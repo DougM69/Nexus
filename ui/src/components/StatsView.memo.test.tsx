@@ -24,6 +24,8 @@ vi.mock('../api', () => ({
   getLogStats: vi.fn(async () => {
     throw new Error('not under test')
   }),
+  // Nor the timeline: an empty window.
+  getLogTimeline: vi.fn(async () => ({ edges: [0, 3_600], modes: [] })),
 }))
 afterEach(cleanup)
 

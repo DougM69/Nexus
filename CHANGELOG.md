@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A Timeline card in Statistics.** A line chart of your QSOs over the past day (by hour), the
+  past 30 days (by day) or the past year (by month), each ending with the current hour, day or month
+  in UTC, as the log is. One line per mode, counted as the By mode card counts them (USB and LSB are
+  SSB); past six modes, the five you worked most in that range keep a line each and the rest share
+  one Other line. Each line has its own dash pattern and marker as well as its colour. Point at the
+  chart, or focus it and use the arrow keys, to read each hour, day or month; a screen reader gets
+  every count as a table. It opens on the past 30 days. A Remote observer's Statistics does not
+  show it yet.
 - **Change what an RTTY, PSK or CW macro key sends on the fly.** Right-click a key, or press
   Ctrl+Shift with its F-key (Ctrl+Shift+F3 for F3), and that key's editor opens with the cursor in
   its message. Neither sends anything, and the browser's menu no longer opens over a key. The editor

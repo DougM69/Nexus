@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { AwardsJourney } from '../components/AwardsJourney'
 import { StatsView } from '../components/StatsView'
-import { askLog, getAwards, getConfirmationDiagnostics, getLogStats, uploadLotwReport, uploadLotwReportByIds } from '../api'
+import { askLog, getAwards, getConfirmationDiagnostics, getLogStats, getLogTimeline, uploadLotwReport, uploadLotwReportByIds } from '../api'
 import type { LogQuestion } from '../features/logAnswers'
 import type { DiagnosticsReport } from '../types'
 import fixture from './__fixtures__/insights.json'
@@ -12,6 +12,7 @@ vi.mock('../api', () => ({
   getAwards: vi.fn(async () => fixture.awards),
   getConfirmationDiagnostics: vi.fn(async (): Promise<DiagnosticsReport | null> => null),
   getLogStats: vi.fn(async () => fixture.geography),
+  getLogTimeline: vi.fn(async () => ({ edges: [0, 86_400], modes: [] })),
   // The engine, over an empty log.
   askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, [])),
   getJourney: vi.fn(async () => { throw new Error('unsupported') }),
@@ -38,6 +39,9 @@ it('renders full-log Statistics using the supplied totals and the existing chart
   expect((await screen.findAllByText('2301')).length).toBeGreaterThan(0)
   expect(askLog).not.toHaveBeenCalled()
   expect(getLogStats).not.toHaveBeenCalled()
+  // A remote summary carries no timeline, and the card does not ask this window's engine for one.
+  expect(getLogTimeline).not.toHaveBeenCalled()
+  expect(container.querySelector('.stats-tl')).toBeNull()
   expect(container.querySelectorAll('.stats-bar-fill').length).toBeGreaterThan(5)
   expect(screen.getByText('2012')).toBeTruthy()
 })

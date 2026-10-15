@@ -2,10 +2,11 @@
 //!
 //! Every pass the command layer makes over the log — the needs model the Needed board,
 //! propagation, satellite passes and the pounce thread share; the award summary; the Journey;
-//! the log statistics; today's hunted parks; a station's last logged grid; the upload health the
-//! Settings panel polls; the oldest LoTW upload awaiting its echo; the catch-up sweep's pick; the
-//! compound calls the launch seeds the decoder with — reads the store here, through ONE door
-//! ([`LogRows`]), and runs the fold it always ran over what it reads.
+//! the log statistics and the Statistics view's timeline; today's hunted parks; a station's last
+//! logged grid; the upload health the Settings panel polls; the oldest LoTW upload awaiting its
+//! echo; the catch-up sweep's pick; the compound calls the launch seeds the decoder with — reads
+//! the store here, through ONE door ([`LogRows`]), and runs the fold it always ran over what it
+//! reads.
 //!
 //! # Four rules each of them keeps
 //!
@@ -45,13 +46,15 @@
 //! that is what the upload health is kept against; the diagnosis is not kept at all, as before.
 //!
 //! Today's hunted parks are not kept either: they are read through the `qso_recent` index for
-//! today's contacts alone, which is the whole of their cost.
+//! today's contacts alone, which is the whole of their cost. Nor is the Statistics view's
+//! timeline, for the same reason: its window's contacts alone, through the same index.
 
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 
 use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::logstore::{Freshness, LogRows};
+use tempo_core::logbook::query::{LogFold, LogTimeline, TimelineCounter, TimelineRange};
 use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Order, Scope};
 use tempo_core::logbook::{QsoRecord, AWARD_EXTRAS};
 
@@ -129,6 +132,12 @@ const CALLS: Narrow = Narrow {
 /// [`hunted_today`]'s inputs.
 const HUNTED: Narrow = Narrow {
     columns: &["call", "when_unix", "ota_their_ref"],
+    uploads: false,
+};
+
+/// [`log_timeline`]'s inputs.
+const TIMELINE: Narrow = Narrow {
+    columns: &["mode", "when_unix"],
     uploads: false,
 };
 
@@ -488,6 +497,37 @@ pub(crate) fn hunted_today(
     .map_err(unreadable)?
     .or_refuse()?;
     Ok(propagation::HuntedActivations::from_log(worked))
+}
+
+// ── the Statistics view's timeline ──────────────────────────────────────────
+
+/// `get_log_timeline`'s answer at `now`: contacts per mode over the past day, 30 days or year,
+/// in UTC as the log is ([`TimelineCounter`] holds the window rule). Only the window's contacts
+/// are read — through the `qso_recent` index, whatever the log's size — and the counter still
+/// tests every row it is handed. Not kept: the window moves with the clock, and its read is the
+/// whole of its cost.
+///
+/// ⚠️ It reads the store: never under the Engine lock. Take `rows` ([`Engine::log_rows`]) under
+/// it.
+pub(crate) fn log_timeline(
+    rows: &LogRows,
+    range: TimelineRange,
+    now: i64,
+) -> Result<LogTimeline, String> {
+    // A clock before 1970 is asked about 1970.
+    let mut timeline = TimelineCounter::new(range, u64::try_from(now).unwrap_or(0));
+    rows.each(
+        TIMELINE,
+        Scope::Since(timeline.since()),
+        Order::Log,
+        &mut |q| {
+            timeline.add(q);
+            ControlFlow::Continue(())
+        },
+    )
+    .map_err(unreadable)?
+    .or_refuse()?;
+    Ok(timeline.finish())
 }
 
 // ── a station's last logged grid ────────────────────────────────────────────
@@ -1071,6 +1111,22 @@ mod tests {
         format!("{report:?}")
     }
 
+    /// The timeline's three windows.
+    const RANGES: [TimelineRange; 3] = [
+        TimelineRange::PastDay,
+        TimelineRange::Past30Days,
+        TimelineRange::PastYear,
+    ];
+
+    /// The timeline over the whole log in memory: every contact handed to the counter, which
+    /// decides the window itself — where the store reads only the window's, off its index.
+    fn timeline_old(records: &[Arc<QsoRecord>], range: TimelineRange) -> LogTimeline {
+        tempo_core::logbook::query::reference::fold(
+            records,
+            TimelineCounter::new(range, NOW as u64),
+        )
+    }
+
     // ── one answer per fold, from the store and from the oracle ─────────────
 
     /// One fold's two answers: whether they are equal (by the type's own equality where it has
@@ -1157,6 +1213,11 @@ mod tests {
                 hunted_old(&held, NOW),
             ),
             answer(
+                "timeline",
+                RANGES.map(|range| log_timeline(&rows, range, NOW).expect("reads")),
+                RANGES.map(|range| timeline_old(&held, range)),
+            ),
+            answer(
                 "grid",
                 grids(&|p| newest_logged_grid(&rows, p).expect("reads")),
                 grids(&|p| grid_old(&held, p)),
@@ -1231,6 +1292,12 @@ mod tests {
             !seed_old(&held).is_empty(),
             "premise: compound calls are logged"
         );
+        for range in RANGES {
+            assert!(
+                !timeline_old(&held, range).modes.is_empty(),
+                "premise: contacts in the {range:?} window"
+            );
+        }
         for a in answers {
             assert!(
                 a.equal,
@@ -1538,6 +1605,24 @@ mod tests {
             "today's park is hunted"
         );
 
+        let ft8_this_hour = |t: &LogTimeline| {
+            t.modes
+                .iter()
+                .find(|m| m.label == "FT8")
+                .map_or(0, |m| m.counts[23])
+        };
+        let rows = e.lock().unwrap().log_rows();
+        let before = ft8_this_hour(&log_timeline(&rows, RANGES[0], NOW).unwrap());
+        let timeline = asked_straight_after(&d, &e, contact("K9TML", NOW as u64), || {
+            let rows = e.lock().unwrap().log_rows();
+            log_timeline(&rows, RANGES[0], NOW)
+        });
+        assert_eq!(
+            ft8_this_hour(&timeline),
+            before + 1,
+            "the timeline counts it"
+        );
+
         let grid = asked_straight_after(&d, &e, contact("K9GRD", NOW as u64), || {
             let rows = e.lock().unwrap().log_rows();
             newest_logged_grid(&rows, "K9GRD")
@@ -1638,6 +1723,13 @@ mod tests {
                 (
                     "today's parks",
                     s.spawn(|| hunted_today(&rows(), NOW).map(|_| "today's parks".to_string())),
+                ),
+                (
+                    "the timeline",
+                    s.spawn(|| {
+                        log_timeline(&rows(), TimelineRange::PastDay, NOW)
+                            .map(|t| format!("{} modes", t.modes.len()))
+                    }),
                 ),
                 (
                     "a grid",
@@ -1774,5 +1866,57 @@ mod tests {
         let eng = engine_lock(&e);
         let rows = eng.log_rows();
         let _ = hunted_today(&rows, NOW);
+    }
+
+    /// The Statistics timeline timed on a 100,000-contact log in the store —
+    /// `cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio --release --
+    /// --ignored --nocapture timeline_bench` (`TIMELINE_BENCH_ROWS` sets the size). The contacts
+    /// are spread evenly over the year before [`NOW`], so the year's window reads every one of
+    /// them — the most any window can read — the 30 days about one in twelve, the day one in 365.
+    #[test]
+    #[ignore = "a release-build bench, run by hand"]
+    fn timeline_bench() {
+        let n: usize = std::env::var("TIMELINE_BENCH_ROWS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100_000);
+        let modes = [
+            "FT8", "FT8", "FT8", "CW", "SSB", "FT4", "RTTY", "USB", "FM", "PSK31",
+        ];
+        let mut adif = tempo_core::logbook::adif_header();
+        for i in 0..n {
+            let when = NOW as u64 - i as u64 * 365 * 86_400 / n as u64;
+            let (y, m, day, hh, mm, ss) = tempo_core::logbook::datetime_utc(when);
+            let call = format!("K{}AB{}", i % 10, i % 1000);
+            let mode = modes[i % modes.len()];
+            adif.push_str(&format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:{}>{mode}<QSO_DATE:8>{y:04}{m:02}{day:02}\
+                 <TIME_ON:6>{hh:02}{mm:02}{ss:02}<EOR>\n",
+                call.len(),
+                mode.len()
+            ));
+        }
+        let d = Dir::new("timeline-bench");
+        std::fs::write(d.log(), adif).unwrap();
+        let e = launch(&d);
+        settle(&e);
+        let rows = e.lock().unwrap().log_rows();
+        for range in RANGES {
+            let mut took = Vec::new();
+            let mut counted = 0;
+            for _ in 0..7 {
+                let t = std::time::Instant::now();
+                let timeline = log_timeline(&rows, range, NOW).expect("reads");
+                took.push(t.elapsed().as_secs_f64() * 1000.0);
+                counted = timeline.modes.iter().flat_map(|m| &m.counts).sum::<usize>();
+            }
+            let first = took[0];
+            took.sort_by(f64::total_cmp);
+            println!(
+                "TIMELINE_BENCH rows={n} {range:?}: {counted} contacts in the window, first {first:.1} \
+                 ms, median of 7 {:.1} ms",
+                took[3]
+            );
+        }
     }
 }

@@ -15680,6 +15680,168 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(11px * var(--text-scale));
   color: var(--text-faint);
 }
+/* The Timeline card (StatsTimeline.tsx): the whole width of the grid, a line chart drawn by hand
+   in SVG. A line takes its slot's colour AND dash pattern AND marker shape (the marker is the
+   slot's <use> in the component), so two lines stay apart without colour. The colours are the
+   identity palette (--dxc-*), which both themes define, hues ~36° apart with no meaning of their
+   own; "Other" is the faint ink, the line that is no one mode. */
+.stats-tl {
+  grid-column: 1 / -1;
+}
+.stats-tl [data-slot='0'] {
+  --tl-ink: var(--dxc-0);
+  --tl-dash: none;
+}
+.stats-tl [data-slot='1'] {
+  --tl-ink: var(--dxc-5);
+  --tl-dash: 7 4;
+}
+.stats-tl [data-slot='2'] {
+  --tl-ink: var(--dxc-8);
+  --tl-dash: 0 5;
+}
+.stats-tl [data-slot='3'] {
+  --tl-ink: var(--dxc-2);
+  --tl-dash: 9 3 2 3;
+}
+.stats-tl [data-slot='4'] {
+  --tl-ink: var(--dxc-4);
+  --tl-dash: 14 4;
+}
+.stats-tl [data-slot='5'] {
+  --tl-ink: var(--dxc-6);
+  --tl-dash: 3 3;
+}
+.stats-tl [data-other] {
+  --tl-ink: var(--text-faint);
+}
+.stats-tl-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.stats-tl-head h3 {
+  margin: 0;
+}
+.stats-tl-ranges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.stats-tl-chart {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: calc(150px * var(--text-scale)) auto;
+  /* Room for the plot's focus ring, which sits outside it. */
+  column-gap: var(--space-2);
+}
+.stats-tl-y {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  font-size: calc(10px * var(--text-scale));
+  color: var(--text-faint);
+}
+.stats-tl-plot {
+  position: relative;
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  cursor: crosshair;
+}
+.stats-tl-plot:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.stats-tl-lines,
+.stats-tl-marks {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.stats-tl-line {
+  fill: none;
+  stroke: var(--tl-ink);
+  stroke-width: 2;
+  stroke-dasharray: var(--tl-dash);
+  stroke-linejoin: round;
+}
+/* Slot 2's zero-length dashes are its dots: round caps draw them. */
+.stats-tl [data-slot='2'] .stats-tl-line,
+.stats-tl .stats-tl-line[data-slot='2'] {
+  stroke-linecap: round;
+}
+.stats-tl-mark {
+  fill: var(--tl-ink);
+  stroke: var(--tl-ink);
+  stroke-width: 1.5;
+}
+.stats-tl-guide {
+  stroke: var(--text-faint);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+.stats-tl-x {
+  grid-column: 2;
+  position: relative;
+  height: calc(14px * var(--text-scale) + 6px);
+}
+.stats-tl-tick {
+  position: absolute;
+  /* Below the plot's focus ring (2px, 2px out). */
+  top: 5px;
+  transform: translateX(-50%);
+  font-size: calc(10px * var(--text-scale));
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.stats-tl-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-label);
+}
+.stats-tl-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.stats-tl-key {
+  width: 24px;
+  height: 10px;
+  overflow: visible;
+}
+.stats-tl-total {
+  color: var(--text-dim);
+}
+.stats-tl-read {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-2) 0 0;
+  min-height: 1.45em;
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-dim);
+}
+.stats-tl-at {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+.stats-tl-at .stats-tl-name {
+  color: var(--text);
+  font-weight: 600;
+}
+.stats-tl-hint {
+  color: var(--text-faint);
+}
 /* Gain/Zero contrast knobs next to the palette (double-click to recenter = auto). */
 .wf-knob {
   display: inline-flex;

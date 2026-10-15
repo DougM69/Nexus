@@ -20574,6 +20574,23 @@ async fn get_log_stats(
         .await
 }
 
+/// The Statistics view's timeline — contacts per mode over the past day (by hour), the past 30
+/// days (by day) or the past year (by month), each window ending with the current UTC hour, day
+/// or month. Counted where the log is, from the window's contacts alone
+/// ([`log_folds::log_timeline`]), on the blocking pool. Pure/offline.
+#[tauri::command]
+async fn get_log_timeline(
+    state: State<'_, SharedEngine>,
+    range: tempo_core::logbook::query::TimelineRange,
+) -> Result<tempo_core::logbook::query::LogTimeline, String> {
+    let engine = state.inner().clone();
+    log_folds::off_the_runtime(move || {
+        let rows = engine_lock(&engine).log_rows();
+        log_folds::log_timeline(&rows, range, now_unix())
+    })
+    .await
+}
+
 /// The Journey snapshot — the in-app, beginner-first achievement layer (auto-detected
 /// firsts, tiered sub-award ladders toward the big awards, fill-the-map collections,
 /// novel ham feats, personal bests, an XP/level spine, and an opt-in weekly streak),
@@ -35668,6 +35685,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_awards,
             get_journey,
             get_log_stats,
+            get_log_timeline,
             get_confirmation_diagnostics,
             import_adif,
             sync_lotw_report,

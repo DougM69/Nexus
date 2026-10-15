@@ -11,6 +11,7 @@ import type { GeoLogStats } from '../types'
 import { type LogStats, type Tally } from '../features/logStats'
 import { logSource } from '../features/logSource'
 import { askAgainWhileSaving } from '../features/notAnswered'
+import { StatsTimeline } from './StatsTimeline'
 
 /** Service names and ham shorthand — the same letters in every language. */
 const SERVICE_LABELS = { lotw: 'LoTW', eqsl: 'eQSL', dx: 'DX' }
@@ -122,6 +123,8 @@ export function StatsView({ observation }: { observation?: { statistics: LogStat
       </div>
 
       <div className="stats-grid">
+        {/* The timeline asks the engine itself; a Remote summary carries none. */}
+        {!observation && <StatsTimeline />}
         <BarList title={t('stats.byBand.head')} items={s.byBand} />
         <BarList title={t('stats.byMode.head')} items={s.byMode} />
         <BarList title={t('stats.byYear.head')} items={s.byYear} />
