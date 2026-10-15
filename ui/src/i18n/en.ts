@@ -11073,12 +11073,6 @@ export const EN = {
   // sound card's own error, as data.
   'shell.lane.slotKeyRefused.txAudio':
     'Nexus did not key the radio at {{time}} UTC because the transmit audio output would not open ({{why}}). Nothing was sent and TX was turned off. Check Output Device (TX) in Settings (another program may be holding it, or it is unplugged), then turn TX on again.',
-  // The radio keyed an FT8 or FT4 over only after the period it was keyed for had ended, in the
-  // other station's (a slow CAT link, Split operation's commands before the key): Nexus unkeyed it at
-  // once and sent nothing. The radio refused nothing, so the PTT advice above would be wrong.
-  // `{{why}}` is how long after the period's end ("1.2 s"), as data.
-  'shell.lane.slotKeyRefused.pastPeriod':
-    'The radio keyed only at {{time}} UTC, {{why}} after the period it was keyed for had ended, so Nexus unkeyed it at once. Nothing was sent and TX was turned off. A slow CAT link holds up the key, more so with Split operation, which sends its commands first: check the CAT link and Split operation in Settings, then turn TX on again.',
   // The radio did not accept the unkey that ended a slot over: the station halted TX the same way,
   // keeps sending the unkey until the radio takes it, and the lane keeps this until TX is turned on
   // again. `{{why}}` is the radio's own answer, as data.
@@ -11092,6 +11086,23 @@ export const EN = {
   'shell.lane.slotAudioLost.message': 'OVER ENDED — TX STOPPED',
   'shell.lane.slotAudioLost.detail':
     'Flex native DAX audio went off at {{time}} UTC in the middle of an over, so the rest of that over would have gone out silent. Nexus ended the over there and turned TX off. Turn TX on again to carry on.',
+  // An FT8 or FT4 over the radio keyed only after this station's period had ended, in the other
+  // station's (a slow CAT link: Split operation's commands before the key, and the key itself): Nexus
+  // unkeyed it at once, sent nothing and left TX on for the next over, as WSJT-X does. A warning, in
+  // a lane of its own: the radio refused nothing and TX did not stop. `{{late}}` is how long after
+  // the period's end ("1.2 s"), as data. The lane goes with the next over that keys in time.
+  'shell.lane.slotOverDropped.message': 'OVER DROPPED — RADIO KEYED LATE',
+  'shell.lane.slotOverDropped.detail':
+    'This over was dropped: the radio keyed only at {{time}} UTC, {{late}} after your period had ended (slow CAT), so Nexus unkeyed it at once and sent nothing, and left TX on for your next over. Split operation sends the radio its commands before each key, which on a slow CAT link can take seconds: if this keeps happening, check the CAT link and Split operation in Settings.',
+  // …and when that many overs in a row were dropped so, Nexus turned TX off, as Stop TX does; the
+  // lane keeps this until TX is turned on again. `{{count}}` is how many in a row, `{{late}}` how
+  // long after its period's end the last one keyed ("1.2 s"), as data.
+  'shell.lane.slotOverDropped.stopped.message': 'OVERS DROPPED — TX STOPPED',
+  'shell.lane.slotOverDropped.stopped.detail': {
+    one: 'The radio keyed your over only after your period had ended (slow CAT), at {{time}} UTC, {{late}} after it, so Nexus did not send it and turned TX off. Split operation sends the radio its commands before each key, which on a slow CAT link can take seconds: check the CAT link and Split operation in Settings, then turn TX on again.',
+    other:
+      'The radio keyed {{count}} overs in a row only after your period had ended (slow CAT), the last at {{time}} UTC, {{late}} after it, so Nexus sent none of them and turned TX off. Split operation sends the radio its commands before each key, which on a slow CAT link can take seconds: check the CAT link and Split operation in Settings, then turn TX on again.',
+  },
   // The operator's PTT press that Nexus's own Flex client kept off the air: right after a digital
   // mode, or native audio going off, the radio still took its transmit audio from the DAX Nexus had
   // set, not the mic, so the voice would not have gone out. TX stays on; the next press answers anew.

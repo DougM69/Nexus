@@ -186,6 +186,7 @@ import { parsecStopLane } from './features/parsecPresence'
 import { slotKeyRefusedLane } from './features/slotKeyRefused'
 import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
 import { slotAudioLostLane } from './features/slotAudioLost'
+import { slotOverDroppedLane } from './features/slotOverDropped'
 import { pttRefusedLane } from './features/pttRefused'
 import { voiceDroppedLane } from './features/voiceDropped'
 import { clockRepairHoldLane } from './features/clockRepairHold'
@@ -757,6 +758,20 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   useEffect(() => {
     setStatus('slotAudioLost', remote ? null : slotAudioLostLane(snap?.radio.slotAudioLost))
   }, [snap?.radio.slotAudioLost?.at, remote])
+
+  // …and an FT8 or FT4 over the radio keyed only after its period had ended (a slow CAT link): the
+  // station dropped that over and left TX on, as WSJT-X does, so the lane is its own, a warning,
+  // until the next over keys in time; after that many in a row TX stopped, and the lane says so until
+  // TX is turned on again. Not on the Remote page either.
+  useEffect(() => {
+    setStatus('slotOverDropped', remote ? null : slotOverDroppedLane(snap?.radio.slotOverDropped))
+  }, [
+    snap?.radio.slotOverDropped?.at,
+    snap?.radio.slotOverDropped?.late,
+    snap?.radio.slotOverDropped?.count,
+    snap?.radio.slotOverDropped?.txStopped,
+    remote,
+  ])
 
   // The operator's PTT press that Nexus's own Flex client kept off the air, the radio still on the
   // DAX Nexus set and not on its mic: the lane says so, in place of the PTT advice, until a press

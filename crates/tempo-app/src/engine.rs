@@ -2891,9 +2891,8 @@ pub struct Engine {
     tx_watchdog: bool,
     /// The slot over whose key the radio did not accept, which halted TX
     /// ([`Engine::halt_tx_for_refused_key`]), or that Nexus would not key because the transmit
-    /// audio output would not open ([`Engine::halt_tx_for_tx_audio`]), or that the radio keyed
-    /// only after its period had ended ([`Engine::halt_tx_for_key_past_its_period`]). Kept until
-    /// the operator turns TX on again.
+    /// audio output would not open ([`Engine::halt_tx_for_tx_audio`]). Kept until the operator
+    /// turns TX on again.
     slot_key_refused: Option<crate::dto::SlotKeyRefused>,
     /// The slot over whose unkey the radio did not accept, which halted TX
     /// ([`Engine::halt_tx_for_failed_unkey`]). Kept until the operator turns TX on again.
@@ -2902,6 +2901,13 @@ pub struct Engine {
     /// which halted TX ([`Engine::halt_tx_for_lost_slot_audio`]). Kept until the operator turns TX
     /// on again.
     slot_audio_lost: Option<crate::dto::SlotAudioLost>,
+    /// FT8/FT4 overs dropped in a row because the radio keyed each only after its period had ended
+    /// ([`Engine::drop_over_keyed_past_its_period`]), since an over last keyed in its period
+    /// ([`Engine::note_over_keyed_in_its_period`]) or TX was last turned on.
+    overs_dropped_in_a_row: u32,
+    /// The last such over, for its status lane: until an over keys in its period or TX is turned on
+    /// again, and shown only while TX is on unless that many in a row turned it off.
+    slot_over_dropped: Option<crate::dto::SlotOverDropped>,
     /// The operator's PTT press Nexus's own Flex client kept off the air because the radio still
     /// took its transmit audio from the DAX Nexus set, not its mic ([`Engine::set_ptt_refused`]).
     /// Kept until a press keys, or fails for another reason.
@@ -5590,6 +5596,8 @@ impl Engine {
             slot_key_refused: None,
             slot_unkey_failed: None,
             slot_audio_lost: None,
+            overs_dropped_in_a_row: 0,
+            slot_over_dropped: None,
             ptt_refused: None,
             tx_watchdog_start: None,
             cq_pause_until: None,
@@ -16765,47 +16773,80 @@ Pick the one you operate from on the Contesting tab in Settings.",
             why: why.to_string(),
             flex_audio: None,
             tx_audio_failed: false,
-            keyed_past_period: false,
         });
     }
 
-    /// Halt TX because the radio keyed an FT8 or FT4 over only after the period it was keyed for had
-    /// ended, `past_ms` after it, in the other station's period or later: the CAT before the key
-    /// (Split Operation's commands on a slow link) and the key itself held it up. The radio loop has
-    /// unkeyed it at once and played none of it; the reason stays on the refused key's line until
-    /// the operator turns TX on again ([`Self::set_tx_enabled`]).
+    /// How many FT8/FT4 overs dropped in a row turn TX off
+    /// ([`Self::drop_over_keyed_past_its_period`]). WSJT-X has no such count: its next own period
+    /// asserts PTT again, until its Tx watchdog (6 minutes by default,
+    /// `widgets/mainwindow.cpp:5109-5111`). This is a safety default of Nexus's own: a link this
+    /// slow keys the radio in the other station's period on every try, with nothing sent.
+    pub const OVERS_DROPPED_BEFORE_TX_OFF: u32 = 3;
+
+    /// Drop an FT8 or FT4 over the radio keyed only after the period it was keyed for had ended,
+    /// `past_ms` after it, in the other station's period or later: the CAT before the key (Split
+    /// Operation's commands on a slow link) and the key itself held it up. The decision to key it
+    /// was `decided_ms` into its period. The radio loop has unkeyed it at once and played none of
+    /// it.
     ///
-    /// WSJT-X starts an over's audio only when the radio reports PTT on and the over is "still
-    /// needed" (`widgets/mainwindow.cpp:8852`, `m_tx_when_ready && g_iptt`), and its GUI tick ends
-    /// the over the moment the clock leaves its window, which never reaches into the other
-    /// station's period (`:5016-5019`, `:5055`, `:5180`, `:5530`; `stopTx` clears `g_iptt` and
-    /// lowers PTT 200 ms later, `:5743-5760`): a radio that answers there sends nothing and is
-    /// unkeyed. Halted as a refused key halts ([`Self::halt_tx_for_refused_key`]): a link that slow
-    /// would key the next over as late, and an over that cannot go out in its own period is
-    /// dropped, never held to key at a time the operator did not choose. One event, one line in the
-    /// log, and no stop for a voice memory, as there.
-    pub fn halt_tx_for_key_past_its_period(&mut self, past_ms: f64) {
-        let voice_mem_halt = self.voice_mem_halt;
-        self.quiet_tx_log = true;
-        self.halt_tx();
-        self.quiet_tx_log = false;
-        self.voice_mem_halt = voice_mem_halt;
-        let why = format!("{:.1} s", past_ms / 1000.0);
+    /// ⭐ ONLY THIS OVER IS DROPPED: TX STAYS ON, AND THE NEXT OWN PERIOD KEYS ITS OVER AS USUAL, AS
+    /// WSJT-X DOES. WSJT-X starts an over's audio only when the radio reports PTT on and the over
+    /// is "still needed" (`widgets/mainwindow.cpp:8852`, `m_tx_when_ready && g_iptt`), and the GUI
+    /// tick that found its window closed ends that over alone (`stopTx`, `:5743-5756`: `g_iptt=0`,
+    /// PTT off 200 ms later), leaving Enable Tx ticked for the next; only Stop TX unticks it
+    /// (`:8714-8717`). The over's records stay, as WSJT-X writes its own when it asserts PTT
+    /// (`:5201`, `:5405`).
+    ///
+    /// The operator is told in a lane of its own, with how late
+    /// ([`crate::dto::RadioStatus::slot_over_dropped`]): the refused key's "TX STOPPED" would be
+    /// wrong while TX is on. [`Self::OVERS_DROPPED_BEFORE_TX_OFF`] in a row turn TX off as Stop TX
+    /// does ([`Self::halt_tx`]), the lane then saying so until TX is on again. One event, one line
+    /// in the log, and no stop for a voice memory, as [`Self::halt_tx_for_refused_key`].
+    pub fn drop_over_keyed_past_its_period(&mut self, decided_ms: f64, past_ms: f64) {
+        self.overs_dropped_in_a_row += 1;
+        let count = self.overs_dropped_in_a_row;
+        let tx_stopped = count >= Self::OVERS_DROPPED_BEFORE_TX_OFF;
+        if tx_stopped {
+            let voice_mem_halt = self.voice_mem_halt;
+            self.quiet_tx_log = true;
+            self.halt_tx();
+            self.quiet_tx_log = false;
+            self.voice_mem_halt = voice_mem_halt;
+        }
+        let late = format!("{:.1} s", past_ms / 1000.0);
+        let took_ms = self.active_slot_secs() * 1000.0 - decided_ms + past_ms;
         tempo_core::applog::info(
             "tx",
             &format!(
-                "{} over: the radio keyed {why} after its period had ended (a slow key); unkeyed at \
-                 once, nothing sent; transmit halted",
-                self.tier().label()
+                "{} over dropped: decided {:.1} s into its period, the radio keyed {:.1} s \
+                 later, {late} after the period had ended (a slow key; Split Operation {:?}); \
+                 unkeyed at once, nothing sent; {count} in a row: {}",
+                self.tier().label(),
+                decided_ms / 1000.0,
+                took_ms / 1000.0,
+                self.settings.split_mode,
+                if tx_stopped {
+                    "transmit halted"
+                } else {
+                    "transmit stays on"
+                }
             ),
         );
-        self.slot_key_refused = Some(crate::dto::SlotKeyRefused {
+        self.slot_over_dropped = Some(crate::dto::SlotOverDropped {
             at: now_unix_secs(),
-            why,
-            flex_audio: None,
-            tx_audio_failed: false,
-            keyed_past_period: true,
+            late,
+            count,
+            tx_stopped,
         });
+    }
+
+    /// The radio keyed an FT8 or FT4 over at a boundary in its own period: a run of dropped overs
+    /// ([`Self::drop_over_keyed_past_its_period`]) is over, and so is its lane. A late start needs
+    /// no such call: every one follows an operator arm ([`Self::set_tx_enabled`]), which ends the
+    /// run itself.
+    pub fn note_over_keyed_in_its_period(&mut self) {
+        self.overs_dropped_in_a_row = 0;
+        self.slot_over_dropped = None;
     }
 
     /// Halt TX because the sound card's transmit audio output would not open for slot TX (FT8,
@@ -16838,7 +16879,6 @@ Pick the one you operate from on the Contesting tab in Settings.",
             why: why.to_string(),
             flex_audio: None,
             tx_audio_failed: true,
-            keyed_past_period: false,
         });
     }
 
@@ -17150,6 +17190,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.slot_unkey_failed = None;
             // …and a slot over ended for its lost audio, the same way.
             self.slot_audio_lost = None;
+            // …and a run of FT8/FT4 overs dropped for a late key, with its lane: the count starts
+            // again from this arm.
+            self.overs_dropped_in_a_row = 0;
+            self.slot_over_dropped = None;
         } else {
             // A SLOT over already in flight is NOT cut here. Operator (2026-07-31):
             // "TX Off should disable TX for the next cycle, but allow any ongoing
@@ -23953,6 +23997,12 @@ contact yourself."
         s.radio.slot_key_refused = self.slot_key_refused.clone();
         s.radio.slot_unkey_failed = self.slot_unkey_failed.clone();
         s.radio.slot_audio_lost = self.slot_audio_lost.clone();
+        // A dropped over's lane says TX was left on, so it goes while TX is off (a Stop TX, TX Off,
+        // a failed unkey's halt); the one saying that many in a row turned TX off stays.
+        s.radio.slot_over_dropped = self
+            .slot_over_dropped
+            .clone()
+            .filter(|d| d.tx_stopped || self.tx_enabled);
         s.radio.ptt_refused = self.ptt_refused.clone();
         s.radio.voice_dropped = self.voice_dropped.clone();
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
@@ -37002,63 +37052,145 @@ mod tests {
         );
     }
 
-    /// The radio keyed an FT8 over only after its period had ended (the radio loop unkeyed it at
-    /// once and sent nothing): TX halts as a refused key halts it, and the line says how long after
-    /// the period's end, as its own cause, until TX is on again. A radio's own refusal and a
-    /// transmit audio failure carry no such flag, on the wire either.
+    /// The lane of the last FT8/FT4 over dropped for a late key, as the UI reads it, or `None`
+    /// while it is absent.
+    fn over_dropped(e: &Engine) -> Option<serde_json::Value> {
+        serde_json::to_value(e.snapshot()).unwrap()["radio"]
+            .get("slotOverDropped")
+            .cloned()
+    }
+
+    /// ⭐ AN FT8/FT4 OVER THE RADIO KEYED PAST ITS PERIOD IS DROPPED AND TX STAYS ON (the radio loop
+    /// unkeyed it at once and sent nothing), as WSJT-X leaves Enable Tx ticked: no stop for the
+    /// loop, nothing on the refused key's line, slot TX still armed, and a lane of its own with how
+    /// late and how many in a row. The third in a row turns TX off as Stop TX does, the lane saying
+    /// so until TX is on again, which starts the count again.
     #[test]
-    fn a_key_the_radio_answered_past_its_period_halts_tx_and_says_how_late_until_tx_is_on_again() {
+    fn overs_the_radio_keyed_past_their_period_are_dropped_with_tx_on_until_three_in_a_row() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.call_station("W9XYZ"); // arms the responder sequencer (running)
         assert!(e.slot_tx_armed(), "premise: the QSO armed slot TX");
-        let radio = |e: &Engine| serde_json::to_value(e.snapshot()).unwrap()["radio"].clone();
-        e.halt_tx_for_key_past_its_period(1_234.0);
-        assert!(!e.tx_enabled() && !e.slot_tx_armed(), "TX is still on");
+        let _ = e.take_slot_tx_abort();
+        assert_eq!(
+            over_dropped(&e),
+            None,
+            "absent until an over is dropped, so every snapshot before one is byte-identical"
+        );
+        assert_eq!(Engine::OVERS_DROPPED_BEFORE_TX_OFF, 3);
+        for (n, past_ms, late) in [(1u64, 1_234.0, "1.2 s"), (2, 2_000.0, "2.0 s")] {
+            e.drop_over_keyed_past_its_period(10_000.0, past_ms);
+            assert!(e.tx_enabled() && e.slot_tx_armed(), "drop {n}: TX went off");
+            assert!(
+                !e.take_slot_tx_abort(),
+                "drop {n}: the loop was told to stop"
+            );
+            assert_eq!(
+                e.snapshot().radio.slot_key_refused,
+                None,
+                "drop {n}: on the refused key's line"
+            );
+            let d = over_dropped(&e)
+                .unwrap_or_else(|| panic!("drop {n}: nothing says the over was dropped"));
+            assert_eq!(
+                (d["late"].as_str(), d["count"].as_u64(), d.get("txStopped")),
+                (Some(late), Some(n), None),
+                "drop {n}: {d}"
+            );
+        }
+        e.drop_over_keyed_past_its_period(10_000.0, 300.0);
+        assert!(
+            !e.tx_enabled() && !e.slot_tx_armed(),
+            "TX is still on after three in a row"
+        );
         assert!(
             e.take_slot_tx_abort(),
-            "the loop is told to stop, as Stop TX tells it"
+            "the loop is not told to stop, as Stop TX tells it"
         );
         assert!(
             e.poll_tx(0).is_empty() && e.poll_tx(2).is_empty(),
-            "and it stays stopped: the sequencer does not re-arm"
+            "and it does not stay stopped: the sequencer re-arms"
         );
-        let refused = e
-            .snapshot()
-            .radio
-            .slot_key_refused
-            .expect("the reason is kept for the operator");
-        assert_eq!(
-            (
-                refused.why.as_str(),
-                refused.keyed_past_period,
-                refused.tx_audio_failed,
-                refused.flex_audio
-            ),
-            ("1.2 s", true, false, None)
-        );
-        assert_eq!(radio(&e)["slotKeyRefused"]["keyedPastPeriod"], true);
-        e.set_tx_enabled(true);
         assert_eq!(
             e.snapshot().radio.slot_key_refused,
             None,
-            "turning TX on again clears it"
+            "on the refused key's line"
         );
-
-        e.halt_tx_for_refused_key("rigctld PTT error: \"RPRT -1\\n\"");
-        assert!(
-            !e.snapshot()
-                .radio
-                .slot_key_refused
-                .unwrap()
-                .keyed_past_period
-        );
-        assert_eq!(radio(&e)["slotKeyRefused"].get("keyedPastPeriod"), None);
-        e.set_tx_enabled(true);
-        e.halt_tx_for_tx_audio("playback stream: Device or resource busy");
+        let d = over_dropped(&e).expect("nothing says the overs were dropped");
         assert_eq!(
-            radio(&e)["slotKeyRefused"].get("keyedPastPeriod"),
+            (
+                d["late"].as_str(),
+                d["count"].as_u64(),
+                d["txStopped"].as_bool()
+            ),
+            (Some("0.3 s"), Some(3), Some(true)),
+            "{d}"
+        );
+        e.set_tx_enabled(true);
+        assert_eq!(over_dropped(&e), None, "turning TX on again leaves it up");
+        e.drop_over_keyed_past_its_period(10_000.0, 500.0);
+        assert!(
+            e.tx_enabled(),
+            "the count did not start again when TX was turned on"
+        );
+        assert_eq!(
+            over_dropped(&e).map(|d| d["count"].clone()),
+            Some(serde_json::json!(1))
+        );
+    }
+
+    /// An FT8/FT4 over the radio keys in its period ends a run of dropped ones: its lane goes, and
+    /// the count starts again, so two more drops leave TX on.
+    #[test]
+    fn an_over_keyed_in_its_period_ends_a_run_of_dropped_overs() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        e.drop_over_keyed_past_its_period(10_000.0, 1_000.0);
+        e.drop_over_keyed_past_its_period(10_000.0, 1_000.0);
+        assert_eq!(
+            over_dropped(&e).map(|d| d["count"].clone()),
+            Some(serde_json::json!(2)),
+            "premise: two in a row"
+        );
+        e.note_over_keyed_in_its_period();
+        assert_eq!(
+            over_dropped(&e),
             None,
-            "absent for the other causes, so their snapshots are byte-identical to before"
+            "the lane is still up after an over that went out"
+        );
+        e.drop_over_keyed_past_its_period(10_000.0, 1_000.0);
+        e.drop_over_keyed_past_its_period(10_000.0, 1_000.0);
+        assert!(
+            e.tx_enabled(),
+            "two drops after an over that went out turned TX off"
+        );
+        assert_eq!(
+            over_dropped(&e).map(|d| d["count"].clone()),
+            Some(serde_json::json!(2))
+        );
+    }
+
+    /// The lane of a dropped over says TX was left on for the next, so it goes while TX is off:
+    /// after a Stop TX, or a failed unkey's halt. The one saying that many in a row turned TX off
+    /// stays (above).
+    #[test]
+    fn a_dropped_overs_lane_says_tx_was_left_on_only_while_it_is() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        e.drop_over_keyed_past_its_period(10_000.0, 1_000.0);
+        assert!(over_dropped(&e).is_some(), "premise: the lane");
+        e.halt_tx();
+        assert_eq!(over_dropped(&e), None, "still up after Stop TX");
+        e.set_tx_enabled(true);
+        e.drop_over_keyed_past_its_period(10_000.0, 1_000.0);
+        e.halt_tx_for_failed_unkey("rigctld PTT error: \"RPRT -1\\n\"");
+        assert!(
+            e.snapshot().radio.slot_unkey_failed.is_some(),
+            "premise: the failed unkey's lane"
+        );
+        assert_eq!(
+            over_dropped(&e),
+            None,
+            "still up after a failed unkey turned TX off"
         );
     }
 

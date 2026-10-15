@@ -1576,6 +1576,13 @@ export interface RadioStatus {
    *  under it, or its DAX transmit route went, so the station ended it there and halted transmit.
    *  Kept until TX is turned on again; absent otherwise, and from a station older than it. */
   slotAudioLost?: SlotAudioLost | null
+  /** The last FT8 or FT4 over the station dropped because the radio keyed it only after its period
+   *  had ended (a slow CAT link): it was unkeyed at once, nothing was sent, and TX was left on for
+   *  the next over, as WSJT-X does. After several in a row TX is turned off, and `txStopped` says
+   *  so. Cleared by the next over the radio keys in its period, or by turning TX on again, and
+   *  absent while TX is off but for the one that turned it off; absent otherwise, and from a
+   *  station older than it. */
+  slotOverDropped?: SlotOverDropped | null
   /** The operator's last PTT press did not key: right after the transmit slice left a digital mode,
    *  or native audio went off, the radio still took its transmit audio from the DAX Nexus set, not
    *  its mic, so Nexus's own Flex client kept the key off the air. Cleared by the next press that
@@ -5104,10 +5111,6 @@ export interface SlotKeyRefused {
    *  would not open (`why` is then the sound card's own error): the lane says that in its own
    *  words. Absent otherwise. */
   txAudioFailed?: boolean
-  /** Set when the radio keyed an FT8 or FT4 over only after the period it was keyed for had ended,
-   *  so Nexus unkeyed it at once and sent nothing (`why` is then how long after the period's end,
-   *  "1.2 s"): the lane says that in its own words. Absent otherwise. */
-  keyedPastPeriod?: boolean
 }
 
 /** Why Nexus's own Flex client kept a slot over's key off the air (mirror of the Rust
@@ -5158,6 +5161,20 @@ export interface SlotUnkeyFailed {
 export interface SlotAudioLost {
   /** When it happened (unix seconds). */
   at: number
+}
+
+/** The last FT8 or FT4 over the station dropped because the radio keyed it only after its period
+ *  had ended (mirror of the Rust SlotOverDropped). The words are the UI's, in
+ *  features/slotOverDropped.ts. */
+export interface SlotOverDropped {
+  /** When it happened (unix seconds). */
+  at: number
+  /** How long after the period's end the radio keyed it ("1.2 s"): data, never translated. */
+  late: string
+  /** How many in a row, this one included. */
+  count: number
+  /** Set when that many in a row turned TX off. Absent otherwise. */
+  txStopped?: boolean
 }
 
 /** What Parsec presence mode knows (mirror of the Rust ParsecPresenceDto). Tokens only — the

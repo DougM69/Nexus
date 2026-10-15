@@ -605,6 +605,9 @@ const MIGRATED = [
   // …and of a slot over the station ended when its audio stopped reaching the radio — migrated
   // from birth.
   'features/slotAudioLost.ts',
+  // …and of an FT8/FT4 over the station dropped because the radio keyed it after its period had
+  // ended — migrated from birth. How late passes through as data.
+  'features/slotOverDropped.ts',
   // …and of a PTT press the station kept off the air for the radio's DAX — migrated from birth.
   'features/pttRefused.ts',
   // …and of a voice-keyer message the station dropped before the radio took DAX — migrated from

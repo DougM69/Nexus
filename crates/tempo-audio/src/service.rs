@@ -12639,13 +12639,14 @@ impl RadioLoop {
                         // PLAYED, as at the boundary (`slot::unkey_a_key_past_its_period`): Fake It's
                         // write-back, Split Operation's commands and the key all come after the
                         // decision, and on a slow link they took the carrier into the other
-                        // station's period, where the rest of the over went out.
+                        // station's period, where the rest of the over went out. Only that over is
+                        // dropped; TX stays on.
                         let past = decided
                             .filter(|_| keyed)
-                            .and_then(|d| d.past_its_period(period_ms));
-                        if let Some(past_ms) = past {
+                            .and_then(|d| d.past_its_period(period_ms).map(|past_ms| (d, past_ms)));
+                        if let Some((d, past_ms)) = past {
                             crate::slot::unkey_a_key_past_its_period(
-                                &mut eng, rig, backend, held, past_ms,
+                                &mut eng, rig, backend, held, d, past_ms,
                             );
                         } else if keyed {
                             if on_slot_clock {

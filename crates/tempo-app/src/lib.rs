@@ -343,6 +343,7 @@ impl AppState {
                 slot_key_refused: None,
                 slot_unkey_failed: None,
                 slot_audio_lost: None,
+                slot_over_dropped: None,
                 ptt_refused: None,
                 voice_dropped: None,
                 decode_depth: 3,

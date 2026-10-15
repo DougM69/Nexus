@@ -76,6 +76,16 @@ impl Over {
         self.engine.lock().unwrap().broadcast("CQ KD9TAW EN52");
     }
 
+    /// Call CQ inside this station's own slot: a CQ run, whose first over keys at once if it can
+    /// and which plans its CQ again at every own boundary while TX is on.
+    fn call_cq(&self) {
+        self.engine
+            .lock()
+            .unwrap()
+            .start_cq(None)
+            .expect("premise: Call CQ");
+    }
+
     /// Run the loop, a 20 ms tick at a time, to `until` ms (inclusive).
     fn run_to(&mut self, until: f64) {
         step_to(
@@ -1084,7 +1094,7 @@ fn late_start_on_a_slow_split(tier: Tier, at_ms: f64, split_ms: u64, key_ms: u64
     s.state.last_ptt_poll = later;
     s.tick_now(); // this slot's boundary, with nothing to send
     assert_eq!(s.sent("T 1"), 0, "premise: nothing to send at the boundary");
-    s.cq_now();
+    s.call_cq();
     let want = s
         .engine
         .lock()
@@ -1129,17 +1139,20 @@ impl SlowLateStart {
 }
 
 /// ⭐ A CALL CQ 10.0 s INTO THIS STATION'S OWN FT8 SLOT WHOSE SPLIT AND KEY TAKE 6 s: THE CARRIER COMES
-/// UP 16.0 s IN, IN THE OTHER STATION'S PERIOD. Nothing is played, the radio is unkeyed in the same
-/// tick, at once after the key's answer, and TX halts with how late on the refused key's line. The
-/// rest of the over used to go out from their slot's 1.0 s on their slot clock, PTT held to their
-/// 13.84 s. The control: the same split taking 2 s puts the carrier at 12.0 s, and the rest of the
-/// over goes out from there, ending on this slot's window.
+/// UP 16.0 s IN, IN THE OTHER STATION'S PERIOD. Nothing is played and the radio is unkeyed in the
+/// same tick, at once after the key's answer. Only that over is dropped: TX stays on, a lane of its
+/// own says so, and the next own slot sends the CQ whole. The rest of the over used to go out from
+/// their slot's 1.0 s on their slot clock, PTT held to their 13.84 s. The control: the same split
+/// taking 2 s puts the carrier at 12.0 s, and the rest of the over goes out from there, ending on
+/// this slot's window.
 #[test]
 fn a_late_start_ft8_cq_a_slow_split_keys_past_its_period_sends_nothing_and_is_unkeyed_at_once() {
     std::thread::scope(|s| {
         s.spawn(|| {
             let late = late_start_on_a_slow_split(Tier::Ft8, 10_000.0, 1_900, 300);
-            a_slow_late_start_is_unkeyed_at_once(late, 300, "FT8, 6 s");
+            a_slow_late_start_is_dropped_and_the_next_own_slot_sends_it_whole(
+                late, 300, 13_840.0, "FT8, 6 s",
+            );
         });
         s.spawn(|| {
             let control = late_start_on_a_slow_split(Tier::Ft8, 10_000.0, 600, 200);
@@ -1148,15 +1161,18 @@ fn a_late_start_ft8_cq_a_slow_split_keys_past_its_period_sends_nothing_and_is_un
     });
 }
 
-/// FT4 THE SAME WAY: a Call CQ 2.0 s into its own slot, the split and key taking 6 s, the carrier 8.0 s
-/// in, half a second into the other station's period: nothing played, unkeyed at once, TX halted.
-/// The control, 2 s: the carrier at 4.0 s and the rest of the over from there, ending at 6.24 s.
+/// FT4 THE SAME WAY: a Call CQ 2.0 s into its own slot, the split and key taking 6 s, the carrier
+/// 8.0 s in, half a second into the other station's period: nothing played, unkeyed at once, only
+/// that over dropped, and the next own slot sends the CQ whole. The control, 2 s: the carrier at
+/// 4.0 s and the rest of the over from there, ending at 6.24 s.
 #[test]
 fn a_late_start_ft4_cq_a_slow_split_keys_past_its_period_sends_nothing_and_is_unkeyed_at_once() {
     std::thread::scope(|s| {
         s.spawn(|| {
             let late = late_start_on_a_slow_split(Tier::Ft4, 2_000.0, 1_900, 300);
-            a_slow_late_start_is_unkeyed_at_once(late, 300, "FT4, 6 s");
+            a_slow_late_start_is_dropped_and_the_next_own_slot_sends_it_whole(
+                late, 300, 6_240.0, "FT4, 6 s",
+            );
         });
         s.spawn(|| {
             let control = late_start_on_a_slow_split(Tier::Ft4, 2_000.0, 600, 200);
@@ -1165,7 +1181,12 @@ fn a_late_start_ft4_cq_a_slow_split_keys_past_its_period_sends_nothing_and_is_un
     });
 }
 
-fn a_slow_late_start_is_unkeyed_at_once(mut late: SlowLateStart, key_ms: u64, what: &str) {
+fn a_slow_late_start_is_dropped_and_the_next_own_slot_sends_it_whole(
+    mut late: SlowLateStart,
+    key_ms: u64,
+    ptt_off_ms: f64,
+    what: &str,
+) {
     let answered = late.came("T 1") + key_ms as f64;
     assert!(
         answered >= late.period,
@@ -1189,20 +1210,69 @@ fn a_slow_late_start_is_unkeyed_at_once(mut late: SlowLateStart, key_ms: u64, wh
         late.came("T 0") - answered
     );
     assert_eq!(late.s.state.tx_until_ms, None, "{what}: held");
-    let e = late.s.engine.lock().unwrap();
-    assert!(!e.tx_enabled(), "{what}: TX is still on");
-    let refused = e
-        .snapshot()
-        .radio
-        .slot_key_refused
-        .unwrap_or_else(|| panic!("{what}: nothing on the refused key's line"));
-    assert!(refused.keyed_past_period, "{what}: {refused:?}");
-    drop(e);
-    // And it stays stopped, as Stop TX leaves it: the next own slot keys nothing.
+    let over_dropped = |s: &Over| {
+        serde_json::to_value(s.engine.lock().unwrap().snapshot()).unwrap()["radio"]
+            .get("slotOverDropped")
+            .cloned()
+    };
+    {
+        let e = late.s.engine.lock().unwrap();
+        assert!(e.tx_enabled(), "{what}: TX went off");
+        assert_eq!(
+            e.snapshot().radio.slot_key_refused,
+            None,
+            "{what}: on the refused key's line"
+        );
+    }
+    let lane = over_dropped(&late.s)
+        .unwrap_or_else(|| panic!("{what}: nothing says the over was dropped"));
+    assert_eq!(lane["count"], 1, "{what}: {lane}");
+    // ⭐ AND TX STAYS ON: the CQ run's next own slot keys again, the link answering at once now, and
+    // sends the CQ whole and on time, ended on its window, as WSJT-X's next own period does with
+    // Enable Tx still ticked. The lane goes with the over that went out.
+    let fast = a_timed_rigctld(&mut late.s, 0, 0);
+    // The new link stands in for the same radio, whose once-per-connection probes (`\dump_state`
+    // twice, `u TUNER`) a station on the air ran long before: run here, at the boundary, their read
+    // windows held the key up 0.66 s.
+    late.s.state.rx_ranges_probed = true;
+    late.s.state.tuner_probed = true;
     let next_own = late.own + 2.0 * late.period;
     steer_to_before(&mut late.s, next_own, -20.0);
     late.s.tick_now();
-    assert_eq!(late.s.sent("T 1"), 1, "{what}: the next own slot keyed");
+    let offset = late.s.state.clock_offset_ms as f64;
+    let lines: Vec<(String, f64)> = fast
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(l, t)| (l.clone(), (t - offset - next_own).round()))
+        .collect();
+    assert_eq!(
+        late.s.sent("T 1"),
+        1,
+        "{what}: the next own slot keyed nothing: {lines:?}"
+    );
+    let played = &late.s.backend.played;
+    let skipped = late.want.len().saturating_sub(played.len());
+    assert!(
+        skipped < 6_000,
+        "{what}: {} of {} samples played at the next own slot: not the whole CQ; the link got \
+         (ms from the slot's start) {lines:?}",
+        played.len(),
+        late.want.len()
+    );
+    if let Err(why) = same_audio(played, &late.want[skipped..]) {
+        panic!("{what}: the next own slot did not send the CQ: {why}");
+    }
+    assert_eq!(
+        late.s.state.tx_until_ms,
+        Some(next_own + ptt_off_ms),
+        "{what}: not ended on the next own slot's window"
+    );
+    assert_eq!(
+        over_dropped(&late.s),
+        None,
+        "{what}: the lane is still up after an over that went out"
+    );
 }
 
 fn a_slow_late_start_plays_in_its_own_period(
