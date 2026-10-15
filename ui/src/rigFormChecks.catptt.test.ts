@@ -29,7 +29,7 @@ describe("the list is the bundled Hamlib's answer, not a hand list", () => {
       fileURLToPath(new URL('../../crates/tempo-audio/src/rigmodels.rs', import.meta.url)),
       'utf8',
     )
-    const inCatalog = [...new Set([...catalog.matchAll(/^\s*\(\s*(\d+)\s*,/gm)].map((m) => Number(m[1])))]
+    const inCatalog = [...new Set([...catalog.matchAll(/^\s*\(\s*(\d+)\s*,\s*"/gm)].map((m) => Number(m[1])))]
     // The parse is this test's own positive control: a pattern that matched nothing would leave
     // nothing unaccounted for, on no evidence at all.
     expect(inCatalog.length).toBeGreaterThan(100)
