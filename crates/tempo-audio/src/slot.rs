@@ -1808,7 +1808,19 @@ mod tests {
         //
         // ⚠️ THE MODEM LOCK IS THE WHOLE PROCESS'S: held here for about 250 ms, the decision's build
         // only.
-        let mut eng = armed_engine_on(tempo_app::dto::Tier::Ft4);
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tier(tempo_app::dto::Tier::Ft4);
+        let _ = eng.take_slot_tx_abort();
+        eng.set_tx_enabled(true);
+        eng.set_mode("qso-run").expect("premise: a CQ run");
+        eng.qso_freetext("<...> W9XYZ -10");
+        match eng.next_over_hint(0) {
+            Some(tempo_app::engine::TxWaveform::Native { text, .. }) => assert!(
+                tempo_core::modes::wsjt77::ft4_tones(&text).is_none(),
+                "premise: the lock-free encoder builds {text:?}, so nothing waits on the modem"
+            ),
+            _ => panic!("premise: the free text is not the next over"),
+        }
         let (holding, held) = std::sync::mpsc::channel();
         let (until_tx, until_rx) = std::sync::mpsc::channel::<(f64, f64)>();
         let decode = std::thread::spawn(move || {
