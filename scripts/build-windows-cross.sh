@@ -138,6 +138,25 @@ else
   ok "built → $VPX_MINGW_PREFIX (libvpx $VPX_VER)"
 fi
 
+# BUILD PATHS: from here on, every compiler maps $HOME to `~`. Each one embeds the absolute path
+# of what it compiles: rustc for panic locations (crates.io sources included), gcc for __FILE__,
+# gfortran for its run-time and I/O error messages. Built under a home directory, Nexus.exe carried
+# that path, and with it the account name, more than a thousand times; CI's installers only ever
+# held its runner's. Not set before FFTW and libvpx: FFTW's configure leaves out its own -O3 when
+# CFLAGS is set, and both build in a temporary directory, so neither embeds a home path anyway.
+#   • rustc: --remap-path-prefix in RUSTFLAGS. RUSTFLAGS REPLACES `rustflags` from a cargo config
+#     file rather than adding to it; this repo sets none there.
+#   • gcc (the cc and cmake crates, and CMake's C/C++): -ffile-prefix-map in CFLAGS/CXXFLAGS.
+#   • gfortran ignores -ffile-prefix-map for those paths, so scripts/fortran-remap-home.sh rewrites
+#     them where gfortran reads them, as CMake's Fortran compiler launcher.
+# CMake reads CFLAGS and the launcher only when it first configures a build directory. That is
+# enough: a changed RUSTFLAGS gives every build script a new OUT_DIR, so the libtempo cargo links
+# is configured afresh the first time this runs in an existing tree.
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$HOME=~"
+export CFLAGS="${CFLAGS:+$CFLAGS }-ffile-prefix-map=$HOME=~"
+export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-ffile-prefix-map=$HOME=~"
+export CMAKE_Fortran_COMPILER_LAUNCHER="$REPO/scripts/fortran-remap-home.sh${CMAKE_Fortran_COMPILER_LAUNCHER:+;$CMAKE_Fortran_COMPILER_LAUNCHER}"
+
 # 3 — libtempo modem test exes (proves the native chain on Windows) ------------
 bold "3/5  libtempo Windows test exes"
 # Configure/build output goes to a log; on FAILURE the log is dumped so CI and
