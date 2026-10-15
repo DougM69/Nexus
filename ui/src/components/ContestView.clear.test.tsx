@@ -117,7 +117,7 @@ describe('Clear test contacts asks first, then clears exactly the log it named',
     expect(clearButton()!.textContent).toBe('Clear test contacts')
     fireEvent.click(clearButton()!)
     expect(clearButton()!.getAttribute('aria-pressed')).toBe('true')
-    expect(clearButton()!.textContent, 'the question is on the button').toBe('Clear all 2 contacts? Click again')
+    expect(clearButton()!.textContent, 'the question is on the button').toBe('Clear all 2 contacts? Serials restart at 001. Click again')
     expect(api.contestClear).not.toHaveBeenCalled()
     expect(toast).not.toHaveBeenCalled()
     await act(async () => {
@@ -126,7 +126,10 @@ describe('Clear test contacts asks first, then clears exactly the log it named',
     await settle()
     expect(api.contestClear).toHaveBeenCalledWith(3, 'K9NR', T0 + 60)
     expect(clearButton()!.textContent).toBe('Clear test contacts')
-    said('Took 2 contacts out of the contest log. They are under Removed, where Restore puts each back.', 'info')
+    said(
+      'Took 2 contacts out of the contest log. They are under Removed, where Restore puts each back. Serials restart at 001.',
+      'info',
+    )
     expect(api.contestRemoved, 'the Removed list is read again after the clear').toHaveBeenCalledTimes(2)
   })
 
@@ -138,7 +141,7 @@ describe('Clear test contacts asks first, then clears exactly the log it named',
     fireEvent.click(clearButton()!)
     await settle()
     expect(api.contestClear).not.toHaveBeenCalled()
-    expect(clearButton()!.textContent).toBe('Clear all 3 contacts? Click again')
+    expect(clearButton()!.textContent).toBe('Clear all 3 contacts? Serials restart at 001. Click again')
   })
 
   it('says where any of them had already gone, and at a club when every laptop drops them', async () => {
@@ -155,7 +158,7 @@ describe('Clear test contacts asks first, then clears exactly the log it named',
       await show(LOG)
       await clickTwice()
       said(
-        'Took 2 contacts out of the contest log. They are under Removed, where Restore puts each back. ' +
+        'Took 2 contacts out of the contest log. They are under Removed, where Restore puts each back. Serials restart at 001. ' +
           `${words} Some were already sent to N3FJP (192.168.1.5), WSJT-X listeners: delete them there too. ` +
           'Some stay in your logbook, and LoTW have them: Nexus cannot take them back from there.',
         'info',

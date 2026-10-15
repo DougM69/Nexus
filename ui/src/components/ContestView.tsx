@@ -3048,8 +3048,8 @@ export function ContestView({
     return () => window.clearTimeout(id)
   }, [removeAsk])
   // ⭐ CLEAR TEST CONTACTS — every contact of this running out of the contest log at once, each the
-  // way Remove takes the newest: kept under Removed, Restore brings each back, the numbers stay
-  // spent. For the contacts logged as a test before the start. It asks first, on the button itself,
+  // way Remove takes the newest: kept under Removed, Restore brings each back, the club seqs stay
+  // spent; the serial run starts again at 001. For the contacts logged as a test before the start. It asks first, on the button itself,
   // naming how many, and a second click within REMOVE_CONFIRM_MS clears exactly the log it named: a
   // contact logged in between asks again, and the engine refuses a log that changed. At a club only
   // this laptop's contacts go (its log holds no other), and the club drops them as it drops a removed

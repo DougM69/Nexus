@@ -4194,14 +4194,14 @@ export const EN = {
   'fieldDay.removed.restore.remote': 'Only at the station: a press through Remote restores no contact.',
   'contest.clear.label': 'Clear test contacts',
   'contest.clear.title': 
-    'Take every contact of this running out of the contest log, for contacts you logged as a test before the start. Each is kept under Removed, where Restore puts it back, and its serial number is not used again. Click twice: the first click asks.',
+    'Take every contact of this running out of the contest log, for contacts you logged as a test before the start. Each is kept under Removed, where Restore puts it back, and in a contest that sends a serial the next contact is 001. Click twice: the first click asks.',
   'contest.clear.confirm': {
-    one: 'Clear {{count}} contact? Click again',
-    other: 'Clear all {{count}} contacts? Click again',
+    one: 'Clear {{count}} contact? Serials restart at 001. Click again',
+    other: 'Clear all {{count}} contacts? Serials restart at 001. Click again',
   },
   'contest.clear.done': {
-    one: 'Took {{count}} contact out of the contest log. It is under Removed, where Restore puts it back.',
-    other: 'Took {{count}} contacts out of the contest log. They are under Removed, where Restore puts each back.',
+    one: 'Took {{count}} contact out of the contest log. It is under Removed, where Restore puts it back. Serials restart at 001.',
+    other: 'Took {{count}} contacts out of the contest log. They are under Removed, where Restore puts each back. Serials restart at 001.',
   },
   'contest.clear.club': 'The club log drops them too, on every laptop, as soon as the host has them.',
   'contest.clear.clubAway': 'This laptop is not with the club host right now: the club log drops them when the link is back.',

@@ -703,32 +703,76 @@ impl Spent {
 
     /// The header field, or nothing when no row was let go.
     fn header(&self) -> String {
-        if self.seq == 0 {
-            return String::new();
-        }
-        let value = format!("{}:{}", self.seq, self.when_unix);
-        format!("<{}:{}>{}\n", Self::TAG, value.len(), value)
+        header_field(Self::TAG, self.seq, self.when_unix)
     }
 
     /// The field read back from a journal's header. One this build cannot read is nothing
     /// let go, never an error: the rows still number themselves.
     fn from_header(header: &str) -> Spent {
-        let open = format!("<{}:", Self::TAG);
-        let Some(at) = header.to_ascii_uppercase().find(&open) else {
-            return Spent::default();
-        };
-        header[at + open.len()..]
-            .split_once('>')
-            .and_then(|(len, tail)| {
-                let value = tail.get(..len.trim().parse::<usize>().ok()?)?;
-                let (seq, when) = value.split_once(':')?;
-                Some(Spent {
-                    seq: seq.trim().parse().ok()?,
-                    when_unix: when.trim().parse().ok()?,
-                })
-            })
+        header_value(header, Self::TAG)
+            .map(|(seq, when_unix)| Spent { seq, when_unix })
             .unwrap_or_default()
     }
+}
+
+/// ⭐ **The latest Clear test contacts** ([`FieldDayLog::remove_all`]): the highest
+/// [`LoggedQso::seq`] given by then, and when it was made ([`FieldDayLog::cleared`]). `seq` 0:
+/// never.
+///
+/// It rides the journal's header as `<APP_NEXUS_CLEARED:n>seq:unix`, as [`Spent`] does, and only
+/// once a clear was made, so a journal never cleared is written exactly as before.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Cleared {
+    seq: u64,
+    when_unix: u64,
+}
+
+impl Cleared {
+    const TAG: &'static str = "APP_NEXUS_CLEARED";
+
+    /// ⭐ **Was the row with `seq`, logged at `when_unix`, logged before this clear — before it by
+    /// its seq AND by its time?** Such a row numbers nothing in the serial run.
+    ///
+    /// Either half alone would be wrong somewhere, and in the direction that sends a number twice.
+    /// The seq orders one session's rows whatever the clock does, where a clock stepped back would
+    /// put a contact logged after the clear before it. The time keeps the clear off a later
+    /// session's rows: a running's seqs may start again from 1 ([`FieldDayLog::spent`] counts
+    /// within its own running), below a clear made a year before. A row is passed over only when
+    /// both say so, so a half that misjudges a row can only count it: the run then skips a number,
+    /// and never sends one twice.
+    fn passed_over(&self, seq: u64, when_unix: u64) -> bool {
+        seq <= self.seq && when_unix <= self.when_unix
+    }
+
+    /// The header field, or nothing when no clear was made.
+    fn header(&self) -> String {
+        header_field(Self::TAG, self.seq, self.when_unix)
+    }
+
+    /// The field read back from a journal's header: `None` when it holds none this build can read.
+    fn from_header(header: &str) -> Option<Cleared> {
+        header_value(header, Self::TAG).map(|(seq, when_unix)| Cleared { seq, when_unix })
+    }
+}
+
+/// A journal header field holding a seq and a moment, `<TAG:n>seq:unix`: nothing for seq 0.
+fn header_field(tag: &str, seq: u64, when_unix: u64) -> String {
+    if seq == 0 {
+        return String::new();
+    }
+    let value = format!("{seq}:{when_unix}");
+    format!("<{tag}:{}>{value}\n", value.len())
+}
+
+/// A [`header_field`] read back out of a journal's header: `None` when it holds none that reads.
+fn header_value(header: &str, tag: &str) -> Option<(u64, u64)> {
+    let open = format!("<{tag}:");
+    let at = header.to_ascii_uppercase().find(&open)?;
+    let (len, tail) = header[at + open.len()..].split_once('>')?;
+    let (seq, when) = tail
+        .get(..len.trim().parse::<usize>().ok()?)?
+        .split_once(':')?;
+    Some((seq.trim().parse().ok()?, when.trim().parse().ok()?))
 }
 
 /// A dupe-checked contest log with scoring — and **the log IS the session**: its
@@ -845,6 +889,14 @@ pub struct FieldDayLog {
     /// out. Their numbers are [`spent`](Self::spent), as before. A record taken back
     /// (`APP_NEXUS_REMOVED`) is not kept: it ages out as it always did, and stays taken back.
     aged: Vec<AgedRecord>,
+    /// ⭐ **Where the serial run started again: the latest Clear test contacts**
+    /// ([`remove_all`](Self::remove_all)). Read from the journal's header and written back into it
+    /// ([`journal_adif`](Self::journal_adif)), so it outlives a restart.
+    ///
+    /// A fact about an event, not a second counter: the run is still re-derived from the rows
+    /// (`restore_row`), from the ones logged after the clear, as the live run counts them — a
+    /// contact the clear took out numbers nothing, restored or not.
+    cleared: Cleared,
 }
 
 impl FieldDayLog {
@@ -876,6 +928,7 @@ impl FieldDayLog {
             held: Vec::new(),
             spent: Spent::default(),
             aged: Vec::new(),
+            cleared: Cleared::default(),
         }
     }
 
@@ -1302,9 +1355,11 @@ impl FieldDayLog {
     /// rows), so each comes back on its own ([`Self::restore`]).
     ///
     /// `Changed` when the log is not what was named (a contact logged, removed or restored in
-    /// between), `Empty` when it holds none; either way nothing changes. ⚠️ **The numbers stay
-    /// spent**, as for [`Self::remove_last`]: the next contact's serial and seq follow the
-    /// cleared ones.
+    /// between), `Empty` when it holds none; either way nothing changes. ⚠️ **The seqs stay
+    /// spent, as for [`Self::remove_last`], and the serial run starts again at 1**: the next
+    /// contact's seq follows the cleared ones, and its serial is 1, after a restart too
+    /// (`cleared`). A contact restored after the clear keeps the serial it was sent and does not
+    /// move the run, so a later contact may send its number again.
     pub fn remove_all(
         &mut self,
         row_count: usize,
@@ -1336,6 +1391,16 @@ impl FieldDayLog {
             contact.push(row);
         }
         entries.push(self.took_out(contact, removed_unix));
+        // ⭐ **The serial run starts again at 1, and the seq does not**: test contacts cleared
+        // before the start leave the contest to begin at 001, while a club host drops a reissued
+        // seq as a repeat. Only here: a removal gives no number back, even of the last contact in
+        // the log. Kept as the clear itself, so a restart counts the run from the rows the live
+        // log counts it from.
+        self.cleared = Cleared {
+            seq: self.max_seq(),
+            when_unix: removed_unix,
+        };
+        self.session.restart_serials();
         Ok(entries)
     }
 
@@ -2132,7 +2197,8 @@ impl FieldDayLog {
     /// input merges nothing — never an error. Restored dupe keys keep the ROW's
     /// band, so they survive a mid-event QSY. A row the journal marks removed
     /// (`APP_NEXUS_REMOVED`) comes back REMOVED ([`removed`](Self::removed)), outside the
-    /// dupe index, with its seq and serial still counted.
+    /// dupe index, with its seq still counted, and its serial unless a clear took it out
+    /// (`cleared`).
     ///
     /// Returns what it found ([`AdifMerge`]): the rows it restored, and the records it could not
     /// read — no CALL, or cut off before their `<EOR>` — which the journal's reader keeps the
@@ -2150,6 +2216,10 @@ impl FieldDayLog {
             Some(i) => {
                 // The numbers of the rows an earlier restore let go (`spent`).
                 self.spent = self.spent.max(Spent::from_header(&text[..i]));
+                // The latest clear (`cleared`), as the journal holds it: never a mix of two.
+                if let Some(cleared) = Cleared::from_header(&text[..i]) {
+                    self.cleared = cleared;
+                }
                 &text[i + 5..]
             }
             None => text,
@@ -2272,11 +2342,12 @@ impl FieldDayLog {
     }
 
     /// ⭐ **The journal: the rows of [`adif`](Self::adif), each with the exchange it was sent
-    /// with; in its header the numbers of the rows a restore let go (`spent`); and the records
-    /// the restore held, then the ones it kept past its window** ([`aged`](Self::aged)), after
-    /// them, as the journal held them — what the engine writes the journal file from, so a row
-    /// kept out of this session is never dropped by a rewrite. Never an export: those carry this
-    /// log's rows alone, as [`adif`](Self::adif) writes them.
+    /// with; in its header the numbers of the rows a restore let go (`spent`) and the latest
+    /// clear (`cleared`); and the records the restore held, then the ones it kept past its
+    /// window** ([`aged`](Self::aged)), after them, as the journal held them — what the engine
+    /// writes the journal file from, so a row kept out of this session is never dropped by a
+    /// rewrite. Never an export: those carry this log's rows alone, as [`adif`](Self::adif)
+    /// writes them.
     pub fn journal_adif(&self) -> String {
         let removed = self
             .removed
@@ -2290,7 +2361,7 @@ impl FieldDayLog {
         // session running now, which a Settings edit never makes true, and nothing here can
         // know what the next session will be built from.
         let mut s = self.adif_of(
-            &self.spent.header(),
+            &(self.spent.header() + &self.cleared.header()),
             self.qsos.iter().map(|q| (q, None)).chain(removed),
             true,
             false,
@@ -2585,7 +2656,13 @@ impl FieldDayLog {
         // source of truth for one fact, and the two come apart exactly where it matters: a
         // journal that lost rows to `min_when_unix`, a partial restore, an operator who
         // edited the file. Reading the rows cannot drift from the rows.
-        if let Some(n) = issued_serial(spec, &tx) {
+        //
+        // Only from the rows logged since the latest clear, which is a fact about an event
+        // rather than a counter (`cleared`): a contact the clear took out numbers nothing,
+        // restored or not, as in the live run.
+        if let Some(n) =
+            issued_serial(spec, &tx).filter(|_| !self.cleared.passed_over(seq, when_unix))
+        {
             self.session.next_serial = self.session.next_serial.max(n + 1);
         }
         // Resolved on the RESTORE path too, and from the call the row carries — a

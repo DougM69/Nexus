@@ -797,3 +797,134 @@ fn clearing_names_where_each_contact_had_already_gone() {
         "…and it stays in the logbook: nothing taken back"
     );
 }
+
+/// A Sweepstakes CW engine, a contest that sends a serial — journaling to `path` when one is given,
+/// and entered as a relaunch enters it: a fresh engine whose contest mode reads the journal back.
+fn ss_engine(path: Option<&std::path::Path>) -> Engine {
+    let mut e = Engine::new("W9XYZ", "EN50", 0);
+    let mut s = e.settings().clone();
+    s.mycall = "W9XYZ".into();
+    s.fd_active = true;
+    s.fd_event = "arrlss_cw".into();
+    s.fd_section = "WI".into();
+    s.contest_check = "74".into();
+    s.contest_category_assisted = "NON-ASSISTED".into();
+    s.contest_category_power = "LOW".into();
+    e.apply_settings(s);
+    if let Some(path) = path {
+        e.set_fd_log_path(path.to_path_buf());
+    }
+    e.set_mode("fieldday-sp").expect("Sweepstakes runs");
+    e
+}
+
+/// Log a Sweepstakes contact with `call` from the strip, and answer the serial its row sent.
+fn ss(e: &mut Engine, call: &str) -> String {
+    assert!(e
+        .contest_log_manual(
+            call,
+            &fields(&[
+                ("NR", "12"),
+                ("PREC", "A"),
+                ("CALL", call),
+                ("CK", "71"),
+                ("SEC", "CT")
+            ]),
+            "CW",
+            None
+        )
+        .unwrap());
+    let fd = e.snapshot().field_day.expect("the contest runs");
+    let row = fd
+        .log
+        .iter()
+        .rev()
+        .find(|q| q.call == call)
+        .expect("logged");
+    row.sent
+        .iter()
+        .find(|(slot, _)| slot == "NR")
+        .map(|(_, nr)| nr.clone())
+        .expect("Sweepstakes sends a serial")
+}
+
+/// The serial the strip shows it will send next: the first word of the exchange it reads out.
+fn shown(e: &Engine) -> String {
+    let fd = e.snapshot().field_day.expect("the contest runs");
+    fd.composing_text
+        .split(' ')
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The live rows' club seqs.
+fn seqs(e: &Engine) -> Vec<u64> {
+    let fd = e.snapshot().field_day.expect("the contest runs");
+    fd.log.iter().map(|q| q.seq).collect()
+}
+
+/// ⭐ **Clear test contacts starts a serial contest's run again at 1 — on the strip, on the next
+/// contact, across a Run/S&P switch and across a relaunch — and the club seq goes on** from the
+/// cleared contacts'. The relaunch is a second engine reading the journal file a crash leaves.
+#[test]
+fn clearing_restarts_the_serial_run_and_a_relaunch_agrees() {
+    let path = std::env::temp_dir().join(format!(
+        "nexus_contest_clear_serial_{}_{}.adi",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let mut e = ss_engine(Some(&path));
+    assert_eq!(ss(&mut e, "K2DEF"), "1");
+    assert_eq!(ss(&mut e, "W1AW"), "2");
+    assert_eq!(shown(&e), "3", "premise: the strip reads the serial");
+    let (call, when) = newest(&e);
+    assert!(matches!(e.contest_clear(2, &call, when), Ok(Ok(_))));
+    assert_eq!(shown(&e), "1", "the strip sends 1 next");
+    e.set_mode("fieldday-run").expect("Sweepstakes runs");
+    assert_eq!(
+        shown(&e),
+        "1",
+        "a Run/S&P switch reads the journal back, and keeps it"
+    );
+    e.journal_mark().wait();
+
+    let mut back = ss_engine(Some(&path));
+    assert_eq!(
+        back.contest_removed().len(),
+        2,
+        "premise: the relaunch read the journal"
+    );
+    assert_eq!(shown(&back), "1", "a relaunch sends 1 next too");
+    assert_eq!(ss(&mut back, "K3GHI"), "1");
+    assert_eq!(seqs(&back), [3], "the club seq goes on");
+    back.journal_mark().wait();
+    drop(back);
+
+    let mut again = ss_engine(Some(&path));
+    assert_eq!(shown(&again), "2");
+    assert_eq!(ss(&mut again, "N4JKL"), "2");
+    assert_eq!(seqs(&again), [3, 4]);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// ⭐ **A station half-worked before the clear takes no number into the new run.** A committed call
+/// holds the number it was given until it is logged; after Clear test contacts the next call
+/// committed is not handed the number in flight, and a station called during the test and worked
+/// later gets the next number of the new run, not its old one.
+#[test]
+fn clearing_releases_the_numbers_of_stations_half_worked_before_it() {
+    let mut e = ss_engine(None);
+    assert_eq!(ss(&mut e, "K2DEF"), "1");
+    e.contest_working("W1AW").unwrap(); // given 2
+    e.contest_entry_reset(); // wiped: W1AW keeps its 2
+    e.contest_working("N5XYZ").unwrap(); // given 3, in flight
+    assert_eq!(shown(&e), "3", "premise: N5XYZ's number is in flight");
+    let (call, when) = newest(&e);
+    assert!(matches!(e.contest_clear(1, &call, when), Ok(Ok(_))));
+    assert_eq!(shown(&e), "1", "not N5XYZ's 3");
+    assert_eq!(ss(&mut e, "K3GHI"), "1");
+    assert_eq!(ss(&mut e, "N4JKL"), "2");
+    assert_eq!(ss(&mut e, "W1AW"), "3", "not W1AW's 2 again");
+}

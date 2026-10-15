@@ -13,10 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event's log unless you deleted the journal file with Nexus closed. **Clear test contacts**, beside
   the exports, takes every contact of this running out of the contest log at once: the first click
   names how many, and a second within 5 seconds clears them. Each goes as Remove takes one: it waits
-  under Removed, where Restore puts it back, it leaves the score, the dupe check and every export,
-  and its serial number is not used again, so the next contact carries the number after it. At a
-  club only this laptop's contacts go, and the club drops them on every laptop as it drops a
-  removed one. Nothing transmits.
+  under Removed, where Restore puts it back, and it leaves the score, the dupe check and every
+  export. In a contest that sends a serial the numbers start again: the next contact is 001, after
+  a restart too. A contact you restore afterwards keeps the number it was sent, so a later contact
+  can send that number again. At a club only this laptop's contacts go, and the club drops them on
+  every laptop as it drops a removed one. Nothing transmits.
 - **Settings ▸ Licenses shows Nexus's NOTICE.** The Licenses screen now opens with the NOTICE file
   the installers carry, before the license texts of the interface's npm packages and the Rust
   crates.

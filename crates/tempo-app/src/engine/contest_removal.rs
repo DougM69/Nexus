@@ -4,8 +4,8 @@
 //! ([`FieldDayLog::remove_last`](tempo_core::fieldday::FieldDayLog::remove_last)) and its
 //! journal keeps it marked, so the serial and the club seq it was given stay spent and the
 //! contest screen can restore it exactly. Clear test contacts takes every contact out the same
-//! way, each its own removal ([`Engine::contest_clear`]). **Nothing here keys, unkeys or stops a
-//! transmission.**
+//! way, each its own removal, and starts the serial run again at 1 ([`Engine::contest_clear`]).
+//! **Nothing here keys, unkeys or stops a transmission.**
 //!
 //! ⭐ **At a club the club takes it back too**, at a position or at the host (a host is just
 //! another position): the removed rows' seqs, and a restore's rows, are what this position owes
@@ -133,8 +133,9 @@ impl Engine {
     /// a test before the start: every contact of this running leaves the contest log, each as
     /// [`Self::contest_remove_last`] takes the newest
     /// ([`FieldDayLog::remove_all`](tempo_core::fieldday::FieldDayLog::remove_all)): kept under
-    /// Removed for Restore, its serial and seq spent, the journal keeping it marked. Only when the
-    /// log is still what the screen named: `row_count` rows, the newest contact `call` at `when_unix`.
+    /// Removed for Restore, its seq spent, the journal keeping it marked, and the serial run
+    /// starting again at 1, after a restart too. Only when the log is still what the screen named:
+    /// `row_count` rows, the newest contact `call` at `when_unix`.
     /// At a club the club takes each back too, as a removal goes (each answer's `club`): this
     /// laptop's log holds only its own contacts, and every removed row is a take-back the club
     /// sync owes the host ([`Self::fd_sync_marks`]). `Err` only when no contest runs.

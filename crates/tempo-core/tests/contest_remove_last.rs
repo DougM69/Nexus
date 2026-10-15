@@ -548,10 +548,19 @@ fn clearing_takes_every_contact_out_each_kept_as_a_removal_is() {
     );
 }
 
-/// ⭐ **Clearing gives no number back**, as a removal gives none: in a serial contest, and across a
-/// restart, the next contact's serial and seq follow the cleared ones.
+/// The Sweepstakes journal `log` writes, read back at `now` into a fresh session the way a relaunch
+/// reads it: the engine's own restore, with its four-day window.
+fn relaunch(log: &FieldDayLog, now: u64) -> FieldDayLog {
+    let mut back = FieldDayLog::new("W9XYZ", ss_session(), "20m");
+    back.restore_journal(&log.journal_adif(), now - 4 * 86_400, now);
+    back
+}
+
+/// ⭐ **Clear test contacts starts the serial run again at 1, and only the serial run**: the first
+/// contact after it sends 1 under a seq of its own, after the cleared contacts' (a club host drops
+/// a reissued seq as a repeat). The cleared contacts keep the serials they were sent.
 #[test]
-fn clearing_never_reissues_a_serial_or_a_seq() {
+fn clearing_restarts_the_serial_run_at_1_and_never_reissues_a_seq() {
     let mut log = FieldDayLog::new("W9XYZ", ss_session(), "20m");
     let issued: Vec<String> = ["K2DEF", "W1AW"]
         .iter()
@@ -561,17 +570,223 @@ fn clearing_never_reissues_a_serial_or_a_seq() {
     assert_eq!(issued, ["1", "2"]);
     log.remove_all(2, "W1AW", SS + 60, SS + 90)
         .expect("the log is what was named");
-    assert_eq!(log.session.next_serial, 3, "a clear gives no number back");
+    assert_eq!(log.session.serial_now(), Some(1), "the strip shows 1");
 
-    let mut restored = restart(&log.adif(), ss_session());
-    assert_eq!(restored.removed(), log.removed());
+    assert_eq!(ss_work(&mut log, "K3GHI", SS + 600), "1");
+    assert_eq!(log.qsos()[0].seq, 3, "the club seq goes on");
+    let kept: Vec<&str> = log
+        .removed()
+        .iter()
+        .flat_map(|r| &r.rows)
+        .map(|q| serial_of(&q.tx))
+        .collect();
+    assert_eq!(kept, ["1", "2"], "the cleared contacts keep what they sent");
+    assert_eq!(ss_work(&mut log, "N4JKL", SS + 660), "2");
+    assert_eq!(log.qsos()[1].seq, 4);
+}
+
+/// ⭐ **A relaunch after a clear gives the next serial the live log gives**, before the first
+/// contact and after it, and a relaunched log writes the clear back for the next relaunch. The clear
+/// is made in the second the last test contact was logged in, which still clears it.
+#[test]
+fn a_relaunch_after_a_clear_gives_the_next_serial_the_live_log_gives() {
+    let mut log = FieldDayLog::new("W9XYZ", ss_session(), "20m");
+    ss_work(&mut log, "K2DEF", SS);
+    ss_work(&mut log, "W1AW", SS + 60);
+    log.remove_all(2, "W1AW", SS + 60, SS + 60)
+        .expect("the log is what was named");
+
+    let back = relaunch(&log, SS + 300);
     assert_eq!(
-        (restored.max_seq(), restored.session.next_serial),
-        (2, 3),
-        "(the club seq high-water, the next serial) both continue past the cleared contacts"
+        back.removed(),
+        log.removed(),
+        "the cleared contacts come back removed"
     );
-    assert_eq!(ss_work(&mut restored, "K3GHI", SS + 600), "3");
-    assert_eq!(restored.qsos().last().unwrap().seq, 3);
+    assert_eq!(
+        (back.max_seq(), back.session.serial_now()),
+        (2, Some(1)),
+        "(the club seq high-water, the next serial)"
+    );
+    let mut back = relaunch(&back, SS + 400);
+    assert_eq!(
+        back.session.serial_now(),
+        Some(1),
+        "a relaunched log keeps the clear in its journal"
+    );
+    assert_eq!(ss_work(&mut back, "K3GHI", SS + 600), "1");
+    assert_eq!(back.qsos()[0].seq, 3);
+
+    let mut again = relaunch(&back, SS + 900);
+    assert_eq!(
+        rows(&again),
+        rows(&back),
+        "the contact after the clear is back"
+    );
+    assert_eq!((again.max_seq(), again.session.serial_now()), (3, Some(2)));
+    assert_eq!(ss_work(&mut again, "N4JKL", SS + 960), "2");
+    assert_eq!(again.qsos()[1].seq, 4);
+}
+
+/// ⭐ **Only Clear test contacts starts the run again.** Remove, and the Logbook delete that takes
+/// a row out by its seq, give no number back even when they empty the log: the next contact sends
+/// the number after them, before and after a relaunch.
+#[test]
+fn emptying_the_log_without_clear_gives_no_number_back() {
+    for by_remove_last in [true, false] {
+        let mut log = FieldDayLog::new("W9XYZ", ss_session(), "20m");
+        ss_work(&mut log, "K2DEF", SS);
+        ss_work(&mut log, "W1AW", SS + 60);
+        if by_remove_last {
+            log.remove_last("W1AW", SS + 60, SS + 90)
+                .expect("the newest");
+            log.remove_last("K2DEF", SS, SS + 95)
+                .expect("then the other");
+        } else {
+            log.remove_row(1, SS + 90).expect("seq 1");
+            log.remove_row(2, SS + 95).expect("seq 2");
+        }
+        assert!(log.qsos().is_empty(), "premise: the log is empty");
+        assert_eq!(
+            log.session.serial_now(),
+            Some(3),
+            "removed, not cleared (Remove: {by_remove_last})"
+        );
+        assert_eq!(
+            relaunch(&log, SS + 300).session.serial_now(),
+            Some(3),
+            "…and after a relaunch (Remove: {by_remove_last})"
+        );
+        assert_eq!(ss_work(&mut log, "K3GHI", SS + 600), "3");
+    }
+}
+
+/// ⭐ **A clear the log refuses restarts nothing**: the run goes on, and the journal records no
+/// clear.
+#[test]
+fn a_refused_clear_leaves_the_serial_run_and_the_journal_alone() {
+    let mut log = FieldDayLog::new("W9XYZ", ss_session(), "20m");
+    ss_work(&mut log, "K2DEF", SS);
+    ss_work(&mut log, "W1AW", SS + 60);
+    let journal = log.journal_adif();
+    assert_eq!(
+        log.remove_all(1, "K2DEF", SS, SS + 90),
+        Err(RemoveRefusal::Changed),
+        "W1AW was logged after the screen counted the log"
+    );
+    assert_eq!(log.session.serial_now(), Some(3));
+    assert_eq!(log.journal_adif(), journal);
+    assert_eq!(ss_work(&mut log, "K3GHI", SS + 600), "3");
+}
+
+/// ⭐ **A contact restored after a clear comes back with the serial it was sent, and does not move
+/// the run**: the next contact still sends 1, and the one after sends 2 again, beside the restored 2
+/// — the old numbers come back alongside the new ones. A relaunch agrees before and after.
+#[test]
+fn a_contact_restored_after_a_clear_keeps_its_serial_and_the_run_may_send_it_again() {
+    let mut log = FieldDayLog::new("W9XYZ", ss_session(), "20m");
+    ss_work(&mut log, "K2DEF", SS);
+    ss_work(&mut log, "W1AW", SS + 60);
+    let gone = log
+        .remove_all(2, "W1AW", SS + 60, SS + 90)
+        .expect("the log is what was named");
+    let back = log.restore(gone[1].id()).expect("W1AW comes back");
+    assert_eq!(rows(&log), back.rows, "exactly as it was");
+    assert_eq!((serial_of(&log.qsos()[0].tx), log.qsos()[0].seq), ("2", 2));
+    assert_eq!(
+        log.session.serial_now(),
+        Some(1),
+        "the restore leaves the run at 1"
+    );
+    assert_eq!(
+        relaunch(&log, SS + 120).session.serial_now(),
+        Some(1),
+        "…after a relaunch too"
+    );
+
+    assert_eq!(ss_work(&mut log, "K3GHI", SS + 600), "1");
+    assert_eq!(ss_work(&mut log, "N4JKL", SS + 660), "2");
+    let sent: Vec<&str> = log.qsos().iter().map(|q| serial_of(&q.tx)).collect();
+    assert_eq!(
+        sent,
+        ["2", "1", "2"],
+        "W1AW restored, then the two new contacts"
+    );
+    let again = relaunch(&log, SS + 900);
+    assert_eq!(rows(&again), rows(&log));
+    assert_eq!(
+        again.session.serial_now(),
+        Some(3),
+        "a relaunch numbers on from the new contacts alone"
+    );
+}
+
+/// ⭐ **A contact logged after the clear counts by its seq, whatever the clock says**: with the
+/// clock stepped back past the clear, a relaunch still numbers on from it.
+#[test]
+fn a_contact_after_the_clear_counts_though_the_clock_stepped_back() {
+    let mut log = FieldDayLog::new("W9XYZ", ss_session(), "20m");
+    ss_work(&mut log, "K2DEF", SS);
+    ss_work(&mut log, "W1AW", SS + 60);
+    log.remove_all(2, "W1AW", SS + 60, SS + 90)
+        .expect("the log is what was named");
+    // The clock steps back a minute: the next contact is stamped before the clear.
+    assert_eq!(ss_work(&mut log, "K3GHI", SS + 30), "1");
+    assert_eq!(
+        relaunch(&log, SS + 300).session.serial_now(),
+        Some(2),
+        "its 1 is never sent again"
+    );
+}
+
+/// ⭐ **A clear reaches only the contacts logged before it.** A year on, the journal still holds
+/// the clear, and the next running's contacts are numbered from 1 again, seq and serial both: they
+/// came after the clear by its time, so a relaunch numbers on from them.
+#[test]
+fn a_clear_from_an_earlier_running_never_reaches_a_later_ones_contacts() {
+    let mut log = FieldDayLog::new("W9XYZ", ss_session(), "20m");
+    ss_work(&mut log, "K2DEF", SS);
+    ss_work(&mut log, "W1AW", SS + 60);
+    ss_work(&mut log, "N5XYZ", SS + 120);
+    log.remove_all(3, "N5XYZ", SS + 120, SS + 180)
+        .expect("the log is what was named");
+    let year = 365 * 86_400;
+    let mut next = relaunch(&log, SS + year);
+    assert_eq!(
+        next.max_seq(),
+        0,
+        "premise: the next running numbers its seqs from 1"
+    );
+    ss_work(&mut next, "K3GHI", SS + year + 60);
+    ss_work(&mut next, "N4JKL", SS + year + 120);
+    assert_eq!(
+        next.qsos().iter().map(|q| q.seq).collect::<Vec<_>>(),
+        [1, 2],
+        "premise: at or below the clear's seq"
+    );
+    let back = relaunch(&next, SS + year + 600);
+    assert_eq!(rows(&back), rows(&next));
+    assert_eq!(back.session.serial_now(), Some(3));
+}
+
+/// ⭐ **A journal written before a clear restarted the run loads as it did.** The fixture was
+/// written by the build before: two Sweepstakes contacts, sent 1 and 2, then Clear test contacts —
+/// both rows marked removed, and no clear in its header. The run numbers on past them, as it did,
+/// and the journal is written back byte for byte, with no clear read into it.
+#[test]
+fn a_journal_cleared_before_the_restart_existed_numbers_on_past_its_contacts() {
+    let journal = include_str!("fixtures/contest-journals/ss-cleared-before-restart.adi");
+    let mut back = FieldDayLog::new("W9XYZ", ss_session(), "20m");
+    back.restore_journal(journal, SS + 300 - 4 * 86_400, SS + 300);
+    let kept: Vec<&str> = back
+        .removed()
+        .iter()
+        .flat_map(|r| &r.rows)
+        .map(|q| serial_of(&q.tx))
+        .collect();
+    assert_eq!(kept, ["1", "2"], "premise: both cleared contacts are read");
+    assert_eq!((back.max_seq(), back.session.serial_now()), (2, Some(3)));
+    assert_eq!(back.journal_adif(), journal);
+    assert_eq!(ss_work(&mut back, "K3GHI", SS + 600), "3");
 }
 
 /// If the log is not what the screen named — a contact logged, removed or restored in between —

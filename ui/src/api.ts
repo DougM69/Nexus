@@ -852,8 +852,8 @@ export type ContestClearAnswer =
 
 /** ⭐ **Clear test contacts** — every contact of this running out of the contest log, each kept
  *  under Removed as `contestRemoveLast` keeps one, when the log is still what the screen named
- *  (`rowCount` rows, the newest contact `call` at `whenUnix`), else `refused: changed`. Serials and
- *  club seqs stay spent. At a club the club takes each back too (`club`). Answers once the contest
+ *  (`rowCount` rows, the newest contact `call` at `whenUnix`), else `refused: changed`. Club seqs
+ *  stay spent, and the serial run starts again at 1. At a club the club takes each back too (`club`). Answers once the contest
  *  journal holds the change. Never keys or stops TX. */
 export async function contestClear(rowCount: number, call: string, whenUnix: number): Promise<ContestClearAnswer> {
   return invoke<ContestClearAnswer>('contest_clear', { rowCount, call, whenUnix })

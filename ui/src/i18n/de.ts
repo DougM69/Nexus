@@ -4584,9 +4584,10 @@ export const DE: PartialCatalog = {
   "fieldDay.removed.failed": "Nexus could not restore the contact.",
   "fieldDay.removed.restore.remote": "Only at the station: a press through Remote restores no contact.",
   "contest.clear.label": "Test-QSOs entfernen",
-  "contest.clear.title": "Nimmt jedes QSO dieses Durchgangs aus dem Contest-Log, für QSOs, die vor dem Start zum Test geloggt wurden. Jedes bleibt unter „Removed“ erhalten, wo „Restore“ es zurückholt, und seine Seriennummer wird nicht wieder vergeben. Zweimal klicken: Der erste Klick fragt nach.",
-  "contest.clear.confirm": { "one": "{{count}} QSO entfernen? Noch einmal klicken", "other": "Alle {{count}} QSOs entfernen? Noch einmal klicken" },
-  "contest.clear.done": { "one": "{{count}} QSO aus dem Contest-Log genommen. Es steht unter „Removed“, wo „Restore“ es zurückholt.", "other": "{{count}} QSOs aus dem Contest-Log genommen. Sie stehen unter „Removed“, wo „Restore“ jedes einzeln zurückholt." },
+  // Clear test contacts starts the serial numbers again at 001: MACHINE TRANSLATION, for a native speaker to check.
+  "contest.clear.title": "Nimmt jedes QSO dieses Durchgangs aus dem Contest-Log, für QSOs, die vor dem Start zum Test geloggt wurden. Jedes bleibt unter „Removed“ erhalten, wo „Restore“ es zurückholt, und in einem Contest mit Seriennummern erhält das nächste QSO die 001. Zweimal klicken: Der erste Klick fragt nach.",
+  "contest.clear.confirm": { "one": "{{count}} QSO entfernen? Seriennummern beginnen wieder bei 001. Noch einmal klicken", "other": "Alle {{count}} QSOs entfernen? Seriennummern beginnen wieder bei 001. Noch einmal klicken" },
+  "contest.clear.done": { "one": "{{count}} QSO aus dem Contest-Log genommen. Es steht unter „Removed“, wo „Restore“ es zurückholt. Seriennummern beginnen wieder bei 001.", "other": "{{count}} QSOs aus dem Contest-Log genommen. Sie stehen unter „Removed“, wo „Restore“ jedes einzeln zurückholt. Seriennummern beginnen wieder bei 001." },
   "contest.clear.club": "Das Club-Log nimmt sie auch heraus, auf jedem Laptop, sobald der Host sie hat.",
   "contest.clear.clubAway": "Dieser Laptop ist gerade nicht mit dem Club-Host verbunden: Das Club-Log nimmt sie heraus, sobald die Verbindung wieder steht.",
   "contest.clear.sentTo": "Einige wurden schon an {{places}} gesendet: Dort auch löschen.",

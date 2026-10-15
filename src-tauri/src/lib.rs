@@ -29218,8 +29218,8 @@ enum ContestClearDto {
 /// ⭐ **Clear test contacts** — the contest screen's two-click action: every contact of this
 /// running out of the contest log, each the way [`contest_remove_last`] takes the newest, when the
 /// log is still what the screen named (`row_count` rows, the newest contact `call` at `when_unix`).
-/// Kept under Removed, never deleted; serials and club seqs stay spent. At a club the club takes
-/// each back too (`club`). Answers once the contest journal holds the change; the logbook's copies
+/// Kept under Removed, never deleted; club seqs stay spent, and the serial run starts again at 1.
+/// At a club the club takes each back too (`club`). Answers once the contest journal holds the change; the logbook's copies
 /// are read with the engine lock released, on the blocking pool, in one read.
 ///
 /// ⛔ Not one of Remote's operations: removal is refused from afar.

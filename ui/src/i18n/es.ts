@@ -1696,9 +1696,10 @@ export const ES: PartialCatalog = {
   "fieldDay.removed.failed": "Nexus could not restore the contact.",
   "fieldDay.removed.restore.remote": "Only at the station: a press through Remote restores no contact.",
   "contest.clear.label": "Quitar contactos de prueba",
-  "contest.clear.title": "Quita del registro del concurso todos los contactos de esta edición, para los que anotaste como prueba antes del inicio. Cada uno se guarda en «Removed», donde «Restore» lo devuelve, y su número de serie no se vuelve a usar. Haz clic dos veces: el primer clic pregunta.",
-  "contest.clear.confirm": { "one": "¿Quitar {{count}} contacto? Vuelve a hacer clic", "other": "¿Quitar los {{count}} contactos? Vuelve a hacer clic" },
-  "contest.clear.done": { "one": "Se quitó {{count}} contacto del registro del concurso. Está en «Removed», donde «Restore» lo devuelve.", "other": "Se quitaron {{count}} contactos del registro del concurso. Están en «Removed», donde «Restore» devuelve cada uno." },
+  // Clear test contacts starts the serial numbers again at 001: MACHINE TRANSLATION, for a native speaker to check.
+  "contest.clear.title": "Quita del registro del concurso todos los contactos de esta edición, para los que anotaste como prueba antes del inicio. Cada uno se guarda en «Removed», donde «Restore» lo devuelve, y en un concurso con número de serie el siguiente contacto es el 001. Haz clic dos veces: el primer clic pregunta.",
+  "contest.clear.confirm": { "one": "¿Quitar {{count}} contacto? Los números de serie vuelven a empezar en 001. Vuelve a hacer clic", "other": "¿Quitar los {{count}} contactos? Los números de serie vuelven a empezar en 001. Vuelve a hacer clic" },
+  "contest.clear.done": { "one": "Se quitó {{count}} contacto del registro del concurso. Está en «Removed», donde «Restore» lo devuelve. Los números de serie vuelven a empezar en 001.", "other": "Se quitaron {{count}} contactos del registro del concurso. Están en «Removed», donde «Restore» devuelve cada uno. Los números de serie vuelven a empezar en 001." },
   "contest.clear.club": "El registro del club también los quita, en cada portátil, en cuanto el anfitrión los tenga.",
   "contest.clear.clubAway": "Este portátil no está conectado ahora al anfitrión del club: el registro del club los quitará cuando vuelva el enlace.",
   "contest.clear.sentTo": "Algunos ya se enviaron a {{places}}: bórralos también allí.",
