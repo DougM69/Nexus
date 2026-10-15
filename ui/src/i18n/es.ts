@@ -1012,6 +1012,7 @@ export const ES: PartialCatalog = {
   'bandPicker.txLock.splitTitle':
     'TX bloqueado — su frecuencia de transmisión en split, {{tx}} MHz, está fuera de los privilegios de su licencia. Recibir en {{rx}} MHz no supone ningún problema.',
   "bandPicker.txLock.title": "Esta frecuencia/modo queda fuera de los privilegios de tu licencia — la transmisión está bloqueada. Elige una banda arriba o cambia tu clase de licencia en Ajustes.",
+  "bandPicker.txLock.usbOnlyTitle": "En 60 m solo se permite Phone en USB — la transmisión está bloqueada. Elige USB o AUTO.",
   "bandStrip.age.hours": "hace {{hours}}h",
   "bandStrip.age.mins": "hace {{mins}}m",
   "bandStrip.age.secs": "hace {{secs}}s",
@@ -3948,6 +3949,7 @@ export const ES: PartialCatalog = {
   "phone.mode.auto.title": "AUTO — banda lateral según la banda (ahora {{sideband}}); un cambio de banda lo vuelve a aplicar",
   "phone.mode.failed": "No se pudo fijar el modo",
   "phone.mode.force.title": "Forzar {{mode}} hasta que cambies de banda",
+  "phone.mode.usbOnly": "En 60 m solo se permite Phone en USB",
   "phone.noCat.label": "⚠ sin control del equipo",
   "phone.noCat.title": "Sin enlace CAT — configura un equipo rigctld/CAT en Ajustes para que la app pueda cambiar el modo y seguir el dial. Con PTT por VOX o por RTS-DTR el equipo no tiene canal de mando.",
   "phone.pane.bandActivity.title": "Actividad de banda",
@@ -4072,6 +4074,7 @@ export const ES: PartialCatalog = {
   "phone.split.on.title": "Split activo — TX {{freq}} MHz. Pulsa para simplex.",
   "phone.split.setFailed": "No se pudo activar el Split",
   "phone.tx.locked": "TX bloqueado — esta frecuencia o modo está fuera de tus privilegios de licencia",
+  "phone.tx.usbOnly": "TX bloqueado — en 60 m solo se permite Phone en USB. Elige USB o AUTO.",
   "phone.tx.turnedBackOn": "El TX estaba apagado — se ha vuelto a activar. Pulsa PTT otra vez para hablar.",
   "phone.tx.remoteLock": "Lock (PTT manos libres) no funciona a través de Remote. Desmarca Lock y mantén pulsado PTT o la barra espaciadora para hablar.",
   "phone.tx.clockRepair": "No se ha transmitido: hay una reparación del reloj en marcha y ninguna transmisión empieza hasta que termine (dos minutos como máximo).",

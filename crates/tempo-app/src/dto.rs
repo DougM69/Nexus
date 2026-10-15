@@ -1518,6 +1518,17 @@ pub struct RadioStatus {
     /// transmitting on (field report 2026-08-25). `None` on an old snapshot.
     #[serde(default)]
     pub tx_emission_mhz: Option<f64>,
+    /// Upper sideband is the only phone the licence allows where this radio transmits: 60 m, for
+    /// every US class (`privileges::usb_only_phone`). The Phone cockpit greys its LSB, AM and FM
+    /// picks and says why. Skipped when false, so every other snapshot is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub phone_usb_only: bool,
+    /// The licence lock is the phone MODE alone: the pick is LSB, AM or FM on 60 m, and a USB pick
+    /// would key (`Engine::phone_mode_refused`). `tx_allowed` is false with it, and the cockpit
+    /// names that rule instead of "this frequency is outside your license privileges". Skipped
+    /// when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub phone_mode_refused: bool,
     /// Whether the operator is holding a steady tune carrier (for ATU / amp
     /// tuning). While true the radio plays a continuous f0 sine instead of slots.
     #[serde(default)]

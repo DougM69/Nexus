@@ -23,6 +23,10 @@ The mode chips — **AUTO / USB / LSB / FM** — set what the cockpit commands, 
 AUTO shows the sideband it settled on (`AUTO·USB`, `AUTO·FM`). If the rig's own
 mode knob disagrees, a **rig:** badge appears beside them naming what the radio
 is actually on; logging and TX follow the commanded mode until you match it up.
+On 60 m a US licence class may talk only upper sideband, so LSB, AM and FM are
+greyed out there, and hovering one says why. If TX is locked on 60 m only
+because the mode is not USB, 🔒 TX LOCKED says "60 m allows only USB phone"
+instead of blaming the frequency.
 
 **The bandscope** is a fast (~30 Hz) colored display split into a panadapter
 trace and a scrolling waterfall, with per-frame AGC so signals stay visible as

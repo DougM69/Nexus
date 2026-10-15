@@ -6126,6 +6126,9 @@ export const EN = {
     'TX locked — your split transmit frequency, {{tx}} MHz, is outside your license privileges. Receiving on {{rx}} MHz is fine.',
   'bandPicker.txLock.title':
     'This frequency/mode is outside your license privileges — transmit is blocked. Pick a band above, or change your license class in Settings.',
+  // The lock when the phone MODE is the whole reason: LSB, AM or FM on 60 m, where USB would key.
+  'bandPicker.txLock.usbOnlyTitle':
+    '60 m allows only USB phone — transmit is blocked. Pick USB or AUTO.',
 
   'freq.control.aria': 'Frequency control',
   'freq.channel.label': 'Band / Channel',
@@ -10759,6 +10762,9 @@ export const EN = {
   'phone.mode.auto.title':
     'AUTO — sideband by band (now {{sideband}}); a band change re-asserts this',
   'phone.mode.force.title': 'Force {{mode}} until you change bands',
+  // The tooltip on the greyed LSB, AM and FM buttons on 60 m, where a US licence allows upper
+  // sideband only. "USB" is a mode name.
+  'phone.mode.usbOnly': '60 m allows only USB phone',
   'phone.mode.failed': 'Could not set mode',
   'phone.header.power.label': 'Power',
   'phone.header.power.title': 'RF output power',
@@ -10834,6 +10840,9 @@ export const EN = {
   // The BUTTON stays written in the cockpit (it is the stop-line census); these are the
   // toasts it raises, and a toast is neither a control nor anything a sweep can see.
   'phone.tx.locked': 'TX locked — this frequency/mode is outside your license privileges',
+  // …when the phone MODE is the whole reason: LSB, AM or FM on 60 m, where USB would key.
+  // "USB" and "AUTO" are the mode buttons' own names.
+  'phone.tx.usbOnly': 'TX locked — 60 m allows only USB phone. Pick USB or AUTO.',
   'phone.tx.turnedBackOn': 'TX was off — turned it back on. Press PTT again to talk.',
   'phone.tx.remoteLock': 'Lock (hands-free PTT) does not work over Remote. Untick Lock, then hold PTT or the Space bar to talk.',
   'phone.tx.clockRepair':

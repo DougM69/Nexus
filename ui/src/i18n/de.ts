@@ -3385,6 +3385,7 @@ export const DE: PartialCatalog = {
   'bandPicker.txLock.splitTitle':
     'TX gesperrt — Ihre Split-Sendefrequenz, {{tx}} MHz, liegt außerhalb Ihrer Lizenzrechte. Der Empfang auf {{rx}} MHz ist in Ordnung.',
   "bandPicker.txLock.title": "Diese Frequenz/Betriebsart liegt außerhalb der Lizenzrechte — Senden ist gesperrt. Oben ein Band wählen oder die Lizenzklasse in den Einstellungen ändern.",
+  "bandPicker.txLock.usbOnlyTitle": "Auf 60 m ist nur Phone in USB erlaubt — Senden ist gesperrt. USB oder AUTO wählen.",
   "freq.control.aria": "Frequenzsteuerung",
   "freq.channel.label": "Band / Kanal",
   "freq.channel.aria": "Bandplan-Kanal",
@@ -6361,6 +6362,7 @@ export const DE: PartialCatalog = {
   "phone.mode.aria": "Phone-Betriebsart",
   "phone.mode.auto.title": "AUTO — Seitenband je nach Band (jetzt {{sideband}}); ein Bandwechsel setzt das erneut",
   "phone.mode.force.title": "{{mode}} erzwingen, bis Sie das Band wechseln",
+  "phone.mode.usbOnly": "Auf 60 m ist nur Phone in USB erlaubt",
   "phone.mode.failed": "Betriebsart konnte nicht gesetzt werden",
   "phone.header.power.label": "Pwr",
   "phone.header.power.title": "HF-Ausgangsleistung",
@@ -6402,6 +6404,7 @@ export const DE: PartialCatalog = {
   "phone.record.stopFailed": "Aufzeichnung konnte nicht beendet werden",
   "phone.rxMeter.label": "RX-Audiopegel",
   "phone.tx.locked": "TX gesperrt — diese Frequenz/Betriebsart liegt außerhalb Ihrer Lizenzrechte",
+  "phone.tx.usbOnly": "TX gesperrt — auf 60 m ist nur Phone in USB erlaubt. USB oder AUTO wählen.",
   "phone.tx.turnedBackOn": "TX war aus — wieder eingeschaltet. Zum Sprechen erneut PTT drücken.",
   "phone.tx.remoteLock": "Lock (freihändiges PTT) funktioniert über Remote nicht. Lock abwählen, dann zum Sprechen PTT oder die Leertaste gedrückt halten.",
   "phone.tx.clockRepair": "Nicht getastet: Eine Uhrreparatur läuft, und bis sie fertig ist (höchstens zwei Minuten), beginnt keine Aussendung.",

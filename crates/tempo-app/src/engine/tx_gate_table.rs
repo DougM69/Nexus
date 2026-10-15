@@ -313,6 +313,668 @@ fn rows() -> Vec<Row> {
             emission_mhz: 14.200,
             phone_seg: None,
         },
+        // 60 m phone is USB, so the passband is [dial, dial + 2.8 kHz]. On a channel 47 CFR
+        // 97.303(h)(3) sets the phone carrier 1.5 kHz below the centre, so that is where a
+        // General may key, and nowhere a passband leaves the channel. A passband must lie in ONE
+        // contiguous range, so none may cross the 2.1 kHz between the 5348.0 kHz channel and the
+        // segment. LSB is refused everywhere on 60 m, the channels and the segment alike. CW keys
+        // within 5 Hz of a channel's centre, data keeps the channel's +/- 1.4 kHz.
+        Row {
+            name: "IC-7300 phone 5.3305 USB, the 5332.0 kHz channel's carrier, General",
+            build: || station(3073, "general", "phone", 5.3305, "60m", "LSB"),
+            tx_allowed: true,
+            emission_mhz: 5.3305,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3530 USB, the passband inside the 60 m segment, General",
+            build: || station(3073, "general", "phone", 5.3530, "60m", "LSB"),
+            tx_allowed: true,
+            emission_mhz: 5.3530,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3570 USB, mid-segment, General",
+            build: || station(3073, "general", "phone", 5.3570, "60m", "LSB"),
+            tx_allowed: true,
+            emission_mhz: 5.3570,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3650 USB, the passband over the 60 m segment top, General",
+            build: || station(3073, "general", "phone", 5.3650, "60m", "LSB"),
+            tx_allowed: false,
+            emission_mhz: 5.3650,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3304 USB, 100 Hz below the 5332.0 kHz channel's carrier, General",
+            build: || station(3073, "general", "phone", 5.3304, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3304,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3307 USB, the passband 100 Hz over the 5332.0 kHz channel's top, General",
+            build: || station(3073, "general", "phone", 5.3307, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3307,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3305 LSB picked, on the 5332.0 kHz channel's carrier, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3305, "60m", "USB");
+                e.request_sideband_override(Some("LSB"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3305,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3333 LSB picked, the passband inside the 5332.0 kHz channel, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3333, "60m", "USB");
+                e.request_sideband_override(Some("LSB"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3333,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3305 USB, the 5332.0 kHz channel's carrier, Technician",
+            build: || station(3073, "technician", "phone", 5.3305, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3305,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.3320, the 5332.0 kHz channel's centre, General",
+            build: || station(3073, "general", "cw", 5.3320, "60m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 5.3320,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.3325, 500 Hz above the 5332.0 kHz channel's centre, General",
+            build: || station(3073, "general", "cw", 5.3325, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3325,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.3335, outside the 5332.0 kHz channel, General",
+            build: || station(3073, "general", "cw", 5.3335, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3335,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3465 USB, the 5348.0 kHz channel's carrier, General",
+            build: || station(3073, "general", "phone", 5.3465, "60m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 5.3465,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3464 USB, 100 Hz below the 5348.0 kHz channel's carrier, General",
+            build: || station(3073, "general", "phone", 5.3464, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3464,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3467 USB, the passband 100 Hz over the 5348.0 kHz channel's top, General",
+            build: || station(3073, "general", "phone", 5.3467, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3467,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3465 LSB picked, on the 5348.0 kHz channel's carrier, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3465, "60m", "USB");
+                e.request_sideband_override(Some("LSB"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3465,
+            phone_seg: None,
+        },
+        // This channel's top is only 2.1 kHz under the segment's floor. The LSB pick at 5.3493 has
+        // its own passband inside the channel, but the convention's USB passband from 5.3493 runs
+        // across the gap into the segment, and LSB is refused on 60 m anyway. The USB row at
+        // 5.3490 after it crosses the same gap.
+        Row {
+            name: "IC-7300 phone 5.3493 LSB picked, the passband inside the 5348.0 kHz channel, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3493, "60m", "USB");
+                e.request_sideband_override(Some("LSB"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3493,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3490 USB, the passband across the gap above the 5348.0 kHz channel, General",
+            build: || station(3073, "general", "phone", 5.3490, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3490,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3465 USB, the 5348.0 kHz channel's carrier, Technician",
+            build: || station(3073, "technician", "phone", 5.3465, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3465,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.3480, the 5348.0 kHz channel's centre, General",
+            build: || station(3073, "general", "cw", 5.3480, "60m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 5.3480,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.3485, 500 Hz above the 5348.0 kHz channel's centre, General",
+            build: || station(3073, "general", "cw", 5.3485, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3485,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.3495, outside the 5348.0 kHz channel, General",
+            build: || station(3073, "general", "cw", 5.3495, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3495,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3715 USB, the 5373.0 kHz channel's carrier, General",
+            build: || station(3073, "general", "phone", 5.3715, "60m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 5.3715,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3714 USB, 100 Hz below the 5373.0 kHz channel's carrier, General",
+            build: || station(3073, "general", "phone", 5.3714, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3714,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3717 USB, the passband 100 Hz over the 5373.0 kHz channel's top, General",
+            build: || station(3073, "general", "phone", 5.3717, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3717,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3715 LSB picked, on the 5373.0 kHz channel's carrier, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3715, "60m", "USB");
+                e.request_sideband_override(Some("LSB"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3715,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3743 LSB picked, the passband inside the 5373.0 kHz channel, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3743, "60m", "USB");
+                e.request_sideband_override(Some("LSB"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3743,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3715 USB, the 5373.0 kHz channel's carrier, Technician",
+            build: || station(3073, "technician", "phone", 5.3715, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3715,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.3730, the 5373.0 kHz channel's centre, General",
+            build: || station(3073, "general", "cw", 5.3730, "60m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 5.3730,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.3735, 500 Hz above the 5373.0 kHz channel's centre, General",
+            build: || station(3073, "general", "cw", 5.3735, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3735,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.3745, outside the 5373.0 kHz channel, General",
+            build: || station(3073, "general", "cw", 5.3745, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3745,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.4035 USB, the 5405.0 kHz channel's carrier, General",
+            build: || station(3073, "general", "phone", 5.4035, "60m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 5.4035,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.4034 USB, 100 Hz below the 5405.0 kHz channel's carrier, General",
+            build: || station(3073, "general", "phone", 5.4034, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.4034,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.4037 USB, the passband 100 Hz over the 5405.0 kHz channel's top, General",
+            build: || station(3073, "general", "phone", 5.4037, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.4037,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.4035 LSB picked, on the 5405.0 kHz channel's carrier, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.4035, "60m", "USB");
+                e.request_sideband_override(Some("LSB"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.4035,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.4063 LSB picked, the passband inside the 5405.0 kHz channel, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.4063, "60m", "USB");
+                e.request_sideband_override(Some("LSB"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.4063,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.4035 USB, the 5405.0 kHz channel's carrier, Technician",
+            build: || station(3073, "technician", "phone", 5.4035, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.4035,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.4050, the 5405.0 kHz channel's centre, General",
+            build: || station(3073, "general", "cw", 5.4050, "60m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 5.4050,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.4055, 500 Hz above the 5405.0 kHz channel's centre, General",
+            build: || station(3073, "general", "cw", 5.4055, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.4055,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.4065, outside the 5405.0 kHz channel, General",
+            build: || station(3073, "general", "cw", 5.4065, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.4065,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3400 USB, between the 60 m channels, General",
+            build: || station(3073, "general", "phone", 5.3400, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3400,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.3400, between the 60 m channels, General",
+            build: || station(3073, "general", "cw", 5.3400, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3400,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 LSB picked, inside the 60 m segment, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("LSB"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 LSB picked, inside the 60 m segment, Extra",
+            build: || {
+                let mut e = station(3073, "extra", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("LSB"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 LSB picked, inside the 60 m segment, Open class",
+            build: || {
+                let mut e = station(3073, "open", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("LSB"));
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3487 USB, the lowest carrier whose passband crosses the gap into the segment, General",
+            build: || station(3073, "general", "phone", 5.3487, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3487,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3487 USB, the passband across the gap into the segment, Extra",
+            build: || station(3073, "extra", "phone", 5.3487, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3487,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3493 USB, the passband across the gap into the segment, General",
+            build: || station(3073, "general", "phone", 5.3493, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3493,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3494 USB, on the 5348.0 kHz channel's top, General",
+            build: || station(3073, "general", "phone", 5.3494, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3494,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3516 AM picked, the lower sideband across the gap into the 5348.0 kHz channel, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3516, "60m", "USB");
+                e.request_sideband_override(Some("AM"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3516,
+            phone_seg: None,
+        },
+        // Every 60 m emission is held to 2.8 kHz, one sideband of voice, and AM and FM both send
+        // the voice on each side of the carrier, so neither keys on 60 m for a US class, in the
+        // segment or on a channel's carrier. USB keys beside them, and AM and FM keep every other
+        // band.
+        Row {
+            name: "IC-7300 phone 5.3600 AM picked, inside the 60 m segment, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("AM"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 AM picked, inside the 60 m segment, Extra",
+            build: || {
+                let mut e = station(3073, "extra", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("AM"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 FM picked, inside the 60 m segment, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("FM"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 FM picked, inside the 60 m segment, Extra",
+            build: || {
+                let mut e = station(3073, "extra", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("FM"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3305 FM picked, on the 5332.0 kHz channel's carrier, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3305, "60m", "USB");
+                e.request_sideband_override(Some("FM"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3305,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 USB picked, inside the 60 m segment, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("USB"));
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 AM picked, inside the 60 m segment, Open class",
+            build: || {
+                let mut e = station(3073, "open", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("AM"));
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 FM picked, inside the 60 m segment, Open class",
+            build: || {
+                let mut e = station(3073, "open", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("FM"));
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 7.2500 AM picked, inside the 40 m phone segment, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 7.2500, "40m", "LSB");
+                e.request_sideband_override(Some("AM"));
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 7.2500,
+            phone_seg: Some((7.175, 7.300)),
+        },
+        Row {
+            name: "IC-7300 phone 29.6000 FM picked, the 10 m FM calling frequency, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 29.6000, "10m", "USB");
+                e.request_sideband_override(Some("FM"));
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 29.6000,
+            phone_seg: Some((28.300, 29.700)),
+        },
+        Row {
+            name: "IC-7300 RTTY FSK 5.3516 with a 2500 Hz shift, its space across the gap in the 5348.0 kHz channel, General",
+            build: || {
+                let mut e = station(3073, "general", "rtty", 5.3516, "60m", "LSB");
+                e.settings.rtty_backend = "fsk".to_string();
+                e.settings.rtty_shift_hz = 2_500;
+                e.settings.sync_active_from_flat();
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3516,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 RTTY AFSK 5.3538 with a 2500 Hz shift, its tones across the gap above the 5348.0 kHz channel, General",
+            build: || {
+                let mut e = station(3073, "general", "rtty", 5.3538, "60m", "LSB");
+                e.settings.rtty_backend = "afsk".to_string();
+                e.settings.rtty_shift_hz = 2_500;
+                e.settings.sync_active_from_flat();
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3538,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 RTTY FSK 5.3600 with a 2500 Hz shift, inside the 60 m segment, General",
+            build: || {
+                let mut e = station(3073, "general", "rtty", 5.3600, "60m", "LSB");
+                e.settings.rtty_backend = "fsk".to_string();
+                e.settings.rtty_shift_hz = 2_500;
+                e.settings.sync_active_from_flat();
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.332005, 5 Hz above the 5332.0 kHz channel's centre, General",
+            build: || station(3073, "general", "cw", 5.332005, "60m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 5.332005,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.331995, 5 Hz below the 5332.0 kHz channel's centre, General",
+            build: || station(3073, "general", "cw", 5.331995, "60m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 5.331995,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.332006, 6 Hz above the 5332.0 kHz channel's centre, General",
+            build: || station(3073, "general", "cw", 5.332006, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.332006,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.331994, 6 Hz below the 5332.0 kHz channel's centre, General",
+            build: || station(3073, "general", "cw", 5.331994, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.331994,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.3320, the 5332.0 kHz channel's centre, Extra",
+            build: || station(3073, "extra", "cw", 5.3320, "60m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 5.3320,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.3320, the 5332.0 kHz channel's centre, Technician",
+            build: || station(3073, "technician", "cw", 5.3320, "60m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 5.3320,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 CW 5.3600, inside the 60 m segment, General",
+            build: || station(3073, "general", "cw", 5.3600, "60m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        // The soundcard keyer keys PKTLSB below 10 MHz, so its tone sits one pitch (600 Hz) under
+        // the dial, and the gate judges the dial as CW as well as the tone. On a channel the two
+        // cannot both be within 5 Hz of the centre.
+        Row {
+            name: "IC-7300 soundcard CW 5.3326, its tone on the 5332.0 kHz channel's centre, General",
+            build: || {
+                let mut e = station(3073, "general", "cw", 5.3326, "60m", "LSB");
+                e.settings.cw_keyer = CwKeyerBackend::Soundcard;
+                e.settings.sync_active_from_flat();
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3326,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 soundcard CW 5.3606, its tone at 5.3600 inside the 60 m segment, General",
+            build: || {
+                let mut e = station(3073, "general", "cw", 5.3606, "60m", "LSB");
+                e.settings.cw_keyer = CwKeyerBackend::Soundcard;
+                e.settings.sync_active_from_flat();
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 5.3606,
+            phone_seg: None,
+        },
+        // Two touching rows that both allow CW (80 m CW/data to 3.600, phone and CW above it)
+        // are one range: the dial above the boundary and the tone below it both key.
+        Row {
+            name: "IC-7300 soundcard CW 3.6003, Extra: the dial over the 80 m phone floor and the tone under it",
+            build: || {
+                let mut e = station(3073, "extra", "cw", 3.6003, "80m", "LSB");
+                e.settings.cw_keyer = CwKeyerBackend::Soundcard;
+                e.settings.sync_active_from_flat();
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 3.6003,
+            phone_seg: Some((3.600, 4.000)),
+        },
+        Row {
+            name: "IC-7300 FT8 5.3715 USB, its tone 500 Hz above the 5373.0 kHz channel's centre, General",
+            build: || {
+                let mut e = station(3073, "general", "digital", 5.3715, "60m", "USB");
+                e.set_tx_offset(2_000.0);
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 5.3715,
+            phone_seg: None,
+        },
         // ── Dual-receiver radios, normal operation ─────────────────────────────────────
         Row {
             name: "IC-7610 phone 14.250, General",

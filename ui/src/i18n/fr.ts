@@ -1012,6 +1012,7 @@ export const FR: PartialCatalog = {
   'bandPicker.txLock.splitTitle':
     'TX verrouillé — votre fréquence d\u2019émission en split, {{tx}} MHz, est en dehors des privilèges de votre licence. La réception sur {{rx}} MHz ne pose aucun problème.',
   "bandPicker.txLock.title": "Cette fréquence/ce mode est hors de vos privilèges de licence — l'émission est bloquée. Choisissez une bande ci-dessus, ou changez votre classe de licence dans les Réglages.",
+  "bandPicker.txLock.usbOnlyTitle": "Sur 60 m, seul le phone en USB est autorisé — l'émission est bloquée. Choisissez USB ou AUTO.",
   "bandStrip.age.hours": "il y a {{hours}} h",
   "bandStrip.age.mins": "il y a {{mins}} min",
   "bandStrip.age.secs": "il y a {{secs}} s",
@@ -3948,6 +3949,7 @@ export const FR: PartialCatalog = {
   "phone.mode.auto.title": "AUTO — bande latérale selon la bande (actuellement {{sideband}}) ; un changement de bande la réapplique",
   "phone.mode.failed": "Impossible de régler le mode",
   "phone.mode.force.title": "Forcer {{mode}} jusqu'au prochain changement de bande",
+  "phone.mode.usbOnly": "Sur 60 m, seul le phone en USB est autorisé",
   "phone.noCat.label": "⚠ pas de pilotage radio",
   "phone.noCat.title": "Pas de liaison CAT — indiquez une radio rigctld/CAT dans Réglages pour que l'application puisse changer le mode et suivre le VFO. En PTT VOX ou RTS-DTR, la radio n'a aucun canal de commande.",
   "phone.pane.bandActivity.title": "Activité bande",
@@ -4072,6 +4074,7 @@ export const FR: PartialCatalog = {
   "phone.split.on.title": "Split ON — TX {{freq}} MHz. Cliquez pour le simplex.",
   "phone.split.setFailed": "Impossible d'activer le Split",
   "phone.tx.locked": "TX verrouillé — cette fréquence ou ce mode est hors de vos privilèges de licence",
+  "phone.tx.usbOnly": "TX verrouillé — sur 60 m, seul le phone en USB est autorisé. Choisissez USB ou AUTO.",
   "phone.tx.turnedBackOn": "Le TX était coupé — il a été réactivé. Appuyez de nouveau sur PTT pour parler.",
   "phone.tx.remoteLock": "Lock (PTT mains libres) ne fonctionne pas via Remote. Décochez Lock, puis maintenez PTT ou la barre d'espace enfoncée pour parler.",
   "phone.tx.clockRepair": "Pas d'émission : une réparation de l'horloge est en cours, et aucune émission ne commence avant qu'elle se termine (deux minutes au plus).",

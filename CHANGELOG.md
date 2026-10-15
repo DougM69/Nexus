@@ -591,6 +591,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call you send is still shown in full when the reply to it comes back. NEEDS-BENCH: beside
   WSJT-X on a slow computer, an FT8 and an FT4 over changed in the last seconds before your slot (a
   new TX frequency, a double-click) keys on time, and a QSO with a compound call completes.
+- **Phone on 60 m now sets the radio to USB.** Nexus put every band below 10 MHz on LSB, 60 m
+  included, so picking a 60 m channel in the Phone screen set the radio to LSB and the voice went
+  out on the wrong side of the channel. US rules put the 60 m carrier 1.5 kHz below each channel
+  centre, which only works on USB, and the IARU Region 1 and Canadian band plans use USB there too.
+  The Phone screen, an SSTV image sent from it, the transmit lock and the sideband a contact is
+  logged with now all use USB on 60 m; every other band is unchanged. NEEDS-BENCH: a radio on 60 m
+  into a dummy load, checking the mode on the radio's own display.
+- **US General and Extra operators can now talk on the four 60 m channels.** The rule sets a 60 m
+  phone carrier 1.5 kHz below the channel centre (5330.5, 5346.5, 5371.5 and 5403.5 kHz), but the
+  transmit lock only accepted a carrier at least 1.4 kHz below it, so it showed TX LOCKED on the
+  very frequency the rule names. Phone now keys on that carrier, in USB, and is still refused
+  anywhere the voice would leave the 2.8 kHz channel. The lock is also stricter on 60 m in four
+  places. LSB is refused everywhere on the band, the channels and the 5351.5 to 5366.5 kHz segment
+  alike. AM and FM are refused there too: the rule holds every 60 m signal to 2.8 kHz, and both
+  send the voice on each side of the carrier, so neither fits. A signal can no longer reach across
+  the 2.1 kHz gap between the 5348.0 kHz channel and the segment. CW keys only within 5 Hz of a
+  channel centre, where the rule puts the CW carrier, so the soundcard CW keyer, whose tone sits a
+  pitch away from its dial, keys only in the segment. Data, Technician and non-US operators are
+  unchanged, and AM and FM keep every other band. NEEDS-BENCH: a radio on 60 m into a dummy load,
+  checking that Nexus keys USB on a channel carrier and CW on a channel centre, and shows TX LOCKED
+  for LSB, AM, FM and CW off the centre.
+- **On 60 m the Phone screen greys LSB, AM and FM, and the lock says why.** A US licence allows only
+  upper sideband phone on 60 m, but the mode chips still offered LSB, AM and FM, and a pick showed
+  TX LOCKED with "this frequency is outside your license privileges" on a frequency that was fine.
+  The chips now grey those three on 60 m, with "60 m allows only USB phone" when you hover one. When
+  the mode is the only reason TX is locked, push-to-talk, the band lock, the voice keyer, the radio's
+  tuner button and SSTV say that 60 m allows only USB phone and ask for USB or AUTO. A frequency
+  where USB is refused too keeps the old sentence. What keys and what is refused is unchanged.
 
 ### Security
 

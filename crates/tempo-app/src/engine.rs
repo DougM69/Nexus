@@ -75,6 +75,9 @@ mod kept_files_tests;
 mod live_level_tests;
 mod mode_entry;
 pub mod parsec_presence;
+/// 60 m allows only USB phone: the picks the cockpit greys, and the lock naming the rule.
+#[cfg(test)]
+mod phone_usb_only_tests;
 /// A contest picked while Contest mode is on, switched on Save exactly as off-and-on switches it.
 #[cfg(test)]
 mod pick_switch_tests;
@@ -1695,6 +1698,13 @@ const SSTV_REFUSED_TX_OFF: &str = "SSTV stopped: transmit was turned off, so the
 const SSTV_REFUSED_PRIVILEGES: &str = "SSTV not sent: this frequency is outside your license \
      privileges, so the picture that was waiting was dropped, not held for later. Send it again \
      from inside them.";
+/// …and when the phone MODE is the whole reason ([`Engine::phone_mode_refused`]): an image under
+/// an FM pick on 60 m, where a USB pick would have sent it.
+const SSTV_REFUSED_USB_ONLY: &str = "SSTV not sent: 60 m allows only USB phone, so the picture \
+     that was waiting was dropped, not held for later. Pick USB or AUTO and send it again.";
+/// The licence lock's words when the phone MODE is the whole reason ([`Engine::phone_mode_refused`]):
+/// on 60 m the frequency is fine for USB, and the pick is LSB, AM or FM.
+const PHONE_USB_ONLY: &str = "TX locked — 60 m allows only USB phone. Pick USB or AUTO.";
 const SSTV_REFUSED_RADIO_HAS_MIC: &str = "SSTV not sent: the radio has the mic (Flex native DAX \
      audio, Phone at the shack), so the picture that was waiting was dropped, not held for later. \
      Nothing was keyed.";
@@ -8150,14 +8160,17 @@ impl Engine {
     /// per keying backend (keep in step with [`Self::tx_allowed`]'s Rtty arm): AFSK rides
     /// LSB, so the mark/space audio pair (2125 / 2125+shift Hz) lands BELOW the dial;
     /// true FSK keys the rig's RTTY mode where the dial reads the mark RF and space sits
-    /// `shift` below. Both edges of the span must be privileged.
+    /// `shift` below. The whole span must lie in one privileged range
+    /// ([`crate::privileges::tx_span_allowed`]).
     fn rtty_emission_ok(&self, dial: f64) -> bool {
         use crate::settings::OperatingMode;
         let class = self.settings.license_class;
         let shift = self.settings.rtty_shift_hz as f64 / 1_000_000.0;
-        let allow = |f: f64| crate::privileges::tx_allowed(class, f, OperatingMode::Rtty);
+        let span = |lo: f64, hi: f64| {
+            crate::privileges::tx_span_allowed(class, lo, hi, OperatingMode::Rtty)
+        };
         if self.settings.rtty_backend.eq_ignore_ascii_case("fsk") {
-            allow(dial - shift) && allow(dial)
+            span(dial - shift, dial)
         } else {
             // ⚠️ THE LIVE MARK, NOT `RTTY_AFSK_MARK_HZ`. The constant was right until 1.9.0 made
             // the transmitter follow the netted centre; after that the emitted mark is
@@ -8186,13 +8199,10 @@ impl Engine {
             // not reported its mode, or reports one this does not recognise, is refused unless
             // the emission is legal on EITHER side — never approved on a guess.
             match self.rtty_afsk_usb_side() {
-                Some(true) => allow(dial + mark) && allow(dial + mark + shift),
-                Some(false) => allow(dial - mark - shift) && allow(dial - mark),
+                Some(true) => span(dial + mark, dial + mark + shift),
+                Some(false) => span(dial - mark - shift, dial - mark),
                 None => {
-                    allow(dial - mark - shift)
-                        && allow(dial - mark)
-                        && allow(dial + mark)
-                        && allow(dial + mark + shift)
+                    span(dial - mark - shift, dial - mark) && span(dial + mark, dial + mark + shift)
                 }
             }
         }
@@ -9342,7 +9352,7 @@ impl Engine {
                 let lsb = self
                     .sideband_override
                     .as_deref()
-                    .map_or(self.settings.dial_mhz < 10.0, |m| {
+                    .map_or(crate::bandplan::phone_is_lsb(self.settings.dial_mhz), |m| {
                         m.eq_ignore_ascii_case("lsb")
                     });
                 // Same per-radio opt-out as Digital and RTTY-AFSK: a mic-jack interface needs
@@ -11027,9 +11037,7 @@ impl Engine {
             return Err(why.to_string());
         }
         if !self.tx_allowed() {
-            return Err(
-                "TX locked — this frequency is outside your license privileges".to_string(),
-            );
+            return Err(self.licence_lock_text().to_string());
         }
         // Nexus's own Flex client runs the radio's ATU: the cycle is the radio's carrier, where
         // the radio transmits, so it is judged as CW there too, as its tune carrier is. Only ever
@@ -11251,9 +11259,7 @@ impl Engine {
                 "tx",
                 "voice-keyer message refused: the dial is outside the licence's privileges",
             );
-            return Err(
-                "TX locked — this frequency is outside your license privileges".to_string(),
-            );
+            return Err(self.licence_lock_text().to_string());
         }
         if self.flex_radio_has_mic {
             // The pending message is the one this replaces, not something else transmitting.
@@ -22236,9 +22242,7 @@ contact yourself."
             return Err(why.to_string());
         }
         if !self.tx_allowed() {
-            return Err(
-                "TX locked — this frequency is outside your license privileges".to_string(),
-            );
+            return Err(self.licence_lock_text().to_string());
         }
         // Ownership from the ONE arbiter. This gate's field list was the complete
         // one the other gates lacked; `tx_owner()` is that list, generalised.
@@ -22333,7 +22337,11 @@ contact yourself."
         } else if in_section && !self.tx_allowed() {
             Some((
                 "the dial is outside the licence's privileges",
-                SSTV_REFUSED_PRIVILEGES,
+                if self.phone_mode_refused() {
+                    SSTV_REFUSED_USB_ONLY
+                } else {
+                    SSTV_REFUSED_PRIVILEGES
+                },
             ))
         } else if self.flex_radio_has_mic {
             Some((
@@ -22724,6 +22732,38 @@ contact yourself."
             .then_some(crate::settings::ICOM_LAN_TX_REFUSED)
     }
 
+    /// Is the licence lock the phone MODE alone? The Phone section is refused, upper sideband is
+    /// the only phone at the transmit carrier ([`crate::privileges::usb_only_phone`]: 60 m, every
+    /// US class), and a USB pick would key on every frequency the gate judges. Then the pick (LSB,
+    /// AM or FM, or a data form of one) is all that stands in the way, and the lock says so,
+    /// [`PHONE_USB_ONLY`]; where USB is refused too, the frequency is the reason and the lock keeps
+    /// its frequency sentence.
+    ///
+    /// DISPLAY ONLY: it picks the words for a refusal [`Self::tx_allowed`] has already made, and
+    /// nothing keys or refuses on it.
+    pub fn phone_mode_refused(&self) -> bool {
+        use crate::settings::OperatingMode;
+        self.settings.operating_mode == OperatingMode::Phone
+            && crate::privileges::usb_only_phone(
+                self.settings.license_class,
+                self.tx_source_verdict().emission_mhz,
+            )
+            && !self.tx_allowed()
+            // The gate with a USB pick: the band convention is USB on 60 m too, so the one
+            // phone model asked of USB is the whole of what it would judge.
+            && self.every_tx_frequency(|mhz| self.phone_emission_allowed(mhz, "USB"))
+    }
+
+    /// The words for a licence refusal: [`PHONE_USB_ONLY`] when the phone mode is the whole reason
+    /// ([`Self::phone_mode_refused`]), else the frequency sentence every transmit path has said.
+    fn licence_lock_text(&self) -> &'static str {
+        if self.phone_mode_refused() {
+            PHONE_USB_ONLY
+        } else {
+            "TX locked — this frequency is outside your license privileges"
+        }
+    }
+
     /// THE KEY-TIME JUDGEMENT OF THE FREQUENCY THE NEXT OVER IS EMITTED ON: the whole licence
     /// gate before the D1 switch, unchanged, and still the whole of it whenever Main transmits
     /// ([`Self::tx_allowed`], [`Self::tx_source_verdict`]).
@@ -22735,6 +22775,13 @@ contact yourself."
     /// frequencies, each through `om`'s emission model. CW keyed from another section — the CW
     /// ID after an FT 73 — is judged as CW too ([`Self::poll_cw_one`]).
     fn tx_allowed_as(&self, om: crate::settings::OperatingMode) -> bool {
+        self.every_tx_frequency(|mhz| self.emission_in_use_allowed_as(om, mhz))
+    }
+
+    /// Does `judge` pass every frequency the next over is emitted on? The frame of
+    /// [`Self::tx_allowed_as`], which asks it of the emission in use; [`Self::phone_mode_refused`]
+    /// asks it of a USB pick, so the two never disagree about which frequencies count.
+    fn every_tx_frequency(&self, judge: impl Fn(f64) -> bool) -> bool {
         if self.connection_tx_refusal().is_some() {
             return false;
         }
@@ -22743,7 +22790,6 @@ contact yourself."
         if self.tx_freq_verdict() == TxFreqVerdict::SplitUnverified {
             return false;
         }
-        let judge = |mhz: f64| self.emission_in_use_allowed_as(om, mhz);
         // `tx_emission_mhz` already carries XIT.
         let emission = self.tx_emission_mhz();
         // ⚠️ SPLIT **AND** XIT IS THE ONE COMBINATION NO DOCUMENT HERE SETTLES. Whether a radio
@@ -23014,12 +23060,13 @@ contact yourself."
                 allow(if lsb { dial - off } else { dial + off })
             }
             OperatingMode::Phone => {
-                // The band CONVENTION's sideband (LSB below 10 MHz, USB from 30 m up) through the
+                // The band CONVENTION's sideband (LSB below 10 MHz except 60 m, USB from 30 m up) through the
                 // one phone passband model. Right as it stands for a band pick and a dial-memory
                 // recall — both follow a band change, which drops the cockpit's pick — and the
                 // key-time gate judges the mode the rig is actually in on top of it
                 // (`emission_in_use_allowed`).
-                self.phone_emission_allowed(dial, if dial < 10.0 { "LSB" } else { "USB" })
+                let lsb = crate::bandplan::phone_is_lsb(dial);
+                self.phone_emission_allowed(dial, if lsb { "LSB" } else { "USB" })
             }
             // CW: the carrier sits at the dial.
             OperatingMode::Cw => allow(dial),
@@ -23039,20 +23086,24 @@ contact yourself."
     ///
     /// The width is `privileges::SSB_BW_MHZ` — the SAME constant the phone home parks by, so a
     /// picker can never choose a dial this gate then refuses — and it is the voice audio one
-    /// sideband carries. The WHOLE emission must sit in a privileged phone segment, so a dial
-    /// within a passband of an edge cannot bleed out of it:
+    /// sideband carries. The WHOLE emission must sit in ONE contiguous privileged phone range
+    /// ([`crate::privileges::tx_span_allowed`]), so a dial within a passband of an edge cannot
+    /// bleed out of it, and a passband cannot cross a gap between two ranges:
     /// * USB / LSB, and the PKTUSB / PKTLSB an SSTV image rides: one passband above / below.
+    ///   A passband below the carrier is refused on 60 m for every US class
+    ///   ([`crate::privileges::lsb_phone_allowed`]).
     /// * AM: the carrier plus BOTH sidebands of the same audio, one passband either side.
     /// * FM: ⚠️ NO WIDTH MODEL. An FM signal's width is set by its deviation, which Nexus does
     ///   not know (`repeater_tune` records the same decision), so only the carrier is judged.
-    ///   Every caller also judges the convention's passband, so an FM pick is judged exactly as
-    ///   it was before this model knew the pick at all — never less.
+    ///   Every caller also judges the convention's passband, so off 60 m an FM pick is judged
+    ///   exactly as it was before this model knew the pick at all — never less.
     /// * any other word: both sides. A mode this model does not know must never unlock anything.
+    ///
+    /// AM, FM and any other word that is not ONE sideband are refused on 60 m for every US class:
+    /// the rule holds every emission there to 2.8 kHz ([`crate::privileges::wide_phone_allowed`]).
     fn phone_emission_allowed(&self, carrier: f64, word: &str) -> bool {
         use crate::privileges::SSB_BW_MHZ as SSB_BW;
         let class = self.settings.license_class;
-        let allow =
-            |f: f64| crate::privileges::tx_allowed(class, f, crate::settings::OperatingMode::Phone);
         let (above, below) = match word.trim().to_ascii_uppercase().as_str() {
             "USB" | "PKTUSB" => (true, false),
             "LSB" | "PKTLSB" => (false, true),
@@ -23060,7 +23111,11 @@ contact yourself."
             // AM, and any word this model does not know.
             _ => (true, true),
         };
-        allow(carrier) && (!above || allow(carrier + SSB_BW)) && (!below || allow(carrier - SSB_BW))
+        let lo = if below { carrier - SSB_BW } else { carrier };
+        let hi = if above { carrier + SSB_BW } else { carrier };
+        crate::privileges::tx_span_allowed(class, lo, hi, crate::settings::OperatingMode::Phone)
+            && (above || !below || crate::privileges::lsb_phone_allowed(class, carrier))
+            && (above != below || crate::privileges::wide_phone_allowed(class, carrier))
     }
 
     /// May the operator's class key a DIGITAL emission from the transmit dial `dial`, with the
@@ -23117,8 +23172,8 @@ contact yourself."
     /// `mark + shift` from the dial on the side the WORD names — where
     /// [`Self::rtty_emission_ok`] judges the side the rig REPORTS, or failing that the dial's own
     /// word, and on a satellite pass neither is the uplink's: an inverting bird commands it on
-    /// the other side (`uplink_mode_for` mirrors PKTLSB ↔ PKTUSB). Both edges of the span must
-    /// be privileged, as there.
+    /// the other side (`uplink_mode_for` mirrors PKTLSB ↔ PKTUSB). The whole span must lie in
+    /// one privileged range, as there.
     ///
     /// True FSK keys the rig's own RTTY mode, whose span `rtty_emission_ok` already judges from
     /// the dial, and `uplink_mode_for` never mirrors it; with a word that names no side it adds
@@ -23129,16 +23184,17 @@ contact yourself."
         }
         let shift = self.settings.rtty_shift_hz as f64 / 1_000_000.0;
         let mark = self.rtty_tx_mark_hz() / 1_000_000.0;
-        let allow = |f: f64| {
-            crate::privileges::tx_allowed(
+        let span = |lo: f64, hi: f64| {
+            crate::privileges::tx_span_allowed(
                 self.settings.license_class,
-                f,
+                lo,
+                hi,
                 crate::settings::OperatingMode::Rtty,
             )
         };
         match Self::side_is_lsb(word) {
-            Some(false) => allow(dial + mark) && allow(dial + mark + shift),
-            Some(true) => allow(dial - mark - shift) && allow(dial - mark),
+            Some(false) => span(dial + mark, dial + mark + shift),
+            Some(true) => span(dial - mark - shift, dial - mark),
             None => true,
         }
     }
@@ -23824,6 +23880,11 @@ contact yourself."
         s.radio.tx_allowed = self.tx_allowed();
         s.radio.tx_refusal = self.connection_tx_refusal().map(str::to_string);
         s.radio.tx_emission_mhz = Some(self.tx_emission_mhz());
+        s.radio.phone_usb_only = crate::privileges::usb_only_phone(
+            self.settings.license_class,
+            self.tx_source_verdict().emission_mhz,
+        );
+        s.radio.phone_mode_refused = self.phone_mode_refused();
         s.radio.tuning = self.tuning;
         // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
         s.radio.tx_busy_reason = self.tx_owner().map(TxOwner::busy_reason);
@@ -49701,6 +49762,48 @@ mod tests {
         );
     }
 
+    /// 60 m phone is USB end to end: the mode the radio loop commands, the passband the
+    /// key-time gate judges, the DATA submode an SSTV image would ride, and the SUBMODE the
+    /// contact logs once the rig reads back what it was told (47 CFR 97.303(h): the carrier
+    /// sits 1.5 kHz below the channel centre). 40 m stays LSB as the control.
+    #[test]
+    fn phone_on_60m_is_usb_from_the_command_to_the_logged_submode() {
+        for (dial, band, want) in [(7.185, "40m", "LSB"), (5.3305, "60m", "USB")] {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            e.settings.operating_mode = crate::settings::OperatingMode::Phone;
+            e.set_frequency(dial, band, "USB");
+            assert_eq!(e.rig_mode_effective(), want, "{band}: the commanded mode");
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+            // The rig echoes what it was commanded over a healthy link.
+            e.set_cat_status(Some(true), "up".into());
+            let commanded = e.rig_mode_effective();
+            e.observe_rig_mode(commanded);
+            assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "PH").unwrap());
+            let adif = e.field_day_log_adif().expect("an FD log to flush");
+            assert!(
+                adif.contains(&format!("<SUBMODE:3>{want} ")),
+                "{band}: {adif}"
+            );
+        }
+        // An SSTV image queued in the Phone section rides the DATA submode on the same side.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(7.171, "40m", "USB");
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert_eq!(e.rig_mode_effective(), "PKTLSB", "40 m SSTV data submode");
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(5.3570, "60m", "LSB");
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert_eq!(e.rig_mode_effective(), "PKTUSB", "60 m SSTV data submode");
+    }
+
     /// Master ON but the exchange is incomplete: `apply_settings` must NOT enter
     /// FD on a blank class/section (the exchange goes on the air) — it leaves the
     /// engine non-FD so the setup screen (spec §1.2 #1) can prompt for them.
@@ -64994,6 +65097,36 @@ mod phone_pick_licence_tests {
                 "{pick}: the sweep must reach dials the convention refuses: {refused}"
             );
         }
+    }
+
+    /// 60 m holds every emission to 2.8 kHz, one sideband of voice, so a mode word that is not
+    /// one sideband is refused there for every US class: AM and the AM-like words a rig can
+    /// report, FM, the PKTFM an SSTV image rides under an FM pick, on a channel's carrier and in
+    /// the segment alike. USB keeps 60 m, and every one of those words keeps 40 m.
+    #[test]
+    fn a_word_that_is_not_one_sideband_is_refused_on_60m() {
+        let mut wrong = Vec::new();
+        for class in ["general", "extra"] {
+            let sixty = phone_at(class, "60m", 5.3600, None);
+            let forty = phone_at(class, "40m", 7.2500, None);
+            for word in ["AM", "SAM", "DSB", "PKTAM", "FM", "PKTFM", "WFM"] {
+                for (e, carrier, want) in [
+                    (&sixty, 5.3305, false),
+                    (&sixty, 5.3600, false),
+                    (&forty, 7.2500, true),
+                ] {
+                    if e.phone_emission_allowed(carrier, word) != want {
+                        wrong.push(format!("{class} {word} at {carrier:.4}: allowed={}", !want));
+                    }
+                }
+            }
+            for word in ["USB", "PKTUSB"] {
+                if !sixty.phone_emission_allowed(5.3600, word) {
+                    wrong.push(format!("{class} {word} at 5.3600: allowed=false"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     /// The split + XIT branch judges TWO carriers — whether a rig adds XIT on top of split is
