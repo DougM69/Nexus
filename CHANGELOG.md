@@ -99,6 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The manual's drive advice covers the Yaesus that turn their power down with the ALC.** On an
+  FT-991A below full power the ALC reads above zero however clean the drive, so "set it so your
+  rig's ALC reads zero" could not be met there. Rig and Audio Setup, Getting Started and the
+  settings reference now say to set the drive at full power on those radios.
 - **On Windows, Nexus follows your computer's light or dark setting until you pick a theme.** A new
   install there opens in System, so the very first screen already matches Windows, and it changes
   when Windows does. On Linux, the Raspberry Pi and macOS, Nexus opens Dark until you pick, as

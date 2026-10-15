@@ -558,7 +558,9 @@ target to copy.*
   Settings." Flat means no audio on that input.
 - **Tx Power** — the audio **drive** into the rig, the same control as the
   cockpit **Pwr** slider (they always match). "Trim down until your rig's ALC is
-  just zero. This is *not* the rig's RF watts — set those on the radio."
+  just zero. This is *not* the rig's RF watts — set those on the radio." On a Yaesu
+  that turns its power down with the ALC, such as the FT-991A, the ALC reads above
+  zero whenever the power is below full, so set the drive at full power.
 - **RX Level** — a live dB meter like WSJT-X. "Aim for around 30 dB. Anything
   from ~15–60 dB decodes fine; red means too hot." An audio error shows here.
 - **RX Gain** — "Boost a quiet interface until RX Level reads around 30 dB — the

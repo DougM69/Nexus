@@ -198,6 +198,8 @@ The **Tx Power** slider sets the audio output gain from 0.0 to 1.0 before it rea
 
 This is software drive level, not RF power. Set it so your rig's ALC reads **zero** during transmit. Trim down if ALC is deflecting. Overdrive causes IMD and splatter and degrades your signal decodability — a slightly conservative level is always correct for a digital mode.
 
+Some Yaesu radios, the FT-991A among them, turn their power down with the ALC, so their ALC meter reads above zero whenever the power is below full, however clean the drive. On those, set the drive at full power, then turn the power down and leave the ALC reading that follows alone.
+
 Use the **Tune** button to hold a steady carrier while adjusting.
 
 ### Tune Carrier
