@@ -271,3 +271,8 @@ export function js8ListedStations(
     (h) => h.call === o.selectedCall || unreadFrom.has(h.call) || Math.trunc((o.nowMs - h.lastMs) / 60_000) < o.agingMin,
   )
 }
+
+// ── The compose box's buttons (JS8Call's own names) ──────────────────────────────────────────
+
+/** JS8Call's REPLY button (`replyMacroButton`): its name, carried verbatim like AUTOREPLY. */
+export const REPLY = 'REPLY'

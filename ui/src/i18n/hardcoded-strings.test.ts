@@ -588,6 +588,13 @@ const MIGRATED = [
   // reading) plus the ◀/▶ glyphs, which are direction and not prose: both carry a translated
   // aria-label, because an arrow names nothing to a screen reader and this one moves a kilowatt.
   'components/AmpStrip.tsx',
+  // JS8's compose box as JS8Call 3.0.3 has it (the pills and word suggestions in the box, the
+  // REPLY/SNR/INFO/STATUS buttons and the Saved menu, and their Settings) — migrated from birth. The
+  // command words, REPLY, the CQ forms and the macros are the mode's tokens. None of it stops a
+  // transmission: the buttons are senders, like Send.
+  'components/Js8ComposeBox.tsx',
+  'components/Js8ComposeActions.tsx',
+  'components/Js8ComposeSettings.tsx',
   // Parsec presence mode's words (the Settings readout, the status-lane stop report) — migrated
   // from birth. The station sends tokens; every sentence is here, from the catalog.
   'features/parsecPresence.ts',

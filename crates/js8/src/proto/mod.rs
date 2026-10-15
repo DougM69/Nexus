@@ -15,8 +15,10 @@ pub mod frame;
 pub mod grid;
 pub mod huffman;
 pub mod jsc;
+pub mod macros;
 pub mod reassembly;
 pub mod station;
+pub mod suggest;
 
 pub use command::Command;
 pub use compose::{frame_count_estimate, frames, max_frames, ComposeError};

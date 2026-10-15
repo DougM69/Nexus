@@ -76,7 +76,6 @@ import {
   HZ,
   JS8,
   JS8_COMMANDS,
-  JS8_CQS,
   JS8_GRID,
   JS8_QUICK_QUERIES,
   JS8_SPEEDS,
@@ -96,6 +95,11 @@ import {
   js8ListedStations,
   utcClock,
 } from '../js8Vocab'
+import { Js8ComposeBox } from './Js8ComposeBox'
+import { Js8ComposeActions } from './Js8ComposeActions'
+import { JS8_COMPOSE_DEFAULTS, js8InsertText, js8MacroSelected, type Js8ComposeConfig } from '../js8Compose'
+import { JS8_DEFAULT_SAVED, JS8_DEFAULT_STATUS, js8FormatSnr, js8MacroValues, replaceJs8Macros } from '../js8Macros'
+import { patchSettings } from '../settings/patch'
 
 interface Props {
   /** Open the Logbook filtered to a callsign — handed to the log strip's recall card. */
@@ -132,6 +136,12 @@ interface Props {
   /** What the window lends this cockpit's BOXES (2026-10-07) — exactly what it lends the dashboard
    *  rail. Absent ⇒ no box is drawn or offered, whatever the record says (Phone's rule). */
   boxes?: BoxSource
+  /** Settings ▸ JS8's compose box: JS8Call's CQ and reply messages, the saved messages, "send at
+   *  once" (JS8Call's "Immediately transmit…"), pills and word suggestions, with INFO and STATUS.
+   *  JS8Call's defaults where absent (the Remote page). */
+  compose?: Js8ComposeConfig
+  /** The saved messages after "Save current message" wrote them, for App's copy of Settings. */
+  onSavedMessages?: (messages: string[]) => void
 }
 
 /** The ⊞ menu's entries: the cockpit's own panes. A box comes and goes through ⊞ Arrange's "+ Add a
@@ -196,6 +206,8 @@ export function Js8Cockpit({
   panels,
   onOpenSettings,
   boxes,
+  compose = JS8_COMPOSE_DEFAULTS,
+  onSavedMessages,
 }: Props) {
   const canControl = useStationControl(), dataAvailable = useStationData()
   const rotatorControl = useStationCapability('rotator')
@@ -346,9 +358,12 @@ export function Js8Cockpit({
   // --- The dock's addressee + composer. The ENGINE is the authority on every send. ---
   const [toCall, setToCall] = useState('')
   const [text, setText] = useState('')
-  const [cqIdx, setCqIdx] = useState(0)
   /** The directed command the composer sends, or null for a plain message / MSG. */
   const [cmdId, setCmdId] = useState<number | null>(null)
+  const composeRef = useRef<HTMLInputElement>(null)
+  /** The last message that went out from this dock, as it went: JS8Call's "Restore Previous
+   *  Message" puts it back (`restoreMessage`, mainwindow.cpp:3491-3496). This session's only. */
+  const [previous, setPrevious] = useState<{ to: string; cmdId: number | null; text: string } | null>(null)
   const snapRef = useRef(snap)
   snapRef.current = snap
   // THE COMPOSE BOX, BOTH WAYS (JS8Call's extFreeTextMsgEdit). With AUTO off the station puts a
@@ -402,9 +417,24 @@ export function Js8Cockpit({
     }
     return false
   }
+  /** JS8Call's macro values now (`buildMacroValues`): Settings, the idle count and, unless `cq`
+   *  (JS8Call's CQ clears the selected call first), the call in the To box when it was heard. */
+  const macroValues = (cq = false) =>
+    js8MacroValues({
+      mycall: snapRef.current?.mycall ?? '',
+      grid: snapRef.current?.mygrid ?? '',
+      info: compose.info,
+      status: compose.status,
+      cq: compose.cqText,
+      reply: compose.replyText,
+      idleMinutes: js8?.idleMinutes ?? 0,
+      selected: cq ? null : js8MacroSelected(toCall, js8?.stations ?? [], js8?.activity ?? []),
+    })
   const send = () => {
     if (!canControl) return
-    const body = text.trim()
+    // Every macro the box holds, replaced and NOT pruned, as JS8Call's `createMessage` frames it
+    // (mainwindow.cpp:3436-3440).
+    const body = replaceJs8Macros(text, macroValues(), false).trim()
     const to = toCall.trim().toUpperCase()
     if (cmdId !== null && !to) {
       pushToast(t('js8.toast.noAddressee'), 'info', 3000)
@@ -417,6 +447,7 @@ export function Js8Cockpit({
       if (s) {
         setJs8(s)
         setText('')
+        setPrevious({ to, cmdId, text: body })
       }
     })
   }
@@ -441,11 +472,31 @@ export function Js8Cockpit({
       if (s) setJs8(s)
     })
   }
+  // CQ (`sendCQ`, mainwindow.cpp:4524-4545): the CQ message from Settings, or `CQ CQ CQ` and the
+  // square when it is empty; it clears the selected call — here the To box and its command. Sent at
+  // once by the station, which composes the same message for the repeat, or put in the box.
+  const cqLine = () => {
+    const message = compose.cqText.trim().split('CQCQCQ').join('CQ CQ CQ')
+    if (message !== '') return replaceJs8Macros(message, macroValues(true), true)
+    const grid4 = [...(snapRef.current?.mygrid ?? '').trim()].slice(0, 4).join('').toUpperCase()
+    return `CQ CQ CQ ${grid4}`.trim()
+  }
   const callCq = () => {
     if (!canControl) return
+    if (!compose.sendAtOnce) {
+      setToCall('')
+      fill(cqLine())
+      return
+    }
     if (refuseIfUnready()) return
-    void withErrorToast(() => js8CallCq(cqIdx), t('js8.toast.cq.failed')).then((s) => {
-      if (s) setJs8(s)
+    setToCall('')
+    setCmdId(null)
+    const line = cqLine()
+    void withErrorToast(() => js8CallCq(), t('js8.toast.cq.failed')).then((s) => {
+      if (s) {
+        setJs8(s)
+        setPrevious({ to: '', cmdId: null, text: line })
+      }
     })
   }
   // HB is the SESSION-ONLY schedule (never persisted): the second act for heartbeat frames.
@@ -461,15 +512,30 @@ export function Js8Cockpit({
   // its own — the TX latch is the first act and the engine re-reads it every slot.
   const toggleCqRepeat = () => {
     if (!canControl) return
-    void withErrorToast(() => js8CqRepeat(js8?.cqOn !== true, cqIdx), t('js8.toast.arm.failed')).then((s) => {
+    const on = js8?.cqOn !== true
+    // Turning it on clears the selected call, as JS8Call's checked CQ button does (mainwindow.cpp:4550).
+    if (on) {
+      setToCall('')
+      setCmdId(null)
+    }
+    void withErrorToast(() => js8CqRepeat(on), t('js8.toast.arm.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
   const quickQuery = (call: string, cmd: number) => {
     if (!canControl) return
+    // JS8Call's Directed menu (buildQueryMenu.cpp:113-123): with "send at once" off, the ask goes in
+    // the box, in place of what is there, for Send.
+    if (!compose.sendAtOnce) {
+      fill(JS8_COMMANDS[cmd].label, { to: call, clear: true })
+      return
+    }
     if (refuseIfUnready()) return
     void withErrorToast(() => js8SendCommand(call, cmd, ''), t('js8.toast.command.failed')).then((s) => {
-      if (s) setJs8(s)
+      if (s) {
+        setJs8(s)
+        setPrevious({ to: call, cmdId: cmd, text: '' })
+      }
     })
   }
   // JS8Call's query menu sends a station your locator in one click, `<call> GRID <my_grid()>`
@@ -478,11 +544,113 @@ export function Js8Cockpit({
   // send whatever the button says.
   const sendMyGrid = (call: string) => {
     if (!canControl) return
-    if (refuseIfUnready()) return
     const grid = (snapRef.current?.mygrid ?? '').trim().toUpperCase()
+    if (!compose.sendAtOnce) {
+      fill(`${JS8_GRID.label} ${grid}`, { to: call, clear: true })
+      return
+    }
+    if (refuseIfUnready()) return
     void withErrorToast(() => js8SendCommand(call, JS8_GRID.id, grid), t('js8.toast.command.failed')).then((s) => {
-      if (s) setJs8(s)
+      if (s) {
+        setJs8(s)
+        setPrevious({ to: call, cmdId: JS8_GRID.id, text: grid })
+      }
     })
+  }
+
+  // ---- JS8Call's one-click buttons and saved messages (mainwindow.cpp:4579-4640, :4960-4990) ----
+  // Each makes the words JS8Call's makes, its macros replaced and the rest pruned, then SENDS them
+  // at once (Settings ▸ JS8, JS8Call's "Immediately transmit…", on by default) or FILLS the box for
+  // Send. Sent at once, they leave what is typed in the box alone, as the station rows' asks do.
+  /** `insert` into the box as JS8Call's `addMessageText` does, at the caret (`clear`: in place of
+   *  everything); `to` sets the To box. The command palette goes back to "no command" — the words
+   *  carry their own — except for a saved message (`keepCmd`), which may be a MSG's text. */
+  const fill = (insert: string, o: { to?: string; clear?: boolean; keepCmd?: boolean } = {}) => {
+    const input = composeRef.current
+    const now = textRef.current
+    const at = js8InsertText(now, input?.selectionStart ?? now.length, input?.selectionEnd ?? now.length, insert, o.clear === true)
+    if (o.to !== undefined) setToCall(o.to.toUpperCase())
+    if (!o.keepCmd) setCmdId(null)
+    textRef.current = at.text
+    setText(at.text)
+    requestAnimationFrame(() => {
+      const el = composeRef.current
+      if (!el) return
+      el.focus({ preventScroll: true })
+      el.setSelectionRange(at.caret, at.caret)
+    })
+  }
+  /** One button's words to `to`: sent now, or into the box. */
+  const oneClick = (to: string | null, words: string, keepCmd = false) => {
+    if (!canControl) return
+    if (!compose.sendAtOnce) {
+      fill(words, { keepCmd })
+      return
+    }
+    if (refuseIfUnready()) return
+    void withErrorToast(() => js8Send(to, words), t('js8.toast.send.failed')).then((s) => {
+      if (s) {
+        setJs8(s)
+        setPrevious({ to: to ?? '', cmdId: null, text: words })
+      }
+    })
+  }
+  const boxCall = () => toCall.trim().toUpperCase()
+  /** The To box's call as heard and inside JS8Call's callsign aging, which SNR needs (:4598-4606). */
+  const heardSelected = () => {
+    const sel = js8MacroSelected(toCall, js8?.stations ?? [], js8?.activity ?? [])
+    const h = sel && js8?.stations.find((s) => s.call === sel.call)
+    const aged = h != null && callsignAgingMin > 0 && Math.trunc((js8DisplayNow(js8) - h.lastMs) / 60_000) >= callsignAgingMin
+    return sel && !aged ? sel : null
+  }
+  // REPLY (:4579-4589): the reply message, to the selected call.
+  const sendReply = () => {
+    const to = boxCall()
+    if (to) oneClick(to, replaceJs8Macros(compose.replyText, macroValues(), true))
+  }
+  // SNR (:4591-4616): the selected call's report as heard.
+  const sendSnr = () => {
+    const sel = heardSelected()
+    if (sel) oneClick(sel.call, `${JS8_COMMANDS[25].label} ${js8FormatSnr(sel.snrDb)}`)
+  }
+  // INFO (:4618-4628) and STATUS (:4630-4640): to the selected call, or to everyone.
+  const sendInfo = () => {
+    if (compose.info.trim() === '') return
+    oneClick(boxCall() || null, `${JS8_COMMANDS[17].label} ${replaceJs8Macros(compose.info.trim(), macroValues(), true)}`)
+  }
+  const sendStatus = () =>
+    oneClick(
+      boxCall() || null,
+      `${JS8_COMMANDS[7].label} ${replaceJs8Macros(compose.status.trim() || JS8_DEFAULT_STATUS, macroValues(), true)}`,
+    )
+  // A saved message (:4964-4970): it may be a MSG's text, so the command stays.
+  const sendSaved = (i: number) => {
+    const m = compose.savedMessages[i]
+    if (m !== undefined) oneClick(boxCall() || null, replaceJs8Macros(m, macroValues(), true), true)
+  }
+  // "Restore Previous Message": the last message sent, back in the box in place of what is there.
+  const restorePrevious = () => {
+    if (!previous) return
+    setToCall(previous.to)
+    setCmdId(previous.cmdId)
+    textRef.current = previous.text
+    setText(previous.text)
+    requestAnimationFrame(() => composeRef.current?.focus({ preventScroll: true }))
+  }
+  // "Save Current Message" (:4980-4989): the box's words, as typed, added to the saved messages.
+  const saveCurrent = () => {
+    const keep = text.trim().toUpperCase()
+    if (!canControl || keep === '') return
+    let saved: string[] = []
+    void patchSettings((cur) => {
+      saved = [...(cur.js8SavedMessages ?? JS8_DEFAULT_SAVED), keep]
+      return { js8SavedMessages: saved }
+    })
+      .then(() => {
+        onSavedMessages?.(saved)
+        pushToast(t('js8.toast.savedMessage', { text: keep }), 'info', 2500)
+      })
+      .catch(() => pushToast(t('js8.toast.savedMessage.failed'), 'error'))
   }
   const setSpeed = (idx: number) => {
     if (!canControl) {
@@ -729,7 +897,7 @@ export function Js8Cockpit({
   // the authority and refuses over the §97.119 cap; the `over` face and the disabled Send
   // just save the round trip.
   const speedInfo = JS8_SPEEDS[js8?.speed ?? 'normal']
-  const frames = estimateFrames(toCall, cmdId, text, snap?.mycall ?? '', speedInfo.key)
+  const frames = estimateFrames(toCall, cmdId, replaceJs8Macros(text, macroValues(), false), snap?.mycall ?? '', speedInfo.key)
   const overCap = frames > speedInfo.maxFrames
   const estimateText =
     frames === 0
@@ -1457,19 +1625,21 @@ export function Js8Cockpit({
               </option>
             ))}
           </select>
-          <input
-            className="settings-input cw-type js8-compose"
+          {/* JS8Call 3.0's compose box: pills for calls and commands, and the dictionary's
+              cheaper words for an underlined one (Js8ComposeBox). Word suggestions ask the
+              station, so the Remote page shows pills only. */}
+          <Js8ComposeBox
             value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter') return
-              e.preventDefault()
+            onChange={setText}
+            onEnter={() => {
               if (canSend) send()
             }}
+            toCall={toCall}
+            pills={compose.pills}
+            suggest={compose.wordSuggestions && canControl && !remote}
+            inputRef={composeRef}
             placeholder={t('js8.dock.compose.placeholder')}
-            aria-label={t('js8.dock.compose.aria')}
-            autoComplete="off"
-            spellCheck={false}
+            ariaLabel={t('js8.dock.compose.aria')}
           />
           <span className={`js8-estimate${overCap ? ' over' : ''}`} title={t('js8.dock.estimate.title')}>
             {estimateText}
@@ -1479,19 +1649,28 @@ export function Js8Cockpit({
           </button>
         </div>
 
+        {/* JS8Call's one-click buttons under its compose box: REPLY, SNR, INFO, STATUS and the
+            Saved menu (with "Restore previous message"). Senders, like Send: no ⊞ id, no stop. */}
+        <Js8ComposeActions
+          canControl={canControl}
+          toCall={toCall}
+          heard={heardSelected() !== null}
+          infoSet={compose.info.trim() !== ''}
+          sendAtOnce={compose.sendAtOnce}
+          saved={compose.savedMessages.map((m) => ({ text: m, shown: replaceJs8Macros(m, macroValues(), false) }))}
+          hasPrevious={previous !== null}
+          composing={text.trim() !== ''}
+          onReply={sendReply}
+          onSnr={sendSnr}
+          onInfo={sendInfo}
+          onStatus={sendStatus}
+          onSaved={sendSaved}
+          onRestore={restorePrevious}
+          onSaveCurrent={saveCurrent}
+          onEditSaved={onOpenSettings ? () => onOpenSettings('js8') : undefined}
+        />
+
         <div className="js8-dock-row js8-beacon-row">
-          <select
-            className="settings-input js8-cq-select"
-            value={cqIdx}
-            onChange={(e) => setCqIdx(Number(e.target.value))}
-            aria-label={t('js8.dock.cq.aria')}
-          >
-            {JS8_CQS.map((c, i) => (
-              <option key={c} value={i}>
-                {c}
-              </option>
-            ))}
-          </select>
           {/* CQ — one button, two behaviours, exactly as JS8Call's `cqMacroButton`: a plain
               one-shot at interval 0, and the checkable auto-repeat above it, carrying the
               live countdown in its own label. Turning the repeat off cancels the SCHEDULE;
@@ -1507,7 +1686,13 @@ export function Js8Cockpit({
               <span className="cw-macro-label">{cqCount ? `${CQ} (${cqCount})` : CQ}</span>
             </button>
           ) : (
-            <button type="button" className="cw-macro js8-cq" disabled={!canControl} onClick={callCq} title={t('js8.dock.cq.title')}>
+            <button
+              type="button"
+              className="cw-macro js8-cq"
+              disabled={!canControl}
+              onClick={callCq}
+              title={compose.sendAtOnce ? t('js8.dock.cq.send', { text: cqLine() }) : t('js8.dock.cq.fill', { text: cqLine() })}
+            >
               <span className="cw-macro-label">{CQ}</span>
             </button>
           )}

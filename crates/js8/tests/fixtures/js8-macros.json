@@ -1,0 +1,1017 @@
+{
+ "about": "JS8Call's 13 message macros (buildMacroValues + replaceMacros): one table of cases, read as it is by crates/js8/src/proto/macros.rs and by ui/src/js8Macros.agreement.test.ts. Each expectation was worked out from JS8Call 3.0.3's algorithm, not produced by either implementation. `selected` is the call in the To box when the station has heard it; tdeltaMs is (int)(1000 * its time drift).",
+ "cases": [
+  {
+   "name": "my call",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYCALL>",
+   "prune": false,
+   "expect": "KD9TAW"
+  },
+  {
+   "name": "my call is upper-cased as it is put in",
+   "input": {
+    "mycall": "kd9taw",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "DE <MYCALL>",
+   "prune": false,
+   "expect": "DE KD9TAW"
+  },
+  {
+   "name": "the square and the long locator",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYGRID4> <MYGRID12>",
+   "prune": false,
+   "expect": "EN52 EN52HW12"
+  },
+  {
+   "name": "a lower-case locator goes in upper-cased",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "en52hw",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYGRID4>",
+   "prune": false,
+   "expect": "EN52"
+  },
+  {
+   "name": "no locator: both grid words are empty",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "[<MYGRID4>][<MYGRID12>]",
+   "prune": false,
+   "expect": "[][]"
+  },
+  {
+   "name": "an empty INFO pruned",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "INFO <MYINFO>",
+   "prune": true,
+   "expect": "INFO "
+  },
+  {
+   "name": "INFO is trimmed",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "  QTH  ",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYINFO>|",
+   "prune": false,
+   "expect": "QTH|"
+  },
+  {
+   "name": "INFO's own macros are replaced first",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "QTH <MYGRID4> RIG <MYCALL>",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "INFO <MYINFO>",
+   "prune": true,
+   "expect": "INFO QTH EN52 RIG KD9TAW"
+  },
+  {
+   "name": "a value goes in upper-cased",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "qth en52",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYINFO>",
+   "prune": false,
+   "expect": "QTH EN52"
+  },
+  {
+   "name": "the CQ message",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYCQ>",
+   "prune": false,
+   "expect": "CQ CQ CQ EN52"
+  },
+  {
+   "name": "the legacy CQCQCQ is read as CQ CQ CQ",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQCQCQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYCQ>",
+   "prune": false,
+   "expect": "CQ CQ CQ EN52"
+  },
+  {
+   "name": "a CQ message with no locator keeps its space",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYCQ>|",
+   "prune": false,
+   "expect": "CQ CQ CQ |"
+  },
+  {
+   "name": "a CQ message naming a word sorted after its own",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ <MYVERSION>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYCQ>",
+   "prune": false,
+   "expect": "CQ NEXUS"
+  },
+  {
+   "name": "the heartbeat text",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYHB>",
+   "prune": false,
+   "expect": "HB EN52"
+  },
+  {
+   "name": "the reply message",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYREPLY>",
+   "prune": false,
+   "expect": "HW CPY?"
+  },
+  {
+   "name": "the reply message's own <CALL>",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "<CALL> TNX",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYREPLY>",
+   "prune": false,
+   "expect": "W1AW TNX"
+  },
+  {
+   "name": "the default STATUS",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYSTATUS>",
+   "prune": false,
+   "expect": "IDLE 12M VERSION NEXUS"
+  },
+  {
+   "name": "a STATUS of its own",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "ON <MYVERSION>",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYSTATUS>",
+   "prune": false,
+   "expect": "ON NEXUS"
+  },
+  {
+   "name": "a STATUS of its own, with the idle time",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "PSE <MYIDLE>",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYSTATUS>",
+   "prune": false,
+   "expect": "PSE 12M"
+  },
+  {
+   "name": "INFO naming STATUS keeps STATUS's <MYIDLE>: INFO is made before STATUS",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "S: <MYSTATUS>",
+    "status": "PSE <MYIDLE>",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYINFO>",
+   "prune": false,
+   "expect": "S: PSE <MYIDLE>"
+  },
+  {
+   "name": "…and pruning then drops it",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "S: <MYSTATUS>",
+    "status": "PSE <MYIDLE>",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYINFO>",
+   "prune": true,
+   "expect": "S: PSE "
+  },
+  {
+   "name": "a value naming itself is put in once, never again",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "<MYINFO>!",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYINFO>",
+   "prune": false,
+   "expect": "<MYINFO>!!"
+  },
+  {
+   "name": "…and pruned",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "<MYINFO>!",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYINFO>",
+   "prune": true,
+   "expect": "!!"
+  },
+  {
+   "name": "the version",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYVERSION>",
+   "prune": false,
+   "expect": "NEXUS"
+  },
+  {
+   "name": "idle 12 minutes",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYIDLE>",
+   "prune": false,
+   "expect": "12M"
+  },
+  {
+   "name": "idle 0 is 0M",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 0,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYIDLE>",
+   "prune": false,
+   "expect": "0M"
+  },
+  {
+   "name": "idle 59 minutes",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 59,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYIDLE>",
+   "prune": false,
+   "expect": "59M"
+  },
+  {
+   "name": "idle 60 minutes is an hour",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 60,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYIDLE>",
+   "prune": false,
+   "expect": "1H"
+  },
+  {
+   "name": "idle 1439 minutes is 23 hours",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 1439,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYIDLE>",
+   "prune": false,
+   "expect": "23H"
+  },
+  {
+   "name": "idle 1440 minutes is a day",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 1440,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYIDLE>",
+   "prune": false,
+   "expect": "1D"
+  },
+  {
+   "name": "idle 3000 minutes is 2 days",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 3000,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYIDLE>",
+   "prune": false,
+   "expect": "2D"
+  },
+  {
+   "name": "the default STATUS a day idle",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 1440,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYSTATUS>",
+   "prune": false,
+   "expect": "IDLE 1D VERSION NEXUS"
+  },
+  {
+   "name": "the selected call and its report",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<CALL> SNR <SNR>",
+   "prune": false,
+   "expect": "W1AW SNR -07"
+  },
+  {
+   "name": "a positive report",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": 5,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<SNR>",
+   "prune": false,
+   "expect": "+05"
+  },
+  {
+   "name": "-30 is reported",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -30,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<SNR>",
+   "prune": false,
+   "expect": "-30"
+  },
+  {
+   "name": "-31 is not: the token stays",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -31,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<SNR>",
+   "prune": false,
+   "expect": "<SNR>"
+  },
+  {
+   "name": "…and is pruned",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -31,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "[<SNR>]",
+   "prune": true,
+   "expect": "[]"
+  },
+  {
+   "name": "past +60 the report is empty, not absent",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": 61,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "[<SNR>]",
+   "prune": false,
+   "expect": "[]"
+  },
+  {
+   "name": "the time delta, upper-cased with its unit",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "TD <TDELTA>",
+   "prune": false,
+   "expect": "TD 120 MS"
+  },
+  {
+   "name": "a negative time delta",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": -250
+    }
+   },
+   "text": "<TDELTA>",
+   "prune": false,
+   "expect": "-250 MS"
+  },
+  {
+   "name": "no selected call: the three stay",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": null
+   },
+   "text": "<CALL> <SNR> <TDELTA>",
+   "prune": false,
+   "expect": "<CALL> <SNR> <TDELTA>"
+  },
+  {
+   "name": "no selected call: pruned",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": null
+   },
+   "text": "<CALL> <SNR> <TDELTA>",
+   "prune": true,
+   "expect": "  "
+  },
+  {
+   "name": "a lower-case token is replaced",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<mycall> de <call>",
+   "prune": false,
+   "expect": "KD9TAW de W1AW"
+  },
+  {
+   "name": "a mixed-case token is replaced",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MyGrid4>",
+   "prune": false,
+   "expect": "EN52"
+  },
+  {
+   "name": "every occurrence",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<MYCALL> <MYCALL>",
+   "prune": false,
+   "expect": "KD9TAW KD9TAW"
+  },
+  {
+   "name": "an unknown word stays",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "HI <FOO> <MYCALL>",
+   "prune": false,
+   "expect": "HI <FOO> KD9TAW"
+  },
+  {
+   "name": "an unknown word is pruned",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "HI <FOO> <MYCALL>",
+   "prune": true,
+   "expect": "HI  KD9TAW"
+  },
+  {
+   "name": "prune needs a character between the brackets, and a closing one",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "A <> B <C",
+   "prune": true,
+   "expect": "A <> B <C"
+  },
+  {
+   "name": "prune ends at the first >",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<A<B>C",
+   "prune": true,
+   "expect": "C"
+  },
+  {
+   "name": "text around the words is kept as typed",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "73 de <MYCALL> ¡hola!",
+   "prune": false,
+   "expect": "73 de KD9TAW ¡hola!"
+  },
+  {
+   "name": "a saved message with three words",
+   "input": {
+    "mycall": "KD9TAW",
+    "grid": "EN52HW12",
+    "info": "",
+    "status": "",
+    "cq": "CQ CQ CQ <MYGRID4>",
+    "reply": "HW CPY?",
+    "idleMinutes": 12,
+    "selected": {
+     "call": "W1AW",
+     "snrDb": -7,
+     "tdeltaMs": 120
+    }
+   },
+   "text": "<CALL> DE <MYCALL> <MYGRID4> TNX",
+   "prune": true,
+   "expect": "W1AW DE KD9TAW EN52 TNX"
+  }
+ ]
+}

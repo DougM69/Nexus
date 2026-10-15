@@ -57,8 +57,9 @@ both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
 
 **The TX dock**, pinned under the panes. The **To** box (blank = everyone, a callsign,
 `@ALLCALL`, or a `@GROUP` you belong to), the composer, a frame estimate ("3 frames ·
-45 s") and **Send**; a command palette with JS8Call's 32 directed commands; the **CQ**
-variant picker and **CQ**; **HB**; the **AUTOREPLY · RELAY · HB ACK** chips; an automatic
+45 s") and **Send**; a command palette with JS8Call's 32 directed commands; JS8Call's
+**REPLY · SNR · INFO · STATUS** buttons and **Saved** menu (see [Composing](#composing));
+**CQ**; **HB**; the **AUTOREPLY · RELAY · HB ACK** chips; an automatic
 reply's question, **Yes** or **No**; the queue with **Drop queue**; and the
 idle-watchdog readout.
 
@@ -69,6 +70,38 @@ All four speeds decode at once, exactly as JS8Call's multi-decode does: a Slow s
 speeds in Settings if a small machine struggles. A long message arrives one frame per
 period and is stitched together by audio offset — you see the frames arrive in Activity,
 and the finished message in Inbox if it was for you.
+
+## Composing
+
+The compose box works as JS8Call 3.0's does. Its switches and texts are in
+[Settings ▸ Digital ▸ JS8](settings-reference.md#js8), under **Composing**.
+
+- **Pills.** As you type, the parts of a message JS8Call recognises are drawn as coloured
+  pills: who it goes to (a call, a relay route such as `W1AW>K1ABC`, or a `@GROUP`), who it is
+  from, and the command (`SNR?`, `MSG`, `QUERY CALL K1ABC?` and the rest). Point at a pill to
+  read what it does. A command typed with no address goes to the call in the **To** box, and
+  the pill says so.
+- **Cheaper words.** A word the JS8 dictionary sends in pieces is underlined in red.
+  Right-click it for up to five words that take less airtime, cheapest first, and pick one to
+  put it in place.
+- **One-click messages.** **REPLY** sends your reply message (`HW CPY?` unless you change it)
+  to the call in the **To** box. **SNR** sends that station the report you hear from it, once
+  it has been heard. **INFO** and **STATUS** send yours, to the **To** box call or to everyone.
+  **CQ** sends your CQ message (`CQ CQ CQ` and your square unless you change it), and clears
+  the **To** box as JS8Call does. A button that sends leaves what you were typing in the box.
+- **Saved messages.** The **Saved** menu lists the messages you keep (`TNX 73 GL` to start
+  with). Pick one to send it, to the **To** box call or to everyone. **Save current message**
+  adds what is in the compose box, **Edit saved messages…** opens Settings, and **Restore
+  previous message** puts the last message you sent back in the box.
+- **Macros.** A saved message, the CQ and reply messages, INFO and STATUS may carry JS8Call's
+  macros, replaced when the message is used: `<MYCALL>`, `<MYGRID4>`, `<MYGRID12>`, `<MYINFO>`,
+  `<MYCQ>`, `<MYHB>`, `<MYREPLY>`, `<MYSTATUS>`, `<MYVERSION>`, `<MYIDLE>`, and for the call in
+  the **To** box once it has been heard, `<CALL>`, `<SNR>` and `<TDELTA>`. A macro typed into
+  the compose box is replaced when you press **Send**.
+- **Fill only.** Turn off **Send CQ, REPLY, SNR, INFO, STATUS, saved messages and a station's
+  asks at once** (JS8Call's "Immediately transmit…") and those buttons, and the quick asks on a
+  station row, put their message in the compose box instead; **Send** sends it. The repeating
+  CQ always sends.
 
 ## Transmitting
 

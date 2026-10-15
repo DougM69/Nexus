@@ -11,6 +11,8 @@ import { LanStation } from '../remote-native/LanStation'
 import { BetaNote } from '../remote-web/BetaNote'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
+import { Js8ComposeSettings } from './Js8ComposeSettings'
+import { js8CqTextRefused } from '../js8Compose'
 import { confirmDialog } from '../confirm'
 import { checkRigForm, blocks, dataModePickerShown, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
@@ -3567,6 +3569,13 @@ export function SettingsPanel({
     if (unjoinable) {
       setTab('digital')
       setError(t('settings.save.js8GroupCannotJoin', { group: unjoinable }))
+      return
+    }
+    // JS8Call's Settings refuse a CQ message that is not empty, does not start with CQ and does not
+    // hold the callsign (Configuration.cpp:3003-3008), and so does this Save.
+    if (js8CqTextRefused(form.js8CqText ?? '', form.mycall ?? '')) {
+      setTab('digital')
+      setError(t('settings.save.js8CqText'))
       return
     }
     // Check the RADIO before saving it. Until now the callsign was the only validated field, so
@@ -9328,6 +9337,15 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.js8.groups.hint')}</span>
               </label>
             </div>
+
+            <Js8ComposeSettings
+              form={form}
+              disabled={remote}
+              onChange={(patch) => {
+                markDirty()
+                setForm((prev) => (prev ? { ...prev, ...patch } : prev))
+              }}
+            />
           </fieldset>
           )}
 

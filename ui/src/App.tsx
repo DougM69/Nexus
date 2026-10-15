@@ -118,6 +118,7 @@ import { PhoneCockpit } from './components/PhoneCockpit'
 import { RttyCockpit } from './components/RttyCockpit'
 import { PskCockpit } from './components/PskCockpit'
 import { Js8Cockpit } from './components/Js8Cockpit'
+import { js8ComposeConfig } from './js8Compose'
 import { SstvView } from './components/SstvView'
 import { AprsCockpit } from './components/AprsCockpit'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
@@ -4157,6 +4158,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 panels={js8Panels}
                 onOpenSettings={openSettingsAt}
                 boxes={boxesFor('js8')}
+                compose={js8ComposeConfig(settings)}
+                onSavedMessages={(js8SavedMessages) => setSettings((prev) => (prev ? { ...prev, js8SavedMessages } : prev))}
               />
             </div>
           )}
