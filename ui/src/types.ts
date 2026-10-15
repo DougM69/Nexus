@@ -1931,6 +1931,17 @@ export interface Js8InboxEntry {
   snrDb: number
 }
 
+/** Which cap took a message out of the inbox: the count (100 a half) or the bytes (64 KB). */
+export type Js8DropReason = 'count' | 'bytes'
+
+/** A message a cap took out of the inbox: when, why, and the row itself (its `state` says whose
+ * mail it was). Kept until the operator clears the notes. */
+export interface Js8InboxDrop {
+  atMs: number
+  why: Js8DropReason
+  entry: Js8InboxEntry
+}
+
 /** One outbox row (empty in the receive-only build). */
 export interface Js8QueueRow {
   origin: Js8Origin
@@ -1986,6 +1997,8 @@ export interface Js8State {
   activity: Js8ActivityRow[]
   stations: Js8Heard[]
   inbox: Js8InboxEntry[]
+  /** What a cap took out of the inbox, oldest first, at most ten. Absent while there are none. */
+  inboxDropped?: Js8InboxDrop[]
   queue: Js8QueueRow[]
   pendingReply: Js8PendingReply | null
   /** The last refused verb's reason, cleared by the next successful verb. */

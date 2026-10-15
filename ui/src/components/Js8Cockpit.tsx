@@ -35,6 +35,8 @@ import { Js8HbButton, Js8HbNetChip, js8HbAckRateBlockedNote, js8HbAckSuppressedT
 import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
+import { Js8InboxDropped } from './Js8InboxDropped'
+import { Js8StoreMessage } from './Js8StoreMessage'
 import { useRegionCols, type RegionCols } from '../useRegionCols'
 import {
   atuTune,
@@ -50,6 +52,7 @@ import {
   js8Enter,
   js8HeartbeatNow,
   js8InboxDelete,
+  js8InboxDroppedClear,
   js8InboxMark,
   js8LocatorRefusal,
   js8SelectCall,
@@ -527,6 +530,15 @@ export function Js8Cockpit({
   const deleteInbox = (id: number) => {
     if (!canControl) return
     void withErrorToast(() => js8InboxDelete(id), t('js8.inbox.failed')).then((s) => {
+      if (s) setJs8(s)
+    })
+  }
+  // "Store message…" on a heard station (Js8StoreMessage), and the Inbox's notes of what a cap
+  // took out (Js8InboxDropped).
+  const [storeFor, setStoreFor] = useState<string | null>(null)
+  const clearDropped = () => {
+    if (!canControl) return
+    void withErrorToast(() => js8InboxDroppedClear(), t('js8.inbox.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
@@ -1045,12 +1057,22 @@ export function Js8Cockpit({
                 >
                   {ownGrid ? `${JS8_GRID.label} ${ownGrid}` : JS8_GRID.label}
                 </button>
+                <button
+                  type="button"
+                  className="cw-macro js8-query js8-store"
+                  disabled={!canControl}
+                  onClick={() => setStoreFor(h.call)}
+                  title={t('js8.station.store.title', { call: h.call })}
+                >
+                  {t('js8.station.store.label')}
+                </button>
               </span>
             </div>
             )
           })
         )}
       </div>
+      <Js8StoreMessage call={storeFor} onClose={() => setStoreFor(null)} onStored={setJs8} />
     </CockpitPaneFrame>
   )
 
@@ -1064,6 +1086,7 @@ export function Js8Cockpit({
       {...closeProps('inbox')}
     >
       <div className="js8-inbox">
+        <Js8InboxDropped drops={js8?.inboxDropped} canControl={canControl} onClear={clearDropped} />
         {!js8 || js8.inbox.length === 0 ? (
           <div className="cw-decode-idle">{t('js8.inbox.empty')}</div>
         ) : (

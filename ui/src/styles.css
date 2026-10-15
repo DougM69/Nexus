@@ -27542,6 +27542,14 @@ button.sat-chip:disabled {
 .js8-inbox-row.state-unread {
   font-weight: 700;
 }
+/* The Inbox's notes of what a cap took out (Js8InboxDropped.tsx), above the rows. */
+.js8-inbox-dropped {
+  color: var(--state-weak);
+}
+/* "Store message…" (Js8StoreMessage.tsx): the message takes the dialog's width. */
+.js8-store-input {
+  width: 100%;
+}
 .js8-path {
   color: var(--text-dim);
 }

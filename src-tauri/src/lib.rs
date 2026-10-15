@@ -17015,6 +17015,29 @@ fn js8_inbox_delete(
     Ok(eng.js8_state())
 }
 
+/// "Store message…" (JS8Call's): leave `text` here for `to`, handed over when `to` asks with
+/// QUERY MSGS and QUERY MSG n. Keys nothing. Journaled.
+#[tauri::command(async)]
+fn js8_store_message(
+    state: State<'_, SharedEngine>,
+    to: String,
+    text: String,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_store_message(to, text)?;
+    Ok(eng.js8_state())
+}
+
+/// Clear the Inbox's notes of what a cap dropped. Journaled.
+#[tauri::command(async)]
+fn js8_inbox_dropped_clear(
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_inbox_dropped_clear();
+    Ok(eng.js8_state())
+}
+
 /// Clear the decoded-PSK transcript (display only; the decoder keeps running).
 #[tauri::command(async)]
 fn psk_clear(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
@@ -35521,6 +35544,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             js8_inbox_delete,
             js8_heartbeat_now,
             js8_select_call,
+            js8_store_message,
+            js8_inbox_dropped_clear,
             psk_clear,
             psk_afc_reset,
             psk_net,

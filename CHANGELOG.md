@@ -117,6 +117,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not answer right now (at Turbo, while a message is still arriving, or while a call is in the To
   box), the chip reads not armed and its tooltip says why, as JS8Call drops "ACK" from its HB
   button then.
+- **JS8: QUERY CALL and AGN? are answered, as JS8Call 3.0.3 answers them.** A station that sends
+  "QUERY CALL W1AW?" to you, to a group you joined or to @ALLCALL hears back "YES -12 (5M)", the
+  SNR and how long ago you last heard W1AW, when you have heard it; on @ALLCALL each station is
+  answered once in 15 minutes, and with AUTOREPLY off nothing is sent. "AGN?" to your call sends
+  your last transmission again as it went out; with AUTOREPLY off it goes into the message box for
+  you to send. Both ask first while "Ask for confirmation" is on, wait while you are typing or a
+  message to you is still arriving, follow the only-reply and never-reply lists, and stop with the
+  idle watchdog, as every automatic reply does. NEEDS-BENCH against JS8Call 3.0.3.
+- **JS8: a message left for a group is handed to each member.** A `MSG TO:@GROUP` held at your
+  station is offered to any station that sends QUERY MSGS to that group, if you joined it, and
+  handed once to each station that then asks for it with QUERY MSG n. It is held 48 hours, as long
+  as JS8Call offers one. NEEDS-BENCH.
+- **JS8: Store… leaves a message at your station for a heard station.** The button at the end of a
+  row in Stations opens a box ("Store this message locally for W1AW:"). The message waits in the
+  Inbox, from your call, and goes out only when that station asks for it with QUERY MSGS and QUERY
+  MSG n, under the same rules as every automatic reply. Storing it sends nothing. NEEDS-BENCH for
+  the hand-over.
 
 ### Changed
 
@@ -199,6 +216,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   acknowledgements answer while HB NET and AUTOREPLY are on, whether or not your own heartbeat
   repeat is running; before, they answered only while HB was on. HB NET is off after the update, so
   nothing is acknowledged until you turn it on. NEEDS-BENCH.
+- **JS8: replies about held messages read as JS8Call 3.0's.** QUERY MSGS is answered "YES MSG ID 4
+  +2" when two more wait after message 4, a delivery ends "NEXT MSG ID 5" when another waits (and
+  "+1" past that), and a heartbeat acknowledgement says "MSG ID 4 +2)", as JS8Call 3.0.3 sends it.
+  With one message waiting the replies read as before. NEEDS-BENCH against JS8Call 3.0.3.
+- **JS8: a message held for one station stays until you delete it.** It no longer goes after 48
+  hours, as JS8Call keeps it too; one left for a group still goes after 48 hours. The inbox still
+  holds at most 100 messages (and 64 KB) of your own and as many held for others. When it is full a
+  message already handed over goes first, then the oldest, and the Inbox now lists which message
+  went and why until you press Clear notes.
 
 ### Fixed
 

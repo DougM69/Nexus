@@ -13,6 +13,7 @@ pub mod compose;
 pub mod crc16;
 pub mod frame;
 pub mod grid;
+pub mod held;
 pub mod huffman;
 pub mod jsc;
 pub mod reassembly;

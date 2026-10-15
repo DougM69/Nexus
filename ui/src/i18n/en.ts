@@ -10018,6 +10018,23 @@ export const EN = {
   'js8.inbox.failed': 'Inbox change refused',
   'js8.inbox.new': 'New message from {{from}} at {{time}} UTC, in the Inbox',
 
+  // ── JS8 ▸ held messages: "Store message…", and what a cap removed from the inbox ────────
+  'js8.station.store.label': 'Store…',
+  'js8.station.store.title': 'Store a message here for {{call}}: it is held at your station and handed over when {{call}} asks for it',
+  'js8.store.title': 'Store message',
+  'js8.store.label': 'Store this message locally for {{call}}:',
+  'js8.store.aria': 'Message to hold for {{call}}',
+  'js8.store.cancel': 'Cancel',
+  'js8.store.save': 'Store',
+  'js8.store.done': 'Held for {{call}} until they ask for it',
+  'js8.inbox.dropped.chip': 'removed',
+  'js8.inbox.dropped.count.held': 'The inbox holds at most 100 messages for other stations; this one made room for a new one',
+  'js8.inbox.dropped.bytes.held': 'Messages held for other stations may take at most 64 KB; this one made room for a new one',
+  'js8.inbox.dropped.count.mine': 'The inbox keeps at most 100 of your messages; this one made room for a new one',
+  'js8.inbox.dropped.bytes.mine': 'Your messages may take at most 64 KB; this one made room for a new one',
+  'js8.inbox.dropped.clear.label': 'Clear notes',
+  'js8.inbox.dropped.clear.title': 'Clear these notes of messages the inbox removed',
+
   // ── JS8 ▸ the dock: addressee, composer, CQ, HB ──────────────────────────────────────
   'js8.dock.aria': 'JS8 composer',
   'js8.dock.to.placeholder': 'To — a callsign, @ALLCALL or @GROUP (blank = everyone)',

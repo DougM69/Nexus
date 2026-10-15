@@ -33,8 +33,11 @@ export function parseJs8Sample(raw: unknown, ageMs: number, now = Date.now()): J
   const sample = object(raw,['state','capturedAtMs'])
   if (!integer(sample.capturedAtMs) || !finite(ageMs) || ageMs < 0 || ageMs >= APPLICATION_TIMEOUT_MS ||
     new TextEncoder().encode(JSON.stringify(raw)).length > 384*1024) throw new Error('invalidJs8')
+  // `inboxDropped`, the Inbox's notes of what a cap took out, is OPTIONAL: a station sends it only
+  // while there are notes, and an older station never. A page from before it refuses a sample
+  // carrying it, so this page must be deployed before a station that sends it.
   const s = object(sample.state,['speed','rxSpeeds','txEnabled','sending','hbOn','hbNextAtMs','hbIntervalMin','cqOn','cqNextAtMs','cqIntervalMin',
-    'autoreply','relay','hbAck','armed','idleMinutes','idleLimitMin','idleTripped','activity','stations','inbox','queue','pendingReply','lastError'],['notArmed'])
+    'autoreply','relay','hbAck','armed','idleMinutes','idleLimitMin','idleTripped','activity','stations','inbox','queue','pendingReply','lastError'],['notArmed','inboxDropped'])
   if (!speed(s.speed) || !integer(s.rxSpeeds) || s.rxSpeeds > 15 ||
     ![s.txEnabled,s.sending,s.hbOn,s.cqOn,s.autoreply,s.relay,s.hbAck,s.idleTripped].every(bool) ||
     ![s.hbNextAtMs,s.cqNextAtMs].every(nullableTime) || ![s.hbIntervalMin,s.cqIntervalMin,s.idleMinutes,s.idleLimitMin].every(integer) ||
@@ -64,11 +67,23 @@ export function parseJs8Sample(raw: unknown, ageMs: number, now = Date.now()): J
     calls.add(r.call)
   }
   const ids = new Set<number>()
-  for (const raw of rows(s.inbox,100)) {
+  const inboxRow = (raw: unknown) => {
     const r = object(raw,['id','from','to','text','path','state','atMs','freqHz','snrDb'])
-    if (!integer(r.id) || ids.has(r.id) || ![r.from,r.to,r.text].every(v => text(v)) || !rows(r.path,8).every(v => text(v)) ||
+    if (!integer(r.id) || ![r.from,r.to,r.text].every(v => text(v)) || !rows(r.path,8).every(v => text(v)) ||
       !['unread','read','store','delivered'].includes(String(r.state)) || !integer(r.atMs) || ![r.freqHz,r.snrDb].every(finite)) throw new Error('invalidJs8')
-    ids.add(r.id)
+    return r
+  }
+  for (const raw of rows(s.inbox,100)) {
+    const r = inboxRow(raw)
+    if (ids.has(r.id as number)) throw new Error('invalidJs8')
+    ids.add(r.id as number)
+  }
+  if (s.inboxDropped !== undefined) {
+    for (const raw of rows(s.inboxDropped,10)) {
+      const d = object(raw,['atMs','why','entry'])
+      if (!integer(d.atMs) || !['count','bytes'].includes(String(d.why))) throw new Error('invalidJs8')
+      inboxRow(d.entry)
+    }
   }
   for (const raw of rows(s.queue,2048)) {
     const r = object(raw,['origin','display','first','last'])

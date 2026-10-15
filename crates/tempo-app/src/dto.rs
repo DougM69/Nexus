@@ -504,6 +504,8 @@ impl Tier {
 
 /// The heard-station row, straight from the message layer (serde-derived there).
 pub use js8::proto::station::Heard as Js8Heard;
+/// A message a cap took out of the inbox, `{ atMs, why: "count" | "bytes", entry }`.
+pub use js8::proto::station::InboxDrop as Js8InboxDrop;
 /// One inbox row (UNREAD / READ / STORE / DELIVERED), straight from the message layer.
 pub use js8::proto::station::InboxEntry as Js8InboxEntry;
 /// The inbox row state — lowercase on the wire (`"unread" | "read" | "store" | "delivered"`).
@@ -649,6 +651,11 @@ pub struct Js8State {
     pub activity: Vec<Js8ActivityRow>,
     pub stations: Vec<Js8Heard>,
     pub inbox: Vec<Js8InboxEntry>,
+    /// What a cap took out of the inbox, oldest first, at most ten, until the operator clears
+    /// the notes: which, and why. Left out while there are none, so a Remote page that does not
+    /// know the key reads the station's sample as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inbox_dropped: Vec<Js8InboxDrop>,
     pub queue: Vec<Js8QueueRow>,
     pub pending_reply: Option<Js8PendingReply>,
     /// The last refused verb's reason (a send that would not compose, a forbidden
@@ -5010,6 +5017,7 @@ mod tests {
             }],
             stations: Vec::new(),
             inbox: Vec::new(),
+            inbox_dropped: Vec::new(),
             queue: vec![Js8QueueRow {
                 origin: js8::Origin::HbAck,
                 display: "x".to_string(),
