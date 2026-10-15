@@ -139,7 +139,7 @@ fn decoded(frames: &[(u64, TxFrame)]) -> String {
 fn assert_keys(s: &mut Station, asked_ms: u64, text: &str) {
     let first = asked_ms / PERIOD * PERIOD + PERIOD;
     let keyed = key_all(s, first);
-    let got: Vec<Word87> = keyed.iter().map(|(_, f)| f.word.clone()).collect();
+    let got: Vec<Word87> = keyed.iter().map(|(_, f)| f.word).collect();
     assert_eq!(
         got,
         words(text),
@@ -314,7 +314,7 @@ fn agn_sends_my_last_message_again() {
     );
     assert_eq!(replies(&s), ["W1AW SNR -05"]);
     assert_keys(&mut s, asked, "W1AW SNR -05");
-    let first_words: Vec<Word87> = first.iter().map(|(_, f)| f.word.clone()).collect();
+    let first_words: Vec<Word87> = first.iter().map(|(_, f)| f.word).collect();
     assert_eq!(
         first_words,
         words("W1AW SNR -05"),
@@ -364,7 +364,7 @@ fn agn_sends_a_multi_frame_message_again_as_it_was_decoded() {
         &ev("W1AW", "KD9TAW", Command::AgnQuery, "", -9, asked),
         asked,
     );
-    assert_eq!(replies(&s), [again.clone()]);
+    assert_eq!(replies(&s), std::slice::from_ref(&again));
     assert_eq!(
         words(&format!("KD9TAW: {again}")),
         words(&again),
@@ -480,10 +480,7 @@ fn the_heartbeat_ack_says_how_many_more_wait_as_js8call_3_does() {
     assert_eq!(replies(&s), ["K1ABC HEARTBEAT SNR -05 MSG ID 1 +2)"]);
     let keyed = key_all(&mut s, T0 + PERIOD);
     assert_eq!(
-        keyed
-            .iter()
-            .map(|(_, f)| f.word.clone())
-            .collect::<Vec<_>>(),
+        keyed.iter().map(|(_, f)| f.word).collect::<Vec<_>>(),
         words("K1ABC HEARTBEAT SNR -05 MSG ID 1 +2)"),
         "decoded {:?}",
         decoded(&keyed)
