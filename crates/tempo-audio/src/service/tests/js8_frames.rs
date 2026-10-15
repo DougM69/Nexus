@@ -271,19 +271,25 @@ fn a_held_js8_key_whose_next_frame_does_not_key_drops_just_after_the_boundary_an
     );
 }
 
-/// The dial leaves the licence's privileges while a frame is on the air: its key is not held past
-/// its end (13.40 s), since the next frame could not key there, and the next boundary drops the rest
-/// of the message (`plan_js8_tx`).
+/// The dial leaves the licence's privileges late in a frame, after the once-a-second JS8 tick that
+/// would drop the rest of the message (`Engine::js8_tick`) and before the frame's end: the key is not
+/// held past that end (13.40 s), since the next frame could not key there, and the next tick drops
+/// the rest of the message. Earlier in the frame the tick drops it first, which ends a hold too.
 #[test]
 fn a_js8_key_is_not_held_once_the_dial_is_outside_the_privileges() {
     let mut m = Js8Message::holding(1, LONG, true);
     assert!(m.frames >= 3, "premise: a message of several frames");
-    assert_eq!(m.ptt_until(5_000.0), [(0.0, "T 1".to_string())], "premise");
+    assert_eq!(m.ptt_until(13_100.0), [(0.0, "T 1".to_string())], "premise");
     {
         let mut e = m.engine.lock().unwrap();
         e.set_license_class("general");
         e.set_frequency(14.020, "20m", "USB");
         assert!(!e.tx_allowed(), "premise: 14.020 MHz is outside General");
+        assert_eq!(
+            e.js8_state().queue.len(),
+            m.frames - 1,
+            "premise: the rest of the message is still queued at the frame's end"
+        );
     }
     assert_eq!(
         m.ptt_until(3.0 * 15_000.0),
