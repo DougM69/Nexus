@@ -292,6 +292,39 @@ describe('REPLY, SNR, INFO and STATUS', () => {
   })
 })
 
+describe('REPLY, SNR, INFO, STATUS and Saved wait while a message is queued or going out', () => {
+  // JS8Call greys them on CQ's and HB's one predicate, `isMessageQueuedForTransmit()`
+  // (`updateButtonDisplay`, mainwindow.cpp:5675-5689, :3264-3266): anything waiting to go, or the
+  // key down, not only a message of the compose box's.
+  const greyed = () => ['.js8-reply', '.js8-snr-send', '.js8-info', '.js8-status', '.js8-saved'].map((s) => q<HTMLButtonElement>(s).disabled)
+  const waiting = [{ origin: 'autoReply' as const, display: 'KD9TAW: W1AW SNR -05', first: true, last: true }]
+
+  it('an automatic reply waiting in the queue greys all five, and a click on them sends nothing', async () => {
+    state.current = { ...base(), queue: waiting }
+    await renderCockpit({ info: 'QTH <MYGRID4>' })
+    type(toBox(), 'W1AW')
+    expect(greyed()).toEqual([true, true, true, true, true])
+    for (const s of ['.js8-reply', '.js8-snr-send', '.js8-info', '.js8-status', '.js8-saved']) await click(q(s))
+    expect(js8Send).not.toHaveBeenCalled()
+    expect(js8SendCommand).not.toHaveBeenCalled()
+  })
+
+  it('the key down with the queue empty greys them too', async () => {
+    state.current = { ...base(), sending: true }
+    await renderCockpit({ info: 'QTH <MYGRID4>' })
+    type(toBox(), 'W1AW')
+    expect(greyed()).toEqual([true, true, true, true, true])
+  })
+
+  it('control: with nothing queued or going out, all five can be pressed, and the same click sends', async () => {
+    await renderCockpit({ info: 'QTH <MYGRID4>' })
+    type(toBox(), 'W1AW')
+    expect(greyed()).toEqual([false, false, false, false, false])
+    await click(q('.js8-reply'))
+    expect(js8Send).toHaveBeenCalledWith('W1AW', 'W1AW HW CPY?')
+  })
+})
+
 describe('the Saved menu', () => {
   it('shows each saved message with its macros filled in, and sends the one picked', async () => {
     await renderCockpit({ savedMessages: ['TNX 73 GL', 'DE <MYCALL> <FOO>'] })

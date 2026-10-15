@@ -25,8 +25,9 @@ export interface Js8SavedShown {
 interface Props {
   /** May this window send (the Remote observes). */
   canControl: boolean
-  /** A message of the compose box's is going out: JS8Call greys these out until it has gone
-   *  (`updateButtonDisplay`, mainwindow.cpp:5675-5696), and adds no text to its box meanwhile. */
+  /** A message waits to go or the key is down (JS8Call's `isMessageQueuedForTransmit()`, the
+   *  cockpit's `queued`): JS8Call greys these out until it has gone, on the predicate it greys CQ
+   *  and HB on (`updateButtonDisplay`, mainwindow.cpp:5675-5689). */
   busy: boolean
   /** The call in the To box, JS8Call's selected call. */
   toCall: string

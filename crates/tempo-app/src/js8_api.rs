@@ -459,8 +459,9 @@ pub fn answer(req: &Request, via: Via, snap: &Js8ApiSnapshot, now_ms: u64) -> Op
                         Value::from(c.autoreply_confirmation),
                     ),
                     ("AUTO_REPLY".into(), Value::from(c.autoreply)),
-                    // Nexus has no switch for leaving @ALLCALL unanswered: JS8Call's default.
-                    ("AVOID_ALLCALL".into(), Value::from(false)),
+                    // JS8Call's "Do not participate in the @ALLCALL group" (`avoid_allcall()`,
+                    // networkMessage.cpp:332): Settings' *Do not take part in @ALLCALL*.
+                    ("AVOID_ALLCALL".into(), Value::from(c.avoid_allcall)),
                     ("CAN_HB".into(), Value::from(c.can_hb)),
                     ("HBACK".into(), Value::from(c.hb_ack)),
                     ("HB_INTERVAL".into(), Value::from(c.hb_interval_min)),
@@ -1082,6 +1083,8 @@ pub struct ConfigRow {
     pub tx_enabled: bool,
     /// Heartbeat networking (`JS8HB`): the Settings switch.
     pub js8hb: bool,
+    /// Not taking part in @ALLCALL (`AVOID_ALLCALL`): the Settings switch.
+    pub avoid_allcall: bool,
 }
 
 /// Everything a read is answered from, copied out of the Engine.
@@ -1596,6 +1599,7 @@ impl Engine {
                 groups: s.js8_groups.clone(),
                 tx_enabled: self.tx_enabled(),
                 js8hb: s.js8_hb_networking,
+                avoid_allcall: s.js8_avoid_allcall,
             },
             on_air: on_air.map(|(text, _, _)| text.clone()).unwrap_or_default(),
             tx_text: going
@@ -2134,6 +2138,22 @@ mod tests {
         assert_eq!(js8hb(&e), Value::from(false), "off, as JS8Call ships it");
         e.settings.js8_hb_networking = true;
         assert_eq!(js8hb(&e), Value::from(true));
+    }
+
+    /// `STATION.CONFIG`'s `AVOID_ALLCALL` is JS8Call's "Do not participate in the @ALLCALL group"
+    /// (`m_config.avoid_allcall()`, networkMessage.cpp:332; `AvoidAllcall`, off by default,
+    /// Configuration.cpp:2407): the Settings switch, *Do not take part in @ALLCALL*.
+    #[test]
+    fn avoid_allcall_is_the_settings_switch() {
+        let mut e = engine();
+        let avoid = |e: &Engine| {
+            json(&line_for(e, "STATION.GET_CONFIG"))["params"]["AVOID_ALLCALL"].clone()
+        };
+        assert_eq!(avoid(&e), Value::from(false), "off, as JS8Call ships it");
+        e.settings.js8_avoid_allcall = true;
+        assert_eq!(avoid(&e), Value::from(true));
+        e.settings.js8_avoid_allcall = false;
+        assert_eq!(avoid(&e), Value::from(false), "and off again");
     }
 
     /// `RX.GET_FILTER` is answered `RX.FILTER` as JS8Call 3.0.3 answers it

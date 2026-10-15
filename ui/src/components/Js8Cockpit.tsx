@@ -954,8 +954,10 @@ export function Js8Cockpit({
 
   const sending = js8?.sending === true
   // JS8Call's `isMessageQueuedForTransmit()` (mainwindow.cpp:3264-3266): a message waiting to go, or
-  // the key down. CQ and HB are greyed out meanwhile (`updateButtonDisplay`, :5675-5689).
-  const queued = sending || (js8?.queue.length ?? 0) > 0
+  // the key down. The compose box's own message going out is one, and the typeahead's poll can say so
+  // before the queue's does. CQ, HB, REPLY, SNR, INFO, STATUS and Saved are greyed out meanwhile, all
+  // on this one predicate (`updateButtonDisplay`, :5675-5689).
+  const queued = sending || (js8?.queue.length ?? 0) > 0 || typeahead.active
   const rxCount = countBits(js8?.rxSpeeds ?? 0)
   const selectedCall = toCall.trim().toUpperCase()
   const selected = js8?.stations.find((h) => h.call === selectedCall) ?? null
@@ -1945,7 +1947,7 @@ export function Js8Cockpit({
               Saved menu (with "Restore previous message"). Senders, like Send: no ⊞ id, no stop. */}
           <Js8ComposeActions
             canControl={canControl}
-            busy={typeahead.active}
+            busy={queued}
             toCall={toCall}
             heard={heardSelected() !== null}
             infoSet={compose.info.trim() !== ''}

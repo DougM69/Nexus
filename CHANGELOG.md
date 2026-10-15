@@ -243,7 +243,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Allow TX offset changes while sending" on, as in JS8Call) or its speed, centre the decode
   filter there while the filter is on, show the station's messages, add a station or a group,
   remove one (a group is left;
-  removing @ALLCALL turns on "Do not participate in the @ALLCALL group" in Settings, and adding
+  removing @ALLCALL turns on "Do not take part in @ALLCALL" in Settings, and adding
   it turns that off), block one, remove an offset's activity. Needs a bench check: a jump moves
   where your next message keys, as a Ctrl-click on the waterfall does (with that option on, the
   frame on the air too), and removing @ALLCALL changes what Nexus answers.
@@ -431,8 +431,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pinned to the top from its row's ⋯ now. The call list sorts by callsign and shows JS8Call's
   columns, as JS8Call ships them; grid, distance, azimuth, speed and time delta are a tick away in
   its ⋯ ▸ Show columns, and Band activity's time delta and speed in its own.
-- **JS8: CQ and HB wait while a message is going out.** Both are greyed out while a message is
-  waiting to go or going out, as JS8Call's are, so a CQ or a heartbeat no longer queues behind it.
+- **JS8: CQ, HB and the one-click buttons wait while a message is going out.** CQ, HB, REPLY,
+  SNR, INFO, STATUS and Saved are greyed out while a message is waiting to go or going out, an
+  automatic reply or a heartbeat included, as JS8Call's are, so nothing they send queues behind it.
   Needs a bench check.
 - **The manual's drive advice covers the Yaesus that turn their power down with the ALC.** On an
   FT-991A below full power the ALC reads above zero however clean the drive, so "set it so your

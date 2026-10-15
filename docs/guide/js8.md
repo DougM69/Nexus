@@ -70,7 +70,7 @@ each row has a **⋯** of its own (a right-click on the row opens it too).
   there), **Show message inbox**, **Pin to the top**, **Add new
   station or group…** (a call, or a `@GROUP` to join), **Remove this station** (until it is
   heard again) or **Remove this group** (leaves it; on `@ALLCALL` it turns on Settings' *Do not
-  participate in the @ALLCALL group* and the row goes, and adding `@ALLCALL` turns it off and
+  take part in @ALLCALL* and the row goes, and adding `@ALLCALL` turns it off and
   brings the row back, as in JS8Call), **Block this station** (Settings' RX block list).
   **Store…** at the end of a row leaves a message at your station for that station, as
   JS8Call's Store Message does: it waits in the Inbox, from your call, and goes out only when
@@ -112,8 +112,8 @@ each row has a **⋯** of its own (a right-click on the row opens it too).
 **CQ**; **HB NET** and, while it is on, **HB** with its menu (**▾**, or
 right-click **HB**); the **AUTOREPLY · RELAY · HB ACK** chips; an automatic
 reply's question, **Yes** or **No**; the queue with **Drop queue**; and the
-idle-watchdog readout. **CQ** and **HB** are greyed out while a message is waiting to go or going
-out, as JS8Call's are.
+idle-watchdog readout. **CQ**, **HB**, **REPLY**, **SNR**, **INFO**, **STATUS** and **Saved** are
+greyed out while a message is waiting to go or going out, as JS8Call's are.
 
 ## Receiving
 

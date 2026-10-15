@@ -1572,7 +1572,7 @@ mod tests {
 
     #[test]
     fn bounded_observation_preserves_native_js8_state_at_every_speed() {
-        for speed in 0..4 {
+        for speed in Js8Speed::ALL.map(Js8Speed::index) {
             let mut e = Engine::with_settings(Settings {
                 mycall: "N0CALL".into(),
                 mygrid: "AA00".into(),
@@ -2955,6 +2955,54 @@ mod tests {
         assert!(
             after.is_empty(),
             "a tune back inside them sends nothing stale: {after:?}"
+        );
+    }
+
+    /// JS8Call 3.0.3's 60 m dial (5.363 MHz, `bandplan::js8_band_plan`) for a US General: a
+    /// message at a TX offset that keeps the signal inside the 5351.5–5366.5 kHz segment keys
+    /// there, every frame at that offset; at an offset that puts it above 5366.5 kHz the
+    /// transmitter is locked and nothing keys.
+    #[test]
+    fn js8_on_its_60_m_dial_keys_inside_the_segment_and_is_locked_outside_it() {
+        let dial = crate::bandplan::js8_band_plan()
+            .into_iter()
+            .find(|c| c.band == "60m")
+            .expect("JS8's plan has a 60 m row")
+            .dial_mhz;
+        assert_eq!(dial, 5.363, "JS8Call 3.0.3's 60 m dial");
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        e.set_license_class("general");
+        e.set_frequency(dial, "60m", "USB");
+        // The band change turned TX off (`halt_tx_for_context_change`); the operator turns it on.
+        e.set_tx_enabled(true);
+        // 1500 Hz: the signal starts at 5364.5 kHz, inside the segment.
+        assert!(e.tx_allowed(), "5.363 MHz + 1500 Hz is a General's data");
+        e.js8_send(None, "HELLO SIXTY".into()).expect("queues");
+        let frames = e.js8_state().queue.len();
+        assert!(frames > 0, "premise: the message waits to go");
+        let overs = run_js8_loop(&mut e, (frames as u64 + 2) * 15);
+        assert_eq!(overs.len(), frames, "every frame keys: {overs:?}");
+        for (i, &(at, f0)) in overs.iter().enumerate() {
+            assert_eq!(f0, 1500.0, "on the operator's offset: {overs:?}");
+            assert_eq!(at, overs[0].0 + i as u64 * 15_000, "one frame a period");
+        }
+        assert_eq!(e.settings.dial_mhz, dial, "keyed on the 60 m dial");
+        // 3600 Hz: the signal starts at 5366.6 kHz, above the segment.
+        e.set_tx_offset(3600.0);
+        assert_eq!(
+            e.tx_offset_hz(),
+            3600.0,
+            "premise: nothing is queued, so the offset moves"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "5.363 MHz + 3600 Hz is outside a General's privileges"
+        );
+        let _ = e.js8_send(None, "HELLO SIXTY".into());
+        let overs = run_js8_loop(&mut e, 4 * 15);
+        assert!(
+            overs.is_empty(),
+            "nothing keys above the segment: {overs:?}"
         );
     }
 
