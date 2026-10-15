@@ -67,6 +67,16 @@ pub fn encode(msg: &str) -> Vec<i32> {
     itone
 }
 
+/// Run [`encode`] on `msg` once the modem is free, for what it writes into the callsign tables
+/// the decoder reads (every call `pack77` packs, the recent calls and hash memos `unpack77` keeps);
+/// its tones are not wanted. The lock-free encoder (`modes::wsjt77`) makes the tones and calls
+/// this, so a hashed call this station sends still resolves when it comes back. Never waits: the
+/// encode runs now if the modem is free, otherwise at the start of the next modem call, before
+/// that call can read a table (`tempo_fast_sys::defer_encode`).
+pub fn encode_later(msg: &str) {
+    tempo_fast_sys::defer_encode(tempo_fast_sys::DeferredEncoder::Ft8, msg.as_bytes());
+}
+
 /// Generate the real FT8 audio waveform (Gaussian BT=2.0) for the given tones.
 /// `fsample` is the sample rate (use [`SAMPLE_RATE`]); `f0` the audio carrier (Hz).
 pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
