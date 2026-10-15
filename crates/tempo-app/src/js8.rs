@@ -546,6 +546,7 @@ impl Engine {
             if let MessageEvent::Message(m) = &ev {
                 self.js8_log_directed(m, m.frames > 1 || !m.complete || frame_last, now_ms);
             }
+            self.js8_api_observe(&ev, now_ms);
             let row = match &ev {
                 MessageEvent::Frame(rx) => {
                     frame_last = rx.i3.last;
@@ -1524,6 +1525,7 @@ impl Engine {
             follows: f0 == self.tx_offset_hz(),
             moves: std::sync::Arc::new(std::sync::Mutex::new(vec![(0, f0)])),
         });
+        self.js8_api_note_tx(&tf, speed, f0);
         self.set_transmitting(true);
         Some(TxPlan {
             slot,

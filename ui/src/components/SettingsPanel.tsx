@@ -208,6 +208,7 @@ import { cloudlogLocationMismatch } from '../settings/cloudlogLocation'
 import { SettingsStation } from './SettingsStation'
 import { SettingsClusterNodes } from './SettingsClusterNodes'
 import { SettingsStreetMaps } from './SettingsStreetMaps'
+import { Js8ApiSettings } from './Js8ApiSettings'
 import { getClusterNodes } from '../api'
 import type { ClusterNodes } from '../types'
 import { SetupHealth } from './SetupHealth'
@@ -9472,6 +9473,12 @@ export function SettingsPanel({
               </label>
             </div>
             <Js8ListsSettings form={form} disabled={remote} setList={setJs8Words} setMark={setJs8Mark} setSounds={setJs8Sounds} />
+
+            {/* JS8Call's API for programs on this computer: read-only, 127.0.0.1 only, both
+                sides off by default (its own file says what keeps each promise). Never on the
+                Remote page: the keys are withheld from Remote's settings projection, so the page
+                could only show a guess. */}
+            {!remote && <Js8ApiSettings form={form} onSwitch={updateBool} onPort={updateNum} />}
           </fieldset>
           )}
 

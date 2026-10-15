@@ -365,7 +365,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'band schedule', 'frequency schedule', 'switch bands', 'band hopping',
       'spot', 'spotting', 'js8net', 'aprsis', 'aprs-is', 'never spot', 'aprs relay',
       'rx block list', 'block list', 'hide callsigns', 'highlight', 'end of transmission', 'missing frame',
-      'js8 sounds', 'notifications'],
+      'js8 sounds', 'notifications',
+      'js8call api', 'api', 'tcp', 'udp', '2442', '2242', 'accept requests'],
   },
   {
     id: 'sstv',

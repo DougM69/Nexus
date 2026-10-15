@@ -4228,6 +4228,20 @@ export interface Settings {
   /** The JS8 events that play a sound (JS8Call's notifications, all off by default): cq, hb, ack,
    *  directed, inbox, callNew, callOld. */
   js8Sounds: string[]
+  /** JS8Call's TCP API for programs on this computer: read-only, on 127.0.0.1 only. Off by
+   * default, as in JS8Call. */
+  js8ApiTcp?: boolean
+  /** Its port (JS8Call's 2442). */
+  js8ApiTcpPort?: number
+  /** JS8Call's UDP API: datagrams to a program on this computer, read-only. Off by default. */
+  js8ApiUdp?: boolean
+  /** The port on 127.0.0.1 they go to (JS8Call's 2242). */
+  js8ApiUdpPort?: number
+  /** Answer requests a TCP program sends ("Accept TCP requests"). Off by default, as in JS8Call:
+   * the program hears what the station sends and is answered nothing. */
+  js8ApiTcpAccept?: boolean
+  /** Answer requests a UDP program sends ("Accept UDP requests"). Off by default, as in JS8Call. */
+  js8ApiUdpAccept?: boolean
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number

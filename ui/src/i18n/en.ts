@@ -7974,6 +7974,19 @@ export const EN = {
   'settings.js8.sound.test.label': 'Test',
   'settings.js8.sound.test.title': 'Play this sound once',
   'settings.js8.sound.test.aria': 'Test the sound for {{event}}',
+  'settings.js8.api.title': 'JS8Call API',
+  'settings.js8.api.hint': 'For programs written for JS8Call, such as loggers, maps and message tools, on this computer. They can read what Nexus hears, the inbox and the station details. They cannot transmit, tune or change anything. Programs on other computers cannot connect.',
+  'settings.js8.api.tcp.label': 'TCP API',
+  'settings.js8.api.tcp.hint': 'Programs connect to 127.0.0.1 on the port below. One at a time, as in JS8Call.',
+  'settings.js8.api.tcpPort.label': 'TCP port',
+  'settings.js8.api.tcpPort.hint': 'JS8Call uses 2442.',
+  'settings.js8.api.udp.label': 'UDP API',
+  'settings.js8.api.udp.hint': 'Nexus sends to a program listening on 127.0.0.1 at the port below, and answers it there.',
+  'settings.js8.api.udpPort.label': 'UDP port',
+  'settings.js8.api.udpPort.hint': 'JS8Call uses 2242.',
+  'settings.js8.api.tcpAccept.label': 'Accept TCP requests',
+  'settings.js8.api.udpAccept.label': 'Accept UDP requests',
+  'settings.js8.api.accept.hint': 'Off by default, as in JS8Call: the program then gets what Nexus hears and sends, and no answer to its requests. On, Nexus answers its requests to read. A request to send, tune or change a setting is never answered.',
 
   // ── Settings ▸ SSTV ─────────────────────────────────────────────────────────────────
   // The transmit-mode picker's own rows are built from `SSTV_TX_MODES` — a mode name, its

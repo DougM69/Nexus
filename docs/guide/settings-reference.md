@@ -1463,6 +1463,21 @@ JS8NET, and commands sent to a `@group` go to JS8NET. The [JS8 chapter](js8.md) 
 - **Never spot these callsigns** — comma-separated, empty by default, as in JS8Call. A station
   on it, as heard or by its base call, is spotted to no network.
 
+**JS8Call API**
+
+For programs written for JS8Call (loggers, maps, message tools) on this computer; the
+[JS8 chapter](js8.md#programs-written-for-js8call) says what they get. Read-only: they cannot
+send, tune or change a setting. Both listen on 127.0.0.1 only, and none of these settings can be
+seen or changed from the Remote page.
+
+- **TCP API** — off by default, as in JS8Call. Programs connect to 127.0.0.1 on **TCP port**
+  (JS8Call's 2442), one at a time.
+- **UDP API** — off by default, as in JS8Call. Nexus sends to a program listening on 127.0.0.1
+  at **UDP port** (JS8Call's 2242) and answers it there.
+- **Accept TCP requests** / **Accept UDP requests** — off by default, as in JS8Call. Off, a
+  program on that side gets what Nexus hears and sends, and its requests get no answer. On, Nexus
+  answers its requests to read; a request to send, tune or change a setting is never answered.
+
 ### SSTV
 
 ![The SSTV group: "Start receiving when SSTV opens" on, ISS SSTV auto-arm off, Transmit mode set to "Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)", and an empty Transmit power percentage box.](../img/manual/settings-sstv.webp)

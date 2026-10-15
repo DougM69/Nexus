@@ -665,6 +665,8 @@ const MIGRATED = [
   'components/Js8ListMenu.tsx',
   'components/js8ListMenus.ts',
   'components/Js8ListsSettings.tsx',
+  // Settings ▸ Digital ▸ JS8's JS8Call API switches and ports — migrated from birth.
+  'components/Js8ApiSettings.tsx',
 ]
 
 /**

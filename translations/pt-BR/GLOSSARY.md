@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 7,391 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 7,404 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -20,7 +20,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 
 | Term | Rows | Why it stays |
 |---|---:|---|
-| Nexus | 287 | The program's name. |
+| Nexus | 290 | The program's name. |
 | QSO / QSOs | 114 / 60 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 98 | ARRL's Logbook of The World — a service name. |
 | CAT | 95 | Computer Aided Transceiver — the radio control protocol. |
@@ -103,15 +103,15 @@ word in, and use only that word in the CSV.
 | settings | 178 | The Settings screen and every reference to it. | |
 | grid | 145 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 136 | Sound cards, levels, routing. | |
-| station | 428 | Both your own station and the one you are working. | |
-| port | 104 | Serial and network ports. | |
+| station | 429 | Both your own station and the one you are working. | |
+| port | 108 | Serial and network ports. | |
 | dial | 106 | The dial frequency. A radio term, but the word itself is prose. | |
-| transmit / receive | 137 / 41 | The verbs. The abbreviations TX/RX stay English. | |
+| transmit / receive | 138 / 41 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 90 | A satellite pass. | |
 | callsign | 115 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 112 | "Worked before", "stations you have worked". | |
 | frequency | 120 | | |
-| tune | 62 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |
+| tune | 64 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |
 | power | 67 | RF power, in watts. | |
 | confirmed | 73 | A QSO confirmed by LoTW/eQSL/card. | |
 | decode | 66 | Both noun and verb. | |
