@@ -16,7 +16,8 @@ Pi. GPL-3.0, built in Rust.
 > test, field-verified end to end on Yaesu FTDX10 and FT-991A and on native-CI-V
 > Icom. APRS is on the air with its internet feed and receive-only iGate confirmed
 > against a live connection. It does **not** claim nothing is left: the FlexRadio
-> native panadapter is opt-in and not yet confirmed on hardware here, and the
+> native client and panadapter and the Icom network connection are opt-in Betas,
+> not yet confirmed on hardware here, and the
 > TempoFast and TempoDeep sensitivity figures are still bench numbers. The Windows
 > installer is unsigned, so verify the published SHA-256.
 

@@ -1,8 +1,8 @@
 # CW
 
 The CW cockpit is a casual/ragchew CW station in software. It is deliberately
-scoped: you key every message yourself — there are no contest serials and no
-auto-sequencing. What it gives you is a keyboard keyer with F-key macros, a live
+scoped: you key every message yourself, and there is no auto-sequencing. What it
+gives you is a keyboard keyer with F-key macros, a live
 CW decoder so you can read the other station, on-the-fly speed control, a
 zero-beat scope, and your license privileges enforced — so you can call CQ and
 hold a conversation without a paddle and without copying by ear if you'd rather
@@ -294,8 +294,6 @@ for your first over. The Log pane pre-fills **CW / 599**.
 - **Unassisted mode turns the AI decoder off**, whatever the switch says, because
   a declared unassisted entry means no machine copy. That is the one case where
   the AI decoder is silent with the setting still on.
-- **No contest exchanges or serials** — this is a casual keyboard station by
-  design. (Contest exchange modes aren't built.)
 
 The license-class gate blocks keying outside your segment — including the
 Technician CW-only segments on 80/40/15 m. Set your class in

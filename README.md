@@ -94,10 +94,13 @@ WSJT-X muscle memory works unchanged inside a UI built this decade.
 - **🎚️ Real rig control, not just CAT.** On a native-CI-V Icom (IC-7300 / 7610 / 9700 / 705 / 905)
   Nexus drives the radio directly and streams the rig's **own spectrum scope** into the cockpit as a
   real RF panadapter, alongside AGC speed, noise reduction and blanker, notch, filter width, mic
-  gain, and SWR / ALC / power / compression meters on the rig's own calibration curves. FlexRadio
-  streams the SmartSDR panadapter and DAX audio over the network (VITA-49), which keeps working
-  under Remote Desktop where the DAX sound devices are invisible. Every other rig runs through
-  bundled Hamlib and still gets click-to-tune and drag-a-passband on the audio scope.
+  gain, and SWR / ALC / power / compression meters on the rig's own calibration curves. The six
+  Icoms with a network port (IC-7610 / 9700 / 705 / 905 / 7760 / 7300MK2) can also connect over
+  your LAN or Wi-Fi, with frequency and mode, the meters and the rig's own panadapter: a Beta,
+  receive and control only. FlexRadio streams the SmartSDR panadapter over the network (VITA-49),
+  and through the Flex native client (Beta), Nexus's own SmartSDR client, the DAX audio too, which
+  keeps working under Remote Desktop where the DAX sound devices are invisible. Every other rig
+  runs through bundled Hamlib and still gets click-to-tune and drag-a-passband on the audio scope.
 - **🔧 Rig control that recovers by itself.** Nexus stops polling a radio that has stopped
   answering, which is right, but that state used to be permanent: any hiccup cost you rig control
   until you restarted the app. It now retries quietly, backing off to about once every thirty
@@ -145,7 +148,7 @@ WSJT-X muscle memory works unchanged inside a UI built this decade.
 - **🏞️ POTA, SOTA and Field Day.** Live activator spots with **NEW PARK** and **BAND OPEN** badges
   and a one-click **HUNT**. ARRL FD and Winter FD event modes with correct date rules and scoring
   (per-mode points, dupes per band *per mode*, legal power tiers, live bonus checklist), a
-  worked-sections board for all 83 sections, submittable Cabrillo 3.0, and every contact pushed in
+  worked-sections board for all 85 sections, submittable Cabrillo 3.0, and every contact pushed in
   real time to the club's **N3FJP** master log over its official TCP API and broadcast as native
   **N1MM+** `<contactinfo>` datagrams. The event log is journalled, so a mid-event crash comes back
   with your log intact.
@@ -320,8 +323,11 @@ still says what a thing does *not* do, and so does every entry in the changelog.
 - **APRS is on the air**, receiving and mapping, with the internet feed and the receive-only iGate
   confirmed against a live APRS-IS connection. Transmit (beacons, messages, acks) stays behind an
   explicit TX arm; opening the screen only ever starts a receive-only decoder.
-- **The FlexRadio native path** (SmartSDR panadapter, DAX RX and TX audio, native meters) is opt-in,
-  off by default, and **not yet confirmed on hardware here**. Turn it back off if decodes stop.
+- **The FlexRadio native path** (the Flex native client, SmartSDR panadapter, DAX RX and TX audio,
+  native meters) is opt-in, off by default, and **not yet confirmed on hardware here**. Turn it back
+  off if decodes stop.
+- **The Icom network connection** (LAN / Wi-Fi, for the six Icoms with a network port) is a Beta,
+  receive and control only, and **not yet tried on a radio**. USB stays the default.
 - The **TempoFast/TempoDeep tiers work on the air** (first decode 2026-07-21, first two-station QSO
   2026-07-26), and their **sensitivity figures are still simulation numbers**. On-air
   decode-rate-vs-SNR is the open gate and the single most useful contribution you can make.
@@ -330,7 +336,8 @@ still says what a thing does *not* do, and so does every entry in the changelog.
   RTTY among them) the log strip takes that contest's exchange and flags dupes, and the contest log
   exports to Cabrillo. Neither cockpit runs a contest for you.
 - **Windows, macOS, Linux and Raspberry Pi** builds ship together every release.
-- Not implemented yet: **contest modes** (NA VHF, RTTY RU, WW Digi), the **Fox role** (running a
+- Not implemented yet: WSJT-X's **RTTY Roundup and WW Digi contest modes** (FT8 and FT4 send its
+  Field Day and NA VHF Contest messages), the **Fox role** (running a
   DXpedition end), **transmit-side iGating** (deliberately never, since it means a radio keying up
   unattended), and programming DMR / D-STAR / Fusion repeaters (they are listed with badges so you
   know they're there). Shared RepeaterBook access for every user, with no token to set up, is

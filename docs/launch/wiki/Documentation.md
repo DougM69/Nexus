@@ -62,7 +62,7 @@ are indexed at
 
 | Guide | What it covers |
 |---|---|
-| [Contesting, POTA & SOTA](https://github.com/kd9taw/Nexus/blob/main/docs/guide/contesting-pota.md) | ARRL / Winter Field Day with Cabrillo and club interop, plus the POTA / SOTA hunter |
+| [Contesting, POTA & SOTA](https://github.com/kd9taw/Nexus/blob/main/docs/guide/contesting-pota.md) | Contest mode for ARRL / Winter Field Day and every other contest in the picker, with Cabrillo and club interop, plus the POTA / SOTA hunter |
 
 ### System
 
