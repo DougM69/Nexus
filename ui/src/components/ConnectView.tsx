@@ -15,7 +15,8 @@ import type { NeedAlert, NeedTag, PropagationSnapshot, Station } from '../types'
 import type { AmpStatus } from '../types'
 import type { Theme } from '../useTheme'
 import { effectiveXray } from '../flareAlert'
-import { gpuCapableForGlobe } from '../gpu'
+import { gpuCapableForGlobe, webgl2ForGlobe } from '../gpu'
+import { GlobeGuard } from './GlobeGuard'
 import { gridToLatLon, type LatLon } from '../grid'
 import { packFor, useStreetMaps } from '../features/streetMaps'
 import { StreetDownloadSheet } from './StreetDownloadSheet'
@@ -465,10 +466,12 @@ export function ConnectView({
   // buttons (operator decision 2026-09-13, late). PER-SURFACE and PER-INTENT: stored in the intent's
   // record, where the old shared projection and 3-D flag migrate on first load.
   //
-  // 3D needs a GPU that can carry the textured, bloomed globe (gpuCapableForGlobe). Without one the
-  // choice stays in the row, unavailable and saying why, and a 3D pick stored on this surface shows
-  // Globe instead of a globe this machine cannot draw — without discarding the stored pick.
-  const [gpuOk] = useState(gpuCapableForGlobe)
+  // 3D needs a GPU that can carry the textured, bloomed globe (gpuCapableForGlobe), and the WebGL 2
+  // context three.js draws it with (webgl2ForGlobe: the first passes a WebGL 1 context, and three.js
+  // throws without a WebGL 2 one). Without both the choice stays in the row, unavailable and saying why,
+  // and a 3D pick stored on this surface shows Globe instead of a globe this machine cannot draw —
+  // without discarding the stored pick.
+  const [gpuOk] = useState(() => gpuCapableForGlobe() && webgl2ForGlobe())
   const [mapPick, setMapPick] = useState<MapChoice>(() => loadIntentSetup(intent)?.map ?? 'globe')
   const map3d = mapPick === '3d' && gpuOk
   // THE STREET MAP (features/streetMaps.ts; operator rulings 2026-10-04, D5): a fifth choice, offered
@@ -895,23 +898,26 @@ export function ConnectView({
               )}
             </div>
             {map3d ? (
-              <Suspense
-                fallback={<div className="globe3d-loading">{t('connect.globe3d.loading')}</div>}
-              >
-                <Globe3D
-                  myGrid={myGrid}
-                  prop={prop}
-                  selectedCall={selectedCall}
-                  onSelectCall={onSelectCall}
-                  outlook={selectedCall ? pathPred : bandOutlook}
-                  onBandClick={toggleFocusBand}
-                  activeBand={focusBand}
-                  muf={muf}
-                  xrayLong={xrayLong}
-                  stations={stations}
-                  layersRev={mapLayersRev}
-                />
-              </Suspense>
+              // A globe that fails once drawn leaves the cell to a note; the picker above still works.
+              <GlobeGuard noWebgl2={t('globe.unsupported')} failed={t('globe.failed')}>
+                <Suspense
+                  fallback={<div className="globe3d-loading">{t('connect.globe3d.loading')}</div>}
+                >
+                  <Globe3D
+                    myGrid={myGrid}
+                    prop={prop}
+                    selectedCall={selectedCall}
+                    onSelectCall={onSelectCall}
+                    outlook={selectedCall ? pathPred : bandOutlook}
+                    onBandClick={toggleFocusBand}
+                    activeBand={focusBand}
+                    muf={muf}
+                    xrayLong={xrayLong}
+                    stations={stations}
+                    layersRev={mapLayersRev}
+                  />
+                </Suspense>
+              </GlobeGuard>
             ) : (
             <MapView
               myGrid={myGrid}

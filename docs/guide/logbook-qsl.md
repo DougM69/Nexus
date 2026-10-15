@@ -13,6 +13,12 @@ survives restarts.
 
 *The logbook table in Nexus 1.10.3, sorted newest first.*
 
+Above the table, a 3-D globe puts a dot on every grid square in the log;
+**Settings ▸ Appearance ▸ Map & globe ▸ Logbook globe** turns it off. On a
+computer whose graphics have no WebGL2, the band says so instead of drawing the
+globe, and if the globe stops working the band says that. Either way the table,
+its search, editing and import work as always.
+
 Each row is one QSO. The columns you'll use most:
 
 - **Call, band, mode, date/time, RST** — the contact itself.

@@ -2056,8 +2056,10 @@ button.nb-chip:hover {
   min-height: 0;
   position: relative;
 }
-.globe3d-fallback {
-  flex: 1;
+/* A 3-D globe's note where the globe would be (components/GlobeGuard.tsx): this computer cannot make the
+   WebGL 2 context the globe needs, or the globe failed once drawn. It fills the Logbook's band (a box of the
+   operator's height), and in Connect's map cell, a column, what is left under the picker's bar. */
+.globe-note {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2065,6 +2067,13 @@ button.nb-chip:hover {
   text-align: center;
   color: var(--text-dim);
   font-size: 0.9rem;
+}
+.log-globe-band > .globe-note {
+  height: 100%;
+}
+.connect-map > .globe-note {
+  flex: 1;
+  min-height: 0;
 }
 /* "3D view paused" and its Reload, over a 3-D globe (Connect's or the Logbook's) whose WebGL context
    was lost and has not come back (components/globeWebgl.tsx). A card in the middle of the blank

@@ -65,7 +65,7 @@ vi.mock('../api', async (importOriginal) => ({
 }))
 vi.mock('./Globe3D', () => ({ default: () => <div data-testid="globe3d-stub" /> }))
 vi.mock('./StreetMap', () => ({ default: () => <div className="street-map" data-testid="street-stub" /> }))
-vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => true, webgl2Available: () => bench.webgl2 }))
+vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => true, webgl2ForGlobe: () => true, webgl2Available: () => bench.webgl2 }))
 import { ConnectView } from './ConnectView'
 import { t } from '../i18n'
 import { __resetStreetMapsForTests, STREET_MAP_MANIFEST_URL } from '../features/streetMaps'

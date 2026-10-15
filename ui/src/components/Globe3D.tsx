@@ -454,21 +454,6 @@ const LAYER_ROWS: readonly GlobeLayerRow[] = [
   { k: 'lights', labelKey: 'globe.layer.lights' },
 ]
 
-/** Is a WebGL context creatable? Guards against a low-end GPU that flipped the toggle. */
-function webglOk(): boolean {
-  try {
-    const c = document.createElement('canvas')
-    const gl = c.getContext('webgl2') || c.getContext('webgl')
-    if (!gl) return false
-    // Hand the probe's context straight back: the browser keeps only a handful of live WebGL contexts
-    // and takes the oldest away, and this one would otherwise stay until the next garbage collection.
-    gl.getExtension('WEBGL_lose_context')?.loseContext()
-    return true
-  } catch {
-    return false
-  }
-}
-
 // ── layer accessors, HOISTED OUT OF THE JSX ─────────────────────────────────────────────────
 //
 // ⚠️ An accessor written inline in the JSX is a NEW FUNCTION on every render, react-kapsule
@@ -567,7 +552,6 @@ function Globe3DView({
     el.style.top = `${top}px`
   }, [hover, size.w, size.h])
   const [ready, setReady] = useState(false)
-  const [ok] = useState(webglOk)
   const [spin, setSpin] = useState(false) // idle auto-rotate; OFF by default (continuous 60fps
   // GPU load on weak/laptop iGPUs); operator-toggleable
   const [nowMs, setNowMs] = useState(() => Date.now())
@@ -1840,10 +1824,6 @@ function Globe3DView({
   // Last of the effects, so its cleanup (which hands the context back) runs after theirs. A restored
   // context needs a frame, and this globe's loop sleeps while nothing changes.
   const paused = useGlobeWebgl(globeRef, ready, () => kickRef.current())
-
-  if (!ok) {
-    return <div className="globe3d-fallback">{t('globe.unsupported')}</div>
-  }
 
   return (
     <div ref={wrapRef} className="globe3d-wrap">

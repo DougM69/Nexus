@@ -205,6 +205,7 @@ const MIGRATED = [
   'components/Globe3D.tsx',
   'components/QsoGlobe.tsx',
   'components/globeWebgl.tsx',
+  'components/GlobeGuard.tsx',
   'components/StreetMap.tsx',
   'components/StreetDownloadSheet.tsx',
   'components/SettingsStreetMaps.tsx',

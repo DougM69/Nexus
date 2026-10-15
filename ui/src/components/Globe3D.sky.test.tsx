@@ -105,7 +105,7 @@ beforeEach(() => {
       opsOf.set(this, ops)
       ctxs.set(
         this,
-        // The probe's context has no extensions to hand it back with.
+        // No extensions: these are the sprites' 2-D canvases.
         new Proxy({ getExtension: () => null } as Record<string | symbol, unknown>, {
           get: (t, k) =>
             k in t

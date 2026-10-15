@@ -12,6 +12,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LogExport, LoggedActivation, LoggedQso } from '../types'
 import { QsoDetail } from './QsoDetail'
 import { gpuCapableForGlobe } from '../gpu'
+import { GlobeGuard } from './GlobeGuard'
 import { useLogbookGlobe } from '../features/logbookGlobe'
 import { PaneSeam } from './PaneSeam'
 import { LOG_GLOBE_SPLIT_MAX, LOG_GLOBE_SPLIT_MIN } from '../features/paneSeam'
@@ -27,7 +28,8 @@ import { ConfirmationReview } from './ConfirmationReview'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
 // Logbook actually shows it (same pattern as ConnectView's Globe3D) — a weak-GPU
-// machine that fails `gpuCapableForGlobe` never pays for the chunk at all.
+// machine that fails `gpuCapableForGlobe` never pays for the chunk at all, nor does
+// one without the WebGL 2 context three.js needs (GlobeGuard).
 const QsoGlobe = lazy(() => import('./QsoGlobe'))
 
 import {
@@ -2436,9 +2438,12 @@ export function Logbook({
         <div className="log-scroll" ref={scrollRef}>
           {globeShown && (
             <div className="log-globe-band" ref={globeRef}>
-              <Suspense fallback={<div className="log-globe-loading">{t('logbook.globe.loading')}</div>}>
-                <QsoGlobe logTick={logTick} />
-              </Suspense>
+              {/* Where the globe cannot draw, or fails once drawn, the band says so and the log carries on. */}
+              <GlobeGuard noWebgl2={t('logbook.globe.noWebgl2')} failed={t('logbook.globe.failed')}>
+                <Suspense fallback={<div className="log-globe-loading">{t('logbook.globe.loading')}</div>}>
+                  <QsoGlobe logTick={logTick} />
+                </Suspense>
+              </GlobeGuard>
             </div>
           )}
           {/* The globe | table divider (layout L7): the band's height, a % of the scroller, the
