@@ -5516,6 +5516,11 @@ impl Engine {
             autoreply_allow: Vec::new(),
             autoreply_deny: Vec::new(),
             hb_ack_deny: Vec::new(),
+            hb_networking: false,
+            hb_anywhere: false,
+            hb_qso_pause: true,
+            hb_rate_limit: false,
+            avoid_allcall: false,
         };
         Self {
             app,
@@ -55829,6 +55834,7 @@ mod tests {
     #[test]
     fn js8_heartbeat_lands_in_the_hb_subband_and_moves_nothing_else() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_hb_networking = true; // HB needs heartbeat networking (JS8Call)
         e.js8_enter();
         e.set_frequency(14.078, "20m", "USB");
         e.set_tx_offset(1500.0);
@@ -55880,6 +55886,7 @@ mod tests {
     fn a_js8_heartbeat_is_exempt_from_the_wall_clock_watchdog() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.settings.tx_watchdog_min = 6;
+        e.settings.js8_hb_networking = true; // HB needs heartbeat networking (JS8Call)
         e.js8_enter();
         e.set_tx_enabled(true);
         e.js8_arm(Js8Switch::Hb, true).expect("HB on");
@@ -56108,6 +56115,7 @@ mod tests {
     #[test]
     fn the_idle_watchdog_stands_the_automatic_origins_down_but_leaves_tx_armed() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_hb_networking = true; // HB needs heartbeat networking (JS8Call)
         e.js8_enter();
         e.set_tx_enabled(true);
         e.js8_arm(Js8Switch::Hb, true).expect("HB on");
@@ -56235,6 +56243,7 @@ mod tests {
     #[test]
     fn halt_tx_clears_the_js8_queue_heartbeat_and_pending_reply() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_hb_networking = true; // HB needs heartbeat networking (JS8Call)
         e.js8_enter();
         e.set_tx_enabled(true);
         e.js8_arm(Js8Switch::Hb, true).expect("HB on");
@@ -56272,6 +56281,7 @@ mod tests {
     #[test]
     fn leaving_the_js8_tier_cancels_the_heartbeat_and_drops_the_queue() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_hb_networking = true; // HB needs heartbeat networking (JS8Call)
         e.js8_enter();
         e.set_tx_enabled(true);
         e.js8_arm(Js8Switch::Hb, true).expect("HB on");
@@ -56299,6 +56309,7 @@ mod tests {
     #[test]
     fn set_mode_drops_the_js8_queue_and_heartbeat() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_hb_networking = true; // HB needs heartbeat networking (JS8Call)
         e.js8_enter();
         e.set_tx_enabled(true);
         e.js8_arm(Js8Switch::Hb, true).expect("HB on");
@@ -56396,6 +56407,7 @@ mod tests {
         e.settings.js8_hb_interval_min = 5;
         e.settings.js8_idle_watchdog_min = 60;
         e.js8_apply_station_config();
+        e.settings.js8_hb_networking = true; // HB needs heartbeat networking (JS8Call)
         e.js8_enter();
         e.set_tx_enabled(true);
         e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
@@ -56564,6 +56576,7 @@ mod tests {
         e.settings.js8_cq_interval_min = 5;
         e.settings.js8_hb_interval_min = 5;
         e.js8_apply_station_config();
+        e.settings.js8_hb_networking = true; // HB needs heartbeat networking (JS8Call)
         e.js8_enter();
         e.set_tx_enabled(true);
         e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
@@ -56614,6 +56627,7 @@ mod tests {
     #[test]
     fn js8_drop_queue_is_not_a_stop() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_hb_networking = true; // HB needs heartbeat networking (JS8Call)
         e.js8_enter();
         e.set_tx_enabled(true);
         e.js8_arm(Js8Switch::Hb, true).expect("HB on");

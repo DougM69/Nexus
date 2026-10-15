@@ -1304,6 +1304,23 @@ nothing until you enable TX in the cockpit, every session.
   signal report (`HEARTBEAT SNR`), one frame per station, and a message you hold for
   that station is offered to it. **Never acknowledge heartbeats from these callsigns**,
   comma-separated and empty by default, leaves those stations unanswered.
+- **Heartbeat networking** — off by default, as in JS8Call (its *Enable Heartbeat
+  Networking*). On, the cockpit shows the **HB** button and **Answer heartbeats** can answer;
+  off, no heartbeat and no acknowledgement goes out. It is the cockpit's **HB NET** switch.
+  Heartbeats and acknowledgements go out at Slow, Normal and Fast only, never at Turbo.
+- **Allow heartbeats outside 500–1000 Hz** — off by default, as in JS8Call. On, heartbeats
+  and acknowledgements go out on your own TX offset instead of a free spot in 500–1000 Hz.
+- **Pause heartbeats while a call is in the To box** — on by default, as in JS8Call's
+  pause while in a QSO. While the To box holds a call the heartbeat repeat pauses (it starts
+  again one interval after you clear the box), no heartbeat is acknowledged, and a repeating
+  CQ stops. Switching **HB** on clears the To box.
+- **Don't acknowledge stations that heartbeat more often than every 55 minutes** — off by
+  default, as in JS8Call 3.0. On, a station heard heartbeating again within 55 minutes of its
+  last acknowledged heartbeat is not acknowledged then or later; the **HB ACK** chip names
+  it. Turning this off forgets those stations.
+- **Do not take part in @ALLCALL** — off by default, as in JS8Call. On, nothing addressed to
+  `@ALLCALL` is answered (`QUERY MSGS` included) or marked as addressed to you, and
+  `@ALLCALL` leaves the To box's list. Heartbeats and CQs are handled as before.
 - **Auto-reply to queries** — on by default, as in JS8Call: `SNR?`, `GRID?`, `INFO?`,
   `STATUS?`, `HEARING?` and `QUERY MSGS` addressed to you are answered, and a `MSG` to you
   or a group you joined, or a `MSG TO:` you hold for another station, gets an `ACK`. On

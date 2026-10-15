@@ -14,8 +14,8 @@ after APRS. If you don't operate it, switch it off in
 tunes the rig to the JS8 watering hole for the current band (7.078, 14.078, 3.578 … —
 JS8Call's own list, USB) and starts decoding every speed at once. Nothing transmits
 until you enable TX in the header, every session. The mode's own switches — transmit
-speed, which speeds to decode, heartbeat interval, the three automatic-reply switches,
-the idle watchdog and your INFO/STATUS/group texts — are in
+speed, which speeds to decode, heartbeat interval, heartbeat networking and its rules, the
+three automatic-reply switches, the idle watchdog and your INFO/STATUS/group texts — are in
 [Settings ▸ Digital ▸ JS8](settings-reference.md#js8).
 
 ## The tour
@@ -58,7 +58,8 @@ both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
 **The TX dock**, pinned under the panes. The **To** box (blank = everyone, a callsign,
 `@ALLCALL`, or a `@GROUP` you belong to), the composer, a frame estimate ("3 frames ·
 45 s") and **Send**; a command palette with JS8Call's 32 directed commands; the **CQ**
-variant picker and **CQ**; **HB**; the **AUTOREPLY · RELAY · HB ACK** chips; an automatic
+variant picker and **CQ**; **HB NET** and, while it is on, **HB** with its menu (**▾**, or
+right-click **HB**); the **AUTOREPLY · RELAY · HB ACK** chips; an automatic
 reply's question, **Yes** or **No**; the queue with **Drop queue**; and the
 idle-watchdog readout.
 
@@ -84,12 +85,29 @@ and acknowledges with an ACK a MSG to you or to a group you joined, or a MSG TO:
 another station, as JS8Call does; with it off, the answer, the ACK or a relay is put in the
 message box for you to send instead, and nothing keys by itself),
 **RELAY** (passes on messages routed through your callsign and holds MSG TO: traffic),
-**HB ACK** (answers heartbeats with your report, but only while **HB** and **AUTOREPLY** are on
-as well, as in JS8Call) — those three persist in Settings, at
+**HB ACK** (answers heartbeats with your report, but only while **HB NET** and **AUTOREPLY** are
+on as well, as in JS8Call) — those three persist in Settings, at
 JS8Call's defaults (on, on, off) — and **HB**, the heartbeat schedule, which is
 session-only. A chip lights only when what it switches can go out now. One that is on but
 cannot says why when you point at it (TX is off, the idle watchdog holds it, or it needs
 another switch), and nothing keys.
+
+**Heartbeats, as JS8Call 3.0 has them.** **HB NET** is JS8Call's *Enable Heartbeat
+Networking*: off by default and remembered, it sends nothing by itself, and without it there
+is no **HB** button and no heartbeat acknowledgement. **HB** starts the repeat (Settings sets
+the interval; the first heartbeat goes one interval after you switch it on), or at interval 0
+sends one heartbeat. Its menu has **Send heartbeat now** and, with an interval set, **Start**
+or **Stop heartbeat timer**. Heartbeats and acknowledgements go out at Slow, Normal and Fast
+only: at Turbo **HB** disappears, **HB NET** is greyed out, and a running repeat stops. With the
+**QSO pause** (on by default), a call in the **To** box pauses the heartbeat repeat until you
+clear the box, holds back every acknowledgement, and stops a repeating CQ; switching **HB** on
+clears the **To** box. When **HB ACK** is on but held back for one of these reasons (the speed,
+the QSO pause, or a message still arriving) it shows as not armed and says why. Settings also
+has JS8Call's *Allow heartbeats outside 500–1000 Hz* (your own TX offset instead of a free
+spot), *Don't acknowledge stations that heartbeat more often than every 55 minutes* (such a
+station gets no acknowledgement again; **HB ACK** names them, and turning the option off
+forgets them) and *Do not take part in @ALLCALL* (nothing to @ALLCALL is answered or marked
+as yours), all off by default.
 Every automatic reply first asks in the dock, as JS8Call asks: "A transmission is queued for
 autoreply … would you like to send this transmission?" **Yes** sends it in the next period; **No**
 sends nothing, and so does no answer, which is No after 89 seconds. A message you hold for

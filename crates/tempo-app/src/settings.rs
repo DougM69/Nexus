@@ -981,6 +981,33 @@ pub struct Settings {
     /// Joined @GROUP names (e.g. `@FUN`) the station answers directed traffic for.
     #[serde(default)]
     pub js8_groups: Vec<String>,
+    // --- JS8 heartbeat networking and presence, as JS8Call 3.0.3 has them ---
+    /// JS8Call's "Enable Heartbeat Networking" (its Mode menu's `SubModeHB`, off by default): the
+    /// cockpit's HB button shows only with it on, and no heartbeat or heartbeat acknowledgement
+    /// goes out without it. The HB repeat itself stays session-only (`Engine.js8_hb_on`).
+    #[serde(default)]
+    pub js8_hb_networking: bool,
+    /// JS8Call's "Allow heartbeat transmissions outside of heartbeat sub-channel (500Hz -
+    /// 1000Hz)" (`BeaconAnywhere`, off by default): on, a heartbeat or heartbeat acknowledgement
+    /// keys on the TX offset instead of a free spot in 500-1000 Hz.
+    #[serde(default)]
+    pub js8_hb_anywhere: bool,
+    /// JS8Call's "Pause heartbeat transmissions while in a QSO (i.e., callsign is selected)"
+    /// (`HeartbeatQSOPause`, ON by default, and what a file from before this setting loads as):
+    /// while the cockpit's To box holds a call the HB repeat pauses until the box is cleared, no
+    /// heartbeat is acknowledged, and the repeating CQ stops.
+    #[serde(default = "default_js8_hb_qso_pause")]
+    pub js8_hb_qso_pause: bool,
+    /// JS8Call 3.0's "Suppress ACK to stations that send heartbeats at less than 55 minute
+    /// intervals" (`HBRateLimit`, off by default): a station heard heartbeating again within 55
+    /// minutes of its last acknowledged heartbeat is acknowledged no more.
+    #[serde(default)]
+    pub js8_hb_ack_rate_limit: bool,
+    /// JS8Call's "Do not participate in the @ALLCALL group" (`AvoidAllcall`, off by default):
+    /// nothing addressed to @ALLCALL is answered or shown as addressed to you, a heartbeat and a
+    /// CQ aside.
+    #[serde(default)]
+    pub js8_avoid_allcall: bool,
     /// FM repeater offset override in Hz (0 = use the band convention from
     /// [`Self::rptr_offset_hz`]). Set by the Program section's tune-now so
     /// odd-split machines (e.g. +1 MHz on 2 m) key the right input.
@@ -4692,6 +4719,11 @@ fn default_js8_activity_aging_min() -> u16 {
     2
 }
 
+/// JS8Call ships HeartbeatQSOPause ON. See [`Settings::js8_hb_qso_pause`].
+fn default_js8_hb_qso_pause() -> bool {
+    true
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -4744,6 +4776,11 @@ impl Default for Settings {
             js8_info: String::new(),
             js8_status: String::new(),
             js8_groups: Vec::new(),
+            js8_hb_networking: false,
+            js8_hb_anywhere: false,
+            js8_hb_qso_pause: default_js8_hb_qso_pause(),
+            js8_hb_ack_rate_limit: false,
+            js8_avoid_allcall: false,
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this
             fd_class: String::new(),
@@ -9867,6 +9904,84 @@ mod tests {
                 && !body.lines().any(|l| l.trim_start().starts_with("js8CqOn:")),
             "HB and CQ-repeat on/off are session-only and must never be settings"
         );
+    }
+
+    /// The five heartbeat-and-presence switches: JS8Call 3.0.3's defaults (networking, HB
+    /// anywhere, the 55-minute rule and @ALLCALL avoidance off; the QSO pause on), the exact
+    /// camelCase wire keys, an upgrader's file, an explicit choice surviving the round trip, and
+    /// the TS mirror read from `ui/src/types.ts` itself.
+    #[test]
+    fn js8_heartbeat_and_presence_settings_defaults_wire_keys_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(
+            (
+                s.js8_hb_networking,
+                s.js8_hb_anywhere,
+                s.js8_hb_qso_pause,
+                s.js8_hb_ack_rate_limit,
+                s.js8_avoid_allcall
+            ),
+            (false, false, true, false, false),
+            "JS8Call's SubModeHB, BeaconAnywhere, HeartbeatQSOPause, HBRateLimit, AvoidAllcall"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"js8HbNetworking\":false",
+            "\"js8HbAnywhere\":false",
+            "\"js8HbQsoPause\":true",
+            "\"js8HbAckRateLimit\":false",
+            "\"js8AvoidAllcall\":false",
+        ] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            (
+                old.js8_hb_networking,
+                old.js8_hb_anywhere,
+                old.js8_hb_qso_pause,
+                old.js8_hb_ack_rate_limit,
+                old.js8_avoid_allcall
+            ),
+            (false, false, true, false, false),
+            "an upgrader's file takes JS8Call's defaults"
+        );
+        let chosen: Settings = serde_json::from_str(
+            r#"{"js8HbNetworking":true,"js8HbAnywhere":true,"js8HbQsoPause":false,"js8HbAckRateLimit":true,"js8AvoidAllcall":true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                chosen.js8_hb_networking,
+                chosen.js8_hb_anywhere,
+                chosen.js8_hb_qso_pause,
+                chosen.js8_hb_ack_rate_limit,
+                chosen.js8_avoid_allcall
+            ),
+            (true, true, false, true, true),
+            "every choice, the QSO pause off included, survives the load"
+        );
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in [
+            "js8HbNetworking",
+            "js8HbAnywhere",
+            "js8HbQsoPause",
+            "js8HbAckRateLimit",
+            "js8AvoidAllcall",
+        ] {
+            assert!(
+                body.lines()
+                    .any(|l| l.trim_start().starts_with(&format!("{key}:"))),
+                "ui/src/types.ts Settings is missing `{key}`"
+            );
+        }
     }
 
     /// A group JS8Call will not let be joined (@APRSIS, @JS8NET) is refused only by the

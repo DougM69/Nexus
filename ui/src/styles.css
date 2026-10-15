@@ -27376,6 +27376,38 @@ button.sat-chip:disabled {
   border-color: var(--state-ok);
   color: var(--state-ok);
 }
+/* THE HB MENU (components/Js8Heartbeat): JS8Call's HB context menu, opened by a right-click on HB
+   or by the ▾ beside it. Out of flow on the dock's top edge over the HB button, as the keyboard
+   docks' macro editor is (.rtty-macro-editor): its containing block is the dock itself (the
+   control is not positioned) and `left` is the control's offset in it, clamped by the component,
+   so opening it moves no control and covers none of the dock. The dock is lifted over the panes'
+   dividers while it stands (.cockpit-txdock-editing). Opaque, because it sits over the panes. */
+.js8-hb-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.js8-hb-menu-btn {
+  padding: 0 var(--space-1);
+}
+.js8-hb-menu {
+  position: absolute;
+  bottom: calc(100% + var(--space-1));
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: max-content;
+  padding: var(--space-2);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.js8-hb-menu-item {
+  text-align: left;
+  white-space: nowrap;
+}
 /* Feeds: readable minimum on the CONTENT wrapper (never on the frame). */
 .js8-activity,
 .js8-offsets,
