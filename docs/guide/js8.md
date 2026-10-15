@@ -52,8 +52,9 @@ each row has a **⋯** of its own (a right-click on the row opens it too).
   band heartbeats and ACKs** (on) hides heartbeats and their acknowledgements. CQ rows are
   tinted green, traffic to you carries a bar, and the two highlight lists in Settings tint their
   words. Double-click a row to move RX there. A row's **⋯**: **Jump to … Hz** (both your RX and
-  TX offsets, as JS8Call's one offset; not while a message is queued or going out), **Jump to …
-  speed**, **Remove activity**.
+  TX offsets, as JS8Call's one offset; while a message is queued or going out, only with **Allow
+  TX offset changes while sending** on, as in JS8Call), **Centre filter at … Hz** (while the
+  decode filter is on), **Jump to … speed**, **Remove activity**.
 - **Stations** — JS8Call's call list: `@ALLCALL` and your groups on top, then everyone heard,
   sorted by callsign (or any of JS8Call's orders from **⋯ ▸ Sort by**), a station with a
   message for you first. A station is kept as it was heard, as in JS8Call: W1AW and W1AW/P are
@@ -65,7 +66,8 @@ each row has a **⋯** of its own (a right-click on the row opens it too).
   distance and azimuth. Click a callsign to address it; the five quick buttons send **SNR? ·
   GRID? · INFO? · HEARING? · QUERY MSGS** to that station, which answers by itself if its
   auto-reply is on; **HB** and **✉ n** chips show a heartbeat and messages you hold for it. A
-  row's **⋯**: jump to its offset or speed, **Show message inbox**, **Pin to the top**, **Add new
+  row's **⋯**: jump to its offset or speed (and, while the decode filter is on, centre the filter
+  there), **Show message inbox**, **Pin to the top**, **Add new
   station or group…** (a call, or a `@GROUP` to join), **Remove this station** (until it is
   heard again) or **Remove this group** (leaves it; on `@ALLCALL` it turns on Settings' *Do not
   participate in the @ALLCALL group* and the row goes, and adding `@ALLCALL` turns it off and
@@ -110,7 +112,8 @@ each row has a **⋯** of its own (a right-click on the row opens it too).
 **CQ**; **HB NET** and, while it is on, **HB** with its menu (**▾**, or
 right-click **HB**); the **AUTOREPLY · RELAY · HB ACK** chips; an automatic
 reply's question, **Yes** or **No**; the queue with **Drop queue**; and the
-idle-watchdog readout.
+idle-watchdog readout. **CQ** and **HB** are greyed out while a message is waiting to go or going
+out, as JS8Call's are.
 
 ## Receiving
 
@@ -184,7 +187,9 @@ the frequency you last used in JS8 instead.
 **The decode filter.** The **Filter** plate on the waterfall says what the decoder listens to,
 **Filter 500–2500 Hz** out of the box as JS8Call ships it, and opens the waterfall
 controls. Switch the filter off to decode the whole passband, or set its centre and width;
-**Centre on my RX offset** puts it on the station you are listening to.
+**Centre on my RX offset** puts it on the station you are listening to. While it is on, a row's
+**⋯** in Band activity or the call list has **Centre filter at … Hz**, which centres it on that
+row, as JS8Call's row menus do.
 
 **QSY to centre**, in the same controls, moves the rig's dial so your TX offset sits on the
 passband centre (1500 Hz unless you change it): for narrow filters, and rigs whose passband
@@ -295,7 +300,8 @@ next, and drops at once on **Stop TX** or **TX Off**.
 
 **Moving the TX offset while sending.** While a message is waiting to go or going out, the TX
 offset stays where it is, as in JS8Call: a right-click on the waterfall is refused and the screen
-says why. Turn on **Allow TX offset changes while sending** and the move is taken at once, as in
+says why, and a list row's **Jump to … Hz** is greyed out. Turn on **Allow TX offset changes while
+sending** and the move (or the jump) is taken at once, as in
 JS8Call: the frame on the air moves to the new offset a tenth of a second later, from where it has
 got to (receivers lose that frame, as they lose JS8Call's), and the frames still to go are sent
 there. At Slow, a move in the first few seconds of a frame lands near its end instead: the sound
@@ -350,9 +356,10 @@ JS8Call's ports: 2442 for TCP, 2242 for UDP.
   are JS8Call's own, so a program reads them as it reads JS8Call's.
 - **What a program can ask for**, once you turn on **Accept TCP requests** or **Accept UDP
   requests** for its side (both off until you do, as in JS8Call): the callsign, grid, INFO and
-  STATUS, the stations heard, the band activity, the free offsets, the switches, the inbox, the
-  dial and offset, the speed, whether the transmitter is keyed, the message going out, how many
-  messages wait behind it, and the Nexus version. While that side's Accept is off, a program's
+  STATUS, the stations heard, the band activity, the free offsets, the decode filter, the
+  switches (heartbeat networking among them), the call in your **To** box, the inbox, the dial and
+  offset, the speed, whether the transmitter is keyed, the message going out, how many messages
+  wait behind it, and the Nexus version. While that side's Accept is off, a program's
   requests get no answer, as in JS8Call.
 - **Read-only.** A program cannot send a message, tune, change the frequency, the speed or a
   setting, or store a message through Nexus. Those requests get no answer, as JS8Call answers
@@ -363,9 +370,9 @@ JS8Call's ports: 2442 for TCP, 2242 for UDP.
   Remote page cannot see or change them.
 - **One TCP program at a time**, as in JS8Call. A second one is told "Connections Full".
 
-Not yet: sending through the API, and the band-pass filter (a program asking for it gets no
-answer). No station is ever "selected" for a program, and an inbox message filed before Nexus
-started reads dial 0. The message going out is the one Nexus shows in its queue; what you are
+Not yet: sending through the API, or changing the decode filter through it (a program asking to
+gets no answer). The call a program reads as selected is the one in your **To** box, and an inbox
+message filed before Nexus started reads dial 0. The message going out is the one Nexus shows in its queue; what you are
 still typing stays in the cockpit and is not sent to a program.
 
 ## Compatibility

@@ -239,12 +239,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message for you, ★ hearing you, ☎ a CQ in the last five minutes, ⚟ heard through a relay. Each
   list's ⋯ chooses its columns and its order (any of JS8Call's sorts) and clears it, or every
   list. Each row's ⋯, or a right-click on it, has JS8Call's row menu: jump to the row's offset
-  (your RX and TX offsets both, as JS8Call has one offset; not while a message is queued) or its
-  speed, show the station's messages, add a station or a group, remove one (a group is left;
+  (your RX and TX offsets both, as JS8Call has one offset; while a message is queued, only with
+  "Allow TX offset changes while sending" on, as in JS8Call) or its speed, centre the decode
+  filter there while the filter is on, show the station's messages, add a station or a group,
+  remove one (a group is left;
   removing @ALLCALL turns on "Do not participate in the @ALLCALL group" in Settings, and adding
   it turns that off), block one, remove an offset's activity. Needs a bench check: a jump moves
-  where your next message keys, as a Ctrl-click on the waterfall does, and removing @ALLCALL
-  changes what Nexus answers.
+  where your next message keys, as a Ctrl-click on the waterfall does (with that option on, the
+  frame on the air too), and removing @ALLCALL changes what Nexus answers.
 - **JS8: the Inbox works as JS8Call's message panel.** Click a message to read it; tick several
   and delete them together; sort by any column; show one station's messages; **Reply** puts
   `<path> MSG [MESSAGE]` in the compose box with `[MESSAGE]` ready to type over, and sends
@@ -260,8 +262,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Digital ▸ JS8 (TCP on 2442, UDP on 2242, both off until you do, as in JS8Call), and a logger, map
   or message tool made for JS8Call gets what Nexus hears, in JS8Call's own messages. Turn on
   **Accept TCP requests** or **Accept UDP requests** as well (also off, as in JS8Call) and it can
-  ask for the stations heard, the band activity, the inbox, the station details, the dial, the
-  speed, whether you are transmitting and what is going out. It is read-only: such a program cannot
+  ask for the stations heard, the band activity, the inbox, the station details, the call in your
+  To box, the decode filter, the dial, the speed, whether you are transmitting and what is going
+  out. It is read-only: such a program cannot
   send, tune or change a setting through Nexus. Only programs on this computer can connect, and the
   Remote page cannot turn it on.
 
@@ -397,6 +400,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pinned to the top from its row's ⋯ now. The call list sorts by callsign and shows JS8Call's
   columns, as JS8Call ships them; grid, distance, azimuth, speed and time delta are a tick away in
   its ⋯ ▸ Show columns, and Band activity's time delta and speed in its own.
+- **JS8: CQ and HB wait while a message is going out.** Both are greyed out while a message is
+  waiting to go or going out, as JS8Call's are, so a CQ or a heartbeat no longer queues behind it.
+  Needs a bench check.
 
 ### Fixed
 

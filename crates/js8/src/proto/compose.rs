@@ -48,7 +48,7 @@ pub enum ComposeError {
 }
 
 /// §97.119 airtime cap: the largest frame count with frames × period < 600 s
-/// (Slow 19 · Normal 39 · Fast 59 · Turbo 99).
+/// (Slow 19 · Normal 39 · Fast 59 · JS8 40 99 · JS8 60 149).
 pub const fn max_frames(speed: Speed) -> usize {
     (599 / speed.period_s()) as usize
 }

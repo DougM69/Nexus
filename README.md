@@ -440,7 +440,8 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   a halved symbol time. Decodium's on-air behavior is the compatibility baseline for the mode
   (see **[NOTICE](NOTICE)** for the per-file provenance split).
 - **[JS8Call](https://github.com/js8call/js8call)** (GPLv3) — **Jordan Sherer KN4CRD** and the
-  JS8Call contributors. Nexus's **JS8** mode is on-air compatible with JS8Call, implemented in Rust
+  JS8Call contributors, and **[JS8Call-improved](https://github.com/JS8Call-improved/JS8Call-improved)**
+  (GPLv3), which continues it as JS8Call 3.0. Nexus's **JS8** mode is on-air compatible with JS8Call, implemented in Rust
   (`crates/js8/`) from JS8Call's source read as the protocol reference; the transcribed tables
   (Costas arrays, LDPC(174,87) parity tables from WSJT-X, alphabets, command and group tables,
   the JSC dictionary) are credited in **[NOTICE](NOTICE)**. No JS8Call code is copied.

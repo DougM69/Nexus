@@ -1415,7 +1415,8 @@ JS8 screen is open. JS8Call plays a sound file you pick for each; Nexus plays it
   message into the next, and drops at once on Stop TX or TX Off.
 - **Allow TX offset changes while sending** — off by default, as in JS8Call: while a
   message is waiting to go or going out, the TX offset stays where it is, and the cockpit
-  says why when you try to move it. On, the move is taken at once: the frame on the air
+  says why when you try to move it (a list row's **Jump to … Hz** is greyed out). On, the move
+  or the jump is taken at once: the frame on the air
   moves too, from where it has got to (a heartbeat on its own spot stays there), and the
   frames still to go are sent at the new offset.
 
