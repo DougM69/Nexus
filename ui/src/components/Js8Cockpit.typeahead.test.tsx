@@ -159,7 +159,9 @@ describe('typeahead in the JS8 compose box', () => {
     await act(async () => {
       type('KD9TAW: HELLO WORLD, 73')
     })
-    engine.typeahead = { sent: 'KD9TAW: HELLO ', unsent: 'WORLD, 73', locked: false }
+    // The first frame goes while the engine's answer still lags what was typed (a change on its
+    // way): only what went comes off the box, and ", 73" stays.
+    engine.typeahead = { sent: 'KD9TAW: HELLO ', unsent: 'WORLD', locked: false }
     await waitFor(() => expect(box().value).toBe('WORLD, 73'), { timeout: 2000 })
   })
 

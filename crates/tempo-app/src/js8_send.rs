@@ -8,7 +8,7 @@
 //! - **Allow Tx frequency changes while transmitting** (`TxQSYAllowed`, Configuration.cpp:2305),
 //!   the TX offset's half: off, JS8Call's `changeFreq` refuses a move while a message is queued
 //!   for transmit or going out (mainwindow.cpp:5381-5386).
-//! - **Typeahead** (mainwindow.cpp:3590-3628): the compose box keeps the operator's message while
+//! - **Typeahead** (mainwindow.cpp:3589-3668): the compose box keeps the operator's message while
 //!   it goes out and takes more typing; the station frames the box's newest text just before each
 //!   frame (`Station::type_ahead`). Nothing new keys by itself: every frame still goes out through
 //!   `plan_js8_tx` and its gates.
@@ -72,8 +72,9 @@ impl Engine {
     /// The compose box's typeahead, JS8Call's: what is still to go of the operator's message going
     /// out, `sent_seen` the characters of it the box had seen go (`Station::type_ahead`). Framed
     /// just before the next frame, which goes out through `plan_js8_tx` and every gate there; keys
-    /// nothing by itself. An operator act, as a key press in JS8Call's box is (`eventFilter`,
-    /// mainwindow.cpp:2979-2988): it restarts the idle count and, taken, the wall-clock watchdog.
+    /// nothing by itself. An operator act, as a key press in JS8Call's box is (`eventFilter` →
+    /// `resetIdleTimer`, mainwindow.cpp:1368-1374): it restarts the idle count and, taken, the
+    /// wall-clock watchdog.
     pub fn js8_typeahead(&mut self, sent_seen: usize, unsent: String) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
         self.js8_restart_idle_clock(now_ms);

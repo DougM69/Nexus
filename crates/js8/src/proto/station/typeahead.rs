@@ -1,23 +1,23 @@
 //! Typeahead — JS8Call's compose box while its message goes out (`prepareNextMessageFrame`,
-//! JS8_UI/mainwindow.cpp:3590-3628, read as the spec; its user guide: "you can start transmitting
+//! JS8_UI/mainwindow.cpp:3589-3668, read as the spec; its user guide: "you can start transmitting
 //! and continue typing your message as each frame is transmitted. Checksummed messages like MSG or
 //! Relays cannot use typeahead.").
 //!
 //! JS8Call's box holds the message as its frames render, the characters of each frame marked sent
-//! as it goes (`setCharsSent`, :3645-3648). Before each frame (`stopTx` → `prepareNextMessageFrame`,
-//! :2891) it reads the box: changed and not empty, the frames still to go are thrown away and the
-//! unsent text is framed again (:3601-3628):
+//! as it goes (`setCharsSent`, :3653-3654). Before each frame (`stopTx` → `prepareNextMessageFrame`,
+//! :2895) it reads the box: changed and not empty, the frames still to go are thrown away and the
+//! unsent text is framed again (:3600-3628):
 //! - nothing of the message gone yet: the box's text is the message;
 //! - part way out: the rest as data only (`forceData`, Varicode.cpp:2055-2058): no heartbeat,
 //!   compound or directed frame, no selected call put in front, no "MYCALL: ", none flagged first and
-//!   the final one flagged last (mainwindow.cpp:3630-3641);
+//!   the final one flagged last (mainwindow.cpp:3636-3643);
 //! - its last frame gone (it carried the last flag): a message of its own, sent straight after, its
-//!   first frame not flagged first (:3632-3635).
+//!   first frame not flagged first (:3636-3638).
 //!
-//! A message whose directed command is checksummed (MSG, a relay; `isCommandChecksumed`, :3576-3580)
+//! A message whose directed command is checksummed (MSG, a relay; `isCommandChecksumed`, :3573-3576)
 //! leaves the box read-only while it goes. Emptying what is still to go ends the message after the
 //! frame on the air, with no last flag sent, as JS8Call's empty rebuild ends it; emptying a box with
-//! nothing of it gone changes nothing (`!isEmpty()`, :3601).
+//! nothing of it gone changes nothing (`!isEmpty()`, :3602).
 //!
 //! Here the cockpit's box hands the station what is still to go ([`Station::type_ahead`]) and the
 //! station frames the newest text just before the next frame goes ([`Station::take_typeahead`],
@@ -48,7 +48,7 @@ pub(super) struct Typeahead {
     /// A checksummed directed command (MSG, a relay): the box may not change it.
     locked: bool,
     /// The message in the outbox went in after an earlier one's last frame: its first frame is not
-    /// flagged first, as JS8Call clears the flag once a frame has gone (mainwindow.cpp:3632-3635).
+    /// flagged first, as JS8Call clears the flag once a frame has gone (mainwindow.cpp:3636-3638).
     follow_on: bool,
     /// The period start its last frame was handed out in, once it has been.
     last_out_ms: Option<u64>,
@@ -96,7 +96,7 @@ fn rendered(frames: &[(Frame, I3)]) -> String {
 }
 
 /// JS8Call keeps the box read-only for a checksummed directed command (`isCommandChecksumed`,
-/// mainwindow.cpp:3576-3580): MSG, MSG TO:, a relay, QUERY, QUERY MSGS, QUERY CALL, CMD.
+/// mainwindow.cpp:3573-3576): MSG, MSG TO:, a relay, QUERY, QUERY MSGS, QUERY CALL, CMD.
 fn checksummed(frames: &[(Frame, I3)]) -> bool {
     frames.iter().any(|(f, _)| match f {
         Frame::Directed { cmd, .. } | Frame::CompoundDirected { cmd, .. } => cmd.is_checksummed(),
@@ -199,7 +199,7 @@ impl Station {
 
     /// Just before each frame: frame the box's newest text, and let the box go once the period
     /// after its message's last frame has come with nothing more typed (JS8Call clears its box as
-    /// the message ends, mainwindow.cpp:2897-2900).
+    /// the message ends, mainwindow.cpp:2895-2899).
     pub(super) fn take_typeahead(&mut self, period_start_ms: u64) {
         if self.typeahead.is_none() {
             return;
