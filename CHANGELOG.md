@@ -154,13 +154,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with its tones on the slot clock. A Call CQ or double-click inside your own slot still keys at
   once, now with its tones on the slot clock and its PTT ending inside the slot (it ran 0.25 s into
   the next one), and it now keys as late as WSJT-X does: while the slot is under 75 % of its period,
-  up to 11.25 s into an FT8 slot or 5.6 s into FT4, sending the symbols that remain (it stopped at
-  6 s and 3 s). An FT4 Call CQ between 5.54 s, where Nexus's FT4 tones end, and that limit has
+  up to 11.25 s into an FT8 slot or 5.6 s into FT4, sending the symbols that remain (1.18.0 keyed
+  one only up to about 7.9 s into FT8 and 5.0 s into FT4). An FT4 Call CQ between 5.54 s, where Nexus's FT4 tones end, and that limit has
   nothing left to send: Nexus keys and holds the transmitter, silent, until the over's usual end at
-  6.24 s, as WSJT-X does (it used to let go at once). Later than that it waits for your next slot.
+  6.24 s, as WSJT-X does (1.18.0 waited for your next slot). Later than that it waits for your next
+  slot.
   The same limit holds when your slot's own key comes late (a decode that finished late, a busy
   computer): past 75 % of the slot Nexus does not key it, as WSJT-X does not, and the over goes out
-  at your next slot instead (it used to key as long as one of its tones was still ahead).
+  at your next slot instead (1.18.0 keyed it however late, and the boundary cut the over short).
   NEEDS-BENCH: an FT8 and an FT4 over on a dummy load beside WSJT-X, a Call CQ about 10 s into an
   FT8 slot and another about 12 s in (the first keys at once, the second waits for the next slot, in
   both programs), an FT4 Call CQ about 5.6 s into your slot (TX on at once with nothing sent and off
@@ -169,7 +170,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **On Windows the title bar follows your theme pick.** Pick Light or Dark in Settings ▸
   Appearance ▸ Theme and the window's title bar turns light or dark with it; System, the Windows
   default, follows the computer's own setting as before. Linux, the Raspberry Pi and macOS are
-  unchanged. Not yet checked on a Windows machine.
+  unchanged. NEEDS-BENCH: Windows, with Light, Dark and System picked in turn.
 
 ### Fixed
 
