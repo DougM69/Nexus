@@ -51,6 +51,17 @@ describe('the status lane after a refused slot key', () => {
     expect(lane!.detail).not.toContain('CAT/port')
   })
 
+  it('says the radio keyed only after its period had ended and how long after, without PTT advice', () => {
+    const lane = slotKeyRefusedLane({ at: AT, why: '1.2 s', keyedPastPeriod: true })
+    expect(lane!.tier).toBe('critical')
+    expect(lane!.message).toBe(EN['shell.lane.slotKeyRefused.message'])
+    expect(lane!.detail).toBe(
+      EN['shell.lane.slotKeyRefused.pastPeriod'].replace('{{time}}', '14:32:05').replace('{{why}}', '1.2 s'),
+    )
+    expect(lane!.detail).toContain('1.2 s after the period')
+    expect(lane!.detail).not.toContain('PTT method')
+  })
+
   it('says the radio was still on the DAX Nexus set once native audio was off, in its own sentence', () => {
     const lane = slotKeyRefusedLane({
       at: AT,

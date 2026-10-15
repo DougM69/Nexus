@@ -1158,6 +1158,12 @@ pub struct SlotKeyRefused {
     /// nothing, so the UI says so in its own words. Absent for every other refusal.
     #[serde(default, skip_serializing_if = "is_false")]
     pub tx_audio_failed: bool,
+    /// Set when the radio keyed an FT8 or FT4 over only after the period it was keyed for had
+    /// ended, in the other station's, so Nexus unkeyed it at once and sent nothing (`why` is then
+    /// how long after the period's end, "1.2 s"): the radio refused nothing, so the UI says so in
+    /// its own words. Absent for every other refusal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub keyed_past_period: bool,
 }
 
 /// What a FlexRadio reports about its own tune carrier, while Nexus's Flex client tunes with it

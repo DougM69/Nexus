@@ -5093,6 +5093,10 @@ export interface SlotKeyRefused {
    *  would not open (`why` is then the sound card's own error): the lane says that in its own
    *  words. Absent otherwise. */
   txAudioFailed?: boolean
+  /** Set when the radio keyed an FT8 or FT4 over only after the period it was keyed for had ended,
+   *  so Nexus unkeyed it at once and sent nothing (`why` is then how long after the period's end,
+   *  "1.2 s"): the lane says that in its own words. Absent otherwise. */
+  keyedPastPeriod?: boolean
 }
 
 /** Why Nexus's own Flex client kept a slot over's key off the air (mirror of the Rust

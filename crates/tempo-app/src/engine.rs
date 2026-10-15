@@ -2881,8 +2881,9 @@ pub struct Engine {
     tx_watchdog: bool,
     /// The slot over whose key the radio did not accept, which halted TX
     /// ([`Engine::halt_tx_for_refused_key`]), or that Nexus would not key because the transmit
-    /// audio output would not open ([`Engine::halt_tx_for_tx_audio`]). Kept until the operator
-    /// turns TX on again.
+    /// audio output would not open ([`Engine::halt_tx_for_tx_audio`]), or that the radio keyed
+    /// only after its period had ended ([`Engine::halt_tx_for_key_past_its_period`]). Kept until
+    /// the operator turns TX on again.
     slot_key_refused: Option<crate::dto::SlotKeyRefused>,
     /// The slot over whose unkey the radio did not accept, which halted TX
     /// ([`Engine::halt_tx_for_failed_unkey`]). Kept until the operator turns TX on again.
@@ -16758,6 +16759,46 @@ Pick the one you operate from on the Contesting tab in Settings.",
             why: why.to_string(),
             flex_audio: None,
             tx_audio_failed: false,
+            keyed_past_period: false,
+        });
+    }
+
+    /// Halt TX because the radio keyed an FT8 or FT4 over only after the period it was keyed for had
+    /// ended, `past_ms` after it, in the other station's period or later: the CAT before the key
+    /// (Split Operation's commands on a slow link) and the key itself held it up. The radio loop has
+    /// unkeyed it at once and played none of it; the reason stays on the refused key's line until
+    /// the operator turns TX on again ([`Self::set_tx_enabled`]).
+    ///
+    /// WSJT-X starts an over's audio only when the radio reports PTT on and the over is "still
+    /// needed" (`widgets/mainwindow.cpp:8852`, `m_tx_when_ready && g_iptt`), and its GUI tick ends
+    /// the over the moment the clock leaves its window, which never reaches into the other
+    /// station's period (`:5016-5019`, `:5055`, `:5180`, `:5530`; `stopTx` clears `g_iptt` and
+    /// lowers PTT 200 ms later, `:5743-5760`): a radio that answers there sends nothing and is
+    /// unkeyed. Halted as a refused key halts ([`Self::halt_tx_for_refused_key`]): a link that slow
+    /// would key the next over as late, and an over that cannot go out in its own period is
+    /// dropped, never held to key at a time the operator did not choose. One event, one line in the
+    /// log, and no stop for a voice memory, as there.
+    pub fn halt_tx_for_key_past_its_period(&mut self, past_ms: f64) {
+        let voice_mem_halt = self.voice_mem_halt;
+        self.quiet_tx_log = true;
+        self.halt_tx();
+        self.quiet_tx_log = false;
+        self.voice_mem_halt = voice_mem_halt;
+        let why = format!("{:.1} s", past_ms / 1000.0);
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "{} over: the radio keyed {why} after its period had ended (a slow key); unkeyed at \
+                 once, nothing sent; transmit halted",
+                self.tier().label()
+            ),
+        );
+        self.slot_key_refused = Some(crate::dto::SlotKeyRefused {
+            at: now_unix_secs(),
+            why,
+            flex_audio: None,
+            tx_audio_failed: false,
+            keyed_past_period: true,
         });
     }
 
@@ -16791,6 +16832,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             why: why.to_string(),
             flex_audio: None,
             tx_audio_failed: true,
+            keyed_past_period: false,
         });
     }
 
@@ -36896,6 +36938,66 @@ mod tests {
             radio(&e)["slotKeyRefused"].get("txAudioFailed"),
             None,
             "absent for a radio's refusal, so its snapshot is byte-identical to before"
+        );
+    }
+
+    /// The radio keyed an FT8 over only after its period had ended (the radio loop unkeyed it at
+    /// once and sent nothing): TX halts as a refused key halts it, and the line says how long after
+    /// the period's end, as its own cause, until TX is on again. A radio's own refusal and a
+    /// transmit audio failure carry no such flag, on the wire either.
+    #[test]
+    fn a_key_the_radio_answered_past_its_period_halts_tx_and_says_how_late_until_tx_is_on_again() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ"); // arms the responder sequencer (running)
+        assert!(e.slot_tx_armed(), "premise: the QSO armed slot TX");
+        let radio = |e: &Engine| serde_json::to_value(e.snapshot()).unwrap()["radio"].clone();
+        e.halt_tx_for_key_past_its_period(1_234.0);
+        assert!(!e.tx_enabled() && !e.slot_tx_armed(), "TX is still on");
+        assert!(
+            e.take_slot_tx_abort(),
+            "the loop is told to stop, as Stop TX tells it"
+        );
+        assert!(
+            e.poll_tx(0).is_empty() && e.poll_tx(2).is_empty(),
+            "and it stays stopped: the sequencer does not re-arm"
+        );
+        let refused = e
+            .snapshot()
+            .radio
+            .slot_key_refused
+            .expect("the reason is kept for the operator");
+        assert_eq!(
+            (
+                refused.why.as_str(),
+                refused.keyed_past_period,
+                refused.tx_audio_failed,
+                refused.flex_audio
+            ),
+            ("1.2 s", true, false, None)
+        );
+        assert_eq!(radio(&e)["slotKeyRefused"]["keyedPastPeriod"], true);
+        e.set_tx_enabled(true);
+        assert_eq!(
+            e.snapshot().radio.slot_key_refused,
+            None,
+            "turning TX on again clears it"
+        );
+
+        e.halt_tx_for_refused_key("rigctld PTT error: \"RPRT -1\\n\"");
+        assert!(
+            !e.snapshot()
+                .radio
+                .slot_key_refused
+                .unwrap()
+                .keyed_past_period
+        );
+        assert_eq!(radio(&e)["slotKeyRefused"].get("keyedPastPeriod"), None);
+        e.set_tx_enabled(true);
+        e.halt_tx_for_tx_audio("playback stream: Device or resource busy");
+        assert_eq!(
+            radio(&e)["slotKeyRefused"].get("keyedPastPeriod"),
+            None,
+            "absent for the other causes, so their snapshots are byte-identical to before"
         );
     }
 
