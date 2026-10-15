@@ -225,8 +225,10 @@ mod tests {
 
     #[test]
     fn suggestions_agree_with_a_full_dictionary_scan() {
+        // HELLOXX: HELLO is offered only as its prefix (it is two edits away). TONEX has ten words
+        // one edit away, so the cut at five is seen.
         for w in [
-            "HELLOX", "WEATHR", "ANTENNAA", "QRZZ", "QXZJ", "JJJJJ", "XQZJV",
+            "HELLOX", "HELLOXX", "TONEX", "WEATHR", "ANTENNAA", "QRZZ", "QXZJ", "JJJJJ", "XQZJV",
         ] {
             let got = suggestions(w, OFFERED);
             assert_eq!(got.words, oracle(w, OFFERED), "{w}");
@@ -239,6 +241,16 @@ mod tests {
         let s = suggestions("HELLOX", OFFERED);
         assert!(s.found);
         assert_eq!(s.words, ["HELLO", "HELLOS", "HELLOW"]);
+        assert_eq!(
+            suggestions("HELLOXX", OFFERED).words,
+            ["HELLO"],
+            "the prefix alone, two edits away"
+        );
+        assert_eq!(
+            suggestions("TONEX", OFFERED).words.len(),
+            OFFERED,
+            "five of ten"
+        );
         assert_eq!(
             s.words.iter().filter(|w| *w == "HELLO").count(),
             1,
