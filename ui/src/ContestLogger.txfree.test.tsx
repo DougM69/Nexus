@@ -57,6 +57,9 @@ const ALLOWED = new Set([
   'contest_removed', 'contest_remove_last', 'contest_restore', 'set_fd_operator', 'export_log',
   // a contact's edit, which writes the contest log and its journal and nothing else
   'contest_edit',
+  // Clear test contacts: every contact of the running out of the contest log, each as Remove takes
+  // one — the contest log and its journal, nothing else (clearing_never_touches_the_transmitter)
+  'contest_clear',
   'save_text_to_downloads', 'fd_merge_to_general', 'fd_set_upload', 'fd_club_export', 'fd_club_give_position',
   // the host's Remove and Allow back on its club board: who is in the club, and nothing else
   'fd_club_remove_position', 'fd_club_allow_back',
@@ -132,7 +135,7 @@ function respond(cmd: string): unknown {
   if (cmd === 'contest_log_manual_rows') return [true]
   if (cmd === 'export_log' || cmd === 'fd_club_export') return 'QSO: …'
   if (cmd === 'save_text_to_downloads') return '/tmp/x'
-  if (cmd === 'contest_remove_last' || cmd === 'contest_restore' || cmd === 'contest_edit') {
+  if (cmd === 'contest_remove_last' || cmd === 'contest_restore' || cmd === 'contest_edit' || cmd === 'contest_clear') {
     return { outcome: 'refused', refusal: 'changed' }
   }
   if (cmd === 'fd_merge_to_general') return [{ added: 0, already: 1, refused: 0, queued: false }, snapshot]

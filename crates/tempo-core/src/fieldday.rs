@@ -1295,6 +1295,50 @@ impl FieldDayLog {
         Some(self.took_out(vec![row], removed_unix))
     }
 
+    /// ⭐ **Take every contact out of the live log — removed, never deleted** — the contest
+    /// screen's Clear test contacts, when the log is still what the screen named: `row_count` live
+    /// rows, the newest contact `call` (any case) at `when_unix`. Each contact is its own entry,
+    /// oldest first, as [`Self::remove_last`] would make it (a county line one entry with all its
+    /// rows), so each comes back on its own ([`Self::restore`]).
+    ///
+    /// `Changed` when the log is not what was named (a contact logged, removed or restored in
+    /// between), `Empty` when it holds none; either way nothing changes. ⚠️ **The numbers stay
+    /// spent**, as for [`Self::remove_last`]: the next contact's serial and seq follow the
+    /// cleared ones.
+    pub fn remove_all(
+        &mut self,
+        row_count: usize,
+        call: &str,
+        when_unix: u64,
+        removed_unix: u64,
+    ) -> Result<Vec<RemovedQso>, RemoveRefusal> {
+        let newest = self.newest_contact();
+        let Some(first) = newest.first() else {
+            return Err(RemoveRefusal::Empty);
+        };
+        if self.qsos.len() != row_count
+            || !first.call.eq_ignore_ascii_case(call.trim())
+            || first.when_unix != when_unix
+        {
+            return Err(RemoveRefusal::Changed);
+        }
+        // A contact is the run of rows sharing one call and one time, as `newest_contact` reads
+        // the newest.
+        let mut entries = Vec::new();
+        let mut contact: Vec<LoggedQso> = Vec::new();
+        for row in std::mem::take(&mut self.qsos) {
+            if contact
+                .last()
+                .is_some_and(|q| q.call != row.call || q.when_unix != row.when_unix)
+            {
+                entries.push(self.took_out(std::mem::take(&mut contact), removed_unix));
+            }
+            contact.push(row);
+        }
+        entries.push(self.took_out(contact, removed_unix));
+        Ok(entries)
+    }
+
     /// The one place rows leave the live log: kept as one entry, the dupe index and every
     /// row's mark rebuilt (removing a row can make a LATER one stop being a duplicate), and
     /// a showing `constant_sent` warning re-derived, since the row it described may be the

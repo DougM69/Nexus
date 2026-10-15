@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Clear test contacts on the Contest screen.** A gear test logged before the start stayed in the
+  event's log unless you deleted the journal file with Nexus closed. **Clear test contacts**, beside
+  the exports, takes every contact of this running out of the contest log at once: the first click
+  names how many, and a second within 5 seconds clears them. Each goes as Remove takes one: it waits
+  under Removed, where Restore puts it back, it leaves the score, the dupe check and every export,
+  and its serial number is not used again, so the next contact carries the number after it. At a
+  club only this laptop's contacts go, and the club drops them on every laptop as it drops a
+  removed one. Nothing transmits.
 - **Settings ▸ Licenses shows Nexus's NOTICE.** The Licenses screen now opens with the NOTICE file
   the installers carry, before the license texts of the interface's npm packages and the Rust
   crates.
@@ -168,6 +176,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Tab passed every checkbox before Cancel. Each dialog's first Tab stop is now a skip, shown only
   while it has the keyboard: Enter puts the keyboard on Cancel, which changes nothing, and Tab from
   there reaches the dialog's other button.
+- **The manual names the contest journal by its real name.** Since club sync the journal is
+  `fieldday_backup_<id>.adi`, one per computer, not `fieldday_backup.adi`. Contest Log Persistence
+  now says so, and says how to start clean after a gear test with Clear test contacts.
 - **AD1C's country file now carries its license notice.** Nexus finds a call's DXCC entity and
   zones in the cty.dat country file by Jim Reisert AD1C, which is MIT-licensed. That license asks
   for its notice to travel with every copy, and NOTICE named the license without reproducing it.
