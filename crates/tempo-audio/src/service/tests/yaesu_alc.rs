@@ -157,17 +157,28 @@ fn an_ft991a_and_an_ft710_show_alc_where_the_radios_own_bar_is() {
 
 /// …and every other radio reads its ALC as it did: another Yaesu on the same Hamlib table (the
 /// FTDX10) and an Icom (the IC-7300 through Hamlib). Whatever `l ALC` answers is what the meter
-/// is given, and the radio is sent no `RM4;`, which on an Icom's CI-V bus is junk.
+/// is given, and the radio is sent no `RM4;`, which on an Icom's CI-V bus is junk. By value
+/// first, every reading, as above: raw 0 reads 0 on either scale, so it proves nothing alone.
 #[test]
 fn every_other_radios_alc_still_reads_through_hamlib() {
     for (model, name) in [(1042u32, "FTDX10"), (3073, "IC-7300")] {
-        for raw in [0u16, 64, 128, 255] {
-            let (alc, sent) = alc_after_an_over(model, raw, "000");
-            assert_eq!(
-                alc,
-                Some(hamlib_alc(raw)),
-                "{name}, raw {raw}: unchanged, the meter shows Hamlib's own answer"
-            );
+        let overs: Vec<(u16, Option<f32>, Vec<String>)> = [0u16, 64, 128, 255]
+            .into_iter()
+            .map(|raw| {
+                let (alc, sent) = alc_after_an_over(model, raw, "000");
+                (raw, alc, sent)
+            })
+            .collect();
+        let got: Vec<(u16, Option<f32>)> = overs.iter().map(|(raw, alc, _)| (*raw, *alc)).collect();
+        let want: Vec<(u16, Option<f32>)> = overs
+            .iter()
+            .map(|(raw, _, _)| (*raw, Some(hamlib_alc(*raw))))
+            .collect();
+        assert_eq!(
+            got, want,
+            "{name}: unchanged, the meter shows Hamlib's own answer (raw, meter)"
+        );
+        for (_, _, sent) in &overs {
             assert!(
                 sent.iter().any(|l| l == "l ALC"),
                 "{name}: ALC is still read through Hamlib — {sent:?}"
