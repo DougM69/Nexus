@@ -55,7 +55,7 @@ describe('the role picker on a set of the operator\'s own', () => {
     expect(onChange).toHaveBeenLastCalledWith({ tu: ['F3'] })
   })
 
-  it('maps two keys to one step, in order — N1MM\'s "F5 followed by F2"', () => {
+  it('maps two keys to one step, in order — F5 then F2', () => {
     const onChange = vi.fn()
     const own: EsmRoleMap = { callExch: ['F5'] }
     render(<EsmRolePicker cockpit="cw" builtIn={null} own={own} slots={OWN_CW} keys={MACRO_KEYS} onChange={onChange} />)

@@ -609,7 +609,7 @@ describe('Enter Sends Message — call history and Super Check Partial (rule 10)
     expect(qthBox().value, 'premise: the file filled his county').toBe('WILL')
     await enter(callBox())
     expect(outcome()).toEqual({ sent: [[...MY_CALL, 'K9AAA']], logged: [], lit: ['F6'] })
-    expect(document.activeElement, 'the cursor stays in Call, as in N1MM').toBe(callBox())
+    expect(document.activeElement, 'the cursor stays in Call').toBe(callBox())
     expect(line()).toBe(null)
     await enter(callBox())
     expect(outcome()).toEqual({

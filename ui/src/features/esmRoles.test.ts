@@ -265,7 +265,7 @@ describe('the role picker — the operator\'s own macros mapped to ESM\'s steps'
     expect(resolveEsmRole(mapped, 'tu', own)).toEqual({ keys: ['F3'], text: 'TU {MYCALL} TEST' })
   })
 
-  it('sends two keys as one message, in order — N1MM\'s "F5 followed by F2"', () => {
+  it('sends two keys as one message, in order — F5 then F2', () => {
     expect(resolveEsmRole(mapped, 'callExch', own)).toEqual({ keys: ['F5', 'F2'], text: '! 5NN {EXCH}' })
   })
 

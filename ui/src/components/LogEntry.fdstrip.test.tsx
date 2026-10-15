@@ -115,7 +115,7 @@ describe('LogEntry — the FD callsign field drops spaces', () => {
   })
 })
 
-describe('LogEntry — space walks the contest exchange, like N1MM and N3FJP', () => {
+describe('LogEntry — space walks the contest exchange, box to box', () => {
   // Contest operators tab with the space bar: they arrive with that in their fingers, and a
   // logger that ignores it feels broken at speed.
   // Tab is unchanged (plain DOM order); this adds a second way, it does not replace one.
