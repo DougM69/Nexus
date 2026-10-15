@@ -142,6 +142,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   work as before. If your radios ended up sharing a baud, a port, a sound card or a drive level, set
   each one again under Settings ▸ Radio. NEEDS-BENCH: two Yaesus (an FT-710 and an FT-991A) on a
   Mac.
+- **A Save in Settings keeps the drive and RX gain you set last.** After you moved the cockpit
+  **Pwr** slider or changed RX Gain, Settings showed the level from before the change, and the next
+  Save of anything in Settings set the radio in use back to it. With two radios, saving the radio
+  you were editing did the same, and so did every Save in that window after it. The level you set
+  last, in the cockpit or in Settings, is now the one Settings shows and keeps and the one the radio
+  in use gets. While you edit a radio that is not in use, the hint under **Tx Power** and **RX
+  Gain** now says that Save stores them for that radio and that the radio in use does not change.
+  NEEDS-BENCH: an FT-710 into a dummy load.
 - **The ATU button now starts the FT-710's tuner.** On a Yaesu FT-710 the ATU button sent the
   command that starts a tune-up on other Yaesu radios, which the FT-710 does not use: the radio
   accepted it and nothing tuned, and in the digital modes Nexus still turned transmit off for the

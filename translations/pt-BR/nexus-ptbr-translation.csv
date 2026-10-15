@@ -2152,6 +2152,7 @@
 "4","settings.audio.rxGain.label","RX Gain","","RX",""
 "4","settings.audio.rxGain.aria","RX capture gain","","RX",""
 "4","settings.audio.rxGain.hint","Boost a quiet interface until RX Level reads around 30 dB — the meter responds as you release the slider. Leave at ×1.0 unless the meter reads low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much.","","FT8 | RX | dB | 1.0",""
+"4","settings.audio.multiRadio.levelHint","<b>Save</b> stores this for <b>{{radio}}</b>, and it takes effect when that radio is in use; the radio in use now does not change.","","<b> | {{radio}}",""
 "4","settings.radio.check.noPort","No serial port chosen — a rig model is set, so CAT needs a port.","","CAT",""
 "4","settings.radio.check.portMissing","{{port}} is not connected right now — check the rig is powered on, or pick another port.","","{{port}}",""
 "4","settings.radio.check.dialIn","{{port}} is a dial-in device and will hang waiting for carrier. Use the matching /dev/cu.… port instead.","","{{port}}",""

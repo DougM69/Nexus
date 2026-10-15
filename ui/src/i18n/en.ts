@@ -6836,6 +6836,12 @@ export const EN = {
   'settings.audio.rxGain.aria': 'RX capture gain',
   'settings.audio.rxGain.hint':
     'Boost a quiet interface until RX Level reads around 30 dB — the meter responds as you release the slider. Leave at ×1.0 unless the meter reads low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much.',
+  // Under BOTH sliders above, in place of their own hints, while the form edits a radio that is not
+  // the one in use: the sliders then set that radio's stored levels and act on nothing live, so
+  // "the SAME control as the cockpit Pwr" and "the meter responds" are not true there. `{{radio}}`
+  // is that radio's name, as in the multi-radio banner.
+  'settings.audio.multiRadio.levelHint':
+    '<b>Save</b> stores this for <b>{{radio}}</b>, and it takes effect when that radio is in use; the radio in use now does not change.',
 
   // ── Settings ▸ Radio ▸ Headphone monitor ────────────────────────────────────────────
   // "System default" inside these sentences names the picker entry above, so it reads the

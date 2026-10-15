@@ -26,10 +26,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel, radioPatch } from './SettingsPanel'
 import { confirmDialog } from '../confirm'
-import type { RadioProfilePatch } from '../api'
+import { setRxGain, setTxLevel, type RadioProfilePatch } from '../api'
 import type { RadioStatus } from '../types'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
+import { EN } from '../i18n/en'
 
 // The house budget (see SettingsPanel.radiorouting.test.tsx): a loaded full suite runs cases far
 // slower than one core does.
@@ -185,14 +186,16 @@ function installStation(radios: Profile[], activeRadio = 0) {
     station = { ...station, radios: station.radios.filter((r) => r.id !== id) }
     return {}
   })
-  // `set_tx_level` / `set_rx_gain` write the flat field only: the live drive and gain of the radio
-  // in use, which its profile takes at the next fold.
+  // `set_tx_level` / `set_rx_gain` set the live drive and gain of the radio in use: the flat field
+  // and that radio's profile together.
+  const inUse = (edit: Partial<Profile>) =>
+    station.radios.map((r) => (r.id === station.activeRadio ? { ...r, ...edit } : r))
   api.get('setTxLevel').mockImplementation(async (level: number) => {
-    station = { ...station, txLevel: level }
+    station = { ...station, txLevel: level, radios: inUse({ txLevel: level }) }
     return {}
   })
   api.get('setRxGain').mockImplementation(async (gain: number) => {
-    station = { ...station, rxGain: gain }
+    station = { ...station, rxGain: gain, radios: inUse({ rxGain: gain }) }
     return {}
   })
 }
@@ -456,11 +459,69 @@ describe('Tx Power and RX Gain belong to the radio being edited', () => {
     expect(txPower().value).toBe('0.6')
 
     // The cockpit's Pwr slider moves the FT-710 to 0.81 while the FT-991A is open for Edit.
-    station = { ...station, txLevel: 0.81 }
+    await setTxLevel(0.81)
     rerender(panel({ txLevel: 0.81 }))
     await save()
     expect(profile(1).txLevel).toBe(0.36)
     expect(txPower().value).toBe('0.6')
+  })
+
+  it('a second Save of a radio not in use keeps a cockpit Pwr and RX gain change made after the first', async () => {
+    installStation([IN_USE, OTHER])
+    const { rerender } = renderPanel({ txLevel: 0.25 })
+    await openRadioTab()
+    await editTheOtherRadio('FT-991A')
+    await save()
+
+    // The FT-710's cockpit moves its drive to 0.81 and its RX gain to ×3.5 while the FT-991A is open.
+    await setTxLevel(0.81)
+    await setRxGain(3.5)
+    rerender(panel({ txLevel: 0.81 }))
+    move(txPower(), '0.7')
+    await save()
+    expect({ live: levels(station), inUse: levels(profile(0)), edited: levels(profile(1)) }).toEqual({
+      live: { txLevel: 0.81, rxGain: 3.5 },
+      inUse: { txLevel: 0.81, rxGain: 3.5 },
+      edited: { txLevel: 0.7 ** 2, rxGain: 2 },
+    })
+  })
+
+  it('after a Save of a radio not in use, a Save of the radio in use keeps a cockpit RX gain change made between', async () => {
+    installStation([IN_USE, OTHER])
+    renderPanel({ txLevel: 0.25 })
+    await openRadioTab()
+    await editTheOtherRadio('FT-991A')
+    await save()
+
+    // The FT-710's cockpit moves its RX gain to ×3.5; then the FT-710's own Edit, and Save.
+    await setRxGain(3.5)
+    await editTheOtherRadio('FT-710')
+    await save()
+    expect({ live: levels(station), inUse: levels(profile(0)) }).toEqual({
+      live: { txLevel: 0.25, rxGain: 3.5 },
+      inUse: { txLevel: 0.25, rxGain: 3.5 },
+    })
+  })
+
+  it('a Save after Test CAT on a radio not in use keeps a cockpit Pwr change made after the test', async () => {
+    installStation([IN_USE, OTHER])
+    renderPanel({ txLevel: 0.25 })
+    await openRadioTab()
+    await editTheOtherRadio('FT-991A')
+    await setTxLevel(0.81)
+    // Test CAT saves the radio being edited first (it cannot test a radio that is not in use).
+    fireEvent.click(screen.getByRole('button', { name: 'Test CAT' }))
+    await waitFor(() => expect(api.get('updateRadioProfile')).toHaveBeenCalled())
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Test CAT' }) as HTMLButtonElement).disabled).toBe(false),
+    )
+
+    await setTxLevel(0.9)
+    await save()
+    expect({ live: levels(station), inUse: levels(profile(0)) }).toEqual({
+      live: { txLevel: 0.9, rxGain: 1.5 },
+      inUse: { txLevel: 0.9, rxGain: 1.5 },
+    })
   })
 
   it('control: editing the radio in use, both sliders act on it live and Tx Power follows its cockpit Pwr', async () => {
@@ -477,5 +538,36 @@ describe('Tx Power and RX Gain belong to the radio being edited', () => {
 
     rerender(panel({ txLevel: 0.81 }))
     expect(txPower().value).toBe('0.9')
+  })
+})
+
+/** The hint under a slider: the `.settings-hint` in the slider's own `<label>`, as it reads. */
+const hint = (slider: HTMLInputElement) =>
+  slider.closest('label')?.querySelector('.settings-hint')?.textContent
+
+/** A catalog sentence as it reads on screen, its markers rendered as elements. */
+const reads = (key: 'settings.audio.txPower.hint' | 'settings.audio.rxGain.hint') =>
+  EN[key].replace(/<\/?[a-z]+>/g, '')
+
+describe('the hints under Tx Power and RX Gain', () => {
+  it('while a radio not in use is open for Edit, both say that Save stores the level for that radio', async () => {
+    installStation([IN_USE, OTHER])
+    renderPanel({ txLevel: 0.25 })
+    await openRadioTab()
+    await editTheOtherRadio('FT-991A')
+    const note =
+      'Save stores this for FT-991A, and it takes effect when that radio is in use; the radio in use now does not change.'
+    expect({ txPower: hint(txPower()), rxGain: hint(rxGain()) }).toEqual({ txPower: note, rxGain: note })
+  })
+
+  it('control: on the radio in use, each slider keeps its own hint', async () => {
+    installStation([IN_USE, OTHER])
+    renderPanel({ txLevel: 0.25 })
+    await openRadioTab()
+    await waitFor(() => expect(txPower().value).toBe('0.5'))
+    expect({ txPower: hint(txPower()), rxGain: hint(rxGain()) }).toEqual({
+      txPower: reads('settings.audio.txPower.hint'),
+      rxGain: reads('settings.audio.rxGain.hint'),
+    })
   })
 })

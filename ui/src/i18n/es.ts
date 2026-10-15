@@ -5287,6 +5287,7 @@ export const ES: PartialCatalog = {
   "settings.audio.input.hint": "Tarjeta de sonido con el audio de recepción.",
   "settings.audio.input.label": "Dispositivo de entrada (RX)",
   "settings.audio.legend": "Audio",
+  "settings.audio.multiRadio.levelHint": "<b>Guardar</b> almacena este valor para <b>{{radio}}</b>, y se aplica cuando ese equipo está en uso; el equipo en uso ahora no cambia.",
   "settings.audio.multiRadio.note": "🎚 Los dispositivos de audio de abajo son para <b>{{radio}}</b>. Cada equipo tiene su PROPIA entrada/salida — pulsa “Editar” en otro equipo (en Equipos, arriba) para ajustar su audio. El audio RX en vivo y la cascada siguen al equipo activo.",
   "settings.audio.multiRadio.selectedRadio": "el equipo seleccionado",
   "settings.audio.output.hint": "Tarjeta de sonido que alimenta al equipo (transmisión).",

@@ -1960,6 +1960,19 @@ export function SettingsPanel({
   // so applying them live would change the radio in use. Keyed on the LIVE active radio, as the
   // satellite VFO map's guard is, because that is the radio the two verbs act on.
   const editingOtherRadio = editingRadioId != null && editingRadioId !== (activeRadioId ?? form?.activeRadio)
+  // …and the hint both sliders show then, in place of their own: those call Tx Power the cockpit
+  // Pwr's control and say the RX Level meter answers RX Gain, which holds for the radio in use only.
+  const otherRadioLevelHint = (
+    <T
+      k="settings.audio.multiRadio.levelHint"
+      tags={{ b: <strong /> }}
+      vals={{
+        radio:
+          form?.radios?.find((r) => r.id === editingRadioId)?.name ??
+          t('settings.audio.multiRadio.selectedRadio'),
+      }}
+    />
+  )
 
   // Apply RX capture gain to the LIVE audio stream (not just the form). Called on
   // release — `set_rx_gain` persists + returns a snapshot, so we commit once the
@@ -2977,7 +2990,18 @@ export function SettingsPanel({
     // re-opened for Edit, and the operating radio's went back at the next save of the other one.
     const { radios } = await getSettings()
     setForm((prev) => (prev ? { ...prev, radios } : prev))
-    return { ...next, radios }
+    // The baseline the next Save is diffed against (`saveForm`) holds the radio fields as the form
+    // now holds them. With another radio open the flat fields hold THAT radio, while a station-wide
+    // save sends the radio in use's own config from `radios` (`withActiveRadioConfig`), so the
+    // baseline holds the same. With the edited radio's fields there, or an older copy than `radios`,
+    // a field of the radio in use read as a change, and the next Save sent that copy's drive and
+    // gain back over the cockpit's newer ones. Test CAT and Auto-test save through here too, so the
+    // radio fields move here for every caller; `commitSave` then takes the whole of what this returns.
+    const saved = { ...next, radios }
+    const baseline =
+      editingRadioId != null && editingRadioId !== next.activeRadio ? withActiveRadioConfig(saved) : saved
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(baseline), radios }
+    return baseline
   }
 
   // A station-wide save (LoTW/eQSL credentials, config profiles) that must NOT carry the rig
@@ -6510,7 +6534,11 @@ export function SettingsPanel({
                   aria-label={t('settings.audio.txPower.aria')}
                 />
                 <span className="settings-hint">
-                  <T k="settings.audio.txPower.hint" tags={{ b: <strong />, em: <em /> }} />
+                  {editingOtherRadio ? (
+                    otherRadioLevelHint
+                  ) : (
+                    <T k="settings.audio.txPower.hint" tags={{ b: <strong />, em: <em /> }} />
+                  )}
                 </span>
               </label>
 
@@ -6549,7 +6577,9 @@ export function SettingsPanel({
                   onBlur={() => { if (remote) remoteGain.cancel() }}
                   aria-label={t('settings.audio.rxGain.aria')}
                 />
-                <span className="settings-hint">{t('settings.audio.rxGain.hint')}</span>
+                <span className="settings-hint">
+                  {editingOtherRadio ? otherRadioLevelHint : t('settings.audio.rxGain.hint')}
+                </span>
               </label>
             </div>
           </fieldset>

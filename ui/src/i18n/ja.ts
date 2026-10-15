@@ -4401,6 +4401,7 @@ export const JA: PartialCatalog = {
   "settings.audio.rxGain.label": "RXゲイン",
   "settings.audio.rxGain.aria": "RXキャプチャゲイン",
   "settings.audio.rxGain.hint": "入力の小さいインターフェースを、RXレベルが30 dB前後になるまで増幅します。メーターはスライダーを離すと反応します。メーターが低い（約15 dB未満）場合を除き×1.0のままにしてください。FT8は小さい信号でもデコードできるため、大きく上げる必要はほとんどありません。",
+  "settings.audio.multiRadio.levelHint": "<b>保存</b>すると<b>{{radio}}</b>用の値として保存され、その無線機が使用中になると反映されます（現在使用中の無線機は変わりません）。",
   "settings.headphoneMonitor.legend": "このコンピューターでの受信音",
   "settings.headphoneMonitor.enable.label": "受信音をここで再生",
   "settings.headphoneMonitor.enable.aria": "受信音をこのコンピューターで再生",
