@@ -3551,6 +3551,13 @@ export async function js8SetGroups(groups: string[]): Promise<string[]> {
   return invoke<string[]>('js8_set_groups', { groups })
 }
 
+/** The JS8 call list's Remove on @ALLCALL and Add of @ALLCALL (Settings `js8AvoidAllcall`, JS8Call's
+ *  "Do not participate in the @ALLCALL group"), that one field, never the settings form. Resolves
+ *  with the setting as saved. */
+export async function js8SetAvoidAllcall(avoid: boolean): Promise<boolean> {
+  return invoke<boolean>('js8_set_avoid_allcall', { avoid })
+}
+
 /** Arm/disarm the SSTV RX decoder by an EXPLICIT operator act (session-only; RX
  * decode, never TX). Stopping it here is remembered for the session — opening the
  * view again will not restart it behind the operator. */

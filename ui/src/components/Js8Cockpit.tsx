@@ -193,10 +193,14 @@ export interface Js8ListSettings {
   sounds: readonly string[]
   /** The joined @GROUPs. */
   groups: readonly string[]
+  /** "Do not participate in the @ALLCALL group": the call list leaves @ALLCALL out. */
+  avoidAllcall: boolean
   /** "Block this station": the RX block list as it should be. */
   setRxBlocklist?: (calls: string[]) => Promise<void>
   /** "Add New Station or Group…" with a @GROUP and "Remove This Group": the groups as they should be. */
   setGroups?: (groups: string[]) => Promise<void>
+  /** "Remove" on @ALLCALL and "Add" of @ALLCALL: whether not to take part in it, as it should be. */
+  setAvoidAllcall?: (avoid: boolean) => Promise<void>
 }
 
 /** How long the new-message notice stays up: JS8Call's "New Message Received" box closes itself
@@ -212,6 +216,7 @@ const JS8_LIST_DEFAULTS: Js8ListSettings = {
   mfi: '\u2026\u2026',
   sounds: [],
   groups: [],
+  avoidAllcall: false,
 }
 
 /** The ⊞ menu's entries: the cockpit's own panes. A box comes and goes through ⊞ Arrange's "+ Add a
@@ -690,8 +695,9 @@ export function Js8Cockpit({
   // Send. Sent at once, they leave what is typed in the box alone, as the station rows' asks do.
   /** `insert` into the box as JS8Call's `addMessageText` does, at the caret (`clear`: in place of
    *  everything); `to` sets the To box. The command palette goes back to "no command" — the words
-   *  carry their own — except for a saved message (`keepCmd`), which may be a MSG's text. */
-  const fill = (insert: string, o: { to?: string; clear?: boolean; keepCmd?: boolean } = {}) => {
+   *  carry their own — except for a saved message (`keepCmd`), which may be a MSG's text. `select`
+   *  picks that part of what was put in (the Inbox Reply's `[MESSAGE]`), so typing replaces it. */
+  const fill = (insert: string, o: { to?: string; clear?: boolean; keepCmd?: boolean; select?: string } = {}) => {
     // Nothing while the box's message goes out (typeahead): JS8Call adds no text while one is
     // queued (`addMessageText`, mainwindow.cpp:3288-3294).
     if (typeahead.active) return
@@ -702,11 +708,14 @@ export function Js8Cockpit({
     if (!o.keepCmd) setCmdId(null)
     textRef.current = at.text
     setText(at.text)
+    const start = at.caret - insert.length
+    const picked = o.select ? insert.indexOf(o.select) : -1
     requestAnimationFrame(() => {
       const el = composeRef.current
       if (!el) return
       el.focus({ preventScroll: true })
-      el.setSelectionRange(at.caret, at.caret)
+      if (o.select && picked >= 0) el.setSelectionRange(start + picked, start + picked + o.select.length)
+      else el.setSelectionRange(at.caret, at.caret)
     })
   }
   /** One button's words to `to`: sent now, or into the box. */
@@ -1060,7 +1069,7 @@ export function Js8Cockpit({
     sortCallRows(callRows, view.call.sort, { myGrid: snap?.mygrid ?? '', grids: callGrids, unreadFrom }),
     pins,
   )
-  const groupRows = js8GroupRows(lists.groups, js8?.inbox ?? [], true)
+  const groupRows = js8GroupRows(lists.groups, js8?.inbox ?? [], !lists.avoidAllcall)
 
   /** What a switch that is on but not armed says: the station's reason (`notArmed`). The idle
    *  watchdog's sentence is shared, TX off keeps the switch's own "on, but TX is off" title
@@ -1224,11 +1233,12 @@ export function Js8Cockpit({
   })
   const [adding, setAdding] = useState(false)
   /** "Remove This Station" / "Remove This Group" (UI_Constructor.cpp:1099-1117): a station leaves the
-   *  list until it is heard again; a group is left. (@ALLCALL's is the setting that stops taking
-   *  part in it.) */
+   *  list until it is heard again; a group is left; @ALLCALL's turns on "Do not participate in the
+   *  @ALLCALL group" (`set_avoid_allcall(true)`, :1108), which takes its row away. */
   const removeFromList = (call: string) => {
     if (call.startsWith('@')) {
-      if (call !== ALLCALL) void lists.setGroups?.(lists.groups.filter((g) => g.trim().toUpperCase() !== call))
+      if (call === ALLCALL) void lists.setAvoidAllcall?.(true)
+      else void lists.setGroups?.(lists.groups.filter((g) => g.trim().toUpperCase() !== call))
       return
     }
     changeMarks((m) => {
@@ -1237,8 +1247,13 @@ export function Js8Cockpit({
       return { ...m, added, removedCalls: { ...m.removedCalls, [call]: js8DisplayNow(js8) } }
     })
   }
-  /** "Add New Station or Group…" (UI_Constructor.cpp:1059-1097). */
+  /** "Add New Station or Group…" (UI_Constructor.cpp:1059-1097). @ALLCALL turns "Do not participate
+   *  in the @ALLCALL group" off (`set_avoid_allcall(false)`, :1075), which brings its row back. */
   const addToList = (what: { kind: 'allcall' | 'group' | 'call'; name: string }) => {
+    if (what.kind === 'allcall') {
+      if (lists.avoidAllcall) void lists.setAvoidAllcall?.(false)
+      return
+    }
     if (what.kind === 'group') {
       if (!lists.groups.some((g) => g.trim().toUpperCase() === what.name)) void lists.setGroups?.([...lists.groups, what.name])
       return
@@ -1271,7 +1286,7 @@ export function Js8Cockpit({
       pinned: pins.includes(call),
       onPin: () => togglePin(call),
       onAdd: () => setAdding(true),
-      canRemove: !group || (call !== ALLCALL && lists.setGroups != null && canControl),
+      canRemove: !group || (canControl && (call === ALLCALL ? lists.setAvoidAllcall : lists.setGroups) != null),
       onRemove: () => removeFromList(call),
       blocked,
       canBlock: lists.setRxBlocklist != null && canControl,
@@ -1292,21 +1307,12 @@ export function Js8Cockpit({
     <Js8ListMenu label={menuLabel(t('js8.panel.stations'))} entries={() => js8CallViewEntries(view, changeView, () => setAdding(true), clears('call'))} />
   )
   /** Reply (MessagePanel.cpp:336-350, mainwindow.cpp:145-150): JS8Call's reply text in the compose
-   *  box, the To box and the command cleared, `[MESSAGE]` picked so typing replaces it. Sends nothing. */
+   *  box, the To box and the command cleared, `[MESSAGE]` picked so typing replaces it. Sends nothing.
+   *  It goes in as every other fill does, so nothing goes in while a message of the box's is going
+   *  out (JS8Call's `addMessageText` adds no text while one is queued). */
   const replyTo = (e: Js8InboxEntry) => {
     if (!canControl) return
-    const reply = js8ReplyText(e)
-    setToCall('')
-    setCmdId(null)
-    textRef.current = reply
-    setText(reply)
-    requestAnimationFrame(() => {
-      const el = composeRef.current
-      if (!el) return
-      el.focus({ preventScroll: true })
-      const at = reply.indexOf(JS8_REPLY_PLACEHOLDER)
-      el.setSelectionRange(at, at + JS8_REPLY_PLACEHOLDER.length)
-    })
+    fill(js8ReplyText(e), { to: '', clear: true, select: JS8_REPLY_PLACEHOLDER })
   }
 
   // THE RX PANE (JS8Call's): my offset plus what is addressed to me, a line per message, the end

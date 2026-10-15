@@ -103,9 +103,12 @@ async function renderCockpit() {
   return r
 }
 
-/** Each Inbox row's text, in order (the notes of what a cap removed are not rows of the list). */
+/** Each Inbox row's text, by message id (the notes of what a cap removed are not rows of the list,
+ *  whose table shows the newest first; its third column is the id). */
 const rows = () =>
-  Array.from(document.querySelectorAll('.js8-inbox > .js8-inbox-row')).map((r) => r.textContent ?? '')
+  Array.from(document.querySelectorAll('.js8-inbox-table .js8-inbox-row'))
+    .sort((a, b) => Number(a.querySelectorAll('td')[2]?.textContent) - Number(b.querySelectorAll('td')[2]?.textContent))
+    .map((r) => r.textContent ?? '')
 
 describe('the Inbox says why a held message is not offered at this speed', () => {
   it('on that message\'s row: the frames, the cap, and the speed it goes at', async () => {

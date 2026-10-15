@@ -4099,6 +4099,17 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       unavailableCollections.delete('fieldDay');await click(button('Refresh contest'))
       await untilThroughLapse(`document.querySelector('.fieldday input:not([type=checkbox])')?.value==='K9TEST'`)
     }
+    // The JS8 cockpit takes what its first poll finds as seen; a message to me that comes after it
+    // raises a notice that stays five minutes, its Show button over the content the reachability
+    // sweep below hit-tests. So the station's mail is all there before the view opens, as a
+    // journal's is, and no run depends on whether the first poll came before the fixture grew.
+    if(applicationVersion>=11){
+      js8Fixture.state.activity.push(...Array.from({length:76},(_,i)=>({...js8Fixture.state.activity[i%4],text:`JS8 HISTORY ${i+1}`,atMs:js8Start+i,freqHz:600+i*20})))
+      js8Fixture.state.inbox.push(...Array.from({length:39},(_,i)=>({...js8Fixture.state.inbox[0],id:i+2,text:`JS8 MAIL ${i+1}`})))
+      js8Fixture.state.stations.push(...Array.from({length:38},(_,i)=>({...js8Fixture.state.stations[0],call:`K1JS${i}`})))
+      for(const row of js8Fixture.state.stations)collections.js8Context.meta.history[row.call]??={count:0,lastUnix:null,grid:'',name:'',comment:''}
+      js8Fixture.state.queue.push(...Array.from({length:38},(_,i)=>({...js8Fixture.state.queue[1],display:`JS8 QUEUE ${i+1}`})))
+    }
     await click(button('JS8'))
     if(applicationVersion<11){
       await until(`!!document.querySelector('.remote-view-unavailable')`)
@@ -4106,11 +4117,6 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(js8Queries.length,0)
       assert.equal(applicationTraffic.byCommand.get_js8_state??0,0)
     }else{
-      js8Fixture.state.activity.push(...Array.from({length:76},(_,i)=>({...js8Fixture.state.activity[i%4],text:`JS8 HISTORY ${i+1}`,atMs:js8Start+i,freqHz:600+i*20})))
-      js8Fixture.state.inbox.push(...Array.from({length:39},(_,i)=>({...js8Fixture.state.inbox[0],id:i+2,text:`JS8 MAIL ${i+1}`})))
-      js8Fixture.state.stations.push(...Array.from({length:38},(_,i)=>({...js8Fixture.state.stations[0],call:`K1JS${i}`})))
-      for(const row of js8Fixture.state.stations)collections.js8Context.meta.history[row.call]??={count:0,lastUnix:null,grid:'',name:'',comment:''}
-      js8Fixture.state.queue.push(...Array.from({length:38},(_,i)=>({...js8Fixture.state.queue[1],display:`JS8 QUEUE ${i+1}`})))
       await until(`document.querySelectorAll('.js8-row').length===80 && document.querySelector('.js8-stations')?.textContent.includes('COMPLETE LOG')`)
       assert.equal(await evaluate(`document.querySelectorAll('.js8-cockpit').length`),1)
       assert.equal(await evaluate(`document.querySelectorAll('.js8-cockpit .waterfall-wrap').length`),1)

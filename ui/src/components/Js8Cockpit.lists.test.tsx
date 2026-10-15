@@ -6,7 +6,7 @@
 // clear), the Inbox (reply, delete several, read on pick, filter, sort), the new-message notice and
 // the sounds. These read the DOM; jsdom lays nothing out, so how the tables look is the browser
 // probe's and a human's.
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
 import { Js8Cockpit, type Js8ListSettings } from './Js8Cockpit'
@@ -151,8 +151,10 @@ const lists = (o: Partial<Js8ListSettings> = {}): Js8ListSettings => ({
   mfi: '……',
   sounds: [],
   groups: ['@FUN'],
+  avoidAllcall: false,
   setRxBlocklist: vi.fn(async () => {}),
   setGroups: vi.fn(async () => {}),
+  setAvoidAllcall: vi.fn(async () => {}),
   ...o,
 })
 
@@ -404,6 +406,48 @@ describe('the call list is JS8Call’s', () => {
       fireEvent.submit(again.form!)
     })
     expect(l.setGroups).toHaveBeenCalledWith(['@FUN', '@NET'])
+  })
+
+  // JS8Call's "Remove Station" on @ALLCALL is `set_avoid_allcall(true)` and adding "@ALLCALL" is
+  // `set_avoid_allcall(false)` (UI_Constructor.cpp:1108, :1075): Settings' "Do not participate in the
+  // @ALLCALL group", which takes the row away while it is on.
+  it('takes @ALLCALL off the list when I stop taking part in it, and back when I add it, the setting saved each time', async () => {
+    // App's part in miniature: the setting it saves, handed back down as the list's.
+    const saved: boolean[] = []
+    function WithSetting() {
+      const [avoid, setAvoid] = useState(false)
+      const setAvoidAllcall = async (on: boolean) => {
+        saved.push(on)
+        setAvoid(on)
+      }
+      return <Js8Cockpit snap={snap} panels={fakePanels()} lists={lists({ avoidAllcall: avoid, setAvoidAllcall })} />
+    }
+    render(<WithSetting />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const groups = () => Array.from(document.querySelectorAll('[data-pane="stations"] .js8-group .js8-station-call')).map((b) => b.textContent)
+    expect(groups(), 'control: taking part').toEqual(['@ALLCALL', '@FUN'])
+    const allcall = Array.from(document.querySelectorAll('[data-pane="stations"] .js8-group')).find((r) => r.textContent?.includes('@ALLCALL'))!
+    await pick(allcall.querySelector('.js8-row-menu')!, 'Remove this group')
+    expect(saved, 'not taking part, saved').toEqual([true])
+    await waitFor(() => expect(groups()).toEqual(['@FUN']))
+    await pick(paneMenu('stations'), 'Add new station or group…')
+    const input = await waitFor(() => document.querySelector('.js8-add-form input') as HTMLInputElement)
+    await act(async () => {
+      fireEvent.change(input, { target: { value: '@allcall' } })
+      fireEvent.submit(input.form!)
+    })
+    expect(saved, 'taking part again, saved').toEqual([true, false])
+    await waitFor(() => expect(groups()).toEqual(['@ALLCALL', '@FUN']))
+  })
+
+  it('offers no Remove on @ALLCALL where the setting cannot be written (the Remote page)', async () => {
+    await renderCockpit({ lists: lists({ setAvoidAllcall: undefined }) })
+    const allcall = Array.from(document.querySelectorAll('[data-pane="stations"] .js8-group')).find((r) => r.textContent?.includes('@ALLCALL'))!
+    const entries = await menuEntries(allcall.querySelector('.js8-row-menu')!)
+    expect(entries.find(([n]) => n === 'Remove this group')).toEqual(['Remove this group', true])
   })
 
   it('removes a station until it is heard again, and clears every list after asking', async () => {

@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { Js8Cockpit } from './Js8Cockpit'
 import * as api from '../api'
-import type { AppSnapshot, Js8State, Js8Typeahead } from '../types'
+import type { AppSnapshot, Js8InboxEntry, Js8State, Js8Typeahead } from '../types'
 import { t } from '../i18n'
 import { JS8_COMPOSE_DEFAULTS, type Js8ComposeConfig } from '../js8Compose'
 
@@ -41,14 +41,14 @@ const base = (): Js8State => ({
     { atMs: Date.now() - 30_000, speed: 'normal', freqHz: 1500, snrDb: -3, dtS: -0.12, from: 'W1AW', text: 'W1AW: KD9TAW SNR?', directedToMe: true, mine: false, complete: true, lowConf: false },
   ],
   stations: [{ call: 'W1AW', grid: 'FN31', snrDb: -3, freqHz: 1500, speed: 'normal', lastMs: Date.now(), lastHb: false, lastCq: false, storedMsgs: 0 }],
-  inbox: [],
+  inbox: engine.inbox,
   queue: [],
   pendingReply: null,
   lastError: null,
 })
 
-/** What the engine says of the box's message: `null` while none goes out. */
-const engine = vi.hoisted(() => ({ typeahead: null as Js8Typeahead | null }))
+/** What the engine says of the box's message: `null` while none goes out. And its Inbox. */
+const engine = vi.hoisted(() => ({ typeahead: null as Js8Typeahead | null, inbox: [] as Js8InboxEntry[] }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
   const auto: Record<string, unknown> = {}
@@ -92,6 +92,7 @@ const snap = {
 
 beforeEach(() => {
   engine.typeahead = null
+  engine.inbox = []
   for (const f of [js8Send, js8CallCq, js8Typeahead, js8WordSuggestions]) f.mockClear()
   globalThis.ResizeObserver = class {
     observe() {}
@@ -179,6 +180,25 @@ describe('the compose box while its message goes out (typeahead)', () => {
     await gone()
     await click(q('.js8-cq'))
     expect(box().value, 'control: once it has gone, CQ fills the box').toBe('CQ CQ CQ EN52')
+  })
+
+  it('the Inbox Reply fills nothing while it goes out, and fills the reply once it has gone', async () => {
+    // A message to me, already read, so picking it asks nothing of the engine.
+    engine.inbox = [{ id: 1, from: 'W0IND', to: 'KD9TAW', text: 'HELLO', path: ['W0IND'], state: 'read', atMs: Date.now() - 60_000, freqHz: 1503, snrDb: -8 }]
+    await renderCockpit()
+    await waitFor(() => expect(q('[data-pane="inbox"] .js8-inbox-row')).not.toBeNull())
+    await click(q('[data-pane="inbox"] .js8-inbox-row'))
+    await send('HELLO', { sent: '', unsent: 'KD9TAW: HELLO', locked: false })
+    expect(q<HTMLButtonElement>('.js8-inbox-reply').disabled, 'premise: Reply can be pressed').toBe(false)
+    await click(q('.js8-inbox-reply'))
+    expect(box().value, 'the message going out, unchanged').toBe('KD9TAW: HELLO')
+    expect(js8Typeahead, 'nothing handed to the engine').not.toHaveBeenCalled()
+    await gone()
+    await click(q('.js8-inbox-reply'))
+    expect(box().value, 'control: once it has gone, Reply fills the box').toBe('W0IND MSG [MESSAGE]')
+    // `[MESSAGE]` picked, so typing replaces it.
+    await waitFor(() => expect([box().selectionStart, box().selectionEnd]).toEqual([10, 19]))
+    expect(js8Send, 'Reply sends nothing').toHaveBeenCalledTimes(1)
   })
 
   it('a word picked for an underlined one goes to the engine as typing does', async () => {

@@ -64,8 +64,10 @@ each row has a **⋯** of its own (a right-click on the row opens it too).
   auto-reply is on; **HB** and **✉ n** chips show a heartbeat and messages you hold for it. A
   row's **⋯**: jump to its offset or speed, **Show message inbox**, **Pin to the top**, **Add new
   station or group…** (a call, or a `@GROUP` to join), **Remove this station** (until it is
-  heard again) or **Remove this group** (leaves it), **Block this station** (Settings' RX block
-  list). **Store…** at the end of a row leaves a message at your station for that station, as
+  heard again) or **Remove this group** (leaves it; on `@ALLCALL` it turns on Settings' *Do not
+  participate in the @ALLCALL group* and the row goes, and adding `@ALLCALL` turns it off and
+  brings the row back, as in JS8Call), **Block this station** (Settings' RX block list).
+  **Store…** at the end of a row leaves a message at your station for that station, as
   JS8Call's Store Message does: it waits in the Inbox, from your call, and goes out only when
   the station asks for it (QUERY MSGS, then QUERY MSG n). Storing it sends nothing.
 - **Inbox** — JS8Call's message panel: messages addressed to you, and **MSG TO:** messages you
@@ -73,7 +75,8 @@ each row has a **⋯** of its own (a right-click on the row opens it too).
   click a heading to sort by it. **Messages:** shows one station's. Clicking a message reads
   it; tick several and **Delete** them together (or press Delete). **Reply** puts
   `<path> MSG [MESSAGE]` in the compose box, the path the message came by, with `[MESSAGE]`
-  picked for you to type over; nothing is sent until you send it. A new message to you puts a
+  picked for you to type over; nothing is sent until you send it, and while a message of yours
+  is going out it puts nothing in, as JS8Call adds no text then. A new message to you puts a
   notice up for five minutes, as JS8Call's box stays, with **Show** to open it. A message held
   for one station stays until you delete it, as in JS8Call. One left for a group
   (`MSG TO:@GROUP`, a group you joined) is offered for 48 hours to every station that sends

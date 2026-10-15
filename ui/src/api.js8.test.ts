@@ -95,4 +95,13 @@ describe('JS8 api wrappers', () => {
       { cmd: 'js8_set_groups', args: { groups: ['@FUN', '@NET'] } },
     ])
   })
+
+  it('writes "Do not participate in the @ALLCALL group" for the call list by its own command, never the settings form', async () => {
+    await api.js8SetAvoidAllcall(true)
+    await api.js8SetAvoidAllcall(false)
+    expect(calls).toEqual([
+      { cmd: 'js8_set_avoid_allcall', args: { avoid: true } },
+      { cmd: 'js8_set_avoid_allcall', args: { avoid: false } },
+    ])
+  })
 })

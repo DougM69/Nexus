@@ -34,6 +34,7 @@ import {
   setBlockedCalls as apiSetBlockedCalls,
   js8SetRxBlocklist,
   js8SetGroups,
+  js8SetAvoidAllcall,
   tuneChannel as apiTuneChannel,
   aprsTune,
   setMode as apiSetMode,
@@ -1799,7 +1800,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     [],
   )
 
-  // THE JS8 LISTS' SETTINGS (Settings ▸ JS8) for the cockpit, and its call list's two writes: each
+  // THE JS8 LISTS' SETTINGS (Settings ▸ JS8) for the cockpit, and its call list's three writes: each
   // one field through its own verb, never the settings form, and the mirror patched with what was
   // saved. The hosted page writes neither.
   const js8Lists: Js8ListSettings | undefined = settings
@@ -1811,6 +1812,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         mfi: settings.js8Mfi ?? '\u2026\u2026',
         sounds: settings.js8Sounds ?? [],
         groups: settings.js8Groups ?? [],
+        avoidAllcall: settings.js8AvoidAllcall ?? false,
         setRxBlocklist: remote
           ? undefined
           : async (calls: string[]) => {
@@ -1822,6 +1824,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           : async (groups: string[]) => {
               const saved = await withErrorToast(() => js8SetGroups(groups), t('js8.lists.saveFailed'))
               if (saved) setSettings((prev) => (prev ? { ...prev, js8Groups: saved } : prev))
+            },
+        setAvoidAllcall: remote
+          ? undefined
+          : async (avoid: boolean) => {
+              const saved = await withErrorToast(() => js8SetAvoidAllcall(avoid), t('js8.lists.saveFailed'))
+              if (saved !== null) setSettings((prev) => (prev ? { ...prev, js8AvoidAllcall: saved } : prev))
             },
       }
     : undefined

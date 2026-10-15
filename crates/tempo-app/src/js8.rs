@@ -845,6 +845,15 @@ impl Engine {
         Ok(())
     }
 
+    /// "Remove This Station" on the `@ALLCALL` row and "Add New Station or Group…" with `@ALLCALL`
+    /// (JS8Call's `set_avoid_allcall(true)` and `(false)`, UI_Constructor.cpp:1108, :1075): the
+    /// "Do not participate in the @ALLCALL group" setting both write, reaching the station at once,
+    /// as a Settings save would. The call list leaves `@ALLCALL` out while it is on.
+    pub fn js8_set_avoid_allcall(&mut self, avoid: bool) {
+        self.settings.js8_avoid_allcall = avoid;
+        self.js8_apply_station_config();
+    }
+
     // ---- journal (the pending_msgs.json contract) ----
 
     /// Where the station snapshot (inbox, heard, @ALLCALL replies, next id) is journaled.
@@ -5164,6 +5173,39 @@ mod tests {
         assert_eq!(e.settings().js8_groups, ["@FUN", "@NET"], "nothing changed");
         e.js8_set_groups(vec!["@NET".into()]).expect("leave @FUN");
         assert_eq!(e.js8_station.config().groups, ["@NET"]);
+    }
+
+    /// The call list's "Remove" on `@ALLCALL` and its "Add" of `@ALLCALL` (JS8Call's
+    /// `set_avoid_allcall`, UI_Constructor.cpp:1108, :1075): "Do not participate in the @ALLCALL
+    /// group" lands in Settings, in the station at once, and in the state the cockpit reads.
+    #[test]
+    fn removing_and_adding_allcall_on_the_call_list_sets_do_not_participate() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        let seen = |e: &Engine| {
+            (
+                e.settings().js8_avoid_allcall,
+                e.js8_station.config().avoid_allcall,
+                e.js8_state().presence.map(|p| p.avoid_allcall),
+            )
+        };
+        assert_eq!(
+            seen(&e),
+            (false, false, Some(false)),
+            "control: taking part, as JS8Call ships"
+        );
+        e.js8_set_avoid_allcall(true);
+        assert_eq!(
+            seen(&e),
+            (true, true, Some(true)),
+            "removed: not taking part"
+        );
+        e.js8_set_avoid_allcall(false);
+        assert_eq!(
+            seen(&e),
+            (false, false, Some(false)),
+            "added back: taking part again"
+        );
     }
 }
 

@@ -17,6 +17,7 @@ import {
   sortCallRows,
   sortInbox,
   speedMark,
+  speedName,
   withEot,
   type Js8BandOptions,
   type Js8CallOptions,
@@ -61,7 +62,9 @@ describe('the marks', () => {
     expect(withEot('HELLO', '')).toBe('HELLO  ')
   })
   it('names the speed as JS8Call’s columns do: the first letter, or the number of a JS8 40/60', () => {
-    expect(['slow', 'normal', 'fast', 'turbo'].map((s) => speedMark(s as Js8ActivityRow['speed']))).toEqual(['S', 'N', 'F', 'T'])
+    // JS8Call 3.0's names: Turbo is JS8 40, and JS8 60 is the fifth speed.
+    expect(['slow', 'normal', 'fast', 'turbo', 'ultra'].map((s) => speedMark(s as Js8ActivityRow['speed']))).toEqual(['S', 'N', 'F', '40', '60'])
+    expect(['turbo', 'ultra'].map((s) => speedName(s as Js8ActivityRow['speed']))).toEqual(['JS8 40', 'JS8 60'])
   })
   it('reads the addressee of a directed frame and a call by itself or its base call on a list', () => {
     expect(addresseeOf('W1AW: KD9TAW SNR? ')).toBe('KD9TAW')
@@ -303,6 +306,23 @@ describe('Band activity (displayBandActivity, processIdleActivity)', () => {
     expect(order('submode')).toEqual([900, 1200, 600])
     expect(order('-submode')).toEqual([600, 1200, 900])
   })
+
+  it('sorts JS8 40 and JS8 60 after Fast by speed, JS8 60 the fastest, and marks them by their numbers', () => {
+    const rows = js8BandRows(
+      [
+        frame({ atMs: T0, freqHz: 500, speed: 'ultra', text: 'U ' }),
+        frame({ atMs: T0, freqHz: 700, speed: 'turbo', text: 'T ' }),
+        frame({ atMs: T0, freqHz: 900, speed: 'fast', text: 'F ' }),
+        frame({ atMs: T0, freqHz: 1100, speed: 'slow', text: 'S ' }),
+        frame({ atMs: T0, freqHz: 1300, speed: 'normal', text: 'N ' }),
+      ],
+      band(),
+    )
+    const marks = (s: Parameters<typeof sortBandRows>[1]) => sortBandRows(rows, s).map((r) => speedMark(r.speed))
+    expect(marks('offset'), 'control: by offset').toEqual(['60', '40', 'F', 'S', 'N'])
+    expect(marks('submode')).toEqual(['S', 'N', 'F', '40', '60'])
+    expect(marks('-submode')).toEqual(['60', '40', 'F', 'N', 'S'])
+  })
 })
 
 const heard = (call: string, o: Partial<Js8Heard> = {}): Js8Heard => ({
@@ -425,6 +445,18 @@ describe('the call list (displayCallActivity)', () => {
     expect(order('-timestamp')).toEqual(['N0GRD', 'W1AW', 'K1ABC'])
     expect(order('-snr')).toEqual(['K1ABC', 'W1AW', 'N0GRD'])
     expect(order('callsign', ['W1AW'])).toEqual(['W1AW', 'K1ABC', 'N0GRD'])
+  })
+
+  it('sorts stations heard at JS8 40 and JS8 60 after Fast by speed, JS8 60 the fastest', () => {
+    const rows = js8CallRows(
+      [heard('W1UL', { speed: 'ultra' }), heard('W1TB', { speed: 'turbo' }), heard('W1FA', { speed: 'fast' }), heard('W1SL', { speed: 'slow' })],
+      calls(),
+    )
+    const order = (sort: Parameters<typeof sortCallRows>[1]) =>
+      sortCallRows(rows, sort, { myGrid: 'EN61', grids: new Map(), unreadFrom: new Set() }).map((r) => r.call)
+    expect(order('callsign'), 'control: by callsign').toEqual(['W1FA', 'W1SL', 'W1TB', 'W1UL'])
+    expect(order('submode')).toEqual(['W1SL', 'W1FA', 'W1TB', 'W1UL'])
+    expect(order('-submode')).toEqual(['W1UL', 'W1TB', 'W1FA', 'W1SL'])
   })
 
   it('puts @ALLCALL and my groups on top, in order, ⚑ while one holds an unread message', () => {

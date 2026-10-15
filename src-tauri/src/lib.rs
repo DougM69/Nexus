@@ -17098,6 +17098,17 @@ fn js8_set_groups(
     Ok(eng.settings().js8_groups.clone())
 }
 
+/// The JS8 call list's "Remove" on `@ALLCALL` and "Add" of `@ALLCALL` (JS8Call's
+/// `set_avoid_allcall`): "Do not participate in the @ALLCALL group", that one field, never the
+/// settings form. Answers the setting as saved.
+#[tauri::command(async)]
+fn js8_set_avoid_allcall(state: State<'_, SharedEngine>, avoid: bool) -> Result<bool, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_avoid_allcall(avoid);
+    js8_persist_settings(&eng);
+    Ok(eng.settings().js8_avoid_allcall)
+}
+
 /// Clear the decoded-PSK transcript (display only; the decoder keeps running).
 #[tauri::command(async)]
 fn psk_clear(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
@@ -35612,6 +35623,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             js8_inbox_dropped_clear,
             js8_set_rx_blocklist,
             js8_set_groups,
+            js8_set_avoid_allcall,
             psk_clear,
             psk_afc_reset,
             psk_net,
