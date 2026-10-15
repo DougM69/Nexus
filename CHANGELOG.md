@@ -25,10 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JS8: return to the last used frequency.** Off by default, as in JS8Call. On, opening JS8 tunes
   the rig back to the frequency you last used in JS8 instead of the band's JS8 frequency.
   NEEDS-BENCH: it moves the rig.
-- **JS8: the decode filter.** The new Filter plate in the JS8 header shows what the decoder listens
-  to and opens the waterfall controls: the filter on or off, its centre and width, and Centre on my
-  RX offset. As in JS8Call it is on out of the box, at 1500 Hz and 2000 Hz wide, so JS8 now decodes
-  500–2500 Hz unless you widen it or switch it off (it decoded 200–2900 Hz before).
+- **JS8: the decode filter.** The new Filter plate on the JS8 waterfall shows what the decoder
+  listens to and opens the waterfall controls: the filter on or off, its centre and width, and
+  Centre on my RX offset. As in JS8Call it is on out of the box, at 1500 Hz and 2000 Hz wide, so JS8
+  now decodes 500–2500 Hz unless you widen it or switch it off (it decoded 200–2900 Hz before).
 - **JS8: QSY to centre.** In the same waterfall controls: moves the rig's dial so your TX offset
   sits on the passband centre (1500 Hz unless you change it), for narrow filters and rigs whose
   passband is uneven. Your RX offset and the stations heard move with it. Never while transmitting

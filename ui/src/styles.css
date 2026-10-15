@@ -26998,7 +26998,32 @@ button.sat-chip:disabled {
   grid-template-columns: minmax(90px, 130px) minmax(0, 1fr) auto;
 }
 .js8-hop-row {
-  grid-template-columns: minmax(90px, 130px) auto auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(90px, 130px) 6em 6em minmax(0, 1fr) auto;
+}
+.js8-hop-add {
+  display: grid;
+  grid-template-columns: minmax(90px, 130px) auto;
+  justify-content: start;
+  gap: var(--space-2);
+  align-items: center;
+}
+/* The waterfall controls' dialog stacks its groups' rows with room between them (the Settings
+   panel's groups get theirs from the panel); a button keeps its own width. */
+.ui-dialog.js8-wf-dialog .settings-featgroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.ui-dialog.js8-wf-dialog .settings-featgroup > button {
+  align-self: flex-start;
+}
+/* Two fields side by side (centre and width), or a field and its button (the passband centre
+   and QSY to centre). */
+.js8-wf-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: end;
 }
 /* Muted dashed placeholder pill (band slot etc.) — reads as "not wired yet". */
 .cockpit-ph-pill {

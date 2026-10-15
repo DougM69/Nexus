@@ -86,7 +86,7 @@ reads such a file back. Opening JS8 tunes the first frequency of the list on the
 band. **Return to the last used frequency** (off by default, as in JS8Call) tunes back to
 the frequency you last used in JS8 instead.
 
-**The decode filter.** The **Filter** plate in the header says what the decoder listens to,
+**The decode filter.** The **Filter** plate on the waterfall says what the decoder listens to,
 **Filter 500–2500 Hz** out of the box as JS8Call ships it, and opens the waterfall
 controls. Switch the filter off to decode the whole passband, or set its centre and width;
 **Centre on my RX offset** puts it on the station you are listening to.

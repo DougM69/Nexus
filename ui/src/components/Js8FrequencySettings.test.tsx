@@ -170,12 +170,18 @@ describe('return to the last used frequency and the band schedule', () => {
     expect(last(seen)).toEqual({
       js8Schedule: [{ mhz: 14.078, fromMin: 13 * 60 + 5, untilMin: 14 * 60 + 5, description: '' }],
     })
-    fireEvent.change(screen.getByLabelText(t('settings.js8.schedule.until.aria', { n: 1 })), {
-      target: { value: '02:30' },
-    })
+    const until = screen.getByLabelText(t('settings.js8.schedule.until.aria', { n: 1 })) as HTMLInputElement
+    expect(until.value, '24-hour UTC text').toBe('14:05')
+    fireEvent.change(until, { target: { value: '02:30' } })
+    fireEvent.blur(until)
     expect(last(seen)).toEqual({
       js8Schedule: [{ mhz: 14.078, fromMin: 13 * 60 + 5, untilMin: 150, description: '' }],
     })
+    const n = seen.length
+    fireEvent.change(until, { target: { value: '25:00' } })
+    fireEvent.keyDown(until, { key: 'Enter' })
+    expect(seen, 'not a time: nothing stored').toHaveLength(n)
+    expect(until.value, 'the stored time is back').toBe('02:30')
     vi.restoreAllMocks()
   })
 })

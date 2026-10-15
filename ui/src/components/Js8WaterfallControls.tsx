@@ -6,8 +6,11 @@
 //   · QSY TO CENTRE: the passband centre, and the button that moves the dial so the TX offset sits
 //     on it (narrow filters, rigs with an uneven passband);
 //   · the band schedule's notice when a scheduled frequency change is waiting: Cancel or Change now.
-// A header pill names the filter and opens them in a dialog. JS8Call keeps them in a panel under
-// its waterfall; a dialog keeps the cockpit's shell as it is (header, scope, TX strip, panes, dock).
+// A plate in the waterfall's header row names the filter and opens them in a dialog: JS8Call keeps
+// them with its waterfall, and a dialog keeps the cockpit's shell as it is (header, scope, TX strip,
+// panes, dock). In the header row the plate costs no height (measured in Chrome at 1024-1920 px:
+// the row's height is the same with and without it; in the cockpit header it wrapped that header
+// to two rows at 1280 px).
 //
 // Receive side, except QSY to centre, which MOVES THE RIG: the engine refuses it while anything
 // transmits or a message is going out, and the refusal is shown as it says it. Nothing here keys.
@@ -196,22 +199,24 @@ export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, canControl, 
               {filter.enabled ? t('js8.wf.filter.hint.on', { lo: win.lo, hi: win.hi }) : t('js8.wf.filter.hint.off')}
             </span>
           </div>
-          <HzInput
-            label={t('js8.wf.center.label')}
-            value={filter.centerHz}
-            min={120}
-            max={4880}
-            disabled={!canControl || !filter.enabled}
-            onCommit={(hz) => setFilter({ ...filter, centerHz: hz })}
-          />
-          <HzInput
-            label={t('js8.wf.width.label')}
-            value={filter.widthHz}
-            min={120}
-            max={5000}
-            disabled={!canControl || !filter.enabled}
-            onCommit={(hz) => setFilter({ ...filter, widthHz: hz })}
-          />
+          <div className="js8-wf-pair">
+            <HzInput
+              label={t('js8.wf.center.label')}
+              value={filter.centerHz}
+              min={120}
+              max={4880}
+              disabled={!canControl || !filter.enabled}
+              onCommit={(hz) => setFilter({ ...filter, centerHz: hz })}
+            />
+            <HzInput
+              label={t('js8.wf.width.label')}
+              value={filter.widthHz}
+              min={120}
+              max={5000}
+              disabled={!canControl || !filter.enabled}
+              onCommit={(hz) => setFilter({ ...filter, widthHz: hz })}
+            />
+          </div>
           <button
             type="button"
             className="settings-linkbtn"
@@ -224,22 +229,24 @@ export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, canControl, 
         </div>
         <div className="settings-featgroup">
           <span className="settings-featgroup-title">{t('js8.wf.qsy.title')}</span>
-          <HzInput
-            label={t('js8.wf.qsyCenter.label')}
-            value={center}
-            min={500}
-            max={4000}
-            disabled={!canControl}
-            onCommit={(hz) => void act(() => js8SetQsyCenter(hz), onState)}
-          />
-          <button
-            type="button"
-            className="settings-refresh"
-            disabled={!canControl || sending || Math.round(txOffsetHz) === center}
-            onClick={() => void act(js8QsyToCentre, onState)}
-          >
-            {t('js8.wf.qsy.action')}
-          </button>
+          <div className="js8-wf-pair">
+            <HzInput
+              label={t('js8.wf.qsyCenter.label')}
+              value={center}
+              min={500}
+              max={4000}
+              disabled={!canControl}
+              onCommit={(hz) => void act(() => js8SetQsyCenter(hz), onState)}
+            />
+            <button
+              type="button"
+              className="settings-refresh"
+              disabled={!canControl || sending || Math.round(txOffsetHz) === center}
+              onClick={() => void act(js8QsyToCentre, onState)}
+            >
+              {t('js8.wf.qsy.action')}
+            </button>
+          </div>
           <span className="settings-hint">{t('js8.wf.qsy.hint', { hz: center, tx: Math.round(txOffsetHz) })}</span>
         </div>
         {hop && (

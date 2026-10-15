@@ -26,6 +26,8 @@ import {
 
 /** The dial the refusal shows as an example: a frequency, an invariant token. */
 const MHZ_EXAMPLE = '7.078'
+/** The time fields' placeholder: the format, an invariant token. */
+const HHMM_PLACEHOLDER = 'HH:MM'
 
 export type Js8FrequencyPatch = Partial<
   Pick<Settings, 'js8Frequencies' | 'js8ReturnToLastDial' | 'js8BandHop' | 'js8Schedule'>
@@ -98,6 +100,50 @@ function MhzInput({
       inputMode="decimal"
       aria-label={ariaLabel}
       value={draft ?? value.toFixed(6)}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') commit()
+      }}
+      autoComplete="off"
+    />
+  )
+}
+
+/** A UTC time of day as 24-hour HH:MM text, committed on blur or Enter; text that is not a time
+ *  puts the stored one back. Plain text, not `type="time"`: the native control draws the computer's
+ *  12-hour clock in some locales, and these are UTC schedule times (JS8Call shows hh:mm). */
+function HhmmInput({
+  value,
+  ariaLabel,
+  title,
+  disabled,
+  onCommit,
+}: {
+  value: number
+  ariaLabel: string
+  title?: string
+  disabled?: boolean
+  onCommit: (min: number) => void
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const commit = () => {
+    if (draft === null) return
+    const min = hhmmToMinutes(draft)
+    if (min !== null && min !== value) onCommit(min)
+    setDraft(null)
+  }
+  return (
+    <input
+      disabled={disabled}
+      className="settings-input js8-hhmm"
+      type="text"
+      inputMode="numeric"
+      aria-label={ariaLabel}
+      title={title}
+      placeholder={HHMM_PLACEHOLDER}
+      maxLength={5}
+      value={draft ?? minutesToHhmm(value)}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
@@ -335,28 +381,18 @@ export function Js8FrequencySettings({ form, onChange, disabled }: Props) {
               disabled={disabled}
               onCommit={(mhz) => editHop(i, { mhz })}
             />
-            <input
+            <HhmmInput
+              value={r.fromMin}
+              ariaLabel={t('settings.js8.schedule.from.aria', { n: i + 1 })}
               disabled={disabled}
-              className="settings-input"
-              type="time"
-              aria-label={t('settings.js8.schedule.from.aria', { n: i + 1 })}
-              value={minutesToHhmm(r.fromMin)}
-              onChange={(e) => {
-                const m = hhmmToMinutes(e.target.value)
-                if (m !== null) editHop(i, { fromMin: m })
-              }}
+              onCommit={(fromMin) => editHop(i, { fromMin })}
             />
-            <input
-              disabled={disabled}
-              className="settings-input"
-              type="time"
-              aria-label={t('settings.js8.schedule.until.aria', { n: i + 1 })}
+            <HhmmInput
+              value={r.untilMin}
+              ariaLabel={t('settings.js8.schedule.until.aria', { n: i + 1 })}
               title={t('settings.js8.schedule.until.title')}
-              value={minutesToHhmm(r.untilMin)}
-              onChange={(e) => {
-                const m = hhmmToMinutes(e.target.value)
-                if (m !== null) editHop(i, { untilMin: m })
-              }}
+              disabled={disabled}
+              onCommit={(untilMin) => editHop(i, { untilMin })}
             />
             <input
               disabled={disabled}
@@ -381,7 +417,7 @@ export function Js8FrequencySettings({ form, onChange, disabled }: Props) {
             </button>
           </div>
         ))}
-        <div className="js8-freq-row">
+        <div className="js8-hop-add">
           <input
             disabled={disabled}
             className="settings-input"

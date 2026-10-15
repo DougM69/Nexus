@@ -1242,15 +1242,6 @@ export function Js8Cockpit({
               <span className="rtty-afc-pill js8-multi" title={t('js8.header.rx.title', { n: rxCount })}>
                 {RX_PLATE} {rxCount}/4
               </span>
-              {/* JS8Call's waterfall controls: the decode filter and QSY to centre (its own file). */}
-              <Js8WaterfallControls
-                js8={js8}
-                rxOffsetHz={snap.radio.rxOffsetHz}
-                txOffsetHz={snap.radio.txOffsetHz}
-                canControl={canControl}
-                active={active}
-                onState={setJs8}
-              />
               {sending && (
                 // ⚠️ NOT MIGRATED — the transmit-path deferral: this tooltip states what Stop TX
                 // does to a frame in flight. It moves in the JS8 TX batch with the sweeps re-run.
@@ -1342,6 +1333,18 @@ export function Js8Cockpit({
           keyed={sending || (snap?.radio.tuning ?? false)}
           rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
           txOffsetHz={snap?.radio.txOffsetHz ?? 1500}
+          // JS8Call's waterfall controls (the decode filter, QSY to centre), on its waterfall, as
+          // JS8Call keeps them: a plate naming the filter opens them (its own file).
+          headerExtra={
+            <Js8WaterfallControls
+              js8={js8}
+              rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
+              txOffsetHz={snap?.radio.txOffsetHz ?? 1500}
+              canControl={canControl}
+              active={active}
+              onState={setJs8}
+            />
+          }
           onTune={(hz, target) => {
             if (!canControl) {
               if (target === 'rx') receiverSettings.tuneRx(hz)
