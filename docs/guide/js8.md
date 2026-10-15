@@ -43,9 +43,18 @@ both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
 - **Stations** — everyone heard, with grid, SNR, offset, speed, age, and chips for a
   recent heartbeat, a recent CQ, and any messages you hold for them. Click a callsign to
   address it; the five quick buttons send **SNR? · GRID? · INFO? · HEARING? · QUERY MSGS**
-  to that station, which answers by itself if its auto-reply is on.
+  to that station, which answers by itself if its auto-reply is on. **Store…** at the end of a
+  row leaves a message at your station for that station, as JS8Call's Store Message does: it
+  waits in the Inbox, from your call, and goes out only when the station asks for it (QUERY
+  MSGS, then QUERY MSG n). Storing it sends nothing.
 - **Inbox** — messages addressed to you, and **MSG TO:** messages you are holding for
-  someone else until they collect them (store and forward). Mark read, delete.
+  someone else until they collect them (store and forward). Mark read, delete. A message held
+  for one station stays until you delete it, as in JS8Call. One left for a group
+  (`MSG TO:@GROUP`, a group you joined) is offered for 48 hours to every station that sends
+  QUERY MSGS to the group, and handed to each of them once. The inbox keeps at most 100 messages
+  (and 64 KB) of yours and as many held for others; when it is full, a message already handed
+  over goes first, then the oldest, and a note at the top of the Inbox says which message went
+  and why until you press **Clear notes**.
 - **Log** — the log strip, prefilled from the station you last addressed. A JS8 QSO logs
   as `MFSK` / `JS8` in ADIF.
 - **Boxes** — up to six panes of [Conditions](connect.md) among these, from ⊞ Panels ▸
@@ -80,9 +89,12 @@ so every frame identifies you.
 Everything automatic is gated twice. The first act is the **TX On** latch in the header —
 never remembered across launches. The second is the switch for that kind of transmission:
 **AUTOREPLY** (answers SNR?, GRID?, INFO?, STATUS?, HEARING?, QUERY MSGS addressed to you,
+QUERY CALL — "YES -12 (5M)", the SNR and how long ago you last heard the station asked about,
+on @ALLCALL too but once per station in 15 minutes — and AGN? with your last transmission again,
 and acknowledges with an ACK a MSG to you or to a group you joined, or a MSG TO: you hold for
 another station, as JS8Call does; with it off, the answer, the ACK or a relay is put in the
-message box for you to send instead, and nothing keys by itself),
+message box for you to send instead, and nothing keys by itself; QUERY CALL and QUERY MSGS are
+not answered at all with it off, as in JS8Call),
 **RELAY** (passes on messages routed through your callsign and holds MSG TO: traffic),
 **HB ACK** (answers heartbeats with your report, but only while **HB** and **AUTOREPLY** are on
 as well, as in JS8Call) — those three persist in Settings, at
@@ -90,6 +102,9 @@ JS8Call's defaults (on, on, off) — and **HB**, the heartbeat schedule, which i
 session-only. A chip lights only when what it switches can go out now. One that is on but
 cannot says why when you point at it (TX is off, the idle watchdog holds it, or it needs
 another switch), and nothing keys.
+Replies about held messages read as JS8Call 3.0's: `YES MSG ID 4 +2` says two more wait after
+message 4, a delivery ends `NEXT MSG ID 5` when another waits, and a heartbeat acknowledgement
+carries `MSG ID 4 +2)`, as JS8Call 3.0.3 sends it.
 Every automatic reply first asks in the dock, as JS8Call asks: "A transmission is queued for
 autoreply … would you like to send this transmission?" **Yes** sends it in the next period; **No**
 sends nothing, and so does no answer, which is No after 89 seconds. A message you hold for
