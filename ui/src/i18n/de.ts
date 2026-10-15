@@ -5307,6 +5307,12 @@ export const DE: PartialCatalog = {
   "settings.js8.status.hint": "Was eine STATUS?-Anfrage zurückbekommt. Leer lassen für die JS8Call-Form: IDLE, die Leerlaufminuten und der Programmname.",
   "settings.js8.groups.label": "Gruppen",
   "settings.js8.groups.hint": "Die @GROUP-Namen, zu denen du gehörst, durch Kommas getrennt — eine Nachricht an eine davon gilt als an dich gerichtet. @ALLCALL sind alle und ist immer an.",
+  // JS8's spotting and APRS-IS block: MACHINE TRANSLATION, for a native speaker to check.
+  "settings.js8.spotting.title": "Spotting und APRS-IS",
+  "settings.js8.spotAprs.label": "@APRSIS-Nachrichten an APRS-IS spotten",
+  "settings.js8.spotAprs.hint": "Standardmäßig an, wie in JS8Call, solange der Schalter PSK Reporter an ist. Eine Station, die @APRSIS GRID sendet, erscheint mit diesem Locator auf der APRS-Karte, und der Text nach @APRSIS CMD geht als Rohpaket an APRS-IS. Beides geht unter deinem Rufzeichen hinaus: Nexus meldet sich bei APRS-IS mit dem daraus berechneten Passcode an, wie das iGate, und speichert nichts.",
+  "settings.js8.spotNever.label": "Diese Rufzeichen nie spotten",
+  "settings.js8.spotNever.hint": "Solange der Schalter PSK Reporter an ist, werden die Stationen, die du in JS8 hörst, wie in JS8Call gespottet: an PSK Reporter und an JS8NET, das Spotting-Netz von JS8Call, zusammen mit den Befehlen an eine @Gruppe. Ein Rufzeichen auf dieser durch Kommas getrennten Liste, wie gehört oder als Grundrufzeichen, wird an kein Netz gespottet. Standardmäßig leer, wie in JS8Call.",
   "settings.sstv.legend": "SSTV",
   "settings.sstv.receiving.title": "Empfangen",
   "settings.sstv.rxAutoArm.label": "Empfang starten, wenn SSTV geöffnet wird",

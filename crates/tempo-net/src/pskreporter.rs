@@ -38,6 +38,11 @@
 //!   loss detection; a constant is accepted (WSJT-X itself increments, which is
 //!   a harmless superset of this behavior).
 //! - Spot `time` is Unix seconds (the "flowStartSeconds" IE).
+//! - The sender record carries the spotted station's locator and an information source, as
+//!   WSJT-X's and JS8Call 3.0.3's do (`appendSIDTo`: senderLocator, then informationSource 1,
+//!   "automatically extracted"). A spot with no known locator sends it empty, which is what
+//!   WSJT-X sends for every decode that is not a CQ. The frequency stays 4 bytes (theirs is 5):
+//!   the server reads the width the template declares, and 4 bytes reach 4.29 GHz.
 //!
 //! Everything here builds bytes; tests assert structure and bind loopback only.
 
@@ -68,6 +73,8 @@ pub struct Spot {
     pub snr: i32,
     /// Mode string, e.g. "FT8".
     pub mode: String,
+    /// The spotted station's Maidenhead locator; empty when none was heard.
+    pub grid: String,
     /// Reception time, Unix seconds (UTC).
     pub time_secs: u32,
 }
@@ -215,16 +222,19 @@ fn rx_template_set() -> Vec<u8> {
 
 /// The sender/spot template definition.
 ///
-/// Declares: senderCallsign, frequency, snr, mode, flowStartSeconds.
+/// Declares: senderCallsign, frequency, snr, mode, senderLocator, informationSource,
+/// flowStartSeconds — WSJT-X's and JS8Call's field list and order.
 fn tx_template_set() -> Vec<u8> {
     const ENTERPRISE: u32 = 30351;
     // For standard IEs (no enterprise bit) we still emit enterprise ids to keep
     // a single code path; PSK Reporter accepts the WSJT-X layout.
-    let fields: [(u16, u16); 5] = [
+    let fields: [(u16, u16); 7] = [
         (0x8001, 0xFFFF), // senderCallsign (variable string)
         (0x8005, 4),      // frequency (u32 Hz; WSJT-X uses up to 8, see note)
         (0x8006, 1),      // snr (i8)
         (0x800A, 0xFFFF), // mode (variable string; 0x8007 is iMD, NOT mode)
+        (0x8003, 0xFFFF), // senderLocator (variable string, empty when unknown)
+        (0x800B, 1),      // informationSource (u8)
         (150, 4),         // flowStartSeconds (standard IE 150, u32)
     ];
     plain_template_set(TEMPLATE_TX, ENTERPRISE, &fields)
@@ -293,6 +303,10 @@ fn rx_data_set(rx_call: &str, rx_grid: &str, software: &str) -> Vec<u8> {
     data_set(TEMPLATE_RX, &rec)
 }
 
+/// `informationSource` 1: "automatically extracted" from a decode (`REPORTER_SOURCE_AUTOMATIC`),
+/// the value WSJT-X and JS8Call send for every spot.
+const SOURCE_AUTOMATIC: u8 = 1;
+
 /// All spot records as a single data set keyed to the sender template id.
 fn tx_data_set(spots: &[Spot]) -> Vec<u8> {
     let mut rec = Vec::new();
@@ -301,6 +315,8 @@ fn tx_data_set(spots: &[Spot]) -> Vec<u8> {
         rec.extend_from_slice(&(spot.freq_hz as u32).to_be_bytes());
         rec.push(clamp_i8(spot.snr) as u8);
         push_str(&mut rec, &spot.mode);
+        push_str(&mut rec, &spot.grid);
+        rec.push(SOURCE_AUTOMATIC);
         rec.extend_from_slice(&spot.time_secs.to_be_bytes());
     }
     data_set(TEMPLATE_TX, &rec)
@@ -334,13 +350,15 @@ mod tests {
                 freq_hz: 14_074_000,
                 snr: -7,
                 mode: "FT8".to_string(),
+                grid: String::new(),
                 time_secs: 1_577_836_800,
             },
             Spot {
                 call: "VE3ABC".to_string(),
                 freq_hz: 14_074_500,
                 snr: -15,
-                mode: "FT8".to_string(),
+                mode: "JS8".to_string(),
+                grid: "FN04TV".to_string(),
                 time_secs: 1_577_836_815,
             },
         ]
@@ -357,9 +375,10 @@ mod tests {
     fn tx_template_declares_the_pskreporter_mode_field() {
         // Field ids per PSK Reporter's registry (enterprise 30351), as used by
         // WSJT-X's PSKReporter.cpp: 1=senderCallsign, 5=frequency, 6=sNR,
-        // 10=mode, plus standard IE 150=flowStartSeconds. Field 7 is iMD — a
-        // PSK31 distortion metric; declaring the mode string there leaves the
-        // report modeless and PSK Reporter displays its default (PSK31).
+        // 10=mode, 3=senderLocator, 11=informationSource, plus standard IE
+        // 150=flowStartSeconds. Field 7 is iMD — a PSK31 distortion metric;
+        // declaring the mode string there leaves the report modeless and PSK
+        // Reporter displays its default (PSK31).
         let set = tx_template_set();
         assert_eq!(read_u16(&set, 0), SET_ID_TEMPLATE);
         assert_eq!(read_u16(&set, 4), TEMPLATE_TX);
@@ -374,7 +393,10 @@ mod tests {
                 off += 4; // enterprise number
             }
         }
-        assert_eq!(ids, vec![0x8001, 0x8005, 0x8006, 0x800A, 150]);
+        assert_eq!(
+            ids,
+            vec![0x8001, 0x8005, 0x8006, 0x800A, 0x8003, 0x800B, 150]
+        );
     }
 
     #[test]
@@ -465,20 +487,32 @@ mod tests {
         let bytes = find_data_set(&dgram, TEMPLATE_TX);
         let body = &bytes[4..];
         let mut off = 0;
-        // First spot.
+        // First spot: no locator heard, so an empty string, as WSJT-X sends one.
         assert_eq!(read_str(body, &mut off), "W1AW");
         assert_eq!(read_u32(body, off), 14_074_000);
         off += 4;
         assert_eq!(body[off] as i8, -7);
         off += 1;
         assert_eq!(read_str(body, &mut off), "FT8");
+        assert_eq!(read_str(body, &mut off), "");
+        assert_eq!(body[off], 1, "informationSource: automatically extracted");
+        off += 1;
         assert_eq!(read_u32(body, off), 1_577_836_800);
         off += 4;
-        // Second spot.
+        // Second spot, with its locator.
         assert_eq!(read_str(body, &mut off), "VE3ABC");
         assert_eq!(read_u32(body, off), 14_074_500);
         off += 4;
         assert_eq!(body[off] as i8, -15);
+        off += 1;
+        assert_eq!(read_str(body, &mut off), "JS8");
+        assert_eq!(read_str(body, &mut off), "FN04TV");
+        assert_eq!(body[off], 1);
+        off += 1;
+        assert_eq!(read_u32(body, off), 1_577_836_815);
+        off += 4;
+        // Nothing after the last record but the set's NUL padding.
+        assert!(body[off..].iter().all(|&b| b == 0));
     }
 
     #[test]

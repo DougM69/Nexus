@@ -13049,8 +13049,15 @@ impl RadioLoop {
             let _ = rig.stop_voice_mem();
         }
 
-        // PSK Reporter: flush accumulated spots periodically (outside the lock).
+        // PSK Reporter: flush accumulated spots periodically (outside the lock). JS8's spots are
+        // the engine's (`take_js8_psk_spots`: the stations JS8Call would spot, with their grids),
+        // taken into the same buffer when the flush is due, so they ride the same upload.
         if let Some(reporter) = sinks.psk {
+            if now - station.last_psk_flush >= PSK_FLUSH_SECS * 1000.0 {
+                station
+                    .psk_spots
+                    .extend(engine_lock(engine).take_js8_psk_spots());
+            }
             if !station.psk_spots.is_empty()
                 && now - station.last_psk_flush >= PSK_FLUSH_SECS * 1000.0
             {
@@ -13905,7 +13912,9 @@ fn emit_rx_decodes(
                 d.qual < 0.17, // the stock low-confidence line
             ));
         }
-        if sinks.psk.is_some() {
+        // A JS8 line is not FT8 grammar (`CALL: …`, frames of a longer message): its spots come
+        // from the engine, which reads JS8's messages as JS8Call does (`take_js8_psk_spots`).
+        if sinks.psk.is_some() && eng.tier() != Tier::Js8 {
             if let Some(spot) = build_spot(&d.message, d.snr, d.freq, tier, cur_dial, now_secs) {
                 psk_spots.push(spot);
             }
@@ -13951,6 +13960,7 @@ fn build_spot(
         freq_hz: cur_dial + freq as u64,
         snr,
         mode: mode.to_string(),
+        grid: String::new(),
         time_secs: now_secs,
     })
 }

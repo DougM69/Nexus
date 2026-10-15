@@ -107,10 +107,32 @@ frame in flight complete, as in the FT8 screen; what is still queued, the rest o
 included, is dropped, not sent when TX comes back on. So is what waits while the dial is outside
 your license privileges, and the screen says so.
 
+## Spotting and APRS-IS
+
+With the **PSK Reporter** switch on
+([Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds))
+and a real callsign set, JS8 spots the way JS8Call's SPOT button does:
+
+- Every station you hear — a heartbeat, a CQ, a directed message, the first frame of a plain
+  message — goes to PSK Reporter as a JS8 spot, with the grid it sent or the one it sent before.
+  The same station heard again on the same band within the hour updates its spot rather than
+  adding one.
+- The same stations, and every command sent to a @group (heartbeats, CQs, @JS8NET and @APRSIS
+  messages), go to JS8NET, JS8Call's spotting network, once a minute.
+- **Spot @APRSIS messages to APRS-IS** (on by default, as in JS8Call): a station heard sending
+  `@APRSIS GRID` is put on the APRS map at that locator, and the text after `@APRSIS CMD` goes to
+  APRS-IS as a raw packet. They go up under your callsign: Nexus logs in to APRS-IS with the
+  passcode worked out from it, as the iGate does, only while JS8 is open and something is waiting
+  to go, and stores nothing.
+- **Never spot these callsigns** keeps a station off all three networks.
+
+A contest that allows spots only over RF (Winter Field Day) stops all of it while it runs, as it
+stops the PSK Reporter uploads.
+
 ## Compatibility
 
 On the air: JS8Call 2.2 and later, and JS8Call-improved, at Slow, Normal, Fast and Turbo.
-Not implemented: the "JS8 60" / Ultra speed (JS8Call has offered it since 3.0), and the
-APRS-IS and @JS8NET internet gateways. The full protocol reference is
+Not implemented: the "JS8 60" / Ultra speed (JS8Call has offered it since 3.0), and 3.0's
+relay of APRS-IS messages to heard stations. The full protocol reference is
 [JS8Call's source](https://github.com/js8call/js8call), read as the specification; see
 NOTICE.

@@ -4023,6 +4023,11 @@ export interface Settings {
   js8Status: string
   /** Joined @GROUP names the station answers directed traffic for. */
   js8Groups: string[]
+  /** JS8Call's "spot @APRSIS messages to APRS-IS" (default on): a heard @APRSIS GRID becomes an
+   * APRS-IS position and an @APRSIS CMD a raw packet, under this callsign. Needs PSK Reporter on. */
+  js8SpotAprs: boolean
+  /** JS8Call's "never spot these callsigns": sent to no network, and relayed no APRS message. */
+  js8SpotNever: string[]
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number

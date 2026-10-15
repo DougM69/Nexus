@@ -474,6 +474,7 @@ impl Engine {
             }
             let actions = self.js8_station.on_event(&ev, now_ms);
             self.js8_handle_actions(actions);
+            self.js8_links_on_event(&ev, now_ms);
         }
     }
 

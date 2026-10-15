@@ -1342,6 +1342,20 @@ nothing until you enable TX in the cockpit, every session.
   `@JS8NET` cannot be joined, as in JS8Call: Settings will not save while either is in
   this field, and says so.
 
+**Spotting and APRS-IS**
+
+Spotting itself follows the **PSK Reporter** switch in
+[Integrations & Feeds](#integrations--feeds), as JS8Call's SPOT button carries PSK Reporter
+and JS8NET together: while it is on, the stations you hear on JS8 go to PSK Reporter and to
+JS8NET, and commands sent to a `@group` go to JS8NET. The [JS8 chapter](js8.md) has the details.
+
+- **Spot @APRSIS messages to APRS-IS** — on by default, as in JS8Call. A station heard sending
+  `@APRSIS GRID` is put on the APRS map at that locator, and the text after `@APRSIS CMD` goes
+  to APRS-IS as a raw packet, under your callsign; Nexus logs in to APRS-IS with the passcode
+  worked out from it, as the iGate does.
+- **Never spot these callsigns** — comma-separated, empty by default, as in JS8Call. A station
+  on it, as heard or by its base call, is spotted to no network.
+
 ### SSTV
 
 ![The SSTV group: "Start receiving when SSTV opens" on, ISS SSTV auto-arm off, Transmit mode set to "Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)", and an empty Transmit power percentage box.](../img/manual/settings-sstv.webp)

@@ -6063,6 +6063,12 @@ export const FR: PartialCatalog = {
   "settings.js8.status.hint": "Ce que renvoie une requête STATUS?. Laissez vide pour la forme JS8Call : IDLE, les minutes d’inactivité et le nom de l’application.",
   "settings.js8.groups.label": "Groupes",
   "settings.js8.groups.hint": "Les noms @GROUP dont vous faites partie, séparés par des virgules — un message à l’un d’eux compte comme adressé à vous. @ALLCALL, c’est tout le monde, et il est toujours actif.",
+  // JS8's spotting and APRS-IS block: MACHINE TRANSLATION, for a native speaker to check.
+  "settings.js8.spotting.title": "Spots et APRS-IS",
+  "settings.js8.spotAprs.label": "Spotter les messages @APRSIS vers APRS-IS",
+  "settings.js8.spotAprs.hint": "Activé par défaut, comme dans JS8Call, tant que l’interrupteur PSK Reporter est activé. Une station entendue envoyant @APRSIS GRID apparaît sur la carte APRS à ce locator, et le texte qui suit @APRSIS CMD part vers APRS-IS comme paquet brut. Les deux partent sous votre indicatif : Nexus se connecte à APRS-IS avec le code calculé à partir de celui-ci, comme l’iGate, et n’enregistre rien.",
+  "settings.js8.spotNever.label": "Ne jamais spotter ces indicatifs",
+  "settings.js8.spotNever.hint": "Tant que l’interrupteur PSK Reporter est activé, les stations entendues en JS8 sont spottées comme dans JS8Call : vers PSK Reporter et vers JS8NET, le réseau de spots de JS8Call, avec les commandes envoyées à un @groupe. Un indicatif de cette liste séparée par des virgules, tel qu’entendu ou par son indicatif de base, n’est spotté vers aucun réseau. Vide par défaut, comme dans JS8Call.",
   "settings.jt65.hint": "Le mode classique des signaux faibles et du rebond lunaire, décodé et émis. Les messages sont au format ancien de 22 caractères, pas celui de 37 caractères qu'utilisent FT8 et consorts.",
   "settings.jt65.legend": "JT65 — EME classique",
   "settings.jt65.submode.a": "A — standard HF, le plus étroit",

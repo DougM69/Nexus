@@ -93,6 +93,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   follow the call and the antenna as they move. With no call in the entry, a station Nexus cannot
   place, or no grid of your own there is no line and no number, and a rotator that does not report
   its position gets the line without a number. Nexus Remote is unchanged.
+- **JS8 spots the stations you hear, as JS8Call does.** With the PSK Reporter switch on, every
+  station heard on JS8 (a heartbeat, a CQ, a directed message, the first frame of a plain message)
+  now shows on PSK Reporter as a JS8 spot with its grid, where before almost none did. The same
+  stations, and every command sent to a @group, go to JS8NET, JS8Call's spotting network, once a
+  minute. Spots of every mode now carry the station's grid field to PSK Reporter, empty where none
+  was heard, as WSJT-X sends it.
+- **The JS8 @APRSIS gateway.** A station heard sending `@APRSIS GRID` is put on the APRS map at
+  that locator, and the text after `@APRSIS CMD` goes to APRS-IS as a raw packet, under your
+  callsign: Nexus logs in to APRS-IS with the passcode worked out from your callsign, as the iGate
+  does, only while JS8 is open and something waits to go. On by default, as in JS8Call; switch it
+  off in Settings ▸ Digital ▸ JS8. **Never spot these callsigns** there keeps a station off PSK
+  Reporter, JS8NET and APRS-IS. NEEDS-BENCH: seeing the spots arrive needs a station on the air.
 
 ### Changed
 

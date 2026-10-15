@@ -7812,6 +7812,15 @@ export const EN = {
   'settings.js8.groups.label': 'Groups',
   'settings.js8.groups.hint':
     'The @GROUP names you belong to, comma-separated — a message to one of them counts as addressed to you. @ALLCALL is everyone and is always on.',
+  // JS8Call's SPOT block. `@APRSIS GRID` and `@APRSIS CMD` are JS8 wire words;
+  // APRS-IS, JS8NET, PSK Reporter, JS8Call and iGate are names. None is translated.
+  'settings.js8.spotting.title': 'Spotting and APRS-IS',
+  'settings.js8.spotAprs.label': 'Spot @APRSIS messages to APRS-IS',
+  'settings.js8.spotAprs.hint':
+    'On by default, as in JS8Call, while the PSK Reporter switch is on. A station heard sending @APRSIS GRID is put on the APRS map at that locator, and the text after @APRSIS CMD goes to APRS-IS as a raw packet. Both go up under your callsign: Nexus logs in to APRS-IS with the passcode worked out from it, as the iGate does, and stores nothing.',
+  'settings.js8.spotNever.label': 'Never spot these callsigns',
+  'settings.js8.spotNever.hint':
+    "While the PSK Reporter switch is on, the stations you hear on JS8 are spotted as JS8Call spots them: to PSK Reporter and to JS8NET, JS8Call's spotting network, along with the commands sent to a @group. A callsign on this comma-separated list, as heard or by its base call, is spotted to no network. Empty by default, as in JS8Call.",
 
   // ── Settings ▸ SSTV ─────────────────────────────────────────────────────────────────
   // The transmit-mode picker's own rows are built from `SSTV_TX_MODES` — a mode name, its

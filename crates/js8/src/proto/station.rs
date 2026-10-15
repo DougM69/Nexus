@@ -1149,6 +1149,12 @@ impl Station {
         }
     }
 
+    /// My INFO as the station answers `INFO?` with it, its grid macros expanded: what JS8Call's
+    /// spot client announces as this station's INFO (`spotSetLocal`, mainwindow.cpp:5543-5547).
+    pub fn info_text(&self) -> String {
+        self.expand_grid_macros(&self.cfg.info)
+    }
+
     /// JS8Call's `<MYGRID4>` and `<MYGRID12>` (`buildMacroValues`, mainwindow.cpp:7024-7025): the
     /// locator's first 4 and first 12 characters, upper-cased, stand wherever the token does
     /// (`replaceMacros`, :181-194, which walks its map in key order, `<MYGRID12>` first). JS8Call's

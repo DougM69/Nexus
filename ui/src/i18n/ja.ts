@@ -4922,6 +4922,12 @@ export const JA: PartialCatalog = {
   "settings.js8.status.hint": "STATUS? への返答。空欄なら JS8Call の形式(IDLE、アイドル分数、アプリ名)を送ります。",
   "settings.js8.groups.label": "グループ",
   "settings.js8.groups.hint": "所属する @GROUP 名をカンマ区切りで — そのグループ宛てのメッセージは自局宛てとして扱います。@ALLCALL は全局宛てで常にオンです。",
+  // JS8's spotting and APRS-IS block: MACHINE TRANSLATION, for a native speaker to check.
+  "settings.js8.spotting.title": "スポットと APRS-IS",
+  "settings.js8.spotAprs.label": "@APRSIS メッセージを APRS-IS へスポット",
+  "settings.js8.spotAprs.hint": "JS8Call と同じく既定はオン(PSK Reporter のスイッチがオンのとき)。@APRSIS GRID を送った局はそのロケーターで APRS マップに載り、@APRSIS CMD の後のテキストは生パケットとして APRS-IS へ送られます。どちらも自局のコールサインで送られます:Nexus は iGate と同じく、コールサインから算出したパスコードで APRS-IS にログインし、何も保存しません。",
+  "settings.js8.spotNever.label": "次のコールサインは決してスポットしない",
+  "settings.js8.spotNever.hint": "PSK Reporter のスイッチがオンの間、JS8 で受信した局は JS8Call と同じようにスポットされます:PSK Reporter と、JS8Call のスポットネットワークである JS8NET へ。@グループ宛てのコマンドも JS8NET へ送られます。このカンマ区切りのリストにあるコールサインは(受信したままでも基本コールサインでも)どのネットワークにもスポットされません。JS8Call と同じく既定は空です。",
   "settings.sstv.legend": "SSTV",
   "settings.sstv.receiving.title": "受信",
   "settings.sstv.rxAutoArm.label": "SSTVを開いたら受信開始",
