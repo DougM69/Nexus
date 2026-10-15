@@ -131,6 +131,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exports the Club Cabrillo before Contest over?, while Contest mode is still on, because its button
   is on the Contest screen only then. The guide's page on ending a contest now says the last two for
   every club contest.
+- **FT8 and FT4 overs now start and end on the slot clock, as WSJT-X's do.** An over used to run
+  from the moment the radio keyed, so anything that made the key late (a CAT exchange at the start
+  of the slot, a decode still running, a busy computer) moved every tone late by the same amount and
+  cut the end of the over at the next boundary. The tones are now placed on the slot clock, as
+  WSJT-X places them: a late key skips the first symbols and the over still ends on time, and an
+  on-time over is unchanged (its tones start 0.5 s into the slot). The over now ends where WSJT-X
+  ends it: FT8's audio stops 13.64 s into the slot and PTT drops at 13.84 s (it dropped at about
+  13.39 s, 0.45 s before WSJT-X, with half the room for the sound card's delay); FT4's audio stops
+  at 6.04 s and PTT drops at 6.24 s (it held about 0.56 s longer). FT4 keeps its tones 0.5 s into
+  the slot. A decode still running when your slot starts no longer delays your over: Nexus builds
+  the over it is about to send before that decode begins, and keys it on time; an over you change in
+  the last seconds of the slot (a new TX frequency or message) is built then and can still wait,
+  with its tones on the slot clock. A Call CQ or double-click inside your own slot still keys at
+  once, now with its tones on the slot clock and its PTT ending inside the slot (it ran 0.25 s into
+  the next one), and it now keys as late as WSJT-X does: while the slot is under 75 % of its period,
+  up to 11.25 s into an FT8 slot or 5.6 s into FT4, sending the symbols that remain (it stopped at
+  6 s and 3 s). An FT4 Call CQ between 5.54 s, where Nexus's FT4 tones end, and that limit has
+  nothing left to send: Nexus keys and holds the transmitter, silent, until the over's usual end at
+  6.24 s, as WSJT-X does (it used to let go at once). Later than that it waits for your next slot.
+  The same limit holds when your slot's own key comes late (a decode that finished late, a busy
+  computer): past 75 % of the slot Nexus does not key it, as WSJT-X does not, and the over goes out
+  at your next slot instead (it used to key as long as one of its tones was still ahead).
+  NEEDS-BENCH: an FT8 and an FT4 over on a dummy load beside WSJT-X, a Call CQ about 10 s into an
+  FT8 slot and another about 12 s in (the first keys at once, the second waits for the next slot, in
+  both programs), an FT4 Call CQ about 5.6 s into your slot (TX on at once with nothing sent and off
+  at about 6.2 s, in both programs; the window is 85 ms wide, so it takes a few tries), and FT8 on a
+  slow computer (a Raspberry Pi) watching the TX start against the clock.
 
 ### Fixed
 
@@ -465,6 +492,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in use gets. While you edit a radio that is not in use, the hint under **Tx Power** and **RX
   Gain** now says that Save stores them for that radio and that the radio in use does not change.
   NEEDS-BENCH: an FT-710 into a dummy load.
+- **An FT over is never keyed with no transmit audio.** Nexus opened the sound card's transmit
+  output inside the first FT8 or FT4 over of a session, after it had keyed the radio, so that over
+  went out late by however long the open took. If the output would not open (another program
+  holding the device, or the device unplugged), every over after that keyed the radio with no
+  audio for the rest of the session, and nothing on screen said why. The output now opens when you
+  turn TX on in the digital section (TX On, Call CQ, a double-click), so the first over no longer
+  waits for it. If it will not open, the radio is not keyed, TX turns off, and the status line says
+  so in the sound card's own words; once the device is free, turn TX on again and the next over
+  keys normally. A station that only listens still opens no transmit output at all, and Phone, CW
+  and the keyboard modes open theirs as before. This covers FT8, FT4, JS8 and the other timed-slot
+  modes. NEEDS-BENCH: an FT8 and an FT4 over on a dummy load beside WSJT-X, and one with the
+  output device held by another program.
 
 ### Security
 

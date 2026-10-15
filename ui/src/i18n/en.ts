@@ -11033,6 +11033,11 @@ export const EN = {
   // nothing feeds once it is off. `{{mode}}` is the radio's own mode word (DIGU), as data.
   'shell.lane.slotKeyRefused.flex.daxUnfed':
     'Nexus did not key the {{mode}} over at {{time}} UTC: Flex native DAX audio is off, but the radio was still taking its transmit audio from DAX, as Nexus had set it, and nothing feeds DAX now. Nothing was sent and TX was turned off. Nexus puts the radio back on its mic input within a moment; then turn TX on again.',
+  // Nexus kept the key off the air itself because the sound card's transmit audio output would not
+  // open: the radio refused nothing, so the PTT and CAT advice would be wrong. `{{why}}` is the
+  // sound card's own error, as data.
+  'shell.lane.slotKeyRefused.txAudio':
+    'Nexus did not key the radio at {{time}} UTC because the transmit audio output would not open ({{why}}). Nothing was sent and TX was turned off. Check Output Device (TX) in Settings (another program may be holding it, or it is unplugged), then turn TX on again.',
   // The radio did not accept the unkey that ended a slot over: the station halted TX the same way,
   // keeps sending the unkey until the radio takes it, and the lane keeps this until TX is turned on
   // again. `{{why}}` is the radio's own answer, as data.

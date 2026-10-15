@@ -2880,7 +2880,9 @@ pub struct Engine {
     /// Whether the transmit watchdog has tripped (auto-halted TX).
     tx_watchdog: bool,
     /// The slot over whose key the radio did not accept, which halted TX
-    /// ([`Engine::halt_tx_for_refused_key`]). Kept until the operator turns TX on again.
+    /// ([`Engine::halt_tx_for_refused_key`]), or that Nexus would not key because the transmit
+    /// audio output would not open ([`Engine::halt_tx_for_tx_audio`]). Kept until the operator
+    /// turns TX on again.
     slot_key_refused: Option<crate::dto::SlotKeyRefused>,
     /// The slot over whose unkey the radio did not accept, which halted TX
     /// ([`Engine::halt_tx_for_failed_unkey`]). Kept until the operator turns TX on again.
@@ -3196,6 +3198,12 @@ pub struct Engine {
     /// Split Operation — the audio was reduced into 1500–2000 Hz and the loop
     /// must move the TX dial by this much before keying. 0 = no shift.
     tx_dial_shift_hz: i64,
+    /// The FT8/FT4 over built most recently ahead of its key: the one this station keyed last
+    /// ([`Engine::commit_tx`]), or the next one, built before the early decode took the modem
+    /// ([`Engine::keep_prebuilt_wave`]). A key whose plan asks for exactly this over uses it rather
+    /// than build it again, which would wait for a decode still holding the modem
+    /// ([`Engine::prebuilt_wave`]).
+    prebuilt_over: Option<PrebuiltOver>,
     /// TX-gate generation, stamped into every [`TxPlan`] and bumped by the
     /// arming/QSY verbs so `commit_tx` refuses an over planned before them —
     /// see [`TxGateStamp`].
@@ -5110,6 +5118,15 @@ impl TxWaveform {
     }
 }
 
+/// An FT8/FT4 over's audio built ahead of its key, with what it was built from
+/// ([`Engine::prebuilt_wave`]).
+struct PrebuiltOver {
+    kind: modes::ModeKind,
+    text: String,
+    f0: f32,
+    wave: Vec<f32>,
+}
+
 /// A decided over: what to send, and the slot/tier/gate state it was decided for.
 ///
 /// `slot`, `tier` and `stamp` are carried so [`Engine::commit_tx`] can REFUSE a
@@ -5633,6 +5650,7 @@ impl Engine {
             cq_dir: None,
             last_wire_decodes: Vec::new(),
             tx_dial_shift_hz: 0,
+            prebuilt_over: None,
             tx_gate_gen: 0,
             remote_receiver_gen: 0,
             remote_actuation: Default::default(),
@@ -16738,6 +16756,40 @@ Pick the one you operate from on the Contesting tab in Settings.",
             at: now_unix_secs(),
             why: why.to_string(),
             flex_audio: None,
+            tx_audio_failed: false,
+        });
+    }
+
+    /// Halt TX because the sound card's transmit audio output would not open for slot TX (FT8,
+    /// FT4, JS8 and the other timed-slot modes): nothing is keyed, since a radio keyed with no
+    /// audio puts a dead carrier on the air for the whole over, and every over after it while the
+    /// output stays shut. The reason (`why`, the sound card's own error) stays on the refused key's
+    /// line until the operator turns TX on again ([`Self::set_tx_enabled`]); that arm opens the
+    /// output again, so a device that is back keys normally and one that is not says so again.
+    ///
+    /// The radio loop finds this when TX is armed, before any over is planned, and the slot key
+    /// checks again as a backstop. It is the refused key's halt ([`Self::halt_tx_for_refused_key`])
+    /// for the same reason: an over that cannot go out is dropped, never held to key later at a
+    /// time the operator did not choose. One event, one line in the log, and no stop for a voice
+    /// memory, as there.
+    pub fn halt_tx_for_tx_audio(&mut self, why: &str) {
+        let voice_mem_halt = self.voice_mem_halt;
+        self.quiet_tx_log = true;
+        self.halt_tx();
+        self.quiet_tx_log = false;
+        self.voice_mem_halt = voice_mem_halt;
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "{} not keyed: the transmit audio output would not open ({why}); transmit halted",
+                self.tier().label()
+            ),
+        );
+        self.slot_key_refused = Some(crate::dto::SlotKeyRefused {
+            at: now_unix_secs(),
+            why: why.to_string(),
+            flex_audio: None,
+            tx_audio_failed: true,
         });
     }
 
@@ -17172,6 +17224,20 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.tx_enabled
     }
 
+    /// Whether the slot sequencer (FT8, FT4, JS8 and the other timed-slot modes) is armed to key:
+    /// TX on, in the Digital section, on a tier that transmits. The gates [`Self::plan_tx`] opens
+    /// with that hold for the whole arm, not just for one over (the dial, the licence and the clock
+    /// are judged per over there). The radio loop opens the sound card's transmit audio when this
+    /// turns true, so the first over does not pay for the open and an output that will not open is
+    /// found before anything keys. False in Phone, CW and the keyboard sections, whose section
+    /// entry arms TX for the operator's own keying: those open the output at their own key, and a
+    /// station that only listens opens none (#139).
+    pub fn slot_tx_armed(&self) -> bool {
+        self.tx_enabled
+            && self.settings.operating_mode == crate::settings::OperatingMode::Digital
+            && !self.tier_is_rx_only(self.app.tier())
+    }
+
     /// Take + reset the one-shot slot-TX abort (Stop TX / halt / a watchdog trip / a
     /// cockpit Stop button).
     /// The radio loop consumes this EVERY tick — cutting the over in flight if
@@ -17184,7 +17250,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// Consume the one-shot "key the current period now" request set by a directed
     /// call (double-click). The radio loop honors it only if the current slot is
-    /// our TX parity and the whole over still fits before the next boundary.
+    /// our TX parity and the over can still start in it: FT8 and FT4 while the slot
+    /// is under 75 % of its period (WSJT-X's late start), every other tier while the
+    /// whole over still fits before the next boundary.
     pub fn take_immediate_tx(&mut self) -> bool {
         let v = self.immediate_tx;
         self.immediate_tx = false;
@@ -25168,6 +25236,74 @@ contact yourself."
         self.app.set_transmitting(on);
     }
 
+    /// The audio already built for `waveform`, when this station built exactly this FT8/FT4 over
+    /// ahead of its key: the same mode, text and audio frequency, so what keys is always what the
+    /// plan asked for. Used where the over would otherwise be built at its key, which waits for
+    /// any decode then holding the modem, and the key with it; WSJT-X's decoder is another process
+    /// and never delays a key.
+    pub fn prebuilt_wave(&self, waveform: &TxWaveform) -> Option<&[f32]> {
+        let TxWaveform::Native { kind, text, f0 } = waveform else {
+            return None;
+        };
+        self.prebuilt_over
+            .as_ref()
+            .filter(|p| p.kind == *kind && p.text == *text && p.f0 == *f0)
+            .map(|p| p.wave.as_slice())
+    }
+
+    /// Keep `wave`, built from `waveform`, for [`Self::prebuilt_wave`]. FT8 and FT4 only: the
+    /// tiers whose early decode can still hold the modem when their slot keys.
+    pub fn keep_prebuilt_wave(&mut self, waveform: &TxWaveform, wave: &[f32]) {
+        if let TxWaveform::Native { kind, text, f0 } = waveform {
+            if matches!(kind, modes::ModeKind::Ft8 | modes::ModeKind::Ft4) && !wave.is_empty() {
+                self.prebuilt_over = Some(PrebuiltOver {
+                    kind: *kind,
+                    text: text.clone(),
+                    f0: *f0,
+                    wave: wave.to_vec(),
+                });
+            }
+        }
+    }
+
+    /// The FT8/FT4 over this station would send in `slot` if it were planned now and nothing
+    /// changed first, so the radio loop can build it before the early decode takes the modem. A
+    /// guess, never a plan: it reads what [`Self::plan_tx`] would choose and changes nothing, and
+    /// its audio goes out only to a plan that asks for exactly this over
+    /// ([`Self::prebuilt_wave`]). `None` where it cannot say, or `slot` is not this station's.
+    pub fn next_over_hint(&self, slot: u64) -> Option<TxWaveform> {
+        let tier = self.app.tier();
+        if !self.slot_tx_armed()
+            || self.tuning
+            || slot % 2 != self.tx_parity
+            || !matches!(tier, Tier::Ft8 | Tier::Ft4)
+        {
+            return None;
+        }
+        let text = match &self.mode {
+            Mode::Qso { station, .. } => match self
+                .recent_partner
+                .as_ref()
+                .filter(|p| slot <= p.until_slot)
+                .and_then(|p| p.owed.as_ref())
+            {
+                Some(owed) => owed.to_text(),
+                None => station.outgoing_rv()?.0.to_text(),
+            },
+            Mode::FieldDay { station, .. } => station.outgoing()?.to_text(),
+            Mode::Chat => self
+                .broadcast_queue
+                .front()
+                .or_else(|| self.tx_queue.front())?
+                .clone(),
+        };
+        Some(TxWaveform::Native {
+            kind: self.tier_mode_kind(tier)?,
+            text,
+            f0: self.split_reduce(self.tx_offset_hz).0,
+        })
+    }
+
     /// Decide, build and commit an over in one call — the whole transmit decision
     /// for `slot`, exactly as it has always behaved.
     ///
@@ -25179,7 +25315,11 @@ contact yourself."
         let Some(plan) = self.plan_tx(slot) else {
             return Vec::new();
         };
-        let wave = plan.waveform.build();
+        // An over built ahead of its key is not built again (`prebuilt_wave`).
+        let wave = match self.prebuilt_wave(&plan.waveform) {
+            Some(wave) => wave.to_vec(),
+            None => plan.waveform.build(),
+        };
         // One thread, no unlock between plan and commit — but `slot` is the CALLER's
         // claim, not a clock reading, so commit's `plan.slot != current_slot` check is
         // vacuous on this path. A caller holding a stale slot index (a decode-worker
@@ -25247,6 +25387,9 @@ contact yourself."
         if plan.beacon {
             self.app.set_transmitting(true);
         }
+        // Kept, so the next over that is the same one (a CQ called again, a message repeated
+        // while the reply is not yet heard) keys without being built again (`prebuilt_wave`).
+        self.keep_prebuilt_wave(&plan.waveform, &wave);
         vec![wave]
     }
 
@@ -36702,6 +36845,170 @@ mod tests {
             radio["slotKeyRefused"]["flexAudio"],
             serde_json::json!({ "mode": "DIGU", "cause": "notYetDax" })
         );
+    }
+
+    /// The sound card's transmit audio would not open: nothing is keyed, TX halts as a refused key
+    /// halts it, and the line says so in the sound card's own words, as its own cause, until TX is
+    /// on again. A radio's own refusal says nothing about transmit audio, on the wire either.
+    #[test]
+    fn transmit_audio_that_will_not_open_halts_tx_and_says_why_until_tx_is_on_again() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ"); // arms the responder sequencer (running)
+        assert!(e.slot_tx_armed(), "premise: the QSO armed slot TX");
+        let radio = |e: &Engine| serde_json::to_value(e.snapshot()).unwrap()["radio"].clone();
+        let why = "playback stream: Device or resource busy";
+        e.halt_tx_for_tx_audio(why);
+        assert!(!e.tx_enabled() && !e.slot_tx_armed(), "TX is still on");
+        assert!(
+            e.take_slot_tx_abort(),
+            "the loop is told to stop, as Stop TX tells it"
+        );
+        assert!(
+            e.poll_tx(0).is_empty() && e.poll_tx(2).is_empty(),
+            "and it stays stopped: the sequencer does not re-arm"
+        );
+        let refused = e
+            .snapshot()
+            .radio
+            .slot_key_refused
+            .expect("the reason is kept for the operator");
+        assert_eq!(
+            (
+                refused.why.as_str(),
+                refused.tx_audio_failed,
+                refused.flex_audio
+            ),
+            (why, true, None)
+        );
+        assert_eq!(radio(&e)["slotKeyRefused"]["txAudioFailed"], true);
+        e.set_tx_enabled(true);
+        assert_eq!(
+            e.snapshot().radio.slot_key_refused,
+            None,
+            "turning TX on again clears it"
+        );
+
+        e.halt_tx_for_refused_key("rigctld PTT error: \"RPRT -1\\n\"");
+        assert!(!e.snapshot().radio.slot_key_refused.unwrap().tx_audio_failed);
+        assert_eq!(
+            radio(&e)["slotKeyRefused"].get("txAudioFailed"),
+            None,
+            "absent for a radio's refusal, so its snapshot is byte-identical to before"
+        );
+    }
+
+    /// The over built ahead of its key is handed only to a plan that asks for exactly that over:
+    /// the same mode, text and audio frequency. Anything else builds its own, as before.
+    #[test]
+    fn a_prebuilt_over_is_used_only_for_exactly_the_same_over() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tx_enabled(true);
+        e.broadcast("CQ K2DEF FN31");
+        let slot = 0;
+        let hint = e.next_over_hint(slot).expect("the CQ about to go out");
+        let plan = e.plan_tx(slot).expect("the CQ");
+        assert!(
+            matches!((&hint, &plan.waveform), (
+                TxWaveform::Native { kind: hk, text: ht, f0: hf },
+                TxWaveform::Native { kind: pk, text: pt, f0: pf },
+            ) if hk == pk && ht == pt && hf == pf),
+            "the hint is not the over plan_tx chose"
+        );
+        assert_eq!(e.prebuilt_wave(&plan.waveform), None, "nothing built yet");
+        let wave = plan.waveform.build();
+        assert!(!wave.is_empty(), "premise: the CQ builds");
+        e.keep_prebuilt_wave(&hint, &wave);
+        assert_eq!(e.prebuilt_wave(&plan.waveform), Some(wave.as_slice()));
+        // Any difference, and it is not this over.
+        let TxWaveform::Native { kind, text, f0 } = &plan.waveform else {
+            unreachable!("FT8 is a native mode");
+        };
+        for other in [
+            TxWaveform::Native {
+                kind: *kind,
+                text: "CQ K2DEF FN32".into(),
+                f0: *f0,
+            },
+            TxWaveform::Native {
+                kind: *kind,
+                text: text.clone(),
+                f0: f0 + 1.0,
+            },
+            TxWaveform::Native {
+                kind: modes::ModeKind::Ft4,
+                text: text.clone(),
+                f0: *f0,
+            },
+        ] {
+            assert_eq!(e.prebuilt_wave(&other), None);
+        }
+        // An over keyed is kept, so the same over keyed again is not built again.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tx_enabled(true);
+        e.broadcast("CQ K2DEF FN31");
+        let plan = e.plan_tx(slot).expect("the CQ");
+        let built = plan.waveform.build();
+        assert_eq!(e.commit_tx(&plan, built.clone(), slot), vec![built.clone()]);
+        assert_eq!(e.prebuilt_wave(&plan.waveform), Some(built.as_slice()));
+    }
+
+    /// The hint says nothing where no over of this station's would go out: another station's slot,
+    /// TX off, a tier the early decode never delays, or a tripped watchdog. A watchdog trip keys
+    /// nothing and builds nothing ahead (WSJT-X's own watchdog, `tx_watchdog`, disables transmit).
+    #[test]
+    fn the_next_over_hint_is_none_where_no_over_of_this_station_would_go_out() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ"); // the QSO's own over, on this station's even slots
+        assert!(
+            e.next_over_hint(0).is_some(),
+            "premise: the QSO's next over"
+        );
+        assert!(e.next_over_hint(1).is_none(), "the other station's slot");
+        e.set_tier(Tier::TempoFast);
+        e.call_station("W9XYZ");
+        assert!(
+            e.next_over_hint(0).is_none(),
+            "FT1 has no early decode to wait for"
+        );
+
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        e.set_tx_enabled(false);
+        assert!(e.next_over_hint(0).is_none(), "TX off");
+
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        assert!(
+            e.poll_tx(0).is_empty(),
+            "premise: the watchdog trips at the plan"
+        );
+        assert!(e.take_slot_tx_abort(), "and cuts what is on the air");
+        assert!(
+            e.next_over_hint(2).is_none(),
+            "a tripped watchdog: nothing ahead"
+        );
+        assert!(e.poll_tx(2).is_empty(), "and nothing after");
+    }
+
+    /// Slot TX is armed only where the slot sequencer can key: TX on, in the Digital section.
+    /// Phone's and CW's section entry arms TX for the operator's own keying, and that is not it.
+    #[test]
+    fn slot_tx_is_armed_only_with_tx_on_in_the_digital_section() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        assert!(!e.slot_tx_armed(), "TX is off at launch");
+        e.set_tx_enabled(true);
+        assert!(e.slot_tx_armed(), "TX on in Digital");
+        for section in ["phone", "cw"] {
+            e.set_operating_mode(section, false);
+            e.set_tx_enabled(true);
+            assert!(!e.slot_tx_armed(), "{section} keys the slot sequencer");
+        }
+        e.set_operating_mode("digital", false);
+        e.set_tx_enabled(true);
+        assert!(e.slot_tx_armed(), "back in Digital with TX on");
+        e.set_tx_enabled(false);
+        assert!(!e.slot_tx_armed(), "TX off");
     }
 
     #[test]

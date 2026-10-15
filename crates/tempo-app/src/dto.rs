@@ -1153,6 +1153,11 @@ pub struct SlotKeyRefused {
     /// its transmit audio from: the UI says that in its own words. Absent for every other refusal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flex_audio: Option<FlexAudioRefusal>,
+    /// Set when Nexus kept the key off the air itself because the sound card's transmit audio
+    /// output would not open (`why` is then the sound card's own error): the radio refused
+    /// nothing, so the UI says so in its own words. Absent for every other refusal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tx_audio_failed: bool,
 }
 
 /// What a FlexRadio reports about its own tune carrier, while Nexus's Flex client tunes with it

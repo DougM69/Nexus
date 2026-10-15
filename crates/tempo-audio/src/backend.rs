@@ -36,6 +36,15 @@ pub trait AudioBackend {
     fn capture(&mut self) -> Vec<f32>;
     /// Queue 12 kHz mono samples for transmission.
     fn play(&mut self, samples: &[f32]);
+    /// Open the transmit audio route now, ahead of the over that will use it, and say whether an
+    /// over handed to [`Self::play`] would reach the radio: `Ok`, or `Err` with the reason it would
+    /// not, in the sound card's own words. The radio loop calls it when slot TX is armed and again
+    /// right before a slot over keys ([`crate::slot::key_slot_transmitter`]), and keys nothing on
+    /// an `Err`: a radio keyed with no audio puts a dead carrier on the air for the whole over.
+    /// Default `Ok`: a backend with no real device carries every over.
+    fn prepare_tx(&mut self) -> Result<(), String> {
+        Ok(())
+    }
     /// Smoothed RX input RMS (0.0–1.0), measured on the audio callback. Since 2026-08-01 the
     /// APP UI meters via the rx-dsp thread's `MeterFeed` (fast attack / standard decay,
     /// CAT-stall-immune) — this remains for standalone diagnostics (`examples/audio_probe`).
@@ -173,6 +182,12 @@ pub struct MockBackend {
     /// Scripted stream death: the next `take_stream_error()` returns this and clears it,
     /// standing in for the OS killing a capture/playback stream out from under the loop.
     pub stream_error: Option<String>,
+    /// Scripted transmit-audio failure: while set, every `prepare_tx()` answers `Err` with it,
+    /// standing in for a sound card whose output will not open (another program holds it, or it
+    /// is unplugged). Clearing it stands in for the device coming back.
+    pub tx_open_error: Option<String>,
+    /// How many times `prepare_tx` was called.
+    pub prepare_tx_calls: usize,
 }
 
 impl MockBackend {
@@ -218,6 +233,13 @@ impl AudioBackend for MockBackend {
     }
     fn play(&mut self, samples: &[f32]) {
         self.played.extend_from_slice(samples);
+    }
+    fn prepare_tx(&mut self) -> Result<(), String> {
+        self.prepare_tx_calls += 1;
+        match &self.tx_open_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(()),
+        }
     }
     fn flush_output(&mut self) -> usize {
         self.flush_calls += 1;

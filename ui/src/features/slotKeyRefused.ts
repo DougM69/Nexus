@@ -14,7 +14,8 @@ import { t } from '../i18n'
 /** The status-lane item after a refused slot key halted TX, or null. `why` is the rig link's own
  *  answer, interpolated as data and never translated. A key Nexus's own Flex client kept off the
  *  air for the audio route has a sentence of its own, by cause: the radio refused nothing, and the
- *  PTT and CAT advice would be wrong. */
+ *  PTT and CAT advice would be wrong. So does a key Nexus kept off the air because the sound card's
+ *  transmit audio would not open; `why` is then the sound card's error. */
 export function slotKeyRefusedLane(
   r: SlotKeyRefused | null | undefined,
 ): Omit<StatusItem, 'id'> | null {
@@ -24,10 +25,12 @@ export function slotKeyRefusedLane(
   return {
     tier: 'critical',
     message: t('shell.lane.slotKeyRefused.message'),
-    detail: !r.flexAudio
-      ? t('shell.lane.slotKeyRefused.detail', { time, why: r.why })
-      : r.flexAudio.cause === 'daxUnfed'
-        ? t('shell.lane.slotKeyRefused.flex.daxUnfed', { time, mode: r.flexAudio.mode })
-        : t('shell.lane.slotKeyRefused.flex.notYetDax', { time, mode: r.flexAudio.mode }),
+    detail: r.txAudioFailed
+      ? t('shell.lane.slotKeyRefused.txAudio', { time, why: r.why })
+      : !r.flexAudio
+        ? t('shell.lane.slotKeyRefused.detail', { time, why: r.why })
+        : r.flexAudio.cause === 'daxUnfed'
+          ? t('shell.lane.slotKeyRefused.flex.daxUnfed', { time, mode: r.flexAudio.mode })
+          : t('shell.lane.slotKeyRefused.flex.notYetDax', { time, mode: r.flexAudio.mode }),
   }
 }
