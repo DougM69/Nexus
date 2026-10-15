@@ -342,7 +342,10 @@ fn a_held_message_too_long_to_hand_over_at_this_speed_is_not_offered() {
     assert_keys(&mut s, t, "K1ABC YES MSG ID 1", Origin::AutoReply);
     let t = T0 + 42 * MIN;
     let delivery = format!("K1ABC MSG {long} FROM W1AW");
-    assert_eq!(ask(&mut s, Command::Query, "MSG 1", t), [delivery.clone()]);
+    assert_eq!(
+        ask(&mut s, Command::Query, "MSG 1", t),
+        std::slice::from_ref(&delivery)
+    );
     let keyed = key_all(&mut s, t / 15_000 * 15_000 + 15_000);
     assert_eq!(
         keyed.len(),
@@ -417,7 +420,7 @@ fn a_hand_over_that_fits_only_without_next_msg_id_goes_without_it() {
     let t = T0 + 2 * MIN;
     s.on_event(&ev("K1ABC", "KD9TAW", Command::Query, "MSG 1", -5, t), t);
     let delivery = format!("K1ABC MSG {text} FROM W1AW");
-    assert_eq!(replies(&s), [delivery.clone()]);
+    assert_eq!(replies(&s), std::slice::from_ref(&delivery));
     assert_keys(&mut s, t, &delivery, Origin::AutoReply);
     assert_eq!(state_of(&s, 1), Some(InboxState::Delivered));
     let t = T0 + 30 * MIN;
