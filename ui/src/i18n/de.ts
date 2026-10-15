@@ -1019,6 +1019,7 @@ export const DE: PartialCatalog = {
   "settings.audio.rxGain.label": "RX-Verstärkung",
   "settings.audio.rxGain.aria": "RX-Aufnahmeverstärkung",
   "settings.audio.rxGain.hint": "Ein leises Interface anheben, bis der RX-Pegel etwa 30 dB zeigt — die Anzeige reagiert beim Loslassen des Reglers. Auf ×1.0 lassen, solange die Anzeige nicht zu niedrig steht (unter ~15 dB) — FT8 dekodiert auch aus kleinen Signalen, viel wird selten gebraucht.",
+  "settings.audio.multiRadio.levelHint": "<b>Speichern</b> legt diesen Wert für <b>{{radio}}</b> ab, und er gilt, sobald dieses Gerät genutzt wird; am jetzt genutzten Gerät ändert sich nichts.",
   "settings.headphoneMonitor.legend": "Empfangsaudio auf diesem Computer",
   "settings.headphoneMonitor.enable.label": "Empfangsaudio hier wiedergeben",
   "settings.headphoneMonitor.enable.aria": "Empfangsaudio auf diesem Computer wiedergeben",

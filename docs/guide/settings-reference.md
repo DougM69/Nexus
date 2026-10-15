@@ -565,6 +565,11 @@ target to copy.*
   meter responds as you release the slider. Leave at ×1.0 unless the meter reads
   low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much."
 
+While you **Edit** a radio that is not the one in use, Tx Power and RX Gain are
+that radio's own levels: moving them changes nothing on the radio in use,
+**Save** stores them on the radio you are editing, and it uses them once it
+becomes the active radio.
+
 ### Receive audio on this computer
 
 This plays the audio your radio is RECEIVING out of a device on this computer — headphones

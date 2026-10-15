@@ -1955,12 +1955,32 @@ export function SettingsPanel({
     )
   }
 
+  // True while the form edits a radio that is NOT the one in use. Its RX Gain and Tx Power then edit
+  // the form only, and Save stores them on that radio: `set_rx_gain` / `set_tx_level` take no radio,
+  // so applying them live would change the radio in use. Keyed on the LIVE active radio, as the
+  // satellite VFO map's guard is, because that is the radio the two verbs act on.
+  const editingOtherRadio = editingRadioId != null && editingRadioId !== (activeRadioId ?? form?.activeRadio)
+  // …and the hint both sliders show then, in place of their own: those call Tx Power the cockpit
+  // Pwr's control and say the RX Level meter answers RX Gain, which holds for the radio in use only.
+  const otherRadioLevelHint = (
+    <T
+      k="settings.audio.multiRadio.levelHint"
+      tags={{ b: <strong /> }}
+      vals={{
+        radio:
+          form?.radios?.find((r) => r.id === editingRadioId)?.name ??
+          t('settings.audio.multiRadio.selectedRadio'),
+      }}
+    />
+  )
+
   // Apply RX capture gain to the LIVE audio stream (not just the form). Called on
   // release — `set_rx_gain` persists + returns a snapshot, so we commit once the
   // operator lets go of the slider rather than on every drag tick (which would
   // disk-thrash). The RX Level meter then responds within a poll, so the control
   // visibly "works" instead of appearing dead until a full Save.
   const applyRxGainLive = (value: number) => {
+    if (editingOtherRadio) return
     void setRxGain(value).catch(() => pushToast(t('settings.audio.rxGain.failed'), 'error'))
   }
 
@@ -1972,6 +1992,7 @@ export function SettingsPanel({
   // bypasses the throttle window so the final settled value is never silently dropped by it.
   const txLevelThrottleRef = useRef(0)
   const applyTxLevelLive = (value: number, force = false) => {
+    if (editingOtherRadio) return
     const now = Date.now()
     if (!force && now - txLevelThrottleRef.current < 60) return
     txLevelThrottleRef.current = now
@@ -1982,8 +2003,11 @@ export function SettingsPanel({
   // (radio.txLevel). When the cockpit changes it, mirror the live value into the form so the slider
   // tracks it (previously the form was a stale copy, so cockpit→Settings never showed). setForm
   // directly (not updateNum) so this live-sync never spuriously marks the form dirty.
+  // Not while the form edits another radio: the live value is the drive of the radio in use, and
+  // mirrored into another radio's form it was saved as that radio's drive.
   useEffect(() => {
     if(remote)return
+    if (editingOtherRadio) return
     const live = radio?.txLevel
     if (live == null) return
     setForm((prev) => (prev && Math.abs(prev.txLevel - live) > 1e-6 ? { ...prev, txLevel: live } : prev))
@@ -2460,7 +2484,20 @@ export function SettingsPanel({
       onSaved?.()
     })
   }
-  const handleAddRadio = () => {
+  const handleAddRadio = async () => {
+    // Selecting the new radio for editing (below) replaces what the rig form holds, so unsaved
+    // edits get the same confirm as Edit gives them.
+    if (
+      dirtyRef.current &&
+      !(await confirmDialog({
+        title: t('settings.radios.edit.confirm.title'),
+        body: t('settings.radios.edit.confirm.body'),
+        confirmLabel: t('settings.radios.edit.confirm.action'),
+        danger: true,
+      }))
+    ) {
+      return
+    }
     // Adding does not switch the station onto the new radio -- see Engine::add_radio. Select it
     // for EDITING instead, so the operator lands on the profile they just made and can configure
     // it, while the rig they are actually operating keeps running.
@@ -2469,7 +2506,13 @@ export function SettingsPanel({
       reloadRadios()
       const fresh = await getSettings()
       const added = fresh.radios?.[fresh.radios.length - 1]
-      if (added) setEditingRadioId(added.id)
+      if (!added) return
+      // …with ITS config in the form, as Edit loads one. Selected without it, the form still held
+      // the radio it was editing before, and the first Save copied that radio's port, baud and
+      // sound card onto the new one (two Yaesus on a Mac, 2026-10-14).
+      setForm((prev) => (prev ? { ...prev, ...radioPatch(added) } : prev))
+      setEditingRadioId(added.id)
+      dirtyRef.current = false
     })
   }
   const handleRemoveRadio = async (id: number) => {
@@ -2488,8 +2531,16 @@ export function SettingsPanel({
     ) {
       return
     }
-    void withErrorToast(() => removeRadio(id), t('settings.radios.remove.failed')).then((s) => {
+    void withErrorToast(() => removeRadio(id), t('settings.radios.remove.failed')).then(async (s) => {
       if (!s) return
+      // …and its fields with it. Handed to the operating radio still holding the deleted radio's
+      // port, baud and sound card, the form's next Save folded them into the operating radio.
+      if (editingRadioId === id) {
+        const fresh = await getSettings()
+        const operating = fresh.radios?.find((p) => p.id === (activeRadioId ?? fresh.activeRadio))
+        if (operating) setForm((prev) => (prev ? { ...prev, ...radioPatch(operating) } : prev))
+        dirtyRef.current = false
+      }
       // If the deleted radio was the one the rig form is editing, retarget the form: a
       // dangling editingRadioId routes every later Save through update_radio_profile(<gone
       // id>), which no-ops on a missing id — so station-wide edits (callsign, credentials)
@@ -2933,6 +2984,24 @@ export function SettingsPanel({
     } else {
       await saveForm({ ...next, mycall: next.mycall.trim().toUpperCase() }, forced)
     }
+    // The form's `radios` is a copy, and the writes above changed the profiles it copies, so take
+    // it again. Edit loads a radio from this copy and `withActiveRadioConfig` writes the operating
+    // radio back from it: left stale, a saved baud, port or sound card came back on the radio
+    // re-opened for Edit, and the operating radio's went back at the next save of the other one.
+    const { radios } = await getSettings()
+    setForm((prev) => (prev ? { ...prev, radios } : prev))
+    // The baseline the next Save is diffed against (`saveForm`) holds the radio fields as the form
+    // now holds them. With another radio open the flat fields hold THAT radio, while a station-wide
+    // save sends the radio in use's own config from `radios` (`withActiveRadioConfig`), so the
+    // baseline holds the same. With the edited radio's fields there, or an older copy than `radios`,
+    // a field of the radio in use read as a change, and the next Save sent that copy's drive and
+    // gain back over the cockpit's newer ones. Test CAT and Auto-test save through here too, so the
+    // radio fields move here for every caller; `commitSave` then takes the whole of what this returns.
+    const saved = { ...next, radios }
+    const baseline =
+      editingRadioId != null && editingRadioId !== next.activeRadio ? withActiveRadioConfig(saved) : saved
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(baseline), radios }
+    return baseline
   }
 
   // A station-wide save (LoTW/eQSL credentials, config profiles) that must NOT carry the rig
@@ -3552,9 +3621,9 @@ export function SettingsPanel({
       // Editing a NON-active radio writes ONLY that radio's CAT/audio/PTT/rotator/native config;
       // the active radio, its flat mirror and station-wide settings are untouched (the backend
       // re-syncs the flat mirror from the still-active radio). No live rig swap.
-      await persistRadioForm(next, forced)
+      const saved = await persistRadioForm(next, forced)
       dirtyRef.current = false
-      savedRef.current = next
+      savedRef.current = saved
       setStatus('saved')
       onSaved?.()
     } catch (err) {
@@ -6465,7 +6534,11 @@ export function SettingsPanel({
                   aria-label={t('settings.audio.txPower.aria')}
                 />
                 <span className="settings-hint">
-                  <T k="settings.audio.txPower.hint" tags={{ b: <strong />, em: <em /> }} />
+                  {editingOtherRadio ? (
+                    otherRadioLevelHint
+                  ) : (
+                    <T k="settings.audio.txPower.hint" tags={{ b: <strong />, em: <em /> }} />
+                  )}
                 </span>
               </label>
 
@@ -6504,7 +6577,9 @@ export function SettingsPanel({
                   onBlur={() => { if (remote) remoteGain.cancel() }}
                   aria-label={t('settings.audio.rxGain.aria')}
                 />
-                <span className="settings-hint">{t('settings.audio.rxGain.hint')}</span>
+                <span className="settings-hint">
+                  {editingOtherRadio ? otherRadioLevelHint : t('settings.audio.rxGain.hint')}
+                </span>
               </label>
             </div>
           </fieldset>

@@ -70,6 +70,9 @@ mod held_form_tests;
 /// The journals when the file there cannot be read: kept, never written over.
 #[cfg(test)]
 mod kept_files_tests;
+/// The cockpit's drive and RX gain survive a later Settings save, and a save of another radio.
+#[cfg(test)]
+mod live_level_tests;
 mod mode_entry;
 pub mod parsec_presence;
 /// A contest picked while Contest mode is on, switched on Save exactly as off-and-on switches it.
@@ -17123,8 +17126,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Set the TX audio drive level (0.0–1.0), clamped. The radio loop reads
     /// `settings.tx_level` each slot and applies it to the audio backend, so this
     /// takes effect live (the "Pwr" slider — trim until ALC is just zero).
+    ///
+    /// The active radio's profile takes the same value. Settings reads the level back from that
+    /// profile (`get_settings` mirrors it into the flat fields every save is built on, and
+    /// `update_radio_profile` mirrors it into the fields the radio loop reads), so a profile left
+    /// at the old drive was the drive the next save of anything put back over this one.
     pub fn set_tx_level(&mut self, level: f32) {
-        self.settings.tx_level = level.clamp(0.0, 1.0);
+        let level = level.clamp(0.0, 1.0);
+        self.settings.tx_level = level;
+        let active = self.settings.active_radio;
+        if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == active) {
+            p.tx_level = level;
+        }
     }
 
     /// Set the MSK144 T/R period (s) — the cockpit's narrow write. Clamped to the mode's
@@ -17142,10 +17155,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     /// Set the RX capture gain (≥1.0 multiplier on received audio before decode). Headroom for a
-    /// quiet interface; clamped to 1.0–8.0 (+18 dB). Applied live by the audio service.
+    /// quiet interface; clamped to 1.0–8.0 (+18 dB). Applied live by the audio service. The active
+    /// radio's profile takes the same value, for the reason [`Self::set_tx_level`] gives.
     pub fn set_rx_gain(&mut self, gain: f32) {
         self.remote_actuation.revoke();
-        self.settings.rx_gain = gain.clamp(1.0, 8.0);
+        let gain = gain.clamp(1.0, 8.0);
+        self.settings.rx_gain = gain;
+        let active = self.settings.active_radio;
+        if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == active) {
+            p.rx_gain = gain;
+        }
     }
 
     /// Whether normal slot TX is currently enabled.

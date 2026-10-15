@@ -74,10 +74,12 @@ fn rx_gain_preserves_settings_and_other_profiles_and_survives_native_radio_round
 }
 
 #[test]
-fn rx_gain_can_follow_a_local_narrow_edit_with_a_legitimately_older_profile_mirror() {
+fn rx_gain_can_follow_a_local_narrow_edit() {
     let mut s = Station::new(Tier::Ft8);
     s.engine.set_rx_gain(2.5);
-    assert_eq!(s.engine.settings.active_profile().unwrap().rx_gain, 1.0);
+    // The local edit moves the active profile's copy with the live gain: a copy left at 1.0 was
+    // the gain the next local Settings save put back.
+    assert_eq!(s.engine.settings.active_profile().unwrap().rx_gain, 2.5);
     s.engine.settings.save(&s.path).unwrap();
     assert_eq!(Settings::load(&s.path).rx_gain, 2.5);
     apply(&mut s, 2.5, 3.5).unwrap();

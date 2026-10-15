@@ -433,6 +433,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   band, frequency and mode are still read from the radio when you log. Nothing is kept across a
   restart, in a contest's entry, or while "Log a contact from another radio" is open. The RTTY,
   PSK and JS8 cockpits already kept their entries.
+- **With two radios, each one keeps its own serial port, baud, sound card and drive.** Four things
+  in Settings ▸ Radio could put one radio's settings on the other. **+ Add radio** left the radio you
+  had been editing in the form, so the first Save gave the new radio that radio's port, baud and
+  audio devices. A radio you opened again with **Edit** after saving it showed what it had before
+  the save, and saving it put those values back; saving one radio could also put back the other
+  radio's last-saved changes. Removing the radio you were editing left its settings in the form, so
+  the next Save put them on the radio you operate. And while you edited a radio that is not the one
+  in use, its **Tx Power** and **RX Gain** sliders changed the radio in use as you moved them, and a
+  change to the drive of the radio in use (its cockpit **Pwr** slider) showed up in the form, so
+  Save gave the radio you were editing that drive. The form now loads the radio it is editing every
+  time and reads both radios again after each save, and + Add radio asks before it drops unsaved
+  edits, as Edit does. While you edit a radio that is not in use, the two sliders now set only that
+  radio's saved levels, which it takes up when it becomes the radio in use; on the radio in use they
+  work as before. If your radios ended up sharing a baud, a port, a sound card or a drive level, set
+  each one again under Settings ▸ Radio. NEEDS-BENCH: two Yaesus (an FT-710 and an FT-991A) on a
+  Mac.
+- **A Save in Settings keeps the drive and RX gain you set last.** After you moved the cockpit
+  **Pwr** slider or changed RX Gain, Settings showed the level from before the change, and the next
+  Save of anything in Settings set the radio in use back to it. With two radios, saving the radio
+  you were editing did the same, and so did every Save in that window after it. The level you set
+  last, in the cockpit or in Settings, is now the one Settings shows and keeps and the one the radio
+  in use gets. While you edit a radio that is not in use, the hint under **Tx Power** and **RX
+  Gain** now says that Save stores them for that radio and that the radio in use does not change.
+  NEEDS-BENCH: an FT-710 into a dummy load.
 
 ### Security
 

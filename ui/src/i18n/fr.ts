@@ -5292,6 +5292,7 @@ export const FR: PartialCatalog = {
   "settings.audio.input.hint": "Carte son qui transporte l'audio de réception.",
   "settings.audio.input.label": "Périphérique d'entrée (RX)",
   "settings.audio.legend": "Audio",
+  "settings.audio.multiRadio.levelHint": "<b>Enregistrer</b> conserve ce réglage pour <b>{{radio}}</b>, et il s'applique quand cette radio est en service ; la radio en service actuellement ne change pas.",
   "settings.audio.multiRadio.note": "🎚 Les périphériques audio ci-dessous concernent <b>{{radio}}</b>. Chaque radio a SES PROPRES entrée et sortie — cliquez « Modifier » sur une autre radio (dans Radios ci-dessus) pour régler son audio. L'audio RX en direct et la cascade suivent la radio active.",
   "settings.audio.multiRadio.selectedRadio": "la radio sélectionnée",
   "settings.audio.output.hint": "Carte son qui alimente la radio (émission).",
