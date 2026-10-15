@@ -295,7 +295,7 @@ fn a_long_held_message_s_hand_over_keeps_its_from_at_the_fast_speeds() {
             &text[..MAX_TEXT_LEN - head.len() - tail.len()]
         );
         assert_eq!(want.len(), MAX_TEXT_LEN, "premise: the reply fills the cap");
-        assert_eq!(replies(&s), [want.clone()], "{speed:?}");
+        assert_eq!(replies(&s), std::slice::from_ref(&want), "{speed:?}");
         assert_keys(&mut s, at, &want);
         assert_eq!(s.inbox()[0].state, InboxState::Delivered, "{speed:?}");
     }
@@ -319,7 +319,7 @@ fn a_hand_over_the_cap_would_cut_goes_without_its_next_msg_id() {
     );
     let at = T0 + MIN;
     s.on_event(&ev("K1ABC", "KD9TAW", Command::Query, "MSG 1", -7, at), at);
-    assert_eq!(replies(&s), [bare.clone()]);
+    assert_eq!(replies(&s), std::slice::from_ref(&bare));
     assert_keys(&mut s, at, &bare);
     // Control: a short one still names the next.
     let at = T0 + 3 * MIN;
