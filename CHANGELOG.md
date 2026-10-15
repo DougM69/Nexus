@@ -126,6 +126,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **AD1C's country file now carries its license notice.** Nexus finds a call's DXCC entity and
+  zones in the cty.dat country file by Jim Reisert AD1C, which is MIT-licensed. That license asks
+  for its notice to travel with every copy, and NOTICE named the license without reproducing it.
+  NOTICE, which every installer carries, now has the notice in full; the copyright file kept with
+  the data is now the one AD1C ships in the same release, not a copy of a web page; and the README
+  credits AD1C.
 - **The ATU button now starts the FT-710's tuner.** On a Yaesu FT-710 the ATU button sent the
   command that starts a tune-up on other Yaesu radios, which the FT-710 does not use: the radio
   accepted it and nothing tuned, and in the digital modes Nexus still turned transmit off for the

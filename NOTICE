@@ -504,11 +504,46 @@ Hamlib package; macOS relied on `brew install hamlib` the same way.
 ### DXCC country file (cty.dat) — Jim Reisert, AD1C
 `crates/propagation/data/cty.dat` is the AD1C "Country Files" (the big-CTY
 `cty.dat` database) by Jim Reisert, **AD1C** (<https://www.country-files.com/>),
-embedded verbatim (via `include_str!`, see `crates/propagation/src/dxcc.rs`).
+taken verbatim from the Big CTY release of 15 January 2025 (`bigcty-20250115.zip`)
+and embedded via `include_str!` (see `crates/propagation/src/dxcc.rs`).
 It resolves callsigns to DXCC entities and CQ/ITU zones and underpins the
 DXCC / WAS / WAZ awards engine, map spot labels, and Needed-board hints. It is
-distributed under the **MIT License**. © 1994– Jim Reisert AD1C. See
-`crates/propagation/data/cty.dat_copyright.txt`.
+distributed under the **MIT License**, and MIT requires its notice to travel with
+every copy. The release's own notice, the zip's `copyright.txt`, is kept verbatim as
+`crates/propagation/data/cty.dat_copyright.txt`. After a first line giving the
+release date, it reads:
+
+> Copyright © 1994-
+>
+> Permission is hereby granted, free of charge, to any person obtaining a
+> copy of this software and associated documentation files (the
+> “Software”), to deal in the Software without restriction, including
+> without limitation the rights to use, copy, modify, merge, publish,
+> distribute, sublicense, and/or sell copies of the Software, and to
+> permit persons to whom the Software is furnished to do so, subject to
+> the following conditions:
+>
+> The above copyright notice and this permission notice shall be included
+> in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS
+> OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+> MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+> IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+> CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+> TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+> SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The notice names no holder and no end year; it is reproduced as AD1C publishes it.
+
+The project also republishes AD1C's current `cty.dat`, unmodified, every week:
+`scripts/gen-cty.mjs` fetches it from <https://www.country-files.com/bigcty/cty.dat>
+in CI (`.github/workflows/cty.yml`) and publishes it as a GitHub Release asset (`cty`),
+served at <https://hamradiotools.io/nexus/cty.dat>. Installs download it and use a
+newer file in place of the embedded one from their next launch. It is under the same
+MIT License: the 15 September 2026 release's `copyright.txt` differs from the one
+above only in its release date. The mirror publishes the file without a copy of the
+notice, as AD1C's own stable URL does; the notice above applies to it.
 
 ### ITU-R / CCIR propagation coefficient data
 The HF path-prediction engine embeds the CCIR ionospheric numerical-map
