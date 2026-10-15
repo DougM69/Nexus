@@ -335,7 +335,7 @@ impl<'a> KeyboardLatch<'a> {
     }
 
     /// Lower the operator's INTENT, leaving what they already typed to drain on
-    /// the air (the MMTTY semantic — this is a sender coming down, not a stop).
+    /// the air (this is a sender coming down, not a stop).
     ///
     /// `start_ms` is deliberately LEFT SET: the drain is still a keyed
     /// transmission, so the hard ceiling has to bound the whole keyed period and

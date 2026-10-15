@@ -19,7 +19,7 @@ vi.setConfig({ testTimeout: 15_000 })
 
 afterEach(cleanup)
 
-/** An N1MM-style CW set of the operator's own: his call on F5, the exchange alone on F2. */
+/** A CW set of the operator's own: his call on F5, the exchange alone on F2. */
 const OWN_CW = [
   { key: 'F1', text: 'CQ TEST {MYCALL}' },
   { key: 'F2', text: '5NN {EXCH}' },

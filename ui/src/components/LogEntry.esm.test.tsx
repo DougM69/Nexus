@@ -283,7 +283,7 @@ describe('Enter Sends Message — one press, one message', () => {
     expect(line()).toBe('A dupe of your own log: Enter sends nothing and logs nothing.')
   })
 
-  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule, like N1MM — log it, mark it,
+  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule — log it, mark it,
   // score it zero, and with ESM send QSO B4). The first Enter sends the B4 key once; the next logs the
   // dupe through the one log path, sending nothing. The dupe warning stays on the strip throughout.
   it('running, a dupe gets QSO B4 once, and the next Enter logs it as a dupe, sending nothing', async () => {
@@ -592,7 +592,7 @@ describe('Enter Sends Message — call history and Super Check Partial (rule 10)
   })
 
   // In S&P the file completes his exchange as the call is typed, before he has sent a thing, so
-  // the first Enter sends your call and the next your exchange, which logs: N1MM's order.
+  // the first Enter sends your call and the next your exchange, which logs.
   /** What the press sent and logged, and what the dock lights for the next Enter. */
   const outcome = () => ({
     sent: harness.sent.map((m) => [m.role, m.text, m.call]),

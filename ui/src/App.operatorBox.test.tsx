@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// CTRL+O IN THE REAL APP (N1MM's "Ctrl+O = Set operator call"). From a cockpit's contest log strip it
+// CTRL+O IN THE REAL APP (it sets the operator call). From a cockpit's contest log strip it
 // shows the Contest screen with the caret in its OPERATOR box, the one place the operator at the key
 // is set while a contest runs. It is a key in the log line: the station's operating mode is left as it
 // was, so the FT8/FT4 role the Contest tab's own button enters on the way in is not touched — the

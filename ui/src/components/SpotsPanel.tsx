@@ -1,6 +1,6 @@
 import { useStationControl } from '../stationAccess'
 // The raw "Spots" board — every recent cluster/RBN spot (CW/Phone/Digital, all sources),
-// NOT needs-gated. This is the SpotCollector/DXHeat-style firehose view: see everything,
+// NOT needs-gated. This is the firehose view: see everything,
 // filter client-side. The Needed board stays the curated "what to work" list; this is the
 // "what's on the air" list. Single-click a row to QSY/work the spot.
 //

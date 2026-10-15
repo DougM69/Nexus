@@ -2,14 +2,12 @@
 // THE OPERATOR'S RATE METER — contacts per hour, from the contest log's timestamps.
 //
 // A contester watches rate to make one decision: keep running this frequency, or go
-// search-and-pounce. Three readings are conventional, and N1MM Logger+ — the logger
-// this will be compared against — shows four of them in its Info window: "the rate for
-// the last 10 QSOs, the last 100 QSOs, the last hour, and the interval since the start
-// of the current clock hour" (n1mmwp.hamdocs.com/manual-windows/info-window/, read
-// 2026-09-09).
+// search-and-pounce. Three readings are conventional, and the loggers this will be compared
+// against show four: the rate for the last 10 contacts, the last 100 contacts, the last hour,
+// and the interval since the start of the current clock hour.
 //
-// ⚠️ **N1MM DOES NOT PUBLISH ITS ARITHMETIC.** The manual names the four readings and
-// stops. The only open implementation of them is `not1mm` (K6GTE's re-implementation),
+// ⚠️ **THE ARITHMETIC IS NOT PUBLISHED.** The documentation names the four readings and
+// stops. The only open implementation of them is K6GTE's open-source contest logger,
 // whose rate window computes, for each window, the minutes between the OLDEST and
 // NEWEST contact in it and then `(60 / timespan) * count`. That is a re-implementation
 // by a different author, not a specification, so it is a READING of the convention and
@@ -37,7 +35,7 @@
 // it needs no projection at all, because a count of contacts in the last 60 minutes IS
 // a rate per hour.
 //
-// ⚠️ WHY A ROLLING HOUR AND NOT THE CLOCK HOUR. N1MM offers both. A clock-hour count
+// ⚠️ WHY A ROLLING HOUR AND NOT THE CLOCK HOUR. Loggers offer both. A clock-hour count
 // reads 7 at five past the hour for an operator running 90/h, which is the shape of
 // misleading this whole module is written to avoid; the rolling hour always describes a
 // full hour of real operating time. The clock-hour reading is the one an operator uses

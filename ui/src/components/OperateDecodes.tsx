@@ -148,7 +148,7 @@ interface Props {
    */
   myGrid?: string
   /**
-   * JTAlert-style UDP callsign highlights (built by OperateCockpit via
+   * UDP callsign highlights (built by OperateCockpit via
    * buildHighlightMap). When a row's from-call matches an entry, the row's
    * backgroundColor/color are overridden with the logger's chosen colors.
    * Inline style wins intentionally — JTAlert colors must show above theme classes.

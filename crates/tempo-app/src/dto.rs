@@ -4424,7 +4424,7 @@ pub struct AppSnapshot {
     /// unless there is one, until the next period of the new band or mode decodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub late_decodes: Option<LateDecodes>,
-    /// JTAlert-style UDP callsign highlights (call → CSS colors) for the
+    /// UDP callsign highlights (call → CSS colors) for the
     /// decode panes. Empty unless a cooperating app sent HighlightCallsign.
     #[serde(default)]
     pub highlights: Vec<HighlightEntry>,

@@ -3296,7 +3296,7 @@ fn build(spec: FileSpec) -> RulesTable {
                     ),
                     // ⭐ EVERY CONTEST LOGS ITS DUPES, whatever the file says (the operator's
                     // ruling, 2026-10-11: a dupe typed, answered or called is "logged marked as a
-                    // dupe for 0 points, as N1MM does"). No shipped sponsor's rules say to remove
+                    // dupe for 0 points"). No shipped sponsor's rules say to remove
                     // dupes; one that did would be refused here, by its event id.
                     //
                     // ⚠️ Decided in code, not in the file, for two reasons. A downloaded file

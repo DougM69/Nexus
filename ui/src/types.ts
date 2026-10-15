@@ -2811,7 +2811,7 @@ export interface NeedAlert {
   stateFrom?: 'park' | 'license' | 'grid' | null
 }
 
-/** One raw cluster/RBN spot for the Spots panel (the SpotCollector-style firehose).
+/** One raw cluster/RBN spot for the Spots panel (the firehose).
  *  NOT needs-gated — every recent spot; the panel filters client-side. */
 export interface SpotRow {
   call: string
@@ -5160,7 +5160,7 @@ export interface AppSnapshot {
   /** The period a band or mode change caught while it was decoding (see `LateDecodes`). Absent
    *  unless there is one, until the first period of the new band or mode decodes. */
   lateDecodes?: LateDecodes
-  /** JTAlert-style UDP callsign highlights for the decode panes. */
+  /** UDP callsign highlights for the decode panes. */
   highlights?: { call: string; bg?: string | null; fg?: string | null }[]
   /** Bumped by an inbound UDP Clear — panes erase on change. */
   clearTick?: number

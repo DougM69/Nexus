@@ -116,9 +116,8 @@ describe('LogEntry — the FD callsign field drops spaces', () => {
 })
 
 describe('LogEntry — space walks the contest exchange, like N1MM and N3FJP', () => {
-  // N1MM's keyboard reference puts it in capitals — "SPACE IS THE PREFERRED TAB CHARACTER" —
-  // and N3FJP's own help tells operators to "press the space bar to tab". Contest operators
-  // arrive with that in their fingers, and a logger that ignores it feels broken at speed.
+  // Contest operators tab with the space bar: they arrive with that in their fingers, and a
+  // logger that ignores it feels broken at speed.
   // Tab is unchanged (plain DOM order); this adds a second way, it does not replace one.
   const cls = () => screen.getByPlaceholderText('1D')
   const sect = () => screen.getByPlaceholderText('WI')

@@ -2678,8 +2678,8 @@ mod tests {
     #[test]
     fn a_worked_but_unconfirmed_zone_raises_a_confirm_row() {
         // You worked CQ zone 5 on 20 m once but never got the QSL/LoTW match; a new zone-5
-        // station on 20 m is a confirmation opportunity — SpotCollector shows it for every
-        // multiplier, and now so does Nexus (previously a worked zone was just dropped).
+        // station on 20 m is a confirmation opportunity, and Nexus shows it for every
+        // multiplier (previously a worked zone was just dropped).
         let mut needs = LogNeeds::new();
         needs.add("W1AW", "20m", "CW", None, None, true); // USA/zone5/20m CW worked+CONFIRMED → entity satisfied
         let worked_zones: HashSet<(u8, Band)> = HashSet::from([(5, Band::B20)]);

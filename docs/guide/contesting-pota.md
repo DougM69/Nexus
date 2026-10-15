@@ -313,7 +313,7 @@ a club sync worked.*
 - Every position gets a **club dupe warning while typing** — if another tent
   already worked that call on this band and mode (and, at a QSO party, from
   the county you have typed), you're told before you call. It's a warning, not
-  a lock (N3FJP semantics); your own log's dupes still refuse.
+  a lock; your own log's dupes still refuse.
 - Every laptop's **county or sections board** shows what the whole club has
   worked, so everyone sees what the club still needs: a county, state or
   section another position logs turns green with a ✓ on the host's board and

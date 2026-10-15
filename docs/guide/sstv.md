@@ -127,7 +127,7 @@ axis moves — the cursor tells you which — and when the picture already match
 mode it says so instead of offering a control that would do nothing.
 
 **Text on the picture.** A **Text:** row under the preview lays lettering over the
-image, MMSSTV-style. **CQ** and **73** drop in a line built from your own call
+image. **CQ** and **73** drop in a line built from your own call
 (`CQ CQ DE <your call>`); **Reply** builds `<their call> DE <your call> 599` from
 the newest FSK ID in the gallery, and is disabled until a station with one has
 been received; **+ Text** adds a free line. Each line gets a row of controls —

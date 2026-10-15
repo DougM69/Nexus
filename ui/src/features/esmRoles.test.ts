@@ -150,7 +150,7 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
 
   it('keeps the CQ and AGN the sets sent before, AGN on F8 and B4 on F7, and their his-call text on F5', () => {
     // What F1, F7 and F6 sent before the layout (the signature's "Today" column). AGN and B4
-    // then traded keys (the operator, 2026-10-10): AGN on F8, as in N1MM's default message sets.
+    // then traded keys (the operator, 2026-10-10): AGN on F8.
     for (const [layout, cq] of [
       [CW_CONTEST_LAYOUT, 'CQ TEST DE {MYCALL} {MYCALL} K'],
       [CW_CONTEST_NO_REPORT_LAYOUT, 'CQ TEST DE {MYCALL} {MYCALL} K'],
@@ -250,7 +250,7 @@ describe('the voice-slot convention', () => {
 })
 
 describe('the role picker — the operator\'s own macros mapped to ESM\'s steps', () => {
-  // An N1MM-style CW set of the operator's own: his call on F5, the exchange alone on F2.
+  // A CW set of the operator's own: his call on F5, the exchange alone on F2.
   const own: EsmSlot[] = [
     { key: 'F1', text: 'CQ TEST {MYCALL}' },
     { key: 'F2', text: '5NN {EXCH}' },

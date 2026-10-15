@@ -355,7 +355,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
 
   const sending = psk?.sending === true
 
-  // --- CONTINUOUS TX (the MMTTY-style latch, RTTY's semantics verbatim) -----
+  // --- CONTINUOUS TX (the latch, RTTY's semantics verbatim) -----------------
   // Stay keyed and type into a live transmission (the air carries idle
   // reversals between keystrokes). The engine owns all of the safety: the
   // same gate a send runs before the latch comes up, every TX gate re-checked

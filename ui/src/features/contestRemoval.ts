@@ -93,7 +93,7 @@ export function contactLabel(rows: readonly FieldDayQso[]): string {
     : t('logEntry.remove.contactBare', values)
 }
 
-/** Ctrl+D, as N1MM binds it: Ctrl alone — never with Alt, Shift or Cmd. A held key's auto-repeat
+/** Ctrl+D: Ctrl alone — never with Alt, Shift or Cmd. A held key's auto-repeat
  *  is the caller's to ignore. */
 export function isRemoveKey(e: KeyboardEvent): boolean {
   return e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && e.key.toLowerCase() === 'd'

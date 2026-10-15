@@ -971,7 +971,7 @@ fn is_real_call(call: &str) -> bool {
         && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '/')
 }
 
-/// Connect ALL enabled spot sources (SpotCollector-style aggregation): the RBN CW + RBN
+/// Connect ALL enabled spot sources (one aggregated feed): the RBN CW + RBN
 /// digital skimmer firehoses, plus the human DX-cluster nodes — the SSB/phone aggregator —
 /// that should run: the nodes Nexus picks, or every node in the operator's own list (see
 /// `cluster_nodes`). RBN endpoints are wired once via fixed latches; the human nodes are
@@ -16897,7 +16897,7 @@ fn rtty_send(state: State<'_, SharedEngine>, text: String) -> Result<RttyStateDt
     Ok(rtty_state_dto(&eng))
 }
 
-/// Continuous TX on/off — the cockpit's TX button, the MMTTY latch: stay keyed
+/// Continuous TX on/off — the cockpit's TX button, a latch: stay keyed
 /// and type into a live transmission instead of one keyed over per Enter.
 ///
 /// ON runs the SAME gate a send runs (so the latch can never key where a send
@@ -17025,7 +17025,7 @@ fn psk_send(state: State<'_, SharedEngine>, text: String) -> Result<PskStateDto,
     Ok(psk_state_dto(&eng))
 }
 
-/// Continuous TX on/off — the PSK cockpit's TX button, the same MMTTY-style
+/// Continuous TX on/off — the PSK cockpit's TX button, the same
 /// latch RTTY carries: ON runs the SAME gate a send runs; OFF lets what was
 /// typed finish keying, then unkeys. NOT the emergency stop — Stop TX, the
 /// Esc/Stop macro and the TX-enable latch cut instantly and each also drops
@@ -18948,7 +18948,7 @@ fn work_spot(
     };
     // Pile-up SPLIT: if the freshest cluster spot for this call names a listening
     // offset ("UP 2" / "QSX …"), configure rig split so TX lands where the DX is
-    // listening — the N1MM behavior, using the spot we already hold. Tolerant
+    // listening, using the spot we already hold. Tolerant
     // lookup (3Y0J/MM matches 3Y0J); no spot or no offset → simplex.
     let split_up_khz = call.as_deref().and_then(|c| {
         spots
@@ -21108,7 +21108,7 @@ fn confirmation_diagnostics(engine: &Mutex<Engine>) -> Result<DiagnosticsReportD
     })
 }
 
-/// One raw cluster/RBN spot for the Spots panel (the SpotCollector-style firehose view).
+/// One raw cluster/RBN spot for the Spots panel (the firehose view).
 /// UNLIKE the Needed board, this is NOT needs-gated — every recent spot is returned and
 /// the UI filters client-side. `mode` is the frequency-derived class (CW/Phone/Digital) that
 /// drives the filter chips + privilege gate; `submode` carries the RBN skimmer's specific mode
@@ -30427,7 +30427,7 @@ fn hunted_parks_count(state: State<'_, SharedEngine>) -> Result<usize, String> {
         .hunted_parks_import_count())
 }
 
-/// Import a park directory from CSV text the operator downloaded (the HRD workflow). Caches it and
+/// Import a park directory from CSV text the operator downloaded. Caches it and
 /// swaps in the new index. Returns the park count. Always works regardless of the download URL.
 #[tauri::command]
 fn import_parks_csv(parks: State<'_, SharedParks>, csv: String) -> Result<usize, String> {

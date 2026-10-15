@@ -14,13 +14,13 @@ import type { EsmRefusal, EsmRole } from './esm'
 import type { BuiltinMacro, MacroKey, MacroSetId } from './macroSets'
 
 /** Which F-keys send each step, in order. Two keys go out as ONE message, their texts joined —
- *  a set laid out as N1MM's CW default is (his call on F5, the exchange alone on F2) runs its
+ *  a set laid out with his call on F5 and the exchange alone on F2 runs its
  *  "his call and my exchange" as F5 followed by F2. A step with no keys has no message. */
 export type EsmRoleMap = Partial<Record<EsmRole, readonly MacroKey[]>>
 
 /** The contest layout — RTTY's contest set's as it ships: F1 CQ · F2 his call and my exchange ·
- *  F3 TU · F4 my call · F5 his call · F6 my S&P exchange · F7 QSO B4 · F8 AGN. AGN is on F8 as in
- *  N1MM's default message sets; it traded keys with B4 (operator, 2026-10-10), and nothing else
+ *  F3 TU · F4 my call · F5 his call · F6 my S&P exchange · F7 QSO B4 · F8 AGN. AGN is on F8; it
+ *  traded keys with B4 (operator, 2026-10-10), and nothing else
  *  moved. ESM sends seven of the eight, QSO B4 to a dupe that calls the run; F5 stays a key the
  *  operator presses. */
 export const CONTEST_LAYOUT_ROLES: EsmRoleMap = {

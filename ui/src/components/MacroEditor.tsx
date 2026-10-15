@@ -20,7 +20,7 @@
 // THREE WAYS IN, ONE WAY OUT TO THE AIR. The ✎ (or a click on an empty key) opens a key's editor
 // with the caret in Title; a right-click on the key, or Ctrl+Shift with its F-key (the cockpit's
 // keyboard handler, `macroEditChordKey`), opens it with the caret in Message, to change what the
-// key sends on the fly as N1MM and fldigi let you. None of them sends. The editor's Send once
+// key sends on the fly. None of them sends. The editor's Send once
 // hands the message to the cockpit's `onSendOnce`, which sends it through the key's own path and
 // leaves the saved key as it was: this file still keys nothing.
 //

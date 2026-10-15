@@ -3183,7 +3183,7 @@ pub struct Engine {
     /// by the service on TX-idle so the ID never keys over the over's audio).
     /// Never armed in FT8, FT4, FT2, FT1 or DX1 (WSJT-X sends none in FT8/FT4).
     pending_cw_id: bool,
-    /// JTAlert-style callsign highlights from UDP HighlightCallsign (type 13):
+    /// Callsign highlights from UDP HighlightCallsign (type 13):
     /// uppercased call → (bg, fg) CSS hex. None/None entries are removed.
     /// Value = (insertion sequence, bg, fg). The sequence exists so the
     /// at-cap eviction is OLDEST-FIRST: evicting `.keys().min()` was
@@ -3920,7 +3920,7 @@ pub struct Engine {
     /// One-shot: abort the RTTY transmission in progress (the loop stops the FSK
     /// keying thread / flushes the AFSK audio ring and unkeys PTT).
     rtty_abort: bool,
-    /// CONTINUOUS-TX LATCH (the MMTTY "TX" button): the operator has asked to
+    /// CONTINUOUS-TX LATCH (the cockpit's "TX" button): the operator has asked to
     /// stay keyed and type into a live transmission, instead of one keyed over
     /// per Enter. Set ONLY by [`Engine::set_rtty_latched`] — never on arm, never
     /// on launch, never by a decode.
@@ -8861,8 +8861,8 @@ impl Engine {
     }
 
     /// As [`work_spot`], optionally configuring rig SPLIT for a pile-up spot whose
-    /// comment named a listening offset ("UP 2" → TX dial = spot + 2 kHz). The
-    /// N1MM behavior: click the spot, the rig lands on the DX's frequency with TX
+    /// comment named a listening offset ("UP 2" → TX dial = spot + 2 kHz): click
+    /// the spot, the rig lands on the DX's frequency with TX
     /// already split to where they're listening. `None` = simplex (and clears any
     /// prior split — handled inside set_frequency).
     pub fn work_spot_split(
@@ -20617,7 +20617,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// owning the rig, no tune carrier, no foreign transmission. Text is
     /// filtered to the varicode alphabet (full ASCII, case preserved), so
     /// exactly what's queued is what keys. While continuous TX is latched a
-    /// send TYPES INTO the live transmission (the MMTTY/RTTY macro semantic).
+    /// send TYPES INTO the live transmission (the RTTY macro semantic).
     pub fn psk_send_text(&mut self, text: &str) -> Result<(), String> {
         self.psk_tx_gate()?;
         let filtered = psk_filter(text);
@@ -20923,8 +20923,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
     pub fn rtty_send_text(&mut self, text: &str) -> Result<(), String> {
         self.rtty_tx_gate()?;
         // Continuous TX up: a macro TYPES INTO the live transmission instead of
-        // queueing a separate over behind it (MMTTY's F-keys work exactly this
-        // way). Not a convenience — the latched stream holds the message queue,
+        // queueing a separate over behind it. Not a convenience — the latched
+        // stream holds the message queue,
         // so an enqueue here would be a silent hold: the operator would press F1
         // and hear nothing until they unlatched.
         if self.rtty_latched {
@@ -21303,7 +21303,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         (text, keyed, cut)
     }
 
-    // ----- RTTY continuous TX (the MMTTY "TX" latch) — stay keyed and type into
+    // ----- RTTY continuous TX (the "TX" latch) — stay keyed and type into
     // a live transmission, instead of one keyed over per Enter. -----
     //
     // THE SAFETY MODEL, because a latched transmitter is the one thing in this
@@ -21374,7 +21374,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// turns into `on_tx_complete`), so the two ways of owning the transmitter
     /// are deliberately exclusive rather than subtly interleaved.
     ///
-    /// OFF is the MMTTY semantic: stop accepting characters and let what the
+    /// OFF means: stop accepting characters and let what the
     /// operator already typed finish keying, then unkey (`poll_rtty_stream`
     /// returns [`RttyStreamTick::Idle`] once the buffer drains, and the loop's
     /// `tx_until_ms` unkeys as it does for any over). It is NOT the emergency
@@ -21490,7 +21490,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Returns what to key: nothing at all, the operator's characters, or the
     /// RTTY IDLE. Idle is [`RttyStreamTick::Diddle`] and not silence — between
     /// keystrokes a latched RTTY signal carries LTRS fill, which is what holds
-    /// the far end's decoder in sync and what an MMTTY operator hears. Silence
+    /// the far end's decoder in sync and what the far-end operator hears. Silence
     /// under a held PTT would read as a dropout and lose the far end's clock.
     pub fn poll_rtty_stream(&mut self, max_chars: usize) -> RttyStreamTick {
         use crate::keyboard::{KbDrop, KbGates};
@@ -29742,7 +29742,7 @@ mod tests {
         assert_eq!(e.poll_rtty_one(), None, "halt dropped the queued messages");
     }
 
-    // ----- Continuous TX (the MMTTY "TX" latch). A latched transmitter is the
+    // ----- Continuous TX (the "TX" latch). A latched transmitter is the
     // only thing in this app that keys with no precomputed end, so these tests
     // are about the STOPS, not the feature. -----
 
@@ -30055,7 +30055,7 @@ mod tests {
         let mut e = rtty_latched_engine();
         // The message queue is HELD while the latch streams, so an enqueue here
         // would be a silent hold — the operator presses F1 and hears nothing.
-        // It goes into the stream instead (MMTTY's F-keys work this way).
+        // It goes into the stream instead.
         e.rtty_send_text("CQ DE W9XYZ K").unwrap();
         assert_eq!(
             e.poll_rtty_one(),

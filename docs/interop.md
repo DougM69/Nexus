@@ -44,7 +44,7 @@ if you want several apps to hear Nexus at once.
 **What Nexus accepts back** (so a controlling app can drive it): Reply (double-click a
 decode to call that station), HaltTx (stop transmitting, optionally auto-only),
 FreeText (stage or send a free-text message), Clear, Replay, Location (a GPS feeder
-updating your grid), and HighlightCallsign (JTAlert-style row coloring).
+updating your grid), and HighlightCallsign (row coloring sent by a logger such as JTAlert).
 
 > The message-type numbers follow WSJT-X's canonical `NetworkMessage.hpp` exactly
 > (HaltTx = 8, FreeText = 9, …). This matters: an off-by-one here once made a real

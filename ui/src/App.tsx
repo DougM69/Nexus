@@ -2199,7 +2199,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     return () => window.clearInterval(id)
   }, [recallMemory])
 
-  // Click-to-work ANY needed spot (CW / Phone / Digital): N1MM-style single click that
+  // Click-to-work ANY needed spot (CW / Phone / Digital): a single click that
   // changes the band, mode, AND frequency to exactly the spot's — in ONE atomic backend call
   // (`workSpot`) so the rig can never end up in the new mode at the old dial (no wrong-mode
   // flash) and the UI never sees a half-applied mode/freq state. Then open the matching
