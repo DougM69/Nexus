@@ -1901,6 +1901,16 @@ export interface Js8ActivityRow {
   complete: boolean
   /** Decode quality below JS8Call's 0.17 low-confidence threshold. */
   lowConf: boolean
+  /** Where the row stands in its message: the frame's i3 First/Last bits, or the reassembled line
+   *  of a multi-frame message. The desktop's alone; the Remote page's sample has none. */
+  flags?: Js8RowFlags
+}
+/** JS8Call's `JS8CallFirst`/`JS8CallLast` bits of a frame row, or `assembled` for the reassembled
+ *  line of a multi-frame message (never a frame of its own). */
+export interface Js8RowFlags {
+  first: boolean
+  last: boolean
+  assembled: boolean
 }
 
 /** A heard station (the message layer's own row, serde camelCase). */
@@ -1914,6 +1924,12 @@ export interface Js8Heard {
   lastHb: boolean
   lastCq: boolean
   storedMsgs: number
+  /** JS8Call's `ackTimestamp` (★ "Hearing your station"): when this station last sent something
+   *  addressed to my call. The desktop's alone, absent until it has. */
+  ackMs?: number
+  /** JS8Call's `cqTimestamp` (☎ for five minutes): when this station last called CQ. The
+   *  desktop's alone, absent until it has. */
+  cqMs?: number
 }
 
 /** One inbox row. */
@@ -4023,6 +4039,21 @@ export interface Settings {
   js8Status: string
   /** Joined @GROUP names the station answers directed traffic for. */
   js8Groups: string[]
+  /** JS8Call 3.0's "Hide messages from these callsigns in the RX pane" (empty by default): matched by
+   *  the call as heard or its base call; such a station is marked ✕ in the call list. Display only. */
+  js8RxBlocklist: string[]
+  /** JS8Call's primary highlight words or callsigns (empty by default): Band activity rows holding
+   *  one, and the call list rows of those calls. Display only. */
+  js8HighlightPrimary: string[]
+  /** The same with the secondary highlight; the primary wins a row both name. */
+  js8HighlightSecondary: string[]
+  /** JS8Call's end-of-transmission mark (♢ by default), after a message's last frame. */
+  js8Eot: string
+  /** JS8Call's missing-frame mark (…… by default). */
+  js8Mfi: string
+  /** The JS8 events that play a sound (JS8Call's notifications, all off by default): cq, hb, ack,
+   *  directed, inbox, callNew, callOld. */
+  js8Sounds: string[]
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number

@@ -67,4 +67,13 @@ describe('JS8 api wrappers', () => {
     await api.js8LocatorRefusal()
     expect(calls).toEqual([{ cmd: 'js8_locator_refusal', args: undefined }])
   })
+
+  it('writes the call list’s two settings by their own commands, never the settings form', async () => {
+    await api.js8SetRxBlocklist(['W1AW'])
+    await api.js8SetGroups(['@FUN', '@NET'])
+    expect(calls).toEqual([
+      { cmd: 'js8_set_rx_blocklist', args: { calls: ['W1AW'] } },
+      { cmd: 'js8_set_groups', args: { groups: ['@FUN', '@NET'] } },
+    ])
+  })
 })

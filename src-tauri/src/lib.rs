@@ -16995,6 +16995,32 @@ fn js8_inbox_delete(
     Ok(eng.js8_state())
 }
 
+/// The JS8 call list's "Block this station" (JS8Call 3.0's RX block list, `RXCallsignBlocklist`):
+/// that one field, never the settings form. Answers the list as saved, for the UI's mirror.
+#[tauri::command(async)]
+fn js8_set_rx_blocklist(
+    state: State<'_, SharedEngine>,
+    calls: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_rx_blocklist(calls);
+    js8_persist_settings(&eng);
+    Ok(eng.settings().js8_rx_blocklist.clone())
+}
+
+/// The JS8 call list's "Add new station or group…" with a @GROUP, and "Remove this group": the
+/// joined groups, that one field, never the settings form. Answers the groups as saved.
+#[tauri::command(async)]
+fn js8_set_groups(
+    state: State<'_, SharedEngine>,
+    groups: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_groups(groups)?;
+    js8_persist_settings(&eng);
+    Ok(eng.settings().js8_groups.clone())
+}
+
 /// Clear the decoded-PSK transcript (display only; the decoder keeps running).
 #[tauri::command(async)]
 fn psk_clear(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
@@ -35499,6 +35525,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             js8_drop_queue,
             js8_inbox_mark,
             js8_inbox_delete,
+            js8_set_rx_blocklist,
+            js8_set_groups,
             psk_clear,
             psk_afc_reset,
             psk_net,
