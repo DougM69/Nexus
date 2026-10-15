@@ -1755,18 +1755,24 @@ impl Station {
     /// replies call `replaceMacros(…, true)` (mainwindow.cpp:4541; processCommandActivity.cpp:
     /// 347-358). A station has no selected call, so `<CALL>`, `<SNR>` and `<TDELTA>` go.
     fn expand_macros(&self, text: &str, now_ms: u64) -> String {
-        let input = crate::proto::macros::MacroInput {
+        let values = self.macro_values(self.idle_minutes(now_ms));
+        crate::proto::macros::replace(text, &values, true)
+    }
+
+    /// JS8Call's macro values for this station (`buildMacroValues`, mainwindow.cpp:4848-4888),
+    /// idle `idle_minutes`. A station has no selected call: no value for `<CALL>`, `<SNR>` or
+    /// `<TDELTA>`.
+    fn macro_values(&self, idle_minutes: u16) -> crate::proto::macros::Values {
+        crate::proto::macros::values(&crate::proto::macros::MacroInput {
             mycall: &self.cfg.mycall,
             grid: &self.cfg.grid,
             info: &self.cfg.info,
             status: &self.cfg.status,
             cq: &self.cfg.cq_text,
             reply: &self.cfg.reply_text,
-            idle_minutes: self.idle_minutes(now_ms),
+            idle_minutes,
             selected: None,
-        };
-        let values = crate::proto::macros::values(&input);
-        crate::proto::macros::replace(text, &values, true)
+        })
     }
 
     /// JS8Call's `<MYGRID4>` and `<MYGRID12>` (`buildMacroValues`, mainwindow.cpp:7024-7025): the

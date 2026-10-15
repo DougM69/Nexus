@@ -609,6 +609,9 @@ export function Js8Cockpit({
    *  everything); `to` sets the To box. The command palette goes back to "no command" — the words
    *  carry their own — except for a saved message (`keepCmd`), which may be a MSG's text. */
   const fill = (insert: string, o: { to?: string; clear?: boolean; keepCmd?: boolean } = {}) => {
+    // Nothing while the box's message goes out (typeahead): JS8Call adds no text while one is
+    // queued (`addMessageText`, mainwindow.cpp:3288-3294).
+    if (typeahead.active) return
     const input = composeRef.current
     const now = textRef.current
     const at = js8InsertText(now, input?.selectionStart ?? now.length, input?.selectionEnd ?? now.length, insert, o.clear === true)
@@ -1714,7 +1717,7 @@ export function Js8Cockpit({
               station, so the Remote page shows pills only. */}
           <Js8ComposeBox
             value={text}
-            onChange={setText}
+            onChange={typeahead.type}
             onEnter={() => {
               if (canSend) send()
             }}
@@ -1724,6 +1727,8 @@ export function Js8Cockpit({
             inputRef={composeRef}
             placeholder={t('js8.dock.compose.placeholder')}
             ariaLabel={t('js8.dock.compose.aria')}
+            readOnly={typeahead.locked}
+            title={typeahead.locked ? t('js8.dock.typeahead.locked') : undefined}
           />
           <span className={`js8-estimate${overCap ? ' over' : ''}`} title={t('js8.dock.estimate.title')}>
             {typeahead.active ? '' : estimateText}
@@ -1738,6 +1743,7 @@ export function Js8Cockpit({
               Saved menu (with "Restore previous message"). Senders, like Send: no ⊞ id, no stop. */}
           <Js8ComposeActions
             canControl={canControl}
+            busy={typeahead.active}
             toCall={toCall}
             heard={heardSelected() !== null}
             infoSet={compose.info.trim() !== ''}

@@ -34,6 +34,10 @@ interface Props {
   inputRef: RefObject<HTMLInputElement>
   placeholder: string
   ariaLabel: string
+  /** Read-only: a MSG or relay going out, which JS8Call's box keeps as it was sent (typeahead). */
+  readOnly?: boolean
+  /** The box's own title: while set, it is shown in place of a pill's or an underline's. */
+  title?: string
 }
 
 /** One stretch of the text and what is drawn under it. */
@@ -154,7 +158,7 @@ export function js8PillTitle(p: Js8Pill): string {
   }
 }
 
-export function Js8ComposeBox({ value, onChange, onEnter, toCall, pills: pillsOn, suggest, inputRef, placeholder, ariaLabel }: Props) {
+export function Js8ComposeBox({ value, onChange, onEnter, toCall, pills: pillsOn, suggest, inputRef, placeholder, ariaLabel, readOnly = false, title: boxTitle }: Props) {
   const pills = useMemo(() => (pillsOn ? js8Pills(value, toCall) : []), [pillsOn, value, toCall])
   const flagged = useJs8FlaggedWords(value, suggest)
   const flags = useMemo(() => (suggest ? js8Words(value).filter((w) => flagged.has(w.word)) : []), [suggest, value, flagged])
@@ -246,6 +250,7 @@ export function Js8ComposeBox({ value, onChange, onEnter, toCall, pills: pillsOn
           className="settings-input cw-type js8-compose"
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          readOnly={readOnly}
           onKeyDown={(e) => {
             if (e.key !== 'Enter') return
             e.preventDefault()
@@ -261,7 +266,8 @@ export function Js8ComposeBox({ value, onChange, onEnter, toCall, pills: pillsOn
           onMouseLeave={() => setTitle(undefined)}
           onContextMenu={(e) => {
             const h = hit(e.clientX, e.clientY)
-            if (h.flag < 0) return
+            // A read-only box takes no word in place of another.
+            if (h.flag < 0 || readOnly) return
             e.preventDefault()
             const word = flags[h.flag]
             setMenu({ flag: h.flag, word, offers: null })
@@ -269,7 +275,7 @@ export function Js8ComposeBox({ value, onChange, onEnter, toCall, pills: pillsOn
               .then((offers) => setMenu((m) => (m && m.word === word ? { ...m, offers } : m)))
               .catch(() => setMenu((m) => (m && m.word === word ? { ...m, offers: { words: [], found: true } } : m)))
           }}
-          title={title}
+          title={boxTitle ?? title}
           placeholder={placeholder}
           aria-label={ariaLabel}
           autoComplete="off"

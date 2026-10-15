@@ -196,8 +196,11 @@ and the frames still to go carry what you typed; the change is taken just before
 Text typed after the last frame has gone goes straight after it, as a message of its own. Delete
 everything still to go and the message ends after the frame on the air. **Enter** and **Send** do
 not queue a new message while yours is going out. A MSG or relay message cannot be changed while it
-goes out (the box is read-only), as in JS8Call. The box empties when the message has gone, or when
-you press **Stop TX**.
+goes out (the box is read-only), as in JS8Call. While it goes out, **REPLY**, **SNR**, **INFO**,
+**STATUS** and **Saved** are greyed out and a button that fills the box adds nothing, as JS8Call
+adds no text then. A macro typed into the box meanwhile is replaced as **Send** replaces it, except
+`<CALL>`, `<SNR>` and `<TDELTA>`, which stay as typed. The box empties when the message has gone,
+or when you press **Stop TX**.
 
 **Between frames.** The radio drops PTT after each frame and keys again for the next, as JS8Call
 does by default: at Normal it is unkeyed for about 1.6 seconds between two frames (Slow about 4,

@@ -262,7 +262,10 @@ impl Station {
             return Ok(Retype::Keep);
         };
         let speed = self.cfg.speed;
-        let text = self.expand_grid_macros(text);
+        // Every macro the station can value, none pruned, as a send replaces them (JS8Call frames
+        // the box again through `appendMessage`, mainwindow.cpp:3443-3447); idle 0M, as the box was
+        // just typed in.
+        let text = crate::proto::macros::replace(text, &self.macro_values(0), false);
         let whole = |follow_on: bool| -> Result<Vec<(Frame, I3)>, ComposeError> {
             let mut frames = frames_with_grid(
                 &self.cfg.mycall,
@@ -599,6 +602,28 @@ mod tests {
         s.type_ahead(first.0.chars().count(), "QTH <MYGRID4>")
             .expect("taken");
         assert_eq!(text(&key_all(&mut s, P)), "QTH EN52");
+    }
+
+    /// Typed text takes every macro the station can value, as a send does: JS8Call frames the box
+    /// again through `appendMessage`, which replaces them and prunes nothing (mainwindow.cpp:
+    /// 3443-3447). A word in angle brackets that is no macro stays as typed.
+    #[test]
+    fn typed_text_takes_every_macro_a_send_takes() {
+        let mut s = Station::new(StationConfig {
+            info: "RIG IC7300".into(),
+            ..station().cfg
+        });
+        send(&mut s, None, LONG);
+        let first = key(&mut s, 0).expect("the first frame");
+        s.type_ahead(
+            first.0.chars().count(),
+            "DE <MYCALL> <MYINFO> <MYREPLY> <MYVERSION> <ANT>",
+        )
+        .expect("taken");
+        assert_eq!(
+            text(&key_all(&mut s, P)),
+            "DE KD9TAW RIG IC7300 HW CPY? NEXUS <ANT>"
+        );
     }
 
     /// Stopped (Stop TX), the box lets go and takes nothing more.
