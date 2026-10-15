@@ -3637,7 +3637,8 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await until(`document.querySelector('.cw-cockpit .amp-op').disabled`)
       assert.equal(controlGeometry+modeGeometry+bandGeometry+wheelGeometry+filterGeometry+dspGeometry+phoneModeGeometry+tierGeometry+followGeometry+decoderGeometry+receiverGeometry+gainGeometry+levelGeometry+16,656)
       // 127: the steady-view scenario's band pick (one radio.band, asserted sent exactly once) joined the 126.
-      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,127);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
+      // 128: the JS8 walk's JS8 60 chip (one decoder.js8Speed, asserted sent exactly once) joined the 127.
+      assert.equal(loggedRequests.length,5);assert.equal(stationRequests.length,128);assert.equal(unexpectedMessages,0);assert.equal(exceptions,0)
       if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-manual-logging.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'operation-results.json'),JSON.stringify({count:loggedRequests.length,stationActions:stationRequests.map(r=>r.action),controlGeometry,modeGeometry,bandGeometry,wheelGeometry,filterGeometry,dspGeometry,phoneModeGeometry,tierGeometry,followGeometry,decoderGeometry,receiverGeometry,gainGeometry,levelGeometry,modes:loggedRequests.map(r=>r.record.mode),lostResultResolved:true,wholePageReloadResolved:true,crossTabLockRefusal:true,geometry:16,exceptions,unexpectedMessages},null,2))}
       console.log('Compiled browser: five logging forms, 127 station gestures, saved receiver choices, native band recall, shared wheel/digit tuning, Phone mode and FM receiver controls, separate grants, recovery and 656 geometry cases passed');return
     }
