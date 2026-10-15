@@ -533,6 +533,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DXCC entity, but the search still looked only at the country text stored with the contact, so a
   contact stored as `Germany` from a QRZ lookup was not found by "Fed. Rep. of Germany", the name
   on its row. The search now looks in both, on the desktop and on the Remote page.
+- **The FT-991A's, FT-710's and FTDX10's ALC meter reads on the radio's own scale.** Nexus showed the
+  ALC of these three radios at four times the radio's own reading, and at 100 % in red from a quarter
+  of the radio's ALC bar up. A 991A run below full power, which raises its ALC reading by design,
+  looked overdriven on every over. Nexus now reads the radio's own ALC value and shows the same
+  share of the bar as the radio. Every other radio's ALC reads as before. NEEDS-BENCH: an FT-991A
+  and an FTDX10 into a dummy load, each radio's ALC bar next to Nexus's at three drive levels.
 
 ### Security
 

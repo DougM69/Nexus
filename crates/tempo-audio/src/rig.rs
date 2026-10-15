@@ -1579,8 +1579,17 @@ impl Rig {
     }
 
     pub fn send_raw(&mut self, raw: &str) -> Option<String> {
+        self.send_raw_within(raw, None)
+    }
+
+    /// [`Self::send_raw`] with a caller-chosen deadline (ms), for a read made while a tune carrier
+    /// plays: the bound [`Self::read_meter_f32_within`] gives the tune-time meter poll. `None` =
+    /// the transport's normal deadline.
+    pub fn send_raw_within(&mut self, raw: &str, deadline_ms: Option<u64>) -> Option<String> {
         self.control.as_ref()?;
-        let reply = self.command(&format!("w {raw}\n")).ok()?;
+        let reply = self
+            .command_with_deadline(&format!("w {raw}\n"), deadline_ms)
+            .ok()?;
         // `str::trim` does NOT remove a NUL — it is not whitespace — so trim it explicitly or every
         // caller gets "MD02;\0" and has to know that. The rig's own terminator (`;`) is left alone:
         // callers parse the rig's string, not a cleaned-up version of it.

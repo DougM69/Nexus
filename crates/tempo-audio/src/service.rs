@@ -1017,6 +1017,22 @@ const TX_METER_POLL_MS: f64 = 150.0;
 /// poll, the capability ladder and its reset cannot disagree about the order.
 const TX_METERS: [&str; 4] = ["SWR", "ALC", "RFPOWER_METER_WATTS", "COMP_METER"];
 const N_TX_METERS: usize = TX_METERS.len();
+
+/// Read one transmit meter as the bars take it (SWR ratio, ALC 0 to 1, Po watts, COMP dB): Hamlib's
+/// `l NAME`, except the ALC of a radio that [`crate::rigmodels::raw_alc_query`] names. There the
+/// radio's own `RM4;` answer is read through rigctld's `w`, the same bytes `l ALC` puts on the
+/// wire, and placed on the radio's own bar instead of Hamlib's quarter of it. `None` is a missed
+/// read on either path, so the three-strikes ladder treats both alike, and `deadline_ms` bounds
+/// both. A read: nothing is set on the radio.
+fn read_tx_meter(rig: &mut Rig, meter: &str, model: u32, deadline_ms: Option<u64>) -> Option<f32> {
+    match crate::rigmodels::raw_alc_query(model) {
+        Some(query) if meter == "ALC" => rig
+            .send_raw_within(query, deadline_ms)
+            .and_then(|reply| crate::rigmodels::alc_bar_from_rm4(&reply)),
+        _ => rig.read_meter_f32_within(meter, deadline_ms),
+    }
+}
+
 /// The tune-time meter read's deadline. A tune carrier is fed one chunk per tick from a lead of
 /// [`TUNE_LEAD_MS`]; a meter read blocks the loop, so it may take at most this long before the
 /// ring would run dry. Past it the read is abandoned, never waited for.
@@ -11530,7 +11546,8 @@ impl RadioLoop {
         // read ONLY while keyed (a tune carrier, a slot/CW/voice over, or live phone PTT), and
         // blanked on unkey so the bars never freeze on a stale reading. Read via the generic
         // `l NAME` level path, so it works on BOTH the native CI-V daemon (Icom 15 11/12/13/14)
-        // and any Hamlib rig reporting these levels; an unsupported meter returns None and
+        // and any Hamlib rig reporting these levels (an FT-991A's or FT-710's ALC is read raw
+        // instead, see `read_tx_meter`); an unsupported meter returns None and
         // simply doesn't render. Deliberately placed AFTER the PTT-drop above: a meter read is a
         // blocking CAT round-trip, so it must never sit upstream of the auto-unkey and hold the
         // transmitter keyed past the over on a slow rig. And only ONE meter is read per throttled
@@ -11645,7 +11662,8 @@ impl RadioLoop {
                     // alone while it transmits. See `tx_meter_supported`.
                     let mut reading = None;
                     if self.tx_meter_supported[i] != Some(false) {
-                        reading = rig.read_meter_f32_within(TX_METERS[i], deadline);
+                        reading =
+                            read_tx_meter(rig, TX_METERS[i], self.applied.rig_model, deadline);
                         note_ext_read(
                             &mut self.tx_meter_supported[i],
                             &mut self.tx_meter_misses[i],
@@ -16027,6 +16045,7 @@ mod tests {
     mod rf_pane;
     mod split_overs;
     mod wfview;
+    mod yaesu_alc;
     use super::should_command_rf_power;
 
     #[test]
