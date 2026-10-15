@@ -36,8 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   among them, and the client's own checks (Nexus's slice the transmit slice, nothing else keying
   the radio, XIT off, break-in on and Sync CWX off for CW, a tuner fitted for the ATU). Saving a
   change reconnects Nexus to the radio. Beta, not yet checked on a real Flex: try it into a dummy
-  load first. NEEDS-BENCH on a FLEX radio, into a dummy load: CW, Tune and the ATU through the
-  client.
+  load first. While it is off, a CW word, a Tune or an ATU press the client holds back says so and
+  names this switch. NEEDS-BENCH on a FLEX radio, into a dummy load: CW, Tune and the ATU through
+  the client.
 - **FlexRadio: your paddle wins over Nexus's CW on the Flex native client (Beta), built and off
   until a tester has checked it on a radio.** Once a tester's bench has shown what the radio
   reports for a paddle or key in its key jack, touching it while Nexus sends CW clears the radio's

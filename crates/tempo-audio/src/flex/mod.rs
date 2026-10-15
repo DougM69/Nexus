@@ -993,6 +993,12 @@ impl Drop for FlexDaemon {
     }
 }
 
+/// Where the radio's Beta switch for the client's CW, Tune and ATU is, in the words a refusal shows
+/// while it is off (`RadioProfile::flex_native_unbenched`): its Settings label and place, and the
+/// dummy load a first try belongs on.
+pub(crate) const BETA_SWITCH: &str = "\"Let Nexus send CW, Tune and ATU through the native Flex \
+     client\" in Settings ▸ Radio ▸ Rig & CAT ▸ Advanced (dummy load first)";
+
 /// The PTT line's words for a tune of the radio's own carrier the client did not start
 /// ([`FlexDaemon::tune_on`]): what kept it back, and what to do. `None`: the session has gone.
 pub(crate) fn tune_refusal_words(refusal: Option<&Refusal>) -> String {
@@ -1002,6 +1008,10 @@ pub(crate) fn tune_refusal_words(refusal: Option<&Refusal>) -> String {
                                  radio's carrier would sit off the frequency Nexus checked. Turn \
                                  XIT off."
             .to_string(),
+        Some(Refusal::NoReadback(_)) => format!(
+            "Tune not keyed: Tune through the Flex native client is not bench-tested yet. To try \
+             it, turn on {BETA_SWITCH}."
+        ),
         Some(other) => format!("Tune not keyed: {other}."),
     }
 }
@@ -1015,6 +1025,10 @@ pub(crate) fn atu_refusal_words(refusal: Option<&Refusal>) -> String {
                                  the radio's carrier would sit off the frequency Nexus checked. \
                                  Turn XIT off."
             .to_string(),
+        Some(Refusal::NoReadback(_)) => format!(
+            "ATU not started: the ATU through the Flex native client is not bench-tested yet. To \
+             try it, turn on {BETA_SWITCH}."
+        ),
         Some(other) => format!("ATU not started: {other}."),
     }
 }

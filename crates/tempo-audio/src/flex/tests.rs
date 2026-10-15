@@ -660,15 +660,7 @@ fn a_cw_word_the_client_does_not_send_says_why() {
     let d = daemon(&sim);
     let mut c = Client::connect(&d);
     in_cw(&mut c, &d);
-    assert_eq!(
-        refused(&mut c, &d),
-        Some((
-            "CW not sent: the Flex native client does not send CW yet. For CW, turn the Flex \
-             native client off (SmartSDR CAT sends it), or use the WinKeyer or Soundcard keyer."
-                .to_string(),
-            None
-        ))
-    );
+    assert_eq!(refused(&mut c, &d), Some((CW_BETA_OFF.to_string(), None)));
     assert_eq!(cwx_wire(&sim), Vec::<String>::new());
 }
 
@@ -696,13 +688,7 @@ fn the_radios_beta_setting_switches_the_clients_cw_tune_and_atu() {
             assert_eq!(c.ask("b CQ", 1), "RPRT -1\n");
             assert_eq!(
                 d.key_refused_since(asked),
-                Some((
-                    "CW not sent: the Flex native client does not send CW yet. For CW, turn the \
-                     Flex native client off (SmartSDR CAT sends it), or use the WinKeyer or \
-                     Soundcard keyer."
-                        .to_string(),
-                    None
-                ))
+                Some((CW_BETA_OFF.to_string(), None))
             );
             assert_eq!(cwx_wire(&sim), Vec::<String>::new());
         }
@@ -2443,4 +2429,45 @@ fn a_refused_dax_transmit_stream_routes_nothing() {
     wait_session(&d, "the readback idle", |s| s.transmit_ready);
     assert_ne!(c.ask("T 1", 1), "RPRT 0\n");
     assert_eq!(count(&sim, "xmit 1"), 0);
+}
+
+/// The CW line's words for a word refused because the radio's Beta switch is off: what it is, and
+/// the switch that turns it on, so the operator can find it from the refusal alone.
+const CW_BETA_OFF: &str =
+    "CW not sent: CW through the Flex native client is not bench-tested yet. \
+     To try it, turn on \"Let Nexus send CW, Tune and ATU through the native Flex client\" in \
+     Settings ▸ Radio ▸ Rig & CAT ▸ Advanced (dummy load first), or turn the Flex native client \
+     off (SmartSDR CAT sends CW), or use the WinKeyer or Soundcard keyer.";
+
+/// ⭐ WITH THE BETA SWITCH OFF, CW, TUNE AND THE ATU EACH SAY WHICH SWITCH TURNS THEM ON. The words
+/// for the `NoReadback` refusal (the switch off) name the switch and where it is, by value; the
+/// other refusals keep their own words (XIT is the control: it reads as it did).
+#[test]
+fn with_the_beta_switch_off_cw_tune_and_the_atu_name_the_switch() {
+    assert_eq!(
+        super::shim::cw_refusal_words(&Refusal::NoReadback(StartKind::Cwx)),
+        CW_BETA_OFF
+    );
+    assert_eq!(
+        super::tune_refusal_words(Some(&Refusal::NoReadback(StartKind::Tune))),
+        "Tune not keyed: Tune through the Flex native client is not bench-tested yet. To try it, \
+         turn on \"Let Nexus send CW, Tune and ATU through the native Flex client\" in Settings ▸ \
+         Radio ▸ Rig & CAT ▸ Advanced (dummy load first)."
+    );
+    assert_eq!(
+        super::atu_refusal_words(Some(&Refusal::NoReadback(StartKind::Atu))),
+        "ATU not started: the ATU through the Flex native client is not bench-tested yet. To try \
+         it, turn on \"Let Nexus send CW, Tune and ATU through the native Flex client\" in \
+         Settings ▸ Radio ▸ Rig & CAT ▸ Advanced (dummy load first)."
+    );
+    assert_eq!(
+        super::tune_refusal_words(Some(&Refusal::XitOn)),
+        "Tune not keyed: XIT is on for the radio's transmit slice, so the radio's carrier would \
+         sit off the frequency Nexus checked. Turn XIT off."
+    );
+    assert_eq!(
+        super::atu_refusal_words(Some(&Refusal::XitOn)),
+        "ATU not started: XIT is on for the radio's transmit slice, so the radio's carrier would \
+         sit off the frequency Nexus checked. Turn XIT off."
+    );
 }
