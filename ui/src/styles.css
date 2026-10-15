@@ -30782,9 +30782,11 @@ tr.sel .aprs-sym {
 .cstats-slot[data-slot='none'] .cstats-mark {
   visibility: hidden;
 }
+/* The dash centred in the box every other mark takes (0.8em, 1px above and below), so a line with a
+   no-credit slot is no taller than one without (CallStatsPane, ONE HEIGHT). */
 .cstats-slot[data-slot='noCredit'] .cstats-mark {
   height: 2px;
-  margin: calc(0.4em + 1px) auto;
+  margin: 0.4em auto;
   border: 0;
   background: var(--text-dim);
 }
