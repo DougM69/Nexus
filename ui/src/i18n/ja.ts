@@ -5031,7 +5031,7 @@ export const JA: PartialCatalog = {
   // JS8's spotting and APRS-IS block: MACHINE TRANSLATION, for a native speaker to check.
   "settings.js8.spotting.title": "スポットと APRS-IS",
   "settings.js8.spotAprs.label": "@APRSIS メッセージを APRS-IS へスポット",
-  "settings.js8.spotAprs.hint": "JS8Call と同じく既定はオン(PSK Reporter のスイッチがオンのとき)。@APRSIS GRID を送った局はそのロケーターで APRS マップに載り、@APRSIS CMD の後のテキストは生パケットとして APRS-IS へ送られます。どちらも自局のコールサインで送られます:Nexus は iGate と同じく、コールサインから算出したパスコードで APRS-IS にログインし、何も保存しません。",
+  "settings.js8.spotAprs.hint": "既定はオフ(JS8Call では既定でオン)。PSK Reporter のスイッチがオンのときだけ働きます。@APRSIS GRID を送った局はそのロケーターで APRS マップに載り、@APRSIS CMD の後のテキストは生パケットとして APRS-IS へ送られます。どちらも自局のコールサインで送られます:Nexus は iGate と同じく、コールサインから算出したパスコードで APRS-IS にログインし、何も保存しません。",
   "settings.js8.aprsRelay.label": "APRS-IS のメッセージを受信済みの局へ中継",
   "settings.js8.aprsRelay.hint": "既定はオフ。無人で送信します:JS8 で受信した局宛ての APRS メッセージを @APRSIS MSG TO: として、DE と送信者のコールサイン付きでその局へ送信し、その局の名義で APRS-IS に確認を返します。下の「スポットしない」リストにある局へは中継しません。TX がオンのときだけ、1 通ずつ、アイドルと TX のウォッチドッグを含むすべての送信ガードを通ります。上のスイッチが必要です。",
   "settings.js8.spotNever.label": "次のコールサインは決してスポットしない",

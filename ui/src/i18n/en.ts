@@ -7939,7 +7939,7 @@ export const EN = {
   'settings.js8.spotting.title': 'Spotting and APRS-IS',
   'settings.js8.spotAprs.label': 'Spot @APRSIS messages to APRS-IS',
   'settings.js8.spotAprs.hint':
-    'On by default, as in JS8Call, while the PSK Reporter switch is on. A station heard sending @APRSIS GRID is put on the APRS map at that locator, and the text after @APRSIS CMD goes to APRS-IS as a raw packet. Both go up under your callsign: Nexus logs in to APRS-IS with the passcode worked out from it, as the iGate does, and stores nothing.',
+    'Off by default (JS8Call ships it on), and it works only while the PSK Reporter switch is on. A station heard sending @APRSIS GRID is put on the APRS map at that locator, and the text after @APRSIS CMD goes to APRS-IS as a raw packet. Both go up under your callsign: Nexus logs in to APRS-IS with the passcode worked out from it, as the iGate does, and stores nothing.',
   'settings.js8.aprsRelay.label': 'Relay APRS-IS messages to heard stations',
   'settings.js8.aprsRelay.hint':
     "Off by default. This transmits with nobody at the radio: an APRS message for a station you have heard on JS8 is keyed to it as @APRSIS MSG TO:, signed DE and the sender's call, and acknowledged on APRS-IS in that station's name. Never to a station on the never-spot list below. Only while TX is on, one message at a time, through every transmit guard, the idle and TX watchdogs included. Needs the switch above.",

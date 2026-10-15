@@ -9420,10 +9420,10 @@ export function SettingsPanel({
                   <button disabled={remote}
                     type="button"
                     role="switch"
-                    // ⚠️ `!== false`, not `!!` — the default is ON, as in JS8Call, so an absent key reads as on.
-                    aria-checked={form.js8SpotAprs !== false}
-                    className={`toggle${form.js8SpotAprs !== false ? ' on' : ''}`}
-                    onClick={() => updateBool('js8SpotAprs', form.js8SpotAprs === false)}
+                    // Off by default, though JS8Call ships it on: an absent key reads as off.
+                    aria-checked={form.js8SpotAprs === true}
+                    className={`toggle${form.js8SpotAprs === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8SpotAprs', form.js8SpotAprs !== true)}
                   >
                     <span className="toggle-knob" />
                   </button>

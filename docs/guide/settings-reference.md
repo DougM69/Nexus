@@ -1429,10 +1429,10 @@ Spotting itself follows the **PSK Reporter** switch in
 and JS8NET together: while it is on, the stations you hear on JS8 go to PSK Reporter and to
 JS8NET, and commands sent to a `@group` go to JS8NET. The [JS8 chapter](js8.md) has the details.
 
-- **Spot @APRSIS messages to APRS-IS** — on by default, as in JS8Call. A station heard sending
-  `@APRSIS GRID` is put on the APRS map at that locator, and the text after `@APRSIS CMD` goes
-  to APRS-IS as a raw packet, under your callsign; Nexus logs in to APRS-IS with the passcode
-  worked out from it, as the iGate does.
+- **Spot @APRSIS messages to APRS-IS** — off by default (JS8Call ships it on). A station heard
+  sending `@APRSIS GRID` is put on the APRS map at that locator, and the text after
+  `@APRSIS CMD` goes to APRS-IS as a raw packet, under your callsign; Nexus logs in to APRS-IS
+  with the passcode worked out from it, as the iGate does.
 - **Relay APRS-IS messages to heard stations** — off by default. **It transmits with nobody at
   the radio:** an APRS message for a station heard on JS8 is keyed to it as `@APRSIS MSG TO:`,
   only while TX is on and through every transmit guard, and never to a station on the

@@ -1093,11 +1093,14 @@ pub struct Settings {
     /// (mainwindow.cpp:5381-5386); on, a move is taken and the frames still to go key at it.
     #[serde(default)]
     pub js8_tx_offset_while_sending: bool,
-    /// JS8Call's "Enable spotting @APRSIS messages to the APRS-IS network" (`SpotToAPRS`, on by
-    /// default, Configuration.cpp:2300): a heard `@APRSIS GRID` becomes an APRS-IS position and an
+    /// JS8Call's "Enable spotting @APRSIS messages to the APRS-IS network" (`SpotToAPRS`,
+    /// Configuration.cpp:2300): a heard `@APRSIS GRID` becomes an APRS-IS position and an
     /// `@APRSIS CMD` a raw APRS packet, uploaded under this station's callsign on the APRS-IS
     /// session, which logs in with the passcode computed from that callsign as the iGate's does.
-    /// Only while PSK Reporter uploads (JS8Call's SPOT) and the callsign is real.
+    /// Only while PSK Reporter uploads (JS8Call's SPOT) and the callsign is real. OFF by default,
+    /// where JS8Call ships it on: a stranger's `@APRSIS CMD` packet would go up under the
+    /// operator's own verified login, so the operator turns it on. A file without the key (an
+    /// upgrader's) loads it off.
     #[serde(default = "default_js8_spot_aprs")]
     pub js8_spot_aprs: bool,
     /// JS8Call 3.0's "Relay APRS-IS messages to stations in the Heard List" (`APRSISRelay`, OFF by
@@ -4885,9 +4888,10 @@ fn default_js8_relay() -> bool {
     true
 }
 
-/// JS8Call ships @APRSIS spotting ON (`SpotToAPRS`). See [`Settings::js8_spot_aprs`].
+/// The @APRSIS gateway ships OFF, though JS8Call ships its `SpotToAPRS` on: see
+/// [`Settings::js8_spot_aprs`].
 fn default_js8_spot_aprs() -> bool {
-    true
+    false
 }
 
 /// JS8Call's `TxIdleWatchdog` default (minutes). See [`Settings::js8_idle_watchdog_min`].
@@ -10383,36 +10387,48 @@ mod tests {
         }
     }
 
-    /// JS8's internet links: JS8Call's defaults (@APRSIS spotting ON, the inbound APRS-IS relay
-    /// OFF, nobody on the never-spot list), on the wire under their own keys, an upgrader's file
-    /// loading those defaults, an explicit choice surviving the round trip, and the TS mirror.
+    /// JS8's internet links: the defaults (the @APRSIS gateway OFF, though JS8Call ships its
+    /// SpotToAPRS on; the inbound APRS-IS relay OFF; nobody on the never-spot list), on the wire
+    /// under their own keys, an upgrader's file loading those defaults, an explicit choice
+    /// surviving the round trip, and the TS mirror.
     #[test]
     fn js8_link_settings_defaults_wire_keys_and_ts_mirror() {
         let s = Settings::default();
-        assert!(s.js8_spot_aprs, "JS8Call SpotToAPRS default true");
-        assert!(
-            !s.js8_aprs_relay,
-            "JS8Call APRSISRelay default false: it keys unattended"
-        );
-        assert!(
-            s.js8_spot_never.is_empty(),
-            "JS8Call SpotBlacklist default empty"
+        assert_eq!(
+            (
+                s.js8_spot_aprs,
+                s.js8_aprs_relay,
+                s.js8_spot_never.is_empty()
+            ),
+            (false, false, true),
+            "the @APRSIS gateway off until the operator turns it on; JS8Call's APRSISRelay off (it \
+             keys unattended); JS8Call's SpotBlacklist empty"
         );
         let json = serde_json::to_string(&s).unwrap();
         for k in [
-            "\"js8SpotAprs\":true",
+            "\"js8SpotAprs\":false",
             "\"js8AprsRelay\":false",
             "\"js8SpotNever\":[]",
         ] {
             assert!(json.contains(k), "missing wire key/value {k}");
         }
+        // An upgrader's file has none of the three keys: the gateway loads off.
         let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
-        assert!(old.js8_spot_aprs && !old.js8_aprs_relay && old.js8_spot_never.is_empty());
+        assert_eq!(
+            (
+                old.js8_spot_aprs,
+                old.js8_aprs_relay,
+                old.js8_spot_never.is_empty()
+            ),
+            (false, false, true),
+            "an upgrader who never set them: the gateway and the relay off, the list empty"
+        );
+        // Each explicit choice differs from its default, so a key read back proves itself.
         let chosen: Settings = serde_json::from_str(
-            r#"{"js8SpotAprs":false,"js8AprsRelay":true,"js8SpotNever":["W1AW","K1ABC"]}"#,
+            r#"{"js8SpotAprs":true,"js8AprsRelay":true,"js8SpotNever":["W1AW","K1ABC"]}"#,
         )
         .unwrap();
-        assert!(!chosen.js8_spot_aprs && chosen.js8_aprs_relay);
+        assert!(chosen.js8_spot_aprs && chosen.js8_aprs_relay);
         assert_eq!(chosen.js8_spot_never, vec!["W1AW", "K1ABC"]);
         let back: Settings =
             serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();

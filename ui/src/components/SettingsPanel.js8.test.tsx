@@ -358,27 +358,28 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     expect(sent?.js8Groups, 'and keeps the group as it is').toEqual(['@APRSIS'])
   })
 
-  // JS8Call's SPOT block: "Enable spotting @APRSIS messages to the APRS-IS network" (on as it
-  // ships, `SpotToAPRS`), 3.0's inbound relay (off, `APRSISRelay`: it keys unattended, and its
-  // hint says so) and "Never spot these callsigns" (`SpotBlacklist`, read upper-cased).
-  it('the @APRSIS switch reads on, the APRS-IS relay off, the never-spot list empty, and each saves', async () => {
+  // JS8Call's SPOT block: "Enable spotting @APRSIS messages to the APRS-IS network" (off in
+  // Nexus, where JS8Call ships its `SpotToAPRS` on), 3.0's inbound relay (off, `APRSISRelay`: it
+  // keys unattended, and its hint says so) and "Never spot these callsigns" (`SpotBlacklist`, read
+  // upper-cased).
+  it('the @APRSIS switch reads off, the APRS-IS relay off, the never-spot list empty, and each saves', async () => {
     const fs = await openJs8()
     const aprs = control(fs, 'Spot @APRSIS messages to APRS-IS')
     const relay = control(fs, 'Relay APRS-IS messages to heard stations')
     const never = control(fs, 'Never spot these callsigns') as HTMLInputElement
-    expect(aprs.getAttribute('aria-checked'), 'on by default, an absent key included').toBe('true')
+    expect(aprs.getAttribute('aria-checked'), 'off by default, an absent key included').toBe('false')
     expect(relay.getAttribute('aria-checked'), 'off by default').toBe('false')
     expect(never.value, 'empty by default').toBe('')
     expect(within(fs).getByText(/This transmits with nobody at the radio/), 'the relay says it keys unattended').toBeTruthy()
     fireEvent.click(aprs)
     fireEvent.click(relay)
     fireEvent.change(never, { target: { value: 'w1aw, k1abc/p ,' } })
-    expect(aprs.getAttribute('aria-checked')).toBe('false')
+    expect(aprs.getAttribute('aria-checked')).toBe('true')
     expect(relay.getAttribute('aria-checked')).toBe('true')
     await clickSave()
     await waitFor(() =>
       expect(api.get('setSettings')).toHaveBeenCalledWith(
-        expect.objectContaining({ js8SpotAprs: false, js8AprsRelay: true, js8SpotNever: ['W1AW', 'K1ABC/P'] }),
+        expect.objectContaining({ js8SpotAprs: true, js8AprsRelay: true, js8SpotNever: ['W1AW', 'K1ABC/P'] }),
       ),
     )
   })

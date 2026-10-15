@@ -221,9 +221,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The JS8 @APRSIS gateway.** A station heard sending `@APRSIS GRID` is put on the APRS map at
   that locator, and the text after `@APRSIS CMD` goes to APRS-IS as a raw packet, under your
   callsign: Nexus logs in to APRS-IS with the passcode worked out from your callsign, as the iGate
-  does, only while JS8 is open and something waits to go. On by default, as in JS8Call; switch it
-  off in Settings ▸ Digital ▸ JS8. **Never spot these callsigns** there keeps a station off PSK
-  Reporter, JS8NET and APRS-IS. NEEDS-BENCH: seeing the spots arrive needs a station on the air.
+  does, only while JS8 is open and something waits to go. Off by default (JS8Call ships it on):
+  switch it on in Settings ▸ Digital ▸ JS8. **Never spot these callsigns** there keeps a station
+  off PSK Reporter, JS8NET and APRS-IS. NEEDS-BENCH: seeing the spots arrive needs a station on
+  the air.
 - **JS8 can relay APRS-IS messages to stations you hear (JS8Call 3.0), off by default.** Turned
   on, it transmits with nobody at the radio: an APRS message for a station heard on JS8 is
   acknowledged on APRS-IS in that station's name and keyed to it as `@APRSIS MSG TO:`, only while

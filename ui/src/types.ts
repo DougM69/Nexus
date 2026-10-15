@@ -4188,8 +4188,9 @@ export interface Settings {
    * default): off, the offset cannot be moved while a message is queued or going out; on, a move
    * applies from the next frame. */
   js8TxOffsetWhileSending: boolean
-  /** JS8Call's "spot @APRSIS messages to APRS-IS" (default on): a heard @APRSIS GRID becomes an
-   * APRS-IS position and an @APRSIS CMD a raw packet, under this callsign. Needs PSK Reporter on. */
+  /** JS8Call's "spot @APRSIS messages to APRS-IS" (default off; JS8Call ships it on): a heard
+   * @APRSIS GRID becomes an APRS-IS position and an @APRSIS CMD a raw packet, under this callsign.
+   * Needs PSK Reporter on. */
   js8SpotAprs: boolean
   /** JS8Call 3.0's inbound APRS-IS relay (default OFF): an APRS message for a heard station is
    * keyed as `@APRSIS MSG TO:<call> <text> DE <sender>` with nobody at the radio. */

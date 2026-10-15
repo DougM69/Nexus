@@ -62,9 +62,9 @@ both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
   (and 64 KB) of yours and as many held for others; when it is full, a message already handed
   over goes first, then the oldest, and a note at the top of the Inbox says which message went
   and why until you press **Clear notes**. A held message is handed over in one transmission,
-  which holds at most 19 frames at Slow, 39 at Normal, 59 at Fast and 99 at Turbo; one that needs
-  more is not offered or handed over until you change to a speed it fits, and its row says so and
-  names that speed.
+  which holds at most 19 frames at Slow, 39 at Normal, 59 at Fast, 99 at JS8 40 and 149 at
+  JS8 60; one that needs more is not offered or handed over until you change to a speed it fits,
+  and its row says so and names that speed.
 - **Log** — the log strip, prefilled from the station you last addressed, as JS8Call's log
   dialog is: their SNR at your station in **RST sent**, the start time when you selected
   them (put their call in the To box), and the frequency the dial plus your TX offset. A JS8
@@ -285,11 +285,11 @@ and a real callsign set, JS8 spots the way JS8Call's SPOT button does:
   adding one.
 - The same stations, and every command sent to a @group (heartbeats, CQs, @JS8NET and @APRSIS
   messages), go to JS8NET, JS8Call's spotting network, once a minute.
-- **Spot @APRSIS messages to APRS-IS** (on by default, as in JS8Call): a station heard sending
-  `@APRSIS GRID` is put on the APRS map at that locator, and the text after `@APRSIS CMD` goes to
-  APRS-IS as a raw packet. They go up under your callsign: Nexus logs in to APRS-IS with the
-  passcode worked out from it, as the iGate does, only while JS8 is open and something is waiting
-  to go, and stores nothing.
+- **Spot @APRSIS messages to APRS-IS** (off by default; JS8Call ships it on): a station heard
+  sending `@APRSIS GRID` is put on the APRS map at that locator, and the text after `@APRSIS CMD`
+  goes to APRS-IS as a raw packet. They go up under your callsign: Nexus logs in to APRS-IS with
+  the passcode worked out from it, as the iGate does, only while JS8 is open and something is
+  waiting to go, and stores nothing.
 - **Never spot these callsigns** keeps a station off all three networks.
 
 A contest that allows spots only over RF (Winter Field Day) stops all of it while it runs, as it

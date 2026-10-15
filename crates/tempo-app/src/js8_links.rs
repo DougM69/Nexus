@@ -19,7 +19,8 @@
 //! GATES, JS8Call's: every link needs spotting on — Nexus's PSK Reporter switch as it uploads
 //! (`pskreporter_uploading`, so a contest that allows spots only over RF stops all three) — and a
 //! real callsign, as the iGate needs. The gateway also needs `js8_spot_aprs` (JS8Call's
-//! `SpotToAPRS`, on by default) and the relay `js8_aprs_relay` (`APRSISRelay`, off by default). A
+//! `SpotToAPRS`, which JS8Call ships on and Nexus ships off: its packets go up under the operator's
+//! own APRS-IS login) and the relay `js8_aprs_relay` (`APRSISRelay`, off by default). A
 //! station on `js8_spot_never` (JS8Call's `SpotBlacklist`), as heard or by its base call, is sent
 //! to no network, and no APRS message is relayed to one.
 //!
@@ -641,10 +642,18 @@ mod tests {
     }
 
     /// JS8 on 20 m at 14.078 MHz, KD9TAW in EN52, every switch at its default (PSK Reporter on).
-    fn links_engine() -> Engine {
+    /// JS8 on 20 m with the settings as they ship: PSK Reporter on, the @APRSIS gateway off.
+    fn shipped_engine() -> Engine {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.js8_enter();
         e.set_frequency(14.078, "20m", "USB");
+        e
+    }
+
+    /// The same with the @APRSIS gateway turned on, as the operator turns it on in Settings.
+    fn links_engine() -> Engine {
+        let mut e = shipped_engine();
+        e.settings.js8_spot_aprs = true;
         e
     }
 
@@ -946,6 +955,31 @@ mod tests {
         let back = js8net_view(&e.take_js8net("Nexus 1.19.0"));
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].0, "RX.LOCAL");
+    }
+
+    /// The gateway is off as Nexus ships, where JS8Call ships its SpotToAPRS on: what a heard
+    /// station sends after @APRSIS CMD would go up under the operator's own APRS-IS login. A
+    /// heard @APRSIS GRID and CMD go nowhere and nothing logs in, until the operator turns it on.
+    #[test]
+    fn the_aprsis_gateway_is_off_until_the_operator_turns_it_on() {
+        let mut rows = sent("K1ABC", "@APRSIS GRID FN04TV53", 1500.0, -7);
+        rows.extend(sent("K1ABC", "@APRSIS CMD :SMSGTE :HI", 900.0, -3));
+        let now = now_unix_secs();
+        let mut e = shipped_engine();
+        e.js8_ingest(&rows, 1);
+        assert_eq!(
+            (e.take_js8_aprs_uplink(now), e.js8_aprs_link(now)),
+            (Vec::<String>::new(), Js8AprsLink::default()),
+            "as shipped: no APRS-IS line and no APRS-IS login"
+        );
+        // CONTROL: the same traffic with the gateway turned on goes up.
+        let mut on = links_engine();
+        on.js8_ingest(&rows, 1);
+        assert_eq!(
+            on.take_js8_aprs_uplink(now).len(),
+            2,
+            "turned on: both lines"
+        );
     }
 
     #[test]

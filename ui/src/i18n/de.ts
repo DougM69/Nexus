@@ -5417,7 +5417,7 @@ export const DE: PartialCatalog = {
   // JS8's spotting and APRS-IS block: MACHINE TRANSLATION, for a native speaker to check.
   "settings.js8.spotting.title": "Spotting und APRS-IS",
   "settings.js8.spotAprs.label": "@APRSIS-Nachrichten an APRS-IS spotten",
-  "settings.js8.spotAprs.hint": "Standardmäßig an, wie in JS8Call, solange der Schalter PSK Reporter an ist. Eine Station, die @APRSIS GRID sendet, erscheint mit diesem Locator auf der APRS-Karte, und der Text nach @APRSIS CMD geht als Rohpaket an APRS-IS. Beides geht unter deinem Rufzeichen hinaus: Nexus meldet sich bei APRS-IS mit dem daraus berechneten Passcode an, wie das iGate, und speichert nichts.",
+  "settings.js8.spotAprs.hint": "Standardmäßig aus (in JS8Call an); wirkt nur, solange der Schalter PSK Reporter an ist. Eine Station, die @APRSIS GRID sendet, erscheint mit diesem Locator auf der APRS-Karte, und der Text nach @APRSIS CMD geht als Rohpaket an APRS-IS. Beides geht unter deinem Rufzeichen hinaus: Nexus meldet sich bei APRS-IS mit dem daraus berechneten Passcode an, wie das iGate, und speichert nichts.",
   "settings.js8.aprsRelay.label": "APRS-IS-Nachrichten an gehörte Stationen weiterleiten",
   "settings.js8.aprsRelay.hint": "Standardmäßig aus. Das sendet, ohne dass jemand am Funkgerät sitzt: Eine APRS-Nachricht für eine Station, die du in JS8 gehört hast, wird ihr als @APRSIS MSG TO: gesendet, mit DE und dem Rufzeichen des Absenders, und im Namen dieser Station bei APRS-IS bestätigt. Nie an eine Station auf der Nie-spotten-Liste unten. Nur bei eingeschaltetem TX, eine Nachricht nach der anderen, durch jede Sendesperre, auch den Leerlauf- und den TX-Watchdog. Braucht den Schalter darüber.",
   "settings.js8.spotNever.label": "Diese Rufzeichen nie spotten",
