@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Settings ▸ Licenses shows Nexus's NOTICE.** The Licenses screen now opens with the NOTICE file
+  the installers carry, before the license texts of the interface's npm packages and the Rust
+  crates.
 - **A Timeline card in Statistics.** A line chart of your QSOs over the past day (by hour), the
   past 30 days (by day) or the past year (by month), each ending with the current hour, day or month
   in UTC, as the log is. One line per mode, counted as the By mode card counts them (USB and LSB are
