@@ -1206,16 +1206,23 @@ export function Js8Cockpit({
                     aria-pressed={js8?.speed === s.key}
                     disabled={!canControl && (!decoderSettings.allowed || !js8)}
                     onClick={() => setSpeed(s.idx)}
-                    title={t('js8.header.speed.chip.title', { speed: s.label, period: s.periodS })}
+                    title={
+                      s.alias
+                        ? t('js8.header.speed.chip.aliasTitle', { speed: s.label, alias: s.alias, period: s.periodS })
+                        : t('js8.header.speed.chip.title', { speed: s.label, period: s.periodS })
+                    }
                   >
                     {s.label}
                   </button>
                 ))}
               </span>
-              {/* MULTI-DECODE: how many of the four speeds the receiver is decoding right now.
+              {/* MULTI-DECODE: how many of the speeds the receiver is decoding right now.
                   Which ones is a Settings choice (Settings ▸ Digital ▸ JS8). */}
-              <span className="rtty-afc-pill js8-multi" title={t('js8.header.rx.title', { n: rxCount })}>
-                {RX_PLATE} {rxCount}/4
+              <span
+                className="rtty-afc-pill js8-multi"
+                title={t('js8.header.rx.title', { n: rxCount, total: JS8_SPEED_LIST.length })}
+              >
+                {RX_PLATE} {rxCount}/{JS8_SPEED_LIST.length}
               </span>
               {sending && (
                 // ⚠️ NOT MIGRATED — the transmit-path deferral: this tooltip states what Stop TX

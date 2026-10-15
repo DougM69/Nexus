@@ -10,7 +10,7 @@ import { RemoteStationsWindow } from '../remote-native/RemoteStationsWindow'
 import { LanStation } from '../remote-native/LanStation'
 import { BetaNote } from '../remote-web/BetaNote'
 import { SAT_VFO_MAPS } from '../features/satVfo'
-import { JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
+import { JS8_ALL_SPEEDS_MASK, JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
 import { confirmDialog } from '../confirm'
 import { checkRigForm, blocks, dataModePickerShown, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
@@ -9081,7 +9081,7 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('js8Speed', Number(e.target.value))}
                 >
                   {JS8_SPEED_LIST.map((s) => (
-                    <option key={s.key} value={s.idx}>
+                    <option key={s.key} value={s.idx} title={s.alias ?? undefined}>
                       {s.label}
                     </option>
                   ))}
@@ -9093,10 +9093,10 @@ export function SettingsPanel({
                 <div className="js8-rx-speeds">
                   {JS8_SPEED_LIST.map((s) => {
                     const bit = 1 << s.idx
-                    const mask = form.js8RxSpeeds ?? 15
+                    const mask = form.js8RxSpeeds ?? JS8_ALL_SPEEDS_MASK
                     const on = (mask & bit) !== 0
                     return (
-                      <label key={s.key} className="settings-toggle">
+                      <label key={s.key} className="settings-toggle" title={s.alias ?? undefined}>
                         <span className="settings-label">{s.label}</span>
                         <button disabled={remote}
                           type="button"

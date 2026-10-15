@@ -1846,8 +1846,9 @@ export interface PskState {
 
 // ---- JS8 (the `get_js8_state` poll; mirrors tempo_app::dto::Js8State field for field) ----
 
-/** JS8 speed, lowercase on the wire (serde `rename_all = "lowercase"`). */
-export type Js8Speed = 'slow' | 'normal' | 'fast' | 'turbo'
+/** JS8 speed, lowercase on the wire (serde `rename_all = "lowercase"`). `turbo` and `ultra` are
+ * the enum's names for what JS8Call 3.0 calls JS8 40 and JS8 60 (js8Vocab). */
+export type Js8Speed = 'slow' | 'normal' | 'fast' | 'turbo' | 'ultra'
 /** Who originated a queued/pending frame (serde camelCase). A CQ the operator CLICKS is
  * `operator`; a CQ the repeat schedule produced is `cqRepeat`, an automatic origin. */
 export type Js8Origin = 'operator' | 'heartbeat' | 'hbAck' | 'autoReply' | 'relay' | 'cqRepeat'
@@ -1958,7 +1959,7 @@ export interface Js8PendingReply {
 export interface Js8State {
   /** The TRANSMIT speed (= the slot clock). */
   speed: Js8Speed
-  /** Bitmask of decoded speeds: slow 1 · normal 2 · fast 4 · turbo 8. */
+  /** Bitmask of decoded speeds: slow 1 · normal 2 · fast 4 · turbo 8 · ultra 16. */
   rxSpeeds: number
   txEnabled: boolean
   sending: boolean
@@ -3976,10 +3977,11 @@ export interface Settings {
   /** JT65 submode 0/1/2 for A/B/C (tone spacing 1x/2x/4x). */
   jt65Submode: number
   /** JS8 TRANSMIT speed as an index: 0 Slow (30 s) | 1 Normal (15 s) | 2 Fast (10 s) |
-   * 3 Turbo (6 s). Receive decodes every speed in `js8RxSpeeds` regardless. */
+   * 3 Turbo / JS8 40 (6 s) | 4 Ultra / JS8 60 (4 s). Receive decodes every speed in
+   * `js8RxSpeeds` regardless. */
   js8Speed: number
-  /** Bitmask of speeds the receiver decodes: Slow 1 · Normal 2 · Fast 4 · Turbo 8.
-   * Default 15 (all four — JS8Call's SubModeMultiDecode). */
+  /** Bitmask of speeds the receiver decodes: Slow 1 · Normal 2 · Fast 4 · Turbo 8 · Ultra 16.
+   * Default 31 (all five — JS8Call 3.0's SubModeMultiDecode). */
   js8RxSpeeds: number
   /** Heartbeat repeat interval in minutes; 0 = on demand. HB on/off itself is
    * session-only and is NOT here — the app can never launch beaconing. */

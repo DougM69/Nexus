@@ -765,9 +765,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             if(a.tier==='MSK144')applicationData.get_snapshot.link.periodSecs=15
             assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
           }else if(a.action==='decoder.js8Speed'){
-            const speeds=['slow','normal','fast','turbo'];assert.equal(applicationData.get_snapshot.link.tier,'JS8')
+            const speeds=['slow','normal','fast','turbo','ultra'];assert.equal(applicationData.get_snapshot.link.tier,'JS8')
             assert.equal(a.expectedSpeed,speeds.indexOf(js8Fixture.state.speed));assert.notEqual(a.expectedSpeed,a.speed)
-            js8Fixture.state.speed=speeds[a.speed];applicationData.get_snapshot.link.periodSecs=[30,15,10,6][a.speed]
+            js8Fixture.state.speed=speeds[a.speed];applicationData.get_snapshot.link.periodSecs=[30,15,10,6,4][a.speed]
           }else if(a.action==='decoder.msk144Period'){
             assert.equal(applicationData.get_snapshot.link.tier,'MSK144')
             assert.equal(a.expectedPeriodSecs,applicationData.get_snapshot.link.periodSecs);assert.notEqual(a.expectedPeriodSecs,a.periodSecs)
@@ -3384,8 +3384,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await click(button('JS8'));await gesture('.js8-cockpit .remote-mode-entry','radio.workspace')
       await until(`!document.querySelector('.js8-cockpit .remote-mode-entry')`)
       decoderGeometry+=await decoderLayout('.js8-cockpit .js8-speed-chip:last-child','js8')
-      for(const speed of [0,2,3,1]){
-        const expectedSpeed=['slow','normal','fast','turbo'].indexOf(js8Fixture.state.speed)
+      // JS8 60 (index 4) too: the fifth chip is the last child the layout check above reaches.
+      for(const speed of [0,2,3,4,1]){
+        const expectedSpeed=['slow','normal','fast','turbo','ultra'].indexOf(js8Fixture.state.speed)
         const selector=`.js8-cockpit .js8-speed-chip:nth-child(${speed+1})`
         await gesture(selector,'decoder.js8Speed')
         assert.deepEqual(stationRequests.at(-1).action,{action:'decoder.js8Speed',expectedSpeed,speed})

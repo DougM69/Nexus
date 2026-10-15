@@ -25,6 +25,22 @@ describe('JS8 observation values', () => {
     expect(state.armed).toEqual(current.state.armed)
     expect(current).toEqual(fixture)
   })
+  // JS8 60, JS8Call 3.0's fifth speed: a station transmitting at it, or decoding every speed (31),
+  // or showing a frame heard at it, is a valid sample; a mask past the five speeds is not.
+  it('takes JS8 60 — the speed, a row heard at it, the every-speed mask — and refuses a bit past it', () => {
+    const value = structuredClone(fixture)
+    Object.assign(value.state, { speed: 'ultra', rxSpeeds: 31 })
+    value.state.activity[0].speed = 'ultra'
+    const state = parseJs8Sample(value,0)
+    expect([state.speed, state.rxSpeeds, state.activity[0].speed]).toEqual(['ultra', 31, 'ultra'])
+    for (const change of [
+      (s: typeof fixture.state) => { s.rxSpeeds = 32 },
+      (s: typeof fixture.state) => { s.speed = 'sixty' },
+    ]) {
+      const bad = structuredClone(value);change(bad.state)
+      expect(() => parseJs8Sample(bad,0)).toThrow()
+    }
+  })
   it('rejects expired, malformed, oversized and contradictory armed state', () => {
     expect(() => parseJs8Sample(fixture,3000)).toThrow()
     for (const change of [

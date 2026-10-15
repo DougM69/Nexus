@@ -292,13 +292,30 @@ describe('Js8Cockpit pane shell', () => {
   it('the speed chips render in the header and ask the ENGINE for a speed change', async () => {
     await renderCockpit()
     const chips = Array.from(document.querySelectorAll('.cockpit-header .js8-speed-chip'))
-    expect(chips.map((c) => c.textContent)).toEqual(['Slow', 'Normal', 'Fast', 'Turbo'])
+    expect(chips.map((c) => c.textContent)).toEqual(['Slow', 'Normal', 'Fast', 'JS8 40', 'JS8 60'])
     expect(chips[1].getAttribute('aria-pressed')).toBe('true')
     await act(async () => {
       fireEvent.click(chips[2])
     })
     expect(js8SetSpeed).toHaveBeenCalledWith(2)
     expect(document.querySelector('.cockpit-txdock .js8-speed-chip')).toBeNull()
+  })
+
+  // JS8Call 3.0's names on the chips, the old and internal ones in the tooltip, and JS8 60 a
+  // speed the operator can pick: index 4 to the engine, as the other chips send theirs.
+  it('names JS8 40 and JS8 60 as JS8Call 3.0 does, Turbo and Ultra in their tooltips', async () => {
+    await renderCockpit()
+    const chips = Array.from(document.querySelectorAll<HTMLElement>('.cockpit-header .js8-speed-chip'))
+    expect(chips[3].title).toContain('Turbo')
+    expect(chips[4].title).toContain('Ultra')
+    expect(chips[4].title).toContain('4 s')
+    expect(chips[2].title).not.toContain('Turbo')
+    await act(async () => {
+      fireEvent.click(chips[4])
+    })
+    expect(js8SetSpeed).toHaveBeenCalledWith(4)
+    // The fixture's mask is the 2.3-era four (15): four of five speeds decode.
+    expect(document.querySelector('.cockpit-header .js8-multi')?.textContent).toContain('4/5')
   })
 
   it('survives the keep-alive hide/show round trip with its structure intact', async () => {

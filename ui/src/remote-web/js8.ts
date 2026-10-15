@@ -7,7 +7,7 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 const text = (v: unknown, max = 1024): v is string => typeof v === 'string' && new TextEncoder().encode(v).length <= max && !/[\uD800-\uDFFF]/u.test(v)
 const bool = (v: unknown) => typeof v === 'boolean'
 const nullableTime = (v: unknown) => v === null || integer(v)
-const speed = (v: unknown) => ['slow','normal','fast','turbo'].includes(String(v))
+const speed = (v: unknown) => ['slow','normal','fast','turbo','ultra'].includes(String(v))
 const origin = (v: unknown) => ['operator','heartbeat','hbAck','autoReply','relay','cqRepeat'].includes(String(v))
 const unarmed = (v: unknown) => ['idle','txOff','needsHb','needsAuto','needsHbAndAuto','unscheduled'].includes(String(v))
 function object(v: unknown, keys: string[], optional: string[] = []): Record<string, unknown> {
@@ -35,7 +35,7 @@ export function parseJs8Sample(raw: unknown, ageMs: number, now = Date.now()): J
     new TextEncoder().encode(JSON.stringify(raw)).length > 384*1024) throw new Error('invalidJs8')
   const s = object(sample.state,['speed','rxSpeeds','txEnabled','sending','hbOn','hbNextAtMs','hbIntervalMin','cqOn','cqNextAtMs','cqIntervalMin',
     'autoreply','relay','hbAck','armed','idleMinutes','idleLimitMin','idleTripped','activity','stations','inbox','queue','pendingReply','lastError'],['notArmed'])
-  if (!speed(s.speed) || !integer(s.rxSpeeds) || s.rxSpeeds > 15 ||
+  if (!speed(s.speed) || !integer(s.rxSpeeds) || s.rxSpeeds > 31 ||
     ![s.txEnabled,s.sending,s.hbOn,s.cqOn,s.autoreply,s.relay,s.hbAck,s.idleTripped].every(bool) ||
     ![s.hbNextAtMs,s.cqNextAtMs].every(nullableTime) || ![s.hbIntervalMin,s.cqIntervalMin,s.idleMinutes,s.idleLimitMin].every(integer) ||
     (s.lastError !== null && !text(s.lastError))) throw new Error('invalidJs8')

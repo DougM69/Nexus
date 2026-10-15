@@ -1277,12 +1277,14 @@ lives here is what JS8Call keeps in its own settings and Nexus cannot infer.
 
 **Speed & receiving**
 
-- **Transmit speed** — Slow (30 s periods), Normal (15 s), Fast (10 s) or Turbo (6 s).
-  The period the TX clock follows; Normal is what most of the band runs. The speed chips
-  in the JS8 header change this same setting.
-- **Decode these speeds** — all four on by default, exactly as JS8Call's multi-decode:
-  a Slow station and a Turbo station on the same band both print, each activity row
-  marked with its speed letter (E/A/B/C). Untick a speed to save CPU on a small machine.
+- **Transmit speed** — Slow (30 s periods), Normal (15 s), Fast (10 s), JS8 40 (6 s) or
+  JS8 60 (4 s), the names JS8Call 3.0 uses: JS8 40 was called Turbo before 3.0, and JS8 60
+  is 3.0's experimental fifth speed. The period the TX clock follows; Normal is what most of
+  the band runs. The speed chips in the JS8 header change this same setting.
+- **Decode these speeds** — all five on by default, exactly as JS8Call 3.0's multi-decode:
+  a Slow station and a JS8 60 station on the same band both print, each activity row
+  marked with its speed letter (E/A/B/C/I). Untick a speed to save CPU on a small machine.
+  Settings saved before JS8 60 arrived keep the four speeds they had; tick JS8 60 to add it.
 - **Callsign aging (minutes)** — off (0) by default, as in JS8Call. Otherwise a station
   not heard for this many minutes drops off the cockpit's Stations list (the one you have
   selected, or one with an unread message for you, stays) and is left out of your

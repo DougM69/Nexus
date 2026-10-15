@@ -274,8 +274,11 @@ export const FEATURES: FeatureDef[] = [
     // for is gone, and JS8 now ships exactly like RTTY/PSK/SSTV/APRS: visible, toggleable in
     // Settings ▸ Features. What the flip did NOT prove, and the next person here should know it:
     // the four-speed on-air bench against JS8Call has NOT happened; Fast and Turbo have only ever
-    // been decoded from SYNTHETIC audio, never off the air; and Normal measures ~2 dB less
-    // sensitive than JS8Call. VISIBILITY is the only gate that opened — transmit still needs both
+    // been decoded from SYNTHETIC audio, never off the air. Sensitivity, re-measured in the lab
+    // on 2026-10-15, is within 0.1 dB of JS8Call 3.0.3's decoder at every speed (the earlier
+    // "~2 dB behind at Normal" was a three-seed reading). JS8 60 (JS8Call 3.0's fifth speed)
+    // joined later, on the same terms: cross-decoded with JS8Call 3.0.3 in the lab, never on the
+    // air. VISIBILITY is the only gate that opened — transmit still needs both
     // acts (the session TX latch, then the per-mode arm), and `plan_js8_tx` gates on the latch
     // regardless of this flag. Global (no workspace): the view asserts the DIGITAL rig mode
     // through rigModeForView and `js8_enter` sets the tier + the JS8 watering hole — RX only.
