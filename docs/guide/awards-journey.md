@@ -17,7 +17,8 @@ yours will read differently.*
 
 ## Awards — the official programs
 
-Awards are **computed offline** from cty.dat entity resolution — no upload
+Awards are **computed offline** — each contact by the DXCC number and CQ zone
+its record carries, else by cty.dat's reading of its callsign — no upload
 required to *see* where you stand:
 
 - **DXCC** with per-band and per-mode slots, and **5-Band DXCC**,

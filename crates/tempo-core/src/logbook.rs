@@ -248,6 +248,50 @@ pub struct QsoRecord {
     pub contest: Option<Box<ContestFields>>,
 }
 
+/// The ADIF field a contact keeps LoTW's DXCC entity number in, when LoTW confirmed it under
+/// another entity than the log's own `DXCC` ([`crate::reconcile::reconcile_lotw`]). The log's
+/// value stays as entered; the awards count by LoTW's, and list the difference.
+pub const LOTW_DXCC_FIELD: &str = "APP_NEXUS_LOTW_DXCC";
+
+/// The passthrough fields ([`QsoRecord::extra`]) the award folds read beside their columns: the
+/// contact's CQ zone and LoTW's DXCC. What a narrow read of the store asks for them by
+/// (`sqlite::LogDb::each_narrow_with`).
+pub const AWARD_EXTRAS: &[&str] = &["CQZ", LOTW_DXCC_FIELD];
+
+/// A passthrough field's value, by its (uppercased) ADIF name.
+fn extra_value<'a>(r: &'a QsoRecord, name: &str) -> Option<&'a str> {
+    r.extra
+        .iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.trim())
+}
+
+/// ADIF `CQZ` as the record carries it — the contacted station's CQ zone. `None` when it has none
+/// or it is not a number; whether the number is a zone is the awards' rule to apply.
+pub fn record_cq_zone(r: &QsoRecord) -> Option<u8> {
+    extra_value(r, "CQZ")?.parse().ok()
+}
+
+/// LoTW's DXCC for the contact, where it differs from the log's own ([`LOTW_DXCC_FIELD`]).
+pub fn record_lotw_dxcc(r: &QsoRecord) -> Option<u32> {
+    extra_value(r, LOTW_DXCC_FIELD)?.parse().ok()
+}
+
+/// Set (or with `None` remove) a passthrough field, keeping [`QsoRecord::extra`] in name order
+/// as the parser and the store keep it.
+pub(crate) fn set_extra(r: &mut QsoRecord, name: &str, value: Option<String>) {
+    let at = r.extra.partition_point(|(k, _)| k.as_str() < name);
+    let held = r.extra.get(at).is_some_and(|(k, _)| k == name);
+    match (value, held) {
+        (Some(v), true) => r.extra[at].1 = v,
+        (Some(v), false) => r.extra.insert(at, (name.to_string(), v)),
+        (None, true) => {
+            r.extra.remove(at);
+        }
+        (None, false) => {}
+    }
+}
+
 /// The contest provenance of one general-log row (§3).
 ///
 /// ⭐ **`sent`/`rcvd` are PAIRS, not the contest log's `FieldValue` triples, and that

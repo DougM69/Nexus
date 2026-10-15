@@ -519,6 +519,12 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   which carry the SQLite C amalgamation; ADIF is still written alongside it as a plain-text
   mirror, so your log stays readable without Nexus. SQLite is not licensed — it is dedicated
   to the public domain (see **[NOTICE](NOTICE)** for the per-file verification).
+- **AD1C's `cty.csv`** (MIT) — **Jim Reisert AD1C** ([country-files.com](https://www.country-files.com/)).
+  From the same release as `cty.dat`, it gives each country-file entity its DXCC number, so the
+  awards count a contact by the entity its log or LoTW records (see **[NOTICE](NOTICE)**).
+- **[TrustedQSL](https://www.arrl.org/tqsl-download)** (the ARRL's BSD-style licence) — the **ARRL**.
+  The list of the 62 deleted DXCC entities is transcribed from TrustedQSL's configuration data
+  (see **[NOTICE](NOTICE)**).
 - **[Hamlib](https://hamlib.github.io/)** — `rigctld` for CAT control, bundled on every platform
   (tools GPL-2.0-or-later, library LGPL-2.1-or-later; launched as a separate process, not linked).
 - **[OpenSSL](https://www.openssl.org/)** (Apache-2.0) — the secure connection for HRDLog.net

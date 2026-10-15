@@ -4,6 +4,20 @@
     "confirmedQsos": 1001,
     "dxccWorked": 3,
     "dxccConfirmed": 2,
+    "dxccWorkedTotal": 4,
+    "dxccConfirmedTotal": 3,
+    "dxccDisagreements": [
+      {
+        "call": "K1N",
+        "whenUnix": 1423571640,
+        "band": "20m",
+        "mode": "CW",
+        "loggedDxcc": 291,
+        "loggedEntity": "United States",
+        "lotwDxcc": 182,
+        "lotwEntity": "Navassa Island"
+      }
+    ],
     "dxccCredited": 1,
     "readyToSubmit": 1,
     "slotsWorked": 5,

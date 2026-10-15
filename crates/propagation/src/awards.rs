@@ -1,9 +1,11 @@
 //! Award progress computed from the operator's logbook — DXCC-first.
 //!
-//! Pure + offline: each worked call is resolved to a DXCC entity via the vendored
-//! cty.dat ([`crate::dxcc`]); we tally distinct entities worked/confirmed, the
-//! entity×band "DXCC Challenge" slots, a per-band breakdown (the elite DX
-//! tracker's view), and the chase list of worked-but-unconfirmed entities.
+//! Pure + offline: each worked contact counts toward the DXCC entity its record's own number
+//! names (ADIF `DXCC`, LoTW's where it differs — [`RecordFields`]), else the one its call
+//! resolves to via the vendored cty.dat ([`crate::dxcc`]); we tally distinct entities
+//! worked/confirmed (current, and with the deleted ones), the entity×band "DXCC Challenge"
+//! slots, a per-band breakdown (the elite DX tracker's view), and the chase list of
+//! worked-but-unconfirmed entities.
 //!
 //! Online LoTW/eQSL/QRZ/ClubLog sync (which would flip a QSO's `confirmed`) is a
 //! separate, later increment; this computes everything from what's already in the
@@ -325,15 +327,62 @@ pub struct WapProgress {
     pub needed: Vec<String>,
 }
 
+/// What a contact's own record carries beyond its call, for the awards that count by it: the DXCC
+/// entity number (ADIF `DXCC`) and CQ zone (ADIF `CQZ`) the log holds, and the DXCC LoTW
+/// confirmed it under where that differs from the log's. `Default` carries none of them, and the
+/// contact then counts by its call through cty.dat, as it always did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RecordFields {
+    /// ADIF `DXCC` as the log holds it.
+    pub dxcc: Option<u32>,
+    /// LoTW's DXCC for the contact, kept beside the log's own where the two differ. ARRL credits
+    /// LoTW's, so it counts; the log's value is never changed.
+    pub lotw_dxcc: Option<u32>,
+    /// ADIF `CQZ`.
+    pub cqz: Option<u8>,
+    /// When the contact was made, Unix seconds UTC — only to name it in
+    /// [`AwardSummary::dxcc_disagreements`].
+    pub when_unix: u64,
+}
+
+/// A contact LoTW confirmed under another DXCC entity than the log records for it. The awards
+/// count it by LoTW's; the log keeps its own, and this is where the operator sees the difference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DxccDisagreement {
+    pub call: String,
+    pub when_unix: u64,
+    pub band: String,
+    pub mode: String,
+    /// The log's DXCC number, and the entity it names when the table knows it.
+    pub logged_dxcc: u32,
+    pub logged_entity: Option<String>,
+    /// LoTW's, likewise.
+    pub lotw_dxcc: u32,
+    pub lotw_entity: Option<String>,
+}
+
 /// DXCC-first award summary for the dashboard.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AwardSummary {
     pub qsos: usize,
     pub confirmed_qsos: usize,
-    /// Distinct DXCC entities worked / confirmed (100 confirmed = basic DXCC).
+    /// Distinct CURRENT DXCC entities worked / confirmed (100 confirmed = basic DXCC). A deleted
+    /// entity counts only toward [`dxcc_worked_total`](Self::dxcc_worked_total).
     pub dxcc_worked: usize,
     pub dxcc_confirmed: usize,
+    /// Distinct DXCC entities worked / confirmed, the deleted ones included — LoTW's "total"
+    /// beside the current count above. A contact reaches a deleted entity only by the number its
+    /// record carries (cty.dat lists none).
+    #[serde(default)]
+    pub dxcc_worked_total: usize,
+    #[serde(default)]
+    pub dxcc_confirmed_total: usize,
+    /// Every contact LoTW confirmed under another DXCC entity than the log records, in the order
+    /// the log holds them.
+    #[serde(default)]
+    pub dxcc_disagreements: Vec<DxccDisagreement>,
     /// Distinct DXCC entities with award credit **granted** by ARRL (official
     /// standing) — typically ≤ `dxcc_confirmed`.
     pub dxcc_credited: usize,
@@ -433,9 +482,73 @@ pub struct Awards {
     /// Satellite DXCC — entities via satellite (excluded from every terrestrial DXCC fold).
     worked_entity_sat: HashSet<&'static str>,
     confirmed_entity_sat: HashSet<&'static str>,
+    /// Deleted DXCC entities worked / confirmed, by number — in the totals only.
+    worked_deleted: HashSet<u32>,
+    confirmed_deleted: HashSet<u32>,
+    /// Contacts LoTW confirmed under another DXCC entity than the log records, in log order.
+    disagreements: Vec<DxccDisagreement>,
     /// The operator's own DXCC entity (resolved from mycall), so DX-oriented
     /// achievements can count entities OTHER than home. None until set.
     home_entity: Option<&'static str>,
+}
+
+/// The DXCC entity a contact counts toward.
+#[derive(Debug, Clone, Copy)]
+struct Counted {
+    /// Its number, where the record or cty.csv gives one.
+    code: Option<u32>,
+    /// A current entity's cty.dat name, or a deleted one's.
+    name: &'static str,
+    deleted: bool,
+}
+
+impl Counted {
+    /// The WAS family — the United States, Alaska, Hawaii — by number where there is one.
+    fn is_us_state(&self) -> bool {
+        match self.code {
+            Some(code) => dxcc::is_us_state_dxcc(code),
+            None => dxcc::is_us_state_entity(self.name),
+        }
+    }
+}
+
+/// Which DXCC entity a contact counts toward, or `None` for no entity at all.
+///
+/// **The record's own number first** — LoTW's, then the log's — wherever the table knows it:
+/// it is what the ARRL credits, and the call cannot tell it. A 1×1 call like K1N is Navassa
+/// in 2015 and a US special event another year, and only the record knows which. ADIF's 0 says
+/// the station was in no entity (a ship at sea), so it earns none. A number the table does not
+/// know (garbled, or newer than the table) is passed over.
+///
+/// **Else the call, through cty.dat.** A WAE/CQ-only area counts as the parent cty.csv gives it
+/// (Sicily as Italy), which is how the ARRL credits it; an entity with no number keeps the old
+/// rule, its name and no credit for a WAE area.
+fn counted_entity(resolved: Option<&dxcc::DxccInfo>, rec: &RecordFields) -> Option<Counted> {
+    for code in [rec.lotw_dxcc, rec.dxcc].into_iter().flatten() {
+        if code == dxcc::NO_DXCC_ENTITY {
+            return None;
+        }
+        if let Some(e) = dxcc::entity_by_dxcc(code) {
+            return Some(Counted {
+                code: Some(code),
+                name: e.name,
+                deleted: e.deleted,
+            });
+        }
+    }
+    let info = resolved?;
+    match info.dxcc.and_then(dxcc::entity_by_dxcc) {
+        Some(e) => Some(Counted {
+            code: Some(e.code),
+            name: e.name,
+            deleted: e.deleted,
+        }),
+        None => info.is_dxcc.then_some(Counted {
+            code: None,
+            name: info.entity,
+            deleted: false,
+        }),
+    }
 }
 
 impl Awards {
@@ -478,14 +591,26 @@ impl Awards {
         iota: Option<&str>,
     ) {
         self.add_qso(
-            call, band, mode, confirmed, credited, false, state, grid, iota, false,
+            call,
+            band,
+            mode,
+            confirmed,
+            credited,
+            false,
+            state,
+            grid,
+            iota,
+            false,
+            RecordFields::default(),
         )
     }
 
     /// The full fold: [`add_with_credit`](Self::add_with_credit) plus `sat` —
-    /// whether the contact was made through a satellite (`PROP_MODE=SAT`).
-    /// Production log folds go through here so satellite credit is stated, not
-    /// defaulted.
+    /// whether the contact was made through a satellite (`PROP_MODE=SAT`) — and
+    /// what the contact's record carries beyond its call ([`RecordFields`]): DXCC,
+    /// WAS and WAZ count by the record's numbers where it has them. Production log
+    /// folds go through here so satellite credit and the record's numbers are
+    /// stated, not defaulted.
     #[allow(clippy::too_many_arguments)]
     pub fn add_qso(
         &mut self,
@@ -499,6 +624,7 @@ impl Awards {
         grid: Option<&str>,
         iota: Option<&str>,
         sat: bool,
+        rec: RecordFields,
     ) {
         self.qsos += 1;
         if confirmed {
@@ -538,14 +664,30 @@ impl Awards {
             }
         }
         let resolved = dxcc::resolve(call);
+        // The entity DXCC and the WAS gate count by: the record's number, else the call's.
+        let counted = counted_entity(resolved.as_ref(), &rec);
+        if let (Some(lotw_dxcc), Some(logged_dxcc)) = (rec.lotw_dxcc, rec.dxcc) {
+            if lotw_dxcc != logged_dxcc {
+                let name = |code| dxcc::entity_by_dxcc(code).map(|e| e.name.to_string());
+                self.disagreements.push(DxccDisagreement {
+                    call: call.to_string(),
+                    when_unix: rec.when_unix,
+                    band: band.to_string(),
+                    mode: mode.to_string(),
+                    logged_dxcc,
+                    logged_entity: name(logged_dxcc),
+                    lotw_dxcc,
+                    lotw_entity: name(lotw_dxcc),
+                });
+            }
+        }
         // WAS — keyed on the STATE code, but GATED on a US-family DXCC entity
         // (United States / Alaska / Hawaii). The entity gate keeps HI/AK counting
         // while rejecting non-US subdivision codes that collide with US postal
         // codes (e.g. Australian "WA" = Western Australia vs Washington). eQSL
-        // excluded: WAS uses award-eligible `confirmed`.
-        let is_us_state = resolved
-            .as_ref()
-            .is_some_and(|i| matches!(i.entity, "United States" | "Alaska" | "Hawaii"));
+        // excluded: WAS uses award-eligible `confirmed`. The entity is the record's
+        // where it carries one: a KP4 licensee signing LoTW from Florida is DXCC 291.
+        let is_us_state = counted.is_some_and(|c| c.is_us_state());
         if is_us_state {
             if let Some(code) = state.and_then(valid_state) {
                 self.worked_states.insert(code);
@@ -578,32 +720,38 @@ impl Awards {
                 }
             }
         }
-        let Some(info) = resolved else {
-            return;
-        };
-        // WAZ: CQ zones 1..=40 (0 = cty.dat couldn't supply a zone — skip it).
-        // The zone is valid even on a non-DXCC (WAE) entity — Sicily, African
-        // Italy etc. are real CQ-zone contacts — so this is OUTSIDE the DXCC gate.
-        if (1..=40).contains(&info.cq_zone) {
-            self.worked_zones.insert(info.cq_zone);
+        // WAZ: CQ zones 1..=40 — the record's CQZ where it carries one (a W1 licensee living
+        // in California is zone 3, whatever the W1 prefix says), else cty.dat's zone for the
+        // call (0 = cty.dat couldn't supply one — skip it). The zone is valid even on a non-DXCC
+        // (WAE) entity — Sicily, African Italy etc. are real CQ-zone contacts — so this is
+        // OUTSIDE the DXCC gate.
+        let zone = rec
+            .cqz
+            .filter(|z| (1..=40).contains(z))
+            .or_else(|| resolved.map(|i| i.cq_zone).filter(|z| (1..=40).contains(z)));
+        if let Some(zone) = zone {
+            self.worked_zones.insert(zone);
             if confirmed {
-                self.confirmed_zones.insert(info.cq_zone);
+                self.confirmed_zones.insert(zone);
             }
         }
-        // DXCC awards credit ARRL DXCC entities only. WAE/CQ-only entities
-        // (Sicily, European Turkey, African Italy, Shetland, Bear Island, Vienna)
-        // are NOT DXCC, so they earn no entity / slot / band / mode credit. (They
-        // still counted for the QSO total + WAZ above.)
-        if !info.is_dxcc {
+        // DXCC awards credit ARRL DXCC entities only ([`counted_entity`]): a WAE/CQ-only area
+        // (Sicily, European Turkey, African Italy, Shetland, Bear Island, Vienna) counts as its
+        // parent, and a contact no entity takes earns no entity / slot / band / mode credit.
+        // (It still counted for the QSO total + WAZ above.)
+        let Some(counted) = counted else {
             return;
-        }
+        };
         // ARRL restricts satellite contacts to the SATELLITE awards: a bird QSO earns
         // Satellite DXCC here and never a Mixed / band / mode entity — counting a
         // SAT-tagged 2 m QSO in 2 m band-DXCC is exactly the overcount LoTW's own
         // 2M column refuses (N9UM audit, 2026-08-09). QSO totals, WAZ, WAS, IOTA and
         // the grid fold above all follow their own programs' rules and are untouched.
         if sat {
-            let entity = info.entity;
+            if counted.deleted {
+                return;
+            }
+            let entity = counted.name;
             self.worked_entity_sat.insert(entity);
             if confirmed {
                 self.confirmed_entity_sat.insert(entity);
@@ -617,7 +765,18 @@ impl Awards {
         if Band::from_label(band).is_some_and(|b| !earns_dxcc_credit(b)) {
             return;
         }
-        let entity = info.entity; // &'static str (cty.dat is leaked once)
+        // A deleted entity counts toward the totals and nothing else: no current count, Honor
+        // Roll, Challenge slot, band, mode or chase.
+        if counted.deleted {
+            if let Some(code) = counted.code {
+                self.worked_deleted.insert(code);
+                if confirmed {
+                    self.confirmed_deleted.insert(code);
+                }
+            }
+            return;
+        }
+        let entity = counted.name; // &'static str (cty.dat is leaked once)
         self.worked_entity.insert(entity);
         if confirmed {
             self.confirmed_entity.insert(entity);
@@ -943,6 +1102,9 @@ impl Awards {
             confirmed_qsos: self.confirmed_qsos,
             dxcc_worked: self.worked_entity.len(),
             dxcc_confirmed: self.confirmed_entity.len(),
+            dxcc_worked_total: self.worked_entity.len() + self.worked_deleted.len(),
+            dxcc_confirmed_total: self.confirmed_entity.len() + self.confirmed_deleted.len(),
+            dxcc_disagreements: self.disagreements.clone(),
             dxcc_credited,
             ready_to_submit,
             // Challenge counts ONLY the 10 Challenge bands (worked_slot itself keeps every
@@ -1122,23 +1284,50 @@ mod tests {
         assert!(!s.band_targets.iter().any(|t| t.entity == japan));
     }
 
+    /// Sicily (IT9) is a WAE/CQ-only area, NOT an ARRL DXCC entity of its own: the ARRL credits it
+    /// as Italy, the entity whose number cty.csv gives it. (This test used to pin no credit at all,
+    /// which left every Sicily contact out of the DXCC count.)
     #[test]
-    fn wae_entity_excluded_from_dxcc_but_counts_for_waz_and_qsos() {
-        // Sicily (IT9) is a WAE/CQ-only entity, NOT ARRL DXCC.
+    fn a_wae_area_counts_as_its_parent_entity() {
         assert!(!dxcc::resolve("IT9ABC").unwrap().is_dxcc);
         let mut a = Awards::new();
         a.add("IT9ABC", "20m", "FT8", true);
         let s = a.summary();
-        assert_eq!(s.qsos, 1, "the QSO still counts");
-        assert_eq!(s.dxcc_worked, 0, "Sicily is not a DXCC entity");
-        assert_eq!(s.dxcc_confirmed, 0);
-        assert_eq!(s.slots_worked, 0, "no DXCC band slot either");
-        assert_eq!(s.waz_worked, 1, "but CQ zone 15 counts for WAZ");
+        assert_eq!(s.qsos, 1, "the QSO counts");
+        assert_eq!(s.dxcc_worked, 1, "as Italy");
+        assert_eq!(s.dxcc_confirmed, 1);
+        assert_eq!(s.slots_worked, 1, "and its band slot");
+        assert_eq!(s.waz_worked, 1, "CQ zone 15 counts for WAZ");
         assert_eq!(s.waz_confirmed, 1);
-        assert!(
-            s.bands.is_empty(),
-            "no DXCC-by-band entry for a non-DXCC entity"
+        assert_eq!(
+            s.bands
+                .iter()
+                .map(|b| (b.band.as_str(), b.worked))
+                .collect::<Vec<_>>(),
+            [("20m", 1)]
         );
+        // The SAME entity as an Italian call, never a second one beside it.
+        a.add("I1ABC", "20m", "FT8", true);
+        assert_eq!(
+            a.summary().dxcc_confirmed,
+            1,
+            "Sicily and Italy are one entity"
+        );
+
+        // Named Italy where an entity is named, and its own zone kept: African Italy is CQ zone
+        // 33, not Italy's 15.
+        let mut b = Awards::new();
+        b.add("IG9ABC", "20m", "FT8", false);
+        let s = b.summary();
+        assert_eq!(
+            s.needed
+                .iter()
+                .map(|n| n.entity.as_str())
+                .collect::<Vec<_>>(),
+            ["Italy"]
+        );
+        b.add("I1ABC", "20m", "FT8", false);
+        assert_eq!(b.summary().waz_worked, 2, "zones 33 and 15");
     }
 
     #[test]
@@ -1365,6 +1554,7 @@ mod tests {
             Some("PM95"),
             None,
             true,
+            RecordFields::default(),
         );
         let s = a.summary();
         assert_eq!(s.dxcc_worked, 0, "a sat QSO earns no Mixed-DXCC entity");
@@ -1399,6 +1589,7 @@ mod tests {
             Some("FN31"),
             None,
             false,
+            RecordFields::default(),
         );
         let s = a.summary();
         assert_eq!(s.vucc.worked, 1, "the all-band total sees the 70cm grid");
@@ -1429,6 +1620,7 @@ mod tests {
                 Some(&g),
                 None,
                 false,
+                RecordFields::default(),
             );
         }
         let s = a.summary();
@@ -1461,6 +1653,7 @@ mod tests {
             None,
             Some("NA-001"),
             false,
+            RecordFields::default(),
         );
         // Card-confirmed.
         a.add_qso(
@@ -1474,6 +1667,7 @@ mod tests {
             None,
             Some("EU-005"),
             false,
+            RecordFields::default(),
         );
         let s = a.summary();
         assert_eq!(s.iota.confirmed, 2, "both are confirmed in the log sense");
@@ -1501,6 +1695,7 @@ mod tests {
             Some("FN31"),
             None,
             true,
+            RecordFields::default(),
         );
         a.add_qso(
             "W2DEF",
@@ -1513,6 +1708,7 @@ mod tests {
             Some("FN20"),
             None,
             true,
+            RecordFields::default(),
         );
         // A terrestrial 2m QSO keeps the per-band slot.
         a.add_qso(
@@ -1526,6 +1722,7 @@ mod tests {
             Some("FN42"),
             None,
             false,
+            RecordFields::default(),
         );
         let s = a.summary();
         assert_eq!(

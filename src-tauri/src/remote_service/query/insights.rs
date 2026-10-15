@@ -19,7 +19,9 @@ const READ_TEXT_BYTES: usize = 32 * 1024 * 1024;
 const TIME_CLIP_SECONDS: u64 = 8_640_000_000_000;
 
 /// What the summaries read of every contact — [`Row::copy`]'s inputs, and the four
-/// confirmation channels its `confirmed`, `award_confirmed` and channel flags are read from.
+/// confirmation channels its `confirmed`, `award_confirmed` and channel flags are read from. The
+/// award summary reads the passthrough fields `AWARD_EXTRAS` names beside them, as the desktop's
+/// award fold does.
 const SUMMARIES: Narrow = Narrow {
     columns: &[
         "call",
@@ -36,6 +38,7 @@ const SUMMARIES: Narrow = Narrow {
         "lotw_rcvd_raw",
         "eqsl_rcvd_raw",
         "qrz_status_raw",
+        "dxcc",
     ],
     uploads: false,
 };
@@ -59,6 +62,8 @@ struct Row {
     eqsl: bool,
     credited: bool,
     satellite: bool,
+    /// The record's DXCC, LoTW's DXCC and CQ zone — numbers, no text.
+    fields: propagation::RecordFields,
 }
 impl Row {
     fn copy(q: &QsoRecord) -> Result<Self, &'static str> {
@@ -115,6 +120,7 @@ impl Row {
             eqsl: q.qsl_rcvd.eqsl,
             credited: q.credit_granted.iter().any(|c| c.starts_with("DXCC")),
             satellite: crate::qso_is_sat(q.prop_mode.as_deref()),
+            fields: crate::log_folds::award_fields(q),
         })
     }
     fn award(&self, awards: &mut propagation::Awards) {
@@ -131,6 +137,7 @@ impl Row {
             self.grid.as_deref(),
             self.iota.as_deref(),
             self.satellite,
+            self.fields,
         );
     }
 }
@@ -292,7 +299,12 @@ pub(super) fn read_engine(
         if count > LOG_ROWS {
             return Err("applicationTooLarge");
         }
-        log.each(SUMMARIES, &mut |pick, q| {
+        let extras = if collection == Collection::Awards {
+            tempo_core::logbook::AWARD_EXTRAS
+        } else {
+            &[]
+        };
+        log.each_with(SUMMARIES, extras, &mut |pick, q| {
             super::picture::within(deadline, pick)?;
             let row = Row::copy(q)?;
             text_bytes += row.text_bytes;
@@ -395,6 +407,54 @@ mod tests {
         assert_eq!(
             stats["statistics"]["byState"],
             json!(["AK", "CT", "HI", "MA", "WI"].map(|label| json!({ "label": label, "count": 1 })))
+        );
+    }
+    /// ★ The Remote award summary counts each contact by what its record carries beyond the call —
+    /// its DXCC number, LoTW's DXCC and its CQ zone — over the store's rows, exactly as the
+    /// desktop's fold does over whole records.
+    #[test]
+    fn the_award_summary_counts_by_each_records_own_numbers_as_the_desktop_does() {
+        let row = |call: &str, date: &str, fields: &str| {
+            format!(
+                "<CALL:{}>{call}<QSO_DATE:8>{date}<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+                 <LOTW_QSL_RCVD:1>Y{fields}<EOR>\n",
+                call.len()
+            )
+        };
+        let mut e = tempo_app::engine::Engine::with_settings(Default::default());
+        e.import_adif(
+            &[
+                row("K1N", "20150210", "<DXCC:3>182<CQZ:1>8"),
+                row("K1B", "20021201", "<DXCC:3>291<APP_NEXUS_LOTW_DXCC:2>20"),
+                row("K3J", "20010101", "<DXCC:3>123"),
+                row("Y24UK", "19890101", "<DXCC:3>229"),
+                row("K1ABC", "20200101", "<CQZ:1>3<STATE:2>CA"),
+                row("KP4ABC", "20200102", "<DXCC:3>291<STATE:2>FL"),
+            ]
+            .concat(),
+        );
+        let (log, my_call) = (e.stored_log(), e.settings().mycall.clone());
+        assert_eq!(log.len(), 6);
+        let engine = Arc::new(Mutex::new(e));
+        let awards = read_engine(&engine, Collection::Awards).unwrap();
+        assert_eq!(
+            awards["awards"],
+            serde_json::to_value(crate::awards_for_records(&log, &my_call)).unwrap()
+        );
+        let a = &awards["awards"];
+        assert_eq!(
+            (&a["dxccConfirmed"], &a["dxccConfirmedTotal"]),
+            (&json!(4), &json!(5))
+        );
+        assert_eq!(a["wazConfirmed"], 4);
+        assert_eq!(a["was"]["confirmed"], 2);
+        assert_eq!(
+            a["dxccDisagreements"],
+            json!([{
+                "call": "K1B", "whenUnix": 1_038_746_040, "band": "20m", "mode": "CW",
+                "loggedDxcc": 291, "loggedEntity": "United States",
+                "lotwDxcc": 20, "lotwEntity": "Baker & Howland Islands",
+            }])
         );
     }
     #[test]

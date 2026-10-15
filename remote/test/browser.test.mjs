@@ -3846,6 +3846,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       if (label === 'Awards') {
         assert.ok(await evaluate(`[...document.querySelectorAll('.aj-tab')].some(e=>e.disabled && e.textContent==='Journey')`))
         assert.ok(await evaluate(`document.querySelector('.awards-journey').textContent.includes('Japan')`))
+        // The count by each record's own DXCC number: current beside total, and LoTW's disagreement.
+        assert.ok(await evaluate(`document.querySelector('.awards-journey').textContent.includes('2 current · 3 total')`))
+        assert.ok(await evaluate(`document.querySelector('.awards-journey').textContent.includes('LoTW: Navassa Island (182)')`))
       } else {
         assert.ok(await evaluate(`document.querySelector('.stats-summary').textContent.includes('2012')`))
         assert.ok(await evaluate(`document.querySelectorAll('.stats-bar-fill').length>5`))

@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award, Flag, UploadCloud, Grid3x3, Satellite } from 'lucide-react'
-import type { AwardSummary, EntityNeed, DiagnosticsReport, DiagAction, DiagActionBucket, QsoDiagnosis, UploadReport } from '../types'
+import type { AwardSummary, EntityNeed, DiagnosticsReport, DiagAction, DiagActionBucket, DxccDisagreement, QsoDiagnosis, UploadReport } from '../types'
 import {
   getAwards,
   getConfirmationDiagnostics,
@@ -18,6 +18,7 @@ import {
 } from '../api'
 import { t } from '../i18n'
 import { logSource } from '../features/logSource'
+import { utcDate } from '../features/utcLog'
 import { askAgainWhileSaving } from '../features/notAnswered'
 import { PaneSeam } from './PaneSeam'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
@@ -56,6 +57,37 @@ const VUCC_GRIDS = 100
 const IOTA_ISLANDS = 100
 
 type NeedSort = 'entity' | 'bands'
+
+/** A DXCC entity as a disagreement names it: its name and number, or the number alone when the
+ * station's table does not know it. */
+function dxccLabel(code: number, name?: string | null): string {
+  return name ? `${name} (${code})` : t('awards.dxccDiffer.unknown', { code })
+}
+
+/** The contacts LoTW confirmed under another DXCC entity than the log records: counted by
+ * LoTW's, listed so the operator sees every one. The log's own value is never changed. */
+function DxccDifferList({ items }: { items: DxccDisagreement[] }) {
+  return (
+    <>
+      <p className="aw-empty">{t('awards.dxccDiffer.note')}</p>
+      <ul className="aw-needed">
+        {items.map((d, i) => (
+          <li key={`${d.call}-${d.whenUnix}-${i}`}>
+            <span className="aw-entity">
+              {d.call} · {utcDate(d.whenUnix)} · {d.band} {d.mode}
+            </span>
+            <span className="aw-needbands">
+              {t('awards.dxccDiffer.row', {
+                logged: dxccLabel(d.loggedDxcc, d.loggedEntity),
+                lotw: dxccLabel(d.lotwDxcc, d.lotwEntity),
+              })}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </>
+  )
+}
 
 /** Render a chase list (entity + the bands to confirm) with a quick filter + a
  * sort (A–Z or by how many bands are needed), or an empty note. */
@@ -547,6 +579,14 @@ export function AwardsView({
             {aw.readyToSubmit > 0 &&
               t('awards.dxcc.note.readyToSubmit', { count: aw.readyToSubmit })}
           </span>
+          {aw.dxccConfirmedTotal !== undefined && (
+            <span className="aw-note">
+              {t('awards.dxcc.note.currentTotal', {
+                current: aw.dxccConfirmed,
+                total: aw.dxccConfirmedTotal,
+              })}
+            </span>
+          )}
         </div>
 
         <div className={`aw-card${hr.achieved ? ' aw-card-elite' : ''}`}>
@@ -939,6 +979,15 @@ export function AwardsView({
               </span>
             )}
           </div>
+          {(aw.dxccDisagreements ?? []).length > 0 && (
+            <div className="aw-panel">
+              <h3>
+                <Globe2 size={14} aria-hidden="true" />{' '}
+                {t('awards.dxccDiffer.head', { count: aw.dxccDisagreements?.length ?? 0 })}
+              </h3>
+              <DxccDifferList items={aw.dxccDisagreements ?? []} />
+            </div>
+          )}
         </div>
         {/* The progress column | chase lists divider (layout L7): out of flow, in the gap before
             the chase lists (styles.css `.awards-colseam`). The stacked sm/xs layout hides it. */}
