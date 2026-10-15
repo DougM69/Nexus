@@ -4909,7 +4909,7 @@ export const JA: PartialCatalog = {
   "settings.js8.freqs.add.mhz.placeholder": "MHz",
   "settings.js8.freqs.add.description.aria": "新しい周波数の説明",
   "settings.js8.freqs.add.action": "追加",
-  "settings.js8.freqs.badMhz": "周波数を MHz で入力してください(例: 7.078)。",
+  "settings.js8.freqs.badMhz": "周波数を MHz で入力してください(例: {{example}})。",
   "settings.js8.freqs.reset.action": "リセット",
   "settings.js8.freqs.reset.confirm.title": "JS8 周波数をリセットしますか?",
   "settings.js8.freqs.reset.confirm.body": "保存すると、あなたのリストは JS8Call の推奨周波数に置き換わります。",

@@ -7790,7 +7790,7 @@ export const EN = {
   'settings.js8.freqs.add.mhz.placeholder': 'MHz',
   'settings.js8.freqs.add.description.aria': 'Description of the new frequency',
   'settings.js8.freqs.add.action': 'Add',
-  'settings.js8.freqs.badMhz': 'Type the frequency in MHz, for example 7.078.',
+  'settings.js8.freqs.badMhz': 'Type the frequency in MHz, for example {{example}}.',
   'settings.js8.freqs.reset.action': 'Reset',
   'settings.js8.freqs.reset.confirm.title': 'Reset the JS8 frequencies?',
   'settings.js8.freqs.reset.confirm.body': "Your list is replaced by JS8Call's suggested frequencies when you save.",

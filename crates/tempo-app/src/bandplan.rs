@@ -1442,7 +1442,14 @@ mod wsjtx_parity_tests {
         let plan = js8_plan_from(Some(&own));
         let rows: Vec<(&str, &str, f64, &str)> = plan
             .iter()
-            .map(|c| (c.band.as_str(), c.group.as_str(), c.dial_mhz, c.mode.as_str()))
+            .map(|c| {
+                (
+                    c.band.as_str(),
+                    c.group.as_str(),
+                    c.dial_mhz,
+                    c.mode.as_str(),
+                )
+            })
             .collect();
         assert_eq!(
             rows,
@@ -1459,7 +1466,10 @@ mod wsjtx_parity_tests {
         assert_eq!(plan[2].label, format!("2 m · JS8 · {}", "x".repeat(80)));
         assert_eq!(plan[3].label, "JS8");
         assert!(plan.iter().all(|c| c.tx));
-        assert!(js8_plan_from(Some(&[])).is_empty(), "an empty own list stays empty");
+        assert!(
+            js8_plan_from(Some(&[])).is_empty(),
+            "an empty own list stays empty"
+        );
     }
 
     /// The regression this whole change exists to prevent: every new tier used to

@@ -24,6 +24,9 @@ import {
   parseMhz,
 } from '../features/js8Frequencies'
 
+/** The dial the refusal shows as an example: a frequency, an invariant token. */
+const MHZ_EXAMPLE = '7.078'
+
 export type Js8FrequencyPatch = Partial<
   Pick<Settings, 'js8Frequencies' | 'js8ReturnToLastDial' | 'js8BandHop' | 'js8Schedule'>
 >
@@ -83,7 +86,7 @@ function MhzInput({
   const commit = () => {
     if (draft === null) return
     const mhz = parseMhz(draft)
-    if (mhz === null) pushToast(t('settings.js8.freqs.badMhz'), 'info', 3500)
+    if (mhz === null) pushToast(t('settings.js8.freqs.badMhz', { example: MHZ_EXAMPLE }), 'info', 3500)
     else if (mhz !== value) onCommit(mhz)
     setDraft(null)
   }
@@ -131,7 +134,7 @@ export function Js8FrequencySettings({ form, onChange, disabled }: Props) {
   const add = () => {
     const mhz = parseMhz(addMhz)
     if (mhz === null) {
-      pushToast(t('settings.js8.freqs.badMhz'), 'info', 3500)
+      pushToast(t('settings.js8.freqs.badMhz', { example: MHZ_EXAMPLE }), 'info', 3500)
       return
     }
     setRows([...rows, { mhz, description: addDesc.trim() }])
@@ -195,7 +198,7 @@ export function Js8FrequencySettings({ form, onChange, disabled }: Props) {
   const addHop = () => {
     const mhz = parseMhz(hopMhz)
     if (mhz === null) {
-      pushToast(t('settings.js8.freqs.badMhz'), 'info', 3500)
+      pushToast(t('settings.js8.freqs.badMhz', { example: MHZ_EXAMPLE }), 'info', 3500)
       return
     }
     setSchedule([...schedule, newHop(mhz, Date.now())])
@@ -292,7 +295,7 @@ export function Js8FrequencySettings({ form, onChange, disabled }: Props) {
             disabled={disabled}
             ref={fileRef}
             type="file"
-            accept=".json,application/json"
+            accept=".json"
             style={{ display: 'none' }}
             onChange={(e) => {
               const f = e.target.files?.[0]

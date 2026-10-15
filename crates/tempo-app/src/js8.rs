@@ -229,7 +229,10 @@ impl Engine {
         if !add(self.js8_last_error.as_deref().unwrap_or("")) {
             return None;
         }
-        Some(self.js8_state())
+        let mut state = self.js8_state();
+        // The page's parser refuses a key it does not list, and none lists `controls` yet.
+        state.controls = None;
+        Some(state)
     }
 
     /// The cockpit poll. Every field is engine truth at poll time; `armed` is, per origin, the
@@ -252,9 +255,11 @@ impl Engine {
         Js8State {
             speed: self.js8_tx_speed_setting(),
             rx_speeds: s.js8_rx_speeds,
-            filter: s.js8_filter,
-            qsy_center_hz: s.js8_qsy_center_hz,
-            hop: self.js8_hop_notice(),
+            controls: Some(crate::dto::Js8Controls {
+                filter: s.js8_filter,
+                qsy_center_hz: s.js8_qsy_center_hz,
+                hop: self.js8_hop_notice(),
+            }),
             tx_enabled: self.tx_enabled,
             sending: self.app.transmitting(),
             hb_on: self.js8_hb_on,
@@ -1232,9 +1237,17 @@ mod tests {
             let before = serde_json::to_value(e.js8_state()).unwrap();
             assert!(!before["activity"].as_array().unwrap().is_empty());
             assert!(!before["queue"].as_array().unwrap().is_empty());
+            // The desktop's `controls` (the waterfall controls and the schedule's notice) is a
+            // key the Remote's sample leaves out (the page's parser does not list it yet);
+            // everything else is the native state, unchanged.
+            let mut native = before.clone();
+            assert!(
+                native.as_object_mut().unwrap().remove("controls").is_some(),
+                "control: the desktop's state carries controls"
+            );
             assert_eq!(
                 serde_json::to_value(e.bounded_js8_state().unwrap()).unwrap(),
-                before
+                native
             );
             assert_eq!(serde_json::to_value(e.js8_state()).unwrap(), before);
             assert!(!e.snapshot().radio.tx_enabled);

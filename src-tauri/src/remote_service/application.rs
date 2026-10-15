@@ -618,7 +618,17 @@ mod tests {
     fn js8_observation_uses_native_state_without_entering_or_arming() {
         use std::sync::{Arc, Mutex};
         let engine = tempo_app::engine::Engine::with_settings(Default::default());
-        let expected = serde_json::to_value(engine.js8_state()).unwrap();
+        let mut expected = serde_json::to_value(engine.js8_state()).unwrap();
+        // The desktop's `controls` (the waterfall controls and the schedule's notice) is a key the
+        // page's sample leaves out (its parser does not list it yet).
+        assert!(
+            expected
+                .as_object_mut()
+                .unwrap()
+                .remove("controls")
+                .is_some(),
+            "control: the desktop's state carries controls"
+        );
         let settings = serde_json::to_value(engine.settings()).unwrap();
         let shared = Arc::new(Mutex::new(engine));
         let command: Command = serde_json::from_value(json!("get_js8_state")).unwrap();

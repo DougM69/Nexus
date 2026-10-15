@@ -112,10 +112,13 @@ function HzInput({
 
 export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, canControl, active, onState }: Props) {
   const [open, setOpen] = useState(false)
-  const filter = js8?.filter ?? JS8_FILTER_DEFAULT
-  const center = js8?.qsyCenterHz || JS8_QSY_CENTER_DEFAULT
+  // The desktop's own state; absent on the hosted Remote page's sample and from an older station,
+  // and then there is nothing true to show (no plate rather than a default that may be wrong).
+  const controls = js8?.controls ?? null
+  const filter = controls?.filter ?? JS8_FILTER_DEFAULT
+  const center = controls?.qsyCenterHz || JS8_QSY_CENTER_DEFAULT
   const win = js8FilterWindow(filter)
-  const hop = js8?.hop ?? null
+  const hop = controls?.hop ?? null
   const sending = js8?.sending === true
 
   // The scheduled change's notice, ONCE per change and only while JS8 is on screen: JS8Call's
@@ -160,6 +163,7 @@ export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, canControl, 
 
   const setFilter = (f: Js8Filter) => void act(() => js8SetFilter(f), onState)
 
+  if (!controls) return null
   return (
     <>
       <button

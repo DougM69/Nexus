@@ -1987,17 +1987,21 @@ export interface Js8HopNotice {
   held: boolean
 }
 
+/** JS8Call's waterfall controls as stored, and the schedule's change waiting out its notice. */
+export interface Js8Controls {
+  filter: Js8Filter
+  qsyCenterHz: number
+  hop: Js8HopNotice | null
+}
+
 export interface Js8State {
   /** The TRANSMIT speed (= the slot clock). */
   speed: Js8Speed
   /** Bitmask of decoded speeds: slow 1 · normal 2 · fast 4 · turbo 8. */
   rxSpeeds: number
-  /** JS8Call's decode filter and its passband centre for QSY (the waterfall controls), as stored.
-   *  Optional: an older station sends neither. */
-  filter?: Js8Filter
-  qsyCenterHz?: number
-  /** A scheduled frequency change waiting out its notice (JS8Call's 30-second box), if any. */
-  hop?: Js8HopNotice | null
+  /** JS8Call's waterfall controls and the band schedule's notice: the desktop's own. Absent on the
+   *  hosted Remote page's sample and from an older station. */
+  controls?: Js8Controls | null
   txEnabled: boolean
   sending: boolean
   hbOn: boolean

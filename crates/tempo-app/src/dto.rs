@@ -588,6 +588,16 @@ pub struct Js8ComposerPrefill {
     pub text: String,
 }
 
+/// JS8Call's waterfall controls as stored (the decode filter and the passband centre for QSY to
+/// centre), and the band schedule's change waiting out its notice, if any.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Controls {
+    pub filter: crate::settings::Js8Filter,
+    pub qsy_center_hz: u16,
+    pub hop: Option<Js8HopNotice>,
+}
+
 /// A scheduled JS8 frequency change waiting out its notice (JS8Call's self-destructing
 /// "Scheduled Frequency Change" box): where it goes, when, the row's description, and whether a
 /// transmission is holding it back.
@@ -611,15 +621,11 @@ pub struct Js8State {
     pub speed: Js8Speed,
     /// Bitmask of decoded speeds (`Js8Speed::bit()`).
     pub rx_speeds: u8,
-    /// JS8Call's decode filter and its passband centre for QSY (the waterfall controls), as
-    /// stored. Defaulted on read, so an older station's state still parses.
-    #[serde(default)]
-    pub filter: crate::settings::Js8Filter,
-    #[serde(default)]
-    pub qsy_center_hz: u16,
-    /// A scheduled frequency change waiting out its notice (JS8Call's 30-second box), if any.
-    #[serde(default)]
-    pub hop: Option<Js8HopNotice>,
+    /// JS8Call's waterfall controls and the band schedule's notice ([`Js8Controls`]): the
+    /// desktop's own. `None`, and left out of the JSON, on the Remote page's sample, whose parser
+    /// refuses a key it does not list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controls: Option<Js8Controls>,
     pub tx_enabled: bool,
     pub sending: bool,
     pub hb_on: bool,
@@ -4958,17 +4964,19 @@ mod tests {
         let s = Js8State {
             speed: Js8Speed::Turbo,
             rx_speeds: 15,
-            filter: crate::settings::Js8Filter {
-                enabled: true,
-                center_hz: 1500,
-                width_hz: 2000,
-            },
-            qsy_center_hz: 1500,
-            hop: Some(Js8HopNotice {
-                mhz: 7.078,
-                fires_at_ms: 30_000,
-                description: "40 m net".to_string(),
-                held: false,
+            controls: Some(Js8Controls {
+                filter: crate::settings::Js8Filter {
+                    enabled: true,
+                    center_hz: 1500,
+                    width_hz: 2000,
+                },
+                qsy_center_hz: 1500,
+                hop: Some(Js8HopNotice {
+                    mhz: 7.078,
+                    fires_at_ms: 30_000,
+                    description: "40 m net".to_string(),
+                    held: false,
+                }),
             }),
             tx_enabled: false,
             sending: false,
@@ -5026,9 +5034,7 @@ mod tests {
         for k in [
             "\"speed\":\"turbo\"",
             "\"rxSpeeds\":15",
-            "\"filter\":{\"enabled\":true,\"centerHz\":1500,\"widthHz\":2000}",
-            "\"qsyCenterHz\":1500",
-            "\"hop\":{\"mhz\":7.078,\"firesAtMs\":30000,\"description\":\"40 m net\",\"held\":false}",
+            "\"controls\":{\"filter\":{\"enabled\":true,\"centerHz\":1500,\"widthHz\":2000},\"qsyCenterHz\":1500,\"hop\":{\"mhz\":7.078,\"firesAtMs\":30000,\"description\":\"40 m net\",\"held\":false}}",
             "\"txEnabled\":false",
             "\"hbOn\":false",
             "\"hbNextAtMs\":null",

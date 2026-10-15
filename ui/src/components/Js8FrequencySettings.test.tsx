@@ -87,7 +87,7 @@ describe('the JS8 frequency list', () => {
     fireEvent.change(mhzBox(1), { target: { value: 'abc' } })
     fireEvent.blur(mhzBox(1))
     expect(seen).toHaveLength(1)
-    expect(pushToast).toHaveBeenCalledWith(t('settings.js8.freqs.badMhz'), 'info', 3500)
+    expect(pushToast).toHaveBeenCalledWith(t('settings.js8.freqs.badMhz', { example: '7.078' }), 'info', 3500)
   })
 
   it('adds and removes rows', async () => {

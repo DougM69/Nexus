@@ -506,6 +506,14 @@ mod tests {
     /// 2023-11-14 22:13:20 UTC.
     const NOW: u64 = 1_700_000_000_000;
 
+    /// The change waiting out its notice, as the cockpit reads it.
+    fn notice(e: &Engine) -> Option<Js8HopNotice> {
+        e.js8_state()
+            .controls
+            .expect("the desktop's state carries controls")
+            .hop
+    }
+
     fn js8_engine() -> Engine {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.js8_enter();
@@ -819,7 +827,7 @@ mod tests {
         for i in 0..10 {
             e.js8_tick(NOW + i * 15_000);
         }
-        assert!(e.js8_state().hop.is_none());
+        assert!(notice(&e).is_none());
         assert_eq!(e.settings().dial_hz(), 14_078_000);
     }
 
@@ -831,11 +839,11 @@ mod tests {
         e.settings.js8_band_hop = true;
         e.settings.js8_schedule = vec![hop(7.078, "22:00", "23:00", "40 m net")];
         e.js8_tick(NOW);
-        let notice = e.js8_state().hop.expect("announced");
-        assert_eq!(notice.mhz, 7.078);
-        assert_eq!(notice.fires_at_ms, NOW + 30_000);
-        assert_eq!(notice.description, "40 m net");
-        assert!(!notice.held);
+        let announced = notice(&e).expect("announced");
+        assert_eq!(announced.mhz, 7.078);
+        assert_eq!(announced.fires_at_ms, NOW + 30_000);
+        assert_eq!(announced.description, "40 m net");
+        assert!(!announced.held);
         assert_eq!(
             e.settings().dial_hz(),
             14_078_000,
@@ -846,12 +854,12 @@ mod tests {
         e.js8_tick(NOW + 30_000);
         assert_eq!(e.settings().dial_hz(), 7_078_000);
         assert_eq!(e.settings().band, "40m");
-        assert!(e.js8_state().hop.is_none());
+        assert!(notice(&e).is_none());
         for i in 1..10 {
             e.js8_tick(NOW + 30_000 + i * 15_000);
         }
         assert!(
-            e.js8_state().hop.is_none(),
+            notice(&e).is_none(),
             "already there: nothing more to change"
         );
         assert_eq!(e.settings().dial_hz(), 7_078_000);
@@ -865,14 +873,14 @@ mod tests {
         e.settings.js8_band_hop = true;
         e.settings.js8_schedule = vec![hop(7.078, "22:00", "23:00", "")];
         e.js8_tick(NOW);
-        assert!(e.js8_state().hop.is_some());
+        assert!(notice(&e).is_some());
         e.js8_hop_answer(false).unwrap();
-        assert!(e.js8_state().hop.is_none());
+        assert!(notice(&e).is_none());
         for i in 1..10 {
             e.js8_tick(NOW + i * 15_000);
         }
         assert!(
-            e.js8_state().hop.is_none(),
+            notice(&e).is_none(),
             "a cancelled window does not ask again"
         );
         assert_eq!(e.settings().dial_hz(), 14_078_000);
@@ -886,10 +894,10 @@ mod tests {
             .js8_schedule
             .push(hop(28.078, "06:00", "07:00", ""));
         e.js8_tick(NOW + 200_000);
-        assert!(e.js8_state().hop.is_some(), "an edit takes a fresh look");
+        assert!(notice(&e).is_some(), "an edit takes a fresh look");
         e.js8_hop_answer(true).unwrap();
         assert_eq!(e.settings().dial_hz(), 7_078_000, "change now: at once");
-        assert!(e.js8_state().hop.is_none());
+        assert!(notice(&e).is_none());
     }
 
     /// The operator's own move is not undone by the window that moved them.
@@ -905,7 +913,7 @@ mod tests {
         for i in 1..20 {
             e.js8_tick(NOW + 30_000 + i * 15_000);
         }
-        assert!(e.js8_state().hop.is_none());
+        assert!(notice(&e).is_none());
         assert_eq!(e.settings().dial_hz(), 7_095_000);
     }
 
@@ -917,16 +925,16 @@ mod tests {
         e.settings.js8_schedule = vec![hop(7.078, "22:00", "23:00", "")];
         e.app.set_transmitting(true);
         e.js8_tick(NOW);
-        assert!(e.js8_state().hop.is_none(), "on the air: no look");
+        assert!(notice(&e).is_none(), "on the air: no look");
         e.app.set_transmitting(false);
         e.set_tx_enabled(true);
         e.js8_send(None, "HELLO WORLD".into()).unwrap();
         e.js8_tick(NOW + 15_000);
         assert!(e.js8_message_going_out());
-        assert!(e.js8_state().hop.is_none(), "a message going out: no look");
+        assert!(notice(&e).is_none(), "a message going out: no look");
         e.js8_drop_queue();
         e.js8_tick(NOW + 30_000);
-        assert!(e.js8_state().hop.is_some(), "clear: the look happens");
+        assert!(notice(&e).is_some(), "clear: the look happens");
         assert_eq!(e.settings().dial_hz(), 14_078_000);
     }
 
@@ -944,7 +952,7 @@ mod tests {
             14_078_000,
             "never while transmitting"
         );
-        assert!(e.js8_state().hop.expect("still waiting").held);
+        assert!(notice(&e).expect("still waiting").held);
         e.js8_hop_answer(true).unwrap();
         assert_eq!(e.settings().dial_hz(), 14_078_000, "change now waits too");
         e.app.set_transmitting(false);
@@ -963,7 +971,7 @@ mod tests {
         e.js8_send(None, "HELLO WORLD".into()).unwrap();
         e.js8_tick(NOW + 30_000);
         assert_eq!(e.settings().dial_hz(), 14_078_000);
-        assert!(e.js8_state().hop.expect("still waiting").held);
+        assert!(notice(&e).expect("still waiting").held);
         e.js8_drop_queue();
         e.js8_tick(NOW + 31_000);
         assert_eq!(e.settings().dial_hz(), 7_078_000);
@@ -977,14 +985,14 @@ mod tests {
         e.settings.js8_band_hop = true;
         e.settings.js8_schedule = vec![hop(7.078, "22:00", "23:00", "")];
         e.js8_tick(NOW);
-        assert!(e.js8_state().hop.is_some());
+        assert!(notice(&e).is_some());
         e.set_tier(Tier::Ft8);
         let dial = e.settings().dial_hz();
         e.js8_tick(NOW + 30_000);
         assert_eq!(e.settings().dial_hz(), dial);
         e.js8_hop_answer(true).unwrap();
         assert_eq!(e.settings().dial_hz(), dial);
-        assert!(e.js8_state().hop.is_none());
+        assert!(notice(&e).is_none());
     }
 
     /// Off JS8 the schedule does not even look: no notice, and the dial on another mode is not
@@ -997,7 +1005,7 @@ mod tests {
         e.settings.js8_schedule = vec![hop(7.078, "22:00", "23:00", "")];
         let dial = e.settings().dial_hz();
         e.js8_tick(NOW);
-        assert!(e.js8_state().hop.is_none(), "no look off JS8");
+        assert!(notice(&e).is_none(), "no look off JS8");
         e.js8_tick(NOW + 30_000);
         assert_eq!(e.settings().dial_hz(), dial);
         assert_eq!(e.settings().js8_last_dial_mhz, 0.0);
@@ -1071,7 +1079,7 @@ mod tests {
         e.js8_tick(NOW + 60_000);
         assert_eq!(e.settings().dial_hz(), 14_078_000);
         assert_eq!(
-            e.js8_state().hop.expect("announced afresh").fires_at_ms,
+            notice(&e).expect("announced afresh").fires_at_ms,
             NOW + 60_000 + 30_000
         );
     }
@@ -1085,7 +1093,7 @@ mod tests {
         e.js8_tick(NOW);
         e.settings.js8_band_hop = false;
         e.js8_tick(NOW + 30_000);
-        assert!(e.js8_state().hop.is_none());
+        assert!(notice(&e).is_none());
         assert_eq!(e.settings().dial_hz(), 14_078_000);
     }
 

@@ -19,13 +19,16 @@ vi.mock('../api', () => ({
 }))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
 
-const js8 = (over: Partial<Js8State> = {}): Js8State =>
+type Controls = NonNullable<Js8State['controls']>
+const js8 = (over: Partial<Controls> = {}, sending = false): Js8State =>
   ({
-    sending: false,
-    filter: { enabled: true, centerHz: 1500, widthHz: 2000 },
-    qsyCenterHz: 1500,
-    hop: null,
-    ...over,
+    sending,
+    controls: {
+      filter: { enabled: true, centerHz: 1500, widthHz: 2000 },
+      qsyCenterHz: 1500,
+      hop: null,
+      ...over,
+    },
   }) as unknown as Js8State
 
 beforeEach(() => vi.clearAllMocks())
@@ -48,6 +51,12 @@ function mount(state: Js8State, props: Partial<Parameters<typeof Js8WaterfallCon
 }
 
 describe('the waterfall controls', () => {
+  it('no plate where the station sends no controls (the Remote page, an older station)', () => {
+    mount({ sending: false } as unknown as Js8State)
+    expect(screen.queryByRole('button', { name: /Filter/ })).toBeNull()
+    expect(document.body.textContent).toBe('')
+  })
+
   it('the pill names the filter window, or says it is off', () => {
     mount(js8())
     expect(screen.getByRole('button', { name: t('js8.wf.pill.on', { lo: 500, hi: 2500 }) })).toBeTruthy()
@@ -83,7 +92,7 @@ describe('the waterfall controls', () => {
   })
 
   it('QSY to centre is not offered while a frame is on the air, nor from a window that may not control', () => {
-    mount(js8({ sending: true }))
+    mount(js8({}, true))
     fireEvent.click(screen.getByRole('button', { name: t('js8.wf.pill.on', { lo: 500, hi: 2500 }) }))
     expect((screen.getByRole('button', { name: t('js8.wf.qsy.action') }) as HTMLButtonElement).disabled).toBe(true)
     cleanup()

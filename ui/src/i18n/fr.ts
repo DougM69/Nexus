@@ -6051,7 +6051,7 @@ export const FR: PartialCatalog = {
   "settings.js8.freqs.add.mhz.placeholder": "MHz",
   "settings.js8.freqs.add.description.aria": "Description de la nouvelle fréquence",
   "settings.js8.freqs.add.action": "Ajouter",
-  "settings.js8.freqs.badMhz": "Saisissez la fréquence en MHz, par exemple 7.078.",
+  "settings.js8.freqs.badMhz": "Saisissez la fréquence en MHz, par exemple {{example}}.",
   "settings.js8.freqs.reset.action": "Réinitialiser",
   "settings.js8.freqs.reset.confirm.title": "Réinitialiser les fréquences JS8 ?",
   "settings.js8.freqs.reset.confirm.body": "À l’enregistrement, votre liste est remplacée par les fréquences suggérées par JS8Call.",
