@@ -147,10 +147,10 @@ you press **Stop TX**.
 
 **Between frames.** The radio drops PTT after each frame and keys again for the next, as JS8Call
 does by default: at Normal it is unkeyed for about 1.6 seconds between two frames (Slow about 4,
-Fast and Turbo about 1.7). Turn on **Hold PTT between frames** in Settings ▸ Digital ▸ JS8 and it
-stays keyed from the end of one frame of a message to the start of the next instead. It still drops
-after the message's last frame, never holds from one message into the next, and drops at once on
-**Stop TX** or **TX Off**.
+Fast and JS8 40 about 1.7, JS8 60 about 1.1). Turn on **Hold PTT between frames** in Settings ▸
+Digital ▸ JS8 and it stays keyed from the end of one frame of a message to the start of the next
+instead. It still drops after the message's last frame, never holds from one message into the
+next, and drops at once on **Stop TX** or **TX Off**.
 
 **Moving the TX offset while sending.** While a message is waiting to go or going out, the TX
 offset stays where it is, as in JS8Call: a right-click on the waterfall is refused and the screen
