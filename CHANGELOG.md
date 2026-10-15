@@ -267,6 +267,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out. It is read-only: such a program cannot
   send, tune or change a setting through Nexus. Only programs on this computer can connect, and the
   Remote page cannot turn it on.
+- **JS8Call's API tells a program the JS8 contacts you log, and counts Tune as transmitting, as
+  JS8Call does.** With the API on, a program made for JS8Call gets JS8Call's LOG.QSO each time you
+  log a JS8 contact, with the contact as JS8Call's log writes it, and RIG.PTT on and off for a tune
+  carrier; asked while you tune, it reads the transmitter keyed with TUNE going out. NEEDS-BENCH
+  with a program made for JS8Call.
+- **JS8NET gets your INFO with its macros replaced, as JS8Call sends it:** `<MYCALL>`,
+  `<MYVERSION>` and the rest, as an INFO? reply has them. NEEDS-BENCH: a capture of what goes to
+  JS8NET.
 
 ### Changed
 
@@ -403,6 +411,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JS8: CQ and HB wait while a message is going out.** Both are greyed out while a message is
   waiting to go or going out, as JS8Call's are, so a CQ or a heartbeat no longer queues behind it.
   Needs a bench check.
+- **ALL.TXT names each JS8 frame's speed, as JS8Call does.** With Write ALL.TXT decode log on,
+  each JS8 line, heard or sent, carries JS8Call's letter for its speed after the audio offset,
+  before the message: A Normal, B Fast, C JS8 40, E Slow, I JS8 60. A program that reads the JS8
+  lines in Nexus's ALL.TXT finds the letter there. NEEDS-BENCH: a line beside JS8Call's for the
+  same frame.
 
 ### Fixed
 

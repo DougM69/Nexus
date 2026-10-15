@@ -1934,10 +1934,10 @@ impl Station {
         })
     }
 
-    /// My INFO as the station answers `INFO?` with it, its grid macros expanded: what JS8Call's
-    /// spot client announces as this station's INFO (`spotSetLocal`, mainwindow.cpp:5543-5547).
-    pub fn info_text(&self) -> String {
-        self.expand_grid_macros(&self.cfg.info)
+    /// My INFO as JS8Call's spot client announces it (`spotSetLocal`, mainwindow.cpp:5543-5547):
+    /// every macro replaced and the rest removed, as the `INFO?` reply has it.
+    pub fn info_text(&self, now_ms: u64) -> String {
+        self.expand_macros(&self.cfg.info, now_ms)
     }
 
     /// JS8Call's `<MYGRID4>` and `<MYGRID12>` (`buildMacroValues`, mainwindow.cpp:7024-7025): the
@@ -2113,7 +2113,7 @@ impl Station {
         if self.cfg.autoreply || matches!(r.origin, Origin::HbAck | Origin::AprsRelay) {
             // A reply that no longer composes (the speed went down while it asked, so it no longer
             // fits one transmission) is not sent, and said, never dropped without a word; a
-            // delivery it carried stays held.
+            // delivery it carried stays held. A relay is said as a relay.
             let out = match self.compose_out(r.origin, &r.text, r.freq_hint) {
                 Ok(out) => out,
                 Err(e) => {
@@ -2125,8 +2125,13 @@ impl Station {
                         ComposeError::NoCallsign => "no callsign is set".to_string(),
                         ComposeError::Empty => "it is empty".to_string(),
                     };
+                    let what = if r.origin == Origin::AprsRelay {
+                        "APRS-IS relay"
+                    } else {
+                        "Auto-reply"
+                    };
                     actions.push(StationAction::Toast {
-                        text: format!("Auto-reply not sent, {why}: {}", r.text),
+                        text: format!("{what} not sent, {why}: {}", r.text),
                         directed_to_me: false,
                     });
                     return actions;
@@ -7965,6 +7970,31 @@ mod tests {
             assert!(s.enqueue_aprs_relay(&format!("@APRSIS MSG TO:W1AW N{k} DE N0CALL")));
         }
         assert!(!s.enqueue_aprs_relay("@APRSIS MSG TO:W1AW OVER DE N0CALL"));
+    }
+
+    /// A relay that does not compose when its turn comes (here no callsign is set) is not sent,
+    /// and the log says so as a relay; an automatic reply that does not compose is still said as
+    /// one (`a_reply_that_no_longer_fits_when_it_goes_is_said_and_its_message_stays_held`).
+    #[test]
+    fn a_relay_that_does_not_compose_is_said_as_a_relay() {
+        let mut s = Station::new(StationConfig {
+            mycall: String::new(),
+            ..cfg()
+        });
+        assert!(s.enqueue_aprs_relay("@APRSIS MSG TO:W1AW HELLO DE N0CALL"));
+        let said: Vec<String> = s
+            .process_tx_queue()
+            .into_iter()
+            .filter_map(|a| match a {
+                StationAction::Toast { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            said,
+            ["APRS-IS relay not sent, no callsign is set: @APRSIS MSG TO:W1AW HELLO DE N0CALL"]
+        );
+        assert!(s.queue().is_empty(), "nothing waits to key");
     }
 
     /// JS8Call's call list marks (displayCallActivity.cpp:200-245): ★ "Hearing Your Station" from the
