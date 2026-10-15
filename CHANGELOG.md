@@ -425,6 +425,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tuned a channel the radio refuses. When your only radio cannot receive 145.800 MHz, Nexus now
   tells you once per session, with where to turn the auto-arm off (Settings ▸ Digital ▸ SSTV), and
   then leaves the radio and the screen alone.
+- **The log entry keeps what you typed when you switch pages.** A call typed into the Phone or CW
+  cockpit's log entry, with its reports, name, QTH, comment, notes and park, was gone when you
+  came back from another page such as Conditions, and had to be typed again. Each cockpit now
+  keeps its own contact until you log it or clear it, and the Satellites section's log entry does
+  the same. In CW the call is back in His Call too, so the F-keys send the call on screen. The
+  band, frequency and mode are still read from the radio when you log. Nothing is kept across a
+  restart, in a contest's entry, or while "Log a contact from another radio" is open. The RTTY,
+  PSK and JS8 cockpits already kept their entries.
 
 ### Security
 

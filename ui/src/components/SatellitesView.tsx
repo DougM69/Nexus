@@ -4425,6 +4425,9 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
               fieldDay={snap.fieldDay}
               {...fdClassForLogMode(logMode)}
               onSnap={onSnap}
+              // Nothing in the section unmounts the strip (above), but App's view switch does: a
+              // page switch mid-pass leaves the contact in the draft until the section is back.
+              draft="sats"
             />
             <p
               className="sats-log-note"
