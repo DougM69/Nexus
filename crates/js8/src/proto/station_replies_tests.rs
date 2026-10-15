@@ -508,9 +508,12 @@ fn the_heartbeat_ack_says_how_many_more_wait_as_js8call_3_does() {
 // ---- group store-and-forward ------------------------------------------------------------------
 
 /// A `MSG TO:@FUN` is offered to a station that asks the group, handed over when it asks for it,
-/// and then offered to it no more, while another station still gets it; once each.
+/// and then offered to it no more, while another station still gets it: offered once each. A
+/// station that asks for it by number again is handed it again, as JS8Call 3.0.3 hands it
+/// (processCommandActivity.cpp:905-935: only the `@` is checked), and the record of who had it
+/// keeps one row for it.
 #[test]
-fn a_group_message_is_handed_to_each_station_that_asks_once() {
+fn a_group_message_is_offered_once_to_each_station_and_handed_over_whenever_asked() {
     let mut s = Station::new(cfg());
     store(&mut s, "@FUN NET AT EIGHT", T0);
     assert_eq!(s.inbox()[0].to, "@FUN");
@@ -541,17 +544,25 @@ fn a_group_message_is_handed_to_each_station_that_asks_once() {
         ask(&mut s, "K1ABC", "@FUN", Command::QueryMsgs, "", t + 300_000),
         ["K1ABC NO"]
     );
+    s.on_event(
+        &ev("K1ABC", "KD9TAW", Command::Query, "MSG 1", -5, t + 360_000),
+        t + 360_000,
+    );
     assert_eq!(
-        ask(
-            &mut s,
-            "K1ABC",
-            "KD9TAW",
-            Command::Query,
-            "MSG 1",
-            t + 360_000
-        ),
-        Vec::<String>::new(),
-        "not handed to K1ABC twice"
+        replies(&s),
+        ["K1ABC MSG NET AT EIGHT FROM W1AW"],
+        "asked for again, handed to K1ABC again"
+    );
+    assert_keys(&mut s, t + 360_000, "K1ABC MSG NET AT EIGHT FROM W1AW");
+    assert_eq!(
+        s.group_recipients,
+        [(1, "K1ABC".to_string())],
+        "one row for K1ABC, however often it is handed over"
+    );
+    assert_eq!(
+        ask(&mut s, "K1ABC", "@FUN", Command::QueryMsgs, "", t + 400_000),
+        ["K1ABC NO"],
+        "and still offered to K1ABC no more"
     );
     assert_eq!(
         ask(&mut s, "N0XYZ", "@FUN", Command::QueryMsgs, "", t + 420_000),

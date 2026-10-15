@@ -3134,6 +3134,10 @@ pub struct Engine {
     /// in the same slot (the snappy immediate-TX path, a re-plan) must not pop the NEXT
     /// frame and key it mid-period. Cleared by `js8_halt_clear`.
     pub(crate) js8_planned_slot: Option<u64>,
+    /// The JS8 frame last planned, for "Allow TX offset changes while sending" to move while it is
+    /// on the air (`js8_retune_on_air`): its slot, speed, word and offset, and whether that offset
+    /// is the operator's TX offset.
+    pub(crate) js8_on_air: Option<crate::engine::js8::Js8OnAir>,
     /// One-shot: drop Enable-Tx once the CURRENT over finishes playing — set
     /// when our final 73 goes out with "Disable Tx after sending 73" on. The
     /// radio loop consumes it AFTER tx_until expires; disabling immediately
@@ -5647,6 +5651,7 @@ impl Engine {
             js8_journal_path: None,
             js8_rng: (tempo_core::timing::now_unix_ms() as u32) | 1,
             js8_planned_slot: None,
+            js8_on_air: None,
             pending_tx_disable: false,
             pending_cw_id: false,
             highlights: std::collections::HashMap::new(),

@@ -72,9 +72,11 @@
 //!   whose hand-over would not fit one transmission at the current speed (the §97.119 cap,
 //!   which JS8Call does not have) is not offered, counted, named next or handed over until the
 //!   speed allows it, and the Inbox is told why (`held_too_long`).
-//! - Group store-and-forward: a `MSG TO:@GROUP` is held 48 h and handed once to each station
-//!   that asks for it — offered when a QUERY MSGS (or a heartbeat) addressed to a group I joined
-//!   finds nothing held for the asker itself (`getNextGroupMessageIdForCallsign`, Inbox.cpp:468).
+//! - Group store-and-forward: a `MSG TO:@GROUP` is held 48 h and offered once to each station —
+//!   when a QUERY MSGS (or a heartbeat) addressed to a group I joined finds nothing held for the
+//!   asker itself (`getNextGroupMessageIdForCallsign`, Inbox.cpp:468) — and handed over to any
+//!   station that asks for it by number, as often as it asks, as JS8Call 3.0.3 hands it
+//!   (processCommandActivity.cpp:905-935).
 //! - QUERY CALL `<call>?`, on my call, a joined group or @ALLCALL, with AUTO on: `<from> YES <snr>
 //!   (<age>)` when the call is heard (processCommandActivity.cpp:1052-1101). AGN? to my call: my
 //!   last message again, as it went out (:625-629).
@@ -154,7 +156,9 @@ const MAX_PENDING: usize = 32;
 /// less than this long after the heartbeat it was last acknowledged for is acknowledged no more.
 pub const HB_RATE_WINDOW_MS: u64 = 55 * 60 * 1000;
 /// The rule's two lists grow from air-sourced calls, so each is capped as `heard` is, dropping its
-/// oldest entry. A timestamp past the window carries nothing and is pruned on its own.
+/// oldest entry. A timestamp past the window carries nothing and is pruned on its own. The rule
+/// also adds no call to a "never acknowledge" list already this long: that list is the
+/// operator's Settings.
 const MAX_HB_RATE: usize = MAX_HEARD;
 
 /// The speeds JS8Call sends heartbeats and heartbeat acknowledgements at: Slow, Normal and Fast
@@ -313,7 +317,9 @@ pub struct StationConfig {
     pub autoreply_deny: Vec<String>,
     /// "Never acknowledge heartbeats from these callsigns" (`HBBlacklist`, Configuration.ui:762,
     /// default empty, Configuration.cpp:1849): a heartbeat from one draws no HB-ACK
-    /// (mainwindow.cpp:9073-9077).
+    /// (mainwindow.cpp:9073-9077). The 55-minute rule adds the stations it stops to it, as
+    /// JS8Call adds them to its blacklist (`addToHbBlacklist`, Configuration.cpp:1226-1231), and
+    /// the engine writes each into the operator's Settings.
     pub hb_ack_deny: Vec<String>,
     // ---- heartbeat networking and presence, as JS8Call 3.0.3 has them ----
     /// "Enable Heartbeat Networking" (the Mode menu's `actionModeJS8HB`, `SubModeHB`, default off,
@@ -482,8 +488,9 @@ pub enum StationAction {
         freq_hz: f32,
     },
     IdleTripped,
-    /// The 55-minute rule stopped acknowledging `from` (`hb_rate_limit`): the list it keeps
-    /// changed, and is journaled.
+    /// The 55-minute rule stopped acknowledging `from` (`hb_rate_limit`): `from` is on the
+    /// station's "never acknowledge" list ([`StationConfig::hb_ack_deny`]) now, unless that list
+    /// was full, and the rule's own record changed, to be journaled.
     HbAckRateLimited {
         from: String,
     },
@@ -569,9 +576,10 @@ pub struct StationSnapshot {
     pub heard: Vec<Heard>,
     pub allcall_replied: Vec<(String, u64)>,
     pub next_inbox_id: u32,
-    /// The stations the 55-minute rule stopped acknowledging, kept across launches as JS8Call
-    /// keeps them in its HB blacklist (Configuration.cpp:1226-1231). Left out while empty, so a
-    /// journal that never used the rule is written as before.
+    /// Which calls on the "never acknowledge" list the 55-minute rule put there, for the HB ACK
+    /// chip; the list itself is the operator's Settings, as JS8Call's HB blacklist is
+    /// (Configuration.cpp:1226-1231). Left out while empty, so a journal that never used the rule
+    /// is written as before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hb_rate_blocked: Vec<String>,
     /// Who has been handed which group message, `(id, call as heard)`. Absent from a journal
@@ -664,8 +672,9 @@ pub struct Station {
     /// JS8Call 3.0's HB ACK rate limit (`HBBlockingDB`, processHeartbeatRateLimit.cpp): when each
     /// station, by its call as heard, was last acknowledged…
     hb_acked_at: HashMap<String, u64>,
-    /// …and the stations the rule has stopped acknowledging, oldest first (JS8Call adds each to
-    /// its HB blacklist, Configuration.cpp:1226-1231).
+    /// …and the stations the rule put on the "never acknowledge" list and that are still on it,
+    /// oldest first: which of that list's calls are the rule's, for the HB ACK chip. The list
+    /// itself (`hb_ack_deny`) is what turns them away, as JS8Call's blacklist does.
     hb_rate_blocked: Vec<String>,
     /// The compose box's message while it goes out, for its typeahead.
     typeahead: Option<typeahead::Typeahead>,
@@ -716,14 +725,15 @@ impl Station {
     /// The operator's Settings, as the engine hands them over. Heartbeat networking turned off,
     /// or a speed JS8Call sends no heartbeats at, stops heartbeats as JS8Call's
     /// `prepareHeartbeatMode(false)` stops them (mainwindow.cpp:4124-4130): see
-    /// `stop_heartbeats`. The 55-minute rule turned off forgets what it learned, so turning it off
-    /// is how its stations are acknowledged again.
+    /// `stop_heartbeats`. The 55-minute rule turned off forgets the times it kept; the stations
+    /// it stopped stay on the "never acknowledge" list, as JS8Call's stay on its blacklist, and
+    /// taking one off that list is how it is acknowledged again.
     pub fn set_config(&mut self, cfg: StationConfig) {
         if self.cfg.hb_rate_limit && !cfg.hb_rate_limit {
             self.hb_acked_at.clear();
-            self.hb_rate_blocked.clear();
         }
         self.cfg = cfg;
+        self.keep_listed_rate_blocks();
         if !self.hb_allowed() {
             self.stop_heartbeats();
         }
@@ -920,15 +930,17 @@ impl Station {
         split_portable(call).0.eq_ignore_ascii_case(&self.base())
     }
 
+    /// The heard list keeps a station under its call as heard, `/P` included, as JS8Call's call
+    /// activity keys it (`m_callActivity[d.call]`, mainwindow.cpp:2297-2311): W1AW and W1AW/P are
+    /// two stations to it, each with its own SNR and time.
     fn record_heard(&mut self, m: &Message, actions: &mut Vec<StationAction>) {
-        let call = clamp_str(split_portable(&m.from).0, MAX_CALL_LEN).to_ascii_uppercase();
+        let call = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
         if call.is_empty() || call == "<....>" {
             return;
         }
         let grid = m.grid.as_deref().map(|g| clamp_str(g, MAX_CALL_LEN));
         // The messages held for the station as it was heard, found as its queries find them.
-        let who = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
-        let stored = self.inbox.iter().filter(|e| held_for(e, &who)).count() as u8;
+        let stored = self.inbox.iter().filter(|e| held_for(e, &call)).count() as u8;
         if let Some(h) = self.heard.iter_mut().find(|h| h.call == call) {
             h.snr_db = m.snr_db;
             h.freq_hz = m.freq_hz;
@@ -1104,10 +1116,10 @@ impl Station {
         }
         // The station as heard, `/P` included (`sendHeartbeatAck(d.from, …)`, :9098); a message
         // held for it is found as JS8Call finds it (`getNextMessageIdForCallsign(d.from)`, :9082).
-        // A station the 55-minute rule stopped is on that deny list in JS8Call (`hb_blacklist`,
-        // processCommandActivity.cpp:655-661), turned away here as there.
+        // A station the 55-minute rule stopped is on that deny list, here as in JS8Call
+        // (`hb_blacklist`, processCommandActivity.cpp:655-661), and was turned away above.
         let to = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
-        if self.is_me(&to) || (self.cfg.hb_rate_limit && on_list(&self.hb_rate_blocked, &to)) {
+        if self.is_me(&to) {
             return;
         }
         // A heartbeat is @ALLCALL traffic to JS8Call (`isAllCallIncluded` reads @HB as @ALLCALL,
@@ -1156,11 +1168,12 @@ impl Station {
     }
 
     /// JS8Call 3.0's 55-minute rule (`processHeartbeatRateLimit`, processHeartbeatRateLimit.cpp:
-    /// 8-38), for a station it has not stopped: one it stopped stays stopped, by its call as heard
-    /// or its base call, as JS8Call's HB blacklist keeps it (processCommandActivity.cpp:655-661,
-    /// :713-715), and `maybe_hb_ack` turns it away first. A station acknowledged less than
-    /// [`HB_RATE_WINDOW_MS`] ago is stopped now, for good, and its time forgotten (:26-33); any
-    /// other has its time kept, and is acknowledged (:36-37).
+    /// 8-38), for a station it has not stopped: one it stopped is on the "never acknowledge" list,
+    /// by its call as heard, as JS8Call writes it into its HB blacklist (`addToHbBlacklist`,
+    /// :31; Configuration.cpp:1226-1231), and `maybe_hb_ack` turns it away first, by that call or
+    /// its base call (processCommandActivity.cpp:655-661, :713-715). A station acknowledged less
+    /// than [`HB_RATE_WINDOW_MS`] ago is stopped now, for good, and its time forgotten (:26-33);
+    /// any other has its time kept, and is acknowledged (:36-37).
     fn hb_rate_held_off(
         &mut self,
         who: &str,
@@ -1170,10 +1183,16 @@ impl Station {
         match self.hb_acked_at.get(who) {
             Some(&last) if now_ms.saturating_sub(last) < HB_RATE_WINDOW_MS => {
                 self.hb_acked_at.remove(who);
-                self.hb_rate_blocked.push(who.to_string());
-                if self.hb_rate_blocked.len() > MAX_HB_RATE {
-                    self.hb_rate_blocked.remove(0);
+                // Once, as heard (`if (!hb_blacklist_.contains(callsign)) append`), and never
+                // into a list already `MAX_HB_RATE` long: it grows from calls heard on the air.
+                let deny = &mut self.cfg.hb_ack_deny;
+                if !deny.iter().any(|c| c == who) && deny.len() < MAX_HB_RATE {
+                    deny.push(who.to_string());
                 }
+                if !self.hb_rate_blocked.iter().any(|c| c == who) {
+                    self.hb_rate_blocked.push(who.to_string());
+                }
+                self.keep_listed_rate_blocks();
                 actions.push(StationAction::HbAckRateLimited {
                     from: who.to_string(),
                 });
@@ -1385,9 +1404,11 @@ impl Station {
 
     /// A MSG to me (or a group I joined) into my inbox as `Unread`: JS8Call's
     /// `addCommandToMyInbox` → `addCommandToStorage("UNREAD", d)` (mainwindow.cpp:9462-9467),
-    /// with its PATH (`parseRelayPathCallsigns`, :9127).
+    /// with its PATH (`parseRelayPathCallsigns`, :9127). Its sender is kept as heard, `/P`
+    /// included (`{"FROM", d.from}`, mainwindow.cpp:6356), the key the heard list keeps it under,
+    /// so the station's row in the Stations list is the one the unread message flags.
     fn file_msg_to_me(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
-        let from = clamp_str(split_portable(&m.from).0, MAX_CALL_LEN).to_ascii_uppercase();
+        let from = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
         let text = clamp_str(m.text.trim(), MAX_TEXT_LEN);
         let path = relay_path(&from, &text);
         let id = self.next_inbox_id;
@@ -1432,20 +1453,20 @@ impl Station {
                 return;
             };
             let inbox = self.offerable(&from);
-            // A group's message goes to any station that asks for it (JS8Call: "allow any
-            // message to a @GROUP to be retrieved by anybody", processCommandActivity.cpp:916-922)
-            // and, as a message for one station does here, once to each.
+            // A group's message goes to any station that asks for it, and again to one that asks
+            // again: JS8Call checks nothing but the message's `@` ("allow any message to a @GROUP
+            // to be retrieved by anybody", processCommandActivity.cpp:905-912) and records the
+            // hand-over (`markGroupMsgDeliveredForCallsign`, :931-934) only so that QUERY MSGS
+            // and a heartbeat no longer offer it to that station.
             if let Some(e) = inbox.iter().find(|e| {
                 e.id == id
                     && has_text(e)
                     && (held_for(e, &from)
-                        || (held::is_group(&e.to)
-                            && e.state == InboxState::Store
-                            && !held::handed(&self.group_recipients, id, &from)))
+                        || (held::is_group(&e.to) && e.state == InboxState::Store))
             }) {
                 // 3.0's reply (:938-975): the message, then the next one waiting, `NEXT MSG ID m`,
                 // and `+k` when k more wait past that — counted before this one is marked.
-                let bare = format!("{from} MSG {} FROM {}", e.text, e.from);
+                let bare = hand_over_text(e, &from);
                 let mut deliver = bare.clone();
                 let next = held::lookahead_for(&inbox, &from, id).or_else(|| {
                     held::is_group(&e.to)
@@ -1477,8 +1498,11 @@ impl Station {
                     });
                     // A hand-over that fits one transmission at this speed only without its NEXT
                     // MSG ID goes without it, rather than never; the next one is offered on the
-                    // next QUERY MSGS. (JS8Call, with no such cap, always names it.)
-                    if self.too_long(&deliver, self.cfg.speed).is_some() {
+                    // next QUERY MSGS. (JS8Call, with no such cap, always names it.) So does one
+                    // the reply's length cap would cut into: the cap must never take a word of it.
+                    if self.too_long(&deliver, self.cfg.speed).is_some()
+                        || deliver.len() > MAX_TEXT_LEN
+                    {
                         deliver = bare;
                     }
                 }
@@ -1602,10 +1626,10 @@ impl Station {
     /// only with AUTO on (:1053) and only when the call asked about is heard and its callsign aging
     /// has not passed (:1080-1084): `<from> YES <snr> (<age>)`, the SNR and age of the station
     /// as last heard. JS8Call matches the call asked about against each heard call and its base
-    /// call, in the heard list's key order (:1074-1095); Nexus's heard list keeps a call without
-    /// its `/P`, so a question naming a `/P` call is answered only for a station heard without it.
-    /// On @ALLCALL it holds the asker off for the reply interval, as every @ALLCALL reply does
-    /// (:1097-1100, :1128-1131).
+    /// call, in the heard list's key order (:1074-1095), and its list keeps each call as heard: a
+    /// question naming W1AW/P is answered for W1AW/P, and one naming W1AW for W1AW or, by its base
+    /// call, W1AW/P. On @ALLCALL it holds the asker off for the reply interval, as every @ALLCALL
+    /// reply does (:1097-1100, :1128-1131).
     fn handle_query_call(
         &mut self,
         m: &Message,
@@ -1717,7 +1741,7 @@ impl Station {
         who: &str,
         speed: Speed,
     ) -> Option<(usize, usize)> {
-        self.too_long(&format!("{who} MSG {} FROM {}", e.text, e.from), speed)
+        self.too_long(&hand_over_text(e, who), speed)
     }
 
     /// The inbox as the held-message lookups see it for `who`: without a held message whose
@@ -1793,12 +1817,12 @@ impl Station {
     /// four calls, newest first (:8873-8883), never the station that asked (:8890) and none its
     /// callsign aging has passed (:8894), a setting that ships off.
     fn hearing_reply(&self, from: &str, now_ms: u64) -> String {
-        // The heard list files a station under its base call (`record_heard`).
-        let asker = split_portable(from).0;
+        // The heard list keeps each call as heard (`record_heard`), and JS8Call leaves out the
+        // asker by that key (`call == d.from`, processCommandActivity.cpp:391).
         let mut calls: Vec<&Heard> = self
             .heard
             .iter()
-            .filter(|h| h.call != asker && !self.aged(h, now_ms))
+            .filter(|h| h.call != from && !self.aged(h, now_ms))
             .collect();
         calls.sort_by(|a, b| b.last_ms.cmp(&a.last_ms));
         let mut words = vec![format!("{from} HEARING")];
@@ -2438,9 +2462,19 @@ impl Station {
         self.hb_paused
     }
 
-    /// The stations the 55-minute rule has stopped acknowledging, oldest first.
+    /// The stations the 55-minute rule put on the "never acknowledge" list and that are still on
+    /// it, oldest first.
     pub fn hb_rate_blocked(&self) -> &[String] {
         &self.hb_rate_blocked
+    }
+
+    /// Keep in the rule's record only the stations still on the "never acknowledge" list, the
+    /// newest `MAX_HB_RATE`: one the operator took off the list is the rule's no more.
+    fn keep_listed_rate_blocks(&mut self) {
+        let deny = &self.cfg.hb_ack_deny;
+        self.hb_rate_blocked.retain(|c| deny.iter().any(|d| d == c));
+        let over = self.hb_rate_blocked.len().saturating_sub(MAX_HB_RATE);
+        self.hb_rate_blocked.drain(..over);
     }
 
     /// Why a heartbeat heard now would draw no acknowledgement, the HB ACK switches being on: the
@@ -2839,14 +2873,14 @@ impl Station {
         self.heard = s.heard;
         self.allcall_replied = s.allcall_replied.into_iter().collect();
         self.next_inbox_id = s.next_inbox_id.max(1);
-        // A journal is read as data: the newest calls the cap holds.
+        // A journal is read as data: the newest calls the cap holds, and of those only the ones
+        // still on the "never acknowledge" list the Settings hand over.
         let mut blocked = s.hb_rate_blocked;
-        let over = blocked.len().saturating_sub(MAX_HB_RATE);
-        blocked.drain(..over);
         blocked
             .iter_mut()
             .for_each(|c| *c = clamp_str(c, MAX_CALL_LEN));
         self.hb_rate_blocked = blocked;
+        self.keep_listed_rate_blocks();
         self.group_recipients = s.group_recipients;
         self.inbox_dropped = s.inbox_dropped;
     }
@@ -3021,10 +3055,23 @@ fn relay_call_shape(call: &str) -> bool {
     }
 }
 
+/// The `n` of a QUERY reading "MSG n". Only "MSG": JS8Call takes the first word of the text and
+/// answers only when it is `MSG` (processCommandActivity.cpp:875-891), so "MSGS 5" asks for
+/// nothing.
 fn query_msg_id(m: &Message) -> Option<u32> {
-    let t = m.text.trim();
-    let rest = t.strip_prefix("MSG ").or_else(|| t.strip_prefix("MSGS "))?;
+    let rest = m.text.trim().strip_prefix("MSG ")?;
     rest.split_whitespace().next()?.parse().ok()
+}
+
+/// The hand-over of held message `e` to `who`, `<who> MSG <text> FROM <from>` (the reply a QUERY
+/// MSG n draws, processCommandActivity.cpp:973-978). Every reply is cut to `MAX_TEXT_LEN`
+/// (`schedule`), and a held text may be that long itself, so it is the held text that is cut, to
+/// the room the reply leaves it: the reply always ends `FROM <from>`, at every speed.
+fn hand_over_text(e: &InboxEntry, who: &str) -> String {
+    let head = format!("{who} MSG ");
+    let tail = format!(" FROM {}", e.from);
+    let room = MAX_TEXT_LEN.saturating_sub(head.len() + tail.len());
+    format!("{head}{}{tail}", clamp_str(&e.text, room))
 }
 
 #[cfg(test)]
@@ -7371,8 +7418,10 @@ mod tests {
     /// JS8Call 3.0's rule (processHeartbeatRateLimit.cpp:8-38), on: a station's first heartbeat
     /// is acknowledged and its time kept; heard again less than 55 minutes later it is
     /// acknowledged no more, ever, as JS8Call puts it in its HB blacklist (by its call as heard,
-    /// which also covers it with a suffix). 55 minutes or more later it is acknowledged again.
-    /// Off, every heartbeat is acknowledged. Kept across launches; turning the rule off forgets it.
+    /// which also covers it with a suffix): here the "never acknowledge" list, after the
+    /// operator's own calls. 55 minutes or more later it is acknowledged again. Off, every
+    /// heartbeat not on the list is acknowledged, and the stations the rule put on it stay there,
+    /// as on JS8Call's list; taken off the list, a station is acknowledged again.
     #[test]
     fn the_55_minute_rule_stops_acknowledging_a_station_heard_again_inside_the_window() {
         const MIN: u64 = 60_000;
@@ -7384,6 +7433,7 @@ mod tests {
         let on = || StationConfig {
             hb_ack: true,
             hb_rate_limit: true,
+            hb_ack_deny: vec!["N0XYZ".into()],
             ..cfg()
         };
         let mut s = Station::new(on());
@@ -7391,15 +7441,24 @@ mod tests {
         assert_eq!(heard(&mut s, "K1ABC", MIN).0, ack("K1ABC"), "K1ABC's first");
         let (keyed, actions) = heard(&mut s, "W1AW", 30 * MIN);
         assert_eq!(
-            (keyed, s.hb_rate_blocked().to_vec()),
-            (None, vec!["W1AW".to_string()]),
-            "W1AW again 30 minutes later: not acknowledged, and no more"
+            (
+                keyed,
+                s.config().hb_ack_deny.clone(),
+                s.hb_rate_blocked().to_vec()
+            ),
+            (
+                None,
+                vec!["N0XYZ".to_string(), "W1AW".to_string()],
+                vec!["W1AW".to_string()]
+            ),
+            "W1AW again 30 minutes later: not acknowledged, and on the never-ACK list after the \
+             operator's own, as JS8Call's addToHbBlacklist appends it"
         );
         assert!(
             actions.contains(&StationAction::HbAckRateLimited {
                 from: "W1AW".into()
             }),
-            "the change is reported, to be journaled: {actions:?}"
+            "the change is reported, for the engine to write into Settings: {actions:?}"
         );
         assert_eq!(
             heard(&mut s, "K1ABC", MIN + 55 * MIN).0,
@@ -7414,8 +7473,11 @@ mod tests {
             (None, None),
             "W1AW two hours on, and as W1AW/P: still not"
         );
-        // Kept across a launch.
-        let mut back = Station::new(on());
+        // Kept across a launch by the Settings the engine wrote it into; the journal names it.
+        let mut back = Station::new(StationConfig {
+            hb_ack_deny: s.config().hb_ack_deny.clone(),
+            ..on()
+        });
         back.restore(s.snapshot(122 * MIN), 122 * MIN);
         assert_eq!(
             (
@@ -7423,29 +7485,34 @@ mod tests {
                 heard(&mut back, "W1AW", 200 * MIN).0
             ),
             (vec!["W1AW".to_string()], None),
-            "restored from the journal"
+            "restored: still on the list, still not acknowledged"
         );
-        // Off: forgotten, and every heartbeat is acknowledged.
+        // The rule off: its times forgotten, but W1AW stays on the list, as on JS8Call's.
         s.set_config(StationConfig {
             hb_rate_limit: false,
-            ..on()
+            ..s.config().clone()
         });
         // 16 minutes apart: inside the rule's 55, past JS8Call's @ALLCALL cache, which holds a
         // second acknowledgement off for 15 minutes whatever the rule says.
         assert_eq!(
             (
-                s.hb_rate_blocked().len(),
+                s.hb_rate_blocked().to_vec(),
                 heard(&mut s, "W1AW", 130 * MIN).0,
-                heard(&mut s, "W1AW", 146 * MIN).0
+                heard(&mut s, "K1ABC", 131 * MIN).0,
+                heard(&mut s, "K1ABC", 147 * MIN).0
             ),
-            (0, ack("W1AW"), ack("W1AW")),
-            "the rule off: W1AW 16 minutes apart, acknowledged both times"
+            (vec!["W1AW".to_string()], None, ack("K1ABC"), ack("K1ABC")),
+            "the rule off: W1AW still on the list; K1ABC 16 minutes apart, acknowledged both times"
         );
+        // Taken off the list (the operator's Settings): acknowledged again, and the rule's no more.
         s.set_config(on());
         assert_eq!(
-            heard(&mut s, "W1AW", 162 * MIN).0,
-            ack("W1AW"),
-            "on again: W1AW starts afresh"
+            (
+                s.hb_rate_blocked().len(),
+                heard(&mut s, "W1AW", 162 * MIN).0
+            ),
+            (0, ack("W1AW")),
+            "off the list: W1AW starts afresh"
         );
     }
 
@@ -7494,3 +7561,7 @@ mod replies_tests;
 #[cfg(test)]
 #[path = "station_followups_tests.rs"]
 mod followups_tests;
+
+#[cfg(test)]
+#[path = "station_design_tests.rs"]
+mod design_tests;

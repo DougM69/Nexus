@@ -1938,6 +1938,58 @@ impl CpalBackend {
         pending.clear();
         n + parked + tee.map_or(0, |t| t.flush())
     }
+
+    /// The rest of the over on the air, played anew (`AudioBackend::retune_tx`: JS8's "Allow TX
+    /// offset changes while sending" moving a frame mid-air). What is still to play is counted
+    /// where it waits, parked at the modem rate and queued for the card at the card's, and its
+    /// rebuild is made BEFORE anything is dropped, so the card never runs dry while it is made.
+    /// Then the queue is dropped as Stop TX drops it ([`Self::flush_tx`]: everything queued as of
+    /// now, and nothing queued after) and the rebuild queued in its place, as much of it as is
+    /// still to play by then: the card may have taken a callback's worth while it was made. Never
+    /// more than was dropped, so the over ends when it would have.
+    ///
+    /// Not on the DAX route (`tee`): its queue holds two rates, and the over plays on there as it
+    /// was. Nor with nothing left to play: `false`, and nothing is touched.
+    fn retune_route(
+        tee: Option<&crate::backend::TxTeeHandle>,
+        tx_rs: &mut CaptureResampler,
+        out_ring: &SpscRing,
+        pending: &mut VecDeque<f32>,
+        draining: bool,
+        tail: &mut dyn FnMut(usize) -> Vec<f32>,
+    ) -> bool {
+        if tee.is_some() {
+            return false;
+        }
+        let card_rate = match tx_rs.out_rate() {
+            0 => u64::from(MODEM_RATE),
+            r => u64::from(r),
+        };
+        let at_modem_rate = |card: usize| {
+            ((card as u64 * u64::from(MODEM_RATE) + card_rate / 2) / card_rate) as usize
+        };
+        let left = pending.len() + at_modem_rate(out_ring.len());
+        if left == 0 {
+            return false;
+        }
+        let rest = tail(left);
+        let queued = out_ring.request_flush();
+        if !draining {
+            out_ring.apply_flush();
+        }
+        let parked = pending.len();
+        pending.clear();
+        let still = (parked + at_modem_rate(queued)).min(rest.len());
+        Self::route_tx(
+            None,
+            tx_rs,
+            out_ring,
+            pending,
+            draining,
+            &rest[rest.len() - still..],
+        );
+        true
+    }
 }
 
 /// Queue device-rate TX audio for the output callback, counting anything the ring cannot take.
@@ -2183,6 +2235,18 @@ impl AudioBackend for CpalBackend {
             &self.tx_out.ring,
             &mut self.tx_pending,
             self.tx_out.stream.is_some(),
+        )
+    }
+
+    /// The rest of the over on the air, played anew ([`Self::retune_route`]).
+    fn retune_tx(&mut self, tail: &mut dyn FnMut(usize) -> Vec<f32>) -> bool {
+        Self::retune_route(
+            self.tx_tee.as_ref(),
+            &mut self.tx_rs,
+            &self.tx_out.ring,
+            &mut self.tx_pending,
+            self.tx_out.stream.is_some(),
+            tail,
         )
     }
 
@@ -2816,6 +2880,156 @@ mod tx_route_tests {
             3,
             "and what does not fit is counted, every sample of it"
         );
+    }
+
+    /// JS8's "Allow TX offset changes while sending": the rest of the over on the air, played anew.
+    /// The card has played 4,000 of a 10,000-sample over: the rebuild is asked for the 6,000 left,
+    /// and once the queue is dropped it is what the card plays, sample for sample, and all of it.
+    /// With the stream running the drop is the card's own, at its next callback, as Stop TX's is.
+    #[test]
+    fn a_retune_plays_the_rebuilt_rest_in_place_of_what_was_left() {
+        for draining in [false, true] {
+            let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
+            let ring = tx_ring();
+            let mut pending = VecDeque::new();
+            let over: Vec<f32> = (0..10_000).map(|i| i as f32).collect();
+            CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &over);
+            for _ in 0..4_000 {
+                ring.pop();
+            }
+            let mut asked = Vec::new();
+            let rebuilt =
+                |left: usize| -> Vec<f32> { (0..left).map(|i| -(i as f32) - 1.0).collect() };
+            let done = CpalBackend::retune_route(
+                None,
+                &mut tx_rs,
+                &ring,
+                &mut pending,
+                draining,
+                &mut |left| {
+                    asked.push(left);
+                    rebuilt(left)
+                },
+            );
+            assert!(done, "draining {draining}");
+            assert_eq!(asked, [6_000], "draining {draining}: what was left");
+            ring.apply_flush(); // the card's next callback (a no-op when the producer applied it)
+            if draining {
+                CpalBackend::pump_card(&mut tx_rs, &ring, &mut pending);
+            }
+            let mut heard = Vec::new();
+            while let Some(x) = ring.pop() {
+                heard.push(x);
+            }
+            assert_eq!(
+                heard,
+                rebuilt(6_000),
+                "draining {draining}: the rebuilt rest, all of it"
+            );
+            assert!(pending.is_empty());
+        }
+    }
+
+    /// The card plays on while the rest is built: 100 more samples of the over go while `tail`
+    /// works, so only the last 5,900 of the rebuild are still to play, and only they go in; the
+    /// over ends where it would have.
+    #[test]
+    fn a_retune_queues_only_what_is_still_to_play_once_the_rest_is_built() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
+        let ring = tx_ring();
+        let mut pending = VecDeque::new();
+        let over: Vec<f32> = (0..10_000).map(|i| i as f32).collect();
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &over);
+        for _ in 0..4_000 {
+            ring.pop();
+        }
+        let rebuilt = |left: usize| -> Vec<f32> { (0..left).map(|i| -(i as f32) - 1.0).collect() };
+        let mut played_meanwhile = 0;
+        assert!(CpalBackend::retune_route(
+            None,
+            &mut tx_rs,
+            &ring,
+            &mut pending,
+            true,
+            &mut |left| {
+                for _ in 0..100 {
+                    played_meanwhile += usize::from(ring.pop().is_some());
+                }
+                rebuilt(left)
+            },
+        ));
+        assert_eq!(
+            played_meanwhile, 100,
+            "premise: the card took 100 while the rest was built"
+        );
+        ring.apply_flush();
+        let mut heard = Vec::new();
+        while let Some(x) = ring.pop() {
+            heard.push(x);
+        }
+        assert_eq!(heard, rebuilt(6_000)[100..], "only the 5,900 still to play");
+    }
+
+    /// At the card's 48 kHz the rest is counted at the modem rate: 4 card samples a modem sample.
+    #[test]
+    fn a_retune_counts_what_is_left_at_the_modem_rate() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, 48_000);
+        let ring = tx_ring();
+        let mut pending = VecDeque::new();
+        let over = vec![0.25f32; 12_000];
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &over);
+        let queued = ring.len();
+        for _ in 0..16_000 {
+            ring.pop();
+        }
+        let mut asked = 0;
+        CpalBackend::retune_route(None, &mut tx_rs, &ring, &mut pending, false, &mut |left| {
+            asked = left;
+            vec![0.5; left]
+        });
+        assert_eq!(
+            asked,
+            (queued - 16_000 + 2) / 4,
+            "{queued} queued, 16,000 played"
+        );
+    }
+
+    /// Not on the DAX route, whose queue holds two rates: nothing is asked for or touched, and the
+    /// over plays on as it was. Nor with nothing left to play.
+    #[test]
+    fn a_retune_leaves_the_dax_route_and_a_finished_over_alone() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
+        let ring = tx_ring();
+        let mut pending = VecDeque::new();
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &[0.5; 1_000]);
+        let tee: TxTeeHandle = Arc::new(RecordingTee::default());
+        let mut asked = false;
+        assert!(!CpalBackend::retune_route(
+            Some(&tee),
+            &mut tx_rs,
+            &ring,
+            &mut pending,
+            false,
+            &mut |_| {
+                asked = true;
+                Vec::new()
+            }
+        ));
+        assert!(!asked, "the DAX route: nothing asked for");
+        assert_eq!(ring.len(), 1_000, "and the over left as it was");
+        while ring.pop().is_some() {}
+        assert!(!CpalBackend::retune_route(
+            None,
+            &mut tx_rs,
+            &ring,
+            &mut pending,
+            false,
+            &mut |_| {
+                asked = true;
+                Vec::new()
+            }
+        ));
+        assert!(!asked, "nothing left to play: nothing asked for");
     }
 }
 

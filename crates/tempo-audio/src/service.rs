@@ -5489,6 +5489,28 @@ impl RadioLoop {
         Some((t / period_ms).ceil() * period_ms + JS8_PTT_HOLD_GRACE_MS)
     }
 
+    /// JS8Call's "Allow Tx frequency changes while transmitting" (`TxQSYAllowed`, off by default),
+    /// on: while a JS8 frame's slot over is on the air, a move of the TX offset moves the rest of
+    /// the frame to it, as JS8Call's Modulator takes a new frequency mid-frame. The engine says when
+    /// and builds the frame's rest at the new offset ([`Engine::js8_retune_on_air`]); the sound card
+    /// plays it in place of what it still holds ([`AudioBackend::retune_tx`]), so the over keeps
+    /// its length and its deadline. Only a slot over this loop keyed and still holds, before its
+    /// deadline: never a PTT hold between frames, where nothing plays. On JS8 alone: another
+    /// tier's over never asks the engine anything here.
+    fn js8_retune<B: AudioBackend>(&self, engine: &Arc<Mutex<Engine>>, backend: &mut B, now: f64) {
+        let (Some(t), Some(keyed)) = (self.tx_until_ms, self.boundary_keyed.as_ref()) else {
+            return;
+        };
+        if self.cur_tier != Tier::Js8 || now >= t || !keyed.tx_this_slot || !self.holds_slot_over()
+        {
+            return;
+        }
+        let tail = engine_lock(engine).js8_retune_on_air(keyed.slot);
+        if let Some(mut tail) = tail {
+            backend.retune_tx(&mut tail);
+        }
+    }
+
     /// Whether this loop's PTT hold is a slot over's (FT8, FT4, JS8 and the other timed-slot
     /// modes): the two slot keying sites stamp its deadline on `slot_tx_until_ms` as well, and
     /// every other keyed source leaves that behind. The unkey that drops it follows WSJT-X when the
@@ -11509,6 +11531,10 @@ impl RadioLoop {
             }
         }
 
+        // JS8's "Allow TX offset changes while sending" (off by default): a move of the TX offset
+        // moves the frame on the air with it, from what it still has to play (`js8_retune`).
+        self.js8_retune(engine, backend, now);
+
         // JS8's Hold PTT between frames (off by default): a frame's over that has reached its end
         // with more of its message to go holds the transmitter to the next frame's key instead of
         // dropping here (`js8_ptt_hold_until`).
@@ -16068,6 +16094,7 @@ mod tests {
     mod ic905_ten_ghz;
     mod icom_lan;
     mod js8_frames;
+    mod js8_retune;
     mod omnirig_coverage;
     mod receive_source;
     mod refused_key;

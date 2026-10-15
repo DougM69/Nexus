@@ -658,16 +658,12 @@ impl Engine {
                     self.js8_hb_on = false;
                     self.js8_station.halt();
                 }
-                // The 55-minute rule's list changed: journaled, as JS8Call writes its HB
-                // blacklist at once (Configuration.cpp:1226-1231).
+                // The 55-minute rule stopped a station: it goes into Settings' "never
+                // acknowledge" list, as JS8Call writes it into its HB blacklist and saves its
+                // settings at once (`addToHbBlacklist`, Configuration.cpp:1226-1231). The rule's
+                // record of it is journaled.
                 StationAction::HbAckRateLimited { from } => {
-                    tempo_core::applog::info(
-                        "js8",
-                        &format!(
-                            "{from} heartbeats more often than every 55 minutes: no more \
-                             heartbeat acknowledgements to it"
-                        ),
-                    );
+                    self.js8_list_rate_blocked(&from);
                     self.js8_persist();
                 }
                 // Queued/ReplyPending/HeardChanged carry no engine-side effect: the queue,
@@ -677,6 +673,51 @@ impl Engine {
                 | StationAction::ReplyPending { .. }
                 | StationAction::HeardChanged => {}
             }
+        }
+    }
+
+    /// Write a station the 55-minute rule stopped into the operator's "never acknowledge" list,
+    /// which the station put it on (`hb_rate_held_off`): the one call appended to the settings
+    /// this Engine holds, under its lock, so it is a change to the live settings and never a
+    /// write of an older copy; then handed to `settings.json`'s writer, as a command's change is
+    /// (`settings::writer`). The settings file is the native host's (installed at launch with
+    /// `configure_remote_settings_store`, the file every command saves to); with none, as in a
+    /// test, the change stays in memory. The Settings form saves its own edits of the list over
+    /// this one rather than over its copy (`ui/src/settings/patch.ts`, `mergeListEdit`).
+    fn js8_list_rate_blocked(&mut self, call: &str) {
+        let listed = self
+            .js8_station
+            .config()
+            .hb_ack_deny
+            .iter()
+            .any(|c| c == call);
+        if !listed {
+            tempo_core::applog::info(
+                "js8",
+                &format!(
+                    "{call} heartbeats more often than every 55 minutes, but the \"never \
+                     acknowledge\" list is full: it was not added"
+                ),
+            );
+            return;
+        }
+        tempo_core::applog::info(
+            "js8",
+            &format!(
+                "{call} heartbeats more often than every 55 minutes: added to \"Never acknowledge \
+                 heartbeats from these callsigns\" (Settings ▸ Digital ▸ JS8)"
+            ),
+        );
+        let deny = &mut self.settings.js8_hb_ack_deny;
+        if deny.iter().any(|c| c.trim().eq_ignore_ascii_case(call)) {
+            return;
+        }
+        deny.push(call.to_string());
+        self.js8_apply_station_config();
+        if let Some(path) = &self.remote_settings_path {
+            crate::settings::writer::SettingsWriter::of(path).queue(self.settings.clone(), |e| {
+                eprintln!("tempo: failed to save the never-acknowledge list: {e}")
+            });
         }
     }
 
@@ -1368,6 +1409,14 @@ impl Engine {
         // re-based itself in `next_frame` when the message's last frame went.
         self.js8_station.note_tx_done(&tf, period_start_ms);
         self.js8_note_tx_done(&tf.display, period_start_ms, f0);
+        self.js8_on_air = Some(Js8OnAir {
+            slot,
+            speed,
+            word: tf.word,
+            f0,
+            follows: f0 == self.tx_offset_hz(),
+            moves: std::sync::Arc::new(std::sync::Mutex::new(vec![(0, f0)])),
+        });
         self.set_transmitting(true);
         Some(TxPlan {
             slot,
@@ -1383,9 +1432,26 @@ impl Engine {
     }
 }
 
+/// The JS8 frame last planned (`Engine::js8_on_air`): the slot it keys in, its speed and word, the
+/// offset it is on now, whether that is the operator's TX offset — a heartbeat or HB ACK on its own
+/// spot in 500–1000 Hz is not, and stays there — and where its offset has moved while it played.
+#[derive(Debug, Clone)]
+pub(crate) struct Js8OnAir {
+    pub(crate) slot: u64,
+    pub(crate) speed: Js8Speed,
+    pub(crate) word: Word87,
+    pub(crate) f0: f32,
+    pub(crate) follows: bool,
+    /// `(sample of the frame's wave, offset)` from its planned offset at sample 0 on: each move's
+    /// rest is built on the ones before it, written as the sound card takes it
+    /// (`js8_retune_on_air`), so the phase carries on unbroken across every move.
+    pub(crate) moves: std::sync::Arc<std::sync::Mutex<Vec<(usize, f32)>>>,
+}
+
 /// JS8's send mechanics: Hold PTT between frames, the TX offset while sending, and typeahead.
 #[path = "js8_send.rs"]
 mod send;
+pub use send::JS8_RETUNE_LEAD;
 
 #[cfg(test)]
 mod tests {
@@ -4864,9 +4930,10 @@ mod tests {
         }
     }
 
-    /// The 55-minute rule's list is journaled the moment it changes, and a journal that holds it
-    /// keeps the station from answering: W1AW, heard twice within the window, draws one HB ACK;
-    /// the journal then holds it, and a fresh engine loading it answers K1ABC but not W1AW.
+    /// The 55-minute rule's record is journaled the moment it changes: W1AW, heard twice within the
+    /// window, draws one HB ACK and goes on the "never acknowledge" list in Settings, and the
+    /// journal names it as the rule's. A fresh engine with those Settings, loading that journal,
+    /// answers K1ABC but not W1AW, and still names W1AW as the rule's.
     #[test]
     fn the_55_minute_rule_list_is_kept_in_the_js8_journal() {
         let dir = std::env::temp_dir().join(format!("nexus-js8-hbrate-{}", std::process::id()));
@@ -4906,9 +4973,20 @@ mod tests {
             text.contains(r#""hbRateBlocked":["W1AW"]"#),
             "the journal holds the list: {text}"
         );
+        assert_eq!(
+            e.settings().js8_hb_ack_deny,
+            ["W1AW"],
+            "on the never-ACK list in Settings"
+        );
         let mut fresh = hb_engine("EN52", 30, 1500.0);
+        fresh.settings.js8_hb_ack_deny = e.settings().js8_hb_ack_deny.clone();
         with_rule(&mut fresh);
         fresh.js8_load_journal(&text);
+        assert_eq!(
+            fresh.js8_state().presence.map(|p| p.hb_ack_rate_blocked),
+            Some(vec!["W1AW".to_string()]),
+            "the journal names it as the rule's"
+        );
         heard_hb(&mut fresh, "W1AW");
         heard_hb(&mut fresh, "K1ABC");
         run_js8_loop(&mut fresh, 60);
@@ -4929,3 +5007,7 @@ mod replies_tests;
 #[cfg(test)]
 #[path = "js8_followups_tests.rs"]
 mod followups_tests;
+
+#[cfg(test)]
+#[path = "js8_design_tests.rs"]
+mod design_tests;

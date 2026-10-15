@@ -7,7 +7,11 @@
 //!   The engine only answers whether to hold; the radio loop owns PTT and holds it.
 //! - **Allow Tx frequency changes while transmitting** (`TxQSYAllowed`, Configuration.cpp:2305),
 //!   the TX offset's half: off, JS8Call's `changeFreq` refuses a move while a message is queued
-//!   for transmit or going out (mainwindow.cpp:5381-5386).
+//!   for transmit or going out (mainwindow.cpp:5381-5386); on, the move is taken at once, the frame
+//!   on the air included: `setFreq` hands the new frequency to the Modulator (mainwindow.cpp:
+//!   4212-4217, UI_Constructor.cpp:238-239), which sounds it from the next sample it makes
+//!   (Modulator.cpp:217-229). The engine says when and builds the frame's rest; the radio loop has
+//!   the sound card play it in place of what it still holds (`js8_retune_on_air`).
 //! - **Typeahead** (mainwindow.cpp:3589-3668): the compose box keeps the operator's message while
 //!   it goes out and takes more typing; the station frames the box's newest text just before each
 //!   frame (`Station::type_ahead`). Nothing new keys by itself: every frame still goes out through
@@ -19,6 +23,12 @@
 use super::super::Engine;
 use crate::dto::{Js8Typeahead, Tier};
 use ::js8::proto::station::TypeaheadError;
+use std::sync::{Arc, PoisonError};
+
+/// How far into the rest of a JS8 frame a move of the TX offset lands (`js8_retune_on_air`): 100 ms
+/// of the frame at 12 kHz, more than the sound card plays while the rest is built and swapped in, so
+/// the samples before the move are the ones the card plays.
+pub const JS8_RETUNE_LEAD: usize = 1_200;
 
 /// What the JS8 cockpit says when a move of the TX offset is refused because a message is going
 /// out. The sentence shape of the adapter's other refusals.
@@ -56,6 +66,54 @@ impl Engine {
             self.js8_last_error = Some(JS8_TX_OFFSET_HELD.to_string());
         }
         sending
+    }
+
+    /// "Allow TX offset changes while sending" on: the TX offset moved while the frame planned for
+    /// `slot` is on the air, so that frame moves too, from what it still has to play, as JS8Call's
+    /// Modulator takes a new frequency mid-frame. Hands the radio loop what builds the rest of the
+    /// frame at the new offset: given how many 12 kHz samples of the frame have not played yet,
+    /// that many of the frame's wave, moved [`JS8_RETUNE_LEAD`] into them and its phase run on
+    /// unbroken from the samples before (`::js8::phy::modulate_moved`, every earlier move kept).
+    /// The lead is what the sound card may play of the frame as it was while the rest is built,
+    /// so the move lands on a sample that sounds as the phase assumes. Only a frame keyed on the
+    /// operator's offset (a heartbeat or HB ACK on its own 500–1000 Hz spot keeps it), only on
+    /// JS8 with TX on, and only into the licence's privileges, which the frame was planned inside:
+    /// a move out of them leaves the frame where it is (and the next frame is not planned there).
+    /// Each move is handed over once.
+    pub fn js8_retune_on_air(
+        &mut self,
+        slot: u64,
+    ) -> Option<impl FnMut(usize) -> Vec<f32> + 'static> {
+        if self.app.tier() != Tier::Js8
+            || !self.settings.js8_tx_offset_while_sending
+            || !self.tx_enabled()
+            || !self.tx_allowed()
+        {
+            return None;
+        }
+        let to = self.tx_offset_hz();
+        let on = self.js8_on_air.as_mut()?;
+        if on.slot != slot || !on.follows || on.f0 == to {
+            return None;
+        }
+        on.f0 = to;
+        let (speed, moves) = (on.speed, Arc::clone(&on.moves));
+        let tones = ::js8::phy::encode_word(&on.word, speed);
+        let len = speed.delay_ms() as usize * 12 + 79 * speed.nsps();
+        Some(move |left: usize| {
+            let at = (len.saturating_sub(left) + JS8_RETUNE_LEAD).min(len);
+            let mut moves = moves.lock().unwrap_or_else(PoisonError::into_inner);
+            // A move whose sample the card has not reached yet is overtaken by this one.
+            moves.retain(|&(k, _)| k == 0 || k < at);
+            moves.push((at, to));
+            let wave = ::js8::phy::modulate_moved(
+                &tones,
+                speed,
+                &moves,
+                tempo_core::tempo_fast::SAMPLE_RATE,
+            );
+            wave[wave.len().saturating_sub(left)..].to_vec()
+        })
     }
 
     /// Hold PTT between frames: whether the radio loop keeps the transmitter keyed from the end of

@@ -96,6 +96,15 @@ pub trait AudioBackend {
     fn flush_output(&mut self) -> usize {
         0
     }
+    /// Play the rest of the over on the air anew: `tail(left)` is given how many 12 kHz samples
+    /// of what [`Self::play`] was handed have not played yet, and returns that many to play in
+    /// their place (the same stretch of the over, built again). For JS8's "Allow TX offset
+    /// changes while sending", which moves a frame mid-air (`Engine::js8_retune_on_air`). Never
+    /// lengthens the over. `false` when this route cannot take it: the over plays on as it was.
+    /// Default `false`; the real sound card overrides it.
+    fn retune_tx(&mut self, _tail: &mut dyn FnMut(usize) -> Vec<f32>) -> bool {
+        false
+    }
     /// Start / stop / retune the dark headphone monitor in place, WITHOUT rebuilding
     /// the capture/TX streams (the decode path must never restart). `enabled` is the
     /// already-guard-resolved decision (the caller has refused any TX-device
@@ -188,6 +197,11 @@ pub struct MockBackend {
     pub tx_open_error: Option<String>,
     /// How many times `prepare_tx` was called.
     pub prepare_tx_calls: usize,
+    /// How many of the samples in `played` the mock sound card has not played yet, which a
+    /// `retune_tx` replaces: a test says how far playback has got.
+    pub tx_unplayed: usize,
+    /// How many times `retune_tx` replaced the rest of an over.
+    pub retunes: usize,
 }
 
 impl MockBackend {
@@ -244,6 +258,14 @@ impl AudioBackend for MockBackend {
     fn flush_output(&mut self) -> usize {
         self.flush_calls += 1;
         0
+    }
+    fn retune_tx(&mut self, tail: &mut dyn FnMut(usize) -> Vec<f32>) -> bool {
+        let left = self.tx_unplayed.min(self.played.len());
+        let rest = tail(left);
+        self.played.truncate(self.played.len() - left);
+        self.played.extend_from_slice(&rest[..rest.len().min(left)]);
+        self.retunes += 1;
+        true
     }
     fn set_voice_mic(&mut self, device: Option<&str>) -> Result<(), String> {
         self.voice_mic_calls.push(device.map(str::to_string));

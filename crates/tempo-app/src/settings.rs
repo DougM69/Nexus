@@ -5248,6 +5248,20 @@ impl Settings {
         self.cluster_nodes_auto = auto;
     }
 
+    /// Choose [`Settings::js8_hb_networking`] for settings written before it existed: on for an
+    /// operator whose settings show they used heartbeats, off (JS8Call's default) for everyone
+    /// else, so today's heartbeat users keep their HB button. "Used heartbeats" is read from what
+    /// the settings kept of it: the HB ACK switch on, or an HB repeat interval set. Whether the
+    /// HB repeat itself was on was never stored (it is session-only, `Engine.js8_hb_on`), and an
+    /// interval of 0, the default, sends a heartbeat only when asked, which leaves no trace.
+    ///
+    /// Called by [`Settings::load`] for a file without the key, and by the backup restore for a
+    /// backup without it: the restore deserialises directly and runs none of `load`'s
+    /// migrations, so without this a restored heartbeat user would lose the HB button.
+    pub fn choose_js8_hb_networking_for_old_settings(&mut self) {
+        self.js8_hb_networking = self.js8_hb_ack || self.js8_hb_interval_min > 0;
+    }
+
     /// Is DX cluster / RBN spot ingestion EFFECTIVELY on? Cluster and RBN spots are
     /// callsign-and-frequency identification from other people's receivers — the textbook
     /// QSO-finding assistance, named by both CQ WW and ARRL.
@@ -6115,6 +6129,9 @@ impl Settings {
         // reason as `satDoppler`: once parsed, the field's default cannot be told from a saved
         // `true`, and a file without the key is one from before the choice existed.
         let mut node_choice_saved = false;
+        // …and whether it says if JS8 heartbeat networking is on, for the same reason: a file
+        // without the key is from before the switch (`choose_js8_hb_networking_for_old_settings`).
+        let mut hb_networking_saved = false;
         let mut s: Settings = match std::fs::read_to_string(path) {
             // Missing file: a normal first run.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
@@ -6144,6 +6161,15 @@ impl Settings {
                     node_choice_saved = serde_json::from_str::<NodeChoice>(&text)
                         .ok()
                         .and_then(|c| c.auto)
+                        .is_some();
+                    #[derive(Deserialize)]
+                    struct HbNetworking {
+                        #[serde(rename = "js8HbNetworking")]
+                        on: Option<bool>,
+                    }
+                    hb_networking_saved = serde_json::from_str::<HbNetworking>(&text)
+                        .ok()
+                        .and_then(|c| c.on)
                         .is_some();
                     s
                 }
@@ -6245,6 +6271,12 @@ impl Settings {
         // key wrote its own choice and is never overruled.
         if !node_choice_saved {
             s.choose_cluster_nodes_for_old_settings();
+        }
+        // Migration (2026-10-15): JS8 heartbeat networking, for a file from before the switch —
+        // see `choose_js8_hb_networking_for_old_settings`. A file that has the key is never
+        // overruled.
+        if !hb_networking_saved {
+            s.choose_js8_hb_networking_for_old_settings();
         }
         // Migration (2026-09-16): the default list was the ve7cc + wa9pie PAIR, and both died
         // on the same day — every default-config install lost its only SSB/phone sources at
@@ -10135,6 +10167,52 @@ mod tests {
                 "ui/src/types.ts Settings is missing `{key}`"
             );
         }
+    }
+
+    /// JS8 heartbeat networking, for a file from before the switch: on for an operator whose
+    /// settings show they used heartbeats (HB ACK on, or an HB repeat interval set), so the HB
+    /// button they had stays; off, JS8Call's default, for everyone else. A file that has the key
+    /// keeps its own choice, whatever else it holds.
+    #[test]
+    fn a_file_from_before_heartbeat_networking_keeps_a_heartbeat_user_s_hb_button() {
+        let path = scratch_dir("hbnet").join("settings.json");
+        let load = |hb_ack: bool, interval: u16, saved: Option<bool>| {
+            let s = Settings {
+                js8_hb_ack: hb_ack,
+                js8_hb_interval_min: interval,
+                ..Settings::default()
+            };
+            let mut v = serde_json::to_value(&s).unwrap();
+            let fields = v.as_object_mut().unwrap();
+            match saved {
+                Some(on) => {
+                    fields.insert("js8HbNetworking".into(), on.into());
+                }
+                None => assert!(
+                    fields.remove("js8HbNetworking").is_some(),
+                    "the key was there to remove, or this writes a current file and proves nothing"
+                ),
+            }
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+            Settings::load(&path).js8_hb_networking
+        };
+        assert_eq!(
+            [
+                load(false, 0, None),
+                load(true, 0, None),
+                load(false, 10, None),
+                load(true, 10, None)
+            ],
+            [false, true, true, true],
+            "an upgrader: on with HB ACK on or an HB repeat interval set, off otherwise"
+        );
+        assert_eq!(
+            [load(true, 10, Some(false)), load(false, 0, Some(true))],
+            [false, true],
+            "a file with the key keeps its own choice"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     /// JS8Call's two send options, off by default as JS8Call ships them: Hold PTT between frames

@@ -13991,15 +13991,21 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
 ///
 /// A backup from before the cluster node choice chooses by its node list, exactly as an upgraded
 /// settings file does. A restore runs none of `Settings::load`'s migrations, and the field's
-/// default would otherwise switch a restored list of the operator's own to automatic.
+/// default would otherwise switch a restored list of the operator's own to automatic. A backup
+/// from before JS8 heartbeat networking chooses it as an upgraded file does too, or a restored
+/// heartbeat user would lose the HB button.
 fn settings_from_bundle(
     settings_json: serde_json::Value,
 ) -> Result<tempo_app::settings::Settings, String> {
     let predates_node_choice = settings_json.get("clusterNodesAuto").is_none();
+    let predates_hb_networking = settings_json.get("js8HbNetworking").is_none();
     let mut settings: tempo_app::settings::Settings = serde_json::from_value(settings_json)
         .map_err(|e| format!("The settings in that backup could not be read: {e}"))?;
     if predates_node_choice {
         settings.choose_cluster_nodes_for_old_settings();
+    }
+    if predates_hb_networking {
+        settings.choose_js8_hb_networking_for_old_settings();
     }
     Ok(settings)
 }
@@ -45285,6 +45291,51 @@ mod tests {
             "a saved choice is kept"
         );
         assert!(!restored(&shipped, Some(false)), "…either way");
+    }
+
+    /// A backup from before JS8 heartbeat networking restores as the same settings file loads: a
+    /// heartbeat user (HB ACK on, or an HB repeat interval set) keeps the HB button, everyone else
+    /// gets JS8Call's default, off, and a backup that carries the switch keeps it. A restore runs
+    /// none of `Settings::load`'s migrations, so this is the restore's own call to the same rule.
+    #[test]
+    fn a_restored_backup_from_before_heartbeat_networking_chooses_as_the_file_would_load() {
+        let dir = std::env::temp_dir().join(format!("nexus-hbnet-restore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("settings.json");
+        let both = |hb_ack: bool, interval: u16, saved: Option<bool>| {
+            let s = tempo_app::settings::Settings {
+                js8_hb_ack: hb_ack,
+                js8_hb_interval_min: interval,
+                ..Default::default()
+            };
+            let mut v = serde_json::to_value(&s).unwrap();
+            let fields = v.as_object_mut().unwrap();
+            match saved {
+                Some(on) => {
+                    fields.insert("js8HbNetworking".into(), on.into());
+                }
+                None => assert!(fields.remove("js8HbNetworking").is_some()),
+            }
+            std::fs::write(&file, serde_json::to_string(&v).unwrap()).unwrap();
+            (
+                super::settings_from_bundle(v).unwrap().js8_hb_networking,
+                tempo_app::settings::Settings::load(&file).js8_hb_networking,
+            )
+        };
+        for (hb_ack, interval, saved, want) in [
+            (false, 0, None, false),
+            (true, 0, None, true),
+            (false, 10, None, true),
+            (true, 10, Some(false), false),
+            (false, 0, Some(true), true),
+        ] {
+            assert_eq!(
+                both(hb_ack, interval, saved),
+                (want, want),
+                "HB ACK {hb_ack}, interval {interval}, saved {saved:?}: restored, and loaded"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The bundle must not carry secrets: it is written to Downloads and operators mail these
