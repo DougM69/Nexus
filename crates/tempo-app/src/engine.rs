@@ -5055,7 +5055,8 @@ const DT_OK_THRESHOLD: f32 = 0.5;
 /// out lets the radio loop release the engine before it waits.
 ///
 /// Nothing here changes WHEN we key: the wait is the same wait, in the same
-/// place. Only the engine lock is no longer held across it.
+/// place. Only the engine lock is no longer held across it. (FT8 and FT4 overs no
+/// longer wait at all: their encoder, `modes::wsjt77`, takes no lock.)
 pub enum TxWaveform {
     /// DX1: 8-FSK, non-coherent.
     Deep { text: String, f0: f32 },
@@ -5083,7 +5084,7 @@ pub enum TxWaveform {
 
 impl TxWaveform {
     /// Synthesise the audio. **Takes the modem lock for the Fortran-backed variants;
-    /// call it with no other lock held.** JS8 is pure Rust and takes none. Returns
+    /// call it with no other lock held.** JS8, FT8 and FT4 are pure Rust and take none. Returns
     /// empty on any refusal, which every caller already treats as "do not key".
     pub fn build(&self) -> Vec<f32> {
         match self {
@@ -25219,9 +25220,10 @@ contact yourself."
 
     /// The audio already built for `waveform`, when this station built exactly this FT8/FT4 over
     /// ahead of its key: the same mode, text and audio frequency, so what keys is always what the
-    /// plan asked for. Used where the over would otherwise be built at its key, which waits for
+    /// plan asked for. Used where the over would otherwise be built at its key, which waited for
     /// any decode then holding the modem, and the key with it; WSJT-X's decoder is another process
-    /// and never delays a key.
+    /// and never delays a key. (An FT8 or FT4 over is built without the modem now, so that build
+    /// no longer waits either: `modes::wsjt77`.)
     pub fn prebuilt_wave(&self, waveform: &TxWaveform) -> Option<&[f32]> {
         let TxWaveform::Native { kind, text, f0 } = waveform else {
             return None;

@@ -16,6 +16,7 @@
 pub mod decode;
 pub mod mode;
 pub mod source;
+pub mod wsjt77;
 
 pub use decode::Decode;
 pub use mode::{

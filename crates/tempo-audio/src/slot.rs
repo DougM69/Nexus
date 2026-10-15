@@ -555,7 +555,8 @@ pub fn slot_tx_phase(
     rx_frame: Option<Vec<f32>>,
     // A waveform already built by the caller, or `None` to build it here.
     //
-    // Building takes `MODEM_LOCK`, which a running decode holds for the length of
+    // Building takes `MODEM_LOCK` (every Fortran-backed mode; FT8 and FT4 no longer,
+    // `modes::wsjt77`), which a running decode holds for the length of
     // that decode. Doing it here means doing it with the ENGINE mutex held, which
     // is what froze the UI: every Tauri snapshot and command queued behind a
     // decode. The radio loop therefore plans, RELEASES the engine, builds, and

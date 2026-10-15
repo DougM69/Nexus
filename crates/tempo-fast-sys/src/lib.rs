@@ -18,7 +18,9 @@ use std::sync::{Mutex, MutexGuard, TryLockError};
 ///
 /// ⚠️ **Acquire it with [`modem_lock`] or [`try_modem_lock`], never by calling `.lock().unwrap()` on this
 /// static directly.** It stays public for documentation and for the tests that reason
-/// about it; the unwrap is what turned one panic into a dead radio for the session.
+/// about it; the unwrap is what turned one panic into a dead radio for the session. The two
+/// wrappers also make the encodes owed to the callsign tables ([`defer_encode`]) before they
+/// return, and a bare `.lock()` would read those tables without them.
 pub static MODEM_LOCK: Mutex<()> = Mutex::new(());
 
 /// Acquire [`MODEM_LOCK`], recovering rather than dying if it was POISONED.
@@ -47,17 +49,75 @@ pub static MODEM_LOCK: Mutex<()> = Mutex::new(());
 ///
 /// This is the same recovery the audio device layer already uses
 /// (`unwrap_or_else(|e| e.into_inner())`); the modem was the outlier.
+///
+/// Before it returns, the encodes owed to the callsign tables are made ([`defer_encode`]), so
+/// whatever this caller reads there includes every FT8/FT4 message already sent.
 pub fn modem_lock() -> MutexGuard<'static, ()> {
-    MODEM_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    let guard = MODEM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    settle_deferred_encodes();
+    guard
 }
 
 /// Try the same modem serialization without waiting for an active decode.
-/// Poison recovery is identical to [`modem_lock`]; only contention returns None.
+/// Poison recovery and the owed encodes are as in [`modem_lock`]; only contention returns None.
 pub fn try_modem_lock() -> Option<MutexGuard<'static, ()>> {
-    match MODEM_LOCK.try_lock() {
-        Ok(guard) => Some(guard),
-        Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
-        Err(TryLockError::WouldBlock) => None,
+    let guard = match MODEM_LOCK.try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(TryLockError::WouldBlock) => return None,
+    };
+    settle_deferred_encodes();
+    Some(guard)
+}
+
+/// The vendored encoder a deferred message is owed to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeferredEncoder {
+    /// `ft8_encode`.
+    Ft8,
+    /// `ft4_encode`.
+    Ft4,
+}
+
+/// Messages sent with the lock-free FT8/FT4 encoder whose vendored encode is still owed.
+///
+/// Encoding is not only tones: `pack77` stores every call it packs in the callsign tables the
+/// decoder reads to print a hashed `<call>`, and `unpack77` keeps its recent-call list and hash
+/// memos. The Rust encoder (`modes::wsjt77`) writes none of that, so the vendored encoder runs
+/// on the same message afterwards, its tones discarded, for exactly what it always wrote.
+///
+/// It runs under [`MODEM_LOCK`], at once when the modem is free ([`defer_encode`]) and otherwise
+/// at the very start of the next modem call, before that call can read a table: every reader of
+/// those tables takes the lock, and the lock settles this list first. So no reader can tell the
+/// write was late, and the transmitter never waits for a decode to get it made.
+static DEFERRED_ENCODES: Mutex<Vec<(DeferredEncoder, Vec<u8>)>> = Mutex::new(Vec::new());
+
+/// Owe the vendored encoder `msg` (the bytes `ft8_encode` / `ft4_encode` would have been passed),
+/// for the tables it writes. Never waits: the modem is tried, not waited for.
+pub fn defer_encode(encoder: DeferredEncoder, msg: &[u8]) {
+    DEFERRED_ENCODES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((encoder, msg.to_vec()));
+    drop(try_modem_lock());
+}
+
+/// Run every owed vendored encode, in the order the messages were sent. Caller holds
+/// [`MODEM_LOCK`].
+fn settle_deferred_encodes() {
+    let owed = std::mem::take(&mut *DEFERRED_ENCODES.lock().unwrap_or_else(|e| e.into_inner()));
+    for (encoder, msg) in owed {
+        let mut itone = [0 as c_int; FT4_NN];
+        let mut nsym: c_int = 0;
+        let (ptr, len) = (msg.as_ptr() as *const c_char, msg.len() as c_int);
+        // SAFETY: the caller holds MODEM_LOCK; `msg` outlives the call and `itone` holds the 103
+        // tones FT4 writes (FT8 writes 79).
+        unsafe {
+            match encoder {
+                DeferredEncoder::Ft8 => ft8_encode(ptr, len, itone.as_mut_ptr(), &mut nsym),
+                DeferredEncoder::Ft4 => ft4_encode(ptr, len, itone.as_mut_ptr(), &mut nsym),
+            }
+        }
     }
 }
 
