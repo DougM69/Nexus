@@ -133,10 +133,14 @@ it('connects exactly one real JS8 cockpit without entry, inbox, send, shortcut o
   fireEvent.change(root.querySelector('.js8-compose')!,{target:{value:'TEST SEND'}})
   fireEvent.keyDown(root.querySelector('.js8-compose')!,{key:'Enter'})
   fireEvent.keyDown(window,{key:'Escape'})
-  fireEvent.click(root.querySelector('.js8-station-call')!)
+  const w1aw=[...root.querySelectorAll('.js8-station:not(.js8-group)')].find(r=>r.querySelector('.js8-station-call')?.textContent==='W1AW')!
+  fireEvent.click(w1aw.querySelector('.js8-station-call')!)
   expect((root.querySelector('.js8-to') as HTMLInputElement).value).toBe('W1AW')
-  fireEvent.click(root.querySelector('.js8-pin')!)
-  expect(root.querySelector('.js8-pin')?.getAttribute('aria-pressed')).toBe('true')
+  // The pin is in the row's menu (its ⋯), with JS8Call's own entries.
+  await act(async()=>{fireEvent.pointerDown(w1aw.querySelector('.js8-row-menu')!,{button:0,pointerType:'mouse'})})
+  const pin=await waitFor(()=>{const hit=[...document.querySelectorAll('[role="menuitem"]')].find(el=>el.textContent==='Pin to the top');expect(hit).toBeTruthy();return hit as HTMLElement})
+  await act(async()=>{fireEvent.click(pin)})
+  expect(root.querySelector('.js8-station.pinned .js8-station-call')?.textContent).toBe('W1AW')
   stateAvailable=false
   await waitFor(()=>expect(root.querySelector('.js8-inbox')?.textContent).not.toContain('STORED REMOTE TEST'))
   expect(root.querySelector('.js8-pending-row')).toBeNull()

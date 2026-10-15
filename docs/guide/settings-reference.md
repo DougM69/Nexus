@@ -1340,7 +1340,30 @@ nothing until you enable TX in the cockpit, every session.
 - **Groups** — the `@GROUP` names you belong to, comma-separated; a message to one of
   them counts as addressed to you. `@ALLCALL` is everyone and is always on. `@APRSIS` and
   `@JS8NET` cannot be joined, as in JS8Call: Settings will not save while either is in
-  this field, and says so.
+  this field, and says so. The call list's **Add new station or group…** and **Remove this
+  group** change this same list.
+
+**Lists and marks**
+
+- **Hide these callsigns in the RX pane** — JS8Call 3.0's RX block list, comma-separated and
+  empty by default. Nothing a listed station sends prints in the RX pane (by its call as heard
+  or its base call), and the call list marks it ✕; it is still heard, answered and filed as
+  before, and it still shows in Band activity. The call list's **Block this station** adds to
+  it.
+- **Highlight these words or callsigns** — two lists, primary and secondary colour, empty by
+  default as in JS8Call. A Band activity row holding one of the words, and the call list row of
+  one of the calls, is tinted; a row both lists name takes the primary.
+- **End of transmission mark** — ♢ by default, as in JS8Call; up to two characters. It follows
+  the last frame of a message in the RX pane and Band activity.
+- **Missing frame mark** — …… by default, as in JS8Call. It stands where the next frame of a
+  message did not come within one and a half periods.
+
+**Sounds**
+
+A short tone of its own for each of: a CQ, a heartbeat, an ACK for you, a message directed to
+you or your group, a message filed in your Inbox, a new callsign, a callsign you have worked.
+All off by default, as JS8Call's notifications are; **Test** plays one. They sound while the
+JS8 screen is open. JS8Call plays a sound file you pick for each; Nexus plays its own tones.
 
 ### SSTV
 

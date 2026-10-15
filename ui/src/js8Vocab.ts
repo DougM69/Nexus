@@ -225,7 +225,7 @@ export function dtLabel(dtS: number): string {
 
 /** JS8Call's `Radio::base_callsign` (Radio.cpp:117-133): the longer side of the first '/', the
  *  right-hand side on a tie, upper-cased. */
-function js8BaseCall(call: string): string {
+export function js8BaseCall(call: string): string {
   const c = call.trim().toUpperCase(), slash = c.indexOf('/')
   if (slash < 0) return c
   return c.length - slash - 1 >= slash ? c.slice(slash + 1) : c.slice(0, slash)

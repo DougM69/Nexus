@@ -277,7 +277,8 @@ describe('the JS8 Stations list takes its callsign aging from Settings', () => {
       await waitFor(
         () =>
           expect(
-            onScreen('[data-pane="stations"] .js8-station-call').map((b) => b.textContent),
+            // The station rows (the call list opens with @ALLCALL and the groups).
+            onScreen('[data-pane="stations"] .js8-station:not(.js8-group) .js8-station-call').map((b) => b.textContent),
             'W0OLD, heard 11 minutes ago, is aged out',
           ).toEqual(['W0NEW']),
         { timeout: 3000 },
