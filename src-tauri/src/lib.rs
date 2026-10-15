@@ -20105,6 +20105,31 @@ fn dxcc_entity_names() -> Vec<String> {
         .collect()
 }
 
+/// One DXCC entity as the Logbook's country picker lists it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DxccEntityRow {
+    code: u32,
+    name: String,
+    deleted: bool,
+}
+
+/// Every DXCC entity a contact can be set to count toward, current and deleted, by number
+/// (`propagation::dxcc::entities`) — the Logbook's country picker. The backend owns the table, so
+/// the picker offers exactly the numbers [`log_by_id::set_dxcc_by_id`] accepts. Same arrangement
+/// as [`dxcc_entity_names`].
+#[tauri::command]
+fn dxcc_entities() -> Vec<DxccEntityRow> {
+    propagation::dxcc::entities()
+        .into_iter()
+        .map(|e| DxccEntityRow {
+            code: e.code,
+            name: e.name.to_string(),
+            deleted: e.deleted,
+        })
+        .collect()
+}
+
 /// Every cty.dat entity name with its continent code, `(entity, "EU")` — for band activity's
 /// hide-by-continent (#229). A decode row carries the entity NAME `resolve` gave it, never a
 /// continent, and the UI has no cty.dat, so a continent tick expands through this table.
@@ -20239,7 +20264,7 @@ fn durability_failed(why: String) -> String {
 /// left it, so a follow-up (a QSL mark from the same edit form) can key the row it just changed.
 fn logged_qso(r: &tempo_core::logbook::QsoRecord) -> LoggedQso {
     let mut q = LoggedQso::from(r.clone());
-    q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+    q.entity = log_queries::shown(r);
     q
 }
 
@@ -35486,6 +35511,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_licensed_band_plan,
             privilege_spans::get_privilege_spans,
             dxcc_entity_names,
+            dxcc_entities,
             dxcc_entity_continents,
             cloudlog_station_info,
             dxcc_entity_locations,
@@ -35668,6 +35694,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             log_by_id::mark_qsl_sent_by_id,
             log_by_id::mark_qsl_card_by_id,
             log_by_id::set_sat_tag_by_id,
+            log_by_id::set_dxcc_by_id,
             log_by_id::delete_qso_by_id,
             log_queries::ask_log,
             purge_log,
@@ -38126,6 +38153,53 @@ mod tests {
             !body.contains("unwrap_or_default"),
             "a defaulted name would turn the removal into a refused empty name"
         );
+    }
+
+    /// The Logbook's country picker lists what `ui/src/api.ts`'s `getDxccEntities` reads: the
+    /// command is defined and registered (a missing one fails only at runtime, as the satellite
+    /// tag's test above says), and it sends every entity the station can set, deleted ones among
+    /// them, under the names the picker reads.
+    #[test]
+    fn the_country_picker_list_is_registered_and_holds_the_deleted_entities() {
+        let src = include_str!("lib.rs");
+        assert!(
+            src.lines().any(|l| l.starts_with("fn dxcc_entities(")),
+            "dxcc_entities is invoked by the UI but defined nowhere"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "dxcc_entities,"),
+            "dxcc_entities is not registered"
+        );
+        let all = serde_json::to_value(crate::dxcc_entities()).expect("serializes");
+        let rows = all.as_array().expect("a list");
+        assert_eq!(rows.len(), 402);
+        assert!(rows.contains(
+            &serde_json::json!({"code": 229, "name": "GERMAN DEMOCRATIC REPUBLIC", "deleted": true})
+        ));
+        assert!(rows.contains(
+            &serde_json::json!({"code": 182, "name": "Navassa Island", "deleted": false})
+        ));
+    }
+
+    /// The row a log command answers with shows the contact as a page of the log does: under the
+    /// entity its record's DXCC number names, where that is another than its call's.
+    #[test]
+    fn a_log_commands_row_shows_the_entity_its_records_number_names() {
+        let row = |dxcc: &str| {
+            let adif = format!(
+                "<CALL:3>K1N<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20150210<TIME_ON:6>123400{dxcc}<EOR>"
+            );
+            crate::logged_qso(&tempo_core::logbook::parse_adif(&adif).remove(0)).entity
+        };
+        assert_eq!(row("<DXCC:3>182").as_deref(), Some("Navassa Island"));
+        assert_eq!(row("").as_deref(), Some("United States"), "by its call");
     }
 
     /// THE CONNECT DASHBOARD'S WINDOW IS WIRED END TO END. What makes the pop-out

@@ -150,6 +150,20 @@ shows a quiet "QSL sent … via …" note. Marking a request sent does **not**
 confirm the contact — it stays in the "needs confirmation" list until the reply
 comes back.
 
+### Set a contact's country by hand
+
+An old log often carries no DXCC number on its contacts, and then a contact counts
+by its callsign. That is wrong for a DXpedition on a 1×1 call: K1N reads as the
+United States, though the 2015 operation was Navassa Island. Click the contact's
+**Country** in the Logbook and pick the entity from the list, searching by name or
+by DXCC number; the deleted entities are in it too. Nexus keeps the entity's
+number on the contact as its ADIF `DXCC`, so every export carries it, and the
+awards, the Needed board and the statistics count the contact as that entity.
+**Clear the DXCC number** in the same list puts the contact back to counting by
+its callsign. Where LoTW confirmed the contact as another entity, LoTW's still
+counts, and the Awards view lists the two side by side. This is set on the
+station; a Remote browser shows the country but cannot change it.
+
 ### Understand why a contact isn't confirmed
 
 A per-QSO **diagnostics** view explains why award credit hasn't landed yet — no

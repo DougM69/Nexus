@@ -1697,6 +1697,26 @@ export const EN = {
   'logbook.sat.tagged': '{{call}} tagged as worked via {{sat}}',
   'logbook.sat.cleared': 'Satellite tag cleared for {{call}}',
   'logbook.sat.failed': 'Could not change the satellite tag',
+  // The Country cell's picker: the DXCC entity a contact counts toward, set by hand. Entity names
+  // and numbers are data and arrive as {{entity}}.
+  'logbook.country.pick.title': 'Set the DXCC entity this contact counts toward',
+  'logbook.country.pick.aria': 'Country of {{call}}: {{entity}}. Set its DXCC entity',
+  'logbook.country.search.placeholder': 'Find an entity by name or number',
+  'logbook.country.current': 'DXCC on record: {{entity}}',
+  'logbook.country.byCall': 'No DXCC number on record: it counts by its call.',
+  'logbook.country.lotw': 'LoTW confirmed it as {{entity}}, and the awards count LoTW’s.',
+  'logbook.country.deletedEntity': '{{entity}} · deleted',
+  'logbook.country.loading': 'Reading the entities…',
+  'logbook.country.unavailable': 'The entity list could not be read.',
+  'logbook.country.noMatch': 'No entity matches.',
+  'logbook.country.more': {
+    one: '{{count}} more. Type to narrow the list.',
+    other: '{{count}} more. Type to narrow the list.',
+  },
+  'logbook.country.clear': 'Clear the DXCC number',
+  'logbook.country.set': '{{call}} set to {{entity}}',
+  'logbook.country.cleared': '{{call}}: DXCC number cleared, it counts by its call',
+  'logbook.country.failed': 'Could not set the country',
 
   // The QSL-request note. Four whole sentences instead of a stem plus " via …" and " on …"
   // tails: both stamps land in a different place in different languages. `{{date}}` is a

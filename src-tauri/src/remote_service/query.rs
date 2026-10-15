@@ -581,9 +581,9 @@ impl Publisher {
                 let rows = rows
                     .into_iter()
                     .map(|r| {
+                        let entity = crate::log_queries::shown(&r);
                         let mut q = tempo_app::dto::LoggedQso::from(r);
-                        q.entity =
-                            propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+                        q.entity = entity;
                         serde_json::to_value(q).map_err(|_| "applicationUnavailable")
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1067,8 +1067,9 @@ mod tests {
         let rows = rows
             .into_iter()
             .map(|r| {
+                let entity = crate::log_queries::shown(&r);
                 let mut q = tempo_app::dto::LoggedQso::from(r);
-                q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+                q.entity = entity;
                 serde_json::to_value(q).map_err(|_| "applicationUnavailable")
             })
             .collect::<Result<Vec<_>, _>>()?;

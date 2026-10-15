@@ -2466,6 +2466,15 @@ export interface DxccDisagreement {
   lotwEntity?: string | null
 }
 
+/** One DXCC entity a contact can be set to count toward (the station's `dxcc_entities`): its
+ * ARRL number, the name Nexus gives it — cty.dat's for a current entity, the ARRL's for a deleted
+ * one — and whether it is one of the deleted entities. */
+export interface DxccEntityOption {
+  code: number
+  name: string
+  deleted: boolean
+}
+
 /** A gamification milestone (unlocked, or locked-with-progress). */
 export interface Achievement {
   /** Stable id (e.g. "dxcc-100") — the key the UI tracks "seen" by. */

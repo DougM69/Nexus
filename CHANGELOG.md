@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Set a contact's country by hand in the Logbook.** Click a contact's Country and pick its DXCC
+  entity from a list you can search by name or by number; the 62 deleted entities are in it too.
+  Nexus keeps the entity's number on the contact as its ADIF `DXCC`, written to every export and
+  read back by an import, and the awards, the Needed board and the statistics count the contact as
+  that entity. It is for an old log whose contacts carry no DXCC number: a 1×1 call like K1N counts
+  as the United States by its call, and as Navassa Island once you pick it. **Clear the DXCC
+  number** in the same list puts the contact back to counting by its call. Where LoTW confirmed the
+  contact as another entity, LoTW's still counts, and the Awards view lists the two side by side.
+  The Country column shows and sorts each contact by the entity its record's number names, and the
+  new-entity and new-band badges beside a call you type in the log form, or pick in Operate, count
+  it there too. On the station only: a Remote browser shows the country but cannot change it.
 - **Change what an RTTY, PSK or CW macro key sends on the fly.** Right-click a key, or press
   Ctrl+Shift with its F-key (Ctrl+Shift+F3 for F3), and that key's editor opens with the cursor in
   its message. Neither sends anything, and the browser's menu no longer opens over a key. The editor

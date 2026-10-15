@@ -16729,6 +16729,50 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   white-space: nowrap;
   color: var(--text-dim);
 }
+/* On the station the country is a button that opens the picker (LogCountryPicker). It ellipsizes
+   inside its own box, as the call's button does: a cell's text-overflow cannot reach into a button
+   (#215). */
+.log-country-pick {
+  font: inherit;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: top;
+}
+.log-country-pick:hover,
+.log-country-pick[data-state='open'] {
+  color: var(--accent);
+  text-decoration: underline;
+}
+/* The picker itself: portaled, in .country-menu's box. */
+.log-country-menu {
+  max-width: 24rem;
+}
+/* The note's rule separates it from a list above it; the picker's first note has none. */
+.log-country-menu .country-menu-note:first-child {
+  margin-top: 0;
+  border-top: none;
+}
+/* The search box stays in view while the list under it scrolls, so it needs a background of its
+   own. */
+.log-country-search {
+  position: sticky;
+  /* Over the menu's own top padding too, so no scrolled row shows above the box. */
+  top: calc(-1 * var(--space-1));
+  z-index: 1;
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-elev-2);
+}
+.log-country-search .settings-input {
+  width: 16rem;
+  max-width: 100%;
+}
 .logbook-row.editing {
   outline: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
   outline-offset: -1px;

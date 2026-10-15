@@ -72,6 +72,8 @@ Every award computation — DXCC, Challenge, Honor Roll, WAZ, WAS — uses `awar
 
 Award tracking is computed entirely offline from the logbook — no internet connection is required. DXCC, WAS and WAZ count each contact by the DXCC entity number and CQ zone its record carries (ADIF `DXCC` and `CQZ`, from an ADIF import or a LoTW download), and by cty.dat's reading of the callsign where the record carries none. Where LoTW confirmed a contact under a different DXCC entity than your log has, the awards count LoTW's; your log keeps its own, and the Awards view lists each such contact.
 
+A contact's DXCC entity can be set by hand: click its **Country** in the Logbook and pick from every DXCC entity, current and deleted, searched by name or number. The entity's number is stored as the contact's ADIF `DXCC` (so exports carry it and an import reads it back), and the awards count the contact by it; **Clear the DXCC number** returns the contact to its callsign. LoTW's number, where the log keeps one, still counts over a number set by hand. The Logbook shows, sorts and keys a contact under the entity its record's number names when that differs from its callsign's; the ADIF `COUNTRY` text stays as the callsign gives it.
+
 **Shipped awards:**
 
 - **DXCC** — worked and confirmed counts toward 100 entities, the current count beside the total with deleted entities; per-band and per-mode (CW / Phone / Digital) breakdowns. A WAE area such as Sicily counts as the DXCC entity it belongs to (Italy).

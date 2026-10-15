@@ -113,6 +113,11 @@ pub enum LogOp {
         id: RecordId,
         sat_name: Option<String>,
     },
+    /// The operator says which DXCC entity this contact counts toward (ADIF `DXCC`): `Some`
+    /// sets the number, `None` clears it and the contact counts by its call again. Its own op
+    /// for [`SetSatTag`](LogOp::SetSatTag)'s reason: a clear must be unmistakable, and the
+    /// edit form's blank means "leave alone".
+    SetDxcc { id: RecordId, dxcc: Option<u32> },
     /// What happened the last time we pushed this contact to one connector.
     Stamp {
         id: RecordId,
@@ -146,6 +151,7 @@ impl LogOp {
             | LogOp::MarkQslSent { id, .. }
             | LogOp::MarkQslCard { id, .. }
             | LogOp::SetSatTag { id, .. }
+            | LogOp::SetDxcc { id, .. }
             | LogOp::Stamp { id, .. }
             | LogOp::Delete(id) => Some(*id),
             LogOp::AppendOne(_) | LogOp::AppendRows(_) | LogOp::Clear => None,
@@ -157,7 +163,7 @@ impl LogOp {
     /// ([`Logbook::apply`]); the station runs it on the row it read from the store, off the
     /// Engine lock, and commits what it answers under the lock. The rules of each change live in
     /// the function it calls, and nowhere else: [`super::edited`], [`super::qsl_sent_marked`],
-    /// [`super::qsl_card_marked`], [`super::sat_tagged`], [`super::stamped`].
+    /// [`super::qsl_card_marked`], [`super::sat_tagged`], [`super::dxcc_set`], [`super::stamped`].
     ///
     /// It never looks at `row`'s id: the caller found the row by it.
     pub fn apply_to(&self, row: &QsoRecord) -> RowAfter {
@@ -175,6 +181,7 @@ impl LogOp {
                     return RowAfter::Unchanged;
                 }
             }
+            LogOp::SetDxcc { dxcc, .. } => super::dxcc_set(&mut now, *dxcc),
             LogOp::Stamp {
                 service, status, ..
             } => super::stamped(&mut now, *service, status.clone()),
@@ -201,6 +208,10 @@ impl LogOp {
             // Satellite-VUCC split, so a stale answer here is a wrong award. Exactly what the
             // same change through `Edit` would cost, on an act an operator performs by hand.
             LogOp::SetSatTag { .. } => OpClass::Key,
+            // `Key` for the tag's reason: it can be cleared, and every fold that names a contact's
+            // entity reads `DXCC` — the awards, the needs, the statistics, the Logbook's country
+            // column and its order — so a narrower class would serve them a stale entity.
+            LogOp::SetDxcc { .. } => OpClass::Key,
             LogOp::Delete(_) | LogOp::Clear => OpClass::Structural,
         }
     }
@@ -220,6 +231,7 @@ impl Logbook {
             | LogOp::MarkQslSent { .. }
             | LogOp::MarkQslCard { .. }
             | LogOp::SetSatTag { .. }
+            | LogOp::SetDxcc { .. }
             | LogOp::Stamp { .. }
             | LogOp::Delete(_) => {
                 let Some(id) = op.target() else {
@@ -390,6 +402,15 @@ mod tests {
                 id: gone,
                 sat_name: None,
             },
+            // The same for a DXCC number set and cleared.
+            LogOp::SetDxcc {
+                id: gone,
+                dxcc: Some(182),
+            },
+            LogOp::SetDxcc {
+                id: gone,
+                dxcc: None,
+            },
             LogOp::Delete(gone),
         ] {
             let effects = lb.apply(op);
@@ -462,6 +483,22 @@ mod tests {
                 },
                 OpClass::Key,
             ),
+            (
+                "dxcc",
+                |ids| LogOp::SetDxcc {
+                    id: ids[1],
+                    dxcc: Some(182),
+                },
+                OpClass::Key,
+            ),
+            (
+                "dxcc clear",
+                |ids| LogOp::SetDxcc {
+                    id: ids[1],
+                    dxcc: None,
+                },
+                OpClass::Key,
+            ),
             ("delete", |ids| LogOp::Delete(ids[1]), OpClass::Structural),
             ("clear", |_| LogOp::Clear, OpClass::Structural),
         ];
@@ -494,6 +531,53 @@ mod tests {
         assert_eq!(row.upload.lotw, None, "no other service was stamped");
         assert_eq!(row.upload.eqsl, None);
         assert_eq!(row.upload.qrz, None);
+    }
+
+    /// The DXCC number set by hand: it lands on the one row it names; a clear takes it off; and
+    /// LoTW's number, kept beside the log's where LoTW confirmed the contact as another entity,
+    /// is never overwritten — a number that agrees with it drops it, and a clear leaves the log
+    /// holding it, as a LoTW download leaves a contact that had none.
+    #[test]
+    fn a_dxcc_set_by_hand_keeps_lotws_number_beside_it() {
+        use crate::logbook::{record_lotw_dxcc, LOTW_DXCC_FIELD};
+        let (mut lb, ids) = seeded(&["K1N", "K1B"]);
+        let at = |lb: &Logbook, i: usize| {
+            let r = &lb.records()[i];
+            (r.dxcc, record_lotw_dxcc(r))
+        };
+        let set = |lb: &mut Logbook, dxcc| {
+            lb.apply(LogOp::SetDxcc { id: ids[0], dxcc });
+        };
+        set(&mut lb, Some(182));
+        assert_eq!(at(&lb, 0), (Some(182), None), "set");
+        assert_eq!(at(&lb, 1), (None, None), "and nobody else was touched");
+        set(&mut lb, None);
+        assert_eq!(at(&lb, 0), (None, None), "cleared: the call counts again");
+
+        // LoTW confirmed the contact as Navassa, the log holding the United States.
+        let lotw_kept = |lb: &mut Logbook| {
+            let mut r = lb.records()[0].as_ref().clone();
+            r.dxcc = Some(291);
+            r.extra = vec![(LOTW_DXCC_FIELD.to_string(), "182".to_string())];
+            lb.records_mut(OpClass::Key)[0] = std::sync::Arc::new(r);
+        };
+        lotw_kept(&mut lb);
+        set(&mut lb, Some(79));
+        assert_eq!(
+            at(&lb, 0),
+            (Some(79), Some(182)),
+            "LoTW's is kept beside another"
+        );
+        set(&mut lb, Some(182));
+        assert_eq!(at(&lb, 0), (Some(182), None), "one that agrees drops it");
+        assert!(lb.records()[0].extra.is_empty(), "the field itself goes");
+        lotw_kept(&mut lb);
+        set(&mut lb, None);
+        assert_eq!(
+            at(&lb, 0),
+            (Some(182), None),
+            "a clear leaves the log LoTW's"
+        );
     }
 
     /// An appended row leaves with an id, and the effects hand back the same one the log gave

@@ -515,11 +515,11 @@ pub(super) fn value_key(row: &Value) -> String {
 }
 
 /// The key of a stored record, built as the log page builds its row (query.rs `Collection::Log`:
-/// the DTO plus the resolved entity). If that row shape changes, keys stop matching and every
-/// change is refused as stale — safe, and caught by the page-row test.
+/// the DTO plus its entity, [`crate::log_queries::shown`]). If that row shape changes, keys stop
+/// matching and every change is refused as stale — safe, and caught by the page-row test.
 pub(super) fn row_key(record: &QsoRecord) -> String {
     let mut q = tempo_app::dto::LoggedQso::from(record.clone());
-    q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+    q.entity = crate::log_queries::shown(record);
     serde_json::to_value(q)
         .map(|v| value_key(&v))
         .unwrap_or_default()

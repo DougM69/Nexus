@@ -297,7 +297,7 @@ enum SortVal {
     Num(f64),
 }
 
-/// `entity` is the row's resolved DXCC entity, asked for only when the column is the country.
+/// `entity` is the row's DXCC entity (`q.entity`), asked for only when the column is the country.
 fn sort_val(r: &QsoRecord, k: SortKey, entity: Option<&str>) -> SortVal {
     let text = |s: &str| SortVal::Text(js_upper(s).into_boxed_str());
     match k {
@@ -382,12 +382,12 @@ fn submode(r: &QsoRecord) -> Option<&str> {
 
 /// The rows `query` shows, as their handles in display order — the order vector (`logOrder`,
 /// SPEC-2 v3 §4.3). `rows` are `(handle, row)` in LOG ORDER; a row the query does not show is
-/// left out; `resolve` is a call's live DXCC entity, which the country column sorts on. See
-/// [`OrderBuilder`], which this is.
+/// left out; `resolve` is a row's DXCC entity (`q.entity`), which the country column sorts on.
+/// See [`OrderBuilder`], which this is.
 pub fn order<H, R>(
     rows: impl IntoIterator<Item = (H, R)>,
     query: &LogQuery,
-    resolve: &dyn Fn(&str) -> Option<String>,
+    resolve: &dyn Fn(&QsoRecord) -> Option<String>,
 ) -> Vec<H>
 where
     R: Borrow<QsoRecord>,
@@ -410,15 +410,16 @@ pub struct OrderBuilder<'a, H> {
     needs_confirm_only: bool,
     /// The search, trimmed and lower-cased once.
     t: String,
-    /// A call's live DXCC entity, resolved once per distinct call and only for the country
-    /// column, as the statistics resolve theirs ([`LogStatCounter`]).
-    resolve: &'a dyn Fn(&str) -> Option<String>,
-    entity_of: HashMap<String, Option<String>>,
+    /// A row's DXCC entity (`q.entity`) — its call's, or the one its record's DXCC number names
+    /// — asked only for the country column, once per distinct call and number, as the
+    /// statistics ask theirs ([`LogStatCounter`]).
+    resolve: &'a dyn Fn(&QsoRecord) -> Option<String>,
+    entity_of: HashMap<(String, Option<u32>), Option<String>>,
     kept: Vec<(H, SortVal, u64)>,
 }
 
 impl<'a, H> OrderBuilder<'a, H> {
-    pub fn new(query: &LogQuery, resolve: &'a dyn Fn(&str) -> Option<String>) -> Self {
+    pub fn new(query: &LogQuery, resolve: &'a dyn Fn(&QsoRecord) -> Option<String>) -> Self {
         Self {
             sort: query.sort,
             asc: query.asc,
@@ -446,8 +447,8 @@ impl<'a, H> OrderBuilder<'a, H> {
             SortKey::Country => {
                 let resolve = self.resolve;
                 self.entity_of
-                    .entry(r.call.clone())
-                    .or_insert_with(|| resolve(&r.call))
+                    .entry((r.call.clone(), r.dxcc))
+                    .or_insert_with(|| resolve(r))
                     .as_deref()
             }
             _ => None,
@@ -1139,12 +1140,12 @@ pub mod reference {
             .collect()
     }
 
-    /// The order vector of the whole log, as log positions; `resolve` is a call's live DXCC
-    /// entity, which the country column sorts on.
+    /// The order vector of the whole log, as log positions; `resolve` is a row's DXCC entity
+    /// (`q.entity`), which the country column sorts on.
     pub fn order<R: Borrow<QsoRecord>>(
         log: &[R],
         query: &LogQuery,
-        resolve: &dyn Fn(&str) -> Option<String>,
+        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
     ) -> Vec<usize> {
         super::order(log.iter().map(|r| r.borrow()).enumerate(), query, resolve)
     }

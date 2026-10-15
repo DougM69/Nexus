@@ -625,6 +625,41 @@ pub fn is_us_state_dxcc(code: u32) -> bool {
     matches!(code, 291 | 6 | 110)
 }
 
+/// Every DXCC entity a contact's record can name, by number: the current ones under their cty.dat
+/// names and the deleted ones under the ARRL's, in number order — what the Logbook offers when
+/// the operator sets the entity a contact counts toward by hand. One per number, as
+/// [`entity_by_dxcc`] names it, so a WAE area (which carries its parent's number) is not offered
+/// as an entity of its own.
+pub fn entities() -> Vec<DxccEntity> {
+    let current = resolver().by_dxcc.keys();
+    let mut all: Vec<DxccEntity> = current
+        .chain(deleted_entities().keys())
+        .filter_map(|&code| entity_by_dxcc(code))
+        .collect();
+    all.sort_unstable_by_key(|e| e.code);
+    all
+}
+
+/// The entity a logged contact is SHOWN under — the Logbook's Country column, its sort, and an
+/// entity's worked slots on the callsign card: the entity its record's own DXCC number names where
+/// that is another DXCC entity than its call's (a 1×1 call like K1N, logged as Navassa; a deleted
+/// entity; a number the operator set by hand), else its call's (`resolved`).
+///
+/// A number that names its call's own entity changes nothing, so a WAE area keeps its name
+/// (Sicily, whose calls carry Italy's 248). A number that names no entity (0, or one newer than
+/// the table) is passed over. LoTW's number, kept beside the log's where the two differ, is not
+/// the log's own: it is shown beside it, never in its place.
+///
+/// Not the entity a contact COUNTS toward ([`crate::awards::counted_entity`]): the awards take
+/// LoTW's number first, and a WAE area as its parent.
+pub fn shown_entity(resolved: Option<&DxccInfo>, dxcc: Option<u32>) -> Option<&'static str> {
+    let call = resolved.map(|i| i.entity);
+    match dxcc.and_then(entity_by_dxcc) {
+        Some(e) if resolved.and_then(|i| i.dxcc) != Some(e.code) => Some(e.name),
+        _ => call,
+    }
+}
+
 /// The subdivision an ENTITY settles on its own, because the entity IS one state (#171).
 ///
 /// Alaska and Hawaii are single-state DXCC entities: a call the prefix places there is in AK
@@ -1418,5 +1453,60 @@ mod dxcc_numbers {
         let parsed = parse_csv_numbers("K,United States,291,NA\r\nXX,Nowhere,abc,EU\r\n");
         assert_eq!(parsed.get("K"), Some(&291));
         assert_eq!(parsed.get("XX"), None);
+    }
+
+    /// What the Logbook's picker offers: the ARRL's 402, current and deleted, one per number in
+    /// number order, each named as a record carrying its number is — and no WAE area of its own.
+    #[test]
+    fn the_entities_offered_are_the_402_by_number() {
+        let all = entities();
+        assert_eq!(all.len(), 402);
+        assert_eq!(all.iter().filter(|e| e.deleted).count(), 62);
+        assert!(
+            all.windows(2).all(|w| w[0].code < w[1].code),
+            "number order"
+        );
+        for e in &all {
+            assert_eq!(entity_by_dxcc(e.code), Some(*e), "{}", e.code);
+        }
+        let named = |code| {
+            all.iter()
+                .find(|e| e.code == code)
+                .map(|e| (e.name, e.deleted))
+        };
+        assert_eq!(named(182), Some(("Navassa Island", false)));
+        assert_eq!(named(229), Some(("GERMAN DEMOCRATIC REPUBLIC", true)));
+        assert_eq!(
+            named(248),
+            Some(("Italy", false)),
+            "Sicily's number is Italy's"
+        );
+        assert!(
+            !all.iter().any(|e| e.name == "Sicily"),
+            "a WAE area is no entity"
+        );
+        assert_eq!(named(NO_DXCC_ENTITY), None);
+    }
+
+    /// A contact is shown under the entity its record's number names where that is another than
+    /// its call's — and under its call's otherwise, a WAE area's own name kept.
+    #[test]
+    fn a_contact_is_shown_under_its_records_entity_where_that_is_another() {
+        let shown = |call: &str, dxcc| shown_entity(resolve(call).as_ref(), dxcc);
+        assert_eq!(resolve("K1N").map(|i| i.entity), Some("United States"));
+        assert_eq!(shown("K1N", Some(182)), Some("Navassa Island"));
+        assert_eq!(
+            shown("Y24UK", Some(229)),
+            Some("GERMAN DEMOCRATIC REPUBLIC")
+        );
+        // Controls: no number, the call's own, a WAE area's parent's, none, and an unknown one.
+        assert_eq!(shown("K1N", None), Some("United States"));
+        assert_eq!(shown("W1AW", Some(291)), Some("United States"));
+        assert_eq!(shown("IT9ABC", Some(248)), Some("Sicily"));
+        assert_eq!(shown("K1N", Some(NO_DXCC_ENTITY)), Some("United States"));
+        assert_eq!(shown("K1N", Some(523)), Some("United States"));
+        // A call cty.dat cannot place is shown under its record's entity, or none.
+        assert_eq!(shown("Q", Some(182)), Some("Navassa Island"));
+        assert_eq!(shown("Q", None), None);
     }
 }
