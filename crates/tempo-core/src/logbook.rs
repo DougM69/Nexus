@@ -2953,17 +2953,24 @@ pub(crate) fn sat_tagged(rec: &mut QsoRecord, sat_name: Option<&str>) -> bool {
 /// ([`crate::reconcile::reconcile_lotw`]). A clear leaves the log holding LoTW's, as a LoTW
 /// download fills a contact that has none: LoTW's counts wherever the log keeps it.
 ///
-/// `COUNTRY` is not touched: it is the call's entity, which every edit resolves again.
+/// `COUNTRY` follows the number: `country` is the name the number this leaves gives the contact,
+/// or its call's entity where it is left with none, so the two never disagree. `None` leaves it
+/// as it is. Only this, the operator's own change, writes it — a contact the operator does not
+/// touch keeps the `COUNTRY` it was stored with.
 ///
-/// ⚠️ It does not check the number names an entity — that table is `propagation`'s, which the
-/// caller consults ([`sat_tagged`] leaves its own list to its caller the same way).
+/// ⚠️ It does not check the number names an entity, nor name the country — that table is
+/// `propagation`'s, which the caller consults ([`sat_tagged`] leaves its own list to its caller
+/// the same way).
 ///
 /// ★ THE one implementation of [`LogOp::SetDxcc`] (SPEC-2 v3 §4.6).
-pub(crate) fn dxcc_set(rec: &mut QsoRecord, dxcc: Option<u32>) {
+pub(crate) fn dxcc_set(rec: &mut QsoRecord, dxcc: Option<u32>, country: Option<&str>) {
     let lotw = record_lotw_dxcc(rec);
     rec.dxcc = dxcc.or(lotw);
     if lotw.is_some() && rec.dxcc == lotw {
         set_extra(rec, LOTW_DXCC_FIELD, None);
+    }
+    if let Some(country) = country {
+        rec.country = Some(country.to_string());
     }
 }
 

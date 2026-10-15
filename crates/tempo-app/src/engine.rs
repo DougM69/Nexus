@@ -27408,6 +27408,14 @@ contact yourself."
         self.station.set_dxcc_resolver_shared(resolve)
     }
 
+    /// See [`StationCore::set_dxcc_country_resolver`].
+    pub fn set_dxcc_country_resolver(
+        &mut self,
+        country: impl Fn(&str, Option<u32>) -> Option<String> + Send + Sync + 'static,
+    ) {
+        self.station.set_dxcc_country_resolver(country)
+    }
+
     /// See [`StationCore::set_state_resolver`].
     pub fn set_state_resolver(
         &mut self,

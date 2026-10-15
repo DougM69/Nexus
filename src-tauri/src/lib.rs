@@ -7907,6 +7907,14 @@ fn country_resolver() -> Arc<tempo_app::station::DxccResolve> {
     Arc::clone(&SHARED)
 }
 
+/// The station's two country resolvers, wired as the launch wires them: the entity a call places
+/// a contact in ([`country_resolver`]), and the country a record's own DXCC number gives it
+/// ([`log_queries::dxcc_country`]), which the contact's `COUNTRY` follows.
+fn wire_country_resolvers(eng: &mut Engine) {
+    eng.set_dxcc_resolver_shared(country_resolver());
+    eng.set_dxcc_country_resolver(log_queries::dxcc_country);
+}
+
 /// The version of the resolvers' data the logbook's country and state fills are written for —
 /// what `fill_ver` in the store records (SPEC-2 v3 D2-A). It changes with anything that can
 /// change what [`country_of`] or [`subdivision_hint`] answers: this build (their rules, the
@@ -26570,6 +26578,56 @@ mod stamp_subject_tests {
     }
 }
 
+/// The contact a logbook service is sent, from the row the push was handed: its `COUNTRY` the
+/// name its own DXCC number gives it ([`log_queries::sent`]), so a service is never handed a
+/// `DXCC` and a `COUNTRY` that disagree. The one conversion each push below — QRZ, HRDLog.net,
+/// Club Log, eQSL, Cloudlog/Wavelog — builds its ADIF from.
+fn upload_record(record: LoggedQso) -> tempo_core::logbook::QsoRecord {
+    log_queries::sent(record.into())
+}
+
+#[cfg(test)]
+mod upload_record_tests {
+    /// The body of the top-level `fn name(…)` in this file: through the `}` that closes it.
+    fn body(src: &'static str, name: &str) -> &'static str {
+        let start = src
+            .find(&format!("\nfn {name}("))
+            .unwrap_or_else(|| panic!("no fn {name}"));
+        let len = src[start..].find("\n}\n").expect("its end");
+        &src[start..start + len]
+    }
+
+    /// Every service push sends the contact `upload_record` makes of its row, and the DXKeeper
+    /// push the contact `log_queries::sent` makes, so each names `COUNTRY` by the DXCC number; and
+    /// the launch wires the station's resolver of that country. These reach the keychain, the
+    /// network or the whole launch, which no test drives, so the source is read: what is checked
+    /// is that no push is left serialising the row another way. `upload_record` and `sent`
+    /// themselves are held to their answers by value (`log_by_id`'s tests).
+    #[test]
+    fn every_push_and_the_launch_follow_the_dxcc_number_for_country() {
+        let src = include_str!("lib.rs");
+        for name in [
+            "qrz_push_qso_impl",
+            "hrdlog_push_qso_impl",
+            "clublog_push_qso_impl",
+            "eqsl_push_qso_impl",
+            "cloudlog_push_qso_impl",
+        ] {
+            let body = body(src, name);
+            assert!(
+                body.contains("let rec = upload_record(")
+                    && body.contains("adif_record(&rec)")
+                    && !body.contains(".into();"),
+                "{name} must send the row as `upload_record` makes it"
+            );
+        }
+        let launch = body(src, "start_on_the_logbook");
+        assert!(launch.contains("wire_country_resolvers(&mut eng);"));
+        assert!(launch.contains("adif_record_own_log(&log_queries::sent(rec.clone()))"));
+        assert_eq!(launch.matches("dxkeeper_push_async(").count(), 1);
+    }
+}
+
 fn qrz_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
@@ -26644,7 +26702,7 @@ fn qrz_push_qso_impl(
     // The row this push is for, kept for the stamp (see `stamp_subject`); the payload below
     // is built from the record without it, as it always was.
     let named = record.id.clone();
-    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let rec = upload_record(record);
     let adif = tempo_core::logbook::adif_record(&rec);
     let body = tempo_core::qrz::build_insert_body(&key, &adif, false);
     let resp = propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)?;
@@ -27153,7 +27211,7 @@ fn hrdlog_push_qso_impl(
     let code = hrdlog_keychain()?
         .get_password()
         .map_err(|_| "No HRDLog.net upload code stored — set it in Settings.".to_string())?;
-    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let rec = upload_record(record);
     let adif = tempo_core::logbook::adif_record(&rec);
 
     // Build + POST without the lock; the body carries the code — never logged.
@@ -27255,7 +27313,7 @@ fn clublog_push_qso_impl(
         .map_err(|_| "No ClubLog app-password stored — set it in Settings.".to_string())?;
     // The row this push is for, kept for the stamp (see `stamp_subject`).
     let named = record.id.clone();
-    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let rec = upload_record(record);
     let adif = tempo_core::logbook::adif_record(&rec);
 
     let (status, resp) = {
@@ -27404,7 +27462,7 @@ fn eqsl_push_qso_impl(
     }
     // The row this push is for, kept for the stamp (see `stamp_subject`).
     let named = record.id.clone();
-    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let rec = upload_record(record);
     let adif = tempo_core::logbook::adif_record(&rec);
 
     // Build + POST without the lock; the body carries the password — never logged.
@@ -27761,7 +27819,7 @@ fn cloudlog_push_qso_impl(
             status: None,
         });
     }
-    let rec: tempo_core::logbook::QsoRecord = dto.clone().into();
+    let rec = upload_record(dto.clone());
     let adif = tempo_core::logbook::adif_record(&rec);
     // The station-location check runs before sending and is said only if the instance refuses:
     // Wavelog is the authority, so the QSO goes either way. The QSO's side is what the record
@@ -33718,8 +33776,9 @@ fn start_on_the_logbook(
         // so new-DXCC decode highlighting works; set it BEFORE loading the log so
         // the initial worked-entity index is populated. The SAME shared resolver the store
         // keyed the hot index with when it opened, so the attach below installs that index
-        // rather than building one under this lock.
-        eng.set_dxcc_resolver_shared(country_resolver());
+        // rather than building one under this lock. Beside it, the country a record's own DXCC
+        // number gives it, which the contact's COUNTRY follows.
+        wire_country_resolvers(&mut eng);
         // Wire the subdivision resolver — `us_state_hint`, the SAME function the heard side
         // uses (get_need_alerts / the spot rows), plus the Canadian province. That shared
         // function is the whole point of the fix: the worked side used to have no resolver at
@@ -34338,12 +34397,13 @@ fn start_on_the_logbook(
                     // publication, and stripping it would leave their master log missing what
                     // they typed in Nexus. The line this fix draws is a nominated local logger
                     // vs a service or a broadcast — flip this one word if the operator wants it
-                    // drawn elsewhere.
+                    // drawn elsewhere. Its COUNTRY is the one its DXCC number gives it, as
+                    // every service's is (`log_queries::sent`).
                     dxkeeper_push_async(
                         host,
                         base,
                         uploads,
-                        tempo_core::logbook::adif_record_own_log(&rec),
+                        tempo_core::logbook::adif_record_own_log(&log_queries::sent(rec.clone())),
                     );
                 }
                 let failed = auto_push_one(

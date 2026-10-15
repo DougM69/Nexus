@@ -159,8 +159,11 @@ United States, though the 2015 operation was Navassa Island. Click the contact's
 by DXCC number; the deleted entities are in it too. Nexus keeps the entity's
 number on the contact as its ADIF `DXCC`, so every export carries it, and the
 awards, the Needed board and the statistics count the contact as that entity.
-**Clear the DXCC number** in the same list puts the contact back to counting by
-its callsign. Where LoTW confirmed the contact as another entity, LoTW's still
+The contact's country goes with the number: its ADIF `COUNTRY` becomes the
+entity's name, and every export and upload names a contact that carries a DXCC
+number by that number, so the two never disagree. **Clear the DXCC number** in
+the same list puts the contact back to counting by its callsign, and its country
+back to the callsign's. Where LoTW confirmed the contact as another entity, LoTW's still
 counts, and the Awards view lists the two side by side. This is set on the
 station; a Remote browser shows the country but cannot change it.
 

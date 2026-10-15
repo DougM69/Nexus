@@ -699,7 +699,8 @@ fn the_logbook_shows_sorts_and_keys_a_contact_by_the_dxcc_set_by_hand() {
         id,
         &[LogOp::SetDxcc {
             id,
-            dxcc: Some(182)
+            dxcc: Some(182),
+            country: None,
         }]
     ));
     assert_eq!(
@@ -719,6 +720,83 @@ fn the_logbook_shows_sorts_and_keys_a_contact_by_the_dxcc_set_by_hand() {
     );
     let us = app(json!({"kind": "entity", "entity": "United States"}));
     assert_eq!(us["slots"]["bandsWorked"], json!(["40M"]));
+}
+
+/// ★ The awards, the Needed board and the statistics count a contact by its DXCC number and never
+/// by the COUNTRY beside it, unchanged now that COUNTRY follows the number. A K1N contact carrying
+/// 182 counts as Navassa Island whether its COUNTRY says the United States (as an import that
+/// contradicts its number leaves it) or Navassa (as the operator's change writes it), and so does
+/// one set to 182 by hand, with the app's own resolvers.
+#[test]
+fn the_awards_the_needed_board_and_the_statistics_count_by_the_number_not_the_country() {
+    let k1n = |fields: &str| {
+        tempo_core::logbook::parse_adif(&format!(
+            "<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:4>1234<BAND:3>20m<MODE:2>CW{fields}<EOR>"
+        ))
+        .remove(0)
+    };
+    // The awards' chase and worked count, the Needed board's worked entities, and the statistics'
+    // entity count and entities.
+    let counts = |engine: &SharedEngine| {
+        let tallies = crate::LogTallies::default();
+        let awards = crate::log_folds::awards_kept(engine, &tallies).expect("awards");
+        let (needs, _) = crate::log_folds::needs_kept(engine, &tallies).expect("needs");
+        let q: LogQuestion = serde_json::from_value(json!({"kind": "statistics"})).expect("asked");
+        let stats = LogQueries::default()
+            .answer(engine, &q, &shown, &counted)
+            .expect("answered");
+        let mut worked: Vec<String> = needs.worked_entity_names().iter().cloned().collect();
+        worked.sort();
+        (
+            awards
+                .needed
+                .iter()
+                .map(|n| n.entity.clone())
+                .collect::<Vec<_>>(),
+            awards.dxcc_worked,
+            worked,
+            stats["dxccEntities"].clone(),
+            stats["entities"].clone(),
+        )
+    };
+    let navassa = (
+        vec!["Navassa Island".to_string()],
+        1,
+        vec!["Navassa Island".to_string()],
+        json!(1),
+        json!([{"label": "Navassa Island", "count": 1}]),
+    );
+    for (tag, fields) in [
+        ("contradicted", "<DXCC:3>182<COUNTRY:13>United States"),
+        ("agreeing", "<DXCC:3>182<COUNTRY:14>Navassa Island"),
+    ] {
+        let d = Dir::new(&format!("counts-{tag}"));
+        let engine = on_store(&d, &[k1n(fields)]);
+        assert_eq!(counts(&engine), navassa, "{tag}");
+    }
+
+    // Set to 182 by hand on a station wired as the launch wires it, which writes COUNTRY beside
+    // the number (`log_by_id`'s tests hold that by value).
+    let d = Dir::new("counts-by-hand");
+    write_log(&d, &[k1n("<COUNTRY:13>United States")]);
+    let opened = tempo_app::logstore::open(
+        &d.log(),
+        Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+        None,
+    )
+    .expect("the store opens");
+    let mut e = Engine::new("K2DEF", "FN31", 0);
+    e.attach_log_store(opened);
+    crate::wire_country_resolvers(&mut e);
+    let engine: SharedEngine = Arc::new(Mutex::new(e));
+    let row = QsoRecord::clone(&engine.lock().unwrap().stored_log()[0]);
+    let key = QsoEdit::project(&row).key();
+    let (made, _) = tempo_app::logwrite::until_written(|| {
+        tempo_app::logwrite::set_dxcc(&engine, row.id.expect("an id"), &key, Some(182))
+    });
+    let (_, after) = made.expect("read").expect("made");
+    assert_eq!(after.expect("the contact stays").dxcc, Some(182), "premise");
+    assert_eq!(counts(&engine), navassa, "set by hand");
 }
 
 /// ★ `orderRev` IS THE INDEX REVISION. An upload stamp moves the rows' content and not their

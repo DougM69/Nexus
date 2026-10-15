@@ -156,6 +156,29 @@ pub fn change_ops(
     (made, durability)
 }
 
+/// The DXCC number set — or cleared, `None` — by hand on the contact `id`, with the `COUNTRY` that
+/// goes with it ([`StationCore::dxcc_ops`]), only while it is still the version whose edit key is
+/// `edit_key` — planned with the Engine lock released ([`change_row`]). What it made, or why not.
+pub fn set_dxcc(
+    engine: &Mutex<Engine>,
+    id: RecordId,
+    edit_key: &str,
+    dxcc: Option<u32>,
+) -> (Result<Result<MadeRow, RowRefusal>, String>, Durability) {
+    let (made, durability) = change_row(
+        engine,
+        id,
+        "set_dxcc",
+        |e, row| {
+            let ops = e.station().dxcc_ops(id, edit_key, dxcc, row)?;
+            Ok(station::ops_on(row, &ops))
+        },
+        |_, made| made,
+    );
+    let made = made.map(|made| made.and_then(|made| made.ok_or(RowRefusal::Gone)));
+    (made, durability)
+}
+
 /// The Logbook form's edit of the contact `id`, as ONE change ([`StationCore::edit_ops`]: the
 /// fields, and the QSL-sent and paper-card marks where the form changes them), only while it is
 /// still the version whose edit key is `edit_key` — planned with the Engine lock released. The

@@ -19,7 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contact as another entity, LoTW's still counts, and the Awards view lists the two side by side.
   The Country column shows and sorts each contact by the entity its record's number names, and the
   new-entity and new-band badges beside a call you type in the log form, or pick in Operate, count
-  it there too. On the station only: a Remote browser shows the country but cannot change it.
+  it there too. The contact's ADIF `COUNTRY` follows the number: picking an entity writes its name
+  on the contact, and every export and upload names a contact that carries a DXCC number by that
+  number's entity, so the two never disagree. A contact imported with a `COUNTRY` its number
+  contradicts goes out under the number's name; Nexus changes the stored contact only when you
+  change it. On the station only: a Remote browser shows the country but cannot change it.
 - **Change what an RTTY, PSK or CW macro key sends on the fly.** Right-click a key, or press
   Ctrl+Shift with its F-key (Ctrl+Shift+F3 for F3), and that key's editor opens with the cursor in
   its message. Neither sends anything, and the browser's menu no longer opens over a key. The editor

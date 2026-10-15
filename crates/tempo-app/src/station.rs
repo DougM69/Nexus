@@ -521,6 +521,10 @@ pub(crate) struct StationKeys<'a>(pub(crate) Option<&'a DxccResolve>);
 /// A callsign → DXCC entity resolver, as [`StationCore::dxcc_resolve`] holds it.
 pub type DxccResolve = dyn Fn(&str) -> Option<String> + Send + Sync;
 
+/// A contact's (callsign, DXCC number) → the country (ADIF `COUNTRY`) that number gives it, `None`
+/// where the number names no entity — as [`StationCore::dxcc_country`] holds it.
+pub type DxccCountry = dyn Fn(&str, Option<u32>) -> Option<String> + Send + Sync;
+
 impl HotKeys for StationKeys<'_> {
     fn band_key(&self, band: &str) -> String {
         band_key(band)
@@ -2112,6 +2116,12 @@ pub struct StationCore {
     /// launch can key the hot index it builds off the lock with this very resolver
     /// ([`crate::logstore::HotBuild`]).
     pub(crate) dxcc_resolve: Option<Arc<DxccResolve>>,
+    /// (Callsign, DXCC number) → the country a contact's record takes from its own number,
+    /// injected by the command layer for [`Self::dxcc_resolve`]'s reason. `COUNTRY` follows the
+    /// number: what the operator's own changes write beside it ([`Self::country_for`]) and what
+    /// an export names ([`crate::logexport`]). `None` in headless tests: `COUNTRY` is the call's,
+    /// as before the number was followed. See [`Self::set_dxcc_country_resolver`].
+    pub(crate) dxcc_country: Option<Arc<DxccCountry>>,
     /// (Callsign, heard grid) → US state resolver, injected by the command layer (which owns
     /// the FCC callsign index) — same pattern as [`Self::set_dxcc_resolver`], and injected for
     /// the same reason: tempo-app has no `propagation` dependency, so it cannot reach the index
@@ -2265,6 +2275,7 @@ impl StationCore {
             pending_msgs_path: None,
             journals: Default::default(),
             dxcc_resolve: None,
+            dxcc_country: None,
             state_resolve: None,
             grid_rarity_resolve: None,
             lotw_resolve: None,
@@ -2913,6 +2924,27 @@ impl StationCore {
         // rows' own country is the store's (SPEC-2 v3 D2-A): each insert fills it, and the fill
         // job fills what an older build left.
         self.rekey_hot();
+    }
+
+    /// Inject the (callsign, DXCC number) → country resolver (the command layer passes a closure
+    /// over `propagation::dxcc::country_by_dxcc`). No index is keyed by it, so nothing is
+    /// rebuilt: it names the `COUNTRY` the operator's next change writes, and an export's.
+    pub fn set_dxcc_country_resolver(
+        &mut self,
+        country: impl Fn(&str, Option<u32>) -> Option<String> + Send + Sync + 'static,
+    ) {
+        self.dxcc_country = Some(Arc::new(country));
+    }
+
+    /// The `COUNTRY` a contact with `call`, left holding the DXCC number `dxcc`, takes when the
+    /// operator changes it: the name that number gives it, so the two never disagree; else, with
+    /// no number or one that names no entity, its call's entity, as every edit has always written.
+    /// `None` when neither resolver names one (a headless test's station).
+    pub(crate) fn country_for(&self, call: &str, dxcc: Option<u32>) -> Option<String> {
+        self.dxcc_country
+            .as_ref()
+            .and_then(|country| country(call, dxcc))
+            .or_else(|| self.dxcc_resolve.as_ref().and_then(|resolve| resolve(call)))
     }
 
     /// Build the hot index again under the DXCC resolver the station now holds, which keys
@@ -3925,10 +3957,10 @@ impl StationCore {
         let sent = edit.qsl_sent_change(stored)?;
         let card = edit.qsl_card_change(stored);
         let mut rec = edit.record(stored);
-        // Keep country populated on edits, as `update_qso` does: the form does not carry it.
-        if let Some(resolve) = &self.dxcc_resolve {
-            rec.country = resolve(&rec.call);
-        }
+        // Keep country populated on edits, as `update_qso` does: the form does not carry it. It
+        // follows the DXCC number the contact keeps — the edit leaves the stored one, and a
+        // corrected call drops both — and else the call.
+        rec.country = self.country_for(&rec.call, rec.dxcc.or(stored.dxcc));
         let mut ops = vec![LogOp::Edit {
             id,
             rec: Box::new(rec),
@@ -3944,6 +3976,37 @@ impl StationCore {
             ops.push(LogOp::MarkQslCard { id, received });
         }
         Ok(Ok(ops))
+    }
+
+    /// The DXCC number set — or cleared, `None` — by hand on the contact `id`, as the op that makes
+    /// it on the row as it stands: the number, and the `COUNTRY` that goes with the number it
+    /// leaves ([`Self::country_for`]), so the two never disagree. Refused when the row is no longer
+    /// the version whose key is `edit_key`.
+    pub(crate) fn dxcc_ops(
+        &self,
+        id: RecordId,
+        edit_key: &str,
+        dxcc: Option<u32>,
+        stored: &Arc<QsoRecord>,
+    ) -> Result<Vec<LogOp>, RowRefusal> {
+        Self::fresh_row(stored, edit_key)?;
+        // The number the op leaves — on a clear, LoTW's where the log keeps it — read off the
+        // op's own rule rather than restated here.
+        let left = match (LogOp::SetDxcc {
+            id,
+            dxcc,
+            country: None,
+        })
+        .apply_to(stored)
+        {
+            RowAfter::Now(row) => row.dxcc,
+            RowAfter::Gone | RowAfter::Unchanged => stored.dxcc,
+        };
+        Ok(vec![LogOp::SetDxcc {
+            id,
+            dxcc,
+            country: self.country_for(&stored.call, left),
+        }])
     }
 
     /// The Logbook form's edit of the contact `id`, as ONE change ([`Self::edit_ops`]), in one

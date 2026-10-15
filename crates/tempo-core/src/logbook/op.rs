@@ -117,7 +117,15 @@ pub enum LogOp {
     /// sets the number, `None` clears it and the contact counts by its call again. Its own op
     /// for [`SetSatTag`](LogOp::SetSatTag)'s reason: a clear must be unmistakable, and the
     /// edit form's blank means "leave alone".
-    SetDxcc { id: RecordId, dxcc: Option<u32> },
+    ///
+    /// `country` is the ADIF `COUNTRY` the contact takes with the number the op leaves it — the
+    /// name that number gives it, or its call's where it is left with none — named by the caller,
+    /// which holds the entity table. `None` leaves `COUNTRY` as it is.
+    SetDxcc {
+        id: RecordId,
+        dxcc: Option<u32>,
+        country: Option<String>,
+    },
     /// What happened the last time we pushed this contact to one connector.
     Stamp {
         id: RecordId,
@@ -181,7 +189,9 @@ impl LogOp {
                     return RowAfter::Unchanged;
                 }
             }
-            LogOp::SetDxcc { dxcc, .. } => super::dxcc_set(&mut now, *dxcc),
+            LogOp::SetDxcc { dxcc, country, .. } => {
+                super::dxcc_set(&mut now, *dxcc, country.as_deref())
+            }
             LogOp::Stamp {
                 service, status, ..
             } => super::stamped(&mut now, *service, status.clone()),
@@ -406,10 +416,12 @@ mod tests {
             LogOp::SetDxcc {
                 id: gone,
                 dxcc: Some(182),
+                country: Some("Navassa Island".into()),
             },
             LogOp::SetDxcc {
                 id: gone,
                 dxcc: None,
+                country: None,
             },
             LogOp::Delete(gone),
         ] {
@@ -488,6 +500,7 @@ mod tests {
                 |ids| LogOp::SetDxcc {
                     id: ids[1],
                     dxcc: Some(182),
+                    country: Some("Navassa Island".into()),
                 },
                 OpClass::Key,
             ),
@@ -496,6 +509,7 @@ mod tests {
                 |ids| LogOp::SetDxcc {
                     id: ids[1],
                     dxcc: None,
+                    country: None,
                 },
                 OpClass::Key,
             ),
@@ -546,7 +560,11 @@ mod tests {
             (r.dxcc, record_lotw_dxcc(r))
         };
         let set = |lb: &mut Logbook, dxcc| {
-            lb.apply(LogOp::SetDxcc { id: ids[0], dxcc });
+            lb.apply(LogOp::SetDxcc {
+                id: ids[0],
+                dxcc,
+                country: None,
+            });
         };
         set(&mut lb, Some(182));
         assert_eq!(at(&lb, 0), (Some(182), None), "set");
@@ -577,6 +595,47 @@ mod tests {
             at(&lb, 0),
             (Some(182), None),
             "a clear leaves the log LoTW's"
+        );
+    }
+
+    /// The contact's COUNTRY goes with the number set by hand: the name the caller gives for the
+    /// number the op leaves is written beside it, on a set and on a clear alike, and an op that
+    /// names none leaves COUNTRY as it was.
+    #[test]
+    fn a_dxcc_set_by_hand_writes_the_country_its_caller_names() {
+        let (mut lb, ids) = seeded(&["K1N", "K1B"]);
+        let mut first = lb.records()[0].as_ref().clone();
+        first.country = Some("United States".into());
+        lb.records_mut(OpClass::Key)[0] = std::sync::Arc::new(first);
+        let held = |lb: &Logbook, i: usize| {
+            let r = &lb.records()[i];
+            (r.dxcc, r.country.clone())
+        };
+        let set = |lb: &mut Logbook, dxcc, country: Option<&str>| {
+            lb.apply(LogOp::SetDxcc {
+                id: ids[0],
+                dxcc,
+                country: country.map(str::to_string),
+            });
+        };
+        set(&mut lb, Some(182), Some("Navassa Island"));
+        assert_eq!(
+            held(&lb, 0),
+            (Some(182), Some("Navassa Island".into())),
+            "set: the two agree"
+        );
+        assert_eq!(held(&lb, 1), (None, None), "nobody else was touched");
+        set(&mut lb, None, Some("United States"));
+        assert_eq!(
+            held(&lb, 0),
+            (None, Some("United States".into())),
+            "cleared: the call's entity again"
+        );
+        set(&mut lb, Some(182), None);
+        assert_eq!(
+            held(&lb, 0),
+            (Some(182), Some("United States".into())),
+            "no name given: COUNTRY as it was"
         );
     }
 

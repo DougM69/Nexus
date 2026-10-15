@@ -660,6 +660,19 @@ pub fn shown_entity(resolved: Option<&DxccInfo>, dxcc: Option<u32>) -> Option<&'
     }
 }
 
+/// The country (ADIF `COUNTRY`) a contact's record takes from its own DXCC number, so the two never
+/// disagree: the entity the contact is shown under ([`shown_entity`]) wherever the number names
+/// one. The Logbook's Country column, the record and every file or upload carrying `COUNTRY` say
+/// the same name — a WAE area's own included (Sicily, whose calls carry Italy's 248).
+///
+/// `None` where the record carries no number, or one that names no entity (0, or one newer than
+/// the table): there is nothing to follow, and `COUNTRY` is whatever else names it — the call's
+/// entity on an edit, the record's own text in a file.
+pub fn country_by_dxcc(resolved: Option<&DxccInfo>, dxcc: Option<u32>) -> Option<&'static str> {
+    entity_by_dxcc(dxcc?)?;
+    shown_entity(resolved, dxcc)
+}
+
 /// The subdivision an ENTITY settles on its own, because the entity IS one state (#171).
 ///
 /// Alaska and Hawaii are single-state DXCC entities: a call the prefix places there is in AK
@@ -1508,5 +1521,26 @@ mod dxcc_numbers {
         // A call cty.dat cannot place is shown under its record's entity, or none.
         assert_eq!(shown("Q", Some(182)), Some("Navassa Island"));
         assert_eq!(shown("Q", None), None);
+    }
+
+    /// A record's COUNTRY follows its DXCC number: the name the contact is shown under wherever
+    /// the number names an entity — a WAE area's own kept — and nothing where it names none, so
+    /// the record's own text stands.
+    #[test]
+    fn a_records_country_is_the_name_its_dxcc_number_gives_it() {
+        let country = |call: &str, dxcc| country_by_dxcc(resolve(call).as_ref(), dxcc);
+        assert_eq!(country("K1N", Some(182)), Some("Navassa Island"));
+        assert_eq!(
+            country("Y24UK", Some(229)),
+            Some("GERMAN DEMOCRATIC REPUBLIC")
+        );
+        assert_eq!(country("W1AW", Some(291)), Some("United States"));
+        assert_eq!(country("K1N", Some(291)), Some("United States"));
+        assert_eq!(country("IT9ABC", Some(248)), Some("Sicily"));
+        assert_eq!(country("Q", Some(182)), Some("Navassa Island"));
+        // No number, 0 and an unknown one name nothing: the call's entity is NOT offered.
+        assert_eq!(country("K1N", None), None);
+        assert_eq!(country("K1N", Some(NO_DXCC_ENTITY)), None);
+        assert_eq!(country("K1N", Some(523)), None);
     }
 }
