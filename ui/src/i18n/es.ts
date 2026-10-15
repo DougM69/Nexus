@@ -4612,6 +4612,8 @@ export const ES: PartialCatalog = {
   "rotor.pane.aim.point.title": "Apuntar la antena a {{call}}, camino corto",
   "rotor.pane.aim.unknown": "ubicación desconocida",
   "rotor.pane.aim.noGrid": "pon tu locator en Ajustes para ver un rumbo",
+  "rotor.pane.aim.off": "{{deg}}° de desvío",
+  "rotor.pane.aim.off.title": "La antena está desviada {{deg}}° del rumbo a {{call}} (la línea de puntos en la rosa), por el lado más corto",
   "rotor.pane.stop.label": "■ PARAR",
   "rotor.pane.stop.title": "Parar la rotación YA",
   "rotor.pane.track.title": "Autoseguimiento de {{bird}} ({{state}}) — la sección Satélites manda en el rotor hasta el LOS; un giro manual o PARAR lo detiene",

@@ -154,7 +154,11 @@ Once it's configured and answering, rotator control appears throughout the app:
   `→ EC1DD 227° (1531 km)`, and **Point**, which turns the antenna there. The
   bearing shown is the one Point turns to. So are the Chase box's heading beside
   its ↗ and the distance and bearing on the recall card under a log entry, and a
-  browser on Nexus Remote turns its → CALL to the same bearing. In the dashboard
+  browser on Nexus Remote turns its → CALL to the same bearing. The rose draws
+  the bearing to the call as well, as a dotted line with a marker on the rim
+  under the antenna's own needle, and the second line says how far off it the
+  antenna is, e.g. `20° off`, so you can see at a glance whether to press Point
+  (no number when the rotator does not report its position). In the dashboard
   rail the pane is laid out tighter, with a smaller rose beside the bearing and
   the boxes, so the bearing, STOP and the second line show without scrolling in
   the stock rail. In a rail narrowed toward its minimum on a 1366×768 or 1600×900

@@ -1300,6 +1300,22 @@ button.nb-chip:hover {
   stroke-width: 1;
   stroke-dasharray: 3 3;
 }
+/* The station's bearing (line 2's call; RotorPane's header): told from the needle and the dashed target
+   needle by its shape, dotted with a bug on the rim, and by its colour, the amber role in either theme.
+   Drawn under both needles, and never a click's target, so a click on it slews as the rose does.
+   RotorPane.contrast.test.tsx measures its colour in every mode and skin. */
+.rotor-bearing {
+  pointer-events: none;
+}
+.rotor-bearing-line {
+  stroke: var(--alert-warning);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-dasharray: 0 4;
+}
+.rotor-bearing-bug {
+  fill: var(--alert-warning);
+}
 .rotor-hub {
   fill: var(--accent);
 }
@@ -1375,6 +1391,10 @@ button.nb-chip:hover {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+/* "20° off" beside the bearing: the number never wraps away from its word. */
+.rotor-aim-off {
+  white-space: nowrap;
+}
 .rotor-aim-why {
   color: var(--text-dim);
 }
@@ -1406,7 +1426,9 @@ button.nb-chip:hover {
      its scrollbar the moment line 2 arrives, and a rose sized by it moved STOP 2.5 px sideways. The drawing
      scales (the pane's viewBox); its lines keep their widths and its letters are set larger in its own units.
    · LINE 2 AND WHAT FOLLOWS IT RUN UNDER THE ROSE at the box's full width (`.rotor-side` lends its lines to
-     the row's grid), where "→ EC1DD 227° (951 mi)" and Point fit one line in the 300 px rail.
+     the row's grid), where "→ EC1DD 227° (951 mi)" and Point fit one line in the 300 px rail. With the
+     antenna's "104° off" beside them the words take two lines there (32 px against 25 in Chrome, 2026-10-14),
+     and the fit holds that room, so its rose is 57 px rather than 63 in the stock rail's 139 px box.
    · TIGHTER LINES: the bearing at 1.25em, the elevation at the body size, the bearing and elevation boxes
      STOP's height (not the 44 px touch floor) and narrower (three digits still show), and Point beside line
      2's words, which wrap, wherever that leaves them 6em, so a distance such as "(15310 km)" never splits;
@@ -1414,7 +1436,7 @@ button.nb-chip:hover {
    What still needs a scroll, measured: line 2 at 1366×768 and 1600×900 in the 200 px rail (113 px of body:
    every box's head takes two lines there), and with an elevation axis in the 225 and 250 px rails at
    1366×768 (its boxes and STOP take two lines below ~265 px); and with an elevation axis and a call, the
-   box's last few px (the hint) at 1366×768 and 1600×900 in the 300 px rail.
+   hint's second line at 1366×768 and 1600×900 in the 300 px rail (13 px with "N° off" on line 2, 6 before).
    Everywhere else (Connect, a box in a cockpit's columns) the pane is laid out as above.
    RotorPane.rail.test.tsx computes both. */
 .dash-boxes .pane-body .rotor-row {
@@ -1435,7 +1457,8 @@ button.nb-chip:hover {
 }
 .dash-boxes .pane-body .rotor-ring,
 .dash-boxes .pane-body .rotor-tick,
-.dash-boxes .pane-body .rotor-needle {
+.dash-boxes .pane-body .rotor-needle,
+.dash-boxes .pane-body .rotor-bearing-line {
   vector-effect: non-scaling-stroke;
 }
 .dash-boxes .pane-body .rotor-cardinal {
@@ -1506,6 +1529,11 @@ button.nb-chip:hover {
 }
 .dash-boxes .pane-body .rotor-pane[data-fit] .rotor-needle.target {
   stroke-width: max(1px, calc(var(--rotor-rose, 0px) * 0.007));
+}
+/* The station's dots grow apart with them, or a big rose's would run together into a solid line. */
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-bearing-line {
+  stroke-width: max(1.5px, calc(var(--rotor-rose, 0px) * 0.01));
+  stroke-dasharray: 0 max(4px, calc(var(--rotor-rose, 0px) * 0.027));
 }
 .dash-boxes .pane-body .rotor-pane[data-fit] .rotor-az,
 .dash-boxes .pane-body .rotor-pane[data-fit] .rotor-el,

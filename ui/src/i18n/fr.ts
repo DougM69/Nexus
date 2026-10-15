@@ -4612,6 +4612,8 @@ export const FR: PartialCatalog = {
   "rotor.pane.aim.point.title": "Pointer l'antenne vers {{call}}, chemin court",
   "rotor.pane.aim.unknown": "position inconnue",
   "rotor.pane.aim.noGrid": "indiquez votre locator dans Réglages pour un azimut",
+  "rotor.pane.aim.off": "{{deg}}° d'écart",
+  "rotor.pane.aim.off.title": "L'antenne est à {{deg}}° de l'azimut vers {{call}} (la ligne pointillée sur la rose), par le plus court",
   "rotor.pane.stop.label": "■ STOP",
   "rotor.pane.stop.title": "Arrêter la rotation MAINTENANT",
   "rotor.pane.track.title": "Suivi automatique de {{bird}} ({{state}}) — la section Satellites contrôle le rotor jusqu'au LOS ; une commande manuelle ou STOP l'interrompt",

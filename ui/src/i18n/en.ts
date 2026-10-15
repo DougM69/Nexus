@@ -11898,6 +11898,11 @@ export const EN = {
   'rotor.pane.aim.point.title': 'Point the antenna at {{call}}, short path',
   'rotor.pane.aim.unknown': 'location unknown',
   'rotor.pane.aim.noGrid': 'set your grid in Settings for a bearing',
+  // How far the antenna's live heading is from line 2's bearing, the short way round: `{{deg}}` is
+  // whole degrees, 0–180. The rose draws that bearing as a dotted line with a marker on the rim.
+  'rotor.pane.aim.off': '{{deg}}° off',
+  'rotor.pane.aim.off.title':
+    'The antenna is {{deg}}° off the bearing to {{call}} (the dotted line on the rose), the short way round',
 
   // ── The shared cockpit header ───────────────────────────────────────────────────────
   // ⚠️ THE FOUR TRANSMIT CONTROLS THIS HEADER DRAWS ARE ABSENT BY DESIGN: the TX-enable latch,

@@ -33,6 +33,15 @@
 // nobody resolved; no call, no line. A browser has no line 2 at all: the bearing read is the
 // desktop's, and Nexus Remote offers it nothing new.
 //
+// THE STATION ON THE ROSE (2026-10-14, asked for by a user as an instant indication of how far the
+// antenna is off and whether to point): line 2's bearing is drawn on the rose too, dotted from the
+// hub to a bug on the rim, under both needles, and line 2 says how far off it the antenna is, "20°
+// off", the short way round. It is line 2's own answer, so it shows exactly when line 2 has a
+// bearing: no call, no station placed, no grid of your own, a failed read or a browser draws
+// neither. The rose is TRUE north up: the needle is the rotator's reading, and the bearing is the
+// one Point sends the rotator as it stands, so no declination touches either. No reading from the
+// rotator, no number: an "off" from a needle nobody read would be a guess.
+//
 // IN THE DASHBOARD RAIL the pane is compact in a short box and grows into a taller or wider one: the
 // rose and the readings as big as the box holds, centred (rotorFit.ts measures the box; styles.css draws).
 import { useEffect, useRef, useState } from 'react'
@@ -54,7 +63,7 @@ import { magneticDeg } from '../../grid'
 import { pushToast } from '../../toast'
 import { t } from '../../i18n'
 import { pollSingleFlight } from '../../singleFlight'
-import { follow, pending, type Pending } from '../../features/rotorTargets'
+import { follow, gap, pending, type Pending } from '../../features/rotorTargets'
 import { fmtDistanceKm, useUnits } from '../../units'
 import { ROTATOR_POLL_MS } from '../../remote-web/rotator'
 import { pointedTo, rotorPointAt } from '../rotorPointAt'
@@ -277,6 +286,10 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
   const entryAim = aimCall != null && aim?.call === aimCall ? aim : null
   const entryBearing = entryAim && 'bearing' in entryAim ? entryAim.bearing : null
   const entryWhy = entryAim && 'why' in entryAim ? entryAim.why : null
+  // The station on the rose (the header): line 2's bearing as Point sends it, and how far off it the
+  // antenna is, from the two whole numbers the pane shows, so the three agree.
+  const toward = entryBearing ? entryBearing.pointed.bearing : null
+  const off = toward != null && az != null ? gap(Math.round(az), Math.round(toward) % 360, true) : null
 
   const pointAtEntry = (call: string) => {
     // The mast goes where the station sends it now, so nothing this pane sent before may be handed
@@ -321,6 +334,14 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
             const inn = needle(a, R - 5)
             return <line key={a} x1={inn.x} y1={inn.y} x2={o.x} y2={o.y} className="rotor-tick" />
           })}
+          {/* The station's bearing, under both needles. Drawn at north and turned, so it scales with the
+              rose; it takes no clicks (styles.css), so a click on it slews as the rose does. */}
+          {toward != null && (
+            <g className="rotor-bearing" transform={`rotate(${toward} ${SIZE / 2} ${SIZE / 2})`}>
+              <line x1={SIZE / 2} y1={SIZE / 2} x2={SIZE / 2} y2={SIZE / 2 - R} className="rotor-bearing-line" />
+              <path d={`M ${SIZE / 2} ${SIZE / 2 - R} l -4 -7 h 8 z`} className="rotor-bearing-bug" />
+            </g>
+          )}
           {tgt && (
             <line
               x1={SIZE / 2}
@@ -444,6 +465,11 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
                 {entryBearing &&
                   ` ${Math.round(entryBearing.pointed.bearing) % 360}° (${fmtDistanceKm(entryBearing.km, units)})`}
               </span>
+              {off != null && (
+                <span className="rotor-aim-off mono" title={t('rotor.pane.aim.off.title', { call: aimCall, deg: off })}>
+                  {t('rotor.pane.aim.off', { deg: off })}
+                </span>
+              )}
               {entryWhy === 'unknownStation' && <span className="rotor-aim-why">{t('rotor.pane.aim.unknown')}</span>}
               {entryWhy === 'noGrid' && <span className="rotor-aim-why">{t('rotor.pane.aim.noGrid')}</span>}
               {entryWhy == null && (
