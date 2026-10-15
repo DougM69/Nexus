@@ -43,7 +43,6 @@ Nexus on Windows, and an ISS pass no longer retunes the radio you are using for 
 - **DXCC, WAS and WAZ by each contact's own DXCC number**, LoTW's first: a K1N contact counts as
   Navassa Island, the DXCC card shows the current count beside the total, Sicily counts as Italy,
   and Awards lists the contacts where LoTW and your log disagree.
-<!-- PENDING: fix/needed-board-by-record-dxcc-2026-10-14 -->
 - **The Needed board and the statistics count each contact the way Awards does.**
 - **A Timeline in Statistics:** your contacts over the past day, 30 days or year, one line per mode.
 - **The log entry keeps what you typed** in Phone, CW and Satellites when you switch pages.
@@ -62,7 +61,6 @@ Nexus on Windows, and an ISS pass no longer retunes the radio you are using for 
 <!-- PENDING: fix/cq-claimed-score-2026-10-14 -->
 - **CQ WW and CQ WPX logs claim their score**, apart from a single-band entry with contacts on
   another band.
-<!-- PENDING: feat/rotor-station-bearing-line-2026-10-14 -->
 - **The Rotor box draws the station in your log entry on its rose** and says how far the antenna
   is off it.
 <!-- PENDING: fix/yaesu-alc-scale-2026-10-14 -->
@@ -389,7 +387,6 @@ All of this is on the Flex native client (Beta), and none of it is checked on a 
   anything in Settings set the radio in use back to it. The level you set last, in the cockpit or
   in Settings, is the one Settings shows and keeps and the one the radio in use gets. NEEDS-BENCH:
   an FT-710 into a dummy load.
-<!-- PENDING: feat/rotor-station-bearing-line-2026-10-14 -->
 - **The Rotor box shows on its rose where the station in your log entry is.** Beside a cockpit, the
   bearing on the box's second line is drawn on the rose as well: a dotted amber line from the middle
   with a small marker on the rim, under the antenna's own needle. The second line also says how far
@@ -425,13 +422,12 @@ All of this is on the Flex native client (Beta), and none of it is checked on a 
   counts the CQ zone the contact's record carries. A LoTW download or an ADIF import keeps the DXCC
   number and CQ zone it brings for a contact already in your log. The Remote page counts the same
   way.
-<!-- PENDING: fix/needed-board-by-record-dxcc-2026-10-14 (when it lands, check this bullet and the
-     Known issues lines on the Country column and the Needed board against its CHANGELOG wording:
-     the places it changed and any it left) -->
 - **The Needed board and the statistics count each contact the way Awards does.** The Needed
   board's worked and confirmed entities, the statistics' entity counts, Worked All Provinces and the
-  First DX achievement read the same DXCC number, so the board does not call Navassa needed once a
-  K1N contact counts for it, and a contact from Sicily counts toward Italy there too.
+  First DX achievement read the same DXCC number, and the board's new-zone and new-state marks go by
+  the CQ zone and DXCC number your contact carries. So the board does not call Navassa needed once a
+  K1N contact counts for it, and a contact from Sicily counts toward Italy there too. A station on
+  the air has no contact in your log yet, so the board still places it by its call.
 - **A Timeline card in Statistics.** A line chart of your contacts over the past day (by hour), the
   past 30 days (by day) or the past year (by month), each ending with the current hour, day or month
   in UTC, as the log is. One line per mode, counted as the By mode card counts them (USB and LSB are
@@ -502,10 +498,6 @@ All of this is on the Flex native client (Beta), and none of it is checked on a 
 - The Timeline card is not on a Remote observer's Statistics yet.
 - The Logbook's Country column names the DXCC entity of the call, so a K1N contact reads United
   States there while Awards counts it as Navassa Island.
-<!-- DROP IF LANDED: fix/needed-board-by-record-dxcc-2026-10-14 -->
-- The Needed board, the statistics' entity counts, Worked All Provinces and the First DX achievement
-  still go by the call, so the Needed board can call Navassa needed after Awards counts a K1N
-  contact.
 <!-- DROP IF LANDED: feat/ft-tx-encoder-lockfree-2026-10-14 -->
 - An FT8 or FT4 over you change in the last seconds before your slot (a new TX frequency or
   message, a double-click) is built at the key and can still wait for a decode that is running, on
