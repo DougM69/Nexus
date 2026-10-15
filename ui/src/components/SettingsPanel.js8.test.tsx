@@ -338,3 +338,25 @@ async function clickSave() {
   )!
   fireEvent.click(save)
 }
+
+// JS8Call's two send options, off as it ships them: "Hold PTT between frames while there are more to
+// be transmitted" (HoldPTT, Configuration.cpp:2404) and "Allow Tx frequency changes while
+// transmitting" (TxQSYAllowed, :2305), its TX-offset half. A settings file from before them carries
+// neither key, and reads off.
+describe('Settings ▸ Digital ▸ JS8 ▸ Sending', () => {
+  it('Hold PTT between frames and Allow TX offset changes while sending read off, and save on', async () => {
+    const fs = await openJs8()
+    for (const label of ['Hold PTT between frames', 'Allow TX offset changes while sending']) {
+      const sw = control(fs, label)
+      expect(sw.getAttribute('aria-checked'), `${label}: off by default`).toBe('false')
+      fireEvent.click(sw)
+      expect(sw.getAttribute('aria-checked'), `${label}: on after a click`).toBe('true')
+    }
+    await clickSave()
+    await waitFor(() =>
+      expect(api.get('setSettings')).toHaveBeenCalledWith(
+        expect.objectContaining({ js8HoldPtt: true, js8TxOffsetWhileSending: true }),
+      ),
+    )
+  })
+})

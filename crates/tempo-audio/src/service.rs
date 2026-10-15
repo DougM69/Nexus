@@ -1024,6 +1024,11 @@ const TUNE_METER_DEADLINE_MS: u64 = 120;
 /// …and it is only ISSUED while the carrier's remaining lead can absorb that deadline with
 /// margin; a thinner lead waits a tick rather than risk a gap.
 const TUNE_METER_MIN_LEAD_MS: f32 = 150.0;
+/// How long past the boundary a JS8 PTT hold between frames lasts ([`RadioLoop::js8_ptt_hold_until`]):
+/// the next frame keys on the boundary's tick and takes the hold over long before this; a boundary
+/// that keys nothing unkeys this long after it. The 250 ms of a slot over's own tail
+/// ([`crate::slot::TX_TAIL_MS`]).
+const JS8_PTT_HOLD_GRACE_MS: f64 = crate::slot::TX_TAIL_MS;
 /// How long an over must have been running before a ZERO forward-power reading is believed.
 ///
 /// Po refreshes every ~600 ms (one meter per 150 ms cycle, round-robin over four), so 2 s puts
@@ -5457,6 +5462,31 @@ impl RadioLoop {
             .as_ref()
             .and_then(CatDaemon::flex)
             .is_some_and(crate::flex::FlexDaemon::keyed)
+    }
+
+    /// JS8's "Hold PTT between frames" (JS8Call's `HoldPTT`, off by default): when the slot over
+    /// this loop holds has reached its end and the engine says frames of its message follow
+    /// ([`Engine::js8_holds_ptt_between_frames`]), the time to hold the transmitter to instead of
+    /// dropping it now: the boundary the next frame keys at, and [`JS8_PTT_HOLD_GRACE_MS`] for that
+    /// key to land. The next frame's key replaces the hold with its own over; a boundary that keys
+    /// nothing leaves the hold to end at its deadline, where the ordinary deadline path unkeys.
+    ///
+    /// ⛔ Only a SLOT over is ever held ([`Self::holds_slot_over`]), and a hold is not one: its
+    /// deadline is not the over's, so a hold that has run out is never held again, whatever the
+    /// engine says, and a next frame refused at its boundary (the identity gone, say) unkeys
+    /// [`JS8_PTT_HOLD_GRACE_MS`] after it. Nor is a hold an over TX Off lets finish
+    /// (`slot_tx_until_ms` stays the frame's own), so TX Off and Stop TX both cut one at once.
+    fn js8_ptt_hold_until(&self, engine: &Arc<Mutex<Engine>>, now: f64) -> Option<f64> {
+        let t = self.tx_until_ms?;
+        if now < t || !self.holds_slot_over() {
+            return None;
+        }
+        let eng = engine_lock(engine);
+        if !eng.js8_holds_ptt_between_frames() {
+            return None;
+        }
+        let period_ms = eng.active_slot_secs() * 1000.0;
+        Some((t / period_ms).ceil() * period_ms + JS8_PTT_HOLD_GRACE_MS)
     }
 
     /// Whether this loop's PTT hold is a slot over's (FT8, FT4, JS8 and the other timed-slot
@@ -11477,6 +11507,13 @@ impl RadioLoop {
                 backend.flush_output();
                 self.slot_audio_stop = None;
             }
+        }
+
+        // JS8's Hold PTT between frames (off by default): a frame's over that has reached its end
+        // with more of its message to go holds the transmitter to the next frame's key instead of
+        // dropping here (`js8_ptt_hold_until`).
+        if let Some(hold) = self.js8_ptt_hold_until(engine, now) {
+            self.tx_until_ms = Some(hold);
         }
 
         // Drop PTT once the transmitted audio has played out (+ a small tail). Do NOT

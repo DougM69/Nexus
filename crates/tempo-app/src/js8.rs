@@ -1188,6 +1188,10 @@ impl Engine {
     }
 }
 
+/// JS8's send mechanics: Hold PTT between frames and the TX offset while sending.
+#[path = "js8_send.rs"]
+mod send;
+
 #[cfg(test)]
 mod tests {
     use super::*;

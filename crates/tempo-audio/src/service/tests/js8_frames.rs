@@ -35,15 +35,27 @@ struct Js8Message {
 
 impl Js8Message {
     /// A station on the 20 m JS8 watering hole at `speed` (an index into `Js8Speed::ALL`), TX on,
-    /// with `text` queued and nothing sent yet.
+    /// with `text` queued and nothing sent yet, and Hold PTT between frames as it ships: off.
     fn new(speed: u8, text: &str) -> Js8Message {
+        Js8Message::holding(speed, text, false)
+    }
+
+    /// …with Hold PTT between frames `hold`.
+    fn holding(speed: u8, text: &str, hold: bool) -> Js8Message {
         let peer = retuning_peer(14_078_000, "PKTUSB", |line, state| {
             (line == "T 1").then(|| {
                 state.keyed = true;
                 "RPRT 0\n".to_string()
             })
         });
-        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let engine = Arc::new(Mutex::new(Engine::with_settings(
+            tempo_app::settings::Settings {
+                mycall: "KD9TAW".into(),
+                mygrid: "EN52".into(),
+                js8_hold_ptt: hold,
+                ..Default::default()
+            },
+        )));
         let (period_ms, frames) = {
             let mut e = engine.lock().unwrap();
             e.set_license_class("extra");
@@ -168,4 +180,141 @@ fn a_js8_message_unkeys_between_its_frames_and_keys_again_at_each_boundary() {
             "{speed:?}: unkeyed {gap} ms between two frames"
         );
     }
+}
+
+/// A message long enough to take several frames at Normal.
+const LONG: &str =
+    "TEST MESSAGE WITH MULTIPLE FRAMES, LONG ENOUGH TO TAKE SEVERAL OVERS AT EVERY SPEED";
+
+/// ⭐ HOLD PTT BETWEEN FRAMES ON: THE RADIO IS KEYED FROM THE FIRST FRAME TO THE END OF THE LAST. At
+/// each speed, the first frame keys at its boundary and nothing unkeys until the last frame's own
+/// end; each later frame's boundary asks for PTT again over the held key, as JS8Call asks again for
+/// every frame (`prepareSending` → `emitPTT(true)`, mainwindow.cpp:2560-2572). Off, the scene above.
+#[test]
+fn with_hold_ptt_on_a_js8_message_stays_keyed_from_its_first_frame_to_the_end_of_its_last() {
+    for speed in Js8Speed::ALL {
+        let mut m = Js8Message::holding(speed.index(), "TEST MESSAGE WITH MULTIPLE FRAMES", true);
+        assert!(
+            m.frames >= 2,
+            "{speed:?}: premise: a message of several frames"
+        );
+        let p = m.period_ms;
+        let ptt = m.ptt_until(m.frames as f64 * p + p);
+        let last = (m.frames - 1) as f64 * p;
+        let mut want: Vec<(f64, String)> = (0..m.frames)
+            .map(|k| (k as f64 * p, "T 1".to_string()))
+            .collect();
+        want.push((unkey_tick(speed, m.t0, last, p), "T 0".to_string()));
+        assert_eq!(
+            ptt, want,
+            "{speed:?}: the PTT lines of a {}-frame message",
+            m.frames
+        );
+    }
+}
+
+/// A held key ends at once when the operator stops between two frames: Stop TX (the hard stop's
+/// abort) and TX Off (the TX-off cut: the hold is no over TX Off lets finish) both unkey on the next
+/// tick, 14.02 s into the period, and nothing keys after. Held, the key would have run to the next
+/// frame at 15 s.
+#[test]
+fn a_held_js8_key_drops_at_once_when_stop_tx_or_tx_off_comes_between_frames() {
+    for stop in ["Stop TX", "TX Off"] {
+        let mut m = Js8Message::holding(1, LONG, true);
+        assert!(m.frames >= 3, "premise: a message of several frames");
+        assert_eq!(
+            m.ptt_until(14_000.0),
+            [(0.0, "T 1".to_string())],
+            "{stop}: premise: keyed, and still held past the frame's end at 13.40 s"
+        );
+        {
+            let mut e = m.engine.lock().unwrap();
+            match stop {
+                "Stop TX" => e.halt_tx(),
+                _ => e.set_tx_enabled(false),
+            }
+        }
+        assert_eq!(
+            m.ptt_until(3.0 * 15_000.0),
+            [(14_020.0, "T 0".to_string())],
+            "{stop}: unkeyed on the next tick, and nothing keyed after"
+        );
+    }
+}
+
+/// ⛔ A HOLD IS NEVER HELD AGAIN. When the boundary keys nothing while frames of the message are
+/// still queued (here a clock repair holds transmit, which leaves the queue as it is), the held key
+/// ends 250 ms after that boundary, on the tick at 15.26 s, and stays down: a hold that has run out
+/// is not a slot over, so it is never held again whatever the engine says.
+#[test]
+fn a_held_js8_key_whose_next_frame_does_not_key_drops_just_after_the_boundary_and_stays_down() {
+    let mut m = Js8Message::holding(1, LONG, true);
+    assert!(m.frames >= 3, "premise: a message of several frames");
+    assert_eq!(
+        m.ptt_until(14_000.0),
+        [(0.0, "T 1".to_string())],
+        "premise: keyed, and still held past the frame's end at 13.40 s"
+    );
+    m.engine
+        .lock()
+        .unwrap()
+        .hold_tx_for_clock_repair(std::time::Instant::now() + std::time::Duration::from_secs(600));
+    assert_eq!(
+        m.ptt_until(3.0 * 15_000.0),
+        [(15_260.0, "T 0".to_string())],
+        "unkeyed 250 ms after the boundary that keyed nothing, and nothing after"
+    );
+    assert_eq!(
+        m.engine.lock().unwrap().js8_state().queue.len(),
+        m.frames - 1,
+        "premise: the rest of the message is still queued"
+    );
+}
+
+/// The dial leaves the licence's privileges while a frame is on the air: its key is not held past
+/// its end (13.40 s), since the next frame could not key there, and the next boundary drops the rest
+/// of the message (`plan_js8_tx`).
+#[test]
+fn a_js8_key_is_not_held_once_the_dial_is_outside_the_privileges() {
+    let mut m = Js8Message::holding(1, LONG, true);
+    assert!(m.frames >= 3, "premise: a message of several frames");
+    assert_eq!(m.ptt_until(5_000.0), [(0.0, "T 1".to_string())], "premise");
+    {
+        let mut e = m.engine.lock().unwrap();
+        e.set_license_class("general");
+        e.set_frequency(14.020, "20m", "USB");
+        assert!(!e.tx_allowed(), "premise: 14.020 MHz is outside General");
+    }
+    assert_eq!(
+        m.ptt_until(3.0 * 15_000.0),
+        [(13_400.0, "T 0".to_string())],
+        "unkeyed at the frame's own end, and nothing keyed after"
+    );
+}
+
+/// Hold PTT holds within a message, never across two (JS8Call counts the frames of the one message
+/// going out): two one-frame messages queued back to back (a CQ, then a query) key and unkey once
+/// each.
+#[test]
+fn hold_ptt_never_holds_across_two_messages() {
+    let mut m = Js8Message::holding(1, "CQ CQ CQ EN52", true);
+    assert_eq!(m.frames, 1, "premise: a one-frame message");
+    {
+        let mut e = m.engine.lock().unwrap();
+        e.js8_send(None, "W1AW SNR?".into()).unwrap();
+        assert_eq!(
+            e.js8_state().queue.len(),
+            2,
+            "premise: two one-frame messages"
+        );
+    }
+    assert_eq!(
+        m.ptt_until(2.0 * 15_000.0),
+        [
+            (0.0, "T 1".to_string()),
+            (13_400.0, "T 0".to_string()),
+            (15_000.0, "T 1".to_string()),
+            (28_400.0, "T 0".to_string()),
+        ]
+    );
 }

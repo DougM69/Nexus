@@ -1779,6 +1779,14 @@ impl Station {
         (held, operator)
     }
 
+    /// Whether more frames of the message on the air follow the one handed out last: the outbox
+    /// head is part way through a message (JS8Call's `m_txFrameCount > 0` once a frame has gone,
+    /// mainwindow.cpp:2919-2932). Never across two messages: a message's last frame pops it, so a
+    /// head with a frame handed out still has frames to go.
+    pub fn frames_follow(&self) -> bool {
+        self.outbox.front().is_some_and(|o| o.cursor > 0)
+    }
+
     pub fn note_tx_done(&mut self, f: &TxFrame, now_ms: u64) {
         // Display state, updated for EVERY origin.
         self.last_tx_display = Some(f.display.clone());

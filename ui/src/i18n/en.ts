@@ -7812,6 +7812,13 @@ export const EN = {
   'settings.js8.groups.label': 'Groups',
   'settings.js8.groups.hint':
     'The @GROUP names you belong to, comma-separated — a message to one of them counts as addressed to you. @ALLCALL is everyone and is always on.',
+  'settings.js8.sending.title': 'Sending',
+  'settings.js8.holdPtt.label': 'Hold PTT between frames',
+  'settings.js8.holdPtt.hint':
+    'Off by default, as in JS8Call. On, the radio stays keyed from the end of one frame of a message until the next frame starts, instead of dropping PTT after each frame and keying again. PTT still drops after the last frame, and at once when you stop transmitting.',
+  'settings.js8.txOffsetWhileSending.label': 'Allow TX offset changes while sending',
+  'settings.js8.txOffsetWhileSending.hint':
+    'Off by default, as in JS8Call: while a message is waiting to go or going out, the TX offset stays where it is. On, you can move it, and the frames still to go are sent at the new offset.',
 
   // ── Settings ▸ SSTV ─────────────────────────────────────────────────────────────────
   // The transmit-mode picker's own rows are built from `SSTV_TX_MODES` — a mode name, its

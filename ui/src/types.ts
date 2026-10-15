@@ -4023,6 +4023,13 @@ export interface Settings {
   js8Status: string
   /** Joined @GROUP names the station answers directed traffic for. */
   js8Groups: string[]
+  /** JS8Call's "Hold PTT between frames" (off by default): the radio stays keyed from the end of
+   * one frame of a message to the key of its next, while frames of it remain. */
+  js8HoldPtt: boolean
+  /** JS8Call's "Allow Tx frequency changes while transmitting", for the TX offset (off by
+   * default): off, the offset cannot be moved while a message is queued or going out; on, a move
+   * applies from the next frame. */
+  js8TxOffsetWhileSending: boolean
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number

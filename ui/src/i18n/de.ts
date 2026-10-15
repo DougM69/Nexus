@@ -5307,6 +5307,12 @@ export const DE: PartialCatalog = {
   "settings.js8.status.hint": "Was eine STATUS?-Anfrage zurückbekommt. Leer lassen für die JS8Call-Form: IDLE, die Leerlaufminuten und der Programmname.",
   "settings.js8.groups.label": "Gruppen",
   "settings.js8.groups.hint": "Die @GROUP-Namen, zu denen du gehörst, durch Kommas getrennt — eine Nachricht an eine davon gilt als an dich gerichtet. @ALLCALL sind alle und ist immer an.",
+  // JS8 send options: MACHINE TRANSLATIONS, for a native speaker to check.
+  "settings.js8.sending.title": "Senden",
+  "settings.js8.holdPtt.label": "PTT zwischen den Frames halten",
+  "settings.js8.holdPtt.hint": "Standardmäßig aus, wie in JS8Call. Eingeschaltet bleibt das Funkgerät vom Ende eines Frames einer Nachricht bis zum Beginn des nächsten getastet, statt nach jedem Frame PTT abfallen zu lassen und neu zu tasten. Nach dem letzten Frame fällt PTT trotzdem ab, und sofort, wenn du das Senden stoppst.",
+  "settings.js8.txOffsetWhileSending.label": "TX-Offset beim Senden ändern erlauben",
+  "settings.js8.txOffsetWhileSending.hint": "Standardmäßig aus, wie in JS8Call: Solange eine Nachricht auf das Senden wartet oder gesendet wird, bleibt der TX-Offset, wo er ist. Eingeschaltet kannst du ihn verschieben, und die noch ausstehenden Frames gehen auf dem neuen Offset hinaus.",
   "settings.sstv.legend": "SSTV",
   "settings.sstv.receiving.title": "Empfangen",
   "settings.sstv.rxAutoArm.label": "Empfang starten, wenn SSTV geöffnet wird",

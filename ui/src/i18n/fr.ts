@@ -6063,6 +6063,12 @@ export const FR: PartialCatalog = {
   "settings.js8.status.hint": "Ce que renvoie une requête STATUS?. Laissez vide pour la forme JS8Call : IDLE, les minutes d’inactivité et le nom de l’application.",
   "settings.js8.groups.label": "Groupes",
   "settings.js8.groups.hint": "Les noms @GROUP dont vous faites partie, séparés par des virgules — un message à l’un d’eux compte comme adressé à vous. @ALLCALL, c’est tout le monde, et il est toujours actif.",
+  // JS8 send options: MACHINE TRANSLATIONS, for a native speaker to check.
+  "settings.js8.sending.title": "Envoi",
+  "settings.js8.holdPtt.label": "Maintenir le PTT entre les trames",
+  "settings.js8.holdPtt.hint": "Désactivé par défaut, comme dans JS8Call. Activé, la radio reste en émission de la fin d’une trame d’un message jusqu’au début de la suivante, au lieu de relâcher le PTT après chaque trame puis de le réenclencher. Le PTT est tout de même relâché après la dernière trame, et immédiatement si vous arrêtez l’émission.",
+  "settings.js8.txOffsetWhileSending.label": "Autoriser le changement du décalage TX pendant l’envoi",
+  "settings.js8.txOffsetWhileSending.hint": "Désactivé par défaut, comme dans JS8Call : tant qu’un message attend de partir ou part, le décalage TX reste où il est. Activé, vous pouvez le déplacer, et les trames restantes partent sur le nouveau décalage.",
   "settings.jt65.hint": "Le mode classique des signaux faibles et du rebond lunaire, décodé et émis. Les messages sont au format ancien de 22 caractères, pas celui de 37 caractères qu'utilisent FT8 et consorts.",
   "settings.jt65.legend": "JT65 — EME classique",
   "settings.jt65.submode.a": "A — standard HF, le plus étroit",

@@ -4922,6 +4922,12 @@ export const JA: PartialCatalog = {
   "settings.js8.status.hint": "STATUS? への返答。空欄なら JS8Call の形式(IDLE、アイドル分数、アプリ名)を送ります。",
   "settings.js8.groups.label": "グループ",
   "settings.js8.groups.hint": "所属する @GROUP 名をカンマ区切りで — そのグループ宛てのメッセージは自局宛てとして扱います。@ALLCALL は全局宛てで常にオンです。",
+  // JS8 send options: MACHINE TRANSLATIONS, for a native speaker to check.
+  "settings.js8.sending.title": "送信",
+  "settings.js8.holdPtt.label": "フレーム間で PTT を保持",
+  "settings.js8.holdPtt.hint": "JS8Call と同じく既定はオフ。オンにすると、メッセージのあるフレームの終わりから次のフレームの開始まで送信状態を保ち、フレームごとに PTT を切って入れ直しません。最後のフレームの後と、送信を止めたときには PTT を切ります。",
+  "settings.js8.txOffsetWhileSending.label": "送信中の TX オフセット変更を許可",
+  "settings.js8.txOffsetWhileSending.hint": "JS8Call と同じく既定はオフ：メッセージの送信待ちまたは送信中は TX オフセットを動かしません。オンにすると動かせ、まだ送っていないフレームは新しいオフセットで送信します。",
   "settings.sstv.legend": "SSTV",
   "settings.sstv.receiving.title": "受信",
   "settings.sstv.rxAutoArm.label": "SSTVを開いたら受信開始",
