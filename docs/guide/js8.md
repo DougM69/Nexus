@@ -35,36 +35,63 @@ rig reports a tuner; the **TX On / TX Off** latch; **Stop TX**; and **⊞ Panels
 both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
 500–1000 Hz sub-band by convention.
 
-**The panes** (each removable from ⊞ Panels):
+**The panes** (each removable from ⊞ Panels). The three lists and the Inbox are JS8Call's own;
+each list's **⋯** in its title bar holds what JS8Call's View menu and right-click menus hold, and
+each row has a **⋯** of its own (a right-click on the row opens it too).
 
-- **Activity** — every frame decoded at every enabled speed, one row each: UTC, the
-  speed letter (E Slow · A Normal · B Fast · C JS8 40 · I JS8 60, JS8Call's ALL.TXT letters), the
-  audio offset, the SNR, and the message exactly as JS8Call would print it. Rows
-  addressed to you carry a bar; your own transmissions are tinted; faint rows are
-  low-confidence copy; italic rows closed without their last frame. Double-click a row
-  to write to that station.
-- **Stations** — everyone heard, with grid, SNR, offset, speed, age, and chips for a
-  recent heartbeat, a recent CQ, and any messages you hold for them. A station is kept as it was
-  heard, as in JS8Call: W1AW and W1AW/P are two rows, each with its own report, and a message
-  from W1AW/P comes from W1AW/P in the Inbox. Click a callsign to
-  address it; the five quick buttons send **SNR? · GRID? · INFO? · HEARING? · QUERY MSGS**
-  to that station, which answers by itself if its auto-reply is on. **Store…** at the end of a
-  row leaves a message at your station for that station, as JS8Call's Store Message does: it
-  waits in the Inbox, from your call, and goes out only when the station asks for it (QUERY
-  MSGS, then QUERY MSG n). Storing it sends nothing.
-- **Inbox** — messages addressed to you, and **MSG TO:** messages you are holding for
-  someone else until they collect them (store and forward). Mark read, delete. A message held
+- **RX** — JS8Call's RX pane: what is sent on your RX offset, and what is addressed to you or
+  a group you joined wherever it is in the passband, each message on one line as its frames
+  arrive ("time · offset · text"), closed by **♢** after its last frame. **……** stands where a
+  frame did not come within one and a half periods. Your own transmissions print here too,
+  tinted, and lines addressed to you carry a bar. Double-click a line to write to the station
+  that opens it. **⋯** ▸ **Clear** empties it; **Clear all lists…** empties the three lists after
+  asking.
+- **Band activity** — one row per audio offset holding every frame heard there (the last ten),
+  joined, with ♢ after each message. Columns: offset, age, SNR, and from **⋯ ▸ Show columns**
+  time delta and speed too, as JS8Call's; **⋯ ▸ Sort by** offers JS8Call's orders; **⋯ ▸ Show
+  band heartbeats and ACKs** (on) hides heartbeats and their acknowledgements. CQ rows are
+  tinted green, traffic to you carries a bar, and the two highlight lists in Settings tint their
+  words. Double-click a row to move RX there. A row's **⋯**: **Jump to … Hz** (both your RX and
+  TX offsets, as JS8Call's one offset; not while a message is queued or going out), **Jump to …
+  speed**, **Remove activity**.
+- **Stations** — JS8Call's call list: `@ALLCALL` and your groups on top, then everyone heard,
+  sorted by callsign (or any of JS8Call's orders from **⋯ ▸ Sort by**), a station with a
+  message for you first. A station is kept as it was heard, as in JS8Call: W1AW and W1AW/P are
+  two rows, each with its own report, and a message from W1AW/P comes from W1AW/P in the Inbox.
+  One mark per station: **✕** blocked, **⚑** a message for you, **★**
+  hearing you (it sent something to your call), **☎** called CQ in the last five minutes,
+  **⚟** heard only through a relay. Columns as JS8Call's: callsign, age, SNR, offset, worked
+  before ✓, logged name and comment, and from **⋯ ▸ Show columns** time delta, speed, grid,
+  distance and azimuth. Click a callsign to address it; the five quick buttons send **SNR? ·
+  GRID? · INFO? · HEARING? · QUERY MSGS** to that station, which answers by itself if its
+  auto-reply is on; **HB** and **✉ n** chips show a heartbeat and messages you hold for it. A
+  row's **⋯**: jump to its offset or speed, **Show message inbox**, **Pin to the top**, **Add new
+  station or group…** (a call, or a `@GROUP` to join), **Remove this station** (until it is
+  heard again) or **Remove this group** (leaves it; on `@ALLCALL` it turns on Settings' *Do not
+  participate in the @ALLCALL group* and the row goes, and adding `@ALLCALL` turns it off and
+  brings the row back, as in JS8Call), **Block this station** (Settings' RX block list).
+  **Store…** at the end of a row leaves a message at your station for that station, as
+  JS8Call's Store Message does: it waits in the Inbox, from your call, and goes out only when
+  the station asks for it (QUERY MSGS, then QUERY MSG n). Storing it sends nothing.
+- **Inbox** — JS8Call's message panel: messages addressed to you, and **MSG TO:** messages you
+  are holding for someone else until they collect them (store and forward). Newest first;
+  click a heading to sort by it. **Messages:** shows one station's. Clicking a message reads
+  it; tick several and **Delete** them together (or press Delete). **Reply** puts
+  `<path> MSG [MESSAGE]` in the compose box, the path the message came by, with `[MESSAGE]`
+  picked for you to type over; nothing is sent until you send it, and while a message of yours
+  is going out it puts nothing in, as JS8Call adds no text then. A new message to you puts a
+  notice up for five minutes, as JS8Call's box stays, with **Show** to open it. A message held
   for one station stays until you delete it, as in JS8Call. One left for a group
   (`MSG TO:@GROUP`, a group you joined) is offered for 48 hours to every station that sends
   QUERY MSGS to the group, once to each, and handed over whenever a station asks for it with
   QUERY MSG n, again too, as in JS8Call. A long one keeps its `FROM <call>`: what does not fit
   one reply is cut from the end of the message, never from the `FROM`. The inbox keeps at most 100 messages
   (and 64 KB) of yours and as many held for others; when it is full, a message already handed
-  over goes first, then the oldest, and a note at the top of the Inbox says which message went
-  and why until you press **Clear notes**. A held message is handed over in one transmission,
-  which holds at most 19 frames at Slow, 39 at Normal, 59 at Fast, 99 at JS8 40 and 149 at
-  JS8 60; one that needs more is not offered or handed over until you change to a speed it fits,
-  and its row says so and names that speed.
+  over goes first, then the oldest, and a note above the messages says which message went and
+  why until you press **Clear notes**. A held message is handed over in one transmission, which
+  holds at most 19 frames at Slow, 39 at Normal, 59 at Fast, 99 at JS8 40 and 149 at JS8 60; one
+  that needs more is not offered or handed over until you change to a speed it fits, and its row
+  says so and names that speed.
 - **Log** — the log strip, prefilled from the station you last addressed, as JS8Call's log
   dialog is: their SNR at your station in **RST sent**, the start time when you selected
   them (put their call in the To box), and the frequency the dial plus your TX offset. A JS8
@@ -92,7 +119,11 @@ Every speed decodes at once, exactly as JS8Call 3.0's multi-decode does: a Slow 
 speeds in Settings if a small machine struggles. Settings saved before JS8 60 arrived keep the
 four speeds they had; tick **JS8 60** under *Decode these speeds* to add it. A long message
 arrives one frame per period and is stitched together by audio offset — you see the frames
-arrive in Activity, and the finished message in Inbox if it was for you.
+arrive in Band activity (and in RX when they are on your offset or for you), and the finished
+message in Inbox if it was for you. Settings ▸ Digital ▸ JS8 holds JS8Call's lists and marks:
+the callsigns to hide in the RX pane, two highlight lists, the ♢ and …… marks, and a sound for
+each of a CQ, a heartbeat, an ACK for you, a message to you, a message in your Inbox, a new
+callsign and one you have worked (all off, as in JS8Call).
 
 **JS8 60** is JS8Call 3.0's newest speed, and JS8Call calls it experimental: 4-second
 periods, a signal 250 Hz wide, each frame about 2.6 s on the air, so the band carries a

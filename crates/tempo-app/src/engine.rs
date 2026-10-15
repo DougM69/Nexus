@@ -55760,6 +55760,8 @@ mod tests {
             "KD9TAW: @HB HEARTBEAT EN52",
             period_start_ms,
             e.tx_offset_hz(),
+            true,
+            true,
         );
         let lines = e.take_all_txt_pending();
         assert_eq!(lines.len(), 1, "one Tx line: {lines:?}");
@@ -55790,6 +55792,8 @@ mod tests {
             "KD9TAW: @ALLCALL CQ CQ CQ EN52",
             period_start_ms + 15_000,
             e.tx_offset_hz(),
+            true,
+            true,
         );
         assert!(e.take_all_txt_pending().is_empty());
         assert_eq!(

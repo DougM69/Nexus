@@ -4099,6 +4099,17 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       unavailableCollections.delete('fieldDay');await click(button('Refresh contest'))
       await untilThroughLapse(`document.querySelector('.fieldday input:not([type=checkbox])')?.value==='K9TEST'`)
     }
+    // The JS8 cockpit takes what its first poll finds as seen; a message to me that comes after it
+    // raises a notice that stays five minutes, its Show button over the content the reachability
+    // sweep below hit-tests. So the station's mail is all there before the view opens, as a
+    // journal's is, and no run depends on whether the first poll came before the fixture grew.
+    if(applicationVersion>=11){
+      js8Fixture.state.activity.push(...Array.from({length:76},(_,i)=>({...js8Fixture.state.activity[i%4],text:`JS8 HISTORY ${i+1}`,atMs:js8Start+i,freqHz:600+i*20})))
+      js8Fixture.state.inbox.push(...Array.from({length:39},(_,i)=>({...js8Fixture.state.inbox[0],id:i+2,text:`JS8 MAIL ${i+1}`})))
+      js8Fixture.state.stations.push(...Array.from({length:38},(_,i)=>({...js8Fixture.state.stations[0],call:`K1JS${i}`})))
+      for(const row of js8Fixture.state.stations)collections.js8Context.meta.history[row.call]??={count:0,lastUnix:null,grid:'',name:'',comment:''}
+      js8Fixture.state.queue.push(...Array.from({length:38},(_,i)=>({...js8Fixture.state.queue[1],display:`JS8 QUEUE ${i+1}`})))
+    }
     await click(button('JS8'))
     if(applicationVersion<11){
       await until(`!!document.querySelector('.remote-view-unavailable')`)
@@ -4106,20 +4117,20 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(js8Queries.length,0)
       assert.equal(applicationTraffic.byCommand.get_js8_state??0,0)
     }else{
-      js8Fixture.state.activity.push(...Array.from({length:76},(_,i)=>({...js8Fixture.state.activity[i%4],text:`JS8 HISTORY ${i+1}`,atMs:js8Start+i,freqHz:600+i*20})))
-      js8Fixture.state.inbox.push(...Array.from({length:39},(_,i)=>({...js8Fixture.state.inbox[0],id:i+2,text:`JS8 MAIL ${i+1}`})))
-      js8Fixture.state.stations.push(...Array.from({length:38},(_,i)=>({...js8Fixture.state.stations[0],call:`K1JS${i}`})))
-      for(const row of js8Fixture.state.stations)collections.js8Context.meta.history[row.call]??={count:0,lastUnix:null,grid:'',name:'',comment:''}
-      js8Fixture.state.queue.push(...Array.from({length:38},(_,i)=>({...js8Fixture.state.queue[1],display:`JS8 QUEUE ${i+1}`})))
       await until(`document.querySelectorAll('.js8-row').length===80 && document.querySelector('.js8-stations')?.textContent.includes('COMPLETE LOG')`)
       assert.equal(await evaluate(`document.querySelectorAll('.js8-cockpit').length`),1)
       assert.equal(await evaluate(`document.querySelectorAll('.js8-cockpit .waterfall-wrap').length`),1)
       assert.equal(await evaluate(`!!document.querySelector('.grid-stations,.grid-center .conversation')`),false)
       assert.ok(await evaluate(`[...document.querySelectorAll('.js8-speed-chip,.js8-query,.js8-inbox-act,.js8-send,.js8-cq,.js8-hb,.js8-arm,.js8-confirm-yes,.js8-confirm-no,.js8-drop')].length>15 && [...document.querySelectorAll('.js8-speed-chip,.js8-query,.js8-inbox-act,.js8-send,.js8-cq,.js8-hb,.js8-arm,.js8-confirm-yes,.js8-confirm-no,.js8-drop')].every(e=>e.disabled)`))
-      await click(`document.querySelector('.js8-station-call')`)
+      // The call list opens with @ALLCALL and the groups, then the stations in JS8Call's callsign order.
+      const js8W1aw=`[...document.querySelectorAll('.js8-station:not(.js8-group)')].find(r=>r.querySelector('.js8-station-call')?.textContent==='W1AW')`
+      await click(`${js8W1aw}.querySelector('.js8-station-call')`)
       await until(`document.querySelector('.js8-to')?.value==='W1AW' && document.querySelector('.js8-cockpit .le-call')?.value==='W1AW'`)
-      await click(`document.querySelector('.js8-pin')`)
-      assert.equal(await evaluate(`document.querySelector('.js8-pin').getAttribute('aria-pressed')`),'true')
+      // ★ is JS8Call's "hearing you" mark; a pin is the row menu's, a real gesture through it.
+      await click(`${js8W1aw}.querySelector('.js8-row-menu')`)
+      const js8PinItem=`[...document.querySelectorAll('[role=menuitem]')].find(e=>e.textContent==='Pin to the top')`
+      await click(js8PinItem)
+      await until(`document.querySelector('.js8-station.pinned .js8-station-call')?.textContent==='W1AW'`)
       for(const [width,height,zoom] of [[360,740,1],[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],[1200,1390,1],[3440,1440,1],[1024,768,0.8],[1280,800,1.75],[390,844,1.75]])for(const theme of ['dark','light']){
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)

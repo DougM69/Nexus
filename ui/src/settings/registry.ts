@@ -363,7 +363,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'hold ptt', 'ptt between frames', 'tx offset', 'offset while sending',
       'js8 frequencies', 'frequency list', 'calling frequencies', '1.8435', '5.363', 'last used frequency',
       'band schedule', 'frequency schedule', 'switch bands', 'band hopping',
-      'spot', 'spotting', 'js8net', 'aprsis', 'aprs-is', 'never spot', 'aprs relay'],
+      'spot', 'spotting', 'js8net', 'aprsis', 'aprs-is', 'never spot', 'aprs relay',
+      'rx block list', 'block list', 'hide callsigns', 'highlight', 'end of transmission', 'missing frame',
+      'js8 sounds', 'notifications'],
   },
   {
     id: 'sstv',

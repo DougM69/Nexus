@@ -230,6 +230,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   acknowledged on APRS-IS in that station's name and keyed to it as `@APRSIS MSG TO:`, only while
   TX is on and through every transmit guard. A message relayed to you this way lands in your JS8
   Inbox from APRS. NEEDS-BENCH before it is used on the air.
+- **JS8: the RX pane, Band activity and the call list work as JS8Call 3.0.3's.** The RX pane
+  shows what is sent on your RX offset and what is addressed to you or your groups anywhere in
+  the passband, each message on one line as it arrives, with ♢ after its last frame, …… where a
+  frame went missing, and your own transmissions among them. Band activity keeps every frame
+  heard at an offset, joined, and can hide heartbeats and their ACKs. The call list puts
+  `@ALLCALL` and your groups on top and gives each station JS8Call's mark: ✕ blocked, ⚑ a
+  message for you, ★ hearing you, ☎ a CQ in the last five minutes, ⚟ heard through a relay. Each
+  list's ⋯ chooses its columns and its order (any of JS8Call's sorts) and clears it, or every
+  list. Each row's ⋯, or a right-click on it, has JS8Call's row menu: jump to the row's offset
+  (your RX and TX offsets both, as JS8Call has one offset; not while a message is queued) or its
+  speed, show the station's messages, add a station or a group, remove one (a group is left;
+  removing @ALLCALL turns on "Do not participate in the @ALLCALL group" in Settings, and adding
+  it turns that off), block one, remove an offset's activity. Needs a bench check: a jump moves
+  where your next message keys, as a Ctrl-click on the waterfall does, and removing @ALLCALL
+  changes what Nexus answers.
+- **JS8: the Inbox works as JS8Call's message panel.** Click a message to read it; tick several
+  and delete them together; sort by any column; show one station's messages; **Reply** puts
+  `<path> MSG [MESSAGE]` in the compose box with `[MESSAGE]` ready to type over, and sends
+  nothing; while a message of yours is going out it puts nothing in, as JS8Call. A new message to
+  you puts a notice up for five minutes, as JS8Call's box stays, with **Show** to open it.
+- **JS8: JS8Call's list settings and sounds.** Settings ▸ Digital ▸ JS8 gains the callsigns to hide
+  in the RX pane, two highlight lists (words or callsigns, tinted in Band activity and the call
+  list), the end and missing-frame marks (♢ and ……), and a sound for a CQ, a heartbeat, an ACK
+  for you, a message to you, a message in your Inbox, a new callsign and a callsign you have
+  worked. All as JS8Call ships them: the lists empty, every sound off. Nexus plays a tone of its
+  own for each where JS8Call plays a file you pick.
 
 ### Changed
 
@@ -358,6 +384,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JS8 on 160 m is now 1.8435 MHz, and 60 m (5.363 MHz) is in the JS8 band picker**, as in
   JS8Call 3. Opening JS8 on 160 m tunes 1.8435 instead of 1.842, and on 60 m it now tunes 5.363
   (60 m is channelised and differs by country: check your own band plan).
+- **JS8: the Activity pane is now JS8Call's RX pane, and ★ is JS8Call's "hearing you".** The
+  running list of every frame is gone from it; every frame is in Band activity. A station is
+  pinned to the top from its row's ⋯ now. The call list sorts by callsign and shows JS8Call's
+  columns, as JS8Call ships them; grid, distance, azimuth, speed and time delta are a tick away in
+  its ⋯ ▸ Show columns, and Band activity's time delta and speed in its own.
 
 ### Fixed
 

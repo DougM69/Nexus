@@ -222,6 +222,11 @@ const SHARED = [
   // on the band right now — one click to remake, meaningless tomorrow — so it does not join the
   // watch list and the chase sets in DURABLE_KEYS (features/js8Pins).
   'nexus.js8.pins',
+  // The JS8 lists' view choices (columns, orders, labels, heartbeats shown) and what was cleared,
+  // removed or added (features/js8View). SHARED and not durable, for the pins' reason: how this
+  // operator draws the lists is about the operator, not a window, and it is one click to remake.
+  'nexus.js8.view',
+  'nexus.js8.lists',
   'nexus.memory.bank.v1',
   'nexus.memory.bank.v2',
   'nexus.needed.autopop',

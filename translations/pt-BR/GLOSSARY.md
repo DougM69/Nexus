@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 7,281 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 7,391 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -24,11 +24,11 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | QSO / QSOs | 114 / 60 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 98 | ARRL's Logbook of The World — a service name. |
 | CAT | 95 | Computer Aided Transceiver — the radio control protocol. |
-| TX / RX | 131 / 75 | Transmit and receive. Printed on the radio itself. |
+| TX / RX | 131 / 85 | Transmit and receive. Printed on the radio itself. |
 | CW | 78 | The mode. Never "telegrafia" in a mode picker. |
 | QRZ | 75 | Both the Q-code and the callsign lookup site. |
-| CQ | 97 | The call. Translating it would be strange on the air and on screen. |
-| MHz / kHz / Hz | 85 / 22 / 57 | SI units. Never translated, never re-punctuated. |
+| CQ | 99 | The call. Translating it would be strange on the air and on screen. |
+| MHz / kHz / Hz | 85 / 22 / 59 | SI units. Never translated, never re-punctuated. |
 | Doppler | 62 | The effect, in satellite work. Same word, proper name. |
 | DX | 70 | Distant station / distance working. |
 | ADIF | 54 | The log file format. |
@@ -95,26 +95,26 @@ word in, and use only that word in the CSV.
 
 | English | Rows | Where it turns up | Your pt-BR word |
 |---|---:|---|---|
-| band | 377 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
+| band | 381 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
 | radio | 315 | The rig itself, and the radio list in Settings. | |
 | mode | 252 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 179 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 198 / 98 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
-| settings | 176 | The Settings screen and every reference to it. | |
-| grid | 143 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
+| settings | 178 | The Settings screen and every reference to it. | |
+| grid | 145 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 136 | Sound cards, levels, routing. | |
-| station | 419 | Both your own station and the one you are working. | |
+| station | 428 | Both your own station and the one you are working. | |
 | port | 104 | Serial and network ports. | |
 | dial | 106 | The dial frequency. A radio term, but the word itself is prose. | |
 | transmit / receive | 137 / 41 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 90 | A satellite pass. | |
-| callsign | 108 | Appears constantly. Whatever you choose, choose it once. | |
-| worked | 110 | "Worked before", "stations you have worked". | |
-| frequency | 118 | | |
+| callsign | 115 | Appears constantly. Whatever you choose, choose it once. | |
+| worked | 112 | "Worked before", "stations you have worked". | |
+| frequency | 120 | | |
 | tune | 62 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |
 | power | 67 | RF power, in watts. | |
 | confirmed | 73 | A QSO confirmed by LoTW/eQSL/card. | |
-| decode | 67 | Both noun and verb. | |
+| decode | 66 | Both noun and verb. | |
 | spot / spots | 52 / 65 | A cluster or RBN spot. Both noun and verb. | |
 | needed | 57 | "Needed" is also a screen name in the navigation — keep the screen name and the word matching. | |
 | import / export | 48 / 52 | ADIF import and export. | |
@@ -130,7 +130,7 @@ word in, and use only that word in the CSV.
 | antenna | 37 | | |
 | memories | 37 | Saved channels — the Memories screen. | |
 | cockpit | 43 | Nexus's word for an operating screen. Decide whether to translate it or keep it as a product term. | |
-| pane / panel | 27 / 18 | The movable boxes inside a cockpit. | |
+| pane / panel | 33 / 18 | The movable boxes inside a cockpit. | |
 | operator | 28 | The person at the key. | |
 | keyer | 31 | The CW keyer. | |
 | exchange | 30 | The contest exchange. | |

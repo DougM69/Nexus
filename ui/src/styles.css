@@ -27630,18 +27630,7 @@ button.sat-chip:disabled {
 .js8-offset-row.low {
   color: var(--text-dim);
 }
-/* ★ the operator pin: a text button, dim until it holds a row. */
-.js8-pin {
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  color: var(--text-dim);
-  line-height: 1;
-}
-.js8-pin.on {
-  color: var(--accent);
-}
+/* A row the operator pinned to the top (its menu's "Pin to the top"). */
 .js8-station.pinned {
   background: var(--bg-elev-2);
 }
@@ -27766,6 +27755,152 @@ button.sat-chip:disabled {
 }
 .js8-rx-speeds .settings-toggle {
   flex: 0 0 auto;
+}
+/* THE JS8 LISTS AS JS8Call 3.0.3 DRAWS THEM (components/Js8RxPane, Js8BandActivity, Js8CallList,
+   Js8InboxPanel). Content styling only: each sits inside its pane's body, which scrolls.
+   The RX pane's line: time · offset · the message as far as it has come. The font is monospaced,
+   so `ch` columns hold HH:MM:SS and a four-digit offset exactly; an em column wrapped the clock. */
+.js8-rx-line {
+  grid-template-columns: 8ch 4ch minmax(0, 1fr);
+}
+.js8-rx-line .js8-time,
+.js8-rx-line .js8-freq {
+  white-space: nowrap;
+}
+/* Band activity, the call list and the inbox are tables: a column is as wide as what it holds, as
+   JS8Call's resize-to-contents makes it, and the message column takes the rest and wraps. The rows
+   keep the class names the panes always had; a table row is a table row whatever else they say. */
+.js8-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.js8-table tr {
+  display: table-row;
+}
+.js8-table th,
+.js8-table td {
+  padding: 1px var(--space-1);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.js8-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+.js8-table td.js8-text {
+  width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.js8-table tr.selected > td:first-child,
+.js8-table tr.directed > td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.js8-table tr.selected {
+  background: var(--bg-elev-2);
+}
+/* JS8Call's row colours, from the theme: a CQ green, the two highlight lists amber and blue (the
+   primary wins: it is the later rule). */
+.js8-table tr.cq {
+  background: color-mix(in srgb, var(--snr-strong) 16%, transparent);
+}
+.js8-table tr.hl-secondary {
+  background: color-mix(in srgb, var(--alert-info) 22%, transparent);
+}
+.js8-table tr.hl-primary {
+  background: color-mix(in srgb, var(--snr-marginal) 26%, transparent);
+}
+.js8-table tr.low {
+  color: var(--text-dim);
+}
+.js8-call-table tr.unread {
+  font-weight: 700;
+}
+.js8-mark {
+  text-align: center;
+}
+.js8-mark-blocked {
+  color: var(--snr-weak);
+  border-color: var(--snr-weak);
+}
+.js8-group .js8-station-call {
+  color: var(--text);
+}
+.js8-row-acts {
+  text-align: right;
+}
+.js8-row-menu {
+  background: none;
+  border: none;
+  padding: 0 var(--space-1);
+  cursor: pointer;
+  color: var(--text-dim);
+  line-height: 1;
+}
+.js8-row-menu:hover,
+.js8-row-menu[data-state='open'] {
+  color: var(--text);
+}
+/* The one-click asks wrap inside their cell, as they wrapped in the row before, so a narrow pane
+   is not pushed wider than its column by them. */
+.js8-table td.js8-acts-cell {
+  white-space: normal;
+}
+.js8-call-table .js8-station-acts {
+  margin-left: 0;
+  flex-wrap: wrap;
+}
+.js8-inbox-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1);
+}
+.js8-inbox-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+/* A pane toolbar's filter, sized as Operate's sort select (`.od-sort select`), not as a Settings
+   field: the touch-height field took a third of the pane's minimum height. */
+.js8-inbox-filter select {
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font: inherit;
+}
+.js8-sort {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.js8-inbox-table tr {
+  cursor: pointer;
+}
+/* A held message's note that it is too long to hand over at this speed (Js8InboxTooLong.tsx): its
+   own line under the message, as it wrapped in the row before. */
+.js8-inbox-table td.js8-text > .js8-path {
+  display: block;
+}
+.js8-sound {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.js8-mark-input {
+  max-width: 6em;
 }
 /* Stop button in the macro row — live (red-tinted) only while sending. */
 .rtty-stop:not(:disabled) {
