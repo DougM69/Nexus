@@ -159,7 +159,7 @@ fn ask(
 ) -> Value {
     let q: LogQuestion = serde_json::from_value(q.clone()).unwrap_or_else(|e| panic!("{q}: {e}"));
     queries
-        .answer(engine, &q, resolve)
+        .answer(engine, &q, resolve, &|r: &QsoRecord| resolve(&r.call))
         .unwrap_or_else(|e| panic!("{q:?}: {e}"))
 }
 
@@ -171,7 +171,7 @@ fn try_ask(
     resolve: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Value, String> {
     let q: LogQuestion = serde_json::from_value(q.clone()).unwrap_or_else(|e| panic!("{q}: {e}"));
-    queries.answer(engine, &q, resolve)
+    queries.answer(engine, &q, resolve, &|r: &QsoRecord| resolve(&r.call))
 }
 
 /// [`ask`], asked again while it is refused for a change still on its way to disk
@@ -297,7 +297,10 @@ fn reference_answer(
             GridCounts::new(q["band"].as_str().expect("band"))
         )),
         "bandsInLog" => json!(reference::fold(log, BandsInLog::default())),
-        "statistics" => json!(reference::fold(log, LogStatCounter::new(&resolve))),
+        "statistics" => json!(reference::fold(
+            log,
+            LogStatCounter::new(&|r: &QsoRecord| resolve(&r.call))
+        )),
         "lotwBacklog" => json!(reference::fold(log, LotwBacklog::default())),
         "rowsAt" => json!(q["indices"]
             .as_array()
@@ -779,7 +782,10 @@ fn a_fold_is_kept_until_what_it_reads_moves() {
             json!(reference::fold(log, WorkedGrids::default())),
             json!(reference::fold(log, BandsInLog::default())),
             json!(reference::fold(log, GridCounts::new("20m"))),
-            json!(reference::fold(log, LogStatCounter::new(&of))),
+            json!(reference::fold(
+                log,
+                LogStatCounter::new(&|r: &QsoRecord| of(&r.call))
+            )),
             json!(reference::fold(log, LotwBacklog::default())),
         ]
     };
@@ -1606,7 +1612,10 @@ fn assert_parity(seed: u64, step: &str, engine: &SharedEngine, queries: &LogQuer
         ),
         (
             json!({"kind": "statistics"}),
-            json!(reference::fold(&held, LogStatCounter::new(&of))),
+            json!(reference::fold(
+                &held,
+                LogStatCounter::new(&|r: &QsoRecord| of(&r.call))
+            )),
         ),
     ];
     for (q, expected) in folds {
@@ -1830,6 +1839,78 @@ fn a_javascript_index_is_an_integer_in_range() {
     assert_eq!(position(-1.0, 3), None);
     assert_eq!(position(1.5, 3), None);
     assert_eq!(position(f64::NAN, 3), None);
+}
+
+// ── the statistics count each contact as the awards do ─────────────────────────────────────────
+
+/// ★ The Statistics dashboard counts each contact under the entity the awards count it toward —
+/// its record's DXCC number (LoTW's first), else its call through cty.dat, a WAE area as the
+/// entity it belongs to — read from the store as the whole record holds it, with the app's own
+/// resolvers. The entities, their count and the WAS states, by value.
+#[test]
+fn the_statistics_count_each_contact_as_the_awards_do() {
+    let row = |call: &str, date: &str, fields: &str| {
+        format!(
+            "<CALL:{}>{call}<QSO_DATE:8>{date}<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+             <LOTW_QSL_RCVD:1>Y{fields}<EOR>\n",
+            call.len()
+        )
+    };
+    let d = Dir::new("stats-by-record");
+    let rows = [
+        // Navassa, Baker & Howland (LoTW's number over the log's 291) and Johnston on US calls.
+        row("K1N", "20150210", "<DXCC:3>182<CQZ:1>8"),
+        row("K1B", "20021201", "<DXCC:3>291<APP_NEXUS_LOTW_DXCC:2>20"),
+        row("K3J", "20010101", "<DXCC:3>123"),
+        // The German Democratic Republic, deleted in 1990: never the Federal Republic.
+        row("Y24UK", "19890101", "<DXCC:3>229"),
+        row("K1ABC", "20200101", "<CQZ:1>3<STATE:2>CA"),
+        // A KP4 licensee in Florida: the United States, so Florida is a WAS state.
+        row("KP4ABC", "20200102", "<DXCC:3>291<STATE:2>FL"),
+        // No number: Sicily by its call, which counts as Italy; and the United States.
+        row("IT9ABC", "20200103", ""),
+        row("W1AW", "20200104", "<STATE:2>CT"),
+    ];
+    std::fs::write(d.log(), format!("{}{}", adif_header(), rows.concat())).expect("log.adi");
+    let opened = tempo_app::logstore::open(
+        &d.log(),
+        Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+        None,
+    )
+    .expect("the store opens");
+    let mut e = Engine::new("K2DEF", "FN31", 0);
+    e.attach_log_store(opened);
+    let engine: SharedEngine = Arc::new(Mutex::new(e));
+    let queries = LogQueries::default();
+    let q: LogQuestion = serde_json::from_value(json!({"kind": "statistics"})).expect("parses");
+    let counts = queries
+        .answer(&engine, &q, &cty, &counted)
+        .expect("answered");
+    let entities: Vec<(&str, u64)> = counts["entities"]
+        .as_array()
+        .expect("entities")
+        .iter()
+        .map(|t| (t["label"].as_str().unwrap(), t["count"].as_u64().unwrap()))
+        .collect();
+    assert_eq!(
+        entities,
+        [
+            ("Navassa Island", 1),
+            ("Baker & Howland Islands", 1),
+            ("Johnston Island", 1),
+            ("GERMAN DEMOCRATIC REPUBLIC", 1),
+            ("United States", 3),
+            ("Italy", 1),
+        ]
+    );
+    assert_eq!(counts["dxccEntities"], 6);
+    let states: Vec<&str> = counts["byState"]
+        .as_array()
+        .expect("byState")
+        .iter()
+        .map(|t| t["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(states, ["CA", "FL", "CT"]);
 }
 
 // ── the diagnosis names its contacts by id ─────────────────────────────────────────────────────

@@ -492,19 +492,19 @@ pub struct Awards {
     home_entity: Option<&'static str>,
 }
 
-/// The DXCC entity a contact counts toward.
-#[derive(Debug, Clone, Copy)]
-struct Counted {
+/// The DXCC entity a contact counts toward ([`counted_entity`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Counted {
     /// Its number, where the record or cty.csv gives one.
-    code: Option<u32>,
+    pub code: Option<u32>,
     /// A current entity's cty.dat name, or a deleted one's.
-    name: &'static str,
-    deleted: bool,
+    pub name: &'static str,
+    pub deleted: bool,
 }
 
 impl Counted {
     /// The WAS family — the United States, Alaska, Hawaii — by number where there is one.
-    fn is_us_state(&self) -> bool {
+    pub fn is_us_state(&self) -> bool {
         match self.code {
             Some(code) => dxcc::is_us_state_dxcc(code),
             None => dxcc::is_us_state_entity(self.name),
@@ -523,7 +523,13 @@ impl Counted {
 /// **Else the call, through cty.dat.** A WAE/CQ-only area counts as the parent cty.csv gives it
 /// (Sicily as Italy), which is how the ARRL credits it; an entity with no number keeps the old
 /// rule, its name and no credit for a WAE area.
-fn counted_entity(resolved: Option<&dxcc::DxccInfo>, rec: &RecordFields) -> Option<Counted> {
+///
+/// The ONE answer to "which entity is this logged contact": the awards, the Needed board's needs
+/// model ([`crate::dxped::LogNeeds`]), the log statistics ([`crate::stats`], and the dashboard's
+/// counts the app makes), Worked All Provinces, and the home entity "First DX" is judged against
+/// all read it, so none of them can call an entity needed, or count it, differently from the
+/// others. A station heard on the air has no record: its entity comes from its call alone.
+pub fn counted_entity(resolved: Option<&dxcc::DxccInfo>, rec: &RecordFields) -> Option<Counted> {
     for code in [rec.lotw_dxcc, rec.dxcc].into_iter().flatten() {
         if code == dxcc::NO_DXCC_ENTITY {
             return None;
@@ -551,6 +557,16 @@ fn counted_entity(resolved: Option<&dxcc::DxccInfo>, rec: &RecordFields) -> Opti
     }
 }
 
+/// The CQ zone a contact counts toward (WAZ), beside [`counted_entity`]: its record's CQZ where
+/// that is a zone (1–40) — a W1 licensee living in California is zone 3, whatever the W1 prefix
+/// says — else the zone cty.dat gives its call; `None` when neither gives one.
+pub fn counted_zone(resolved: Option<&dxcc::DxccInfo>, rec: &RecordFields) -> Option<u8> {
+    let zone = |z: &u8| (1..=40).contains(z);
+    rec.cqz
+        .filter(zone)
+        .or_else(|| resolved.map(|i| i.cq_zone).filter(zone))
+}
+
 impl Awards {
     pub fn new() -> Self {
         Self::default()
@@ -559,8 +575,13 @@ impl Awards {
     /// Record the operator's own callsign so DX-oriented achievements ("First DX")
     /// count entities OTHER than home. Without it, a US op whose only worked entity
     /// is foreign would never unlock "First DX". Safe to call zero or many times.
+    ///
+    /// Home is the entity a contact from this call counts toward ([`counted_entity`]), so the
+    /// two compare alike: an IT9 operator is home in Italy, as the ARRL credits Sicily, and an
+    /// Italian contact is not DX for them.
     pub fn set_home_call(&mut self, call: &str) {
-        self.home_entity = dxcc::resolve(call).map(|i| i.entity);
+        self.home_entity =
+            counted_entity(dxcc::resolve(call).as_ref(), &RecordFields::default()).map(|c| c.name);
     }
 
     /// Fold one logged contact in. `band` is an ADIF band label ("20m"); `mode`
@@ -664,7 +685,7 @@ impl Awards {
             }
         }
         let resolved = dxcc::resolve(call);
-        // The entity DXCC and the WAS gate count by: the record's number, else the call's.
+        // The entity DXCC and the WAS and WAP gates count by: the record's number, else the call's.
         let counted = counted_entity(resolved.as_ref(), &rec);
         if let (Some(lotw_dxcc), Some(logged_dxcc)) = (rec.lotw_dxcc, rec.dxcc) {
             if lotw_dxcc != logged_dxcc {
@@ -710,8 +731,9 @@ impl Awards {
         //
         // Credit comes from the logged ADIF STATE, never from the callsign hint: a licensee who
         // moved keeps the old numeral, so `province_for_call` labels a roster row but must not
-        // decide an award (see the note at the top of `province.rs`).
-        let is_canada = resolved.as_ref().is_some_and(|i| i.entity == "Canada");
+        // decide an award (see the note at the top of `province.rs`). The entity is the one the
+        // contact counts toward, like WAS's: the record's DXCC number where it carries one.
+        let is_canada = counted.is_some_and(|c| c.name == "Canada");
         if is_canada {
             if let Some(code) = state.and_then(valid_province) {
                 self.worked_provinces.insert(code);
@@ -720,16 +742,11 @@ impl Awards {
                 }
             }
         }
-        // WAZ: CQ zones 1..=40 — the record's CQZ where it carries one (a W1 licensee living
-        // in California is zone 3, whatever the W1 prefix says), else cty.dat's zone for the
-        // call (0 = cty.dat couldn't supply one — skip it). The zone is valid even on a non-DXCC
-        // (WAE) entity — Sicily, African Italy etc. are real CQ-zone contacts — so this is
-        // OUTSIDE the DXCC gate.
-        let zone = rec
-            .cqz
-            .filter(|z| (1..=40).contains(z))
-            .or_else(|| resolved.map(|i| i.cq_zone).filter(|z| (1..=40).contains(z)));
-        if let Some(zone) = zone {
+        // WAZ: CQ zones 1..=40 — [`counted_zone`]: the record's CQZ where it carries one, else
+        // cty.dat's zone for the call (0 = cty.dat couldn't supply one — skip it). The zone is
+        // valid even on a non-DXCC (WAE) entity — Sicily, African Italy etc. are real CQ-zone
+        // contacts — so this is OUTSIDE the DXCC gate.
+        if let Some(zone) = counted_zone(resolved.as_ref(), &rec) {
             self.worked_zones.insert(zone);
             if confirmed {
                 self.confirmed_zones.insert(zone);

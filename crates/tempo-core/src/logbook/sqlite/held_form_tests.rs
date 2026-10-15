@@ -130,7 +130,7 @@ fn every_narrow_read_of_a_store_from_before_holds_the_same_form() {
         ControlFlow::Continue(())
     })
     .expect("narrow");
-    let counts = reference::fold(&seen, LogStatCounter::new(&|_: &str| None));
+    let counts = reference::fold(&seen, LogStatCounter::new(&|_: &QsoRecord| None));
     let label = |label: &str, count| LabelCount {
         label: label.into(),
         count,

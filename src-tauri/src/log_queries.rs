@@ -60,7 +60,7 @@ use tempo_core::logbook::query::{
     LogStatCounter, LogStatCounts, LotwBacklog, OrderBuilder, WorkedGrids,
 };
 use tempo_core::logbook::sqlite::{self, Narrow, Order, Scope, ENTITY_COLUMNS, ORDER_COLUMNS};
-use tempo_core::logbook::{QsoEdit, QsoRecord, RecordId};
+use tempo_core::logbook::{QsoEdit, QsoRecord, RecordId, AWARD_EXTRAS};
 
 use crate::{SharedEngine, Tally};
 
@@ -106,7 +106,9 @@ const BACKLOG: Narrow = Narrow {
     uploads: true,
 };
 
-/// The statistics' counts (`statistics`).
+/// The statistics' counts (`statistics`) — with the record's DXCC number, and LoTW's beside it
+/// (the passthrough fields [`AWARD_EXTRAS`] names), which decide the entity a contact counts
+/// toward.
 const STATISTICS: Narrow = Narrow {
     columns: &[
         "call",
@@ -119,6 +121,7 @@ const STATISTICS: Narrow = Narrow {
         "lotw_rcvd_raw",
         "eqsl_rcvd_raw",
         "qrz_status_raw",
+        "dxcc",
     ],
     uploads: false,
 };
@@ -345,12 +348,16 @@ pub struct LogQueries(Arc<Inner>);
 
 impl LogQueries {
     /// Answer `q`: take what it needs under the Engine lock, release it, read, answer. `resolve`
-    /// is a call's live DXCC entity (cty.dat in the app).
+    /// is a call's live DXCC entity (cty.dat in the app) — what each row the UI is handed carries,
+    /// and what an entity's slots are keyed by. `counted` is the entity the statistics count a
+    /// contact under: in the app, the one the awards count it toward ([`counted`]), by its
+    /// record's DXCC number first.
     pub(crate) fn answer(
         &self,
         engine: &SharedEngine,
         q: &LogQuestion,
         resolve: &dyn Fn(&str) -> Option<String>,
+        counted: &dyn Fn(&QsoRecord) -> Option<String>,
     ) -> Result<Value, String> {
         match q {
             LogQuestion::WorkedCalls { calls } => json(self.worked_calls(engine, calls)),
@@ -409,7 +416,7 @@ impl LogQueries {
                 &self.0.grids,
                 (),
                 Engine::log_index_rev,
-                GRIDS,
+                (GRIDS, &[]),
                 WorkedGrids::default(),
             )?),
             LogQuestion::GridPoints { band } => json(&*self.fold(
@@ -417,7 +424,7 @@ impl LogQueries {
                 &self.0.grid_points,
                 band.clone(),
                 Engine::log_index_rev,
-                GRID_POINTS,
+                (GRID_POINTS, &[]),
                 GridCounts::new(band),
             )?),
             LogQuestion::BandsInLog {} => json(&*self.fold(
@@ -425,7 +432,7 @@ impl LogQueries {
                 &self.0.bands,
                 (),
                 Engine::log_index_rev,
-                BANDS,
+                (BANDS, &[]),
                 BandsInLog::default(),
             )?),
             LogQuestion::Statistics {} => json(&*self.fold(
@@ -433,8 +440,8 @@ impl LogQueries {
                 &self.0.statistics,
                 (),
                 Engine::log_index_rev,
-                STATISTICS,
-                LogStatCounter::new(resolve),
+                (STATISTICS, AWARD_EXTRAS),
+                LogStatCounter::new(counted),
             )?),
             // The backlog reads the LoTW stamp — a Stamp moves `content_rev`, and a contact
             // imported with its stamp is an Append, which moves `index_rev` — so it is kept
@@ -444,7 +451,7 @@ impl LogQueries {
                 &self.0.backlog,
                 (),
                 Engine::log_revision,
-                BACKLOG,
+                (BACKLOG, &[]),
                 LotwBacklog::default(),
             )?),
             _ => {
@@ -771,14 +778,14 @@ impl LogQueries {
     /// A fold question (C14's folds, for the UI's questions): kept against `mark` — the
     /// watermark of what it reads — and `key`, or else one narrow pass over the log in log
     /// order with the Engine lock released, kept — or refused, keeping nothing, if the read ran
-    /// out of wait.
+    /// out of wait. What it reads is a narrow, and the passthrough fields read beside it.
     fn fold<K: PartialEq, F: LogFold>(
         &self,
         engine: &SharedEngine,
         kept: &Tally<K, F::Answer>,
         key: K,
         mark: fn(&Engine) -> u64,
-        narrow: Narrow,
+        (narrow, extras): (Narrow, &[&str]),
         mut fold: F,
     ) -> Result<Arc<F::Answer>, String> {
         let (at, rows) = {
@@ -793,7 +800,7 @@ impl LogQueries {
         self.0
             .folded
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        rows.each(narrow, Scope::All, Order::Log, &mut |r| {
+        rows.each_with(narrow, extras, Scope::All, Order::Log, &mut |r| {
             fold.add(r);
             ControlFlow::Continue(())
         })
@@ -865,6 +872,18 @@ fn cty(call: &str) -> Option<String> {
     propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
 }
 
+/// The DXCC entity a contact counts toward, as the awards count it
+/// (`propagation::awards::counted_entity`): its record's DXCC number, LoTW's first, else its
+/// call through cty.dat, a WAE area as the entity it belongs to — what the statistics count it
+/// under.
+fn counted(r: &QsoRecord) -> Option<String> {
+    propagation::awards::counted_entity(
+        propagation::dxcc::resolve(&r.call).as_ref(),
+        &crate::log_folds::award_fields(r),
+    )
+    .map(|c| c.name.to_string())
+}
+
 /// Answer one of the UI's log questions (`LogQuestion` → its answer, as `logAnswers.ts` types
 /// them). On the blocking pool: it may wait for the writer, and it reads the disk.
 #[tauri::command]
@@ -874,7 +893,7 @@ pub async fn ask_log(
     q: LogQuestion,
 ) -> Result<Value, String> {
     let (engine, queries) = (Arc::clone(&state), queries.inner().clone());
-    tauri::async_runtime::spawn_blocking(move || queries.answer(&engine, &q, &cty))
+    tauri::async_runtime::spawn_blocking(move || queries.answer(&engine, &q, &cty, &counted))
         .await
         .map_err(|e| format!("the logbook read did not finish: {e}"))?
 }

@@ -288,6 +288,7 @@ mod whole_log_reader_tests {
                 q.state.as_deref(),
                 q.award_confirmed,
                 qso_is_sat(q.prop_mode.as_deref()),
+                crate::log_folds::award_fields(&q),
             );
         }
         needs
@@ -409,10 +410,14 @@ mod whole_log_reader_tests {
         let engine = engine_with_log();
         let old = {
             let my_call = engine_lock(&engine).settings().mycall.clone();
-            // The log as the store holds it, as `needs_the_old_way` reads it.
+            // The log as the store holds it, as `needs_the_old_way` reads it: each contact with
+            // what its record carries.
             let log = engine.lock().unwrap().stored_records();
-            let calls: Vec<String> = log.into_iter().map(|q| q.call).collect();
-            propagation::compute_log_stats(&calls, &my_call)
+            let mut stats = propagation::stats::LogStatsAccumulator::new(&my_call);
+            for q in &log {
+                stats.add(&q.call, crate::log_folds::award_fields(q));
+            }
+            stats.summary()
         };
         assert!(old.total > 0, "premise: there is something to count");
         let tallies = LogTallies::default();
@@ -20558,9 +20563,10 @@ async fn get_awards(
 
 /// The geographic slice of the logbook — QSOs by WAC continent, by CQ zone, and a DX-vs-domestic
 /// split — the dimensions the frontend `StatsView` can't derive on its own (the stored record has
-/// no continent/zone; both re-resolve per callsign here via cty.dat, anchored on the operator's
-/// own call for the DX split). The rest of the Statistics dashboard (band/mode/year/hour/state/
-/// confirmations) is the `statistics` log question's ([`log_queries`]). Pure/offline.
+/// no continent; each contact is placed where the awards count it, by the DXCC number and CQ zone
+/// its record carries, else by its callsign via cty.dat, anchored on the operator's own call for
+/// the DX split). The rest of the Statistics dashboard (band/mode/year/hour/state/confirmations)
+/// is the `statistics` log question's ([`log_queries`]). Pure/offline.
 ///
 /// Folded again only when the log's content or the operator's call moves ([`log_stats`]), from
 /// the logbook store, on the blocking pool.

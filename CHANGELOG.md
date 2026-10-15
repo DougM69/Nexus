@@ -144,7 +144,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zone it brings for a contact already in your log; WAS counts a state by the contact's DXCC (a
   KP4 call signing from Florida counts Florida); and WAZ counts the CQ zone the contact's record
   carries. The numbers come from AD1C's cty.csv and, for the deleted entities, the ARRL's
-  TrustedQSL (see NOTICE).
+  TrustedQSL (see NOTICE). The Needed board, the Statistics page, Worked All Provinces and the
+  "First DX" achievement now count each contact the same way. The Needed board no longer calls an
+  entity needed that the Awards view counts (Navassa Island after a K1N contact), and its new-zone
+  and new-state chips go by the CQ zone and DXCC number the contact's record carries; the
+  statistics count Navassa rather than the United States. An operator in Sicily is at home in
+  Italy for "First DX". A station on the air has no record, so the board still places it by its
+  call.
 - **A contest log that cannot be saved to disk now says so.** When the contest journal could not
   be written (a full disk, or a file held by another program), the contacts since the last good
   save were in memory only and nothing on screen said so; a power cut would have lost them. The

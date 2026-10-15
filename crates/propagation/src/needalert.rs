@@ -319,6 +319,12 @@ pub fn score_slots(
     needs: &dyn OperatorNeeds,
     slots: &AwardSlots,
 ) -> Option<NeedAlert> {
+    // A heard station is a live call with no record, so its entity and zone can only come from
+    // the call, through cty.dat. The log's side of every comparison below counts each contact by
+    // its record first — its DXCC number and CQ zone, as the awards do
+    // ([`crate::dxped::LogNeeds::add_qso`]) — and by its call through cty.dat where the record
+    // carries neither, a WAE area as the entity it belongs to (heard, a WAE area earns no DXCC
+    // tag below).
     let info = dxcc::resolve(call)?;
     let mut tags: Vec<NeedTag> = Vec::new();
     // Set when a zone/grid/state axis is worked-but-unconfirmed; folded into a SINGLE Confirm

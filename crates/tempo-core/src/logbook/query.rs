@@ -36,7 +36,7 @@
 //! once. [`reference`] answers every question from a whole log, exactly as `answerFrom` does, and
 //! is the oracle the engine's own paths are held to.
 
-use super::{QsoRecord, UploadOutcome};
+use super::{record_lotw_dxcc, QsoRecord, UploadOutcome};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::cmp::Ordering;
@@ -959,9 +959,10 @@ const WAS_STATES: [&str; 50] = [
 ];
 
 /// `wasState(q)`: a contact's state as a WAS code, only for a contact of a US-family entity.
-/// `named` is the name its entity is counted under: its DXCC entity, or its stored country where
-/// its call resolves to none. So a LoTW download's `UNITED STATES OF AMERICA` counts, and a
-/// foreign entity's contact stored with a US country does not.
+/// `named` is the name its entity is counted under: the DXCC entity its row is given
+/// ([`LogStatCounter`]'s `resolve`), or its stored country where that names none. So a LoTW
+/// download's `UNITED STATES OF AMERICA` counts, and a foreign entity's contact stored with a US
+/// country does not.
 fn was_state(named: &str, r: &QsoRecord) -> Option<String> {
     if !US_ENTITIES.contains(&js_upper(named).as_str()) {
         return None;
@@ -980,11 +981,14 @@ fn phone_mode_label(mode: &str) -> String {
 }
 
 /// `countLogStats(log)`, a row at a time (`statistics`): the dashboard's counts, with each
-/// contact's entity its call's live one (`resolve`, once per distinct call in the pass) and the
-/// stored country where it has none.
+/// contact's entity the one `resolve` names for its row (`q.entity`) and the stored country where
+/// it names none. In the app that is the entity the awards count the contact toward: its
+/// record's DXCC number (LoTW's first), else its call's live entity. `resolve` answers from the
+/// call and the record's two DXCC numbers ([`QsoRecord::dxcc`], [`record_lotw_dxcc`]), so it is
+/// asked once per distinct three in the pass: a lifetime log repeats them.
 pub struct LogStatCounter<'a> {
-    resolve: &'a dyn Fn(&str) -> Option<String>,
-    entity_of: HashMap<String, Option<String>>,
+    resolve: &'a dyn Fn(&QsoRecord) -> Option<String>,
+    entity_of: HashMap<(String, Option<u32>, Option<u32>), Option<String>>,
     counts: LogStatCounts,
     calls: HashSet<String>,
     countries: HashSet<String>,
@@ -996,7 +1000,7 @@ pub struct LogStatCounter<'a> {
 }
 
 impl<'a> LogStatCounter<'a> {
-    pub fn new(resolve: &'a dyn Fn(&str) -> Option<String>) -> Self {
+    pub fn new(resolve: &'a dyn Fn(&QsoRecord) -> Option<String>) -> Self {
         Self {
             resolve,
             entity_of: HashMap::new(),
@@ -1019,8 +1023,8 @@ impl LogFold for LogStatCounter<'_> {
         let resolve = self.resolve;
         let entity = self
             .entity_of
-            .entry(r.call.clone())
-            .or_insert_with(|| resolve(&r.call));
+            .entry((r.call.clone(), r.dxcc, record_lotw_dxcc(r)))
+            .or_insert_with(|| resolve(r));
         let c = &mut self.counts;
         c.total += 1;
         self.calls.insert(js_upper(js_trim(&r.call)));
