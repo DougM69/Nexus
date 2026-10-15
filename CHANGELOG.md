@@ -131,6 +131,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accepted it and nothing tuned, and in the digital modes Nexus still turned transmit off for the
   tune-up. Nexus now sends the FT-710 its own tuning-start command; every other radio gets the
   same command as before. NEEDS-BENCH: an FT-710 into a dummy load.
+- **The FT-991A's and FT-710's ALC meter reads on the radio's own scale.** Nexus showed the ALC
+  of these two radios at four times the radio's own reading, and at 100 % in red from a quarter
+  of the radio's ALC bar up. A 991A run below full power, which raises its ALC reading by design,
+  looked overdriven on every over. Nexus now reads the radio's own ALC value and shows the same
+  share of the bar as the radio. Every other radio's ALC reads as before. NEEDS-BENCH: an FT-991A
+  into a dummy load, its ALC bar next to Nexus's at three drive levels.
 - **A contest log that cannot be saved to disk now says so.** When the contest journal could not
   be written (a full disk, or a file held by another program), the contacts since the last good
   save were in memory only and nothing on screen said so; a power cut would have lost them. The
