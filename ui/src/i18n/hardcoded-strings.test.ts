@@ -632,6 +632,11 @@ const MIGRATED = [
   // What the radio reports beside Tune while Tune is the Flex radio's own carrier — migrated from
   // birth.
   'components/RadioTuneNote.tsx',
+  // JS8's heartbeat controls (HB NET, HB and its menu, what holds an HB ACK back) and their
+  // Settings switches — migrated from birth; HB and HB NET are the mode's tokens. Neither stops a
+  // transmission: HB off cancels a schedule, and "Send heartbeat now" is a sender.
+  'components/Js8Heartbeat.tsx',
+  'components/Js8HeartbeatSettings.tsx',
 ]
 
 /**

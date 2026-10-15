@@ -21,6 +21,9 @@ export const TX_PLATE = 'TX ▲'
 export const AUTOREPLY = 'AUTOREPLY'
 export const RELAY = 'RELAY'
 export const HB_ACK = 'HB ACK'
+/** JS8Call's "Enable Heartbeat Networking (HB)" Mode-menu switch. The chip reads HB NET so it
+ *  reads apart from the HB button beside it, which only exists while it is on. */
+export const HB_NET = 'HB NET'
 
 export interface Js8SpeedInfo {
   key: Js8Speed

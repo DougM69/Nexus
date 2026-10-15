@@ -7786,6 +7786,21 @@ export const EN = {
     'Off by default, as in JS8Call. On, a heard heartbeat is answered with your signal report (HEARTBEAT SNR), one frame per station, and a message you hold for that station is offered to it. Needs TX on.',
   'settings.js8.hbAckDeny.label': 'Never acknowledge heartbeats from these callsigns',
   'settings.js8.hbAckDeny.hint': 'Comma-separated, empty by default as in JS8Call. A heartbeat from a station on this list draws no acknowledgement.',
+  'settings.js8.hbNetworking.label': 'Heartbeat networking',
+  'settings.js8.hbNetworking.hint':
+    'Off by default, as in JS8Call (its Mode ▸ Enable Heartbeat Networking). On, the cockpit shows the HB button and Answer heartbeats can answer the heartbeats you hear; off, no heartbeat and no heartbeat acknowledgement goes out. The same switch as the cockpit’s HB NET.',
+  'settings.js8.hbAnywhere.label': 'Allow heartbeats outside 500–1000 Hz',
+  'settings.js8.hbAnywhere.hint':
+    'Off by default, as in JS8Call. On, your heartbeats and heartbeat acknowledgements go out on your own TX offset. Off, each goes on a free spot between 500 and 1000 Hz, and a heartbeat stays on your offset if it is at or below 1000 Hz.',
+  'settings.js8.hbQsoPause.label': 'Pause heartbeats while a call is in the To box',
+  'settings.js8.hbQsoPause.hint':
+    'On by default, as in JS8Call (its pause while in a QSO). While the cockpit’s To box holds a call, the heartbeat repeat pauses and starts again one interval after you clear the box, no heartbeat is acknowledged, and a repeating CQ stops. Turning the heartbeat repeat on clears the To box.',
+  'settings.js8.hbAckRateLimit.label': 'Don’t acknowledge stations that heartbeat more often than every 55 minutes',
+  'settings.js8.hbAckRateLimit.hint':
+    'Off by default, as in JS8Call 3.0. On, a station heard heartbeating again within 55 minutes of its last acknowledged heartbeat gets no acknowledgement then or later, and the cockpit’s HB ACK chip names it. Turning this off forgets those stations.',
+  'settings.js8.avoidAllcall.label': 'Do not take part in @ALLCALL',
+  'settings.js8.avoidAllcall.hint':
+    'Off by default, as in JS8Call. On, nothing addressed to @ALLCALL is answered (a QUERY MSGS included) or marked as addressed to you, and @ALLCALL leaves the To box’s list. Heartbeats and CQs are handled as before.',
   'settings.js8.autoreply.label': 'Auto-reply to queries',
   'settings.js8.autoreply.hint':
     'On by default, as in JS8Call: SNR?, GRID?, INFO?, STATUS?, HEARING? and QUERY MSGS addressed to you are answered, and a MSG to you or to a group you joined, or a MSG TO: you hold for another station, gets an ACK; each one first asks for your Yes in the cockpit, unless you turn that off below. On @ALLCALL only QUERY MSGS is answered, when a message waits for that station, at most once every 15 minutes. Off, a reply is put in the message box for you to send, as JS8Call does, and QUERY MSGS is not answered. Needs TX on.',
@@ -10028,7 +10043,30 @@ export const EN = {
   'js8.dock.hb.title.armed':
     'Heartbeats are going out on schedule, on a random free slot between 500 and 1000 Hz. Click to stop the schedule.',
   'js8.dock.hb.notArmed.unscheduled':
-    'HB is on, and HB ACK answers only while it is, but no heartbeat of yours is scheduled: with the interval at 0 (Settings ▸ Digital ▸ JS8), HB sends one when it is turned on, and that one has gone. Turn HB off and on for another.',
+    'HB is on, but no heartbeat of yours is scheduled: with the interval at 0 (Settings ▸ Digital ▸ JS8), HB sends one when it is turned on, and that one has gone. Turn HB off and on, or use Send heartbeat now on its menu, for another.',
+  // ── JS8 ▸ the dock: heartbeat networking (HB NET), HB's menu, the QSO pause (JS8Call 3.0.3) ──
+  'js8.dock.hb.paused':
+    'The heartbeat repeat is paused while a call is in the To box (the QSO pause, Settings ▸ Digital ▸ JS8). Clear the To box and it starts again, its first heartbeat one interval later.',
+  'js8.dock.hb.menu.aria': 'Heartbeat menu',
+  'js8.dock.hb.menu.title': 'Heartbeat menu: send one now, or start or stop the repeat. Right-clicking HB opens it too.',
+  'js8.dock.hb.menu.start': 'Start heartbeat timer',
+  'js8.dock.hb.menu.stop': 'Stop heartbeat timer',
+  'js8.dock.hb.menu.now': 'Send heartbeat now',
+  'js8.dock.hbNet.title.off':
+    'Heartbeat networking is off, as JS8Call ships it: no HB button, no heartbeats and no heartbeat acknowledgements. Click to turn it on (remembered). It sends nothing by itself.',
+  'js8.dock.hbNet.title.on':
+    'Heartbeat networking is on: HB sends your heartbeats, and HB ACK may answer the heartbeats you hear. Click to turn it off (remembered); a running heartbeat repeat stops.',
+  'js8.dock.hbNet.title.speed':
+    'No heartbeats at {{speed}}: JS8Call sends heartbeats and their acknowledgements only at Slow, Normal and Fast. HB is hidden until you change speed, and this switch keeps its setting.',
+  'js8.dock.hbAck.suppressed.speed':
+    'Heartbeat acknowledgements are on, but none goes out at {{speed}}: JS8Call answers heartbeats only at Slow, Normal and Fast.',
+  'js8.dock.hbAck.suppressed.arriving':
+    'Heartbeat acknowledgements are on, but held back now: a message is still arriving, as in JS8Call.',
+  'js8.dock.hbAck.suppressed.qsoPause':
+    'Heartbeat acknowledgements are on, but held back now: a call is in the To box (the QSO pause, Settings ▸ Digital ▸ JS8). Clear the To box to answer heartbeats again.',
+  'js8.dock.hbAck.rateBlocked':
+    'Not answering these stations, which heartbeat more often than every 55 minutes: {{calls}}.',
+  'js8.toast.hb.failed': 'Heartbeat not sent',
 
   // ── JS8 ▸ the dock: command palette, the estimate, the second-act chips, pending, queue ──
   'js8.dock.cmd.aria': 'Directed command',
@@ -10059,11 +10097,11 @@ export const EN = {
   'js8.dock.hbAck.title.armed':
     'Heartbeat acknowledgements are ARMED: each heartbeat heard is answered with HEARTBEAT SNR on a random free slot. Click to turn it off.',
   'js8.dock.hbAck.notArmed.needsHb':
-    'Heartbeat acknowledgements are on, but they answer only while HB is on, as in JS8Call. Turning HB on also sends your own heartbeat.',
+    'Heartbeat acknowledgements are on, but they answer only while heartbeat networking (HB NET) is on, as in JS8Call. HB NET sends nothing by itself.',
   'js8.dock.hbAck.notArmed.needsAuto':
     'Heartbeat acknowledgements are on, but they answer only while AUTOREPLY is on, as in JS8Call. Turn AUTOREPLY on.',
   'js8.dock.hbAck.notArmed.needsHbAndAuto':
-    'Heartbeat acknowledgements are on, but they answer only while HB and AUTOREPLY are both on, as in JS8Call. Turning HB on also sends your own heartbeat.',
+    'Heartbeat acknowledgements are on, but they answer only while heartbeat networking (HB NET) and AUTOREPLY are both on, as in JS8Call. HB NET sends nothing by itself.',
   // Appended to all three faces of the three arm chips (the reason it is its own key rather
   // than nine edits is the same as js8.panel.activity.differs).
   'js8.dock.arm.differs':

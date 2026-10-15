@@ -93,6 +93,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   follow the call and the antenna as they move. With no call in the entry, a station Nexus cannot
   place, or no grid of your own there is no line and no number, and a rotator that does not report
   its position gets the line without a number. Nexus Remote is unchanged.
+- **JS8 heartbeats as JS8Call 3.0 has them: HB NET, and Send heartbeat now.** A new **HB NET**
+  switch in the JS8 dock (also Settings ▸ Digital ▸ JS8 ▸ Heartbeat networking) is JS8Call's
+  Enable Heartbeat Networking: off by default and remembered, it sends nothing itself, and the HB
+  button and heartbeat acknowledgements exist only while it is on. Right-click **HB**, or click the
+  **▾** beside it, for **Send heartbeat now** (one heartbeat in the next period, the repeat left as
+  it is) and, with a repeat interval set, **Start** or **Stop heartbeat timer**. The first repeated
+  heartbeat still goes one interval after you switch the repeat on, as in JS8Call. NEEDS-BENCH.
+- **JS8: no heartbeats at Turbo.** Heartbeats and heartbeat acknowledgements go out at Slow, Normal
+  and Fast only, as in JS8Call: at Turbo HB disappears, HB NET is greyed out, a running heartbeat
+  repeat stops, and an acknowledgement still waiting is dropped. NEEDS-BENCH.
+- **JS8 QSO pause, on by default.** While the To box holds a call, the heartbeat repeat pauses and
+  starts again one interval after you clear the box, no heartbeat is acknowledged, and a repeating
+  CQ stops; switching HB on clears the To box. Settings ▸ Digital ▸ JS8 ▸ Pause heartbeats while a
+  call is in the To box turns it off. NEEDS-BENCH.
+- **Three more JS8Call options in Settings ▸ Digital ▸ JS8, all off by default.** *Allow heartbeats
+  outside 500–1000 Hz* sends your heartbeats and acknowledgements on your own TX offset. *Don't
+  acknowledge stations that heartbeat more often than every 55 minutes* is JS8Call 3.0's rule: such
+  a station gets no acknowledgement again, the HB ACK chip names it, and turning the option off
+  forgets those stations. *Do not take part in @ALLCALL*: nothing addressed to @ALLCALL is answered
+  or marked as addressed to you, and @ALLCALL leaves the To box's list. NEEDS-BENCH.
+- **The JS8 HB ACK chip says when an acknowledgement is held back.** When HB ACK is armed but would
+  not answer right now (at Turbo, while a message is still arriving, or while a call is in the To
+  box), the chip reads not armed and its tooltip says why, as JS8Call drops "ACK" from its HB
+  button then.
 
 ### Changed
 
@@ -171,6 +195,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Appearance ▸ Theme and the window's title bar turns light or dark with it; System, the Windows
   default, follows the computer's own setting as before. Linux, the Raspberry Pi and macOS are
   unchanged. NEEDS-BENCH: Windows, with Light, Dark and System picked in turn.
+- **JS8 HB ACK needs heartbeat networking, not the HB repeat.** As in JS8Call, heartbeat
+  acknowledgements answer while HB NET and AUTOREPLY are on, whether or not your own heartbeat
+  repeat is running; before, they answered only while HB was on. HB NET is off after the update, so
+  nothing is acknowledged until you turn it on. NEEDS-BENCH.
 
 ### Fixed
 

@@ -220,6 +220,7 @@ import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
 import { SettingsSearch } from './SettingsSearch'
 import { SettingsLicenses } from './SettingsLicenses'
 import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
+import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
 import { resolveTarget } from '../settings/registry'
 import { changedSince, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
@@ -9206,6 +9207,7 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">{t('settings.js8.hbAckDeny.hint')}</span>
               </label>
+              <Js8HeartbeatSettings form={form} disabled={remote} update={updateBool} />
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.js8.autoreply.label')}</span>
