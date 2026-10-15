@@ -444,6 +444,7 @@ impl Engine {
     /// Reassembler events → activity rows + station actions.
     fn js8_handle_events(&mut self, events: Vec<MessageEvent>, low_conf: bool, now_ms: u64) {
         for ev in events {
+            self.js8_api_observe(&ev, now_ms);
             let row = match &ev {
                 MessageEvent::Frame(rx) => {
                     self.js8_file_band_activity(rx.freq_hz, rx.speed, rx.at_ms);
@@ -1173,6 +1174,7 @@ impl Engine {
         // re-based itself in `next_frame` when the message's last frame went.
         self.js8_station.note_tx_done(&tf, period_start_ms);
         self.js8_note_tx_done(&tf.display, period_start_ms, f0);
+        self.js8_api_note_tx(&tf, speed, f0);
         self.set_transmitting(true);
         Some(TxPlan {
             slot,

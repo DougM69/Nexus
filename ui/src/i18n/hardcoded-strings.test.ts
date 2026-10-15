@@ -632,6 +632,8 @@ const MIGRATED = [
   // What the radio reports beside Tune while Tune is the Flex radio's own carrier — migrated from
   // birth.
   'components/RadioTuneNote.tsx',
+  // Settings ▸ Digital ▸ JS8's JS8Call API switches and ports — migrated from birth.
+  'components/Js8ApiSettings.tsx',
 ]
 
 /**

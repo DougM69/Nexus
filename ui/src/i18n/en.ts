@@ -7812,6 +7812,16 @@ export const EN = {
   'settings.js8.groups.label': 'Groups',
   'settings.js8.groups.hint':
     'The @GROUP names you belong to, comma-separated — a message to one of them counts as addressed to you. @ALLCALL is everyone and is always on.',
+  'settings.js8.api.title': 'JS8Call API',
+  'settings.js8.api.hint': 'For programs written for JS8Call, such as loggers, maps and message tools, on this computer. They can read what Nexus hears, the inbox and the station details. They cannot transmit, tune or change anything. Programs on other computers cannot connect.',
+  'settings.js8.api.tcp.label': 'TCP API',
+  'settings.js8.api.tcp.hint': 'Programs connect to 127.0.0.1 on the port below. One at a time, as in JS8Call.',
+  'settings.js8.api.tcpPort.label': 'TCP port',
+  'settings.js8.api.tcpPort.hint': 'JS8Call uses 2442.',
+  'settings.js8.api.udp.label': 'UDP API',
+  'settings.js8.api.udp.hint': 'Nexus sends to a program listening on 127.0.0.1 at the port below, and answers it there.',
+  'settings.js8.api.udpPort.label': 'UDP port',
+  'settings.js8.api.udpPort.hint': 'JS8Call uses 2242.',
 
   // ── Settings ▸ SSTV ─────────────────────────────────────────────────────────────────
   // The transmit-mode picker's own rows are built from `SSTV_TX_MODES` — a mode name, its

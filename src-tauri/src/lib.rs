@@ -48,6 +48,9 @@ mod contest_lists;
 /// Is the data folder somewhere a DATABASE must not live — a network share, or a folder some
 /// consumer sync client is also writing to? The log is the one thing here that cannot be rebuilt.
 mod data_folder_location;
+/// JS8Call's API for other programs on this computer: TCP and UDP on 127.0.0.1, read-only, off
+/// until the operator turns a side on. What each line says is `tempo_app::engine::js8_api`.
+mod js8_api;
 /// Remote over this network on the PC an operator works from: its key for each station, pairing,
 /// the pinned road, and the loopback origin the window's page comes from. No engine, no command.
 mod lan_client;
@@ -32608,6 +32611,9 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     // held has already done it, before it waited on anything; the second run finds the loop gone
     // and returns at once, and sweeps any daemon started since.
     stop_the_radio();
+    // Programs on JS8Call's API hear that the station is closing, as JS8Call tells them. After the
+    // unkey, and bounded: it never delays taking the transmitter off the air.
+    js8_api::closing();
     // The last settings change, still on its way to `settings.json` on the writer's thread. On
     // every quit, attached or not: it is only what the operator changed, written late.
     flush_settings();
@@ -34589,6 +34595,11 @@ fn start_on_the_logbook(
             }
         });
     }
+
+    // JS8Call's API for other programs on this computer, read-only: one manager thread in the
+    // CAT-broker mold above, hot-applying the TCP and UDP switches. Off by default — nothing is
+    // bound or sent until the operator turns a side on.
+    js8_api::spawn(engine.clone());
 
     // Field Day club sync: one manager thread in the CAT-broker mold above —
     // poll settings 1 s, hot-apply both roles. HOST role (fd_host_enable) =

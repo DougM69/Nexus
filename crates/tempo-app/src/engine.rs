@@ -1099,6 +1099,11 @@ use crate::AppState;
 #[path = "js8.rs"]
 pub mod js8;
 
+/// JS8Call's network API, read-only (`crates/tempo-app/src/js8_api.rs`) — a CHILD of this module
+/// for the same reason as `js8`: it reads the JS8 station without widening any visibility.
+#[path = "js8_api.rs"]
+pub mod js8_api;
+
 /// Live CAT read-back for one NON-active radio (dual-radio), fed by the monitor thread. `None` fields
 /// mean "not read yet / not reported". `cat_ok` mirrors the active radio's `(Option<bool>)` health.
 #[derive(Debug, Clone, Default)]
@@ -3122,6 +3127,9 @@ pub struct Engine {
     js8_band_activity: std::collections::BTreeMap<i32, u64>,
     /// The last refused JS8 verb's reason (surfaced as `Js8State.last_error`).
     js8_last_error: Option<String>,
+    /// What JS8Call's API reports and the rest of the engine keeps no copy of: its events
+    /// between two listener ticks, the band activity by offset, the directed pane.
+    js8_api: js8_api::Js8ApiTap,
     /// `<config dir>/js8_station.json` — the inbox/heard journal (`set_js8_journal_path`).
     js8_journal_path: Option<PathBuf>,
     /// xorshift32 state for the heartbeat sub-band pick (`Station::next_frame`'s `rng`).
@@ -5634,6 +5642,7 @@ impl Engine {
             js8_activity: VecDeque::new(),
             js8_band_activity: std::collections::BTreeMap::new(),
             js8_last_error: None,
+            js8_api: js8_api::Js8ApiTap::default(),
             js8_journal_path: None,
             js8_rng: (tempo_core::timing::now_unix_ms() as u32) | 1,
             js8_planned_slot: None,

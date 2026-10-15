@@ -4023,6 +4023,15 @@ export interface Settings {
   js8Status: string
   /** Joined @GROUP names the station answers directed traffic for. */
   js8Groups: string[]
+  /** JS8Call's TCP API for programs on this computer: read-only, on 127.0.0.1 only. Off by
+   * default, as in JS8Call. */
+  js8ApiTcp?: boolean
+  /** Its port (JS8Call's 2442). */
+  js8ApiTcpPort?: number
+  /** JS8Call's UDP API: datagrams to a program on this computer, read-only. Off by default. */
+  js8ApiUdp?: boolean
+  /** The port on 127.0.0.1 they go to (JS8Call's 2242). */
+  js8ApiUdpPort?: number
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number

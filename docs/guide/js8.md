@@ -107,9 +107,35 @@ frame in flight complete, as in the FT8 screen; what is still queued, the rest o
 included, is dropped, not sent when TX comes back on. So is what waits while the dial is outside
 your license privileges, and the screen says so.
 
+## Programs written for JS8Call
+
+Loggers, maps and message tools made for JS8Call's API can read from Nexus as they read from
+JS8Call. Turn on **TCP API** or **UDP API** in
+[Settings ▸ Digital ▸ JS8](settings-reference.md#js8). Both are off until you do, and they use
+JS8Call's ports: 2442 for TCP, 2242 for UDP.
+
+- **What a program gets:** what Nexus hears, as it hears it (every frame, and every directed
+  message, heartbeats and CQs included), each station spotted while PSK Reporter spotting is on,
+  when the transmitter keys and the tones of each frame it sends, a band change, and on request
+  the callsign, grid, INFO and STATUS, the stations heard, the band activity, the free offsets,
+  the switches and the inbox. The messages are JS8Call's own, so a program reads them as it reads
+  JS8Call's.
+- **Read-only.** A program cannot send a message, tune, change the frequency, the speed or a
+  setting, or store a message through Nexus. Those requests get no answer, as JS8Call answers
+  none it does not accept.
+- **This computer only.** Both listen on 127.0.0.1 whatever the port, so a program on another
+  computer cannot reach them. These two settings are changed only here, at the station: the
+  Remote page cannot see or change them.
+- **One TCP program at a time**, as in JS8Call. A second one is told "Connections Full".
+
+Not yet: sending through the API, and the band-pass filter (a program asking for it gets no
+answer). No station is ever "selected" for a program, and an inbox message filed before Nexus
+started reads dial 0.
+
 ## Compatibility
 
 On the air: JS8Call 2.2 and later, and JS8Call-improved, at Slow, Normal, Fast and Turbo.
+For other programs: JS8Call 3.0's API, read-only, as above.
 Not implemented: the "JS8 60" / Ultra speed (JS8Call has offered it since 3.0), and the
 APRS-IS and @JS8NET internet gateways. The full protocol reference is
 [JS8Call's source](https://github.com/js8call/js8call), read as the specification; see

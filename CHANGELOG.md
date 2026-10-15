@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Programs written for JS8Call can read from Nexus.** Turn on JS8Call's API in Settings ▸
+  Digital ▸ JS8 (TCP on 2442, UDP on 2242, both off until you do, as in JS8Call), and a logger, map
+  or message tool made for JS8Call gets what Nexus hears, the stations heard, the band activity, the
+  inbox and the station details, in JS8Call's own messages. It is read-only: such a program cannot
+  send, tune or change a setting through Nexus. Only programs on this computer can connect, and the
+  Remote page cannot turn it on.
+
 - **A Timeline card in Statistics.** A line chart of your QSOs over the past day (by hour), the
   past 30 days (by day) or the past year (by month), each ending with the current hour, day or month
   in UTC, as the log is. One line per mode, counted as the By mode card counts them (USB and LSB are

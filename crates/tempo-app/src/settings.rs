@@ -981,6 +981,20 @@ pub struct Settings {
     /// Joined @GROUP names (e.g. `@FUN`) the station answers directed traffic for.
     #[serde(default)]
     pub js8_groups: Vec<String>,
+    // --- JS8Call's API for other programs on this computer (`engine/js8_api.rs`) ---
+    /// Serve JS8Call's TCP API (`TCPEnabled`): OFF by default, as JS8Call ships it. Read-only, and
+    /// on 127.0.0.1 only whatever else changes (`src-tauri/src/js8_api.rs`).
+    #[serde(default)]
+    pub js8_api_tcp: bool,
+    /// Its port (`TCPServerPort`, JS8Call's 2442).
+    #[serde(default = "default_js8_api_tcp_port")]
+    pub js8_api_tcp_port: u16,
+    /// Send JS8Call's UDP API datagrams (`UDPEnabled`): OFF by default, as JS8Call ships it.
+    #[serde(default)]
+    pub js8_api_udp: bool,
+    /// The port on 127.0.0.1 they go to (`UDPServerPort`, JS8Call's 2242).
+    #[serde(default = "default_js8_api_udp_port")]
+    pub js8_api_udp_port: u16,
     /// FM repeater offset override in Hz (0 = use the band convention from
     /// [`Self::rptr_offset_hz`]). Set by the Program section's tune-now so
     /// odd-split machines (e.g. +1 MHz on 2 m) key the right input.
@@ -4692,6 +4706,16 @@ fn default_js8_activity_aging_min() -> u16 {
     2
 }
 
+/// JS8Call's TCP API port. See [`Settings::js8_api_tcp_port`].
+fn default_js8_api_tcp_port() -> u16 {
+    crate::engine::js8_api::DEFAULT_TCP_PORT
+}
+
+/// JS8Call's UDP API port. See [`Settings::js8_api_udp_port`].
+fn default_js8_api_udp_port() -> u16 {
+    crate::engine::js8_api::DEFAULT_UDP_PORT
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -4744,6 +4768,10 @@ impl Default for Settings {
             js8_info: String::new(),
             js8_status: String::new(),
             js8_groups: Vec::new(),
+            js8_api_tcp: false,
+            js8_api_tcp_port: default_js8_api_tcp_port(),
+            js8_api_udp: false,
+            js8_api_udp_port: default_js8_api_udp_port(),
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this
             fd_class: String::new(),
