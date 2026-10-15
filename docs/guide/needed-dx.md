@@ -33,6 +33,14 @@ Each row is one opportunity, ranked by value to your log:
   station on the band in front of you closes it.
 - **confirmation opportunity** (10) — worked on this band, not yet confirmed.
 
+**What your log counts as worked.** Each contact counts as the
+[Awards](awards-journey.md) count it: by the DXCC entity and CQ zone its record
+carries (from an ADIF import or a LoTW download, LoTW's entity first), else by
+its callsign. So a 2015 K1N contact that LoTW confirmed as Navassa Island makes
+Navassa worked here too, a contact from Sicily counts for Italy, and a contact
+with a deleted entity such as East Germany fills no current entity's slot. A
+station on the air has no record, so it is placed by its callsign alone.
+
 **The chips, and what each one says.** The chip is the short form; hover it for the sentence.
 The same vocabulary appears on the decode feed in the cockpits, so the two read as one system:
 

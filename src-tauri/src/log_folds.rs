@@ -65,7 +65,8 @@ use crate::{qso_is_sat, LogTallies, Tally};
 // The four confirmation channels ride with any pass that reads `award_confirmed` or
 // `confirmed`: the decoder derives both from them, exactly as it does for a whole record.
 
-/// `LogNeeds::add_qso`'s inputs.
+/// `LogNeeds::add_qso`'s inputs — with the passthrough fields [`AWARD_EXTRAS`] names, read beside
+/// them: the needs count each contact as the awards do ([`award_fields`]).
 const NEEDS: Narrow = Narrow {
     columns: &[
         "call",
@@ -78,6 +79,7 @@ const NEEDS: Narrow = Narrow {
         "eqsl_rcvd_raw",
         "qrz_status_raw",
         "prop_mode",
+        "dxcc",
     ],
     uploads: false,
 };
@@ -123,9 +125,16 @@ const JOURNEY: Narrow = Narrow {
     uploads: false,
 };
 
-/// A callsign, and nothing else: the statistics, and the compound calls the launch seeds.
+/// A callsign, and nothing else: the compound calls the launch seeds.
 const CALLS: Narrow = Narrow {
     columns: &["call"],
+    uploads: false,
+};
+
+/// The log statistics' geography: a callsign and the record's DXCC number — with the passthrough
+/// fields [`AWARD_EXTRAS`] names (its CQ zone, and LoTW's DXCC), read beside them.
+const GEOGRAPHY: Narrow = Narrow {
+    columns: &["call", "dxcc"],
     uploads: false,
 };
 
@@ -227,7 +236,7 @@ pub(crate) fn needs_finish(
     tempo_core::logbook::io_fence::whole_log_off_engine_lock("the needs model's fold");
     let mut needs = propagation::LogNeeds::new();
     let fresh = rows
-        .each(NEEDS, Scope::All, Order::Log, &mut |q| {
+        .each_with(NEEDS, AWARD_EXTRAS, Scope::All, Order::Log, &mut |q| {
             // A "needs confirmation" must be award-grade (LoTW/paper), not eQSL.
             needs.add_qso(
                 &q.call,
@@ -237,6 +246,7 @@ pub(crate) fn needs_finish(
                 q.state.as_deref(),
                 q.award_confirmed,
                 qso_is_sat(q.prop_mode.as_deref()),
+                award_fields(q),
             );
             ControlFlow::Continue(())
         })
@@ -303,8 +313,9 @@ pub(crate) fn awards_for_records<R: std::borrow::Borrow<QsoRecord>>(
 }
 
 /// What a contact's record carries for the awards beyond its call: its DXCC number, LoTW's where
-/// that differs, its CQ zone, and when it was made. The one reading [`award_add`] and Remote's
-/// award fold both take.
+/// that differs, its CQ zone, and when it was made. The one reading [`award_add`], the needs
+/// model, the log statistics and Remote's folds of them all take, so each counts a contact as the
+/// awards do.
 pub(crate) fn award_fields(q: &QsoRecord) -> propagation::RecordFields {
     propagation::RecordFields {
         dxcc: q.dxcc,
@@ -355,11 +366,11 @@ pub(crate) fn log_stats(
     let rows = eng.log_rows();
     drop(eng);
     tempo_core::logbook::io_fence::whole_log_off_engine_lock("the log statistics");
-    // `compute_log_stats`' own accumulator, a call at a time.
+    // `compute_log_stats`' own accumulator, a contact at a time, with what its record carries.
     let mut stats = propagation::stats::LogStatsAccumulator::new(&my_call);
     let fresh = rows
-        .each(CALLS, Scope::All, Order::Log, &mut |q| {
-            stats.add(&q.call);
+        .each_with(GEOGRAPHY, AWARD_EXTRAS, Scope::All, Order::Log, &mut |q| {
+            stats.add(&q.call, award_fields(q));
             ControlFlow::Continue(())
         })
         .map_err(unreadable)?;
@@ -908,9 +919,22 @@ mod tests {
                 q.state.as_deref(),
                 q.award_confirmed,
                 qso_is_sat(q.prop_mode.as_deref()),
+                // Since the needs count by the record's own numbers, the oracle reads them off
+                // the whole record — the store's narrow read must carry them to match it.
+                award_fields(q),
             );
         }
         needs
+    }
+
+    /// `log_stats`' fold over the log in memory: `compute_log_stats`' accumulator, each contact
+    /// with what its whole record carries — which the store's narrow read must hand over.
+    fn log_stats_old(records: &[Arc<QsoRecord>], my_call: &str) -> propagation::LogStats {
+        let mut stats = propagation::stats::LogStatsAccumulator::new(my_call);
+        for q in records {
+            stats.add(&q.call, award_fields(q));
+        }
+        stats.summary()
     }
 
     /// `awards_for_records` as it was.
@@ -1197,10 +1221,7 @@ mod tests {
             answer(
                 "statistics",
                 log_stats(e, tallies).expect("reads").as_ref().clone(),
-                propagation::compute_log_stats(
-                    &held.iter().map(|q| q.call.as_str()).collect::<Vec<_>>(),
-                    MY_CALL,
-                ),
+                log_stats_old(&held, MY_CALL),
             ),
             answer(
                 "journey",
@@ -1543,6 +1564,149 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("K1B", 291, 20)]
         );
+    }
+
+    /// [`by_record_log`] and two contacts whose records carry no number, which count by their
+    /// calls: a Sicilian call (Italy, as the ARRL credits Sicily) and a Connecticut one.
+    fn by_record_log_and_calls() -> String {
+        format!(
+            "{}{}{}",
+            by_record_log(),
+            "<CALL:6>IT9ABC<QSO_DATE:8>20200103<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+             <LOTW_QSL_RCVD:1>Y<EOR>\n",
+            "<CALL:4>W1AW<QSO_DATE:8>20200104<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+             <LOTW_QSL_RCVD:1>Y<STATE:2>CT<EOR>\n",
+        )
+    }
+
+    /// ★ The Needed board judges what the log holds by the entity, zone and state the awards
+    /// count each contact toward — its record's DXCC number (LoTW's first) and CQ zone, else its
+    /// call — read from the store as the whole record holds them. Each station below is heard on
+    /// 20 m CW, where every contact in the log was made and confirmed by LoTW. A spot has no
+    /// record, so it is placed by its call alone.
+    #[test]
+    fn the_needed_board_counts_each_contact_as_the_awards_do() {
+        let d = Dir::new("needs-by-record");
+        std::fs::write(
+            d.log(),
+            format!(
+                "{}{}",
+                tempo_core::logbook::adif_header(),
+                by_record_log_and_calls()
+            ),
+        )
+        .unwrap();
+        let e = launch(&d);
+        let tallies = LogTallies::default();
+        let held = records(&e);
+        assert_eq!(held.len(), 8, "premise: every contact converted");
+        let (needs, _) = needs_kept(&e, &tallies).unwrap();
+        assert_eq!(
+            observed(&needs),
+            observed(&needs_old(&held)),
+            "the store's narrow read must carry what the whole record does"
+        );
+        for (call, entity) in [
+            ("KP1AA", "Navassa Island"),
+            ("KH1AA", "Baker & Howland Islands"),
+            ("I1ABC", "Italy"),
+            ("DL1ABC", "Fed. Rep. of Germany"),
+            ("K1N", "United States"),
+        ] {
+            assert_eq!(
+                propagation::dxcc::resolve(call).map(|i| i.entity),
+                Some(entity),
+                "premise: cty.dat places {call}"
+            );
+        }
+        let heard = |call: &str, state: Option<&str>| propagation::Heard {
+            call: call.into(),
+            band: "20m".into(),
+            mode: "CW".into(),
+            freq_mhz: None,
+            admitted_at: None,
+            evidence: None,
+            grid: None,
+            us_state: state.map(|s| (s.to_string(), propagation::StateSource::License)),
+        };
+        let spots = [
+            // Navassa: K1N's record, zone 8 with it.
+            heard("KP1AA", None),
+            // Baker & Howland: LoTW's number on K1B, over the 291 the log holds. The zone is
+            // the call's (K1B's record carries none), as WAZ counts it: 5, so 31 is new.
+            heard("KH1AA", None),
+            // Italy: the Sicilian contact, by its call.
+            heard("I1ABC", None),
+            // Germany: Y24UK was the German Democratic Republic, deleted — no current entity.
+            heard("DL1ABC", None),
+            // Florida: KP4ABC's record says the United States.
+            heard("K4ABC", Some("FL")),
+            // Today's K1N, placed by its call: the United States, never Navassa.
+            heard("K1N", None),
+            // Control: Connecticut, by W1AW's call, which carries no number.
+            heard("W1XYZ", Some("CT")),
+        ];
+        let mut board: Vec<(String, String, Vec<propagation::NeedTag>)> =
+            propagation::rank_needs(&spots, &*needs, &needs.slots())
+                .into_iter()
+                .map(|a| (a.call, a.entity, a.tags))
+                .collect();
+        board.sort_by(|a, b| a.0.cmp(&b.0));
+        use propagation::NeedTag::{NewEntity, NewZone};
+        assert_eq!(
+            board,
+            [
+                (
+                    "DL1ABC".into(),
+                    "Fed. Rep. of Germany".into(),
+                    vec![NewEntity]
+                ),
+                (
+                    "KH1AA".into(),
+                    "Baker & Howland Islands".into(),
+                    vec![NewZone]
+                ),
+            ]
+        );
+        assert!(
+            !needs
+                .worked_entity_names()
+                .contains("GERMAN DEMOCRATIC REPUBLIC"),
+            "a deleted entity is never a need"
+        );
+    }
+
+    /// ★ The log statistics' geography counts each contact by the entity and zone the awards
+    /// count it toward, read from the store: DX or domestic against the operator's own entity
+    /// (the United States), each continent's entities, the zones.
+    #[test]
+    fn the_log_statistics_count_each_contact_as_the_awards_do() {
+        let d = Dir::new("stats-by-record");
+        std::fs::write(
+            d.log(),
+            format!(
+                "{}{}",
+                tempo_core::logbook::adif_header(),
+                by_record_log_and_calls()
+            ),
+        )
+        .unwrap();
+        let e = launch(&d);
+        let tallies = LogTallies::default();
+        let stats = log_stats(&e, &tallies).unwrap();
+        assert_eq!((stats.total, stats.resolved), (8, 8));
+        // Domestic: K1ABC, KP4ABC (its record's 291) and W1AW. DX: Navassa, Baker & Howland,
+        // Johnston, the German Democratic Republic, Italy.
+        assert_eq!((stats.domestic, stats.dx), (3, 5));
+        let continents: Vec<(&str, usize, usize)> = stats
+            .by_continent
+            .iter()
+            .map(|c| (c.continent.as_str(), c.qsos, c.entities))
+            .collect();
+        assert_eq!(continents, [("NA", 6, 4), ("EU", 2, 2)]);
+        let zones: Vec<(u8, usize)> = stats.by_zone.iter().map(|z| (z.zone, z.qsos)).collect();
+        // K1N's record says 8 and K1ABC's 3; the rest are their calls' zones.
+        assert_eq!(zones, [(3, 1), (5, 3), (8, 2), (14, 1), (15, 1)]);
     }
 
     /// One ADIF record, parsed as the log parses it, with no id.

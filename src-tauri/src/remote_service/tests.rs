@@ -952,10 +952,14 @@ fn cloud_runtime_probe() {
             let records = e.stored_records();
             drop(e);
             let awards = crate::awards_for_records(&records, &my_call);
-            let geography = propagation::compute_log_stats(
-                &records.iter().map(|q| &q.call).collect::<Vec<_>>(),
-                &my_call,
-            );
+            // The desktop's geography fold: each contact with what its record carries.
+            let geography = {
+                let mut stats = propagation::stats::LogStatsAccumulator::new(&my_call);
+                for q in &records {
+                    stats.add(&q.call, crate::log_folds::award_fields(q));
+                }
+                stats.summary()
+            };
             let mut log: Vec<_> = records
                 .into_iter()
                 .map(tempo_app::dto::LoggedQso::from)

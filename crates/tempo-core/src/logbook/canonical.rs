@@ -148,7 +148,7 @@ mod tests {
             one(&imported("K1ABC", "20M", "FT8", "EN52")),
             one(&logged("K2DEF", "20m", "FT8", "FN20")),
         ];
-        let counts = reference::fold(&log, LogStatCounter::new(&|_: &str| None));
+        let counts = reference::fold(&log, LogStatCounter::new(&|_: &QsoRecord| None));
         assert_eq!(
             counts.by_band,
             vec![LabelCount {
@@ -278,7 +278,7 @@ mod tests {
                 + &tag("SUBMODE", "LSB")
                 + "<EOR>")),
         ];
-        let counts = reference::fold(&log, LogStatCounter::new(&|_: &str| None));
+        let counts = reference::fold(&log, LogStatCounter::new(&|_: &QsoRecord| None));
         assert_eq!(
             counts.by_mode,
             vec![LabelCount {

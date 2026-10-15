@@ -451,7 +451,10 @@ fn reference_answer(
         "bandsInLog" => json!(reference::fold(log, BandsInLog::default())),
         "lotwBacklog" => json!(reference::fold(log, LotwBacklog::default())),
         // The COUNTS, which the window orders (`finishLogStats`) into the golden answer.
-        "statistics" => json!(reference::fold(log, LogStatCounter::new(&entity))),
+        "statistics" => json!(reference::fold(
+            log,
+            LogStatCounter::new(&|r: &QsoRecord| entity(&r.call))
+        )),
         other => panic!("no reference answer for {other}"),
     }
 }
@@ -487,9 +490,60 @@ fn the_statistics_counts_are_the_uis() {
     assert!(!logs.is_empty(), "premise: the tied log is in the fixture");
     for (log, entities, counts) in logs {
         let entity = |call: &str| entities.get(call).cloned().flatten();
-        let got = json!(reference::fold(&log, LogStatCounter::new(&entity)));
+        let got = json!(reference::fold(
+            &log,
+            LogStatCounter::new(&|r: &QsoRecord| entity(&r.call))
+        ));
         assert_eq!(got, counts, "{} rows", log.len());
     }
+}
+
+/// A row's entity is asked of the resolver once per call AND the record's DXCC numbers, never
+/// once per call: one call is two entities when its records carry two numbers (K1N, Navassa in
+/// 2015 and a US call since), or LoTW's beside the log's (K1B).
+#[test]
+fn the_statistics_ask_each_calls_entity_apart_for_each_records_numbers() {
+    let rec = |call: &str, dxcc: Option<u32>, lotw: Option<&str>| {
+        let mut r = parse_adif("<CALL:1>X<QSO_DATE:8>20240101<TIME_ON:4>1200<EOR>").remove(0);
+        r.call = call.to_string();
+        r.dxcc = dxcc;
+        crate::logbook::set_extra(
+            &mut r,
+            crate::logbook::LOTW_DXCC_FIELD,
+            lotw.map(str::to_string),
+        );
+        r
+    };
+    let log = [
+        rec("K1N", Some(182), None),
+        rec("K1N", None, None),
+        rec("K1B", Some(291), Some("20")),
+        rec("K1B", Some(291), None),
+    ];
+    // As the app names a row's entity: LoTW's number, else the log's, else the call's — all
+    // three calls here are US calls today.
+    let entity = |r: &QsoRecord| {
+        let name = match crate::logbook::record_lotw_dxcc(r).or(r.dxcc) {
+            Some(182) => "Navassa Island",
+            Some(20) => "Baker & Howland Islands",
+            _ => "United States",
+        };
+        Some(name.to_string())
+    };
+    let counts = reference::fold(&log, LogStatCounter::new(&entity));
+    let entities: Vec<(&str, usize)> = counts
+        .entities
+        .iter()
+        .map(|t| (t.label.as_str(), t.count))
+        .collect();
+    assert_eq!(
+        entities,
+        [
+            ("Navassa Island", 1),
+            ("United States", 2),
+            ("Baker & Howland Islands", 1),
+        ]
+    );
 }
 
 /// The WAS gate is the UI's: its three US-family entities and fifty codes, read out of
@@ -548,7 +602,7 @@ fn by_state_counts_a_contact_by_its_dxcc_entity() {
             .and_then(|r| r.1)
             .map(str::to_string)
     };
-    let counts = reference::fold(&log, LogStatCounter::new(&entity));
+    let counts = reference::fold(&log, LogStatCounter::new(&|r: &QsoRecord| entity(&r.call)));
     let by_state: Vec<(&str, usize)> = counts
         .by_state
         .iter()
@@ -970,11 +1024,12 @@ fn the_timeline_counts_modes_as_the_by_mode_card_does() {
         .map(|m| (m.label.as_str(), m.counts.iter().sum()))
         .collect();
     assert_eq!(lines, [("FT8", 2), ("SSB", 3), ("CW", 1), ("ft8", 1)]);
-    let by_mode: Vec<(String, usize)> = reference::fold(&log, LogStatCounter::new(&|_: &str| None))
-        .by_mode
-        .into_iter()
-        .map(|t| (t.label, t.count))
-        .collect();
+    let by_mode: Vec<(String, usize)> =
+        reference::fold(&log, LogStatCounter::new(&|_: &QsoRecord| None))
+            .by_mode
+            .into_iter()
+            .map(|t| (t.label, t.count))
+            .collect();
     let lines: Vec<(String, usize)> = lines.into_iter().map(|(m, c)| (m.to_string(), c)).collect();
     assert_eq!(lines, by_mode, "the By mode card's tally");
 }
