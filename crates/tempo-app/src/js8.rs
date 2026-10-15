@@ -281,22 +281,12 @@ impl Engine {
         if !add(self.js8_last_error.as_deref().unwrap_or("")) {
             return None;
         }
-        // The page's parser refuses a key it does not list, and none lists these yet: the
-        // desktop's `presence`, `inboxTooLong` and `controls`, each row's place in its message
-        // (`flags`), and each station's ★ and ☎ (`ackMs`, `cqMs`). Its cockpit reads the sample as
-        // it read it before them.
-        let mut state = self.js8_state();
-        state.presence = None;
-        state.inbox_too_long = Vec::new();
-        state.controls = None;
-        for row in &mut state.activity {
-            row.flags = None;
-        }
-        for heard in &mut state.stations {
-            heard.ack_ms = None;
-            heard.cq_ms = None;
-        }
-        Some(state)
+        // The desktop's own keys ride as they are, each listed by the page's parser: `presence`,
+        // `controls`, `inboxTooLong`, each row's place in its message (`flags`) and each station's
+        // ★ and ☎ (`ackMs`, `cqMs`). Their text is inside the page's bounds as the station keeps
+        // it: at most 500 calls the 55-minute rule stopped, each held to 32 bytes, and a band
+        // schedule description of at most 80 characters.
+        Some(self.js8_state())
     }
 
     /// The cockpit poll. Every field is engine truth at poll time; `armed` is, per origin, the
@@ -1588,28 +1578,24 @@ mod tests {
             let before = serde_json::to_value(e.js8_state()).unwrap();
             assert!(!before["activity"].as_array().unwrap().is_empty());
             assert!(!before["queue"].as_array().unwrap().is_empty());
-            // The desktop's `presence` and `controls` (the waterfall controls and the schedule's
-            // notice) and each row's place in its message are the keys the Remote's sample leaves
-            // out (the page's parser does not list them yet); everything else is the native state,
-            // unchanged.
-            let mut native = before.clone();
+            // The Remote's sample is the native state whole: the desktop's `presence` and
+            // `controls` (the waterfall controls and the schedule's notice) and each row's place
+            // in its message ride in it, as the page's parser lists them.
             assert!(
-                native.as_object_mut().unwrap().remove("presence").is_some(),
-                "control: the desktop's state carries presence"
+                before.get("presence").is_some() && before.get("controls").is_some(),
+                "control: the desktop's state carries presence and controls"
             );
             assert!(
-                native.as_object_mut().unwrap().remove("controls").is_some(),
-                "control: the desktop's state carries controls"
+                before["activity"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|row| row.get("flags").is_some()),
+                "control: the desktop's rows carry their places"
             );
-            for row in native["activity"].as_array_mut().unwrap() {
-                assert!(
-                    row.as_object_mut().unwrap().remove("flags").is_some(),
-                    "control: the desktop's row carries its place"
-                );
-            }
             assert_eq!(
                 serde_json::to_value(e.bounded_js8_state().unwrap()).unwrap(),
-                native
+                before
             );
             assert_eq!(serde_json::to_value(e.js8_state()).unwrap(), before);
             assert!(!e.snapshot().radio.tx_enabled);
@@ -4988,11 +4974,10 @@ mod tests {
         );
     }
 
-    /// The desktop's cockpit reads presence; the Remote page's sample carries no such key, as that
-    /// page's parser refuses a key it does not list. At Turbo an armed HB ACK says the speed
-    /// holds it back.
+    /// The desktop's cockpit reads presence, and the Remote page's sample carries the same, which
+    /// that page's parser lists. At Turbo an armed HB ACK says the speed holds it back, on both.
     #[test]
-    fn js8_presence_reaches_the_desktop_and_not_the_remote_sample() {
+    fn js8_presence_reaches_the_desktop_and_the_remote_sample() {
         use crate::dto::Js8HbAckSuppressed;
         let mut e = hb_engine("EN52", 0, 1500.0);
         e.settings.js8_avoid_allcall = true;
@@ -5011,9 +4996,10 @@ mod tests {
         );
         let sample = e.bounded_js8_state().expect("bounded");
         let json = serde_json::to_value(&sample).expect("serialises");
-        assert!(
-            sample.presence.is_none() && json.get("presence").is_none(),
-            "the Remote's sample carries no presence"
+        assert_eq!(
+            (&sample.presence, &json["presence"]["avoidAllcall"]),
+            (&e.js8_state().presence, &serde_json::json!(true)),
+            "the Remote's sample carries the desktop's presence"
         );
         e.js8_arm(Js8Switch::HbAck, true).expect("HB ACK on");
         e.js8_set_speed(3).expect("Turbo");
@@ -5023,6 +5009,13 @@ mod tests {
                 .map(|p| (p.hb_speed, p.hb_ack_suppressed)),
             Some((false, Some(Js8HbAckSuppressed::Speed))),
             "Turbo: no heartbeats, and the armed HB ACK says why"
+        );
+        assert_eq!(
+            e.bounded_js8_state()
+                .and_then(|s| s.presence)
+                .map(|p| (p.hb_speed, p.hb_ack_suppressed)),
+            Some((false, Some(Js8HbAckSuppressed::Speed))),
+            "and so does the Remote's"
         );
     }
 
@@ -5207,10 +5200,10 @@ mod tests {
         );
     }
 
-    /// The Remote page's sample is the state it always was: no row's place and no station's ★ or
-    /// ☎, which its parser does not list yet, while the desktop's state carries all three.
+    /// The Remote page's sample carries each row's place and each station's ★ and ☎ as the
+    /// desktop's state does, which that page's parser lists.
     #[test]
-    fn the_remote_sample_leaves_out_the_desktops_new_keys() {
+    fn the_remote_sample_carries_the_rows_places_and_the_stations_marks() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.js8_enter();
         e.js8_load_journal(
@@ -5238,16 +5231,8 @@ mod tests {
         );
         assert!(native["activity"][0].get("flags").is_some(), "control");
         let sample = serde_json::to_value(e.bounded_js8_state().unwrap()).unwrap();
-        for h in sample["stations"].as_array().unwrap() {
-            assert!(h.get("ackMs").is_none() && h.get("cqMs").is_none(), "{h}");
-        }
-        for r in sample["activity"].as_array().unwrap() {
-            assert!(r.get("flags").is_none(), "{r}");
-        }
-        assert_eq!(
-            sample["stations"].as_array().unwrap().len(),
-            native["stations"].as_array().unwrap().len()
-        );
+        assert_eq!(sample["stations"], native["stations"]);
+        assert_eq!(sample["activity"], native["activity"]);
     }
 
     /// The call list's two writes: "Block This Station" (UI_Constructor.cpp:1119-1129) and the

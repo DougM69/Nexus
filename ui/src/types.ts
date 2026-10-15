@@ -1912,7 +1912,7 @@ export interface Js8ActivityRow {
   /** Decode quality below JS8Call's 0.17 low-confidence threshold. */
   lowConf: boolean
   /** Where the row stands in its message: the frame's i3 First/Last bits, or the reassembled line
-   *  of a multi-frame message. The desktop's alone; the Remote page's sample has none. */
+   *  of a multi-frame message. Absent from a station older than this key (on the Remote page). */
   flags?: Js8RowFlags
 }
 /** JS8Call's `JS8CallFirst`/`JS8CallLast` bits of a frame row, or `assembled` for the reassembled
@@ -1935,10 +1935,10 @@ export interface Js8Heard {
   lastCq: boolean
   storedMsgs: number
   /** JS8Call's `ackTimestamp` (★ "Hearing your station"): when this station last sent something
-   *  addressed to my call. The desktop's alone, absent until it has. */
+   *  addressed to my call. Absent until it has, and from a station older than this key. */
   ackMs?: number
-  /** JS8Call's `cqTimestamp` (☎ for five minutes): when this station last called CQ. The
-   *  desktop's alone, absent until it has. */
+  /** JS8Call's `cqTimestamp` (☎ for five minutes): when this station last called CQ. Absent until
+   *  it has, and from a station older than this key. */
   cqMs?: number
 }
 
@@ -2055,8 +2055,8 @@ export interface Js8State {
   speed: Js8Speed
   /** Bitmask of decoded speeds: slow 1 · normal 2 · fast 4 · turbo 8 · ultra 16. */
   rxSpeeds: number
-  /** JS8Call's waterfall controls and the band schedule's notice: the desktop's own. Absent on the
-   *  hosted Remote page's sample and from an older station. */
+  /** JS8Call's waterfall controls and the band schedule's notice. Absent from a station older than
+   *  this key (on the Remote page). */
   controls?: Js8Controls | null
   txEnabled: boolean
   sending: boolean
@@ -2086,14 +2086,14 @@ export interface Js8State {
   /** What a cap took out of the inbox, oldest first, at most ten. Absent while there are none. */
   inboxDropped?: Js8InboxDrop[]
   /** Held messages too long to hand over at the current speed. Absent while there are none, and
-   * from the Remote page's sample. */
+   * from a station older than this key. */
   inboxTooLong?: Js8InboxTooLong[]
   queue: Js8QueueRow[]
   pendingReply: Js8PendingReply | null
   /** The last refused verb's reason, cleared by the next successful verb. */
   lastError: string | null
-  /** Heartbeat networking, the QSO pause and what holds an HB ACK back. The desktop's own: the
-   * Remote page's sample does not carry it, and its cockpit shows the HB controls as before. */
+  /** Heartbeat networking, the QSO pause and what holds an HB ACK back. A station older than this
+   * key sends none (on the Remote page), and the cockpit then shows the HB controls as before. */
   presence?: Js8Presence
 }
 

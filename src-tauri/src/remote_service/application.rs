@@ -618,24 +618,16 @@ mod tests {
     fn js8_observation_uses_native_state_without_entering_or_arming() {
         use std::sync::{Arc, Mutex};
         let engine = tempo_app::engine::Engine::with_settings(Default::default());
-        let mut expected = serde_json::to_value(engine.js8_state()).unwrap();
-        // The desktop's `presence` and `controls` (the waterfall controls and the schedule's
-        // notice) are the keys the page's sample leaves out (its parser does not list them yet);
-        // everything else is the native state as it stands.
+        let expected = serde_json::to_value(engine.js8_state()).unwrap();
+        // The page's sample is the native state as it stands, the desktop's `presence` and
+        // `controls` (the waterfall controls and the schedule's notice) with it: its parser
+        // lists them.
         assert!(
-            expected
-                .as_object_mut()
-                .unwrap()
-                .remove("presence")
-                .is_some(),
+            expected.get("presence").is_some(),
             "control: the desktop's state carries presence"
         );
         assert!(
-            expected
-                .as_object_mut()
-                .unwrap()
-                .remove("controls")
-                .is_some(),
+            expected.get("controls").is_some(),
             "control: the desktop's state carries controls"
         );
         let settings = serde_json::to_value(engine.settings()).unwrap();

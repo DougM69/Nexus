@@ -515,10 +515,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     const stationModes=await stationModesFixture()
     applicationData.get_sstv_state=stationModes.sstv;applicationData.get_remote_aprs_state=stationModes.aprs
     collections.aprs=stationModes.roster
-    const js8Fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/js8.json',import.meta.url),'utf8'))
+    // The oldest JS8 station (v11) sends JS8 as 1.18.0 and every release before it did; the rest send it as this
+    // release does, with the desktop's heartbeat networking, waterfall controls, too-long notes, rows' places and marks.
+    const js8Fixture=JSON.parse(await readFile(new URL(`../../ui/src/remote-web/__fixtures__/${applicationVersion===11?'js8-1.18.0':'js8'}.json`,import.meta.url),'utf8'))
     const js8Start=Date.now(), js8Delta=js8Start-js8Fixture.capturedAtMs
     for(const row of js8Fixture.state.activity)row.atMs+=js8Delta
-    for(const row of js8Fixture.state.stations)row.lastMs+=js8Delta
+    for(const row of js8Fixture.state.stations)for(const key of ['lastMs','ackMs','cqMs'])if(key in row)row[key]+=js8Delta
     for(const row of js8Fixture.state.inbox)row.atMs+=js8Delta
     js8Fixture.state.hbNextAtMs+=js8Delta;js8Fixture.state.cqNextAtMs+=js8Delta;js8Fixture.state.pendingReply.firesAtMs+=js8Delta
     applicationData.get_js8_state=js8Fixture
@@ -4104,8 +4106,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     // sweep below hit-tests. So the station's mail is all there before the view opens, as a
     // journal's is, and no run depends on whether the first poll came before the fixture grew.
     if(applicationVersion>=11){
-      js8Fixture.state.activity.push(...Array.from({length:76},(_,i)=>({...js8Fixture.state.activity[i%4],text:`JS8 HISTORY ${i+1}`,atMs:js8Start+i,freqHz:600+i*20})))
-      js8Fixture.state.inbox.push(...Array.from({length:39},(_,i)=>({...js8Fixture.state.inbox[0],id:i+2,text:`JS8 MAIL ${i+1}`})))
+      // Each a message to me, so the RX pane lines it up whether the station says where its rows stand or not.
+      js8Fixture.state.activity.push(...Array.from({length:76},(_,i)=>({...js8Fixture.state.activity[i%4],text:`W1AW: N0CALL JS8 HISTORY ${i+1}`,atMs:js8Start+i,freqHz:600+i*20})))
+      const js8Mail=js8Fixture.state.inbox.length
+      js8Fixture.state.inbox.push(...Array.from({length:39},(_,i)=>({...js8Fixture.state.inbox[0],id:js8Mail+i+1,text:`JS8 MAIL ${i+1}`})))
       js8Fixture.state.stations.push(...Array.from({length:38},(_,i)=>({...js8Fixture.state.stations[0],call:`K1JS${i}`})))
       for(const row of js8Fixture.state.stations)collections.js8Context.meta.history[row.call]??={count:0,lastUnix:null,grid:'',name:'',comment:''}
       js8Fixture.state.queue.push(...Array.from({length:38},(_,i)=>({...js8Fixture.state.queue[1],display:`JS8 QUEUE ${i+1}`})))
@@ -4131,6 +4135,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       const js8PinItem=`[...document.querySelectorAll('[role=menuitem]')].find(e=>e.textContent==='Pin to the top')`
       await click(js8PinItem)
       await until(`document.querySelector('.js8-station.pinned .js8-station-call')?.textContent==='W1AW'`)
+      // What a station from this release adds to the view: HB NET, the filter plate, ★ and ☎, and a held message's note.
+      // Hit-tested in the version scenarios; the operating ones show this same view, and ~25 s a scenario is CI's time.
+      const js8New=js8Fixture.state.presence&&!operating?['.js8-hbnet','.js8-filter-pill','.js8-mark-ack','.js8-mark-cq','.js8-inbox-row.state-store .js8-path']:[]
       for(const [width,height,zoom] of [[360,740,1],[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],[1200,1390,1],[3440,1440,1],[1024,768,0.8],[1280,800,1.75],[390,844,1.75]])for(const theme of ['dark','light']){
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
@@ -4139,7 +4146,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         // native pane columns. Measurements showed a 2→1 column change AFTER
         // the first layout wait, which invalidated an already-completed scroll.
         await settledLayout()
-        for(const target of ['.js8-row:last-child .js8-text','.js8-station:last-child .js8-station-call','.js8-inbox-row:last-child .js8-text','.js8-offset-row:last-child .js8-text','.js8-compose','.js8-queue-item:last-of-type .js8-queue-text']){
+        for(const target of ['.js8-row:last-child .js8-text','.js8-station:last-child .js8-station-call','.js8-inbox-row:last-child .js8-text','.js8-offset-row:last-child .js8-text','.js8-compose','.js8-queue-item:last-of-type .js8-queue-text',...js8New]){
           const beforeScroll=await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest',behavior:'instant'},`node=>{window.__js8ScrollNode=node;const chain=[];for(let e=node;e;e=e.parentElement){const r=e.getBoundingClientRect();chain.push({class:e.className,top:r.top,height:r.height,scroll:e.scrollHeight,client:e.clientHeight,at:e.scrollTop,cols:e.dataset.cols,flow:e.dataset.flow})}return chain}`,`${target} at ${width}x${height} zoom ${zoom}`))
           await settledLayout()
           if(!await evaluate(`!!document.querySelector('${target}')`))console.log('SESSION MISSING',target,JSON.stringify({session:await sessionDiagnostic(),documents:await evaluate('window.__queryTrace'),availability:await evaluate('window.__availabilityTrace')}));
@@ -4160,7 +4167,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(`!!document.querySelector('.js8-inbox')`),false)
       assert.equal(await evaluate(`document.querySelectorAll('.js8-queue-item').length`),40)
       await click(inboxCheck)
-      await until(`document.querySelectorAll('.js8-inbox-row').length===40`)
+      await until(`document.querySelectorAll('.js8-inbox-row').length===${js8Fixture.state.inbox.length}`)
       await click(`document.querySelector('.js8-cockpit .panels-menu-btn')`)
       await evaluate(`document.querySelector('.js8-cockpit').scrollTop=0`)
       await settledLayout()

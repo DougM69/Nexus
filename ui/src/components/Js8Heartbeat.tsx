@@ -26,7 +26,8 @@ const MENU_GLYPH = '▾'
 
 /** JS8Call shows its HB button only with heartbeat networking on, at a speed that heartbeats
  *  (`prepareHeartbeatMode(canCurrentModeSendHeartbeat() && actionModeJS8HB->isChecked())`). A
- *  sample with no presence (the Remote page's) keeps the button as it always was. */
+ *  sample with no presence (an older station's, on the Remote page) keeps the button as it
+ *  always was. */
 export function js8HbShown(presence: Js8Presence | undefined): boolean {
   return presence === undefined || (presence.hbNetworking && presence.hbSpeed)
 }
