@@ -180,7 +180,8 @@ spot), *Don't acknowledge stations that heartbeat more often than every 55 minut
 station is added to *Never acknowledge heartbeats from these callsigns*, as JS8Call adds it to
 its list, and gets no acknowledgement again; **HB ACK** names the ones the rule added; take a
 station off that list to acknowledge it again, and turning the option off leaves the list as it
-is) and *Do not take part in @ALLCALL* (nothing to @ALLCALL is answered or marked as yours), all
+is; once the list holds 500 calls the rule adds no more, but a station it stops is still not
+acknowledged until you turn the option off) and *Do not take part in @ALLCALL* (nothing to @ALLCALL is answered or marked as yours), all
 off by default. An update from a version without **HB NET** turns it on if you had **HB ACK**
 on or a heartbeat repeat interval set, so the **HB** button stays; otherwise it starts off.
 Every automatic reply first asks in the dock, as JS8Call asks: "A transmission is queued for

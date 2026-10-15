@@ -151,7 +151,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a station is added to *Never acknowledge heartbeats from these callsigns* (Settings ▸ Digital ▸
   JS8), as JS8Call adds it to its list, gets no acknowledgement again, and the HB ACK chip names it;
   take it off that list to acknowledge it again (turning the option off leaves the list as it is).
-  A station the rule adds while Settings is open is kept when you save it. *Do not take part in
+  Once the list holds 500 calls the rule adds no more, but a station it stops is still not
+  acknowledged until you turn the option off. A station the rule adds while Settings is open is
+  kept when you save it. *Do not take part in
   @ALLCALL*: nothing addressed to @ALLCALL is answered
   or marked as addressed to you, and @ALLCALL leaves the To box's list. NEEDS-BENCH.
 - **The JS8 HB ACK chip says when an acknowledgement is held back.** When HB ACK is armed but would

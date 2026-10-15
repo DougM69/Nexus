@@ -401,3 +401,70 @@ fn the_55_minute_rule_puts_its_stations_on_the_never_acknowledge_list() {
         "{actions:?}"
     );
 }
+
+/// A station the rule stops while the "never acknowledge" list is full is turned away all the same,
+/// as JS8Call's uncapped blacklist would turn it away: the cap bounds what heard calls can write
+/// into the operator's Settings, never whether the rule holds. The rule keeps such a station in a
+/// record of its own, journaled, until the rule is turned off.
+#[test]
+fn a_station_the_rule_stops_while_the_list_is_full_stays_turned_away() {
+    let full: Vec<String> = (0..MAX_HB_RATE).map(|i| format!("K{i}AA")).collect();
+    let on = |rule: bool| StationConfig {
+        hb_networking: true,
+        hb_ack: true,
+        hb_rate_limit: rule,
+        hb_ack_deny: full.clone(),
+        ..cfg(Speed::Normal)
+    };
+    let acks = |s: &mut Station, call: &str, at: u64| -> Vec<String> {
+        s.on_event(&hb(call, -5, at), at);
+        let made = replies(s);
+        s.drop_queue();
+        made
+    };
+    let mut s = Station::new(on(true));
+    assert_eq!(acks(&mut s, "W1AW", T0), ["W1AW HEARTBEAT SNR -05"]);
+    assert!(acks(&mut s, "W1AW", T0 + 30 * MIN).is_empty(), "stopped");
+    assert_eq!(s.config().hb_ack_deny, full, "the full list takes no more");
+    assert!(
+        acks(&mut s, "W1AW", T0 + 60 * MIN).is_empty(),
+        "still turned away, an hour after its first heartbeat"
+    );
+    assert_eq!(
+        acks(&mut s, "K1ABC", T0 + 60 * MIN),
+        ["K1ABC HEARTBEAT SNR -05"],
+        "control: another station is acknowledged"
+    );
+
+    // The journal keeps it.
+    let mut back = Station::new(on(true));
+    back.restore(s.snapshot(T0 + 61 * MIN), T0 + 61 * MIN);
+    assert!(
+        acks(&mut back, "W1AW", T0 + 90 * MIN).is_empty(),
+        "turned away after a restart"
+    );
+
+    // The rule turned off forgets it: the operator's way back.
+    back.set_config(on(false));
+    back.set_config(on(true));
+    assert_eq!(
+        acks(&mut back, "W1AW", T0 + 120 * MIN),
+        ["W1AW HEARTBEAT SNR -05"],
+        "the rule off and on again: acknowledged"
+    );
+}
+
+/// A relayed station's call as it arrives, `W1AW>K1ABC`, is a route and not a station: JS8Call's
+/// call activity leaves out any call holding a `>` ("don't log relay calls",
+/// `logCallActivity`, mainwindow.cpp:2290-2293), so the heard list does too.
+#[test]
+fn a_relay_route_is_not_a_heard_station() {
+    let mut s = Station::new(cfg(Speed::Normal));
+    s.on_event(&ev("W1AW>K1ABC", "KD9TAW", Command::Snr, "", -9, T0), T0);
+    assert!(heard_calls(&s).is_empty(), "{:?}", heard_calls(&s));
+    s.on_event(
+        &ev("W1AW", "KD9TAW", Command::Snr, "", -9, T0 + MIN),
+        T0 + MIN,
+    );
+    assert_eq!(heard_calls(&s), ["W1AW"], "control: a station is listed");
+}

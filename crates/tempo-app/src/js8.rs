@@ -696,7 +696,8 @@ impl Engine {
                 "js8",
                 &format!(
                     "{call} heartbeats more often than every 55 minutes, but the \"never \
-                     acknowledge\" list is full: it was not added"
+                     acknowledge\" list is full: it was not added, and it is still not acknowledged \
+                     until the 55-minute rule is turned off"
                 ),
             );
             return;

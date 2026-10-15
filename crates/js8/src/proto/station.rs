@@ -582,6 +582,10 @@ pub struct StationSnapshot {
     /// is written as before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hb_rate_blocked: Vec<String>,
+    /// The stations the rule stopped while that list was full, still turned away
+    /// ([`Station::hb_rate_overflow`]). Left out while empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hb_rate_overflow: Vec<String>,
     /// Who has been handed which group message, `(id, call as heard)`. Absent from a journal
     /// written before groups were handed over, and left out while empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -674,8 +678,12 @@ pub struct Station {
     hb_acked_at: HashMap<String, u64>,
     /// …and the stations the rule put on the "never acknowledge" list and that are still on it,
     /// oldest first: which of that list's calls are the rule's, for the HB ACK chip. The list
-    /// itself (`hb_ack_deny`) is what turns them away, as JS8Call's blacklist does.
+    /// itself (`hb_ack_deny`) is what turns them away, as JS8Call's blacklist does…
     hb_rate_blocked: Vec<String>,
+    /// …and the stations it stopped while that list was full (`MAX_HB_RATE`), which the list could
+    /// not take: turned away all the same, as JS8Call's uncapped blacklist would turn them away,
+    /// oldest dropped past the cap. Journaled; the rule turned off forgets them.
+    hb_rate_overflow: Vec<String>,
     /// The compose box's message while it goes out, for its typeahead.
     typeahead: Option<typeahead::Typeahead>,
     /// Who has been handed which group message, `(id, call as heard)` (JS8Call's
@@ -715,6 +723,7 @@ impl Station {
             hb_paused: false,
             hb_acked_at: HashMap::new(),
             hb_rate_blocked: Vec::new(),
+            hb_rate_overflow: Vec::new(),
             typeahead: None,
             group_recipients: Vec::new(),
             inbox_dropped: Vec::new(),
@@ -731,6 +740,7 @@ impl Station {
     pub fn set_config(&mut self, cfg: StationConfig) {
         if self.cfg.hb_rate_limit && !cfg.hb_rate_limit {
             self.hb_acked_at.clear();
+            self.hb_rate_overflow.clear();
         }
         self.cfg = cfg;
         self.keep_listed_rate_blocks();
@@ -932,10 +942,11 @@ impl Station {
 
     /// The heard list keeps a station under its call as heard, `/P` included, as JS8Call's call
     /// activity keys it (`m_callActivity[d.call]`, mainwindow.cpp:2297-2311): W1AW and W1AW/P are
-    /// two stations to it, each with its own SNR and time.
+    /// two stations to it, each with its own SNR and time. A relay route (`W1AW>K1ABC`) is not a
+    /// station: JS8Call does not log relay calls (`logCallActivity`, mainwindow.cpp:2290-2293).
     fn record_heard(&mut self, m: &Message, actions: &mut Vec<StationAction>) {
         let call = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
-        if call.is_empty() || call == "<....>" {
+        if call.is_empty() || call == "<....>" || call.contains('>') {
             return;
         }
         let grid = m.grid.as_deref().map(|g| clamp_str(g, MAX_CALL_LEN));
@@ -1111,7 +1122,7 @@ impl Station {
         if self.cfg.hb_qso_pause && self.selected.is_some() {
             return;
         }
-        if on_list(&self.cfg.hb_ack_deny, &m.from) {
+        if on_list(&self.cfg.hb_ack_deny, &m.from) || on_list(&self.hb_rate_overflow, &m.from) {
             return;
         }
         // The station as heard, `/P` included (`sendHeartbeatAck(d.from, …)`, :9098); a message
@@ -1186,8 +1197,16 @@ impl Station {
                 // Once, as heard (`if (!hb_blacklist_.contains(callsign)) append`), and never
                 // into a list already `MAX_HB_RATE` long: it grows from calls heard on the air.
                 let deny = &mut self.cfg.hb_ack_deny;
-                if !deny.iter().any(|c| c == who) && deny.len() < MAX_HB_RATE {
-                    deny.push(who.to_string());
+                if !deny.iter().any(|c| c == who) {
+                    if deny.len() < MAX_HB_RATE {
+                        deny.push(who.to_string());
+                    } else if !self.hb_rate_overflow.iter().any(|c| c == who) {
+                        // A full list takes no more, but the rule still holds: the station is
+                        // kept in the rule's own record, which `maybe_hb_ack` reads as well.
+                        self.hb_rate_overflow.push(who.to_string());
+                        let over = self.hb_rate_overflow.len().saturating_sub(MAX_HB_RATE);
+                        self.hb_rate_overflow.drain(..over);
+                    }
                 }
                 if !self.hb_rate_blocked.iter().any(|c| c == who) {
                     self.hb_rate_blocked.push(who.to_string());
@@ -2863,6 +2882,7 @@ impl Station {
                 .collect(),
             next_inbox_id: self.next_inbox_id,
             hb_rate_blocked: self.hb_rate_blocked.clone(),
+            hb_rate_overflow: self.hb_rate_overflow.clone(),
             group_recipients: self.group_recipients.clone(),
             inbox_dropped: self.inbox_dropped.clone(),
         }
@@ -2881,6 +2901,13 @@ impl Station {
             .for_each(|c| *c = clamp_str(c, MAX_CALL_LEN));
         self.hb_rate_blocked = blocked;
         self.keep_listed_rate_blocks();
+        let mut overflow = s.hb_rate_overflow;
+        overflow
+            .iter_mut()
+            .for_each(|c| *c = clamp_str(c, MAX_CALL_LEN));
+        let over = overflow.len().saturating_sub(MAX_HB_RATE);
+        overflow.drain(..over);
+        self.hb_rate_overflow = overflow;
         self.group_recipients = s.group_recipients;
         self.inbox_dropped = s.inbox_dropped;
     }
