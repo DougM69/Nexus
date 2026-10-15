@@ -417,8 +417,10 @@ export function Js8Cockpit({
     }
     return false
   }
-  /** JS8Call's macro values now (`buildMacroValues`): Settings, the idle count and, unless `cq`
-   *  (JS8Call's CQ clears the selected call first), the call in the To box when it was heard. */
+  /** JS8Call's macro values now (`buildMacroValues`): Settings and, unless `cq` (JS8Call's CQ
+   *  clears the selected call first), the call in the To box when it was heard. Idle is 0: every
+   *  message made here follows a click or a key, and JS8Call zeroes its idle count on each one
+   *  (`eventFilter` → `resetIdleTimer`, mainwindow.cpp:1368-1376), so its `<MYIDLE>` reads 0M. */
   const macroValues = (cq = false) =>
     js8MacroValues({
       mycall: snapRef.current?.mycall ?? '',
@@ -427,7 +429,7 @@ export function Js8Cockpit({
       status: compose.status,
       cq: compose.cqText,
       reply: compose.replyText,
-      idleMinutes: js8?.idleMinutes ?? 0,
+      idleMinutes: 0,
       selected: cq ? null : js8MacroSelected(toCall, js8?.stations ?? [], js8?.activity ?? []),
     })
   const send = () => {

@@ -238,10 +238,12 @@ describe('REPLY, SNR, INFO and STATUS', () => {
     expect(js8Send).toHaveBeenLastCalledWith('W1AW', 'INFO QTH EN52 RIG')
   })
 
-  it('STATUS sends JS8Call\'s own when none is set: the idle time and the application', async () => {
+  it('STATUS sends JS8Call\'s own when none is set; the click is an operator act, so idle is 0M', async () => {
+    // The station has been idle 12 minutes (base()), but JS8Call zeroes its idle count on the
+    // press that sends STATUS (eventFilter → resetIdleTimer), so the macro reads 0M.
     await renderCockpit()
     await click(q('.js8-status'))
-    expect(js8Send).toHaveBeenCalledWith(null, 'STATUS IDLE 12M VERSION NEXUS')
+    expect(js8Send).toHaveBeenCalledWith(null, 'STATUS IDLE 0M VERSION NEXUS')
   })
 })
 
