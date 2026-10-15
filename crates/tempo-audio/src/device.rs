@@ -1948,15 +1948,27 @@ impl CpalBackend {
     /// still to play by then: the card may have taken a callback's worth while it was made. Never
     /// more than was dropped, so the over ends when it would have.
     ///
-    /// Not on the DAX route (`tee`): its queue holds two rates, and the over plays on there as it
-    /// was. Nor with nothing left to play: `false`, and nothing is touched.
+    /// ⚠️ THE RESAMPLER STARTS AGAIN AT THE SPLICE. The one that resampled the over holds the
+    /// over's last samples (its window's look-ahead), and it would sound them first, in the middle
+    /// of the over. A fresh one is set going on the [`RETUNE_PRIME`] samples before the splice,
+    /// which the card has played (fewer than a window, they make no output), so its first output
+    /// is the card's next: the splice is seamless when the card has played a whole number of
+    /// modem samples on the resampler's grid (the tests), and off by under one modem sample
+    /// otherwise. Its tap bank is built before the drop.
+    ///
+    /// A ring too full to take the start of the rebuild beside what it must drop (the first
+    /// seconds of a Slow frame, which is longer than the ring) keeps what it holds: only the part
+    /// still parked at the modem rate is played anew, the resampler running on into it, so the
+    /// move lands where the ring's audio ends. Not on the DAX route (`tee`): its queue holds two
+    /// rates, and the over plays on there as it was. Nor with nothing left to play: `false`, and
+    /// nothing is touched.
     fn retune_route(
         tee: Option<&crate::backend::TxTeeHandle>,
         tx_rs: &mut CaptureResampler,
         out_ring: &SpscRing,
         pending: &mut VecDeque<f32>,
         draining: bool,
-        tail: &mut dyn FnMut(usize) -> Vec<f32>,
+        tail: &mut dyn FnMut(usize, usize) -> Vec<f32>,
     ) -> bool {
         if tee.is_some() {
             return false;
@@ -1968,29 +1980,57 @@ impl CpalBackend {
         let at_modem_rate = |card: usize| {
             ((card as u64 * u64::from(MODEM_RATE) + card_rate / 2) / card_rate) as usize
         };
-        let left = pending.len() + at_modem_rate(out_ring.len());
+        let queued = out_ring.len();
+        let left = pending.len() + at_modem_rate(queued);
         if left == 0 {
             return false;
         }
-        let rest = tail(left);
-        let queued = out_ring.request_flush();
+        let first_on_card = (RETUNE_FIRST as u64 * card_rate / u64::from(MODEM_RATE)) as usize;
+        if out_ring.capacity().saturating_sub(queued) < first_on_card + RETUNE_PRIME {
+            let parked = pending.len();
+            if parked == 0 {
+                return false;
+            }
+            let rest = tail(parked, 0);
+            pending.clear();
+            pending.extend(&rest[rest.len().saturating_sub(parked)..]);
+            return true;
+        }
+        let passthrough = card_rate == u64::from(MODEM_RATE);
+        let prime = if passthrough { 0 } else { RETUNE_PRIME };
+        let rebuilt = tail(left, prime);
+        let mut fresh = CaptureResampler::new(MODEM_RATE, tx_rs.out_rate());
+        let flushed = out_ring.request_flush();
         if !draining {
             out_ring.apply_flush();
         }
         let parked = pending.len();
         pending.clear();
-        let still = (parked + at_modem_rate(queued)).min(rest.len());
-        Self::route_tx(
-            None,
-            tx_rs,
-            out_ring,
-            pending,
-            draining,
-            &rest[rest.len() - still..],
-        );
+        let still = (parked + at_modem_rate(flushed)).min(left);
+        // `at` is the first sample still to play, in `rebuilt`. The card's next output is the one
+        // whose window starts RETUNE_PRIME samples before it (the window's look-ahead is why the
+        // ring's count reads that way), so the fresh resampler is fed those samples first: fewer
+        // than a window, they make no output, and the next it makes is that one. A rebuild short of
+        // what is still to play (never, from a JS8 frame) plays what it has: the over ends early,
+        // and the loop, with PTT keyed, never panics here.
+        let at = rebuilt.len().saturating_sub(still);
+        let _ = fresh.process(&rebuilt[at.saturating_sub(prime)..at]);
+        *tx_rs = fresh;
+        let rest = &rebuilt[at..];
+        let first = rest.len().min(RETUNE_FIRST);
+        queue_to_card(out_ring, &tx_rs.process(&rest[..first]));
+        Self::route_tx(None, tx_rs, out_ring, pending, draining, &rest[first..]);
         true
     }
 }
+
+/// [`CpalBackend::retune_route`]'s prime: the samples before the splice the resampler's window
+/// reaches back over, one short of a window (64 taps).
+const RETUNE_PRIME: usize = 63;
+
+/// …and how much of the rebuild goes to the card at once, before the rest is paced in as any over
+/// is: 100 ms at the modem rate, more than a callback takes.
+const RETUNE_FIRST: usize = 1_200;
 
 /// Queue device-rate TX audio for the output callback, counting anything the ring cannot take.
 ///
@@ -2239,7 +2279,7 @@ impl AudioBackend for CpalBackend {
     }
 
     /// The rest of the over on the air, played anew ([`Self::retune_route`]).
-    fn retune_tx(&mut self, tail: &mut dyn FnMut(usize) -> Vec<f32>) -> bool {
+    fn retune_tx(&mut self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
         Self::retune_route(
             self.tx_tee.as_ref(),
             &mut self.tx_rs,
@@ -2883,11 +2923,13 @@ mod tx_route_tests {
     }
 
     /// JS8's "Allow TX offset changes while sending": the rest of the over on the air, played anew.
-    /// The card has played 4,000 of a 10,000-sample over: the rebuild is asked for the 6,000 left,
-    /// and once the queue is dropped it is what the card plays, sample for sample, and all of it.
-    /// With the stream running the drop is the card's own, at its next callback, as Stop TX's is.
+    /// At the modem's own rate (no resampler): the card has played 4,000 of a 10,000-sample over;
+    /// the rebuild is asked for the 6,000 left and none before them, and once the queue is dropped
+    /// it is what the card plays, sample for sample, and all of it. With the stream running the drop
+    /// is the card's own, at its next callback, as Stop TX's is.
     #[test]
     fn a_retune_plays_the_rebuilt_rest_in_place_of_what_was_left() {
+        let rebuilt = |left: usize| -> Vec<f32> { (0..left).map(|i| -(i as f32) - 1.0).collect() };
         for draining in [false, true] {
             let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
             let ring = tx_ring();
@@ -2898,25 +2940,21 @@ mod tx_route_tests {
                 ring.pop();
             }
             let mut asked = Vec::new();
-            let rebuilt =
-                |left: usize| -> Vec<f32> { (0..left).map(|i| -(i as f32) - 1.0).collect() };
             let done = CpalBackend::retune_route(
                 None,
                 &mut tx_rs,
                 &ring,
                 &mut pending,
                 draining,
-                &mut |left| {
-                    asked.push(left);
-                    rebuilt(left)
+                &mut |left, before| {
+                    asked.push((left, before));
+                    rebuilt(left + before)
                 },
             );
             assert!(done, "draining {draining}");
-            assert_eq!(asked, [6_000], "draining {draining}: what was left");
+            assert_eq!(asked, [(6_000, 0)], "draining {draining}: what was left");
             ring.apply_flush(); // the card's next callback (a no-op when the producer applied it)
-            if draining {
-                CpalBackend::pump_card(&mut tx_rs, &ring, &mut pending);
-            }
+            CpalBackend::pump_card(&mut tx_rs, &ring, &mut pending);
             let mut heard = Vec::new();
             while let Some(x) = ring.pop() {
                 heard.push(x);
@@ -2928,6 +2966,67 @@ mod tx_route_tests {
             );
             assert!(pending.is_empty());
         }
+    }
+
+    /// ⭐ THE SPLICE IS SEAMLESS THROUGH THE RESAMPLER. At the card's 48 kHz, an over is resampled
+    /// and the card plays 16,000 of its samples; then the rest is "rebuilt" exactly as it was. What
+    /// the card plays from then on is, sample for sample, what it would have played anyway: the
+    /// fresh resampler, primed on the 63 samples before the splice, takes up exactly where the old
+    /// one was. The old one, kept, would first have sounded the over's own last samples (its
+    /// window's look-ahead) in the middle of the over: the control.
+    #[test]
+    fn a_retune_through_the_resampler_takes_up_exactly_where_the_card_had_got_to() {
+        let over: Vec<f32> = (0..12_000).map(|i| (i as f32 * 0.37).sin() * 0.8).collect();
+        let whole = CaptureResampler::new(MODEM_RATE, 48_000).process(&over);
+        let run = |fresh_resampler: bool| -> Vec<f32> {
+            let mut tx_rs = CaptureResampler::new(MODEM_RATE, 48_000);
+            let ring = tx_ring();
+            let mut pending = VecDeque::new();
+            CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &over);
+            let mut heard: Vec<f32> = (0..16_000).filter_map(|_| ring.pop()).collect();
+            let mut same = |left: usize, before: usize| -> Vec<f32> {
+                over[over.len() - (left + before).min(over.len())..].to_vec()
+            };
+            if fresh_resampler {
+                assert!(CpalBackend::retune_route(
+                    None,
+                    &mut tx_rs,
+                    &ring,
+                    &mut pending,
+                    false,
+                    &mut same
+                ));
+            } else {
+                // The control: the same splice, but the old resampler kept.
+                let left = ring.len() / 4;
+                let rest = same(left, 0);
+                ring.request_flush();
+                ring.apply_flush();
+                CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &rest);
+            }
+            while let Some(x) = ring.pop() {
+                heard.push(x);
+            }
+            heard
+        };
+        let heard = run(true);
+        assert_eq!(heard.len(), whole.len(), "as long as it was");
+        assert_eq!(
+            heard, whole,
+            "sample for sample what the card would have played"
+        );
+        let control = run(false);
+        let off = control
+            .iter()
+            .zip(&whole)
+            .skip(16_000)
+            .take(400)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            off > 0.1,
+            "control: the old resampler sounds the over's end first ({off})"
+        );
     }
 
     /// The card plays on while the rest is built: 100 more samples of the over go while `tail`
@@ -2951,11 +3050,11 @@ mod tx_route_tests {
             &ring,
             &mut pending,
             true,
-            &mut |left| {
+            &mut |left, before| {
                 for _ in 0..100 {
                     played_meanwhile += usize::from(ring.pop().is_some());
                 }
-                rebuilt(left)
+                rebuilt(left + before)
             },
         ));
         assert_eq!(
@@ -2963,6 +3062,7 @@ mod tx_route_tests {
             "premise: the card took 100 while the rest was built"
         );
         ring.apply_flush();
+        CpalBackend::pump_card(&mut tx_rs, &ring, &mut pending);
         let mut heard = Vec::new();
         while let Some(x) = ring.pop() {
             heard.push(x);
@@ -2970,7 +3070,8 @@ mod tx_route_tests {
         assert_eq!(heard, rebuilt(6_000)[100..], "only the 5,900 still to play");
     }
 
-    /// At the card's 48 kHz the rest is counted at the modem rate: 4 card samples a modem sample.
+    /// At the card's 48 kHz the rest is counted at the modem rate: 4 card samples a modem sample,
+    /// and the 63 before it are asked for too, for the resampler's window.
     #[test]
     fn a_retune_counts_what_is_left_at_the_modem_rate() {
         let mut tx_rs = CaptureResampler::new(MODEM_RATE, 48_000);
@@ -2982,16 +3083,84 @@ mod tx_route_tests {
         for _ in 0..16_000 {
             ring.pop();
         }
-        let mut asked = 0;
-        CpalBackend::retune_route(None, &mut tx_rs, &ring, &mut pending, false, &mut |left| {
-            asked = left;
-            vec![0.5; left]
+        let mut asked = (0, 0);
+        CpalBackend::retune_route(None, &mut tx_rs, &ring, &mut pending, false, &mut |l, b| {
+            asked = (l, b);
+            vec![0.5; l + b]
         });
         assert_eq!(
             asked,
-            (queued - 16_000 + 2) / 4,
+            ((queued - 16_000 + 2) / 4, 63),
             "{queued} queued, 16,000 played"
         );
+    }
+
+    /// A ring too full to take the start of the rebuild beside what it must drop (the first seconds
+    /// of a Slow frame, longer than the ring) keeps what it holds, and only what is still parked
+    /// at the modem rate is played anew: nothing is dropped from the ring.
+    #[test]
+    fn a_retune_with_the_ring_full_plays_anew_only_what_is_still_parked() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
+        let ring = SpscRing::new(4_096);
+        let mut pending = VecDeque::new();
+        let over: Vec<f32> = (0..10_000).map(|i| i as f32).collect();
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, true, &over);
+        let (in_ring, parked) = (ring.len(), pending.len());
+        assert!(
+            parked > 0 && in_ring + parked == 10_000,
+            "premise: the ring full, the rest parked"
+        );
+        let mut asked = Vec::new();
+        assert!(CpalBackend::retune_route(
+            None,
+            &mut tx_rs,
+            &ring,
+            &mut pending,
+            true,
+            &mut |left, before| {
+                asked.push((left, before));
+                (0..left + before).map(|i| -(i as f32) - 1.0).collect()
+            },
+        ));
+        assert_eq!(
+            asked,
+            [(parked, 0)],
+            "only what is parked, and none before it"
+        );
+        assert_eq!(ring.len(), in_ring, "the ring as it was");
+        let replaced: Vec<f32> = pending.iter().copied().collect();
+        assert_eq!(
+            replaced,
+            (0..parked).map(|i| -(i as f32) - 1.0).collect::<Vec<f32>>()
+        );
+    }
+
+    /// A rebuild shorter than what is left plays what it has, and nothing of the over as it was:
+    /// the over ends early rather than the loop panicking with PTT keyed.
+    #[test]
+    fn a_retune_with_a_short_rebuild_plays_what_it_has() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
+        let ring = tx_ring();
+        let mut pending = VecDeque::new();
+        let over: Vec<f32> = (0..10_000).map(|i| i as f32).collect();
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &over);
+        for _ in 0..4_000 {
+            ring.pop();
+        }
+        let short: Vec<f32> = (0..5_000).map(|i| -(i as f32) - 1.0).collect();
+        assert!(CpalBackend::retune_route(
+            None,
+            &mut tx_rs,
+            &ring,
+            &mut pending,
+            false,
+            &mut |_, _| short.clone(),
+        ));
+        let mut heard = Vec::new();
+        while let Some(x) = ring.pop() {
+            heard.push(x);
+        }
+        assert_eq!(heard, short, "the 5,000 it has, for the 6,000 left");
     }
 
     /// Not on the DAX route, whose queue holds two rates: nothing is asked for or touched, and the
@@ -3010,7 +3179,7 @@ mod tx_route_tests {
             &ring,
             &mut pending,
             false,
-            &mut |_| {
+            &mut |_, _| {
                 asked = true;
                 Vec::new()
             }
@@ -3024,7 +3193,7 @@ mod tx_route_tests {
             &ring,
             &mut pending,
             false,
-            &mut |_| {
+            &mut |_, _| {
                 asked = true;
                 Vec::new()
             }

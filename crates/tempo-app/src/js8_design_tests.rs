@@ -282,7 +282,7 @@ fn with_offset_changes_on_a_move_hands_over_the_rest_of_the_frame_on_the_air() {
         12_000.0,
     );
     assert_eq!(
-        rest(len - played),
+        rest(len - played, 0),
         want[played..],
         "moved 100 ms into the rest"
     );
@@ -290,6 +290,11 @@ fn with_offset_changes_on_a_move_hands_over_the_rest_of_the_frame_on_the_air() {
         want[..first],
         at_1500[..first],
         "the frame as it was, up to the move"
+    );
+    assert_eq!(
+        rest(len - played, 63),
+        want[played - 63..],
+        "with the 63 samples before it, which the sound card asks for too"
     );
     assert!(e.js8_retune_on_air(slot).is_none(), "handed over once");
     // A second move carries on from the first.
@@ -302,8 +307,8 @@ fn with_offset_changes_on_a_move_hands_over_the_rest_of_the_frame_on_the_air() {
         &[(0, 1500.0), (first, 1800.0), (second, 1650.0)],
         12_000.0,
     );
-    assert_eq!(again(len - 90_000), want[90_000..], "every move kept");
-    assert!(again(0).is_empty(), "nothing left to play: nothing");
+    assert_eq!(again(len - 90_000, 0), want[90_000..], "every move kept");
+    assert!(again(0, 0).is_empty(), "nothing left to play: nothing");
 }
 
 /// The move is handed over only where it applies: the option on, the frame on the air (its slot),

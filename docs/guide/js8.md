@@ -225,7 +225,8 @@ offset stays where it is, as in JS8Call: a right-click on the waterfall is refus
 says why. Turn on **Allow TX offset changes while sending** and the move is taken at once, as in
 JS8Call: the frame on the air moves to the new offset a tenth of a second later, from where it has
 got to (receivers lose that frame, as they lose JS8Call's), and the frames still to go are sent
-there. A heartbeat or acknowledgement on its own spot in 500–1000 Hz stays on it, and so does a
+there. At Slow, a move in the first few seconds of a frame lands near its end instead: the sound
+card already holds the next 22 seconds of it. A heartbeat or acknowledgement on its own spot in 500–1000 Hz stays on it, and so does a
 frame when the move would leave your licence's privileges; on a Flex radio's own audio (DAX) the
 frame on the air finishes where it started. Moving RX is never held.
 

@@ -195,8 +195,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while sending** in Settings ▸ Digital ▸ JS8 (JS8Call's option, off by default) takes the move at
   once, as JS8Call does: the frame on the air moves to the new offset a tenth of a second later,
   from where it has got to (receivers lose that frame, as with JS8Call), and the frames still to go
-  are sent there. A heartbeat on its own spot stays there, and a move out of your privileges leaves
-  the frame where it is. NEEDS-BENCH.
+  are sent there (at Slow, a move in a frame's first few seconds lands near its end). A heartbeat on
+  its own spot stays there, and a move out of your privileges leaves the frame where it is.
+  NEEDS-BENCH.
 - **On Windows, Nexus follows your computer's light or dark setting until you pick a theme.** A new
   install there opens in System, so the very first screen already matches Windows, and it changes
   when Windows does. On Linux, the Raspberry Pi and macOS, Nexus opens Dark until you pick, as

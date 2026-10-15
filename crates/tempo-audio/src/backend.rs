@@ -96,13 +96,14 @@ pub trait AudioBackend {
     fn flush_output(&mut self) -> usize {
         0
     }
-    /// Play the rest of the over on the air anew: `tail(left)` is given how many 12 kHz samples
-    /// of what [`Self::play`] was handed have not played yet, and returns that many to play in
-    /// their place (the same stretch of the over, built again). For JS8's "Allow TX offset
+    /// Play the rest of the over on the air anew: `tail(left, before)` is given how many 12 kHz
+    /// samples of what [`Self::play`] was handed have not played yet, and how many of the ones
+    /// before them the route needs as well (a resampler's look-back), and returns those, `before`
+    /// then `left`, built again (the same stretch of the over). For JS8's "Allow TX offset
     /// changes while sending", which moves a frame mid-air (`Engine::js8_retune_on_air`). Never
     /// lengthens the over. `false` when this route cannot take it: the over plays on as it was.
     /// Default `false`; the real sound card overrides it.
-    fn retune_tx(&mut self, _tail: &mut dyn FnMut(usize) -> Vec<f32>) -> bool {
+    fn retune_tx(&mut self, _tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
         false
     }
     /// Start / stop / retune the dark headphone monitor in place, WITHOUT rebuilding
@@ -259,9 +260,9 @@ impl AudioBackend for MockBackend {
         self.flush_calls += 1;
         0
     }
-    fn retune_tx(&mut self, tail: &mut dyn FnMut(usize) -> Vec<f32>) -> bool {
+    fn retune_tx(&mut self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
         let left = self.tx_unplayed.min(self.played.len());
-        let rest = tail(left);
+        let rest = tail(left, 0);
         self.played.truncate(self.played.len() - left);
         self.played.extend_from_slice(&rest[..rest.len().min(left)]);
         self.retunes += 1;

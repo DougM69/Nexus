@@ -71,9 +71,10 @@ impl Engine {
     /// "Allow TX offset changes while sending" on: the TX offset moved while the frame planned for
     /// `slot` is on the air, so that frame moves too, from what it still has to play, as JS8Call's
     /// Modulator takes a new frequency mid-frame. Hands the radio loop what builds the rest of the
-    /// frame at the new offset: given how many 12 kHz samples of the frame have not played yet,
-    /// that many of the frame's wave, moved [`JS8_RETUNE_LEAD`] into them and its phase run on
-    /// unbroken from the samples before (`::js8::phy::modulate_moved`, every earlier move kept).
+    /// frame at the new offset: given how many 12 kHz samples of the frame have not played yet
+    /// (and how many before them the sound card wants too), those of the frame's wave, moved
+    /// [`JS8_RETUNE_LEAD`] into what has not played and its phase run on unbroken from the samples
+    /// before (`::js8::phy::modulate_moved`, every earlier move kept).
     /// The lead is what the sound card may play of the frame as it was while the rest is built,
     /// so the move lands on a sample that sounds as the phase assumes. Only a frame keyed on the
     /// operator's offset (a heartbeat or HB ACK on its own 500–1000 Hz spot keeps it), only on
@@ -83,7 +84,7 @@ impl Engine {
     pub fn js8_retune_on_air(
         &mut self,
         slot: u64,
-    ) -> Option<impl FnMut(usize) -> Vec<f32> + 'static> {
+    ) -> Option<impl FnMut(usize, usize) -> Vec<f32> + 'static> {
         if self.app.tier() != Tier::Js8
             || !self.settings.js8_tx_offset_while_sending
             || !self.tx_enabled()
@@ -100,7 +101,7 @@ impl Engine {
         let (speed, moves) = (on.speed, Arc::clone(&on.moves));
         let tones = ::js8::phy::encode_word(&on.word, speed);
         let len = speed.delay_ms() as usize * 12 + 79 * speed.nsps();
-        Some(move |left: usize| {
+        Some(move |left: usize, before: usize| {
             let at = (len.saturating_sub(left) + JS8_RETUNE_LEAD).min(len);
             let mut moves = moves.lock().unwrap_or_else(PoisonError::into_inner);
             // A move whose sample the card has not reached yet is overtaken by this one.
@@ -112,7 +113,7 @@ impl Engine {
                 &moves,
                 tempo_core::tempo_fast::SAMPLE_RATE,
             );
-            wave[wave.len().saturating_sub(left)..].to_vec()
+            wave[wave.len().saturating_sub(left + before)..].to_vec()
         })
     }
 
