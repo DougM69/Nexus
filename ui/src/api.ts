@@ -3484,6 +3484,17 @@ export async function js8InboxDelete(id: number): Promise<Js8State> {
   return invoke<Js8State>('js8_inbox_delete', { id })
 }
 
+/** JS8Call's "Store message…": leave `text` at this station for `to`, handed over when `to` asks
+ * (QUERY MSGS, then QUERY MSG n). Keys nothing. Refused with the reason. Journaled. */
+export async function js8StoreMessage(to: string, text: string): Promise<Js8State> {
+  return invoke<Js8State>('js8_store_message', { to, text })
+}
+
+/** Clear the Inbox's notes of what a cap dropped. Journaled. */
+export async function js8InboxDroppedClear(): Promise<Js8State> {
+  return invoke<Js8State>('js8_inbox_dropped_clear')
+}
+
 /** Arm/disarm the SSTV RX decoder by an EXPLICIT operator act (session-only; RX
  * decode, never TX). Stopping it here is remembered for the session — opening the
  * view again will not restart it behind the operator. */

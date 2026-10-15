@@ -632,6 +632,9 @@ const MIGRATED = [
   // What the radio reports beside Tune while Tune is the Flex radio's own carrier — migrated from
   // birth.
   'components/RadioTuneNote.tsx',
+  // JS8's "Store message…" box and the Inbox's notes of what a cap removed — migrated from birth.
+  'components/Js8StoreMessage.tsx',
+  'components/Js8InboxDropped.tsx',
 ]
 
 /**

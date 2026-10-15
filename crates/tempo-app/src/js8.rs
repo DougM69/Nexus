@@ -220,6 +220,22 @@ impl Engine {
                 return None;
             }
         }
+        // The Inbox's notes of what a cap dropped: ten at most, each an inbox row.
+        let dropped = self.js8_station.inbox_dropped();
+        if dropped.len() > 10 {
+            return None;
+        }
+        for d in dropped {
+            let row = &d.entry;
+            if row.path.len() > 8
+                || !add(&row.from)
+                || !add(&row.to)
+                || !add(&row.text)
+                || !row.path.iter().all(|hop| add(hop))
+            {
+                return None;
+            }
+        }
         if !add(self.js8_last_error.as_deref().unwrap_or("")) {
             return None;
         }
@@ -277,6 +293,7 @@ impl Engine {
             activity: self.js8_activity.iter().cloned().collect(),
             stations: self.js8_station.heard().to_vec(),
             inbox: self.js8_station.inbox().to_vec(),
+            inbox_dropped: self.js8_station.inbox_dropped().to_vec(),
             queue: self
                 .js8_station
                 .queue()
@@ -657,6 +674,40 @@ impl Engine {
             Ok(())
         } else {
             Err(format!("no JS8 inbox message #{id}"))
+        }
+    }
+
+    /// JS8Call's "Store Message…": leave `text` at this station for `to`, held in the Inbox and
+    /// handed over when `to` asks (QUERY MSGS, then QUERY MSG n), through every reply gate. An
+    /// operator act that keys nothing. Journaled.
+    pub fn js8_store_message(&mut self, to: String, text: String) -> Result<(), String> {
+        use ::js8::proto::station::StoreRefusal as R;
+        let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        self.js8_restart_idle_clock(now_ms);
+        let actions = self
+            .js8_station
+            .store_message(&to, &text, now_ms)
+            .map_err(|r| match r {
+                R::NoCallsign => {
+                    "Set your callsign in Settings before storing a JS8 message.".to_string()
+                }
+                R::NotAStation => format!("{} is not a station's call.", to.trim()),
+                R::Empty => "Nothing to store.".to_string(),
+                R::TooLong { frames, max } => format!(
+                    "Handing that message over needs {frames} frames; the cap at this speed is \
+                     {max} (one message must stay under 10 minutes of airtime, §97.119). \
+                     Shorten it."
+                ),
+            })?;
+        self.js8_handle_actions(actions);
+        Ok(())
+    }
+
+    /// The operator has read the Inbox's notes of what a cap dropped: clear them. Journaled.
+    pub fn js8_inbox_dropped_clear(&mut self) {
+        self.js8_restart_idle_clock(tempo_core::timing::now_unix_ms() as u64);
+        if self.js8_station.clear_inbox_dropped() {
+            self.js8_persist();
         }
     }
 
@@ -4179,3 +4230,7 @@ mod tests {
         assert_eq!(c.hb_ack_deny, ["KD2UWR"]);
     }
 }
+
+#[cfg(test)]
+#[path = "js8_replies_tests.rs"]
+mod replies_tests;
