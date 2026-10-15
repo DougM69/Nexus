@@ -32,6 +32,13 @@ export function ParkStateReview({
   // The keyboard goes into the dialog when it opens and back to where it was opened from when it
   // closes, applied or cancelled (SpotDialog's rule).
   const boxRef = useRef<HTMLDivElement>(null)
+  // The first Tab stop skips the list to its buttons: with thousands of lines, Tab otherwise
+  // passes every checkbox before Cancel. It lands on Cancel, which changes nothing.
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const skipToButtons = () => {
+    cancelRef.current?.focus({ preventScroll: true })
+    cancelRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }
   useLayoutEffect(() => {
     if (!open) return
     const active = document.activeElement
@@ -110,6 +117,9 @@ export function ParkStateReview({
           <h2>{t('logbook.parkStates.title')}</h2>
         </div>
         <p className="park-review-intro">{t('logbook.parkStates.intro')}</p>
+        <button type="button" className="park-review-skip" onClick={skipToButtons}>
+          {t('logbook.parkStates.skip')}
+        </button>
         {rows == null ? (
           <p className="park-review-note">{t('logbook.parkStates.reading')}</p>
         ) : rows.length === 0 ? (
@@ -141,7 +151,7 @@ export function ParkStateReview({
           </ul>
         )}
         <div className="logconfirm-actions">
-          <button type="button" className="logconfirm-discard" onClick={onClose}>
+          <button ref={cancelRef} type="button" className="logconfirm-discard" onClick={onClose}>
             {t('logbook.parkStates.cancel')}
           </button>
           <button

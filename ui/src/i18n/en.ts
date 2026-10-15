@@ -1173,6 +1173,7 @@ export const EN = {
   'logbook.parkStates.confirmedTitle':
     'Confirmed: its confirmation came with the state the other station signed. Tick it only if you are sure.',
   'logbook.parkStates.cancel': 'Cancel',
+  'logbook.parkStates.skip': 'Skip to Cancel and Change',
   'logbook.parkStates.apply': {
     one: 'Change {{count}} contact',
     other: 'Change {{count}} contacts',
@@ -1265,6 +1266,8 @@ export const EN = {
       '{{count}} LoTW records are for calls your log holds no contact under, such as a club call on your LoTW account; this check leaves them alone.',
   },
   'logbook.confirmations.cancel': 'Cancel',
+  'logbook.confirmations.skipCheck': 'Skip to Cancel and Check',
+  'logbook.confirmations.skipChange': 'Skip to Cancel and Change',
   'logbook.confirmations.apply': {
     one: 'Change {{count}} contact',
     other: 'Change {{count}} contacts',

@@ -164,6 +164,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Check park states and Check confirmations: one key skips the list.** With thousands of lines,
+  Tab passed every checkbox before Cancel. Each dialog's first Tab stop is now a skip, shown only
+  while it has the keyboard: Enter puts the keyboard on Cancel, which changes nothing, and Tab from
+  there reaches the dialog's other button.
 - **AD1C's country file now carries its license notice.** Nexus finds a call's DXCC entity and
   zones in the cty.dat country file by Jim Reisert AD1C, which is MIT-licensed. That license asks
   for its notice to travel with every copy, and NOTICE named the license without reproducing it.
