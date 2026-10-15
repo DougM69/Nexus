@@ -59,16 +59,19 @@ impl Cache {
                 Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
             }
         };
-        let (revision, rows, heard, class) = {
+        let (revision, rows, heard, class, own) = {
             let e = lock()?;
             (
                 e.log_revision(),
                 e.log_rows(),
                 calls(&e)?,
                 e.settings().license_class,
+                e.settings().js8_frequencies.clone(),
             )
         };
-        let unchanged = |e: &tempo_app::engine::Engine| e.settings().license_class == class;
+        let unchanged = |e: &tempo_app::engine::Engine| {
+            e.settings().license_class == class && e.settings().js8_frequencies == own
+        };
         if self.revision != Some(revision) || self.calls != heard {
             let mut history: BTreeMap<_, _> = heard
                 .iter()
@@ -124,7 +127,7 @@ impl Cache {
             self.calls = heard.clone();
             self.history = history;
         }
-        let plan: Vec<_> = tempo_app::bandplan::js8_band_plan()
+        let plan: Vec<_> = tempo_app::bandplan::js8_plan_from(own.as_deref())
             .into_iter()
             .map(|mut c| {
                 c.tx = tempo_app::privileges::tx_allowed(
@@ -403,14 +406,21 @@ mod tests {
                 .lock()
                 .map_err(|_| "applicationUnavailable")?
                 .stored_log();
-            let (count, heard, class) = {
+            let (count, heard, class, own) = {
                 let e = lock()?;
                 if log.len() > 1_000_000 {
                     return Err("applicationTooLarge");
                 }
-                (log.len(), calls(&e)?, e.settings().license_class)
+                (
+                    log.len(),
+                    calls(&e)?,
+                    e.settings().license_class,
+                    e.settings().js8_frequencies.clone(),
+                )
             };
-            let unchanged = |e: &tempo_app::engine::Engine| e.settings().license_class == class;
+            let unchanged = |e: &tempo_app::engine::Engine| {
+                e.settings().license_class == class && e.settings().js8_frequencies == own
+            };
             if self.log.as_ref() != Some(&log) || self.calls != heard {
                 let mut history: BTreeMap<_, _> = heard
                     .iter()
@@ -473,7 +483,7 @@ mod tests {
                 self.calls = heard.clone();
                 self.history = history;
             }
-            let plan: Vec<_> = tempo_app::bandplan::js8_band_plan()
+            let plan: Vec<_> = tempo_app::bandplan::js8_plan_from(own.as_deref())
                 .into_iter()
                 .map(|mut c| {
                     c.tx = tempo_app::privileges::tx_allowed(

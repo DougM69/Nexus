@@ -166,8 +166,14 @@ impl Engine {
     /// (stay-on-miss). KEYS NOTHING: the TX latch is untouched and `tier_is_rx_only`
     /// refuses to arm it anyway.
     pub fn js8_enter(&mut self) {
+        // "Return to the last used frequency" (off by default): read before the tier switch
+        // retunes to the band's JS8 frequency, put back after it (`js8_freq`).
+        let back_to = self.js8_return_dial();
         self.js8_start_session();
         self.set_tier(Tier::Js8);
+        if let Some(mhz) = back_to {
+            self.js8_return_to(mhz);
+        }
     }
 
     /// Shared session-entry effects before the native decoder transition.
@@ -246,6 +252,9 @@ impl Engine {
         Js8State {
             speed: self.js8_tx_speed_setting(),
             rx_speeds: s.js8_rx_speeds,
+            filter: s.js8_filter,
+            qsy_center_hz: s.js8_qsy_center_hz,
+            hop: self.js8_hop_notice(),
             tx_enabled: self.tx_enabled,
             sending: self.app.transmitting(),
             hb_on: self.js8_hb_on,
@@ -439,13 +448,22 @@ impl Engine {
         }
         let actions = self.js8_station.tick(now_ms);
         self.js8_handle_actions(actions);
+        // The dial remembered for "return to the last used frequency", and the band schedule.
+        self.js8_freq_tick(now_ms);
     }
 
     /// Reassembler events → activity rows + station actions.
     fn js8_handle_events(&mut self, events: Vec<MessageEvent>, low_conf: bool, now_ms: u64) {
+        // Whether the frame before a single-frame message was its Last: DIRECTED.TXT marks a
+        // message that ended (`js8_freq::js8_directed_line`).
+        let mut frame_last = true;
         for ev in events {
+            if let MessageEvent::Message(m) = &ev {
+                self.js8_log_directed(m, m.frames > 1 || !m.complete || frame_last, now_ms);
+            }
             let row = match &ev {
                 MessageEvent::Frame(rx) => {
+                    frame_last = rx.i3.last;
                     self.js8_file_band_activity(rx.freq_hz, rx.speed, rx.at_ms);
                     Some(self.js8_row_for_frame(rx, low_conf))
                 }

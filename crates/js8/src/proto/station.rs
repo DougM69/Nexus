@@ -1829,6 +1829,16 @@ impl Station {
         &self.heard
     }
 
+    /// Move every heard station's offset down by `delta_hz`: the dial went up by that much (a QSY
+    /// that centres the offset), so each station sits that much lower in the audio, as JS8Call
+    /// shifts its call activity (mainwindow.cpp:5360-5364). Display only: nothing the station
+    /// sends reads a heard offset.
+    pub fn shift_offsets(&mut self, delta_hz: f32) {
+        for h in &mut self.heard {
+            h.freq_hz -= delta_hz;
+        }
+    }
+
     pub fn inbox(&self) -> &[InboxEntry] {
         &self.inbox
     }

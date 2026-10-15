@@ -911,6 +911,46 @@ pub struct Settings {
     /// meant).
     #[serde(default = "default_js8_rx_speeds")]
     pub js8_rx_speeds: u8,
+    // --- JS8 frequencies, the decode filter, QSY to centre and the band schedule (JS8Call
+    // 3.0.3's Settings ▸ Frequencies and its waterfall controls) ---
+    /// The operator's own JS8 frequency list: JS8Call's working frequencies, with the
+    /// descriptions 3.0 added. `None`, the default and what a file from before this setting
+    /// loads as, is JS8Call 3.0.3's own table (`bandplan::js8_band_plan`), and JS8Call's Reset
+    /// returns to it. `Some` replaces that table wherever JS8 reads one (`bandplan::js8_plan_from`):
+    /// the cockpit's band picker, the dial entering JS8 tunes to, the Remote's list. It may be
+    /// empty, as JS8Call's may.
+    #[serde(default)]
+    pub js8_frequencies: Option<Vec<Js8Freq>>,
+    /// JS8Call's "Monitor returns to last used frequency" (`MonitorLastUsed`), OFF by default
+    /// as JS8Call ships it (Configuration.cpp:2297): on, entering JS8 tunes the rig back to the
+    /// dial last used there (`js8_last_dial_mhz`) instead of the band's JS8 frequency.
+    #[serde(default)]
+    pub js8_return_to_last_dial: bool,
+    /// The dial last used on JS8, MHz (JS8Call's `DialFreq`, its `m_lastMonitoredFrequency`);
+    /// 0 = none yet. ENGINE-OWNED: written while JS8 runs, and kept across a Settings form save
+    /// (a form's copy is a snapshot from whenever it loaded).
+    #[serde(default)]
+    pub js8_last_dial_mhz: f64,
+    /// JS8Call's decode filter (its waterfall controls' `FilterEnabled`, `FilterCenter`,
+    /// `FilterWidth`): on, the JS8 decoder searches only centre ± width/2. ON at 1500 Hz ± 1000
+    /// by default, as JS8Call ships it (WideGraph.cpp:237-241). ENGINE-OWNED: the cockpit's
+    /// controls write it (`Engine::js8_set_filter`), and a form save keeps the live value.
+    #[serde(default)]
+    pub js8_filter: Js8Filter,
+    /// JS8Call's passband centre for QSY (waterfall controls `CenterOffset`, default 1500 Hz):
+    /// "QSY to centre" moves the dial so the transmit offset lands here. ENGINE-OWNED, as the
+    /// filter is.
+    #[serde(default = "default_js8_qsy_center_hz")]
+    pub js8_qsy_center_hz: u16,
+    /// JS8Call's "Automatically switch bands / frequencies at specific times of day"
+    /// (`AutoSwitchBands`), OFF by default as JS8Call ships it (Configuration.cpp:2124). On, the
+    /// JS8 station changes the rig's frequency BY ITSELF at the times in `js8_schedule`, with
+    /// nobody at the radio — never while transmitting or with a message going out.
+    #[serde(default)]
+    pub js8_band_hop: bool,
+    /// JS8Call's Frequency Schedule (`stations`): a dial and a UTC window to switch to it in.
+    #[serde(default)]
+    pub js8_schedule: Vec<Js8Hop>,
     /// Heartbeat repeat interval in minutes; 0 = on demand (JS8Call `HBInterval` default).
     /// Whether HB is ON is NOT a setting — it is session-only (`Engine.js8_hb_on`), so the
     /// app can never launch beaconing.
@@ -3016,6 +3056,57 @@ pub struct WorkingFreq {
     pub mhz: f64,
 }
 
+/// One row of the operator's own JS8 frequency list ([`Settings::js8_frequencies`]): JS8Call's
+/// working frequency, a dial in MHz and the free-text description 3.0 added. JS8Call's other
+/// two columns are fixed here: the mode is JS8 and the IARU region all regions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Freq {
+    pub mhz: f64,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// JS8Call's decode filter ([`Settings::js8_filter`]). Fields default one by one, so a partial
+/// object (a hand edit) still loads.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Js8Filter {
+    pub enabled: bool,
+    /// Audio offset the filter is centred on, Hz.
+    pub center_hz: u16,
+    /// Its full width, Hz: the decoder searches centre ± width/2.
+    pub width_hz: u16,
+}
+
+impl Default for Js8Filter {
+    /// JS8Call's defaults: on, 1500 Hz, 2000 Hz wide (WideGraph.cpp:237-241).
+    fn default() -> Self {
+        Js8Filter {
+            enabled: true,
+            center_hz: 1500,
+            width_hz: 2000,
+        }
+    }
+}
+
+/// One row of JS8Call's Frequency Schedule ([`Settings::js8_schedule`]): switch the dial to
+/// `mhz` while the UTC time of day is inside the window. Both ends count (JS8Call compares
+/// `switch_at <= now <= switch_until`, mainwindow.cpp:243-254), and a window whose end is
+/// before its start runs over midnight. JS8Call's band column is derived from the dial.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Hop {
+    pub mhz: f64,
+    /// Minutes after 00:00 UTC the window opens (0..=1439): JS8Call's "Switch at (UTC)".
+    pub from_min: u16,
+    /// Minutes after 00:00 UTC it closes: JS8Call's "Until (UTC)". The frequency does not
+    /// return at the end; a later row does that.
+    pub until_min: u16,
+    #[serde(default)]
+    pub description: String,
+}
+
 fn default_on() -> bool {
     true
 }
@@ -4667,6 +4758,11 @@ fn default_js8_rx_speeds() -> u8 {
     15
 }
 
+/// JS8Call's `CenterOffset` default (WideGraph.cpp:216).
+fn default_js8_qsy_center_hz() -> u16 {
+    1500
+}
+
 /// JS8Call ships autoreply ON (G3). See [`Settings::js8_autoreply`].
 fn default_js8_autoreply() -> bool {
     true
@@ -4729,6 +4825,13 @@ impl Default for Settings {
             q65_submode: 0,
             js8_speed: default_js8_speed(),
             js8_rx_speeds: default_js8_rx_speeds(),
+            js8_frequencies: None,
+            js8_return_to_last_dial: false,
+            js8_last_dial_mhz: 0.0,
+            js8_filter: Js8Filter::default(),
+            js8_qsy_center_hz: default_js8_qsy_center_hz(),
+            js8_band_hop: false,
+            js8_schedule: Vec::new(),
             js8_hb_interval_min: 0,
             js8_cq_interval_min: 0,
             js8_hb_ack: false,

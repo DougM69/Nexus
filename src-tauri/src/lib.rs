@@ -5698,6 +5698,30 @@ fn flush_all_txt(lines: &[String]) {
     }
 }
 
+/// JS8Call's DIRECTED.TXT (every directed message heard), beside ALL.TXT.
+fn directed_txt_path() -> PathBuf {
+    local_data_dir().join("DIRECTED.TXT")
+}
+
+/// Append JS8's DIRECTED.TXT lines, as [`flush_all_txt`] appends ALL.TXT's.
+fn flush_directed_txt(lines: &[String]) {
+    if lines.is_empty() {
+        return;
+    }
+    use std::io::Write;
+    let path = directed_txt_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "{}", lines.join("\n"));
+    }
+}
+
 /// The resolved absolute `ALL.TXT` path, for the Settings panel to show the operator
 /// exactly where the decode log lives.
 #[tauri::command]
@@ -6478,6 +6502,8 @@ async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Str
     // then release the lock before the file append so the UI poll never waits on disk.
     with_engine(&state, |mut eng| {
         let all_txt = eng.take_all_txt_pending();
+        // JS8's DIRECTED.TXT, written beside ALL.TXT under the same switch, the same way.
+        let directed_txt = eng.take_js8_directed_pending();
         // ⭐ R3: the same shape as the ALL.TXT drain beside it — the engine buffers what it
         // cannot say (the Connections log lives here, not there), the poll takes it under the
         // lock and writes it after releasing. Deliberately NOT the connector worker the #290
@@ -6491,6 +6517,7 @@ async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Str
         let snap = eng.snapshot();
         drop(eng);
         flush_all_txt(&all_txt);
+        flush_directed_txt(&directed_txt);
         for line in unconfirmed_auto_log_lines(&auto_logged) {
             conn_log("Logbook", "error", line);
         }
@@ -16860,6 +16887,69 @@ fn js8_set_rx_speeds(
     Ok(eng.js8_state())
 }
 
+/// JS8Call's decode filter (the waterfall controls, and the row menus' "Centre filter at …Hz"):
+/// on/off, centre and width in Hz. Receive only. Persisted.
+#[tauri::command(async)]
+fn js8_set_filter(
+    state: State<'_, SharedEngine>,
+    filter: tempo_app::settings::Js8Filter,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_filter(filter);
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
+/// JS8Call 3.0.3's own frequency table as rows of the operator's list (no descriptions, as
+/// JS8Call's defaults have none): what Settings shows, and what Reset returns to.
+#[tauri::command]
+fn js8_default_frequencies() -> Vec<tempo_app::settings::Js8Freq> {
+    tempo_app::bandplan::js8_band_plan()
+        .into_iter()
+        .map(|c| tempo_app::settings::Js8Freq {
+            mhz: c.dial_mhz,
+            description: String::new(),
+        })
+        .collect()
+}
+
+/// The passband centre "QSY to centre" puts the transmit offset on (JS8Call's waterfall
+/// `Center`), Hz. Moves nothing by itself. Persisted.
+#[tauri::command(async)]
+fn js8_set_qsy_center(
+    state: State<'_, SharedEngine>,
+    hz: u16,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_qsy_center(hz);
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
+/// JS8Call's QSY: move the dial so the transmit offset sits on the passband centre. MOVES THE
+/// RIG through the operator's own tune path; refused while anything transmits or a JS8 message
+/// is going out (the engine says why). Persisted, as every QSY is.
+#[tauri::command(async)]
+fn js8_qsy_to_centre(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_qsy_to_centre()?;
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
+/// The answer to a scheduled frequency change's notice: `go` changes it now (held while anything
+/// transmits), otherwise it is cancelled and the frequency stays. Persisted, as a QSY is.
+#[tauri::command(async)]
+fn js8_hop_answer(
+    state: State<'_, SharedEngine>,
+    go: bool,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_hop_answer(go)?;
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
 /// Queue a message (`to` = a callsign, `@GROUP`, or null for @ALLCALL). REFUSED in this
 /// receive-only build; the operator-gated TX batch supplies the body behind it.
 #[tauri::command(async)]
@@ -18312,7 +18402,8 @@ fn get_licensed_band_plan(
     // RTTY / SSTV / PSK / JS8: fixed standard watering-hole channels (like WSJT-X's
     // per-mode dials), license-filtered per band — a Technician sees only the
     // bands their class can key there (RTTY, PSK and JS8 ride data privileges, SSTV
-    // rides phone). JS8's list is JS8Call's FrequencyList defaults (bandplan::js8_band_plan).
+    // rides phone). JS8's list is JS8Call's FrequencyList defaults (bandplan::js8_band_plan),
+    // or the operator's own (bandplan::js8_plan_from).
     let lower = mode.to_ascii_lowercase();
     if lower == "rtty" || lower == "sstv" || lower == "psk" || lower == "js8" {
         let (plan, priv_mode) = if lower == "rtty" {
@@ -18326,7 +18417,11 @@ fn get_licensed_band_plan(
                 OperatingMode::Keyboard,
             )
         } else if lower == "js8" {
-            (tempo_app::bandplan::js8_band_plan(), OperatingMode::Digital)
+            // The operator's own JS8 list when there is one (Settings ▸ Digital ▸ JS8).
+            (
+                tempo_app::bandplan::js8_plan_from(eng.settings().js8_frequencies.as_deref()),
+                OperatingMode::Digital,
+            )
         } else {
             (tempo_app::bandplan::sstv_band_plan(), OperatingMode::Phone)
         };
@@ -35489,6 +35584,11 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             js8_locator_refusal,
             js8_set_speed,
             js8_set_rx_speeds,
+            js8_set_filter,
+            js8_default_frequencies,
+            js8_set_qsy_center,
+            js8_qsy_to_centre,
+            js8_hop_answer,
             js8_send,
             js8_send_command,
             js8_call_cq,

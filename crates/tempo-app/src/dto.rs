@@ -588,6 +588,20 @@ pub struct Js8ComposerPrefill {
     pub text: String,
 }
 
+/// A scheduled JS8 frequency change waiting out its notice (JS8Call's self-destructing
+/// "Scheduled Frequency Change" box): where it goes, when, the row's description, and whether a
+/// transmission is holding it back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8HopNotice {
+    pub mhz: f64,
+    /// When it is made unless cancelled (unix ms); 0 once "Change now" was pressed.
+    pub fires_at_ms: u64,
+    pub description: String,
+    /// Due, and waiting for the station to stop transmitting or the message going out to end.
+    pub held: bool,
+}
+
 /// The live JS8 state the cockpit polls (~500 ms while visible) — `PskRxState`'s role.
 /// Every field is computed from engine truth at poll time; nothing here is cached UI state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -597,6 +611,15 @@ pub struct Js8State {
     pub speed: Js8Speed,
     /// Bitmask of decoded speeds (`Js8Speed::bit()`).
     pub rx_speeds: u8,
+    /// JS8Call's decode filter and its passband centre for QSY (the waterfall controls), as
+    /// stored. Defaulted on read, so an older station's state still parses.
+    #[serde(default)]
+    pub filter: crate::settings::Js8Filter,
+    #[serde(default)]
+    pub qsy_center_hz: u16,
+    /// A scheduled frequency change waiting out its notice (JS8Call's 30-second box), if any.
+    #[serde(default)]
+    pub hop: Option<Js8HopNotice>,
     pub tx_enabled: bool,
     pub sending: bool,
     pub hb_on: bool,
@@ -4935,6 +4958,18 @@ mod tests {
         let s = Js8State {
             speed: Js8Speed::Turbo,
             rx_speeds: 15,
+            filter: crate::settings::Js8Filter {
+                enabled: true,
+                center_hz: 1500,
+                width_hz: 2000,
+            },
+            qsy_center_hz: 1500,
+            hop: Some(Js8HopNotice {
+                mhz: 7.078,
+                fires_at_ms: 30_000,
+                description: "40 m net".to_string(),
+                held: false,
+            }),
             tx_enabled: false,
             sending: false,
             hb_on: false,
@@ -4991,6 +5026,9 @@ mod tests {
         for k in [
             "\"speed\":\"turbo\"",
             "\"rxSpeeds\":15",
+            "\"filter\":{\"enabled\":true,\"centerHz\":1500,\"widthHz\":2000}",
+            "\"qsyCenterHz\":1500",
+            "\"hop\":{\"mhz\":7.078,\"firesAtMs\":30000,\"description\":\"40 m net\",\"held\":false}",
             "\"txEnabled\":false",
             "\"hbOn\":false",
             "\"hbNextAtMs\":null",
