@@ -23,9 +23,9 @@ from collections import Counter, defaultdict
 
 # ── What the kit shipped, so a missing row can be detected without a second file ───────────
 EXPECTED_ROWS = 7057
-EXPECTED_KEYS_SHA = '6d5237efd60db31fc9b2e6aae2b99a6f4754caf51a242b5f2d3ca091ccb436cb'
-EXPECTED_ENGLISH_SHA = 'c53ed72df6c1545796c5d6f64bff97350f9731d896179f833511ec729030c8c5'
-EXPECTED_DNT_SHA = 'ab3103d6f387338fc0abf940535d4e9021bcadebb6b027d045136db2d3d770ad'
+EXPECTED_KEYS_SHA = '395e1ed5c266e2b8ed6bca8d84516a625195dceb55699bd41bd1e3f4106f67bd'
+EXPECTED_ENGLISH_SHA = '0974b148fbeba33e1dbdc244b3f0dd219f8e84753d189d11716cd727ab87d7a4'
+EXPECTED_DNT_SHA = '8c368dbd61b87b112511b4164f87f1a54819a272f4304c08e0ad5d3daa04ef67'
 EXPECTED_TIERS = {1: 741, 2: 314, 3: 1050, 4: 473, 5: 2997, 6: 1482}
 COLUMNS = ['priority', 'key', 'english', 'portuguese', 'do_not_translate', 'notes']
 

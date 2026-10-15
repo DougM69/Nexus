@@ -2057,6 +2057,11 @@ export async function importPotaLog(text: string): Promise<PotaStampResult> {
   return invoke<PotaStampResult>('import_pota_log', { text })
 }
 
+/** The native title bar's theme on Windows: the operator's pick, or null for System. */
+export async function setTitleBarTheme(theme: 'light' | 'dark' | null): Promise<void> {
+  await invoke('set_title_bar_theme', { theme })
+}
+
 /** Open a station's QRZ.com profile in the system browser (roster/logbook affordance). */
 export async function openQrzPage(call: string): Promise<void> {
   await invoke('open_qrz_page', { call })
