@@ -29196,6 +29196,154 @@ async fn contest_restore(
     })
 }
 
+/// What a Clear test contacts came to.
+#[derive(serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+enum ContestClearDto {
+    #[serde(rename_all = "camelCase")]
+    Cleared {
+        /// The contacts taken out, each now under Removed.
+        contacts: usize,
+        /// Where any of them had already gone — places a removal cannot take one back from.
+        sent_to: ContestSentToDto,
+        /// At a club: `"linked"` or `"away"`, as for a removal. Absent without club sync.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        club: Option<&'static str>,
+    },
+    Refused {
+        refusal: &'static str,
+    },
+}
+
+/// ⭐ **Clear test contacts** — the contest screen's two-click action: every contact of this
+/// running out of the contest log, each the way [`contest_remove_last`] takes the newest, when the
+/// log is still what the screen named (`row_count` rows, the newest contact `call` at `when_unix`).
+/// Kept under Removed, never deleted; serials and club seqs stay spent. At a club the club takes
+/// each back too (`club`). Answers once the contest journal holds the change; the logbook's copies
+/// are read with the engine lock released, on the blocking pool, in one read.
+///
+/// ⛔ Not one of Remote's operations: removal is refused from afar.
+#[tauri::command]
+async fn contest_clear(
+    state: State<'_, SharedEngine>,
+    row_count: usize,
+    call: String,
+    when_unix: u64,
+) -> Result<ContestClearDto, String> {
+    let engine = Arc::clone(&state);
+    let answer = tokio::task::spawn_blocking(move || {
+        tempo_app::engine::contest_removal::clear(&engine, row_count, &call, when_unix)
+    })
+    .await
+    .map_err(|e| format!("contest log task failed: {e}"))??;
+    Ok(clear_answer(answer))
+}
+
+/// What the contest screen is told after Clear test contacts: how many contacts left the log, every
+/// place any of them had already gone (the first host and address named, WSJT-X if any went
+/// there, the services holding a logbook copy of any), and the club's route — or why nothing was
+/// cleared.
+fn clear_answer(
+    answer: Result<
+        tempo_app::engine::contest_removal::ContestCleared,
+        tempo_app::engine::contest_removal::ContestRefusal,
+    >,
+) -> ContestClearDto {
+    match answer {
+        Ok(cleared) => {
+            let removals = &cleared.removals;
+            ContestClearDto::Cleared {
+                contacts: removals.len(),
+                sent_to: ContestSentToDto {
+                    n3fjp: removals.iter().find_map(|r| r.sent.n3fjp.clone()),
+                    n1mm: removals.iter().find_map(|r| r.sent.n1mm.clone()),
+                    wsjtx: removals.iter().any(|r| r.sent.wsjtx),
+                    logbook: cleared.logbook.is_some(),
+                    uploaded: cleared.logbook.clone().unwrap_or_default(),
+                },
+                club: club_route(removals.first().and_then(|r| r.club)),
+            }
+        }
+        Err(refusal) => ContestClearDto::Refused {
+            refusal: refusal.code(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod contest_clear_answer_tests {
+    use super::*;
+    use tempo_app::engine::contest_removal::{
+        ContestCleared, ContestRefusal, ContestRemoval, ContestSentTo,
+    };
+    use tempo_core::fieldday::RemovedQso;
+
+    fn removal(sent: ContestSentTo, club: Option<bool>) -> ContestRemoval {
+        ContestRemoval {
+            entry: RemovedQso {
+                rows: Vec::new(),
+                removed_unix: 0,
+            },
+            rows: Vec::new(),
+            sent,
+            qids: Vec::new(),
+            club,
+        }
+    }
+
+    /// The wire the contest screen reads (`ContestClearAnswer` in ui/src/api.ts), by value: the
+    /// contacts counted, every place any of them had gone, the logbook's services, the club's
+    /// route; and a refusal by its code.
+    #[test]
+    fn a_clear_answers_the_screen_by_value() {
+        let cleared = ContestCleared {
+            removals: vec![
+                removal(ContestSentTo::default(), Some(true)),
+                removal(
+                    ContestSentTo {
+                        n3fjp: Some("192.168.1.20".into()),
+                        n1mm: None,
+                        wsjtx: true,
+                    },
+                    Some(true),
+                ),
+                removal(ContestSentTo::default(), Some(true)),
+            ],
+            logbook: Some(vec!["lotw"]),
+        };
+        assert_eq!(
+            serde_json::to_value(clear_answer(Ok(cleared))).unwrap(),
+            serde_json::json!({
+                "outcome": "cleared",
+                "contacts": 3,
+                "sentTo": {
+                    "n3fjp": "192.168.1.20",
+                    "wsjtx": true,
+                    "logbook": true,
+                    "uploaded": ["lotw"],
+                },
+                "club": "linked",
+            })
+        );
+        let quiet = ContestCleared {
+            removals: vec![removal(ContestSentTo::default(), None)],
+            logbook: None,
+        };
+        assert_eq!(
+            serde_json::to_value(clear_answer(Ok(quiet))).unwrap(),
+            serde_json::json!({
+                "outcome": "cleared",
+                "contacts": 1,
+                "sentTo": { "wsjtx": false, "logbook": false, "uploaded": [] },
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(clear_answer(Err(ContestRefusal::Changed))).unwrap(),
+            serde_json::json!({ "outcome": "refused", "refusal": "changed" })
+        );
+    }
+}
+
 /// What an edit came to: the contact as it was and as it is now, and where it had already gone,
 /// which the edit does not reach — or why nothing changed.
 #[derive(serde::Serialize)]
@@ -35644,6 +35792,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             contest_entry_put,
             contest_remove_last,
             contest_restore,
+            contest_clear,
             contest_removed,
             contest_edit,
             fd_merge_to_general,
@@ -37705,10 +37854,10 @@ mod tests {
         );
     }
 
-    /// ⭐ Removing the newest contest contact, and editing one, reach the app only if their
-    /// commands are REGISTERED, and the three that change the contest log answer only once its
-    /// journal holds the change (the tempo-app functions that wait for it). And none of them is
-    /// one of Remote's operations: removal and edit are refused from afar, so the Remote
+    /// ⭐ Removing the newest contest contact, clearing every one, and editing one, reach the app
+    /// only if their commands are REGISTERED, and the four that change the contest log answer only
+    /// once its journal holds the change (the tempo-app functions that wait for it). And none of
+    /// them is one of Remote's operations: removal and edit are refused from afar, so the Remote
     /// dispatcher must never name them.
     #[test]
     fn the_contest_removal_commands_are_registered_journaled_and_not_remote() {
@@ -37723,6 +37872,7 @@ mod tests {
         for (command, waits_through) in [
             ("contest_remove_last", Some("contest_removal::remove_last(")),
             ("contest_restore", Some("contest_removal::restore(")),
+            ("contest_clear", Some("contest_removal::clear(")),
             ("contest_removed", None),
             ("contest_edit", Some("contest_edit::edit(")),
         ] {
@@ -37753,6 +37903,7 @@ mod tests {
             "contest_removal",
             "contest_remove_last",
             "contest_restore",
+            "contest_clear",
             "contest_edit",
         ] {
             assert!(!remote.contains(name), "Remote must not reach {name}");

@@ -1173,6 +1173,7 @@ export const EN = {
   'logbook.parkStates.confirmedTitle':
     'Confirmed: its confirmation came with the state the other station signed. Tick it only if you are sure.',
   'logbook.parkStates.cancel': 'Cancel',
+  'logbook.parkStates.skip': 'Skip to Cancel and Change',
   'logbook.parkStates.apply': {
     one: 'Change {{count}} contact',
     other: 'Change {{count}} contacts',
@@ -1265,6 +1266,8 @@ export const EN = {
       '{{count}} LoTW records are for calls your log holds no contact under, such as a club call on your LoTW account; this check leaves them alone.',
   },
   'logbook.confirmations.cancel': 'Cancel',
+  'logbook.confirmations.skipCheck': 'Skip to Cancel and Check',
+  'logbook.confirmations.skipChange': 'Skip to Cancel and Change',
   'logbook.confirmations.apply': {
     one: 'Change {{count}} contact',
     other: 'Change {{count}} contacts',
@@ -4189,6 +4192,25 @@ export const EN = {
   'fieldDay.removed.notRemoved': 'That contact is no longer in the Removed list.',
   'fieldDay.removed.failed': 'Nexus could not restore the contact.',
   'fieldDay.removed.restore.remote': 'Only at the station: a press through Remote restores no contact.',
+  'contest.clear.label': 'Clear test contacts',
+  'contest.clear.title': 
+    'Take every contact of this running out of the contest log, for contacts you logged as a test before the start. Each is kept under Removed, where Restore puts it back, and its serial number is not used again. Click twice: the first click asks.',
+  'contest.clear.confirm': {
+    one: 'Clear {{count}} contact? Click again',
+    other: 'Clear all {{count}} contacts? Click again',
+  },
+  'contest.clear.done': {
+    one: 'Took {{count}} contact out of the contest log. It is under Removed, where Restore puts it back.',
+    other: 'Took {{count}} contacts out of the contest log. They are under Removed, where Restore puts each back.',
+  },
+  'contest.clear.club': 'The club log drops them too, on every laptop, as soon as the host has them.',
+  'contest.clear.clubAway': 'This laptop is not with the club host right now: the club log drops them when the link is back.',
+  'contest.clear.sentTo': 'Some were already sent to {{places}}: delete them there too.',
+  'contest.clear.logbook': 'Some stay in your logbook.',
+  'contest.clear.logbookUploaded': 'Some stay in your logbook, and {{services}} have them: Nexus cannot take them back from there.',
+  'contest.clear.changed': 'The contest log changed, so nothing was cleared.',
+  'contest.clear.failed': 'Nexus could not clear the contacts, so nothing was cleared.',
+  'contest.clear.remote': 'Only at the station: a press through Remote clears no contact.',
   'fieldDay.log.dupe.title': 'Duplicate — kept in the log and worth no points',
   'fieldDay.log.mult.title': 'New section — multiplier',
   'fieldDay.log.mult': 'Mult!',

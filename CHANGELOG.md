@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Clear test contacts on the Contest screen.** A gear test logged before the start stayed in the
+  event's log unless you deleted the journal file with Nexus closed. **Clear test contacts**, beside
+  the exports, takes every contact of this running out of the contest log at once: the first click
+  names how many, and a second within 5 seconds clears them. Each goes as Remove takes one: it waits
+  under Removed, where Restore puts it back, it leaves the score, the dupe check and every export,
+  and its serial number is not used again, so the next contact carries the number after it. At a
+  club only this laptop's contacts go, and the club drops them on every laptop as it drops a
+  removed one. Nothing transmits.
+- **Settings ▸ Licenses shows Nexus's NOTICE.** The Licenses screen now opens with the NOTICE file
+  the installers carry, before the license texts of the interface's npm packages and the Rust
+  crates.
 - **A Timeline card in Statistics.** A line chart of your QSOs over the past day (by hour), the
   past 30 days (by day) or the past year (by month), each ending with the current hour, day or month
   in UTC, as the log is. One line per mode, counted as the By mode card counts them (USB and LSB are
@@ -111,6 +122,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The manual's drive advice covers the Yaesus that turn their power down with the ALC.** On an
+  FT-991A below full power the ALC reads above zero however clean the drive, so "set it so your
+  rig's ALC reads zero" could not be met there. Rig and Audio Setup, Getting Started and the
+  settings reference now say to set the drive at full power on those radios.
 - **On Windows, Nexus follows your computer's light or dark setting until you pick a theme.** A new
   install there opens in System, so the very first screen already matches Windows, and it changes
   when Windows does. On Linux, the Raspberry Pi and macOS, Nexus opens Dark until you pick, as
@@ -193,6 +208,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Check park states and Check confirmations: one key skips the list.** With thousands of lines,
+  Tab passed every checkbox before Cancel. Each dialog's first Tab stop is now a skip, shown only
+  while it has the keyboard: Enter puts the keyboard on Cancel, which changes nothing, and Tab from
+  there reaches the dialog's other button.
+- **The manual names the contest journal by its real name.** Since club sync the journal is
+  `fieldday_backup_<id>.adi`, one per computer, not `fieldday_backup.adi`. Contest Log Persistence
+  now says so, and says how to start clean after a gear test with Clear test contacts.
 - **AD1C's country file now carries its license notice.** Nexus finds a call's DXCC entity and
   zones in the cty.dat country file by Jim Reisert AD1C, which is MIT-licensed. That license asks
   for its notice to travel with every copy, and NOTICE named the license without reproducing it.

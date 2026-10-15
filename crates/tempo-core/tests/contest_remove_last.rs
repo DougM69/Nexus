@@ -466,3 +466,141 @@ fn a_removed_contact_keeps_the_exchange_it_sent_across_a_restart() {
     let back = restored.restore(id).unwrap();
     assert_eq!(back.rows[0].tx, sent_from_cook, "it still sent COOK");
 }
+
+/// ⭐ **Clear test contacts takes every contact out, each kept as a removal keeps one.** The live
+/// log empties; each contact is its own Removed entry, oldest first — a county line one entry with
+/// both its rows, the same station worked twice two entries, and two stations logged in the same
+/// second two entries; a restart reads exactly those entries back from the journal; and each
+/// restores on its own, back to the log byte for byte.
+#[test]
+fn clearing_takes_every_contact_out_each_kept_as_a_removal_is() {
+    let mut log = ilqp_log();
+    assert!(party(&mut log, "K9AAA", "COOK", T0));
+    // One contact on the air, two rows: one time for both, as the engine writes a line.
+    assert!(party(&mut log, "K9NR", "COOK", T0 + 60));
+    assert!(party(&mut log, "K9NR", "DUPG", T0 + 60));
+    // The same station again, later: another contact with the same call.
+    assert!(party(&mut log, "K9NR", "LAKE", T0 + 120));
+    assert!(party(&mut log, "W9BBB", "LAKE", T0 + 180));
+    // Another station in the same second: another contact.
+    assert!(party(&mut log, "W9CCC", "WILL", T0 + 180));
+    let before = rows(&log);
+    let journal_before = log.adif();
+
+    let gone = log
+        .remove_all(6, "w9ccc", T0 + 180, T0 + 300)
+        .expect("the log is what was named");
+
+    let entry = |rows: &[LoggedQso]| RemovedQso {
+        rows: rows.to_vec(),
+        removed_unix: T0 + 300,
+    };
+    assert_eq!(
+        gone,
+        vec![
+            entry(&before[..1]),
+            entry(&before[1..3]),
+            entry(&before[3..4]),
+            entry(&before[4..5]),
+            entry(&before[5..]),
+        ],
+        "one entry per contact, oldest first, each row exactly as it stood"
+    );
+    assert!(rows(&log).is_empty(), "the live log is empty");
+    assert_eq!(
+        log.removed(),
+        gone,
+        "…and every contact is kept, marked removed"
+    );
+    assert_eq!(log.qso_count(), 0);
+    assert_eq!(score(&log), score(&ilqp_log()), "nothing scores");
+
+    let mut restarted = ilqp_log();
+    restarted.merge_adif(&log.adif(), 0);
+    assert!(
+        rows(&restarted).is_empty(),
+        "a restart keeps them out of the log"
+    );
+    assert_eq!(
+        restarted.removed(),
+        log.removed(),
+        "…and reads back each contact removed, apart from the others"
+    );
+
+    let back = log
+        .restore(gone[1].id())
+        .expect("the county line comes back");
+    assert_eq!(back, gone[1]);
+    assert_eq!(
+        rows(&log),
+        before[1..3],
+        "both its counties, and nothing else"
+    );
+    for e in [&gone[3], &gone[0], &gone[4], &gone[2]] {
+        log.restore(e.id()).expect("each comes back on its own");
+    }
+    assert_eq!(rows(&log), before, "every row back in its place");
+    assert!(log.removed().is_empty());
+    assert_eq!(
+        log.adif(),
+        journal_before,
+        "the journal is back byte for byte"
+    );
+}
+
+/// ⭐ **Clearing gives no number back**, as a removal gives none: in a serial contest, and across a
+/// restart, the next contact's serial and seq follow the cleared ones.
+#[test]
+fn clearing_never_reissues_a_serial_or_a_seq() {
+    let mut log = FieldDayLog::new("W9XYZ", ss_session(), "20m");
+    let issued: Vec<String> = ["K2DEF", "W1AW"]
+        .iter()
+        .enumerate()
+        .map(|(i, c)| ss_work(&mut log, c, SS + 60 * i as u64))
+        .collect();
+    assert_eq!(issued, ["1", "2"]);
+    log.remove_all(2, "W1AW", SS + 60, SS + 90)
+        .expect("the log is what was named");
+    assert_eq!(log.session.next_serial, 3, "a clear gives no number back");
+
+    let mut restored = restart(&log.adif(), ss_session());
+    assert_eq!(restored.removed(), log.removed());
+    assert_eq!(
+        (restored.max_seq(), restored.session.next_serial),
+        (2, 3),
+        "(the club seq high-water, the next serial) both continue past the cleared contacts"
+    );
+    assert_eq!(ss_work(&mut restored, "K3GHI", SS + 600), "3");
+    assert_eq!(restored.qsos().last().unwrap().seq, 3);
+}
+
+/// If the log is not what the screen named — a contact logged, removed or restored in between —
+/// nothing is cleared; and an empty log has nothing to clear.
+#[test]
+fn clearing_a_changed_or_empty_log_refuses_and_changes_nothing() {
+    let mut log = ilqp_log();
+    assert_eq!(
+        log.remove_all(0, "K9AAA", T0, T0 + 5),
+        Err(RemoveRefusal::Empty)
+    );
+    assert!(party(&mut log, "K9AAA", "COOK", T0));
+    assert!(party(&mut log, "W9BBB", "LAKE", T0 + 60));
+    let before = rows(&log);
+    let journal = log.adif();
+    for (n, call, when) in [
+        (1, "W9BBB", T0 + 60), // a row more than the screen named
+        (3, "W9BBB", T0 + 60), // a row fewer
+        (2, "K9AAA", T0),      // an older contact, not the newest
+        (2, "W9BBB", T0 + 61), // the newest call, another time
+        (2, "W1AW", T0 + 60),  // the newest time, another call
+    ] {
+        assert_eq!(
+            log.remove_all(n, call, when, T0 + 90),
+            Err(RemoveRefusal::Changed),
+            "{n} rows, {call} @ {when} is not this log"
+        );
+        assert_eq!(rows(&log), before, "nothing was cleared");
+        assert!(log.removed().is_empty());
+        assert_eq!(log.adif(), journal);
+    }
+}
