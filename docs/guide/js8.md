@@ -108,7 +108,7 @@ is no **HB** button and no heartbeat acknowledgement. **HB** starts the repeat (
 the interval; the first heartbeat goes one interval after you switch it on), or at interval 0
 sends one heartbeat. Its menu has **Send heartbeat now** and, with an interval set, **Start**
 or **Stop heartbeat timer**. Heartbeats and acknowledgements go out at Slow, Normal and Fast
-only: at Turbo **HB** disappears, **HB NET** is greyed out, and a running repeat stops. With the
+only: at JS8 40 and JS8 60 **HB** disappears, **HB NET** is greyed out, and a running repeat stops. With the
 **QSO pause** (on by default), a call in the **To** box pauses the heartbeat repeat until you
 clear the box, holds back every acknowledgement, and stops a repeating CQ; switching **HB** on
 clears the **To** box. When **HB ACK** is on but held back for one of these reasons (the speed,

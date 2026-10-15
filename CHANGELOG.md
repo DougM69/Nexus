@@ -100,9 +100,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **▾** beside it, for **Send heartbeat now** (one heartbeat in the next period, the repeat left as
   it is) and, with a repeat interval set, **Start** or **Stop heartbeat timer**. The first repeated
   heartbeat still goes one interval after you switch the repeat on, as in JS8Call. NEEDS-BENCH.
-- **JS8: no heartbeats at Turbo.** Heartbeats and heartbeat acknowledgements go out at Slow, Normal
-  and Fast only, as in JS8Call: at Turbo HB disappears, HB NET is greyed out, a running heartbeat
-  repeat stops, and an acknowledgement still waiting is dropped. NEEDS-BENCH.
+- **JS8: no heartbeats at JS8 40 or JS8 60.** Heartbeats and heartbeat acknowledgements go out at
+  Slow, Normal and Fast only, as in JS8Call: at JS8 40 (once called Turbo) and JS8 60 HB disappears,
+  HB NET is greyed out, a running heartbeat repeat stops, and an acknowledgement still waiting is
+  dropped. NEEDS-BENCH.
 - **JS8 QSO pause, on by default.** While the To box holds a call, the heartbeat repeat pauses and
   starts again one interval after you clear the box, no heartbeat is acknowledged, and a repeating
   CQ stops; switching HB on clears the To box. Settings ▸ Digital ▸ JS8 ▸ Pause heartbeats while a
@@ -114,7 +115,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forgets those stations. *Do not take part in @ALLCALL*: nothing addressed to @ALLCALL is answered
   or marked as addressed to you, and @ALLCALL leaves the To box's list. NEEDS-BENCH.
 - **The JS8 HB ACK chip says when an acknowledgement is held back.** When HB ACK is armed but would
-  not answer right now (at Turbo, while a message is still arriving, or while a call is in the To
+  not answer right now (at JS8 40 or JS8 60, while a message is still arriving, or while a call is in the To
   box), the chip reads not armed and its tooltip says why, as JS8Call drops "ACK" from its HB
   button then.
 - **JS8 60, JS8Call 3.0's fifth speed, to receive and to transmit.** A fifth speed chip in the
