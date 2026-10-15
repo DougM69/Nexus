@@ -4356,6 +4356,9 @@ export const JA: PartialCatalog = {
   "settings.rigControl.flexAudio.label": "FlexネイティブDAXオーディオ（ベータ）",
   "settings.rigControl.flexAudio.hint": "「DAX Audio RX」/「DAX TX」サウンドデバイス — <b>リモートデスクトップでは見えません</b> — の代わりに、このFlexRadioのオーディオをネットワーク経由（VITA-49 DAX）でやり取りします。<b>Flexネイティブクライアント（ベータ）をオンにする必要があります。</b>SmartSDR CATではこの設定は何もしません。オーディオはサウンドデバイスのままで、設定はクライアント用に保持されます。クライアントでは、デコーダーが無線機から受信オーディオを直接読み取り、<b>デジタルモード</b>とリモートストリームの音声はDAXで送信されます。シャックのPhoneでは無線機自身のマイクを使うため、ボイスキーヤーは再生できません。オフにするか切断すると、ご自身のDAX設定に戻ります。SmartSDRのDAXが接続されている間、Nexusはこの設定を変更しません。<b>ベータ版・実機では未検証です:</b> デコードや送信が止まった場合はオフに戻してください。保存で適用されます。",
   "settings.rigControl.flexClient.label": "Flexネイティブクライアント（ベータ）",
+  // The Flex client's Beta setting for CW, Tune and the ATU: MACHINE TRANSLATION, for a native speaker to check.
+  "settings.rigControl.flexUnbenched.label": "NexusにFlexネイティブクライアント経由でCW・Tune・ATUを送らせる（実機ベンチ未検証）",
+  "settings.rigControl.flexUnbenched.hint": "<b>実機のFlexではまだ確認されていません：</b>CW・Tune・ATUはまずダミーロードで試してください。既定ではオフです。保存で適用され、Nexusは無線機に再接続します。",
   "settings.rigControl.flexClient.hint": "Nexusは<b>FlexのIP</b>で無線機に直接接続し、SmartSDRクライアントの一つとして自身のスライスでCATとPTTを扱います。ベータ版で<b>実機では未検証</b>です。送信はまずダミーロードで試してください。Nexusが接続できない場合はSmartSDR CATに戻ります。保存で適用されます。",
   "settings.rigControl.civLog.label": "CI-Vバス診断ログ",
   "settings.rigControl.civLog.failed": "CI-V診断ログを切り替えられませんでした",

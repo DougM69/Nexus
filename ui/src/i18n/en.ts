@@ -6774,6 +6774,10 @@ export const EN = {
   'settings.rigControl.flexClient.label': 'Flex native client (Beta)',
   'settings.rigControl.flexClient.hint':
     "Nexus connects to the radio itself, at the <b>Flex radio IP</b>, as one of its SmartSDR clients, and runs CAT and PTT on a slice of its own. Beta and <b>unverified on hardware</b>: try transmit into a dummy load first. If Nexus cannot connect, it falls back to SmartSDR CAT. Save to apply.",
+  'settings.rigControl.flexUnbenched.label':
+    'Let Nexus send CW, Tune and ATU through the native Flex client (not yet bench-tested)',
+  'settings.rigControl.flexUnbenched.hint':
+    '<b>Not yet checked on a real Flex:</b> try CW, Tune and the ATU into a dummy load first. Off by default. Save to apply; Nexus reconnects to the radio.',
   // ⚠️ `{{path}}` is a file path the backend chose. Markers are parsed BEFORE values are
   // substituted, so a path that happens to contain `<b>` is text, never markup.
   'settings.rigControl.civLog.label': 'CI-V bus diagnostic log',

@@ -24,6 +24,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changed, and Enter Sends Message keeps sending the same keys for the same steps. Send once sends
   exactly as the key does, His call and all. With the editor open and nothing on the air, Esc closes
   it and leaves TX on.
+- **FlexRadio: a Beta switch lets the Flex native client send CW, run Tune and run the ATU before
+  a tester has checked them on a radio. Off by default.** **Settings ▸ Radio ▸ Rig & CAT ▸
+  Advanced ▸ Let Nexus send CW, Tune and ATU through the native Flex client (not yet
+  bench-tested)**, shown only while the Flex native client (Beta) serves the radio, turns all three
+  on for that radio: CW goes to the radio's keyer a word at a time, Tune is the radio's own carrier
+  at its tune power, and the ATU button runs the radio's tuner. It is off for every radio until you
+  turn it on, it is kept per radio, and it changes only at the shack, never through the Remote
+  stream. It lifts only the client's "not yet checked on a radio" refusal: every other check still
+  decides each transmission, the TX-enable latch, your licence privileges and the TX watchdog
+  among them, and the client's own checks (Nexus's slice the transmit slice, nothing else keying
+  the radio, XIT off, break-in on and Sync CWX off for CW, a tuner fitted for the ATU). Saving a
+  change reconnects Nexus to the radio. Beta, not yet checked on a real Flex: try it into a dummy
+  load first. NEEDS-BENCH on a FLEX radio, into a dummy load: CW, Tune and the ATU through the
+  client.
 - **FlexRadio: your paddle wins over Nexus's CW on the Flex native client (Beta), built and off
   until a tester has checked it on a radio.** Once a tester's bench has shown what the radio
   reports for a paddle or key in its key jack, touching it while Nexus sends CW clears the radio's

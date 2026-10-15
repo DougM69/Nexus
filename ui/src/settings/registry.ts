@@ -181,7 +181,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // The #145 declarations. The words here are the SYMPTOM, not the setting name — an
       // operator whose rig keys the moment Nexus opens does not search for "handshake".
       'serial handshake', 'flow control', 'xonxoff', 'rts state', 'dtr state', 'keying line',
-      'keys at launch', 'transmits at startup', 'stuck ptt', 'stuck transmit'],
+      'keys at launch', 'transmits at startup', 'stuck ptt', 'stuck transmit',
+      // The Flex client's Beta setting for CW, Tune and the ATU, under the words for what it
+      // switches on: an operator looking for it asks how to get CW or the tuner through the client.
+      'flex cw', 'cwx', 'flex tune', 'flex atu'],
   },
   {
     id: 'audio',

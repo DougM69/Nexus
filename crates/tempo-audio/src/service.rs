@@ -152,6 +152,13 @@ fn flex_client_ip(t: &Transport) -> Option<&str> {
         .then(|| t.flex_radio_ip.trim())
 }
 
+/// The radio's Beta setting for the Flex client's CW, Tune and ATU (`flex_native_unbenched`) where
+/// the client serves the radio ([`flex_client_ip`]); `None` on every other radio, so the setting
+/// restarts nothing there.
+fn flex_client_unbenched(t: &Transport) -> Option<bool> {
+    flex_client_ip(t).map(|_| t.flex_native_unbenched)
+}
+
 /// The CI-V bus address for [`native_civ_model`]'s rig. Split out from the model rather
 /// than resolved separately: the daemon needs BOTH (the address to talk on, the model to
 /// know which attenuator pads and preamps this rig has), and two independent lookups of the
@@ -258,7 +265,7 @@ fn spawn_cat_daemon(
     // start (no radio at that address, a refused registration, no slice of ours), SmartSDR CAT
     // through rigctld below is the fallback, and the reason is recorded as the CI-V daemon's is.
     if let Some(ip) = flex_client_ip(t) {
-        match crate::flex::FlexDaemon::start_for_ip(ip, t.rigctld_port) {
+        match crate::flex::FlexDaemon::start_for_ip(ip, t.rigctld_port, t.flex_native_unbenched) {
             Ok(d) => return Ok((CatDaemon::Flex(d), None)),
             Err(e) => {
                 tempo_core::applog::warn(
@@ -1445,6 +1452,10 @@ pub struct RadioConfig {
     /// CAT daemon a tick later.
     pub flex_native_cat: bool,
     pub flex_radio_ip: String,
+    /// The radio's Beta setting that lets the Flex client start CW, Tune and the ATU before a
+    /// bench has confirmed them (`RadioProfile::flex_native_unbenched`, off by default), seeded
+    /// with the opt-in so the first client is started with it.
+    pub flex_native_unbenched: bool,
     /// The radio's address, network user and control port for Nexus's Icom network client (the
     /// "Icom network" Connection; `RadioProfile::icom_lan_host`), and the radio profile whose
     /// keychain entry holds the password, so the first launch connects rather than failing a
@@ -1505,6 +1516,7 @@ impl Default for RadioConfig {
             icom_native_cat: false,
             flex_native_cat: false,
             flex_radio_ip: String::new(),
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
@@ -2316,6 +2328,7 @@ impl Transport {
             icom_native_cat: p.icom_native_cat,
             flex_native_cat: p.flex_native_cat,
             flex_radio_ip: p.flex_radio_ip.clone(),
+            flex_native_unbenched: p.flex_native_unbenched,
             icom_lan_host: p.icom_lan_host.clone(),
             icom_lan_user: p.icom_lan_user.clone(),
             icom_lan_port: p.icom_lan_port,
@@ -14469,6 +14482,10 @@ struct Transport {
     /// radio's own address it connects to. Read through [`flex_client_ip`] only.
     flex_native_cat: bool,
     flex_radio_ip: String,
+    /// The radio's Beta setting for the Flex client's CW, Tune and ATU
+    /// (`RadioProfile::flex_native_unbenched`), handed to the client's session when it starts, so
+    /// part of transport identity where the client serves the radio ([`flex_client_unbenched`]).
+    flex_native_unbenched: bool,
     /// The Icom network connection's address, network user and control port, and the radio
     /// profile whose keychain entry holds its password. Read through [`Transport::icom_lan_target`]
     /// only.
@@ -14539,6 +14556,7 @@ impl Transport {
             icom_native_cat: c.icom_native_cat,
             flex_native_cat: c.flex_native_cat,
             flex_radio_ip: c.flex_radio_ip.clone(),
+            flex_native_unbenched: c.flex_native_unbenched,
             icom_lan_host: c.icom_lan_host.clone(),
             icom_lan_user: c.icom_lan_user.clone(),
             icom_lan_port: c.icom_lan_port,
@@ -14596,6 +14614,7 @@ impl Transport {
             icom_native_cat: s.icom_native_cat,
             flex_native_cat: s.flex_native_cat,
             flex_radio_ip: s.flex_radio_ip.clone(),
+            flex_native_unbenched: s.flex_native_unbenched,
             icom_lan_host: s.icom_lan_host.clone(),
             icom_lan_user: s.icom_lan_user.clone(),
             icom_lan_port: s.icom_lan_port,
@@ -14656,6 +14675,9 @@ impl Transport {
             // the client is in play: an address edit on a radio NOT opted in restarts nothing, as
             // before the client existed.
             || flex_client_ip(self) != flex_client_ip(o)
+            // Its Beta setting for CW, Tune and the ATU, which the client's session is started
+            // with, compared the same way: on a radio the client does not serve it restarts nothing.
+            || flex_client_unbenched(self) != flex_client_unbenched(o)
             // The Icom network client's radio, compared only where that connection is in play,
             // like the Flex client's: an address edit on a serial radio restarts nothing.
             || self.icom_lan_target() != o.icom_lan_target()
@@ -31330,6 +31352,7 @@ mod tests {
             icom_native_cat: false,
             flex_native_cat: false,
             flex_radio_ip: String::new(),
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
@@ -31427,6 +31450,90 @@ mod tests {
             flex_client_ip(&Transport::from_profile(&p)),
             Some("192.0.2.20")
         );
+    }
+
+    /// ⭐ The radio's Beta setting for the Flex client's CW, Tune and ATU (`flex_native_unbenched`,
+    /// off by default) is fixed into the client's session when it starts, so where the client
+    /// serves the radio, turning it on or off restarts the client; on SmartSDR CAT or another
+    /// radio it restarts nothing. The first launch, the live rebuild from settings and a monitored
+    /// radio's profile all carry it, and all three carry it off by default.
+    #[test]
+    fn the_flex_clients_beta_setting_restarts_the_client_and_nothing_else() {
+        let client = || {
+            let mut t = cat_transport(4534, Some(4532));
+            t.rig_model = 2036;
+            t.rig_conn = "network".into();
+            t.rig_addr = "127.0.0.1:5002".into();
+            t.flex_native_cat = true;
+            t.flex_radio_ip = "192.0.2.20".into();
+            t
+        };
+        let with = |mut t: Transport, on: bool| {
+            t.flex_native_unbenched = on;
+            t
+        };
+        assert_eq!(flex_client_unbenched(&client()), Some(false));
+        assert_eq!(flex_client_unbenched(&with(client(), true)), Some(true));
+        assert!(
+            !with(client(), true).rig_differs(&with(client(), true)),
+            "the control: unchanged, nothing restarts"
+        );
+        assert!(
+            with(client(), true).rig_differs(&client()),
+            "turning it on restarts the client"
+        );
+        assert!(
+            client().rig_differs(&with(client(), true)),
+            "and so does turning it off"
+        );
+        let mut cat = client();
+        cat.flex_native_cat = false;
+        assert_eq!(flex_client_unbenched(&with(cat.clone(), true)), None);
+        assert!(
+            !with(cat.clone(), true).rig_differs(&cat),
+            "on SmartSDR CAT it restarts nothing"
+        );
+        let mut icom = client();
+        icom.rig_model = 3073;
+        assert!(
+            !with(icom.clone(), true).rig_differs(&icom),
+            "nor on another radio"
+        );
+        // The first launch, the live rebuild and a monitored radio's profile: off, then on.
+        for on in [false, true] {
+            let cfg = RadioConfig {
+                rig_model: 2036,
+                rig_conn: "network".into(),
+                flex_native_cat: true,
+                flex_radio_ip: "192.0.2.20".into(),
+                flex_native_unbenched: on,
+                ..RadioConfig::default()
+            };
+            assert_eq!(flex_client_unbenched(&Transport::from_cfg(&cfg)), Some(on));
+            let s = tempo_app::settings::Settings {
+                rig_model: 2036,
+                flex_native_cat: true,
+                flex_radio_ip: "192.0.2.20".into(),
+                flex_native_unbenched: on,
+                ..tempo_app::settings::Settings::default()
+            };
+            assert_eq!(
+                flex_client_unbenched(&Transport::from_settings(&s)),
+                Some(on)
+            );
+            let p = tempo_app::settings::RadioProfile {
+                rig_model: 2036,
+                flex_native_cat: true,
+                flex_radio_ip: "192.0.2.20".into(),
+                flex_native_unbenched: on,
+                ..tempo_app::settings::RadioProfile::default()
+            };
+            assert_eq!(
+                flex_client_unbenched(&Transport::from_profile(&p)),
+                Some(on)
+            );
+        }
+        assert!(!RadioConfig::default().flex_native_unbenched);
     }
 
     /// ⭐ #145 AT THE **FIRST** LAUNCH, which is the launch that keys.

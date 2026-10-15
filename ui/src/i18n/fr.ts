@@ -6309,6 +6309,9 @@ export const FR: PartialCatalog = {
   "settings.rigControl.flexAudio.label": "Audio DAX Flex natif (bêta)",
   "settings.rigControl.flexClient.hint": "Nexus se connecte lui-même à la radio, à l'<b>IP de la radio Flex</b>, comme l'un de ses clients SmartSDR, et pilote le CAT et le PTT sur une slice à lui. Bêta et <b>non vérifié sur matériel</b> : essayez d'abord l'émission sur une charge fictive. Si Nexus ne peut pas se connecter, il revient à SmartSDR CAT. Enregistrez pour appliquer.",
   "settings.rigControl.flexClient.label": "Client Flex natif (bêta)",
+  // The Flex client's Beta setting for CW, Tune and the ATU: MACHINE TRANSLATION, for a native speaker to check.
+  "settings.rigControl.flexUnbenched.label": "Laisser Nexus envoyer le CW, Tune et l'ATU via le client Flex natif (pas encore testé au banc)",
+  "settings.rigControl.flexUnbenched.hint": "<b>Pas encore vérifié sur un vrai Flex :</b> essayez d'abord le CW, Tune et l'ATU sur une charge fictive. Désactivé par défaut. Enregistrez pour appliquer ; Nexus se reconnecte à la radio.",
   "settings.rigControl.flexIp.hint": "L'IP LAN de votre FlexRadio (API SmartSDR, port 4992) — active le panadapter RF natif. C'est l'adresse de la <em>radio</em>, pas le port SmartSDR-CAT ci-dessus.",
   "settings.rigControl.flexIp.label": "IP de la radio Flex (panadapter natif + DAX)",
   "settings.rigControl.flexPan.hint": "Diffuse le vrai panadapter SmartSDR de ce FlexRadio (FFT VITA-49) dans le scope du cockpit — le spectre RF autour de votre VFO, avec les contrôles d'étendue et de référence du pan Flex. Bêta et <b>non vérifié sur matériel</b>, donc en option : nécessite l'IP du Flex (via Trouver des radios) et SmartSDR joignable sur ce réseau. Si le scope reste vide ou que l'application saccade, redésactivez-le. Enregistrez pour appliquer.",

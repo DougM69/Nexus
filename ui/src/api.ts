@@ -2767,6 +2767,9 @@ export interface RadioProfilePatch {
   flexNativeAudio: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta; per-radio, as above). */
   flexNativeCat: boolean
+  /** This radio's Beta setting that lets the Flex client send CW, Tune and ATU before a bench has
+   *  confirmed them (off by default; per-radio, as above). */
+  flexNativeUnbenched: boolean
   /** This radio's address, network user and control port for the Icom network connection (Beta;
    *  per-radio, as above). Its password is never here: the OS keychain holds it. */
   icomLanHost: string

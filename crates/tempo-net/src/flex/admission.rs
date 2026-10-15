@@ -25,7 +25,10 @@
 //!   transmission can be proven ([`super::ptt_evidence`]);
 //! - and the start is of a kind whose readback a tester's bench has confirmed ([`BENCHED`]). Today
 //!   that is `xmit` only. Tune, ATU and CWX have readback profiles built from AetherSDR's notes,
-//!   but their starts are refused, before any other check, until the bench confirms them.
+//!   but their starts are refused, before any other check, until the bench confirms them, unless
+//!   the operator has turned on, for the radio in use, the Beta setting that lets Nexus start them
+//!   before a bench has ([`BETA`], [`admit_beta`]; off by default). That setting passes this one
+//!   check: every check above still decides each start, in the same order.
 //!
 //! **A CWX word while our own CWX operation is open** joins it: the two checks that describe that
 //! operation (nothing of ours keyed, the readback idle) do not apply, nor does the interlock's
@@ -34,9 +37,9 @@
 //! reason.
 //!
 //! [`Admitted`] is the value a start must carry to be rendered ([`super::encode::render_start`]).
-//! Its field is private to this module and [`admit`] is the only constructor, so a keying
-//! command cannot be produced anywhere else. It is neither `Clone` nor `Copy`: one admission
-//! renders one start.
+//! Its field is private to this module and [`admit`] is the only constructor (with
+//! [`admit_beta`], the same checks under the operator's Beta setting), so a keying command cannot
+//! be produced anywhere else. It is neither `Clone` nor `Copy`: one admission renders one start.
 //!
 //! **The transmitter's audio source** (`stream create type=dax_tx`, `transmit set dax`) has its
 //! own admission, [`admit_tx_audio`], and its own value, [`AdmittedTxAudio`]: it keys nothing,
@@ -61,6 +64,21 @@ use super::status::SliceDelta;
 /// kind joins this list only after its readback profile ([`super::ptt_evidence`]) has passed the
 /// bench, never on the strength of the notes it was built from.
 pub const BENCHED: &[StartKind] = &[StartKind::Key];
+
+/// The kinds the operator's Beta setting admits beside [`BENCHED`] on the radio it is on for
+/// (`super::session::Config::beta`; the radio profile's `flex_native_unbenched` in tempo-app, off
+/// by default): tune, ATU and CWX, whose readback profiles are built from AetherSDR's notes and
+/// that no bench has confirmed yet. With the setting on they pass the [`Refusal::NoReadback`]
+/// check and every other check still decides them, in the same order ([`admit_beta`]); with it
+/// off they are refused as before. A kind moves from here to [`BENCHED`] once a bench confirms it.
+pub const BETA: &[StartKind] = &[StartKind::Tune, StartKind::Atu, StartKind::Cwx];
+
+/// Whether admission takes starts of `kind` at all, with the operator's Beta setting at `beta`: a
+/// kind a bench has confirmed ([`BENCHED`]), or, with the setting on, one of [`BETA`]. A kind it
+/// does not take is refused with [`Refusal::NoReadback`] before every other check.
+pub fn switched_on(kind: StartKind, beta: bool) -> bool {
+    BENCHED.contains(&kind) || (beta && BETA.contains(&kind))
+}
 
 // The door past [`BENCHED`] (`session::Config::unbenched`) is test support: this crate's tests,
 // and tempo-audio's through the `flex-unbenched` feature. A release build never carries it.
@@ -131,8 +149,9 @@ pub struct Facts {
 /// Why a start was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
-    /// A kind whose readback no tester's bench has confirmed yet ([`BENCHED`]): tune, ATU, CWX.
-    /// Also a CWX word sent with no keying time, which its readback needs.
+    /// A kind whose readback no tester's bench has confirmed yet ([`BENCHED`]): tune, ATU, CWX,
+    /// while the operator's Beta setting for the radio is off ([`BETA`]). Also a CWX word sent
+    /// with no keying time, which its readback needs.
     NoReadback(StartKind),
     NotReady,
     /// A TCP API version not reviewed for transmit: receive only.
@@ -254,6 +273,18 @@ impl std::error::Error for Refusal {}
 /// other than a refusal is the one value that can be rendered as a keying command.
 pub fn admit(model: &StatusModel, facts: &Facts, start: TxStart) -> Result<Admitted, Refusal> {
     admit_kinds(model, facts, start, BENCHED)
+}
+
+/// [`admit`] on a radio whose operator has turned its Beta setting on ([`BETA`]): a tune, an ATU
+/// cycle and a CWX word pass the [`Refusal::NoReadback`] check as a key does, and every other
+/// check decides them, in the same order. With the setting off, [`admit`] runs, unchanged.
+pub fn admit_beta(model: &StatusModel, facts: &Facts, start: TxStart) -> Result<Admitted, Refusal> {
+    let kinds = if BETA.contains(&start.kind()) {
+        BETA
+    } else {
+        BENCHED
+    };
+    admit_kinds(model, facts, start, kinds)
 }
 
 /// [`admit`] for every kind, also those whose readback no bench has confirmed: the tests' way to
@@ -915,6 +946,317 @@ mod tests {
             Refusal::NoReadback(StartKind::Atu)
         );
         assert_eq!(BENCHED, &[StartKind::Key]);
+    }
+
+    // ── The operator's Beta setting ──
+
+    const ALL_KINDS: [StartKind; 4] = [
+        StartKind::Key,
+        StartKind::Tune,
+        StartKind::Atu,
+        StartKind::Cwx,
+    ];
+
+    fn start_of(kind: StartKind) -> TxStart {
+        match kind {
+            StartKind::Key => TxStart::Key,
+            StartKind::Tune => TxStart::TuneOn,
+            StartKind::Atu => TxStart::AtuStart,
+            StartKind::Cwx => TxStart::CwxSend(CwxText::new("TEST").unwrap()),
+        }
+    }
+
+    /// The scene every check passes on, for every kind: our transmit slice in CW with XIT off, the
+    /// radio's keyer as a CWX word needs it, its tuner fitted, the interlock idle.
+    fn passing_lines() -> Vec<String> {
+        [OUR_CW_SLICE, KEYER, ATU, IDLE].map(String::from).to_vec()
+    }
+
+    /// One admission check failing on its own: how the session's facts and the radio's lines change
+    /// from the scene every check passes on, and what each kind is refused with then (`None`:
+    /// admitted).
+    struct Failing {
+        check: &'static str,
+        facts: fn(&mut Facts),
+        lines: fn(&mut Vec<String>),
+        want: fn(StartKind) -> Option<Refusal>,
+    }
+
+    /// Every check but [`BENCHED`]'s, each failing on its own (the slice's lines are at 0, the
+    /// keyer's at 1, the tuner's at 2, the interlock's at 3), and our own open CWX, which a word
+    /// joins.
+    fn failing() -> Vec<Failing> {
+        use crate::flex::ptt_evidence::{KeyHandle, OperatorKey};
+        fn none(_: &mut Facts) {}
+        fn same(_: &mut Vec<String>) {}
+        vec![
+            Failing {
+                check: "every check passes",
+                facts: none,
+                lines: same,
+                want: |_| None,
+            },
+            Failing {
+                check: "not registered",
+                facts: |f| f.ready = false,
+                lines: same,
+                want: |_| Some(Refusal::NotReady),
+            },
+            Failing {
+                check: "an API version not reviewed for transmit",
+                facts: |f| f.transmit_protocol = false,
+                lines: same,
+                want: |_| Some(Refusal::ProtocolUnsupported),
+            },
+            Failing {
+                check: "no client handle",
+                facts: |f| f.handle = None,
+                lines: same,
+                want: |_| Some(Refusal::NoHandle),
+            },
+            Failing {
+                check: "an over of ours still unconfirmed",
+                facts: |f| {
+                    f.keyed = true;
+                    f.open = Some(StartKind::Key);
+                },
+                lines: same,
+                want: |_| Some(Refusal::AlreadyKeyed),
+            },
+            Failing {
+                check: "the readback has not seen the radio idle",
+                facts: |f| f.readback_idle = false,
+                lines: same,
+                want: |_| Some(Refusal::ReadbackNotIdle),
+            },
+            Failing {
+                check: "the operator's own key keying the radio",
+                facts: |f| {
+                    f.operator_key = Some(OperatorKey {
+                        source: "PADDLE",
+                        handle: KeyHandle::Ours,
+                    });
+                },
+                lines: |l| {
+                    l[3] = "S0|interlock tx_client_handle=0x2B6E1F40 state=TRANSMITTING reason= \
+                            source=PADDLE tx_allowed=1"
+                        .into();
+                },
+                want: |_| Some(Refusal::OperatorKeying),
+            },
+            Failing {
+                check: "no transmit slice",
+                facts: none,
+                lines: |l| l[0] = l[0].replace("tx=1", "tx=0"),
+                want: |_| Some(Refusal::NoTxSlice),
+            },
+            Failing {
+                check: "the transmit slice another client's",
+                facts: none,
+                lines: |l| {
+                    l[0] = "S7A3C0001|slice 0 in_use=1 tx=1 client_handle=0x7A3C0001 mode=CW \
+                            xit_on=0"
+                        .into();
+                },
+                want: |_| {
+                    Some(Refusal::TxSliceNotOurs {
+                        slice: 0,
+                        owner: Owner::Foreign(0x7A3C_0001),
+                    })
+                },
+            },
+            Failing {
+                check: "two transmit slices",
+                facts: none,
+                lines: |l| {
+                    l.push("S7A3C0001|slice 1 in_use=1 tx=1 client_handle=0x7A3C0001".into())
+                },
+                want: |_| Some(Refusal::SeveralTxSlices(vec![0, 1])),
+            },
+            Failing {
+                check: "the transmit slice not in CW",
+                facts: none,
+                lines: |l| l[0] = l[0].replace("mode=CW", "mode=USB"),
+                want: |k| (k == StartKind::Cwx).then(|| Refusal::NotCw { mode: "USB".into() }),
+            },
+            Failing {
+                check: "the radio's break-in off",
+                facts: none,
+                lines: |l| l[1] = l[1].replace("break_in=1", "break_in=0"),
+                want: |k| (k == StartKind::Cwx).then_some(Refusal::BreakInOff),
+            },
+            Failing {
+                check: "the radio's Sync CWX on",
+                facts: none,
+                lines: |l| l[1] = l[1].replace("synccwx=0", "synccwx=1"),
+                want: |k| (k == StartKind::Cwx).then_some(Refusal::SyncCwx),
+            },
+            Failing {
+                check: "the transmit slice's XIT on",
+                facts: none,
+                lines: |l| l[0] = l[0].replace("xit_on=0", "xit_on=1"),
+                want: |k| (k != StartKind::Key).then_some(Refusal::XitOn),
+            },
+            Failing {
+                check: "no tuner fitted",
+                facts: none,
+                lines: |l| l[2] = l[2].replace("atu_enabled=1", "atu_enabled=0"),
+                want: |k| (k == StartKind::Atu).then_some(Refusal::NoAtu),
+            },
+            Failing {
+                check: "no whole interlock sample",
+                facts: none,
+                lines: |l| l.push("S0|interlock tx_allowed=1".into()),
+                want: |_| Some(Refusal::InterlockUnknown),
+            },
+            Failing {
+                check: "another client holding the transmitter",
+                facts: none,
+                lines: |l| {
+                    l[3] =
+                        l[3].replace("tx_client_handle=0x00000000", "tx_client_handle=0x7A3C0001")
+                },
+                want: |_| Some(Refusal::TransmitterHeld { by: 0x7A3C_0001 }),
+            },
+            Failing {
+                check: "the mic's PTT keying the radio",
+                facts: none,
+                lines: |l| {
+                    l[3] = "S0|interlock tx_client_handle=0x00000000 state=TRANSMITTING reason= \
+                            source=MIC tx_allowed=1"
+                        .into();
+                },
+                want: |_| {
+                    Some(Refusal::HardwarePtt {
+                        source: "MIC".into(),
+                    })
+                },
+            },
+            Failing {
+                check: "something else keying the radio",
+                facts: none,
+                lines: |l| {
+                    l[3] = "S0|interlock tx_client_handle=0x00000000 state=TRANSMITTING reason= \
+                            source=SW tx_allowed=1"
+                        .into();
+                },
+                want: |_| {
+                    Some(Refusal::SourceActive {
+                        source: "SW".into(),
+                    })
+                },
+            },
+            Failing {
+                check: "transmit not allowed here",
+                facts: none,
+                lines: |l| l[3] = l[3].replace("tx_allowed=1", "tx_allowed=0"),
+                want: |_| {
+                    Some(Refusal::TransmitNotAllowed {
+                        reason: String::new(),
+                    })
+                },
+            },
+            Failing {
+                check: "the interlock not READY",
+                facts: none,
+                lines: |l| l[3] = l[3].replace("state=READY", "state=RECEIVE"),
+                want: |_| {
+                    Some(Refusal::InterlockNotReady {
+                        state: "RECEIVE".into(),
+                    })
+                },
+            },
+            Failing {
+                check: "our own CWX open and keying",
+                facts: |f| {
+                    f.keyed = true;
+                    f.open = Some(StartKind::Cwx);
+                    f.readback_idle = false;
+                },
+                lines: |l| {
+                    l[3] = format!(
+                        "S0|interlock tx_client_handle=0x2B6E1F40 state=TRANSMITTING reason= \
+                         source={} tx_allowed=1",
+                        crate::flex::ptt_evidence::CWX.source
+                    );
+                },
+                want: |k| (k != StartKind::Cwx).then_some(Refusal::AlreadyKeyed),
+            },
+        ]
+    }
+
+    /// The scene `cases` describe together: the radio's model and the session's facts.
+    fn scene(cases: &[&Failing]) -> (StatusModel, Facts) {
+        let mut f = facts();
+        let mut lines = passing_lines();
+        for case in cases {
+            (case.facts)(&mut f);
+            (case.lines)(&mut lines);
+        }
+        (
+            model(&lines.iter().map(String::as_str).collect::<Vec<_>>()),
+            f,
+        )
+    }
+
+    /// ⭐ The operator's Beta setting, per radio and off by default (`session::Config::beta`):
+    /// every start kind, with the setting off and on, in the scene every check passes on and with
+    /// each other check failing on its own, by value. Off, a tune, an ATU cycle and a CWX word are
+    /// refused `NoReadback` whatever else holds, exactly as before the setting existed; on, each
+    /// is admitted only where every other check passes, and each other check refuses it with its
+    /// own reason. A key is the same either way, and [`BENCHED`] is unchanged.
+    #[test]
+    fn the_beta_setting_admits_tune_atu_and_cwx_and_every_other_check_still_refuses() {
+        for case in &failing() {
+            let (m, f) = scene(&[case]);
+            for kind in ALL_KINDS {
+                let off = admit(&m, &f, start_of(kind)).err();
+                let on = admit_beta(&m, &f, start_of(kind)).err();
+                let want = (case.want)(kind);
+                let today = if kind == StartKind::Key {
+                    want.clone()
+                } else {
+                    Some(Refusal::NoReadback(kind))
+                };
+                assert_eq!(off, today, "setting off, {kind:?}: {}", case.check);
+                assert_eq!(on, want, "setting on, {kind:?}: {}", case.check);
+            }
+        }
+        for kind in ALL_KINDS {
+            assert_eq!(switched_on(kind, false), kind == StartKind::Key, "{kind:?}");
+            assert!(switched_on(kind, true), "{kind:?}");
+        }
+        assert_eq!(BENCHED, &[StartKind::Key]);
+        assert_eq!(BETA, &[StartKind::Tune, StartKind::Atu, StartKind::Cwx]);
+    }
+
+    /// ⭐ In the same order: with any two checks failing at once, the Beta setting refuses a tune,
+    /// an ATU cycle and a CWX word with the reason the test-only door gives (the same checks, in
+    /// the order the tests above established), and a key with today's; off, nothing but
+    /// `NoReadback` for the three.
+    #[test]
+    fn with_two_checks_failing_the_beta_setting_refuses_in_the_same_order() {
+        let cases = failing();
+        let mut pairs = 0;
+        for a in &cases {
+            for b in &cases {
+                let (m, f) = scene(&[a, b]);
+                for kind in ALL_KINDS {
+                    let off = admit(&m, &f, start_of(kind)).err();
+                    let on = admit_beta(&m, &f, start_of(kind)).err();
+                    let door = admit_unbenched(&m, &f, start_of(kind)).err();
+                    let why = format!("{kind:?}: {} + {}", a.check, b.check);
+                    assert_eq!(on, door, "setting on, {why}");
+                    if kind == StartKind::Key {
+                        assert_eq!(off, door, "setting off, {why}");
+                    } else {
+                        assert_eq!(off, Some(Refusal::NoReadback(kind)), "setting off, {why}");
+                    }
+                }
+                pairs += 1;
+            }
+        }
+        assert_eq!(pairs, cases.len() * cases.len());
     }
 
     // ── The transmitter's audio source ──

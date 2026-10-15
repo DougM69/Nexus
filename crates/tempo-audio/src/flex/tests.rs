@@ -672,6 +672,43 @@ fn a_cw_word_the_client_does_not_send_says_why() {
     assert_eq!(cwx_wire(&sim), Vec::<String>::new());
 }
 
+/// ⭐ The radio's Beta setting (`RadioProfile::flex_native_unbenched`, off by default) is what the
+/// production start hands the client's session. Off, the client neither tunes with the radio's
+/// carrier, runs its ATU nor sends CW, and a word is refused with the words it ships with; on, all
+/// three are switched on, and a word goes out to the radio's keyer through every other check.
+#[test]
+fn the_radios_beta_setting_switches_the_clients_cw_tune_and_atu() {
+    for beta in [false, true] {
+        let sim = simulator(with_mode_echo(), vec![]);
+        let d = FlexDaemon::start(sim.tcp_addr(), 0, beta).expect("the daemon starts");
+        assert_eq!(
+            (d.tunes_natively(), d.runs_atu(), d.sends_cw()),
+            (beta, beta, beta)
+        );
+        let mut c = Client::connect(&d);
+        in_cw(&mut c, &d);
+        let asked = Instant::now();
+        if beta {
+            assert_eq!(c.ask("b CQ", 1), "RPRT 0\n");
+            wait_count(&sim, "cwx send \"CQ\" 1", 1);
+            assert_eq!(cwx_wire(&sim), ["cwx send \"CQ\" 1"]);
+        } else {
+            assert_eq!(c.ask("b CQ", 1), "RPRT -1\n");
+            assert_eq!(
+                d.key_refused_since(asked),
+                Some((
+                    "CW not sent: the Flex native client does not send CW yet. For CW, turn the \
+                     Flex native client off (SmartSDR CAT sends it), or use the WinKeyer or \
+                     Soundcard keyer."
+                        .to_string(),
+                    None
+                ))
+            );
+            assert_eq!(cwx_wire(&sim), Vec::<String>::new());
+        }
+    }
+}
+
 /// ⭐ A word with a character Nexus has no Morse for is not sent, and the CW line names the
 /// character: Nexus cannot time it (`morse_duration_ms` skips it), while the radio's keyer may send
 /// it, so the word could outlast the window its readback holds open and end in a false alarm. The
@@ -1415,7 +1452,7 @@ fn a_replacement_daemon_can_stop_the_lost_sessions_stuck_transmitter() {
             radio_stays_keyed: true,
         }],
     );
-    let first = FlexDaemon::start(sim.tcp_addr(), 0).expect("the first daemon starts");
+    let first = FlexDaemon::start(sim.tcp_addr(), 0, false).expect("the first daemon starts");
     let mut c = Client::connect(&first);
     wait_session(&first, "the readback idle", |s| s.transmit_ready);
     assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
@@ -1426,7 +1463,7 @@ fn a_replacement_daemon_can_stop_the_lost_sessions_stuck_transmitter() {
     drop(c);
     drop(first);
     // What the radio loop does with a dead daemon: start another.
-    let second = FlexDaemon::start(sim.tcp_addr(), 0).expect("the second daemon starts");
+    let second = FlexDaemon::start(sim.tcp_addr(), 0, false).expect("the second daemon starts");
     let mut c = Client::connect(&second);
     assert_eq!(
         c.ask("T 1", 1),

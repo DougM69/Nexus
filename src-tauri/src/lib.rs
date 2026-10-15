@@ -33325,6 +33325,7 @@ pub fn run() {
         icom_native_cat: settings.icom_native_cat,
         flex_native_cat: settings.flex_native_cat,
         flex_radio_ip: settings.flex_radio_ip.clone(),
+        flex_native_unbenched: settings.flex_native_unbenched,
         icom_lan_host: settings.icom_lan_host.clone(),
         icom_lan_user: settings.icom_lan_user.clone(),
         icom_lan_port: settings.icom_lan_port,

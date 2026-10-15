@@ -177,7 +177,7 @@ impl FlexScene {
             }
             // What `open_cat` does for a radio Nexus's own client serves: a fresh client, which
             // remembers the handles of the sessions it replaces, probed as every open is.
-            match FlexDaemon::start(radio, 0) {
+            match FlexDaemon::start(radio, 0, t.flex_native_unbenched) {
                 Ok(d) => {
                     let mut rig = Rig::rigctld(&format!("127.0.0.1:{}", d.local_addr().port()));
                     let probe = finish_cat_open(&mut rig, t);
@@ -1300,7 +1300,7 @@ fn want_the_flex_radio(pool: &MonitorPool) -> Vec<(u32, Transport)> {
 fn reopen_flex(
     radio: std::net::SocketAddr,
 ) -> impl FnMut(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
-    move |_| match FlexDaemon::start(radio, 0) {
+    move |t| match FlexDaemon::start(radio, 0, t.flex_native_unbenched) {
         Ok(d) => {
             let cat = format!("127.0.0.1:{}", d.local_addr().port());
             let rig = Rig::with_control(Some(cat), PttMode::Vox);

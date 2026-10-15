@@ -8,8 +8,9 @@
 //!   stream removal, ATU bypass, the CW keyer's speed. [`render`] turns it into text.
 //! - [`TxStart`]: what can key the transmitter (`xmit 1`, `transmit tune 1`, `atu start`,
 //!   `cwx send`). It reaches the wire only through [`render_start`], which takes an
-//!   [`Admitted`], and only `super::admission::admit` constructs one. Nothing else in Nexus can
-//!   produce the text of a keying command.
+//!   [`Admitted`], and only `super::admission::admit` constructs one (with `admit_beta`, the same
+//!   checks under the operator's Beta setting). Nothing else in Nexus can produce the text of a
+//!   keying command.
 //! - [`TxStop`]: what ends a transmission (`xmit 0`, `transmit tune 0`, `cwx clear`). Never
 //!   gated: [`render_stop`] takes the stop alone.
 //! - [`TxAudio`]: what decides where the transmitter's audio comes from (`stream create
