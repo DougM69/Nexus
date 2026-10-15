@@ -86,7 +86,7 @@ pub enum ModeKind {
     /// tier-routed planner is the only TX path; the encoder here serves the lab.
     ///
     /// Carries its speed for the same reason FST4/Q65 carry a period: the T/R period is
-    /// 30/15/10/6 s and the decode window is `speed.frames_needed()` samples, so both
+    /// 30/15/10/6/4 s and the decode window is `speed.frames_needed()` samples, so both
     /// [`Self::slot_secs`] and [`Self::frame_samples`] are pure functions of the kind. The
     /// speed comes from `Settings::js8_speed` (an index into [`Js8Speed::ALL`]).
     Js8 {
@@ -134,8 +134,8 @@ impl ModeKind {
         speed: Js8Speed::Normal,
     };
 
-    /// Every JS8 speed (Slow, Normal, Fast, Turbo) — the capability invariants hold for
-    /// each, exactly as `q65_all` / `fst4_all` enumerate their families.
+    /// Every JS8 speed (Slow, Normal, Fast, Turbo, Ultra) — the capability invariants hold
+    /// for each, exactly as `q65_all` / `fst4_all` enumerate their families.
     pub fn js8_all() -> impl Iterator<Item = ModeKind> {
         Js8Speed::ALL
             .into_iter()
@@ -1357,14 +1357,14 @@ mod tx_capability_tests {
     fn js8_registers_as_a_parametric_kind() {
         // ⭐ B7 (operator gate G1) makes JS8 transmit-capable: `tx_mode` now hands back a
         // Mode at every speed, so the engine's `tier_is_rx_only` no longer refuses to arm
-        // the latch. The parametric registration (one name, four speeds) is unchanged.
+        // the latch. The parametric registration (one name, every speed) is unchanged.
         for speed in Js8Speed::ALL {
             let kind = ModeKind::Js8 { speed };
             let m = make_mode(kind);
             assert_eq!(
                 m.name(),
                 "JS8",
-                "one name for all four speeds; the speed rides Decode.mode"
+                "one name for every speed; the speed rides Decode.mode"
             );
             assert_eq!(m.slot_secs(), speed.period_s() as f32);
             assert_eq!(m.frame_samples(), speed.frames_needed());
@@ -1386,7 +1386,11 @@ mod tx_capability_tests {
                 speed: Js8Speed::Normal
             }
         );
-        assert_eq!(ModeKind::js8_all().count(), 4);
+        assert_eq!(
+            ModeKind::js8_all().count(),
+            5,
+            "Slow, Normal, Fast, JS8 40, JS8 60"
+        );
         assert_eq!(ModeKind::ALL.len(), 10);
         assert!(ModeKind::ALL.contains(&ModeKind::JS8_NORMAL));
     }

@@ -3744,8 +3744,8 @@ struct RadioLoop {
     early_msk_done: Option<(u64, u32)>,
     /// JS8 multi-speed scheduler: the last cycle index decoded per `Js8Speed::index()`, so
     /// each enabled speed fires once per ITS wall-clock cycle (the `early_msk_done` idea,
-    /// four clocks wide). Reset on a tier/period rebuild.
-    js8_done: [Option<u64>; 4],
+    /// one clock per speed). Reset on a tier/period rebuild.
+    js8_done: [Option<u64>; Js8Speed::ALL.len()],
     /// The second worker (`Tier::Js8` only): runs the due speeds under `std::thread::scope`
     /// so a 30 s Slow decode can never block the slot worker's boundary pass.
     js8_multi_worker: DecodeWorker,
@@ -4250,7 +4250,7 @@ impl RadioLoop {
             silent_capture_since: None,
             early_done_slot: None,
             early_msk_done: None,
-            js8_done: [None; 4],
+            js8_done: [None; Js8Speed::ALL.len()],
             js8_multi_worker: DecodeWorker::spawn_with("nexus-js8-multi", run_worker_job),
             js8_multi_pending: 0,
             js8_last_tick_ms: 0,
@@ -12610,7 +12610,7 @@ impl RadioLoop {
             // the old tier must not coincidentally match a new tier's slot.
             self.early_done_slot = None;
             self.early_msk_done = None;
-            self.js8_done = [None; 4];
+            self.js8_done = [None; Js8Speed::ALL.len()];
             self.boundary_keyed = None;
             // Including the index THIS tick already computed, above, from the clock we
             // just replaced. `last_slot = None` makes the boundary block below fire on
@@ -12720,11 +12720,7 @@ impl RadioLoop {
                 && !is_tuning
                 && eng.source_kind() == SourceKind::Native;
             if rx_quiet && self.js8_multi_pending == 0 {
-                // 0 would mean "decode nothing", which nobody means: treat it as all four.
-                let enabled = match eng.settings().js8_rx_speeds & 0x0F {
-                    0 => 0x0F,
-                    m => m,
-                };
+                let enabled = js8_enabled_speeds(eng.settings().js8_rx_speeds);
                 let due = self.js8_multi_decode_due(now_ms, enabled);
                 if !due.is_empty() {
                     let slices: Vec<(Js8Speed, Vec<f32>, u64)> = due
@@ -13854,13 +13850,27 @@ fn civil_from_days(z0: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// The speeds the multi-speed scheduler decodes for the stored `js8_rx_speeds` mask: the bits
+/// that name a speed, or every speed when none does — 0 would mean "decode nothing", which
+/// nobody means.
+fn js8_enabled_speeds(mask: u8) -> u8 {
+    match mask & Js8Speed::ALL_BITS {
+        0 => Js8Speed::ALL_BITS,
+        m => m,
+    }
+}
+
 /// The pure heart of the JS8 multi-speed scheduler. For each speed set in `enabled`
 /// (`Js8Speed::bit()`), the cycle is `floor(now / period)`; it is due once
 /// `frames_needed / 12` ms of that cycle have elapsed (JS8Call's exact decode moment,
 /// `mainwindow.cpp isDecodeReady`) and it has not been decoded for that cycle. Marks each
-/// returned speed done. Fastest first, JS8Call's worker order, so Turbo's 6 s budget is
-/// spent first.
-fn js8_due_speeds(done: &mut [Option<u64>; 4], now_ms: u64, enabled: u8) -> Vec<(Js8Speed, u64)> {
+/// returned speed done. Fastest first, JS8Call's worker order, so JS8 60's 4 s budget is
+/// spent first (3.0.3 JS8.cpp:2620-2626 runs ModeI before the rest).
+fn js8_due_speeds(
+    done: &mut [Option<u64>; Js8Speed::ALL.len()],
+    now_ms: u64,
+    enabled: u8,
+) -> Vec<(Js8Speed, u64)> {
     let mut due = Vec::new();
     for speed in Js8Speed::ALL.iter().rev().copied() {
         if enabled & speed.bit() == 0 {
@@ -16827,7 +16837,7 @@ mod tests {
     #[test]
     fn js8_due_speeds_fires_each_speed_once_per_cycle_at_frames_needed() {
         use tempo_app::engine::Js8Speed;
-        let mut done = [None; 4];
+        let mut done = [None; Js8Speed::ALL.len()];
         // t = 0 of a 30 s cycle: nothing has enough audio.
         assert!(js8_due_speeds(&mut done, 0, 15).is_empty());
         // 4.55 s: Turbo's 54 600 samples are in (its cycle 0); nothing else.
@@ -16863,7 +16873,7 @@ mod tests {
             ]
         );
         // A mask excludes speeds outright.
-        let mut only_slow = [None; 4];
+        let mut only_slow = [None; Js8Speed::ALL.len()];
         assert!(
             js8_due_speeds(&mut only_slow, 20_000, Js8Speed::Slow.bit()).is_empty(),
             "Slow needs 26.28 s; Turbo/Fast/Normal are masked out"
@@ -16871,6 +16881,59 @@ mod tests {
         assert_eq!(
             js8_due_speeds(&mut only_slow, 56_300, Js8Speed::Slow.bit()),
             vec![(Js8Speed::Slow, 30_000)]
+        );
+    }
+
+    /// JS8 60 (bit 16) on its own 4 s clock: due 3.128 s into each cycle (37 536 samples,
+    /// 3.0.3 JS8Submode.cpp `samplesNeeded`), never twice, and ahead of every other speed
+    /// due at the same tick (JS8.cpp:2620-2626). The four-speed mask a 2.3-era file stores
+    /// never decodes it.
+    #[test]
+    fn js8_due_speeds_fires_js8_60_on_its_own_4_s_clock_first() {
+        use tempo_app::engine::Js8Speed;
+        let js8_60 = Js8Speed::from_index(4).expect("JS8 60 is index 4");
+        let mut done = [None; Js8Speed::ALL.len()];
+        assert!(
+            js8_due_speeds(&mut done, 3_100, 31).is_empty(),
+            "37 536 samples are 3.128 s"
+        );
+        assert_eq!(js8_due_speeds(&mut done, 3_200, 31), vec![(js8_60, 0)]);
+        assert!(
+            js8_due_speeds(&mut done, 3_900, 31).is_empty(),
+            "not twice for cycle 0"
+        );
+        assert_eq!(js8_due_speeds(&mut done, 7_200, 31), vec![(js8_60, 4_000)]);
+        // 11.2 s: JS8 60's cycle 2 (8..12 s) and Turbo's cycle 1 (6..12 s, needs 10.55 s) —
+        // JS8 60 first.
+        let mut both = [None; Js8Speed::ALL.len()];
+        assert_eq!(
+            js8_due_speeds(&mut both, 11_200, 31),
+            vec![(js8_60, 8_000), (Js8Speed::Turbo, 6_000)]
+        );
+        let mut four = [None; Js8Speed::ALL.len()];
+        assert!(
+            js8_due_speeds(&mut four, 3_200, 15).is_empty(),
+            "15 is the 2.3 four"
+        );
+    }
+
+    /// The stored mask the scheduler reads: JS8 60's bit (16) survives it, a 2.3-era 15 stays
+    /// the four it names, and a mask naming no speed decodes every speed, JS8 60 too.
+    #[test]
+    fn js8_enabled_speeds_keeps_js8_60_and_reads_no_speed_as_every_speed() {
+        assert_eq!(js8_enabled_speeds(31), 31);
+        assert_eq!(js8_enabled_speeds(16), 16, "JS8 60 alone");
+        assert_eq!(
+            js8_enabled_speeds(15),
+            15,
+            "a 2.3-era file: the four it names"
+        );
+        assert_eq!(js8_enabled_speeds(0), 31);
+        assert_eq!(js8_enabled_speeds(0b1110_0000), 31, "no bit names a speed");
+        assert_eq!(
+            js8_enabled_speeds(0b1001_0001),
+            17,
+            "the unknown bit is dropped"
         );
     }
 
