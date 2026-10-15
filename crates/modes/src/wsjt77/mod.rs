@@ -20,6 +20,14 @@
 //! (`ft8::encode_later` / `ft4::encode_later`), which writes exactly what it always did, before the
 //! next modem call can read them. And where the Fortran's result is not a function of the text
 //! (`pack::Vendored`), these functions answer `None` and the caller uses the vendored encoder.
+//!
+//! ORIGIN AND LICENCE. Translated into Rust by KD9TAW, 2026-10-14, from WSJT-X, © Joe Taylor
+//! (K1JT) and the WSJT Development Group, licensed under the GNU General Public License,
+//! version 3: the copies vendored at `libtempo/vendor/wsjtx/` of `lib/ft8/genft8.f90`,
+//! `lib/ft4/genft4.f90`, `lib/ft8/encode174_91.f90` and `lib/crc14.cpp`, with the generator table
+//! `lib/ft8/ldpc_174_91_c_generator.f90` read as it is (`pack` and `wave` name their own sources).
+//! This translation is distributed under the same licence, as part of Nexus (GPL-3.0-only). Its
+//! differences from the Fortran are the ones listed above. See NOTICE, "WSJT-X".
 
 pub mod pack;
 pub mod wave;

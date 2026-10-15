@@ -20,6 +20,11 @@
 //! gfortran's formatted I/O is reproduced where `pack77` relies on it, from measurements of the
 //! gfortran 13 runtime the modem links (the cases are in this file's tests): list-directed integer
 //! input, `Z6` input and `Bw.w` output.
+//!
+//! ORIGIN AND LICENCE. Translated into Rust by KD9TAW, 2026-10-14, from `lib/77bit/packjt77.f90` of
+//! WSJT-X, © Joe Taylor (K1JT) and the WSJT Development Group, GNU General Public License, version 3
+//! (the copy vendored at `libtempo/vendor/wsjtx/`, which carries Nexus's own marked changes).
+//! Distributed under the same licence, as part of Nexus (GPL-3.0-only). See NOTICE, "WSJT-X".
 
 /// The vendored encoder must make this message: its result there depends on something this port
 /// does not reproduce (see the module header).

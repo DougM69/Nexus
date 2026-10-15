@@ -416,7 +416,8 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   Development Group. Nexus's digital modem (`libtempo/`) is **derived from WSJT-X**: the FT8/FT4 codec,
   the 77-bit message packing, the LDPC(174,91) FEC, the CRC-14 check, and the Q65 / FST4 / FST4W /
   MSK144 / JT65 / WSPR mode sources are their GPL-licensed work, vendored and reused via a
-  foreign-function interface (see **[NOTICE](NOTICE)** for the full lineage and marked
+  foreign-function interface, and the FT8/FT4 transmit encoder is also translated into Rust from
+  those sources (`crates/modes/src/wsjt77/`; see **[NOTICE](NOTICE)** for the full lineage and marked
   modifications). Nexus interoperates with their ecosystem over the standard WSJT-X UDP protocol;
   its auto-sequencer is original Rust modeled on WSJT-X's on-air behavior.
   **Nexus is not endorsed by nor affiliated with the WSJT Development Group.** GPLv3.

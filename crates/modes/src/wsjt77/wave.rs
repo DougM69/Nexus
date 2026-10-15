@@ -6,6 +6,12 @@
 //! on x86-64). The one place gfortran may round differently is the cosine of the two amplitude
 //! ramps, which it vectorises through glibc's vector maths library: a few units in the last place
 //! over the first and last ramp of samples, nowhere else.
+//!
+//! ORIGIN AND LICENCE. Translated into Rust by KD9TAW, 2026-10-14, from `lib/ft8/gen_ft8wave.f90`,
+//! `lib/ft4/gen_ft4wave.f90` and `lib/ft2/gfsk_pulse.f90` of WSJT-X, © Joe Taylor (K1JT) and the
+//! WSJT Development Group, GNU General Public License, version 3 (the copies vendored at
+//! `libtempo/vendor/wsjtx/`). Distributed under the same licence, as part of Nexus (GPL-3.0-only).
+//! See NOTICE, "WSJT-X".
 
 use std::f32::consts::{LN_2, PI, TAU};
 
