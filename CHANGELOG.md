@@ -1095,6 +1095,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   COM number, with the port setting unchanged, is still followed. NEEDS-BENCH: checked with
   simulated port lists only; bench on a USB radio with no transmitting (type COM99 and Save, then
   set the real port back).
+- **CQ WW CW and SSB and CQ WPX CW and SSB logs claim their score.** The Cabrillo file now carries
+  `CLAIMED-SCORE`, the score the Contest screen shows, as the CQ WW RTTY file already did. A
+  single-band entry (Band category set to one band) whose log also holds a contact on another band
+  writes no claimed score, in these four and in CQ WW RTTY: CQ scores only the declared band, and
+  the screen's score counts them all. The guide's note on logging the Scandinavian Activity Contest
+  as CQ WPX again says to delete the claimed score before sending the log.
 
 ### Security
 

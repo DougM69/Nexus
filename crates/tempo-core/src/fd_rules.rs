@@ -4994,7 +4994,13 @@ mod tests {
             "CATEGORY-TRANSMITTER",
             "OPERATORS",
         ];
-        const WRITTEN: &[&str] = &["CATEGORY-ASSISTED", "CATEGORY-POWER", "EMAIL", "NAME"];
+        const WRITTEN: &[&str] = &[
+            "CATEGORY-ASSISTED",
+            "CATEGORY-POWER",
+            "CLAIMED-SCORE",
+            "EMAIL",
+            "NAME",
+        ];
         let shipped = build(parse_spec(SEED).expect("the seed parses"));
         let mut cq = 0;
         for rs in shipped.rulesets {
