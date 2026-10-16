@@ -606,6 +606,14 @@ All of this is on the Flex native client (Beta), and none of it is checked on a 
   before it drops unsaved edits. While you edit a radio that is not in use, Tx Power and RX Gain
   set only that radio's saved levels, which it takes up when it becomes the radio in use, and the
   hint under them says so. NEEDS-BENCH: two Yaesus (an FT-710 and an FT-991A) on a Mac.
+<!-- BENCH (Fri 16 Oct): cut the bullet below if the serial port fix fails the bench. -->
+- **The serial port you choose is the one Nexus opens.** Once CAT had worked on a USB radio's port,
+  Nexus remembered that radio so it could follow it to a new COM number after a replug, and until a
+  restart it also followed it when you changed the port yourself. A port Windows does not list, such
+  as a virtual port from a port-sharing program like VSPE, sent Nexus back to the radio's old port. A
+  port you change to is now opened as you typed it, and if it will not open, the radio line says so.
+  A radio that comes back under a new COM number after a replug is still followed. NEEDS-BENCH: a
+  USB radio, no transmitting.
 - **A Save in Settings keeps the drive and RX gain you set last.** After you moved the cockpit
   **Pwr** slider or changed RX Gain, Settings showed the level from before, and the next Save of
   anything in Settings set the radio in use back to it. The level you set last, in the cockpit or
