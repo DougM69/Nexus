@@ -14055,6 +14055,11 @@ fn build_decode<'a>(
 /// Build a PSK Reporter [`Spot`] from a decode, or `None` if no sender callsign
 /// can be parsed (only stations we actually copied get reported). The spot
 /// frequency is the dial frequency plus the decode's audio offset.
+///
+/// The spot carries the sender's own grid where WSJT-X 3.0.2 sends one (`MainWindow::pskPost`
+/// reading `DecodedText::deCallAndGrid`): the message's third word, or its fourth after a bare
+/// `R` (`TO DE R GRID`, the NA VHF contest exchange), when that word is a locator
+/// ([`is_spot_locator`]). Every other spot sends the locator empty.
 fn build_spot(
     message: &str,
     snr: i32,
@@ -14063,14 +14068,45 @@ fn build_spot(
     cur_dial: u64,
     now_secs: u32,
 ) -> Option<Spot> {
-    Msg::parse(message).sender().map(|call| Spot {
+    // `TO DE R GRID` is `TO DE GRID` rogered: read as that, the sender and the grid come out of
+    // the same parse as every other message.
+    let words: Vec<&str> = message.split_whitespace().collect();
+    let msg = match words.as_slice() {
+        [to, de, "R", grid] if is_spot_locator(grid) => Msg::parse(&format!("{to} {de} {grid}")),
+        _ => Msg::parse(message),
+    };
+    let grid = match &msg {
+        Msg::Cq { grid, .. } | Msg::Grid { grid, .. } if is_spot_locator(grid) => grid.clone(),
+        _ => String::new(),
+    };
+    msg.sender().map(|call| Spot {
         call: call.to_string(),
         freq_hz: cur_dial + freq as u64,
         snr,
         mode: mode.to_string(),
-        grid: String::new(),
+        grid,
         time_secs: now_secs,
     })
+}
+
+/// A locator as WSJT-X's `grid_regexp` reads one (mainwindow.cpp): two field letters A–R, two
+/// digits, optionally a subsquare pair A–X, either case. Never `RR73`, which has a locator's shape
+/// and is a sign-off.
+fn is_spot_locator(s: &str) -> bool {
+    let b = s.as_bytes();
+    let field = |c: u8| matches!(c.to_ascii_uppercase(), b'A'..=b'R');
+    let sub = |c: u8| matches!(c.to_ascii_uppercase(), b'A'..=b'X');
+    let square = b.len() >= 4
+        && field(b[0])
+        && field(b[1])
+        && b[2].is_ascii_digit()
+        && b[3].is_ascii_digit();
+    let shape = match b.len() {
+        4 => square,
+        6 => square && sub(b[4]) && sub(b[5]),
+        _ => false,
+    };
+    shape && !b[..4].eq_ignore_ascii_case(b"RR73")
 }
 
 /// Generate `n` samples of a unit-amplitude sine at `freq` Hz, continuing from
@@ -19228,6 +19264,124 @@ mod tests {
     fn build_spot_skips_senderless_text() {
         // Free text (no `de` callsign) is never reported to PSK Reporter.
         assert!(build_spot("thanks for the qso", -7, 1200.0, "FT8", 14_074_000, 0).is_none());
+    }
+
+    /// The sender records of a PSK Reporter datagram, read back: (call, Hz, SNR, mode, locator,
+    /// information source).
+    fn uploaded_spots(dgram: &[u8]) -> Vec<(String, u32, i8, String, String, u8)> {
+        let u16at = |o: usize| u16::from_be_bytes([dgram[o], dgram[o + 1]]) as usize;
+        let mut off = 16;
+        while off + 4 <= dgram.len() {
+            let (id, len) = (u16at(off), u16at(off + 2));
+            if id == 0x50E3 {
+                let body = &dgram[off + 4..off + len];
+                let s = |i: &mut usize| {
+                    let n = body[*i] as usize;
+                    let v = String::from_utf8_lossy(&body[*i + 1..*i + 1 + n]).into_owned();
+                    *i += 1 + n;
+                    v
+                };
+                let (mut i, mut out) = (0, Vec::new());
+                while i < body.len() && body[i] != 0 {
+                    let call = s(&mut i);
+                    let hz = u32::from_be_bytes([body[i], body[i + 1], body[i + 2], body[i + 3]]);
+                    let snr = body[i + 4] as i8;
+                    i += 5;
+                    let mode = s(&mut i);
+                    let locator = s(&mut i);
+                    let source = body[i];
+                    i += 1 + 4;
+                    out.push((call, hz, snr, mode, locator, source));
+                }
+                return out;
+            }
+            off += len;
+        }
+        panic!("no sender records");
+    }
+
+    /// What PSK Reporter receives for FT8 and FT4, by value: real decode lines through the radio
+    /// loop's spot builder, its reporter sending to a loopback listener, the datagram read back.
+    /// The locator is the one WSJT-X 3.0.2 sends (`MainWindow::pskPost` reading
+    /// `DecodedText::deCallAndGrid`): the message's third word, or its fourth after a bare `R`,
+    /// when that word is a Maidenhead locator and not `RR73`. Anything else sends it empty.
+    #[test]
+    fn ft8_and_ft4_spots_carry_the_grid_the_caller_sent() {
+        let heard = [
+            ("CQ W1AW FN31", -7, 1200.0, "FT8", 14_074_000),
+            ("CQ DX K1ABC FN42", -12, 800.0, "FT8", 14_074_000),
+            ("W9XYZ N0XYZ EN34", 3, 1500.0, "FT8", 14_074_000),
+            // The NA VHF contest exchange: the grid is the fourth word, after the R.
+            ("W9XYZ VE3QQQ R FN03", -3, 1700.0, "FT8", 50_313_000),
+            // A report, a sign-off and a Field Day class carry no locator.
+            ("W9XYZ KA1AAA -07", -9, 2000.0, "FT8", 14_074_000),
+            ("W9XYZ KB1BBB RR73", -1, 2100.0, "FT8", 14_074_000),
+            ("W9XYZ KD1DDD 3A WI", -2, 2300.0, "FT8", 14_074_000),
+            // RR73 in a CQ's grid place is still not a locator.
+            ("CQ KC1CCC RR73", -5, 2200.0, "FT8", 14_074_000),
+            ("CQ TEST K2EEE FN20", -4, 900.0, "FT4", 14_080_000),
+        ];
+        let spots: Vec<Spot> = heard
+            .iter()
+            .filter_map(|&(m, snr, f, mode, dial)| build_spot(m, snr, f, mode, dial, 1_700_000_000))
+            .collect();
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let reporter = PskReporter::with_target(&listener.local_addr().unwrap().to_string());
+        reporter
+            .send_spots("KD9TAW", "EN52", "Nexus", &spots)
+            .unwrap();
+        let mut buf = [0u8; 4096];
+        let (n, _) = listener.recv_from(&mut buf).unwrap();
+        let row = |call: &str, hz: u32, snr: i8, mode: &str, locator: &str| {
+            (
+                call.to_string(),
+                hz,
+                snr,
+                mode.to_string(),
+                locator.to_string(),
+                1,
+            )
+        };
+        assert_eq!(
+            uploaded_spots(&buf[..n]),
+            vec![
+                row("W1AW", 14_075_200, -7, "FT8", "FN31"),
+                row("K1ABC", 14_074_800, -12, "FT8", "FN42"),
+                row("N0XYZ", 14_075_500, 3, "FT8", "EN34"),
+                row("VE3QQQ", 50_314_700, -3, "FT8", "FN03"),
+                row("KA1AAA", 14_076_000, -9, "FT8", ""),
+                row("KB1BBB", 14_076_100, -1, "FT8", ""),
+                row("KD1DDD", 14_076_300, -2, "FT8", ""),
+                row("KC1CCC", 14_076_200, -5, "FT8", ""),
+                row("K2EEE", 14_080_900, -4, "FT4", "FN20"),
+            ]
+        );
+    }
+
+    /// WSJT-X's locator pattern (`grid_regexp`, mainwindow.cpp): two field letters A–R, two
+    /// digits, an optional subsquare pair A–X, either case; never `RR73`.
+    #[test]
+    fn a_psk_reporter_locator_is_what_wsjtx_calls_a_grid() {
+        let ok = ["FN31", "AA00", "RR99", "fn31", "FN31pr", "FN31PR", "RR72"];
+        let not = [
+            "RR73", "rr73", "RR73AA", "SA00", "FS00", "FN3", "FN311", "FN31P", "FN31PY", "-07",
+            "R-07", "73", "RRR", "",
+        ];
+        assert_eq!(
+            ok.iter()
+                .filter(|s| !is_spot_locator(s))
+                .collect::<Vec<_>>(),
+            Vec::<&&str>::new()
+        );
+        assert_eq!(
+            not.iter()
+                .filter(|s| is_spot_locator(s))
+                .collect::<Vec<_>>(),
+            Vec::<&&str>::new()
+        );
     }
 
     fn test_settings() -> Settings {

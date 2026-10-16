@@ -442,6 +442,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **PSK Reporter now shows where the FT8 and FT4 stations you hear are.** When a decode carries
+  the sender's grid (a CQ, or a reply with a grid), its spot now sends that grid, as WSJT-X does,
+  so pskreporter.info can put the station on its map. Other spots still go without one. The NA
+  VHF contest exchange that rogers a grid (`W9XYZ K1ABC R FN42`) is now spotted too, with its
+  grid, as in WSJT-X. NEEDS-BENCH: look yourself up on pskreporter.info after some FT8.
 - **AD1C's country file now carries its license notice.** Nexus finds a call's DXCC entity and
   zones in the cty.dat country file by Jim Reisert AD1C, which is MIT-licensed. That license asks
   for its notice to travel with every copy, and NOTICE named the license without reproducing it.
