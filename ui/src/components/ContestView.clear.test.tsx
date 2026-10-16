@@ -4,9 +4,11 @@
 // log at once, each the way Remove takes the newest, for the contacts logged as a test before the
 // start. It asks first, on the button itself, naming how many (a county line is one contact), and
 // the second click clears exactly the log it named; the answer, a toast and the Removed list's
-// note, says where any of them had already gone, and at a club when every laptop drops them. Never
-// offered when observing from afar, and refused through the Remote stream. The engine decides;
-// this suite pins what the screen asks for and says.
+// note, says where any of them had already gone, and at a club when every laptop drops them. Only a
+// contest that sends a serial says its serials start again at 001 (the station's `sendsSerial`): the
+// Illinois QSO Party here sends a county, CQ WPX a serial. Never offered when observing from afar, and
+// refused through the Remote stream. The engine decides; this suite pins what the screen asks for and
+// says.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, fireEvent, cleanup, act } from '@testing-library/react'
 import { ContestView } from './ContestView'
@@ -61,6 +63,23 @@ const party = (log: FieldDayQso[]): FieldDayStatus =>
     ],
   }) as unknown as FieldDayStatus
 
+/** CQ WPX: the report and a serial, which the station says it sends. */
+const wpx = (log: FieldDayQso[]): FieldDayStatus =>
+  ({
+    ...party(log),
+    event: 'cqwpx',
+    role: '',
+    receives: [
+      { key: 'RST', kind: 'rst', required: true },
+      { key: 'NR', kind: 'serial', required: true },
+    ],
+    composing: [
+      { key: 'RST', raw: '599' },
+      { key: 'NR', raw: '0' },
+    ],
+    sendsSerial: true,
+  }) as unknown as FieldDayStatus
+
 // Three rows, two contacts: K9AAA, then K9NR on a county line (one contact, a row per county).
 const LOG = [row('K9AAA', 'COOK', T0), row('K9NR', 'COOK', T0 + 60), row('K9NR', 'DUPG', T0 + 60)]
 const NOWHERE = { wsjtx: false, logbook: false, uploaded: [] }
@@ -71,9 +90,9 @@ const settle = async () => {
   })
 }
 
-const view = (log: FieldDayQso[], observed = false) => (
+const view = (log: FieldDayQso[], observed = false, contest = party) => (
   <ContestView
-    fieldDay={party(log)}
+    fieldDay={contest(log)}
     onSetMode={() => {}}
     fdActive
     tier="FT8"
@@ -81,8 +100,8 @@ const view = (log: FieldDayQso[], observed = false) => (
   />
 )
 
-async function show(log: FieldDayQso[], observed = false) {
-  const r = render(view(log, observed))
+async function show(log: FieldDayQso[], observed = false, contest = party) {
+  const r = render(view(log, observed, contest))
   await settle()
   return r
 }
@@ -117,7 +136,7 @@ describe('Clear test contacts asks first, then clears exactly the log it named',
     expect(clearButton()!.textContent).toBe('Clear test contacts')
     fireEvent.click(clearButton()!)
     expect(clearButton()!.getAttribute('aria-pressed')).toBe('true')
-    expect(clearButton()!.textContent, 'the question is on the button').toBe('Clear all 2 contacts? Serials restart at 001. Click again')
+    expect(clearButton()!.textContent, 'the question is on the button').toBe('Clear all 2 contacts? Click again')
     expect(api.contestClear).not.toHaveBeenCalled()
     expect(toast).not.toHaveBeenCalled()
     await act(async () => {
@@ -126,11 +145,39 @@ describe('Clear test contacts asks first, then clears exactly the log it named',
     await settle()
     expect(api.contestClear).toHaveBeenCalledWith(3, 'K9NR', T0 + 60)
     expect(clearButton()!.textContent).toBe('Clear test contacts')
-    said(
-      'Took 2 contacts out of the contest log. They are under Removed, where Restore puts each back. Serials restart at 001.',
-      'info',
-    )
+    said('Took 2 contacts out of the contest log. They are under Removed, where Restore puts each back.', 'info')
     expect(api.contestRemoved, 'the Removed list is read again after the clear').toHaveBeenCalledTimes(2)
+  })
+
+  it('says the serials start again at 001 only in a contest that sends one: its tooltip, its question and its answer', async () => {
+    const told: (string | null | undefined)[][] = []
+    for (const contest of [party, wpx]) {
+      api.contestClear.mockResolvedValueOnce({ outcome: 'cleared', contacts: 2, sentTo: NOWHERE })
+      await show(LOG, false, contest)
+      const title = clearButton()!.title
+      fireEvent.click(clearButton()!)
+      const question = clearButton()!.textContent
+      await act(async () => {
+        fireEvent.click(clearButton()!)
+      })
+      await settle()
+      told.push([contest(LOG).event, title, question, note()])
+      cleanup()
+    }
+    expect(told).toEqual([
+      [
+        'ilqp',
+        `${TITLE} Each is kept under Removed, where Restore puts it back. Click twice: the first click asks.`,
+        'Clear all 2 contacts? Click again',
+        'Took 2 contacts out of the contest log. They are under Removed, where Restore puts each back.',
+      ],
+      [
+        'cqwpx',
+        `${TITLE} Each is kept under Removed, where Restore puts it back. Serials restart at 001. Click twice: the first click asks.`,
+        'Clear all 2 contacts? Serials restart at 001. Click again',
+        'Took 2 contacts out of the contest log. They are under Removed, where Restore puts each back. Serials restart at 001.',
+      ],
+    ])
   })
 
   it('asks again when a contact is logged between the two clicks', async () => {
@@ -141,7 +188,7 @@ describe('Clear test contacts asks first, then clears exactly the log it named',
     fireEvent.click(clearButton()!)
     await settle()
     expect(api.contestClear).not.toHaveBeenCalled()
-    expect(clearButton()!.textContent).toBe('Clear all 3 contacts? Serials restart at 001. Click again')
+    expect(clearButton()!.textContent).toBe('Clear all 3 contacts? Click again')
   })
 
   it('says where any of them had already gone, and at a club when every laptop drops them', async () => {
@@ -158,7 +205,7 @@ describe('Clear test contacts asks first, then clears exactly the log it named',
       await show(LOG)
       await clickTwice()
       said(
-        'Took 2 contacts out of the contest log. They are under Removed, where Restore puts each back. Serials restart at 001. ' +
+        'Took 2 contacts out of the contest log. They are under Removed, where Restore puts each back. ' +
           `${words} Some were already sent to N3FJP (192.168.1.5), WSJT-X listeners: delete them there too. ` +
           'Some stay in your logbook, and LoTW have them: Nexus cannot take them back from there.',
         'info',

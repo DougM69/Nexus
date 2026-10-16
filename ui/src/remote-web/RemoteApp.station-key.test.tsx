@@ -42,6 +42,15 @@ vi.mock('./device-key', async importOriginal => {
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); kept.clear(); late.next = null })
 
+/** What a wait on a page just rendered gets: its first render, its station list and the WebCrypto work
+ *  behind each key are real work, which a loaded machine stretches. Measured 2026-10-15 on the first
+ *  case, render to both keys shown: 110 ms with the CPU to itself, then 461, 1,007, 1,816 and 4,011 ms
+ *  with a fifth, a tenth, a twentieth and a fortieth of it, in step with the share; findByText's own
+ *  second ran out at a twentieth. A reaction to the operator's own act keeps that second. */
+const PAGE = { timeout: 5_000 }
+// Three such waits in the first case.
+vi.setConfig({ testTimeout: 15_000 })
+
 // Made-up shapes of a station key (the P-256 SPKI prefix, 04, then one byte sixty-four times), not
 // keys; and the first 128 bits of the SHA-256 of each, as both ends show them.
 const PREFIX = '3059301306072a8648ce3d020106082a8648ce3d03010703420004'
@@ -78,9 +87,9 @@ it('S3-L1: the card keeps the first key the service lists for the station, and s
   session.stations.push({ id: stationId, name: 'Home', stationKey: KEY_A, device: approved() })
   client(session)
   render(<RemoteApp />)
-  expect(await screen.findByText(`This station’s key: ${SHOWN_A}`)).toBeTruthy()
+  expect(await screen.findByText(`This station’s key: ${SHOWN_A}`, {}, PAGE)).toBeTruthy()
   expect(kept.get(stationId), 'first sight pins').toBe(KEY_A)
-  expect((await screen.findByText(/^This browser’s key: /)).textContent).toMatch(EIGHT_GROUPS)
+  expect((await screen.findByText(/^This browser’s key: /, {}, PAGE)).textContent).toMatch(EIGHT_GROUPS)
   expect(streamButton().disabled).toBe(false)
   // Control: a station that lists no key shows none and keeps none.
   cleanup()
@@ -88,7 +97,7 @@ it('S3-L1: the card keeps the first key the service lists for the station, and s
   keyless.stations.push({ id: other, name: 'Field', stationKey: null, device: approved() })
   client(keyless)
   render(<RemoteApp />)
-  await screen.findByText(/^This browser’s key: /)
+  await screen.findByText(/^This browser’s key: /, {}, PAGE)
   expect(screen.queryByText(/^This station’s key: /)).toBeNull()
   expect(kept.has(other)).toBe(false)
 })
@@ -98,7 +107,7 @@ it('S3-L1: a browser waiting for its approval shows its key in eight groups, and
   session.stations.push({ id: stationId, name: 'Home', stationKey: KEY_A, device: { id: crypto.randomUUID(), name: 'Laptop', approved: 0 } })
   client(session)
   render(<RemoteApp />)
-  const waiting = await screen.findByText(/^Waiting for approval at the shack: .* Approve it if it shows this key: /)
+  const waiting = await screen.findByText(/^Waiting for approval at the shack: .* Approve it if it shows this key: /, {}, PAGE)
   expect(waiting.textContent).toMatch(/: [0-9A-F]{4}( [0-9A-F]{4}){7}\.$/)
   await waitFor(() => expect(kept.get(stationId)).toBe(KEY_A))
 })

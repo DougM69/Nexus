@@ -48,6 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
+       scripts/browser-probe --desktop rotor
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'v4'. The names are built in
@@ -67,6 +68,12 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
   --no-build            reuse the existing bundles — ONLY valid if nothing has
                         changed under ui/ or remote/ since the last build, because
                         the sweep loads the BUILT worker, never the source
+  --desktop rotor       a desktop box the hosted page never shows, in real Chrome:
+                        the Rotor box beside a cockpit with a call in its log entry,
+                        in the stock dashboard rail, asserting its line 1 and both
+                        lines of its line 2 ("→ EC1DD 227° …", "27° off", Point) are
+                        on screen, with a control that must come back clipped
+                        (ui/probe/desktop-probe.mjs; it builds nothing)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE
@@ -75,12 +82,15 @@ USAGE
 SCENARIO='v4'
 SHARD=''
 BUILD=1
+DESKTOP=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --scenario) [ $# -ge 2 ] || { usage; exit 2; }; SCENARIO="$2"; shift 2 ;;
     --shard)    [ $# -ge 2 ] || { usage; exit 2; }; SHARD="$2"; shift 2
                 case "$SHARD" in 0|1|2) ;; *) echo "browser-probe: --shard takes 0, 1 or 2 (CI runs three)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
+    --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
+                case "$DESKTOP" in rotor) ;; *) echo "browser-probe: --desktop takes rotor" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -94,6 +104,11 @@ SUITE="$ROOT/remote/test/browser.test.mjs"
 
 command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1 || {
   echo "browser-probe: no google-chrome on PATH — this probe drives a REAL browser" >&2; exit 2; }
+
+# A desktop box: the app's own source, served by its own Vite config, so there is nothing to build.
+if [ -n "$DESKTOP" ]; then
+  exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
+fi
 
 if [ "$BUILD" = 1 ]; then
   # Two builds, in this order, and both are load-bearing. The sweep loads `remote/dist/index.js`

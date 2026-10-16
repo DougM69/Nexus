@@ -4235,13 +4235,25 @@ export const EN = {
   'fieldDay.removed.failed': 'Nexus could not restore the contact.',
   'fieldDay.removed.restore.remote': 'Only at the station: a press through Remote restores no contact.',
   'contest.clear.label': 'Clear test contacts',
+  // Each with a `.serial` form, the one a contest that sends a serial number shows: its serials start
+  // again at 001. A contest that sends none (Field Day, a QSO party sending a county) never says so.
   'contest.clear.title': 
-    'Take every contact of this running out of the contest log, for contacts you logged as a test before the start. Each is kept under Removed, where Restore puts it back, and in a contest that sends a serial the next contact is 001. Click twice: the first click asks.',
+    'Take every contact of this running out of the contest log, for contacts you logged as a test before the start. Each is kept under Removed, where Restore puts it back. Click twice: the first click asks.',
+  'contest.clear.title.serial':
+    'Take every contact of this running out of the contest log, for contacts you logged as a test before the start. Each is kept under Removed, where Restore puts it back. Serials restart at 001. Click twice: the first click asks.',
   'contest.clear.confirm': {
+    one: 'Clear {{count}} contact? Click again',
+    other: 'Clear all {{count}} contacts? Click again',
+  },
+  'contest.clear.confirm.serial': {
     one: 'Clear {{count}} contact? Serials restart at 001. Click again',
     other: 'Clear all {{count}} contacts? Serials restart at 001. Click again',
   },
   'contest.clear.done': {
+    one: 'Took {{count}} contact out of the contest log. It is under Removed, where Restore puts it back.',
+    other: 'Took {{count}} contacts out of the contest log. They are under Removed, where Restore puts each back.',
+  },
+  'contest.clear.done.serial': {
     one: 'Took {{count}} contact out of the contest log. It is under Removed, where Restore puts it back. Serials restart at 001.',
     other: 'Took {{count}} contacts out of the contest log. They are under Removed, where Restore puts each back. Serials restart at 001.',
   },

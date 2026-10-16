@@ -61,7 +61,12 @@ fn now_ms() -> u64 {
 
 /// The TCP side's listener: 127.0.0.1, always.
 fn bind_tcp(port: u16) -> std::io::Result<TcpListener> {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+    let at = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    #[cfg(test)]
+    if let Some(held) = tests::held(at) {
+        return Ok(held);
+    }
+    TcpListener::bind(at)
 }
 
 /// The UDP side's own socket: 127.0.0.1 on a port the system picks; datagrams go out from it to
@@ -578,9 +583,32 @@ mod tests {
 
     const WAIT: Duration = Duration::from_secs(5);
 
-    /// A port nothing on this computer is listening on, as the system picks one.
-    fn free_port() -> u16 {
-        bind_tcp(0).unwrap().local_addr().unwrap().port()
+    // Listeners a test holds for its manager (`held_port`), each taken by `bind_tcp` when the manager
+    // binds exactly its address. Per thread: each test drives its own manager. (A plain comment: doc
+    // comments cannot attach through `thread_local!`.)
+    std::thread_local! {
+        static HELD: std::cell::RefCell<Vec<TcpListener>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// The listener this test holds at `at`, for the manager's bind there.
+    pub(super) fn held(at: SocketAddr) -> Option<TcpListener> {
+        HELD.with(|held| {
+            let mut held = held.borrow_mut();
+            let i = held.iter().position(|l| l.local_addr().ok() == Some(at))?;
+            Some(held.swap_remove(i))
+        })
+    }
+
+    /// A port on 127.0.0.1 for the manager, bound already and held until the manager binds it,
+    /// when `bind_tcp` takes the listener: nothing can be handed the port in between, as anything
+    /// could a port the system picked and the test let go. It is below the ephemeral range too,
+    /// so once the manager lets it go no `:0` bind can land there either.
+    fn held_port() -> u16 {
+        let listener =
+            crate::lan_client::tests::listener_below_the_ephemeral_range(Ipv4Addr::LOCALHOST);
+        let port = listener.local_addr().unwrap().port();
+        HELD.with(|held| held.borrow_mut().push(listener));
+        port
     }
 
     /// This computer's address on its network, if it has one. A UDP `connect` sends nothing: it
@@ -723,7 +751,7 @@ mod tests {
     /// computer's own network address on the same port.
     #[test]
     fn the_api_listens_on_loopback_only() {
-        let port = free_port();
+        let port = held_port();
         let engine = engine_with(Some(port), None);
         let mut m = Manager::new(Arc::new(Hub::default()), "test");
         assert!(m.tick(&engine));
@@ -749,7 +777,7 @@ mod tests {
     /// the first is still served; once it leaves, another is taken.
     #[test]
     fn one_program_at_a_time() {
-        let port = free_port();
+        let port = held_port();
         let engine = engine_with(Some(port), None);
         let mut m = Manager::new(Arc::new(Hub::default()), "test");
         m.tick(&engine);
@@ -774,7 +802,7 @@ mod tests {
     /// read still answered.
     #[test]
     fn oversize_and_malformed_requests_are_dropped() {
-        let port = free_port();
+        let port = held_port();
         let engine = engine_with(Some(port), None);
         let mut m = Manager::new(Arc::new(Hub::default()), "test");
         m.tick(&engine);
@@ -850,7 +878,7 @@ mod tests {
     /// or write — each family JS8Call has — draws no answer and changes nothing.
     #[test]
     fn every_write_family_over_the_socket_is_refused_and_changes_nothing() {
-        let port = free_port();
+        let port = held_port();
         let engine = engine_with(Some(port), None);
         engine_lock(&engine).js8_api_hear_heartbeat("W1AW", "FN31", 1200.0, -7);
         let mut m = Manager::new(Arc::new(Hub::default()), "test");
@@ -895,7 +923,7 @@ mod tests {
     /// `STATION.VERSION` names the version the manager runs, as the PING does.
     #[test]
     fn the_harmless_reads_are_answered_over_the_socket() {
-        let port = free_port();
+        let port = held_port();
         let engine = engine_with(Some(port), None);
         let mut m = Manager::new(Arc::new(Hub::default()), "9.9.9");
         m.tick(&engine);
@@ -930,7 +958,7 @@ mod tests {
     /// it sees what was heard. `STATION.STATUS` is never sent over TCP (its id is fresh).
     #[test]
     fn heard_traffic_reaches_a_connected_program() {
-        let port = free_port();
+        let port = held_port();
         let engine = engine_with(Some(port), None);
         let mut m = Manager::new(Arc::new(Hub::default()), "test");
         m.tick(&engine);
@@ -1028,7 +1056,7 @@ mod tests {
     /// would have come before it. Turned on, a read is answered at once.
     #[test]
     fn with_tcp_requests_not_accepted_the_station_only_speaks() {
-        let port = free_port();
+        let port = held_port();
         let engine = engine_with(Some(port), None);
         set(&engine, |s| s.js8_api_tcp_accept = false);
         let mut m = Manager::new(Arc::new(Hub::default()), "test");
@@ -1116,7 +1144,7 @@ mod tests {
     /// that is no request draws nothing either way: JS8Call's UDP side reports it to nobody.
     #[test]
     fn with_udp_requests_not_accepted_the_station_only_speaks() {
-        let port = free_port();
+        let port = held_port();
         let tool = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         tool.set_read_timeout(Some(WAIT)).unwrap();
         let engine = engine_with(Some(port), Some(tool.local_addr().unwrap().port()));
@@ -1171,7 +1199,8 @@ mod tests {
     /// Off stops listening; a new port rebinds; the same datagram is never sent twice in a row.
     #[test]
     fn the_switches_apply_at_once() {
-        let port = free_port();
+        // Both at once, so the new port is never the old one.
+        let (port, moved) = (held_port(), held_port());
         let engine = engine_with(Some(port), None);
         let mut m = Manager::new(Arc::new(Hub::default()), "test");
         assert!(m.tick(&engine));
@@ -1186,7 +1215,6 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(50));
         }
-        let moved = free_port();
         set(&engine, |s| {
             s.js8_api_tcp = true;
             s.js8_api_tcp_port = moved;
@@ -1219,7 +1247,7 @@ mod tests {
     /// Closing, the program says so on both sides, as JS8Call does.
     #[test]
     fn closing_is_announced() {
-        let port = free_port();
+        let port = held_port();
         let tool = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         tool.set_read_timeout(Some(WAIT)).unwrap();
         let engine = engine_with(Some(port), Some(tool.local_addr().unwrap().port()));

@@ -1039,6 +1039,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         composing_text: "1D EMA".into(),
         composing_text_phone: "1D EMA".into(),
         cabrillo_missing: vec!["CATEGORY-POWER".into()],
+        sends_serial: true,
         bands: vec!["20m".into()],
         dupe_mode_groups: vec![vec!["CW".into(), "DIG".into()]],
         dupe_rule: DupeRuleDto {
@@ -1076,10 +1077,12 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             && native["club"]["otherLocation"][0]["sent"] == "KANE"
             && native["composingTextPhone"] == "1D EMA"
             && native["cabrilloMissing"][0] == "CATEGORY-POWER"
+            && native["sendsSerial"] == true
             && native["unsaved"]["failedWrites"] == 2,
         "CONTROL: the station's own snapshot carries the Give button's handle, the club codes, \
          the host board's link words, the positions sending another county, the phone form of \
-         the exchange, the Cabrillo lines the export would leave out and the failed journal writes"
+         the exchange, the Cabrillo lines the export would leave out, whether the contest sends a \
+         serial and the failed journal writes"
     );
     // What the capture sends: the station's status with what only its own screen acts on left
     // out, by the capture's own function.

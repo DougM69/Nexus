@@ -130,9 +130,24 @@ pub(crate) struct Observations {
     mode: Option<Sample<String>>,
     ptt: Option<Sample<bool>>,
     amplifier: Option<Sample<AmpStatusDto>>,
+    /// A test's clock, held still: the instant [`now`](Self::now) answers instead of the
+    /// monotonic clock.
+    #[cfg(test)]
+    pub(crate) still: Option<Instant>,
 }
 
 impl Observations {
+    /// The instant the readings' ages are measured at: the monotonic clock, or a test's held
+    /// still, so that a machine stalling between a test's sample and its check cannot age the
+    /// reading past a limit the test is not about.
+    pub(crate) fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(t) = self.still {
+            return t;
+        }
+        Instant::now()
+    }
+
     pub(crate) fn invalidate(&mut self) {
         self.invalidate_radio();
         self.amp.current = None;

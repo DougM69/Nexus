@@ -1241,7 +1241,7 @@ fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
             assert!(queued > PIPE, "positive control: {queued} bytes of read answers outgrow the {PIPE}-byte pipe nobody was draining, so the writer was stuck when the Stop went in");
             assert_eq!(answers[READS]["requestId"], id(0x20));
             assert_eq!(answers[READS]["value"], json!({"stop":"accepted"}));
-            cancel.send(true).unwrap();
+            stop_remote(&mut socket, &cancel).await;
         });
         let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
         let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
@@ -1376,7 +1376,7 @@ fn a_settled_control_is_pushed_to_a_v5_browser_and_polled_by_a_v4_one() {
                     assert_eq!(polled["requestId"], id(5));
                     assert_eq!(polled["value"]["outcome"], "applied");
                 }
-                cancel.send(true).unwrap();
+                stop_remote(&mut socket, &cancel).await;
             });
             let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
             let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
@@ -1498,6 +1498,26 @@ async fn lane_text(
     }
 }
 
+/// Remote stops, as the relay sees it: the stop is asked for, and the relay holds its end of the
+/// socket until the station closes the session (for at most 5 s). A relay end dropped at once can
+/// reach the station's loop between its look at the stop and its look at the socket, and the
+/// session then ends on the broken socket (`invalidResponse`), not on the stop.
+async fn stop_remote(
+    socket: &mut tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+    cancel: &watch::Sender<bool>,
+) {
+    use futures_util::StreamExt;
+    cancel.send(true).unwrap();
+    let closed = async {
+        while let Some(Ok(message)) = socket.next().await {
+            if message.is_close() {
+                return;
+            }
+        }
+    };
+    let _ = tokio::time::timeout(Duration::from_secs(5), closed).await;
+}
+
 /// Send one message as the relay and read the station's answer to it.
 async fn lane_exchange(
     socket: &mut tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
@@ -1600,7 +1620,7 @@ fn s1m1_the_operation_lane_takes_only_what_the_pinned_device_key_signed() {
             // The signed release does release.
             let released = lane_exchange(&mut socket, lane_operation(&release(16), LANE_DEVICE, Some(key.proof(LABEL, &release(16).to_string(), ids, 9)))).await;
             assert_eq!(released["value"]["phase"], "available", "{released}");
-            cancel.send(true).unwrap();
+            stop_remote(&mut socket, &cancel).await;
         });
         let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
         let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
@@ -1654,7 +1674,7 @@ fn s1m1_listen_takes_only_what_the_pinned_device_key_signed() {
             // POSITIVE CONTROL: signed as the page signs it, the station listens.
             let heard = lane_exchange(&mut socket, listen(&lease, Some(key.proof(LISTEN, &body(true, &lease), ids, 5)))).await;
             assert_eq!((heard["listening"].clone(), heard.get("reason").cloned()), (json!(true), None), "{heard}");
-            cancel.send(true).unwrap();
+            stop_remote(&mut socket, &cancel).await;
         });
         let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
         let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();

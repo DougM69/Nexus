@@ -2670,6 +2670,16 @@ pub struct FieldDayStatus {
     /// serialised. The export it is about runs only at the station.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cabrillo_missing: Vec<String>,
+    /// ⭐ **This session sends a serial number** (Sweepstakes, CQ WPX) — `ContestSession::serial_now`
+    /// has a number to give — so Clear test contacts starts the serials again at 001, and only then
+    /// does the Contest screen say so. False for a contest that sends none: both Field Day events and
+    /// the QSO parties that send a county.
+    ///
+    /// ⚠️ **Never sent to Remote**, for `composing_text_phone`'s reason: the hosted page refuses a
+    /// key it does not list, so `leave_out_the_hosts_own` clears it and a false one is not
+    /// serialised. Clear test contacts is not offered there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sends_serial: bool,
     /// The bands this contest runs on (`"20m"`), from the ruleset, as ADVISORY data — the strip
     /// says so when the rig is elsewhere, and nothing refuses a contact over it. Empty when the
     /// ruleset names none, which is every contest before CQ WW RTTY.

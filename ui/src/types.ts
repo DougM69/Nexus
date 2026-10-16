@@ -3660,6 +3660,10 @@ export interface FieldDayStatus {
    *  the export writes. Names, not prose: the Contest screen words each one. Absent when nothing
    *  is missing, for a contest whose requirements this build does not read, and on Remote. */
   cabrilloMissing?: string[]
+  /** This session sends a serial number (CQ WPX, Sweepstakes), so Clear test contacts starts the
+   *  serials again at 001 and says so. Absent for a contest that sends none (both Field Days, a QSO
+   *  party sending a county), from an older station, and on Remote. */
+  sendsSerial?: boolean
   /** ⭐ What `{EXCH}` keys right now: this session's sent exchange WITHOUT the signal
    *  report, as macro text — `'5'` in CQ WW CW, `'5 MA'` for a W/VE station in CQ WW
    *  RTTY, `'3A WI'` in Field Day. The CW keyer's `{EXCH}` is the same string.

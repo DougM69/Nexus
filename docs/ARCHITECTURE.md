@@ -279,7 +279,9 @@ keeps the message layer intact (only the waveform length differs:
 `SlotClock::tempofast()` runs a `PERIOD_MS = 4000` period; `SlotClock::tempodeep()` runs a
 15 s period (`DX1_PERIOD_S`). It exposes `phase_ms`, `ms_to_next_slot`,
 `slot_index`, `next_boundary_ms`, and a `within_tolerance` window
-(`TIMING_TOLERANCE_MS = 80`), with a `PRE_TX_GUARD_MS = 200` pre-TX guard.
+(`TIMING_TOLERANCE_MS = 80`). Its `pre_tx_guard_ms` (`PRE_TX_GUARD_MS = 200`) is read by
+nothing: TempoFast's tones start `FT1_LEAD_IN_SECS` (0.3 s) into the slot, shifted inside the
+4 s buffer by `crates/modes/src/mode.rs`.
 
 The capture buffer must match the active tier's window. `tempo_audio::frames::RxRing`
 is a rolling buffer holding the latest `cap` samples (front-zero-padded until
