@@ -152,13 +152,10 @@ const GLOBES: Array<[string, () => ReactElement, boolean]> = [
 
 /** The keydown listeners on the document right now (OrbitControls' is a capturing one). */
 let keydownOnDocument = new Set<EventListenerOrEventListenerObject>()
-/** What the 3-D probe did with its context: `webglOk()` asks for one before the globe mounts. */
-const probeLose = vi.fn()
 
 beforeEach(() => {
   log.length = 0
   instances.length = 0
-  probeLose.mockClear()
   localStorage.clear()
   keydownOnDocument = new Set()
   const add = document.addEventListener.bind(document)
@@ -181,14 +178,11 @@ beforeEach(() => {
     unobserve() {}
     disconnect() {}
   }
-  // A 2-D context for the sprite canvases (any method a no-op), and the 3-D probe's WebGL one.
+  // A 2-D context for the sprite canvases (any method a no-op).
   const ctx2d = new Proxy({} as Record<string | symbol, unknown>, {
     get: (o, k) => (k in o ? o[k] : () => ({ addColorStop() {} })),
   })
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(((type: string) =>
-    /webgl/.test(type)
-      ? { getExtension: (name: string) => (name === 'WEBGL_lose_context' ? { loseContext: probeLose } : null) }
-      : ctx2d) as never)
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation((() => ctx2d) as never)
   vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(600)
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(400)
@@ -319,12 +313,5 @@ describe.each(GLOBES)('%s and its WebGL context', (_name, make, sleeps) => {
     expect(keydownOnDocument.size, 'and only the new one listening').toBe(1)
     expect(pausedNote()).toBeNull()
     expect(shown().container.isConnected).toBe(true)
-  })
-})
-
-describe('the 3-D probe', () => {
-  it('hands the context it asked for straight back', async () => {
-    await show(GLOBES[0][1])
-    expect(probeLose).toHaveBeenCalledTimes(1)
   })
 })

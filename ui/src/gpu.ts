@@ -10,6 +10,9 @@
 // fails closed whenever the renderer string is masked — WebKitGTK masks it by default, so that
 // probe would hide the street map on every Linux and Raspberry Pi install.
 //
+// `webgl2ForGlobe` is the globes' second gate: the WebGL 2 context three.js itself asks for. The
+// capability probe above passes a WebGL 1 context, and three.js throws without a WebGL 2 one.
+//
 // EVERY PROBE RELEASES ITS CONTEXT. A context nobody releases stays live until the page lets go
 // of the canvas, and Chromium keeps at most 16 live WebGL contexts per renderer process, evicting
 // the OLDEST when another is made — a leaked probe is one fewer for the maps and the spectrum.
@@ -62,4 +65,36 @@ export function webgl2Available(): boolean {
   } finally {
     release(gl)
   }
+}
+
+/** The context three.js asks for when globe.gl builds a globe: WebGLRenderer's attributes (three r185),
+ *  with the antialias and alpha that three-render-objects turns on. Neither globe passes its own. */
+const GLOBE_CONTEXT: WebGLContextAttributes = {
+  alpha: true,
+  depth: true,
+  stencil: false,
+  antialias: true,
+  premultipliedAlpha: true,
+  preserveDrawingBuffer: false,
+  powerPreference: 'default',
+  failIfMajorPerformanceCaveat: false,
+}
+let globeContext: boolean | undefined
+
+/** Whether this webview can make the context a 3-D globe draws with: WebGL 2, as three.js asks for it.
+ *  three.js draws with WebGL 2 only and THROWS when it cannot make that context, and `gpuCapableForGlobe`
+ *  passes a WebGL 1 one, so a globe needs this answer as well (GlobeGuard puts a note where it is no).
+ *  Asked once a page and kept, so each globe that mounts costs no context of its own to ask. */
+export function webgl2ForGlobe(): boolean {
+  if (globeContext !== undefined) return globeContext
+  let gl: WebGL2RenderingContext | null = null
+  try {
+    gl = document.createElement('canvas').getContext('webgl2', GLOBE_CONTEXT)
+    globeContext = gl !== null
+  } catch {
+    globeContext = false
+  } finally {
+    release(gl)
+  }
+  return globeContext
 }

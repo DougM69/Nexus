@@ -119,3 +119,69 @@ describe('webgl2Available — the street map gate', () => {
     expect(webgl2Available()).toBe(false)
   })
 })
+
+// The 3-D globes are drawn by three.js, which makes a WebGL 2 context or throws ("Error creating WebGL
+// context"). A computer that makes only WebGL 1 passes gpuCapableForGlobe, so it showed a globe that threw:
+// the whole Logbook became its error page (a report from Linux Mint on 1.18.0). This probe asks three.js's
+// own question once a page, and GlobeGuard puts a note where the answer is no.
+describe('webgl2ForGlobe: the context three.js asks for, once a page', () => {
+  /** gpu.ts afresh: the answer is kept for the page, so each case starts without one. */
+  async function fresh() {
+    vi.resetModules()
+    return (await import('./gpu')).webgl2ForGlobe
+  }
+
+  it('asks for WebGL 2 with the attributes three.js asks for when globe.gl builds a globe', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const asked: unknown[][] = []
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(((...args: unknown[]) => {
+      asked.push(args)
+      return null
+    }) as never)
+    // Both globes build globe.gl with no rendererConfig of their own (react-globe.gl passes none either).
+    const { default: Globe } = await import('globe.gl')
+    expect(() => new Globe(document.createElement('div'))).toThrow('Error creating WebGL context')
+    const three = asked[0]
+    expect(three[0]).toBe('webgl2')
+    asked.length = 0
+    expect((await fresh())()).toBe(false)
+    expect(asked[0]).toEqual(three)
+  })
+
+  it('is true where that context can be made, and hands it straight back', async () => {
+    const { gl, loseContext } = fakeGl({})
+    serve(gl, ['webgl2'])
+    expect((await fresh())()).toBe(true)
+    expect(loseContext).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not count WebGL 1: three.js draws with WebGL 2 only', async () => {
+    const { gl, loseContext } = fakeGl({})
+    serve(gl, ['webgl'])
+    expect((await fresh())()).toBe(false)
+    expect(loseContext).not.toHaveBeenCalled()
+  })
+
+  it('asks once and keeps the answer: no second context, the same answer', async () => {
+    const { gl, loseContext } = fakeGl({})
+    const getContext = serve(gl, ['webgl2'])
+    const webgl2ForGlobe = await fresh()
+    expect([webgl2ForGlobe(), webgl2ForGlobe(), webgl2ForGlobe()]).toEqual([true, true, true])
+    expect(getContext).toHaveBeenCalledTimes(1)
+    expect(loseContext).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a no the same way', async () => {
+    const getContext = serve(null, [])
+    const webgl2ForGlobe = await fresh()
+    expect([webgl2ForGlobe(), webgl2ForGlobe()]).toEqual([false, false])
+    expect(getContext).toHaveBeenCalledTimes(1)
+  })
+
+  it('is false when creating the context throws', async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => {
+      throw new Error('blocklisted')
+    })
+    expect((await fresh())()).toBe(false)
+  })
+})

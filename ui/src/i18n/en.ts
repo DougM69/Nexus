@@ -1567,6 +1567,10 @@ export const EN = {
   // The table. Column headers name a CONCEPT and are prose; every value under them is a
   // token. `{{query}}` is what the operator typed, inserted verbatim.
   'logbook.globe.loading': 'Loading globe…',
+  // In the globe band instead of the globe (components/GlobeGuard.tsx): this computer cannot make the WebGL2
+  // context the globe is drawn with, or the globe failed once it was drawn.
+  'logbook.globe.noWebgl2': "The 3-D globe needs WebGL2, which this computer's graphics cannot provide. Your log is not affected.",
+  'logbook.globe.failed': 'The 3-D globe stopped working. Your log is not affected.',
   // The divider under the globe band (layout L7); its tooltip is paneSeam.title.
   'logbook.globe.height.label': 'Globe height',
   'logbook.search.placeholder': 'Search call / grid / band / mode / date…',
@@ -2873,6 +2877,8 @@ export const EN = {
   // the 2-D map's and NOT the same list, so the two must not share keys.
   'globe.unsupported':
     "This machine's graphics can't run the 3-D globe. Pick Globe, Flat or Beam — they work everywhere.",
+  // In the map cell instead of a 3-D globe that failed once it was drawn (components/GlobeGuard.tsx).
+  'globe.failed': 'The 3-D globe stopped working. Pick Globe, Flat or Beam — they work everywhere.',
   // Beside the map picker while Globe stands in for a stored 3D pick (ConnectView).
   'connect.globe3d.standIn':
     "The 3-D globe can't draw on this computer right now, so the map shows Globe. Your 3D pick is kept.",

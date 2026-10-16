@@ -465,6 +465,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Logbook opens on a computer whose graphics have no WebGL2.** On such a computer (reported
+  on Linux Mint) the Logbook showed only "Logbook hit an error" and "Error creating WebGL context":
+  the 3-D globe above the table needs WebGL2, and when it could not draw it took the whole Logbook
+  down. The band above the table now says the globe needs WebGL2 and that your log is not
+  affected, and the table, search, editing and import work as always. Conditions now greys out 3D
+  on such a computer, as it does where the graphics are too weak, and a stored 3D pick shows Globe
+  instead. If a 3-D globe stops working once it is drawn, only the globe gives way to a note: the
+  Logbook or Conditions around it carries on. NEEDS-BENCH: a Linux PC without WebGL2 (or a
+  virtual machine), and Windows as the control.
 - **AD1C's country file now carries its license notice.** Nexus finds a call's DXCC entity and
   zones in the cty.dat country file by Jim Reisert AD1C, which is MIT-licensed. That license asks
   for its notice to travel with every copy, and NOTICE named the license without reproducing it.

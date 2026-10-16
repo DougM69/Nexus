@@ -27,7 +27,7 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
 })
 
-vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => true }))
+vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => true, webgl2ForGlobe: () => true }))
 vi.mock('./QsoGlobe', () => ({ default: () => <div data-testid="qso-globe" /> }))
 const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
