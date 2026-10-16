@@ -2,7 +2,7 @@
 // FT8/FT4 ride workDigitalSpot, which names its tier; RTTY rides workRttySpot. Work tunes the
 // station and sets its mode and tier; it never starts a QSO or enables transmit.
 import { workTarget, workTier } from '../features/needs'
-import type { BandChannel, NeedAlert, SpotRow } from '../types'
+import type { BandChannel, NeedAlert } from '../types'
 
 /** The station hints a browser Work needs, plus the cockpit switches the desktop Work obeys. */
 export type RemoteWorkGrants = { workSpot: boolean; workDigitalSpot: boolean; workRttySpot: boolean
@@ -23,20 +23,4 @@ export function remoteWorkable(alert: NeedAlert, bandPlan: BandChannel[], grants
   // navigating when the cockpit is off, and a browser has no cockpit to land in at all.
   if (target.view === 'rtty') return grants.workRttySpot && grants.rttyEnabled
   return grants.workSpot && ((target.view === 'cw' && grants.cwEnabled) || (target.view === 'phone' && grants.phoneEnabled))
-}
-
-/** A Spots row in the Needed-board shape the Work path takes. FT8/FT4 keep their submode so the
- * tier travels with the spot. */
-export function spotNeed(s: SpotRow): NeedAlert {
-  return {
-    call: s.call,
-    entity: s.entity,
-    band: s.band,
-    zone: s.zone,
-    tags: [],
-    priority: 0,
-    headline: '',
-    mode: s.submode === 'FT4' || s.submode === 'FT8' ? s.submode : s.mode,
-    freqMhz: s.freqMhz,
-  }
 }

@@ -101,7 +101,7 @@ import {
 import { pushToast } from '../toast'
 import { isStreamInput } from '../remote-native/stream-input'
 import { controlFailureMessage } from '../remote-web/control-failure'
-import { latestOnly } from '../remote-web/latest-only'
+import { latestOnly } from '../latestOnly'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'

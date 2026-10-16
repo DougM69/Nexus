@@ -13,7 +13,8 @@ import { StationControlContext, StationDataContext } from '../stationAccess'
 import type { ApplicationClient } from './application-client'
 import type { QueryPage } from './application-query-protocol'
 import type { NeedAlert, SpotRow } from '../types'
-import { remoteWorkable, remoteWorkTier, spotNeed } from './remote-work'
+import { remoteWorkable, remoteWorkTier } from './remote-work'
+import { spotNeed } from '../features/needs'
 import fixture from './__fixtures__/dxpeditions.json'
 
 const originalScroll = Element.prototype.scrollIntoView

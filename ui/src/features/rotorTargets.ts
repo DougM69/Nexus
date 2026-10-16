@@ -11,6 +11,9 @@
 // nobody asked to move. So a target is dropped when the mast arrives, and when two readings in a
 // row bring it no closer (stopped, stuck, or heading somewhere else). Degrees throughout.
 
+/** The desktop's own rotor poll interval (RotorStrip, RotorPane). */
+export const ROTATOR_POLL_MS = 2_000
+
 /** A commanded position one axis is still on its way to. `gap` is how far off the last reading
  *  was, `stalls` how many readings in a row have not brought it closer. */
 export interface Pending {

@@ -1,3 +1,5 @@
+// The hosted Remote page is the stream page. The old watch/control workspace and the observer view take
+// no new features: new Remote work goes to the stream, the LAN stream window or the native client.
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { useViewport } from '../useViewport'

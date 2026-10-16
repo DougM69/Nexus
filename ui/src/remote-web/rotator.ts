@@ -12,10 +12,9 @@ import type { QueryPage } from './application-query-protocol'
 import { ROTATOR_COMMAND } from './application-query-protocol'
 import { RemoteCollectionsContext } from './collections'
 import { useStationData } from '../stationAccess'
+import { ROTATOR_POLL_MS } from '../features/rotorTargets'
 
 export type RotatorRead = { configured: boolean; azimuthDeg: number | null }
-/** The desktop's own rotor poll interval (RotorStrip, RotorPane). */
-export const ROTATOR_POLL_MS = 2_000
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 
 export function parseRotator(page: QueryPage): RotatorRead {

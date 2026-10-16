@@ -400,6 +400,8 @@ jobs:
       - name: Native Remote controller through the Cloudflare runtime
         run: npm --prefix remote run test:native
 
+  # The hosted page is the stream page. The old watch/control workspace and the observer view take no
+  # new features; new Remote work goes to the stream, the LAN stream window or the native client.
   remote-web:
     name: Remote browser and Cloudflare service (local only)
     runs-on: ubuntu-latest

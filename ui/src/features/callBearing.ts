@@ -12,7 +12,7 @@
 // would not turn to.
 import { useEffect, useState } from 'react'
 import { rotatorBearingToCall } from '../api'
-import { ROTATOR_POLL_MS } from '../remote-web/rotator'
+import { ROTATOR_POLL_MS } from './rotorTargets'
 import { pollSingleFlight } from '../singleFlight'
 import { useStationControl } from '../stationAccess'
 import type { CallBearing } from '../types'
