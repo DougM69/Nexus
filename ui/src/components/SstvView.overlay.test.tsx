@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// TEXT OVERLAYS ON THE TRANSMIT PICTURE (operator request, 2026-08-16 — the
-// MMSSTV-style compose). These tests pin the three contracts the feature must keep:
+// TEXT OVERLAYS ON THE TRANSMIT PICTURE (operator request, 2026-08-16). These tests pin the
+// three contracts the feature must keep:
 //
 //  1. THE IDENT WINS. Overlays draw BEFORE the ID plate inside renderTx, so operator
 //     text can cover artwork but structurally never the callsign. Asserted on the

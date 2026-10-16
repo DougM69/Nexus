@@ -731,7 +731,7 @@ export function LogEntry({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fdActive, fdLogLen])
 
-  // ⭐ REMOVE THE NEWEST CONTACT — Ctrl+D (N1MM's key) or Remove last, PRESSED TWICE. The first
+  // ⭐ REMOVE THE NEWEST CONTACT — Ctrl+D or Remove last, PRESSED TWICE. The first
   // press names the contact on the verdict line and changes nothing; a second within
   // REMOVE_CONFIRM_MS removes it. Any other key, the window running out, or a new contact lets it
   // lapse, so nothing is removed that the operator was not just shown — and if the newest contact
@@ -796,7 +796,7 @@ export function LogEntry({
   }
   const pressRemoveRef = useRef(pressRemove)
   pressRemoveRef.current = pressRemove
-  // ⭐ CTRL+Y OPENS THE NEWEST CONTACT FOR EDIT (N1MM's key), in place of the entry boxes: its call,
+  // ⭐ CTRL+Y OPENS THE NEWEST CONTACT FOR EDIT, in place of the entry boxes: its call,
   // what they sent, its band and its mode (`ContestContactEdit`). Enter saves, Esc leaves it as it
   // was, and the entry boxes come back as they were, with the caret in Call. The contact keeps its
   // time, serial and number. Never through the Remote stream; and at a club the line says how a
@@ -863,7 +863,7 @@ export function LogEntry({
     if (!removable || !active) return
     const onKey = (e: KeyboardEvent) => {
       // Every key but Alt+W itself (a bare modifier is not a key) ends the chance to put back a line
-      // Alt+W wiped: N1MM's "if nothing new has been typed in since".
+      // Alt+W wiped: it comes back only if nothing new has been typed in since.
       if (!isModifierKey(e) && !isWipeKey(e)) wipedRef.current = null
       if (isRemoveKey(e)) {
         // This strip's key while it shows: the browser's own (a bookmark, or delete-next-character
@@ -875,7 +875,7 @@ export function LogEntry({
         return
       }
       if (isEditKey(e)) {
-        // Ctrl+Y is redo in a text box; while this strip shows it is N1MM's edit-last.
+        // Ctrl+Y is redo in a text box; while this strip shows it edits the last contact.
         e.preventDefault()
         if (!e.repeat) pressEditRef.current()
         setEsmLine(null)
@@ -1215,7 +1215,7 @@ export function LogEntry({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logParkRef, logParkProgram, asksForPark, remoteMode, remoteParks])
 
-  // Auto-load a park's details the moment a COMPLETE valid POTA reference is entered (like HRD):
+  // Auto-load a park's details the moment a COMPLETE valid POTA reference is entered:
   // instant offline lookup first, then the live POTA directory if it's not in the local list. Purely
   // informational — never blocks typing or logging, and swallows all errors (offline = no chip).
   // `asksForPark` first: a pending hunt still PREFILLS logParkRef in every exchange
@@ -1718,7 +1718,7 @@ export function LogEntry({
     }
     // Keep fdClass/fdSection across resets for speed in FD runs.
     // Snap focus back to the callsign field so the operator can type the next
-    // contact immediately (rapid logging / a Field Day run), like WSJT-X/N1MM.
+    // contact immediately (rapid logging / a Field Day run), like WSJT-X.
     // rAF so it lands after the cleared value re-renders. Only the mounted layout's
     // input (FD or standard) holds the ref, so this always hits the visible field.
     // preventScroll for the same reason as the click-to-work RST focus above:
@@ -1727,8 +1727,8 @@ export function LogEntry({
     onReset?.()
   }
 
-  // ⭐ ALT+W — WIPE THE LINE, AND PUT IT BACK (`features/contestKeys.ts`; N1MM's "Alt+W can be
-  // reversed by typing it again"). The wipe clears the call as Clear does — the serial in flight
+  // ⭐ ALT+W — WIPE THE LINE, AND PUT IT BACK (`features/contestKeys.ts`: typing Alt+W again
+  // reverses it). The wipe clears the call as Clear does — the serial in flight
   // released, Enter Sends Message at a new contact — and every box as well, a report back to its
   // default, keeping what the line held. A second Alt+W, with no other key between and the line
   // still as the wipe left it, puts back the call, the boxes and their call-history marks, and takes
@@ -2074,10 +2074,9 @@ export function LogEntry({
 
   /**
    * SPACE ADVANCES THE CONTEST EXCHANGE, because that is the key contest operators already
-   * have in their fingers. N1MM's own keyboard reference puts it in capitals — "SPACE IS THE
-   * PREFERRED TAB CHARACTER" — and N3FJP's help tells operators to "press the space bar to
-   * tab". Both agree, so there is no house style to invent. Tab keeps working exactly as it
-   * did (plain DOM order, no tabIndex anywhere in this file).
+   * have in their fingers: contest loggers tab with the space bar, so there is no house style
+   * to invent. Tab keeps working exactly as it did (plain DOM order, no tabIndex anywhere in
+   * this file).
    *
    * Scoped to the Field Day strip on purpose: a space is legitimate in a name, a park
    * reference or a comment on the ordinary strip, so this belongs to the contest exchange

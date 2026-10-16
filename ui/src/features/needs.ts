@@ -493,7 +493,7 @@ function retag(a: NeedAlert, tags: NeedTag[]): NeedAlert {
   return tags[0] === a.tags[0] ? { ...a, tags } : { ...a, tags, priority: NEED_TIER[tags[0]] }
 }
 
-/** Resolve ANY need (CW / Phone / Digital) into a work target — N1MM-style: a single click
+/** Resolve ANY need (CW / Phone / Digital) into a work target: a single click
  * changes the band, mode, AND frequency to exactly the spot's. Uses the spot's exact
  * frequency when the cluster/RBN carried one, else the band's default channel. Returns null
  * only when no frequency can be resolved at all (a band-level need with no band-plan entry). */

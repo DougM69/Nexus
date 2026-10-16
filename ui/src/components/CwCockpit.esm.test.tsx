@@ -51,7 +51,7 @@ const decodeState = {
   name: null as string | null,
 }
 
-/** An operator's own CW profile, mapped N1MM-style: his call on F5, the exchange alone on F2,
+/** An operator's own CW profile: his call on F5, the exchange alone on F2,
  *  so "his call and my exchange" is F5 then F2, sent as one message. */
 const MINE = {
   name: 'Mine',
@@ -235,7 +235,7 @@ afterEach(cleanup)
 
 describe('Enter Sends Message in the CW cockpit', () => {
   it('runs the Illinois QSO Party on the built-in contest set: CQ TEST, his call and the exchange, TU and the log', async () => {
-    settings.macros.cwProfiles = [] // no profile: the built-in set, N1MM's layout
+    settings.macros.cwProfiles = [] // no profile: the built-in set, the contest layout
     await renderCockpit()
     await run()
     expect(engine.keyed).toEqual(['CQ TEST DE KD9TAW KD9TAW K'])
@@ -269,8 +269,8 @@ describe('Enter Sends Message in the CW cockpit', () => {
     expect(engine.calls).toContain('contestLogManual')
   })
 
-  // ⭐ AGN IS ON F8 AND B4 ON F7 in the built-in sets (the operator, 2026-10-10: as in N1MM's
-  // default message sets). Enter's AGN keys the text it keyed from F7 before.
+  // ⭐ AGN IS ON F8 AND B4 ON F7 in the built-in sets (the operator, 2026-10-10). Enter's AGN
+  // keys the text it keyed from F7 before.
   it('asks AGN on the built-in contest set from F8, and keys the AGN it always keyed; F7 is B4', async () => {
     settings.macros.cwProfiles = []
     await renderCockpit()
@@ -287,7 +287,7 @@ describe('Enter Sends Message in the CW cockpit', () => {
     expect(engine.keyed[engine.keyed.length - 1], 'F7 by hand').toBe('K9AAA QSO B4')
   })
 
-  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule, like N1MM): Enter keys the
+  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule): Enter keys the
   // set's QSO B4 from F7, once, and the next Enter logs the dupe, keying nothing.
   it('running, a dupe gets QSO B4 from F7 once, and the next Enter logs it, keying nothing', async () => {
     settings.macros.cwProfiles = []

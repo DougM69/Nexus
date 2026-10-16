@@ -1162,8 +1162,8 @@ const RIG_PTT_POLL_MS: f64 = 1_000.0;
 /// is exactly why this is not the everyday cadence.
 const SAT_PASS_PTT_POLL_MS: f64 = 200.0;
 /// How often to run the FAST dial-only read-back. The dial is the one value that must track a
-/// manual VFO knob in real time, so it's polled ~4× faster than the heavy set — matching HRD's
-/// Yaesu responsiveness (which is pure fast polling; the earlier 1–2 s lag was self-inflicted by
+/// manual VFO knob in real time, so it's polled ~4× faster than the heavy set (tracking a knob
+/// is pure fast polling; the earlier 1–2 s lag was self-inflicted by
 /// reading the dial only on the 750 ms health cadence). A single `F`-read is cheap on a healthy
 /// serial link, and the transport-aware read deadline bounds a stalled one.
 const FREQ_POLL_MS: f64 = 180.0;
@@ -3895,7 +3895,7 @@ struct RadioLoop {
     /// Last `t` poll (ms); 0.0 forces an immediate first read on going idle.
     last_ptt_poll: f64,
     /// Last time we ran the FAST dial-only read-back (ms). The dial is mirrored on a much shorter
-    /// cadence than the heavy reads so a manual VFO-knob turn tracks like HRD (~⅕ s), not the
+    /// cadence than the heavy reads so a manual VFO-knob turn tracks in ~⅕ s, not the
     /// 750 ms health poll — the heavy reads (S-meter/mode/funcs) stay slow to bound CAT traffic.
     last_freq_poll: f64,
     /// Last time we read the CAT S-meter on the FAST cadence (ms). Healthy links re-read
@@ -9167,8 +9167,8 @@ impl RadioLoop {
             }
 
             // Fast dial-only mirror: the dial is the one value that must track a manual VFO knob in
-            // real time (a 1–2 s lag made live tuning feel unusable — HRD tracks Yaesu in ~⅕ s with
-            // pure fast polling). Runs on the fast cadence when the heavy read-back above did NOT (it
+            // real time (a 1–2 s lag made live tuning feel unusable; pure fast polling tracks it in
+            // ~⅕ s). Runs on the fast cadence when the heavy read-back above did NOT (it
             // stamps last_freq_poll, so never a double read), never right after an app retune (that
             // branch defers it), under the same TX-safety + CAT-health gates. A read miss here is
             // ignored — the 750 ms heavy poll stays the authoritative CAT health probe / breaker.
@@ -9928,7 +9928,7 @@ impl RadioLoop {
         // (tx_until_ms expiry), on Stop/halt (the abort below), on the watchdog trip
         // (poll_rtty_one arms the abort), and at app exit (the SHUTDOWN flush).
         //
-        // CONTINUOUS TX (the MMTTY "TX" latch) is the second path through this block:
+        // CONTINUOUS TX (the "TX" latch) is the second path through this block:
         // instead of one keyed over per Enter, the operator stays keyed and types into
         // a live transmission, which idles on DIDDLE (LTRS fill) between keystrokes.
         // It shares every mechanism above — the same abort, the same tx_until_ms unkey,
@@ -10168,7 +10168,7 @@ impl RadioLoop {
                     // shift state spans the whole latched over exactly as it spans a
                     // one-shot message. Diddle is LTRS, the standard RTTY idle: it
                     // holds the far end's decoder in sync and lands the shift plane in
-                    // letters, and it is what an MMTTY operator hears between words.
+                    // letters, and it is what the far-end operator hears between words.
                     //
                     // Rendered inside a scope that ENDS the borrow of the generator,
                     // because the keying below needs `self` (the rig assert, the PTT

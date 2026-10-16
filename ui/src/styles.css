@@ -9935,8 +9935,8 @@ input.cw-pitch::-webkit-inner-spin-button {
   border-color: var(--accent, #4ea1ff);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #4ea1ff) 45%, transparent);
 }
-/* ENTER SENDS MESSAGE: the key or keys the next Enter in the contest strip sends glow, as N1MM
-   lights them — the CW and RTTY F-keys, and the voice keyer's slots. */
+/* ENTER SENDS MESSAGE: the key or keys the next Enter in the contest strip sends glow — the CW
+   and RTTY F-keys, and the voice keyer's slots. */
 .cw-macro.esm-lit,
 .vk-play.esm-lit {
   border-color: var(--accent);
@@ -15385,7 +15385,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--border);
   margin: 0 2px;
 }
-/* The vertical N1MM-style band map (its own torn-off window via open_panel_window) — flex-fills
+/* The vertical band map (its own torn-off window via open_panel_window) — flex-fills
  * the detached window (flex, not a height:100% chain, per the .app.detached note above). */
 .bandmap {
   flex: 1;
@@ -19467,7 +19467,7 @@ button.cq-skiptx1.on {
   min-width: 0;
 }
 
-/* ── Needed panel (the N1MM-style "what's needed now" board) ────────────────── */
+/* ── Needed panel (the "what's needed now" board) ───────────────────────────── */
 .layout.single.needed-panel {
   display: flex;
   flex-direction: column;

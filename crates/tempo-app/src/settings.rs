@@ -715,8 +715,8 @@ pub enum LicenseClass {
 
 /// How CW is transmitted. **Cat** = the rig's own keyer via Hamlib `send_morse` (rig in
 /// CW; clean, but older rigs like the IC-756PRO III don't implement it). **Serial** = the
-/// app toggles a DTR/RTS keyline into the rig's KEY jack (rig in CW; the classic
-/// N1MM/fldigi method — clean, needs only a keying cable; see `cw_key_port`/`cw_key_line`).
+/// app toggles a DTR/RTS keyline into the rig's KEY jack (rig in CW; clean, needs only a
+/// keying cable; see `cw_key_port`/`cw_key_line`).
 /// **WinKeyer** = a K1EL hardware keyer (rig in CW; jitter-free). **Soundcard** = the app
 /// keys an audio tone through SSB (rig in USB; works on any rig, but an SSB-audio workaround
 /// — shape it and keep it below ALC).
@@ -1356,7 +1356,7 @@ pub struct Settings {
     #[serde(default)]
     pub contest_power: String,
     /// ENTER SENDS MESSAGE in the CW cockpit's contest strip: Enter sends the contact's next
-    /// message from the macro set's keys, step by step, as N1MM Logger+'s ESM does. OFF by
+    /// message from the macro set's keys, step by step. OFF by
     /// default, and nothing but the operator's own switch turns it on: it makes Enter a way to
     /// start a transmission. One switch per cockpit, so an operator can run CW with it and
     /// leave Phone without it.
@@ -2145,7 +2145,7 @@ pub struct Settings {
     /// Connect to spot networks for need-aware spots (takes effect at startup). When on,
     /// the RBN CW (7000) + RBN digital (7001) skimmer firehoses are connected for the big
     /// CW + digital evidence, PLUS the human DX-cluster node in `cluster_host` for SSB/phone
-    /// (which RBN doesn't carry). SpotCollector-style multi-source aggregation.
+    /// (which RBN doesn't carry). Multi-source aggregation.
     pub cluster_enabled: bool,
     /// LEGACY single human DX-cluster endpoint — kept only to seed `cluster_hosts` on
     /// upgrade (and for back-compat). `cluster_hosts` is the live source of truth.
@@ -6206,7 +6206,7 @@ impl Settings {
     }
 
     /// ONE-TIME MIGRATION (2026-10-10): AGN moved to F8 in the Phone, CW, RTTY and PSK contest
-    /// keys, as in N1MM's default message sets. In the CW, RTTY and PSK contest sets it traded keys
+    /// keys. In the CW, RTTY and PSK contest sets it traded keys
     /// with B4, now on F7, and nothing else moved. In Phone it was on F5, which is free now: on CW
     /// F5 sends his call, and a recording cannot say a callsign. The voice keyer gains an F8 slot
     /// for it.
@@ -8351,8 +8351,8 @@ mod tests {
     /// written in these two words can be right for both brands at once.
     ///
     /// Nothing on the air changes either way (`CW` and `CWR` are the same emission on the same
-    /// dial), so this is a receive preference — which is how the rig manuals and N1MM both
-    /// model it, and why it is now a checkbox with no band term.
+    /// dial), so this is a receive preference — which is how the rig manuals model it, and
+    /// why it is now a checkbox with no band term.
     #[test]
     fn cw_commands_the_rigs_own_normal_cw_on_every_band() {
         let mut s = Settings::default();

@@ -24,7 +24,7 @@ own explanation, so you can read the others before you switch:
 - **CAT** — the rig generates the Morse (Hamlib `send_morse`), with speed pushed
   over CAT. Zero extra hardware; needs a rig that supports CW keying over CAT.
 - **Serial** — Nexus toggles DTR or RTS into the rig's KEY jack and the rig
-  shapes the signal (rig in CW). This is the N1MM/fldigi method for a rig with no
+  shapes the signal (rig in CW). This is the clean method for a rig with no
   CAT keying command. Set the keyline port and line in
   [Settings ▸ CW](settings-reference.md#cw).
 - **WinKeyer** — a K1EL WinKeyer hardware keyer over serial (rig in CW). It's the

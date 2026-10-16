@@ -624,7 +624,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // i18n guard reads them as the measurements they are.
   const tones = rtty ? `${rtty.baud} · ${rtty.shiftHz} Hz` : control ? DEFAULT_TONES : '—'
 
-  // --- CONTINUOUS TX (the MMTTY "TX" latch) -----------------------------------
+  // --- CONTINUOUS TX (the "TX" latch) -----------------------------------------
   // Stay keyed and type into a live transmission (the air carries LTRS diddle
   // between keystrokes) instead of one keyed over per Enter. The engine owns all
   // of the safety: it runs the same gate a send runs before the latch comes up,
@@ -1464,7 +1464,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           title={
             !control ? t('remote.applicationObserver') : latched
               ? 'Continuous TX ON — the transmitter stays keyed and idles on diddle; type and it goes out as you type. Click to stop transmitting once what you have typed has gone out. (Stop TX or Esc cuts immediately.)'
-              : 'Continuous TX — key up and stay keyed, then type into the live transmission (MMTTY-style), instead of pressing Enter for every line'
+              : 'Continuous TX — key up and stay keyed, then type into the live transmission, instead of pressing Enter for every line'
           }
         >
           <span className="cw-macro-key">TX</span>

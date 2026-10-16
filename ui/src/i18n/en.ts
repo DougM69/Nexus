@@ -3439,7 +3439,7 @@ export const EN = {
   'spots.beacon.ncdxf': 'NCDXF beacon — one-way, not workable',
   'spots.beacon.w1aw': 'W1AW bulletin — one-way, not workable',
 
-  // ── The vertical band map (the N1MM-style torn-off window) ──────────────────────────
+  // ── The vertical band map (its own torn-off window) ─────────────────────────────────
   // ⚠️ Band and mode names, dial frequencies and every spot's own data are tokens and stay
   // in the component. `{{mode}}` here is CW or SSB — the plotted spot mode, not prose.
   'bandMap.title': 'Band map',
@@ -4613,7 +4613,7 @@ export const EN = {
     'This file is for {{contest}}, not the contest picked above, so it is not used now.',
   'settings.contestKeys.legend': 'Enter Sends Message',
   'settings.contestKeys.hint':
-    'With ESM on, Enter in the contest log strip sends the contact’s next message from your F-keys, as N1MM Logger+ does, and the contact logs at its last step. ESM is off until you turn it on, in each cockpit separately. Enter never turns TX on, and nothing is sent by a timer.',
+    'With ESM on, Enter in the contest log strip sends the contact’s next message from your F-keys, and the contact logs at its last step. ESM is off until you turn it on, in each cockpit separately. Enter never turns TX on, and nothing is sent by a timer.',
   'settings.contestKeys.remote':
     'Enter Sends Message is set at the station and works only there, not on this page.',
   'settings.contestKeys.cw.label': 'ESM in the CW cockpit',
@@ -7692,7 +7692,7 @@ export const EN = {
   'settings.cw.keyer.winkeyer': 'WinKeyer — K1EL hardware keyer',
   'settings.cw.keyer.soundcard': 'Soundcard — audio tone through a data mode (workaround)',
   'settings.cw.keyer.hint':
-    "How Nexus sends CW. <b>CAT</b> uses the rig's internal keyer, but older rigs (e.g. IC-756PRO III) don't support it. <b>Serial keyline</b> toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal — the clean N1MM/fldigi method, needs only a keying cable). <b>WinKeyer</b> drives a K1EL.<b>Soundcard</b> keys an audio tone — a workaround; set drive so ALC reads zero. <b>It takes your radio out of CW</b> into a data mode (DATA-U/DATA-L, so the tone reaches the transmitter instead of the mic jack); pick any other keyer and CW mode comes straight back. Also switchable live from the CW cockpit.",
+    "How Nexus sends CW. <b>CAT</b> uses the rig's internal keyer, but older rigs (e.g. IC-756PRO III) don't support it. <b>Serial keyline</b> toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal — a clean method that needs only a keying cable). <b>WinKeyer</b> drives a K1EL.<b>Soundcard</b> keys an audio tone — a workaround; set drive so ALC reads zero. <b>It takes your radio out of CW</b> into a data mode (DATA-U/DATA-L, so the tone reaches the transmitter instead of the mic jack); pick any other keyer and CW mode comes straight back. Also switchable live from the CW cockpit.",
   'settings.cw.keyer.unproven':
     "CAT CW keying is <b>unproven on this radio</b>. Its Hamlib backend sends a different keying command from the one other radios use, and it reports success either way — so if nothing is transmitted, Nexus cannot tell you. If CW doesn't go out, use the Serial keyline, WinKeyer, or Soundcard keyer.",
   'settings.cw.pitch.label': 'Sidetone pitch (Hz)',
@@ -9570,7 +9570,7 @@ export const EN = {
   'operate.header.layout.classic.title':
     'Classic — WSJT-X layout (Band Activity + Rx Frequency pair, roster aside)',
   'operate.header.layout.roster.label': 'Roster',
-  'operate.header.layout.roster.title': 'Roster — GridTracker layout (Call Roster dominant)',
+  'operate.header.layout.roster.title': 'Roster — Call Roster layout (roster dominant, Band Activity + Rx Frequency aside)',
 
   'operate.header.map.label': 'Map',
   'operate.header.map.title': 'Open the POTA activity map in its own window',
@@ -10649,7 +10649,7 @@ export const EN = {
   'sstv.tx.overlay.text.aria': 'Overlay text',
   'sstv.tx.overlay.style.aria': 'Text style',
   'sstv.tx.overlay.style.title':
-    "Crisp: the ident's pixel font, proven through the decoder. Banner: big display text with an outline, MMSSTV-style.",
+    "Crisp: the ident's pixel font, proven through the decoder. Banner: big display text with an outline.",
   'sstv.tx.overlay.style.crisp': 'Crisp',
   'sstv.tx.overlay.style.banner': 'Banner',
   'sstv.tx.overlay.size.aria': 'Text size',
@@ -10836,7 +10836,7 @@ export const EN = {
   // routed and the drive over ALC, so it is operating information, not chrome.
   'cw.keyer.cat.title': 'CAT keyer — the rig generates CW (rig in CW). Zero extra hardware.',
   'cw.keyer.serial.title':
-    "Serial keyline — Nexus toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal). The clean N1MM/fldigi method for rigs without CAT CW. Set the keyline port + line in Settings ▸ CW.",
+    "Serial keyline — Nexus toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal). The clean method for rigs without CAT CW. Set the keyline port + line in Settings ▸ CW.",
   'cw.keyer.winkeyer.title':
     'K1EL WinKeyer — hardware keyer over serial (rig in CW). Set its port in Settings ▸ CW.',
   'cw.keyer.soundcard.title':

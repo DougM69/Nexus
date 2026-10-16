@@ -1,4 +1,4 @@
-// Continent×Band live-activity matrix (DXHeat-style), operator-anchored — "which
+// Continent×Band live-activity matrix, operator-anchored — "which
 // band×region is alive FOR YOU, in the last window," not the global firehose. Cell
 // intensity = distinct anchored stations, colored by the existing inferno heatColor LUT.
 import { heatColor } from '../../propViz'

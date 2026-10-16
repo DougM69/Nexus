@@ -2036,8 +2036,8 @@ mod tests {
     /// band and mode from the start; the spectator page showed label,
     /// operator, QSOs and points only — so the one board the whole tent can
     /// see could not answer the question a multi-station club runs the board
-    /// for (operator report, 2026-08-30: "programs like N3FJP has a board to
-    /// show where everyone is in on the bands").
+    /// for (operator report, 2026-08-30: a board "to show where everyone is in
+    /// on the bands").
     #[test]
     fn positions_say_which_band_and_mode_each_one_is_running() {
         let (d, now) = fixture(FdEvent::ArrlFd);

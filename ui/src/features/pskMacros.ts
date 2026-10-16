@@ -56,8 +56,8 @@ const EVERYDAY: BuiltinMacro[] = [
 ]
 
 /** CONTEST — the run/S&P set, RTTY's key ASSIGNMENTS (F1 CQ · F2 exchange · F3 TU · F4 my call ·
- *  F5 his call · F6 S&P exchange · F7 B4 · F8 AGN, AGN on F8 as in N1MM's default message sets,
- *  operator, 2026-10-10) so an operator who works both modes does not relearn the keyboard, in
+ *  F5 his call · F6 S&P exchange · F7 B4 · F8 AGN, AGN moved to F8 by the operator,
+ *  2026-10-10) so an operator who works both modes does not relearn the keyboard, in
  *  PSK's own wording. The message shapes are the published digital
  *  contest conventions: a CQ starts AND ends with CQ, so a station tuning in mid-message still
  *  reads it as one; the exchange goes twice; the run station's TU asks for the next caller; the

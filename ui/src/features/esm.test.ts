@@ -82,9 +82,9 @@ describe('esmStep — Run', () => {
     })
   })
 
-  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule, like N1MM). N1MM's ESM
-  // table: "Duplicate Call | Empty or invalid | QSO B4 (F6)" when running. Nexus sends it once,
-  // from the key the sets hold it on, and the next press logs the dupe for 0 points.
+  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule). Running, a dupe whose
+  // exchange is empty or invalid gets QSO B4. Nexus sends it once, from the key the sets hold it
+  // on, and the next press logs the dupe for 0 points.
   it('R6: an own dupe gets QSO B4, once: nothing logs, the caret stays, and ESM remembers the call it went to', () => {
     for (const complete of [false, true]) {
       expect(esmStep(RUN, strip('K9AAA', complete, 'own'), CW)).toEqual({
@@ -194,8 +194,8 @@ describe('esmStep — S&P', () => {
     expect(esmStep({ ...SP, myCallTo: 'K9AAA' }, strip('K9AAA', true), ONCE)).toEqual(expected)
   })
 
-  // N1MM's table, S&P: "Duplicate Call | Empty or invalid | … | do nothing". You do not call a
-  // station you have worked, and no QSO B4 goes over his CQ.
+  // In S&P a dupe whose exchange is empty or invalid gets nothing. You do not call a station you
+  // have worked, and no QSO B4 goes over his CQ.
   it('S4: an own dupe sends nothing and logs nothing — no QSO B4 in S&P, whatever ESM remembers', () => {
     expect(esmStep(SP, strip('K9AAA', false, 'own'), CW)).toEqual({ kind: 'refuse', refusal: { why: 'dupe' } })
     expect(esmStep(SP, strip('K9AAA', true, 'own'), ONCE)).toEqual({ kind: 'refuse', refusal: { why: 'dupe' } })
@@ -206,7 +206,7 @@ describe('esmStep — S&P', () => {
   })
 
   // Call history fills the boxes as the call is typed, so the exchange can be complete before he
-  // has sent a thing. Then my call goes first, as N1MM's S&P Enter sends it (operator, 2026-10-09).
+  // has sent a thing. Then my call goes first (operator, 2026-10-09).
   it('S5: complete only by a call-history fill, the first press sends my call and logs nothing; the next sends my exchange and logs', () => {
     const first = esmStep(SP, filled('K9AAA'), CW)
     expect(first).toEqual({ kind: 'send', role: 'myCall', log: false, caret: 'call', next: { ...SP, myCallTo: 'K9AAA' } })
@@ -266,7 +266,7 @@ describe('esmStep — S&P', () => {
 })
 
 describe('esmStep — a club dupe is a new call', () => {
-  // Another position worked them: a warning on the strip, never a block (N3FJP's semantics).
+  // Another position worked them: a warning on the strip, never a block.
   const states: EsmState[] = [RUN, { ...RUN, exchTo: 'K9AAA' }, SP, { ...SP, myCallTo: 'K9AAA' }]
   it('gives exactly the result the same strip gets with no dupe, in Run and S&P, call once or not', () => {
     for (const s of states)

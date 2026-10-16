@@ -2272,7 +2272,7 @@ export async function workSpot(
   park?: { program: string; reference: string } | null,
 ): Promise<AppSnapshot> {
   // `call` lets the backend look up the spot's pile-up split ("UP 2") and
-  // configure rig split automatically — the N1MM behavior. `tier` is the digital
+  // configure rig split automatically. `tier` is the digital
   // spot's protocol: passing it here makes the tier switch and the QSY ONE atomic
   // backend call — as two calls, the radio loop could command the tier's default
   // dial to the rig in the gap before the spot's exact frequency ("hitting a
@@ -3284,7 +3284,7 @@ export async function rttySend(text: string): Promise<RttyState> {
   return invoke<RttyState>('rtty_send', { text })
 }
 
-/** Continuous TX on/off (the MMTTY "TX" latch): stay keyed and type into a live
+/** Continuous TX on/off (the "TX" latch): stay keyed and type into a live
  * transmission instead of one keyed over per Enter. ON runs the same gate a send
  * runs; OFF lets what was already typed finish keying, then unkeys — it is a mode
  * toggle, not the emergency stop (Stop TX and the TX-enable latch are). */
@@ -3396,7 +3396,7 @@ export async function pskSend(text: string): Promise<PskState> {
   return invoke<PskState>('psk_send', { text })
 }
 
-/** Continuous TX on/off — the PSK cockpit's TX button (the MMTTY-style latch).
+/** Continuous TX on/off — the PSK cockpit's TX button (the same latch RTTY carries).
  * ON runs the same gate a send runs; OFF lets what was typed finish keying.
  * NOT the emergency stop: Stop TX / Esc / the TX-enable latch cut instantly. */
 export async function pskSetLatched(on: boolean): Promise<PskState> {

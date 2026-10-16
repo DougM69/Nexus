@@ -909,7 +909,7 @@ with the radio.
 - **Keyer backend** — four ways to send, also switchable live from the CW
   cockpit. **CAT** uses the rig's internal keyer (Hamlib `send_morse`), but older
   rigs (e.g. IC-756PRO III) don't support it. **Serial keyline** toggles DTR/RTS
-  into the rig's KEY jack — the clean N1MM/fldigi method, needs only a keying
+  into the rig's KEY jack — a clean method that needs only a keying
   cable. **WinKeyer** drives a K1EL. **Soundcard** keys an audio tone through SSB
   — a workaround; set drive so ALC reads zero.
 - **Sidetone pitch (Hz)** — 300–1200 Hz. Sets the soundcard keyer tone and the CW
@@ -2326,8 +2326,8 @@ the assistance record lists them.
 
 ### Enter Sends Message
 
-ESM, as N1MM Logger+ calls it. "With ESM on, Enter in the contest log strip sends
-the contact’s next message from your F-keys, as N1MM Logger+ does, and the
+ESM for short. "With ESM on, Enter in the contest log strip sends
+the contact’s next message from your F-keys, and the
 contact logs at its last step. ESM is off until you turn it on, in each cockpit
 separately. Enter never turns TX on, and nothing is sent by a timer." How a
 contact runs, step by step, and the rules ESM keeps are in the

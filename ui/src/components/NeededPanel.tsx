@@ -1,7 +1,7 @@
 import { useStationCapability, useStationControl } from '../stationAccess'
 import { controlFailureMessage } from '../remote-web/control-failure'
 import { useRotatorHeading } from '../remote-web/rotator'
-// The N1MM-style "what's needed now" board: every needed station the engine sees
+// The "what's needed now" board: every needed station the engine sees
 // (from the log — new DXCC/ATNO, new band-slot, new mode, new zone, needs-confirm),
 // ranked by priority and boldly colored by the shared need palette. Single-click a
 // row to QSY the radio to that band and listen. The same stations light up on the

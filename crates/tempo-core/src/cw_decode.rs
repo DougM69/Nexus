@@ -195,7 +195,7 @@ const CW_TRANSCRIPT_CAP: usize = 4000; // keep the tail; drop older text
 /// sliding window every call, so its output churns and the last characters disappear
 /// within seconds. This one emits each character once, into a growing transcript.
 ///
-/// Pipeline per ~4 ms envelope hop, hardened toward what fldigi/CW-Skimmer do:
+/// Pipeline per ~4 ms envelope hop, hardened toward what fldigi does:
 /// Goertzel power at the pitch → **fast-attack peak / slow noise-floor AGC** (flags a
 /// signal on its first hop; adapts to fading) →
 /// **Schmitt-trigger** key state (two thresholds → no chatter near the noise floor) →

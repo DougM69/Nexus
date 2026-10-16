@@ -13,7 +13,7 @@ import { t } from '../i18n'
 import type { EsmDecision, EsmMode } from '../features/esm'
 import { esmInertText, esmRefusalText } from '../features/esmWords'
 
-/** N1MM's name for the feature, as contest operators say it: an invariant token. */
+/** The feature's name as contest operators say it: an invariant token. */
 const ESM = 'ESM'
 
 interface Props {

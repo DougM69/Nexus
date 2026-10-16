@@ -10,7 +10,7 @@ Open the **Operate** section and choose your layout from the toggle in the top-r
 
 **Classic** — Band Activity pane dominates the left; a compact Call Roster sits alongside; the Tx1–Tx6 panel and waterfall strip anchor the right. This is the WSJT-X spatial layout. Operators migrating from WSJT-X should start here.
 
-**Roster** — A full sortable Call Roster takes center stage; Band Activity and the Rx Frequency pane appear as side panels. This is the GridTracker-style layout for operators who prioritize worked-before status and DXCC chase. In Roster mode the Tx1–Tx6 panel is hidden; the QSO strip remains visible in both layouts above the layout-conditional area.
+**Roster** — A full sortable Call Roster takes center stage; Band Activity and the Rx Frequency pane appear as side panels. This is the layout for operators who prioritize worked-before status and DXCC chase. In Roster mode the Tx1–Tx6 panel is hidden; the QSO strip remains visible in both layouts above the layout-conditional area.
 
 Both layouts share the same sequencer, waterfall strip, and decode engine. The toggle is cosmetic; no RF behavior changes with it.
 

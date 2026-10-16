@@ -1202,7 +1202,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const idInImageRef = useRef(false)
   idInImageRef.current = idInImage
 
-  // Operator text overlays (the MMSSTV-style compose). State drives the item strip;
+  // Operator text overlays (text composed onto the picture). State drives the item strip;
   // the ref is what renderTx and the drag read — the same state+ref pairing as
   // idInImage, and for the same reason: the canvas redraws from source every frame, so
   // items are re-drawn declaratively, never painted once. Items survive an image change
@@ -2087,7 +2087,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 }}
               />
             </label>
-            {/* TEXT OVERLAYS — the MMSSTV-style compose. One-click presets that work
+            {/* TEXT OVERLAYS — text composed onto the picture. One-click presets that work
                 with nothing configured (the Reply pulls the other station's call from
                 the newest FSK ID heard), plus free text. Items draw UNDER the ID plate
                 by construction. Text that CONTAINS the callsign retires the plate — the
@@ -2363,8 +2363,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   >
                     ✕
                   </button>
-                  {/* Edit & resend: a received picture back onto the compose stage — the
-                      MMSSTV workflow of answering a picture with that picture plus your
+                  {/* Edit & resend: a received picture back onto the compose stage, to
+                      answer a picture with that picture plus your
                       text. Same fetch bridge the BMP fallback proved out; the file then
                       rides the ORDINARY loadImage path, so format sniffing, orientation
                       and the ident all apply exactly as if it were dropped in. */}

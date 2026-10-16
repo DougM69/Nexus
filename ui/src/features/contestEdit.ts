@@ -16,7 +16,7 @@ import { fdFieldOk, fdSlotValue, fdVerdict } from './contestSlots'
 import { countyLineDomain, isCountyLine, readCountyLine } from './countyLine'
 import { SERVICE_NAMES, contactLabel } from './contestRemoval'
 
-/** Ctrl+Y, as N1MM binds it (edit the last contact): Ctrl alone — never with Alt, Shift or Cmd.
+/** Ctrl+Y (edit the last contact): Ctrl alone — never with Alt, Shift or Cmd.
  *  A held key's auto-repeat is the caller's to ignore. */
 export function isEditKey(e: KeyboardEvent): boolean {
   return e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && e.key.toLowerCase() === 'y'

@@ -67,7 +67,7 @@ pub fn expand(template: &str, ctx: &CwContext) -> String {
         ctx.exch.to_string()
     };
     out = out.replace("{EXCH}", exch.trim());
-    // `!` = the worked station's call (N1MM/WinWarbler convention).
+    // `!` = the worked station's call (the usual contest-macro shorthand).
     out = out.replace('!', ctx.hiscall);
     // Collapse runs of whitespace a substitution may have left (e.g. empty {NAME}),
     // and trim, so an unfilled token doesn't leave a double space mid-message.
