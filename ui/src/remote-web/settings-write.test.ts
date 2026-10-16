@@ -46,7 +46,10 @@ it('writes only settings on the allow-list, each in its own type, against the do
     { clublogApiKey: 'secret' }, { autoLog: true, rigPort: 'COM3' }, {},
     { autoLog: 'yes' }, { decodeDepth: '2' }, { contestCheck: 7 }, { macros: [] }, { units: null },
     // JS8 groups, the two JS8Call will not let be joined above all, change only at the station.
-    { js8Groups: ['@APRSIS'] }, { js8Groups: ['@JS8NET'] }, { autoLog: true, js8Groups: ['@APRSIS'] }
+    { js8Groups: ['@APRSIS'] }, { js8Groups: ['@JS8NET'] }, { autoLog: true, js8Groups: ['@APRSIS'] },
+    // So do the other lists the JS8 view reads from the station: what it blocks and @ALLCALL.
+    { js8Groups: ['@FUN'] }, { js8RxBlocklist: ['K9BLK'] }, { js8RxBlocklist: [] }, { js8AvoidAllcall: true },
+    { autoLog: true, js8AvoidAllcall: false }
   ])
     expect(() => logChange({ kind: 'settings', revision, values }), JSON.stringify(values)).toThrow()
   for (const bad of [
@@ -79,6 +82,7 @@ it('keeps the browser allow-list inside the exposed settings and off anything th
   for (const key of ['mycall', 'licenseClass', 'serialPort', 'rigModel', 'audioIn', 'audioOut', 'txLevel', 'betaUpdates', 'clusterHosts',
     'saveWav', 'saveQsoWav', 'dialMhz', 'band', 'txEven', 'txWatchdogMin', 'tunePowerPct', 'soundTxState', 'announceVerbosity', 'alertCq',
     'specialOp', 'qsyEnabled', 'radios', 'activeRadio', 'ampFollowBand', 'rxGain', 'fdActive', 'lotwAutoUpload', 'js8Autoreply',
+    'js8Groups', 'js8RxBlocklist', 'js8AvoidAllcall',
     'wantedCalls', 'blockedCalls', 'pounceThreshold', 'satDopplerOff', 'rotatorPort', 'unassistedMode', 'openingRegional'])
     expect(writable, key).not.toContain(key)
 })

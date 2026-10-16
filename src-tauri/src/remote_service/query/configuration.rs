@@ -187,6 +187,7 @@ pub(super) const SETTINGS_KEYS: &[&str] = &[
     "js8AutoreplyAllow",
     "js8AutoreplyConfirmation",
     "js8AutoreplyDeny",
+    "js8AvoidAllcall",
     "js8CallsignAgingMin",
     "js8CqIntervalMin",
     "js8Groups",
@@ -197,6 +198,7 @@ pub(super) const SETTINGS_KEYS: &[&str] = &[
     "js8IdleWatchdogMin",
     "js8Info",
     "js8Relay",
+    "js8RxBlocklist",
     "js8RxSpeeds",
     "js8Speed",
     "js8Status",
@@ -568,6 +570,10 @@ pub(super) const WRITE_DENIED_KEYS: &[&str] = &[
     "js8Groups",
     "js8CallsignAgingMin",
     "js8ActivityAgingMin",
+    // The other JS8 lists the cockpit's call list and RX pane read, set at the shack like the groups:
+    // whom the station's RX pane hides, and whether it answers @ALLCALL.
+    "js8RxBlocklist",
+    "js8AvoidAllcall",
     // JS8Call's two send options: transmit behaviour, set at the shack like the watchdog above.
     "js8HoldPtt",
     "js8TxOffsetWhileSending",
@@ -821,6 +827,8 @@ impl Serialize for SettingsView<'_> {
         out.serialize_field("js8Info", &self.0.js8_info)?;
         out.serialize_field("js8Status", &self.0.js8_status)?;
         out.serialize_field("js8Groups", &self.0.js8_groups)?;
+        out.serialize_field("js8RxBlocklist", &self.0.js8_rx_blocklist)?;
+        out.serialize_field("js8AvoidAllcall", &self.0.js8_avoid_allcall)?;
         out.serialize_field("js8HoldPtt", &self.0.js8_hold_ptt)?;
         out.serialize_field(
             "js8TxOffsetWhileSending",

@@ -37,12 +37,13 @@ const snapshot = {
   link: { tier: 'FT8', periodSecs: 15, snrDb: -8, dtSec: 0.1, freqHz: 1500, rv: 0, state: 'idle', quality: 1 },
   stations: [], conversations: [], activePeer: null, qso: null, fieldDay: null, recentDecodes: [], harqRescues: 0,
 } as unknown as AppSnapshot
-/** The station's settings as its Remote projection sends them (SETTINGS_KEYS, read from the Rust). */
-function projectedSettings(): Settings {
+/** The station's settings, `station` over the defaults, as its Remote projection sends them (SETTINGS_KEYS,
+ *  read from the Rust): a setting the projection leaves out never reaches the page. */
+function projectedSettings(station: Partial<Settings> = {}): Settings {
   const rust = readFileSync(resolve('../src-tauri/src/remote_service/application.rs'), 'utf8')
   const keys = [...rust.match(/const SETTINGS_KEYS: &\[&str\] = &\[([\s\S]*?)\];/)![1].matchAll(/"([a-zA-Z0-9]+)"/g)].map((m) => m[1])
   expect(keys).toContain('js8CallsignAgingMin')
-  return Object.fromEntries(Object.entries(settingsFixture).filter(([key]) => keys.includes(key))) as unknown as Settings
+  return Object.fromEntries(Object.entries({ ...settingsFixture, ...station }).filter(([key]) => keys.includes(key))) as unknown as Settings
 }
 /** The reads the page makes with JS8 open; anything else this browser sends is a write. */
 const READS = ['get_snapshot', 'get_settings', 'get_band_plan', 'get_js8_state', 'get_spectrum_row', 'get_meters',
@@ -63,13 +64,14 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); dispose?.(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
-/** Mount the page against a station that sends `sample`, open JS8, and wait for its first poll. */
-async function openJs8(sample: { state: object; capturedAtMs: number }) {
+/** Mount the page against a station that sends `sample` and has `stationSettings` among its settings,
+ *  open JS8, and wait for its first poll. */
+async function openJs8(sample: { state: object; capturedAtMs: number }, stationSettings: Partial<Settings> = {}) {
   const calls: string[] = []
   dispose = installApplicationTransport({ kind: 'remote', invoke: async <T,>(command: string): Promise<T> => {
     calls.push(command)
     if (command === 'get_snapshot') return structuredClone(snapshot) as T
-    if (command === 'get_settings') return projectedSettings() as T
+    if (command === 'get_settings') return projectedSettings(stationSettings) as T
     if (command === 'get_band_plan') return [] as T
     if (command === 'get_js8_state') return parseJs8Sample(structuredClone(sample), 50) as T
     if (command === 'get_spectrum_row') return { row: [], loHz: 0, hiHz: 4000, source: 'audio' } as T
@@ -82,7 +84,7 @@ async function openJs8(sample: { state: object; capturedAtMs: number }) {
       K2ABC: { count: 0, lastUnix: null, grid: '', name: '', comment: '' } } } } } as unknown as QueryPage))
   const { container } = render(<StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>
     <RemoteCollectionsContext.Provider value={context}>
-      <App remote={{ snapshot: structuredClone(snapshot), settings: projectedSettings(), bandPlan: [], js8: true, status: <div>Observer</div> }} />
+      <App remote={{ snapshot: structuredClone(snapshot), settings: projectedSettings(stationSettings), bandPlan: [], js8: true, status: <div>Observer</div> }} />
     </RemoteCollectionsContext.Provider>
   </StationDataContext.Provider></StationControlContext.Provider>)
   fireEvent.click(screen.getByRole('button', { name: /^JS8 —/ }))
@@ -170,4 +172,35 @@ it('shows a 1.18.0 station’s JS8 view as the page always has', async () => {
   // A feed that does not say where its rows stand: each row on its own line, as it stands.
   expect(rxLines()).toEqual(js8v118.state.activity.map((r) => r.text))
   expect(root.querySelector('.js8-observation-status')?.textContent).toBe(t('remote.applicationObserver'))
+})
+
+it('follows the station’s JS8 groups, RX block list and @ALLCALL choice, none of which it can change', async () => {
+  const value = structuredClone(js8Fixture)
+  const row = value.state.activity[0]
+  value.state.activity.push(
+    // A message to a group the station joined, away from my offset, and a station's call to me.
+    { ...row, from: 'W1AW', text: 'W1AW: @FUN GROUP NEWS', freqHz: 900 },
+    { ...row, from: 'K9BLK', text: 'K9BLK: N0CALL HELLO', freqHz: 1100 })
+  value.state.stations.push({ call: 'K9BLK', grid: null, snrDb: -12, freqHz: 1100, speed: 'normal', lastMs: 1700000000000,
+    lastHb: false, lastCq: false, storedMsgs: 0 } as (typeof value.state.stations)[0])
+  value.state.presence.avoidAllcall = true
+  const { root, calls, station, mark, rxLines } = await openJs8(value,
+    { js8Groups: ['@FUN'], js8RxBlocklist: ['K9BLK'], js8AvoidAllcall: true } as Partial<Settings>)
+  // The call list: the joined group on top, and no @ALLCALL, which the station has left.
+  expect([...root.querySelectorAll('.js8-station.js8-group .js8-station-call')].map((e) => e.textContent)).toEqual(['@FUN'])
+  // The RX pane: the group's message, and nothing from the blocked station, which the list marks ✕.
+  expect(rxLines()).toContain('W1AW: @FUN GROUP NEWS \u2662 ')
+  expect(rxLines().filter((l) => l?.includes('K9BLK'))).toEqual([])
+  expect(mark('K9BLK')).toEqual(['js8-chip js8-mark-blocked'])
+  // Its row menu offers Unblock, greyed: the list is changed at the station only, and so is the group.
+  await act(async () => { fireEvent.pointerDown(station('K9BLK').querySelector('.js8-row-menu')!, { button: 0, pointerType: 'mouse' }) })
+  const unblock = await waitFor(() => {
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((e) => e.textContent === t('js8.lists.unblock'))
+    expect(item).toBeTruthy()
+    return item!
+  })
+  expect(unblock.getAttribute('aria-disabled') === 'true' || unblock.hasAttribute('data-disabled')).toBe(true)
+  await act(async () => { fireEvent.click(unblock) })
+  expect(calls.filter((c) => !READS.includes(c))).toEqual([])
+  for (const write of WRITES) expect(calls).not.toContain(write)
 })

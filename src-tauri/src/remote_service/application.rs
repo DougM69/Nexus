@@ -160,6 +160,12 @@ const SETTINGS_KEYS: &[&str] = &[
     "js8CallsignAgingMin",
     // …and its Band activity pane ages rows by this one.
     "js8ActivityAgingMin",
+    // …and its call list and RX pane follow the station's own JS8 lists, as the station's do: the
+    // groups it joined, its RX block list and whether it takes part in @ALLCALL. Read only: none is
+    // on the write allow-list (`operations::settings`).
+    "js8Groups",
+    "js8RxBlocklist",
+    "js8AvoidAllcall",
     "specialOp",
 ];
 fn settings_view(settings: &tempo_app::settings::Settings) -> Result<Value, &'static str> {
@@ -1075,6 +1081,29 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(settings_view(&settings).unwrap()["js8ActivityAgingMin"], 5);
+    }
+
+    /// …and its call list and RX pane by the station's JS8 lists: the groups it joined, its RX
+    /// block list and whether it takes part in @ALLCALL. A station from before them sends none,
+    /// which the page reads as no group, nobody blocked and @ALLCALL taken part in. None of the
+    /// three is writable from a browser (`operations::settings`, the allow-list there).
+    #[test]
+    fn the_live_view_carries_the_js8_lists() {
+        let settings = tempo_app::settings::Settings {
+            js8_groups: vec!["@FUN".into()],
+            js8_rx_blocklist: vec!["K9BLK".into()],
+            js8_avoid_allcall: true,
+            ..Default::default()
+        };
+        let view = settings_view(&settings).unwrap();
+        assert_eq!(
+            [
+                &view["js8Groups"],
+                &view["js8RxBlocklist"],
+                &view["js8AvoidAllcall"]
+            ],
+            [&json!(["@FUN"]), &json!(["K9BLK"]), &json!(true)]
+        );
     }
 
     #[test]
