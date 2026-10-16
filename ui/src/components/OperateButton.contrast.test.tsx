@@ -20,16 +20,14 @@
 // role's), locked or not: the strip locks while the rig is keyed, which is exactly when the
 // amplifier's state matters, so a locked button is measured through its own dimming. And Operate
 // keeps the good-state colour on its border at 3:1 from any surface the header sits on: a status
-// colour is held to 3:1, which a border needs and lettering does not meet. The other buttons that say Operate are held to the same floor: the Remote page's quick
-// navigation and the amplifier strip in its quick header. Settings ▸ Features names Operate as a
-// label and a heading, not a button; both read over 5:1 in Chrome and are not re-measured here.
+// colour is held to 3:1, which a border needs and lettering does not meet. Settings ▸ Features
+// names Operate as a label and a heading, not a button; both read over 5:1 in Chrome and are not
+// re-measured here.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { AmpStrip } from './AmpStrip'
-import { QuickNavigation, RemotePresentationContext } from '../remote-web/presentation'
-import { StationDataContext } from '../stationAccess'
 import { PALETTE_ROLES } from '../features/paletteRoles'
 import {
   BASE_MODES,
@@ -78,7 +76,6 @@ const sheet = (name: string) =>
 const withDisabled = (rules: Rule[]) =>
   rules.map((r) => (r.selector.includes(':disabled') ? { ...r, selector: r.selector.replace(/:disabled/g, '[disabled]') } : r))
 const DESKTOP = withDisabled(parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css')))
-const REMOTE = withDisabled(parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css') + '\n' + sheet('remote-web/application.css')))
 
 const TEXT_MIN = 4.5
 const STATE_MIN = 3
@@ -121,23 +118,6 @@ function ampButtons(host: string, headerClass: string, rules: Rule[]): Button[] 
     }
     cleanup()
   }
-  return out
-}
-
-function quickNavOperate(): Button {
-  const r = render(
-    <StationDataContext.Provider value={false}>
-      <RemotePresentationContext.Provider value={{ presentation: 'quick', change: () => {}, radioDetails: false, setRadioDetails: () => {} }}>
-        <div className="app">
-          <QuickNavigation view="needed" available={() => true} onSelect={() => {}} />
-        </div>
-      </RemotePresentationContext.Provider>
-    </StationDataContext.Provider>,
-  )
-  const b = [...r.container.querySelectorAll<HTMLButtonElement>('.remote-quick-nav button')].find((x) => x.textContent?.trim() === 'Operate')
-  expect(b, 'the quick navigation has no Operate button').toBeTruthy()
-  const out = { host: 'Remote quick navigation', label: 'Operate', chain: chainOf(b!), disabled: b!.disabled, rules: REMOTE, operate: false }
-  cleanup()
   return out
 }
 
@@ -207,31 +187,26 @@ function unreadable(buttons: Button[]): string[] {
 }
 
 describe('every button that says Operate reads, in both themes', () => {
-  // Rendered once the file's ResizeObserver stub is in (the quick navigation measures itself).
   let desktop: Button[] = []
-  let quick: Button[] = []
-  let nav: Button
   beforeAll(() => {
     desktop = ampButtons('cockpit header', 'cockpit-header', DESKTOP)
-    quick = ampButtons('Remote quick header', 'cockpit-header cockpit-header--quick', REMOTE)
-    nav = quickNavOperate()
   })
 
-  it('renders the amplifier strip in every state, in both headers (the census cannot silently empty out)', () => {
-    for (const set of [desktop, quick]) {
+  it('renders the amplifier strip in every state, in the header (the census cannot silently empty out)', () => {
+    for (const set of [desktop]) {
       expect(set.map((b) => b.label)).toEqual(expect.arrayContaining(['Operate', 'Standby', '—', '◀', '▶', 'Operate (disabled)', 'Standby (disabled)']))
       expect(set.filter((b) => b.operate).length, 'Operate is rendered with its "on" state').toBeGreaterThan(0)
     }
   })
 
   it('no amplifier button is left to the browser: each paints its own face, ink and border', () => {
-    expect(leftToTheBrowser([...desktop, ...quick, nav])).toEqual([])
+    expect(leftToTheBrowser(desktop)).toEqual([])
   })
 
   // Twenty base modes (the eight standard ones and three worst-case themes' four each) under three
   // OK presets, on two sheets: about 3.5 s on a loaded box, so the budget is explicit.
   it('every button letters at 4.5:1 on its own face, locked or not, in every mode, under every OK preset', () => {
-    expect(unreadable([...desktop, ...quick, nav])).toEqual([])
+    expect(unreadable(desktop)).toEqual([])
   }, 20_000)
 
   it('Operate keeps the good-state colour on its border, 3:1 from any surface the header sits on', () => {
@@ -254,7 +229,7 @@ describe('every button that says Operate reads, in both themes', () => {
   })
 
   it('a locked amplifier button looks locked (and, above, still reads through its dimming)', () => {
-    for (const b of [...desktop, ...quick].filter((x) => x.disabled)) {
+    for (const b of desktop.filter((x) => x.disabled)) {
       const o = win(b.rules, 'light', b.chain, 'opacity')
       expect(Number(o?.value ?? 1), `${b.host} ${b.label}`).toBeLessThan(1)
     }

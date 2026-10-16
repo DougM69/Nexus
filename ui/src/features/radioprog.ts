@@ -358,3 +358,10 @@ export function splitForMap(rows: readonly RepeaterSearchRow[]): MapSplit {
   }
   return out
 }
+
+/** The two export file names. The stamp is the UTC day, which is what `toISOString` gives and what
+ * the desktop has always written. */
+export function programExportName(format: 'chirp' | 'csv', now = new Date()): string {
+  const stamp = now.toISOString().slice(0, 10)
+  return format === 'chirp' ? `nexus-chirp-${stamp}.csv` : `nexus-channels-${stamp}.csv`
+}

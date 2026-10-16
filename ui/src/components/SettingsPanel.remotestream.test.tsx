@@ -206,13 +206,6 @@ describe('the beta line', () => {
     await waitFor(() => expect(screen.getByText(EN['settings.remoteStream.unavailable'])).toBeTruthy())
     expect(line()?.textContent).toBe(BETA)
   })
-  it('is not on the Remote page\'s copy of Settings, which streams nothing (the site says it on each station)', async () => {
-    renderPanel(true)
-    await openStationTab()
-    await waitFor(() => expect(screen.getByText(EN['remote.configurationLocal'])).toBeTruthy())
-    expect(screen.getByText(EN['remote.configurationLocal']).textContent).toMatch(/in Nexus at the station, in person or streamed to this browser/)
-    expect(line()).toBeNull()
-  })
 })
 
 describe('where the switch is not offered', () => {
@@ -227,13 +220,4 @@ describe('where the switch is not offered', () => {
     expect(screen.queryByText(DISPLAY_NOTE), 'a note about a stream this station cannot send').toBeNull()
   })
 
-  it('is never on the Remote page: no browser may turn streaming on', async () => {
-    renderPanel(true)
-    await openStationTab()
-    // CONTROL for the absence: the section itself rendered, with the Remote page's own note.
-    await waitFor(() => expect(screen.getByText(EN['remote.configurationLocal'])).toBeTruthy())
-    expect(theSwitch()).toBeNull()
-    expect(screen.queryByText(EN['settings.remoteStream.unavailable'])).toBeNull()
-    expect(screen.queryByText(DISPLAY_NOTE)).toBeNull()
-  })
 })

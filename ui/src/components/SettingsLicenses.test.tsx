@@ -126,11 +126,6 @@ describe('in the Settings header', () => {
     expect(update.nextElementSibling).toBe(theButton())
   })
 
-  it('is not on the Remote page, which links its own license file', async () => {
-    renderPanel(true)
-    await screen.findByRole('button', { name: EN['settings.panel.update.label'] })
-    expect(theButton()).toBeNull()
-  })
 })
 
 describe('the dialog', () => {

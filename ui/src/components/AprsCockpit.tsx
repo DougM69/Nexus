@@ -9,15 +9,13 @@
 // symbol codes and their table, digipeater paths, the channel list and every dial reading,
 // dBFS levels, positions, grids, distances, bearings, speeds, the packet kind, and the
 // region names the channel list carries — all data, interpolated as values.
-import { RemoteOperationsContext, useStationCapability, useStationControl } from '../stationAccess'
-import { useAprs } from '../remote-web/useAprs'
-import { displayNow } from '../remote-web/display-validation'
+import { useStationCapability, useStationControl } from '../stationAccess'
 import { MapView } from './MapView'
 import { AprsStationCard } from './AprsStationCard'
 import { AprsRailSeam } from './AprsRailSeam'
 import type { NeedTag, Station } from '../types'
 import type { Theme } from '../useTheme'
-import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import {
   aprsArm,
@@ -637,12 +635,11 @@ export function AprsCockpit({
    * where the rest of the APRS settings live without offering to open them. */
   onOpenSettings?: (target: string) => void
 }) {
-  const canControl = useStationControl(), receiverControl = useStationCapability('decoder'), observation = useAprs(active), remote = observation.remote
+  const canControl = useStationControl(), receiverControl = useStationCapability('decoder')
   // A browser may tune (never beacon or save) while the station advertises the APRS tune. Only an
   // explicit pick or Re-tune uses it: the entry auto-tune below stays local-only.
   const aprsTuning = useStationCapability('aprsTuning')
   const tuneControl = canControl || aprsTuning
-  const operations = useContext(RemoteOperationsContext)
   // NO local `armed` state. Arming lives on the ENGINE and is session state that outlives this
   // component, so a local copy drifts: a remount came back up saying "Monitor" while the decoder
   // was still running, and its first click then sent arm(true) at an already-armed engine. The
@@ -711,23 +708,12 @@ export function AprsCockpit({
   const autoTuned = useRef(false)
   const autoArmed = useRef(false)
 
-  const heard = remote ? observation.value?.heard ?? [] : nativeHeard
-  const roster = remote ? observation.value?.roster ?? EMPTY_ROSTER : nativeRoster
-  const settings = remote ? observation.sample?.settings ?? null : nativeSettings
-  const health = remote ? observation.sample?.health ?? null : nativeHealth
-  const isStatus = remote ? observation.sample?.isStatus ?? null : nativeIsStatus
-  const now = remote ? Math.floor(displayNow(observation.sample ?? observation.value) / 1000) : nativeNow
-  useEffect(() => {
-    const s = observation.sample?.settings
-    if (!remote || !s) return
-    setFreq(resolveAprsChannel(s.aprsChannelMhz, s.mygrid))
-    setComment(s.aprsComment ?? '')
-    setPath((s.aprsPath ?? []).join(', '))
-    const ll = gridToLatLon(s.mygrid)
-    setMe(ll)
-    if (ll) { setLat(ll.lat.toFixed(4)); setLon(ll.lon.toFixed(4)) }
-  }, [remote, observation.sample?.settings.mygrid, observation.sample?.settings.aprsChannelMhz,
-    observation.sample?.settings.aprsComment, JSON.stringify(observation.sample?.settings.aprsPath), myGrid])
+  const heard = nativeHeard
+  const roster = nativeRoster
+  const settings = nativeSettings
+  const health = nativeHealth
+  const isStatus = nativeIsStatus
+  const now = nativeNow
 
   // Can the radio reach the selected APRS channel? `null` = unknown, which must read as "yes,
   // try it" — the backend's refusal handling is the backstop for a radio whose caps we can't read.
@@ -742,7 +728,6 @@ export function AprsCockpit({
   // as success, a dial stuck on a frequency the radio was never on, a wedged CAT link) all followed
   // from it. Never command a radio somewhere it provably cannot go.
   useEffect(() => {
-    if (remote) return
     if (!active) {
       autoTuned.current = false
       return
@@ -755,7 +740,7 @@ export function AprsCockpit({
       autoTuned.current = true
       onTune(freq)
     }
-  }, [active, onTune, freq, canReachAprs, remote])
+  }, [active, onTune, freq, canReachAprs])
 
   // Arm the decoder on ENTERING the view, so APRS does not open on a dead screen the operator has
   // to notice and fix. Rising edge of `active`, not mount — the cockpit is kept alive across
@@ -766,7 +751,6 @@ export function AprsCockpit({
   // decoder this session. The policy lives there rather than in a ref here so it cannot be lost
   // to a remount — which is exactly how the armed-state desync happened.
   useEffect(() => {
-    if (remote) return
     if (!active) {
       autoArmed.current = false
       return
@@ -777,11 +761,11 @@ export function AprsCockpit({
       .then(() => getAprsHealth())
       .then(setHealth)
       .catch(() => {})
-  }, [active, remote])
+  }, [active])
 
   // Prefill the beacon lat/lon from the operator's grid (and remember it for distance/bearing), once.
   useEffect(() => {
-    if (remote || prefilled.current) return
+    if (prefilled.current) return
     prefilled.current = true
     void getSettings()
       .then((s) => {
@@ -799,7 +783,7 @@ export function AprsCockpit({
         }
       })
       .catch(() => {})
-  }, [myGrid, remote])
+  }, [myGrid])
 
   // Follow the grid when it CHANGES, not only at startup. The prefill above is once-per-session,
   // so an operator who fixed a wrong grid on the Station tab kept the old derived channel until
@@ -809,7 +793,7 @@ export function AprsCockpit({
   // operator saving one, while `settings` here is the copy fetched when this view mounted and
   // goes stale the moment they fix it on the Station tab — which is exactly the case this
   // re-derive exists to serve.
-  const derivedGrid = (remote ? settings?.mygrid : myGrid || settings?.mygrid) || ''
+  const derivedGrid = (myGrid || settings?.mygrid) || ''
   const pinnedChannel = settings?.aprsChannelMhz
   useEffect(() => {
     // Gated on `settings` having ARRIVED, not on the prefill having been kicked off: the ref is
@@ -821,7 +805,7 @@ export function AprsCockpit({
 
   // Poll the heard list + decoder health (and tick the age clock) while the cockpit is visible.
   useEffect(() => {
-    if (!active || remote) return
+    if (!active) return
     // The age clock ticks on its own; the five reads are ONE single-flight poll (#335): each
     // takes the engine mutex, so a tick skips while any of the last set is still out.
     const clock = () => setNow(Math.floor(Date.now() / 1000))
@@ -846,7 +830,7 @@ export function AprsCockpit({
       window.clearInterval(clockId)
       stop()
     }
-  }, [active, remote])
+  }, [active])
 
   // The chip judges against the rig's ACTUAL dial/mode and the APRS channel the operator has
   // selected — so it can say "you are on the FT8 frequency" instead of guessing from audio.
@@ -867,7 +851,7 @@ export function AprsCockpit({
    * not take the operator's action with it.
    */
   const writeSettings = (patch: Partial<Settings>) => {
-    if (!canControl || remote || !nativeSettings) return
+    if (!canControl || !nativeSettings) return
     const next = { ...nativeSettings, ...patch }
     setSettingsState(next) // optimistic, so the control does not lag a round-trip
     setSavingInet(true)
@@ -931,8 +915,8 @@ export function AprsCockpit({
   const decode = useMemo(
     // `wantDialMhz` is optional — undefined while the channel is still being read means "no
     // opinion about the dial yet", which is the honest thing to say before we know it.
-    () => remote && !health ? {state:'off' as const,label:(observation.sampleLoading?t('remote.collectionLoading'):t('remote.aprsUnavailable')),detail:t('remote.collectionUnavailable')} : aprsDecodeStatus(health, now, radio ?? null, freq ?? undefined),
-    [health, now, radio, freq, remote, observation.sampleLoading],
+    () => aprsDecodeStatus(health, now, radio ?? null, freq ?? undefined),
+    [health, now, radio, freq],
   )
 
   /** Tune to the selected APRS channel, and SAY what happened. A tune the radio cannot take
@@ -951,7 +935,7 @@ export function AprsCockpit({
     state: inetState,
     label: inetLabel,
     detail: inetDetail,
-  } = useMemo(() => remote && !isStatus ? {state:'off' as const,label:(observation.sampleLoading?t('remote.collectionLoading'):t('remote.aprsUnavailable')),detail:t('remote.collectionUnavailable')} : aprsInetStatus(isStatus, now), [isStatus, now, remote, observation.sampleLoading])
+  } = useMemo(() => aprsInetStatus(isStatus, now), [isStatus, now])
   // The engine's arm state, as of the last poll. Null health (before the first poll) reads as
   // disarmed, which matches how the engine starts.
   const radioNote = useMemo(() => aprsRadioNote(health), [health])
@@ -960,12 +944,6 @@ export function AprsCockpit({
 
   const toggleArm = () => {
     if (!receiverControl) return
-    if (remote) {
-      // Remote RX does not grant the local Explicit arm's auto-ACK capability.
-      // The existing Remote sample supplies health and roster after completion.
-      void operations?.control({ action: 'decoder.arm', receiver: 'aprs', on: !armed }).catch(() => {})
-      return
-    }
     // A plain start/stop toggle. Clicking it while armed ALWAYS stops — including when the
     // decoder was auto-armed on view entry. It deliberately does NOT "upgrade" an auto-arm to an
     // explicit one: the button reads "● Monitoring", so a click is the operator reaching for
@@ -1095,10 +1073,6 @@ export function AprsCockpit({
 
   return (
     <main className="layout single needed-panel aprs-cockpit">
-      {remote && <div className="remote-collection-status" role="status">
-        <span>{!observation.value ? (observation.loading ? t('remote.collectionLoading') : t('remote.collectionUnavailable')) : t('remote.aprsSnapshot', {seconds: Math.floor(observation.ageMs / 1000)})}</span>
-        <button type="button" className="np-chip" disabled={observation.loading} onClick={observation.refresh}>{t('remote.refreshCollection')}</button>
-      </div>}
       <div className="np-head">
         <h2>{APRS_MODE}</h2>
         <span className="np-count">{rows.length}</span>
@@ -1183,7 +1157,7 @@ export function AprsCockpit({
                 : t('aprs.monitor.title.off')
           }
         >
-          {remote && !health ? '—' : arm === 'auto'
+          {arm === 'auto'
             ? t('aprs.monitor.label.auto')
             : arm === 'explicit'
               ? t('aprs.monitor.label.explicit')
@@ -1536,7 +1510,6 @@ export function AprsCockpit({
             aprs={visibleStations}
             aprsFadeAfterMin={roster.fadeAfterMin}
             aprsTtlMin={roster.ttlMin}
-            aprsNowSec={remote ? now : undefined}
             selectedAprs={selected}
             onSelectAprs={setSelected}
             myGrid={derivedGrid}

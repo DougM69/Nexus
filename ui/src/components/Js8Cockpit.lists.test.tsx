@@ -13,7 +13,6 @@ import { Js8Cockpit, type Js8ListSettings } from './Js8Cockpit'
 import { JS8_VIEW_KEY, JS8_LISTS_KEY } from '../features/js8View'
 import type { AppSnapshot, Js8ActivityRow, Js8State } from '../types'
 import type { PanelLayoutApi, Js8PanelId } from '../features/panelState'
-import { StationControlContext } from '../stationAccess'
 
 const T0 = Date.now() - 30_000
 const P = 15_000
@@ -363,21 +362,6 @@ describe('Band activity is JS8Call’s', () => {
     await renderCockpit()
     const off = (await menuEntries(stationRow('W0IND').querySelector('.js8-row-menu')!)).map(([n]) => n)
     expect(off.slice(0, 2), 'with the filter off it is not offered').toEqual(['Jump to 1503 Hz', 'Jump to Fast speed'])
-  })
-
-  it('from a Remote observer a jump moves only the receive offset, through the station’s receiver', async () => {
-    const api = await import('../api')
-    render(
-      <StationControlContext.Provider value={false}>
-        <Js8Cockpit snap={snap} panels={fakePanels()} lists={lists()} />
-      </StationControlContext.Provider>,
-    )
-    await poll()
-    const row = document.querySelectorAll('[data-pane="offsets"] .js8-offset-row')[1]
-    await pick(row.querySelector('.js8-row-menu')!, 'Jump to 900 Hz')
-    expect(receiver.tuneRx).toHaveBeenCalledWith(900)
-    expect(api.setRxOffset).not.toHaveBeenCalled()
-    expect(api.setTxOffset, 'an observer never moves the transmit offset').not.toHaveBeenCalled()
   })
 
   it('removes one offset’s activity until it is heard again', async () => {

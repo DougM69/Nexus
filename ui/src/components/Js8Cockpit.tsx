@@ -6,13 +6,8 @@
 // names and their ALL.TXT letters, the 32 directed-command texts, callsigns, grids, offsets in
 // Hz, SNR in dB, UTC stamps and the s/m/h age units.
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
+import { useStationCapability, useStationControl } from '../stationAccess'
 import { useEscStop } from '../useEscStop'
-import { useJs8Context } from '../remote-web/useJs8Context'
-import { useDecoderSettings } from '../remote-web/useDecoderSettings'
-import { useReceiverSettings } from '../remote-web/useReceiverSettings'
-import { js8DisplayNow } from '../remote-web/js8'
-import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import type { AppSnapshot, BandChannel, Js8InboxEntry, Js8InboxState, Js8Origin, Js8Speed, Js8State, Js8Switch, Js8Unarmed } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
@@ -279,12 +274,10 @@ export function Js8Cockpit({
   onSavedMessages,
   lists = JS8_LIST_DEFAULTS,
 }: Props) {
-  const canControl = useStationControl(), dataAvailable = useStationData()
+  const canControl = useStationControl()
   // The call the Stats pane follows: the strip's call once it has stood (LogEntry `onEntryCall`).
   const [statsCall, setStatsCall] = useState('')
   const rotatorControl = useStationCapability('rotator')
-  const decoderSettings = useDecoderSettings(snap, 'JS8')
-  const receiverSettings = useReceiverSettings(snap, 'JS8')
   // THE BOXES (2026-10-07): what each box on screen shows — none where the window lends them nothing
   // (Phone's rule), and none while this keep-alive cockpit is not the one on screen: a box's body polls
   // the Conditions feeds while it is mounted, and a hidden JS8 must not keep them asking.
@@ -315,24 +308,20 @@ export function Js8Cockpit({
   // catches the display up.
   const [js8, setJs8] = useState<Js8State | null>(null)
   const stationCalls = (js8?.stations ?? []).map((h) => h.call).sort().join(' ')
-  const context = useJs8Context(active, stationCalls)
-  const remote = context.remote
   useEffect(() => {
-    if (!active || (remote && !dataAvailable)) { if (remote) setJs8(null); return }
+    if (!active) return
     // Single-flight (#335): `get_js8_state` takes the engine mutex, so a tick skips while the last
     // read is still out instead of stacking another waiter behind a CAT stall.
     return pollSingleFlight('js8 state', 500, (owns) =>
       getJs8State()
         .then((s) => {
           if (owns()) setJs8(s)
-          if (!remote) {
-            void typeahead.poll()
-            return composerSync.current()
-          }
+          void typeahead.poll()
+          return composerSync.current()
         })
-        .catch(() => { if (owns() && remote) setJs8(null) }),
+        .catch(() => {}),
     )
-  }, [active, remote, dataAvailable])
+  }, [active])
 
   // Rising-edge toast for the idle-watchdog trip: the automatic origins just stood down
   // with no click behind it, so the operator is told ONCE per trip — not on every poll.
@@ -359,7 +348,6 @@ export function Js8Cockpit({
   // what was heard meanwhile does not sound all at once. The Remote page plays none.
   const soundWatch = useRef(new Js8SoundWatch())
   const playSounds = (events: readonly Js8SoundEvent[]) => {
-    if (remote) return
     for (const ev of js8SoundsToPlay(events, lists.sounds)) playJs8Sound(ev)
   }
   useEffect(() => {
@@ -409,21 +397,21 @@ export function Js8Cockpit({
       entered.current = false
       return
     }
-    if (remote || !canControl || entered.current) return
+    if (!canControl || entered.current) return
     entered.current = true
     void js8Enter()
       .then((s) => setJs8(s))
       .catch(() => {})
-  }, [active, canControl, remote])
+  }, [active, canControl])
 
   // JS8 watering holes (JS8Call's FrequencyList, or the operator's own list from Settings),
   // license-filtered. Asked again each time JS8 comes on screen: the list may have been edited in
   // Settings while this keep-alive cockpit was hidden.
   const [plan, setPlan] = useState<BandChannel[]>([])
   useEffect(() => {
-    if (remote || !active) return
+    if (!active) return
     void getLicensedBandPlan('js8').then(setPlan).catch(() => {})
-  }, [remote, active])
+  }, [active])
 
   // THE LOGBOOK JOIN behind the roster's ✓ / Name / Comment columns is asked of `LogSource`
   // (`logDetail`, below): the same `callHistory` rule the log strip and the Operate card answer
@@ -506,22 +494,22 @@ export function Js8Cockpit({
   }
   const composing = text.trim() !== ''
   useEffect(() => {
-    if (!active || remote) return
+    if (!active) return
     void composerSync.current()
-  }, [composing, active, remote])
+  }, [composing, active])
   // JS8Call's SELECTED CALL is the call in the To box: told to the station as it changes, for the
   // QSO pause (the HB repeat and HB ACKs hold while one is there). Native only, and only while
   // this is the visible view; it keys nothing.
   const selectedTo = toCall.trim().toUpperCase()
   useEffect(() => {
-    if (!active || remote || !canControl) return
+    if (!active || !canControl) return
     void js8SelectCall(selectedTo || null).catch(() => {})
-  }, [selectedTo, active, remote, canControl])
+  }, [selectedTo, active, canControl])
   const selectStation = (call: string) => setToCall(call.toUpperCase())
   /** A RECEIVE move only — the offset table's double-click, JS8Call's own behaviour on
    *  tableWidgetRXAll. The TX offset is untouched; nothing here keys. */
   const tuneRx = (hz: number) => {
-    if (!canControl) { receiverSettings.tuneRx(hz); return }
+    if (!canControl) return
     void setRxOffset(hz)
       .then((sn) => onSnap?.(sn))
       .catch(() => {})
@@ -751,7 +739,7 @@ export function Js8Cockpit({
   const heardSelected = () => {
     const sel = js8MacroSelected(toCall, js8?.stations ?? [], js8?.activity ?? [])
     const h = sel && js8?.stations.find((s) => s.call === sel.call)
-    const aged = h != null && callsignAgingMin > 0 && Math.trunc((js8DisplayNow(js8) - h.lastMs) / 60_000) >= callsignAgingMin
+    const aged = h != null && callsignAgingMin > 0 && Math.trunc((Date.now() - h.lastMs) / 60_000) >= callsignAgingMin
     return sel && !aged ? sel : null
   }
   // REPLY (:4579-4589): the selected call and the reply message, `<call> <reply>` as JS8Call puts it
@@ -803,7 +791,6 @@ export function Js8Cockpit({
   }
   const setSpeed = (idx: number) => {
     if (!canControl) {
-      if (js8 && JS8_SPEEDS[js8.speed].idx !== idx) decoderSettings.change({ action: 'decoder.js8Speed', expectedSpeed: JS8_SPEEDS[js8.speed].idx, speed: idx })
       return
     }
     void withErrorToast(() => js8SetSpeed(idx), t('js8.header.speed.failed')).then((s) => {
@@ -990,7 +977,7 @@ export function Js8Cockpit({
   const startedAt = selected
     ? { call: selected.call, unix: selectedTimes.current.get(selected.call) ?? Math.floor(Date.now() / 1000) }
     : null
-  const now = js8DisplayNow(js8)
+  const now = Date.now()
   // The list only: the station keeps every call it heard, so the log strip, the rotator and the
   // To box still know an aged one, as JS8Call's call activity does.
   const listedStations = js8
@@ -1074,28 +1061,21 @@ export function Js8Cockpit({
   // latest answer for the calls it covered: no row loses its marks for the round trip. A call that
   // answer did not cover shows "—" (below), as the Remote path does when it cannot tell.
   const summaryQuestion = { kind: 'callsSummary', calls: listCalls.split(' ').filter(Boolean) } as const
-  const reading = active && !remote ? summaryQuestion : null
+  const reading = active ? summaryQuestion : null
   const summary = useLatestLogAnswer(reading, snap?.logTick)
   const summaryFailed = failureToShow(useLogStatus(reading))
-  const logDetail = useMemo(() => {
-    if (remote) return new Map(Object.entries(context.value?.history ?? {}).filter(([,h]) => h.count > 0))
-    return new Map(Object.entries(summary?.answer ?? {}))
-  }, [summary, remote, context.value])
+  const logDetail = useMemo(() => new Map(Object.entries(summary?.answer ?? {})), [summary])
   /** The heard calls the log has answered about. */
   const answeredCalls = useMemo(() => new Set(summary?.question.calls), [summary])
   const unansweredTitle = summaryFailed !== null ? t('logbook.readFailed', { reason: summaryFailed }) : t('logbook.reading')
   /** Why a call's ✓ is not known yet ("—"), or null once it is. */
   const logPending = (call: string): string | null =>
-    remote
-      ? context.value?.history[call.trim().toUpperCase()]
-        ? null
-        : t('remote.collectionUnavailable')
-      : reading && !answeredCalls.has(call)
-        ? unansweredTitle
-        : null
+    reading && !answeredCalls.has(call)
+      ? unansweredTitle
+      : null
   // A call heard for the first time sounds once the log has said whether it is worked.
   useEffect(() => {
-    if (!js8 || remote) return
+    if (!js8) return
     playSounds(soundWatch.current.newCalls(js8.stations, (call) => (answeredCalls.has(call) ? logDetail.has(call) : null)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [js8?.stations, answeredCalls, logDetail])
@@ -1236,7 +1216,7 @@ export function Js8Cockpit({
 
   // ---- THE LISTS' MENUS (js8ListMenus): JS8Call's View and header menus, each pane's ⋯, and its
   // right-click menus, each row's ⋯ or a right-click on the row. Nothing in them keys. ----
-  const clearList = (which: 'rx' | 'band' | 'call') => changeMarks((m) => clearJs8Lists(m, which, js8DisplayNow(js8)))
+  const clearList = (which: 'rx' | 'band' | 'call') => changeMarks((m) => clearJs8Lists(m, which, Date.now()))
   /** "Clear All Lists", after JS8Call's question (UI_Constructor.cpp:783-795). */
   const clearAll = () => {
     void confirmDialog({
@@ -1245,7 +1225,7 @@ export function Js8Cockpit({
       confirmLabel: t('js8.lists.clearAll.confirm.label'),
       danger: true,
     }).then((yes) => {
-      if (yes) changeMarks((m) => clearJs8Lists(m, 'all', js8DisplayNow(js8)))
+      if (yes) changeMarks((m) => clearJs8Lists(m, 'all', Date.now()))
     })
   }
   const clears = (which: 'rx' | 'band' | 'call') => js8ClearEntries(() => clearList(which), clearAll)
@@ -1253,7 +1233,6 @@ export function Js8Cockpit({
    *  Ctrl-click on the waterfall moves them. The Remote observer moves RX alone, as its waterfall does. */
   const jumpTo = (hz: number) => {
     if (!canControl) {
-      receiverSettings.tuneRx(hz)
       return
     }
     void setRxOffset(hz)
@@ -1268,8 +1247,8 @@ export function Js8Cockpit({
     current: js8?.speed ?? null,
     offsetLocked: queued && !txOffsetWhileSending,
     centreFilter: hz != null ? js8CentreFilterItem(js8?.controls?.filter, hz, setJs8, canControl) : null,
-    canJump: canControl || receiverSettings.rxAllowed,
-    canChangeSpeed: canControl || decoderSettings.allowed,
+    canJump: canControl,
+    canChangeSpeed: canControl,
     onJump: jumpTo,
     onSpeed: (sp) => setSpeed(JS8_SPEEDS[sp].idx),
   })
@@ -1286,7 +1265,7 @@ export function Js8Cockpit({
     changeMarks((m) => {
       const added = { ...m.added }
       delete added[call]
-      return { ...m, added, removedCalls: { ...m.removedCalls, [call]: js8DisplayNow(js8) } }
+      return { ...m, added, removedCalls: { ...m.removedCalls, [call]: Date.now() } }
     })
   }
   /** "Add New Station or Group…" (UI_Constructor.cpp:1059-1097). @ALLCALL turns "Do not participate
@@ -1304,7 +1283,7 @@ export function Js8Cockpit({
       changeMarks((m) => {
         const removedCalls = { ...m.removedCalls }
         delete removedCalls[what.name]
-        return { ...m, removedCalls, added: { ...m.added, [what.name]: js8DisplayNow(js8) } }
+        return { ...m, removedCalls, added: { ...m.added, [what.name]: Date.now() } }
       })
     }
   }
@@ -1339,7 +1318,7 @@ export function Js8Cockpit({
   const bandRowMenu = (r: Js8BandRow) =>
     js8BandRowEntries(
       jump(r.offsetHz, r.speed),
-      () => changeMarks((m) => ({ ...m, removedOffsets: { ...m.removedOffsets, [String(r.offsetHz)]: js8DisplayNow(js8) } })),
+      () => changeMarks((m) => ({ ...m, removedOffsets: { ...m.removedOffsets, [String(r.offsetHz)]: Date.now() } })),
       clears('band'),
     )
   const menuLabel = (pane: string) => t('js8.view.menu.aria', { pane })
@@ -1458,16 +1437,6 @@ export function Js8Cockpit({
       {...closeProps('stations')}
     >
       <Js8CallList
-        header={
-          remote && (
-            <div className="js8-history-status" role="status">
-              {!context.value && <span>{context.loading ? t('remote.collectionLoading') : t('remote.collectionUnavailable')}</span>}
-              <button type="button" className="cw-macro" onClick={context.refresh} disabled={!dataAvailable || context.loading}>
-                {t('remote.refreshCollection')}
-              </button>
-            </div>
-          )
-        }
         groups={groupRows}
         rows={sortedCallRows}
         columns={view.call.columns}
@@ -1526,7 +1495,7 @@ export function Js8Cockpit({
       weight={1.5}
       {...closeProps('log')}
     >
-      {!canControl ? <RemoteRecallEntry snap={snap} mode={JS8} selectedCall={selectedCall} onOpenLog={onOpenLogbook}/> : <LogEntry
+      {!canControl ? null : <LogEntry
         onOpenLogbook={onOpenLogbook}
         onEntryCall={(c) => {
           setStatsCall(c)
@@ -1630,7 +1599,6 @@ export function Js8Cockpit({
         <CockpitHeader
           snap={snap}
           onSnap={onSnap}
-          remoteWorkspace="js8"
           // TX DRIVE, the FT8 header's control: a configuration control on the transmit
           // path, not a transmit control.
           power={{
@@ -1658,7 +1626,7 @@ export function Js8Cockpit({
                     type="button"
                     className={`rtty-arm js8-speed-chip${js8?.speed === s.key ? ' on' : ''}`}
                     aria-pressed={js8?.speed === s.key}
-                    disabled={!canControl && (!decoderSettings.allowed || !js8)}
+                    disabled={!canControl}
                     onClick={() => setSpeed(s.idx)}
                     title={
                       s.alias
@@ -1690,7 +1658,7 @@ export function Js8Cockpit({
           bandControl={
             onSetFrequency ? (
               <FrequencyControl
-                channels={remote ? context.value?.plan ?? [] : plan}
+                channels={plan}
                 dialMhz={snap.radio.dialMhz}
                 band={snap.radio.band}
                 mode={snap.radio.sideband}
@@ -1783,7 +1751,6 @@ export function Js8Cockpit({
           }
           onTune={(hz, target) => {
             if (!canControl) {
-              if (target === 'rx') receiverSettings.tuneRx(hz)
               return
             }
             if (target !== 'tx')
@@ -1897,7 +1864,6 @@ export function Js8Cockpit({
           queue — a SENDER-class control (it empties the queue; a frame already keyed
           finishes) that must never enter the stop-line sweep. */}
       <div className={`cockpit-txdock${canControl ? '' : ' remote-observer-dock'}${canControl && hbMenuOpen ? ' cockpit-txdock-editing' : ''}`}>
-        {remote && <div role="status" className="js8-observation-status">{js8 ? t('remote.applicationObserver') : t('remote.collectionUnavailable')}</div>}
         <div className="js8-dock-row js8-compose-row" role="group" aria-label={t('js8.dock.aria')}>
           <input
             className="settings-input rtty-hiscall js8-to"
@@ -1947,7 +1913,7 @@ export function Js8Cockpit({
             }}
             toCall={toCall}
             pills={compose.pills}
-            suggest={compose.wordSuggestions && canControl && !remote}
+            suggest={compose.wordSuggestions && canControl}
             inputRef={composeRef}
             placeholder={t('js8.dock.compose.placeholder')}
             ariaLabel={t('js8.dock.compose.aria')}

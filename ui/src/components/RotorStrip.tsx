@@ -14,9 +14,7 @@
 // azimuth in degrees and the true/magnetic marks are data, and the three annunciator plates
 // below are the instrument's own vocabulary.
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { useStationCapability, useStationControl } from '../stationAccess'
-import { controlFailureMessage } from '../remote-web/control-failure'
-import { useRotatorHeading } from '../remote-web/rotator'
+import { useStationControl } from '../stationAccess'
 import {
   getDeclination,
   getSatTrackStatus,
@@ -98,13 +96,7 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
   // FT cockpit).
   const [configured, setConfigured] = useState(false)
   const alive = useRef(true)
-  // A browser has no satellite-track path: it points, stops, and reads the heading the station
-  // measured, and only while the station advertises the rotator.
-  const local = useStationControl(), remoteRotator = useStationCapability('rotator')
-  // A browser's heading comes from the station's own read, and only while this strip is on screen:
-  // nothing is asked for when nobody is looking. A station that does not offer the read keeps the
-  // honest "—" — the strip never draws a needle from a bearing nobody measured.
-  const heading = useRotatorHeading(active && !local)
+  const local = useStationControl()
 
   useEffect(() => {
     if (!active) return
@@ -151,67 +143,6 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
   // and this chip claiming the dial for it contradicted the rail's own
   // "the dial stays yours" (round 3, defect 5).
   const dopplerOwnsDial = satTrack != null && dopplerInTrack && satTrack.dopplerDownlink
-
-  // THE BROWSER. No rotator at the station: nothing, as on the desktop. A rotator the browser may
-  // not steer: the plain unavailable plate. Otherwise the point-at slew and a Stop that stops the
-  // rotator only (the satellite loop is the station's), with the station's own heading — or an
-  // honest "—" when it has none to give.
-  if (!local) {
-    if (!configured) return null
-    if (!remoteRotator) {
-      return (
-        <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>
-          {t('rotor.strip.aria')} —
-        </span>
-      )
-    }
-    return (
-      <span role="group" aria-label={t('rotor.strip.aria')} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'inherit' }}>
-        <span style={{ fontSize: '0.65em', letterSpacing: '0.08em', opacity: 0.55, fontWeight: 600 }} aria-hidden>
-          {ROTOR_PLATE}
-        </span>
-        {heading.azimuthDeg == null ? (
-          <span className="mono" style={{ fontSize: '0.9em', opacity: 0.6 }} title={t('remote.b1.rotatorNoHeading')}>
-            —
-          </span>
-        ) : (
-          <>
-            <svg width={GLYPH} height={GLYPH} viewBox={`0 0 ${GLYPH} ${GLYPH}`} aria-hidden style={{ flex: '0 0 auto' }}>
-              <circle cx={C} cy={C} r={C - 1} fill="none" stroke="currentColor" strokeOpacity={0.3} />
-              <g transform={`rotate(${Math.round(heading.azimuthDeg)} ${C} ${C})`}>
-                <line x1={C} y1={C} x2={C} y2={2} stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" />
-                <circle cx={C} cy={2} r={1.4} fill="currentColor" />
-              </g>
-            </svg>
-            <span className="mono" style={{ fontSize: '0.95em', fontWeight: 600, whiteSpace: 'nowrap' }}
-              title={t('rotor.strip.az.title', { deg: Math.round(heading.azimuthDeg) })}>
-              {Math.round(heading.azimuthDeg)}°T
-            </span>
-          </>
-        )}
-        {targetCall && onPointAt && (
-          <button
-            type="button"
-            style={chipStyle}
-            onClick={() => onPointAt(targetCall)}
-            title={t('rotor.strip.pointAt.title', { call: targetCall })}
-          >
-            → {targetCall}
-          </button>
-        )}
-        <button
-          type="button"
-          style={chipStyle}
-          onClick={() => {
-            stopRotator().catch((e) => pushToast(controlFailureMessage(e), 'error'))
-          }}
-          title={t('rotor.strip.stop.title')}
-        >
-          ■
-        </button>
-      </span>
-    )
-  }
 
   // NO LIVE AZIMUTH. Two different stations land here — one with no rotator at
   // all (render nothing, most stations), one with a rotator configured that is

@@ -13,8 +13,8 @@
 //
 // Measured, not asserted by name: the button is rendered in the Connect pane's host chain, its
 // face, ink and border are the cascade winners (cssCascade) under every base mode and every
-// built-in skin in each of its base's modes, on the desktop sheet and on the Remote page's, and the
-// surface under it is composited from every ancestor's own background.
+// built-in skin in each of its base's modes, on the desktop sheet, and the surface under it is
+// composited from every ancestor's own background.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -71,9 +71,6 @@ const sheet = (name: string) =>
 const withHover = (rules: Rule[]) =>
   rules.map((r) => (r.selector.includes(':hover') ? { ...r, selector: r.selector.replace(/:hover/g, '[data-hover]') } : r))
 const DESKTOP = withHover(parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css')))
-const REMOTE = withHover(
-  parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css') + '\n' + sheet('remote-web/application.css')),
-)
 
 const TEXT_MIN = 4.5
 const CONTROL_MIN = 3
@@ -244,8 +241,8 @@ describe("the Rotor pane's STOP reads in every built-in theme", () => {
     expect(MODES.filter((m) => m.startsWith('light')).length).toBeGreaterThan(4)
   })
 
-  it('letters at 4.5:1 on its own face, idle and hovered, and keeps a 3:1 outline, on the desktop and on Remote', () => {
-    expect(failures([['desktop', DESKTOP], ['Remote', REMOTE]])).toEqual([])
+  it('letters at 4.5:1 on its own face, idle and hovered, and keeps a 3:1 outline, on the desktop', () => {
+    expect(failures([['desktop', DESKTOP]])).toEqual([])
   }, 20_000)
 
   it('FIRES: the STOP as it shipped, #f87171 on transparent and #111 on #f87171 hovered, is caught in the light theme', () => {

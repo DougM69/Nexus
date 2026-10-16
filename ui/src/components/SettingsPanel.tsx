@@ -1,9 +1,4 @@
-import { useStationCapability } from '../stationAccess'
-import { useNavigation } from '../remote-web/useNavigation'
-import { settingsForm, type SettingsConfiguration } from '../remote-web/configuration'
-import { useAmplifierFollow } from '../remote-web/useAmplifierFollow'
-import { useReceiverGain } from '../remote-web/useReceiverGain'
-import { useRemotePreferences } from '../remote-web/useRemotePreferences'
+import { useStationCapability, useStationControl } from '../stationAccess'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
 import { RemoteStationsWindow } from '../remote-native/RemoteStationsWindow'
@@ -1133,15 +1128,9 @@ export function SettingsPanel({
   motion = 'system',
   onMotionChange,
 }: Props) {
-  const configuration=useNavigation<SettingsConfiguration>('settings')
-  const remote=configuration.remote
+  const remote = !useStationControl()
   const canSelectRadio = useStationCapability('radioSelection')
-  const remoteFollow = useAmplifierFollow(configuration.value, activeRadioId, configuration.refresh)
-  const remoteGain = useReceiverGain(configuration.value, activeRadioId, radio, configuration.refresh)
-  // Remote: the operating preferences the station lets this browser change. Every other field stays
-  // read-only (`disabled={remote}`); these follow the station's offer instead.
-  const remotePrefs = useRemotePreferences(configuration.value, configuration.refresh)
-  const locked = (key: FieldKey) => remote && !remotePrefs.canEdit(key)
+  const locked = (_key: FieldKey) => remote
   // Restore-from-backup (#28 item 4). A hidden file input, the same shape the Logbook's ADIF
   // import uses — Tauri has no native picker wired here and this needs none.
   const backupFileRef = useRef<HTMLInputElement | null>(null)
@@ -1296,12 +1285,6 @@ export function SettingsPanel({
       if (picked) setDataFolderPath(picked)
     }, t('settings.dataFolder.browse.failed'))
   }
-  useEffect(()=>{
-    if(!remote)return
-    const next=configuration.value?settingsForm(configuration.value):null
-    // A refreshed document keeps unsaved preference edits unless the station changed that setting.
-    setForm(remotePrefs.rebase(form,next,configuration.value));dirtyRef.current=false;savedRef.current=next;setStatus('idle')
-  },[remote,configuration.value])
   // The blocklist editor's text — its OWN write path (apiSetBlockedCalls, the narrow
   // verb), never the form save: the engine deliberately ignores blockedCalls in a
   // whole-struct save so a stale form can't revert a mid-QSO Alt-click. Seeded from the
@@ -1840,11 +1823,6 @@ export function SettingsPanel({
     }
     if (lastActiveRef.current === activeRadioId) return
     lastActiveRef.current = activeRadioId
-    if (remote) {
-      configuration.refresh()
-      setEditingRadioId(activeRadioId)
-      return
-    }
     void getSettings()
       .then((s) => {
         setForm(s)
@@ -2767,14 +2745,6 @@ export function SettingsPanel({
     }
     void withErrorToast(() => setActiveRadio(id), t('settings.radios.switch.failed')).then((s) => {
       if (!s) return
-      if (remote) {
-        // The streamed Settings projection is deliberately smaller than this
-        // form. Refresh its complete configuration document after selection.
-        configuration.refresh()
-        setEditingRadioId(id)
-        onSaved?.()
-        return
-      }
       void getSettings().then((full) => {
         setForm(full)
         dirtyRef.current = false
@@ -3557,7 +3527,6 @@ export function SettingsPanel({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if(remote){await remoteFollow.save();await remotePrefs.save(form);return}
     if (!form) return
     if (!form.mycall.trim()) {
       // Don't dead-end on another tab: route the operator to where the fix is instead of a
@@ -3687,13 +3656,13 @@ export function SettingsPanel({
     setOverOffer(null)
   }
 
-  if (!form || (remote&&!configuration.value)) {
+  if (!form) {
     return (
       <section className="panel settings-panel" data-remote-configuration={remote || undefined}>
         <div className="panel-header">
           <h2>{t('settings.panel.title')}</h2>
         </div>
-        <p className="empty" role="status">{remote ? configuration.loading ? t('remote.collectionLoading') : t('remote.collectionUnavailable') : t('settings.panel.loading')}</p>
+        <p className="empty" role="status">{t('settings.panel.loading')}</p>
       </section>
     )
   }
@@ -3915,8 +3884,6 @@ export function SettingsPanel({
           ))}
         </div>
         <div className="settings-scroll">
-          {remote && <p className="settings-note" role="status">{remoteFollow.supported || remoteGain.supported || remotePrefs.supported ? t('remote.configurationControls') : t('remote.configurationObserver')}</p>}
-          {remote && remotePrefs.supported && <p className="settings-note">{t('remote.settingsEditable')}</p>}
           {remote && (tab==='logging'||tab==='configurations') && <p className="settings-note">{t('remote.configurationLocal')}</p>}
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
           {tab === 'configurations' && !remote && (
@@ -5691,8 +5658,8 @@ export function SettingsPanel({
                       OmniRig is named in the docs and in half the Windows logging ecosystem, so
                       a mac/Linux operator who goes looking for it must find the answer here
                       instead of concluding the build is broken. */}
-                  <option value="omnirig" disabled={omnirigChoiceFor(remote ? configuration.value?.platform==='windows' : IS_WINDOWS).disabled}>
-                    {omnirigChoiceFor(remote ? configuration.value?.platform==='windows' : IS_WINDOWS).label}
+                  <option value="omnirig" disabled={omnirigChoiceFor(IS_WINDOWS).disabled}>
+                    {omnirigChoiceFor(IS_WINDOWS).label}
                   </option>
                   {/* Offered only for the six Icoms with a network server built in, and kept while
                       chosen so the select always shows its own value; Detect never picks it, and a
@@ -5709,7 +5676,7 @@ export function SettingsPanel({
                     k="settings.rigControl.conn.omnirig.hint"
                     tags={{ b: <strong />, em: <em /> }}
                     vals={{
-                      availability: omnirigChoiceFor(remote ? configuration.value?.platform==='windows' : IS_WINDOWS).disabled
+                      availability: omnirigChoiceFor(IS_WINDOWS).disabled
                         ? t('settings.rigControl.conn.omnirig.unavailable.why')
                         : t('settings.rigControl.conn.omnirig.install'),
                     }}
@@ -6635,22 +6602,18 @@ export function SettingsPanel({
               <label className="settings-field">
                 <span className="settings-label">
                   {t('settings.audio.rxGain.label')}{' '}
-                  <span className="settings-value">×{remote ? remoteGain.gain?.toFixed(1) ?? '—' : (form.rxGain ?? 1).toFixed(1)}</span>
+                  <span className="settings-value">×{(form.rxGain ?? 1).toFixed(1)}</span>
                 </span>
-                <input disabled={remote && !remoteGain.canEdit}
+                <input disabled={remote}
                   className="settings-slider"
                   type="range"
                   min="1"
                   max="8"
                   step="0.1"
-                  value={String(remote ? remoteGain.gain ?? 1 : form.rxGain ?? 1)}
-                  onPointerDown={() => { if (remote) remoteGain.begin() }}
-                  onKeyDown={(e) => { if (remote && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) remoteGain.begin() }}
-                  onChange={(e) => remote ? remoteGain.change(Number(e.target.value)) : updateNum('rxGain', Number(e.target.value))}
-                  onPointerUp={(e) => remote ? void remoteGain.commit() : applyRxGainLive(Number((e.target as HTMLInputElement).value))}
-                  onKeyUp={(e) => remote ? void remoteGain.commit() : applyRxGainLive(Number((e.target as HTMLInputElement).value))}
-                  onPointerCancel={() => { if (remote) remoteGain.cancel() }}
-                  onBlur={() => { if (remote) remoteGain.cancel() }}
+                  value={String(form.rxGain ?? 1)}
+                  onChange={(e) => updateNum('rxGain', Number(e.target.value))}
+                  onPointerUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
+                  onKeyUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
                   aria-label={t('settings.audio.rxGain.aria')}
                 />
                 <span className="settings-hint">
@@ -7346,15 +7309,14 @@ export function SettingsPanel({
               {(form.ampModel ?? '') !== '' && (form.ampPort ?? '') !== '' && (
                 <div className="settings-field">
                   <label className="settings-check">
-                    <input disabled={remote && !remoteFollow.canEdit}
+                    <input disabled={remote}
                       type="checkbox"
-                      checked={remote ? remoteFollow.follow : form.ampFollowBand ?? false}
-                      onChange={(e) => remote ? remoteFollow.change(e.target.checked) : updateBool('ampFollowBand', e.target.checked)}
+                      checked={form.ampFollowBand ?? false}
+                      onChange={(e) => updateBool('ampFollowBand', e.target.checked)}
                     />
                     <span>{t('settings.amplifier.follow.label')}</span>
                   </label>
                   <span className="settings-hint">{t('settings.amplifier.follow.hint')}</span>
-                  {remote && remoteFollow.waitingForIdle && <span className="settings-hint">{t('remote.followNeedsIdle')}</span>}
                 </div>
               )}
             </div>
@@ -13915,23 +13877,6 @@ export function SettingsPanel({
         </div>
 
         <div className="settings-actions">
-          {remote && remoteFollow.error && <span className="settings-error" role="alert">{remoteFollow.error === 'contextChanged' ? t('remote.followChanged')
-            : remoteFollow.error === 'persistenceFailed' ? t('remote.followSaveFailed') : ['unconfirmed', 'hardwareUnconfirmed'].includes(remoteFollow.error) ? t('remote.followUnconfirmed') : t('remote.followRefused')}</span>}
-          {remote && remoteFollow.confirming && <span className="settings-ok" role="status">{t('remote.followSavedRefreshing')}</span>}
-          {remote && remoteFollow.saved && <span className="settings-ok" role="status">{t('settings.panel.saved')}</span>}
-          {remote && remotePrefs.result && (
-            <span className={remotePrefs.result === 'saved' ? 'settings-ok' : 'settings-error'} role={remotePrefs.result === 'saved' ? 'status' : 'alert'}>
-              {remotePrefs.result === 'saved' ? t('settings.panel.saved')
-                : remotePrefs.result === 'contextChanged' ? t('remote.settingsChanged')
-                  : remotePrefs.result === 'tooLarge' ? t('remote.settingsTooLarge')
-                    : remotePrefs.result === 'unconfirmed' ? t('remote.settingsUnconfirmed')
-                      : remotePrefs.result === 'notSent' ? t('remote.controlNotSent') : t('remote.settingsRefused')}
-            </span>
-          )}
-          {remote && remotePrefs.result === 'unconfirmed' && <>
-            <button type="button" className="settings-refresh" onClick={remotePrefs.check}>{t('remote.logChangeCheck')}</button>
-            <button type="button" className="settings-refresh" onClick={remotePrefs.acknowledge}>{t('remote.settingsCheckedStation')}</button>
-          </>}
           {/* Warnings from the last save. They did NOT block it -- the save went through -- so
               they are stated once and left visible rather than interrupting. An operator whose
               setup is unusual but correct must be able to read them and carry on. */}
@@ -13951,9 +13896,9 @@ export function SettingsPanel({
             className="settings-save"
             // Not disabled on an empty callsign — clicking routes to the Station tab with a clear
             // message (handleSubmit), rather than a greyed button that gives no reason or fix.
-            disabled={remote ? !(remoteFollow.canSave || remotePrefs.canSave(form)) : status === 'saving'}
+            disabled={status === 'saving'}
           >
-            {(remote ? remoteFollow.saving || remotePrefs.saving : status === 'saving') ? t('settings.panel.saving') : t('settings.panel.save')}
+            {status === 'saving' ? t('settings.panel.saving') : t('settings.panel.save')}
           </button>
         </div>
       </form>

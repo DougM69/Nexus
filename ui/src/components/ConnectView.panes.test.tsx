@@ -38,8 +38,6 @@ import { ConnectView } from './ConnectView'
 import { DEFAULT_SLOTS, SLOT_IDS, type SlotId } from '../features/connectConfig'
 import { MAP_MIN, RAIL_MAX, RAIL_MIN } from '../features/connectRails'
 import { CONNECT_PRESET_IDS, CONNECT_PRESETS, type ConnectPresetId } from '../features/connectPresets'
-import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
-import { StationDataContext } from '../stationAccess'
 import { paneById } from './connect/panes'
 import { pastTheSwitch } from './ConnectView.testkit'
 
@@ -667,25 +665,6 @@ describe('layout presets — ⊞ Panels ▸ Layout', () => {
     }
   })
 
-  it('the Remote Connect page has the same picker, and a preset applies there', async () => {
-    const source = { client: { supports: () => true } } as unknown as RemoteCollections
-    let r!: ReturnType<typeof render>
-    await act(async () => {
-      r = render(
-        <StationDataContext.Provider value={false}>
-          <RemoteCollectionsContext.Provider value={source}>
-            <ConnectView {...props} />
-          </RemoteCollectionsContext.Provider>
-        </StationDataContext.Provider>,
-      )
-    })
-    expect(r.container.querySelector('.connect-header [role="status"]'), 'control: this is the Remote page').not.toBeNull()
-    expect(layoutNow()).toBe('Standard')
-    pick('List first')
-    expect(slotsOn(r.container).sort()).toEqual(['left1', 'left2', 'right1', 'right2'])
-    expect(layoutNow()).toBe('List first')
-  })
-
   it('a pop-out’s preset is its own: the main window’s arrangement is not touched', async () => {
     window.history.replaceState(null, '', '/?panel=connect')
     const { container } = await mount()
@@ -935,21 +914,6 @@ describe('a UTC clock on Connect, in every layout', () => {
     expect(clocks(r.container)).toEqual([])
   })
 
-  it('the Remote Connect page has the clock too', async () => {
-    const source = { client: { supports: () => true } } as unknown as RemoteCollections
-    let r!: ReturnType<typeof render>
-    await act(async () => {
-      r = render(
-        <StationDataContext.Provider value={false}>
-          <RemoteCollectionsContext.Provider value={source}>
-            <ConnectView {...props} />
-          </RemoteCollectionsContext.Provider>
-        </StationDataContext.Provider>,
-      )
-    })
-    expect(r.container.querySelector('.connect-header [role="status"]'), 'control: this is the Remote page').not.toBeNull()
-    expect(utc(r.container)?.querySelector('.utc-time')?.textContent).toMatch(/^\d\d:\d\d:\d\d$/)
-  })
 })
 
 // FRAME + BAR — THE DEFAULT (the operator's batch 60, 2026-10-01: "A: Frame + bar"). Every surface opens in
@@ -1103,23 +1067,6 @@ describe('Frame + bar — the default view to try', () => {
     expect(bar(container), 'the window’s own bar is the one').toBeNull()
   })
 
-  it('the Remote Connect page draws the bar too', async () => {
-    const source = { client: { supports: () => true } } as unknown as RemoteCollections
-    let r!: ReturnType<typeof render>
-    await act(async () => {
-      r = render(
-        <StationDataContext.Provider value={false}>
-          <RemoteCollectionsContext.Provider value={source}>
-            <ConnectView {...props} />
-          </RemoteCollectionsContext.Provider>
-        </StationDataContext.Provider>,
-      )
-    })
-    expect(r.container.querySelector('.connect-header [role="status"]'), 'control: this is the Remote page').not.toBeNull()
-    pick(r.container, 'Frame + bar (default)')
-    expect(bar(r.container)).not.toBeNull()
-    expect(headerOf(r.container).querySelector('.utc-clock')).toBeNull()
-  })
 })
 
 // STANDARD IS A CHOICE (the operator's batch 63). It used to only read back, so the way from a layout

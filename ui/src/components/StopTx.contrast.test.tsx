@@ -14,9 +14,8 @@
 // hover fills the red and writes on it in the page colour; and a stop on a raised surface sits on
 // the page colour, so its red word reads.
 //
-// Each host is RENDERED and placed in App's own chain (.app, .shell, the view's keep-alive host;
-// on the Remote page .app.remote-workspace, and .remote-contact-host for Phone and CW), and every
-// value is the cascade WINNER on that chain:
+// Each host is RENDERED and placed in App's own chain (.app, .shell, the view's keep-alive host),
+// and every value is the cascade WINNER on that chain:
 //   - the outline: the border, composited over the button's own face, against what the button sits
 //     on (every ancestor's background, composited from the page down) — 3:1;
 //   - the words: each run of text, read on the element that holds it (the dock key's words are two
@@ -28,7 +27,7 @@
 // ENABLED: the dock key and the TX-bar Stop render disabled until an over is on the air, and a stop
 // matters while it is live. Modes: every base mode, every theme in each of its base's four modes,
 // and each under every colour-role set (the accent moves the ring and the dock key's hover face).
-// Sheets: the desktop's, and the Remote page's (+ remote-web/application.css).
+// Sheets: the desktop's.
 //
 // What it cannot see: jsdom never lays out, so a stop that is covered or pushed off screen reads
 // fine here (the stop-line sweeps and scripts/browser-probe own that). Roam's Stop shares the
@@ -45,7 +44,6 @@ import { Js8Cockpit } from './Js8Cockpit'
 import { SstvView } from './SstvView'
 import { OperateCockpit } from './OperateCockpit'
 import { TopBar } from './TopBar'
-import { LogConfirm } from './LogConfirm'
 import {
   BASE_MODES,
   MODES,
@@ -67,7 +65,7 @@ import {
 import { SKINS } from '../features/skins'
 import { PALETTE_ROLES } from '../features/paletteRoles'
 import type { PanelLayoutApi } from '../features/panelState'
-import type { AppSnapshot, Js8State, LoggedQso, PskState, RadioStatus, RttyState, SstvState } from '../types'
+import type { AppSnapshot, Js8State, PskState, RadioStatus, RttyState, SstvState } from '../types'
 
 // ── The hosts, rendered as App renders them ─────────────────────────────────────────────────
 
@@ -175,23 +173,21 @@ const snap = {
   mycall: 'KD9TAW', mygrid: 'EN61', radio, stations: [], recentDecodes: [], conversations: [], highlights: [],
   harqRescues: 0, clearTick: 0, qso: null, link: { tier: 'FT8' },
 } as unknown as AppSnapshot
-const pending = { call: 'W9XYZ', grid: 'EN37', rstSent: '-07', rstRcvd: '-10', band: '20m', mode: 'FT8', whenUnix: 1700000000 } as LoggedQso
 
-type Variant = 'txstrip' | 'strip' | 'topbar' | 'dialog' | 'dock' | 'txbar'
+type Variant = 'txstrip' | 'strip' | 'topbar' | 'dock' | 'txbar'
 const VARIANTS: Record<Variant, { name: string; selector: string }> = {
   // Every screen's TX strip but FT's (2026-10-01): the cockpit header's Stop TX moved here.
   txstrip: { name: "the TX strip's Stop TX", selector: '.cockpit-txstrip .op-btn.stop' },
   strip: { name: "Operate's FT-strip Stop TX", selector: '.op-btn.stop' },
   topbar: { name: "the top bar's Stop TX", selector: '.op-btn.stop' },
-  dialog: { name: "the log dialog's Stop TX", selector: '.op-btn.stop' },
   dock: { name: "the dock's Esc Stop key", selector: '.rtty-stop' },
   txbar: { name: "SSTV's TX-bar Stop", selector: '.sstv-tx-stop' },
 }
 
-type Sheet = 'desktop' | 'Remote'
+type Sheet = 'desktop'
 interface Host {
   name: string
-  /** App's view id, which the Remote page carries as `data-remote-view`. */
+  /** App's view id. */
   view: string
   /** Under `.shell` in App's keep-alive host (null: the view's workspace itself), or a direct child of `.app`. */
   host: string | null | 'app'
@@ -199,16 +195,16 @@ interface Host {
   stops: readonly Variant[]
   mount: () => void
 }
-const BOTH: readonly Sheet[] = ['desktop', 'Remote']
+const SHEETS: readonly Sheet[] = ['desktop']
 const HOSTS: readonly Host[] = [
-  { name: 'Phone', view: 'phone', host: null, sheets: BOTH, stops: ['txstrip'], mount: () => render(<PhoneCockpit snap={snap} theme="dark" onWorkSpot={noop} spots={[]} panels={panels()} />) },
-  { name: 'CW', view: 'cw', host: null, sheets: BOTH, stops: ['txstrip'], mount: () => render(<CwCockpit snap={snap} theme="dark" onWorkSpot={noop} spots={[]} panels={panels()} />) },
-  { name: 'RTTY', view: 'rtty', host: 'rtty-host', sheets: BOTH, stops: ['txstrip', 'dock'], mount: () => render(<RttyCockpit snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
-  { name: 'PSK', view: 'psk', host: 'psk-host', sheets: BOTH, stops: ['txstrip', 'dock'], mount: () => render(<PskCockpit snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
-  { name: 'JS8', view: 'js8', host: 'js8-host', sheets: BOTH, stops: ['txstrip'], mount: () => render(<Js8Cockpit snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
-  { name: 'SSTV', view: 'sstv', host: 'sstv-host', sheets: BOTH, stops: ['txstrip', 'txbar'], mount: () => render(<SstvView snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
+  { name: 'Phone', view: 'phone', host: null, sheets: SHEETS, stops: ['txstrip'], mount: () => render(<PhoneCockpit snap={snap} theme="dark" onWorkSpot={noop} spots={[]} panels={panels()} />) },
+  { name: 'CW', view: 'cw', host: null, sheets: SHEETS, stops: ['txstrip'], mount: () => render(<CwCockpit snap={snap} theme="dark" onWorkSpot={noop} spots={[]} panels={panels()} />) },
+  { name: 'RTTY', view: 'rtty', host: 'rtty-host', sheets: SHEETS, stops: ['txstrip', 'dock'], mount: () => render(<RttyCockpit snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
+  { name: 'PSK', view: 'psk', host: 'psk-host', sheets: SHEETS, stops: ['txstrip', 'dock'], mount: () => render(<PskCockpit snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
+  { name: 'JS8', view: 'js8', host: 'js8-host', sheets: SHEETS, stops: ['txstrip'], mount: () => render(<Js8Cockpit snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
+  { name: 'SSTV', view: 'sstv', host: 'sstv-host', sheets: SHEETS, stops: ['txstrip', 'txbar'], mount: () => render(<SstvView snap={snap} panels={panels()} onSetTxEnabled={noop} />) },
   {
-    name: 'Operate', view: 'operate', host: 'operate-host', sheets: BOTH, stops: ['strip'],
+    name: 'Operate', view: 'operate', host: 'operate-host', sheets: SHEETS, stops: ['strip'],
     mount: () =>
       render(
         <OperateCockpit
@@ -223,7 +219,7 @@ const HOSTS: readonly Host[] = [
   {
     // Shown in every view that is not a cockpit (App hides its TX cluster there): the map, Connect,
     // the log, the Field Day scoreboard. It can be the only stop on the screen.
-    name: 'the top bar', view: 'map', host: 'app', sheets: BOTH, stops: ['topbar'],
+    name: 'the top bar', view: 'map', host: 'app', sheets: SHEETS, stops: ['topbar'],
     mount: () =>
       render(
         <TopBar
@@ -233,22 +229,14 @@ const HOSTS: readonly Host[] = [
         />,
       ),
   },
-  {
-    // App gives the log dialog its Stop TX on the Remote page only (`onStop={remote ? … : undefined}`).
-    name: 'the log dialog', view: 'operate', host: 'app', sheets: ['Remote'], stops: ['dialog'],
-    mount: () => render(<LogConfirm record={pending} onConfirm={noop} onDiscard={noop} onStop={noop} />),
-  },
 ]
 
 const el = (tag: string, classes: string[], attrs: Record<string, string> = {}): El => ({ tag, classes, attrs })
 /** App's elements above a host's own root. */
-function aboveHost(h: Host, sheet: Sheet): El[] {
-  const app = sheet === 'Remote'
-    ? el('div', ['app', 'remote-workspace'], { 'data-remote-presentation': 'full', 'data-remote-view': h.view })
-    : el('div', ['app'])
+function aboveHost(h: Host): El[] {
+  const app = el('div', ['app'])
   if (h.host === 'app') return [app]
-  const host = sheet === 'Remote' && (h.view === 'phone' || h.view === 'cw') ? 'remote-contact-host' : h.host
-  return [app, el('div', ['shell']), ...(host ? [el('div', [host])] : [])]
+  return [app, el('div', ['shell']), ...(h.host ? [el('div', [h.host])] : [])]
 }
 
 interface Stop {
@@ -297,7 +285,6 @@ const sheetText = (name: string) =>
   readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 const ORDER = { n: 0 }
 const DESKTOP_RULES = parseRules(sheetText('styles.css') + '\n' + sheetText('cockpit-panes.css'), ORDER)
-const REMOTE_RULES = [...DESKTOP_RULES, ...parseRules(sheetText('remote-web/application.css'), { n: ORDER.n })]
 /** Rules of our own, parsed after the sheet so they win its ties (the controls below). */
 const withBlock = (rules: Rule[], css: string): Rule[] => [...rules, ...parseRules(css, { n: ORDER.n + 100_000 })]
 
@@ -427,7 +414,7 @@ interface Reading {
 }
 
 function read(stop: Stop, sheet: Sheet, all: Rule[], modes: readonly Mode[]): Reading[] {
-  const top = aboveHost(stop.host, sheet)
+  const top = aboveHost(stop.host)
   const button = [...top, ...stop.chain]
   const at0 = button.length - 1
   const raw = STATES.map((s) => ({ s, button: inState(button, at0, s), texts: stop.texts.map((t) => inState([...top, ...t.chain], at0, s)) }))
@@ -537,7 +524,7 @@ let STOPS: Stop[] = []
 let READINGS: Reading[] = []
 beforeAll(async () => {
   STOPS = await mountAll()
-  READINGS = STOPS.flatMap((s) => s.host.sheets.flatMap((sheet) => read(s, sheet, sheet === 'Remote' ? REMOTE_RULES : DESKTOP_RULES, SWEPT)))
+  READINGS = STOPS.flatMap((s) => s.host.sheets.flatMap((sheet) => read(s, sheet, DESKTOP_RULES, SWEPT)))
 }, 300_000)
 
 // ── The checks, each a pure function of readings so the controls below can make one fail ────
@@ -587,7 +574,6 @@ describe('every Stop TX is on screen to be measured', () => {
       "SSTV: SSTV's TX-bar Stop — Stop",
       "Operate: Operate's FT-strip Stop TX — Stop TX",
       "the top bar: the top bar's Stop TX — Stop TX",
-      "the log dialog: the log dialog's Stop TX — Stop TX",
     ])
     // Every base mode and every theme in each of its base's four modes, at the least.
     for (const m of [...BASE_MODES, ...SKINS.flatMap((s) => BASE_MODES.filter((b) => b.startsWith(s.base)).map((b) => `${b} skin=${s.id}`))]) {

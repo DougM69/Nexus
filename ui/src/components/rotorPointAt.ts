@@ -17,7 +17,6 @@
 // lining the beam up for a pile-up had no way to tell. It now aims at the station's own grid or
 // callbook position when Nexus knows one, and the toast says which it got (`pointedTo`).
 import { pointRotatorAtCall } from '../api'
-import { controlFailureMessage } from '../remote-web/control-failure'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 import type { PointedAt } from '../types'
@@ -56,7 +55,7 @@ export function rotorPointAt(control: boolean): (call: string, longPath?: boolea
       )
       .catch((e) =>
         pushToast(
-          control ? t('cw.rotator.failed', { error: e instanceof Error ? e.message : String(e) }) : controlFailureMessage(e),
+          control ? t('cw.rotator.failed', { error: e instanceof Error ? e.message : String(e) }) : t('remote.controlRequestFailed'),
           'error',
         ),
       )

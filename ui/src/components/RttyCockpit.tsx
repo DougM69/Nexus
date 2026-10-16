@@ -75,7 +75,6 @@ import { usePinnedScroll } from '../usePinnedScroll'
 import { t } from '../i18n'
 import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
 import { useEscStop } from '../useEscStop'
-import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 
 interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
@@ -962,7 +961,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             )
           }
           remoteFrequency
-          remoteMode="rtty"
           onCommitDial={frequencyControl && onSetFrequency ? commitDial : undefined}
           digitTune={onSetFrequency != null}
           wheelSensitivity={wheelSensitivity}
@@ -1288,7 +1286,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           share={streamShare != null ? (2 - streamShare) * STREAM_LOG_SPLIT : undefined}
           paneRef={logFrameRef}
         >
-          {!control ? <RemoteRecallEntry snap={snap} mode={RTTY} onOpenLog={onOpenLogbook} /> : (
+          {!control ? null : (
           <LogEntry
             onOpenLogbook={onOpenLogbook}
             onEntryCall={(c) => {

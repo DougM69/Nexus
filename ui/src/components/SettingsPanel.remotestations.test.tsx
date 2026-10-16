@@ -170,13 +170,4 @@ describe('where the window is not offered', () => {
     expect(theButton()).toBeNull()
   })
 
-  it('is never on the Remote page', async () => {
-    renderPanel(true)
-    await openStationTab()
-    // CONTROL for the absence: the section rendered, with the Remote page's own note.
-    await waitFor(() => expect(screen.getByText(EN['remote.configurationLocal'])).toBeTruthy())
-    expect(theButton()).toBeNull()
-    expect(screen.queryByText(EN['settings.remoteStations.label'])).toBeNull()
-    expect(screen.queryByText(EN['settings.remoteStations.unavailable'])).toBeNull()
-  })
 })

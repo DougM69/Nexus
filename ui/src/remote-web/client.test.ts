@@ -279,10 +279,10 @@ it.each([
   remote.stop()
 })
 
-it('recalibrates negative clock drift without displaying it or dropping independent application data',async()=>{
+it('recalibrates negative clock drift without displaying it or dropping the session\'s lanes',async()=>{
  const {remote,post,socket}=await connection(true)
  socket.receive({type:'session',sessionId:crypto.randomUUID()})
- const disconnected=vi.spyOn(remote.application,'disconnected')
+ const disconnected=vi.spyOn(remote.operations,'disconnected')
  await vi.advanceTimersByTimeAsync(100)
  socket.receive(publication(1,'native',1000))
  expect(await remote.source.read(new AbortController().signal)).toBeTruthy()
@@ -552,6 +552,16 @@ it('tells the page once when a ticket is refused, and not for a failure it will 
 // The stream's messages share the observe socket. Both kinds the relay delivers - a signal and the
 // station's state - reach the stream, and neither is ever read as a malformed observation: that
 // closes the socket, and the station's lease goes with it (found by the compiled-browser stream run).
+it('builds no application lane: a session asks the station for none', async () => {
+  const { remote, socket } = await connection(true, 4)
+  socket.receive({ type: 'session', sessionId: crypto.randomUUID() })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(socket.sent.map(m => (JSON.parse(m) as { type?: string }).type)).not.toContain('applicationHello')
+  expect('application' in remote).toBe(false)
+  expect(socket.readyState).toBe(1)
+  remote.stop()
+})
+
 it('routes both of the stream\'s message kinds to the stream and keeps the socket', async () => {
   const { remote, socket } = await connection(true, 4)
   socket.receive({ type: 'session', sessionId: crypto.randomUUID() })

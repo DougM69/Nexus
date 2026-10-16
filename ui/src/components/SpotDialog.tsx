@@ -3,9 +3,7 @@ import { postSpot } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 import { parseOperatorNumber } from '../numInput'
-import { confirmDialog } from '../confirm'
 import { useStationControl } from '../stationAccess'
-import { sendLogChange, useLogChange, useRemoteOperations } from '../remote-web/operations'
 
 // Compose + post a DX-cluster spot. The backend `post_spot` command validates the callsign,
 // checks a cluster is connected, and sanitizes the line — this is just the reviewable popup the
@@ -38,12 +36,10 @@ export function SpotDialog({
   const [freq, setFreq] = useState('')
   const [comment, setComment] = useState(defaultComment)
   const [busy, setBusy] = useState(false)
-  // A browser posts through the station; the station's own cluster login is what goes out.
-  const local = useStationControl(), client = useRemoteOperations(), remoteSpot = useLogChange('postSpot')
+  const local = useStationControl()
 
   // THE KEYBOARD GOES BACK TO WHERE THE DIALOG WAS OPENED FROM when it closes — cancelled, escaped
-  // or posted. It was left on the page itself; and a Remote post asks first (confirmDialog), so the
-  // question's own control is gone with this dialog and only this dialog knows where to return.
+  // or posted. It was left on the page itself.
   // The call box is focused here rather than by `autoFocus`, which would move the keyboard before
   // the control that opened the dialog could be noted.
   const callRef = useRef<HTMLInputElement>(null)
@@ -75,28 +71,14 @@ export function SpotDialog({
   // happy about it. The `canSpot` guard below is what turns an unreadable entry into a
   // greyed-out button instead of a wrong spot in front of everyone.
   const freqNum = parseOperatorNumber(freq)
-  const canSpot = call.trim().length > 0 && Number.isFinite(freqNum) && freqNum > 0 && (local || (!!client && remoteSpot))
+  const canSpot = call.trim().length > 0 && Number.isFinite(freqNum) && freqNum > 0 && local
 
   const submit = async () => {
     if (!canSpot || busy) return
     setBusy(true)
     try {
       const c = call.trim().toUpperCase()
-      if (local) {
-        await postSpot(freqNum, c, comment.trim())
-      } else {
-        // A public post: ask on every press, never remember the answer, and show exactly the
-        // callsign and frequency that will be sent.
-        if (!client || !(await confirmDialog({
-          title: t('spots.post.confirm.title', { call: c }),
-          confirmLabel: t('spots.post.confirm.post'),
-          body: t('spots.post.confirm.body', { call: c, freq: freqNum.toFixed(4) }),
-        }))) return
-        // sendLogChange says what happened — a station with no cluster node connected, a refused
-        // callsign, a request that never left. Only an applied one is a posted spot.
-        const outcome = await sendLogChange(client, { kind: 'spot', call: c, freqMhz: freqNum, comment: comment.trim() })
-        if (outcome?.outcome !== 'applied') return
-      }
+      await postSpot(freqNum, c, comment.trim())
       pushToast(t('spots.post.done', { call: c }), 'success', 2500)
       onClose()
     } catch (e) {

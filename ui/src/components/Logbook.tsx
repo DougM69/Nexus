@@ -288,11 +288,6 @@ const LOTW_BACKLOG = { kind: 'lotwBacklog' } as const satisfies LogQuestion
 const LOG_SIZE = { kind: 'logSize' } as const satisfies LogQuestion
 
 import { useStationControl } from '../stationAccess'
-import { useRemoteLog } from '../remote-web/useRemoteLog'
-import { RemoteLogCheck, sendLogChange, useLogChange, useRemoteOperations } from '../remote-web/operations'
-import { OperationFailure } from '../remote-web/operation-client'
-import { logTarget, manualRecord, type LogChange, type ManualRecord } from '../remote-web/operation-protocol'
-import { useRemoteActivations } from '../remote-web/useRemoteActivations'
 
 export function Logbook({
   defaultBand,
@@ -303,18 +298,13 @@ export function Logbook({
   logTick,
 }: Props) {
   const control = useStationControl()
-  // Remote: the station offers edit/delete as a capability; each change is found again by row key.
-  const operations = useRemoteOperations()
-  const canEdit = useLogChange('logEdit')
-  const canLog = useLogChange('log.manual')
-  const canQsl = useLogChange('qslMarks')
   // The desktop asks `LogSource` for the pages of the list it shows (below, after the sort and
   // search state they are cut by). The source follows `logTick`, so the list moves when the log
   // changes under this view — a Remote browser's delete or edit, another instance's contact, a
   // connector stamp. The rows are addressed by key, so a stale list is refused rather than acted
   // on; following the tick is what keeps that refusal rare. A Remote browser shows the page of
   // rows the station sent (`observedLog`, below).
-  const [observedLog, setLog] = useState<LoggedQso[]>([])
+  const [observedLog] = useState<LoggedQso[]>([])
   // The whole log's size, not the list's: the count badge, the purge warning, the exports and the
   // globe key on it. A Remote browser counts the rows the station sent, as it always did. The
   // engine's answer is `undefined` until it lands, and for as long as the engine refuses the
@@ -426,10 +416,6 @@ export function Logbook({
   const [needsConfirmOnly, setNeedsConfirmOnly] = useState(false)
   // #239: the wide table, off unless this viewer turned it on.
   const [moreColumns, setMoreColumns] = useState(loadMoreColumns)
-  const remoteLog = useRemoteLog(deferredSearch, needsConfirmOnly)
-  // Remote: one activation's ADIF, built at the station by the same export, when the station offers it.
-  const remoteActivations = useRemoteActivations(remoteLog ? operations : null, remoteLog?.total ?? 0)
-  useEffect(() => { if (remoteLog) setLog(remoteLog.rows) }, [remoteLog?.rows])
   // "Check park states": the operator-run review of hunted contacts whose park names another
   // state (ParkStateReview). Opened only by its button; it changes nothing until Apply.
   const [showParkStates, setShowParkStates] = useState(false)
@@ -846,15 +832,6 @@ export function Logbook({
   // send entries vanish and nothing put them back. Same reversal the inbound card has had
   // since #152 — a declaration the operator made by hand, they can unmake by hand.
   const onMarkQslSent = async (q: LoggedQso, ref: RowRef | null, via: 'B' | 'D' | 'E' | null) => {
-    if (remoteLog) {
-      const at = performance.now()
-      const outcome = await remoteChange({ kind: 'qslSent', target: await logTarget(q), via })
-      if (outcome?.outcome === 'applied') {
-        pushToast(via ? t('logbook.qsl.marked', { call: q.call, via: qslViaLabel(via) ?? via }) : t('logbook.qsl.sentCleared', { call: q.call }), 'success')
-        remoteLog.refresh(at)
-      }
-      return
-    }
     // The row on screen by its id and edit key, never its position (see `changeMade`).
     if (!ref) return
     const answer = await withErrorToast(() => markQslSentById(ref, via), t('logbook.qsl.markFailed'))
@@ -871,15 +848,6 @@ export function Logbook({
   }
 
   const onMarkQslCard = async (q: LoggedQso, ref: RowRef | null, received: boolean) => {
-    if (remoteLog) {
-      const at = performance.now()
-      const outcome = await remoteChange({ kind: 'qslCard', target: await logTarget(q), received })
-      if (outcome?.outcome === 'applied') {
-        pushToast(received ? t('logbook.qsl.cardMarked', { call: q.call }) : t('logbook.qsl.cardCleared', { call: q.call }), 'success')
-        remoteLog.refresh(at)
-      }
-      return
-    }
     if (!ref) return
     const answer = await withErrorToast(
       () => markQslCardById(ref, received),
@@ -940,9 +908,6 @@ export function Logbook({
     }
   }
 
-  // A remote change reports its own outcome. An unknown one is held by RemoteLogCheck until checked.
-  const remoteChange = (change: LogChange) => (operations ? sendLogChange(operations, change) : Promise.resolve(null))
-
   /** Ask, then delete: whether the contact was deleted. */
   const onDelete = async (q: LoggedQso, key: string, ref: RowRef | null): Promise<boolean> => {
     if (
@@ -954,17 +919,6 @@ export function Logbook({
       }))
     )
       return false
-    if (remoteLog) {
-      const at = performance.now()
-      const outcome = await remoteChange({ kind: 'delete', target: await logTarget(q) })
-      if (outcome?.outcome === 'applied') {
-        pushToast(t('logbook.delete.done', { call: q.call }), 'success')
-        if (editingKey === key) cancelForm()
-        remoteLog.refresh(at)
-        return true
-      }
-      return false
-    }
     if (!ref) return false
     const answer = await withErrorToast(() => deleteQsoById(ref), t('logbook.delete.failed'))
     if (!answer) return false
@@ -1096,8 +1050,7 @@ export function Logbook({
     readFailed !== null ? 'failed'
     : listTotal > 0 ? null
     : control ? (askedLogSize === undefined || (askedLogSize === 0 && !sizeCurrent) || (askedLogSize > 0 && showingRev === null) ? 'reading' : askedLogSize === 0 ? 'empty' : 'noMatch')
-    : remoteLog?.phase !== 'ready' ? null
-    : deferredSearch.trim() || needsConfirmOnly ? 'noMatch' : 'empty'
+    : null
 
   // 3-D globe band, gated on a real GPU (software renderers would make the whole
   // Logbook crawl — those machines just get the plain table). Probed once per mount.
@@ -1355,7 +1308,7 @@ export function Logbook({
     if (e.key === 'Escape' && showForm) {
       e.preventDefault()
       cancelForm()
-    } else if (row && (control || canEdit) && (e.key === 'Enter' || e.key === 'Delete')) {
+    } else if (row && control && (e.key === 'Enter' || e.key === 'Delete')) {
       e.preventDefault()
       if (e.key === 'Delete') {
         // The question takes the keyboard (a dialog puts it nowhere when it closes); the answer
@@ -1572,52 +1525,6 @@ export function Logbook({
     const existing = editing?.row
     const parkTheirRef = draft.parkTheirRef.trim().toUpperCase() || null
     const parkMyRef = draft.parkMyRef.trim().toUpperCase() || null
-    if (remoteLog) {
-      // An edit: the station carries every field this form does not send (confirmations, uploads,
-      // power, your own park) and finds the row by the key of the row the edit started from.
-      // A new entry: the station's own manual log, at station time unless a time is typed.
-      let record: ManualRecord
-      try {
-        record = manualRecord({
-          call, grid: draft.grid.trim() || null, country: existing?.country ?? null,
-          state: draft.state.trim().toUpperCase() || null, band: draft.band.trim(), freqMhz: freq, mode: draft.mode.trim(),
-          rstSent: parseReport(draft.rstSent), rstRcvd: parseReport(draft.rstRcvd), name: draft.name.trim() || null,
-          qth: draft.qth.trim() || null, comment: draft.comment.trim() || null, notes: draft.notes.trim() || null,
-          whenUnix: when ?? existing?.whenUnix ?? null, confirmed: false, awardConfirmed: false,
-          // The stored program rides through, as on the desktop path: WWFF (an ADIF SIG kept
-          // verbatim) is a real value, and coercing it to SOTA-or-POTA rewrote the park on any edit.
-          ...(parkTheirRef ? { ota: { theirProgram: existing?.ota?.theirProgram || 'POTA', theirRef: parkTheirRef } } : {}),
-        })
-      } catch {
-        setErr(t('remote.logEntryInvalid'))
-        return
-      }
-      const at = performance.now()
-      if (existing) {
-        const outcome = await remoteChange({ kind: 'edit', target: await logTarget(existing), record })
-        if (outcome?.outcome === 'applied') {
-          pushToast(t('logbook.form.updated', { call: record.call }), 'success')
-          cancelForm()
-          remoteLog.refresh(at)
-        }
-        return
-      }
-      if (!operations) return
-      try {
-        // An unknown outcome keeps the draft and holds further writes (RemoteLogCheck).
-        const outcome = await operations.log(record)
-        if (outcome.outcome === 'applied') {
-          pushToast(t('remote.loggingSaved'), 'success')
-          setShowForm(false)
-          setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', parkTheirRef: '' }))
-          remoteLog.refresh(at)
-        } else if (outcome.outcome === 'rejected') pushToast(t('remote.loggingRefused'), 'error', 6000)
-      } catch (e) {
-        const failure = e instanceof OperationFailure ? e : null
-        pushToast(failure?.busy ? t('remote.loggingBusy') : failure && !failure.sent ? t('remote.loggingNotSent') : t('remote.loggingRefused'), 'error', 6000)
-      }
-      return
-    }
     // Only the two park REFS are editable. The program (POTA/SOTA/WWFF) and any IOTA reference
     // ride through from the stored record: a park-only `ota` would trip the backend's ota-preserve
     // guard, which tests only the four park fields and would silently drop `iota`. With both refs
@@ -1790,67 +1697,11 @@ export function Logbook({
           <h2>{t('logbook.title')}</h2>
           {(!control || (askedLogSize !== undefined && (sizeCurrent || askedLogSize > 0))) && (
             <span className="count-badge" title={sizeCurrent ? undefined : t('logbook.count.stale')}>
-              {remoteLog?.total ?? logSize}
+              {logSize}
             </span>
           )}
           <span className="log-sub">{control ? t('logbook.subtitle') : t('remote.collectionObserver')}</span>
         </div>
-        {!control && remoteLog && (canLog || showForm) && (
-          <button type="button" className="export-btn remote-log-open" onClick={() => (showForm ? cancelForm() : setShowForm(true))}>
-            {showForm ? t('logbook.form.close') : t('logbook.form.open')}
-          </button>
-        )}
-        {/* Remote: the same one-activation file, built at the station by the same export and saved by
-            this browser. Only the activation picker; no date range, no whole-log export. */}
-        {!control && remoteActivations.available && remoteActivations.activations.length > 0 && (
-          <div className="log-actions remote-activation-export">
-            <label className="log-export-range" title={t('logbook.export.activation.title')}>
-              <span>{t('logbook.export.activation.label')}</span>
-              <select
-                className="settings-input log-export-activation"
-                value={activationKey}
-                onChange={(e) => setActivationKey(e.target.value)}
-              >
-                <option value="">{t('logbook.export.activation.none')}</option>
-                {remoteActivations.activations.map((a) => (
-                  <option key={activationKeyOf(a)} value={activationKeyOf(a)}>
-                    {t('logbook.export.activation.option', {
-                      activation: [a.callsign, a.reference, a.date].filter(Boolean).join(' · '),
-                      count: a.qsos,
-                    }) +
-                      (a.qsos < POTA_MIN_QSOS ? t('logbook.export.activation.short', { min: POTA_MIN_QSOS }) : '')}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              className="export-btn"
-              disabled={!activationKey || remoteActivations.downloading}
-              onClick={() => {
-                const a = remoteActivations.activations.find((x) => activationKeyOf(x) === activationKey)
-                if (!a) return
-                void remoteActivations.download(a, activationFilename(a)).then((result) => {
-                  if (!result) return
-                  if ('saved' in result) pushToast(t('remote.activationExportDone', { name: result.saved }), 'success')
-                  else
-                    pushToast(
-                      result.failed === 'tooLarge'
-                        ? t('remote.activationExportTooLarge')
-                        : result.failed === 'notFound'
-                          ? t('remote.activationExportMissing')
-                          : t('remote.activationExportFailed'),
-                      'error',
-                      6000,
-                    )
-                })
-              }}
-              title={t('logbook.export.activation.buttonTitle')}
-            >
-              {t('logbook.export.activation.button')}
-            </button>
-          </div>
-        )}
         {control && <div className="log-actions">
           <input
             ref={fileRef}
@@ -1892,26 +1743,22 @@ export function Logbook({
           >
             {t('logbook.pota.label')}
           </button>
-          {!remoteLog && (
-            <button
-              type="button"
-              className="export-btn"
-              onClick={() => setShowParkStates(true)}
-              title={t('logbook.parkStates.buttonTitle')}
-            >
-              {t('logbook.parkStates.button')}
-            </button>
-          )}
-          {!remoteLog && (
-            <button
-              type="button"
-              className="export-btn"
-              onClick={() => setShowConfirmations(true)}
-              title={t('logbook.confirmations.buttonTitle')}
-            >
-              {t('logbook.confirmations.button')}
-            </button>
-          )}
+          <button
+            type="button"
+            className="export-btn"
+            onClick={() => setShowParkStates(true)}
+            title={t('logbook.parkStates.buttonTitle')}
+          >
+            {t('logbook.parkStates.button')}
+          </button>
+          <button
+            type="button"
+            className="export-btn"
+            onClick={() => setShowConfirmations(true)}
+            title={t('logbook.confirmations.buttonTitle')}
+          >
+            {t('logbook.confirmations.button')}
+          </button>
           <button
             type="button"
             className="export-btn"
@@ -2194,8 +2041,7 @@ export function Logbook({
       </div>
 
 
-      {remoteLog && operations && <RemoteLogCheck client={operations} />}
-      {(control || remoteLog) && showForm && (
+      {control && showForm && (
         <form
           className="logbook-form"
           onSubmit={submit}
@@ -2285,10 +2131,8 @@ export function Logbook({
                 title={t('logbook.field.when.title')}
               />
             </label>
-            {/* #329: the contact's END, beside the time it started. Desktop only — the remote
-                edit payload (`ManualRecord`) carries no end time, and a box that silently
-                dropped what was typed into it is worse than no box. */}
-            {!remoteLog && <label className="logbook-field">
+            {/* #329: the contact's END, beside the time it started. */}
+            <label className="logbook-field">
               <span>{t('logbook.field.end.label')}</span>
               <input
                 className={`settings-input mono${endTimeBad ? ' invalid' : ''}`}
@@ -2301,7 +2145,7 @@ export function Logbook({
                 aria-invalid={endTimeBad}
                 title={t('logbook.field.end.title')}
               />
-            </label>}
+            </label>
             <label className="logbook-field">
               <span>{t('logbook.field.state.label')}</span>
               <input
@@ -2360,41 +2204,35 @@ export function Logbook({
               <span>{t('logbook.field.comment.label')}</span>
               <input className="settings-input" value={draft.comment} onChange={(e) => setField('comment', e.target.value)} placeholder={t('logbook.field.comment.placeholder')} autoComplete="off" />
             </label>
-            {/* #239: your own location and rig for THIS contact (ADIF MY_GRIDSQUARE / MY_RIG).
-                Shack only: the Remote record carries neither, so the hosted form showed two
-                fields whose values it then threw away under an "updated" toast. */}
-            {!remoteLog && (
-              <>
-                <label className="logbook-field">
-                  <span>{t('logbook.field.myGrid.label')}</span>
-                  <input
-                    className="settings-input"
-                    value={draft.myGrid}
-                    onChange={(e) => setField('myGrid', e.target.value)}
-                    title={t('logbook.field.myGrid.title')}
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
-                </label>
-                <label className="logbook-field">
-                  <span>{t('logbook.field.myRig.label')}</span>
-                  <input
-                    className="settings-input"
-                    value={draft.myRig}
-                    onChange={(e) => setField('myRig', e.target.value)}
-                    title={t('logbook.field.myRig.title')}
-                    autoComplete="off"
-                  />
-                </label>
-              </>
-            )}
+            {/* #239: your own location and rig for THIS contact (ADIF MY_GRIDSQUARE / MY_RIG). */}
+            <>
+              <label className="logbook-field">
+                <span>{t('logbook.field.myGrid.label')}</span>
+                <input
+                  className="settings-input"
+                  value={draft.myGrid}
+                  onChange={(e) => setField('myGrid', e.target.value)}
+                  title={t('logbook.field.myGrid.title')}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+              <label className="logbook-field">
+                <span>{t('logbook.field.myRig.label')}</span>
+                <input
+                  className="settings-input"
+                  value={draft.myRig}
+                  onChange={(e) => setField('myRig', e.target.value)}
+                  title={t('logbook.field.myRig.title')}
+                  autoComplete="off"
+                />
+              </label>
+            </>
             {/* #239: QSL status where the rest of the contact is edited — saved in the SAME change
                 as the fields (`editQsoById`), and only where it differs from the stored contact.
                 LoTW and eQSL confirmations stay the services'; only the card is the operator's to
-                mark. Edit mode only: both marks address a logged record. Shack only: a Remote
-                edit is one change keyed by the row it started from and carries no marks; the
-                hosted row menu already offers both marks by key. */}
-            {editingKey !== null && !remoteLog && (
+                mark. Edit mode only: both marks address a logged record. */}
+            {editingKey !== null && (
               <>
                 <div className="logbook-field">
                   <label htmlFor="logbook-qsl-sent">{t('logbook.field.qslSent.label')}</label>
@@ -2487,13 +2325,6 @@ export function Logbook({
               once the globe scrolls away they pin to the top and the table reads normally. */}
           <div className="log-sticky">
       <div className="log-searchbar">
-        {remoteLog && <>
-          <span role="status">{remoteLog.phase === 'loading' ? t('remote.collectionLoading') : remoteLog.phase === 'unavailable' ? t('remote.collectionUnavailable') : t('remote.logPage', { start: remoteLog.total ? remoteLog.offset + 1 : 0, end: remoteLog.offset + observedLog.length, total: remoteLog.total })}</span>
-          {remoteLog.retained < remoteLog.total && <span>{t('remote.logWindow', { count: remoteLog.retained })}</span>}
-          <button type="button" className="log-filter-chip" disabled={remoteLog.phase !== 'ready' || !remoteLog.hasPrevious} onClick={remoteLog.previous}>{t('remote.previousPage')}</button>
-          <button type="button" className="log-filter-chip" disabled={remoteLog.phase !== 'ready' || !remoteLog.hasNext} onClick={() => void remoteLog.next()}>{t('remote.nextPage')}</button>
-          <button type="button" className="log-filter-chip" onClick={() => remoteLog.refresh()}>{t('remote.refreshCollection')}</button>
-        </>}
         <input
           className="settings-input log-search"
           value={search}
@@ -2932,7 +2763,7 @@ export function Logbook({
                       to record could never be recorded. `q.qslSent?.sent` now hides only the
                       three SEND entries — you still cannot send twice — while the inbound
                       entries stay reachable for the life of the contact. */}
-                </>}{(control || canQsl) && (
+                </>}{control && (
                     <select
                       className="log-rowbtn"
                       style={{ fontSize: '0.85em' }}
@@ -3019,7 +2850,7 @@ export function Logbook({
                         <option value="clear">{t('logbook.row.sat.clear')}</option>
                       )}
                     </select>
-                  )}{(control || canEdit) && <>
+                  )}{control && <>
                   <button
                     type="button"
                     className="log-rowbtn"
