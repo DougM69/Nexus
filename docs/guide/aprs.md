@@ -262,7 +262,9 @@ arrived.*
    passcode: a read-only login (`pass -1`) receives the full stream normally.
 2. Set the **Radius (km)** around your grid (150 km by default; 0 means no
    distance limit, which is busy) and any **Watched calls**, which come through
-   from anywhere on earth however far outside the radius they are.
+   from anywhere on earth however far outside the radius they are. The server
+   sends what is inside the radius; the weather, objects and messages switches in
+   Settings reach beyond it only when the radius is 0.
 3. Internet stations arrive tagged `net`, dashed and dimmed on the map. When they
    appear while the RF chip stays silent, the fault is in your radio chain, and
    that is the feed's real diagnostic value. The **Internet N** button hides them

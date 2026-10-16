@@ -451,6 +451,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PSK Reporter spots, and it looked the server's address up in the loop that keys and unkeys the
   radio, so a DNS server slow to answer held that loop, and an over due to end, for as long as it
   took. The lookup and the upload now run on their own.
+- **The APRS-IS feed asks only for the stations inside your radius.** With weather, objects or
+  messages switched on in Settings ▸ APRS (all three are, by default), the feed also asked the
+  server for every position, object, message and weather report on the network, worldwide, so the
+  map filled to its 2,000-station limit with stations far outside your radius. It now asks for
+  what is inside your radius and for your watched calls; a radius of 0 still means no distance
+  limit.
 - **AD1C's country file now carries its license notice.** Nexus finds a call's DXCC entity and
   zones in the cty.dat country file by Jim Reisert AD1C, which is MIT-licensed. That license asks
   for its notice to travel with every copy, and NOTICE named the license without reproducing it.
