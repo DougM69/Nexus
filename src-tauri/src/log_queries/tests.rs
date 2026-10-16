@@ -160,7 +160,7 @@ fn ask(
     let q: LogQuestion = serde_json::from_value(q.clone()).unwrap_or_else(|e| panic!("{q}: {e}"));
     let by_call = |r: &QsoRecord| resolve(&r.call);
     queries
-        .answer(engine, &q, &by_call, &by_call)
+        .answer(engine, &q, &by_call, &by_call, &by_call)
         .unwrap_or_else(|e| panic!("{q:?}: {e}"))
 }
 
@@ -173,7 +173,7 @@ fn try_ask(
 ) -> Result<Value, String> {
     let q: LogQuestion = serde_json::from_value(q.clone()).unwrap_or_else(|e| panic!("{q}: {e}"));
     let by_call = |r: &QsoRecord| resolve(&r.call);
-    queries.answer(engine, &q, &by_call, &by_call)
+    queries.answer(engine, &q, &by_call, &by_call, &by_call)
 }
 
 /// [`ask`], asked again while it is refused for a change still on its way to disk
@@ -660,7 +660,7 @@ fn the_logbook_shows_sorts_and_keys_a_contact_by_the_dxcc_set_by_hand() {
     let app = |q: Value| {
         let q: LogQuestion = serde_json::from_value(q).expect("a question");
         queries
-            .answer(&engine, &q, &shown, &counted)
+            .answer(&engine, &q, &shown, &on_card, &counted)
             .expect("answered")
     };
     let by_country =
@@ -722,6 +722,206 @@ fn the_logbook_shows_sorts_and_keys_a_contact_by_the_dxcc_set_by_hand() {
     assert_eq!(us["slots"]["bandsWorked"], json!(["40M"]));
 }
 
+// ── a typed call's card asks for its DXCC entity ───────────────────────────────────────────────
+
+/// `q` answered from the store as `ask_log` answers it, with the app's own resolvers, asked again
+/// while a change is still on its way to disk, as the window asks again.
+fn app_answer(engine: &SharedEngine, q: Value) -> Value {
+    let q: LogQuestion = serde_json::from_value(q).expect("a question");
+    let deadline = std::time::Instant::now() + tempo_app::test_util::TEST_WAIT;
+    loop {
+        match with_app_resolvers(&LogQueries::default(), engine, &q) {
+            Ok(a) => return a,
+            Err(why) if why.starts_with(NOT_ANSWERED) && std::time::Instant::now() < deadline => {}
+            Err(why) => panic!("{q:?}: refused: {why}"),
+        }
+    }
+}
+
+/// A typed call's callsign card, as the log form and Operate make it: the entity it asks for
+/// (`resolve_entity`), and that entity's answer — (entity, `newEntity`, `bandsWorked`,
+/// `modesWorked`).
+type Card = (Option<String>, Value, Value, Value);
+
+fn card_of(engine: &SharedEngine, call: &str) -> Card {
+    let entity = crate::resolve_entity(call.to_string());
+    let a = app_answer(
+        engine,
+        json!({"kind": "entity", "entity": entity.clone().unwrap_or_default()}),
+    );
+    let slots = &a["slots"];
+    (
+        entity,
+        a["newEntity"].clone(),
+        slots["bandsWorked"].clone(),
+        slots["modesWorked"].clone(),
+    )
+}
+
+/// A card that found its entity worked, on these bands and modes.
+fn worked(entity: &str, bands: &[&str], modes: &[&str]) -> Card {
+    (
+        Some(entity.to_string()),
+        json!(false),
+        json!(bands),
+        json!(modes),
+    )
+}
+
+/// ★ A typed call in a WAE area asks its card for the DXCC entity its contacts are shown under:
+/// IT9XYZ asks for Italy, the entity a Sicily contact carrying Italy's 248 is shown as, so the card
+/// finds that contact worked, on its band and in its mode, as the statistics (which count by
+/// number) do.
+#[test]
+fn a_typed_wae_call_asks_its_card_for_the_entity_its_contacts_are_shown_under() {
+    let d = Dir::new("card-wae");
+    let it9 = tempo_core::logbook::parse_adif(
+        "<CALL:6>IT9ABC<QSO_DATE:8>20240101<TIME_ON:4>1200<BAND:3>20m<MODE:2>CW\
+         <DXCC:3>248<COUNTRY:6>Sicily<EOR>",
+    );
+    let engine = on_store(&d, &it9);
+    assert_eq!(
+        card_of(&engine, "IT9XYZ"),
+        worked("Italy", &["20M"], &["CW"])
+    );
+}
+
+/// ★ Every WAE area a call reaches, with the two kinds of contact a log holds for it: one carrying
+/// the parent's DXCC number (an import, or a number a LoTW confirmation filled in) and one logged in
+/// Nexus, which is stored with no number and its area's name, and which the Logbook still shows
+/// under the area. A typed call in the area and a typed call in the parent both ask their card for
+/// the parent, and both see the two contacts. Vienna Intl Ctr is reached by no call: cty.dat places
+/// every Vienna call in Austria.
+#[test]
+fn a_wae_areas_contacts_are_on_its_card_and_its_parents_with_or_without_a_number() {
+    let mut got = Vec::new();
+    let mut want = Vec::new();
+    // (the area's contact, a typed call in the area, a typed call in the parent, number, parent, area)
+    for (call, typed, parent_call, code, parent, area) in [
+        ("IT9ABC", "IT9XYZ", "I1ABC", 248, "Italy", "Sicily"),
+        ("IG9ABC", "IH9XYZ", "I1ABC", 248, "Italy", "African Italy"),
+        (
+            "2M0BDR",
+            "2M0ZET",
+            "GM4ABC",
+            279,
+            "Scotland",
+            "Shetland Islands",
+        ),
+        ("JW0BEA", "JW5RIA", "JW1ABC", 259, "Svalbard", "Bear Island"),
+        (
+            "TA1ABC",
+            "TC1XYZ",
+            "TA2ABC",
+            390,
+            "Asiatic Turkey",
+            "European Turkey",
+        ),
+    ] {
+        let placed = |c: &str| propagation::dxcc::resolve(c).map(|i| i.entity);
+        assert_eq!(
+            (placed(call), placed(typed), placed(parent_call)),
+            (Some(area), Some(area), Some(parent)),
+            "premise: cty.dat places {call} and {typed} in {area}, {parent_call} in {parent}"
+        );
+        let d = Dir::new("card-wae-areas");
+        write_log(
+            &d,
+            &tempo_core::logbook::parse_adif(&format!(
+                "<CALL:{}>{call}<QSO_DATE:8>20240101<TIME_ON:4>1200<BAND:3>20m<MODE:2>CW\
+                 <DXCC:3>{code}<EOR>",
+                call.len()
+            )),
+        );
+        let opened = tempo_app::logstore::open(
+            &d.log(),
+            Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+            None,
+        )
+        .expect("the store opens");
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.attach_log_store(opened);
+        // The station's own country resolvers, as the launch wires them.
+        crate::wire_country_resolvers(&mut e);
+        let engine: SharedEngine = Arc::new(Mutex::new(e));
+        // Logged as the log form logs it.
+        engine_lock(&engine).log_qso(
+            tempo_core::logbook::parse_adif(&format!(
+                "<CALL:{}>{call}<QSO_DATE:8>20250101<TIME_ON:4>1200<BAND:3>40m<MODE:3>SSB<EOR>",
+                call.len()
+            ))
+            .remove(0),
+        );
+        // Each contact as the Logbook's page holds it, oldest first: its number, its COUNTRY, and
+        // the entity its Country column shows.
+        let page = app_answer(
+            &engine,
+            json!({"kind": "page", "offset": 0, "limit": 10, "query":
+                {"sort": "time", "asc": true, "search": "", "needsConfirmOnly": false}}),
+        );
+        let held: Vec<(Value, Value, Value)> = page["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|r| (r["dxcc"].clone(), r["country"].clone(), r["entity"].clone()))
+            .collect();
+        got.push((
+            area,
+            held,
+            card_of(&engine, typed),
+            card_of(&engine, parent_call),
+        ));
+        let both = worked(parent, &["20M", "40M"], &["CW", "SSB"]);
+        want.push((
+            area,
+            vec![
+                (json!(code), Value::Null, json!(parent)),
+                (Value::Null, json!(area), json!(area)),
+            ],
+            both.clone(),
+            both,
+        ));
+    }
+    assert_eq!(got, want);
+}
+
+/// A typed call outside the WAE areas asks its card for the entity it always did, and sees what it
+/// always saw: Germany's contacts with and without a number, Navassa's K1N carrying 182 on a KP1
+/// call's card and not on a US call's, and nothing for a Mexican call.
+#[test]
+fn a_typed_call_outside_the_wae_areas_asks_its_card_for_its_own_entity() {
+    let d = Dir::new("card-non-wae");
+    let engine = on_store(
+        &d,
+        &tempo_core::logbook::parse_adif(
+            "<CALL:6>DL1ABC<QSO_DATE:8>20240101<TIME_ON:4>1200<BAND:3>20m<MODE:2>CW<EOR>\
+             <CALL:6>DK2ABC<QSO_DATE:8>20240102<TIME_ON:4>1200<BAND:3>40m<MODE:3>SSB<DXCC:3>230<EOR>\
+             <CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:4>1234<BAND:3>17m<MODE:4>RTTY<DXCC:3>182<EOR>\
+             <CALL:4>W1AW<QSO_DATE:8>20240103<TIME_ON:4>1200<BAND:3>15m<MODE:3>FT8<EOR>",
+        ),
+    );
+    let typed = |call: &str| card_of(&engine, call);
+    assert_eq!(
+        [
+            typed("DL9XYZ"),
+            typed("KP1XYZ"),
+            typed("K1ABC"),
+            typed("XE1ABC")
+        ],
+        [
+            worked("Fed. Rep. of Germany", &["20M", "40M"], &["CW", "SSB"]),
+            worked("Navassa Island", &["17M"], &["RTTY"]),
+            worked("United States", &["15M"], &["FT8"]),
+            (
+                Some("Mexico".to_string()),
+                json!(true),
+                json!([]),
+                json!([])
+            ),
+        ]
+    );
+}
+
 /// The awards' chase and worked count, the Needed board's worked entities, and the statistics'
 /// entity count and entities — what a contact counts toward, as the screens read it from the store.
 type Counts = (Vec<String>, usize, Vec<String>, Value, Value);
@@ -732,7 +932,7 @@ fn counts(engine: &SharedEngine) -> Counts {
     let (needs, _) = crate::log_folds::needs_kept(engine, &tallies).expect("needs");
     let q: LogQuestion = serde_json::from_value(json!({"kind": "statistics"})).expect("asked");
     let stats = LogQueries::default()
-        .answer(engine, &q, &shown, &counted)
+        .answer(engine, &q, &shown, &on_card, &counted)
         .expect("answered");
     let mut worked: Vec<String> = needs.worked_entity_names().iter().cloned().collect();
     worked.sort();
@@ -2092,7 +2292,7 @@ fn the_statistics_count_each_contact_as_the_awards_do() {
     let queries = LogQueries::default();
     let q: LogQuestion = serde_json::from_value(json!({"kind": "statistics"})).expect("parses");
     let counts = queries
-        .answer(&engine, &q, &shown, &counted)
+        .answer(&engine, &q, &shown, &on_card, &counted)
         .expect("answered");
     let entities: Vec<(&str, u64)> = counts["entities"]
         .as_array()

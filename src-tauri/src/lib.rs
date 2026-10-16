@@ -20091,10 +20091,14 @@ async fn log_qso(
 }
 
 /// The cty.dat-resolved DXCC entity for a callsign, or null — the log-entry
-/// form keys its "new one" badge on this, not on the QRZ country string.
+/// form and Operate key their "new one" badges on this, not on the QRZ country string.
+/// It is the callsign card's entity (`propagation::dxcc::card_entity`), the one an entity's
+/// worked slots keep a contact under ([`log_queries::on_card`]): a WAE area's call is the DXCC
+/// entity its number names (IT9 is Italy), as the Logbook shows a contact carrying that number.
 #[tauri::command]
 fn resolve_entity(call: String) -> Option<String> {
-    propagation::dxcc::resolve(&call).map(|i| i.entity.to_string())
+    propagation::dxcc::card_entity(propagation::dxcc::resolve(&call).as_ref(), None)
+        .map(str::to_string)
 }
 
 /// Every entity name paired with its cty.dat representative location, as
