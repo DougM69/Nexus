@@ -7,6 +7,10 @@
 //! 5366.5 kHz top of the 60 m segment. Each frame is now judged from its lowest tone up the width its
 //! mode occupies: FT8 50 Hz, FT4 83.3 Hz, JS8 25, 50, 80, 160 or 250 Hz by speed.
 //!
+//! FT2 kept the lowest tone after that, and its frame is the widest of them: a General at 5.363 MHz
+//! keyed it from 3334 Hz up with its top on or above 5366.5 kHz. It is judged across its 166.7 Hz
+//! too.
+//!
 //! A JS8 heartbeat or HB ACK keys on its own spot in 500–1000 Hz, while the gate judged the
 //! operator's TX offset; on a dial just under a segment's bottom the spot fell below it with the
 //! gate saying allowed. The frame is now judged at the offset it keys on, when it is planned and
@@ -30,6 +34,10 @@ const OUTSIDE_PRIVILEGES: &str = "JS8 not sent: this frequency is outside your l
 /// offset up.
 const FT8_WIDTH: f64 = 50.0;
 const FT4_WIDTH: f64 = 4.0 * 12_000.0 / 576.0;
+/// FT2's, Decodium's FT4 at half the symbol time: its four tones, 0 to 3 (`genft2.f90`), each a
+/// symbol rate apart (`gen_ft2wave.f90`'s modulation index of 1), and a symbol is 288 samples at
+/// 12 kHz (`ft2_params.f90`). Written out from the Fortran, apart from the gate's own constants.
+const FT2_WIDTH: f64 = 4.0 * 12_000.0 / 288.0;
 const JS8_WIDTHS: [(Js8Speed, f64); 5] = [
     (Js8Speed::Slow, 25.0),
     (Js8Speed::Normal, 50.0),
@@ -202,6 +210,46 @@ fn an_ft8_or_ft4_cq_whose_top_reaches_the_segment_edge_is_refused_and_just_insid
     );
 }
 
+/// FT2 at 5.363 MHz as a US General: a CQ whose lowest tone is inside the segment but whose top
+/// reaches 5366.5 kHz is refused, and one hertz lower it keys. The cockpit locks TX for the licence:
+/// no connection refuses it and the phone mode is not the rule, so the lock says this frequency is
+/// outside the privileges, and the frequency it names is the dial.
+#[test]
+fn an_ft2_cq_whose_top_reaches_the_segment_edge_is_refused_with_the_licence_lock_and_just_inside_keys(
+) {
+    // The last offset that keys and the first that is refused: FT2's 166.7 Hz below 3500 Hz.
+    let (last, first) = (3333.0_f32, 3334.0_f32);
+    assert!(
+        f64::from(last) + FT2_WIDTH < 3500.0 && f64::from(first) + FT2_WIDTH >= 3500.0,
+        "the top under 5366.5 kHz at the last offset, on or above it at the first"
+    );
+    assert!(
+        crate::privileges::tx_allowed(
+            crate::settings::LicenseClass::General,
+            5.363 + f64::from(first) / 1e6,
+            OperatingMode::Digital
+        ),
+        "premise: the lowest tone at the first refused offset is inside the segment"
+    );
+    let keys = ft_keys(&mut ft_general(Tier::Ft2, last));
+    let mut e = ft_general(Tier::Ft2, first);
+    let refused = ft_keys(&mut e);
+    let radio = e.snapshot().radio;
+    assert_eq!(
+        (
+            keys,
+            refused,
+            radio.tx_allowed,
+            radio.tx_refusal,
+            radio.phone_mode_refused,
+            radio.tx_emission_mhz
+        ),
+        (true, false, false, None, false, Some(5.363)),
+        "(keyed at the last offset, keyed at the first refused, the cockpit's TX allowed, the \
+         connection's refusal, the phone-mode lock, the frequency the lock names)"
+    );
+}
+
 /// A heartbeat keys on its own spot in 500–1000 Hz. On a dial 700 Hz under the 60 m segment's
 /// bottom, 5.3508 MHz, the operator's 1500 Hz is 5352.3 kHz, inside, and a spot at 500 Hz is
 /// 5351.3 kHz, below 5351.5: that heartbeat is refused and the cockpit says why. The same dial with
@@ -267,8 +315,8 @@ fn under_a_pass_a_heartbeat_moved_off_its_privilege_between_plan_and_key_is_refu
 }
 
 /// Away from every edge every frame keys exactly as before: at 5.363 MHz + 1500 Hz a General's JS8
-/// frame keys at 1500 Hz at every speed, FT8 and FT4 call CQ, and at 14.078 MHz a heartbeat keys on
-/// its own spot.
+/// frame keys at 1500 Hz at every speed, FT8, FT4 and FT2 call CQ, and at 14.078 MHz a heartbeat
+/// keys on its own spot.
 #[test]
 fn away_from_every_edge_every_frame_keys_as_before() {
     for (speed, _) in JS8_WIDTHS {
@@ -278,7 +326,7 @@ fn away_from_every_edge_every_frame_keys_as_before() {
             "{speed:?}"
         );
     }
-    for tier in [Tier::Ft8, Tier::Ft4] {
+    for tier in [Tier::Ft8, Tier::Ft4, Tier::Ft2] {
         assert!(ft_keys(&mut ft_general(tier, 1500.0)), "{tier:?}");
     }
     let mut e = js8_general(14.078, Js8Speed::Normal, 1500.0);
@@ -292,17 +340,20 @@ fn away_from_every_edge_every_frame_keys_as_before() {
 }
 
 /// ⛔ NEVER LESS. Over every US class, the bottom and top edge of every range it may send data in,
-/// both sidebands, FT8, FT4 and every JS8 speed, and TX offsets across each edge, the gate allows a
-/// frame only where it allowed the frame's lowest tone (the whole of what it judged before), and it
-/// allows every frame whose whole width is privileged, as before. Where the two part, the frame
-/// leaves the privilege, and every mode parts on both sidebands.
+/// both sidebands, FT8, FT4, FT2 and every JS8 speed, and TX offsets across each edge, the gate
+/// allows a frame only where it allowed the frame's lowest tone (the whole of what it judged
+/// before), and it allows every frame whose whole width is privileged, as before. Where the two
+/// part, the frame leaves the privilege, and every mode parts on both sidebands.
 #[test]
 fn the_gate_never_allows_a_frame_it_refused_before_and_allows_every_frame_inside_as_before() {
-    let tiers: Vec<(Tier, Option<Js8Speed>, f64)> =
-        [(Tier::Ft8, None, FT8_WIDTH), (Tier::Ft4, None, FT4_WIDTH)]
-            .into_iter()
-            .chain(JS8_WIDTHS.map(|(speed, width)| (Tier::Js8, Some(speed), width)))
-            .collect();
+    let tiers: Vec<(Tier, Option<Js8Speed>, f64)> = [
+        (Tier::Ft8, None, FT8_WIDTH),
+        (Tier::Ft4, None, FT4_WIDTH),
+        (Tier::Ft2, None, FT2_WIDTH),
+    ]
+    .into_iter()
+    .chain(JS8_WIDTHS.map(|(speed, width)| (Tier::Js8, Some(speed), width)))
+    .collect();
     let mut parted: std::collections::BTreeMap<String, usize> = Default::default();
     let mut cases = 0usize;
     for class in ["technician", "general", "extra"] {

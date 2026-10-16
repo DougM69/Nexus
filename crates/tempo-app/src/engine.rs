@@ -5463,13 +5463,20 @@ impl DataFrame {
     /// Not WSJT-X's Wide Graph bracket, which ends at the top tone's centre (43.75 Hz for FT8,
     /// `markerWidthHz` in `ui/src/waterfall.ts`): the gate judges what the frame occupies.
     ///
-    /// 0 for every other mode (FT2, the Tempo modes, Q65, FST4, MSK144, JT65, WSPR), judged at its
+    /// FT2's, a mode WSJT-X does not have, is counted the same way from its own modulator: its
+    /// [`modes::FT2_NTONES`] tones, each [`modes::FT2_TONE_SPACING_HZ`] (12 kHz over its 288 samples
+    /// a symbol) above the last, ≈ 166.7 Hz.
+    ///
+    /// 0 for every other mode (the Tempo modes, Q65, FST4, MSK144, JT65, WSPR), judged at its
     /// lowest tone alone as before: a width for each of them is a decision of its own, not a claim
     /// that they are narrow.
     pub(crate) fn width_hz(kind: Option<modes::ModeKind>) -> f64 {
         match kind {
             Some(modes::ModeKind::Ft8) => 8.0 * 12_000.0 / 1920.0,
             Some(modes::ModeKind::Ft4) => 4.0 * 12_000.0 / 576.0,
+            Some(modes::ModeKind::Ft2) => {
+                modes::FT2_NTONES as f64 * f64::from(modes::FT2_TONE_SPACING_HZ)
+            }
             Some(modes::ModeKind::Js8 { speed }) => 8.0 * f64::from(speed.tone_spacing_hz()),
             _ => 0.0,
         }

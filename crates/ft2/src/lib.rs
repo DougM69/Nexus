@@ -38,6 +38,12 @@ pub const SAMPLE_RATE: f32 = 12_000.0;
 /// FT2 baud rate and tone spacing (they are equal: h=1 GFSK): 12000/288.
 pub const BAUD: f32 = SAMPLE_RATE / NSPS as f32;
 
+/// FT2's tone count: it is 4-GFSK, every channel tone one of 0..=3 (`genft2.f90:8`, two code bits
+/// a tone through its Gray map at :67-79), each [`BAUD`] above the last (`gen_ft2wave.f90:15,26`:
+/// a modulation index of 1 over `nsps` samples). A frame's bandwidth, its tones times their
+/// spacing as WSJT-X counts FT4's, is `NTONES` × [`BAUD`].
+pub const NTONES: usize = 4;
+
 /// Audio seconds in one FT2 transmission: 105 symbols at 41.67 baud = 2.52 s.
 pub fn tx_audio_secs() -> f32 {
     NWAVE as f32 / SAMPLE_RATE
@@ -185,6 +191,15 @@ fn message_text(raw: &[u8; 38]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`NTONES`] is the encoder's alphabet: a frame's tones are exactly 0 to `NTONES` - 1, and
+    /// every frame sends all of them (each of its four Costas arrays does).
+    #[test]
+    fn a_frame_sends_exactly_ntones_tones() {
+        let itone = encode("CQ KD9TAW EN52").expect("message must pack");
+        let sent: std::collections::BTreeSet<i32> = itone.iter().copied().collect();
+        assert_eq!(sent, (0..).take(NTONES).collect());
+    }
 
     /// TX→RX loopback at clean SNR: what we encode, we must decode.
     ///

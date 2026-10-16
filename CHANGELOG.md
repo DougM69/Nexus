@@ -876,15 +876,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the mode is the only reason TX is locked, push-to-talk, the band lock, the voice keyer, the radio's
   tuner button and SSTV say that 60 m allows only USB phone and ask for USB or AUTO. A frequency
   where USB is refused too keeps the old sentence. What keys and what is refused is unchanged.
-- **FT8, FT4 and JS8: the licence lock now counts the whole signal, not just its lowest tone.** It
-  judged only your dial plus the TX offset, so a signal whose top crossed the edge of your
-  privileges still went out: a US General on 5.363 MHz, where the 60 m segment ends at 5366.5 kHz,
-  could transmit at any TX offset below 3500 Hz. Now the signal's full width counts: FT8 50 Hz, FT4
-  83 Hz, and JS8 25 Hz at Slow, 50 at Normal, 80 at Fast, 160 at JS8 40 and 250 at JS8 60. On 5.363
-  MHz an FT8 or JS8 Normal signal keys at a TX offset up to 3449 Hz, and from 3450 Hz the screen
-  shows TX LOCKED. Away from an edge nothing changes, and neither do the other digital modes or an
-  operator with no US licence class. WSJT-X and JS8Call check no privileges at all. NEEDS-BENCH: a
-  radio on 60 m into a dummy load, as a US General.
+- **FT8, FT4, FT2 and JS8: the licence lock now counts the whole signal, not just its lowest
+  tone.** It judged only your dial plus the TX offset, so a signal whose top crossed the edge of
+  your privileges still went out: a US General on 5.363 MHz, where the 60 m segment ends at 5366.5
+  kHz, could transmit at any TX offset below 3500 Hz. Now the signal's full width counts: FT8 50
+  Hz, FT4 83 Hz, FT2 167 Hz, and JS8 25 Hz at Slow, 50 at Normal, 80 at Fast, 160 at JS8 40 and
+  250 at JS8 60. On 5.363 MHz an FT8 or JS8 Normal signal keys at a TX offset up to 3449 Hz, and
+  from 3450 Hz the screen shows TX LOCKED; FT2 keys up to 3333 Hz and locks from 3334 Hz. Away from
+  an edge nothing changes, and neither do the other digital modes or an operator with no US licence
+  class. WSJT-X, Decodium and JS8Call check no privileges at all. NEEDS-BENCH: a radio on 60 m into
+  a dummy load, as a US General.
 - **JS8: a heartbeat is judged where it is sent.** A heartbeat or heartbeat acknowledgement goes out
   on its own free spot in 500–1000 Hz, but the licence lock judged your TX offset, so on a dial just
   below the bottom of a segment, with your TX offset inside it, a heartbeat could go out below the
