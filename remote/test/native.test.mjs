@@ -1315,11 +1315,12 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
          if(change.kind==='monitor'){assert.equal(after.qso.dxcall,null);assert.equal(after.qso.cqRunning,false)}
          assert.deepEqual(await probe.send({type:'loggingEvidence'}),{...evidence,txEnabled:true})
        }
-       // N0CALL is nonstandard: native hashed_form drops its grid/report and
-       // turns the R-report into RRR. Preserve those on-air forms in readback.
+       // N0CALL is nonstandard: native hashed_form drops its grid, and beside a plain
+       // call hashes its OWN call so the report and R-report ride (WSJT-X's t0b).
+       // Preserve those on-air forms in readback.
        for(const [text,expectedText] of [
-         ['K2ABC N0CALL AA00','<K2ABC> N0CALL'],['K2ABC N0CALL -12','<K2ABC> N0CALL'],
-         ['K2ABC N0CALL R-12','<K2ABC> N0CALL RRR'],['K2ABC N0CALL RR73','<K2ABC> N0CALL RR73'],['TNX 73','TNX 73']]){
+         ['K2ABC N0CALL AA00','<K2ABC> N0CALL'],['K2ABC N0CALL -12','K2ABC <N0CALL> -12'],
+         ['K2ABC N0CALL R-12','K2ABC <N0CALL> R-12'],['K2ABC N0CALL RR73','<K2ABC> N0CALL RR73'],['TNX 73','TNX 73']]){
          const before=(await probe.send({type:'ftCallEvidence'})).qso
          ft=await ftState();assert.ok(ft.controls.capabilities.includes('ftMessages'))
          const expectedQso={dxcall:before.dxcall,state:before.state,txNow:before.txNow,cqRunning:before.cqRunning}
