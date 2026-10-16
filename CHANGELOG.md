@@ -534,6 +534,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FT8, FT4 and FT2 send the signal report when your own call has a prefix.** With a call such
+  as `OE/PD1SCO`, the report went out as `<PA0A> OE/PD1SCO` and the roger as a bare `RRR`, so no
+  report reached the other station and neither log got one. Nexus now sends what WSJT-X sends:
+  your call in brackets in the report and the roger, `PA0A <OE/PD1SCO> -01` and
+  `PA0A <OE/PD1SCO> R-01`, so the number fits, and your call in full in your first call, RR73 and
+  73, which is how the other station learns it. This applies to any call FT8 cannot carry whole
+  (a prefix, or a suffix other than /P and /R) working an ordinary call; when the other call has a
+  slash too, /P and /R included, FT8 still has no room for a report. NEEDS-BENCH: on the air, with
+  a second receiver running WSJT-X. (#410)
+- **A roger Nexus sends again after your CQ run has moved on keeps your whole call.** When a station
+  that missed your RR73 asks again, or a caller your run gave up on comes back with RR73, Nexus
+  answers once. With a call such as `OE/PD1SCO` that answer went out as `PA0A OE/PD1SCO RR73`,
+  which FT8 sends without the prefix, as `PA0A PD1SCO RR73`. It now goes out as the rest of the
+  contact did, `<PA0A> OE/PD1SCO RR73`. NEEDS-BENCH: needs a partner on the air.
 - **The Logbook opens on a computer whose graphics have no WebGL2.** On such a computer (reported
   on Linux Mint) the Logbook showed only "Logbook hit an error" and "Error creating WebGL context":
   the 3-D globe above the table needs WebGL2, and when it could not draw it took the whole Logbook

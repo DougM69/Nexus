@@ -75,17 +75,21 @@ export function genStdMessages(inp: StdMsgInput): StdMessages {
   // second is a property of the PAIR — see suffixConflict: either call is 77-bit
   // nonstandard, or one carries `/P` while the other carries `/R`.
   //
-  // The DX is hashed `<DX>`; the SENDER decides what the payload can be, and the test
-  // is packsBesideHash — a plain c28 sender keeps its grid and its number, while a
-  // nonstandard OR slashed sender can carry neither (Tx1/Tx2 → the bare call, Tx3 →
-  // RRR, which is what keeps Tx3 tellable from Tx1/Tx2 for the partner's sequencer).
+  // The DX is hashed `<DX>`, and a grid or a number rides only beside a plain c28 call
+  // (packsBesideHash). A plain sender keeps both. A nonstandard sender opposite a plain
+  // DX hashes ITS OWN call in Tx2/Tx3 instead — WSJT-X's form (genStdMsgs' t0b, used when
+  // only MY call fails stdCall) — so its number rides: `PA0A <OE/PD1SCO> -01`. Its Tx1
+  // keeps the call in full, which is what lets the partner resolve that hash. Any other
+  // nonstandard or slashed sender carries neither (Tx1/Tx2 → the bare call, Tx3 → RRR,
+  // which is what keeps Tx3 tellable from Tx1/Tx2 for the partner's sequencer).
   if (!isStdCall(dx) || !isStdCall(my) || suffixConflict(my, dx)) {
     const bdx = `<${dx.replace(/^<|>$/g, '')}>`
     const iCarry = packsBesideHash(my)
+    const iHash = !isStdCall(my) && packsBesideHash(dx)
     return {
       tx1: iCarry ? j(bdx, my, grid) : j(bdx, my),
-      tx2: iCarry ? j(bdx, my, rpt) : j(bdx, my),
-      tx3: iCarry ? j(bdx, my, `R${rpt}`) : j(bdx, my, 'RRR'),
+      tx2: iHash ? j(dx, `<${my}>`, rpt) : iCarry ? j(bdx, my, rpt) : j(bdx, my),
+      tx3: iHash ? j(dx, `<${my}>`, `R${rpt}`) : iCarry ? j(bdx, my, `R${rpt}`) : j(bdx, my, 'RRR'),
       tx4: j(bdx, my, final),
       tx5: j(bdx, my, '73'),
       // A CQ has no pair, so only MY call decides it: a /P or /R rover's CQ is an

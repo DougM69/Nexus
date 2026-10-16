@@ -26707,6 +26707,9 @@ contact yourself."
                 _ => None,
             };
             if let Some(m) = owed {
+                // In the form the sequencer sent this pair's overs, hashed where the pair
+                // needs it, never a nonstandard call bare.
+                let m = tempo_core::qso::Station::on_air_form(&mycall, &call, m);
                 tempo_core::applog::info(
                     "tx",
                     &format!("late reply owed to {call}: {}", m.to_text()),
@@ -41997,6 +42000,91 @@ mod tests {
         assert_eq!(log[0].call, "F4CYH/R", "logged under the rover's real call");
         assert_eq!(log[0].rst_rcvd, None, "no number was ever sent to us");
         assert_eq!(log[0].rst_sent, None, "and we could send none either");
+    }
+
+    /// A nonstandard call of mine beside a plain partner sends its number as WSJT-X does,
+    /// with MY call hashed (`PA0A <OE/PD1SCO> -01`), so the contact logs both reports.
+    /// Reported from OE/PD1SCO: the report went out as `<PA0A> OE/PD1SCO` and the roger as
+    /// a bare `RRR`, so no number ever reached the other station.
+    #[test]
+    fn a_nonstandard_call_logs_the_report_it_sent_and_the_one_it_got() {
+        let tx_now = |e: &Engine| e.snapshot().qso.as_ref().and_then(|q| q.tx_now.clone());
+
+        // I answer PA0A's CQ.
+        let mut e = Engine::new("OE/PD1SCO", "JN67", 0);
+        e.set_tier(Tier::Ft8);
+        e.call_station("PA0A");
+        assert_eq!(tx_now(&e).as_deref(), Some("<PA0A> OE/PD1SCO"));
+        key_one_over(&mut e, 0);
+        e.ingest_decodes_for_test(&[dec_snr("<OE/PD1SCO> PA0A -05", -1)], 1);
+        assert_eq!(tx_now(&e).as_deref(), Some("PA0A <OE/PD1SCO> R-01"));
+        key_one_over(&mut e, 2);
+        e.ingest_decodes_for_test(&[dec_snr("<OE/PD1SCO> PA0A RR73", -1)], 3);
+        let log = e.stored_log();
+        assert_eq!(log.len(), 1, "the contact auto-logged");
+        assert_eq!(log[0].call, "PA0A");
+        assert_eq!(log[0].rst_sent.as_deref(), Some("-01"));
+        assert_eq!(log[0].rst_rcvd.as_deref(), Some("-05"));
+
+        // PA0A answers my CQ.
+        let mut e = Engine::new("OE/PD1SCO", "JN67", 0);
+        e.set_tier(Tier::Ft8);
+        e.start_cq(None).expect("a nonstandard call may call CQ");
+        let at = key_one_over(&mut e, 0);
+        e.ingest_decodes_for_test(&[dec_snr("<OE/PD1SCO> PA0A JO22", -1)], at + 1);
+        assert_eq!(tx_now(&e).as_deref(), Some("PA0A <OE/PD1SCO> -01"));
+        let at = key_one_over(&mut e, at + 2);
+        e.ingest_decodes_for_test(&[dec_snr("<OE/PD1SCO> PA0A R-05", -1)], at + 1);
+        assert_eq!(tx_now(&e).as_deref(), Some("<PA0A> OE/PD1SCO RR73"));
+        let at = key_one_over(&mut e, at + 2);
+        e.ingest_decodes_for_test(&[dec_snr("<OE/PD1SCO> PA0A 73", -1)], at + 1);
+        let log = e.stored_log();
+        assert_eq!(log.len(), 1, "the contact auto-logged");
+        assert_eq!(log[0].call, "PA0A");
+        assert_eq!(log[0].rst_sent.as_deref(), Some("-01"));
+        assert_eq!(log[0].rst_rcvd.as_deref(), Some("-05"));
+    }
+
+    /// The roger re-sent to a partner who missed it after the run moved on goes out in the
+    /// form the sequencer sends it, `<PA0A> OE/PD1SCO RR73`. Built bare, `PA0A OE/PD1SCO
+    /// RR73` packs with the prefix dropped, and PA0A would copy a roger from PD1SCO.
+    #[test]
+    fn a_late_roger_from_a_nonstandard_call_keeps_the_call_whole() {
+        // (mycall, the caller, what they send us, the roger we owe after the run moved on)
+        for (me, them, grid, roger, owed) in [
+            (
+                "OE/PD1SCO",
+                "PA0A",
+                "<OE/PD1SCO> PA0A JO22",
+                "<OE/PD1SCO> PA0A R-09",
+                "<PA0A> OE/PD1SCO RR73",
+            ),
+            // The control: a plain pair's late roger is exactly what it always was.
+            (
+                "W9XYZ",
+                "K1ABC",
+                "W9XYZ K1ABC FN42",
+                "W9XYZ K1ABC R-09",
+                "K1ABC W9XYZ RR73",
+            ),
+        ] {
+            let mut e = Engine::new(me, "JN67", 0);
+            e.set_mode("qso-run").unwrap();
+            assert!(!e.poll_tx(0).is_empty(), "CQ goes out");
+            e.ingest_decodes_for_test(&[dec_snr(grid, -8)], 1);
+            e.poll_tx(2);
+            e.ingest_decodes_for_test(&[dec_snr(roger, -8)], 3);
+            assert!(!e.poll_tx(4).is_empty(), "our closing roger goes out");
+            e.ingest_decodes_for_test(&[], 5);
+            let q = e.snapshot().qso.expect("still running");
+            assert_eq!(q.state, "CallingCq", "{me}: the run moved on");
+            assert_eq!(e.stored_log().len(), 1, "{me}: the contact is logged");
+
+            // They never copied our RR73 and ask again.
+            e.ingest_decodes_for_test(&[dec_snr(roger, -8)], 7);
+            let got = e.snapshot().qso.as_ref().and_then(|q| q.tx_now.clone());
+            assert_eq!(got.as_deref(), Some(owed), "{me} × {them}");
+        }
     }
 
     /// ⛔ THE LOGBOOK-INTEGRITY GUARD. A logbook that invents a contact is worse than one
