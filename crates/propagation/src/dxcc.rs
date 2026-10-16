@@ -640,8 +640,8 @@ pub fn entities() -> Vec<DxccEntity> {
     all
 }
 
-/// The entity a logged contact is SHOWN under — the Logbook's Country column, its sort, and an
-/// entity's worked slots on the callsign card: the entity its record's own DXCC number names,
+/// The entity a logged contact is SHOWN under — the Logbook's Country column and its sort (the
+/// callsign card's is [`card_entity`]): the entity its record's own DXCC number names,
 /// wherever it names one ([`country_by_dxcc`], the name its `COUNTRY` takes, so the column and
 /// `COUNTRY` never differ); else its call's (`resolved`).
 ///
@@ -669,6 +669,22 @@ pub fn shown_entity(resolved: Option<&DxccInfo>, dxcc: Option<u32>) -> Option<&'
 /// record's own text in a file.
 pub fn country_by_dxcc(code: u32) -> Option<&'static str> {
     entity_by_dxcc(code).map(|e| e.name)
+}
+
+/// The entity a contact is under on the callsign card: [`shown_entity`] for the contact as it
+/// would be with its DXCC number — its record's own where that names an entity, else the number its
+/// call carries. A typed call has no record (`dxcc` is `None`) and asks its card for this, and an
+/// entity's worked slots keep each logged contact under it, so the two always meet.
+///
+/// It differs from the Country column only for a WAE area's contact without a number, which the
+/// column shows as its call places it (Sicily) and the card counts as its DXCC entity (Italy, from
+/// the 248 the call carries). So IT9XYZ's card and I1ABC's both ask for Italy, and both find a
+/// Sicily contact carrying 248 (an import, or a number a LoTW confirmation filled in) and one
+/// logged in Nexus, which carries none. A call outside the WAE areas is its own entity, as it
+/// always was: each DXCC entity's number names it.
+pub fn card_entity(resolved: Option<&DxccInfo>, dxcc: Option<u32>) -> Option<&'static str> {
+    dxcc.and_then(country_by_dxcc)
+        .or_else(|| shown_entity(resolved, resolved.and_then(|i| i.dxcc)))
 }
 
 /// The subdivision an ENTITY settles on its own, because the entity IS one state (#171).
@@ -1577,5 +1593,66 @@ mod dxcc_numbers {
                 );
             }
         }
+    }
+
+    /// On the callsign card a WAE area's call is its DXCC entity: typed (no record), and logged with
+    /// its parent's number, with none (as Nexus logs it), and with a number that names nothing,
+    /// which the column passes over as well. A number its record carries wins, as in the column.
+    #[test]
+    fn a_wae_areas_call_is_its_dxcc_entity_on_the_card_with_or_without_a_number() {
+        for (call, code, parent) in [
+            ("IT9ABC", 248, "Italy"),
+            ("IG9ABC", 248, "Italy"),
+            ("2M0BDR", 279, "Scotland"),
+            ("JW0BEA", 259, "Svalbard"),
+            ("TA1ABC", 390, "Asiatic Turkey"),
+            ("4U1A", 206, "Austria"),
+        ] {
+            let card = |dxcc| card_entity(resolve(call).as_ref(), dxcc);
+            assert_eq!(
+                [
+                    card(None),
+                    card(Some(code)),
+                    card(Some(NO_DXCC_ENTITY)),
+                    card(Some(523))
+                ],
+                [Some(parent); 4],
+                "{call}"
+            );
+        }
+        let card = |call: &str, dxcc| card_entity(resolve(call).as_ref(), dxcc);
+        assert_eq!(card("IT9ABC", Some(182)), Some("Navassa Island"));
+        assert_eq!(card("K1N", Some(182)), Some("Navassa Island"));
+        assert_eq!(card("K1N", None), Some("United States"));
+        assert_eq!(card("Q", Some(182)), Some("Navassa Island"));
+        assert_eq!(card("Q", None), None);
+    }
+
+    /// A call outside the WAE areas is its own entity on the card, for every entity in cty.dat:
+    /// each DXCC entity's number names that entity, and only the six WAE areas name another.
+    #[test]
+    fn every_other_call_is_its_own_entity_on_the_card() {
+        let r = resolver();
+        let mut areas = Vec::new();
+        for i in 0..r.entities.len() {
+            let e = info(r, i as u32, None);
+            if e.is_dxcc {
+                assert_eq!(card_entity(Some(&e), None), Some(e.entity));
+            } else {
+                areas.push((e.entity, card_entity(Some(&e), None)));
+            }
+        }
+        areas.sort_unstable();
+        assert_eq!(
+            areas,
+            [
+                ("African Italy", Some("Italy")),
+                ("Bear Island", Some("Svalbard")),
+                ("European Turkey", Some("Asiatic Turkey")),
+                ("Shetland Islands", Some("Scotland")),
+                ("Sicily", Some("Italy")),
+                ("Vienna Intl Ctr", Some("Austria")),
+            ]
+        );
     }
 }

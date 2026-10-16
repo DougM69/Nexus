@@ -350,15 +350,17 @@ pub struct LogQueries(Arc<Inner>);
 impl LogQueries {
     /// Answer `q`: take what it needs under the Engine lock, release it, read, answer. `resolve`
     /// is a row's DXCC entity — in the app [`shown`]: its call's, or the one its record's DXCC
-    /// number names — what each row the UI is handed carries, what the country column sorts on,
-    /// and what an entity's slots are keyed by. `counted` is the entity the statistics count a
-    /// contact under: in the app, the one the awards count it toward ([`counted`]), by its
-    /// record's DXCC number first.
+    /// number names — what each row the UI is handed carries and what the country column sorts
+    /// on. `card` is what an entity's slots are keyed by: in the app the entity a contact is
+    /// under on the callsign card ([`on_card`]), which a typed call's card asks for. `counted` is
+    /// the entity the statistics count a contact under: in the app, the one the awards count it
+    /// toward ([`counted`]), by its record's DXCC number first.
     pub(crate) fn answer(
         &self,
         engine: &SharedEngine,
         q: &LogQuestion,
         resolve: &dyn Fn(&QsoRecord) -> Option<String>,
+        card: &dyn Fn(&QsoRecord) -> Option<String>,
         counted: &dyn Fn(&QsoRecord) -> Option<String>,
     ) -> Result<Value, String> {
         match q {
@@ -408,7 +410,7 @@ impl LogQueries {
                         .is_some_and(|k| eng.log_appended_only_since(k.revision));
                     (Capture::take(&eng), cached, appended)
                 };
-                let index = self.entity_index(&c, cached, appended, resolve)?;
+                let index = self.entity_index(&c, cached, appended, card)?;
                 json(index.index.answer(entity))
             }
             // A grid, a band or a time moves `index_rev`; an upload stamp does not, and none of
@@ -873,10 +875,19 @@ impl LogQueries {
 /// call's through cty.dat, or the one its record's own DXCC number names where that is another —
 /// a 1×1 call logged as the DXpedition it was, a deleted entity, a number the operator set by
 /// hand. What each row the UI is handed carries (the Logbook's country column, wherever a row is
-/// made: here, the answers to a change, Remote's pages), what the column sorts on, and what an
-/// entity's worked slots are keyed by.
+/// made: here, the answers to a change, Remote's pages) and what the column sorts on.
 pub(crate) fn shown(r: &QsoRecord) -> Option<String> {
     propagation::dxcc::shown_entity(propagation::dxcc::resolve(&r.call).as_ref(), r.dxcc)
+        .map(str::to_string)
+}
+
+/// The DXCC entity a logged contact is under on the callsign card
+/// (`propagation::dxcc::card_entity`), what an entity's worked slots are keyed by: [`shown`], with
+/// the number its call carries standing in for a record that carries none. A typed call's card
+/// asks for the same entity ([`crate::resolve_entity`]), so a WAE area's contact logged in Nexus
+/// (Sicily, no number) is on the card of IT9XYZ and of I1ABC, under Italy, as one carrying 248 is.
+pub(crate) fn on_card(r: &QsoRecord) -> Option<String> {
+    propagation::dxcc::card_entity(propagation::dxcc::resolve(&r.call).as_ref(), r.dxcc)
         .map(str::to_string)
 }
 
@@ -912,6 +923,16 @@ fn counted(r: &QsoRecord) -> Option<String> {
     .map(|c| c.name.to_string())
 }
 
+/// `q` answered with the app's own resolvers ([`shown`], [`on_card`], [`counted`]): what
+/// [`ask_log`] answers.
+fn with_app_resolvers(
+    queries: &LogQueries,
+    engine: &SharedEngine,
+    q: &LogQuestion,
+) -> Result<Value, String> {
+    queries.answer(engine, q, &shown, &on_card, &counted)
+}
+
 /// Answer one of the UI's log questions (`LogQuestion` → its answer, as `logAnswers.ts` types
 /// them). On the blocking pool: it may wait for the writer, and it reads the disk.
 #[tauri::command]
@@ -921,7 +942,7 @@ pub async fn ask_log(
     q: LogQuestion,
 ) -> Result<Value, String> {
     let (engine, queries) = (Arc::clone(&state), queries.inner().clone());
-    tauri::async_runtime::spawn_blocking(move || queries.answer(&engine, &q, &shown, &counted))
+    tauri::async_runtime::spawn_blocking(move || with_app_resolvers(&queries, &engine, &q))
         .await
         .map_err(|e| format!("the logbook read did not finish: {e}"))?
 }
