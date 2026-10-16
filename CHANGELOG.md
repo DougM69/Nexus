@@ -451,6 +451,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PSK Reporter spots, and it looked the server's address up in the loop that keys and unkeys the
   radio, so a DNS server slow to answer held that loop, and an over due to end, for as long as it
   took. The lookup and the upload now run on their own.
+- **FST4W beacons, and WSPR's from a compound call, show as WSJT-X shows them (#408).** Heard on
+  FST4W, `TI4JWC EK70 30` showed in the decode list and the roster as a station called EK70, in
+  Armenia; it now shows TI4JWC, in Costa Rica, at grid EK70. A beacon from a compound call such as
+  `KI4TWB/0 23`, which carries no grid, showed its power, 23, as a grid and flagged it new; it now
+  shows the call with no grid. A beacon line is no longer read as Tempo chat text either, where it
+  could put a grid in the roster as a station.
 - **The APRS-IS feed asks only for the stations inside your radius.** With weather, objects or
   messages switched on in Settings ▸ APRS (all three are, by default), the feed also asked the
   server for every position, object, message and weather report on the network, worldwide, so the

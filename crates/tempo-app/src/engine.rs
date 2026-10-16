@@ -24408,10 +24408,15 @@ contact yourself."
                 // −50..=49 report range) reads as a signal report and the GRID lands in
                 // the sender slot: "TI4JWC EK70 30" filed its country under EK →
                 // Armenia, and TI4JWC (Costa Rica) was never looked up. WSPR rows parse
-                // by the WSPR field order; they are never CQs and address nobody.
-                let wspr_fields = (d.mode == Some(modes::ModeKind::Wspr)).then(|| {
-                    let mut t = d.message.split_whitespace();
-                    (t.next().map(str::to_string), t.next())
+                // by the WSPR field order; they are never CQs and address nobody. #408: so
+                // do FST4W's, the same lines, and a Type 2 beacon (`KI4TWB/0 23`) has no
+                // grid, where its power used to show as one.
+                let wspr_fields = tempo_core::beacon::is_beacon_mode(d.mode).then(|| {
+                    let beacon = tempo_core::beacon::parse_report(&d.message);
+                    (
+                        beacon.map(|b| b.call.to_string()),
+                        beacon.and_then(|b| b.grid),
+                    )
                 });
                 let is_cq = wspr_fields.is_none() && matches!(parsed, Msg::Cq { .. });
                 let from = match &wspr_fields {
@@ -38259,6 +38264,122 @@ mod tests {
         assert!(
             c.snapshot().stations.iter().any(|s| s.call == "EK70"),
             "control: the FT8-grammar misparse this fix exists for"
+        );
+    }
+
+    /// The beacons #408 reported, as WSJT-X shows them: a WSPR and FST4W line is `CALL GRID
+    /// DBM`, and a Type 2 beacon (a compound call, which carries no grid) is `CALL DBM`.
+    fn beacons_408() -> Vec<modes::Decode> {
+        let fst4w = Some(modes::ModeKind::Fst4 {
+            period_s: 120,
+            wspr: true,
+        });
+        let wspr = Some(modes::ModeKind::Wspr);
+        let heard = |message: &str, mode| modes::Decode {
+            message: message.into(),
+            sync: 1.0,
+            snr: -19,
+            dt: 0.2,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            raw: None,
+            mode,
+        };
+        vec![
+            heard("TI4JWC EK70 30", fst4w),
+            heard("KI4TWB/0 23", wspr),
+            heard("PJ4/K1ABC 37", fst4w),
+            // Positive control: a Type 1 WSPR beacon, which the #55 fix already read.
+            heard("K1ABC FN42 37", wspr),
+        ]
+    }
+
+    /// #408, the decode list: heard on FST4W, `TI4JWC EK70 30` showed a station called EK70 with
+    /// Armenia as its country (the #55 fix knew WSPR only), and a Type 2 beacon showed its power,
+    /// 23, as a grid and flagged it new.
+    #[test]
+    fn a_beacon_row_on_fst4w_or_from_a_type_2_beacon_reads_as_wsjtx_shows_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_dxcc_resolver(|call| {
+            let country = match call.get(..2)? {
+                "TI" => "Costa Rica",
+                "EK" => "Armenia",
+                "KI" | "K1" => "United States",
+                "PJ" => "Bonaire",
+                _ => return None,
+            };
+            Some(country.to_string())
+        });
+        e.last_decodes = beacons_408();
+        let mut rows: Vec<_> = e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .map(|r| {
+                (
+                    r.message.clone(),
+                    r.from.clone(),
+                    r.grid.clone(),
+                    r.country.clone(),
+                    r.new_grid,
+                    r.is_cq,
+                    r.directed_to_me,
+                )
+            })
+            .collect();
+        rows.sort();
+        let row = |message: &str, from: &str, grid: Option<&str>, country: &str, new_grid| {
+            (
+                message.to_string(),
+                Some(from.to_string()),
+                grid.map(str::to_string),
+                Some(country.to_string()),
+                new_grid,
+                false,
+                false,
+            )
+        };
+        assert_eq!(
+            rows,
+            vec![
+                row(
+                    "K1ABC FN42 37",
+                    "K1ABC",
+                    Some("FN42"),
+                    "United States",
+                    true
+                ),
+                row("KI4TWB/0 23", "KI4TWB/0", None, "United States", false),
+                row("PJ4/K1ABC 37", "PJ4/K1ABC", None, "Bonaire", false),
+                row("TI4JWC EK70 30", "TI4JWC", Some("EK70"), "Costa Rica", true),
+            ]
+        );
+    }
+
+    /// #408, the roster: the same beacons file under their calls, each with the grid its line
+    /// carries, and a Type 2 beacon with none.
+    #[test]
+    fn a_beacon_on_fst4w_or_from_a_type_2_beacon_files_in_the_roster_as_wsjtx_shows_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.ingest_decodes_for_test(&beacons_408(), 1);
+        let mut stations: Vec<_> = e
+            .snapshot()
+            .stations
+            .iter()
+            .map(|s| (s.call.clone(), s.grid.clone()))
+            .collect();
+        stations.sort();
+        let station = |call: &str, grid: Option<&str>| (call.to_string(), grid.map(str::to_string));
+        assert_eq!(
+            stations,
+            vec![
+                station("K1ABC", Some("FN42")),
+                station("KI4TWB/0", None),
+                station("PJ4/K1ABC", None),
+                station("TI4JWC", Some("EK70")),
+            ]
         );
     }
 
