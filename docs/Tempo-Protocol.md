@@ -85,10 +85,10 @@ TempoFast is, in one line: *4-CPM, h=1/2, BT=0.3, 99 channel symbols at 28 Bd, d
 | Symbol (baud) rate | **28 Bd** | 12000 ÷ (3000/7); 428.57 samples/symbol nominal (429 rounded) |
 | Waveform duration | **≈ 3.536 s** | inside the frame |
 | T/R period | **4.0 s** | UTC-aligned (`PERIOD_S = 4.0`) |
-| Pre-TX guard | **200 ms** | silence before the waveform (`PRE_TX_GUARD_MS = 200`) |
+| Lead-in | **300 ms** | silence before the waveform: the tones start 0.300 s into the slot (`FT1_LEAD_IN_SECS = 0.3`) |
 | Timing tolerance | **±80 ms** | slot-boundary alignment (`TIMING_TOLERANCE_MS = 80`) |
 
-The 3.536 s waveform inside a 4.0 s frame leaves roughly **0.464 s** for receive guard plus decoding. The three Costas sync arrays are interleaved with the data (beginning / middle / end style placement), which is what makes the time/frequency search in §5 tractable.
+The 3.536 s waveform inside a 4.0 s frame leaves **0.464 s** of silence: the 0.300 s lead-in before the tones and a 0.164 s quiet tail after them. The lead-in is the mode's only tolerance for a signal that arrives early, because the decoder's timing search starts at the frame's first sample; the tail is what keeps the end of the over on the air when the sound card's output runs behind. The three Costas sync arrays are interleaved with the data (beginning / middle / end style placement), which is what makes the time/frequency search in §5 tractable.
 
 ### 3.3 Occupied bandwidth
 
