@@ -189,8 +189,8 @@ p > em:only-child{color:var(--ink-faint); font-size:8.6pt;}
 </tr>
 <tr>
 <td>Timing tolerance</td>
-<td><strong>±80 ms</strong></td>
-<td>slot-boundary alignment (<code>TIMING_TOLERANCE_MS = 80</code>)</td>
+<td><strong>0.3 s early, about 0.6 s late</strong></td>
+<td>how far a signal can stray from its slot timing and still be found: early is fixed by the lead-in, late by the end of the decoder's timing search</td>
 </tr>
 </tbody>
 </table>
@@ -237,7 +237,7 @@ p > em:only-child{color:var(--ink-faint); font-size:8.6pt;}
 <p>Beyond the <strong>±3 downsampled-sample</strong> real-time tolerance, the exact frequency/time search tolerances are not specified here, and the A-priori (AP) decoding schedule is not detailed — treat these as implementation internals, not published specs.</p>
 </blockquote>
 <h3>5.1 The dt convention</h3>
-<p>TempoFast reports time offset using the WSJT-X convention: <strong>dt = t − 0.5</strong>, where <em>t</em> is arrival time into the frame. So <strong>dt ≈ −0.1 s means the signal arrived at 0.4 s</strong> into the cycle. This centers the nominal frame boundary at dt = 0 and matches what WSJT-X operators already expect.</p>
+<p>TempoFast reports time offset using the WSJT-X convention: <strong>dt = t − 0.5</strong>, where <em>t</em> is arrival time into the frame. TempoFast's tones start 0.3 s into the cycle, so <strong>a signal sent on time shows a dt of about −0.2 s</strong>, where an on-time FT8 signal shows about 0. The decoder searches from the frame's first sample to about 0.9 s in, so it finds a signal from 0.3 s early (dt −0.5) to about 0.6 s late (dt about +0.4).</p>
 <hr>
 <h2>6. The differentiator: incremental-redundancy HARQ (IR-HARQ)</h2>
 <p>This is the part that has no analog in FT8, FT4, or JS8.</p>

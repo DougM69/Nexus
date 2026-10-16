@@ -86,7 +86,7 @@ TempoFast is, in one line: *4-CPM, h=1/2, BT=0.3, 99 channel symbols at 28 Bd, d
 | Waveform duration | **≈ 3.536 s** | inside the frame |
 | T/R period | **4.0 s** | UTC-aligned (`PERIOD_S = 4.0`) |
 | Lead-in | **300 ms** | silence before the waveform: the tones start 0.300 s into the slot (`FT1_LEAD_IN_SECS = 0.3`) |
-| Timing tolerance | **±80 ms** | slot-boundary alignment (`TIMING_TOLERANCE_MS = 80`) |
+| Timing tolerance | **0.3 s early, about 0.6 s late** | how far a signal can stray from its slot timing and still be found: early is fixed by the lead-in, late by the end of the decoder's timing search |
 
 The 3.536 s waveform inside a 4.0 s frame leaves **0.464 s** of silence: the 0.300 s lead-in before the tones and a 0.164 s quiet tail after them. The lead-in is the mode's only tolerance for a signal that arrives early, because the decoder's timing search starts at the frame's first sample; the tail is what keeps the end of the over on the air when the sound card's output runs behind. The three Costas sync arrays are interleaved with the data (beginning / middle / end style placement), which is what makes the time/frequency search in §5 tractable.
 
@@ -141,7 +141,7 @@ TempoFast syncs on **three 4×4 Costas arrays** (12 sync symbols total). A *Cost
 
 ### 5.1 The dt convention
 
-TempoFast reports time offset using the WSJT-X convention: **dt = t − 0.5**, where *t* is arrival time into the frame. So **dt ≈ −0.1 s means the signal arrived at 0.4 s** into the cycle. This centers the nominal frame boundary at dt = 0 and matches what WSJT-X operators already expect.
+TempoFast reports time offset using the WSJT-X convention: **dt = t − 0.5**, where *t* is arrival time into the frame. TempoFast's tones start 0.3 s into the cycle, so **a signal sent on time shows a dt of about −0.2 s**, where an on-time FT8 signal shows about 0. The decoder searches from the frame's first sample to about 0.9 s in, so it finds a signal from 0.3 s early (dt −0.5) to about 0.6 s late (dt about +0.4).
 
 ---
 
