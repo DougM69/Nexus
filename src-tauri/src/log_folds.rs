@@ -268,7 +268,16 @@ pub(crate) fn needs_kept(
     Ok((needs_finish(capture, &tallies.needs)?, log))
 }
 
-// ── the award summary ───────────────────────────────────────────────────────
+// ── the award summary, and the Stats pane's index ────────────────────────────
+
+/// What the award fold keeps: the summary `get_awards` serves, and the Stats pane's index of the
+/// same contacts, filled by the same fold at the points it credits each award
+/// ([`propagation::CallStatsIndex`]). One pass makes both, so the pane's grids can never count a
+/// contact differently from the Awards view.
+pub(crate) struct AwardsKept {
+    pub(crate) summary: Arc<propagation::AwardSummary>,
+    pub(crate) call_stats: Arc<propagation::CallStatsIndex>,
+}
 
 /// `get_awards`'s summary, folded again only when the log's content or the operator's call (the
 /// home entity "First DX" is judged against) has moved. The main window polls it twice a minute.
@@ -276,6 +285,39 @@ pub(crate) fn awards_kept(
     engine: &Mutex<Engine>,
     tallies: &LogTallies,
 ) -> Result<Arc<propagation::AwardSummary>, String> {
+    Ok(awards_fold_kept(engine, tallies)?.summary.clone())
+}
+
+/// The Stats pane's index ([`get_call_stats`](crate::get_call_stats)), kept with the summary it
+/// is folded beside: asking it of an unchanged log costs no read of the log.
+pub(crate) fn call_stats_kept(
+    engine: &Mutex<Engine>,
+    tallies: &LogTallies,
+) -> Result<Arc<propagation::CallStatsIndex>, String> {
+    Ok(awards_fold_kept(engine, tallies)?.call_stats.clone())
+}
+
+/// The Stats pane's answer for `call` typed on `band` in `mode`, from the kept index
+/// ([`call_stats_kept`]). The station has no record, so where it is comes from `state_of` — the
+/// licence index in the app ([`crate::us_state_hint`]), as for a station heard.
+pub(crate) fn call_stats_for(
+    engine: &Mutex<Engine>,
+    tallies: &LogTallies,
+    call: &str,
+    band: &str,
+    mode: &str,
+    state_of: impl Fn(&str) -> Option<String>,
+) -> Result<propagation::CallStats, String> {
+    let index = call_stats_kept(engine, tallies)?;
+    let call = call.trim().to_ascii_uppercase();
+    Ok(index.stats_for(&call, band, mode, state_of(&call).as_deref()))
+}
+
+/// The award fold, kept against the log's content and the operator's call.
+fn awards_fold_kept(
+    engine: &Mutex<Engine>,
+    tallies: &LogTallies,
+) -> Result<Arc<AwardsKept>, String> {
     let eng = engine_lock(engine);
     let (mark, my_call) = (eng.log_index_rev(), eng.settings().mycall.clone());
     if let Some(kept) = tallies.awards.get(mark, &my_call) {
@@ -284,7 +326,7 @@ pub(crate) fn awards_kept(
     let rows = eng.log_rows();
     drop(eng);
     tempo_core::logbook::io_fence::whole_log_off_engine_lock("the awards fold");
-    let mut awards = propagation::Awards::new();
+    let mut awards = propagation::Awards::with_call_stats();
     // Tell the accumulator our own entity so "First DX" counts only foreign ones.
     awards.set_home_call(&my_call);
     let fresh = rows
@@ -293,7 +335,11 @@ pub(crate) fn awards_kept(
             ControlFlow::Continue(())
         })
         .map_err(unreadable)?;
-    keep(&tallies.awards, mark, my_call, awards.summary(), fresh)
+    let kept = AwardsKept {
+        call_stats: Arc::new(awards.take_call_stats().unwrap_or_default()),
+        summary: Arc::new(awards.summary()),
+    };
+    keep(&tallies.awards, mark, my_call, kept, fresh)
 }
 
 /// The native award fold over records in hand — the reference Remote's read is held to in its
@@ -313,15 +359,22 @@ pub(crate) fn awards_for_records<R: std::borrow::Borrow<QsoRecord>>(
 }
 
 /// What a contact's record carries for the awards beyond its call: its DXCC number, LoTW's where
-/// that differs, its CQ zone, and when it was made. The one reading [`award_add`], the needs
-/// model, the log statistics and Remote's folds of them all take, so each counts a contact as the
-/// awards do.
+/// that differs, its CQ zone, when it was made, and which channels confirmed it (eQSL's
+/// Authenticity-Guaranteed mark among them). The one reading [`award_add`], the needs model, the
+/// log statistics and Remote's folds of them all take, so each counts a contact as the awards do.
 pub(crate) fn award_fields(q: &QsoRecord) -> propagation::RecordFields {
     propagation::RecordFields {
         dxcc: q.dxcc,
         lotw_dxcc: tempo_core::logbook::record_lotw_dxcc(q),
         cqz: tempo_core::logbook::record_cq_zone(q),
         when_unix: q.when_unix,
+        qsl: propagation::QslChannels {
+            card: q.qsl_rcvd.card,
+            lotw: q.qsl_rcvd.lotw,
+            eqsl: q.qsl_rcvd.eqsl,
+            eqsl_ag: tempo_core::logbook::record_eqsl_ag(q),
+            qrz: q.qsl_rcvd.qrz,
+        },
     }
 }
 
@@ -1563,6 +1616,103 @@ mod tests {
                 .map(|x| (x.call.as_str(), x.logged_dxcc, x.lotw_dxcc))
                 .collect::<Vec<_>>(),
             [("K1B", 291, 20)]
+        );
+    }
+
+    /// ★ The Stats pane reads the store as the Awards view does: its index is the award fold's own,
+    /// kept beside the summary, and equals the index the fold over whole records builds. What a
+    /// record carries beyond its call reaches it — the DXCC number (Navassa for K1N's 2015 contact),
+    /// and eQSL's Authenticity-Guaranteed mark, a passthrough the store keeps apart from the row,
+    /// which confirms a WAZ slot and no DXCC one. Where the station is comes from the app's
+    /// licence index; asked again of an unchanged log, the kept index answers without a read.
+    #[test]
+    fn the_stats_pane_reads_the_store_as_the_awards_do() {
+        let d = Dir::new("stats-pane");
+        std::fs::write(
+            d.log(),
+            format!(
+                "{}{}{}{}",
+                tempo_core::logbook::adif_header(),
+                by_record_log(),
+                "<CALL:6>JA1XYZ<QSO_DATE:8>20200105<TIME_ON:6>123400<BAND:3>20m<MODE:3>FT8\
+                 <EQSL_QSL_RCVD:1>Y<APP_EQSL_AG:1>Y<EOR>\n",
+                "<CALL:6>VK2ABC<QSO_DATE:8>20200106<TIME_ON:6>123400<BAND:3>20m<MODE:3>FT8\
+                 <EQSL_QSL_RCVD:1>Y<EOR>\n",
+            ),
+        )
+        .unwrap();
+        let e = launch(&d);
+        let tallies = LogTallies::default();
+        let held = records(&e);
+        assert_eq!(held.len(), 8, "premise: every contact converted");
+        assert_eq!(
+            *awards_kept(&e, &tallies).unwrap(),
+            awards_for_records(&held, MY_CALL),
+            "the summary from the store is the whole records' (the needs per band among it)"
+        );
+        let whole = {
+            let mut awards = propagation::Awards::with_call_stats();
+            for q in &held {
+                award_add(&mut awards, q);
+            }
+            awards.take_call_stats().unwrap()
+        };
+        let from_store = call_stats_kept(&e, &tallies).unwrap();
+        let state_of = |c: &str| (c == "W6XYZ").then(|| "CA".to_string());
+        for call in [
+            "KP1AA", "K1N", "KH1AA", "W6XYZ", "W4XYZ", "JA1ABC", "VK2XYZ", "DL1ABC",
+        ] {
+            assert_eq!(
+                from_store.stats_for(call, "20m", "FT8", state_of(call).as_deref()),
+                whole.stats_for(call, "20m", "FT8", state_of(call).as_deref()),
+                "{call}"
+            );
+        }
+        let ask = |call: &str| call_stats_for(&e, &tallies, call, "20m", "CW", state_of).unwrap();
+        use propagation::callstats::Slot;
+        let (navassa, japan, australia, w6) =
+            (ask("KP1AA"), ask("JA1ABC"), ask("VK2XYZ"), ask(" w6xyz "));
+        let dxcc = navassa.dxcc.as_ref().unwrap();
+        assert_eq!(
+            (dxcc.label.as_str(), dxcc.rows[0][5], navassa.new_one),
+            ("Navassa Island", Slot::Confirmed, false)
+        );
+        // K1N's contact came back from LoTW: the country's row and the call's say so.
+        assert_eq!(
+            (navassa.country_qsl.unwrap().lotw, ask("K1N").call_qsl.lotw),
+            (true, true)
+        );
+        // 20 m (column 5), FT8 (the Digital row): the AG card confirms the zone and not the entity.
+        assert_eq!(
+            (
+                japan.dxcc.as_ref().unwrap().rows[2][5],
+                japan.waz.as_ref().unwrap().label.as_str(),
+                japan.waz.as_ref().unwrap().rows[2][5],
+                japan.country_qsl.unwrap().eqsl_ag,
+            ),
+            (Slot::Worked, "25", Slot::Confirmed, true)
+        );
+        assert_eq!(
+            (
+                australia.waz.as_ref().unwrap().rows[2][5],
+                australia.country_qsl.unwrap().eqsl_ag
+            ),
+            (Slot::Worked, false)
+        );
+        // K1ABC, logged in California (CQZ 3), fills California's WAS slot; the state is the
+        // licence index's for the call typed.
+        let ca = w6
+            .was
+            .as_ref()
+            .expect("the licence index places W6XYZ in California");
+        assert_eq!(
+            (w6.call.as_str(), ca.label.as_str(), ca.rows[0][5]),
+            ("W6XYZ", "CA", Slot::Confirmed)
+        );
+        assert!(ask("W4XYZ").was.is_none() && ask("W4XYZ").was_family);
+        assert!(
+            Arc::ptr_eq(&from_store, &call_stats_kept(&e, &tallies).unwrap()),
+            "an unchanged log is not folded again"
         );
     }
 

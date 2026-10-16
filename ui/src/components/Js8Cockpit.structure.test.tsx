@@ -81,6 +81,7 @@ vi.mock('../api', async (importOriginal) => {
     // so the auto-stub's `{}` is not a usable log — this suite runs against an empty one.
     getLicensedBandPlan: vi.fn(async () => []),
     haltTx: vi.fn(async () => ({})),
+    getCallStats: vi.fn(async () => null),
   }
 })
 vi.mock('../toast', () => ({
@@ -100,7 +101,10 @@ vi.mock('./PhoneScope', () => ({ PhoneScope: (p: { feed?: string }) => <div data
 vi.mock('./Waterfall', () => ({
   Waterfall: (p: { stripRef?: Ref<HTMLDivElement> }) => <div className="waterfall-wrap" ref={p.stripRef} />,
 }))
-vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
+// A click stands in for a call settling in the strip (LogEntry `onEntryCall`): the Stats pane's source.
+vi.mock('./LogEntry', () => ({
+  LogEntry: (p: { onEntryCall?: (call: string) => void }) => <div data-testid="log-stub" onClick={() => p.onEntryCall?.('W1AW')} />,
+}))
 
 const js8Enter = api.js8Enter as ReturnType<typeof vi.fn>
 const js8SetSpeed = api.js8SetSpeed as ReturnType<typeof vi.fn>
@@ -617,5 +621,34 @@ describe('the JS8 waterfall divider', () => {
     await renderCockpit({ panels: fakePanels(['scope']) })
     expect(screen.queryByRole('separator', { name: 'waterfall height' })).toBeNull()
     expect(localStorage.getItem('nexus.split.js8.waterfall')).toBe('30')
+  })
+})
+
+// THE STATS PANE (2026-10-14): under JS8's log pane in the log column, its own height, asking for the call the strip
+// reports on the radio's band in JS8 — and only beside a log pane: with the log hidden it has nothing to follow.
+describe('the Stats pane beside the log pane', () => {
+  it('stands under the log pane in the log column, its own height, and follows the strip’s call', async () => {
+    vi.mocked(api.getCallStats).mockClear()
+    await renderCockpit({ panels: fakePanels() })
+    const stats = document.querySelector('[data-pane="stats"]')!
+    expect(stats, 'ticked, the Stats pane is not on screen').not.toBeNull()
+    expect(stats.getAttribute('data-fit')).toBe('content')
+    expect(stats.previousElementSibling?.getAttribute('data-pane'), 'not directly under the log pane').toBe('log')
+    expect(api.getCallStats).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('log-stub'))
+    await act(async () => {})
+    expect(api.getCallStats).toHaveBeenCalledWith('W1AW', '20m', 'JS8')
+  })
+
+  it('stands only beside the log pane: with the log hidden it has nothing to follow, and is gone', async () => {
+    await renderCockpit({ panels: fakePanels(['log']) })
+    expect(document.querySelector('[data-pane="stats"]')).toBeNull()
+    expect(document.querySelector('[data-pane="activity"]'), 'control: the region rendered').not.toBeNull()
+  })
+
+  it('is one ⊞ tick', async () => {
+    await renderCockpit({ panels: fakePanels(['stats']) })
+    expect(document.querySelector('[data-pane="stats"]')).toBeNull()
+    expect(document.querySelector('[data-pane="log"]')).not.toBeNull()
   })
 })

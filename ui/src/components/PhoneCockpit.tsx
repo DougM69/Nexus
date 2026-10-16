@@ -76,6 +76,7 @@ import { SMeter } from './SMeter'
 import { SubReceiverStrip, MainReceiverPlate, subScopeMarker } from './SubReceiverStrip'
 import { WheelRange } from './WheelRange'
 import { LogEntry } from './LogEntry'
+import { CallStatsFrame, statsHere, useStatsRoom, withStats, withStatsRoom } from './CallStatsPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import {
   setPtt,
@@ -283,6 +284,7 @@ const phonePanelLabels = (): Record<Exclude<PhonePanelId, BoxId>, string> => ({
   voiceKeyer: t('phone.panel.voiceKeyer'),
   spots: t('phone.panel.spots'),
   needed: t('phone.panel.needed'),
+  stats: t('callStats.pane.title'),
 })
 
 /** THE SPOTS PANE'S OWN VIEW OF THE BOARD (#345, the operator's pick: "Phone spots, this band —
@@ -910,6 +912,9 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   // anyway would ACTIVATE LogEntry's clear-on-empty branch (`logCall` is set to '' when the
   // host's box goes empty) against a host that has no box — see the test below.
   const [workedCall, setWorkedCall] = useState('')
+  // The call the Stats pane follows: the strip's call once it has stood (LogEntry `onEntryCall`),
+  // so a call typed a key at a time is asked about once, not per keystroke.
+  const [statsCall, setStatsCall] = useState('')
   // Wheel-to-tune over the bandscope, sharing the tuning strip's step selector.
   // Tuning step, persisted per cockpit ('nexus.phone.tuneStep'): the cockpit unmounts on every
   // mode switch, so plain state reset the step to 100 Hz on each round-trip (FTDX10
@@ -1409,9 +1414,11 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   // Once per screen across the cockpit and the dashboard rail beside it: a box gives way to the rail (App).
   const entries = panels && boxes ? boxEntries(PHONE_PANELS, panels.layout, panels.stateOf, boxes.rail?.shows) : {}
   const labels = { ...phonePanelLabels(), ...boxLabels(entries) }
+  // The Stats pane where the record says nothing: on where there is room (CallStatsPane `withStatsRoom`).
+  const statsRoom = useStatsRoom()
   const host = panels
-    ? panelHost(panels, {
-        menu: PHONE_MENU,
+    ? panelHost(withStatsRoom(panels, statsRoom), {
+        menu: withStats(PHONE_MENU),
         side: [],
         main: 'bandActivity',
         labels,
@@ -1473,6 +1480,9 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   // (PHONE_PANELS.defaultRemoved), so a stock Phone screen is exactly what it was.
   const hasSpotsPane = spotsBoard != null && shown('spots')
   const hasNeededPane = neededBoard != null && shown('needed')
+  // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
+  // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
+  const hasStatsPane = host != null && shown('stats') && statsHere()
   // Everything the LEADING column can hold below the 3-col tier. The keyer used to make
   // this unconditionally true; now that it has a ⊞ entry, a rig with no DSP and no native
   // scope can have the operator untick its way to an empty leading track — a `minmax(0,1fr)`
@@ -1503,6 +1513,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
           rigscope: hasRigScopePane,
           receiver: hasReceiverPane,
           transmitter: hasTransmitterPane,
+          stats: hasStatsPane,
         })[id as string] ?? false)
   // ── THE LEFT SIDE (operator's pick, 2026-10-03: ⊞ Arrange's "Left side") ───────────────────────
   // A full-height column beside the scope, the TX strip and the region, between the header and the
@@ -2460,6 +2471,11 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         </CockpitPaneFrame>
   ) : null
 
+  // The call the Stats pane follows: the one the log strip reports to the Rotor box, settled.
+  const statsPane = (
+    <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={logMode} logTick={snap.logTick} />
+  )
+
   const logPane = (
     <CockpitPaneFrame
       title={quick && !fieldDay ? t('remote.quick.logbook') : t('phone.pane.log.title')}
@@ -2474,7 +2490,10 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
           gets the QRZ photo / bearing / history back while operating. */}
       {control ? <LogEntry
         onOpenLogbook={onOpenLogbook}
-        onEntryCall={onEntryCall}
+        onEntryCall={(c) => {
+          setStatsCall(c)
+          onEntryCall?.(c)
+        }}
         snap={snap}
         mode={logMode}
         defaultRst="59"
@@ -2511,6 +2530,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
     rigscope: rigscopePane,
     receiver: receiverPane,
     transmitter: transmitterPane,
+    stats: statsPane,
   }
   // THE BOXES (2026-10-07): each one on screen, in the cockpit's frame with its entry's role. What is on
   // screen elsewhere is marked in each picker: the other boxes' entries, and the boards this cockpit
@@ -3005,8 +3025,10 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         {groups.map((g) =>
           g.col === 'log' ? (
             <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log" ref={logColRef}>
-              {g.ids.map(placedPane)}
+              {/* THE LOG FORM HEADS ITS COLUMN (2026-10-14): a pane placed in the log column — the Stats
+                  pane, a box — stands under it, so nothing placed there can push the call field down. */}
               <Fragment key="log-form">{logPane}</Fragment>
+              {g.ids.map(placedPane)}
             </div>
           ) : // Below three tracks the leading column is not rendered when it holds nothing.
           cols < 3 && g.ids.length === 0 && !(g.col === 'a' && folded.length > 0) ? null : (

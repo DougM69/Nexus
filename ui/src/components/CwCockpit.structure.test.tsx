@@ -78,6 +78,7 @@ vi.mock('../api', () => ({
   setTune: vi.fn(async () => ({})),
   setFrequency: vi.fn(async () => ({})),
   haltTx: vi.fn(async () => ({})),
+  getCallStats: vi.fn(async () => null),
 }))
 
 vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cockpit-header" /> }))
@@ -87,8 +88,9 @@ vi.mock('./BandStrip', () => ({ BandStrip: () => <div data-testid="bandstrip-stu
 // rather than log behaviour: whether the strip draws its own heading under a frame head that
 // already says LOG. The strip's own half is in LogEntry.density.test.tsx.
 vi.mock('./LogEntry', () => ({
-  LogEntry: (p: { titled?: boolean }) => (
-    <div data-testid="log-stub" data-titled={String(p.titled ?? true)} />
+  // A click stands in for a call settling in the strip (LogEntry `onEntryCall`): the Stats pane's source.
+  LogEntry: (p: { titled?: boolean; onEntryCall?: (call: string) => void }) => (
+    <div data-testid="log-stub" data-titled={String(p.titled ?? true)} onClick={() => p.onEntryCall?.('W1AW')} />
   ),
 }))
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
@@ -835,5 +837,29 @@ describe('CwCockpit column dividers', () => {
     expect(JSON.parse(localStorage.getItem(panelStorageKey('cw'))!).cols).toEqual({ log: 504 })
     expect(document.querySelector('[data-testid="log-stub"]')!.isSameNode(log0), 'the log form remounted').toBe(true)
     expect(document.querySelector('[data-pane="decode"]')!.isSameNode(decode0), 'the decode transcript remounted').toBe(true)
+  })
+})
+
+// THE STATS PANE (2026-10-14): Phone's, in CW — over the log form, its own height, on from the start, asking for
+// the call the strip reports on the radio's band in CW.
+describe('the Stats pane beside the log form', () => {
+  it('stands under the log form in the log column, its own height, and follows the strip’s call', async () => {
+    const { getCallStats } = await import('../api')
+    vi.mocked(getCallStats).mockClear()
+    await renderCockpit({ panels: fakePanels() })
+    const stats = document.querySelector('[data-pane="stats"]')!
+    expect(stats, 'the Stats pane is not on a stock CW screen').not.toBeNull()
+    expect(stats.getAttribute('data-fit')).toBe('content')
+    expect(stats.previousElementSibling?.getAttribute('data-pane'), 'not directly under the log form').toBe('log')
+    expect(getCallStats).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('log-stub'))
+    await act(async () => {})
+    expect(getCallStats).toHaveBeenCalledWith('W1AW', '20m', 'CW')
+  })
+
+  it('is one ⊞ tick', async () => {
+    await renderCockpit({ panels: fakePanels(['stats']) })
+    expect(document.querySelector('[data-pane="stats"]')).toBeNull()
+    expect(document.querySelector('[data-pane="log"]')).not.toBeNull()
   })
 })

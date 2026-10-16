@@ -71,6 +71,7 @@ import { TxMeters, TX_METERS_WHEN } from './TxMeters'
 import { SpotDialog } from './SpotDialog'
 import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
 import { RecallPanel } from './RecallPanel'
+import { CallStatsFrame, statsHere, withStats } from './CallStatsPane'
 import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
 import { PanelsMenu } from './PanelsMenu'
@@ -324,6 +325,7 @@ const panelLabels = (): Record<Exclude<OperatePanelId, BoxId>, string> => ({
   stations: t('operate.panel.stations'),
   txmeters: t('operate.panel.txmeters'),
   recall: t('operate.panel.recall'),
+  stats: t('callStats.pane.title'),
 })
 
 /** What each layout can render — the menu lists only these, so a panel the current layout has no
@@ -331,8 +333,8 @@ const panelLabels = (): Record<Exclude<OperatePanelId, BoxId>, string> => ({
  *  pick, 2026-10-07), each also lists the panes only the other draws in stock (OPERATE_ARRANGE `extra`):
  *  the Call Roster in Classic, the Tx messages and Stations in Roster, unticked until added. */
 const LAYOUT_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
-  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'callRoster', 'recall', 'txmeters'],
-  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', 'recall', 'txmeters'],
+  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'callRoster', 'recall', 'stats', 'txmeters'],
+  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', 'recall', 'stats', 'txmeters'],
 }
 
 /** Where the rail side is stored (per surface): 'left', or anything else for the stock right. */
@@ -721,12 +723,17 @@ export function OperateCockpit({
   // #204: the callsign card joins the side rail — and Classic's third column — only while
   // there is a card to show. panelHost counts any listed side panel that is not removed, so a
   // standing 'recall' entry would mount an EMPTY rail with Stations hidden and nothing selected.
+  // THE STATS PANE (CallStatsPane) stands under the card, about the same station, in the station's own
+  // window. Unlike the card it always has something to say (its own empty line), so a ticked one counts
+  // for the rail whether or not a station is selected.
+  const statsSide: readonly OperatePanelId[] = statsHere() ? ['stats'] : []
   const sidePanels: readonly OperatePanelId[] = shownRecallCall
-    ? [...SIDE_PANELS[layoutMode], 'recall']
-    : SIDE_PANELS[layoutMode]
-  const classicColumns: readonly (readonly OperatePanelId[])[] = shownRecallCall
-    ? [...CLASSIC_COLUMNS.slice(0, 2), ['recall', 'stations']]
-    : CLASSIC_COLUMNS
+    ? [...SIDE_PANELS[layoutMode], 'recall', ...statsSide]
+    : [...SIDE_PANELS[layoutMode], ...statsSide]
+  const classicColumns: readonly (readonly OperatePanelId[])[] = [
+    ...CLASSIC_COLUMNS.slice(0, 2),
+    [...(shownRecallCall ? ['recall' as const] : []), ...statsSide, ...CLASSIC_COLUMNS[2]],
+  ]
   const { stateOf, setPanelState } = panels
   // EVERY FT PANE IN BOTH LAYOUTS (2026-10-07): a pane only the other layout draws in stock
   // (OPERATE_ARRANGE `extra`) is on screen here once the operator adds it to this layout (the record's
@@ -744,7 +751,7 @@ export function OperateCockpit({
   const entries = boxes && active ? boxEntries(OPERATE_PANELS, panels.layout, stateOf, boxes.rail?.shows) : {}
   const labels = { ...panelLabels(), ...boxLabels(entries) }
   const panelSpec: PanelHostSpec<OperatePanelId> = {
-    menu: LAYOUT_PANELS[layoutMode],
+    menu: withStats(LAYOUT_PANELS[layoutMode]),
     side: sidePanels,
     main: layoutMode === 'roster' ? 'callRoster' : 'bandActivity',
     labels,
@@ -787,10 +794,12 @@ export function OperateCockpit({
   const cardOn = shownRecallCall != null && shown('recall')
   // What stands on screen in an arranged column: a pane the ⊞ menu shows (the card only while it is about
   // a station), and a box only where the window lends it one.
-  const arrangedOn = (id: OperatePanelId): boolean => (isBoxId(id) ? entries[id] != null : id === 'recall' ? cardOn : shown(id))
+  const arrangedOn = (id: OperatePanelId): boolean =>
+    isBoxId(id) ? entries[id] != null : id === 'recall' ? cardOn : id === 'stats' ? shown(id) && statsHere() : shown(id)
   // What ⊞ Arrange lists and steps past: the same, but the card whether or not a station is selected, so
   // the operator can place it before it has anything to show.
-  const arrangeListed = (id: OperatePanelId): boolean => (isBoxId(id) ? entries[id] != null : shown(id))
+  const arrangeListed = (id: OperatePanelId): boolean =>
+    isBoxId(id) ? entries[id] != null : id === 'stats' ? shown(id) && statsHere() : shown(id)
   const arrangedCols = placedColumns(arrangeSpec, place)
   const arrangedShown = columnsOf(arrangeSpec).filter((c) => arrangedCols[c].some(arrangedOn) || (c === foldCol && folded.length > 0))
   // The populated-column count and whether the rail stands, from whichever branch draws the region: the
@@ -1248,6 +1257,19 @@ export function OperateCockpit({
     ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} fdActive={fdActive} onOpenLog={onOpenLogbook} onShowCall={setCardCall} kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} grip="recall" />
     : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} grip="recall" />
   ) : null
+  // THE STATS PANE under the card: what the log holds for the station the card is about — the one the
+  // operator clicked, else the one the sequencer is working (`recallCall`), on this band in this mode.
+  const statsFrame =
+    shown('stats') && statsHere() ? (
+      <CallStatsFrame
+        close={closeProps('stats')}
+        call={shownRecallCall}
+        band={snap.radio.band}
+        mode={tier}
+        logTick={snap.logTick}
+        empty={t('callStats.emptyPicked')}
+      />
+    ) : null
 
   // #204: S&P clears the callsign card, as F4 does — the operator is leaving the station the card
   // was about to go and find the next one. UI only: the mode request goes on exactly as the strip
@@ -1395,6 +1417,8 @@ export function OperateCockpit({
         )
       case 'recall':
         return recallCard
+      case 'stats':
+        return statsFrame
       default: {
         const entry = isBoxId(id) ? entries[id] : undefined
         return entry != null && boxes && isBoxId(id) ? (
@@ -2090,6 +2114,7 @@ export function OperateCockpit({
               {sideShown && (
                 <aside className="cockpit-side" ref={rosterSideRef}>
                   {recallCard}
+                  {statsFrame}
                   {shown('bandActivity') && (
                     <div className="cockpit-decodes-side panel" ref={decodesSideRef} style={shareStyle('bandActivity')}>
                       {/* The FULL decode window (filters + sort), not the compact
@@ -2287,6 +2312,7 @@ export function OperateCockpit({
               {sideShown && (
                 <aside className="cockpit-side" ref={classicSideRef}>
                   {recallCard}
+                  {statsFrame}
                   {shown('stations') && <div className="cockpit-roster panel">{roster}</div>}
                 </aside>
               )}

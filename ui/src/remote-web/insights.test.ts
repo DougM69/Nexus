@@ -67,3 +67,22 @@ it('reads the DXCC totals and LoTW disagreements when a station sends them, and 
     expect(() => parseInsights(broken, 'awards')).toThrow()
   }
 })
+it('reads the needs per band when a station sends them, and refuses a malformed list', () => {
+  const result = parseInsights(insightPage('awards'), 'awards')
+  if (result.kind !== 'awards') throw new Error('awards')
+  expect(result.awards.bandNeeds?.dxcc[0]).toEqual({ band: '20m', unworked: ['Albania', 'Bouvet', 'Crozet Island'], unconfirmed: ['Japan'] })
+  // A station older than the Stats pane sends none.
+  const older = insightPage('awards')
+  delete (older.meta as { source: { awards: Record<string, unknown> } }).source.awards.bandNeeds
+  expect(parseInsights(older, 'awards').kind).toBe('awards')
+  for (const mutate of [
+    (n: Record<string, unknown>) => { delete n.waz },
+    (n: Record<string, unknown>) => { n.dxcc = [{ band: '20m', unworked: 'Albania', unconfirmed: [] }] },
+    (n: Record<string, unknown>) => { n.was = [{ band: 20, unworked: [], unconfirmed: [] }] },
+    (n: Record<string, unknown>) => { n.waz = [{ band: '20m', unworked: [1], unconfirmed: [] }] },
+  ]) {
+    const broken = insightPage('awards')
+    mutate((broken.meta as { source: { awards: { bandNeeds: Record<string, unknown> } } }).source.awards.bandNeeds)
+    expect(() => parseInsights(broken, 'awards')).toThrow()
+  }
+})

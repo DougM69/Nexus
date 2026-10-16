@@ -5,9 +5,9 @@
 // codes the tables print (data), and the achievement titles/details and diagnosis explanations,
 // which the backend writes. See the invariant-token rule in `i18n/index.ts`.
 
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award, Flag, UploadCloud, Grid3x3, Satellite } from 'lucide-react'
-import type { AwardSummary, EntityNeed, DiagnosticsReport, DiagAction, DiagActionBucket, DxccDisagreement, QsoDiagnosis, UploadReport } from '../types'
+import type { AwardBandNeeds, AwardSummary, BandNeed, EntityNeed, DiagnosticsReport, DiagAction, DiagActionBucket, DxccDisagreement, QsoDiagnosis, UploadReport } from '../types'
 import {
   getAwards,
   getConfirmationDiagnostics,
@@ -57,6 +57,105 @@ const VUCC_GRIDS = 100
 const IOTA_ISLANDS = 100
 
 type NeedSort = 'entity' | 'bands'
+
+/** The awards NEEDED BY BAND lists, in the order the operator asked for them. */
+const BAND_NEED_AWARDS = ['dxcc', 'was', 'waz'] as const
+type BandNeedAward = (typeof BAND_NEED_AWARDS)[number]
+/** What each award's needs per band count, and what confirms one. */
+function bandNeedNote(award: BandNeedAward): string {
+  switch (award) {
+    case 'was':
+      return t('awards.bandNeeds.note.was')
+    case 'waz':
+      return t('awards.bandNeeds.note.waz')
+    default:
+      return t('awards.bandNeeds.note.dxcc')
+  }
+}
+type BandNeedKind = 'unworked' | 'unconfirmed'
+
+/** NEEDED BY BAND: for DXCC, WAS or WAZ, each band's count never worked there and worked there but not
+ *  confirmed as the award credits it — the station's own count (`AwardSummary.bandNeeds`). Each count
+ *  opens its list under the row. */
+function BandNeedsPanel({ needs }: { needs: AwardBandNeeds }) {
+  const [award, setAward] = useState<BandNeedAward>('dxcc')
+  const [open, setOpen] = useState<{ band: string; kind: BandNeedKind } | null>(null)
+  const count = (row: BandNeed, kind: BandNeedKind) => {
+    const n = row[kind].length
+    const isOpen = open?.band === row.band && open.kind === kind
+    return (
+      <button
+        type="button"
+        className="aw-bn-count"
+        data-kind={kind}
+        aria-expanded={isOpen}
+        disabled={n === 0}
+        title={isOpen ? t('awards.bandNeeds.hide') : t('awards.bandNeeds.show', { count: n, band: row.band })}
+        onClick={() => setOpen(isOpen ? null : { band: row.band, kind })}
+      >
+        {n}
+      </button>
+    )
+  }
+  return (
+    <div className="aw-panel aw-bandneeds">
+      <h3>{t('awards.bandNeeds.head')}</h3>
+      <div className="aw-needctl" role="group" aria-label={t('awards.bandNeeds.award.label')}>
+        {BAND_NEED_AWARDS.map((a) => (
+          <button
+            type="button"
+            key={a}
+            className={`aw-needsort${award === a ? ' active' : ''}`}
+            aria-pressed={award === a}
+            onClick={() => {
+              setAward(a)
+              setOpen(null)
+            }}
+          >
+            {AWARD_NAMES[a]}
+          </button>
+        ))}
+      </div>
+      <p className="aw-empty">{bandNeedNote(award)}</p>
+      <table className="aw-bn-table">
+        <thead>
+          <tr>
+            <th scope="col">{t('awards.bandNeeds.col.band')}</th>
+            <th scope="col">{t('awards.bandNeeds.col.unworked')}</th>
+            <th scope="col">{t('awards.bandNeeds.col.unconfirmed')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {needs[award].map((row) => (
+            <Fragment key={row.band}>
+              <tr>
+                <th scope="row" className="aw-band">
+                  {row.band}
+                </th>
+                <td>{count(row, 'unworked')}</td>
+                <td>{count(row, 'unconfirmed')}</td>
+              </tr>
+              {open?.band === row.band && (
+                <tr>
+                  <td colSpan={3}>
+                    <p className="aw-bn-list" data-kind={open.kind}>
+                      <strong>
+                        {open.kind === 'unworked'
+                          ? t('awards.bandNeeds.list.unworked', { band: row.band, count: row.unworked.length })
+                          : t('awards.bandNeeds.list.unconfirmed', { band: row.band, count: row.unconfirmed.length })}
+                      </strong>{' '}
+                      {row[open.kind].join(' · ')}
+                    </p>
+                  </td>
+                </tr>
+              )}
+            </Fragment>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
 /** A DXCC entity as a disagreement names it: its name and number, or the number alone when the
  * station's table does not know it. */
@@ -850,6 +949,8 @@ export function AwardsView({
               ))}
             </div>
           </div>
+
+          {aw.bandNeeds && <BandNeedsPanel needs={aw.bandNeeds} />}
 
           {aw.vucc.bands.length > 0 && (
             <div className="aw-panel">

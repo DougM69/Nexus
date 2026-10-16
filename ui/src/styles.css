@@ -31173,3 +31173,224 @@ tr.sel .aprs-sym {
 .street-maps-folder {
   overflow-wrap: anywhere;
 }
+
+/* THE STATS PANE (components/CallStatsPane) — what the log holds for the call in the log entry.
+   Content only: it sits in a pane body, which scrolls, and takes no size of its own. A slot's
+   state is a SHAPE as well as an ink, so it reads in greyscale: an outline (not worked), a hollow
+   ring in the warning ink (worked), solid in the good ink (confirmed), a dash (no DXCC credit on
+   the band). The flags take the need palette the Needed board and the decode badges use. */
+.cstats {
+  display: flex;
+  flex-direction: column;
+  /* Each part its own width: a stretched grid spread thirteen slots across a 3000 px pane. */
+  align-items: flex-start;
+  gap: var(--space-1);
+  font-size: var(--fs-label);
+}
+/* ONE LINE, THE PANE'S WIDTH (CallStatsPane, ONE HEIGHT): the entity, or what the pane says in its
+   place, is cut short rather than wrapped, and the flags keep their room while there is nothing to
+   flag. */
+.cstats-top {
+  display: flex;
+  align-self: stretch;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.cstats-who {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--text);
+}
+.cstats-who.cstats-empty {
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.cstats-flags {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cstats-flags[data-idle] {
+  visibility: hidden;
+}
+.cstats-flag {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.cstats-flag[data-on='true'] {
+  border-color: transparent;
+  color: var(--need-ink);
+}
+.cstats-flag[data-on='true'][data-kind='one'] {
+  background: var(--need-entity);
+}
+.cstats-flag[data-on='true'][data-kind='band'] {
+  background: var(--need-band);
+}
+.cstats-flag[data-on='true'][data-kind='mode'] {
+  background: var(--need-mode);
+}
+.cstats-src,
+.cstats-grid {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.cstats-src th,
+.cstats-src td {
+  padding: 0 6px;
+  text-align: center;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.cstats-src th[scope='row'] {
+  padding-left: 0;
+  text-align: left;
+}
+.cstats-dot {
+  display: inline-block;
+  width: 0.75em;
+  height: 0.75em;
+  box-sizing: border-box;
+  border: 1px solid var(--text-dim);
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.cstats-src-cell[data-held='true'] .cstats-dot {
+  border-color: var(--state-good);
+  background: var(--state-good);
+}
+.cstats-src-cell[data-held='none'] .cstats-dot {
+  visibility: hidden;
+}
+.cstats-grid th,
+.cstats-grid td {
+  padding: 0;
+  text-align: center;
+}
+.cstats-grid thead th {
+  padding: 0 1px;
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.cstats-grid thead th[data-here] {
+  font-weight: 700;
+  color: var(--text);
+}
+.cstats-award-head {
+  padding-right: var(--space-1);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  text-align: left;
+  vertical-align: middle;
+  color: var(--text);
+}
+.cstats-award-of {
+  display: block;
+  max-width: 5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.cstats-award + .cstats-award > tr:first-child > * {
+  border-top: 1px solid var(--border);
+}
+.cstats-mode {
+  padding-right: var(--space-1);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  text-align: left;
+  color: var(--text-dim);
+}
+.cstats-slot {
+  min-width: 1.2em;
+}
+.cstats-slot[data-here] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.cstats-mark {
+  display: block;
+  width: 0.8em;
+  height: 0.8em;
+  margin: 1px auto;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+.cstats-slot[data-slot='worked'] .cstats-mark {
+  border: 2px solid var(--state-warn);
+}
+.cstats-slot[data-slot='confirmed'] .cstats-mark {
+  border-color: var(--state-good);
+  background: var(--state-good);
+}
+.cstats-slot[data-slot='none'] .cstats-mark {
+  visibility: hidden;
+}
+/* The dash centred in the box every other mark takes (0.8em, 1px above and below), so a line with a
+   no-credit slot is no taller than one without (CallStatsPane, ONE HEIGHT). */
+.cstats-slot[data-slot='noCredit'] .cstats-mark {
+  height: 2px;
+  margin: 0.4em auto;
+  border: 0;
+  background: var(--text-dim);
+}
+
+/* NEEDED BY BAND (AwardsView): per band, never worked and worked-not-confirmed, each count a
+   button that opens its list under the row. */
+.aw-bn-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.aw-bn-table th,
+.aw-bn-table td {
+  padding: 2px var(--space-2);
+  text-align: left;
+}
+.aw-bn-table thead th {
+  font-size: var(--fs-label);
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.aw-bn-count {
+  min-width: 3em;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.aw-bn-count[aria-expanded='true'] {
+  border-color: var(--accent);
+}
+.aw-bn-count:disabled {
+  border-color: transparent;
+  color: var(--text-dim);
+  cursor: default;
+}
+.aw-bn-list {
+  margin: 0;
+  padding: 0 0 var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}

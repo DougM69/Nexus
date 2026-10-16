@@ -3290,6 +3290,65 @@ export interface AwardSummary {
   /** WORK chase: entities worked on most award bands but missing a few — the
    * listed bands are ones to WORK (a new contact). Closest-to-complete first. */
   bandTargets: EntityNeed[]
+  /** DXCC, WAS and WAZ needed per band. Absent from a station older than the Stats pane. */
+  bandNeeds?: AwardBandNeeds
+}
+
+/** One band's chase for one award: never worked there, and worked there but not confirmed by
+ *  anything the award credits. Entities and states alphabetical, zones 1 to 40. */
+export interface BandNeed {
+  band: string
+  unworked: string[]
+  unconfirmed: string[]
+}
+
+/** The per-band chase (`AwardSummary.bandNeeds`). DXCC lists only the bands that earn DXCC credit
+ *  (not 60 m or 4 m); WAZ counts an Authenticity-Guaranteed eQSL as a confirmation. */
+export interface AwardBandNeeds {
+  dxcc: BandNeed[]
+  was: BandNeed[]
+  waz: BandNeed[]
+}
+
+/** Where one slot of a Stats pane grid stands for its award. */
+export type StatsSlot = 'unworked' | 'worked' | 'confirmed' | 'noCredit'
+
+/** The channels a confirmation came through. */
+export interface QslChannels {
+  card: boolean
+  lotw: boolean
+  eqsl: boolean
+  /** The eQSL came from an Authenticity-Guaranteed member (WAZ credits it). */
+  eqslAg: boolean
+  qrz: boolean
+}
+
+/** One award's grid in the Stats pane: a row per mode class, a slot per band. */
+export interface StatsGrid {
+  /** The entity's name, the state's postal code, or the zone's number. */
+  label: string
+  /** The entity's DXCC number (DXCC only). */
+  code: number | null
+  rows: StatsSlot[][]
+}
+
+/** What the log holds for the call typed in a log entry (`get_call_stats`). */
+export interface CallStats {
+  call: string
+  /** The grids' columns, 160 m to 2 m. */
+  bands: string[]
+  /** The grids' rows: CW, Phone, Digital. */
+  modes: string[]
+  newOne: boolean
+  newBand: boolean
+  newMode: boolean
+  dxcc: StatsGrid | null
+  /** The station is in the United States, Alaska or Hawaii, so it has a state for WAS. */
+  wasFamily: boolean
+  was: StatsGrid | null
+  waz: StatsGrid | null
+  countryQsl: QslChannels | null
+  callQsl: QslChannels
 }
 
 /** QSOs worked on one WAC continent, with the distinct-entity span. */

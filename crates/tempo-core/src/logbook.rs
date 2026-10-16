@@ -172,8 +172,10 @@ pub struct QsoRecord {
     /// general "has a confirmation" display only.
     pub confirmed: bool,
     /// **Award-eligible** confirmation: LoTW **or** paper QSL only. eQSL is NOT
-    /// accepted for DXCC/WAZ/WPX/WAS, so award counting (DXCC, Challenge, …) must
-    /// use this — not [`confirmed`](Self::confirmed) — or it over-counts.
+    /// accepted for the ARRL's awards (DXCC, WAS), so award counting (DXCC, Challenge, …)
+    /// must use this — not [`confirmed`](Self::confirmed) — or it over-counts. CQ's WAZ
+    /// also takes an eQSL from an Authenticity-Guaranteed member ([`EQSL_AG_FIELD`]), which
+    /// the award fold reads beside this.
     pub award_confirmed: bool,
     /// WHICH channel(s) confirmed (the per-source truth behind the two booleans).
     /// May be all-false on legacy in-memory records whose sync predates the
@@ -253,10 +255,15 @@ pub struct QsoRecord {
 /// value stays as entered; the awards count by LoTW's, and list the difference.
 pub const LOTW_DXCC_FIELD: &str = "APP_NEXUS_LOTW_DXCC";
 
+/// eQSL's mark on a card from an Authenticity-Guaranteed member (`APP_EQSL_AG:Y`), kept on the
+/// contact the card confirmed: CQ's WAZ credits such a card, where the ARRL's awards credit no
+/// eQSL at all.
+pub const EQSL_AG_FIELD: &str = "APP_EQSL_AG";
+
 /// The passthrough fields ([`QsoRecord::extra`]) the award folds read beside their columns: the
-/// contact's CQ zone and LoTW's DXCC. What a narrow read of the store asks for them by
-/// (`sqlite::LogDb::each_narrow_with`).
-pub const AWARD_EXTRAS: &[&str] = &["CQZ", LOTW_DXCC_FIELD];
+/// contact's CQ zone, LoTW's DXCC and eQSL's Authenticity-Guaranteed mark. What a narrow read of
+/// the store asks for them by (`sqlite::LogDb::each_narrow_with`).
+pub const AWARD_EXTRAS: &[&str] = &["CQZ", LOTW_DXCC_FIELD, EQSL_AG_FIELD];
 
 /// A passthrough field's value, by its (uppercased) ADIF name.
 fn extra_value<'a>(r: &'a QsoRecord, name: &str) -> Option<&'a str> {
@@ -275,6 +282,12 @@ pub fn record_cq_zone(r: &QsoRecord) -> Option<u8> {
 /// LoTW's DXCC for the contact, where it differs from the log's own ([`LOTW_DXCC_FIELD`]).
 pub fn record_lotw_dxcc(r: &QsoRecord) -> Option<u32> {
     extra_value(r, LOTW_DXCC_FIELD)?.parse().ok()
+}
+
+/// Whether the record carries eQSL's Authenticity-Guaranteed mark ([`EQSL_AG_FIELD`]). It
+/// qualifies the record's eQSL confirmation and means nothing without one.
+pub fn record_eqsl_ag(r: &QsoRecord) -> bool {
+    extra_value(r, EQSL_AG_FIELD).is_some_and(|v| v.eq_ignore_ascii_case("Y"))
 }
 
 /// Set (or with `None` remove) a passthrough field, keeping [`QsoRecord::extra`] in name order
@@ -361,7 +374,8 @@ pub struct QslRcvd {
     pub card: bool,
     /// Logbook of The World (ADIF `LOTW_QSL_RCVD`). Award-eligible.
     pub lotw: bool,
-    /// eQSL.cc (ADIF `EQSL_QSL_RCVD`). NOT award-eligible for DXCC/WAZ/WPX/WAS.
+    /// eQSL.cc (ADIF `EQSL_QSL_RCVD`). NOT award-eligible for the ARRL's awards (DXCC, WAS); WAZ
+    /// takes it from an Authenticity-Guaranteed member ([`EQSL_AG_FIELD`]).
     pub eqsl: bool,
     /// QRZ Logbook native confirmation (both ops have the QSO in their QRZ logs, ADIF
     /// `APP_QRZLOG_STATUS=C`). Like eQSL: it confirms the contact but is NOT award-eligible —
@@ -9992,6 +10006,51 @@ mod tests {
         other.add(rec("W1AW", "20m", 1_700_000_000));
         other.merge_report(&third_party);
         assert!(other.records()[0].qsl_sent.sent);
+    }
+
+    /// ★ A card from an Authenticity-Guaranteed eQSL member keeps that mark (`APP_EQSL_AG:Y`) on
+    /// the contact it confirms: CQ's WAZ credits such a card where the ARRL's awards credit no
+    /// eQSL at all, and the merge used to drop it with the rest of the row. A card from a member
+    /// who is not AG marks nothing, and the mark goes out in the export and comes back on a load.
+    #[test]
+    fn an_authenticity_guaranteed_eqsl_card_keeps_its_mark_on_the_contact() {
+        let inbox = eqsl_inbox(&[
+            inbox_card("W1AW", "<APP_EQSL_AG:1>Y"),
+            inbox_card("K1ABC", ""),
+        ]);
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        lb.add(rec("K1ABC", "20m", 1_700_000_000));
+        let s = lb.merge_report(&inbox);
+        assert_eq!(s.newly_confirmed_any, 2, "premise: both cards confirm");
+        fn marked<R: std::borrow::Borrow<QsoRecord>>(records: &[R], call: &str) -> Option<bool> {
+            records
+                .iter()
+                .map(|r| r.borrow())
+                .find(|r| r.call == call)
+                .map(|r| r.extra.iter().any(|(k, v)| k == "APP_EQSL_AG" && v == "Y"))
+        }
+        assert_eq!(
+            (marked(lb.records(), "W1AW"), marked(lb.records(), "K1ABC")),
+            (Some(true), Some(false))
+        );
+        let back = parse_adif(&lb.adif());
+        assert_eq!(
+            (marked(&back, "W1AW"), marked(&back, "K1ABC")),
+            (Some(true), Some(false)),
+            "and it survives the export"
+        );
+        // Control: the mark qualifies an eQSL card. A report row that confirms by another channel
+        // and happens to carry it marks nothing.
+        let card = format!(
+            "<EOH>\n{}",
+            inbox_card("W1AW", "<APP_EQSL_AG:1>Y").replace("<EQSL_QSL_RCVD:1>Y", "<QSL_RCVD:1>Y")
+        );
+        let mut other = Logbook::new();
+        other.add(rec("W1AW", "20m", 1_700_000_000));
+        let s = other.merge_report(&card);
+        assert_eq!(s.newly_confirmed, 1, "premise: the card confirms it");
+        assert_eq!(marked(other.records(), "W1AW"), Some(false));
     }
 
     /// ★ A listener's report in eQSL's InBox (`APP_EQSL_SWL`) is no QSO: it neither confirms a

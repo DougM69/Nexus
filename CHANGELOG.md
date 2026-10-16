@@ -312,6 +312,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   QSY to centre, the band schedule, the groups and the block list are changed at the station only,
   as before. A station on 1.18.0 or earlier shows its JS8 screen on the Remote as it did.
   NEEDS-BENCH: a station on this build, watched on the Remote page from a phone.
+- **A Stats pane beside the log entry: the DXCC, WAS and WAZ standing of the call you type.**
+  Type a call and the pane shows NEW ONE, NEW BAND and NEW MODE for the band you are on and the
+  mode you log; which confirmations your log holds through LoTW, a card, eQSL and QRZ, for the
+  station's country and for this call; and a grid for its DXCC entity, its state (WAS) and its CQ
+  zone (WAZ), CW, phone and digital by 160 m to 2 m, each slot not worked, worked or confirmed.
+  Confirmed means what that award takes: DXCC and WAS a LoTW or paper confirmation, WAZ also an
+  eQSL from an Authenticity-Guaranteed member. The grids count exactly what the Awards view counts,
+  contact by contact, by each contact's own DXCC number and CQ zone, and 60 m and 4 m earn no DXCC
+  slot. The pane keeps one height whatever it shows, so nothing beside it moves while you type, log
+  and clear a call. In Phone, CW and JS8 it stands under the log form and shows by itself on a
+  window with room for it beside everything the form shows (a maximized window on a 2560×1440
+  screen, or any window about 1440 px tall); on a smaller window, 1920×1080 included, and in FT
+  (under the callsign card, about the station the card shows), RTTY and PSK (under the log strip),
+  tick **Stats** in ⊞ Panels. Your tick or untick wins at every window size. It moves like any other
+  pane in ⊞ Panels ▸ Arrange in Phone, CW, JS8 and FT. In Phone and CW the log form now heads its
+  column: a box you put in that column stands under it.
+- **Awards: needed by band.** For DXCC, WAS and WAZ, each band's count of what you have never
+  worked there and what you have worked there but not confirmed, with the list behind each count.
+- **WAZ counts an eQSL from an Authenticity-Guaranteed member as a confirmation**, as CQ does.
+  The eQSL download now keeps that mark on the contact the card confirms (it used to drop it), so
+  the Awards view's WAZ total, the Needed board's zone confirmations and the Stats pane agree.
+  DXCC and WAS still count only LoTW and cards.
 
 ### Changed
 

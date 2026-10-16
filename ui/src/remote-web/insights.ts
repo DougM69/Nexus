@@ -19,6 +19,10 @@ const optional = (v: unknown, check: (v: unknown) => boolean) => v === undefined
 const named = (v: unknown) => v === null || string(v)
 const disagreement = (v: unknown) => fields(v, ['call', 'band', 'mode'], string) &&
   fields(v, ['whenUnix', 'loggedDxcc', 'lotwDxcc']) && object(v) && optional(v.loggedEntity, named) && optional(v.lotwEntity, named)
+// Needed by band (absent from a station older than the Stats pane): per award, per band, the names never
+// worked there and worked there but not confirmed — a DXCC list is at most every current entity.
+const bandNeed = (v: unknown) => fields(v, ['band'], string) && object(v) && list(v.unworked, string, 512) && list(v.unconfirmed, string, 512)
+const bandNeeds = (v: unknown) => object(v) && ['dxcc', 'was', 'waz'].every(k => list(v[k], bandNeed, 32))
 function awards(v: unknown, total: number): v is AwardSummary {
   if (!object(v) || v.qsos !== total || !fields(v, ['qsos', 'confirmedQsos', 'dxccWorked', 'dxccConfirmed', 'dxccCredited',
     'readyToSubmit', 'slotsWorked', 'slotsConfirmed', 'fiveBandWorked', 'fiveBandConfirmed', 'satDxccWorked', 'satDxccConfirmed', 'wazWorked', 'wazConfirmed'])) return false
@@ -32,7 +36,7 @@ function awards(v: unknown, total: number): v is AwardSummary {
     list(v.vucc.awards, a => band(a) && fields(a, ['threshold']) && fields(a, ['achieved'], boolean)) &&
     fields(v.iota, ['worked', 'confirmed', 'cardConfirmed']) &&
     optional(v.dxccWorkedTotal, count) && optional(v.dxccConfirmedTotal, count) &&
-    optional(v.dxccDisagreements, d => list(d, disagreement))
+    optional(v.dxccDisagreements, d => list(d, disagreement)) && optional(v.bandNeeds, bandNeeds)
 }
 function tallies(v: unknown, total: number): boolean {
   if (!list(v, t => fields(t, ['label'], string) && fields(t, ['count']) && Number((t as Record<string, unknown>).count) <= total)) return false

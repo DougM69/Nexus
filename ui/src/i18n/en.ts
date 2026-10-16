@@ -2143,6 +2143,22 @@ export const EN = {
 
   // The breakdown panels. Every band and mode name under these headings is data.
   'awards.bands.head': 'DXCC by band',
+  // NEEDED BY BAND: per band, what was never worked there and what was worked but not confirmed.
+  // Award names, band names, entity names, state codes and zone numbers are data.
+  'awards.bandNeeds.head': 'Needed by band',
+  'awards.bandNeeds.award.label': 'Award',
+  'awards.bandNeeds.col.band': 'Band',
+  'awards.bandNeeds.col.unworked': 'Never worked',
+  'awards.bandNeeds.col.unconfirmed': 'Worked, not confirmed',
+  'awards.bandNeeds.note.dxcc':
+    'Current DXCC entities, on the bands that earn DXCC credit (not 60 m or 4 m). Confirmed by LoTW or a QSL card.',
+  'awards.bandNeeds.note.was': 'The 50 states. Confirmed by LoTW or a QSL card.',
+  'awards.bandNeeds.note.waz':
+    'The 40 CQ zones. Confirmed by LoTW, a QSL card or an Authenticity-Guaranteed eQSL.',
+  'awards.bandNeeds.show': 'Show the {{count}} on {{band}}',
+  'awards.bandNeeds.hide': 'Hide the list',
+  'awards.bandNeeds.list.unworked': 'Never worked on {{band}} ({{count}})',
+  'awards.bandNeeds.list.unconfirmed': 'Worked on {{band}}, not confirmed ({{count}})',
   // The divider between the progress column (DXCC and grids by band, DXCC by mode) and the chase
   // lists (layout L7); its tooltip is paneSeam.title.
   'awards.columns.split.label': 'Progress column / chase lists',
@@ -12627,6 +12643,44 @@ export const EN = {
     'Turn the whole console on. Every section and capability enabled.',
 
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
+  // THE STATS PANE beside a log entry (components/CallStatsPane): what the log holds for the call
+  // typed there. Award names (DXCC, WAS, WAZ), service names (LoTW, eQSL, QRZ), the mode classes'
+  // short forms, band names, entity names, state codes and zone numbers are invariant tokens or
+  // data, kept in the component, never here.
+  'callStats.pane.title': 'Stats',
+  'callStats.empty': 'Type a call in the log entry: its DXCC, WAS and WAZ standing shows here.',
+  'callStats.emptyPicked': 'Pick a station: its DXCC, WAS and WAZ standing shows here.',
+  'callStats.loading': 'Reading the log…',
+  'callStats.failed': 'Stats are not available: {{error}}',
+  'callStats.entity.numbered': '{{entity}} · DXCC {{code}}',
+  'callStats.entity.none': '{{call}} names no DXCC entity.',
+  'callStats.flags.label': 'New for this contact',
+  'callStats.flag.newOne': 'NEW ONE',
+  'callStats.flag.newBand': 'NEW BAND',
+  'callStats.flag.newMode': 'NEW MODE',
+  'callStats.flag.newOne.title': 'No contact in your log counts toward this DXCC entity.',
+  'callStats.flag.newBand.title': 'Worked before, but never on {{band}}.',
+  'callStats.flag.newMode.title': 'Worked before, but never in {{mode}}.',
+  'callStats.flag.no': 'no',
+  'callStats.src.caption': 'Confirmations your log holds, by service',
+  'callStats.src.country': 'Country',
+  'callStats.src.call': 'This call',
+  'callStats.src.card': 'Card',
+  'callStats.src.yes': 'held',
+  'callStats.src.no': 'none',
+  'callStats.src.ag': 'held, Authenticity Guaranteed',
+  'callStats.grid.caption': 'Band and mode slots for {{call}}',
+  'callStats.grid.credit':
+    'Confirmed as each award credits it: DXCC and WAS by LoTW or a QSL card, WAZ also by an Authenticity-Guaranteed eQSL.',
+  'callStats.slot.unworked': 'not worked',
+  'callStats.slot.worked': 'worked, not confirmed',
+  'callStats.slot.confirmed': 'confirmed',
+  'callStats.slot.noCredit': 'no DXCC credit on this band',
+  'callStats.slot.title': '{{award}} {{band}} {{mode}}: {{state}}',
+  'callStats.was.unknown': 'WAS: no state on file for {{call}}.',
+  'callStats.was.none': 'WAS: {{call}} is not a station in the United States.',
+  'callStats.waz.unknown': 'WAZ: no CQ zone for {{call}}.',
+
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared
   // key that two surfaces want to word differently cannot be split later without orphaning
   // both translations. When in doubt, give the surface its own key.

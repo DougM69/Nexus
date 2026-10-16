@@ -290,6 +290,7 @@ fn lotws_dxcc_wins_and_the_disagreement_is_listed() {
             lotw_dxcc: Some(182),
             cqz: None,
             when_unix: 1_423_571_640,
+            ..RecordFields::default()
         },
     );
     // Agreeing numbers, and a LoTW number with no log number beside it, list nothing.

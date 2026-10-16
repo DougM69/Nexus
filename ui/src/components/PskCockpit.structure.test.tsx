@@ -53,7 +53,7 @@ vi.mock('../api', () => ({
   pskSetMode: vi.fn(async () => state.current),
   pskType: vi.fn(async () => state.current),
   pskStop: vi.fn(async () => state.current),
-  haltTx: vi.fn(async () => ({})),
+  haltTx: vi.fn(async () => ({})),  getCallStats: vi.fn(async () => null),
 }))
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
@@ -82,7 +82,12 @@ vi.mock('./Waterfall', () => ({
 // suites: this file is a SHELL census, and the real LogEntry reaches the logbook, the park
 // directory and the callbook on mount. That the strip is actually WIRED — the right ADIF
 // mode, the right default report, reachable from this cockpit at all — is PskCockpit.log.test.tsx.
-vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
+// A click stands in for a call settling in the strip (LogEntry `onEntryCall`): the Stats pane's source.
+vi.mock('./LogEntry', () => ({
+  LogEntry: (p: { mode?: string; onEntryCall?: (call: string) => void }) => (
+    <div data-testid="log-stub" data-mode={p.mode} onClick={() => p.onEntryCall?.('W1AW')} />
+  ),
+}))
 
 const pskAutoArm = api.pskAutoArm as ReturnType<typeof vi.fn>
 const pskArm = api.pskArm as ReturnType<typeof vi.fn>
@@ -149,7 +154,8 @@ describe('PskCockpit pane shell', () => {
     await renderCockpit({ panels: fakePanels() })
     const shell = document.querySelector('main.layout.single.psk-cockpit')!
     const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame')).map((f) => f.getAttribute('data-pane'))
-    expect(frames).toEqual(['rfScope', 'stream', 'log'])
+    // …and the Stats pane, ticked too (it ships hidden here): the LAST frame, under the log strip.
+    expect(frames).toEqual(['rfScope', 'stream', 'log', 'stats'])
     const strip = shell.querySelector(':scope > .cockpit-txstrip')!
     expect(strip.previousElementSibling?.matches('.pane-splitter'), 'the TX strip left its place under the scope').toBe(true)
     expect(strip.nextElementSibling?.getAttribute('data-pane'), 'the RF scope pane is not first under the TX strip').toBe('rfScope')
@@ -551,5 +557,29 @@ describe('the PSK waterfall divider', () => {
   it('goes with the waterfall when the operator hides it', async () => {
     await renderCockpit({ panels: fakePanels(['scope']) })
     expect(screen.queryByRole('separator', { name: 'waterfall height' })).toBeNull()
+  })
+})
+
+// THE STATS PANE (2026-10-14): it ships hidden here, where the transcript and the log strip are already short of
+// room at the supported floor; ticked, it stands under the log strip, its own height, and asks for the call the
+// strip reports on the radio's band in the mode the strip logs.
+describe('the Stats pane under the log strip', () => {
+  it('ships hidden; ticked, it is the last frame, its own height, and follows the strip’s call', async () => {
+    const { getCallStats } = await import('../api')
+    vi.mocked(getCallStats).mockClear()
+    await renderCockpit()
+    expect(document.querySelector('[data-pane="stats"]'), 'the Stats pane shipped visible').toBeNull()
+    cleanup()
+    await renderCockpit({ panels: fakePanels() })
+    const shell = document.querySelector('main.layout.single.psk-cockpit')!
+    const stats = shell.querySelector(':scope > [data-pane="stats"]')!
+    expect(stats.getAttribute('data-fit')).toBe('content')
+    expect(stats.previousElementSibling?.getAttribute('data-pane'), 'not directly under the log strip').toBe('log')
+    expect(getCallStats).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('log-stub'))
+    await act(async () => {})
+    const mode = screen.getByTestId('log-stub').getAttribute('data-mode')!
+    expect(mode, 'premise: the strip logs a mode').toMatch(/PSK/)
+    expect(getCallStats).toHaveBeenCalledWith('W1AW', '20m', mode)
   })
 })

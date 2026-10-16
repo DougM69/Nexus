@@ -40,8 +40,28 @@ Under the cards, DXCC is broken out **by band**, and the chase lists start with
 **Confirm for a new one** — entities you have worked but not confirmed, chipped
 with the bands each is waiting on.
 
+**Needed by band** lists, for DXCC, WAS or WAZ, each band's count of what you have
+never worked there and what you have worked there but not confirmed. Click a count
+for the list behind it. DXCC counts the current entities, on the bands that earn
+DXCC credit (60 m and 4 m earn none); WAS the 50 states; WAZ the 40 zones.
+
+**The Stats pane beside the log entry** shows the same standing for one station: type
+a call in the log entry and the pane shows NEW ONE, NEW BAND and NEW MODE for the band
+you are on and the mode you log, which confirmations you hold through LoTW, a card,
+eQSL and QRZ for its country and for this call, and a grid for its DXCC entity, its
+state (WAS) and its CQ zone (WAZ): CW, phone and digital by 160 m to 2 m, each slot
+not worked, worked or confirmed. It counts exactly what this page counts. It stands
+under the log entry and keeps one height whatever it shows, so nothing beside it moves
+as you type, log and clear a call. Phone, CW and JS8 show it by themselves on a window
+with room for it beside the whole log form (a maximized window on a 2560×1440 screen,
+or any window about 1440 px tall); on a smaller one, 1920×1080 included, and in FT,
+RTTY and PSK, tick **Stats** in ⊞ Panels. FT's pane follows the station the callsign
+card shows.
+
 **Confirmation handling is source-aware** — a distinction most loggers blur.
-**eQSL and a QRZ-logbook match never count toward LoTW-grade awards**; the
+**eQSL and a QRZ-logbook match never count toward the ARRL's awards** (DXCC, WAS,
+VUCC); CQ's **WAZ** also takes an eQSL from an Authenticity-Guaranteed member, and
+the eQSL download keeps that mark on the contact it confirms. The
 `confirmed` and `award_confirmed` flags are separate and enforced at every
 computation. So a contact can be "confirmed" (you have an eQSL) yet not
 "award-confirmed" (no LoTW or card), and the awards math respects the

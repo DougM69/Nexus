@@ -344,7 +344,8 @@ describe('THE FIBER-IDENTITY SWEEP, with boxes: no add, pick, hide or move remou
       seen.tiers.add(tracks)
       const want = regionGroups(PHONE_PANELS.arrange!, api!.layout.place, tracks, (x) => shownNow(x) && !onSide.includes(x))
         .filter((g) => g.col === 'log' || tracks === 3 || g.ids.length > 0)
-        .map((g) => (g.col === 'log' ? [...g.ids, 'log'] : g.ids))
+        // The log form heads its column (2026-10-14): a pane placed there stands under it.
+        .map((g) => (g.col === 'log' ? ['log', ...g.ids] : g.ids))
       expect(rendered(), `step ${step} — the region is not the arrangement`).toEqual(want)
       // Every box on screen shows what the record says.
       for (const [b, e] of Object.entries(now)) expect(bodyOf(b), `step ${step}: ${b}`).toBe(`box-body-${paneOf(e!)}`)

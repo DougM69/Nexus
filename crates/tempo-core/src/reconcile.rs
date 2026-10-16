@@ -164,8 +164,9 @@ fn same_contact(a: &QsoRecord, b: &QsoRecord) -> bool {
         r.state = None;
         r.country = None;
         r.dxcc = None;
-        r.extra
-            .retain(|(k, _)| k != "CQZ" && k != crate::logbook::LOTW_DXCC_FIELD);
+        r.extra.retain(|(k, _)| {
+            k != "CQZ" && k != crate::logbook::LOTW_DXCC_FIELD && k != crate::logbook::EQSL_AG_FIELD
+        });
         // ...plus the two that do not survive our own round-trip intact.
         r.mode.clear();
         r.time_known = false;
@@ -473,6 +474,14 @@ pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut Reconc
         if let Some(lotw) = crate::logbook::record_lotw_dxcc(inc) {
             crate::logbook::set_extra(rec, crate::logbook::LOTW_DXCC_FIELD, Some(lotw.to_string()));
         }
+    }
+    // And an eQSL card's Authenticity-Guaranteed mark, with the confirmation it came on: CQ's WAZ
+    // credits such a card. Monotonic too — a mark the log holds is never taken away here.
+    if inc.qsl_rcvd.eqsl
+        && crate::logbook::record_eqsl_ag(inc)
+        && !crate::logbook::record_eqsl_ag(rec)
+    {
+        crate::logbook::set_extra(rec, crate::logbook::EQSL_AG_FIELD, Some("Y".into()));
     }
     // Outbound state — merged so a two-instance shared log doesn't lose an upload stamp or a
     // QSL-sent mark one instance wrote when the other rewrites the whole file. (A LoTW report
@@ -1754,6 +1763,30 @@ mod tests {
         assert_eq!(crate::logbook::record_cq_zone(ours), Some(8));
         assert_eq!(crate::logbook::record_lotw_dxcc(ours), Some(182));
         assert_eq!(mem[1].dxcc, None, "and nothing landed on its twin");
+    }
+
+    /// An eQSL card's Authenticity-Guaranteed mark is the merge's too: a copy of one of our records
+    /// that another instance's eQSL merge marked is still that record, and the mark comes across.
+    #[test]
+    fn merge_own_disk_pairs_a_copy_a_merge_marked_authenticity_guaranteed() {
+        let day = 20_000;
+        let a = date_only("JA1XYZ", "20m", "FT8", day, Some("-05"));
+        let b = date_only("JA1XYZ", "20m", "FT8", day, Some("-12"));
+        let mut marked = a.clone();
+        marked.qsl_rcvd.eqsl = true;
+        marked.confirmed = true;
+        crate::logbook::set_extra(&mut marked, "APP_EQSL_AG", Some("Y".into()));
+
+        let mut mem = vec![a, b];
+        let (added, sum) = merge_own_disk(&mut mem, vec![marked]);
+        assert!(
+            added.is_empty(),
+            "a copy of our own -05 contact, not a new one"
+        );
+        assert_eq!((mem.len(), sum.matched), (2, 1));
+        let ag = |r: &QsoRecord| r.extra.iter().any(|(k, v)| k == "APP_EQSL_AG" && v == "Y");
+        assert_eq!((ag(&mem[0]), mem[0].qsl_rcvd.eqsl), (true, true));
+        assert!(!ag(&mem[1]), "and nothing landed on its twin");
     }
 
     #[test]

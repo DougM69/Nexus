@@ -1614,6 +1614,12 @@ export async function getAwards(): Promise<AwardSummary> {
   return invoke<AwardSummary>('get_awards')
 }
 
+/** The Stats pane: what the log holds for `call`, typed in a log entry on `band` in `mode` —
+ *  counted by the award fold itself, in the station. */
+export async function getCallStats(call: string, band: string, mode: string): Promise<import('./types').CallStats> {
+  return invoke('get_call_stats', { call, band, mode })
+}
+
 /** Geographic log stats — continent / CQ-zone / DX-vs-domestic (cty.dat-resolved per call). */
 export async function getLogStats(): Promise<GeoLogStats> {
   return invoke<GeoLogStats>('get_log_stats')

@@ -97,7 +97,55 @@
       "confirmed": 0,
       "cardConfirmed": 0
     },
-    "bandTargets": []
+    "bandTargets": [],
+    "bandNeeds": {
+      "dxcc": [
+        {
+          "band": "20m",
+          "unworked": [
+            "Albania",
+            "Bouvet",
+            "Crozet Island"
+          ],
+          "unconfirmed": [
+            "Japan"
+          ]
+        },
+        {
+          "band": "40m",
+          "unworked": [
+            "Albania",
+            "Japan"
+          ],
+          "unconfirmed": []
+        }
+      ],
+      "was": [
+        {
+          "band": "20m",
+          "unworked": [
+            "AK",
+            "HI"
+          ],
+          "unconfirmed": [
+            "WA"
+          ]
+        }
+      ],
+      "waz": [
+        {
+          "band": "20m",
+          "unworked": [
+            "1",
+            "2",
+            "23"
+          ],
+          "unconfirmed": [
+            "25"
+          ]
+        }
+      ]
+    }
   },
   "statistics": {
     "total": 2301,

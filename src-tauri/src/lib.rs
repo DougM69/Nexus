@@ -208,8 +208,8 @@ type NeedsKept = Arc<Tally<(), propagation::LogNeeds>>;
 struct LogTallies {
     /// The needs model — see [`NeedsKept`].
     needs: NeedsKept,
-    /// The award summary, per operator call.
-    awards: Arc<Tally<String, propagation::AwardSummary>>,
+    /// The award summary and the Stats pane's index, folded together, per operator call.
+    awards: Arc<Tally<String, log_folds::AwardsKept>>,
     /// The Journey model, per the settings it reads.
     journey: Arc<Tally<JourneyKey, propagation::JourneyModel>>,
     /// The log statistics, per operator call.
@@ -21028,6 +21028,33 @@ async fn get_awards(
         .await
 }
 
+/// The Stats pane beside a log entry: what the log holds for the call typed there — its DXCC
+/// entity's band × mode grid, its state's (WAS) and its CQ zone's (WAZ), the NEW ONE / NEW BAND /
+/// NEW MODE flags for `band` and `mode`, and the confirmation channels held for its country and
+/// for the call ([`propagation::CallStats`]).
+///
+/// Counted by the award fold itself, so every slot is one the Awards view counts
+/// ([`log_folds::call_stats_kept`]): folded again only when the log's content or the operator's
+/// call moves, and asked of the kept index for each call. The station typed has no record, so its
+/// entity and zone come from its call, and its state from the licence index, as for a station
+/// heard ([`us_state_hint`]).
+#[tauri::command]
+async fn get_call_stats(
+    state: State<'_, SharedEngine>,
+    tallies: State<'_, LogTallies>,
+    call: String,
+    band: String,
+    mode: String,
+) -> Result<propagation::CallStats, String> {
+    let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
+    log_folds::off_the_runtime(move || {
+        log_folds::call_stats_for(&engine, &tallies, &call, &band, &mode, |c| {
+            us_state_hint(c, None).map(|(s, _)| s)
+        })
+    })
+    .await
+}
+
 /// The geographic slice of the logbook — QSOs by WAC continent, by CQ zone, and a DX-vs-domestic
 /// split — the dimensions the frontend `StatsView` can't derive on its own (the stored record has
 /// no continent; each contact is placed where the awards count it, by the DXCC number and CQ zone
@@ -36353,6 +36380,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             log_queries::ask_log,
             purge_log,
             get_awards,
+            get_call_stats,
             get_journey,
             get_log_stats,
             get_log_timeline,
