@@ -54,17 +54,28 @@ impl Engine {
         js8_late_start_ms(self.js8_tx_speed(), self.js8_tx_delay_ms())
     }
 
+    /// How far into its period a JS8 frame at the TX speed has sent its last tone, in ms: the
+    /// speed's start delay and its 79 symbols, JS8Call's `txDuration`
+    /// (`JS8_Mode/JS8Submode.cpp:74`), past which JS8Call's GUI tick stops TX (`prepareSending`,
+    /// `JS8_UI/mainwindow.cpp:2575-2576`, then `stopTx`, :2681-2682). Slow 25.78 s, Normal 13.14 s,
+    /// Fast 8.1 s, JS8 40 4.05 s, JS8 60 2.628 s.
+    pub fn js8_frame_end_ms(&self) -> f64 {
+        let speed = self.js8_tx_speed();
+        f64::from(speed.delay_ms()) + (79 * speed.nsps()) as f64 / 12.0
+    }
+
     /// The radio answered a JS8 frame's key `into_ms` into the frame's period, at or after the end
-    /// of that period, `limit_ms` long: nothing of the frame was left to send, and the loop sent
-    /// nothing (and unkeyed the radio, unless it already held it). Says so on the JS8 cockpit's own
-    /// line and in the log. TX stays on and the rest of the message goes out in the next periods,
-    /// as an FT over the radio keys too late is dropped and TX kept on.
+    /// of its last tone, `limit_ms` into it (inside the period or after it): nothing of the frame
+    /// was left to send, and the loop sent nothing (and unkeyed the radio, unless it already held
+    /// it). Says so on the JS8 cockpit's own line and in the log. TX stays on and the rest of the
+    /// message goes out in the next periods, as an FT over the radio keys too late is dropped and
+    /// TX kept on.
     pub fn js8_note_late_key(&mut self, into_ms: f64, limit_ms: f64) {
         let why = format!(
-            "JS8 frame not sent: the radio keyed {:.1} s into its {:.0} s period, after the period \
-             had ended, too late to send any of it. TX stays on, and the rest of the message goes \
-             out in the next periods. A slow CAT link holds up the key: check the CAT link and \
-             Split operation in Settings.",
+            "JS8 frame not sent: the radio keyed {:.1} s into the frame's period, after its last \
+             tone had ended ({:.1} s in), so none of it was left to send. TX stays on, and the \
+             rest of the message goes out in the next periods. A slow CAT link holds up the key: \
+             check the CAT link and Split operation in Settings.",
             into_ms / 1000.0,
             limit_ms / 1000.0
         );
@@ -118,9 +129,29 @@ mod tests {
         assert_eq!(e.js8_late_start_ms(), 1_200.0, "Fast at 0.5 s");
     }
 
-    /// A key the radio answered after its frame's period had ended says so on the cockpit's line,
-    /// with how far into the period it came and the period's length, keeps TX on, and shows nothing
-    /// as going out.
+    /// Where a frame's last tone ends at each speed: JS8Call's `txDuration`, the start delay and 79
+    /// symbols (JS8Submode.cpp:74), whatever the TX delay.
+    #[test]
+    fn the_frames_last_tone_is_js8calls_tx_duration_at_every_speed() {
+        let mut e = Engine::with_settings(Settings::default());
+        e.js8_enter();
+        for delay in [200, 500] {
+            e.settings.js8_tx_delay_ms = delay;
+            let ends = Js8Speed::ALL.map(|s| {
+                e.js8_set_speed(s.index()).unwrap();
+                e.js8_frame_end_ms()
+            });
+            assert_eq!(
+                ends,
+                [25_780.0, 13_140.0, 8_100.0, 4_050.0, 2_628.0],
+                "TX delay {delay} ms"
+            );
+        }
+    }
+
+    /// A key the radio answered after its frame's last tone had ended, inside the period or after
+    /// it, says so on the cockpit's line, with how far into the period it came and where the last
+    /// tone ended, keeps TX on, and shows nothing as going out.
     #[test]
     fn a_late_key_says_why_and_keeps_tx_on() {
         let mut e = Engine::with_settings(Settings {
@@ -130,13 +161,13 @@ mod tests {
         });
         e.js8_enter();
         e.set_tx_enabled(true);
-        e.js8_note_late_key(15_337.0, 15_000.0);
+        e.js8_note_late_key(14_037.0, 13_140.0);
         let state = e.js8_state();
         let line = state.last_error.expect("the cockpit says why");
         assert!(
             line.starts_with(
-                "JS8 frame not sent: the radio keyed 15.3 s into its 15 s period, after the period \
-                 had ended"
+                "JS8 frame not sent: the radio keyed 14.0 s into the frame's period, after its \
+                 last tone had ended (13.1 s in)"
             ),
             "{line}"
         );

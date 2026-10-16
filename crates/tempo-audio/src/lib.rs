@@ -76,7 +76,7 @@ pub mod frames;
 #[cfg(feature = "device")]
 pub mod icomlan;
 /// A JS8 frame keyed as JS8Call keys one: its TX delay before its period, its wave on the slot
-/// clock, nothing once its period has ended.
+/// clock, nothing once its last tone has gone.
 mod js8_slot;
 pub mod mic_decode;
 pub mod monitor;

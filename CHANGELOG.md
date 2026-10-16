@@ -15,9 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your DT late. Now PTT goes up the TX delay before the period (Settings ▸ Digital ▸ JS8 ▸ TX
   delay, 0.2 s by default as in JS8Call, 0.1 to 0.5 s) and the frame waits in silence for the
   period's start delay. A radio that keys later than the start delay leaves out what it missed
-  and sends the rest of the frame on time, however late in the period it keys, as JS8Call does;
-  only one that keys after the period has ended sends nothing of that frame and is unkeyed at
-  once, TX staying on for the rest of the message, and the JS8 screen says why. Stop TX or TX Off
+  and sends the rest of the frame on time, however late it keys, as JS8Call does; only one that
+  keys after the frame's last tone (about 13.1 s into a Normal period) sends nothing of that frame
+  and is unkeyed at once, as JS8Call stops there, TX staying on for the rest of the message, and
+  the JS8 screen says why. Stop TX or TX Off
   during the delay unkeys at once and sends nothing. Heartbeats and acknowledgements key the same
   way; with Hold PTT between frames on, the frames after the first start on their period.
   NEEDS-BENCH: checked on the radio loop with a simulated rig only.
