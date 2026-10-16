@@ -134,9 +134,10 @@ fn off_band_remote_receive_tuning_matches_the_native_dial_and_memory_policy() {
 #[test]
 fn off_band_receive_refuses_an_expired_idle_sample_then_accepts_a_fresh_gesture() {
     let mut s = Station::new(OperatingMode::Phone);
+    let two_seconds_ago = s.engine.remote_readings.now() - Duration::from_secs(2);
     let old = s
         .engine
-        .remote_radio_read(&s.connection, Instant::now() - Duration::from_secs(2))
+        .remote_radio_read(&s.connection, two_seconds_ago)
         .unwrap();
     s.engine.remote_observe_ptt(Some(&old), Some(false));
     assert!(matches!(

@@ -23764,7 +23764,7 @@ contact yourself."
     /// Constant-size monitoring read. Never builds the full snapshot, scans the
     /// logbook or drains decode output. Radio and amp are copied in one engine borrow.
     pub fn remote_monitor_observation(&self) -> crate::remote_monitor::Observation {
-        self.remote_monitor_observation_at(std::time::Instant::now())
+        self.remote_monitor_observation_at(self.remote_readings.now())
     }
 
     pub fn remote_monitor_observation_at(
