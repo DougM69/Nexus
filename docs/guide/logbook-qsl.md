@@ -161,7 +161,11 @@ number on the contact as its ADIF `DXCC`, so every export carries it, and the
 awards, the Needed board and the statistics count the contact as that entity.
 The contact's country goes with the number: its ADIF `COUNTRY` becomes the
 entity's name, and every export and upload names a contact that carries a DXCC
-number by that number, so the two never disagree. **Clear the DXCC number** in
+number by that number, so the two never disagree. The number is followed
+strictly, as ADIF does: a Sicily contact carrying Italy's 248 is shown and
+written as Italy, and so are the other WAE areas carrying their DXCC entity's
+number. A contact that arrives with a DXCC number and no country, from an import
+or another program, is given the number's entity. **Clear the DXCC number** in
 the same list puts the contact back to counting by its callsign, and its country
 back to the callsign's. Where LoTW confirmed the contact as another entity, LoTW's still
 counts, and the Awards view lists the two side by side. This is set on the

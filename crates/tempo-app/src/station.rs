@@ -242,15 +242,19 @@ pub fn catch_up_records(
 /// every screen shows. The record's own values always win, and a resolver that cannot place the
 /// call leaves the field empty. The same rule `Engine::log_qso` applies to a contact it logs.
 ///
+/// The country follows the contact's DXCC number where it carries one ([`country_from`]): K1N
+/// arriving with 182 is filled as Navassa Island, not as the United States its call names.
+///
 /// Never the state of a contact with a hunted park or summit ([`call_places_state`]).
 #[allow(clippy::type_complexity)]
 pub(crate) fn fill_with(
     r: &mut QsoRecord,
     country: Option<&(dyn Fn(&str) -> Option<String> + Send + Sync)>,
+    number: Option<&DxccCountry>,
     state: Option<&(dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync)>,
 ) {
     if r.country.is_none() {
-        r.country = country.and_then(|resolve| resolve(&r.call));
+        r.country = country_from(number, country, &r.call, r.dxcc);
     }
     if r.state.is_none() && call_places_state(r) {
         r.state = state.and_then(|resolve| resolve(&r.call, r.grid.as_deref()));
@@ -276,6 +280,7 @@ pub(crate) fn call_places_state(r: &QsoRecord) -> bool {
 fn fill_loaded(
     log: &mut Logbook,
     country: Option<&(dyn Fn(&str) -> Option<String> + Send + Sync)>,
+    number: Option<&DxccCountry>,
     state: Option<&(dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync)>,
 ) -> bool {
     let fills: Vec<(usize, Option<String>, Option<String>)> = log
@@ -286,7 +291,7 @@ fn fill_loaded(
             let c = r
                 .country
                 .is_none()
-                .then(|| country.and_then(|f| f(&r.call)))
+                .then(|| country_from(number, country, &r.call, r.dxcc))
                 .flatten();
             let st = (r.state.is_none() && call_places_state(r))
                 .then(|| state.and_then(|f| f(&r.call, r.grid.as_deref())))
@@ -521,9 +526,27 @@ pub(crate) struct StationKeys<'a>(pub(crate) Option<&'a DxccResolve>);
 /// A callsign → DXCC entity resolver, as [`StationCore::dxcc_resolve`] holds it.
 pub type DxccResolve = dyn Fn(&str) -> Option<String> + Send + Sync;
 
-/// A contact's (callsign, DXCC number) → the country (ADIF `COUNTRY`) that number gives it, `None`
-/// where the number names no entity — as [`StationCore::dxcc_country`] holds it.
-pub type DxccCountry = dyn Fn(&str, Option<u32>) -> Option<String> + Send + Sync;
+/// A DXCC number → the country (ADIF `COUNTRY`) it gives a contact, the name of the entity it
+/// names; `None` for a number that names none — as [`StationCore::dxcc_country`] holds it.
+pub type DxccCountry = dyn Fn(u32) -> Option<String> + Send + Sync;
+
+/// THE country a contact with `call`, carrying the DXCC number `dxcc`, is named under: the name the
+/// number gives it (`number`), else the entity its call places it in (`by_call`). What every insert
+/// and fill writes where a contact has no country, and what the operator's own changes write
+/// ([`StationCore::country_for`]). `None` when neither names one.
+pub(crate) fn country_from<N, C>(
+    number: Option<&N>,
+    by_call: Option<&C>,
+    call: &str,
+    dxcc: Option<u32>,
+) -> Option<String>
+where
+    N: Fn(u32) -> Option<String> + ?Sized,
+    C: Fn(&str) -> Option<String> + ?Sized,
+{
+    dxcc.and_then(|code| number.and_then(|name| name(code)))
+        .or_else(|| by_call.and_then(|resolve| resolve(call)))
+}
 
 impl HotKeys for StationKeys<'_> {
     fn band_key(&self, band: &str) -> String {
@@ -2116,11 +2139,12 @@ pub struct StationCore {
     /// launch can key the hot index it builds off the lock with this very resolver
     /// ([`crate::logstore::HotBuild`]).
     pub(crate) dxcc_resolve: Option<Arc<DxccResolve>>,
-    /// (Callsign, DXCC number) → the country a contact's record takes from its own number,
-    /// injected by the command layer for [`Self::dxcc_resolve`]'s reason. `COUNTRY` follows the
-    /// number: what the operator's own changes write beside it ([`Self::country_for`]) and what
-    /// an export names ([`crate::logexport`]). `None` in headless tests: `COUNTRY` is the call's,
-    /// as before the number was followed. See [`Self::set_dxcc_country_resolver`].
+    /// DXCC number → the country a contact's record takes from it, injected by the command layer
+    /// for [`Self::dxcc_resolve`]'s reason. `COUNTRY` follows the number: what the operator's own
+    /// changes write beside it ([`Self::country_for`]), what every insert and fill writes where a
+    /// contact has none ([`fill_with`]), and what an export names ([`crate::logexport`]). `None`
+    /// in headless tests: `COUNTRY` is the call's, as before the number was followed. See
+    /// [`Self::set_dxcc_country_resolver`].
     pub(crate) dxcc_country: Option<Arc<DxccCountry>>,
     /// (Callsign, heard grid) → US state resolver, injected by the command layer (which owns
     /// the FCC callsign index) — same pattern as [`Self::set_dxcc_resolver`], and injected for
@@ -2345,6 +2369,7 @@ impl StationCore {
         let filled = fill_loaded(
             &mut log,
             self.dxcc_resolve.as_deref(),
+            self.dxcc_country.as_deref(),
             self.state_resolve.as_deref(),
         );
         let store = LogStore::fallback(&path, read, log.records(), resolve)
@@ -2804,14 +2829,18 @@ impl StationCore {
         } else {
             planned.class
         };
-        let (country, state) = (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
+        let (country, number, state) = (
+            self.dxcc_resolve.as_deref(),
+            self.dxcc_country.as_deref(),
+            self.state_resolve.as_deref(),
+        );
         let mut appended = Vec::new();
         let mut pairs = Vec::with_capacity(planned.pairs.len());
         for (before, after) in planned.pairs {
             match (before, after) {
                 (None, Some(row)) => {
                     let mut row = QsoRecord::clone(&row);
-                    fill_with(&mut row, country, state);
+                    fill_with(&mut row, country, number, state);
                     if row.id.is_none() {
                         row.id = Some(self.minter.mint());
                     }
@@ -2926,12 +2955,12 @@ impl StationCore {
         self.rekey_hot();
     }
 
-    /// Inject the (callsign, DXCC number) → country resolver (the command layer passes a closure
-    /// over `propagation::dxcc::country_by_dxcc`). No index is keyed by it, so nothing is
-    /// rebuilt: it names the `COUNTRY` the operator's next change writes, and an export's.
+    /// Inject the DXCC number → country resolver (the command layer passes a closure over
+    /// `propagation::dxcc::country_by_dxcc`). No index is keyed by it, so nothing is rebuilt: it
+    /// names the `COUNTRY` the operator's next change writes, an insert's fill, and an export's.
     pub fn set_dxcc_country_resolver(
         &mut self,
-        country: impl Fn(&str, Option<u32>) -> Option<String> + Send + Sync + 'static,
+        country: impl Fn(u32) -> Option<String> + Send + Sync + 'static,
     ) {
         self.dxcc_country = Some(Arc::new(country));
     }
@@ -2941,10 +2970,12 @@ impl StationCore {
     /// no number or one that names no entity, its call's entity, as every edit has always written.
     /// `None` when neither resolver names one (a headless test's station).
     pub(crate) fn country_for(&self, call: &str, dxcc: Option<u32>) -> Option<String> {
-        self.dxcc_country
-            .as_ref()
-            .and_then(|country| country(call, dxcc))
-            .or_else(|| self.dxcc_resolve.as_ref().and_then(|resolve| resolve(call)))
+        country_from(
+            self.dxcc_country.as_deref(),
+            self.dxcc_resolve.as_deref(),
+            call,
+            dxcc,
+        )
     }
 
     /// Build the hot index again under the DXCC resolver the station now holds, which keys

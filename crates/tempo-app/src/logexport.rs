@@ -96,7 +96,7 @@ impl Source {
     /// its own DXCC number gives it. `None` — write the record as it is — where it carries no
     /// number, one that names no entity, or already says that name.
     fn as_written(&self, r: &QsoRecord) -> Option<QsoRecord> {
-        let country = self.country.as_ref()?(&r.call, r.dxcc)?;
+        let country = self.country.as_ref()?(r.dxcc?)?;
         if r.country.as_deref() == Some(country.as_str()) {
             return None;
         }

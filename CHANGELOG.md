@@ -21,9 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new-entity and new-band badges beside a call you type in the log form, or pick in Operate, count
   it there too. The contact's ADIF `COUNTRY` follows the number: picking an entity writes its name
   on the contact, and every export and upload names a contact that carries a DXCC number by that
-  number's entity, so the two never disagree. A contact imported with a `COUNTRY` its number
-  contradicts goes out under the number's name; Nexus changes the stored contact only when you
-  change it. On the station only: a Remote browser shows the country but cannot change it.
+  number's entity, so the two never disagree. The number is followed strictly: a Sicily contact
+  carrying Italy's 248 is shown and written as Italy, as ADIF names it, and so are the other WAE
+  areas carrying their DXCC entity's number. A contact that arrives with a DXCC number and no
+  country, from an import or another program, is given the number's entity (K1N with 182 as Navassa
+  Island). A contact imported with a `COUNTRY` its number contradicts goes out under the number's
+  name; Nexus changes the stored contact only when you change it. On the station only: a Remote
+  browser shows the country but cannot change it.
 - **Change what an RTTY, PSK or CW macro key sends on the fly.** Right-click a key, or press
   Ctrl+Shift with its F-key (Ctrl+Shift+F3 for F3), and that key's editor opens with the cursor in
   its message. Neither sends anything, and the browser's menu no longer opens over a key. The editor

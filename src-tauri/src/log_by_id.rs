@@ -1028,6 +1028,234 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ★ A WAE area follows its DXCC number strictly. A Sicily contact set to Italy's 248 by hand
+    /// is Italy in the record, the row (its Country column and its tooltip), the export and an
+    /// upload. One imported with 248 beside "Sicily" is shown, exported and uploaded as Italy, and
+    /// its stored record keeps "Sicily": nobody edited it. Without a number a Sicily contact is
+    /// still Sicily, as its call places it.
+    #[test]
+    fn a_wae_areas_contact_carrying_its_parents_number_is_its_parent_everywhere() {
+        let rows = [
+            "<CALL:6>IT9ABC<QSO_DATE:8>20200101<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+             <COUNTRY:6>Sicily<EOR>\n",
+            "<CALL:6>IT9XYZ<QSO_DATE:8>20200102<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+             <DXCC:3>248<COUNTRY:6>Sicily<EOR>\n",
+            "<CALL:6>IT9DEF<QSO_DATE:8>20200103<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+             <COUNTRY:6>Sicily<EOR>\n",
+        ]
+        .concat();
+        let (dir, engine) = engine_with("wae", &rows);
+        let rt = runtime();
+        let held = engine.lock().unwrap().stored_log();
+        let italy = (Some(248), Some("Italy".to_string()));
+        let sicily = (None, Some("Sicily".to_string()));
+
+        let imported = keyed(&held[1]).row;
+        assert_eq!(
+            imported.entity.as_deref(),
+            Some("Italy"),
+            "an imported one's Country column"
+        );
+        assert_eq!(uploaded(&imported), italy, "an imported one's upload");
+        let imported_before = on_disk(&dir, &imported.id.clone().expect("an id")).expect("held");
+
+        let (target, _) = row_ref(&engine, 0);
+        let now = current(
+            rt.block_on(set_dxcc(engine.clone(), target.clone(), Some(248)))
+                .expect("made"),
+        );
+        assert_eq!(
+            pair(&on_disk(&dir, &target.id).expect("held")),
+            italy,
+            "the record"
+        );
+        assert_eq!((now.row.dxcc, now.row.country.clone()), italy, "the row");
+        assert_eq!(
+            now.row.entity.as_deref(),
+            Some("Italy"),
+            "the Country column"
+        );
+        assert_eq!(uploaded(&now.row), italy, "an upload");
+        assert_eq!(
+            exported(&engine),
+            [
+                ("IT9ABC".to_string(), italy.0, italy.1.clone()),
+                ("IT9XYZ".to_string(), italy.0, italy.1.clone()),
+                ("IT9DEF".to_string(), sicily.0, sicily.1.clone()),
+            ],
+            "the export"
+        );
+        let plain = keyed(&held[2]).row;
+        assert_eq!(
+            (plain.entity.clone(), (plain.dxcc, plain.country.clone())),
+            (Some("Sicily".to_string()), sicily),
+            "without a number: its call's WAE area"
+        );
+        assert_eq!(
+            on_disk(&dir, &imported.id.expect("an id")).expect("held"),
+            imported_before,
+            "the imported record is not rewritten"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── COUNTRY filled from the DXCC number ─────────────────────────────────
+
+    /// A contact's (call, DXCC, COUNTRY), each as the station holds it.
+    fn held_countries(engine: &SharedEngine) -> Vec<(String, Option<u32>, Option<String>)> {
+        engine
+            .lock()
+            .unwrap()
+            .stored_log()
+            .iter()
+            .map(|r| (r.call.clone(), r.dxcc, r.country.clone()))
+            .collect()
+    }
+
+    /// K1N's 2015 contact carrying 182 and no COUNTRY, as a logger that writes `DXCC` only exports
+    /// it; and a W1AW contact carrying neither.
+    const NUMBER_NO_COUNTRY: &str = "<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:6>123400\
+        <BAND:3>20m<MODE:2>CW<DXCC:3>182<EOR>\n\
+        <CALL:4>W1AW<QSO_DATE:8>20200101<TIME_ON:6>120000<BAND:3>40m<MODE:2>CW<EOR>\n";
+
+    /// What every fill below must leave: the number's name where a number names an entity, else
+    /// the call's entity.
+    fn filled_by_number() -> Vec<(String, Option<u32>, Option<String>)> {
+        vec![
+            ("K1N".into(), Some(182), Some("Navassa Island".into())),
+            ("W1AW".into(), None, Some("United States".into())),
+        ]
+    }
+
+    /// ★ An import fills a missing COUNTRY from the contact's DXCC number: K1N with 182 is stored
+    /// as Navassa Island, a contact without a number takes its call's entity, and a contact that
+    /// carries a COUNTRY keeps it — the fill writes only a missing field.
+    #[test]
+    fn an_import_fills_a_missing_country_from_the_dxcc_number() {
+        let (dir, engine) = engine_with("fill-import", "");
+        let text = format!(
+            "{}{NUMBER_NO_COUNTRY}{}",
+            tempo_core::logbook::adif_header(),
+            K1N_2015_CONTRADICTED.replace("20150210", "20150211")
+        );
+        let (made, _) =
+            tempo_app::logwrite::until_written(|| tempo_app::logwrite::import_adif(&engine, &text));
+        assert_eq!(made.expect("imported").0, 3, "three contacts added");
+        let mut want = filled_by_number();
+        want.push(("K1N".into(), Some(182), Some("United States".into())));
+        assert_eq!(held_countries(&engine), want);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A contact logged with a DXCC number and no COUNTRY (another program's, or a Remote log
+    /// form's) is stored with the number's name, as an import is.
+    #[test]
+    fn a_contact_logged_with_a_number_and_no_country_takes_the_numbers_name() {
+        let (dir, engine) = engine_with("fill-logged", "");
+        for rec in tempo_core::logbook::parse_adif(NUMBER_NO_COUNTRY) {
+            assert!(rec.country.is_none(), "premise: no COUNTRY");
+            engine_lock(&engine).log_qso(rec);
+        }
+        assert_eq!(held_countries(&engine), filled_by_number());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The 1.13 path's load fills a missing COUNTRY from the DXCC number too, as an insert does.
+    #[test]
+    fn the_older_log_files_load_fills_a_missing_country_from_the_dxcc_number() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-dxcc-fill-file-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let log = dir.join("log.adi");
+        std::fs::write(
+            &log,
+            format!("{}{NUMBER_NO_COUNTRY}", tempo_core::logbook::adif_header()),
+        )
+        .expect("log");
+        let mut e = tempo_app::engine::Engine::new("K2DEF", "FN31", 0);
+        crate::wire_country_resolvers(&mut e);
+        e.set_log_path(log);
+        let engine: SharedEngine = Arc::new(std::sync::Mutex::new(e));
+        assert_eq!(held_countries(&engine), filled_by_number());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ The fill job fills a stored contact's missing COUNTRY from its DXCC number, as an insert
+    /// does — K1N with 182 → Navassa Island — and from its call where it carries none.
+    #[test]
+    fn the_fill_job_fills_a_missing_country_from_the_dxcc_number() {
+        let (dir, engine) = engine_with("fill-job", NUMBER_NO_COUNTRY);
+        assert!(
+            held_countries(&engine).iter().all(|(_, _, c)| c.is_none()),
+            "premise: the store holds no COUNTRY"
+        );
+        let done = tempo_app::logfill::fill_log_store(
+            &engine,
+            1,
+            &crate::country_of,
+            &|_: &str, _: Option<&str>| None::<String>,
+            &|_: &str| false,
+        )
+        .expect("the job runs");
+        assert_eq!((done.lacking, done.filled), (2, 2));
+        assert_eq!(held_countries(&engine), filled_by_number());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The fill rule's version moved with the rule, so a store the job filled under the older rule
+    /// is filled again. Under that rule a contact its call cannot place, carrying 182, was left
+    /// without a country, and it gains Navassa Island now; a contact the older rule filled from its
+    /// call keeps that country — the job fills only what is missing.
+    #[test]
+    fn a_store_filled_under_the_older_fill_rule_is_filled_again() {
+        let rows = "<CALL:1>Q<QSO_DATE:8>20150210<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+            <DXCC:3>182<EOR>\n\
+            <CALL:3>K1N<QSO_DATE:8>20150211<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW<DXCC:3>182<EOR>\n";
+        let (dir, engine) = engine_with("fill-rules", rows);
+        let k1n = engine.lock().unwrap().stored_log()[1].id.expect("an id");
+        // What the job wrote under the older rule: K1N's country from its call, none for Q (its call
+        // is nowhere), and that rule's version.
+        let older = [tempo_app::station::LogFill {
+            id: k1n,
+            country: Some("United States".into()),
+            state: None,
+        }];
+        let wrote = tempo_app::logwrite::fill(&engine, &older, crate::fill_version(1))
+            .expect("the older fill is written");
+        assert_eq!(wrote, 1, "premise: the older rule's fill");
+        let done = tempo_app::logfill::fill_log_store(
+            &engine,
+            crate::log_fill_version(),
+            &crate::country_of,
+            &|_: &str, _: Option<&str>| None::<String>,
+            &|_: &str| false,
+        )
+        .expect("the job runs");
+        assert!(
+            !done.current,
+            "this rule's version is another: the job runs again"
+        );
+        assert_eq!(
+            held_countries(&engine),
+            [
+                (
+                    "Q".to_string(),
+                    Some(182),
+                    Some("Navassa Island".to_string())
+                ),
+                (
+                    "K1N".to_string(),
+                    Some(182),
+                    Some("United States".to_string())
+                ),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ── positions never name a contact ──────────────────────────────────────
 
     /// A parameter name that says "a place in the log".

@@ -880,15 +880,13 @@ pub(crate) fn shown(r: &QsoRecord) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The country (ADIF `COUNTRY`) a contact with `call` takes from its record's DXCC number `dxcc`
-/// (`propagation::dxcc::country_by_dxcc`): the name it is [`shown`] under wherever the number
-/// names an entity, `None` where it names none. The station's resolver for it — what the
-/// operator's changes write beside the number, and what an export names.
-pub(crate) fn dxcc_country(call: &str, dxcc: Option<u32>) -> Option<String> {
-    // No number, nothing to follow — and no cty.dat lookup for it.
-    dxcc?;
-    propagation::dxcc::country_by_dxcc(propagation::dxcc::resolve(call).as_ref(), dxcc)
-        .map(str::to_string)
+/// The country (ADIF `COUNTRY`) a contact takes from its record's DXCC number `code`
+/// (`propagation::dxcc::country_by_dxcc`): the name of the DXCC entity the number names, the name
+/// the contact is [`shown`] under; `None` for a number that names none. The station's resolver
+/// for it — what the operator's changes and every fill write beside the number, and what an
+/// export names.
+pub(crate) fn dxcc_country(code: u32) -> Option<String> {
+    propagation::dxcc::country_by_dxcc(code).map(str::to_string)
 }
 
 /// A contact as it leaves the station — a logbook service's upload, the operator's own logging
@@ -896,7 +894,7 @@ pub(crate) fn dxcc_country(call: &str, dxcc: Option<u32>) -> Option<String> {
 /// ([`dxcc_country`]) where the number names one, so no other logger is handed a `DXCC` and a
 /// `COUNTRY` that disagree. The stored record is not changed.
 pub(crate) fn sent(mut r: QsoRecord) -> QsoRecord {
-    if let Some(country) = dxcc_country(&r.call, r.dxcc) {
+    if let Some(country) = r.dxcc.and_then(dxcc_country) {
         r.country = Some(country);
     }
     r

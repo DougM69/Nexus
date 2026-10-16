@@ -722,6 +722,33 @@ fn the_logbook_shows_sorts_and_keys_a_contact_by_the_dxcc_set_by_hand() {
     assert_eq!(us["slots"]["bandsWorked"], json!(["40M"]));
 }
 
+/// The awards' chase and worked count, the Needed board's worked entities, and the statistics'
+/// entity count and entities — what a contact counts toward, as the screens read it from the store.
+type Counts = (Vec<String>, usize, Vec<String>, Value, Value);
+
+fn counts(engine: &SharedEngine) -> Counts {
+    let tallies = crate::LogTallies::default();
+    let awards = crate::log_folds::awards_kept(engine, &tallies).expect("awards");
+    let (needs, _) = crate::log_folds::needs_kept(engine, &tallies).expect("needs");
+    let q: LogQuestion = serde_json::from_value(json!({"kind": "statistics"})).expect("asked");
+    let stats = LogQueries::default()
+        .answer(engine, &q, &shown, &counted)
+        .expect("answered");
+    let mut worked: Vec<String> = needs.worked_entity_names().iter().cloned().collect();
+    worked.sort();
+    (
+        awards
+            .needed
+            .iter()
+            .map(|n| n.entity.clone())
+            .collect::<Vec<_>>(),
+        awards.dxcc_worked,
+        worked,
+        stats["dxccEntities"].clone(),
+        stats["entities"].clone(),
+    )
+}
+
 /// ★ The awards, the Needed board and the statistics count a contact by its DXCC number and never
 /// by the COUNTRY beside it, unchanged now that COUNTRY follows the number. A K1N contact carrying
 /// 182 counts as Navassa Island whether its COUNTRY says the United States (as an import that
@@ -734,30 +761,6 @@ fn the_awards_the_needed_board_and_the_statistics_count_by_the_number_not_the_co
             "<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:4>1234<BAND:3>20m<MODE:2>CW{fields}<EOR>"
         ))
         .remove(0)
-    };
-    // The awards' chase and worked count, the Needed board's worked entities, and the statistics'
-    // entity count and entities.
-    let counts = |engine: &SharedEngine| {
-        let tallies = crate::LogTallies::default();
-        let awards = crate::log_folds::awards_kept(engine, &tallies).expect("awards");
-        let (needs, _) = crate::log_folds::needs_kept(engine, &tallies).expect("needs");
-        let q: LogQuestion = serde_json::from_value(json!({"kind": "statistics"})).expect("asked");
-        let stats = LogQueries::default()
-            .answer(engine, &q, &shown, &counted)
-            .expect("answered");
-        let mut worked: Vec<String> = needs.worked_entity_names().iter().cloned().collect();
-        worked.sort();
-        (
-            awards
-                .needed
-                .iter()
-                .map(|n| n.entity.clone())
-                .collect::<Vec<_>>(),
-            awards.dxcc_worked,
-            worked,
-            stats["dxccEntities"].clone(),
-            stats["entities"].clone(),
-        )
     };
     let navassa = (
         vec!["Navassa Island".to_string()],
@@ -797,6 +800,50 @@ fn the_awards_the_needed_board_and_the_statistics_count_by_the_number_not_the_co
     let (_, after) = made.expect("read").expect("made");
     assert_eq!(after.expect("the contact stays").dxcc, Some(182), "premise");
     assert_eq!(counts(&engine), navassa, "set by hand");
+}
+
+/// ★ A WAE area's contact counts as it always has, whatever COUNTRY now says beside its number.
+/// A Sicily contact carrying Italy's 248 — its COUNTRY "Sicily" as an import left it, or "Italy" as
+/// the operator's change now writes it — and one carrying no number count alike. The awards, the
+/// Needed board and the statistics count Italy (a WAE area counts as its parent), and the Journey
+/// is the same model for all three: it places a contact by its call alone, Sicily and all.
+#[test]
+fn a_wae_areas_contact_counts_the_same_whatever_country_it_carries() {
+    // 2026-10-15 12:00 UTC: the Journey's year, and an hour after the contact.
+    const NOW: i64 = 1_792_065_600;
+    let with = |fields: &str| {
+        let it9 = tempo_core::logbook::parse_adif(&format!(
+            "<CALL:6>IT9ABC<QSO_DATE:8>20261015<TIME_ON:4>1100<BAND:3>20m<MODE:2>CW{fields}<EOR>"
+        ))
+        .remove(0);
+        let d = Dir::new("wae-counts");
+        let engine = on_store(&d, &[it9]);
+        let journey = crate::log_folds::journey_kept(&engine, &crate::LogTallies::default())
+            .expect("the Journey");
+        let summary = serde_json::to_value(journey.summary(NOW)).expect("a summary");
+        (counts(&engine), summary)
+    };
+    let (as_imported, journey) = with("<DXCC:3>248<COUNTRY:6>Sicily");
+    assert_eq!(
+        as_imported,
+        (
+            vec!["Italy".to_string()],
+            1,
+            vec!["Italy".to_string()],
+            json!(1),
+            json!([{"label": "Italy", "count": 1}]),
+        )
+    );
+    assert_eq!(
+        with("<DXCC:3>248<COUNTRY:5>Italy"),
+        (as_imported.clone(), journey.clone()),
+        "as the operator's change writes it"
+    );
+    assert_eq!(
+        with("<COUNTRY:6>Sicily"),
+        (as_imported, journey),
+        "no number"
+    );
 }
 
 /// ★ `orderRev` IS THE INDEX REVISION. An upload stamp moves the rows' content and not their

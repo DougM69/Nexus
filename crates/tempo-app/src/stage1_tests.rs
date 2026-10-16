@@ -57,7 +57,7 @@ impl Stage1 {
         let (country, state) = (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
         let _ = self
             .logbook
-            .import_adif_with(text, |r| fill_with(r, country, state));
+            .import_adif_with(text, |r| fill_with(r, country, None, state));
     }
 
     /// `StationCore::apply_log_fills`, on a station with a store (the only one it runs on).
@@ -204,7 +204,7 @@ impl Stage1 {
         let (country, state) = (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
         let (added, skipped, merged) = self
             .logbook
-            .import_adif_with(text, |r| fill_with(r, country, state));
+            .import_adif_with(text, |r| fill_with(r, country, None, state));
         (added.len(), skipped, merged, self.logbook.len())
     }
 
@@ -306,7 +306,7 @@ impl Stage1 {
                 .iter_mut()
                 .skip(before)
             {
-                fill_with(Arc::make_mut(r), country, state);
+                fill_with(Arc::make_mut(r), country, None, state);
             }
         }
         (added.len(), summary)

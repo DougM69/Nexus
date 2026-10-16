@@ -7915,18 +7915,28 @@ fn wire_country_resolvers(eng: &mut Engine) {
     eng.set_dxcc_country_resolver(log_queries::dxcc_country);
 }
 
+/// The fill rule's own version in [`log_fill_version`]. Bump it whenever the rule changes, so a
+/// store filled under an older rule is filled again. 2: a contact carrying a DXCC number is filled
+/// with the number's name ([`log_queries::dxcc_country`]), not its call's entity.
+const FILL_RULES: u32 = 2;
+
 /// The version of the resolvers' data the logbook's country and state fills are written for —
 /// what `fill_ver` in the store records (SPEC-2 v3 D2-A). It changes with anything that can
-/// change what [`country_of`] or [`subdivision_hint`] answers: this build (their rules, the
-/// embedded cty.dat, the grid and province tables), the cty.dat active this session, and the
-/// FCC index the resolver holds. Bump `FILL_RULES` if the fill rule itself ever changes. Which
-/// contacts the job counts is not the fill rule: [`subdivision_applies`] leaves out only contacts
-/// the hint never answers for, so what is written does not change with it.
+/// change what [`country_of`], [`log_queries::dxcc_country`] or [`subdivision_hint`] answers: this
+/// build (their rules, the embedded cty.dat and DXCC tables, the grid and province tables), the
+/// cty.dat active this session, and the FCC index the resolver holds. Bump [`FILL_RULES`] if the
+/// fill rule itself ever changes. Which contacts the job counts is not the fill rule:
+/// [`subdivision_applies`] leaves out only contacts the hint never answers for, so what is written
+/// does not change with it.
 fn log_fill_version() -> i64 {
-    const FILL_RULES: u32 = 1;
+    fill_version(FILL_RULES)
+}
+
+/// [`log_fill_version`] under the fill rule `rules`: what a build of that rule wrote as `fill_ver`.
+fn fill_version(rules: u32) -> i64 {
     let fcc = FCC_LOADED.read().map(|g| g.clone()).unwrap_or_default();
     let key = format!(
-        "fill-rules:{FILL_RULES}|build:{}|cty:{}|fcc:{fcc}",
+        "fill-rules:{rules}|build:{}|cty:{}|fcc:{fcc}",
         env!("CARGO_PKG_VERSION"),
         propagation::dxcc::active_stats().ver.unwrap_or_default(),
     );
@@ -7940,8 +7950,9 @@ fn log_fill_version() -> i64 {
 
 /// Write the country and state the logbook store lacks — once per resolver-data version
 /// ([`log_fill_version`]), after the window is up, on a thread of its own and never the radio
-/// loop's — with the resolvers the engine fills every insert with ([`country_of`],
-/// [`subdivision_hint`]), counting a contact without a state only where one can apply
+/// loop's — with the resolvers the engine fills every insert with ([`country_of`], the engine's
+/// own DXCC-number names, [`subdivision_hint`]), counting a contact without a state only where one
+/// can apply
 /// ([`subdivision_applies`]). See `tempo_app::logfill` (SPEC-2 v3 D2-A).
 fn spawn_log_fill(engine: SharedEngine) {
     let spawned = std::thread::Builder::new()
