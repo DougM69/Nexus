@@ -1085,6 +1085,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   segment. It is now judged on its own spot: one that would fall outside your privileges is not
   sent, and the screen says why. NEEDS-BENCH: a heartbeat on a dial a few hundred hertz below
   5351.5 kHz, as a US General, into a dummy load.
+- **The serial port you choose is the one Nexus opens.** Once CAT had worked on a USB radio's port
+  (COM3, say), Nexus remembered that radio so it could follow it to a new COM number after a
+  replug. Until Nexus was restarted, it also followed it when you changed the port yourself: choose
+  a port Windows does not list, as a virtual port from a port-sharing program such as VSPE may be,
+  and Nexus went back to the radio's old port instead of the one you chose. The remembered radio
+  now belongs to the port it was found on. A port you change to is opened as you typed it, and if
+  it will not open, the radio line says so. A radio that is replugged and comes back under a new
+  COM number, with the port setting unchanged, is still followed. NEEDS-BENCH: checked with
+  simulated port lists only; bench on a USB radio with no transmitting (type COM99 and Save, then
+  set the real port back).
 
 ### Security
 
