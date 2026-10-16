@@ -289,7 +289,7 @@ counts too. A General on 5.363 MHz, where the 60 m segment ends at 5366.5 kHz, k
 at a TX offset up to 3449 Hz and sees TX LOCKED from 3450 Hz, where the frame would reach the edge.
 A heartbeat or acknowledgement on its own spot in 500–1000 Hz is judged on that spot: on a dial just
 below the bottom of a segment, with your TX offset inside it, a heartbeat whose spot falls below the
-segment is not sent, and the screen says why. JS8Call checks no privileges at all.
+segment is not sent, and the screen says why.
 
 **Typeahead.** After **Send** the message stays in the message box while it goes out, as
 JS8Call's does: the box shows it as it goes on the air (with your callsign and the addressee in
