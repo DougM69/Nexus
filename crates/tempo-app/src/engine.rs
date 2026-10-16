@@ -41999,6 +41999,49 @@ mod tests {
         assert_eq!(log[0].rst_sent, None, "and we could send none either");
     }
 
+    /// A nonstandard call of mine beside a plain partner sends its number as WSJT-X does,
+    /// with MY call hashed (`PA0A <OE/PD1SCO> -01`), so the contact logs both reports.
+    /// Reported from OE/PD1SCO: the report went out as `<PA0A> OE/PD1SCO` and the roger as
+    /// a bare `RRR`, so no number ever reached the other station.
+    #[test]
+    fn a_nonstandard_call_logs_the_report_it_sent_and_the_one_it_got() {
+        let tx_now = |e: &Engine| e.snapshot().qso.as_ref().and_then(|q| q.tx_now.clone());
+
+        // I answer PA0A's CQ.
+        let mut e = Engine::new("OE/PD1SCO", "JN67", 0);
+        e.set_tier(Tier::Ft8);
+        e.call_station("PA0A");
+        assert_eq!(tx_now(&e).as_deref(), Some("<PA0A> OE/PD1SCO"));
+        key_one_over(&mut e, 0);
+        e.ingest_decodes_for_test(&[dec_snr("<OE/PD1SCO> PA0A -05", -1)], 1);
+        assert_eq!(tx_now(&e).as_deref(), Some("PA0A <OE/PD1SCO> R-01"));
+        key_one_over(&mut e, 2);
+        e.ingest_decodes_for_test(&[dec_snr("<OE/PD1SCO> PA0A RR73", -1)], 3);
+        let log = e.stored_log();
+        assert_eq!(log.len(), 1, "the contact auto-logged");
+        assert_eq!(log[0].call, "PA0A");
+        assert_eq!(log[0].rst_sent.as_deref(), Some("-01"));
+        assert_eq!(log[0].rst_rcvd.as_deref(), Some("-05"));
+
+        // PA0A answers my CQ.
+        let mut e = Engine::new("OE/PD1SCO", "JN67", 0);
+        e.set_tier(Tier::Ft8);
+        e.start_cq(None).expect("a nonstandard call may call CQ");
+        let at = key_one_over(&mut e, 0);
+        e.ingest_decodes_for_test(&[dec_snr("<OE/PD1SCO> PA0A JO22", -1)], at + 1);
+        assert_eq!(tx_now(&e).as_deref(), Some("PA0A <OE/PD1SCO> -01"));
+        let at = key_one_over(&mut e, at + 2);
+        e.ingest_decodes_for_test(&[dec_snr("<OE/PD1SCO> PA0A R-05", -1)], at + 1);
+        assert_eq!(tx_now(&e).as_deref(), Some("<PA0A> OE/PD1SCO RR73"));
+        let at = key_one_over(&mut e, at + 2);
+        e.ingest_decodes_for_test(&[dec_snr("<OE/PD1SCO> PA0A 73", -1)], at + 1);
+        let log = e.stored_log();
+        assert_eq!(log.len(), 1, "the contact auto-logged");
+        assert_eq!(log[0].call, "PA0A");
+        assert_eq!(log[0].rst_sent.as_deref(), Some("-01"));
+        assert_eq!(log[0].rst_rcvd.as_deref(), Some("-05"));
+    }
+
     /// ⛔ THE LOGBOOK-INTEGRITY GUARD. A logbook that invents a contact is worse than one
     /// that drops it: the operator uploads it to LoTW and QRZ, the other station never
     /// worked them, and nothing in Nexus can be looked at to find out why.

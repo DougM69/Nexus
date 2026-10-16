@@ -23,7 +23,7 @@
 
 use modes::{make_mode, DecodeRequest, ModeKind, NativeSource, SignalSource};
 use tempo_core::message::Msg;
-use tempo_core::qso::Station;
+use tempo_core::qso::{State, Station};
 
 const FS: f32 = 12_000.0;
 const F0: f32 = 1500.0;
@@ -436,5 +436,251 @@ fn a_hashed_cq_is_never_generated() {
             !cq.contains('<') && !cq.contains('>'),
             "CQ for {mycall} must not be hashed: [{cq}]"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A nonstandard OWN call beside a plain partner — WSJT-X hashes MY call
+// ---------------------------------------------------------------------------
+
+/// The `i3` (message type) of the 77-bit frame the FT8/FT4 encoders build from `text`, or
+/// `None` where the packer refuses it.
+fn i3_of(text: &str) -> Option<u8> {
+    let mut msg37 = [b' '; 37];
+    for (slot, b) in msg37.iter_mut().zip(text.bytes()) {
+        *slot = b;
+    }
+    let bits = modes::wsjt77::pack::pack(&msg37).ok()??;
+    Some(bits[74] * 4 + bits[75] * 2 + bits[76])
+}
+
+#[test]
+fn a_nonstandard_own_call_hashes_itself_so_the_report_rides() {
+    // Reported on air from OE/PD1SCO: working PA0A, the report over went out as
+    // `<PA0A> OE/PD1SCO` and the roger as a bare `RRR`, so no number ever reached the
+    // other station. WSJT-X 3.0.2 (`genStdMsgs`) hashes MY call when only mine is
+    // nonstandard: PA0A stays a plain c28 call, so the number rides an ordinary Type 1
+    // frame beside the hash, and PA0A reads the full call back from its hash table —
+    // filled by my CQ or my Tx1, which carry it in full.
+    for t in ["PA0A <OE/PD1SCO> -01", "PA0A <OE/PD1SCO> R-01"] {
+        assert_eq!(i3_of(t), Some(1), "[{t}] must be a Type 1 frame");
+        assert_on_air(ModeKind::Ft4, t);
+    }
+
+    // I answer PA0A's CQ.
+    let cq = Msg::parse("CQ PA0A JO22");
+    let mut st = Station::start("OE/PD1SCO", "JN67", "PA0A", Some((&cq, -1)), false, false);
+    over(&mut st, "<PA0A> OE/PD1SCO");
+    st.observe(&[dec("<OE/PD1SCO> PA0A -05", -1)]);
+    assert_eq!(st.rx_report, Some(-5));
+    assert_eq!(
+        st.state,
+        State::AwaitRr73,
+        "a roger that carries the number is an ordinary Tx3, not the closing RRR"
+    );
+    over(&mut st, "PA0A <OE/PD1SCO> R-01");
+    st.observe(&[dec("<OE/PD1SCO> PA0A RR73", -1)]);
+    over(&mut st, "<PA0A> OE/PD1SCO 73");
+    assert_eq!(st.state, State::Done);
+    assert!(!st.report_impossible_exchange(), "both numbers can ride");
+
+    // PA0A answers my CQ.
+    let mut run = Station::calling_cq("OE/PD1SCO", "JN67");
+    over(&mut run, "CQ OE/PD1SCO");
+    run.observe(&[dec("<OE/PD1SCO> PA0A JO22", -1)]);
+    over(&mut run, "PA0A <OE/PD1SCO> -01");
+    run.observe(&[dec("<OE/PD1SCO> PA0A R-05", -1)]);
+    assert_eq!(run.rx_report, Some(-5));
+    over(&mut run, "<PA0A> OE/PD1SCO RR73");
+    run.observe(&[dec("<OE/PD1SCO> PA0A 73", -1)]);
+    assert_eq!(run.state, State::Done);
+    assert!(!run.report_impossible_exchange(), "both numbers can ride");
+}
+
+#[test]
+fn a_plain_station_follows_a_partner_that_hashes_its_own_call() {
+    // What WSJT-X sends a Nexus user today, and what Nexus now sends too: the bracketed
+    // SENDER must match the DX being worked, and the exchange must advance on it.
+    let mut st = Station::answering("PA0A", "JO22", "OE/PD1SCO");
+    over(&mut st, "<OE/PD1SCO> PA0A JO22");
+    st.observe(&[dec("PA0A <OE/PD1SCO> -01", -5)]);
+    assert_eq!(
+        st.rx_report,
+        Some(-1),
+        "the number beside the hash is captured"
+    );
+    assert_eq!(st.state, State::AwaitRr73);
+    over(&mut st, "<OE/PD1SCO> PA0A R-05");
+    st.observe(&[dec("<PA0A> OE/PD1SCO RR73", -5)]);
+    over(&mut st, "<OE/PD1SCO> PA0A 73");
+    assert_eq!(st.state, State::Done);
+    assert_eq!(
+        st.dxcall.as_deref(),
+        Some("OE/PD1SCO"),
+        "logs the full call"
+    );
+
+    // Running CQ, answered by the same station after its Tx1.
+    let mut run = Station::calling_cq("PA0A", "JO22");
+    run.observe(&[dec("<PA0A> OE/PD1SCO", -5)]);
+    assert_eq!(run.dxcall.as_deref(), Some("OE/PD1SCO"));
+    over(&mut run, "<OE/PD1SCO> PA0A -05");
+    run.observe(&[dec("PA0A <OE/PD1SCO> R-01", -5)]);
+    assert_eq!(run.rx_report, Some(-1));
+    assert_eq!(run.state, State::Confirming);
+    over(&mut run, "<OE/PD1SCO> PA0A RR73");
+}
+
+#[test]
+fn only_a_nonstandard_call_beside_a_plain_partner_changes() {
+    // WSJT-X's form needs the partner to be a plain c28 call. Beside a slashed call the
+    // packer refuses Type 1 (`packjt77.f90:1183-1184`) and the frame would go out as
+    // truncated free text; beside another nonstandard call there is no c28 call at all.
+    for t in [
+        "PA0A/P <OE/PD1SCO> -07",
+        "PA0A/R <OE/PD1SCO> R-07",
+        "PJ4/K1ABC <OE/PD1SCO> -07",
+    ] {
+        assert_ne!(i3_of(t), Some(1), "[{t}] cannot be a Type 1 frame");
+        let got = on_air(ModeKind::Ft8, t);
+        assert!(!got.iter().any(|m| m == t), "[{t}] came back as {got:?}");
+    }
+
+    // Every pair's Tx1–Tx5 and every CQ, byte for byte. The two ★ rows are the change:
+    // a nonstandard call beside a plain one sends WSJT-X's report and roger. Every other
+    // row is exactly what was sent before.
+    const ROWS: [(&str, &str, &str); 20] = [
+        ("KD9TAW", "PA0A", "PA0A KD9TAW EN52 | PA0A KD9TAW -07 | PA0A KD9TAW R-07 | PA0A KD9TAW RR73 | PA0A KD9TAW 73"),
+        ("KD9TAW", "PA0A/P", "PA0A/P KD9TAW EN52 | PA0A/P KD9TAW -07 | PA0A/P KD9TAW R-07 | PA0A/P KD9TAW RR73 | PA0A/P KD9TAW 73"),
+        ("KD9TAW", "PA0A/R", "PA0A/R KD9TAW EN52 | PA0A/R KD9TAW -07 | PA0A/R KD9TAW R-07 | PA0A/R KD9TAW RR73 | PA0A/R KD9TAW 73"),
+        ("KD9TAW", "PJ4/K1ABC", "<PJ4/K1ABC> KD9TAW EN52 | <PJ4/K1ABC> KD9TAW -07 | <PJ4/K1ABC> KD9TAW R-07 | <PJ4/K1ABC> KD9TAW RR73 | <PJ4/K1ABC> KD9TAW 73"),
+        ("KD9TAW/P", "PA0A", "PA0A KD9TAW/P EN52 | PA0A KD9TAW/P -07 | PA0A KD9TAW/P R-07 | PA0A KD9TAW/P RR73 | PA0A KD9TAW/P 73"),
+        ("KD9TAW/P", "PA0A/P", "PA0A/P KD9TAW/P EN52 | PA0A/P KD9TAW/P -07 | PA0A/P KD9TAW/P R-07 | PA0A/P KD9TAW/P RR73 | PA0A/P KD9TAW/P 73"),
+        ("KD9TAW/P", "PA0A/R", "<PA0A/R> KD9TAW/P | <PA0A/R> KD9TAW/P | <PA0A/R> KD9TAW/P RRR | <PA0A/R> KD9TAW/P RR73 | <PA0A/R> KD9TAW/P 73"),
+        ("KD9TAW/P", "PJ4/K1ABC", "<PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P RRR | <PJ4/K1ABC> KD9TAW/P RR73 | <PJ4/K1ABC> KD9TAW/P 73"),
+        ("KD9TAW/R", "PA0A", "PA0A KD9TAW/R EN52 | PA0A KD9TAW/R -07 | PA0A KD9TAW/R R-07 | PA0A KD9TAW/R RR73 | PA0A KD9TAW/R 73"),
+        ("KD9TAW/R", "PA0A/P", "<PA0A/P> KD9TAW/R | <PA0A/P> KD9TAW/R | <PA0A/P> KD9TAW/R RRR | <PA0A/P> KD9TAW/R RR73 | <PA0A/P> KD9TAW/R 73"),
+        ("KD9TAW/R", "PA0A/R", "PA0A/R KD9TAW/R EN52 | PA0A/R KD9TAW/R -07 | PA0A/R KD9TAW/R R-07 | PA0A/R KD9TAW/R RR73 | PA0A/R KD9TAW/R 73"),
+        ("KD9TAW/R", "PJ4/K1ABC", "<PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R RRR | <PJ4/K1ABC> KD9TAW/R RR73 | <PJ4/K1ABC> KD9TAW/R 73"),
+        // ★
+        ("OE/PD1SCO", "PA0A", "<PA0A> OE/PD1SCO | PA0A <OE/PD1SCO> -07 | PA0A <OE/PD1SCO> R-07 | <PA0A> OE/PD1SCO RR73 | <PA0A> OE/PD1SCO 73"),
+        ("OE/PD1SCO", "PA0A/P", "<PA0A/P> OE/PD1SCO | <PA0A/P> OE/PD1SCO | <PA0A/P> OE/PD1SCO RRR | <PA0A/P> OE/PD1SCO RR73 | <PA0A/P> OE/PD1SCO 73"),
+        ("OE/PD1SCO", "PA0A/R", "<PA0A/R> OE/PD1SCO | <PA0A/R> OE/PD1SCO | <PA0A/R> OE/PD1SCO RRR | <PA0A/R> OE/PD1SCO RR73 | <PA0A/R> OE/PD1SCO 73"),
+        ("OE/PD1SCO", "PJ4/K1ABC", "<PJ4/K1ABC> OE/PD1SCO | <PJ4/K1ABC> OE/PD1SCO | <PJ4/K1ABC> OE/PD1SCO RRR | <PJ4/K1ABC> OE/PD1SCO RR73 | <PJ4/K1ABC> OE/PD1SCO 73"),
+        // ★
+        ("YW18FIFA", "PA0A", "<PA0A> YW18FIFA | PA0A <YW18FIFA> -07 | PA0A <YW18FIFA> R-07 | <PA0A> YW18FIFA RR73 | <PA0A> YW18FIFA 73"),
+        ("YW18FIFA", "PA0A/P", "<PA0A/P> YW18FIFA | <PA0A/P> YW18FIFA | <PA0A/P> YW18FIFA RRR | <PA0A/P> YW18FIFA RR73 | <PA0A/P> YW18FIFA 73"),
+        ("YW18FIFA", "PA0A/R", "<PA0A/R> YW18FIFA | <PA0A/R> YW18FIFA | <PA0A/R> YW18FIFA RRR | <PA0A/R> YW18FIFA RR73 | <PA0A/R> YW18FIFA 73"),
+        ("YW18FIFA", "PJ4/K1ABC", "<PJ4/K1ABC> YW18FIFA | <PJ4/K1ABC> YW18FIFA | <PJ4/K1ABC> YW18FIFA RRR | <PJ4/K1ABC> YW18FIFA RR73 | <PJ4/K1ABC> YW18FIFA 73"),
+    ];
+    const CQS: [(&str, &str); 5] = [
+        ("KD9TAW", "CQ KD9TAW EN52"),
+        ("KD9TAW/P", "CQ KD9TAW/P EN52"),
+        ("KD9TAW/R", "CQ KD9TAW/R EN52"),
+        ("OE/PD1SCO", "CQ OE/PD1SCO"),
+        ("YW18FIFA", "CQ YW18FIFA"),
+    ];
+    let mut wrong = Vec::new();
+    for (my, dx, want) in ROWS {
+        let got = (1..=5)
+            .map(|n| queued(my, "EN52", dx, n))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        if got != want {
+            wrong.push(format!("{my} × {dx}\n  sent {got}\n  want {want}"));
+        }
+    }
+    for (my, want) in CQS {
+        let got = Station::calling_cq(my, "EN52").pending_text();
+        if got.as_deref() != Some(want) {
+            wrong.push(format!("CQ {my}\n  sent {got:?}\n  want {want}"));
+        }
+    }
+    assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
+}
+
+/// Two stations working each other over the FT8 modem, `first` transmitting first: every
+/// over is what one station queued, packed, transmitted and decoded, and the other station
+/// observes exactly what came back. Each hears the other at a fixed SNR (`first` hears
+/// `second` at `snr_first_hears`), so the reports on the air are known in advance.
+fn ft8_qso(
+    first: &mut Station,
+    second: &mut Station,
+    snr_first_hears: i32,
+    snr_second_hears: i32,
+) -> Vec<String> {
+    let mut air = Vec::new();
+    for slot in 0..12 {
+        let (tx, rx, snr) = if slot % 2 == 0 {
+            (&mut *first, &mut *second, snr_second_hears)
+        } else {
+            (&mut *second, &mut *first, snr_first_hears)
+        };
+        if let Some(text) = tx.pending_text() {
+            let heard = on_air(ModeKind::Ft8, &text);
+            rx.observe(&heard.iter().map(|m| dec(m, snr)).collect::<Vec<_>>());
+            tx.after_tx();
+            air.push(format!("{}: {text}", tx.mycall));
+        }
+        if first.done() && second.done() {
+            break;
+        }
+    }
+    air
+}
+
+#[test]
+fn a_nonstandard_call_and_a_plain_call_exchange_both_reports_both_ways() {
+    // The reported pair, both ways, through the FT8 modem: OE/PD1SCO hears PA0A at -5 and
+    // PA0A hears OE/PD1SCO at -1. Both numbers cross, and each side's RST_RCVD is the
+    // number the other put on the air.
+    let mut oe = Station::calling_cq("OE/PD1SCO", "JN67");
+    let mut pa = Station::answering("PA0A", "JO22", "OE/PD1SCO");
+    let air = ft8_qso(&mut oe, &mut pa, -5, -1);
+    assert_eq!(
+        air,
+        [
+            "OE/PD1SCO: CQ OE/PD1SCO",
+            "PA0A: <OE/PD1SCO> PA0A JO22",
+            "OE/PD1SCO: PA0A <OE/PD1SCO> -05",
+            "PA0A: <OE/PD1SCO> PA0A R-01",
+            "OE/PD1SCO: <PA0A> OE/PD1SCO RR73",
+            "PA0A: <OE/PD1SCO> PA0A 73",
+        ],
+        "my CQ answered"
+    );
+    for (st, rcvd, call) in [(&oe, -1, "PA0A"), (&pa, -5, "OE/PD1SCO")] {
+        assert_eq!(
+            (st.state, st.rx_report),
+            (State::Done, Some(rcvd)),
+            "{call}"
+        );
+        assert_eq!(st.dxcall.as_deref(), Some(call));
+        assert!(!st.report_impossible_exchange());
+    }
+
+    let mut pa = Station::calling_cq("PA0A", "JO22");
+    let mut oe = Station::answering("OE/PD1SCO", "JN67", "PA0A");
+    let air = ft8_qso(&mut pa, &mut oe, -1, -5);
+    assert_eq!(
+        air,
+        [
+            "PA0A: CQ PA0A JO22",
+            "OE/PD1SCO: <PA0A> OE/PD1SCO",
+            "PA0A: <OE/PD1SCO> PA0A -01",
+            "OE/PD1SCO: PA0A <OE/PD1SCO> R-05",
+            "PA0A: <OE/PD1SCO> PA0A RR73",
+            "OE/PD1SCO: <PA0A> OE/PD1SCO 73",
+        ],
+        "me answering his CQ"
+    );
+    for (st, rcvd, call) in [(&oe, -1, "PA0A"), (&pa, -5, "OE/PD1SCO")] {
+        assert_eq!(
+            (st.state, st.rx_report),
+            (State::Done, Some(rcvd)),
+            "{call}"
+        );
+        assert_eq!(st.dxcall.as_deref(), Some(call));
+        assert!(!st.report_impossible_exchange());
     }
 }

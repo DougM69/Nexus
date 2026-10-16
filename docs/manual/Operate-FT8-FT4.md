@@ -106,6 +106,16 @@ The Tx panel is visible only in Classic layout. It contains:
   with no special activity set. With a compound call (PJ4/K1ABC) every contest CQ is the plain
   `CQ <call>`, as in WSJT-X: FT8 cannot carry such a call beside a contest token or a grid.
 
+**A call FT8 cannot carry whole.** A prefix (`OE/PD1SCO`) or any suffix other than `/P` and `/R`
+(`KD9TAW/M`) does not fit FT8's ordinary call field, so the panel shows, and Nexus sends, what
+WSJT-X sends. Working an ordinary call such as PA0A, Tx1 carries your call in full
+(`<PA0A> OE/PD1SCO`), Tx2 and Tx3 put it in brackets so the report fits (`PA0A <OE/PD1SCO> -01`,
+`PA0A <OE/PD1SCO> R-01`), and RR73 and 73 carry it in full again. The other station reads the
+bracketed call from your CQ or your Tx1, which is why Tx1 is never skipped with such a call.
+When the other station's call has a slash too, `/P` and `/R` included, or is another call FT8
+cannot carry whole, FT8 has no room for a report in either direction: Tx2 is your call alone and
+Tx3 a plain `RRR`.
+
 In Roster layout the equivalent information appears in the modern QSO strip alongside the Call Roster.
 
 ---
