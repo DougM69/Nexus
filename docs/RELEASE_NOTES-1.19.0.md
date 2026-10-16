@@ -93,7 +93,6 @@ Nexus on Windows, and an ISS pass no longer retunes the radio you are using for 
 - **Macro keys:** right-click a CW, RTTY or PSK key, or press Ctrl+Shift with its F-key, to change
   what it sends; **Send once** sends the change once and **Save** keeps it.
 - **The rail's mode badge** names the contest you are running (ILQP, NYQP, WFD), not FIELD DAY.
-<!-- BENCH (Fri 16 Oct): cut the bullet below if the CQ claimed score fails the bench (A0.S). -->
 - **CQ WW and CQ WPX logs claim their score**, apart from a single-band entry with contacts on
   another band.
 - **The Rotor box draws the station in your log entry on its rose** and says how far the antenna
@@ -179,7 +178,6 @@ Nexus on Windows, and an ISS pass no longer retunes the radio you are using for 
 - **The APRS map shows the stations inside your radius**, and your watched calls. With weather,
   objects or messages switched on, as all three are by default, the feed asked for the whole network
   and filled the map to its 2,000-station limit. A radius of 0 still means no limit.
-<!-- BENCH (Fri 16 Oct): cut the bullet below if the CQ claimed score fails the bench (A0.S). -->
 - **1.18.0 can over-claim a single-band CQ WW or WPX entry.** This release's contest rules add the
   claimed score to CQ WW and CQ WPX, and 1.18.0 takes them in through **Check for rules updates** on
   the Contesting tab (they apply when Nexus starts again). On 1.18.0, a log entered as one band that
@@ -270,7 +268,6 @@ Nexus on Windows, and an ISS pass no longer retunes the radio you are using for 
   again at 001, at a club only this laptop's contacts go, and nothing transmits. Contest Log
   Persistence, in the manual, names the journal file and says to start clean this way after a gear
   test.
-<!-- BENCH (Fri 16 Oct): cut the bullet below if the CQ claimed score fails the bench (A0.S). -->
 - **CQ WW CW and SSB and CQ WPX CW and SSB logs claim their score.** The Cabrillo file carries
   CLAIMED-SCORE, the score the Contest screen shows, as the CQ WW RTTY file already did. A
   single-band entry (Band category set to one band) whose log also holds a contact on another band
@@ -325,23 +322,18 @@ Nexus on Windows, and an ISS pass no longer retunes the radio you are using for 
   of message, and a compound or hashed call you send still shows in full when the reply comes back.
   NEEDS-BENCH: beside WSJT-X on a slow computer, an over changed in the last seconds before your
   slot keys on time, and a QSO with a compound call completes.
-<!-- BENCH (Fri 16 Oct): cut the bullet below if the FT slow-CAT drop fails the bench. -->
 - **An over no longer goes out in the other station's period when the radio is slow to key.** With
   Split operation set to Rig on a slow CAT link, a radio that comes on after your period has ended
   is unkeyed at once and sends nothing, as in WSJT-X, and TX stays on: the status line says the over
   was dropped and how late the radio was, and your next over goes out in your next period. The end
   of an over is the first thing each pass of the radio loop checks, so a double-click while a decode
   finishes on a slow computer no longer holds the transmitter past 13.84 s in FT8 or 6.24 s in FT4
-  for as long as that lasts. NEEDS-BENCH: Split operation set to Rig on a radio with a slow serial
-  link (an FT-710 at 4800 baud, a Xiegu), a Call CQ about 11 s into your FT8 slot, several times.
-<!-- BENCH (Fri 16 Oct): cut the bullet below if the licence lock's whole width fails the bench,
-     and with it the JS8 heartbeat bullet that came in the same change. -->
+  for as long as that lasts.
 - **The licence lock counts the whole FT8, FT4, FT2 or JS8 signal, not just its lowest tone.** A
   signal whose top would cross the edge of your privileges shows TX LOCKED: as a US General on 5.363
   MHz, an FT8 or JS8 Normal signal keys at a TX offset up to 3449 Hz and locks from 3450 Hz. Away
   from an edge nothing changes, and neither do the other digital modes or an operator with no US
-  licence class. NEEDS-BENCH: a radio on 60 m into a dummy load, as a US General.
-<!-- BENCH (Fri 16 Oct): cut the bullet below if your own call with a prefix (#410) fails the bench. -->
+  licence class.
 - **Your own call with a prefix or suffix keeps its signal report.** Operating as OE/PD1SCO, or with
   any call FT8 counts as nonstandard (a prefix, or a suffix other than /P or /R), Nexus sent its
   report and its roger without the number. It now shortens your own call to its hash in those two
@@ -355,9 +347,6 @@ load: a Call CQ about 10 s and about 12 s into an FT8 slot (the first keys at on
 waits for the next slot), an FT4 Call CQ about 5.6 s in (TX on with nothing sent, off at about
 6.2 s), FT8 on a slow computer such as a Raspberry Pi, and TX On with the output device held by
 another program.
-<!-- BENCH: the paragraph above reflects the 14 October bench (normal QSOs on a test build with the
-     timing and the 75 % rule, before the FT4 hold); update it after this week's bench of the
-     whole set. -->
 
 ## JS8: closer to JS8Call 3.0
 
@@ -369,13 +358,12 @@ radio.
   and JS8Call 2.x does not decode it. NEEDS-BENCH: JS8 60 to and from JS8Call 3.0.3 on the air.
 - **Turbo is called JS8 40**, its name in JS8Call 3.0, with the same 6-second periods and the same
   signal on the air.
-<!-- BENCH (Fri 16 Oct): cut the bullet below if the JS8 TX delay and late key fail the bench. -->
 - **Each frame keys the radio 0.2 s before its period, and its first tone goes out on time.** A
   radio slow to switch to transmit no longer makes every frame late; the delay is in Settings ▸
   Digital ▸ JS8 ▸ TX delay, 0.1 to 0.5 s. A radio that keys late sends the rest of the frame on
   time, and one that keys after the frame's last tone sends nothing of that frame, with TX left on
   for the rest of the message and the reason on the JS8 screen. Stop TX or TX Off during the delay
-  unkeys at once. NEEDS-BENCH: checked with a simulated radio only.
+  unkeys at once.
 - **Hold PTT between frames**, off by default (Settings ▸ Digital ▸ JS8), keeps the radio keyed from
   one frame of a message to the next, where PTT dropped for about 1.4 s between frames at Normal.
   PTT still drops after the message's last frame, and at once on Stop TX or TX Off. NEEDS-BENCH:
@@ -481,8 +469,6 @@ radio.
   `@ALLCALL` choice. The filter, QSY to centre, the band schedule, the groups and the block list
   change at the station only. NEEDS-BENCH: a station on this build, watched on the Remote page from
   a phone.
-<!-- BENCH (Fri 16 Oct): this bullet came in with the licence lock's whole width (FT8 and FT4,
-     above); cut the two together. -->
 - **A heartbeat is judged where it is sent.** A heartbeat or acknowledgement goes out on its own
   free spot in 500–1000 Hz, and the licence lock judges that spot, not your TX offset: one that
   would fall outside your privileges is not sent, and the screen says why. NEEDS-BENCH: a heartbeat
@@ -519,21 +505,8 @@ All of this is on the Flex native client (Beta), and none of it is checked on a 
   off, and for CW break-in on and Sync CWX off. It changes only at the shack, never through the
   Remote stream, and saving a change reconnects Nexus to the radio. Try it into a dummy load first.
   NEEDS-BENCH on a FLEX radio, into a dummy load.
-<!-- BENCH: the lead keeps ONE of the two paragraphs below, per item, after the Saturday bench of
-     the Beta switch on the release build. CW, Tune and ATU are decided separately; a mixed result
-     keeps the "checked" sentence for each that passed and the "not yet checked" sentence for each
-     that did not, and the matching line under Known issues. If any passes, change "none of it is
-     checked" at the top of this section to say what was. If the switch misses the tag, drop this
-     block and keep the Known issues line in its "stay switched off" form.
-
-  IF THE BENCH PASSES:
-- **CW, Tune and the ATU through the client were checked on a FLEX radio into a dummy load**, with
-  the Beta switch on. The switch stays off by default.
-
-  IF THE BENCH DOES NOT PASS, OR IS NOT RUN:
 - **CW, Tune and the ATU through the client are not yet checked on a radio.** Leave the Beta switch
   off unless you are trying it into a dummy load. NEEDS-BENCH on a FLEX radio.
--->
 
 ## Your screen
 
@@ -606,14 +579,12 @@ All of this is on the Flex native client (Beta), and none of it is checked on a 
   before it drops unsaved edits. While you edit a radio that is not in use, Tx Power and RX Gain
   set only that radio's saved levels, which it takes up when it becomes the radio in use, and the
   hint under them says so. NEEDS-BENCH: two Yaesus (an FT-710 and an FT-991A) on a Mac.
-<!-- BENCH (Fri 16 Oct): cut the bullet below if the serial port fix fails the bench. -->
 - **The serial port you choose is the one Nexus opens.** Once CAT had worked on a USB radio's port,
   Nexus remembered that radio so it could follow it to a new COM number after a replug, and until a
   restart it also followed it when you changed the port yourself. A port Windows does not list, such
   as a virtual port from a port-sharing program like VSPE, sent Nexus back to the radio's old port. A
   port you change to is now opened as you typed it, and if it will not open, the radio line says so.
-  A radio that comes back under a new COM number after a replug is still followed. NEEDS-BENCH: a
-  USB radio, no transmitting.
+  A radio that comes back under a new COM number after a replug is still followed.
 - **A Save in Settings keeps the drive and RX gain you set last.** After you moved the cockpit
   **Pwr** slider or changed RX Gain, Settings showed the level from before, and the next Save of
   anything in Settings set the radio in use back to it. The level you set last, in the cockpit or
@@ -638,11 +609,10 @@ All of this is on the Flex native client (Beta), and none of it is checked on a 
 - **The manual's drive advice covers the Yaesus that turn their power down with the ALC.** An
   FT-991A below full power reads ALC above zero however clean the drive, so Rig and Audio Setup,
   Getting Started and the settings reference say to set the drive at full power on those radios.
-<!-- BENCH (Fri 16 Oct): cut the bullet below if the tune-time meter fails the bench. -->
 - **Tune keeps its carrier when the radio is slow to answer a meter.** While Tune is keyed, each
   SWR, ALC, power or compression reading gets 120 ms, so a slow radio costs a reading and never a
   gap in the carrier, and a radio that takes longer shows no reading for that meter during Tune.
-  Tune keys and unkeys as before. NEEDS-BENCH: watch SWR during Tune on each radio.
+  Tune keys and unkeys as before.
 - **Phone on 60 m is USB.** Nexus put 60 m on LSB with every band below 10 MHz. The Phone screen,
   SSTV sent from it, the transmit lock and the logged sideband use USB there, as a US licence
   requires and the IARU Region 1 and Canadian band plans have it. The mode chips grey LSB, AM and FM
@@ -819,23 +789,16 @@ All of this is on the Flex native client (Beta), and none of it is checked on a 
   Windows, the wizard's keying question (one of the radios it names) and the club-wide county board
   (two laptops on a LAN).
 - Also NEEDS-BENCH: most of JS8's new features (on the air beside JS8Call 3.0.3), an FT8 or FT4 over
-  changed in the last seconds before your slot (beside WSJT-X on a slow computer), Phone and the
-  transmit lock on 60 m (a radio into a dummy load), the ALC meter and its colours on the FT-991A
+  changed in the last seconds before your slot (beside WSJT-X on a slow computer), Phone on 60 m
+  (a radio into a dummy load), the ALC meter and its colours on the FT-991A
   and FTDX10, your spots on pskreporter.info, the Stats pane in each cockpit, and the Logbook on a
   computer without WebGL2.
-<!-- BENCH: if CW, Tune or ATU is not checked on the bench, keep this line, naming those that are
-     not; if the Beta switch misses the tag, say instead that they stay switched off until checked:
 - CW, Tune and the ATU through the Flex native client are not yet checked on a radio. The Beta
   switch that turns them on is off by default.
--->
 - At the Illinois QSO Party and the other QSO parties, N3FJP gets the call, band, mode and frequency
   from Nexus, not the county. The Nexus log and its Cabrillo file are complete. (carried from 1.18.0)
 - The Icom network connection receives and controls only: nothing transmits on it and there is no
   audio over it yet. (carried from 1.18.0)
 
-**142 changes since 1.18.0.** The full list is in the CHANGELOG.
-<!-- COUNT: the bullets under [Unreleased] at 019273c86 (rc3) are 142. Recount at the tag: the CQ
-     claimed score adds one if it lands, and a change taken out after the bench takes its bullet
-     with it. This file is the GitHub release body and the
-     update feed's notes as written, so no HTML comment may be left in it at the tag. -->
+**146 changes since 1.18.0.** The full list is in the CHANGELOG.
 
