@@ -5,6 +5,18 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Nexus Remote: the shack's screen fits the browser window.** Ctrl (⌘ on a Mac) with +, − or 0, Ctrl with the
+  scroll wheel and a trackpad pinch now zoom the browser page instead of going to the shack, and on a short or zoomed
+  window the controls move to the side rail when that shows the shack's screen larger. Stop TX stays in view at every
+  size.
+
+### Removed
+- **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
+  your browser; the watch-and-control workspace it replaced is gone from the page.
+
 ## [1.19.0] — 2026-10-16
 
 ### Added
