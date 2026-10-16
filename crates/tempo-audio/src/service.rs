@@ -798,7 +798,7 @@ use tempo_core::message::Msg;
 // protocols that consume it (N1MM `<band>`, N3FJP `fldBand`), because the
 // shell's per-QSO N1MM forwarder needs the identical conversion.
 use tempo_net::band_for_interop;
-use tempo_net::pskreporter::{PskReporter, Spot};
+use tempo_net::pskreporter::{PskReporter, Spot, SpotCache};
 use tempo_net::server::WsjtxServer;
 use tempo_net::wsjtx::{
     Decode as WsjtxDecode, Inbound as WsjtxInbound, QsoLogged as WsjtxQso, Status as WsjtxStatus,
@@ -3329,6 +3329,9 @@ struct KeyedBoundary {
 struct StationSinks {
     /// PSK Reporter spot buffer, flushed on `PSK_FLUSH_SECS`.
     psk_spots: Vec<Spot>,
+    /// When each call was last spotted, WSJT-X's one-spot-per-call cache: one for the station,
+    /// as one WSJT-X keeps one whatever band it is on.
+    psk_cache: SpotCache,
     last_psk_flush: f64,
     /// Field Day log cursor — the highest contest seq already pushed to the club network /
     /// WSJT-X sinks. A SEQ, not a count: rows are named by it, so a contact removed and the
@@ -3351,6 +3354,7 @@ impl StationSinks {
     fn new() -> Self {
         Self {
             psk_spots: Vec::new(),
+            psk_cache: SpotCache::default(),
             last_psk_flush: now_unix_ms(),
             last_fd_seq: 0,
             last_reported_band: now_unix_ms(),
@@ -12784,7 +12788,14 @@ impl RadioLoop {
                 DecodeApplied::Early { n } => {
                     if n > 0 {
                         let cur_dial = eng.settings().dial_hz();
-                        emit_rx_decodes(sinks, &eng, &mut station.psk_spots, now, cur_dial);
+                        emit_rx_decodes(
+                            sinks,
+                            &eng,
+                            &mut station.psk_spots,
+                            &mut station.psk_cache,
+                            now,
+                            cur_dial,
+                        );
                     }
                 }
                 // A period heard on the band or mode just left: on screen only. It is never a
@@ -12812,7 +12823,14 @@ impl RadioLoop {
                 if let DecodeApplied::Early { n } = eng.apply_decode_result(result) {
                     if n > 0 {
                         let cur_dial = eng.settings().dial_hz();
-                        emit_rx_decodes(sinks, &eng, &mut station.psk_spots, now, cur_dial);
+                        emit_rx_decodes(
+                            sinks,
+                            &eng,
+                            &mut station.psk_spots,
+                            &mut station.psk_cache,
+                            now,
+                            cur_dial,
+                        );
                     }
                 }
             }
@@ -13441,7 +13459,14 @@ impl RadioLoop {
             let _ms_mid = (now as u64 % 86_400_000) as u32;
             let now_secs = (now / 1000.0) as i64;
             if did_rx {
-                emit_rx_decodes(sinks, &*eng, &mut station.psk_spots, now, cur_dial);
+                emit_rx_decodes(
+                    sinks,
+                    &*eng,
+                    &mut station.psk_spots,
+                    &mut station.psk_cache,
+                    now,
+                    cur_dial,
+                );
             }
             if let Some(server) = sinks.wsjtx {
                 let dx = snap
@@ -14005,6 +14030,7 @@ fn emit_rx_decodes(
     sinks: &Sinks,
     eng: &Engine,
     psk_spots: &mut Vec<Spot>,
+    psk_cache: &mut SpotCache,
     now: f64,
     cur_dial: u64,
 ) {
@@ -14014,6 +14040,10 @@ fn emit_rx_decodes(
     let tier = tier_mode(eng.tier());
     let ms_mid = (now as u64 % 86_400_000) as u32;
     let now_secs = (now / 1000.0) as u32;
+    let me = (
+        eng.settings().mycall.as_str(),
+        eng.settings().mygrid.as_str(),
+    );
     // ON-AIR text only — never the hound-rewritten internal form.
     for d in eng.wire_decodes() {
         if let Some(server) = sinks.wsjtx {
@@ -14030,9 +14060,7 @@ fn emit_rx_decodes(
         // A JS8 line is not FT8 grammar (`CALL: …`, frames of a longer message): its spots come
         // from the engine, which reads JS8's messages as JS8Call does (`take_js8_psk_spots`).
         if sinks.psk.is_some() && eng.tier() != Tier::Js8 {
-            if let Some(spot) = build_spot(&d.message, d.snr, d.freq, tier, cur_dial, now_secs) {
-                psk_spots.push(spot);
-            }
+            queue_spot(psk_spots, psk_cache, d, tier, cur_dial, now_secs, me);
         }
     }
 }
@@ -14059,41 +14087,101 @@ fn build_decode<'a>(
     }
 }
 
-/// Build a PSK Reporter [`Spot`] from a decode, or `None` if no sender callsign
-/// can be parsed (only stations we actually copied get reported). The spot
-/// frequency is the dial frequency plus the decode's audio offset.
+/// Build the PSK Reporter [`Spot`] WSJT-X 3.0.2 would post for decode `d`, heard by `me` (our
+/// call and grid), or `None` where it posts none. The spot frequency is the dial frequency plus
+/// the decode's audio offset.
 ///
-/// The spot carries the sender's own grid where WSJT-X 3.0.2 sends one (`MainWindow::pskPost`
-/// reading `DecodedText::deCallAndGrid`): the message's third word, or its fourth after a bare
-/// `R` (`TO DE R GRID`, the NA VHF contest exchange), when that word is a locator
-/// ([`is_spot_locator`]). Every other spot sends the locator empty.
+/// WSJT-X's rule (`MainWindow::pskPost`, mainwindow.cpp:7565-7598, and the decode paths that call
+/// it):
+/// - a decode carrying the sender's locator, or a CQ, and nothing else. The locator is the word
+///   `DecodedText::deCallAndGrid` reads (decodedtext.cpp:212-224): the message's third, or its
+///   fourth after a bare `R` (`TO DE R GRID`, the NA VHF contest exchange), when that word is a
+///   locator ([`is_spot_locator`]); a CQ goes with its locator or with none;
+/// - never a low-confidence decode, WSJT-X's `?` (an a-priori decode under 0.17 quality,
+///   lib/decoder.f90; `isLowConfidence`), and never our own signal heard back: a line holding
+///   our base call and our grid's first four characters (:7568). WSJT-X tests that with no grid
+///   set too, where an empty string is in every line; here it needs both;
+/// - WSPR never: WSJT-X sends it to WSPRnet (`postWSPRDecode`, :13419). FST4W as `CQ CALL GRID`
+///   (:7460-7464), read by the beacon grammar, never the FT8 one, which made a station of its grid;
+/// - never a call WSJT-X's reading cannot hold: a hashed `<CALL>` (its call is `[A-Z0-9/]+`) or
+///   a four-character locator (a callsign ends in a letter, ITU RR 19.69).
+///
+/// A decode of the band or mode just left never reaches here (`DecodeApplied::Late`), which is
+/// WSJT-X's `okToPost` band-change guard.
 fn build_spot(
-    message: &str,
-    snr: i32,
-    freq: f32,
+    d: &tempo_core::modes::Decode,
     mode: &str,
     cur_dial: u64,
     now_secs: u32,
+    me: (&str, &str),
 ) -> Option<Spot> {
-    // `TO DE R GRID` is `TO DE GRID` rogered: read as that, the sender and the grid come out of
-    // the same parse as every other message.
-    let words: Vec<&str> = message.split_whitespace().collect();
-    let msg = match words.as_slice() {
-        [to, de, "R", grid] if is_spot_locator(grid) => Msg::parse(&format!("{to} {de} {grid}")),
-        _ => Msg::parse(message),
+    if d.nap != 0 && d.qual < 0.17 {
+        return None;
+    }
+    let (mycall, mygrid) = me;
+    let my_grid4 = mygrid.get(..4).unwrap_or(mygrid).to_ascii_uppercase();
+    let my_base = tempo_core::message::base_call(mycall);
+    if !my_base.is_empty()
+        && !my_grid4.is_empty()
+        && d.message.contains(my_base.as_str())
+        && d.message.contains(my_grid4.as_str())
+    {
+        return None;
+    }
+    let (call, grid) = if d.mode == Some(tempo_core::modes::ModeKind::Wspr) {
+        return None;
+    } else if tempo_core::beacon::is_beacon_mode(d.mode) {
+        let beacon = tempo_core::beacon::parse_report(&d.message)?;
+        let grid = beacon.grid.filter(|g| is_spot_locator(g)).unwrap_or("");
+        (beacon.call.to_string(), grid.to_string())
+    } else {
+        // `TO DE R GRID` is `TO DE GRID` rogered: read as that, the sender and the grid come out
+        // of the same parse as every other message.
+        let words: Vec<&str> = d.message.split_whitespace().collect();
+        let msg = match words.as_slice() {
+            [to, de, "R", grid] if is_spot_locator(grid) => {
+                Msg::parse(&format!("{to} {de} {grid}"))
+            }
+            _ => Msg::parse(&d.message),
+        };
+        let grid = match &msg {
+            Msg::Cq { grid, .. } | Msg::Grid { grid, .. } if is_spot_locator(grid) => grid.clone(),
+            _ => String::new(),
+        };
+        if grid.is_empty() && !matches!(msg, Msg::Cq { .. }) {
+            return None;
+        }
+        (msg.sender()?.to_string(), grid)
     };
-    let grid = match &msg {
-        Msg::Cq { grid, .. } | Msg::Grid { grid, .. } if is_spot_locator(grid) => grid.clone(),
-        _ => String::new(),
-    };
-    msg.sender().map(|call| Spot {
-        call: call.to_string(),
-        freq_hz: cur_dial + freq as u64,
-        snr,
+    if call.contains(['<', '>']) || (call.len() == 4 && is_spot_locator(&call)) {
+        return None;
+    }
+    Some(Spot {
+        call,
+        freq_hz: cur_dial + d.freq as u64,
+        snr: d.snr,
         mode: mode.to_string(),
         grid,
         time_secs: now_secs,
     })
+}
+
+/// Queue decode `d`'s spot ([`build_spot`]) unless WSJT-X's cache would drop it: a call spotted
+/// in the last five minutes below 49 MHz ([`SpotCache::admit`]).
+fn queue_spot(
+    spots: &mut Vec<Spot>,
+    cache: &mut SpotCache,
+    d: &tempo_core::modes::Decode,
+    mode: &str,
+    cur_dial: u64,
+    now_secs: u32,
+    me: (&str, &str),
+) {
+    if let Some(spot) = build_spot(d, mode, cur_dial, now_secs, me) {
+        if cache.admit(&spot.call, spot.freq_hz, u64::from(now_secs)) {
+            spots.push(spot);
+        }
+    }
 }
 
 /// A locator as WSJT-X's `grid_regexp` reads one (mainwindow.cpp): two field letters A–R, two
@@ -19258,7 +19346,12 @@ mod tests {
     #[test]
     fn build_spot_reports_sender_at_rf_frequency() {
         // Audio offset adds onto the dial: 14.074 MHz + 1200 Hz audio.
-        let spot = build_spot("CQ W1AW FN31", -7, 1200.0, "FT8", 14_074_000, 1_700_000_000)
+        let d = tempo_core::modes::Decode {
+            snr: -7,
+            freq: 1200.0,
+            ..heard_on("CQ W1AW FN31", None)
+        };
+        let spot = build_spot(&d, "FT8", 14_074_000, 1_700_000_000, ("KD9TAW", "EN52"))
             .expect("a CQ has a sender");
         assert_eq!(spot.call, "W1AW");
         assert_eq!(spot.freq_hz, 14_074_000 + 1200);
@@ -19270,7 +19363,8 @@ mod tests {
     #[test]
     fn build_spot_skips_senderless_text() {
         // Free text (no `de` callsign) is never reported to PSK Reporter.
-        assert!(build_spot("thanks for the qso", -7, 1200.0, "FT8", 14_074_000, 0).is_none());
+        let d = heard_on("thanks for the qso", None);
+        assert!(build_spot(&d, "FT8", 14_074_000, 0, ("KD9TAW", "EN52")).is_none());
     }
 
     /// The sender records of a PSK Reporter datagram, read back: (call, Hz, SNR, mode, locator,
@@ -19311,7 +19405,8 @@ mod tests {
     /// loop's spot builder, its reporter sending to a loopback listener, the datagram read back.
     /// The locator is the one WSJT-X 3.0.2 sends (`MainWindow::pskPost` reading
     /// `DecodedText::deCallAndGrid`): the message's third word, or its fourth after a bare `R`,
-    /// when that word is a Maidenhead locator and not `RR73`. Anything else sends it empty.
+    /// when that word is a Maidenhead locator and not `RR73`. A CQ without one sends it empty, and
+    /// a decode that is neither is not spotted (WSJT-X posts only a CQ or a call carrying a grid).
     #[test]
     fn ft8_and_ft4_spots_carry_the_grid_the_caller_sent() {
         let heard = [
@@ -19320,7 +19415,7 @@ mod tests {
             ("W9XYZ N0XYZ EN34", 3, 1500.0, "FT8", 14_074_000),
             // The NA VHF contest exchange: the grid is the fourth word, after the R.
             ("W9XYZ VE3QQQ R FN03", -3, 1700.0, "FT8", 50_313_000),
-            // A report, a sign-off and a Field Day class carry no locator.
+            // A report, a sign-off and a Field Day class carry no locator: not spotted.
             ("W9XYZ KA1AAA -07", -9, 2000.0, "FT8", 14_074_000),
             ("W9XYZ KB1BBB RR73", -1, 2100.0, "FT8", 14_074_000),
             ("W9XYZ KD1DDD 3A WI", -2, 2300.0, "FT8", 14_074_000),
@@ -19330,7 +19425,14 @@ mod tests {
         ];
         let spots: Vec<Spot> = heard
             .iter()
-            .filter_map(|&(m, snr, f, mode, dial)| build_spot(m, snr, f, mode, dial, 1_700_000_000))
+            .filter_map(|&(m, snr, freq, mode, dial)| {
+                let d = tempo_core::modes::Decode {
+                    snr,
+                    freq,
+                    ..heard_on(m, None)
+                };
+                build_spot(&d, mode, dial, 1_700_000_000, ("KD9TAW", "EN52"))
+            })
             .collect();
         let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         listener
@@ -19359,9 +19461,6 @@ mod tests {
                 row("K1ABC", 14_074_800, -12, "FT8", "FN42"),
                 row("N0XYZ", 14_075_500, 3, "FT8", "EN34"),
                 row("VE3QQQ", 50_314_700, -3, "FT8", "FN03"),
-                row("KA1AAA", 14_076_000, -9, "FT8", ""),
-                row("KB1BBB", 14_076_100, -1, "FT8", ""),
-                row("KD1DDD", 14_076_300, -2, "FT8", ""),
                 row("KC1CCC", 14_076_200, -5, "FT8", ""),
                 row("K2EEE", 14_080_900, -4, "FT4", "FN20"),
             ]
@@ -19423,7 +19522,12 @@ mod tests {
         };
         let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
         let mut station = StationSinks::new();
-        let heard = build_spot("CQ W1AW FN31", -7, 1200.0, "FT8", 14_074_000, 1_700_000_000);
+        let d = tempo_core::modes::Decode {
+            snr: -7,
+            freq: 1200.0,
+            ..heard_on("CQ W1AW FN31", None)
+        };
+        let heard = build_spot(&d, "FT8", 14_074_000, 1_700_000_000, ("KD9TAW", "EN52"));
         station.psk_spots = heard.into_iter().collect();
         let now = 1_000_000.0;
         station.last_psk_flush = now - PSK_FLUSH_SECS * 1000.0 - 1.0;
@@ -19459,6 +19563,310 @@ mod tests {
                 1
             )]
         );
+    }
+
+    /// `message` as the radio loop's decoder hands it over: heard on `mode` at 1500 Hz audio and
+    /// -12 dB, no a-priori decoding.
+    fn heard_on(
+        message: &str,
+        mode: Option<tempo_core::modes::ModeKind>,
+    ) -> tempo_core::modes::Decode {
+        tempo_core::modes::Decode {
+            message: message.into(),
+            sync: 1.0,
+            snr: -12,
+            dt: 0.1,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            raw: None,
+            mode,
+        }
+    }
+
+    /// What the radio loop queues for PSK Reporter when KD9TAW in EN52 hears each decode in
+    /// turn: (seconds, dial Hz, the mode's name on the wire, the decode).
+    fn queued(heard: &[(u32, u64, &str, tempo_core::modes::Decode)]) -> Vec<Spot> {
+        let (mut spots, mut cache) = (Vec::new(), SpotCache::default());
+        for (t, dial, mode, d) in heard {
+            queue_spot(
+                &mut spots,
+                &mut cache,
+                d,
+                mode,
+                *dial,
+                *t,
+                ("KD9TAW", "EN52"),
+            );
+        }
+        spots
+    }
+
+    /// The sender records PSK Reporter receives for `spots`: a reporter sends them to a loopback
+    /// listener and every datagram is read back, in order.
+    fn uploaded(spots: &[Spot]) -> Vec<(String, u32, i8, String, String, u8)> {
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let reporter = PskReporter::with_target(&listener.local_addr().unwrap().to_string());
+        let n = reporter
+            .send_spots("KD9TAW", "EN52", "Nexus", spots)
+            .unwrap();
+        let (mut got, mut bytes, mut buf) = (Vec::new(), 0, [0u8; 2048]);
+        while bytes < n {
+            let (k, _) = listener.recv_from(&mut buf).unwrap();
+            bytes += k;
+            got.extend(uploaded_spots(&buf[..k]));
+        }
+        got
+    }
+
+    /// One sender record as [`uploaded`] reads it back; information source 1, as every spot.
+    fn psk_row(
+        call: &str,
+        hz: u32,
+        snr: i8,
+        mode: &str,
+        locator: &str,
+    ) -> (String, u32, i8, String, String, u8) {
+        (
+            call.to_string(),
+            hz,
+            snr,
+            mode.to_string(),
+            locator.to_string(),
+            1,
+        )
+    }
+
+    /// WSPR and FST4W carry `CALL GRID DBM`, never a QSO message: read with the FT8 grammar,
+    /// `K1ABC FN42 37` was a report from a station called FN42, and that is what PSK Reporter
+    /// got. WSJT-X 3.0.2 sends WSPR to WSPRnet and not to PSK Reporter (its WSPR decodes take
+    /// `postWSPRDecode`, mainwindow.cpp:13419, never `pskPost`), and posts an FST4W decode as
+    /// `CQ CALL GRID` (mainwindow.cpp:7460-7464): the call and grid of a Type 1 beacon, the
+    /// compound call of a Type 2 with no grid, and nothing it can read as a call from a Type 3,
+    /// whose call is hashed.
+    #[test]
+    fn wspr_and_fst4w_reach_psk_reporter_as_wsjtx_sends_them() {
+        let fst4w = Some(tempo_core::modes::ModeKind::Fst4 {
+            period_s: 120,
+            wspr: true,
+        });
+        let wspr = Some(tempo_core::modes::ModeKind::Wspr);
+        let (t, dial) = (1_700_000_000, 14_095_600);
+        let spots = queued(&[
+            (t, dial, "WSPR", heard_on("K1ABC FN42 37", wspr)),
+            (t, dial, "WSPR", heard_on("KI4TWB/0 23", wspr)),
+            (t, dial, "FST4W", heard_on("TI4JWC EK70 30", fst4w)),
+            (t, dial, "FST4W", heard_on("PJ4/K1ABC 37", fst4w)),
+            (t, dial, "FST4W", heard_on("<K1ABC> FN42AB 37", fst4w)),
+            (t, dial, "FST4W", heard_on("<...> FN42AB 37", fst4w)),
+        ]);
+        assert_eq!(
+            uploaded(&spots),
+            vec![
+                psk_row("TI4JWC", 14_097_100, -12, "FST4W", "EK70"),
+                psk_row("PJ4/K1ABC", 14_097_100, -12, "FST4W", ""),
+            ]
+        );
+    }
+
+    /// Which decodes PSK Reporter gets: WSJT-X 3.0.2's `MainWindow::pskPost`
+    /// (mainwindow.cpp:7565-7598) posts a decode only when the word `deCallAndGrid` reads as the
+    /// sender's grid is a locator (`grid_regexp`) or the line is a CQ. A report, a roger, a
+    /// sign-off, a Field Day exchange and free text are heard and shown, never spotted.
+    #[test]
+    fn only_a_cq_or_a_call_carrying_a_grid_is_spotted_as_in_wsjtx() {
+        let ft8 = Some(tempo_core::modes::ModeKind::Ft8);
+        let (t, dial) = (1_700_000_000, 14_074_000);
+        let heard: Vec<_> = [
+            "CQ W1AW FN31",
+            "CQ DX K1ABC FN42",
+            "W9XYZ N0XYZ EN34",
+            "W9XYZ VE3QQQ R FN03",
+            // A CQ with no grid: the compound or special-event call that cannot carry one.
+            "CQ EN3SUKR",
+            // A CQ is spotted whatever its grid word holds; RR73 is still no locator.
+            "CQ KC1CCC RR73",
+            "W9XYZ KA1AAA -07",
+            "W9XYZ KE1EEE R-07",
+            "W9XYZ KB1BBB RR73",
+            "W9XYZ KF1FFF RRR",
+            "W9XYZ KG1GGG 73",
+            "W9XYZ KD1DDD 3A WI",
+            "TNX BOB 73 GL",
+        ]
+        .iter()
+        .map(|m| (t, dial, "FT8", heard_on(m, ft8)))
+        .collect();
+        assert_eq!(
+            uploaded(&queued(&heard)),
+            vec![
+                psk_row("W1AW", 14_075_500, -12, "FT8", "FN31"),
+                psk_row("K1ABC", 14_075_500, -12, "FT8", "FN42"),
+                psk_row("N0XYZ", 14_075_500, -12, "FT8", "EN34"),
+                psk_row("VE3QQQ", 14_075_500, -12, "FT8", "FN03"),
+                psk_row("EN3SUKR", 14_075_500, -12, "FT8", ""),
+                psk_row("KC1CCC", 14_075_500, -12, "FT8", ""),
+            ]
+        );
+    }
+
+    /// WSJT-X marks an a-priori decode whose quality is under 0.17 with `?` (lib/decoder.f90,
+    /// `ft8_decoded`, `ft4_decoded`, `fst4_decoded`: `if(nap.ne.0) … if(qual.lt.0.17)`) and
+    /// `pskPost` never posts one (`isLowConfidence`, decodedtext.cpp:131-134). A decode without
+    /// a-priori help is never marked, whatever its quality.
+    #[test]
+    fn a_low_confidence_decode_is_not_spotted_as_in_wsjtx() {
+        let ft8 = Some(tempo_core::modes::ModeKind::Ft8);
+        let (t, dial) = (1_700_000_000, 14_074_000);
+        let with = |m: &str, nap: i32, qual: f32| tempo_core::modes::Decode {
+            nap,
+            qual,
+            ..heard_on(m, ft8)
+        };
+        let spots = queued(&[
+            (t, dial, "FT8", with("CQ W1AW FN31", 2, 0.10)),
+            (t, dial, "FT8", with("CQ K2AAA FN20", 2, 0.17)),
+            (t, dial, "FT8", with("CQ K3BBB FN10", 0, 0.10)),
+        ]);
+        assert_eq!(
+            uploaded(&spots),
+            vec![
+                psk_row("K2AAA", 14_075_500, -12, "FT8", "FN20"),
+                psk_row("K3BBB", 14_075_500, -12, "FT8", "FN10"),
+            ]
+        );
+    }
+
+    /// Our own signal, heard back (a second radio, a second receiver), is not a spot: WSJT-X
+    /// skips a line that holds both its own base call and the first four characters of its grid
+    /// (mainwindow.cpp:7568). A station calling us is still spotted.
+    #[test]
+    fn our_own_signal_heard_back_is_not_spotted_as_in_wsjtx() {
+        let ft8 = Some(tempo_core::modes::ModeKind::Ft8);
+        let fst4w = Some(tempo_core::modes::ModeKind::Fst4 {
+            period_s: 120,
+            wspr: true,
+        });
+        let (t, dial) = (1_700_000_000, 14_074_000);
+        let spots = queued(&[
+            (t, dial, "FT8", heard_on("CQ KD9TAW EN52", ft8)),
+            (t, dial, "FT8", heard_on("W1AW KD9TAW EN52", ft8)),
+            (t, dial, "FT8", heard_on("KD9TAW W1AW FN31", ft8)),
+            (t, dial, "FST4W", heard_on("KD9TAW EN52 37", fst4w)),
+        ]);
+        assert_eq!(
+            uploaded(&spots),
+            vec![psk_row("W1AW", 14_075_500, -12, "FT8", "FN31")]
+        );
+    }
+
+    /// A locator is never sent as a callsign, whatever the mode: a call ends in a letter (ITU
+    /// Radio Regulations 19.69), so a four-character locator such as FN42 can never be one. The
+    /// six-character shape can (a special-event call such as DL50AB), so it still goes.
+    #[test]
+    fn a_locator_never_reaches_the_callsign_field_in_any_mode() {
+        use tempo_core::modes::ModeKind;
+        let (t, dial) = (1_700_000_000, 14_074_000);
+        let spots = queued(&[
+            (
+                t,
+                dial,
+                "FT8",
+                heard_on("CQ FN42 EN52", Some(ModeKind::Ft8)),
+            ),
+            (
+                t,
+                dial,
+                "FT4",
+                heard_on("W1AW FN42 EN52", Some(ModeKind::Ft4)),
+            ),
+            (
+                t,
+                dial,
+                "JT65",
+                heard_on("CQ FN42 EN52", Some(ModeKind::Jt65 { submode: 0 })),
+            ),
+            (
+                t,
+                dial,
+                "Q65",
+                heard_on(
+                    "W1AW FN42 EN52",
+                    Some(ModeKind::Q65 {
+                        period_s: 60,
+                        submode: 0,
+                    }),
+                ),
+            ),
+            (
+                t,
+                dial,
+                "FT8",
+                heard_on("CQ DL50AB JO62", Some(ModeKind::Ft8)),
+            ),
+        ]);
+        assert_eq!(
+            uploaded(&spots),
+            vec![psk_row("DL50AB", 14_075_500, -12, "FT8", "JO62")]
+        );
+    }
+
+    /// WSJT-X keeps one spot of a call per five minutes below 49 MHz and sends every decode above
+    /// it (`PSKReporter::addRemoteStation`, Network/PSKReporter.cpp:382-397): a call it has not
+    /// spotted, a frequency over 49,000,000 Hz, or more than 300 s since that call was last
+    /// queued, and the spot goes, its time noted; otherwise it is dropped. Keyed on the call
+    /// alone, so a QSY does not reset it.
+    #[test]
+    fn a_call_is_spotted_once_per_five_minutes_below_49_mhz_and_every_time_above_as_in_wsjtx() {
+        let ft8 = Some(tempo_core::modes::ModeKind::Ft8);
+        let (t, hf, six) = (1_700_000_000, 14_074_000, 50_313_000);
+        let at = |s: u32, dial: u64, m: &str| (t + s, dial, "FT8", heard_on(m, ft8));
+        let spots = queued(&[
+            at(0, hf, "CQ W1AW FN31"),
+            at(15, hf, "CQ W1AW FN31"),
+            at(300, hf, "CQ W1AW FN31"),
+            at(301, hf, "CQ W1AW FN31"),
+            at(316, hf, "K9AAA W1AW FN31"),
+            at(0, six, "CQ K1ABC FN42"),
+            at(15, six, "CQ K1ABC FN42"),
+            at(30, six, "CQ K1ABC FN42"),
+            // Heard on 10 m: the cache holds the call, not the band, and every 6 m spot renewed
+            // it, so 310 s after the first is 280 s after the last, and 331 s is 301 s.
+            at(310, 28_074_000, "CQ K1ABC FN42"),
+            at(331, 28_074_000, "CQ K1ABC FN42"),
+            // 49,000,000 Hz exactly is not above 49 MHz.
+            at(0, 48_998_500, "CQ K2BBB FN20"),
+            at(15, 48_998_500, "CQ K2BBB FN20"),
+        ]);
+        // Which went, and the second each was heard: the cache's decisions.
+        let went: Vec<_> = spots
+            .iter()
+            .map(|s| (s.call.clone(), s.freq_hz, s.time_secs - t))
+            .collect();
+        let row = |call: &str, hz: u64, after: u32| (call.to_string(), hz, after);
+        assert_eq!(
+            went,
+            vec![
+                row("W1AW", 14_075_500, 0),
+                row("W1AW", 14_075_500, 301),
+                row("K1ABC", 50_314_500, 0),
+                row("K1ABC", 50_314_500, 15),
+                row("K1ABC", 50_314_500, 30),
+                row("K1ABC", 28_075_500, 331),
+                row("K2BBB", 49_000_000, 0),
+            ]
+        );
+        // …and each of them reaches PSK Reporter.
+        let arrived: Vec<_> = uploaded(&spots)
+            .into_iter()
+            .map(|(call, hz, ..)| (call, u64::from(hz)))
+            .collect();
+        let queued_as: Vec<_> = spots.iter().map(|s| (s.call.clone(), s.freq_hz)).collect();
+        assert_eq!(arrived, queued_as);
     }
 
     fn test_settings() -> Settings {
