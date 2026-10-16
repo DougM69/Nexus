@@ -154,6 +154,8 @@ impl Engine {
                     .map(str::to_string)
                     .collect()
             },
+            // A serial to give is a serial sent: what Clear test contacts starts again at 001.
+            sends_serial: log.session.serial_now().is_some(),
             bands: rs.bands.iter().map(|b| b.to_string()).collect(),
             // The dupe rule's mode grouping, so the strip's badge and the engine's
             // refusal answer the same question.

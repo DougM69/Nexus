@@ -3049,7 +3049,8 @@ export function ContestView({
   }, [removeAsk])
   // ⭐ CLEAR TEST CONTACTS — every contact of this running out of the contest log at once, each the
   // way Remove takes the newest: kept under Removed, Restore brings each back, the club seqs stay
-  // spent; the serial run starts again at 001. For the contacts logged as a test before the start. It asks first, on the button itself,
+  // spent; in a contest that sends a serial the run starts again at 001, and only there do the button's
+  // words say so (`sendsSerial`). For the contacts logged as a test before the start. It asks first, on the button itself,
   // naming how many, and a second click within REMOVE_CONFIRM_MS clears exactly the log it named: a
   // contact logged in between asks again, and the engine refuses a log that changed. At a club only
   // this laptop's contacts go (its log holds no other), and the club drops them as it drops a removed
@@ -3120,7 +3121,7 @@ export function ContestView({
     contestClear(clearAsk.rows, clearAsk.call, clearAsk.whenUnix)
       .then(
         (answer) => {
-          say(clearText(answer), answer.outcome === 'refused')
+          say(clearText(answer, fieldDay?.sendsSerial === true), answer.outcome === 'refused')
           return contestRemoved().then(setRemovedList)
         },
         () => say(t('contest.clear.failed'), true),
@@ -3814,9 +3815,13 @@ export function ContestView({
               aria-pressed={clearAsk != null}
               disabled={log.length === 0}
               onClick={clearAll}
-              title={t('contest.clear.title')}
+              title={fieldDay?.sendsSerial ? t('contest.clear.title.serial') : t('contest.clear.title')}
             >
-              {clearAsk != null ? t('contest.clear.confirm', { count: clearAsk.contacts }) : t('contest.clear.label')}
+              {clearAsk == null
+                ? t('contest.clear.label')
+                : fieldDay?.sendsSerial
+                  ? t('contest.clear.confirm.serial', { count: clearAsk.contacts })
+                  : t('contest.clear.confirm', { count: clearAsk.contacts })}
             </button>
           )}
           </div>}

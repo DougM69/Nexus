@@ -273,9 +273,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names how many, and a second within 5 seconds clears them. Each goes as Remove takes one: it waits
   under Removed, where Restore puts it back, and it leaves the score, the dupe check and every
   export. In a contest that sends a serial the numbers start again: the next contact is 001, after
-  a restart too. A contact you restore afterwards keeps the number it was sent, so a later contact
-  can send that number again. At a club only this laptop's contacts go, and the club drops them on
-  every laptop as it drops a removed one. Nothing transmits.
+  a restart too, and only such a contest's button and notice say so (Field Day and the QSO parties
+  that send a county never mention a serial). A contact you restore afterwards keeps the number it
+  was sent, so a later contact can send that number again. At a club only this laptop's contacts go,
+  and the club drops them on every laptop as it drops a removed one. Nothing transmits.
 - **Settings ▸ Licenses shows Nexus's NOTICE.** The Licenses screen now opens with the NOTICE file
   the installers carry, before the license texts of the interface's npm packages and the Rust
   crates.

@@ -156,13 +156,18 @@ export function restoreText(answer: ContestRemovalAnswer, call: string): string 
   }
 }
 
-/** What the contest screen says after Clear test contacts: how many left the log, at a club when
- *  every laptop drops them, and every place any of them had already gone — Nexus takes them back
- *  from none — or that the log changed, so nothing was cleared (an emptied log included: the
- *  button is not offered on an empty one). */
-export function clearText(answer: ContestClearAnswer): string {
+/** What the contest screen says after Clear test contacts: how many left the log, that the serials
+ *  start again at 001 in a contest that sends one (`sendsSerial`), at a club when every laptop drops
+ *  them, and every place any of them had already gone — Nexus takes them back from none — or that
+ *  the log changed, so nothing was cleared (an emptied log included: the button is not offered on an
+ *  empty one). */
+export function clearText(answer: ContestClearAnswer, sendsSerial: boolean): string {
   if (answer.outcome === 'refused') return t('contest.clear.changed')
-  const parts = [t('contest.clear.done', { count: answer.contacts })]
+  const parts = [
+    sendsSerial
+      ? t('contest.clear.done.serial', { count: answer.contacts })
+      : t('contest.clear.done', { count: answer.contacts }),
+  ]
   if (answer.club) {
     parts.push(answer.club === 'away' ? t('contest.clear.clubAway') : t('contest.clear.club'))
   }

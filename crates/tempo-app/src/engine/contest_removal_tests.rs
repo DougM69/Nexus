@@ -928,3 +928,44 @@ fn clearing_releases_the_numbers_of_stations_half_worked_before_it() {
     assert_eq!(ss(&mut e, "N4JKL"), "2");
     assert_eq!(ss(&mut e, "W1AW"), "3", "not W1AW's 2 again");
 }
+
+/// ⭐ **The snapshot says whether the contest sends a serial**, which is all the Contest screen reads
+/// to say that Clear test contacts starts the serials again at 001: Sweepstakes sends one; the
+/// Illinois QSO Party (a county) and ARRL Field Day send none. The key is written only when it is
+/// true, and reads back as it was written.
+#[test]
+fn the_snapshot_says_whether_the_contest_sends_a_serial() {
+    let mut field_day = Engine::new("W9XYZ", "EN50", 0);
+    let mut s = field_day.settings().clone();
+    s.mycall = "W9XYZ".into();
+    s.fd_active = true;
+    s.fd_event = "arrlfd".into();
+    s.fd_class = "2A".into();
+    s.fd_section = "WI".into();
+    field_day.apply_settings(s);
+    field_day.set_mode("fieldday-sp").expect("Field Day runs");
+    let said = [ss_engine(None), ilqp(|_| {}), field_day].map(|e| {
+        let fd = e.snapshot().field_day.expect("the contest runs");
+        let json = serde_json::to_value(&fd).unwrap();
+        let back: crate::dto::FieldDayStatus = serde_json::from_value(json.clone()).unwrap();
+        (
+            fd.event.clone(),
+            fd.sends_serial,
+            json.get("sendsSerial").cloned(),
+            back == fd,
+        )
+    });
+    assert_eq!(
+        said,
+        [
+            (
+                "arrlss_cw".to_string(),
+                true,
+                Some(serde_json::json!(true)),
+                true
+            ),
+            ("ilqp".to_string(), false, None, true),
+            ("arrlfd".to_string(), false, None, true),
+        ]
+    );
+}
