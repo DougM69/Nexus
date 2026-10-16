@@ -1088,7 +1088,7 @@ mod tests {
     /// since it answers none.
     #[test]
     fn a_logged_js8_contact_reaches_both_sides() {
-        let port = free_port();
+        let port = held_port();
         let tool = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         tool.set_read_timeout(Some(WAIT)).unwrap();
         let engine = engine_with(Some(port), Some(tool.local_addr().unwrap().port()));
