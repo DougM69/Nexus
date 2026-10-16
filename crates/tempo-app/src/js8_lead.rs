@@ -54,16 +54,17 @@ impl Engine {
         js8_late_start_ms(self.js8_tx_speed(), self.js8_tx_delay_ms())
     }
 
-    /// The radio answered a JS8 frame's key `into_ms` into the frame's period, at or past the late
-    /// start `limit_ms`: the loop has unkeyed it and sent nothing. Says so on the JS8 cockpit's own
+    /// The radio answered a JS8 frame's key `into_ms` into the frame's period, at or after the end
+    /// of that period, `limit_ms` long: nothing of the frame was left to send, and the loop sent
+    /// nothing (and unkeyed the radio, unless it already held it). Says so on the JS8 cockpit's own
     /// line and in the log. TX stays on and the rest of the message goes out in the next periods,
     /// as an FT over the radio keys too late is dropped and TX kept on.
     pub fn js8_note_late_key(&mut self, into_ms: f64, limit_ms: f64) {
         let why = format!(
-            "JS8 frame not sent: the radio keyed {:.1} s into its period, past the latest start \
-             JS8Call allows at this speed ({:.1} s), so it was unkeyed at once. TX stays on, and the \
-             rest of the message goes out in the next periods. A slow CAT link holds up the key: \
-             check the CAT link and Split operation in Settings.",
+            "JS8 frame not sent: the radio keyed {:.1} s into its {:.0} s period, after the period \
+             had ended, too late to send any of it. TX stays on, and the rest of the message goes \
+             out in the next periods. A slow CAT link holds up the key: check the CAT link and \
+             Split operation in Settings.",
             into_ms / 1000.0,
             limit_ms / 1000.0
         );
@@ -117,8 +118,9 @@ mod tests {
         assert_eq!(e.js8_late_start_ms(), 1_200.0, "Fast at 0.5 s");
     }
 
-    /// A key the radio answered too late says so on the cockpit's line, with how late and the
-    /// limit, keeps TX on, and shows nothing as going out.
+    /// A key the radio answered after its frame's period had ended says so on the cockpit's line,
+    /// with how far into the period it came and the period's length, keeps TX on, and shows nothing
+    /// as going out.
     #[test]
     fn a_late_key_says_why_and_keeps_tx_on() {
         let mut e = Engine::with_settings(Settings {
@@ -128,12 +130,14 @@ mod tests {
         });
         e.js8_enter();
         e.set_tx_enabled(true);
-        e.js8_note_late_key(2_437.0, 2_160.0);
+        e.js8_note_late_key(15_337.0, 15_000.0);
         let state = e.js8_state();
         let line = state.last_error.expect("the cockpit says why");
         assert!(
-            line.starts_with("JS8 frame not sent: the radio keyed 2.4 s into its period")
-                && line.contains("(2.2 s)"),
+            line.starts_with(
+                "JS8 frame not sent: the radio keyed 15.3 s into its 15 s period, after the period \
+                 had ended"
+            ),
             "{line}"
         );
         assert!(e.tx_enabled(), "TX stays on");

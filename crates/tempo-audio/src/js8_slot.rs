@@ -1,5 +1,5 @@
 //! A JS8 frame keyed as JS8Call 3.0.3 keys one: its TX delay before its period, its wave on the slot
-//! clock, and nothing once the period has passed JS8Call's late start.
+//! clock however late in its period the radio answers, and nothing once its period has ended.
 //!
 //! JS8Call asks for PTT on the 100 ms GUI tick that finds the period `TxDelay` from its end
 //! (`prepareSending`, `JS8_UI/mainwindow.cpp:2507-2572`: `time_is_in_tx_delay`, :2512-2516), or later
@@ -16,8 +16,10 @@
 //! FT8's lead-in is, so one placement does all three: silence in front of it for a key before its
 //! period ([`placement`]), its samples skipped for a key after. JS8Call starts no frame past its late
 //! threshold, and Nexus keys none: a frame decided past it waits for the next period
-//! ([`past_late_start`]), and one whose key the radio answers past it is unkeyed at once with
-//! nothing sent ([`late_key`]), as an FT8/FT4 over the radio keys after its period is.
+//! ([`past_late_start`]). A frame decided before it plays what is left of it however late in its
+//! period the radio answers the key, as JS8Call's Modulator does; only a key answered once the
+//! period has ended is unkeyed at once with nothing sent ([`late_key`]), as an FT8/FT4 over the
+//! radio keys after its period is.
 //!
 //! The radio loop's half, keying a frame in its TX delay and ending the RX period before it there, is
 //! `service::js8_lead`; the engine's, the TX delay and the late start, is `Engine::js8_tx_delay_ms`
@@ -102,28 +104,29 @@ pub(crate) fn play_frame(
     }
 }
 
-/// How far into its period the radio answered JS8 frame `slot`'s key at `keyed_ms`, and the late
-/// start it is at or past (`Engine::js8_late_start_ms`): `Some((into_ms, limit_ms))` when the frame
-/// must go out with nothing, `None` when it plays. Under the late start a frame plays what is left of
-/// it on the slot clock, as JS8Call's Modulator plays it. JS8Call starts its Modulator on the
-/// radio's answer however late it comes; Nexus keys nothing past the threshold JS8Call starts no
-/// frame after, as it keys no FT8/FT4 over the radio answers after its period. `None` for every
-/// other tier.
+/// How far into its period the radio answered JS8 frame `slot`'s key at `keyed_ms`, and the length
+/// of that period, which the key is at or past: `Some((into_ms, limit_ms))` when the frame must go
+/// out with nothing, `None` when it plays. Inside its period a frame plays what is left of it on
+/// the slot clock, past JS8Call's late start too: JS8Call starts its Modulator on the radio's
+/// answer however late it comes (`mainwindow.cpp:5395-5417`), and the Modulator skips the symbols
+/// already gone (`Modulator.cpp:102-107`). Once the period has ended nothing of the frame is left
+/// on its clock, and Nexus keys nothing, as it keys no FT8/FT4 over the radio answers after its
+/// period. `None` for every other tier.
 pub(crate) fn late_key(eng: &Engine, keyed_ms: f64, slot: u64) -> Option<(f64, f64)> {
     if eng.tier() != Tier::Js8 {
         return None;
     }
     let into_ms = keyed_ms - frame_start_ms(eng, slot);
-    let limit_ms = eng.js8_late_start_ms();
+    let limit_ms = eng.active_slot_secs() * 1000.0;
     (into_ms >= limit_ms).then_some((into_ms, limit_ms))
 }
 
-/// A JS8 frame whose key came past the late start ([`late_key`]): nothing is played (the output is
-/// flushed, though it holds nothing of the frame), the radio is unkeyed at once unless the loop
-/// already held it (the operator's own PTT, or Hold PTT between frames, which ends at its own
-/// deadline), and the cockpit says why. TX stays on: the rest of the message goes out in the next
-/// periods, the policy for an FT8/FT4 over the radio keys after its period. An unkey the radio does
-/// not take halts TX, as at any slot over's end.
+/// A JS8 frame whose key came at or after its period's end ([`late_key`]): nothing is played (the
+/// output is flushed, though it holds nothing of the frame), the radio is unkeyed at once unless
+/// the loop already held it (the operator's own PTT, or Hold PTT between frames, which ends at its
+/// own deadline), and the cockpit says why. TX stays on: the rest of the message goes out in the
+/// next periods, the policy for an FT8/FT4 over the radio keys after its period. An unkey the radio
+/// does not take halts TX, as at any slot over's end.
 pub(crate) fn unkey_a_late_key(
     eng: &mut Engine,
     rig: &mut Rig,
@@ -290,6 +293,11 @@ mod tests {
 
     /// A JS8 station at Normal, TX on, with a message queued.
     fn sending_engine() -> Engine {
+        sending_engine_at(Js8Speed::Normal)
+    }
+
+    /// …at `speed`.
+    fn sending_engine_at(speed: Js8Speed) -> Engine {
         let mut e = Engine::with_settings(tempo_app::settings::Settings {
             mycall: "KD9TAW".into(),
             mygrid: "EN52".into(),
@@ -297,6 +305,7 @@ mod tests {
         });
         e.set_license_class("extra");
         e.js8_enter();
+        e.js8_set_speed(speed.index()).unwrap();
         e.set_frequency(14.078, "20m", "USB");
         e.set_tx_enabled(true);
         e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
@@ -313,20 +322,48 @@ mod tests {
         key_ms: u64,
         prebuilt: Option<Vec<Vec<f32>>>,
     ) -> (crate::slot::SlotAction, MockBackend, Vec<String>, f64, f64) {
-        tx_phase_held(eng, slot, key_ms, prebuilt, false)
+        tx_phase_held(eng, slot, key_ms, 0, prebuilt, false)
     }
 
-    /// [`tx_phase`] with the loop already holding the transmitter (`held`) or not.
+    /// The mock sound card, taking `open_ms` to open its TX stream (`prepare_tx`, just before the
+    /// key is sent): a key held up, as a slow CAT link holds one up, for as long as a test needs.
+    struct SlowCard {
+        card: MockBackend,
+        open_ms: u64,
+    }
+
+    impl AudioBackend for SlowCard {
+        fn capture(&mut self) -> Vec<f32> {
+            self.card.capture()
+        }
+        fn play(&mut self, samples: &[f32]) {
+            self.card.play(samples);
+        }
+        fn prepare_tx(&mut self) -> Result<(), String> {
+            std::thread::sleep(std::time::Duration::from_millis(self.open_ms));
+            self.card.prepare_tx()
+        }
+        fn flush_output(&mut self) -> usize {
+            self.card.flush_output()
+        }
+    }
+
+    /// [`tx_phase`] with the loop already holding the transmitter (`held`) or not, on a sound card
+    /// that takes `open_ms` to open ([`SlowCard`]).
     fn tx_phase_held(
         eng: &mut Engine,
         slot: u64,
         key_ms: u64,
+        open_ms: u64,
         prebuilt: Option<Vec<Vec<f32>>>,
         held: bool,
     ) -> (crate::slot::SlotAction, MockBackend, Vec<String>, f64, f64) {
         let (addr, log) = rigctld(key_ms);
         let mut rig = Rig::rigctld(&addr);
-        let mut backend = MockBackend::new();
+        let mut backend = SlowCard {
+            card: MockBackend::new(),
+            open_ms,
+        };
         let mut rx = crate::frames::RxRing::new();
         let before = steered_now_ms(eng);
         let act = crate::slot::slot_tx_phase(
@@ -343,84 +380,185 @@ mod tests {
         );
         let after = steered_now_ms(eng);
         let sent = log.lock().unwrap().clone();
-        (act, backend, sent, before, after)
+        (act, backend.card, sent, before, after)
     }
 
-    /// ⭐ A KEY THE RADIO ANSWERS PAST JS8CALL'S LATE START SENDS NOTHING, AND TX STAYS ON. Decided
-    /// 1.7 s into a Normal period (under its 2.16 s late start), the key answered 600 ms later, 2.3 s
-    /// in: the radio is unkeyed at once, nothing plays, the over holds nothing, and the cockpit says
-    /// why; TX stays on, so the rest of the message goes in the next periods. Control: the same key
-    /// answered at once plays the rest of the frame from its place on the slot clock. Nexus played the
-    /// whole frame from the key whenever it came.
+    /// ⭐ A KEY THE RADIO ANSWERS PAST JS8CALL'S LATE START, INSIDE ITS PERIOD, PLAYS THE REST, as
+    /// JS8Call's Modulator skips the symbols already gone however late the radio answers inside the
+    /// period (`Modulator.cpp:102-107`). Decided 1.8 s into a Normal period (under its 2.16 s late
+    /// start), the key answered 500 ms later, 2.3 s in: the first sample played is the frame's
+    /// sample at the key's place in the period and the rest follows sample for sample, PTT is held
+    /// to the frame's end on the slot clock and its tail (13.39 s), TX stays on, and nothing is
+    /// flushed. Control: the same key answered at once plays the same way from 1.8 s. Nexus unkeyed
+    /// the late key and sent nothing of the frame.
     #[test]
-    fn a_key_answered_past_the_late_start_sends_nothing_and_keeps_tx_on() {
-        for (key_ms, late) in [(600, true), (0, false)] {
+    fn a_key_answered_past_the_late_start_inside_its_period_plays_the_rest() {
+        for key_ms in [500, 0] {
             let mut e = sending_engine();
-            let slot = steer_into_period(&mut e, 1_700.0);
+            let slot = steer_into_period(&mut e, 1_800.0);
             let frame = stand_in(Js8Speed::Normal);
             let (act, backend, sent, before, after) =
                 tx_phase(&mut e, slot, key_ms, Some(vec![frame.clone()]));
             let start = frame_start_ms(&e, slot);
+            // The key was answered after the rigctld's wait and before the clock read after the
+            // call.
+            let key_from = before + key_ms as f64 - start;
             assert!(
                 before - start < 2_160.0,
                 "premise: decided under the late start, {} ms in",
                 before - start
             );
-            if late {
-                assert!(after - start >= 2_160.0, "premise: answered past it");
-                assert_eq!(sent, ["T 1", "T 0"], "keyed, then unkeyed at once");
-                assert!(
-                    backend.played.is_empty(),
-                    "{} samples played",
-                    backend.played.len()
-                );
-                assert!(
-                    act.tx_until_ms.is_none() && !act.tx_this_slot,
-                    "an over held"
-                );
-                assert!(e.tx_enabled(), "TX went off");
-                let line = e.js8_state().last_error.expect("the cockpit says why");
-                assert!(
-                    line.starts_with("JS8 frame not sent: the radio keyed 2."),
-                    "{line}"
-                );
-            } else {
-                assert_eq!(sent, ["T 1"]);
-                let skipped = frame.len() - backend.played.len();
-                let (lo, hi) = (
-                    ((before - start) * 12.0).floor() as usize,
-                    ((after - start) * 12.0).ceil() as usize,
-                );
-                assert!(
-                    (lo..=hi).contains(&skipped),
-                    "skipped {skipped}, expected the key's place in the period, {lo}..={hi}"
-                );
-                assert!(act.tx_this_slot && e.js8_state().last_error.is_none());
-            }
+            assert!(
+                key_ms == 0 || key_from >= 2_160.0,
+                "premise: answered past it, {key_from} ms in"
+            );
+            assert_eq!(sent, ["T 1"], "{key_ms} ms: not keyed, or unkeyed");
+            let played = &backend.played;
+            let first = frame.len() - played.len();
+            let (lo, hi) = (
+                (key_from * 12.0).floor() as usize,
+                ((after - start) * 12.0).ceil() as usize,
+            );
+            assert!(
+                (lo..=hi).contains(&first),
+                "{key_ms} ms: the first sample played is the frame's sample {first}, expected the \
+                 key's place in the period, {lo}..={hi}"
+            );
+            assert!(
+                played[..] == frame[first..],
+                "{key_ms} ms: not the rest of the frame"
+            );
+            let end = start + 500.0 + 79.0 * 1_920.0 / 12.0 + TX_TAIL_MS;
+            let until = act.tx_until_ms.expect("no over held");
+            assert!(
+                (until - end).abs() < 0.1,
+                "{key_ms} ms: PTT held to {} ms into the period, expected {}",
+                until - start,
+                end - start
+            );
+            assert!(
+                act.tx_this_slot && e.tx_enabled(),
+                "{key_ms} ms: TX went off"
+            );
+            assert_eq!(
+                backend.flush_calls, 0,
+                "{key_ms} ms: the output was flushed"
+            );
+            assert_eq!(e.js8_state().last_error, None, "{key_ms} ms");
         }
     }
 
-    /// A key past the late start while the loop already holds the transmitter (the operator's own
-    /// PTT, or Hold PTT between frames): nothing plays and the cockpit says why, but the key is
-    /// left where it was, the holder's to end, as an FT8/FT4 over refused past its period leaves it.
+    /// ⭐ A KEY THE RADIO ANSWERS AT OR AFTER ITS PERIOD'S END SENDS NOTHING, AND TX STAYS ON: by
+    /// then nothing of the frame is left on its period's clock. A JS8 60 frame (4 s periods)
+    /// decided 0.2 s into its period, under its 0.636 s late start, on a sound card that takes 4 s
+    /// to open: the key is answered 4.2 s in, after the period has ended, so the radio is unkeyed
+    /// at once, nothing plays, no over is held, and the cockpit says why. The next period keys as
+    /// ever: the next frame of the message in its TX delay, held to its end on the slot clock.
     #[test]
-    fn a_late_key_over_a_held_transmitter_plays_nothing_and_leaves_it_held() {
-        let mut e = sending_engine();
-        let slot = steer_into_period(&mut e, 1_700.0);
-        let (act, backend, sent, _, after) = tx_phase_held(
+    fn a_key_answered_after_its_period_has_ended_sends_nothing_and_the_next_period_keys() {
+        let mut e = sending_engine_at(Js8Speed::Ultra);
+        let slot = steer_into_period(&mut e, 200.0);
+        let (act, backend, sent, before, _) = tx_phase_held(
             &mut e,
             slot,
-            600,
-            Some(vec![stand_in(Js8Speed::Normal)]),
+            0,
+            4_000,
+            Some(vec![stand_in(Js8Speed::Ultra)]),
+            false,
+        );
+        let start = frame_start_ms(&e, slot);
+        assert!(
+            (0.0..636.0).contains(&(before - start)),
+            "premise: decided under the late start, {} ms in",
+            before - start
+        );
+        assert_eq!(sent, ["T 1", "T 0"], "keyed, then unkeyed at once");
+        assert!(
+            backend.played.is_empty(),
+            "{} samples played",
+            backend.played.len()
+        );
+        assert!(
+            act.tx_until_ms.is_none() && !act.tx_this_slot,
+            "an over held"
+        );
+        assert!(e.tx_enabled(), "TX went off");
+        let line = e.js8_state().last_error.expect("the cockpit says why");
+        assert!(
+            line.starts_with("JS8 frame not sent: the radio keyed 4.")
+                && line.contains(" s into its 4 s period, after the period had ended"),
+            "{line}"
+        );
+        let queued = e.js8_state().queue.len();
+        let next = steer_into_period(&mut e, -200.0);
+        let (act, _, sent, _, _) = tx_phase(&mut e, next, 0, None);
+        let start = frame_start_ms(&e, next);
+        let end = start + 100.0 + 79.0 * 384.0 / 12.0 + TX_TAIL_MS;
+        let until = act.tx_until_ms.expect("the next period held no over");
+        assert_eq!(sent, ["T 1"], "the next period did not key");
+        assert!(
+            act.tx_this_slot && (until - end).abs() < 0.1,
+            "the next frame is held to {} ms into its period, expected {}",
+            until - start,
+            end - start
+        );
+        assert_eq!(e.js8_state().queue.len(), queued - 1, "the next frame went");
+    }
+
+    /// A late key while the loop already holds the transmitter (the operator's own PTT, or Hold PTT
+    /// between frames) keeps the same rule. Inside the frame's period the rest plays: answered 2.3
+    /// s into a Normal period, the frame from its place on the slot clock, the key left up. At or
+    /// after the period's end nothing plays and the cockpit says why, but the key is left where it
+    /// was, the holder's to end, as an FT8/FT4 over refused past its period leaves it: a JS8 60
+    /// frame answered 4.2 s into its 4 s period.
+    #[test]
+    fn a_late_key_over_a_held_transmitter_plays_the_rest_and_after_its_period_leaves_it_held() {
+        let mut e = sending_engine();
+        let slot = steer_into_period(&mut e, 1_800.0);
+        let frame = stand_in(Js8Speed::Normal);
+        let (act, backend, sent, before, after) =
+            tx_phase_held(&mut e, slot, 500, 0, Some(vec![frame.clone()]), true);
+        let start = frame_start_ms(&e, slot);
+        assert!(
+            before - start < 2_160.0 && before + 500.0 - start >= 2_160.0,
+            "premise: decided under the late start and answered past it, from {} ms in",
+            before - start
+        );
+        assert_eq!(sent, ["T 1"], "inside the period");
+        let first = frame.len() - backend.played.len();
+        let (lo, hi) = (
+            ((before + 500.0 - start) * 12.0).floor() as usize,
+            ((after - start) * 12.0).ceil() as usize,
+        );
+        assert!(
+            (lo..=hi).contains(&first) && backend.played[..] == frame[first..],
+            "held: the frame from its sample {first}, expected the rest from {lo}..={hi}"
+        );
+        assert!(act.tx_this_slot && e.js8_state().last_error.is_none());
+
+        let mut e = sending_engine_at(Js8Speed::Ultra);
+        let slot = steer_into_period(&mut e, 200.0);
+        let (act, backend, sent, before, _) = tx_phase_held(
+            &mut e,
+            slot,
+            0,
+            4_000,
+            Some(vec![stand_in(Js8Speed::Ultra)]),
             true,
         );
         assert!(
-            after - frame_start_ms(&e, slot) >= 2_160.0,
-            "premise: answered past it"
+            before - frame_start_ms(&e, slot) < 636.0,
+            "premise: decided under the late start"
         );
-        assert_eq!(sent, ["T 1"], "the held key was let go");
-        assert!(backend.played.is_empty() && !act.tx_this_slot);
-        assert!(e.js8_state().last_error.is_some(), "the cockpit says why");
+        assert_eq!(sent, ["T 1"], "after the period: the held key was let go");
+        assert!(
+            backend.played.is_empty() && !act.tx_this_slot && act.tx_until_ms.is_none(),
+            "after the period: {} samples played",
+            backend.played.len()
+        );
+        assert!(e.tx_enabled(), "TX went off");
+        let line = e.js8_state().last_error.expect("the cockpit says why");
+        assert!(line.starts_with("JS8 frame not sent"), "{line}");
     }
 
     /// ⭐ A FRAME DECIDED PAST THE LATE START KEYS NOTHING AND STAYS QUEUED, as JS8Call's frame waits
@@ -488,21 +626,45 @@ mod tests {
         }
     }
 
-    /// The late start's two sides, by value at Normal (2.16 s at 0.2 s of TX delay): a key answered
-    /// just under it plays, one at it does not. Every other tier: never late here.
+    /// The period's end, by value at every speed: a key answered 1 ms before it plays; one at it
+    /// does not, and says how far into its period it came and the period it is past. A key at
+    /// JS8Call's late start, or in the TX delay before the period, plays. Every other tier: never
+    /// late here.
     #[test]
-    fn a_key_at_the_late_start_is_late_and_one_just_under_it_is_not() {
-        let e = js8_engine(Js8Speed::Normal);
+    fn a_key_at_its_periods_end_is_late_and_one_just_before_it_is_not() {
         let slot = 1_000_000;
-        let start = frame_start_ms(&e, slot);
-        assert_eq!(late_key(&e, start + 2_159.0, slot), None);
-        assert_eq!(
-            late_key(&e, start + 2_160.0, slot),
-            Some((2_160.0, 2_160.0))
-        );
-        assert_eq!(late_key(&e, start - 200.0, slot), None, "in the TX delay");
+        for speed in Js8Speed::ALL {
+            let e = js8_engine(speed);
+            let start = frame_start_ms(&e, slot);
+            let period_ms = f64::from(speed.period_s()) * 1000.0;
+            assert_eq!(
+                late_key(&e, start + period_ms - 1.0, slot),
+                None,
+                "{speed:?}: 1 ms before the end"
+            );
+            assert_eq!(
+                late_key(&e, start + period_ms, slot),
+                Some((period_ms, period_ms)),
+                "{speed:?}: at the end"
+            );
+            assert_eq!(
+                late_key(&e, start + e.js8_late_start_ms(), slot),
+                None,
+                "{speed:?}: at JS8Call's late start"
+            );
+            assert_eq!(
+                late_key(&e, start - 200.0, slot),
+                None,
+                "{speed:?}: in the TX delay"
+            );
+        }
         let mut ft8 = Engine::new("KD9TAW", "EN52", 0);
         ft8.set_tier(Tier::Ft8);
-        assert_eq!(late_key(&ft8, start + 9_000.0, slot), None, "FT8: not here");
+        let start = frame_start_ms(&ft8, slot);
+        assert_eq!(
+            late_key(&ft8, start + 20_000.0, slot),
+            None,
+            "FT8: not here"
+        );
     }
 }

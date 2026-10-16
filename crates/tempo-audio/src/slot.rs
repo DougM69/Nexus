@@ -704,9 +704,10 @@ pub fn slot_tx_phase(
         // WSJT-X's window on the slot clock, but how far into the slot the carrier came up, so
         // their tones are laid on the clock as WSJT-X's Modulator lays them ([`play_keyed_over`]).
         let keyed_ms = (now_unix_ms() - eng.clock_offset_ms().unwrap_or(0) as f64).max(now_ms);
-        // JS8: a key the radio answered at or past JS8Call's late start sends nothing and is unkeyed
-        // at once; TX stays on (`js8_slot::late_key`). Every other frame is laid on the slot clock,
-        // keyed in its TX delay or not (`js8_slot::play_frame`).
+        // JS8: a key the radio answered at or after the end of the frame's period sends nothing and
+        // is unkeyed at once unless the loop holds the transmitter; TX stays on
+        // (`js8_slot::late_key`). Every other frame is laid on the slot clock, keyed in its TX delay
+        // or late in its period (`js8_slot::play_frame`).
         if let Some((into_ms, limit_ms)) = crate::js8_slot::late_key(eng, keyed_ms, slot) {
             crate::js8_slot::unkey_a_late_key(eng, rig, backend, held, into_ms, limit_ms);
             return SlotAction {

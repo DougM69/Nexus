@@ -296,11 +296,14 @@ begins, the **TX delay** (0.2 seconds unless you change it in Settings ▸ Digit
 0.5), and sends silence up to the period's start delay, so its first tone goes out on time however
 long the radio takes to switch to transmit, and a station hearing you reads your timing (DT) near
 0.0. A radio slow to key plays less of that silence; one that keys after the start delay leaves out
-what it missed, as JS8Call does. If the radio keys so late that JS8Call would not have started the
-frame at all (at Normal, about 2.2 seconds into the period), Nexus unkeys at once and sends nothing
-of that frame, and the screen says why: TX stays on and the rest of the message goes out in the
-next periods, but the station you are sending to misses that frame. **Stop TX** or **TX Off**
-during the delay unkeys at once, and nothing of that frame goes out.
+what it missed and sends the rest of the frame on time, however late in the period it keys, as
+JS8Call does (the more it missed, the less likely the station hearing you decodes that frame).
+Only if the radio keys after the period has ended does Nexus send nothing of that frame: it unkeys
+at once and the screen says why. TX stays on and the rest of the message goes out in the next
+periods, but the station you are sending to misses that frame. A frame Nexus has not keyed by the
+time JS8Call stops starting frames (at Normal, about 2.2 seconds into the period) waits for the
+next period instead. **Stop TX** or **TX Off** during the delay unkeys at once, and nothing of that
+frame goes out.
 
 **Between frames.** The radio drops PTT after each frame and keys again for the next, as JS8Call
 does by default: at Normal it is unkeyed for about 1.4 seconds between two frames (Slow about 3.8,
