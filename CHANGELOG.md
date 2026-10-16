@@ -461,6 +461,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and JS8's @APRSIS gateway or its relay using APRS-IS, the chip said the feed was switched off
   while Nexus was logged in to APRS-IS. It now reads *Internet for JS8* and says what the
   connection is for. After the feed is switched off, its status no longer stays at connected.
+- **Tune: a radio slow to answer a meter reading can no longer stall the tune carrier.** While
+  Tune is keyed, Nexus reads the SWR, ALC, power and compression meters and gives each reading
+  120 ms, so that a slow radio costs a reading and never a gap in the carrier. The limit was only
+  checked after each wait for the radio, and one wait lasted up to half a second, longer than the
+  carrier Nexus keeps queued. Each wait now ends at the limit. Tune keys and unkeys exactly as
+  before; a radio that takes longer than 120 ms to answer a meter now shows no reading for it
+  during Tune. NEEDS-BENCH: watch SWR during Tune on each radio.
 - **AD1C's country file now carries its license notice.** Nexus finds a call's DXCC entity and
   zones in the cty.dat country file by Jim Reisert AD1C, which is MIT-licensed. That license asks
   for its notice to travel with every copy, and NOTICE named the license without reproducing it.

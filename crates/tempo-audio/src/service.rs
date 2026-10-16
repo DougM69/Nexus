@@ -30967,6 +30967,137 @@ mod tests {
         );
     }
 
+    /// [`mock_rigctld_on`] for a radio that never answers a transmit meter: the read the
+    /// tune-time deadline exists for. Every other line gets its usual answer.
+    fn mock_rigctld_meters_silent(dial_hz: u64) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    if TX_METERS.iter().any(|m| l == format!("l {m}")) {
+                        continue;
+                    }
+                    let reply = if l == "f" {
+                        format!("{dial_hz}\n")
+                    } else {
+                        "RPRT 0\n".to_string()
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// A tune on a radio that never answers a transmit meter ends and unkeys exactly as before:
+    /// the same keying lines on the same ticks, when the operator lets go of Tune and when the
+    /// tune's own ceiling ends it. What changes is how long a stalled meter read holds the tick:
+    /// its 120 ms deadline, where each socket read used to wait its whole 500 ms first.
+    #[test]
+    fn a_tune_whose_meters_never_answer_still_ends_and_unkeys_on_the_same_ticks() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (addr, log) = mock_rigctld_meters_silent(14_074_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        // One tick at loop time `t`: its keying lines and how long it held the loop.
+        let mut tick = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+            let mark = log.lock().unwrap().len();
+            let started = std::time::Instant::now();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            let held = started.elapsed();
+            let keying: Vec<String> = log.lock().unwrap()[mark..]
+                .iter()
+                .filter(|l| l.starts_with("T "))
+                .cloned()
+                .collect();
+            (keying, held)
+        };
+        let meter_reads = || {
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter(|l| TX_METERS.iter().any(|m| **l == format!("l {m}")))
+                .count()
+        };
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_tx_enabled(true);
+            e.set_tune(true);
+        }
+        let mut keyed_on = Vec::new();
+        let mut longest = std::time::Duration::ZERO;
+        let mut t = 0.0;
+        for n in 0..24 {
+            t += 50.0;
+            let (keying, held) = tick(&mut state, &mut rig, t);
+            longest = longest.max(held);
+            if !keying.is_empty() {
+                keyed_on.push((n, keying));
+            }
+        }
+        assert!(state.tuning_keyed, "control: the tune is keyed");
+        assert!(meter_reads() > 0, "control: the meters were asked");
+        // The operator lets go of Tune: unkeyed on that tick.
+        engine.lock().unwrap().set_tune(false);
+        t += 50.0;
+        let (released, held) = tick(&mut state, &mut rig, t);
+        longest = longest.max(held);
+        assert!(!state.tuning_keyed, "the tune released");
+        // The tune's own ceiling: unkeyed on the first tick past it, the operator untouched.
+        engine.lock().unwrap().set_tune(true);
+        t += 50.0;
+        let (rekeyed, _) = tick(&mut state, &mut rig, t);
+        let (ceiling, _) = tick(&mut state, &mut rig, t + MAX_TUNE_MS + 1.0);
+        assert!(!state.tuning_keyed, "the ceiling ended the tune");
+        assert_eq!(
+            (keyed_on, released, rekeyed, ceiling),
+            (
+                vec![(0, vec!["T 1".to_string()])],
+                vec!["T 0".to_string()],
+                vec!["T 1".to_string()],
+                vec!["T 0".to_string()],
+            ),
+            "the keying lines and the ticks they go out on"
+        );
+        assert!(
+            longest < std::time::Duration::from_millis(400),
+            "a stalled meter read held a tune tick {longest:?}; its deadline is 120 ms"
+        );
+    }
+
     /// A rigctld for a radio keyed AT THE RIG (`t` answers 1, the mic-PTT case the transmit
     /// meters exist to cover) whose CAT meters either answer or do not. `RPRT 0` to an
     /// `l NAME` is what a rig with no such meter really sends, and it parses to no number —
