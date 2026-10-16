@@ -76,6 +76,8 @@ vi.mock('../api', () => ({
   searchParks: vi.fn(async () => []),
   setCwPeerInfo: vi.fn(async () => {}),
   setLogFormGrid: vi.fn(async () => {}),
+  // The Stats pane (shown here) asks about a call that stands in the log line; the question never answers.
+  getCallStats: vi.fn(() => new Promise(() => {})),
 }))
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
