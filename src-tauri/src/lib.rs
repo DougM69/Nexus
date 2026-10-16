@@ -1100,6 +1100,8 @@ struct AprsIsSession {
     addr: String,
     screen: bool,
     relay: bool,
+    /// Up for JS8: a gateway line waits or was just handed over, or the relay listens.
+    js8: bool,
 }
 
 /// [`AprsIsSession`] from Settings and JS8's demand (`Engine::js8_aprs_link`). Pure, so the login a
@@ -1156,6 +1158,7 @@ fn aprs_is_session(
         addr: format!("{host}:{}", s.aprs_is_port),
         screen,
         relay: js8.relay,
+        js8: js8.want && real,
     }
 }
 
@@ -1177,10 +1180,14 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
         addr,
         screen,
         relay,
+        js8: _,
     } = {
         let mut eng = engine_lock(engine);
-        let js8 = eng.js8_aprs_link(now_unix().max(0) as u64);
-        aprs_is_session(eng.settings(), js8)
+        let link = eng.js8_aprs_link(now_unix().max(0) as u64);
+        let session = aprs_is_session(eng.settings(), link);
+        // What the session is for, so its status can say it (the screen's feed may be off).
+        eng.set_aprs_is_for_js8(session.js8, session.js8 && session.relay);
+        session
     };
 
     // What the socket thread does with a line is fixed when it starts, so a change in it is a
@@ -1348,9 +1355,10 @@ fn aprs_is_bridge(
             }
         }
         let last_packet = state.last_packet_unix.load(Ordering::Relaxed);
-        {
-            let mut e = engine_lock(&engine);
-            e.set_aprs_is_status(tempo_app::engine::AprsIsStatus {
+        publish_aprs_is_status(
+            &engine,
+            &stop,
+            tempo_app::engine::AprsIsStatus {
                 // `enabled` / `uplink_enabled` are re-derived from settings by the getter.
                 connected: state.connected.load(Ordering::Relaxed),
                 verified: state.verified.load(Ordering::Relaxed),
@@ -1360,8 +1368,23 @@ fn aprs_is_bridge(
                 gate_rejected: rejected,
                 last_reject: last_reject.clone(),
                 ..Default::default()
-            });
-        }
+            },
+        );
+    }
+}
+
+/// The bridge's once-a-second write of the session's state for the status chip, skipped once the
+/// session is stopped. The app stops a session before it resets the status under this same lock,
+/// so a write that finds `stop` clear lands before the reset and is overwritten, and one after it
+/// finds `stop` set: a stopped session never leaves the status reading connected.
+fn publish_aprs_is_status(
+    engine: &SharedEngine,
+    stop: &std::sync::atomic::AtomicBool,
+    status: tempo_app::engine::AprsIsStatus,
+) {
+    let mut e = engine_lock(engine);
+    if !stop.load(std::sync::atomic::Ordering::SeqCst) {
+        e.set_aprs_is_status(status);
     }
 }
 
@@ -1530,6 +1553,82 @@ mod aprs_is_session_tests {
         assert!(
             armed.login.split(" filter ").nth(1) == read_only.login.split(" filter ").nth(1),
             "and keeps the screen's own filter"
+        );
+    }
+
+    /// The session says what it is for, so its status can: the screen's feed, JS8 (a gateway
+    /// line waiting or just handed over, or the relay listening), or both. JS8 armed with nothing
+    /// to send keeps no session up and is not what one is for.
+    #[test]
+    fn the_session_says_what_it_is_for() {
+        let link = |want, relay| Js8AprsLink {
+            armed: true,
+            want,
+            relay,
+        };
+        let off = station();
+        let mut on = station();
+        on.aprs_is_enabled = true;
+        let mut no_call = station();
+        no_call.mycall = String::new();
+        let purposes: Vec<(&str, bool, bool, bool)> = [
+            (
+                "feed off, JS8 idle",
+                aprs_is_session(&off, link(false, false)),
+            ),
+            (
+                "feed off, a gateway line",
+                aprs_is_session(&off, link(true, false)),
+            ),
+            (
+                "feed off, the relay",
+                aprs_is_session(&off, link(true, true)),
+            ),
+            ("feed on, JS8 off", aprs_is_session(&on, JS8_OFF)),
+            (
+                "feed on, a gateway line",
+                aprs_is_session(&on, link(true, false)),
+            ),
+            ("no real call", aprs_is_session(&no_call, link(true, true))),
+        ]
+        .into_iter()
+        .map(|(what, s)| (what, s.want, s.screen, s.js8))
+        .collect();
+        assert_eq!(
+            purposes,
+            vec![
+                ("feed off, JS8 idle", false, false, false),
+                ("feed off, a gateway line", true, false, true),
+                ("feed off, the relay", true, false, true),
+                ("feed on, JS8 off", true, true, false),
+                ("feed on, a gateway line", true, true, true),
+                ("no real call", false, false, false),
+            ]
+        );
+    }
+
+    /// A stopped session never writes its status back. The bridge publishes once a second; the
+    /// app stops a session and then resets the status, and a last write landing after that reset
+    /// left the status reading connected with no session at all.
+    #[test]
+    fn a_stopped_session_never_writes_its_status_back() {
+        let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(station())));
+        let connected = || tempo_app::engine::AprsIsStatus {
+            connected: true,
+            verified: true,
+            packets: 9,
+            ..Default::default()
+        };
+        let stop = std::sync::atomic::AtomicBool::new(true);
+        publish_aprs_is_status(&engine, &stop, connected());
+        let stopped = engine_lock(&engine).aprs_is_status().connected;
+        stop.store(false, std::sync::atomic::Ordering::SeqCst);
+        publish_aprs_is_status(&engine, &stop, connected());
+        let running = engine_lock(&engine).aprs_is_status().connected;
+        assert_eq!(
+            (stopped, running),
+            (false, true),
+            "stopped: no write; running (the control): written"
         );
     }
 }

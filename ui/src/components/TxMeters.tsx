@@ -76,10 +76,17 @@ export function swrBar(swr: number): { frac: number; value: string; zone: Zone }
 }
 
 /** ALC 0–1 → bar. On SSB some ALC action is normal; a pegged meter means the mic gain is
- *  overdriving the transmitter, so warn as it nears the ceiling and flag hot when pinned. */
-export function alcBar(alc: number): { frac: number; value: string; zone: Zone } {
+ *  overdriving the transmitter, so warn as it nears the ceiling and flag hot when pinned.
+ *
+ *  `zoneTop` is where the radio's own ALC zone ends on this bar (`txAlcZone`): 1.0 where the
+ *  reading's 1.0 is the zone top (Hamlib's ALC scales, Nexus's own Icom path), 0.5 on the
+ *  FT-991A, FT-710 and FTDX10, read on their own full bar with the zone ending at half scale.
+ *  The colours keep their place in the zone (amber from 80 % of it, red from 95 %), so they sit
+ *  where the radio's own meter marks the zone. The bar itself stays where the radio's bar is. */
+export function alcBar(alc: number, zoneTop = 1): { frac: number; value: string; zone: Zone } {
   const frac = Math.max(0, Math.min(1, alc))
-  const zone: Zone = alc >= 0.95 ? 'hot' : alc >= 0.8 ? 'warn' : 'ok'
+  const top = zoneTop > 0 ? zoneTop : 1
+  const zone: Zone = alc >= 0.95 * top ? 'hot' : alc >= 0.8 * top ? 'warn' : 'ok'
   return { frac, value: `${Math.round(alc * 100)}%`, zone }
 }
 
@@ -186,7 +193,7 @@ export function TxMeters({
     key: 'alc',
     label: ALC,
     title: t('meters.tx.alc.title'),
-    bar: radio.txAlc == null ? null : alcBar(radio.txAlc),
+    bar: radio.txAlc == null ? null : alcBar(radio.txAlc, radio.txAlcZone ?? 1),
   })
   rows.push({
     key: 'po',

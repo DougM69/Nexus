@@ -3204,6 +3204,12 @@ export interface AprsIsStatus {
   gateRejected: number
   /** The most recent refusal reason, for the tooltip. */
   lastReject: string | null
+  /** The session is up for JS8's @APRSIS gateway: what JS8 stations address to @APRSIS goes up
+   * through it. With the feed off, that is why it is up. Desktop only: the Remote page's sample
+   * keeps the nine fields above, which its validator requires exactly. */
+  forJs8?: boolean
+  /** …and JS8's relay listens on it for APRS messages to stations heard on JS8. Desktop only. */
+  forJs8Relay?: boolean
 }
 
 /** Poll the APRS-IS feed's status beside the decoder health. */

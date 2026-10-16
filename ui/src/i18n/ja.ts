@@ -8015,4 +8015,9 @@ export const JA: PartialCatalog = {
   "contest.edit.failed": "Nexus could not edit the contact, so nothing was changed.",
   "contest.edit.remote": "Only at the station: a press through Remote edits no contact.",
   "contest.edit.empty": "There is no contest contact to edit.",
+  // APRS-IS up for JS8 while the APRS screen's feed is off: MACHINE TRANSLATION, for a native speaker to check.
+  "aprs.inet.js8.label": "JS8用インターネット",
+  "aprs.inet.js8.detail": "この画面のフィードはオフです。APRS-ISにはJS8のために接続しています。JS8の@APRSISゲートウェイが、JS8局が@APRSIS宛てに送った内容をあなたのコールサインで送信します。ここには何も表示されません。{{relay}}",
+  "aprs.inet.js8.connecting": "この画面のフィードはオフです。JS8の@APRSISゲートウェイのためにAPRS-ISへ接続中です。再試行しています。{{relay}}",
+  "aprs.inet.js8.relay": "JS8のリレーも、JS8で受信している局宛てのAPRSメッセージをここで待ち受けます。",
 }

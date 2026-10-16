@@ -1438,6 +1438,10 @@ export interface RadioStatus {
    * txSwr = SWR ratio (1.0–6.0), txAlc = ALC 0–1, txPoW = output watts, txCompDb = COMP dB. */
   txSwr?: number | null
   txAlc?: number | null
+  /** Where the radio's own ALC zone ends on the `txAlc` bar: 0.5 on the FT-991A, FT-710 and
+   * FTDX10, whose bar is the radio's own and whose zone ends at half scale. Absent where 1.0 is
+   * the top of the zone. Display only: it moves the bar's colours, never the bar. */
+  txAlcZone?: number | null
   txPoW?: number | null
   txCompDb?: number | null
   /** Can Nexus put a NUMBER to this radio's SWR — i.e. may the high-SWR cutoff be offered?

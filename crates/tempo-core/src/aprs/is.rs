@@ -127,7 +127,8 @@ pub struct FilterSpec {
     /// Watched callsigns — a budlist that passes their traffic from anywhere on earth,
     /// irrespective of range.
     pub buddies: Vec<String>,
-    /// Include weather stations and positionless weather reports.
+    /// Include weather stations and positionless weather reports. Like the two below, it asks the
+    /// whole network only when there is no range; a range already passes what is inside it.
     pub weather: bool,
     /// Include objects and items (repeaters, NWS alerts, event markers).
     pub objects: bool,
@@ -139,7 +140,8 @@ impl FilterSpec {
     /// Render the filter string for the login line. Empty when nothing is subscribed.
     pub fn build(&self) -> String {
         let mut terms: Vec<String> = Vec::new();
-        if let Some(km) = self.range_km.filter(|k| *k > 0) {
+        let range = self.range_km.filter(|k| *k > 0);
+        if let Some(km) = range {
             terms.push(match self.center {
                 // Coordinates are signed decimal degrees; 2 dp is ~1 km, far finer than any
                 // sensible range and short enough to keep the login line well under 512 bytes.
@@ -159,18 +161,28 @@ impl FilterSpec {
         // One `t/` term carrying every wanted letter, which is how the filter is specified:
         // p=position o=object i=item m=message q=query s=status t=telemetry u=user-defined
         // n=NWS w=weather. Positions always ride along — a station with no position cannot map.
-        let mut types = String::from("p");
-        if self.objects {
-            types.push_str("oi");
-        }
-        if self.messages {
-            types.push('m');
-        }
-        if self.weather {
-            types.push('w');
-        }
-        if types.len() > 1 {
-            terms.push(format!("t/{types}"));
+        //
+        // ⚠️ ONLY WHERE NO RANGE WAS ASKED FOR. The server ORs terms ("If any of the filters find
+        // a match the packet is passed", javAPRSFilter.aspx), and a `t/` term with no call/km
+        // after it passes its types from the whole network. Beside a range it brought every
+        // position, object, item, message and weather report on APRS-IS, worldwide, to a station
+        // that asked for 150 km. A range passes the posits and objects inside it, and messages
+        // to stations inside it, so with a range there is nothing for the types to add; radius 0
+        // is the operator's "no distance limit", the one place they mean the whole network.
+        if range.is_none() {
+            let mut types = String::from("p");
+            if self.objects {
+                types.push_str("oi");
+            }
+            if self.messages {
+                types.push('m');
+            }
+            if self.weather {
+                types.push('w');
+            }
+            if types.len() > 1 {
+                terms.push(format!("t/{types}"));
+            }
         }
         terms.join(" ")
     }
@@ -513,7 +525,7 @@ mod tests {
             messages: true,
             ..Default::default()
         };
-        assert_eq!(f.build(), "r/41.90/-87.60/150 t/poimw");
+        assert_eq!(f.build(), "r/41.90/-87.60/150");
     }
 
     #[test]
@@ -540,6 +552,89 @@ mod tests {
         };
         assert_eq!(f.build(), "b/KD9TAW/W9XYZ-9 t/pm");
         assert_eq!(FilterSpec::default().build(), "", "nothing on = no filter");
+    }
+
+    /// A filter string's terms as the server reads them. javAPRSFilter.aspx: "If any of the
+    /// filters find a match the packet is passed", so every term ADDS what it matches. `r/` and
+    /// `m/` pass posits and objects within their range (and messages to stations in it); `b/`
+    /// passes the named calls from anywhere; a `t/` term with no `call/km` after it passes every
+    /// packet of its types from anywhere on earth.
+    #[derive(Debug, PartialEq)]
+    enum Term {
+        Range { lat: f64, lon: f64, km: u32 },
+        MyRange { km: u32 },
+        Calls(Vec<String>),
+        Everywhere(String),
+    }
+
+    fn subscribed(filter: &str) -> Vec<Term> {
+        filter
+            .split_whitespace()
+            .map(
+                |term| match term.split('/').collect::<Vec<_>>().as_slice() {
+                    ["r", lat, lon, km] => Term::Range {
+                        lat: lat.parse().unwrap(),
+                        lon: lon.parse().unwrap(),
+                        km: km.parse().unwrap(),
+                    },
+                    ["m", km] => Term::MyRange {
+                        km: km.parse().unwrap(),
+                    },
+                    ["b", calls @ ..] => Term::Calls(calls.iter().map(|c| c.to_string()).collect()),
+                    ["t", types] => Term::Everywhere(types.to_string()),
+                    _ => panic!("a term this reader does not know: {term}"),
+                },
+            )
+            .collect()
+    }
+
+    /// A radius asks for that radius. The weather, objects and messages switches used to add a
+    /// bare `t/` term beside it, and the server ORs terms, so the range came with every position,
+    /// object, item, message and weather report on the network, worldwide.
+    #[test]
+    fn a_range_subscribes_only_within_it_whatever_the_type_switches() {
+        let near = FilterSpec {
+            range_km: Some(150),
+            center: Some((41.9, -87.6)),
+            weather: true,
+            objects: true,
+            messages: true,
+            ..Default::default()
+        };
+        let range = || Term::Range {
+            lat: 41.9,
+            lon: -87.6,
+            km: 150,
+        };
+        assert_eq!(subscribed(&near.build()), vec![range()]);
+        let watched = FilterSpec {
+            buddies: vec!["kd9taw".into()],
+            ..near.clone()
+        };
+        assert_eq!(
+            subscribed(&watched.build()),
+            vec![range(), Term::Calls(vec!["KD9TAW".into()])],
+            "watched calls still come from anywhere, as their setting says"
+        );
+        let my_range = FilterSpec {
+            range_km: Some(50),
+            center: None,
+            weather: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            subscribed(&my_range.build()),
+            vec![Term::MyRange { km: 50 }]
+        );
+        // Radius 0 is "no distance limit (busy)": the chosen types from anywhere, as before.
+        let anywhere = FilterSpec {
+            range_km: Some(0),
+            ..near.clone()
+        };
+        assert_eq!(
+            subscribed(&anywhere.build()),
+            vec![Term::Everywhere("poimw".into())]
+        );
     }
 
     // ---- the uplink rules. Every fixture is a real captured or reference-suite line.

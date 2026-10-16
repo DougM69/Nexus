@@ -73,6 +73,32 @@ describe('aprsInetStatus', () => {
   it('says nothing about an iGate that is switched off', () => {
     expect(aprsInetStatus(st(), NOW).detail).not.toMatch(/iGate/i)
   })
+
+  // The feed off, the session up for JS8 alone (its @APRSIS gateway, and its relay when on): the
+  // chip says what the session is for, not "switched off" while Nexus is logged in to APRS-IS.
+  it('says the session is up for JS8 when the feed is off and JS8 holds it', () => {
+    const off = { enabled: false, packets: 3, verified: true }
+    expect(aprsInetStatus(st({ ...off, forJs8: true }), NOW)).toEqual({
+      state: 'off',
+      label: 'Internet for JS8',
+      detail:
+        "This screen's feed is off. APRS-IS is connected for JS8: its @APRSIS gateway sends what JS8 stations address to @APRSIS, under your callsign. Nothing from it is plotted here.",
+    })
+    expect(aprsInetStatus(st({ ...off, forJs8: true, forJs8Relay: true }), NOW).detail).toBe(
+      "This screen's feed is off. APRS-IS is connected for JS8: its @APRSIS gateway sends what JS8 stations address to @APRSIS, under your callsign. Nothing from it is plotted here. JS8's relay listens on it too, for APRS messages to stations you hear on JS8.",
+    )
+    expect(aprsInetStatus(st({ ...off, connected: false, forJs8: true }), NOW)).toEqual({
+      state: 'off',
+      label: 'Internet for JS8',
+      detail: "This screen's feed is off. Connecting to APRS-IS for JS8's @APRSIS gateway, retrying with backoff.",
+    })
+    // Control: with no JS8 session the screen's own words are unchanged.
+    expect(aprsInetStatus(st(off), NOW)).toEqual({
+      state: 'off',
+      label: 'Internet off',
+      detail: 'The APRS-IS feed is switched off.',
+    })
+  })
 })
 
 describe('source tags', () => {

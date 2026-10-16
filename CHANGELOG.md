@@ -952,6 +952,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the mode is the only reason TX is locked, push-to-talk, the band lock, the voice keyer, the radio's
   tuner button and SSTV say that 60 m allows only USB phone and ask for USB or AUTO. A frequency
   where USB is refused too keeps the old sentence. What keys and what is refused is unchanged.
+- **PSK Reporter now shows where the FT8 and FT4 stations you hear are.** When a decode carries
+  the sender's grid (a CQ, or a reply with a grid), its spot now sends that grid, as WSJT-X does,
+  so pskreporter.info can put the station on its map. Other spots still go without one. The NA
+  VHF contest exchange that rogers a grid (`W9XYZ K1ABC R FN42`) is now spotted too, with its
+  grid, as in WSJT-X. NEEDS-BENCH: look yourself up on pskreporter.info after some FT8.
+- **A slow DNS server can no longer hold up a transmission.** Every five minutes Nexus sends its
+  PSK Reporter spots, and it looked the server's address up in the loop that keys and unkeys the
+  radio, so a DNS server slow to answer held that loop, and an over due to end, for as long as it
+  took. The lookup and the upload now run on their own.
+- **The APRS-IS feed asks only for the stations inside your radius.** With weather, objects or
+  messages switched on in Settings ▸ APRS (all three are, by default), the feed also asked the
+  server for every position, object, message and weather report on the network, worldwide, so the
+  map filled to its 2,000-station limit with stations far outside your radius. It now asks for
+  what is inside your radius and for your watched calls; a radius of 0 still means no distance
+  limit.
+- **The APRS internet chip says when APRS-IS is up for JS8.** With the APRS-IS feed switched off
+  and JS8's @APRSIS gateway or its relay using APRS-IS, the chip said the feed was switched off
+  while Nexus was logged in to APRS-IS. It now reads *Internet for JS8* and says what the
+  connection is for. After the feed is switched off, its status no longer stays at connected.
+- **Tune: a radio slow to answer a meter reading can no longer stall the tune carrier.** While
+  Tune is keyed, Nexus reads the SWR, ALC, power and compression meters and gives each reading
+  120 ms, so that a slow radio costs a reading and never a gap in the carrier. The limit was only
+  checked after each wait for the radio, and one wait lasted up to half a second, longer than the
+  carrier Nexus keeps queued. Each wait now ends at the limit. Tune keys and unkeys exactly as
+  before; a radio that takes longer than 120 ms to answer a meter now shows no reading for it
+  during Tune. NEEDS-BENCH: watch SWR during Tune on each radio.
+- **On the FT-991A, FT-710 and FTDX10 the ALC bar's colours follow the radio's own ALC zone.**
+  Nexus shows these radios' ALC on the radio's own scale, where the ALC zone ends at half scale,
+  but the bar turned amber and red only near full scale, so a reading past the radio's zone showed
+  green. It now turns amber at 40 % and red at 48 % on these radios, the same place in the zone
+  as on every other radio, whose bar is unchanged. Display only. NEEDS-BENCH: the ALC steps on
+  the FT-991A and the FTDX10.
 
 ### Security
 

@@ -347,6 +347,19 @@ export function aprsInetStatus(
   nowSec: number,
 ): { state: AprsInetState; label: string; detail: string } {
   if (!st || !st.enabled) {
+    // The screen's feed is off, but the session may be up for JS8 (its @APRSIS gateway, and its
+    // relay when on): say what it is for, not "switched off" while Nexus is logged in. The relay
+    // sentence carries the space that joins it, as the iGate's does below.
+    if (st?.forJs8) {
+      const relay = st.forJs8Relay ? ` ${t('aprs.inet.js8.relay')}` : ''
+      return {
+        state: 'off',
+        label: t('aprs.inet.js8.label'),
+        detail: st.connected
+          ? t('aprs.inet.js8.detail', { relay })
+          : t('aprs.inet.js8.connecting', { relay }),
+      }
+    }
     return {
       state: 'off',
       label: t('aprs.inet.off.label'),
@@ -1225,7 +1238,7 @@ export function AprsCockpit({
             onClick={() => setInetOpen(!inetOpen)}
             title={t('aprs.inet.chip.title', { detail: inetDetail })}
           >
-            {remote && !isStatus ? inetLabel : isStatus?.enabled ? inetLabel : t('aprs.inet.off.label')}
+            {inetLabel}
           </button>
           {inetOpen && (
             <div

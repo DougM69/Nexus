@@ -3671,6 +3671,9 @@ pub struct Engine {
     /// ([`Self::clear_rig_tx_meters`]).
     swr_over_count: u8,
     rig_tx_alc: Option<f32>,
+    /// Where the radio's own ALC zone ends on `rig_tx_alc`'s bar, as the reading came: see
+    /// [`Self::observe_rig_tx_alc_zone`]. `None` = 1.0 is the top of the zone.
+    rig_tx_alc_zone: Option<f32>,
     rig_tx_po_w: Option<f32>,
     rig_tx_comp_db: Option<f32>,
     /// Rig's actual mode read back over CAT (Hamlib name, e.g. "USB"/"LSB"/"FM").
@@ -4082,6 +4085,9 @@ pub struct Engine {
     aprs_uplink_queue: VecDeque<String>,
     /// Live APRS-IS feed state, written by the socket thread. Session-only, never persisted.
     aprs_is_status: AprsIsStatus,
+    /// What the APRS-IS session is up for besides the screen's feed, as the app last brought it
+    /// in line: `(JS8's @APRSIS gateway, JS8's relay)`. See [`Self::set_aprs_is_for_js8`].
+    aprs_is_for_js8: (bool, bool),
     /// APRS holds the rig in FM SIMPLEX (session-only, never persisted). Set by [`Engine::aprs_tune`];
     /// makes `rig_mode_effective` command FM and forces the repeater config to simplex (APRS is not
     /// a Phone/Digital operating section, so it can't ride the Phone-FM override). Cleared by any
@@ -4759,6 +4765,12 @@ pub struct AprsIsStatus {
     pub gate_rejected: u64,
     /// The most recent refusal reason, for the tooltip.
     pub last_reject: Option<String>,
+    /// The session is up for JS8's @APRSIS gateway: what JS8 stations address to @APRSIS goes up
+    /// through it. With `enabled` false, that is why the session is up at all. Desktop only: the
+    /// Remote's APRS sample keeps the nine fields above (`remote_service::aprs::live`).
+    pub for_js8: bool,
+    /// …and JS8's relay listens on it for APRS messages to stations heard on JS8 (`t/m`).
+    pub for_js8_relay: bool,
 }
 /// SSTV gallery session-list cap (mirrors the on-disk `gallery.json` cap).
 pub(crate) const SSTV_GALLERY_CAP: usize = 200;
@@ -5817,6 +5829,7 @@ impl Engine {
             rig_tx_swr: None,
             swr_over_count: 0,
             rig_tx_alc: None,
+            rig_tx_alc_zone: None,
             rig_tx_po_w: None,
             rig_tx_comp_db: None,
             rig_mode: None,
@@ -5911,6 +5924,7 @@ impl Engine {
             aprs_stations: std::collections::HashMap::new(),
             aprs_uplink_queue: VecDeque::new(),
             aprs_is_status: AprsIsStatus::default(),
+            aprs_is_for_js8: (false, false),
             aprs_auto_arm_declined: false,
             aprs_audio: Vec::new(),
             aprs_heard: Vec::new(),
@@ -10873,6 +10887,7 @@ impl Engine {
         }
         if alc.is_some() {
             self.rig_tx_alc = alc;
+            self.rig_tx_alc_zone = None;
         }
         if po_w.is_some() {
             self.rig_tx_po_w = po_w;
@@ -10967,8 +10982,17 @@ impl Engine {
         self.swr_over_count = 0;
         self.rig_tx_swr = None;
         self.rig_tx_alc = None;
+        self.rig_tx_alc_zone = None;
         self.rig_tx_po_w = None;
         self.rig_tx_comp_db = None;
+    }
+
+    /// Where the radio's own ALC zone ends on the bar of the ALC reading just observed, as the
+    /// radio loop read it: `Some(0.5)` on a Yaesu read on its own full-bar scale, whose zone ends
+    /// at half scale. Called right after [`Self::observe_rig_tx_meters`] for that reading, which
+    /// resets it. Display only: the bar's colours follow it, nothing else does.
+    pub fn observe_rig_tx_alc_zone(&mut self, zone_top: Option<f32>) {
+        self.rig_tx_alc_zone = zone_top;
     }
 
     /// Drop the rig's read-back mode so the mismatch tag hides — called on a breaker trip
@@ -19736,11 +19760,20 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.aprs_is_status = status;
     }
 
+    /// What the APRS-IS session is up for besides the screen's feed: JS8's @APRSIS gateway
+    /// (`gateway`) and JS8's relay (`relay`). Set each time the app brings the session in line
+    /// with what is wanted, so [`Self::aprs_is_status`] can say it; both false with no session.
+    pub fn set_aprs_is_for_js8(&mut self, gateway: bool, relay: bool) {
+        self.aprs_is_for_js8 = (gateway, relay);
+    }
+
     /// Snapshot of the APRS-IS feed for the cockpit's internet status chip.
     pub fn aprs_is_status(&self) -> AprsIsStatus {
         AprsIsStatus {
             enabled: self.settings.aprs_is_enabled,
             uplink_enabled: self.settings.aprs_is_uplink,
+            for_js8: self.aprs_is_for_js8.0,
+            for_js8_relay: self.aprs_is_for_js8.1,
             ..self.aprs_is_status.clone()
         }
     }
@@ -24100,6 +24133,7 @@ contact yourself."
         s.radio.smeter_db = self.rig_smeter_db;
         s.radio.tx_swr = self.rig_tx_swr;
         s.radio.tx_alc = self.rig_tx_alc;
+        s.radio.tx_alc_zone = self.rig_tx_alc_zone;
         s.radio.tx_po_w = self.rig_tx_po_w;
         s.radio.tx_comp_db = self.rig_tx_comp_db;
         s.radio.swr_scale_verified = self.settings.swr_scale_is_verified();
@@ -57420,6 +57454,50 @@ mod tests {
         let st = e.aprs_is_status();
         assert!(st.enabled && st.uplink_enabled);
         assert!(!st.connected, "no socket in a headless test");
+    }
+
+    /// The ALC zone edge belongs to the reading it came with. An ALC reading on a scale whose 1.0
+    /// is the top of the zone (the Flex's meter stream) clears the edge a Yaesu reading left, and
+    /// an unkey clears it with the reading.
+    #[test]
+    fn an_alc_reading_without_a_zone_clears_the_last_one() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.observe_rig_tx_meters(None, Some(0.5), None, None);
+        e.observe_rig_tx_alc_zone(Some(0.5));
+        let yaesu = e.snapshot().radio.tx_alc_zone;
+        e.observe_rig_tx_meters(None, Some(0.7), None, None);
+        let flex = e.snapshot().radio.tx_alc_zone;
+        e.observe_rig_tx_alc_zone(Some(0.5));
+        e.clear_rig_tx_meters();
+        let unkeyed = e.snapshot().radio.tx_alc_zone;
+        assert_eq!((yaesu, flex, unkeyed), (Some(0.5), None, None));
+    }
+
+    /// The status says what the session is for. With the feed off and the session up for JS8's
+    /// @APRSIS gateway (and its relay), it says so, and the socket thread's once-a-second write of
+    /// the session's state does not wipe that out.
+    #[test]
+    fn aprs_is_status_says_when_the_session_is_up_for_js8() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_is_for_js8(true, true);
+        e.set_aprs_is_status(AprsIsStatus {
+            connected: true,
+            verified: true,
+            packets: 3,
+            ..Default::default()
+        });
+        let st = e.aprs_is_status();
+        let js8 = (st.enabled, st.connected, st.for_js8, st.for_js8_relay);
+        e.set_aprs_is_for_js8(true, false);
+        let st = e.aprs_is_status();
+        let gateway = (st.for_js8, st.for_js8_relay);
+        e.set_aprs_is_for_js8(false, false);
+        let st = e.aprs_is_status();
+        let gone = (st.for_js8, st.for_js8_relay);
+        assert_eq!(
+            (js8, gateway, gone),
+            ((false, true, true, true), (true, false), (false, false))
+        );
     }
 
     #[test]

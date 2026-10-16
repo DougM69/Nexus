@@ -84,8 +84,9 @@ controls.
 - **on \<radio name\>** appears only when more than one of your radios covers the
   band. The tap follows the active radio, and wrong-radio silence is
   indistinguishable from a dead band unless the app names the rig.
-- **The internet chip** — *Internet off / connecting / quiet / N* — is a second,
-  deliberately separate chip. The RF chain and the APRS-IS feed fail
+- **The internet chip** — *Internet off / connecting / quiet / N*, or *Internet
+  for JS8* when the feed is off but JS8's @APRSIS gateway is using APRS-IS — is a
+  second, deliberately separate chip. The RF chain and the APRS-IS feed fail
   independently, and a green internet chip beside a silent RF chip is the whole
   diagnostic: it proves the fault is in the radio path. Click it and it opens the
   feed's controls in place: the on/off switch, **Radius (km)**, and **Watched
@@ -262,7 +263,9 @@ arrived.*
    passcode: a read-only login (`pass -1`) receives the full stream normally.
 2. Set the **Radius (km)** around your grid (150 km by default; 0 means no
    distance limit, which is busy) and any **Watched calls**, which come through
-   from anywhere on earth however far outside the radius they are.
+   from anywhere on earth however far outside the radius they are. The server
+   sends what is inside the radius; the weather, objects and messages switches in
+   Settings reach beyond it only when the radius is 0.
 3. Internet stations arrive tagged `net`, dashed and dimmed on the map. When they
    appear while the RF chip stays silent, the fault is in your radio chain, and
    that is the feed's real diagnostic value. The **Internet N** button hides them
