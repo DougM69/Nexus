@@ -1055,6 +1055,61 @@ mod tests {
         m.stop_all();
     }
 
+    /// A JS8 contact logged reaches a program on each side as JS8Call's `LOG.QSO`, as every event
+    /// does: to a connected TCP program and as a datagram, with neither side accepting requests,
+    /// since it answers none.
+    #[test]
+    fn a_logged_js8_contact_reaches_both_sides() {
+        let port = free_port();
+        let tool = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        tool.set_read_timeout(Some(WAIT)).unwrap();
+        let engine = engine_with(Some(port), Some(tool.local_addr().unwrap().port()));
+        set(&engine, |s| {
+            s.js8_api_tcp_accept = false;
+            s.js8_api_udp_accept = false;
+        });
+        let mut m = Manager::new(Arc::new(Hub::default()), "test");
+        m.tick(&engine);
+        let mut p = Program::connect(port);
+        // TCP keeps order: once a line that is no request is told why, the program is connected.
+        p.say("{not json");
+        assert_eq!(p.line().expect("told why")["type"], "API.ERROR");
+        let mut rec = tempo_core::logbook::parse_adif("<CALL:4>W1AW<EOR>").remove(0);
+        rec.band = "20m".into();
+        rec.freq_mhz = 14.0795;
+        rec.mode = "JS8".into();
+        rec.when_unix = 1_792_074_600;
+        engine_lock(&engine).log_qso(rec);
+        m.tick(&engine);
+        let heard = p.line().expect("the contact");
+        assert_eq!(
+            (
+                &heard["type"],
+                &heard["params"]["CALL"],
+                &heard["params"]["_ID"]
+            ),
+            (
+                &Value::from("LOG.QSO"),
+                &Value::from("W1AW"),
+                &Value::from(-1)
+            ),
+            "{heard}"
+        );
+        let mut types = Vec::new();
+        let datagram_seen = loop {
+            let (d, _) = datagram(&tool).expect("the station's datagrams");
+            types.push(d["type"].clone());
+            if d["type"] == "LOG.QSO" || types.len() > 8 {
+                break d;
+            }
+        };
+        assert_eq!(
+            datagram_seen, heard,
+            "the same line on both sides: {types:?}"
+        );
+        m.stop_all();
+    }
+
     /// "Accept UDP requests" off: the station's datagrams still go out, a TCP program's answers
     /// among them (the switch is on requests, not on what is sent), and a request from the UDP
     /// program draws nothing (mainwindow.cpp:6717-6727); turned on, it is answered. A datagram

@@ -211,6 +211,10 @@ row ends; add a row for that.
 JS8Call's DIRECTED.TXT beside ALL.TXT: one line per directed message heard, with the date and
 time (UTC), the dial, the offset, the SNR and the message, ♢ where it ended.
 
+**ALL.TXT.** Each JS8 line in ALL.TXT names the frame's speed with JS8Call's letter, after the
+offset: A Normal, B Fast, C JS8 40, E Slow, I JS8 60. JS8Call writes it on the lines it hears;
+Nexus writes it on the lines it sends as well.
+
 ## Transmitting
 
 JS8 keys **one frame per period, every period**, with no even/odd parity — a 60-character
@@ -321,7 +325,8 @@ and a real callsign set, JS8 spots the way JS8Call's SPOT button does:
   The same station heard again on the same band within the hour updates its spot rather than
   adding one.
 - The same stations, and every command sent to a @group (heartbeats, CQs, @JS8NET and @APRSIS
-  messages), go to JS8NET, JS8Call's spotting network, once a minute.
+  messages), go to JS8NET, JS8Call's spotting network, once a minute. Your callsign, grid and INFO
+  go with them, the INFO with its macros replaced as an INFO? reply has them.
 - **Spot @APRSIS messages to APRS-IS** (off by default; JS8Call ships it on): a station heard
   sending `@APRSIS GRID` is put on the APRS map at that locator, and the text after `@APRSIS CMD`
   goes to APRS-IS as a raw packet. They go up under your callsign: Nexus logs in to APRS-IS with
@@ -352,7 +357,8 @@ JS8Call's ports: 2442 for TCP, 2242 for UDP.
 
 - **What a program gets:** what Nexus hears, as it hears it (every frame, and every directed
   message, heartbeats and CQs included), each station spotted while PSK Reporter spotting is on,
-  when the transmitter keys and the tones of each frame it sends, and a band change. The messages
+  when the transmitter keys (a tune carrier too, as in JS8Call) and the tones of each frame it
+  sends, a band change, and each JS8 contact you log. The messages
   are JS8Call's own, so a program reads them as it reads JS8Call's.
 - **What a program can ask for**, once you turn on **Accept TCP requests** or **Accept UDP
   requests** for its side (both off until you do, as in JS8Call): the callsign, grid, INFO and

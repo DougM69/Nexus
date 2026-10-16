@@ -294,6 +294,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load first. While it is off, a CW word, a Tune or an ATU press the client holds back says so and
   names this switch. NEEDS-BENCH on a FLEX radio, into a dummy load: CW, Tune and the ATU through
   the client.
+- **JS8Call's API tells a program the JS8 contacts you log, and counts Tune as transmitting, as
+  JS8Call does.** With the API on, a program made for JS8Call gets JS8Call's LOG.QSO each time you
+  log a JS8 contact, with the contact as JS8Call's log writes it, and RIG.PTT on and off for a tune
+  carrier; asked while you tune, it reads the transmitter keyed with TUNE going out. NEEDS-BENCH
+  with a program made for JS8Call.
+- **JS8NET gets your INFO with its macros replaced, as JS8Call sends it:** `<MYCALL>`,
+  `<MYVERSION>` and the rest, as an INFO? reply has them. NEEDS-BENCH: a capture of what goes to
+  JS8NET.
 
 ### Changed
 
@@ -439,6 +447,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FT-991A below full power the ALC reads above zero however clean the drive, so "set it so your
   rig's ALC reads zero" could not be met there. Rig and Audio Setup, Getting Started and the
   settings reference now say to set the drive at full power on those radios.
+- **ALL.TXT names each JS8 frame's speed, as JS8Call does.** With Write ALL.TXT decode log on,
+  each JS8 line, heard or sent, carries JS8Call's letter for its speed after the audio offset,
+  before the message: A Normal, B Fast, C JS8 40, E Slow, I JS8 60. A program that reads the JS8
+  lines in Nexus's ALL.TXT finds the letter there. NEEDS-BENCH: a line beside JS8Call's for the
+  same frame.
 
 ### Fixed
 

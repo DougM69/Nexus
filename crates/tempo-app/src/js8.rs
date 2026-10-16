@@ -1296,7 +1296,8 @@ impl Engine {
     /// Rx-Frequency feed (`record_own_tx_at`), a `mine` row in the JS8 activity ring the
     /// cockpit's activity pane reads, and — when ALL.TXT is on — the `Tx` line in the
     /// FT/beacon writers' shape (SNR/DT 0, audio = `f0`, into the shared ALL.TXT
-    /// buffer with the same 5000-line cap). `now_ms` is the PERIOD START of the over
+    /// buffer with the same 5000-line cap), with the speed's letter as a JS8 frame's line has
+    /// it (`alltxt::js8_all_txt_line`). `now_ms` is the PERIOD START of the over
     /// (slot × period), not the wall clock: alltxt.rs's rule is that only the slot knows
     /// which period an over belongs to. `f0` is the offset the over KEYED at, a heartbeat's
     /// sub-band slot included: JS8Call moves `freq()` there before it shows the frame
@@ -1336,11 +1337,11 @@ impl Engine {
         if self.settings.write_all_txt {
             self.station
                 .all_txt_pending
-                .push(crate::alltxt::all_txt_line(
+                .push(crate::alltxt::js8_all_txt_line(
                     now_ms / 1000,
                     self.settings.dial_mhz,
                     true,
-                    "JS8",
+                    self.js8_tx_speed(),
                     0,
                     0.0,
                     f0,
@@ -2311,7 +2312,8 @@ mod tests {
             0,
             0.0,
             f0,
-            "KD9TAW: @HB HEARTBEAT EN52",
+            // JS8Call's letter for Normal before the text, as a JS8 frame's line has it.
+            "A KD9TAW: @HB HEARTBEAT EN52",
         );
         assert_eq!(
             e.station.all_txt_pending.last(),
@@ -5380,3 +5382,7 @@ mod followups_tests;
 #[cfg(test)]
 #[path = "js8_design_tests.rs"]
 mod design_tests;
+
+#[cfg(test)]
+#[path = "js8_programs_tests.rs"]
+mod programs_tests;

@@ -448,7 +448,7 @@ impl Engine {
         let local = (
             by.call.clone(),
             by.grid.clone(),
-            self.js8_station.info_text(),
+            self.js8_station.info_text(now_ms),
         );
         let dial = self.settings.dial_hz();
         let links = &mut self.js8_links;

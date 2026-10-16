@@ -14524,6 +14524,8 @@ impl Engine {
             self.pending_udp_qsos.pop_front();
         }
         self.pending_udp_qsos.push_back(rec.clone());
+        // …and a JS8 contact to the programs on JS8Call's API, as JS8Call tells them.
+        self.js8_api_note_logged(&rec);
         // Queue for the shell's connector auto-upload worker (QRZ/ClubLog/eQSL).
         // This is THE funnel: auto-logged FT8 QSOs, cockpit logs, and manual
         // Logbook entries all pass through here, so the Settings auto-upload
@@ -26248,11 +26250,10 @@ contact yourself."
             let stamp =
                 crate::alltxt::period_start_unix(slot.saturating_sub(1), self.active_slot_secs());
             for d in &decodes {
+                // A JS8 frame's line names its speed (`alltxt::decode_line`).
                 self.station
                     .all_txt_pending
-                    .push(crate::alltxt::all_txt_line(
-                        stamp, dial, false, &mode, d.snr, d.dt, d.freq, &d.message,
-                    ));
+                    .push(crate::alltxt::decode_line(stamp, dial, &mode, d));
             }
             // Bound memory if the shell never drains (e.g. headless): keep newest 5000.
             let len = self.station.all_txt_pending.len();

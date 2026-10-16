@@ -11,8 +11,9 @@
 //! never takes the lock and has nothing it could change — [`answer`] borrows the snapshot and
 //! returns a line. And the messages JS8Call sends on its own: `RX.ACTIVITY` (every decoded frame),
 //! `RX.DIRECTED` (every complete directed command, heartbeats and CQs included), `RX.SPOT` (while
-//! spotting is on), `TX.FRAME` (the tones of every frame keyed), `RIG.PTT`, `RIG.FREQ` (a band
-//! change), `STATION.STATUS`, `STATION.CLOSING`, and the UDP side's `PING` and `CLOSE`.
+//! spotting is on), `TX.FRAME` (the tones of every frame keyed), `RIG.PTT` (a tune carrier keys
+//! it too), `RIG.FREQ` (a band change), `STATION.STATUS`, `LOG.QSO` (a JS8 contact logged),
+//! `STATION.CLOSING`, and the UDP side's `PING` and `CLOSE`.
 //!
 //! WHAT IS REFUSED: every other type. `TX.SEND_MESSAGE`, `TX.SET_TEXT`, `RIG.SET_*`,
 //! `RIG.TX_HALT`, `MODE.SET_SPEED`, `STATION.SET_*`, `STATION.SEND_HB`, `INBOX.STORE_MESSAGE`,
@@ -46,6 +47,7 @@ use ::js8::proto::station::InboxState;
 use ::js8::{MessageEvent, TxFrame};
 use modes::Js8Speed;
 use serde_json::Value;
+use tempo_core::logbook::{datetime_utc, QsoRecord};
 
 use super::Engine;
 use crate::dto::Tier;
@@ -753,6 +755,75 @@ pub enum Js8ApiEvent {
     },
     /// The tones of a frame going out (mainwindow.cpp:6702-6715).
     TxFrame { tones: Vec<u8> },
+    /// A JS8 contact logged (`acceptQSO`, mainwindow.cpp:3920-3940).
+    LogQso(LoggedContact),
+}
+
+/// A JS8 contact as JS8Call's `LOG.QSO` tells it, from the record the log took.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoggedContact {
+    pub call: String,
+    pub grid: String,
+    /// The frequency it was worked on, the dial plus the TX offset, in Hz.
+    pub freq_hz: u64,
+    pub band: String,
+    pub rpt_sent: String,
+    pub rpt_recv: String,
+    pub name: String,
+    pub comments: String,
+    /// Who was at the key: the record's operator, else the station's call.
+    pub op: String,
+    pub station_call: String,
+    pub station_grid: String,
+    pub utc_on_ms: u64,
+    pub utc_off_ms: u64,
+}
+
+impl LoggedContact {
+    /// The contact as JS8Call's log writes it, which is `LOG.QSO`'s value (`ADIF::QSOToADIF`,
+    /// ADIF.cpp:385-436): lower-case tags one space apart, each length counted as JS8Call counts
+    /// it (UTF-16 units), the mode MFSK with the submode JS8 (`LogQSO::accept`,
+    /// LogQSO.cpp:252-255), the dates and times UTC, the frequency in MHz to six places, and the
+    /// comment, the name and the operator only where there is one.
+    fn adif(&self) -> String {
+        let tag =
+            |name: &str, value: &str| format!("<{name}:{}>{value}", value.encode_utf16().count());
+        let date_time = |ms: u64| {
+            let (y, mo, d, h, mi, s) = datetime_utc(ms / 1000);
+            (
+                format!("{y:04}{mo:02}{d:02}"),
+                format!("{h:02}{mi:02}{s:02}"),
+            )
+        };
+        let (date_on, time_on) = date_time(self.utc_on_ms);
+        let (date_off, time_off) = date_time(self.utc_off_ms);
+        let mut fields = vec![
+            tag("call", &self.call),
+            tag("gridsquare", &self.grid),
+            tag("mode", "MFSK"),
+            tag("submode", "JS8"),
+            tag("rst_sent", &self.rpt_sent),
+            tag("rst_rcvd", &self.rpt_recv),
+            tag("qso_date", &date_on),
+            tag("time_on", &time_on),
+            tag("qso_date_off", &date_off),
+            tag("time_off", &time_off),
+            tag("band", &self.band),
+            tag("freq", &format!("{:.6}", self.freq_hz as f64 / 1e6)),
+            tag("station_callsign", &self.station_call),
+            tag("my_gridsquare", &self.station_grid),
+        ];
+        for (name, value) in [
+            ("comment", &self.comments),
+            ("name", &self.name),
+            ("operator", &self.op),
+        ] {
+            if !value.is_empty() {
+                fields.push(tag(name, value));
+            }
+        }
+        fields.join(" ")
+    }
 }
 
 impl Js8ApiEvent {
@@ -838,6 +909,28 @@ impl Js8ApiEvent {
                 "TX.FRAME",
                 "",
                 event(vec![("TONES", Value::from(tones.clone()))]),
+            ),
+            Js8ApiEvent::LogQso(c) => wire(
+                "LOG.QSO",
+                &c.adif(),
+                event(vec![
+                    ("CALL", Value::from(c.call.as_str())),
+                    ("COMMENTS", Value::from(c.comments.as_str())),
+                    // The fields JS8Call's log dialog adds by name; Nexus's log form has none.
+                    ("EXTRA", Value::Object(serde_json::Map::new())),
+                    ("FREQ", Value::from(c.freq_hz)),
+                    ("GRID", Value::from(c.grid.as_str())),
+                    ("MODE", Value::from("MFSK")),
+                    ("NAME", Value::from(c.name.as_str())),
+                    ("RPT.RECV", Value::from(c.rpt_recv.as_str())),
+                    ("RPT.SENT", Value::from(c.rpt_sent.as_str())),
+                    ("STATION.CALL", Value::from(c.station_call.as_str())),
+                    ("STATION.GRID", Value::from(c.station_grid.as_str())),
+                    ("STATION.OP", Value::from(c.op.as_str())),
+                    ("SUBMODE", Value::from("JS8")),
+                    ("UTC.OFF", Value::from(c.utc_off_ms)),
+                    ("UTC.ON", Value::from(c.utc_on_ms)),
+                ]),
             ),
         };
         Outgoing { line, id: -1 }
@@ -1102,6 +1195,7 @@ pub struct Js8ApiSnapshot {
     /// The transmit speed, as JS8Call numbers it.
     pub speed: i64,
     pub selected: String,
+    /// The key is down: an over on the air, or a tune carrier.
     pub transmitting: bool,
     pub band: String,
     pub calls: Vec<CallRow>,
@@ -1113,8 +1207,8 @@ pub struct Js8ApiSnapshot {
     pub text: String,
     pub inbox: Vec<InboxRow>,
     pub config: ConfigRow,
-    /// The JS8 frame on the air in JS8Call's twelve characters (`RIG.PTT_STATUS`'s `MESSAGE`):
-    /// empty while no JS8 frame is keyed.
+    /// What is on the air, as `RIG.PTT_STATUS`'s `MESSAGE` names it: the JS8 frame in JS8Call's
+    /// twelve characters, "TUNE" for a tune carrier, empty while neither is keyed.
     pub on_air: String,
     /// The text going out (`TX.TEXT`): the message JS8Call's compose box would hold.
     pub tx_text: String,
@@ -1436,6 +1530,48 @@ impl Engine {
         }
     }
 
+    /// A contact the log took, at the logged-contact fan-out beside the WSJT-X sink's
+    /// (`log_qso`): a JS8 one is told to the API's programs as JS8Call 3.0.3's `acceptQSO` tells
+    /// them (`LOG.QSO`, mainwindow.cpp:3920-3940), while the API is on. Reads the record.
+    pub(crate) fn js8_api_note_logged(&mut self, rec: &QsoRecord) {
+        if !self.js8_api_on() || !rec.mode.trim().eq_ignore_ascii_case("JS8") {
+            return;
+        }
+        let s = &self.settings;
+        // As JS8Call's log dialog has them: the call and grid upper-cased (`LogQSO::accept`,
+        // LogQSO.cpp:249-250), the frequency the dial plus the TX offset
+        // (mainwindow.cpp:3901-3902), the operator its op call or its own (:3878-3881).
+        let station_call = rec
+            .station_callsign
+            .clone()
+            .unwrap_or_else(|| s.mycall.trim().to_ascii_uppercase());
+        let utc_on_ms = rec.when_unix * 1000;
+        let contact = LoggedContact {
+            call: rec.call.trim().to_ascii_uppercase(),
+            grid: rec
+                .grid
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_uppercase(),
+            freq_hz: (rec.freq_mhz * 1e6).round().max(0.0) as u64,
+            band: rec.band.clone(),
+            rpt_sent: rec.rst_sent.clone().unwrap_or_default(),
+            rpt_recv: rec.rst_rcvd.clone().unwrap_or_default(),
+            name: rec.name.clone().unwrap_or_default(),
+            comments: rec.comment.clone().unwrap_or_default(),
+            op: rec.operator.clone().unwrap_or_else(|| station_call.clone()),
+            station_grid: rec
+                .my_grid
+                .clone()
+                .unwrap_or_else(|| s.mygrid.trim().to_string()),
+            station_call,
+            utc_on_ms,
+            utc_off_ms: rec.time_off_unix.map_or(utc_on_ms, |t| t * 1000),
+        };
+        self.js8_api.push(Js8ApiEvent::LogQso(contact));
+    }
+
     /// One tick for the listeners: `None` while both servers are off (and nothing is held), else
     /// the ports, the events since the last tick, and a snapshot to answer reads from.
     pub fn js8_api_poll(&mut self) -> Option<Js8ApiPoll> {
@@ -1543,7 +1679,12 @@ impl Engine {
         } else {
             s.js8_rx_speeds
         };
-        let transmitting = self.app.transmitting();
+        // A tune carrier is the key down, as JS8Call counts its own (`m_transmitting` while
+        // `m_tune`, mainwindow.cpp:2560-2571, :2675), and the frame it names is "TUNE"
+        // (:2623-2626).
+        let tuning = self.tuning();
+        let slot_tx = self.app.transmitting();
+        let transmitting = slot_tx || tuning;
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
         // The JS8 frame keyed last, while the key is down within its period: whatever else is on
         // the air is no JS8 frame.
@@ -1551,7 +1692,7 @@ impl Engine {
             .js8_api
             .on_air
             .as_ref()
-            .filter(|(_, _, until)| transmitting && now_ms < *until);
+            .filter(|(_, _, until)| slot_tx && now_ms < *until);
         // JS8Call's compose box holds a message from its first frame until its last is sent
         // (`stopTx`, mainwindow.cpp:2893-2899), and its queue holds what waits behind it. The
         // outbox here lets a message go when its last frame is handed out: while that frame is
@@ -1601,7 +1742,11 @@ impl Engine {
                 js8hb: s.js8_hb_networking,
                 avoid_allcall: s.js8_avoid_allcall,
             },
-            on_air: on_air.map(|(text, _, _)| text.clone()).unwrap_or_default(),
+            on_air: if tuning {
+                "TUNE".to_string()
+            } else {
+                on_air.map(|(text, _, _)| text.clone()).unwrap_or_default()
+            },
             tx_text: going
                 .chars()
                 .skip(going_chars.saturating_sub(TX_TEXT_CHARS))
