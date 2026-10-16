@@ -76,6 +76,16 @@ impl Over {
         self.engine.lock().unwrap().broadcast("CQ KD9TAW EN52");
     }
 
+    /// Call CQ inside this station's own slot: a CQ run, whose first over keys at once if it can
+    /// and which plans its CQ again at every own boundary while TX is on.
+    fn call_cq(&self) {
+        self.engine
+            .lock()
+            .unwrap()
+            .start_cq(None)
+            .expect("premise: Call CQ");
+    }
+
     /// Run the loop, a 20 ms tick at a time, to `until` ms (inclusive).
     fn run_to(&mut self, until: f64) {
         step_to(
@@ -1001,4 +1011,446 @@ fn a_late_start_decides_on_the_clock_at_the_decision_not_on_its_ticks() {
             "a CQ {at_ms} ms in, its tick's clock 2 s behind"
         );
     }
+}
+
+// ── A key the radio answers past the end of its slot: nothing sent, unkeyed at once ──────────────
+// The late start's own decision (75 % of the slot) is its last slot check before the key. Fake It's
+// write-back, Split Operation's commands and the key come after it, and on a slow link they take
+// seconds (each command up to its 2.5 s deadline). The tones are laid on the clock where the carrier
+// is, so a Call CQ whose carrier came up in the other station's period sent the rest of its over
+// there, on their slot clock. WSJT-X starts an over's audio only when the radio reports PTT on and
+// the over is still needed (`widgets/mainwindow.cpp:8852`), and its GUI tick ends the over as soon
+// as the clock has left its window (`:5055`, `:5180`, `:5530`), a window in this station's own
+// period (`:5016-5019`).
+
+/// Lines a scene's rigctld got, each with the wall clock it came at.
+type Lines = Arc<Mutex<Vec<(String, f64)>>>;
+
+/// Put the scene on a rigctld that logs every line with the wall clock it came at, in place of the
+/// one `Over::new` made, on a slow link: each of Split Operation's commands (`S`, `I`, `X`) answered
+/// after `split_ms`, the key after `key_ms`.
+fn a_timed_rigctld(s: &mut Over, split_ms: u64, key_ms: u64) -> Lines {
+    let lines: Lines = Arc::new(Mutex::new(Vec::new()));
+    let noted = Arc::clone(&lines);
+    s.peer = retuning_peer(14_074_000, "PKTUSB", move |line, state| {
+        noted
+            .lock()
+            .unwrap()
+            .push((line.to_string(), now_unix_ms()));
+        let stall = if ["S ", "I ", "X "].iter().any(|p| line.starts_with(p)) {
+            split_ms
+        } else if line == "T 1" {
+            state.keyed = true;
+            key_ms
+        } else {
+            return None;
+        };
+        std::thread::sleep(Duration::from_millis(stall));
+        Some("RPRT 0\n".to_string())
+    });
+    s.rig = Rig::rigctld(&s.peer.address);
+    s.rig.set_slow_transport(true);
+    lines
+}
+
+/// [`a_timed_rigctld`] with the engine in Split Operation Rig and a 750 Hz TX offset, which needs a
+/// dial shift: three split commands go out before every key.
+fn on_a_slow_split(s: &mut Over, split_ms: u64, key_ms: u64) -> Lines {
+    let lines = a_timed_rigctld(s, split_ms, key_ms);
+    let mut e = s.engine.lock().unwrap();
+    let mut st = e.settings().clone();
+    st.split_mode = tempo_app::settings::SplitMode::Rig;
+    e.apply_settings(st);
+    e.set_tx_offset(750.0);
+    lines
+}
+
+/// A Call CQ `at_ms` into this station's own slot of `tier`, on the real (steered) clock and a slow
+/// split ([`on_a_slow_split`]).
+struct SlowLateStart {
+    s: Over,
+    /// The over the CQ was to send, whole and slot-positioned.
+    want: Vec<f32>,
+    /// The split's and the key's lines, with where the slot was when each came, ms from its start.
+    lines: Vec<(String, f64)>,
+    /// Where the slot was when the tick that keyed it returned.
+    returned_ms: f64,
+    own: f64,
+    period: f64,
+}
+
+fn late_start_on_a_slow_split(tier: Tier, at_ms: f64, split_ms: u64, key_ms: u64) -> SlowLateStart {
+    let mut s = Over::new(tier);
+    let lines = on_a_slow_split(&mut s, split_ms, key_ms);
+    let period = s.engine.lock().unwrap().active_slot_secs() * 1000.0;
+    let even = steer_into_the_odd_slot(&mut s, 0.0);
+    let own = even - 2.0 * period;
+    steer_to_before(&mut s, own + period, period - at_ms);
+    // The rig's own reads held off, as in the busy scene: the steering made them all due.
+    let later = even + 60_000.0;
+    s.state.last_rig_poll = later;
+    s.state.last_freq_poll = later;
+    s.state.last_smeter_poll = later;
+    s.state.last_ptt_poll = later;
+    s.tick_now(); // this slot's boundary, with nothing to send
+    assert_eq!(s.sent("T 1"), 0, "premise: nothing to send at the boundary");
+    s.call_cq();
+    let want = s
+        .engine
+        .lock()
+        .unwrap()
+        .next_over_hint((own / period) as u64)
+        .expect("the CQ")
+        .build();
+    lines.lock().unwrap().clear();
+    s.tick_now();
+    let offset = s.state.clock_offset_ms as f64;
+    let returned_ms = now_unix_ms() - offset - own;
+    let lines = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(l, _)| ["S ", "I ", "X ", "T "].iter().any(|p| l.starts_with(p)))
+        .map(|(l, t)| (l.clone(), t - offset - own))
+        .collect();
+    SlowLateStart {
+        s,
+        want,
+        lines,
+        returned_ms,
+        own,
+        period,
+    }
+}
+
+impl SlowLateStart {
+    fn sent(&self) -> Vec<&str> {
+        self.lines.iter().map(|(l, _)| l.as_str()).collect()
+    }
+
+    /// Where in the slot `line` came, the first time.
+    fn came(&self, line: &str) -> f64 {
+        self.lines
+            .iter()
+            .find(|(l, _)| l == line)
+            .unwrap_or_else(|| panic!("no {line:?} on the wire: {:?}", self.sent()))
+            .1
+    }
+}
+
+/// ⭐ A CALL CQ 10.0 s INTO THIS STATION'S OWN FT8 SLOT WHOSE SPLIT AND KEY TAKE 6 s: THE CARRIER COMES
+/// UP 16.0 s IN, IN THE OTHER STATION'S PERIOD. Nothing is played and the radio is unkeyed in the
+/// same tick, at once after the key's answer. Only that over is dropped: TX stays on, a lane of its
+/// own says so, and the next own slot sends the CQ whole. The rest of the over used to go out from
+/// their slot's 1.0 s on their slot clock, PTT held to their 13.84 s. The control: the same split
+/// taking 2 s puts the carrier at 12.0 s, and the rest of the over goes out from there, ending on
+/// this slot's window.
+#[test]
+fn a_late_start_ft8_cq_a_slow_split_keys_past_its_period_sends_nothing_and_is_unkeyed_at_once() {
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let late = late_start_on_a_slow_split(Tier::Ft8, 10_000.0, 1_900, 300);
+            a_slow_late_start_is_dropped_and_the_next_own_slot_sends_it_whole(
+                late, 300, 13_840.0, "FT8, 6 s",
+            );
+        });
+        s.spawn(|| {
+            let control = late_start_on_a_slow_split(Tier::Ft8, 10_000.0, 600, 200);
+            a_slow_late_start_plays_in_its_own_period(control, 200, 13_840.0, "FT8, 2 s");
+        });
+    });
+}
+
+/// FT4 THE SAME WAY: a Call CQ 2.0 s into its own slot, the split and key taking 6 s, the carrier
+/// 8.0 s in, half a second into the other station's period: nothing played, unkeyed at once, only
+/// that over dropped, and the next own slot sends the CQ whole. The control, 2 s: the carrier at
+/// 4.0 s and the rest of the over from there, ending at 6.24 s.
+#[test]
+fn a_late_start_ft4_cq_a_slow_split_keys_past_its_period_sends_nothing_and_is_unkeyed_at_once() {
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let late = late_start_on_a_slow_split(Tier::Ft4, 2_000.0, 1_900, 300);
+            a_slow_late_start_is_dropped_and_the_next_own_slot_sends_it_whole(
+                late, 300, 6_240.0, "FT4, 6 s",
+            );
+        });
+        s.spawn(|| {
+            let control = late_start_on_a_slow_split(Tier::Ft4, 2_000.0, 600, 200);
+            a_slow_late_start_plays_in_its_own_period(control, 200, 6_240.0, "FT4, 2 s");
+        });
+    });
+}
+
+fn a_slow_late_start_is_dropped_and_the_next_own_slot_sends_it_whole(
+    mut late: SlowLateStart,
+    key_ms: u64,
+    ptt_off_ms: f64,
+    what: &str,
+) {
+    let answered = late.came("T 1") + key_ms as f64;
+    assert!(
+        answered >= late.period,
+        "premise, {what}: the carrier came up {answered} ms into its slot"
+    );
+    assert!(
+        late.s.backend.played.is_empty(),
+        "{what}: {} samples played in the other station's period, PTT held to {:?} ms into it",
+        late.s.backend.played.len(),
+        late.s.state.tx_until_ms.map(|t| t - late.own - late.period)
+    );
+    let sent = late.sent();
+    assert_eq!(
+        sent[sent.len() - 2..],
+        ["T 1", "T 0"],
+        "{what}: the key, then the unkey in the same tick: {sent:?}"
+    );
+    assert!(
+        late.came("T 0") - answered < 250.0,
+        "{what}: the unkey came {} ms after the key's answer",
+        late.came("T 0") - answered
+    );
+    assert_eq!(late.s.state.tx_until_ms, None, "{what}: held");
+    let over_dropped = |s: &Over| {
+        serde_json::to_value(s.engine.lock().unwrap().snapshot()).unwrap()["radio"]
+            .get("slotOverDropped")
+            .cloned()
+    };
+    {
+        let e = late.s.engine.lock().unwrap();
+        assert!(e.tx_enabled(), "{what}: TX went off");
+        assert_eq!(
+            e.snapshot().radio.slot_key_refused,
+            None,
+            "{what}: on the refused key's line"
+        );
+    }
+    let lane = over_dropped(&late.s)
+        .unwrap_or_else(|| panic!("{what}: nothing says the over was dropped"));
+    assert_eq!(lane["count"], 1, "{what}: {lane}");
+    // ⭐ AND TX STAYS ON: the CQ run's next own slot keys again, the link answering at once now, and
+    // sends the CQ whole and on time, ended on its window, as WSJT-X's next own period does with
+    // Enable Tx still ticked. The lane goes with the over that went out.
+    let fast = a_timed_rigctld(&mut late.s, 0, 0);
+    // The new link stands in for the same radio, whose once-per-connection probes (`\dump_state`
+    // twice, `u TUNER`) a station on the air ran long before: run here, at the boundary, their read
+    // windows held the key up 0.66 s.
+    late.s.state.rx_ranges_probed = true;
+    late.s.state.tuner_probed = true;
+    let next_own = late.own + 2.0 * late.period;
+    steer_to_before(&mut late.s, next_own, -20.0);
+    late.s.tick_now();
+    let offset = late.s.state.clock_offset_ms as f64;
+    let lines: Vec<(String, f64)> = fast
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(l, t)| (l.clone(), (t - offset - next_own).round()))
+        .collect();
+    assert_eq!(
+        late.s.sent("T 1"),
+        1,
+        "{what}: the next own slot keyed nothing: {lines:?}"
+    );
+    let played = &late.s.backend.played;
+    let skipped = late.want.len().saturating_sub(played.len());
+    assert!(
+        skipped < 6_000,
+        "{what}: {} of {} samples played at the next own slot: not the whole CQ; the link got \
+         (ms from the slot's start) {lines:?}",
+        played.len(),
+        late.want.len()
+    );
+    if let Err(why) = same_audio(played, &late.want[skipped..]) {
+        panic!("{what}: the next own slot did not send the CQ: {why}");
+    }
+    assert_eq!(
+        late.s.state.tx_until_ms,
+        Some(next_own + ptt_off_ms),
+        "{what}: not ended on the next own slot's window"
+    );
+    assert_eq!(
+        over_dropped(&late.s),
+        None,
+        "{what}: the lane is still up after an over that went out"
+    );
+}
+
+fn a_slow_late_start_plays_in_its_own_period(
+    control: SlowLateStart,
+    key_ms: u64,
+    ptt_off_ms: f64,
+    what: &str,
+) {
+    let answered = control.came("T 1") + key_ms as f64;
+    assert!(
+        control.returned_ms < control.period,
+        "premise, {what}: the carrier came up {answered}..{} ms into its slot",
+        control.returned_ms
+    );
+    let sent = control.sent();
+    assert_eq!(
+        sent.last(),
+        Some(&"T 1"),
+        "{what}: not the key alone: {sent:?}"
+    );
+    let played = &control.s.backend.played;
+    let skipped = control.want.len() - played.len();
+    let (lo, hi) = (
+        (answered * 12.0).floor() as usize,
+        (control.returned_ms * 12.0).ceil() as usize,
+    );
+    assert!(
+        played.iter().any(|&x| x != 0.0) && (lo..=hi).contains(&skipped),
+        "{what}: {skipped} samples skipped, the carrier came up {lo}..={hi} samples in"
+    );
+    if let Err(why) = same_audio(played, &control.want[skipped..]) {
+        panic!("{what}: not the rest of the over from where the carrier came up: {why}");
+    }
+    assert_eq!(
+        control.s.state.tx_until_ms,
+        Some(control.own + ptt_off_ms),
+        "{what}: not ended on this slot's window"
+    );
+    assert!(
+        control.s.engine.lock().unwrap().tx_enabled(),
+        "{what}: TX went off"
+    );
+}
+
+/// ⭐ AN FT8 OVER'S END IS TESTED FIRST IN THE TICK, SO A STALL CANNOT HOLD PTT INTO THE OTHER STATION'S
+/// PERIOD. A double-click or a logger's Reply holds the Engine lock while a decode in flight finishes
+/// (seconds on a slow computer). A tick that came after 13.84 s with the lock held kept PTT up until
+/// it was let go: here 1.5 s, to 15.34 s, a third of a second into the other station's period. WSJT-X
+/// re-tests its window every 100 ms on a thread its CAT and its decoder never stall (`m_bTxTime`,
+/// `widgets/mainwindow.cpp:870`, `:5055`, `:5180`, `:5530`). Now PTT drops first thing in that tick,
+/// and only then does the tick wait for the lock.
+#[test]
+fn an_ft8_overs_end_does_not_wait_for_the_engine_lock() {
+    let mut s = Over::new(Tier::Ft8);
+    let lines = a_timed_rigctld(&mut s, 0, 0);
+    let t0 = s.t;
+    s.cq();
+    s.run_to(t0 + 13_820.0);
+    assert_eq!(
+        (s.sent("T 1"), s.sent("T 0")),
+        (1, 0),
+        "premise: keyed and held"
+    );
+    let (holding, held) = std::sync::mpsc::channel();
+    let engine = Arc::clone(&s.engine);
+    let decode_wait = std::thread::spawn(move || {
+        let lock = engine.lock().unwrap();
+        holding.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(1_500));
+        let let_go = now_unix_ms();
+        drop(lock);
+        let_go
+    });
+    held.recv().unwrap();
+    s.run_to(t0 + 13_840.0);
+    let let_go = decode_wait.join().unwrap();
+    let unkeyed = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(l, _)| l == "T 0")
+        .map(|(_, t)| *t)
+        .expect("PTT never dropped");
+    assert!(
+        unkeyed < let_go - 1_000.0,
+        "PTT dropped {:.0} ms after the Engine lock was let go, not before it",
+        unkeyed - let_go
+    );
+    assert_eq!(s.state.tx_until_ms, None);
+}
+
+/// A mock sound card whose flushes another thread can count while the loop waits elsewhere.
+struct CountedFlushes {
+    inner: MockBackend,
+    flushes: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl AudioBackend for CountedFlushes {
+    fn capture(&mut self) -> Vec<f32> {
+        self.inner.capture()
+    }
+    fn play(&mut self, samples: &[f32]) {
+        self.inner.play(samples);
+    }
+    fn prepare_tx(&mut self) -> Result<(), String> {
+        self.inner.prepare_tx()
+    }
+    fn flush_output(&mut self) -> usize {
+        self.flushes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.flush_output()
+    }
+}
+
+/// ⭐ AND ITS AUDIO STOP: the tick at 13.64 s that finds the Engine lock held stops the over's audio
+/// before it waits for the lock, as WSJT-X's window test stops its Modulator on time. It used to
+/// stop it only once the lock was let go.
+#[test]
+fn an_ft8_overs_audio_stop_does_not_wait_for_the_engine_lock() {
+    let mut s = Over::new(Tier::Ft8);
+    let t0 = s.t;
+    s.cq();
+    s.run_to(t0 + 13_620.0);
+    assert_eq!(
+        (s.sent("T 1"), s.sent("T 0")),
+        (1, 0),
+        "premise: keyed and held"
+    );
+    let flushes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut backend = CountedFlushes {
+        inner: std::mem::take(&mut s.backend),
+        flushes: Arc::clone(&flushes),
+    };
+    let (holding, held) = std::sync::mpsc::channel();
+    let engine = Arc::clone(&s.engine);
+    let counted = Arc::clone(&flushes);
+    let decode_wait = std::thread::spawn(move || {
+        let lock = engine.lock().unwrap();
+        holding.send(()).unwrap();
+        let give_up = std::time::Instant::now() + Duration::from_millis(1_500);
+        while counted.load(std::sync::atomic::Ordering::SeqCst) == 0
+            && std::time::Instant::now() < give_up
+        {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let stopped_while_held = counted.load(std::sync::atomic::Ordering::SeqCst);
+        drop(lock);
+        stopped_while_held
+    });
+    held.recv().unwrap();
+    let sinks = no_sinks();
+    let mut reopen_audio = |_: &Transport| -> Result<CountedFlushes, String> {
+        Ok(CountedFlushes {
+            inner: MockBackend::new(),
+            flushes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        })
+    };
+    let mut reopen_rig = mock_reopen_rig();
+    s.state
+        .step(
+            &s.engine,
+            &mut backend,
+            &mut s.rig,
+            &sinks,
+            t0 + 13_640.0,
+            &mut reopen_audio,
+            &mut reopen_rig,
+            &mut StationSinks::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        decode_wait.join().unwrap(),
+        1,
+        "the over's audio did not stop at 13.64 s while the Engine lock was held"
+    );
+    assert_eq!(
+        flushes.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the audio stopped twice"
+    );
 }

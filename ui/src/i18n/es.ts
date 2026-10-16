@@ -7384,6 +7384,8 @@ export const ES: PartialCatalog = {
   "shell.lane.slotUnkeyFailed.detail": "La radio no aceptó la desactivación del PTT a las {{time}} UTC ({{why}}), así que TX se apagó. Puede que siga transmitiendo: revisa la radio ahora. Nexus sigue desactivando el PTT hasta que la radio lo acepte. Vuelve a activar TX cuando la radio esté recibiendo.",
   "shell.lane.slotAudioLost.message": "TURNO TERMINADO — TX DETENIDO",
   "shell.lane.slotAudioLost.detail": "El audio DAX nativo de Flex se desactivó a las {{time}} UTC en medio de un turno, así que el resto de ese turno habría salido en silencio. Nexus terminó el turno ahí y apagó TX. Vuelve a activar TX para continuar.",
+  "shell.lane.slotOverDropped.message": "TURNO DESCARTADO — ACTIVACIÓN TARDÍA",
+  "shell.lane.slotOverDropped.detail": "Este turno se descartó: la radio no se puso en transmisión hasta las {{time}} UTC, {{late}} después de terminar tu periodo (CAT lento), así que Nexus la quitó de transmisión de inmediato, no envió nada y dejó TX activado para tu siguiente turno. La Operación en Split envía a la radio sus comandos antes de cada activación, lo que en un enlace CAT lento puede tardar segundos: si vuelve a ocurrir, revisa el enlace CAT y la Operación en Split en Ajustes.",
   "shell.lane.pttRefused.message": "PTT RECHAZADO",
   "shell.lane.pttRefused.detail": "Nexus no puso en el aire el turno de {{mode}} a las {{time}} UTC: la radio aún tomaba su audio de transmisión por DAX, como Nexus la había configurado, no de su micrófono, así que tu voz no habría salido. No se envió nada. Suelta el PTT y Nexus vuelve a poner la radio en su entrada de micrófono en un momento; luego vuelve a pulsar el PTT.",
   "shell.lane.voiceDropped.message": "MENSAJE DE VOZ DESCARTADO",

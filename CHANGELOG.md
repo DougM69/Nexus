@@ -447,9 +447,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   computer): past 75 % of the slot Nexus does not key it, as WSJT-X does not, and the over goes out
   at your next slot instead (1.18.0 keyed it however late, and the boundary cut the over short). An
   FT4 one that comes between 5.54 s and that limit is keyed and held silent to 6.24 s, as the Call CQ
-  is. And an FT8 over keyed in time whose radio comes on after its last tone (more than about 1.9 s
-  late: split commands on a slow radio link, a busy computer) is held silent to its usual end at
-  13.84 s, as WSJT-X holds it.
+  is, and so is one that comes before the limit but whose over takes long enough to build that the
+  key lands after it. And an FT8 over keyed in time whose radio comes on after its last tone (more
+  than about 1.9 s late: split commands on a slow radio link, a busy computer) is held silent to its
+  usual end at 13.84 s, as WSJT-X holds it.
   NEEDS-BENCH: an FT8 and an FT4 over on a dummy load beside WSJT-X, a Call CQ about 10 s into an
   FT8 slot and another about 12 s in (the first keys at once, the second waits for the next slot, in
   both programs), an FT4 Call CQ about 5.6 s into your slot (TX on at once with nothing sent and off
@@ -1024,6 +1025,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `KI4TWB/0 23`, which carries no grid, showed its power, 23, as a grid and flagged it new; it now
   shows the call with no grid. A beacon line is no longer read as Tempo chat text either, where it
   could put a grid in the roster as a station.
+- **An FT8 or FT4 over no longer goes out in the other station's period when the radio is slow to
+  key.** With Split operation set to Rig, Nexus sends the radio three commands before each key, and
+  on a slow CAT link each can take up to 2.5 s; the key itself can take 0.7 s more. A key that came
+  that late, after your period had ended, sent the rest of the over in the other station's period,
+  on their slot's timing, with the transmitter held up to 13.84 s into it (FT8) or 6.24 s (FT4).
+  Nexus now unkeys at once when the radio comes on after your period has ended and sends nothing, as
+  WSJT-X sends nothing once its window has closed, and, as WSJT-X does, TX stays on: only that over
+  is dropped, and your next over goes out in your next period. The status line says the over was
+  dropped and how late the radio was. However many are dropped in a row, TX stays on, as in WSJT-X:
+  the TX watchdog is what ends a run that never gets an over out. And the end of an FT8 or FT4 over
+  is now the first thing each pass of the radio loop checks, so something else holding the loop up
+  (a double-click or a logger's Reply while a decode finishes on a slow computer) no longer keeps
+  the transmitter on past 13.84 s or 6.24 s for as long as it lasts. NEEDS-BENCH: with Split
+  operation set to Rig on a radio with a slow serial CAT link (an FT-710 at 4800 baud, a Xiegu),
+  Call CQ about 11 s into your FT8 slot several times: the radio must never stay keyed past the end
+  of your slot; when it keys after it, it unkeys at once, the status line says the over was dropped,
+  TX stays on and your next over goes out whole, however many drop in a row until the TX watchdog.
+  An over that keys in time goes out as before.
 
 ### Security
 

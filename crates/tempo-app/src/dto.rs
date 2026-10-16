@@ -1374,6 +1374,19 @@ pub struct SlotAudioLost {
     pub at: u64,
 }
 
+/// The last FT8 or FT4 over Nexus dropped because the radio keyed it only after its period had
+/// ended ([`RadioStatus::slot_over_dropped`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotOverDropped {
+    /// When, in Unix seconds.
+    pub at: u64,
+    /// How long after its period had ended the radio keyed it, "1.2 s". Data: shown as it is.
+    pub late: String,
+    /// How many in a row, this one included.
+    pub count: u32,
+}
+
 /// Current radio / slot-timing status.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1686,6 +1699,14 @@ pub struct RadioStatus {
     /// ABSENT until it happens, so every snapshot before one is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_audio_lost: Option<SlotAudioLost>,
+    /// The last FT8 or FT4 over Nexus dropped because the radio keyed it only after its period had
+    /// ended (a slow CAT link: Split Operation's commands and the key took the carrier past it): it
+    /// unkeyed at once, sent nothing and left TX on for the next over, as WSJT-X starts no audio
+    /// once its window has closed, however many in a row (the TX watchdog is the only stop, as in
+    /// WSJT-X). Shown while TX is on, until the next over the radio keys in its period or TX is
+    /// turned on again. ABSENT until it happens, so every snapshot before one is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_over_dropped: Option<SlotOverDropped>,
     /// The operator's last PTT press (Phone) did not key: right after the transmit slice left a
     /// digital mode, or native audio went off, the radio still took its transmit audio from the
     /// DAX Nexus set, not its mic, and Nexus's own Flex client kept the key off the air. Cleared by

@@ -7318,6 +7318,8 @@ export const JA: PartialCatalog = {
   "shell.lane.slotUnkeyFailed.detail": "{{time}} UTC に無線機が PTT オフを受け付けませんでした（{{why}}）。そのため TX はオフになりました。まだ送信している可能性があります。今すぐ無線機を確認してください。Nexus は無線機が受け付けるまで PTT オフを送り続けます。無線機が受信に戻ったら、TX をもう一度オンにしてください。",
   "shell.lane.slotAudioLost.message": "送信打ち切り — 送信停止",
   "shell.lane.slotAudioLost.detail": "{{time}} UTC、送信の途中で FlexネイティブDAXオーディオがオフになったため、その送信の残りは無音で出るところでした。Nexus はそこで送信を終了し、TX をオフにしました。続けるには TX をもう一度オンにしてください。",
+  "shell.lane.slotOverDropped.message": "送信破棄 — 無線機のキーイング遅延",
+  "shell.lane.slotOverDropped.detail": "この送信は破棄されました。無線機がキーイングされたのは {{time}} UTC で、あなたの期間が終わってから {{late}} 後でした（CAT の通信が遅いため）。そのため Nexus はすぐにキーイングを解除して何も送信せず、次の送信に備えて TX はオンのままにしました。スプリット運用ではキーイングの前に毎回無線機へコマンドを送るため、遅い CAT 接続では数秒かかることがあります。これが続く場合は、設定の CAT 接続とスプリット運用を確認してください。",
   "shell.lane.pttRefused.message": "PTT 拒否",
   "shell.lane.pttRefused.detail": "{{time}} UTC、Nexus はこの {{mode}} の送信をキーイングしませんでした。無線機は Nexus が設定したとおり、まだ送信オーディオを DAX から受けていて、マイクからではなかったため、声は送信されないところでした。何も送信されていません。PTT を離すと、Nexus はまもなく無線機をマイク入力に戻します。そのあと PTT をもう一度押してください。",
   "shell.lane.voiceDropped.message": "ボイスメッセージ破棄",

@@ -3396,6 +3396,10 @@ struct RadioLoop {
     /// fires only while that over is still the one held (`tx_until_ms` still its deadline), so a
     /// Stop TX, a tune or a rebuild that ended the over leaves nothing here to act on.
     slot_audio_stop: Option<(f64, f64)>,
+    /// The PTT deadline of the FT8/FT4 slot over whose PTT the window's re-test at the top of this
+    /// tick has already dropped ([`Self::retest_ft_window`]): the deadline below then ends the over
+    /// without a second unkey.
+    window_unkeyed: Option<f64>,
     /// Deadline (same clock as `tx_until_ms`) of the voice-keyer message this loop last keyed
     /// through Nexus's Flex client's switch to DAX, the radio having had the mic: its over ends at
     /// that deadline whatever PTT the operator holds, since the radio's DAX would not carry the
@@ -4194,6 +4198,7 @@ impl RadioLoop {
             tx_until_ms: None,
             slot_tx_until_ms: 0.0,
             slot_audio_stop: None,
+            window_unkeyed: None,
             flex_voice_until_ms: None,
             voice_tee_until_ms: None,
             tuning_keyed: false,
@@ -5552,6 +5557,54 @@ impl RadioLoop {
         self.tx_until_ms == Some(self.slot_tx_until_ms)
     }
 
+    /// ⭐ AN FT8/FT4 OVER'S WINDOW IS RE-TESTED FIRST IN EVERY TICK, BEFORE ANYTHING IN THE TICK
+    /// CAN WAIT, AS WSJT-X RE-TESTS ITS OWN ON EVERY GUI TICK. WSJT-X asks every 100 ms whether the
+    /// clock is still inside the over's window (`m_bTxTime`, `widgets/mainwindow.cpp:870`, `:5055`)
+    /// and the tick that finds it outside stops the audio and lowers PTT 200 ms later (`:5180`,
+    /// `:5530`, `stopTx` `:5743-5760`). That tick runs on the GUI thread, which its CAT never stalls.
+    /// Here one thread runs the window's end and everything that can wait: the Engine lock (which a
+    /// double-click or a logger's Reply holds while a decode finishes) and every CAT call. With the
+    /// end tested only where the tick reached it, an end already due waited for whatever the tick
+    /// met first, and a stall there held PTT into the other station's period for as long as it
+    /// lasted.
+    ///
+    /// The same audio stop and PTT off as further down the tick (the over's own, on the slot clock
+    /// of the slot its tick decided for), only earlier in it. The over is still ended where it was
+    /// (`tx_until_ms` cleared at its deadline below, which then sends no second unkey), so the rest
+    /// of the tick does exactly what it did: nothing else goes to the radio in the tick that unkeys
+    /// it. Every other over, and an over while the operator holds live PTT, is left as before.
+    fn retest_ft_window<B: AudioBackend>(
+        &mut self,
+        engine: &Arc<Mutex<Engine>>,
+        rig: &mut Rig,
+        backend: &mut B,
+        now: f64,
+    ) {
+        if crate::slot::wsjtx_tx_window_ms(self.cur_tier).is_none()
+            || !self.holds_slot_over()
+            || self.manual_ptt_applied
+        {
+            return;
+        }
+        if let Some((stop, held_until)) = self.slot_audio_stop {
+            if self.tx_until_ms == Some(held_until) && now >= stop {
+                backend.flush_output();
+                self.slot_audio_stop = None;
+            }
+        }
+        if let Some(t) = self
+            .tx_until_ms
+            .filter(|&t| now >= t && self.window_unkeyed != Some(t))
+        {
+            backend.flush_output();
+            let unkey = rig.ptt(false);
+            self.window_unkeyed = Some(t);
+            if let Some(why) = crate::slot::slot_unkey_failure(&unkey, true) {
+                engine_lock(engine).halt_tx_for_failed_unkey(&why);
+            }
+        }
+    }
+
     /// Key the transmitter for an over whose audio (or, `plain`, FSK keyline) this loop sends,
     /// and say what came of it: keyed, refused, or no answer in time.
     ///
@@ -6370,6 +6423,9 @@ impl RadioLoop {
         // well-synced PC" and "decodes anywhere". Applied to ALL downstream `now`
         // uses (slot index, next-slot countdown, TX-hold deadlines) consistently.
         let now = now - self.clock_offset_ms as f64;
+
+        // An FT8/FT4 over's window, re-tested before anything else in the tick can wait.
+        self.retest_ft_window(engine, rig, backend, now);
 
         // Remote TX expiry is station-owned and does not depend on the host
         // receiving another socket message. Native operation has no permit.
@@ -11591,7 +11647,10 @@ impl RadioLoop {
                 if flex_voice && self.manual_ptt_applied {
                     self.manual_ptt_applied = false;
                 }
-                if !self.manual_ptt_applied {
+                // An FT8/FT4 over the window's re-test unkeyed at the top of this tick ends here
+                // without a second unkey (`retest_ft_window`).
+                let unkeyed = self.window_unkeyed.take() == Some(t);
+                if !self.manual_ptt_applied && !unkeyed {
                     // ⚠️ FLUSH BEFORE THE UNKEY, OR THE DEADLINE DOES NOTHING ON VOX. Dropping
                     // CAT PTT is not what stops a VOX rig — the AUDIO is. Queued playback keeps
                     // the transmitter up on its own, so without this the over runs past its
@@ -12603,15 +12662,15 @@ impl RadioLoop {
             // only an over that still fits whole before the next boundary.
             let on_slot_clock = crate::slot::wsjtx_tx_window_ms(eng.tier()).is_some();
             let deficit_ms = (need_ms - room_ms).max(0.0);
-            let starts_now = if on_slot_clock {
-                let period_ms = self.cur_slot_secs * 1000.0;
+            // The decision is kept: the key's own lateness is measured from it (below).
+            let period_ms = self.cur_slot_secs * 1000.0;
+            let decided = on_slot_clock.then(|| {
                 let reread_ms = now_unix_ms() - self.clock_offset_ms as f64;
-                crate::slot::wsjtx_may_key_at(
-                    crate::slot::into_tick_slot_ms(reread_ms, now, period_ms),
-                    period_ms,
-                )
-            } else {
-                deficit_ms <= 0.0
+                crate::slot::KeyDecision::now(reread_ms, now, period_ms)
+            });
+            let starts_now = match decided {
+                Some(d) => crate::slot::wsjtx_may_key_at(d.into_slot_ms, period_ms),
+                None => deficit_ms <= 0.0,
             };
             if on_our_parity && starts_now {
                 // CONSUME the request only now that it actually fires — a click
@@ -12649,7 +12708,21 @@ impl RadioLoop {
                         let asked = Instant::now();
                         // A key the radio refuses plays nothing here and halts TX, as at the
                         // boundary (`slot::slot_key_failure`).
-                        if crate::slot::key_slot_transmitter(&mut eng, rig, backend, held) {
+                        let keyed = crate::slot::key_slot_transmitter(&mut eng, rig, backend, held);
+                        // ⭐ AN FT8/FT4 KEY THE RADIO ANSWERED PAST THE END OF ITS SLOT IS NOT
+                        // PLAYED, as at the boundary (`slot::unkey_a_key_past_its_period`): Fake It's
+                        // write-back, Split Operation's commands and the key all come after the
+                        // decision, and on a slow link they took the carrier into the other
+                        // station's period, where the rest of the over went out. Only that over is
+                        // dropped; TX stays on.
+                        let past = decided
+                            .filter(|_| keyed)
+                            .and_then(|d| d.past_its_period(period_ms).map(|past_ms| (d, past_ms)));
+                        if let Some((d, past_ms)) = past {
+                            crate::slot::unkey_a_key_past_its_period(
+                                &mut eng, rig, backend, held, d, past_ms,
+                            );
+                        } else if keyed {
                             if on_slot_clock {
                                 // The boundary's own play and end: the tones on the slot
                                 // clock, the over ended on WSJT-X's window.
