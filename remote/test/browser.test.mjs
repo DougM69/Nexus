@@ -1342,6 +1342,66 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.deepEqual({events:await evaluate('window.__csp'),console:refused},{events:[],console:[]},'no CSP violation while negotiating and streaming')
         if(artifacts)for(const theme of ['dark','light']){await evaluate(`document.documentElement.dataset.theme='${theme}';true`);await settledLayout();const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`stream-live-${theme}.png`),Buffer.from(shot.data,'base64'))}
         await evaluate(`document.documentElement.dataset.theme='dark';true`)
+        // FIT TO THE WINDOW (the operator's report, 2026-10-16: "the stream doesn't fit the window"). The station stands in as
+        // the real one does: its window is a 1920 x 1080 or a 2560 x 1440 shack screen, sent scaled down to the view the page
+        // asks for, by the internet's pixel budget (tempo-stream video/picture.rs, encoded_size). Each window is W x H device
+        // pixels at this Chrome's own pixel ratio: run it with --force-device-scale-factor=1.25 (or 0.8, 1.5) for a browser zoom
+        // or a Windows display scale, which reach the page the same way. Chrome's emulated deviceScaleFactor is no stand-in for
+        // either: it leaves devicePixelContentBoxSize in CSS pixels while devicePixelRatio says otherwise (measured 2026-10-16),
+        // a mismatch no real browser has. At every desktop size the page has no scrollbar, the
+        // whole picture is on screen at the shack's shape and as large as the stage allows, Stop TX is whole and takes its
+        // click, and a click on the picture lands at the shack where it was made.
+        {
+          const restore=await evaluate(`({width:innerWidth,height:innerHeight})`)
+          await browser.call('Emulation.setDeviceMetricsOverride',{...restore,deviceScaleFactor:0,mobile:false},session)
+          const zoom=await evaluate('devicePixelRatio')
+          await atShack(`(()=>{const c=document.querySelector('body > canvas');__shack.window=[c.width,c.height];const size=([W,H],v)=>{const w=W&~1,h=H&~1;let sw=w,sh=h;if(v&&!(w<=v.width&&h<=v.height)){if(v.width*h<=v.height*w){sw=v.width;sh=Math.floor(h*v.width/w)}else{sw=Math.floor(w*v.height/h);sh=v.height}}const P=2560*1600;if(sw*sh>P){const k=Math.sqrt(P/(sw*sh));sw=Math.floor(sw*k);sh=Math.floor(sh*k);while(sw*sh>P)sw--}const side=(n,whole)=>Math.min(Math.max(n&~1,16),whole);return [side(sw,w),side(sh,h)]};window.__fit=setInterval(()=>{const [w,h]=size(__shack.window,__shack.received.control.filter(m=>m.type==='view').at(-1));if(c.width!==w||c.height!==h){c.width=w;c.height=h}},50);return true})()`)
+          const shown=`(()=>{const v=document.querySelector('.remote-stream-video'),r=v.getBoundingClientRect(),k=Math.min(r.width/v.videoWidth,r.height/v.videoHeight),w=v.videoWidth*k,h=v.videoHeight*k;return {x:r.x+(r.width-w)/2,y:r.y+(r.height-h)/2,w,h,frame:[v.videoWidth,v.videoHeight],exact:v.hasAttribute('data-exact')}})()`
+          const fitRecord=[],misfits=[],before=await atShack(`__shack.received.control.length`)
+          // A ratio of 2 or more is a Mac's or an iPad's own screen: its windows are given in CSS pixels, and the iPad's on its side.
+          const screen=zoom>=2?2:1,windows=screen===2?[[1280,800],[1440,900],[1512,982],[1728,1117],[1024,768],[1180,820],[1366,1024]].map(([w,h])=>[w*2,h*2]):[[1280,720],[1440,900],[1920,1080],[2560,1440],[1024,768]]
+          for(const shack of [[1920,1080],[2560,1440],[3440,1440]]){
+            await atShack(`__shack.window=${JSON.stringify(shack)};true`)
+            for(const [W,H] of windows){
+              const width=Math.round(W/zoom),height=Math.round(H/zoom),at=`${shack.join('x')} shack, ${W}x${H} window at ${Math.round(zoom*100)}%`
+              await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:0,mobile:false},session)
+              await evaluate(`window.dispatchEvent(new Event('resize'));true`)
+              // The page's size is the window's, less nothing: a scrollbar would take its width from it, which is a fault, not a wait.
+              let sized=false
+              for(let i=0;i<30&&!sized;i++){sized=await evaluate(`(s=>Math.abs(parseFloat(s.getPropertyValue('--vw-eff'))-${width})<1&&Math.abs(parseFloat(s.getPropertyValue('--vh-eff'))-${height})<1)(getComputedStyle(document.documentElement))`);if(!sized)await sleep(100)}
+              // Settled: the frame the page shows is the one the station sends for the last view it heard, twice running.
+              let last=''
+              for(let i=0;i<60;i++){await sleep(150);const now=JSON.stringify([await atShack(`(c=>[c.width,c.height])(document.querySelector('body > canvas'))`),await evaluate(`(v=>[v.videoWidth,v.videoHeight])(document.querySelector('.remote-stream-video'))`)]);const [a,b]=JSON.parse(now);if(a[0]===b[0]&&a[1]===b[1]&&now===last)break;last=now}
+              await settledLayout()
+              const m=await evaluate(`(()=>{const se=document.scrollingElement,s=document.querySelector('.remote-stream-stage').getBoundingClientRect(),stop=${button('Stop TX')},b=stop.getBoundingClientRect(),p=${shown};return {scroll:[se.scrollWidth-se.clientWidth,se.scrollHeight-se.clientHeight],gutter:[innerWidth-se.clientWidth,innerHeight-se.clientHeight],stage:{x:s.x,y:s.y,w:s.width,h:s.height},picture:p,stop:{inside:b.top>=0&&b.left>=0&&b.bottom<=innerHeight&&b.right<=innerWidth,hit:stop.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))}}})()`)
+              const p=m.picture,s=m.stage,slack=3
+              const faults=sized?[]:['viewport']
+              if(m.scroll[0]>0||m.scroll[1]>0||m.gutter[0]>0||m.gutter[1]>0)faults.push('scrolls')
+              if(p.x<s.x-1||p.y<s.y-1||p.x+p.w>s.x+s.w+1||p.y+p.h>s.y+s.h+1||p.x+p.w>width+1||p.y+p.h>height+1)faults.push('clipped')
+              if(!(Math.abs(p.w-s.w)<=slack||Math.abs(p.h-s.h)<=slack))faults.push('small')
+              // The shack's shape, within the station's cut to even sides; the page itself draws the frame at exactly its own.
+              if(Math.abs(p.w/p.h-p.frame[0]/p.frame[1])>0.002*p.frame[0]/p.frame[1]||Math.abs(p.frame[0]/p.frame[1]/(shack[0]/shack[1])-1)>0.01)faults.push('shape')
+              if(!(m.stop.inside&&m.stop.hit))faults.push('stop')
+              // A click at a quarter across and three quarters down the picture, at the shack.
+              const mark=await atShack(`__shack.received.control.length`),point={x:p.x+p.w*0.25,y:p.y+p.h*0.75}
+              await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},session)
+              await browser.call('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},session)
+              let landed=[]
+              for(let i=0;i<30&&landed.length<2;i++){await sleep(100);landed=await atShack(`__shack.received.control.slice(${mark}).filter(m=>m.type==='pointer'&&(m.action==='down'||m.action==='up')).map(m=>({action:m.action,x:m.x,y:m.y}))`)}
+              if(landed.length!==2||!landed.every(l=>Math.abs(l.x-0.25)<=0.01&&Math.abs(l.y-0.75)<=0.01))faults.push('click')
+              const entry={at,frame:p.frame,exact:p.exact,stage:[s.w,s.h].map(n=>+n.toFixed(1)),picture:[p.w,p.h].map(n=>+n.toFixed(1)),scroll:m.scroll,gutter:m.gutter,stop:m.stop,landed,faults}
+              fitRecord.push(entry);if(faults.length)misfits.push(entry)
+              if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`fit-${shack.join('x')}-${W}x${H}-${Math.round(zoom*100)}.png`),Buffer.from(shot.data,'base64'))}
+            }
+          }
+          console.log('Stream fit record: '+JSON.stringify(fitRecord))
+          // The sweep's clicks leave the record, so what follows judges its own.
+          await atShack(`(()=>{clearInterval(window.__fit);const c=document.querySelector('body > canvas');c.width=640;c.height=360;const r=__shack.received.control;r.splice(0,r.length,...r.filter((m,i)=>i<${before}||m.type!=='pointer'));return true})()`)
+          await browser.call('Emulation.setDeviceMetricsOverride',{...restore,deviceScaleFactor:0,mobile:false},session)
+          await evaluate(`window.dispatchEvent(new Event('resize'));true`)
+          await settledLayout()
+          assert.deepEqual(misfits,[],'the stream fits the window at every size and zoom, with Stop TX whole and clicks landing where they were made')
+        }
         // LISTEN, on the stream, under the same policy. The player's AudioWorklet is a module script, and
         // the Worker's `script-src 'self'` refuses one made from a blob: - so Listen said "no audio"
         // against a station that was sending it (the operator's rc2 test, 2026-10-02), and nothing here
