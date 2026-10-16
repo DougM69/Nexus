@@ -925,12 +925,28 @@ function Globe3DView({
     const controls = g.controls() as unknown as THREE.EventDispatcher<Record<string, object>>
     let timer: number | undefined
     let interacting = false
+    // WAKE ONCE. globe.gl's resumeAnimation() draws its first frame at once — controls.update(), then
+    // the render — and records the loop as running only after it. When that update moves the camera
+    // (spin just switched on, or the view jumped while asleep), OrbitControls fires 'change', which is
+    // `kick`, which resumed again into a loop that still read as stopped; and OrbitControls records the
+    // pose it compared against only after 'change' returns, so every nested update fired again, until
+    // "Maximum call stack size exceeded". So the loop counts as awake from the moment it is woken.
+    // While the globe is up nothing else pauses it (useGlobeWebgl does only as the globe goes).
+    let awake = false
+    const wake = () => {
+      if (awake) return
+      awake = true
+      g.resumeAnimation()
+    }
     const sleep = () => {
       timer = undefined
-      if (!interacting && !spinRef.current) g.pauseAnimation()
+      if (!interacting && !spinRef.current) {
+        awake = false
+        g.pauseAnimation()
+      }
     }
     const kick = () => {
-      g.resumeAnimation()
+      wake()
       if (timer !== undefined) window.clearTimeout(timer)
       timer = window.setTimeout(sleep, IDLE_RENDER_MS)
     }
@@ -943,10 +959,13 @@ function Globe3DView({
       interacting = false
       kick()
     }
-    // globe.gl's resume draws a frame synchronously; pausing straight after cancels the next one.
+    // globe.gl's resume draws a frame synchronously; pausing straight after cancels the next one —
+    // unless that frame moved the camera, and `kick` now holds the loop awake.
     const frame = () => {
       if (timer !== undefined || interacting || spinRef.current) return
-      g.resumeAnimation()
+      wake()
+      if (timer !== undefined) return
+      awake = false
       g.pauseAnimation()
     }
     controls.addEventListener('start', onStart)

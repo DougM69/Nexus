@@ -451,6 +451,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead. If a 3-D globe stops working once it is drawn, only the globe gives way to a note: the
   Logbook or Conditions around it carries on. NEEDS-BENCH: a Linux PC without WebGL2 (or a
   virtual machine), and Windows as the control.
+- **The 3-D globe on Conditions starts spinning from rest (#407).** The globe rests a few seconds
+  after nothing on it moves. Pressing ▶ Spin on a resting globe crashed it with "Maximum call stack
+  size exceeded"; on a second computer showing Conditions over the network that took the whole page
+  down until a reload. The globe turning to your grid square while it rested did the same. Both now
+  just set the globe moving. NEEDS-BENCH: on a second computer at the network address, and on the
+  app's own Conditions, pick 3D, leave the globe still for a few seconds, press ▶ Spin, then drag
+  and fling it hard for 30 s.
 - **AD1C's country file now carries its license notice.** Nexus finds a call's DXCC entity and
   zones in the cty.dat country file by Jim Reisert AD1C, which is MIT-licensed. That license asks
   for its notice to travel with every copy, and NOTICE named the license without reproducing it.
