@@ -1626,7 +1626,8 @@ mod tests {
         // Control: WSJT-X's latest key is FT8's and FT4's. FT2 keeps its own: a boundary whose key
         // comes 80 % into the slot still keys, and plays its whole over from the key. (JS8 keeps
         // JS8Call's late start instead: `js8_slot`'s tests.)
-        for tier in [tempo_app::dto::Tier::Ft2] {
+        let tier = tempo_app::dto::Tier::Ft2;
+        {
             let mut eng = armed_engine_on(tier);
             let period_ms = eng.active_slot_secs() * 1000.0;
             let (act, backend, sent) =

@@ -187,7 +187,7 @@ mod tests {
             let keyed = start + key_ms;
             assert_eq!(placement(keyed, start), (silence, skip), "key at {key_s} s");
             let mut backend = MockBackend::new();
-            let over = play_frame(&e, &mut backend, &[frame.clone()], keyed, slot);
+            let over = play_frame(&e, &mut backend, std::slice::from_ref(&frame), keyed, slot);
             let played = &backend.played;
             // Sample k of what plays goes out k / 12 ms after the key.
             let at_ms = |k: usize| keyed + k as f64 / 12.0;
