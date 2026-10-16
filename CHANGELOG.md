@@ -297,6 +297,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **PSK Reporter gets the spots WSJT-X sends, and no others.** A decode is spotted when it is a
+  CQ or carries the sender's grid; a report, a roger, a 73 or free text no longer is, and neither
+  is a low-confidence (`?`) decode or your own signal heard on another radio. Below 49 MHz a
+  station is spotted once every five minutes however often you hear it; on 6 m and up every decode
+  is, as in WSJT-X 3.0.2. JS8 keeps JS8Call's own rules. NEEDS-BENCH: after an hour on a busy band,
+  compare your spots on pskreporter.info with a WSJT-X station's.
 - **JS8: the TX offset stays put while a message is going out, as in JS8Call.** Moving the TX
   offset between two frames of a message used to send the rest of the message on the new offset, so
   one message went out on two. Now the move is refused while a message is waiting to go or going out,
@@ -444,13 +450,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **PSK Reporter now shows where the FT8 and FT4 stations you hear are.** When a decode carries
   the sender's grid (a CQ, or a reply with a grid), its spot now sends that grid, as WSJT-X does,
-  so pskreporter.info can put the station on its map. Other spots still go without one. The NA
-  VHF contest exchange that rogers a grid (`W9XYZ K1ABC R FN42`) is now spotted too, with its
-  grid, as in WSJT-X. NEEDS-BENCH: look yourself up on pskreporter.info after some FT8.
+  so pskreporter.info can put the station on its map. A CQ without a grid still goes without
+  one. The NA VHF contest exchange that rogers a grid (`W9XYZ K1ABC R FN42`) is now spotted too,
+  with its grid, as in WSJT-X. NEEDS-BENCH: look yourself up on pskreporter.info after some FT8.
 - **A slow DNS server can no longer hold up a transmission.** Every five minutes Nexus sends its
   PSK Reporter spots, and it looked the server's address up in the loop that keys and unkeys the
   radio, so a DNS server slow to answer held that loop, and an over due to end, for as long as it
   took. The lookup and the upload now run on their own.
+- **No more PSK Reporter spots of a station called FN42.** A WSPR decode such as `K1ABC FN42 37`
+  went to PSK Reporter as a station named after its grid, FN42, and an FST4W one the same way.
+  WSPR is no longer sent to PSK Reporter (WSJT-X sends it to WSPRnet), and an FST4W beacon is
+  spotted under its own call, with its grid, as WSJT-X spots it. No mode can send a grid as a
+  callsign now. NEEDS-BENCH: look yourself up on pskreporter.info after some FST4W.
+- **A busy band's PSK Reporter spots are no longer lost.** Every five minutes Nexus sent all its
+  spots in one packet; on a busy band (an FT4 contest, a 6 m opening) that packet was too big to
+  send, and the whole five minutes of spots never arrived. They now go in packets of at most 952
+  bytes, the size WSJT-X sends.
 - **FST4W beacons, and WSPR's from a compound call, show as WSJT-X shows them (#408).** Heard on
   FST4W, `TI4JWC EK70 30` showed in the decode list and the roster as a station called EK70, in
   Armenia; it now shows TI4JWC, in Costa Rica, at grid EK70. A beacon from a compound call such as

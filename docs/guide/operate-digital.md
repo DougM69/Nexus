@@ -239,8 +239,16 @@ your logger see Nexus as WSJT-X** once you turn on **WSJT-X UDP API** in
 It is off by default; its address already matches WSJT-X's default, so nothing
 else needs setting. Outbound Heartbeat / Status / Decode /
 QsoLogged and inbound HaltTx / Clear / Replay / Location / HighlightCallsign all
-use the canonical type numbers, and PSK Reporter spotting batches on the stock
-schedule.
+use the canonical type numbers.
+
+With the **PSK Reporter** switch on, Nexus spots what WSJT-X spots. A decode is
+spotted when it is a CQ or carries the sender's grid, which goes with it; a report,
+a roger, a 73, free text, a low-confidence (`?`) decode and your own signal heard
+on another radio are not. Below 49 MHz a station is spotted once every five minutes
+however often you hear it; on 6 m and up, every decode is. WSPR is not sent to PSK
+Reporter (WSJT-X sends it to WSPRnet), and an FST4W beacon is spotted under its call
+with its grid. The spots go every five minutes, in packets of at most 952 bytes, the
+size WSJT-X sends. JS8 spots by JS8Call's own rules ([JS8](js8.md)).
 
 If another app owns the rig, **Companion mode** rides an upstream WSJT-X/JTDX
 decode stream over UDP (default :2237) instead of decoding itself — point it at
