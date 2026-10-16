@@ -68,6 +68,16 @@ fn alc_rigctld(raw: u16, p3: &'static str) -> (String, Arc<Mutex<Vec<String>>>) 
 /// Four seconds of an over on a radio of Hamlib `model` whose ALC reads `raw`: what the meter is
 /// given, and every line the radio's rigctld was sent.
 fn alc_after_an_over(model: u32, raw: u16, p3: &'static str) -> (Option<f32>, Vec<String>) {
+    let (radio, sent) = radio_after_an_over(model, raw, p3);
+    (radio.tx_alc, sent)
+}
+
+/// [`alc_after_an_over`], with the whole radio status the meters are drawn from.
+fn radio_after_an_over(
+    model: u32,
+    raw: u16,
+    p3: &'static str,
+) -> (tempo_app::dto::RadioStatus, Vec<String>) {
     let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
     {
         let mut e = engine.lock().unwrap();
@@ -101,9 +111,9 @@ fn alc_after_an_over(model: u32, raw: u16, p3: &'static str) -> (Option<f32>, Ve
         state.rig_keyed,
         "model {model}: control: the radio must be keyed, or no meter is read at all"
     );
-    let alc = engine.lock().unwrap().snapshot().radio.tx_alc;
+    let radio = engine.lock().unwrap().snapshot().radio;
     let sent = log.lock().unwrap().clone();
-    (alc, sent)
+    (radio, sent)
 }
 
 /// ⭐ THE FT-991A, THE FT-710 AND THE FTDX10 SHOW THE RADIO'S OWN BAR. Raw 64 is a quarter of the radio's bar
@@ -244,5 +254,39 @@ fn a_tune_ups_alc_read_gives_up_at_the_tune_deadline() {
         read_tx_meter(&mut rig, "ALC", 1035, Some(TUNE_METER_DEADLINE_MS)),
         None,
         "a tune-up does not wait a second for its ALC"
+    );
+}
+
+/// The ALC reading carries where the radio's own ALC zone ends, so the bar's colours sit where
+/// the radio's meter marks it. The FT-991A's manual puts the zone at "up to half scale deflection"
+/// (Operating Manual p. 61), and the FT-710's meter marks the same zone (p. 40); the FTDX10 is read
+/// the same way. Every other radio's 1.0 is the top of its zone, as before: no zone is carried.
+#[test]
+fn the_alc_reading_carries_the_radios_own_zone_edge() {
+    let zones: Vec<(&str, Option<f32>, Option<f32>)> = [
+        (1035u32, "FT-991A", ""),
+        (1049, "FT-710", "000"),
+        (1042, "FTDX10", "000"),
+        (3073, "IC-7300", ""),
+    ]
+    .into_iter()
+    .map(|(model, name, p3)| {
+        let (radio, _) = radio_after_an_over(model, 128, p3);
+        (
+            name,
+            radio.tx_alc.map(|a| (a * 255.0).round()),
+            radio.tx_alc_zone,
+        )
+    })
+    .collect();
+    assert_eq!(
+        zones,
+        vec![
+            ("FT-991A", Some(128.0), Some(0.5)),
+            ("FT-710", Some(128.0), Some(0.5)),
+            ("FTDX10", Some(128.0), Some(0.5)),
+            // Hamlib's scale for the IC-7300: raw 128 is past 64, so 1.0, and no zone of its own.
+            ("IC-7300", Some(255.0), None),
+        ]
     );
 }

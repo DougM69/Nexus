@@ -11774,6 +11774,13 @@ impl RadioLoop {
                     {
                         let mut eng = engine_lock(engine);
                         eng.observe_rig_tx_meters(swr, alc, po, comp);
+                        // The ALC reading carries where this radio's own ALC zone ends on its
+                        // bar, for the bar's colours (display only).
+                        if alc.is_some() {
+                            eng.observe_rig_tx_alc_zone(crate::rigmodels::alc_zone_top(
+                                self.applied.rig_model,
+                            ));
+                        }
                         // NOTIFY, NEVER ACT (the project's alerts rule). This raises a status
                         // line into the same lane as the foreign-key notice above and does
                         // nothing else: it does not unkey, does not gate the next over, and

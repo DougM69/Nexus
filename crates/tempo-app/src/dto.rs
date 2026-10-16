@@ -1507,6 +1507,12 @@ pub struct RadioStatus {
     pub tx_swr: Option<f32>,
     #[serde(default)]
     pub tx_alc: Option<f32>,
+    /// Where the radio's own ALC zone ends on the `tx_alc` bar: `Some(0.5)` on the FT-991A,
+    /// FT-710 and FTDX10, whose ALC is read on the radio's own full bar and whose zone ends at
+    /// half scale; `None` where 1.0 is the top of the zone (Hamlib's ALC scales, Nexus's own Icom
+    /// CI-V path, the Flex). Display only: the bar's colours follow it, never the bar.
+    #[serde(default)]
+    pub tx_alc_zone: Option<f32>,
     #[serde(default)]
     pub tx_po_w: Option<f32>,
     #[serde(default)]

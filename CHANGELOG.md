@@ -468,6 +468,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carrier Nexus keeps queued. Each wait now ends at the limit. Tune keys and unkeys exactly as
   before; a radio that takes longer than 120 ms to answer a meter now shows no reading for it
   during Tune. NEEDS-BENCH: watch SWR during Tune on each radio.
+- **On the FT-991A, FT-710 and FTDX10 the ALC bar's colours follow the radio's own ALC zone.**
+  Nexus shows these radios' ALC on the radio's own scale, where the ALC zone ends at half scale,
+  but the bar turned amber and red only near full scale, so a reading past the radio's zone showed
+  green. It now turns amber at 40 % and red at 48 % on these radios, the same place in the zone
+  as on every other radio, whose bar is unchanged. Display only. NEEDS-BENCH: the ALC steps on
+  the FT-991A and the FTDX10.
 - **AD1C's country file now carries its license notice.** Nexus finds a call's DXCC entity and
   zones in the cty.dat country file by Jim Reisert AD1C, which is MIT-licensed. That license asks
   for its notice to travel with every copy, and NOTICE named the license without reproducing it.

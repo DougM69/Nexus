@@ -3671,6 +3671,9 @@ pub struct Engine {
     /// ([`Self::clear_rig_tx_meters`]).
     swr_over_count: u8,
     rig_tx_alc: Option<f32>,
+    /// Where the radio's own ALC zone ends on `rig_tx_alc`'s bar, as the reading came: see
+    /// [`Self::observe_rig_tx_alc_zone`]. `None` = 1.0 is the top of the zone.
+    rig_tx_alc_zone: Option<f32>,
     rig_tx_po_w: Option<f32>,
     rig_tx_comp_db: Option<f32>,
     /// Rig's actual mode read back over CAT (Hamlib name, e.g. "USB"/"LSB"/"FM").
@@ -5826,6 +5829,7 @@ impl Engine {
             rig_tx_swr: None,
             swr_over_count: 0,
             rig_tx_alc: None,
+            rig_tx_alc_zone: None,
             rig_tx_po_w: None,
             rig_tx_comp_db: None,
             rig_mode: None,
@@ -10883,6 +10887,7 @@ impl Engine {
         }
         if alc.is_some() {
             self.rig_tx_alc = alc;
+            self.rig_tx_alc_zone = None;
         }
         if po_w.is_some() {
             self.rig_tx_po_w = po_w;
@@ -10977,8 +10982,17 @@ impl Engine {
         self.swr_over_count = 0;
         self.rig_tx_swr = None;
         self.rig_tx_alc = None;
+        self.rig_tx_alc_zone = None;
         self.rig_tx_po_w = None;
         self.rig_tx_comp_db = None;
+    }
+
+    /// Where the radio's own ALC zone ends on the bar of the ALC reading just observed, as the
+    /// radio loop read it: `Some(0.5)` on a Yaesu read on its own full-bar scale, whose zone ends
+    /// at half scale. Called right after [`Self::observe_rig_tx_meters`] for that reading, which
+    /// resets it. Display only: the bar's colours follow it, nothing else does.
+    pub fn observe_rig_tx_alc_zone(&mut self, zone_top: Option<f32>) {
+        self.rig_tx_alc_zone = zone_top;
     }
 
     /// Drop the rig's read-back mode so the mismatch tag hides — called on a breaker trip
@@ -24117,6 +24131,7 @@ contact yourself."
         s.radio.smeter_db = self.rig_smeter_db;
         s.radio.tx_swr = self.rig_tx_swr;
         s.radio.tx_alc = self.rig_tx_alc;
+        s.radio.tx_alc_zone = self.rig_tx_alc_zone;
         s.radio.tx_po_w = self.rig_tx_po_w;
         s.radio.tx_comp_db = self.rig_tx_comp_db;
         s.radio.swr_scale_verified = self.settings.swr_scale_is_verified();

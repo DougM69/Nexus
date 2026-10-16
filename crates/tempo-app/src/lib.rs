@@ -308,6 +308,7 @@ impl AppState {
                 smeter_db: None, // engine fills from CAT STRENGTH read-back
                 tx_swr: None,    // engine fills from the keyed-only TX-meter poll
                 tx_alc: None,
+                tx_alc_zone: None,
                 tx_po_w: None,
                 tx_comp_db: None,
                 swr_scale_verified: false,
