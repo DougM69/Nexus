@@ -534,6 +534,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The serial port you choose is the one Nexus opens.** Once CAT had worked on a USB radio's port
+  (COM3, say), Nexus remembered that radio so it could follow it to a new COM number after a
+  replug. Until Nexus was restarted, it also followed it when you changed the port yourself: choose
+  a port Windows does not list, as a virtual port from a port-sharing program such as VSPE may be,
+  and Nexus went back to the radio's old port instead of the one you chose. The remembered radio
+  now belongs to the port it was found on. A port you change to is opened as you typed it, and if
+  it will not open, the radio line says so. A radio that is replugged and comes back under a new
+  COM number, with the port setting unchanged, is still followed. NEEDS-BENCH: checked with
+  simulated port lists only; bench on a USB radio with no transmitting (type COM99 and Save, then
+  set the real port back).
 - **The Logbook opens on a computer whose graphics have no WebGL2.** On such a computer (reported
   on Linux Mint) the Logbook showed only "Logbook hit an error" and "Error creating WebGL context":
   the 3-D globe above the table needs WebGL2, and when it could not draw it took the whole Logbook
