@@ -876,6 +876,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the mode is the only reason TX is locked, push-to-talk, the band lock, the voice keyer, the radio's
   tuner button and SSTV say that 60 m allows only USB phone and ask for USB or AUTO. A frequency
   where USB is refused too keeps the old sentence. What keys and what is refused is unchanged.
+- **PSK's Answer key sends the call in the log's Call box (#406).** In PSK, a call typed into the
+  Call box of the log never reached the macro keys: Answer, and every other key that sends their
+  call, sent nothing and said to enter their call first. The log's Call box and the box beside the
+  keys are now one field, as they are in RTTY: a call typed in either shows in both and is the one
+  the keys send, and logging the contact empties both. With no call in either, a key that sends
+  their call still sends nothing and says so. NEEDS-BENCH: in PSK, type a decoded station's call
+  into the log's Call box and press Answer, then empty it and press Answer again.
 
 ### Security
 
