@@ -1357,6 +1357,11 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           const zoom=await evaluate('devicePixelRatio')
           await atShack(`(()=>{const c=document.querySelector('body > canvas');__shack.window=[c.width,c.height];const size=([W,H],v)=>{const w=W&~1,h=H&~1;let sw=w,sh=h;if(v&&!(w<=v.width&&h<=v.height)){if(v.width*h<=v.height*w){sw=v.width;sh=Math.floor(h*v.width/w)}else{sw=Math.floor(w*v.height/h);sh=v.height}}const P=2560*1600;if(sw*sh>P){const k=Math.sqrt(P/(sw*sh));sw=Math.floor(sw*k);sh=Math.floor(sh*k);while(sw*sh>P)sw--}const side=(n,whole)=>Math.min(Math.max(n&~1,16),whole);return [side(sw,w),side(sh,h)]};window.__fit=setInterval(()=>{const [w,h]=size(__shack.window,__shack.received.control.filter(m=>m.type==='view').at(-1));if(c.width!==w||c.height!==h){c.width=w;c.height=h}},50);return true})()`)
           const shown=`(()=>{const v=document.querySelector('.remote-stream-video'),r=v.getBoundingClientRect(),k=Math.min(r.width/v.videoWidth,r.height/v.videoHeight),w=v.videoWidth*k,h=v.videoHeight*k;return {x:r.x+(r.width-w)/2,y:r.y+(r.height-h)/2,w,h,frame:[v.videoWidth,v.videoHeight],exact:v.hasAttribute('data-exact')}})()`
+          // THE RAIL ON A SHORT OR ZOOMED WINDOW (the operator's pick, 2026-10-16). Where the header row leaves a 16:9 shack's
+          // picture small, the page takes the rail beside it; the picture is then wider than the header row left it at
+          // 1.19.0, measured by this sweep on the unchanged page (the width after each). At 100, 125 and 150 % every other
+          // window keeps the layout it had: the header row, or the rail a window under 500 px already took.
+          const railNow={'1280x720 100':1062,'1280x720 125':713.6,'1440x900 150':757.3,'1920x1080 150':1062.7,'1024x768 150':556},railBefore=['1280x720 150']
           const fitRecord=[],misfits=[],before=await atShack(`__shack.received.control.length`)
           // A ratio of 2 or more is a Mac's or an iPad's own screen: its windows are given in CSS pixels, and the iPad's on its side.
           const screen=zoom>=2?2:1,windows=screen===2?[[1280,800],[1440,900],[1512,982],[1728,1117],[1024,768],[1180,820],[1366,1024]].map(([w,h])=>[w*2,h*2]):[[1280,720],[1440,900],[1920,1080],[2560,1440],[1024,768]]
@@ -1373,7 +1378,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
               let last=''
               for(let i=0;i<60;i++){await sleep(150);const now=JSON.stringify([await atShack(`(c=>[c.width,c.height])(document.querySelector('body > canvas'))`),await evaluate(`(v=>[v.videoWidth,v.videoHeight])(document.querySelector('.remote-stream-video'))`)]);const [a,b]=JSON.parse(now);if(a[0]===b[0]&&a[1]===b[1]&&now===last)break;last=now}
               await settledLayout()
-              const m=await evaluate(`(()=>{const se=document.scrollingElement,s=document.querySelector('.remote-stream-stage').getBoundingClientRect(),stop=${button('Stop TX')},b=stop.getBoundingClientRect(),p=${shown};return {scroll:[se.scrollWidth-se.clientWidth,se.scrollHeight-se.clientHeight],gutter:[innerWidth-se.clientWidth,innerHeight-se.clientHeight],stage:{x:s.x,y:s.y,w:s.width,h:s.height},picture:p,stop:{inside:b.top>=0&&b.left>=0&&b.bottom<=innerHeight&&b.right<=innerWidth,hit:stop.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))}}})()`)
+              const m=await evaluate(`(()=>{const se=document.scrollingElement,s=document.querySelector('.remote-stream-stage').getBoundingClientRect(),stop=${button('Stop TX')},b=stop.getBoundingClientRect(),p=${shown};return {scroll:[se.scrollWidth-se.clientWidth,se.scrollHeight-se.clientHeight],gutter:[innerWidth-se.clientWidth,innerHeight-se.clientHeight],stage:{x:s.x,y:s.y,w:s.width,h:s.height},picture:p,stop:{inside:b.top>=0&&b.left>=0&&b.bottom<=innerHeight&&b.right<=innerWidth,hit:stop.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))},layout:document.querySelector('.remote-stream-app').dataset.layout}})()`)
               const p=m.picture,s=m.stage,slack=3
               const faults=sized?[]:['viewport']
               if(m.scroll[0]>0||m.scroll[1]>0||m.gutter[0]>0||m.gutter[1]>0)faults.push('scrolls')
@@ -1382,6 +1387,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
               // The shack's shape, within the station's cut to even sides; the page itself draws the frame at exactly its own.
               if(Math.abs(p.w/p.h-p.frame[0]/p.frame[1])>0.002*p.frame[0]/p.frame[1]||Math.abs(p.frame[0]/p.frame[1]/(shack[0]/shack[1])-1)>0.01)faults.push('shape')
               if(!(m.stop.inside&&m.stop.hit))faults.push('stop')
+              const pct=Math.round(zoom*100),named=`${W}x${H} ${pct}`,wide=shack[0]/shack[1]<2
+              if([100,125,150].includes(pct)&&m.layout!==((wide&&named in railNow)||railBefore.includes(named)?'rail':'header'))faults.push('layout')
+              if(m.layout==='rail'&&Math.abs(s.w-(width-120))>1)faults.push('rail')
+              if(wide&&named in railNow&&m.layout==='rail'&&!(p.w>railNow[named]+1))faults.push('smaller')
               // A click at a quarter across and three quarters down the picture, at the shack.
               const mark=await atShack(`__shack.received.control.length`),point={x:p.x+p.w*0.25,y:p.y+p.h*0.75}
               await browser.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},session)
@@ -1389,7 +1398,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
               let landed=[]
               for(let i=0;i<30&&landed.length<2;i++){await sleep(100);landed=await atShack(`__shack.received.control.slice(${mark}).filter(m=>m.type==='pointer'&&(m.action==='down'||m.action==='up')).map(m=>({action:m.action,x:m.x,y:m.y}))`)}
               if(landed.length!==2||!landed.every(l=>Math.abs(l.x-0.25)<=0.01&&Math.abs(l.y-0.75)<=0.01))faults.push('click')
-              const entry={at,frame:p.frame,exact:p.exact,stage:[s.w,s.h].map(n=>+n.toFixed(1)),picture:[p.w,p.h].map(n=>+n.toFixed(1)),scroll:m.scroll,gutter:m.gutter,stop:m.stop,landed,faults}
+              const entry={at,layout:m.layout,frame:p.frame,exact:p.exact,stage:[s.w,s.h].map(n=>+n.toFixed(1)),picture:[p.w,p.h].map(n=>+n.toFixed(1)),scroll:m.scroll,gutter:m.gutter,stop:m.stop,landed,faults}
               fitRecord.push(entry);if(faults.length)misfits.push(entry)
               if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`fit-${shack.join('x')}-${W}x${H}-${Math.round(zoom*100)}.png`),Buffer.from(shot.data,'base64'))}
             }
