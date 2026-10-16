@@ -1593,6 +1593,11 @@ pub(crate) struct Js8OnAir {
 mod send;
 pub use send::JS8_RETUNE_LEAD;
 
+/// JS8's TX delay: how early a frame keys and how late it may still start.
+#[path = "js8_lead.rs"]
+mod lead;
+pub use lead::{js8_late_start_ms, JS8_TX_DELAY_MAX_MS, JS8_TX_DELAY_MIN_MS};
+
 #[cfg(test)]
 mod tests {
     use super::*;

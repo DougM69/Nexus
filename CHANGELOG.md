@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **JS8: each frame keys the radio 0.2 s before its period, as JS8Call does, and its first tone
+  goes out on time.** Nexus keyed on the period's start, so the time a radio took to switch to
+  transmit (hundreds of milliseconds on a slow CAT link) made every frame late, and stations read
+  your DT late. Now PTT goes up the TX delay before the period (Settings ▸ Digital ▸ JS8 ▸ TX
+  delay, 0.2 s by default as in JS8Call, 0.1 to 0.5 s) and the frame waits in silence for the
+  period's start delay. A radio that keys later than the start delay leaves out what it missed
+  and sends the rest of the frame on time, however late it keys, as JS8Call does; only one that
+  keys after the frame's last tone (about 13.1 s into a Normal period) sends nothing of that frame
+  and is unkeyed at once, as JS8Call stops there, TX staying on for the rest of the message, and
+  the JS8 screen says why. Stop TX or TX Off
+  during the delay unkeys at once and sends nothing. Heartbeats and acknowledgements key the same
+  way; with Hold PTT between frames on, the frames after the first start on their period.
+  NEEDS-BENCH: checked on the radio loop with a simulated rig only.
 - **JS8: keep typing while your message goes out (typeahead), as in JS8Call.** After Send the
   message stays in the message box while it is sent, and each frame's text moves out of the box to
   the line beside it as it goes. Type more, or change what has not gone yet, and the frames still to
@@ -20,8 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NEEDS-BENCH.
 - **JS8: Hold PTT between frames, JS8Call's option (off by default).** On (Settings ▸ Digital ▸
   JS8), the radio stays keyed from the end of one frame of a message to the start of the next,
-  instead of dropping PTT after each frame and keying again (about 1.6 s unkeyed between frames at
-  Normal, 4 s at Slow). PTT still drops after the message's last frame, never holds from one message
+  instead of dropping PTT after each frame and keying again (about 1.4 s unkeyed between frames at
+  Normal, 3.8 s at Slow). PTT still drops after the message's last frame, never holds from one message
   into the next, and drops at once on Stop TX or TX Off. NEEDS-BENCH: checked on the radio loop with
   a simulated rig only.
 - **A Timeline card in Statistics.** A line chart of your QSOs over the past day (by hour), the

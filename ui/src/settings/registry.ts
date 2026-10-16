@@ -363,7 +363,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'only autoreply', 'never autoreply', 'band activity aging', 'activity aging',
       'heartbeat networking', 'hb net', 'qso pause', 'heartbeat acknowledgement', '55 minutes',
       'outside 500', 'do not participate',
-      'hold ptt', 'ptt between frames', 'tx offset', 'offset while sending',
+      'hold ptt', 'ptt between frames', 'tx offset', 'offset while sending', 'tx delay', 'ptt delay',
       'js8 frequencies', 'frequency list', 'calling frequencies', '1.8435', '5.363', 'last used frequency',
       'band schedule', 'frequency schedule', 'switch bands', 'band hopping',
       'spot', 'spotting', 'js8net', 'aprsis', 'aprs-is', 'never spot', 'aprs relay',

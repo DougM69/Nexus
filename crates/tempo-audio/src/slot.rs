@@ -648,6 +648,24 @@ pub fn slot_tx_phase(
     // that fails then is not a new one refused ([`key_slot_transmitter`]).
     held: bool,
 ) -> SlotAction {
+    // JS8CALL'S LATE START: a JS8 frame decided at or past it keys nothing and is not taken from the
+    // queue, so it goes out in the next period, as JS8Call's waits (`js8_slot::past_late_start`). A
+    // frame built beforehand, which no path hands in that late, goes with its dial shift.
+    if crate::js8_slot::past_late_start(eng, slot, now_ms) {
+        if prebuilt.is_some() {
+            let _ = eng.take_tx_dial_shift();
+        }
+        return SlotAction {
+            tx_until_ms: None,
+            audio_until_ms: None,
+            did_rx,
+            rx_frame,
+            tx_this_slot: false,
+            fake_it_restore: None,
+            fake_it_tx_dial: None,
+            rig_split_engaged: false,
+        };
+    }
     // ⭐ WSJT-X'S LATEST KEY, FOR A BOUNDARY WHOSE KEY COMES LATE (a decode that drained late, the
     // wait for a busy decoder, CAT in the boundary tick): an FT8/FT4 over keys only while its slot is
     // under 75 % of the period ([`wsjtx_may_key_at`]), on the clock as it is at this decision, not as
@@ -782,7 +800,28 @@ pub fn slot_tx_phase(
         // WSJT-X's window on the slot clock, but how far into the slot the carrier came up, so
         // their tones are laid on the clock as WSJT-X's Modulator lays them ([`play_keyed_over`]).
         let keyed_ms = (now_unix_ms() - eng.clock_offset_ms().unwrap_or(0) as f64).max(now_ms);
-        let over = play_keyed_over(eng, backend, &waves, keyed_ms, now_ms);
+        // JS8: a key the radio answered once the frame's last tone had gone sends nothing and is
+        // unkeyed at once unless the loop holds the transmitter; TX stays on
+        // (`js8_slot::late_key`). Every other frame is laid on the slot clock, keyed in its TX delay
+        // or late in its period (`js8_slot::play_frame`).
+        if let Some((into_ms, limit_ms)) = crate::js8_slot::late_key(eng, keyed_ms, slot) {
+            crate::js8_slot::unkey_a_late_key(eng, rig, backend, held, into_ms, limit_ms);
+            return SlotAction {
+                tx_until_ms: None,
+                audio_until_ms: None,
+                did_rx,
+                rx_frame,
+                tx_this_slot: false,
+                fake_it_restore: split.fake_it_restore,
+                fake_it_tx_dial: split.fake_it_tx_dial,
+                rig_split_engaged: split.rig_split_engaged,
+            };
+        }
+        let over = if eng.tier() == tempo_app::dto::Tier::Js8 {
+            crate::js8_slot::play_frame(eng, backend, &waves, keyed_ms, slot)
+        } else {
+            play_keyed_over(eng, backend, &waves, keyed_ms, now_ms)
+        };
         rx.clear(); // our just-started carrier must not be decoded next boundary
                     // The bound the re-read above deliberately does NOT provide. Measuring the
                     // deadline from the key (rather than the tick's stale clock) stopped us
@@ -1680,10 +1719,12 @@ mod tests {
     }
 
     #[test]
-    fn ft2_and_js8_keep_their_own_late_keys_past_75_percent() {
-        // Controls: WSJT-X's latest key is FT8's and FT4's. FT2 and JS8 keep their own: a boundary
-        // whose key comes 80 % into the slot still keys, and plays its whole over from the key.
-        for tier in [tempo_app::dto::Tier::Ft2, tempo_app::dto::Tier::Js8] {
+    fn ft2_keeps_its_own_late_key_past_75_percent() {
+        // Control: WSJT-X's latest key is FT8's and FT4's. FT2 keeps its own: a boundary whose key
+        // comes 80 % into the slot still keys, and plays its whole over from the key. (JS8 keeps
+        // JS8Call's late start instead: `js8_slot`'s tests.)
+        let tier = tempo_app::dto::Tier::Ft2;
+        {
             let mut eng = armed_engine_on(tier);
             let period_ms = eng.active_slot_secs() * 1000.0;
             let (act, backend, sent) =

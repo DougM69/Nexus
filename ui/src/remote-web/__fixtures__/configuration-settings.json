@@ -165,6 +165,7 @@
     "js8RxSpeeds": 15,
     "js8Speed": 1,
     "js8Status": "",
+    "js8TxDelayMs": 200,
     "js8TxOffsetWhileSending": false,
     "jt65Submode": 0,
     "licenseClass": "open",

@@ -1,9 +1,10 @@
 //! A JS8 message of several frames, on the real loop: what PTT does between its frames.
 //!
 //! JS8 keys every period, one frame of the message each (`Engine::plan_js8_tx`), and each frame is
-//! an over of its own: keyed at the boundary, held for its wave (the speed's start delay of silence
-//! and 79 symbols) and `slot::TX_TAIL_MS`, then dropped (`slot::tx_deadline_ms`), so the radio
-//! unkeys between two frames and keys again for the next. JS8Call 3.0.3 does the same unless "Hold
+//! an over of its own: keyed JS8Call's TX delay before its period (`service::js8_lead`), held to the
+//! end of its wave on the slot clock (the speed's start delay of silence and 79 symbols) and
+//! `slot::TX_TAIL_MS`, then dropped (`js8_slot::play_frame`), so the radio unkeys between two frames
+//! and keys again for the next. JS8Call 3.0.3 does the same unless "Hold
 //! PTT between frames while there are more to be transmitted" is on (`HoldPTT`, off by default,
 //! `JS8_UI/Configuration.cpp:2404`): its `stopTx2` then leaves PTT up while frames of the message
 //! remain (`JS8_UI/mainwindow.cpp:2919-2932`).
@@ -117,27 +118,20 @@ fn wave_ms(speed: Js8Speed) -> f64 {
     f64::from(speed.delay_ms()) + 79.0 * speed.nsps() as f64 / 12.0
 }
 
-/// The tick (ms from `t0`) the loop drops PTT on for a frame keyed `key` ms after `t0`: its first
-/// 20 ms tick at or after the over's deadline, the key plus the wave (summed as the loop sums it,
-/// in f32 seconds) and the 250 ms tail (`slot::play_keyed_over`, `slot::tx_deadline_ms`). Turbo's
-/// wave sums to 4.05000019 s, so its 4.30 s deadline drops on the tick at 4.32 s.
-fn unkey_tick(speed: Js8Speed, t0: f64, key: f64, period_ms: f64) -> f64 {
-    let samples = speed.delay_ms() as usize * 12 + 79 * speed.nsps();
-    let audio_ms = (samples as f32 / tempo_core::tempo_fast::SAMPLE_RATE) as f64 * 1000.0;
-    let deadline = crate::slot::tx_deadline_ms(t0 + key, audio_ms, period_ms);
-    let mut tick = t0 + key;
-    while tick < deadline {
-        tick += 20.0;
-    }
-    tick - t0
+/// The tick (ms from `t0`) the loop drops PTT on for the frame of the period starting `start` ms
+/// after `t0`: its first 20 ms tick at or after the frame's end on the slot clock, the period's start
+/// plus the wave and the 250 ms tail, wherever its key came (`js8_slot::play_frame`).
+fn unkey_tick(speed: Js8Speed, start: f64) -> f64 {
+    ((start + wave_ms(speed) + crate::slot::TX_TAIL_MS) / 20.0).ceil() * 20.0
 }
 
-/// ⭐ TODAY, MEASURED: PTT DROPS AFTER EVERY FRAME AND KEYS AGAIN AT THE NEXT BOUNDARY. A message of
-/// several frames at each speed, on the real loop: each frame keys at its boundary and unkeys when its
-/// wave and the 250 ms tail have gone (`slot::tx_deadline_ms`), so the radio is unkeyed between two
-/// frames for the rest of the period: Slow 3.97 s (wave 25.78 s of 30), Normal 1.61 s (13.14 of 15),
-/// Fast 1.65 s (8.10 of 10), Turbo 1.70 s (4.05 of 6), JS8 60 1.12 s (2.63 of 4). JS8Call with Hold
-/// PTT off unkeys between frames too: 200 ms after its `txDuration` (the same wave), and keys again
+/// ⭐ PTT DROPS AFTER EVERY FRAME AND KEYS AGAIN JUST BEFORE THE NEXT, AS JS8CALL'S DOES. A message of
+/// several frames at each speed, on the real loop: the first frame keys on the loop's first tick, its
+/// boundary; each later one keys 200 ms (JS8Call's TX delay) before its boundary; each unkeys when its
+/// wave and the 250 ms tail have gone, so the radio is unkeyed between two frames for the rest of the
+/// period less the TX delay: Slow 3.77 s (wave 25.78 s of 30), Normal 1.41 s (13.14 of 15), Fast
+/// 1.45 s (8.10 of 10), Turbo 1.50 s (4.05 of 6), JS8 60 0.92 s (2.63 of 4). JS8Call with Hold PTT
+/// off unkeys between frames too: 200 ms after its `txDuration` (the same wave), and keys again
 /// 200 ms (its TX delay) before the boundary.
 #[test]
 fn a_js8_message_unkeys_between_its_frames_and_keys_again_at_each_boundary() {
@@ -156,10 +150,11 @@ fn a_js8_message_unkeys_between_its_frames_and_keys_again_at_each_boundary() {
         let ptt = m.ptt_until(m.frames as f64 * p + p);
         let want: Vec<(f64, String)> = (0..m.frames)
             .flat_map(|k| {
-                let at = k as f64 * p;
+                let start = k as f64 * p;
+                let key = if k == 0 { start } else { start - 200.0 };
                 [
-                    (at, "T 1".to_string()),
-                    (unkey_tick(speed, m.t0, at, p), "T 0".to_string()),
+                    (key, "T 1".to_string()),
+                    (unkey_tick(speed, start), "T 0".to_string()),
                 ]
             })
             .collect();
@@ -168,13 +163,13 @@ fn a_js8_message_unkeys_between_its_frames_and_keys_again_at_each_boundary() {
             "{speed:?}: the PTT lines of a {}-frame message",
             m.frames
         );
-        let gap = p - (wave_ms(speed) + crate::slot::TX_TAIL_MS);
+        let gap = p - (wave_ms(speed) + crate::slot::TX_TAIL_MS) - 200.0;
         let want_gap = match speed {
-            Js8Speed::Slow => 3_970.0,
-            Js8Speed::Normal => 1_610.0,
-            Js8Speed::Fast => 1_650.0,
-            Js8Speed::Turbo => 1_700.0,
-            Js8Speed::Ultra => 1_122.0,
+            Js8Speed::Slow => 3_770.0,
+            Js8Speed::Normal => 1_410.0,
+            Js8Speed::Fast => 1_450.0,
+            Js8Speed::Turbo => 1_500.0,
+            Js8Speed::Ultra => 922.0,
         };
         assert!(
             (gap - want_gap).abs() < 0.5,
@@ -205,7 +200,7 @@ fn with_hold_ptt_on_a_js8_message_stays_keyed_from_its_first_frame_to_the_end_of
         let mut want: Vec<(f64, String)> = (0..m.frames)
             .map(|k| (k as f64 * p, "T 1".to_string()))
             .collect();
-        want.push((unkey_tick(speed, m.t0, last, p), "T 0".to_string()));
+        want.push((unkey_tick(speed, last), "T 0".to_string()));
         assert_eq!(
             ptt, want,
             "{speed:?}: the PTT lines of a {}-frame message",
@@ -301,7 +296,7 @@ fn a_js8_key_is_not_held_once_the_dial_is_outside_the_privileges() {
 
 /// Hold PTT holds within a message, never across two (JS8Call counts the frames of the one message
 /// going out): two one-frame messages queued back to back (a CQ, then a query) key and unkey once
-/// each.
+/// each, the second 200 ms before its period, in JS8Call's TX delay.
 #[test]
 fn hold_ptt_never_holds_across_two_messages() {
     let mut m = Js8Message::holding(1, "CQ CQ CQ EN52", true);
@@ -320,7 +315,7 @@ fn hold_ptt_never_holds_across_two_messages() {
         [
             (0.0, "T 1".to_string()),
             (13_400.0, "T 0".to_string()),
-            (15_000.0, "T 1".to_string()),
+            (14_800.0, "T 1".to_string()),
             (28_400.0, "T 0".to_string()),
         ]
     );

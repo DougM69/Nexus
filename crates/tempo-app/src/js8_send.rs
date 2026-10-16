@@ -102,7 +102,11 @@ impl Engine {
         let tones = ::js8::phy::encode_word(&on.word, speed);
         let len = speed.delay_ms() as usize * 12 + 79 * speed.nsps();
         Some(move |left: usize, before: usize| {
-            let at = (len.saturating_sub(left) + JS8_RETUNE_LEAD).min(len);
+            // `left` counts from the end of the frame's wave, which is where what the card holds
+            // ends. A frame keyed in its TX delay was handed over with silence up to its period in
+            // front (`tempo_audio::js8_slot`), so `left` can be more than the wave: the move then
+            // lands on the wave's first samples, the start delay's silence.
+            let at = (len + JS8_RETUNE_LEAD).saturating_sub(left).min(len);
             let mut moves = moves.lock().unwrap_or_else(PoisonError::into_inner);
             // A move whose sample the card has not reached yet is overtaken by this one.
             moves.retain(|&(k, _)| k == 0 || k < at);
@@ -113,7 +117,12 @@ impl Engine {
                 &moves,
                 tempo_core::tempo_fast::SAMPLE_RATE,
             );
-            wave[wave.len().saturating_sub(left + before)..].to_vec()
+            // …and what is still to play of that silence is handed back as silence, so the rest is
+            // as long as what it replaces and the frame's first tone stays where it was.
+            let want = left + before;
+            let mut rest = vec![0.0; want.saturating_sub(wave.len())];
+            rest.extend_from_slice(&wave[wave.len().saturating_sub(want)..]);
+            rest
         })
     }
 

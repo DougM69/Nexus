@@ -1093,6 +1093,12 @@ pub struct Settings {
     /// (mainwindow.cpp:5381-5386); on, a move is taken and the frames still to go key at it.
     #[serde(default)]
     pub js8_tx_offset_while_sending: bool,
+    /// JS8Call's "Tx delay" (`TxDelay`, 0.2 s by default, JS8_UI/Configuration.cpp:2275; 0.1 to
+    /// 0.5 s on its spin box, Configuration.ui `sbTxDelay`), in ms: a JS8 frame keys this long
+    /// before its period, its first tone still at the period's start delay
+    /// (`Engine::js8_tx_delay_ms`, which takes a value outside that range as the nearer end).
+    #[serde(default = "default_js8_tx_delay_ms")]
+    pub js8_tx_delay_ms: u32,
     /// JS8Call's "Enable spotting @APRSIS messages to the APRS-IS network" (`SpotToAPRS`,
     /// Configuration.cpp:2300): a heard `@APRSIS GRID` becomes an APRS-IS position and an
     /// `@APRSIS CMD` a raw APRS packet, uploaded under this station's callsign on the APRS-IS
@@ -4971,6 +4977,11 @@ fn default_js8_spot_aprs() -> bool {
     false
 }
 
+/// JS8Call's `TxDelay` default, 0.2 s, in ms. See [`Settings::js8_tx_delay_ms`].
+fn default_js8_tx_delay_ms() -> u32 {
+    200
+}
+
 /// JS8Call's `TxIdleWatchdog` default (minutes). See [`Settings::js8_idle_watchdog_min`].
 fn default_js8_idle_watchdog_min() -> u16 {
     60
@@ -5078,6 +5089,7 @@ impl Default for Settings {
             js8_avoid_allcall: false,
             js8_hold_ptt: false,
             js8_tx_offset_while_sending: false,
+            js8_tx_delay_ms: default_js8_tx_delay_ms(),
             js8_spot_aprs: default_js8_spot_aprs(),
             js8_aprs_relay: false,
             js8_spot_never: Vec::new(),
@@ -10647,6 +10659,33 @@ mod tests {
                 "ui/src/types.ts Settings lacks `{key}`"
             );
         }
+    }
+
+    /// JS8Call's TX delay, 0.2 s by default (`TxDelay`), stored in ms: the wire key, an upgrader's
+    /// file (0.2 s), a value of the operator's own surviving the round trip, and the TS mirror.
+    #[test]
+    fn js8_tx_delay_defaults_to_js8calls_and_round_trips() {
+        let s = Settings::default();
+        assert_eq!(s.js8_tx_delay_ms, 200, "JS8Call TxDelay default: 0.2 s");
+        assert!(serde_json::to_string(&s)
+            .unwrap()
+            .contains("\"js8TxDelayMs\":200"));
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.js8_tx_delay_ms, 200, "an upgrader keys 0.2 s early");
+        let set: Settings = serde_json::from_str(r#"{"js8TxDelayMs":400}"#).unwrap();
+        assert_eq!(set.js8_tx_delay_ms, 400);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&set).unwrap()).unwrap();
+        assert_eq!(back, set);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        assert!(
+            body.lines()
+                .any(|l| l.trim_start() == "js8TxDelayMs: number"),
+            "ui/src/types.ts Settings lacks `js8TxDelayMs: number`"
+        );
     }
 
     /// JS8's internet links: the defaults (the @APRSIS gateway OFF, though JS8Call ships its

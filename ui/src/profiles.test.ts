@@ -352,4 +352,9 @@ describe('mergeProfile — the JS8 send options travel with a profile', () => {
     const older = mergeProfile(settings({ js8HoldPtt: true, js8TxOffsetWhileSending: true }), settings({}))
     expect([older.js8HoldPtt, older.js8TxOffsetWhileSending], 'a profile from before them').toEqual([true, true])
   })
+
+  it('loads the TX delay from a profile, and keeps it over a profile from before it', () => {
+    expect(mergeProfile(settings({ js8TxDelayMs: 200 }), settings({ js8TxDelayMs: 400 })).js8TxDelayMs).toBe(400)
+    expect(mergeProfile(settings({ js8TxDelayMs: 300 }), settings({})).js8TxDelayMs, 'a profile from before it').toBe(300)
+  })
 })

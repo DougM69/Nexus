@@ -254,3 +254,43 @@ fn hold_ptt_holds_across_text_typed_after_the_last_frame() {
         "straight after, a message of its own, not flagged first"
     );
 }
+
+/// A move while the frame is still in its TX delay: the radio loop keyed it before its period and
+/// handed the card the silence up to the period in front of the frame's wave (JS8Call's Modulator
+/// sends that silence too, `JS8_Mode/Modulator.cpp:86-94`). What the card is handed back is as long
+/// as what it still held: the silence still to play first, then the whole frame at the new offset,
+/// its first tone where it was. (Built from the wave alone, it came back short by the silence, and
+/// the card would have played the frame that much early.)
+#[test]
+fn a_move_in_the_tx_delay_keeps_the_silence_before_the_period_and_moves_the_whole_frame() {
+    let mut e = js8_engine();
+    e.settings.js8_tx_offset_while_sending = true;
+    e.js8_send(None, "HELLO".into()).expect("queues");
+    let s = next_slot(&e);
+    let plan = e.plan_tx(s).expect("a frame planned");
+    let TxWaveform::Js8 { word, speed, .. } = &plan.waveform else {
+        panic!("a JS8 plan carries the typed waveform");
+    };
+    let (tones, speed) = (::js8::phy::encode_word(word, *speed), *speed);
+    let wave = plan.waveform.build();
+    assert!(!e.commit_tx(&plan, wave.clone(), s).is_empty(), "premise");
+    e.set_tx_offset(1800.0);
+    let mut rest = e.js8_retune_on_air(s).expect("the move is handed over");
+    // 150 ms of the TX delay still to play, and the 63 samples before it a resampler asks for.
+    let (silence, before) = (1_800, 63);
+    let got = rest(wave.len() + silence, before);
+    let moved = ::js8::phy::modulate(&tones, speed, 1800.0, tempo_core::tempo_fast::SAMPLE_RATE);
+    assert_eq!(
+        got.len(),
+        before + silence + wave.len(),
+        "as long as what the card held"
+    );
+    assert!(
+        got[..before + silence].iter().all(|&x| x == 0.0),
+        "the silence up to the period first"
+    );
+    assert!(
+        got[before + silence..] == moved[..],
+        "then the whole frame at 1800 Hz, sample for sample"
+    );
+}

@@ -4292,6 +4292,9 @@ export interface Settings {
    * default): off, the offset cannot be moved while a message is queued or going out; on, a move
    * applies from the next frame. */
   js8TxOffsetWhileSending: boolean
+  /** JS8Call's "Tx delay" in ms (0.2 s by default, 0.1 to 0.5 s): a JS8 frame keys this long before
+   * its period, its first tone still at the period's start delay. */
+  js8TxDelayMs: number
   /** JS8Call's "spot @APRSIS messages to APRS-IS" (default off; JS8Call ships it on): a heard
    * @APRSIS GRID becomes an APRS-IS position and an @APRSIS CMD a raw packet, under this callsign.
    * Needs PSK Reporter on. */
