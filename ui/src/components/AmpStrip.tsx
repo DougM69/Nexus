@@ -1,10 +1,9 @@
-import { useContext, useState } from 'react'
+import { useState } from 'react'
 import { ampCommand } from '../api'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import type { AmpStatus } from '../types'
-import { RemoteOperationsContext, useStationCapability, useStationControl } from '../stationAccess'
-import { useRemoteAmplifier } from '../remote-web/amplifier-observation'
+import { useStationCapability, useStationControl } from '../stationAccess'
 
 /**
  * The amplifier's own controls, in every cockpit header that has an amplifier behind it.
@@ -29,23 +28,17 @@ import { useRemoteAmplifier } from '../remote-web/amplifier-observation'
 export function AmpStrip({
   amp: snapshotAmp,
   radioTransmitting = false,
-  radioId,
 }: {
   amp: AmpStatus | null | undefined
   /** The RADIO's transmit state, used when the amplifier does not report its own. */
   radioTransmitting?: boolean
-  radioId?: number
 }) {
   // A command the queue refused. Shown once, cleared on the next successful click, because a
   // keystroke the operator watched themselves make and that silently vanished reads as broken.
   const [refused, setRefused] = useState(false)
   const control = useStationControl()
   const amplifierControl = useStationCapability('amplifier')
-  const operations = useContext(RemoteOperationsContext)
-  const observation = useRemoteAmplifier(radioId)
-  const amp = control ? snapshotAmp : observation.amp ?? (snapshotAmp ? {
-    ...snapshotAmp, linked: false, operate: null, transmitting: null, bandLabel: null, outputWatts: null
-  } : null)
+  const amp = snapshotAmp
 
   // Almost every station. No amplifier configured → this surface does not exist.
   if (amp == null) return null
@@ -58,9 +51,8 @@ export function AmpStrip({
   // transmit flag; an SPE idle flag must never override a keyed exciter either.
   // The backend also checks current measurements before issuing a command.
   const keyed = amp.transmitting === true || radioTransmitting
-  const usable = amplifierControl && live && !keyed && (control || observation.idle && operations?.getSnapshot().state?.txArmed === false)
-  const following = !control && observation.amp?.followBand === true
-  const bandUsable = usable && !following
+  const usable = amplifierControl && live && !keyed && control
+  const bandUsable = usable
 
   const send = async (which: 'bandDown' | 'bandUp' | 'operate') => {
     if (!usable || (which !== 'operate' && !bandUsable)) return
@@ -68,16 +60,6 @@ export function AmpStrip({
       if (control) {
         const ok = await ampCommand(which)
         setRefused(!ok)
-      } else if (operations && observation.context) {
-        // Capture the displayed precondition at the click. Never send a blind
-        // toggle or turn a queue acknowledgement into an applied state.
-        if (which === 'operate' && amp.operate == null || which !== 'operate' && !amp.bandLabel) return
-        setRefused(false)
-        await operations.control(which === 'operate'
-          ? { action: 'amplifier.operate', expectedOperate: amp.operate!, operate: !amp.operate }
-          : { action: 'amplifier.band', expectedBand: amp.bandLabel!, direction: which === 'bandDown' ? -1 : 1 }, observation.context)
-        // The common station status presents pending/refused/unknown results;
-        // this strip continues to display only amplifier measurements.
       }
     } catch {
       if (control) setRefused(true)
@@ -117,7 +99,7 @@ export function AmpStrip({
           onClick={() => void send('bandDown')}
           // A bare "◀" names nothing to a screen reader, and this one moves a kilowatt.
           aria-label={t('amp.strip.bandDown.aria')}
-          title={following ? t('amp.strip.follow.title') : keyed ? t('amp.strip.keyed.title') : t('amp.strip.bandDown.aria')}
+          title={keyed ? t('amp.strip.keyed.title') : t('amp.strip.bandDown.aria')}
         >
           ◀
         </button>
@@ -130,7 +112,7 @@ export function AmpStrip({
           disabled={!bandUsable || (!control && !amp.bandLabel)}
           onClick={() => void send('bandUp')}
           aria-label={t('amp.strip.bandUp.aria')}
-          title={following ? t('amp.strip.follow.title') : keyed ? t('amp.strip.keyed.title') : t('amp.strip.bandUp.aria')}
+          title={keyed ? t('amp.strip.keyed.title') : t('amp.strip.bandUp.aria')}
         >
           ▶
         </button>

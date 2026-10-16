@@ -8,7 +8,6 @@ import { ageFrame, MAX_FRAME_BYTES, parseFrame, STALE_MS } from '../remote-monit
 import type { MonitorFrame } from '../remote-monitor/protocol'
 import type { MonitorSource } from '../remote-monitor/session'
 import { APPLICATION_VERSIONS } from './application-capabilities'
-import { ApplicationClient } from './application-client'
 import { APPLICATION_MAX_BYTES } from './application-protocol'
 import { AudioLink, browserAudio } from './audio-listen'
 import { StreamLink, browserStream, type StreamEnvironment } from './stream-link'
@@ -194,10 +193,9 @@ export class BrowserClient {
 }
 
 /** A single socket and a single latest frame. Tickets and JWTs never enter URLs,
- * storage or display text. Application mode adds only the reviewed read/ACK contract. */
+ * storage or display text. Application mode adds the operation, audio and stream lanes. */
 export class HostedConnection {
   readonly source: MonitorSource
-  readonly application: ApplicationClient
   readonly operations: OperationClient
   /** Listening. It shares this socket and nothing else: no ACK, no credit, no retry,
    *  and its own byte budget, so a bundle can never consume the allowance an operation
@@ -254,10 +252,6 @@ export class HostedConnection {
   constructor(private client: BrowserClient, private stationId: string, private readonly applicationMode = false,
     streamEnvironment: StreamEnvironment = browserStream(), private readonly device?: { id: string; key: () => Promise<DeviceKey | null> },
     stationKey: string | null = null, pins?: StationPins) {
-    this.application = new ApplicationClient(message => {
-      if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount + new TextEncoder().encode(message).length > (client.operationVersion>=1?OPERATION_REQUEST_BYTES:2048)) throw new RemoteError(503)
-      this.socket.send(message)
-    }, () => this.socket?.close(1000, 'applicationUnavailable'), client.applicationVersion)
     this.operations = new OperationClient(message=>{
       // With room for this browser's proof (S1-M1) where one goes: never on Stop or `state`, so the room
       // Stop has is what it always was.
@@ -343,7 +337,7 @@ export class HostedConnection {
     void this.connect()
   }
   stop(): void {
-    this.application.disconnected(); this.operations.disconnected(); this.audio.close(); this.stream.dispose()
+    this.operations.disconnected(); this.audio.close(); this.stream.dispose()
     this.disposed = true; this.abort.abort(); this.latest = null
     this.watching?.(); this.watching = undefined
     this.deferred?.(); this.deferred = undefined
@@ -388,7 +382,7 @@ export class HostedConnection {
    *  from showing readings that look live. */
   private sleep(): void {
     if (this.sleepState.asleep) return
-    this.stream.close('streamHidden'); this.audio.release(); this.application.disconnected(); this.operations.disconnected()
+    this.stream.close('streamHidden'); this.audio.release(); this.operations.disconnected()
     this.latest = null
     clearInterval(this.renewal); clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined
     // The in-flight ticket request goes with it; the next connect needs a fresh controller.
@@ -425,7 +419,7 @@ export class HostedConnection {
     if (this.sleepState.resumed) this.publishFeed({ resumed: false })
   }
   private retry(): void {
-    this.application.disconnected(); this.operations.disconnected(); this.audio.disconnected(); this.stream.disconnected()
+    this.operations.disconnected(); this.audio.disconnected(); this.stream.disconnected()
     this.latest = null; clearInterval(this.renewal)
     if (this.disposed || this.sleepState.asleep || this.reconnectTimer) return
     // What forgives the ladder is a connection that made PROGRESS, read here and cleared as it is
@@ -438,11 +432,9 @@ export class HostedConnection {
     // briefly the socket that carried it survived. A session GRANT proves only that the service is
     // reachable, so it earns nothing on its own and must hold the connection up for
     // RECONNECT_CREDIT_MS to be forgiven - that is the case above, and the one the ladder is for.
-    // Requiring the connection to have LASTED in both cases was too strong: this page can close its
-    // own socket (an application read missing its 3 s credit closes the shared socket - see the
-    // ApplicationClient construction above), and that happens structurally below the ten-second
-    // window, so a station that was answering the whole time escalated to 1, 2, 4, 8, 16, 30 s of
-    // "Station data unavailable" it had done nothing to earn.
+    // Requiring the connection to have LASTED in both cases was too strong: a socket this page closed
+    // itself well inside the ten-second window would otherwise escalate a station that was answering
+    // the whole time to 1, 2, 4, 8, 16, 30 s of "Station data unavailable" it had done nothing to earn.
     if (this.delivered || (this.liveSince !== null && performance.now() - this.liveSince >= RECONNECT_CREDIT_MS)) this.attempt = 0
     this.liveSince = null; this.delivered = false
     const delay = Math.min(30000, 1000 * 2 ** Math.min(this.attempt++, 5))
@@ -501,12 +493,13 @@ export class HostedConnection {
           if(this.applicationMode&&message.type==='operationResponse'){reason='invalidOperation';const bytes=new TextEncoder().encode(event.data).length;if(bytes>OPERATION_EXPORT_RESPONSE_BYTES)throw new RemoteError(403);this.operations.receive(message,bytes);return}
           // Operation v5: a settled control, pushed by the station. Same lane, same strictness.
           if (this.applicationMode && message.type === 'operationEvent') { reason = 'invalidOperation'; this.operations.receiveEvent(message, new TextEncoder().encode(event.data).length); return }
+          // This page never asks for the application lane, so anything from it is unrequested.
           if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('application')) {
-            reason = 'invalidApplication'; this.application.receive(message); return
+            reason = 'invalidApplication'; throw new Error('unexpectedApplicationResult')
           }
           if (new TextEncoder().encode(event.data).length > MAX_FRAME_BYTES + 256) throw new RemoteError(403)
           if (message.type === 'session' && Object.keys(message).length === 2 && typeof message.sessionId === 'string' && /^[0-9a-f-]{36}$/.test(message.sessionId)) {
-            if (this.applicationMode) { this.application.open(); this.operations.open() }
+            if (this.applicationMode) this.operations.open()
             this.sessionId = message.sessionId
             this.laneSeq = 0
             // A session proves the SERVICE is reachable, so this connection starts counting
@@ -554,10 +547,10 @@ export class HostedConnection {
             if (socket.bufferedAmount + new TextEncoder().encode(ack).length > (this.applicationMode ? (this.operations.enabled?OPERATION_REQUEST_BYTES:2048) : 512)) throw new RemoteError(503)
             socket.send(ack)
           } else throw new RemoteError(403)
-        } catch { this.latest = null; this.application.disconnected(); this.operations.disconnected(); this.audio.disconnected(); this.stream.disconnected(); socket.close(1000, reason) }
+        } catch { this.latest = null; this.operations.disconnected(); this.audio.disconnected(); this.stream.disconnected(); socket.close(1000, reason) }
       }
       socket.onclose = () => { if (this.socket === socket) { this.socket = null; this.retry() } }
-      socket.onerror = () => { this.latest = null; this.application.disconnected(); this.operations.disconnected(); this.stream.disconnected() }
+      socket.onerror = () => { this.latest = null; this.operations.disconnected(); this.stream.disconnected() }
     } catch (error) {
       if (error instanceof RemoteError && [401, 403].includes(error.status)) {
         this.latest = null

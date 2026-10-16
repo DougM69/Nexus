@@ -1,11 +1,4 @@
-import { useNavigation } from '../remote-web/useNavigation'
-import type { ProgrammingConfiguration } from '../remote-web/configuration'
-import { controlFailureMessage } from '../remote-web/control-failure'
-import { useStationCapability } from '../stationAccess'
-import { sendLogChange, useLogChange, useRemoteOperations } from '../remote-web/operations'
-import type { ProgramEdit } from '../remote-web/operation-protocol'
-import { downloadProgramExport, programExportName } from '../remote-web/program-export'
-import { saveDownload } from '../remote-web/chunked-file'
+import { useStationCapability, useStationControl } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT, and this screen is dense with it: every repeater
 // callsign, output frequency, offset, CTCSS tone and DTCS code, the band chips, the mode badges
@@ -69,6 +62,7 @@ import {
   NAME_CAPS,
   octant,
   onFrequency,
+  programExportName,
   RADIUS_CHIPS_MI,
   repeaterMemory,
   rigRepeaterParams,
@@ -211,20 +205,11 @@ interface Props {
  * (RepeaterMap.tsx).
  */
 export function RadioProgView({ myGrid, catOk = false }: Props) {
-  const configuration=useNavigation<ProgrammingConfiguration>('programming')
-  const remote=configuration.remote
+  const remote=!useStationControl()
   // A browser may Tune (never edit) while the station advertises the repeater transaction.
   const repeaterControl=useStationCapability('repeaterTuning')
-  // Exporting from a browser: the station renders the file with the desktop's own CHIRP/CSV
-  // writers and this page saves it. Locally it is always available; remotely only while the
-  // station advertises the verb, so an older Nexus leaves the buttons dead rather than refused.
-  const exportClient=useRemoteOperations(), exportOffered=useLogChange('programExport')
-  const exportControl=!remote||(!!exportClient&&exportOffered)
-  // Curating that list — rename, reorder, drop a row, clear it. Same shape as the export: always
-  // available locally, and remotely only while the station advertises the verb.
-  const editOffered=useLogChange('programEdit')
-  const editControl=!remote||(!!exportClient&&editOffered)
-  if(remote)myGrid=configuration.value?.mygrid??''
+  const exportControl=!remote
+  const editControl=!remote
   // ── query state ──
   const [originKind, setOriginKind] = useState<'station' | 'grid' | 'city'>('station')
   const [gridInput, setGridInput] = useState('')
@@ -322,12 +307,6 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   // Closed, the keyboard goes back to Export for CHIRP (focusReturn.ts).
   const chirpReturn = useFocusReturn(chirpDialog)
   const loaded = useRef(false)
-
-  useEffect(()=>{
-    if(!remote)return
-    const project=configuration.value?.projects.find(p=>p.id===WORKING_PROJECT_ID)
-    setRows(project?.channels.map(channel=>({channel,nameEdited:true}))??[])
-  },[remote,configuration.value?.revision])
 
   // The saved-projects file this run could not read, when that happened: said out loud with where
   // the file is kept, because the channel list would otherwise just read as empty.
@@ -695,17 +674,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       ...candidates.slice(0, 200).map((row) => ({ channel: { ...row.channel }, nameEdited: false })),
     ])
   }
-  /** One curation gesture at the station, against the document revision this page is SHOWING.
-   *  Whatever the station answers, re-read the list rather than guessing what it now holds: a
-   *  stale revision, a row somebody else removed and a half-written file all end the same way. */
-  const sendEdit = async (edit: ProgramEdit) => {
-    const revision = configuration.value?.revision
-    if (!exportClient || !revision) return
-    await sendLogChange(exportClient, { kind: 'programEdit', revision, edit })
-    configuration.refresh()
-  }
   const move = (i: number, d: -1 | 1) => {
-    if (remote) { void sendEdit({ action: 'move', id: rows[i]!.channel.id, by: d }); return }
     setRows((rs) => {
       const j = i + d
       if (j < 0 || j >= rs.length) return rs
@@ -715,29 +684,12 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     })
   }
   const remove = (i: number) => {
-    if (remote) { void sendEdit({ action: 'remove', id: rows[i]!.channel.id }); return }
     setRows((rs) => rs.filter((_, k) => k !== i))
   }
   const rename = (i: number, name: string) =>
     setRows((rs) =>
       rs.map((r, k) => (k === i ? { ...r, channel: { ...r.channel, name }, nameEdited: true } : r)),
     )
-  /** The name being typed in a browser, held OUTSIDE `rows`: the station's document is re-read on a
-   *  timer, and a refresh landing mid-word would otherwise take the half-typed name away. It is
-   *  sent on blur or Enter — one gesture, one transaction — the way the Memories fields commit.
-   *  Escape drops it, and nothing is sent.
-   *
-   *  ⚠️ Mirrored in a ref, and the ref is what commit reads. Escape clears the draft and then
-   *  leaves the field, and a `useState` value is still the OLD one inside the blur handler's
-   *  closure — which committed the name the operator had just abandoned. */
-  const [draftName, setDraftName] = useState<{ id: string; name: string } | null>(null)
-  const draftRef = useRef<{ id: string; name: string } | null>(null)
-  const setDraft = (draft: { id: string; name: string } | null) => { draftRef.current = draft; setDraftName(draft) }
-  const commitName = (id: string, was: string) => {
-    const draft = draftRef.current
-    setDraft(null)
-    if (draft?.id === id && draft.name !== was) void sendEdit({ action: 'rename', id, name: draft.name })
-  }
 
   // Auto-derived names for rows the operator hasn't touched (cap-aware).
   const displayRows = useMemo(() => {
@@ -780,7 +732,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   }, [result, displayRows])
 
   const exportList = (format: 'chirp' | 'csv') => {
-    if(remote&&!exportClient)return
+    if(remote)return
     const channels = displayRows.map((r) => ({ ...r.channel, name: r.displayName }))
     const analog = channels.filter((c) => c.mode === 'fm' || c.mode === 'nfm' || c.mode === 'am')
     // Checked here for BOTH paths: the browser is holding the same rows the station would render,
@@ -790,24 +742,6 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       return
     }
     const name = programExportName(format)
-    if (remote) {
-      // The file is built at the station — a second CHIRP writer in this browser would drift from
-      // the one the desktop uses — and lands in THIS machine's downloads.
-      void downloadProgramExport(exportClient!, format, nameCap)
-        .then((blob) => {
-          saveDownload(name, blob)
-          pushToast(format === 'chirp' ? t('program.export.browser.savedChirp', { name })
-            : t('program.export.browser.saved', { name }), 'success', 6000)
-        })
-        .catch((e) => {
-          const code = e instanceof Error ? e.message : ''
-          pushToast(code === 'notFound' ? t('program.export.browser.empty')
-            : code === 'tooLarge' ? t('program.export.browser.tooLarge')
-              : code === 'invalidProgramFile' ? t('program.export.browser.failed')
-                : controlFailureMessage(e), 'error', 6000)
-        })
-      return
-    }
     void exportChannels(channels, format, nameCap, attribution)
       .then((text) =>
         saveTextToDownloads(name, text).then((path) => {
@@ -854,7 +788,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
         )
       })
       // A browser's refusal carries data, not operator text: name it plainly.
-      .catch((e) => pushToast(remote ? controlFailureMessage(e) : String(e), 'error'))
+      .catch((e) => pushToast(String(e), 'error'))
   }
 
   /** Save to Memories (the operator's pick, 2026-10-02: "Save buttons + all fields"): the machine
@@ -1106,7 +1040,6 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
         <span className="awards-sub">{t('program.sub')}</span>
       </div>
 
-      {remote && <p className="settings-note" role="status">{configuration.value ? t('remote.programmingObserver') : configuration.loading ? t('remote.collectionLoading') : t('remote.collectionUnavailable')}</p>}
       {/* Above the body, not inside it: .rp-body is a two-column grid, and a note as its first
           child would take the source column's cell. */}
       {fileNotice && (
@@ -1118,7 +1051,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           )}
         </p>
       )}
-      <div className="rp-body" hidden={remote&&!configuration.value}>
+      <div className="rp-body">
         {/* ── SOURCE pane: the query tool ── */}
         <div className="rp-source">
           {/* THE CONDITIONS LOOK (the operator's pick, 2026-10-02: "Conditions' look"): each block is a card with
@@ -1859,17 +1792,10 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   <input disabled={!editControl}
                     type="text"
                     className={`settings-input mono rp-chan-name${dup || over ? ' invalid' : ''}`}
-                    value={draftName?.id === r.channel.id ? draftName.name : r.displayName}
+                    value={r.displayName}
                     maxLength={24}
                     aria-label={t('program.chan.name.aria', { n: startAt + i })}
-                    onChange={(e) => { if (remote) setDraft({ id: r.channel.id, name: e.target.value }); else rename(i, e.target.value) }}
-                    onBlur={() => { if (remote) commitName(r.channel.id, r.displayName) }}
-                    onKeyDown={(e) => {
-                      if (!remote) return
-                      // Enter commits through the blur; Escape drops the draft and sends nothing.
-                      if (e.key === 'Enter') e.currentTarget.blur()
-                      else if (e.key === 'Escape') { setDraft(null); e.currentTarget.blur() }
-                    }}
+                    onChange={(e) => rename(i, e.target.value)}
                     title={
                       dup
                         ? t('program.chan.dup.title')
@@ -1989,8 +1915,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                     }))
                   )
                     return
-                  if (remote) await sendEdit({ action: 'clear' })
-                  else setRows([])
+                  setRows([])
                 })()
               }}
             >

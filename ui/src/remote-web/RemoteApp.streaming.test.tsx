@@ -61,22 +61,16 @@ it('an approved browser\'s card: one big Stream, a small Listen, the beta line, 
   expect(screen.queryByRole('button', { name: 'Observe station' })).toBeNull()
 })
 
-it('the old workspace and observer come back, unchanged, behind the documented flag', async () => {
+it('the old workspace and observer are gone, even for a browser that kept the old flag', async () => {
   localStorage.setItem('nexus.remote.workspace', 'on')
   const session = account()
   session.stations.push({ id: crypto.randomUUID(), name: 'Home', device: { id: crypto.randomUUID(), name: 'Laptop', approved: 1 } })
   client(session)
   render(<RemoteApp />)
-  expect(await screen.findByRole('button', { name: 'Open Nexus' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Observe station' })).toBeTruthy()
-  // Stream stays the card's first and primary way in with the flag on.
-  expect(screen.getByRole('button', { name: 'Stream' }).classList.contains('remote-button--primary')).toBe(true)
-  // Anything but 'on' leaves them hidden.
-  cleanup(); localStorage.setItem('nexus.remote.workspace', '1')
-  client(session)
-  render(<RemoteApp />)
-  await screen.findByRole('button', { name: 'Stream' })
+  expect(await screen.findByRole('button', { name: 'Stream' })).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Open Nexus' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Observe station' })).toBeNull()
+  localStorage.removeItem('nexus.remote.workspace')
 })
 
 it('not approved yet: one sentence, and Stream asks the shack under this browser\'s own name and key, with nothing to type', async () => {

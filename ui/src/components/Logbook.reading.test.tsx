@@ -23,9 +23,6 @@ import type { LoggedQso } from '../types'
 import type { AnswerTo, LogQuestion } from '../features/logAnswers'
 import { answerAs } from '../features/logAnswers.testkit'
 import { ASK_AGAIN_AFTER_MS, ASK_AGAIN_TIMES, NOT_ANSWERED } from '../features/notAnswered'
-import { StationControlContext } from '../stationAccess'
-import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
-import type { QueryPage } from '../remote-web/application-query-protocol'
 
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -317,51 +314,5 @@ describe('a count from before the latest change', () => {
     await answerHeld()
     expect([badge(), badgeTitle()]).toEqual(['25', null])
     expect(rows()).toEqual(['K25ABC', ...NEWEST_FIRST])
-  })
-})
-
-// The Remote page's Logbook shows the page the station sent (`useRemoteLog`), not the engine's
-// answers: "loading" and "unavailable" are its own states, said in its status line.
-describe('the Remote page’s Logbook', () => {
-  const page = (rows: LoggedQso[]): QueryPage => ({ type: 'applicationPage', requestId: crypto.randomUUID(), collection: 'log',
-    snapshotId: crypto.randomUUID(), offset: 0, total: rows.length, retained: rows.length, nextCursor: null, ageMs: 0,
-    rows: rows as unknown as QueryPage['rows'], meta: {} })
-  /** The station: its log, searched by call. */
-  const station = (log: LoggedQso[], answer: (search: string) => Promise<QueryPage> = async (search) =>
-    page(log.filter((q) => q.call.includes(search.toUpperCase())))) => ({
-    page: vi.fn(async ({ search }: { search: string }) => answer(search)),
-  })
-  const observe = async (source: ReturnType<typeof station>) => {
-    render(
-      <StationControlContext.Provider value={false}>
-        <RemoteCollectionsContext.Provider value={source as unknown as RemoteCollections}>
-          <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />
-        </RemoteCollectionsContext.Provider>
-      </StationControlContext.Provider>,
-    )
-    await act(() => vi.advanceTimersByTimeAsync(300))
-  }
-
-  it(`while the station's page is on its way, and once the station refuses it: never "${EMPTY}"`, async () => {
-    await observe(station(LOG_OF_24, () => new Promise<never>(() => {})))
-    expect(document.body.textContent, 'on its way').not.toContain(EMPTY)
-    cleanup()
-    await observe(station(LOG_OF_24, async () => Promise.reject(new Error('busy'))))
-    expect(document.body.textContent, 'refused').not.toContain(EMPTY)
-  })
-
-  it(`a search that matches nothing says so, never "${EMPTY}"`, async () => {
-    await observe(station(LOG_OF_24))
-    expect(rows(), 'premise: the station’s page').toEqual(NEWEST_FIRST)
-    fireEvent.change(document.querySelector('input.log-search')!, { target: { value: 'ZZ9' } })
-    await act(() => vi.advanceTimersByTimeAsync(300))
-    expect(rows(), 'premise: nothing matches').toEqual([])
-    expect(document.body.textContent).not.toContain(EMPTY)
-    expect(said()).toEqual(['No contacts match “ZZ9”.'])
-  })
-
-  it(`the station's log is empty: "${EMPTY}"`, async () => {
-    await observe(station([]))
-    expect(said()).toEqual([EMPTY])
   })
 })

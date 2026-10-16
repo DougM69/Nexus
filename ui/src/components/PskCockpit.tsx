@@ -52,7 +52,6 @@ import { PSK_MODES, PSK_MODE_BY_SLUG } from '../pskModes'
 import { t } from '../i18n'
 import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
 import { useEscStop } from '../useEscStop'
-import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { PskMacroButton, PskMacroEditor, PskMacroSetSwitch, isEmptyPskSlot } from './PskMacroEditor'
 import type { MacroEditorFocus } from './MacroEditor'
 import { macroEditChordKey } from '../features/macroSets'
@@ -707,7 +706,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             )
           }
           remoteFrequency
-          remoteMode="keyboard"
           onCommitDial={frequencyControl && onSetFrequency ? commitDial : undefined}
           digitTune={onSetFrequency != null}
           wheelSensitivity={wheelSensitivity}
@@ -968,7 +966,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           share={streamShare != null ? (2 - streamShare) * STREAM_LOG_SPLIT : undefined}
           paneRef={logFrameRef}
         >
-          {!control ? psk && <RemoteRecallEntry snap={snap} mode={mode.name} onOpenLog={onOpenLogbook} /> : (
+          {!control ? null : (
           <LogEntry
             onOpenLogbook={onOpenLogbook}
             onEntryCall={(c) => {

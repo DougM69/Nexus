@@ -5,10 +5,6 @@ import { setFrequency } from './api'
 import { bandLabelForMhz } from './band'
 import { clampWheelTarget, stepFrom } from './wheelTuningPolicy'
 import { useStationControl } from './stationAccess'
-import { useRemoteWheelTuning } from './remote-web/wheel-tuning-context'
-import type { WheelTuning } from './remote-web/wheel-tuning'
-import { useRemoteStation } from './remote-web/amplifier-observation'
-import type { ControlContext } from './remote-web/station-operation'
 
 /** Trailing-flush window: at most one CAT write per this many ms while the wheel spins. */
 const FLUSH_MS = 120
@@ -34,10 +30,6 @@ interface WheelTuneOpts {
   sideband: string
   /** Only tune when CAT is up AND we're not transmitting (never move the VFO under a live over). */
   enabled: boolean
-  /** Explicitly reviewed Remote surface; its burst uses the session owner. */
-  remoteFrequency?: boolean
-  /** Identity of the station snapshot displayed by a reviewed Remote surface. */
-  radioId?: number
   /** Hz per tuning step (Shift = ×10). Shared with the tuning strip's step selector. */
   stepHz: number
   /** Sensitivity multiplier (1.0 = stock). <1 needs more scroll per step (damps an energetic /
@@ -88,13 +80,10 @@ export function useWheelTune(
   ref: RefObject<HTMLElement | null>,
   opts: WheelTuneOpts,
 ): (deltaHz: number) => void {
-  const control = useStationControl(), remote = useRemoteWheelTuning()
-  const observation = useRemoteStation(opts.radioId)
+  const control = useStationControl()
   // The listener attaches once; a ref keeps it reading the latest props each event.
-  const owner = useRef<object>({})
-  const stateRef = useRef<WheelTuneOpts & { remote: WheelTuning | null; owner: object; context: ControlContext | null }>({ ...opts, remote: null, owner: owner.current, context: null })
-  stateRef.current = { ...opts, owner: owner.current, enabled: opts.enabled && (control || (!!opts.remoteFrequency && remote.input)),
-    remote: !control && opts.remoteFrequency ? remote.controller : null, context: observation.context }
+  const stateRef = useRef<WheelTuneOpts>(opts)
+  stateRef.current = { ...opts, enabled: opts.enabled && control }
   const targetHzRef = useRef<number | null>(null) // optimistic dial while a burst is in flight
   const accumRef = useRef(0) // sub-step scroll accumulator (pixel-equivalents)
   /** The step `accumRef` was filled AT. One accumulator serves every decade, so without this a
@@ -103,7 +92,6 @@ export function useWheelTune(
    *  14.074 on the 10 MHz digit. Pixels are an expression of intent AT A SCALE; they do not
    *  transfer. Adversarial pass, 2026-08-05. */
   const accumStepRef = useRef<number | null>(null)
-  const remoteInputRef = useRef<string | null>(null)
   const lastWheelRef = useRef(0)
   const timerRef = useRef<number | null>(null)
   const edgeSaidRef = useRef(false) // band edge already reported for THIS burst
@@ -145,16 +133,6 @@ export function useWheelTune(
    *  DOMHighResTimeStamp timeline in a browser but NOT under jsdom's fake timers, and a hook
    *  whose two entry points measure idleness against different clocks re-seeds mid-burst. */
   const seed = useCallback(() => {
-    const source = stateRef.current
-    if (source.remote) {
-      const context = JSON.stringify([source.remote.inputContext(), source.context?.radioId, source.context?.radioConnection, source.context?.ampConnection, source.dialMhz, source.sideband])
-      if (remoteInputRef.current !== context) {
-        remoteInputRef.current = context
-        targetHzRef.current = null
-        accumRef.current = 0
-        accumStepRef.current = null
-      }
-    }
     const now = performance.now()
     const idle = now - lastWheelRef.current > IDLE_RESEED_MS
     lastWheelRef.current = now
@@ -215,10 +193,6 @@ export function useWheelTune(
   const tuneBy = useCallback(
     (deltaHz: number) => {
       if (!stateRef.current.enabled || !deltaHz) return
-      if (stateRef.current.remote) {
-        stateRef.current.remote.nudge(deltaHz, stateRef.current, stateRef.current.onEdge)
-        return
-      }
       seed()
       const from = targetHzRef.current ?? 0
       const { hz, hitEdge } = clampToBand(from + deltaHz, from)
@@ -287,10 +261,6 @@ export function useWheelTune(
       const cap = Math.max(1, Math.min(MAX_STEPS_PER_EVENT, Math.floor(MAX_HZ_PER_EVENT / eff)))
       const steps = Math.max(-cap, Math.min(cap, rawSteps))
       // Scroll up (negative delta) tunes UP, so negate: -steps × step.
-      if (stateRef.current.remote) {
-        stateRef.current.remote.nudge(-steps * eff, stateRef.current, stateRef.current.onEdge)
-        return
-      }
       const from = targetHzRef.current ?? 0
       // #273: a notch at the SELECTED step rounds to that step first (14.110.250 → 14.111.000 at
       // 1 kHz), then moves whole steps. A digit notch (the resolver chose a decade other than the
@@ -305,10 +275,9 @@ export function useWheelTune(
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => {
       el.removeEventListener('wheel', onWheel)
-      if (!control) remote.controller?.cancel(owner.current)
       if (timerRef.current != null) window.clearTimeout(timerRef.current)
     }
-  }, [target, flush, seed, clampToBand, reportEdge, control, remote.controller])
+  }, [target, flush, seed, clampToBand, reportEdge])
 
   return tuneBy
 }

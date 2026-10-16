@@ -12,8 +12,8 @@
 //   1. BEHAVIOUR — with a provisional dial standing, the station's snapshot and the station's own
 //      operation state do not carry it. That is the property, stated about the objects themselves
 //      rather than about the code that builds them.
-//   2. CONTAINMENT — only the four files that are supposed to name it do, and nothing anywhere
-//      feeds it into a `dialMhz`. A fifth reader is a change to the safety case and has to be a
+//   2. CONTAINMENT — only the files that are supposed to name it do, and nothing anywhere
+//      feeds it into a `dialMhz`. Another reader is a change to the safety case and has to be a
 //      deliberate edit to this list, not a quiet import.
 //   3. IT IS NEVER LEFT STANDING — a value the station never confirms reverts to the station's
 //      dial within PROVISIONAL_MS and the operator is told; a confirmed one goes quietly.
@@ -110,8 +110,6 @@ const AS_A_DIAL = /\bdialMhz\s*[:=]\s*\{?[^,;)\n]*provisional/i
  *  here that is not in this list is a widening of the safety case. */
 const ALLOWED = [
   'remote-web/wheel-tuning.ts',
-  'remote-web/wheel-tuning-context.ts',
-  'components/CockpitHeader.tsx',
   'components/FrequencyReadout.tsx',
 ]
 
@@ -143,7 +141,7 @@ function sources(): Source[] {
 }
 
 describe('nothing reads the provisional dial but the digits', () => {
-  it('only the four files that own, carry, pass and draw it name it at all', () => {
+  it('only the files that own and draw it name it at all', () => {
     const all = sources()
     expect(all.length, 'the tree was actually walked').toBeGreaterThan(200)
     expect(violations(all)).toEqual([])
@@ -157,8 +155,8 @@ describe('nothing reads the provisional dial but the digits', () => {
     expect(violations([{ path: 'stationAccess.ts', text: 'const dial = tuning.getProvisionalHz()\n' }]))
       .toEqual(['stationAccess.ts: names the provisional dial'])
     // The allowed files are not exempt from the second rule: this is the mistake that matters.
-    expect(violations([{ path: 'components/CockpitHeader.tsx', text: 'a\nb\n<X dialMhz={remoteTuning.provisionalMhz} />\n' }]))
-      .toEqual(['components/CockpitHeader.tsx:3: feeds a provisional value into a dialMhz'])
+    expect(violations([{ path: 'components/FrequencyReadout.tsx', text: 'a\nb\n<X dialMhz={remoteTuning.provisionalMhz} />\n' }]))
+      .toEqual(['components/FrequencyReadout.tsx:3: feeds a provisional value into a dialMhz'])
     expect(violations([{ path: 'remote-web/wheel-tuning.ts', text: 'snapshot.radio.dialMhz = this.provisional!.hz / 1e6\n' }]))
       .toEqual(['remote-web/wheel-tuning.ts:1: feeds a provisional value into a dialMhz'])
   })

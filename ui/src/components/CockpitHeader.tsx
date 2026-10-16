@@ -1,7 +1,4 @@
-import { QuickRadioDetails, useRemotePresentation } from '../remote-web/presentation'
-import { useRadioLevels } from '../remote-web/useRadioLevels'
 import { useStationControl } from '../stationAccess'
-import { ModeEntry, type OperatingSection, type OperatingWorkspace } from '../remote-web/ModeEntry'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts) for the CAT
 // pill's two plates alone. The TX-enable latch, Tune, ATU and Stop TX it used to draw for six
 // cockpits — and their deferred labels — moved to the TX strip under the scope
@@ -21,7 +18,6 @@ import { bandLabelForMhz, bandRangeForLabel } from '../band'
 import { pushToast } from '../toast'
 import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
-import { useRemoteWheelTuning } from '../remote-web/wheel-tuning-context'
 import { t } from '../i18n'
 
 /** The header's annunciator plates — state, not prose: the CAT link's ✓/✗ pill. */
@@ -71,9 +67,6 @@ export interface CockpitHeaderProps {
   /** Commit a typed dial (MHz). Omit ⇒ the readout is display-only. */
   onCommitDial?: (mhz: number) => void
   remoteFrequency?: boolean
-  /** Explicit Remote station entry; opening the cockpit itself stays passive. */
-  remoteMode?: OperatingSection
-  remoteWorkspace?: OperatingWorkspace
   /** Enable mouse-wheel tuning over the readout (Phone/CW). */
   wheelTune?: boolean
   /** PER-DIGIT wheel tuning on the readout (operator request): hover the 100 Hz digit and one
@@ -133,8 +126,6 @@ export function CockpitHeader({
   bandControl,
   onCommitDial,
   remoteFrequency = false,
-  remoteMode,
-  remoteWorkspace,
   wheelTune = false,
   digitTune = false,
   wheelStepHz = 100,
@@ -146,10 +137,7 @@ export function CockpitHeader({
   catStatus,
 }: CockpitHeaderProps) {
   const control = useStationControl()
-  const levels = useRadioLevels(snap)
-  const remotePower = power?.unit === '%' && levels.can('power')
-  const powerInput = levels.input('power'), powerDraft = levels.draft('power')
-  const powerValue = !control && power?.unit === '%' && powerDraft !== undefined ? Math.round(powerDraft * 100) : power?.value
+  const powerValue = power?.value
   const radio = snap.radio
   const catOk = radio.catOk === true
   const dial = radio.dialMhz
@@ -178,10 +166,7 @@ export function CockpitHeader({
   // transmitter — and if it carries across a band edge, halts the over and re-commands mode too.
   //
   // Do NOT re-derive this from flags. Ask the arbiter; it ships the reason with the answer.
-  const remoteTuning = useRemoteWheelTuning()
   const tuneBy = useWheelTune(readoutRef, {
-    remoteFrequency,
-    radioId: snap.activeRadioId,
     dialMhz: dial,
     sideband: radio.sideband || 'USB',
     enabled:
@@ -217,10 +202,6 @@ export function CockpitHeader({
     onSnap,
   })
 
-  const display = useRemotePresentation()
-  const quick = display?.presentation === 'quick' && (remoteMode === 'cw' || remoteMode === 'phone')
-  const brief = quick && !display.radioDetails
-
   // ON AIR is the ARBITER's answer, not the FT slot flag: `transmitting` is written only
   // by the slot/beacon TX path, so a voice over, CW sending, the tune carrier, a held mic
   // key and SSTV all read as "RX" through it — the #57 report (FTdx10, Phone/CW showed no
@@ -229,8 +210,8 @@ export function CockpitHeader({
   const onAir = isOnAir(radio)
 
   return (
-    <div className={`cockpit-header${quick ? ' cockpit-header--quick' : ''}${brief ? ' cockpit-header--brief' : ''}`}>
-      <div className="ch-identity">{modeIndicator}<ModeEntry snap={snap} mode={remoteMode} workspace={remoteWorkspace} onSnap={onSnap} /></div>
+    <div className="cockpit-header">
+      <div className="ch-identity">{modeIndicator}</div>
 
       <div className="ch-freq">
         {/* The VFO display is a well (styles.css DISPLAY WELLS): dark in both themes. Only the
@@ -267,7 +248,6 @@ export function CockpitHeader({
             // a remote cockpit. Passed explicitly rather than read from the context inside the
             // readout, because every other readout in the tree (the top bar, Settings, the memory
             // rows) must keep showing the station's own number and nothing else.
-            provisionalMhz={remoteFrequency ? remoteTuning.provisionalMhz : undefined}
           />
         </div>
         {frequencyExtras && <div className="ch-freq-extras">{frequencyExtras}</div>}
@@ -275,8 +255,6 @@ export function CockpitHeader({
       </div>
 
       {children != null && <div className="ch-mode-extras">{children}</div>}
-
-      {quick && <QuickRadioDetails />}
 
       <div className="ch-actions">
         {actions}
@@ -291,7 +269,6 @@ export function CockpitHeader({
             Elecraft has none). Operator, 2026-09-27: it only ever refuses more. */}
         <AmpStrip
           amp={snap?.radio?.amp ?? null}
-          radioId={snap?.activeRadioId}
           radioTransmitting={onAir}
         />
 
@@ -306,7 +283,7 @@ export function CockpitHeader({
             }
           >
             <span>{power.label ?? t('cockpit.header.power.label')}</span>
-            <WheelRange wheelStep={power.wheelStep} {...powerInput} disabled={(!control && !remotePower) || powerValue == null}
+            <WheelRange wheelStep={power.wheelStep} disabled={!control || powerValue == null}
               type="range"
               min={0}
               max={power.unit === '%' ? 100 : 1}
@@ -330,11 +307,9 @@ export function CockpitHeader({
               onChange={(e) => {
                 const raw = Number(e.target.value)
                 if (control) power.onChange(power.unit === 'drive' ? raw ** 2 : raw)
-                else if (remotePower) void levels.change('power', raw / 100)
-                  .catch(error => pushToast(String(error), 'error'))
               }}
-              onPointerDown={() => { power.onPointerDown?.(); if (remotePower) powerInput.onPointerDown() }}
-              onPointerUp={() => { power.onPointerUp?.(); if (!control) powerInput.onPointerUp() }}
+              onPointerDown={() => { power.onPointerDown?.() }}
+              onPointerUp={() => { power.onPointerUp?.() }}
               aria-label={power.label ?? t('cockpit.header.power.label')}
             />
             <span className="cockpit-pwr-val">

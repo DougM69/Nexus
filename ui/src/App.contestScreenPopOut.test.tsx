@@ -28,11 +28,6 @@ import { DetachedPanel } from './DetachedPanel'
 import { allFeatureIds } from './features/registry'
 import { pastTheSwitch } from './components/ConnectView.testkit'
 import { CONTEST_SCREEN_SAVED_KEY } from './components/ContestScreenWindow'
-import { RemoteFieldDay } from './remote-web/RemoteFieldDay'
-import { RemoteCollections, RemoteCollectionsContext } from './remote-web/collections'
-import type { ApplicationClient } from './remote-web/application-client'
-import { StationDataContext } from './stationAccess'
-import { fieldDayPage } from './remote-web/__fixtures__/field-day-page'
 import { t } from './i18n'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
 
@@ -510,23 +505,6 @@ describe('the control is the main window’s alone', () => {
     const app = await mountPopOut('contestlog')
     expect(app.querySelector('.fd-event-banner'), 'control: the Logger window drew the screen’s banner').not.toBeNull()
     expect(popOutControls(app)).toEqual([])
-  })
-
-  it('not on the Remote page', async () => {
-    const source = new RemoteCollections({
-      invoke: vi.fn(async (): Promise<unknown> => fieldDayPage()),
-      supports: () => true,
-      getPhase: () => 'ready',
-    } as unknown as ApplicationClient)
-    const { container } = render(
-      <StationDataContext.Provider value={true}>
-        <RemoteCollectionsContext.Provider value={source}>
-          <RemoteFieldDay tier="FT8" />
-        </RemoteCollectionsContext.Provider>
-      </StationDataContext.Provider>,
-    )
-    await waitFor(() => expect(container.querySelector('.fd-event-banner'), 'control: the Remote page drew the screen’s banner').not.toBeNull())
-    expect(popOutControls(container)).toEqual([])
   })
 })
 

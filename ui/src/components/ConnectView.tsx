@@ -28,7 +28,7 @@ const Globe3D = lazy(() => import('./Globe3D'))
 import { PaneFrame } from './connect/PaneFrame'
 import { UtcClock } from './UtcClock'
 import { DashboardBar } from './DashboardBar'
-import { remoteFeeds, resolveSelection, usePaneContext } from './connect/usePaneContext'
+import { resolveSelection, usePaneContext } from './connect/usePaneContext'
 import { paneById } from './connect/panes'
 import { RailSplitHandle, RailWidthHandle, useRailWidths } from './connect/RailHandles'
 import { PanelsMenu } from './PanelsMenu'
@@ -72,9 +72,6 @@ import { keepIntentSetup, loadIntentSetup, saveIntentSetup, type MapChoice } fro
 import { keepSatFavOnly } from '../features/satChase'
 import { MapPicker, ALL_MAP_CHOICES, STREET_MAP_CHOICES } from './MapPicker'
 import { t } from '../i18n'
-import { NavigationMapContext, useNavigation, useSatelliteLive } from '../remote-web/useNavigation'
-import { useStationCapability } from '../stationAccess'
-import type { ConnectData, PathData, SatelliteData } from '../remote-web/navigation'
 
 /** The two intents NAMED for a programme and a band. POTA and SOTA are the programmes' own
  * names and `6m/VHF` is a band plus a band group — tokens, exactly as they are everywhere
@@ -439,18 +436,11 @@ export function ConnectView({
   hostBar,
   presets,
 }: Props) {
-  const remoteConnect=useNavigation<ConnectData>('connect')
-  const remoteSats=useNavigation<SatelliteData>('satellites')
-  const remoteTrack=useSatelliteLive()
-  const remote=remoteConnect.remote
-  // A browser may point the rotator only while the station advertises it.
-  const remoteRotator=useStationCapability('rotator')
-  const [remoteSelection,setRemoteSelection]=useState<string|null>(null)
-  const selectedCall=remote?remoteSelection:nativeSelectedCall
-  const onSelectCall=remote?setRemoteSelection:nativeOnSelectCall
-  const prop=remote?remoteConnect.value?.prop??null:nativeProp
-  const myGrid=remote?remoteConnect.value?.mygrid??'':nativeMyGrid
-  const station=remote?{call:remoteConnect.value?.mycall??'',grid:remoteConnect.value?.mygrid??''}:nativeStation??{call:'',grid:''}
+  const selectedCall=nativeSelectedCall
+  const onSelectCall=nativeOnSelectCall
+  const prop=nativeProp
+  const myGrid=nativeMyGrid
+  const station=nativeStation??{call:'',grid:''}
   const [intent, setIntent] = useState<MapIntent>(() =>
     persisted('nexus.connect.intent', ['dx', 'pota', 'casual', 'vhf'] as const, 'dx'),
   )
@@ -480,7 +470,7 @@ export function ConnectView({
   // draw here (no pack, no WebGL2, not offered) shows Flat and says why, without discarding the pick,
   // as 3D does; while the answer is still being read nothing is said.
   const streetMaps = useStreetMaps()
-  const streetOffered = !remote && streetMaps.offered === true
+  const streetOffered = streetMaps.offered === true
   const streetPack = streetOffered ? packFor(streetMaps.packs, gridToLatLon(myGrid)) : null
   const streetCanDraw = streetOffered && streetMaps.webgl2 && streetPack != null
   const streetKnown = streetMaps.offered === false || (streetMaps.offered === true && streetMaps.packs !== null)
@@ -541,15 +531,7 @@ export function ConnectView({
   // fills the selection box), the window's one poll of Connect's feeds, and the path outlook for the
   // selection — built by the code the dashboard rail beside the cockpits uses too
   // (connect/usePaneContext), so a box reads the same in both places and nothing is polled twice.
-  // The hosted Remote page polls nothing: its copies come from the station's `connect` and `path`
-  // collections (`remoteFeeds` is the mapping this view's own effect used to make).
   const selection = useMemo(() => resolveSelection(selectedCall, stations, prop), [selectedCall, stations, prop])
-  const selGrid = selection.selGrid
-  const remotePath=useNavigation<PathData>('path',selGrid??'',!!selGrid)
-  const remoteFeedValues = useMemo(
-    () => (remote ? remoteFeeds(remoteConnect.value, remoteConnect.ageMs) : null),
-    [remote, remoteConnect.value, remoteConnect.ageMs],
-  )
   const { ctx, xrayNow } = usePaneContext({
     myGrid,
     theme,
@@ -558,18 +540,14 @@ export function ConnectView({
     needByCall,
     needAlerts,
     amp,
-    // The Remote browser's copy carries no radio band of its own here.
-    rigBand: remote ? null : (rigBand ?? null),
+    rigBand: rigBand ?? null,
     selectedCall,
     selection,
     onSelectCall,
     onWorkSpot,
-    onPoint: remote&&!remoteRotator?undefined:onPoint,
+    onPoint,
     focusBand,
     toggleFocusBand,
-    remote: remoteFeedValues
-      ? { feeds: remoteFeedValues, pathPred: remotePath.value?.mygrid===myGrid?remotePath.value.prediction:null }
-      : null,
     spotsFeed,
     otaBoard,
     neededBoard,
@@ -780,7 +758,6 @@ export function ConnectView({
   }
 
   return (
-    <NavigationMapContext.Provider value={remote?{connect:remoteConnect.value,satellites:remoteSats.value?.mygrid===myGrid?remoteSats.value.view:null,track:remoteTrack?.track??null,ageMs:remoteConnect.ageMs}:null}>
     <main className="layout single">
       <div className={`connect-shell${chromeHidden ? ' map-full' : ''}`}>
         {/* FRAME + BAR's bar (the operator's pick: "Yes, the full bar" — the dashboard window's, call
@@ -789,7 +766,6 @@ export function ConnectView({
         {!chromeHidden && barShown && <DashboardBar call={station.call} grid={station.grid} prop={prop} />}
         {!chromeHidden && (
         <div className="connect-header">
-          {remote&&<span role="status" className="dim">{remoteConnect.value?t('remote.collectionObserver'):remoteConnect.loading?t('remote.collectionLoading'):t('remote.collectionUnavailable')}</span>}
           <div
             className="map-proj connect-intent"
             role="group"
@@ -836,7 +812,7 @@ export function ConnectView({
               lead={picker}
             />
           </div>
-          {onPopOut && !remote && (
+          {onPopOut && (
             <button
               type="button"
               className="connect-popout"
@@ -987,6 +963,5 @@ export function ConnectView({
         </div>
       </div>
     </main>
-    </NavigationMapContext.Provider>
   )
 }

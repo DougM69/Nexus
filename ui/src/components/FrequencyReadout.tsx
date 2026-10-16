@@ -10,7 +10,6 @@ import { announce } from '../announce'
 import { parseOperatorNumber } from '../numInput'
 import { t } from '../i18n'
 import { useStationCapability, useStationControl } from '../stationAccess'
-import { useRemoteWheelTuning } from '../remote-web/wheel-tuning-context'
 
 /** The unit printed beside the dial. A unit symbol, not a word. */
 const MHZ = 'MHz'
@@ -132,15 +131,11 @@ export function FrequencyReadout({
   const control = useStationControl(), frequencyControl = useStationCapability('frequency')
   const blocked = disabled
   disabled = disabled || !(control || (remoteFrequency && frequencyControl))
-  const wheel = useRemoteWheelTuning()
   // Remote authority is re-read every second and lapses briefly between replies. The digit spans stay
   // drawn through that gap; only tuning waits for it. Unmounting them made the hit regions (and the
   // hover under a resting pointer) blink with every late heartbeat.
   const digitsShown = digitTune && (control || remoteFrequency)
-  // Digit steps (wheel and keyboard) outlive that gap too: they join the shared wheel burst, which is
-  // sent once control is current again or refused as not sent. So does typed entry (`frequencyControl`
-  // keeps through a lapse): its commit's command waits for current control in OperationClient.
-  digitTune = digitTune && (control || (remoteFrequency && wheel.input))
+  digitTune = digitTune && control
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const canEdit = editable && !disabled

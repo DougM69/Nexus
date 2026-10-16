@@ -20,8 +20,6 @@
 // `globe.*`, and the two legends + the ★-filter hint come from `map.*` because the 2-D map
 // and this globe are deliberately identical there.
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useContext } from 'react'
-import { NavigationMapContext } from '../remote-web/useNavigation'
 import { heatPulse, sectorPulse } from '../features/pulse'
 import { loadGlobeLayers, saveGlobeLayers, type GlobeLayers } from '../features/globeLayers'
 import { useStableByKey } from '../features/useStableByKey'
@@ -498,10 +496,6 @@ function Globe3DView({
   layersRev = 0,
   onReload,
 }: Props & { onReload: () => void }) {
-  const remoteMap=useContext(NavigationMapContext)
-  const remoteConnect=remoteMap?.connect
-  const remoteFeed=<T,>(feed:{value:T;ageMs:number;validForMs:number}|null|undefined):T|null=>
-    feed&&feed.ageMs+(remoteMap?.ageMs??Infinity)<feed.validForMs?feed.value:null
   // The roster, CONTENT-keyed: App sends a new array on every 300 ms snapshot. The RX arcs, the
   // decodes cloud and the render-on-demand wake below all read this, so an unchanged roster
   // rebuilds nothing and wakes nothing.
@@ -557,11 +551,11 @@ function Globe3DView({
   const [nowMs, setNowMs] = useState(() => Date.now())
   // Self-fetched space-weather feeds (aurora + PCA come from their own polls, like the 2-D map).
   const [nativeAuroraPts, setAuroraPts] = useState<AuroraPoint[]>([])
-  const auroraPts=remoteMap?remoteFeed(remoteConnect?.aurora)??[]:nativeAuroraPts
+  const auroraPts=nativeAuroraPts
   const [nativePca, setPca] = useState<PcaView | null>(null)
-  const pca=remoteMap?remoteFeed(remoteConnect?.pca):nativePca
+  const pca=nativePca
   const [nativeSats, setSats] = useState<SatView | null>(null)
-  const sats=remoteMap?remoteMap.satellites:nativeSats
+  const sats=nativeSats
   // ★/All chip state + star-set revision, synced by SAT_CHASE_EVENT. Without
   // these in the sat-scene deps the chip's flip reached the 3-D sky only on
   // the next 30 s poll — the pane beside it had already changed (the "one
@@ -578,7 +572,7 @@ function Globe3DView({
   }, [])
   const [cqzones, setCqzones] = useState<[number, number][][]>([]) // each zone → boundary lines
   const [nativeWorkedGrids, setWorkedGrids] = useState<{ lat: number; lon: number }[]>([])
-  const workedGrids=useMemo(()=>remoteMap?(remoteConnect?.coverage.grids??[]).flatMap(grid=>{const ll=gridToLatLon(grid);return ll?[ll]:[]}):nativeWorkedGrids,[!!remoteMap,remoteConnect,nativeWorkedGrids])
+  const workedGrids=nativeWorkedGrids
   // Toggleable 3-D layers. Default-on mirrors the 2-D map (aurora off by default), and the
   // operator's picks are restored from the per-surface store on mount (#211).
   const [show, setShow] = useState<GlobeLayers>(() => loadGlobeLayers(showStates))
@@ -1075,7 +1069,6 @@ function Globe3DView({
 
   // Self-fetch aurora while its layer is on (server caches ~10 min).
   useEffect(() => {
-    if(remoteMap)return
     if (!show.aurora) {
       setAuroraPts([])
       return
@@ -1091,11 +1084,10 @@ function Globe3DView({
       live = false
       clearInterval(id)
     }
-  }, [show.aurora,!!remoteMap])
+  }, [show.aurora])
 
   // Self-fetch PCA while its layer is on (~5 min).
   useEffect(() => {
-    if(remoteMap)return
     if (!show.pca) {
       setPca(null)
       return
@@ -1111,7 +1103,7 @@ function Globe3DView({
       live = false
       clearInterval(id)
     }
-  }, [show.pca,!!remoteMap])
+  }, [show.pca])
 
   // Sync the space-weather point clouds when their data / toggles / readiness change.
   useEffect(() => {
@@ -1227,11 +1219,9 @@ function Globe3DView({
   // invented between ticks, which is why the bird's position is never
   // interpolated: it moves when the tracker says it moved.
   const [nativePass, setPass] = useState<SatTrackStatus | null>(null)
-  const pass=remoteMap?remoteMap.track:nativePass
+  const pass=nativePass
   const passRef = useRef<SatTrackStatus | null>(null)
-  useEffect(()=>{if(remoteMap)passRef.current=remoteMap.track},[remoteMap])
   useEffect(() => {
-    if(remoteMap)return
     if (!show.pass) {
       passRef.current = null
       setPass(null)
@@ -1252,7 +1242,7 @@ function Globe3DView({
       live = false
       clearInterval(id)
     }
-  }, [show.pass,!!remoteMap])
+  }, [show.pass])
 
   // The pass the globe DRAWS: the scene lights up at AOS and goes dark at LOS.
   // Before then there is no look angle and no measured range — the bird is
@@ -1276,7 +1266,6 @@ function Globe3DView({
   // the 2-D map).
   const needSats = show.sats || passBirdKey != null
   useEffect(() => {
-    if(remoteMap)return
     if (!needSats) {
       setSats(null)
       return
@@ -1292,7 +1281,7 @@ function Globe3DView({
       live = false
       clearInterval(id)
     }
-  }, [needSats,!!remoteMap])
+  }, [needSats])
 
   // Build the satellite scene: a REAL 3-D orbit per bird (the ground track lifted to its
   // orbital altitude), a footprint ring on the surface, and a live marker. This is the
@@ -1605,7 +1594,6 @@ function Globe3DView({
 
   // My coverage: worked 4-char grids from the log (self-fetch while the layer is on).
   useEffect(() => {
-    if(remoteMap)return
     if (!show.coverage) {
       setWorkedGrids([])
       return

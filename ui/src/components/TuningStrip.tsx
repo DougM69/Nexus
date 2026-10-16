@@ -5,7 +5,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 //
 // The units rule lands on the STEP: every step in Hz, the RIT/XIT offsets, the dial and the
 // VFO letters are invariant and stay in the code, as do the four button names below.
-import { useContext, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import type { AppSnapshot } from '../types'
 import { setFrequency, setRit, setXit, setVfo, swapVfo } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
@@ -13,11 +13,6 @@ import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
 import { stepFrom } from '../wheelTuningPolicy'
 import { t } from '../i18n'
-import { pushToast } from '../toast'
-import { controlFailureMessage } from '../remote-web/control-failure'
-import { OperationFailure } from '../remote-web/operation-client'
-import { RemoteWheelTuningContext } from '../remote-web/wheel-tuning-context'
-import { useRemoteStation } from '../remote-web/amplifier-observation'
 
 /** The rig's own vocabulary on these buttons: the two clarifiers and the two VFOs. Named so
  *  the catalog guard reads them as the deliberate tokens they are. */
@@ -64,7 +59,6 @@ export function TuningStrip({
   showReadout?: boolean
 }) {
   const control = useStationControl(), frequency = useStationCapability('frequency')
-  const remoteTuning = useContext(RemoteWheelTuningContext), observation = useRemoteStation(snap.activeRadioId)
   const frequencyAllowed = control || (frequency && snap.radio.source === 'native' && !snap.radio.txEnabled &&
     !snap.radio.txBusyReason && !snap.radio.transmitting && !snap.radio.rigKeyed && !snap.radio.tuning)
   // A browser holds VFO + XIT under splitTuning (they move the transmitter) and RIT under ritTuning.
@@ -78,10 +72,7 @@ export function TuningStrip({
   const rit = snap.radio.ritHz ?? 0
   const xit = snap.radio.xitHz ?? 0
   const vfo = snap.radio.activeVfo || 'A'
-  const apply = (p: Promise<AppSnapshot>) => void p.then((s) => s && onSnap?.(s)).catch((error) => {
-    // A refused browser change is said, never swallowed: the value it shows stays the station's.
-    if (!control) pushToast(controlFailureMessage(error), 'error')
-  })
+  const apply = (p: Promise<AppSnapshot>) => void p.then((s) => s && onSnap?.(s)).catch(() => {})
   const fmtOffset = (hz: number) => (hz > 0 ? `+${hz}` : `${hz}`)
 
   const tuneTo = async (mhz: number) => {
@@ -99,24 +90,7 @@ export function TuningStrip({
   }
   // #273: `steps` whole steps, the first rounding to the step (18.110.250 → 18.111.000 at 1 kHz),
   // in integer Hz so float drift never accumulates on repeated nudges.
-  //
-  // A BROWSER'S ARROWS STEP THE WHEEL'S OWN BURST, and the desktop's command the dial directly as
-  // they always have. `dial` is the sample this strip draws, a poll behind the stream and further
-  // behind a wheel command already in flight; an absolute dial built from it walked back what the
-  // wheel had just asked for, or was refused as a second command while the digits showed neither.
-  // `nudgeSteps` keeps the rounding above and hands the press to the one pipeline (wheel-tuning.ts).
   const nudge = (steps: number) => {
-    if (!control && remoteTuning) {
-      // A PRESS IS ONE GESTURE, SO IT SAYS SOMETHING. The burst refuses a wheel spin quietly on
-      // purpose — ten notches must not raise ten toasts — but an arrow that does nothing and says
-      // nothing reads as a broken button, and the state that gets here is a real one (the
-      // observation this browser is looking at is not current, so the pipeline will not build a
-      // command on it). The button stays offered; the press carries the refusal, in the same words
-      // as every other gesture refused before anything left the browser.
-      if (!remoteTuning.nudgeSteps(steps, step, { dialMhz: dial, sideband: snap.radio.sideband || 'USB', context: observation.context }))
-        pushToast(controlFailureMessage(new OperationFailure('notController', false)), 'error')
-      return
-    }
     void tuneTo(stepFrom(Math.round(dial * 1e6), steps, step) / 1e6)
   }
 
@@ -125,7 +99,6 @@ export function TuningStrip({
   // that have no agreed default frequency. Disabled while transmitting or CAT-down.
   const readoutRef = useRef<HTMLSpanElement>(null)
   useWheelTune(readoutRef, {
-    remoteFrequency: true,
     dialMhz: dial,
     sideband: snap.radio.sideband || 'USB',
     enabled: catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,

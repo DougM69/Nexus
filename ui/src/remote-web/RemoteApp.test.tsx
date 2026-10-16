@@ -5,10 +5,9 @@ import { BrowserClient, HostedConnection, RemoteError } from './client'
 import type { AccountSession } from './client'
 import { RemoteApp } from './RemoteApp'
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.removeItem(WORKSPACE_FLAG) })
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
 // The old watch/control workspace and observer are hidden behind this flag while streaming is proven;
 // the tests of those views set it, which is how the hidden workspace stays covered.
-const WORKSPACE_FLAG = 'nexus.remote.workspace'
 function account(entitled = true): AccountSession {
   const accountId = crypto.randomUUID()
   const now = Date.now()
@@ -246,7 +245,6 @@ it('browser enrollment displays the local comparison code and does not imply app
     if (path.endsWith('/device')) session.stations[0].device = { id: deviceId, name: 'Test browser', approved: 0 }
     return { ...session, stations: session.stations.map(station => ({ ...station })) }
   })
-  localStorage.setItem(WORKSPACE_FLAG, 'on')
   render(<RemoteApp />)
   fireEvent.click(await screen.findByRole('button', { name: 'Listen' }))
   await screen.findByText(`Browser code: ${deviceId.slice(-6)}`)
@@ -456,7 +454,6 @@ function openableStation() {
   const session = account()
   session.stations.push({ id: crypto.randomUUID(), name: 'Home', device: { id: crypto.randomUUID(), name: 'Laptop', approved: 1 } })
   const service = client(session)
-  localStorage.setItem(WORKSPACE_FLAG, 'on')
   let refuse: ((error: RemoteError) => void) | undefined
   vi.spyOn(HostedConnection.prototype, 'start').mockImplementation(function (this: HostedConnection) {
     refuse = error => this.onRefused?.(error)
@@ -470,7 +467,7 @@ function openableStation() {
 it('goes back to the stations page and names the end when an open session is refused', async () => {
   const h = openableStation()
   render(<RemoteApp />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Observe station' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Listen' }))
   expect(await screen.findByRole('button', { name: 'Disconnect and return to stations' })).toBeTruthy()
   // Control: nothing refused yet, so the session is still up.
   expect(screen.queryByRole('heading', { name: 'Your stations' })).toBeNull()
@@ -489,7 +486,7 @@ it('goes back to the stations page and names the end when an open session is ref
 it('names an expired sign-in, not an ended session, when that is why the ticket was refused', async () => {
   const h = openableStation()
   render(<RemoteApp />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Observe station' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Listen' }))
   await screen.findByRole('button', { name: 'Disconnect and return to stations' })
   act(() => h.refuse(new RemoteError(401, 'signInRequired')))
   const alert = await screen.findByRole('alert')
@@ -500,26 +497,11 @@ it('names an expired sign-in, not an ended session, when that is why the ticket 
 it('signs out from inside an open session, not only from the stations page', async () => {
   const h = openableStation()
   render(<RemoteApp />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Observe station' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Listen' }))
   const signOut = await screen.findByRole('button', { name: 'Sign out' })
   // Control: opening a session signs nobody out.
   expect(h.service.signOut).not.toHaveBeenCalled()
   fireEvent.click(signOut)
   await waitFor(() => expect(h.service.signOut).toHaveBeenCalledTimes(1))
   expect(h.stop).toHaveBeenCalled()
-})
-
-// The observer-only browser has no session row to hold this, and it is the browser the control is
-// most for: watching a frequency and nothing else is exactly what a backgrounded tab would
-// otherwise quietly stop doing.
-it('offers Keep watching to an observer-only browser, not only to the full workspace', async () => {
-  localStorage.clear() // the choice is remembered per station; start from the default
-  openableStation()
-  render(<RemoteApp />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Observe station' }))
-  const keep = await screen.findByRole('button', { name: 'Keep watching' })
-  // Off by default: the feed sleeps with the tab unless this operator says otherwise.
-  expect(keep.getAttribute('aria-pressed')).toBe('false')
-  fireEvent.click(keep)
-  expect(screen.getByRole('button', { name: 'Keep watching' }).getAttribute('aria-pressed')).toBe('true')
 })

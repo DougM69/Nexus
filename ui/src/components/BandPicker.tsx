@@ -11,8 +11,6 @@ import { getLicensedBandPlan, pickBand } from '../api'
 import { bandChipInk, bandColor } from '../bandColors'
 import { BandMenu } from './BandMenu'
 import { t } from '../i18n'
-import { controlFailureMessage } from '../remote-web/control-failure'
-import { pushToast } from '../toast'
 
 interface Props {
   snap: AppSnapshot
@@ -66,7 +64,7 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
     if (!plan.some((c) => c.band === band)) return
     void pickBand(band, mode)
       .then((s) => onSnap?.(s))
-      .catch((error) => { if (!local) pushToast(controlFailureMessage(error), 'error') })
+      .catch(() => {})
   }
 
   // If the operator has manually tuned to a band that's not a licensed jump target (or off

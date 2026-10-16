@@ -88,11 +88,9 @@ const NEWEST_APPLICATION_VERSION = Math.max(...APPLICATION_VERSIONS)
 const PTT_GAP_MS = Number((await readFile(new URL('../../crates/tempo-app/src/remote_control/ptt_hold.rs', import.meta.url), 'utf8'))
   .match(/pub const GAP: Duration = Duration::from_millis\((\d+)\);/)?.[1])
 if (!(PTT_GAP_MS > 0)) throw new Error('could not read the station\'s PTT hold GAP')
-// Every scenario this suite runs. Extracted from the `for` head on 2026-09-20 so CI can
-// shard it: 17 application versions plus 10 feature scenarios is 27 full compiled-browser
-// runs — PKCE, device approval, observation and viewport checks each — and in series that
-// was 47.7 of the Remote job's 50 minutes, which made it the workflow's critical path.
-const SCENARIOS = [...APPLICATION_VERSIONS.map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,ftOperating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,sessionLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,contactContinuity:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,workSpot:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedTier:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedWorkspace:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,stream:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,stream:true,phone:true}]
+// Every scenario this suite runs: the stream, at a desktop's size and at a phone's. The hosted page is
+// the stream page; the old workspace's scenarios went with it.
+const SCENARIOS = [{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,stream:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,stream:true,phone:true}]
 
 // Shard selection. Unset means shard 0 of 1 — i.e. EVERYTHING — so a local run,
 // `npm --prefix remote run test:browser` and `scripts/gates` all keep full coverage. CI
@@ -391,10 +389,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     // Signed out, the page offers "Sign in" and "Create an account" (the site restyle); both open the
     // same SDK flow, so the PKCE exchange below is unchanged.
     await until(`!!${button('Sign in')}&&!!${button('Create an account')}`)
-    // The old watch/control workspace and observer are hidden behind a flag while streaming is proven
-    // (2026-10-02). Every scenario but the stream's sets it, which is how the hidden workspace stays
-    // covered here; the stream's runs without it and asserts the entry points are gone.
-    if(!stream)await evaluate(`localStorage.setItem('nexus.remote.workspace','on');true`)
+    // The old watch/control workspace and observer are gone. A browser that kept the flag that once
+    // showed them still gets the stream page alone.
+    await evaluate(`localStorage.setItem('nexus.remote.workspace','on');true`)
     await geometry(390,844)
     await browser.call('Fetch.enable',{patterns:[{urlPattern:'https://identity.remote-test.invalid/*'}]},session)
     await click(button('Sign in'))
@@ -412,7 +409,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     // One approval: the confirming browser is approved with no request and no approve-device call.
     await until(`!!${button('Remove this browser’s approval')}`)
     assert.equal(await evaluate(`document.body.textContent.includes("isn't approved for this station yet")||document.body.textContent.includes('Waiting for approval at the shack')`),false,'the pairing browser is never asked to request a separate approval')
-    assert.equal(await evaluate(`!!${button('Observe station')}&&!!${button('Open Nexus')}`),!stream,'the old workspace entry points show only behind the flag')
+    assert.equal(await evaluate(`!!${button('Observe station')}||!!${button('Open Nexus')}`),false,'the old workspace entry points are gone, flag or no flag')
     const pairedDevices=(await app.db.prepare('SELECT id,approved FROM devices WHERE station_id=?').bind(pair.stationId).all()).results
     assert.equal(pairedDevices.length,1);assert.equal(pairedDevices[0].approved,1,'approving the pairing approved the browser that confirmed it')
     // Any OTHER browser still needs its own approval at the shack. Removing this browser's approval
