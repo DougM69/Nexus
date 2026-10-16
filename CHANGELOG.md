@@ -327,13 +327,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (under the callsign card, about the station the card shows), RTTY and PSK (under the log strip),
   tick **Stats** in ⊞ Panels. Your tick or untick wins at every window size. It moves like any other
   pane in ⊞ Panels ▸ Arrange in Phone, CW, JS8 and FT. In Phone and CW the log form now heads its
-  column: a box you put in that column stands under it.
+  column: a box you put in that column stands under it. NEEDS-BENCH: the pane in each cockpit with a
+  log entry.
 - **Awards: needed by band.** For DXCC, WAS and WAZ, each band's count of what you have never
   worked there and what you have worked there but not confirmed, with the list behind each count.
+  NEEDS-BENCH: each band's counts against the Needed board.
 - **WAZ counts an eQSL from an Authenticity-Guaranteed member as a confirmation**, as CQ does.
   The eQSL download now keeps that mark on the contact the card confirms (it used to drop it), so
   the Awards view's WAZ total, the Needed board's zone confirmations and the Stats pane agree.
-  DXCC and WAS still count only LoTW and cards.
+  DXCC and WAS still count only LoTW and cards. NEEDS-BENCH: the WAZ confirmations in Awards and the
+  Stats pane against the Needed board.
 
 ### Changed
 
