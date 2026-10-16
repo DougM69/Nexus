@@ -65637,9 +65637,9 @@ mod digital_side_licence_tests {
         /// `tx_allowed()`, the gate under test.
         got: bool,
         /// TODAY'S MODEL, written out independently: the verdict before the commanded word was
-        /// known. In Digital, the carrier one offset from the transmit dial on the STORED
-        /// sideband's side — below it for `LSB`, above it for anything else; Keyboard and RTTY
-        /// carry their own ([`Soundcard::old`]).
+        /// known. In Digital, the frame one offset from the transmit dial on the STORED
+        /// sideband's side ([`side_allows`]) — below it for `LSB`, above it for anything else;
+        /// Keyboard and RTTY carry their own ([`Soundcard::old`]).
         stored: bool,
         /// The carrier on the side the transmit VFO's commanded word names; `None` for a word
         /// that names no side (FM).
@@ -65647,10 +65647,18 @@ mod digital_side_licence_tests {
         case: String,
     }
 
-    /// May `class` key a data carrier `off` MHz below (`lsb`) or above `tx_mhz`?
+    /// May `class` key a data frame whose lowest tone is `off` MHz below (`lsb`) or above
+    /// `tx_mhz`? The frame is FT8's, the tier the engine starts on: from that tone up the 50 Hz it
+    /// occupies, mirrored below on LSB, wholly in one privileged range, as the gate judges a frame.
     fn side_allows(class: LicenseClass, tx_mhz: f64, off: f64, lsb: bool) -> bool {
-        let carrier = if lsb { tx_mhz - off } else { tx_mhz + off };
-        crate::privileges::tx_allowed(class, carrier, OperatingMode::Digital)
+        let hz = (off * 1e6).round();
+        let (near, far) = (hz / 1e6, (hz + 50.0) / 1e6);
+        let (lo, hi) = if lsb {
+            (tx_mhz - far, tx_mhz - near)
+        } else {
+            (tx_mhz + near, tx_mhz + far)
+        };
+        crate::privileges::tx_span_allowed(class, lo, hi, OperatingMode::Digital)
     }
 
     /// The side a commanded word names: `Some(true)` below the dial, `Some(false)` above, `None`
@@ -67124,12 +67132,15 @@ mod digital_side_licence_tests {
     }
 
     /// CW IDs from the Digital section around every CW edge, for every class, TX offset, pitch
-    /// and sideband, on both keyers.
+    /// and sideband, on both keyers. The offsets add 400 Hz to the data sweeps' own: FT8's frame
+    /// from it on LSB, 500 Hz above a bottom edge, ends 50 Hz inside the edge while a 600 or 900 Hz
+    /// tone below that dial is outside it, so the sweep reaches IDs only the soundcard tone refuses
+    /// (from 500 Hz the frame now hangs below the edge, and FT8's own verdict refuses them).
     fn cw_id_verdicts() -> Vec<CwIdVerdict> {
         let mut out = Vec::new();
         for sc in Soundcard::CW {
             for class in CLASSES {
-                for off_hz in OFFSETS_HZ {
+                for off_hz in OFFSETS_HZ.into_iter().chain([400.0]) {
                     for pitch in sc.centres() {
                         let allow =
                             |f: f64| crate::privileges::tx_allowed(class, f, OperatingMode::Cw);
