@@ -541,9 +541,8 @@ pub use js8::proto::station::Readiness as Js8NotArmed;
 pub use js8::proto::station::Unarmed as Js8Unarmed;
 
 /// Heartbeat networking, the QSO pause and what holds an HB ACK back, as JS8Call 3.0.3 has them:
-/// the desktop cockpit's. NOT on the Remote page's sample (`bounded_js8_state` leaves it out):
-/// that page's parser refuses a key it does not list, so it is sent there only once a page that
-/// lists it is deployed.
+/// the desktop cockpit's, and the Remote page's sample carries it too. That page's parser refuses a
+/// key it does not list, so a page from before this key refuses the sample: the page goes up first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Js8Presence {
@@ -588,8 +587,8 @@ pub struct Js8ActivityRow {
     /// Decode quality below JS8Call's 0.17 low-confidence threshold.
     pub low_conf: bool,
     /// Where the row stands in its message, which the cockpit's RX pane and Band activity join
-    /// frames by (JS8Call's `displayTextForFreq`, mainwindow.cpp:3106-3170). The desktop's alone:
-    /// the Remote page's parser refuses a key it does not list, so `bounded_js8_state` leaves it out.
+    /// frames by (JS8Call's `displayTextForFreq`, mainwindow.cpp:3106-3170), on the desktop and on
+    /// the Remote page. Every row has it; a station from before it sent none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flags: Option<Js8RowFlags>,
 }
@@ -668,9 +667,8 @@ pub struct Js8State {
     pub speed: Js8Speed,
     /// Bitmask of decoded speeds (`Js8Speed::bit()`).
     pub rx_speeds: u8,
-    /// JS8Call's waterfall controls and the band schedule's notice ([`Js8Controls`]): the
-    /// desktop's own. `None`, and left out of the JSON, on the Remote page's sample, whose parser
-    /// refuses a key it does not list.
+    /// JS8Call's waterfall controls and the band schedule's notice ([`Js8Controls`]), on the
+    /// desktop and on the Remote page. Always set here; a station from before it sent none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controls: Option<Js8Controls>,
     pub tx_enabled: bool,
@@ -704,7 +702,7 @@ pub struct Js8State {
     pub inbox_dropped: Vec<Js8InboxDrop>,
     /// The held messages too long to hand over at the current speed, which the station does not
     /// offer: which, the frames each needs, the cap, and the speed it would go at. Left out while
-    /// there are none, and off the Remote page's sample, whose parser does not list the key.
+    /// there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inbox_too_long: Vec<Js8InboxTooLong>,
     pub queue: Vec<Js8QueueRow>,
@@ -712,8 +710,8 @@ pub struct Js8State {
     /// The last refused verb's reason (a send that would not compose, a forbidden
     /// destination), cleared by the next successful verb.
     pub last_error: Option<String>,
-    /// The desktop's view of heartbeat networking and presence; `None`, and left out of the
-    /// JSON, on the Remote page's sample ([`Js8Presence`]).
+    /// Heartbeat networking and presence ([`Js8Presence`]), on the desktop and on the Remote page.
+    /// Always set here; a station from before it sent none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presence: Option<Js8Presence>,
 }

@@ -65,8 +65,8 @@ export function onCallList(list: readonly string[], call: string): boolean {
  *  a multi-frame message, which repeats its frames' words. */
 const framesOf = (rows: readonly Js8ActivityRow[]): Js8ActivityRow[] => rows.filter((r) => r.flags && !r.flags.assembled)
 
-/** A feed from a station that does not say where each row stands in its message (the Remote page's
- *  sample): each row is then shown as it stands, on its own. */
+/** A feed from a station that does not say where each row stands in its message (one older than
+ *  that, on the Remote page): each row is then shown as it stands, on its own. */
 export const isLegacyFeed = (rows: readonly Js8ActivityRow[]): boolean => rows.length > 0 && rows.every((r) => r.flags === undefined)
 
 /** The call a frame's text opens with, `"W1AW: …"` → W1AW (`text.section(':', 0, 0)`). */
@@ -254,7 +254,7 @@ export function js8RxLines(rows: readonly Js8ActivityRow[], o: Js8RxOptions): Js
   return lines
 }
 
-/** A feed that says nothing of where each row stands (the Remote page's): each row that is on my
+/** A feed that says nothing of where each row stands (an older station's): each row that is on my
  *  offset, addressed to me or my own, on its own line, as it stands. */
 function legacyRxLines(rows: readonly Js8ActivityRow[], o: Js8RxOptions): Js8RxLine[] {
   return rows
@@ -461,8 +461,8 @@ export function js8BandRows(rows: readonly Js8ActivityRow[], o: Js8BandOptions):
   return out
 }
 
-/** A feed that says nothing of where each row stands (the Remote page's): the newest row per offset,
- *  as this pane always showed one. */
+/** A feed that says nothing of where each row stands (an older station's): the newest row per
+ *  offset, as this pane always showed one. */
 function legacyBandRows(rows: readonly Js8ActivityRow[], o: Js8BandOptions): Js8BandRow[] {
   const filed = bandActivityByOffset(rows.filter((r) => r.atMs > o.clearedAtMs)).filter((r) => r.atMs > (o.removed[String(r.offsetHz)] ?? 0))
   return js8ShownOffsetRows(filed, { agingMin: o.agingMin, nowMs: o.nowMs, selectedHz: o.selectedHz })
@@ -589,7 +589,7 @@ export function js8CallRows(listed: readonly Js8Heard[], o: Js8CallOptions): Js8
   const markFor = (call: string, h: Js8Heard | null, relay: { through: string; atMs: number } | undefined) => {
     const since = (ms: number | null | undefined) => (ms != null && ms > o.clearedAtMs ? ms : null)
     const ack = since(h?.ackMs)
-    // A station from before ☎ was kept (the Remote page's sample) shows it by its last CQ.
+    // A station from before ☎ was kept (an older one, on the Remote page) shows it by its last CQ.
     const cqAt = since(h ? (h.cqMs ?? (h.lastCq ? h.lastMs : null)) : null)
     const cq = cqAt != null && Math.trunc((o.nowMs - cqAt) / 60_000) < CQ_MARK_MIN ? cqAt : null
     const viaRelay = relay && (!h || h.lastMs < relay.atMs) ? relay : undefined

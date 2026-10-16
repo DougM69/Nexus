@@ -1669,10 +1669,14 @@ fn the_satellite_sample_carries_only_the_keys_the_page_takes() {
     );
 }
 
-/// The JS8 cockpit's sample (`js8.ts`): two keys at its root, twenty-four the state, five what is
-/// armed and five why not, nine each station heard and each inbox message, eleven a decoded row,
-/// and four a queued row and a pending reply. The station and the message come from the station's
-/// own journal; a decoded row, a queued one and a pending reply are written field by field.
+/// The JS8 cockpit's sample (`js8.ts`): two keys at its root; twenty-six the state, and the Inbox's
+/// two kinds of notes while there are any; five what is armed and five why not; seven heartbeat
+/// networking (`presence`); three the waterfall controls, three their filter and four the band
+/// schedule's notice; nine each station heard, and its ★ and ☎ once it has them; nine each inbox
+/// message; twelve a decoded row and three its place in its message; four a queued row, a pending
+/// reply and a held message's too-long note. The station and the message come from the station's
+/// own journal; a decoded row, a queued one, a pending reply, the schedule's notice and a too-long
+/// note are written field by field.
 #[test]
 fn the_js8_sample_carries_only_the_keys_the_page_takes() {
     const DECODED: &[&str] = &[
@@ -1687,7 +1691,11 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
         "mine",
         "complete",
         "lowConf",
+        "flags",
     ];
+    const PLACE: &[&str] = &["first", "last", "assembled"];
+    const HOP: &[&str] = &["mhz", "firesAtMs", "description", "held"];
+    const TOO_LONG: &[&str] = &["id", "frames", "max", "fitsAt"];
     const QUEUED: &[&str] = &["origin", "display", "first", "last"];
     const PENDING: &[&str] = &["origin", "to", "display", "firesAtMs"];
     let engine = engine();
@@ -1700,13 +1708,6 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
         "allcallReplied": [], "nextInboxId": 2})
         .to_string(),
     );
-    // The station's ★ and ☎ are the desktop's: its own state carries them (the control), and the
-    // page's sample, below, does not.
-    let native = serde_json::to_value(engine.lock().unwrap().js8_state()).unwrap();
-    assert!(
-        native["stations"][0].get("ackMs").is_some() && native["stations"][0].get("cqMs").is_some(),
-        "control: the desktop's station carries ★ and ☎"
-    );
     let data = sample(
         &engine,
         &mut application::Publisher::default(),
@@ -1714,7 +1715,7 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
     );
     takes("js8: the sample", &data, &["state", "capturedAtMs"]);
     let state = &data["state"];
-    takes(
+    takes_optional(
         "js8: the state",
         state,
         &[
@@ -1742,7 +1743,10 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
             "queue",
             "pendingReply",
             "lastError",
+            "controls",
+            "presence",
         ],
+        &["inboxDropped", "inboxTooLong"],
     );
     takes(
         "js8: what is armed",
@@ -1754,6 +1758,29 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
         &state["notArmed"],
         &["autoreply", "relay", "hbAck", "hb", "cq"],
     );
+    takes(
+        "js8: heartbeat networking",
+        &state["presence"],
+        &[
+            "hbNetworking",
+            "hbSpeed",
+            "hbPaused",
+            "hbAckSuppressed",
+            "hbAckRateBlocked",
+            "qsoPause",
+            "avoidAllcall",
+        ],
+    );
+    takes(
+        "js8: the waterfall controls",
+        &state["controls"],
+        &["filter", "qsyCenterHz", "hop"],
+    );
+    takes(
+        "js8: the decode filter",
+        &state["controls"]["filter"],
+        &["enabled", "centerHz", "widthHz"],
+    );
     let (stations, inbox) = (
         state["stations"].as_array().unwrap(),
         state["inbox"].as_array().unwrap(),
@@ -1762,6 +1789,7 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
         !stations.is_empty() && !inbox.is_empty(),
         "scene guard: the journal's station and message are sent"
     );
+    // The journal's station has sent to me and called CQ, so it carries ★ and ☎.
     for station in stations {
         takes(
             "js8: a station",
@@ -1776,6 +1804,8 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
                 "lastHb",
                 "lastCq",
                 "storedMsgs",
+                "ackMs",
+                "cqMs",
             ],
         );
     }
@@ -1810,12 +1840,36 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
         mine: false,
         complete: true,
         low_conf: false,
-        flags: None,
+        flags: Some(tempo_app::dto::Js8RowFlags {
+            first: true,
+            last: true,
+            assembled: false,
+        }),
+    };
+    let decoded = serde_json::to_value(decoded).unwrap();
+    takes("js8: a decoded row, every field", &decoded, DECODED);
+    takes("js8: a decoded row's place", &decoded["flags"], PLACE);
+    let hop = tempo_app::dto::Js8HopNotice {
+        mhz: 7.078,
+        fires_at_ms: 1,
+        description: "40 m evening net".into(),
+        held: false,
     };
     takes(
-        "js8: a decoded row, every field",
-        &serde_json::to_value(decoded).unwrap(),
-        DECODED,
+        "js8: the band schedule's notice, every field",
+        &serde_json::to_value(hop).unwrap(),
+        HOP,
+    );
+    let too_long = tempo_app::dto::Js8InboxTooLong {
+        id: 1,
+        frames: 45,
+        max: 39,
+        fits_at: Some(serde_json::from_value(json!("fast")).unwrap()),
+    };
+    takes(
+        "js8: a too-long note, every field",
+        &serde_json::to_value(too_long).unwrap(),
+        TOO_LONG,
     );
     let queued = tempo_app::dto::Js8QueueRow {
         origin: serde_json::from_value(json!("operator")).unwrap(),

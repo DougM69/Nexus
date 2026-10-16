@@ -115,8 +115,8 @@ function HzInput({
 
 export function Js8WaterfallControls({ js8, rxOffsetHz, txOffsetHz, canControl, active, onState }: Props) {
   const [open, setOpen] = useState(false)
-  // The desktop's own state; absent on the hosted Remote page's sample and from an older station,
-  // and then there is nothing true to show (no plate rather than a default that may be wrong).
+  // The station's own state, here and on the Remote page; absent from an older station, and
+  // then there is nothing true to show (no plate rather than a default that may be wrong).
   const controls = js8?.controls ?? null
   const filter = controls?.filter ?? JS8_FILTER_DEFAULT
   const center = controls?.qsyCenterHz || JS8_QSY_CENTER_DEFAULT

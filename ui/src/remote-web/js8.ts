@@ -13,6 +13,8 @@ const speed = (v: unknown) => ['slow','normal','fast','turbo','ultra'].includes(
 // station that sends it.
 const origin = (v: unknown) => ['operator','heartbeat','hbAck','autoReply','relay','cqRepeat','aprsRelay'].includes(String(v))
 const unarmed = (v: unknown) => ['idle','txOff','needsHb','needsAuto','needsHbAndAuto','unscheduled'].includes(String(v))
+const hz = (v: unknown) => integer(v) && v <= 65535
+const ackHeld = (v: unknown) => v === null || ['speed','arriving','qsoPause'].includes(v as string)
 function object(v: unknown, keys: string[], optional: string[] = []): Record<string, unknown> {
   if (!v || typeof v !== 'object' || Array.isArray(v) || !keys.every(k => Object.prototype.hasOwnProperty.call(v,k)) ||
     Object.keys(v).some(k => !keys.includes(k) && !optional.includes(k))) throw new Error('invalidJs8')
@@ -39,8 +41,15 @@ export function parseJs8Sample(raw: unknown, ageMs: number, now = Date.now()): J
   // `inboxDropped`, the Inbox's notes of what a cap took out, is OPTIONAL: a station sends it only
   // while there are notes, and an older station never. A page from before it refuses a sample
   // carrying it, so this page must be deployed before a station that sends it.
+  // So are the keys the desktop's JS8 screen added in 1.19.0, which a 1.18.0 station never sends:
+  // `presence` (heartbeat networking), `controls` (the waterfall's decode filter, the QSY centre and
+  // the band schedule's notice), `inboxTooLong` (held messages too long for this speed, sent only
+  // while there are any), each activity row's `flags` (where it stands in its message) and each
+  // station's `ackMs` and `cqMs` (★ and ☎). Each is held to the station's types here, and a page
+  // from before them refuses a sample carrying any, so this page goes up before that station.
   const s = object(sample.state,['speed','rxSpeeds','txEnabled','sending','hbOn','hbNextAtMs','hbIntervalMin','cqOn','cqNextAtMs','cqIntervalMin',
-    'autoreply','relay','hbAck','armed','idleMinutes','idleLimitMin','idleTripped','activity','stations','inbox','queue','pendingReply','lastError'],['notArmed','inboxDropped'])
+    'autoreply','relay','hbAck','armed','idleMinutes','idleLimitMin','idleTripped','activity','stations','inbox','queue','pendingReply','lastError'],
+    ['notArmed','inboxDropped','presence','controls','inboxTooLong'])
   if (!speed(s.speed) || !integer(s.rxSpeeds) || s.rxSpeeds > 31 ||
     ![s.txEnabled,s.sending,s.hbOn,s.cqOn,s.autoreply,s.relay,s.hbAck,s.idleTripped].every(bool) ||
     ![s.hbNextAtMs,s.cqNextAtMs].every(nullableTime) || ![s.hbIntervalMin,s.cqIntervalMin,s.idleMinutes,s.idleLimitMin].every(integer) ||
@@ -57,16 +66,23 @@ export function parseJs8Sample(raw: unknown, ageMs: number, now = Date.now()): J
       ? armed[key] !== (on === true && notArmed[key] === null) || (on !== true && notArmed[key] !== null) ||
         (armed[key] === true && (s.txEnabled !== true || s.idleTripped !== false))
       : armed[key] !== (on === true && s.txEnabled === true && s.idleTripped === false))) throw new Error('invalidJs8')
+  const placed = new Set<boolean>()
   for (const raw of rows(s.activity,200)) {
-    const r = object(raw,['atMs','speed','freqHz','snrDb','dtS','from','text','directedToMe','mine','complete','lowConf'])
+    const r = object(raw,['atMs','speed','freqHz','snrDb','dtS','from','text','directedToMe','mine','complete','lowConf'],['flags'])
     if (!integer(r.atMs) || !speed(r.speed) || ![r.freqHz,r.snrDb,r.dtS].every(finite) || !text(r.from) || !text(r.text) ||
-      ![r.directedToMe,r.mine,r.complete,r.lowConf].every(bool)) throw new Error('invalidJs8')
+      ![r.directedToMe,r.mine,r.complete,r.lowConf].every(bool) ||
+      (r.flags !== undefined && !Object.values(object(r.flags,['first','last','assembled'])).every(bool))) throw new Error('invalidJs8')
+    placed.add(r.flags !== undefined)
   }
+  // The panes read a feed whole, by its rows' places or (an older station's) without them, so every
+  // row says where it stands or none does.
+  if (placed.size > 1) throw new Error('invalidJs8')
   const calls = new Set<string>()
   for (const raw of rows(s.stations,500)) {
-    const r = object(raw,['call','grid','snrDb','freqHz','speed','lastMs','lastHb','lastCq','storedMsgs'])
+    const r = object(raw,['call','grid','snrDb','freqHz','speed','lastMs','lastHb','lastCq','storedMsgs'],['ackMs','cqMs'])
     if (!text(r.call,32) || !r.call || calls.has(r.call) || (r.grid !== null && !text(r.grid)) || ![r.snrDb,r.freqHz].every(finite) ||
-      !speed(r.speed) || !integer(r.lastMs) || !bool(r.lastHb) || !bool(r.lastCq) || !integer(r.storedMsgs)) throw new Error('invalidJs8')
+      !speed(r.speed) || !integer(r.lastMs) || !bool(r.lastHb) || !bool(r.lastCq) || !integer(r.storedMsgs) ||
+      ![r.ackMs,r.cqMs].every(v => v === undefined || integer(v))) throw new Error('invalidJs8')
     calls.add(r.call)
   }
   const ids = new Set<number>()
@@ -95,6 +111,26 @@ export function parseJs8Sample(raw: unknown, ageMs: number, now = Date.now()): J
   if (s.pendingReply !== null) {
     const p = object(s.pendingReply,['origin','to','display','firesAtMs'])
     if (!origin(p.origin) || !text(p.to) || !text(p.display) || !integer(p.firesAtMs)) throw new Error('invalidJs8')
+  }
+  if (s.inboxTooLong !== undefined) {
+    for (const raw of rows(s.inboxTooLong,100)) {
+      const n = object(raw,['id','frames','max','fitsAt'])
+      if (![n.id,n.frames,n.max].every(integer) || (n.fitsAt !== null && !speed(n.fitsAt))) throw new Error('invalidJs8')
+    }
+  }
+  if (s.controls !== undefined) {
+    const c = object(s.controls,['filter','qsyCenterHz','hop'])
+    const f = object(c.filter,['enabled','centerHz','widthHz'])
+    if (!bool(f.enabled) || ![f.centerHz,f.widthHz,c.qsyCenterHz].every(hz)) throw new Error('invalidJs8')
+    if (c.hop !== null) {
+      const h = object(c.hop,['mhz','firesAtMs','description','held'])
+      if (!finite(h.mhz) || h.mhz < 0 || !integer(h.firesAtMs) || !text(h.description) || !bool(h.held)) throw new Error('invalidJs8')
+    }
+  }
+  if (s.presence !== undefined) {
+    const p = object(s.presence,['hbNetworking','hbSpeed','hbPaused','hbAckSuppressed','hbAckRateBlocked','qsoPause','avoidAllcall'])
+    if (![p.hbNetworking,p.hbSpeed,p.hbPaused,p.qsoPause,p.avoidAllcall].every(bool) || !ackHeld(p.hbAckSuppressed) ||
+      !rows(p.hbAckRateBlocked,500).every(c => text(c,32) && c !== '')) throw new Error('invalidJs8')
   }
   const state = structuredClone(sample.state) as Js8State
   displayClocks.set(state, { stationAt: sample.capturedAtMs + ageMs, receivedAt: now })

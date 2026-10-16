@@ -176,8 +176,8 @@ fn too_long_at_slow() -> (String, usize) {
 
 /// A message held for K1ABC whose hand-over needs more frames than one transmission holds at Slow:
 /// at Slow, QUERY MSGS is answered NO on the air and the cockpit's state names the message, the
-/// frames, the cap and the speed it goes at; the Remote's sample leaves that out (its page's
-/// parser does not list it). At Normal it is offered, by value, and the note is gone.
+/// frames, the cap and the speed it goes at, and so does the Remote's sample (its page's parser
+/// lists it). At Normal it is offered, by value, and the note is gone.
 #[test]
 fn a_js8_held_message_too_long_at_this_speed_is_not_offered_and_the_state_says_why() {
     let mut e = engine();
@@ -209,12 +209,10 @@ fn a_js8_held_message_too_long_at_this_speed_is_not_offered_and_the_state_says_w
         "on the wire"
     );
     let remote = e.bounded_js8_state().expect("bounded");
-    assert!(
-        serde_json::to_value(&remote)
-            .expect("serialises")
-            .get("inboxTooLong")
-            .is_none(),
-        "the Remote's sample leaves it out"
+    assert_eq!(
+        serde_json::to_value(&remote).expect("serialises")["inboxTooLong"],
+        json["inboxTooLong"],
+        "the Remote's sample carries it"
     );
     hear(&mut e, "K1ABC", Some("KD9TAW"), "QUERY MSGS", 1210.0, -7);
     assert_keyed(&overs(&mut e, 90), "K1ABC NO", Js8Speed::Slow);

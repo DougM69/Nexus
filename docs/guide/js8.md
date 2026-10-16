@@ -386,6 +386,11 @@ still typing stays in the cockpit and is not sent to a program.
 On the air: JS8Call 2.2 and later, and JS8Call-improved, at Slow, Normal, Fast and JS8 40
 (Turbo); JS8Call 3.0 and later at JS8 60 as well, a speed JS8Call 2.x does not decode.
 For other programs: JS8Call 3.0's API, read-only, as above.
+On Nexus Remote: the JS8 screen shows what the station's shows, HB NET, the call list's marks,
+the Inbox's notes, the filter plate and the RX pane's lines among them, and it follows the station's
+groups, RX block list and @ALLCALL choice; the decode filter, QSY to centre, the band schedule, the
+groups and the block list are changed at the station only. A station on 1.18.0 or earlier shows its
+JS8 screen there without them, as before.
 The full protocol reference is
 [JS8Call's source](https://github.com/js8call/js8call), read as the specification; see
 NOTICE.

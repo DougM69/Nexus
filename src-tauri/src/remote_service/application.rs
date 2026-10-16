@@ -160,6 +160,12 @@ const SETTINGS_KEYS: &[&str] = &[
     "js8CallsignAgingMin",
     // …and its Band activity pane ages rows by this one.
     "js8ActivityAgingMin",
+    // …and its call list and RX pane follow the station's own JS8 lists, as the station's do: the
+    // groups it joined, its RX block list and whether it takes part in @ALLCALL. Read only: none is
+    // on the write allow-list (`operations::settings`).
+    "js8Groups",
+    "js8RxBlocklist",
+    "js8AvoidAllcall",
     "specialOp",
 ];
 fn settings_view(settings: &tempo_app::settings::Settings) -> Result<Value, &'static str> {
@@ -618,24 +624,16 @@ mod tests {
     fn js8_observation_uses_native_state_without_entering_or_arming() {
         use std::sync::{Arc, Mutex};
         let engine = tempo_app::engine::Engine::with_settings(Default::default());
-        let mut expected = serde_json::to_value(engine.js8_state()).unwrap();
-        // The desktop's `presence` and `controls` (the waterfall controls and the schedule's
-        // notice) are the keys the page's sample leaves out (its parser does not list them yet);
-        // everything else is the native state as it stands.
+        let expected = serde_json::to_value(engine.js8_state()).unwrap();
+        // The page's sample is the native state as it stands, the desktop's `presence` and
+        // `controls` (the waterfall controls and the schedule's notice) with it: its parser
+        // lists them.
         assert!(
-            expected
-                .as_object_mut()
-                .unwrap()
-                .remove("presence")
-                .is_some(),
+            expected.get("presence").is_some(),
             "control: the desktop's state carries presence"
         );
         assert!(
-            expected
-                .as_object_mut()
-                .unwrap()
-                .remove("controls")
-                .is_some(),
+            expected.get("controls").is_some(),
             "control: the desktop's state carries controls"
         );
         let settings = serde_json::to_value(engine.settings()).unwrap();
@@ -1083,6 +1081,29 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(settings_view(&settings).unwrap()["js8ActivityAgingMin"], 5);
+    }
+
+    /// …and its call list and RX pane by the station's JS8 lists: the groups it joined, its RX
+    /// block list and whether it takes part in @ALLCALL. A station from before them sends none,
+    /// which the page reads as no group, nobody blocked and @ALLCALL taken part in. None of the
+    /// three is writable from a browser (`operations::settings`, the allow-list there).
+    #[test]
+    fn the_live_view_carries_the_js8_lists() {
+        let settings = tempo_app::settings::Settings {
+            js8_groups: vec!["@FUN".into()],
+            js8_rx_blocklist: vec!["K9BLK".into()],
+            js8_avoid_allcall: true,
+            ..Default::default()
+        };
+        let view = settings_view(&settings).unwrap();
+        assert_eq!(
+            [
+                &view["js8Groups"],
+                &view["js8RxBlocklist"],
+                &view["js8AvoidAllcall"]
+            ],
+            [&json!(["@FUN"]), &json!(["K9BLK"]), &json!(true)]
+        );
     }
 
     #[test]

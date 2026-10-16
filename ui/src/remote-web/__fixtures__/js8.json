@@ -2,6 +2,15 @@
   "state": {
     "speed": "normal",
     "rxSpeeds": 15,
+    "controls": {
+      "filter": {
+        "enabled": true,
+        "centerHz": 1500,
+        "widthHz": 2000
+      },
+      "qsyCenterHz": 1500,
+      "hop": null
+    },
     "txEnabled": false,
     "sending": false,
     "hbOn": true,
@@ -38,11 +47,16 @@
         "snrDb": -8,
         "dtS": 0.1,
         "from": "W1AW",
-        "text": "JS8 TEST SLOW",
+        "text": "W1AW: N0CALL JS8 TEST SLOW",
         "directedToMe": true,
         "mine": false,
         "complete": true,
-        "lowConf": false
+        "lowConf": false,
+        "flags": {
+          "first": true,
+          "last": true,
+          "assembled": false
+        }
       },
       {
         "atMs": 1700000000000,
@@ -51,11 +65,16 @@
         "snrDb": -9,
         "dtS": 0.1,
         "from": "W1AW",
-        "text": "JS8 TEST NORMAL",
+        "text": "W1AW: N0CALL JS8 TEST NORMAL",
         "directedToMe": true,
         "mine": false,
         "complete": true,
-        "lowConf": false
+        "lowConf": false,
+        "flags": {
+          "first": true,
+          "last": true,
+          "assembled": false
+        }
       },
       {
         "atMs": 1700000000000,
@@ -64,11 +83,16 @@
         "snrDb": -10,
         "dtS": 0.1,
         "from": "W1AW",
-        "text": "JS8 TEST FAST",
+        "text": "W1AW: N0CALL JS8 TEST FAST",
         "directedToMe": true,
         "mine": false,
         "complete": false,
-        "lowConf": true
+        "lowConf": true,
+        "flags": {
+          "first": true,
+          "last": true,
+          "assembled": false
+        }
       },
       {
         "atMs": 1700000000000,
@@ -77,11 +101,16 @@
         "snrDb": -11,
         "dtS": 0.1,
         "from": "W1AW",
-        "text": "JS8 TEST TURBO",
+        "text": "W1AW: N0CALL JS8 TEST TURBO",
         "directedToMe": true,
         "mine": false,
         "complete": true,
-        "lowConf": false
+        "lowConf": false,
+        "flags": {
+          "first": true,
+          "last": true,
+          "assembled": false
+        }
       }
     ],
     "stations": [
@@ -94,7 +123,8 @@
         "lastMs": 1700000000000,
         "lastHb": true,
         "lastCq": false,
-        "storedMsgs": 1
+        "storedMsgs": 1,
+        "cqMs": 1700000000000
       },
       {
         "call": "K2ABC",
@@ -105,7 +135,8 @@
         "lastMs": 1700000000000,
         "lastHb": true,
         "lastCq": false,
-        "storedMsgs": 1
+        "storedMsgs": 1,
+        "ackMs": 1700000000000
       }
     ],
     "inbox": [
@@ -122,6 +153,27 @@
         "atMs": 1700000000000,
         "freqHz": 1500,
         "snrDb": -8
+      },
+      {
+        "id": 2,
+        "from": "W1AW",
+        "to": "K2ABC",
+        "text": "7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/ 7Q9Z/",
+        "path": [
+          "W1AW"
+        ],
+        "state": "store",
+        "atMs": 1700000000000,
+        "freqHz": 1500,
+        "snrDb": -8
+      }
+    ],
+    "inboxTooLong": [
+      {
+        "id": 2,
+        "frames": 45,
+        "max": 39,
+        "fitsAt": "fast"
       }
     ],
     "queue": [
@@ -144,7 +196,18 @@
       "display": "N0CALL: W1AW SNR -08",
       "firesAtMs": 1700000017000
     },
-    "lastError": null
+    "lastError": null,
+    "presence": {
+      "hbNetworking": true,
+      "hbSpeed": true,
+      "hbPaused": false,
+      "hbAckSuppressed": null,
+      "hbAckRateBlocked": [
+        "K9XYZ"
+      ],
+      "qsoPause": false,
+      "avoidAllcall": false
+    }
   },
   "capturedAtMs": 1700000000000
 }

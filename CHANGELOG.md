@@ -302,6 +302,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JS8NET gets your INFO with its macros replaced, as JS8Call sends it:** `<MYCALL>`,
   `<MYVERSION>` and the rest, as an INFO? reply has them. NEEDS-BENCH: a capture of what goes to
   JS8NET.
+- **JS8 on Nexus Remote shows what the station's JS8 screen shows.** HB NET and what is holding HB
+  ACK back, the call list's ★ (hearing you) and ☎ (called CQ in the last five minutes), the Inbox's
+  note on a held message too long to hand over at this speed, the decode filter's plate over the
+  waterfall, and the RX pane with a line for each message, closed by its end mark. The call list and
+  the RX pane follow the station's JS8 groups, RX block list and @ALLCALL choice: a message to a
+  group the station joined shows, a blocked station's does not and its call is marked ✕, and
+  @ALLCALL leaves the list when the station has left it. They are there to see: the decode filter,
+  QSY to centre, the band schedule, the groups and the block list are changed at the station only,
+  as before. A station on 1.18.0 or earlier shows its JS8 screen on the Remote as it did.
+  NEEDS-BENCH: a station on this build, watched on the Remote page from a phone.
 
 ### Changed
 

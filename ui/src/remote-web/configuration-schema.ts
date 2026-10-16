@@ -37,6 +37,8 @@ export const SETTINGS_KEYS = [
   'js8Info',
   'js8Status',
   'js8Groups',
+  'js8RxBlocklist',
+  'js8AvoidAllcall',
   'js8HoldPtt',
   'js8TxOffsetWhileSending',
   'rptrOffsetOverrideHz',
@@ -352,6 +354,10 @@ export const NEWER_SETTINGS = {
   // and lets the TX offset move while a message goes out (the move allowed).
   js8HoldPtt: false,
   js8TxOffsetWhileSending: true,
+  // …and one that predates JS8Call's RX block list and its @ALLCALL choice hides nobody's traffic
+  // and takes part in @ALLCALL: an empty list and the choice off.
+  js8RxBlocklist: [],
+  js8AvoidAllcall: false,
 } as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
@@ -432,6 +438,8 @@ export const SETTINGS_SHAPES = {
   "js8Info": "string",
   "js8Status": "string",
   "js8Groups": "array",
+  "js8RxBlocklist": "array",
+  "js8AvoidAllcall": "boolean",
   "js8HoldPtt": "boolean",
   "js8TxOffsetWhileSending": "boolean",
   "rptrOffsetOverrideHz": "number",
