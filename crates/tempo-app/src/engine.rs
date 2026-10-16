@@ -12438,12 +12438,13 @@ impl Engine {
         if !report.written.is_empty() {
             // Each merged contact is filled before it is written (SPEC-2 v3 D2-A), as every
             // insert is — the rows the merge appends are the copies an upload sends.
-            let (country, state) = (
+            let (country, number, state) = (
                 self.station.dxcc_resolve.as_deref(),
+                self.station.dxcc_country.as_deref(),
                 self.station.state_resolve.as_deref(),
             );
             for rec in &mut report.written {
-                crate::station::fill_with(rec, country, state);
+                crate::station::fill_with(rec, country, number, state);
             }
             // The merge's append — the station's, as every contact's (SPEC-2 v3 C19): ids
             // minted, the hot index told, the writer handed the rows. No SQL.
@@ -14415,11 +14416,10 @@ impl Engine {
             }
         }
         // Resolve the DXCC entity (country) if the record doesn't already carry one
-        // — so manually-logged contacts get a country too, not just auto-QSOs.
+        // — so manually-logged contacts get a country too, not just auto-QSOs. One that arrives
+        // with a DXCC number takes the number's name (`StationCore::country_for`).
         if rec.country.is_none() {
-            if let Some(resolve) = &self.station.dxcc_resolve {
-                rec.country = resolve(&rec.call);
-            }
+            rec.country = self.station.country_for(&rec.call, rec.dxcc);
         }
         // The places of a park the record arrived with, as the caller resolved them. Only for a
         // park it carries: a hunted park below brings its own.
@@ -27712,6 +27712,14 @@ contact yourself."
     /// See [`StationCore::set_dxcc_resolver_shared`].
     pub fn set_dxcc_resolver_shared(&mut self, resolve: Arc<crate::station::DxccResolve>) {
         self.station.set_dxcc_resolver_shared(resolve)
+    }
+
+    /// See [`StationCore::set_dxcc_country_resolver`].
+    pub fn set_dxcc_country_resolver(
+        &mut self,
+        country: impl Fn(u32) -> Option<String> + Send + Sync + 'static,
+    ) {
+        self.station.set_dxcc_country_resolver(country)
     }
 
     /// See [`StationCore::set_state_resolver`].

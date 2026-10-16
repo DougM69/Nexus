@@ -581,9 +581,9 @@ impl Publisher {
                 let rows = rows
                     .into_iter()
                     .map(|r| {
+                        let entity = crate::log_queries::shown(&r);
                         let mut q = tempo_app::dto::LoggedQso::from(r);
-                        q.entity =
-                            propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+                        q.entity = entity;
                         serde_json::to_value(q).map_err(|_| "applicationUnavailable")
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -649,12 +649,14 @@ impl Publisher {
 }
 
 /// What the log window reads of every contact: five of the six fields a search looks in (the
-/// sixth, the SUBMODE, a search reads besides), the time the window is ordered by, and the four
-/// confirmation channels `award_confirmed` is read from.
+/// sixth, the SUBMODE, a search reads besides), the DXCC number that with the call names the
+/// country the page shows, the time the window is ordered by, and the four confirmation channels
+/// `award_confirmed` is read from.
 const WINDOW: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
     columns: &[
         "call",
         "country",
+        "dxcc",
         "grid",
         "band",
         "mode",
@@ -678,8 +680,9 @@ fn log_window(
     let search = search.trim().to_lowercase();
     let mut selected = BinaryHeap::new();
     let mut total = 0;
-    // Each call's DXCC entity, lower-cased, resolved once per call and only for a search.
-    let mut entity_of: HashMap<String, Option<String>> = HashMap::new();
+    // Each row's DXCC entity as the page shows it, lower-cased, asked once per call and DXCC
+    // number and only for a search.
+    let mut entity_of: HashMap<(String, Option<u32>), Option<String>> = HashMap::new();
     let mut test =
         |pick: picture::Pick, q: &tempo_core::logbook::QsoRecord| -> Result<(), &'static str> {
             if unconfirmed && q.award_confirmed {
@@ -702,12 +705,12 @@ fn log_window(
                 .into_iter()
                 .flatten()
                 .any(|s| s.to_lowercase().contains(&search))
-                // …and the country the page shows, the call's DXCC entity, so a QRZ `Germany`
+                // …and the country the page shows, the row's DXCC entity, so a QRZ `Germany`
                 // row is found by "fed. rep" as well as by its stored text.
                 && !entity_of
-                    .entry(q.call.clone())
+                    .entry((q.call.clone(), q.dxcc))
                     .or_insert_with(|| {
-                        propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_lowercase())
+                        crate::log_queries::shown(q).map(|e| e.to_lowercase())
                     })
                     .as_deref()
                     .is_some_and(|e| e.contains(&search))
@@ -926,6 +929,24 @@ mod tests {
         assert_eq!(window("freedonia"), (1, vec!["TA1XX".to_string()]));
         assert_eq!(window("nowhere"), (0, vec![]));
     }
+    /// …and by the entity its record's DXCC number names, which is the country its page row
+    /// shows: the 2015 K1N contact logged as Navassa is found by "navassa", and the K1N contact
+    /// without a number by "united states" alone.
+    #[test]
+    fn a_search_finds_a_contact_by_the_entity_its_record_names() {
+        let engine = engine();
+        engine.lock().unwrap().import_adif(
+            "<CALL:3>K1N<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20150210<TIME_ON:6>123400<DXCC:3>182<EOR>\n\
+             <CALL:3>K1N<BAND:3>40m<MODE:3>SSB<QSO_DATE:8>20180704<TIME_ON:6>150000<EOR>\n",
+        );
+        let log = engine.lock().unwrap().log_rows();
+        let window = |search| {
+            let (rows, total) = picture::read(&log, |p| log_window(p, search, false)).unwrap();
+            (total, rows.into_iter().map(|q| q.dxcc).collect::<Vec<_>>())
+        };
+        assert_eq!(window("navassa"), (1, vec![Some(182)]));
+        assert_eq!(window("united states"), (1, vec![None]));
+    }
     #[test]
     fn missing_feeds_and_a_busy_engine_are_not_empty_collections() {
         let engine = engine();
@@ -1074,8 +1095,7 @@ mod tests {
                 .into_iter()
                 .flatten()
                 .any(|s| s.to_lowercase().contains(&search))
-                && !propagation::dxcc::resolve(&q.call)
-                    .is_some_and(|i| i.entity.to_lowercase().contains(&search))
+                && !crate::log_queries::shown(q).is_some_and(|e| e.to_lowercase().contains(&search))
             {
                 continue;
             }
@@ -1117,8 +1137,9 @@ mod tests {
         let rows = rows
             .into_iter()
             .map(|r| {
+                let entity = crate::log_queries::shown(&r);
                 let mut q = tempo_app::dto::LoggedQso::from(r);
-                q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+                q.entity = entity;
                 serde_json::to_value(q).map_err(|_| "applicationUnavailable")
             })
             .collect::<Result<Vec<_>, _>>()?;

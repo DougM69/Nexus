@@ -268,11 +268,12 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// A row as the UI reads it: [`LoggedQso`] with its live cty.dat entity — the conversion every
-/// row the UI is handed gets ([`crate::log_by_id`]'s answers too).
-fn logged(r: QsoRecord, resolve: &dyn Fn(&str) -> Option<String>) -> LoggedQso {
+/// A row as the UI reads it: [`LoggedQso`] with its entity (in the app [`shown`]) — the
+/// conversion every row the UI is handed gets ([`crate::log_by_id`]'s answers too).
+fn logged(r: QsoRecord, resolve: &dyn Fn(&QsoRecord) -> Option<String>) -> LoggedQso {
+    let entity = resolve(&r);
     let mut q = LoggedQso::from(r);
-    q.entity = resolve(&q.call);
+    q.entity = entity;
     q
 }
 
@@ -348,7 +349,8 @@ pub struct LogQueries(Arc<Inner>);
 
 impl LogQueries {
     /// Answer `q`: take what it needs under the Engine lock, release it, read, answer. `resolve`
-    /// is a call's live DXCC entity (cty.dat in the app) — what each row the UI is handed carries,
+    /// is a row's DXCC entity — in the app [`shown`]: its call's, or the one its record's DXCC
+    /// number names — what each row the UI is handed carries, what the country column sorts on,
     /// and what an entity's slots are keyed by. `counted` is the entity the statistics count a
     /// contact under: in the app, the one the awards count it toward ([`counted`]), by its
     /// record's DXCC number first.
@@ -356,7 +358,7 @@ impl LogQueries {
         &self,
         engine: &SharedEngine,
         q: &LogQuestion,
-        resolve: &dyn Fn(&str) -> Option<String>,
+        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
         counted: &dyn Fn(&QsoRecord) -> Option<String>,
     ) -> Result<Value, String> {
         match q {
@@ -475,13 +477,12 @@ impl LogQueries {
     // ── the Logbook: order vectors, pages, places ────────────────────────────────────────────
 
     /// The order `query` gives at the capture's `index_rev`: kept, or built once however many
-    /// ask at the same time. `resolve` is a call's live DXCC entity, which the country column
-    /// sorts on.
+    /// ask at the same time. `resolve` is a row's DXCC entity, which the country column sorts on.
     fn order_of(
         &self,
         c: &Capture,
         query: &LogQuery,
-        resolve: &dyn Fn(&str) -> Option<String>,
+        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
     ) -> Result<Arc<Vec<u32>>, String> {
         let key = OrderKey {
             index_rev: c.index_rev,
@@ -529,7 +530,7 @@ impl LogQueries {
         &self,
         c: &Capture,
         query: &LogQuery,
-        resolve: &dyn Fn(&str) -> Option<String>,
+        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
     ) -> Result<Vec<u32>, String> {
         #[cfg(test)]
         self.0
@@ -561,7 +562,7 @@ impl LogQueries {
         query: &LogQuery,
         offset: usize,
         limit: usize,
-        resolve: &dyn Fn(&str) -> Option<String>,
+        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
     ) -> Result<Value, String> {
         let order = self.order_of(c, query, resolve)?;
         let slice: Vec<u32> = order.iter().skip(offset).take(limit).copied().collect();
@@ -604,7 +605,7 @@ impl LogQueries {
         c: &Capture,
         query: &LogQuery,
         id: &str,
-        resolve: &dyn Fn(&str) -> Option<String>,
+        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
     ) -> Result<Value, String> {
         let order = self.order_of(c, query, resolve)?;
         let handle = match id.parse::<RecordId>() {
@@ -625,7 +626,7 @@ impl LogQueries {
         &self,
         c: &Capture,
         id: &str,
-        resolve: &dyn Fn(&str) -> Option<String>,
+        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
     ) -> Result<Option<LoggedQso>, String> {
         let Ok(id) = id.parse::<RecordId>() else {
             return Ok(None);
@@ -644,7 +645,7 @@ impl LogQueries {
         &self,
         c: &Capture,
         indices: &[f64],
-        resolve: &dyn Fn(&str) -> Option<String>,
+        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
     ) -> Result<Vec<Option<LoggedQso>>, String> {
         let rows: Vec<Option<QsoRecord>> = match &c.rows {
             LogRows::Store(reads) => {
@@ -818,7 +819,7 @@ impl LogQueries {
         c: &Capture,
         cached: Option<Arc<EntityCache>>,
         appended: bool,
-        resolve: &dyn Fn(&str) -> Option<String>,
+        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
     ) -> Result<Arc<EntityCache>, String> {
         let store = c.is_store();
         if let Some(k) = &cached {
@@ -830,12 +831,13 @@ impl LogQueries {
             Some(k) if appended && k.store == store => (k.index.clone(), k.after),
             _ => (EntityIndex::default(), 0),
         };
-        // A call's entity once per distinct call in the pass: a lifetime log repeats them.
-        let mut entities: HashMap<String, Option<String>> = HashMap::new();
+        // A row's entity once per distinct call and DXCC number in the pass: a lifetime log
+        // repeats them.
+        let mut entities: HashMap<(String, Option<u32>), Option<String>> = HashMap::new();
         let mut count = |index: &mut EntityIndex, r: &QsoRecord| {
             let e = entities
-                .entry(r.call.clone())
-                .or_insert_with(|| resolve(&r.call));
+                .entry((r.call.clone(), r.dxcc))
+                .or_insert_with(|| resolve(r));
             index.add(e.as_deref(), r);
         };
         let after = match &c.rows {
@@ -867,9 +869,35 @@ impl LogQueries {
     }
 }
 
-/// A call's live DXCC entity (cty.dat) — what each row the UI is handed carries.
-fn cty(call: &str) -> Option<String> {
-    propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
+/// The DXCC entity a logged contact is shown under (`propagation::dxcc::shown_entity`): its
+/// call's through cty.dat, or the one its record's own DXCC number names where that is another —
+/// a 1×1 call logged as the DXpedition it was, a deleted entity, a number the operator set by
+/// hand. What each row the UI is handed carries (the Logbook's country column, wherever a row is
+/// made: here, the answers to a change, Remote's pages), what the column sorts on, and what an
+/// entity's worked slots are keyed by.
+pub(crate) fn shown(r: &QsoRecord) -> Option<String> {
+    propagation::dxcc::shown_entity(propagation::dxcc::resolve(&r.call).as_ref(), r.dxcc)
+        .map(str::to_string)
+}
+
+/// The country (ADIF `COUNTRY`) a contact takes from its record's DXCC number `code`
+/// (`propagation::dxcc::country_by_dxcc`): the name of the DXCC entity the number names, the name
+/// the contact is [`shown`] under; `None` for a number that names none. The station's resolver
+/// for it — what the operator's changes and every fill write beside the number, and what an
+/// export names.
+pub(crate) fn dxcc_country(code: u32) -> Option<String> {
+    propagation::dxcc::country_by_dxcc(code).map(str::to_string)
+}
+
+/// A contact as it leaves the station — a logbook service's upload, the operator's own logging
+/// program, a Remote browser's file: its `COUNTRY` the name its own DXCC number gives it
+/// ([`dxcc_country`]) where the number names one, so no other logger is handed a `DXCC` and a
+/// `COUNTRY` that disagree. The stored record is not changed.
+pub(crate) fn sent(mut r: QsoRecord) -> QsoRecord {
+    if let Some(country) = r.dxcc.and_then(dxcc_country) {
+        r.country = Some(country);
+    }
+    r
 }
 
 /// The DXCC entity a contact counts toward, as the awards count it
@@ -893,7 +921,7 @@ pub async fn ask_log(
     q: LogQuestion,
 ) -> Result<Value, String> {
     let (engine, queries) = (Arc::clone(&state), queries.inner().clone());
-    tauri::async_runtime::spawn_blocking(move || queries.answer(&engine, &q, &cty, &counted))
+    tauri::async_runtime::spawn_blocking(move || queries.answer(&engine, &q, &shown, &counted))
         .await
         .map_err(|e| format!("the logbook read did not finish: {e}"))?
 }

@@ -165,8 +165,10 @@ fn read(rows: &LogRows, selection: Option<&Selection>) -> Result<Answer, &'stati
             day_start_unix: selection.day_start_unix,
             callsign: selection.callsign.clone(),
         });
+        // Each contact's COUNTRY the one its DXCC number gives it, as the desktop's file has it
+        // (`tempo_app::logexport`): the stored record is not changed.
         for r in log.whole(&picks)? {
-            file.add(&r);
+            file.add(&crate::log_queries::sent(r));
         }
         Ok(Answer::File(file.finish()))
     })

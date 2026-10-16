@@ -33,15 +33,28 @@
 //! ([`crate::logstore::Freshness`]): a stale read says only that something is missing. The
 //! tickets say how many, and which of the two kinds.
 //!
+//! # A contact's COUNTRY follows its DXCC number
+//!
+//! An export writes each record as the store holds it but for one field: where the record carries
+//! a DXCC number that names an entity, its ADIF `COUNTRY` is the name that number gives it
+//! ([`crate::station::StationCore::dxcc_country`]), so a file never says one entity in `DXCC` and
+//! another in `COUNTRY`. The record itself is not rewritten — a contact imported with a `COUNTRY`
+//! its number contradicts keeps it on disk until the operator changes the contact. With no
+//! resolver (a headless test's station) the file is the store's, byte for byte.
+//!
 //! ⚠️ Every function here reads the store: never call one under the Engine lock (a debug build
 //! panics). Take the [`Source`] under it, release it, then call.
 
 use std::ops::ControlFlow;
+use std::sync::Arc;
 use std::time::Duration;
 
-use tempo_core::logbook::{Activations, Export, ExportKind, LoggedActivation, Operators};
+use tempo_core::logbook::{
+    Activations, Export, ExportKind, LoggedActivation, Operators, QsoRecord,
+};
 
 use crate::logstore::{LogRows, Standing, Unsaved, READ_WAIT};
+use crate::station::DxccCountry;
 
 /// How long an export waits for the changes made before it was asked for to reach the store,
 /// before it writes what the store holds and says what the file lacks — the operator's ruling,
@@ -49,11 +62,13 @@ use crate::logstore::{LogRows, Standing, Unsaved, READ_WAIT};
 /// disk is not a minute's wait. (It was [`crate::logstore::DURABLE_WAIT`], a minute.)
 pub const EXPORT_WAIT: Duration = Duration::from_secs(10);
 
-/// What an export reads, taken under the Engine lock — handles, no I/O: the log's rows, and this
-/// process's changes that were not in the store yet when the export was asked for.
+/// What an export reads, taken under the Engine lock — handles, no I/O: the log's rows, this
+/// process's changes that were not in the store yet when the export was asked for, and the
+/// station's resolver of the country a record's DXCC number gives it.
 pub struct Source {
     rows: LogRows,
     unsaved: Unsaved,
+    country: Option<Arc<DxccCountry>>,
 }
 
 impl Source {
@@ -63,6 +78,7 @@ impl Source {
         Source {
             rows: engine.log_rows(),
             unsaved: engine.log_unsaved(),
+            country: engine.station().dxcc_country.clone(),
         }
     }
 
@@ -72,7 +88,21 @@ impl Source {
         Source {
             rows: LogRows::Store(store.reads()),
             unsaved: store.unsaved(),
+            country: None,
         }
+    }
+
+    /// `r` as an export writes it, where that is not the record as stored: its `COUNTRY` the name
+    /// its own DXCC number gives it. `None` — write the record as it is — where it carries no
+    /// number, one that names no entity, or already says that name.
+    fn as_written(&self, r: &QsoRecord) -> Option<QsoRecord> {
+        let country = self.country.as_ref()?(r.dxcc?)?;
+        if r.country.as_deref() == Some(country.as_str()) {
+            return None;
+        }
+        let mut written = r.clone();
+        written.country = Some(country);
+        Some(written)
     }
 }
 
@@ -165,7 +195,10 @@ pub(crate) fn export_waiting(
     wait: Duration,
 ) -> Result<Exported, String> {
     let mut e = Export::new(kind);
-    let lacking = pass(from, wait, &mut |r| e.add(r))?;
+    let lacking = pass(from, wait, &mut |r| match from.as_written(r) {
+        Some(written) => e.add(&written),
+        None => e.add(r),
+    })?;
     Ok(Exported {
         text: e.finish(),
         saving: lacking.pending + lacking.retryable,

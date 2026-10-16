@@ -158,8 +158,9 @@ fn ask(
     resolve: &dyn Fn(&str) -> Option<String>,
 ) -> Value {
     let q: LogQuestion = serde_json::from_value(q.clone()).unwrap_or_else(|e| panic!("{q}: {e}"));
+    let by_call = |r: &QsoRecord| resolve(&r.call);
     queries
-        .answer(engine, &q, resolve, &|r: &QsoRecord| resolve(&r.call))
+        .answer(engine, &q, &by_call, &by_call)
         .unwrap_or_else(|e| panic!("{q:?}: {e}"))
 }
 
@@ -171,7 +172,8 @@ fn try_ask(
     resolve: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Value, String> {
     let q: LogQuestion = serde_json::from_value(q.clone()).unwrap_or_else(|e| panic!("{q}: {e}"));
-    queries.answer(engine, &q, resolve, &|r: &QsoRecord| resolve(&r.call))
+    let by_call = |r: &QsoRecord| resolve(&r.call);
+    queries.answer(engine, &q, &by_call, &by_call)
 }
 
 /// [`ask`], asked again while it is refused for a change still on its way to disk
@@ -242,11 +244,12 @@ fn reference_answer(
 ) -> Value {
     let name = |i: usize| json!(golden_name(&log[i].id.expect("an id").to_string()));
     let resolve = |call: &str| entities.get(call).cloned().flatten();
+    let by_call = |r: &QsoRecord| resolve(&r.call);
     let calls = || -> Vec<String> { serde_json::from_value(q["calls"].clone()).expect("calls") };
     let query = || -> LogQuery { serde_json::from_value(q["query"].clone()).expect("a query") };
     match q["kind"].as_str().expect("kind") {
         "page" => {
-            let order = reference::order(log, &query(), &resolve);
+            let order = reference::order(log, &query(), &by_call);
             let (offset, limit) = (
                 q["offset"].as_u64().expect("offset") as usize,
                 q["limit"].as_u64().expect("limit") as usize,
@@ -260,7 +263,7 @@ fn reference_answer(
         }
         "locate" => {
             let id = golden_id_text(q["id"].as_str().expect("id"));
-            let order = reference::order(log, &query(), &resolve);
+            let order = reference::order(log, &query(), &by_call);
             json!({"index": order.iter().position(|&i| log[i].id.map(|r| r.to_string()) == Some(id.clone()))})
         }
         "callHistory" => {
@@ -280,9 +283,8 @@ fn reference_answer(
             })
         }
         "entity" => {
-            let of = |r: &QsoRecord| resolve(&r.call);
             let entity = q["entity"].as_str().expect("entity");
-            serde_json::to_value(reference::entity(log, entity, &of)).expect("json")
+            serde_json::to_value(reference::entity(log, entity, &by_call)).expect("json")
         }
         "callsSummary" => Value::Object(
             query::calls_summary(log, &calls())
@@ -297,10 +299,7 @@ fn reference_answer(
             GridCounts::new(q["band"].as_str().expect("band"))
         )),
         "bandsInLog" => json!(reference::fold(log, BandsInLog::default())),
-        "statistics" => json!(reference::fold(
-            log,
-            LogStatCounter::new(&|r: &QsoRecord| resolve(&r.call))
-        )),
+        "statistics" => json!(reference::fold(log, LogStatCounter::new(&by_call))),
         "lotwBacklog" => json!(reference::fold(log, LotwBacklog::default())),
         "rowsAt" => json!(q["indices"]
             .as_array()
@@ -636,6 +635,215 @@ fn accepted(when_unix: i64) -> UploadStatus {
         when_unix,
         detail: None,
     }
+}
+
+/// ★ The Logbook shows a contact under the entity its record's DXCC number names, once the
+/// operator sets it by hand — the country column, the column's order and the callsign card's
+/// slots alike, read from the store with the app's own resolvers. Two K1N contacts: the 2015
+/// Navassa operation, set to 182 by hand, and a US special event that stays the United States.
+/// Each answer is asked before the change too, so a kept order or entity index that outlived it
+/// would show.
+#[test]
+fn the_logbook_shows_sorts_and_keys_a_contact_by_the_dxcc_set_by_hand() {
+    let d = Dir::new("dxcc-by-hand");
+    let rows = [
+        "<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:4>1234<BAND:3>20m<MODE:2>CW<EOR>",
+        "<CALL:3>K1N<QSO_DATE:8>20180704<TIME_ON:4>1500<BAND:3>40m<MODE:3>SSB<EOR>",
+        "<CALL:6>XE1ABC<QSO_DATE:8>20200101<TIME_ON:4>1200<BAND:3>15m<MODE:3>FT8<EOR>",
+    ];
+    let records: Vec<QsoRecord> = rows
+        .iter()
+        .map(|r| tempo_core::logbook::parse_adif(r).remove(0))
+        .collect();
+    let engine = on_store(&d, &records);
+    let queries = LogQueries::default();
+    let app = |q: Value| {
+        let q: LogQuestion = serde_json::from_value(q).expect("a question");
+        queries
+            .answer(&engine, &q, &shown, &counted)
+            .expect("answered")
+    };
+    let by_country =
+        json!({"sort": "country", "asc": true, "search": "", "needsConfirmOnly": false});
+    // Each row as (call, its entity), in the order the column gives.
+    let page = || -> Vec<(String, String)> {
+        let page = app(json!({"kind": "page", "query": by_country, "offset": 0, "limit": 10}));
+        page["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|r| {
+                (
+                    r["call"].as_str().expect("call").to_string(),
+                    r["entity"].as_str().unwrap_or("").to_string(),
+                )
+            })
+            .collect()
+    };
+    let navassa = || app(json!({"kind": "entity", "entity": "Navassa Island"}));
+    let pair = |call: &str, entity: &str| (call.to_string(), entity.to_string());
+    assert_eq!(
+        page(),
+        [
+            pair("XE1ABC", "Mexico"),
+            pair("K1N", "United States"),
+            pair("K1N", "United States"),
+        ],
+        "premise: cty.dat places both K1N contacts in the United States"
+    );
+    assert_eq!(navassa()["newEntity"], json!(true), "premise");
+
+    let id = engine.lock().unwrap().stored_log()[0].id.expect("an id");
+    assert!(change(
+        &engine,
+        id,
+        &[LogOp::SetDxcc {
+            id,
+            dxcc: Some(182),
+            country: None,
+        }]
+    ));
+    assert_eq!(
+        page(),
+        [
+            pair("XE1ABC", "Mexico"),
+            pair("K1N", "Navassa Island"),
+            pair("K1N", "United States"),
+        ]
+    );
+    let card = navassa();
+    assert_eq!(card["newEntity"], json!(false));
+    assert_eq!(
+        (&card["slots"]["bandsWorked"], &card["slots"]["modesWorked"]),
+        (&json!(["20M"]), &json!(["CW"])),
+        "the 2015 contact's slots, and not the special event's"
+    );
+    let us = app(json!({"kind": "entity", "entity": "United States"}));
+    assert_eq!(us["slots"]["bandsWorked"], json!(["40M"]));
+}
+
+/// The awards' chase and worked count, the Needed board's worked entities, and the statistics'
+/// entity count and entities — what a contact counts toward, as the screens read it from the store.
+type Counts = (Vec<String>, usize, Vec<String>, Value, Value);
+
+fn counts(engine: &SharedEngine) -> Counts {
+    let tallies = crate::LogTallies::default();
+    let awards = crate::log_folds::awards_kept(engine, &tallies).expect("awards");
+    let (needs, _) = crate::log_folds::needs_kept(engine, &tallies).expect("needs");
+    let q: LogQuestion = serde_json::from_value(json!({"kind": "statistics"})).expect("asked");
+    let stats = LogQueries::default()
+        .answer(engine, &q, &shown, &counted)
+        .expect("answered");
+    let mut worked: Vec<String> = needs.worked_entity_names().iter().cloned().collect();
+    worked.sort();
+    (
+        awards
+            .needed
+            .iter()
+            .map(|n| n.entity.clone())
+            .collect::<Vec<_>>(),
+        awards.dxcc_worked,
+        worked,
+        stats["dxccEntities"].clone(),
+        stats["entities"].clone(),
+    )
+}
+
+/// ★ The awards, the Needed board and the statistics count a contact by its DXCC number and never
+/// by the COUNTRY beside it, unchanged now that COUNTRY follows the number. A K1N contact carrying
+/// 182 counts as Navassa Island whether its COUNTRY says the United States (as an import that
+/// contradicts its number leaves it) or Navassa (as the operator's change writes it), and so does
+/// one set to 182 by hand, with the app's own resolvers.
+#[test]
+fn the_awards_the_needed_board_and_the_statistics_count_by_the_number_not_the_country() {
+    let k1n = |fields: &str| {
+        tempo_core::logbook::parse_adif(&format!(
+            "<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:4>1234<BAND:3>20m<MODE:2>CW{fields}<EOR>"
+        ))
+        .remove(0)
+    };
+    let navassa = (
+        vec!["Navassa Island".to_string()],
+        1,
+        vec!["Navassa Island".to_string()],
+        json!(1),
+        json!([{"label": "Navassa Island", "count": 1}]),
+    );
+    for (tag, fields) in [
+        ("contradicted", "<DXCC:3>182<COUNTRY:13>United States"),
+        ("agreeing", "<DXCC:3>182<COUNTRY:14>Navassa Island"),
+    ] {
+        let d = Dir::new(&format!("counts-{tag}"));
+        let engine = on_store(&d, &[k1n(fields)]);
+        assert_eq!(counts(&engine), navassa, "{tag}");
+    }
+
+    // Set to 182 by hand on a station wired as the launch wires it, which writes COUNTRY beside
+    // the number (`log_by_id`'s tests hold that by value).
+    let d = Dir::new("counts-by-hand");
+    write_log(&d, &[k1n("<COUNTRY:13>United States")]);
+    let opened = tempo_app::logstore::open(
+        &d.log(),
+        Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+        None,
+    )
+    .expect("the store opens");
+    let mut e = Engine::new("K2DEF", "FN31", 0);
+    e.attach_log_store(opened);
+    crate::wire_country_resolvers(&mut e);
+    let engine: SharedEngine = Arc::new(Mutex::new(e));
+    let row = QsoRecord::clone(&engine.lock().unwrap().stored_log()[0]);
+    let key = QsoEdit::project(&row).key();
+    let (made, _) = tempo_app::logwrite::until_written(|| {
+        tempo_app::logwrite::set_dxcc(&engine, row.id.expect("an id"), &key, Some(182))
+    });
+    let (_, after) = made.expect("read").expect("made");
+    assert_eq!(after.expect("the contact stays").dxcc, Some(182), "premise");
+    assert_eq!(counts(&engine), navassa, "set by hand");
+}
+
+/// ★ A WAE area's contact counts as it always has, whatever COUNTRY now says beside its number.
+/// A Sicily contact carrying Italy's 248 — its COUNTRY "Sicily" as an import left it, or "Italy" as
+/// the operator's change now writes it — and one carrying no number count alike. The awards, the
+/// Needed board and the statistics count Italy (a WAE area counts as its parent), and the Journey
+/// is the same model for all three: it places a contact by its call alone, Sicily and all.
+#[test]
+fn a_wae_areas_contact_counts_the_same_whatever_country_it_carries() {
+    // 2026-10-15 12:00 UTC: the Journey's year, and an hour after the contact.
+    const NOW: i64 = 1_792_065_600;
+    let with = |fields: &str| {
+        let it9 = tempo_core::logbook::parse_adif(&format!(
+            "<CALL:6>IT9ABC<QSO_DATE:8>20261015<TIME_ON:4>1100<BAND:3>20m<MODE:2>CW{fields}<EOR>"
+        ))
+        .remove(0);
+        let d = Dir::new("wae-counts");
+        let engine = on_store(&d, &[it9]);
+        let journey = crate::log_folds::journey_kept(&engine, &crate::LogTallies::default())
+            .expect("the Journey");
+        let summary = serde_json::to_value(journey.summary(NOW)).expect("a summary");
+        (counts(&engine), summary)
+    };
+    let (as_imported, journey) = with("<DXCC:3>248<COUNTRY:6>Sicily");
+    assert_eq!(
+        as_imported,
+        (
+            vec!["Italy".to_string()],
+            1,
+            vec!["Italy".to_string()],
+            json!(1),
+            json!([{"label": "Italy", "count": 1}]),
+        )
+    );
+    assert_eq!(
+        with("<DXCC:3>248<COUNTRY:5>Italy"),
+        (as_imported.clone(), journey.clone()),
+        "as the operator's change writes it"
+    );
+    assert_eq!(
+        with("<COUNTRY:6>Sicily"),
+        (as_imported, journey),
+        "no number"
+    );
 }
 
 /// ★ `orderRev` IS THE INDEX REVISION. An upload stamp moves the rows' content and not their
@@ -1492,7 +1700,7 @@ fn assert_parity(seed: u64, step: &str, engine: &SharedEngine, queries: &LogQuer
             "search": g.pick(&searches), "needsConfirmOnly": g.below(3) == 0,
         });
         let parsed: LogQuery = serde_json::from_value(query.clone()).unwrap();
-        let order = reference::order(&held, &parsed, &resolve);
+        let order = reference::order(&held, &parsed, &|r: &QsoRecord| resolve(&r.call));
         let (offset, limit) = (g.below(held.len() + 2), 1 + g.below(8));
         let page = ask(
             queries,
@@ -1884,7 +2092,7 @@ fn the_statistics_count_each_contact_as_the_awards_do() {
     let queries = LogQueries::default();
     let q: LogQuestion = serde_json::from_value(json!({"kind": "statistics"})).expect("parses");
     let counts = queries
-        .answer(&engine, &q, &cty, &counted)
+        .answer(&engine, &q, &shown, &counted)
         .expect("answered");
     let entities: Vec<(&str, u64)> = counts["entities"]
         .as_array()
@@ -2119,7 +2327,8 @@ fn log_query_bench() {
         peak: Option<i64>,
     }
     let steps: RefCell<Vec<Step>> = RefCell::new(Vec::new());
-    let resolve = |call: &str| cty(call);
+    // The app's row entity ([`shown`]) for a record that carries no DXCC number: its call's.
+    let resolve = |call: &str| propagation::dxcc::resolve(call).map(|i| i.entity.to_string());
     let queries = LogQueries::default();
     let ms = |t: Instant| t.elapsed().as_secs_f64() * 1000.0;
     let step = |name: &'static str, f: &mut dyn FnMut() -> Value| -> (Value, f64) {

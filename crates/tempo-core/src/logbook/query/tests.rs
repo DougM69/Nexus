@@ -368,12 +368,8 @@ fn reference_answer(
 ) -> Value {
     let name = |r: &QsoRecord| golden_name(&r.id.expect("an id"));
     let query = || -> LogQuery { serde_json::from_value(q["query"].clone()).expect("a query") };
-    // A call's entity, as the fixture resolves it (one entity per call).
-    let entity = |call: &str| {
-        log.iter()
-            .find(|r| r.call == call)
-            .and_then(|r| entities[&r.id.expect("an id")].clone())
-    };
+    // A row's entity, as the fixture gives it (`q.entity`).
+    let entity = |r: &QsoRecord| entities[&r.id.expect("an id")].clone();
     match q["kind"].as_str().expect("kind") {
         "page" => {
             let order = reference::order(log, &query(), &entity);
@@ -451,10 +447,7 @@ fn reference_answer(
         "bandsInLog" => json!(reference::fold(log, BandsInLog::default())),
         "lotwBacklog" => json!(reference::fold(log, LotwBacklog::default())),
         // The COUNTS, which the window orders (`finishLogStats`) into the golden answer.
-        "statistics" => json!(reference::fold(
-            log,
-            LogStatCounter::new(&|r: &QsoRecord| entity(&r.call))
-        )),
+        "statistics" => json!(reference::fold(log, LogStatCounter::new(&entity))),
         other => panic!("no reference answer for {other}"),
     }
 }
@@ -725,7 +718,7 @@ fn the_golden_log_exercises_what_it_claims() {
         search: search.to_string(),
         needs_confirm_only: false,
     };
-    let none = |_: &str| None;
+    let none = |_: &QsoRecord| None;
     assert_eq!(reference::order(&log, &q("z"), &none).len(), 24);
     let ssb: Vec<String> = reference::order(&log, &q("ssb"), &none)
         .into_iter()
@@ -789,9 +782,9 @@ fn the_country_column_sorts_on_the_entity_the_logbook_shows() {
             r
         })
         .collect();
-    let entity = |call: &str| {
+    let entity = |q: &QsoRecord| {
         rows.iter()
-            .find(|r| r.0 == call)
+            .find(|r| r.0 == q.call)
             .and_then(|r| r.1)
             .map(str::to_string)
     };
@@ -814,6 +807,46 @@ fn the_country_column_sorts_on_the_entity_the_logbook_shows() {
     assert_eq!(
         sorted(false),
         ["Q0ZZZ", "F5ABC", "DL2XYZ", "DL1ABC", "G4ABC"]
+    );
+}
+
+/// The country column sorts on each ROW's entity, which its record's DXCC number can decide: two
+/// contacts with one call (K1N, in two years) sort apart when one record names another entity —
+/// the entity is asked per call AND number, never once per call.
+#[test]
+fn the_country_column_sorts_each_row_on_its_own_entity() {
+    let row = |when: u64, dxcc: Option<u32>| {
+        let mut r = parse_adif("<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:4>1200<EOR>").remove(0);
+        r.when_unix += when;
+        r.dxcc = dxcc;
+        r
+    };
+    // A US special event first in the log, the 2015 Navassa operation after it, and Mexico.
+    let mut xe = row(120, None);
+    xe.call = "XE1ABC".into();
+    let log = [row(0, None), row(60, Some(182)), xe];
+    let entity = |q: &QsoRecord| {
+        let name = match (q.call.as_str(), q.dxcc) {
+            ("K1N", Some(182)) => "Navassa Island",
+            ("K1N", _) => "United States",
+            _ => "Mexico",
+        };
+        Some(name.to_string())
+    };
+    let query = LogQuery {
+        sort: SortKey::Country,
+        asc: true,
+        search: String::new(),
+        needs_confirm_only: false,
+    };
+    let sorted: Vec<(&str, Option<u32>)> = reference::order(&log, &query, &entity)
+        .into_iter()
+        .map(|i| (log[i].call.as_str(), log[i].dxcc))
+        .collect();
+    assert_eq!(
+        sorted,
+        [("XE1ABC", None), ("K1N", Some(182)), ("K1N", None)],
+        "Mexico, Navassa Island, United States"
     );
 }
 
@@ -1089,9 +1122,9 @@ fn a_search_finds_a_contact_by_the_country_the_logbook_shows() {
             r
         })
         .collect();
-    let entity = |call: &str| {
+    let entity = |q: &QsoRecord| {
         rows.iter()
-            .find(|r| r.0 == call)
+            .find(|r| r.0 == q.call)
             .and_then(|r| r.1)
             .map(str::to_string)
     };
@@ -1116,4 +1149,36 @@ fn a_search_finds_a_contact_by_the_country_the_logbook_shows() {
         assert_eq!(found("freedonia", sort), ["Q0ZZZ"], "{sort:?}");
         assert!(found("nowhere", sort).is_empty(), "{sort:?}");
     }
+}
+
+/// The search finds a contact by the entity its ROW shows, which its record's DXCC number can
+/// decide: the 2015 K1N contact set to Navassa is found by "navassa", and a K1N contact without
+/// a number is not — the entity is asked per call AND number.
+#[test]
+fn a_search_finds_a_contact_by_the_entity_its_record_names() {
+    let row = |when: u64, dxcc: Option<u32>| {
+        let mut r = parse_adif("<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:4>1200<EOR>").remove(0);
+        r.when_unix += when;
+        r.dxcc = dxcc;
+        r
+    };
+    let log = [row(0, None), row(60, Some(182))];
+    let entity = |q: &QsoRecord| {
+        let name = match q.dxcc {
+            Some(182) => "Navassa Island",
+            _ => "United States",
+        };
+        Some(name.to_string())
+    };
+    let query = LogQuery {
+        sort: SortKey::Time,
+        asc: true,
+        search: "navassa".to_string(),
+        needs_confirm_only: false,
+    };
+    let found: Vec<Option<u32>> = reference::order(&log, &query, &entity)
+        .into_iter()
+        .map(|i| log[i].dxcc)
+        .collect();
+    assert_eq!(found, [Some(182)]);
 }

@@ -337,6 +337,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Awards view's WAZ total, the Needed board's zone confirmations and the Stats pane agree.
   DXCC and WAS still count only LoTW and cards. NEEDS-BENCH: the WAZ confirmations in Awards and the
   Stats pane against the Needed board.
+- **Set a contact's country by hand in the Logbook.** Click a contact's Country and pick its DXCC
+  entity from a list you can search by name or by number; the 62 deleted entities are in it too.
+  Nexus keeps the entity's number on the contact as its ADIF `DXCC`, written to every export and
+  read back by an import, and the awards, the Needed board and the statistics count the contact as
+  that entity. It is for an old log whose contacts carry no DXCC number: a 1×1 call like K1N counts
+  as the United States by its call, and as Navassa Island once you pick it. **Clear the DXCC
+  number** in the same list puts the contact back to counting by its call. Where LoTW confirmed the
+  contact as another entity, LoTW's still counts, and the Awards view lists the two side by side.
+  The Country column shows and sorts each contact by the entity its record's number names, and the
+  new-entity and new-band badges beside a call you type in the log form, or pick in Operate, count
+  it there too. The contact's ADIF `COUNTRY` follows the number: picking an entity writes its name
+  on the contact, and every export and upload names a contact that carries a DXCC number by that
+  number's entity, so the two never disagree. The number is followed strictly: a Sicily contact
+  carrying Italy's 248 is shown and written as Italy, as ADIF names it, and so are the other WAE
+  areas carrying their DXCC entity's number. A contact that arrives with a DXCC number and no
+  country, from an import or another program, is given the number's entity (K1N with 182 as Navassa
+  Island). A contact imported with a `COUNTRY` its number contradicts goes out under the number's
+  name; Nexus changes the stored contact only when you change it. On the station only: a Remote
+  browser shows the country but cannot change it.
 
 ### Changed
 

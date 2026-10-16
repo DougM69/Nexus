@@ -20,12 +20,14 @@ use rusqlite::params_from_iter;
 use std::collections::HashMap;
 
 /// The columns the Logbook's order and search read (`logQuery.ts`): the searched fields, the sort
-/// columns, and the four confirmation channels `confirmed` / `award_confirmed` are read from. The
-/// one searched field that is not a column, the SUBMODE, a search reads besides
-/// ([`LogDb::each_narrow_after_with_submode`]).
+/// columns, and the four confirmation channels `confirmed` / `award_confirmed` are read from —
+/// with the DXCC number, which decides the entity a row's country column shows and sorts on where
+/// it names another than the call's. The one searched field that is not a column, the SUBMODE, a
+/// search reads besides ([`LogDb::each_narrow_after_with_submode`]).
 pub const ORDER_COLUMNS: &[&str] = &[
     "call",
     "country",
+    "dxcc",
     "grid",
     "band",
     "mode",
@@ -41,9 +43,9 @@ pub const ORDER_COLUMNS: &[&str] = &[
     "qrz_status_raw",
 ];
 
-/// The columns an entity's slots read: the call (its resolved entity), the stored country (the
-/// fallback), and the band, frequency and mode the slots are keyed on.
-pub const ENTITY_COLUMNS: &[&str] = &["call", "country", "band", "freq_mhz", "mode"];
+/// The columns an entity's slots read: the call and the DXCC number (the row's entity), the stored
+/// country (the fallback), and the band, frequency and mode the slots are keyed on.
+pub const ENTITY_COLUMNS: &[&str] = &["call", "dxcc", "country", "band", "freq_mhz", "mode"];
 
 /// A rowid as an order vector holds it. SQLite hands them out from 1 upward; a store whose rowids
 /// have left `u32` is refused rather than mis-numbered.
@@ -267,6 +269,8 @@ mod tests {
             r.confirmed = r.qsl_rcvd.any();
             r.award_confirmed = r.qsl_rcvd.award();
             r.ota.their_ref = (i % 9 == 0).then(|| format!("US-{:04}", i % 13));
+            // Some records carry a DXCC number of their own, as an import or a hand-set one does.
+            r.dxcc = (i % 4 == 0).then_some(1 + i as u32 % 3);
             records.push(r);
         }
         let mut db = LogDb::open_in_memory().unwrap();
@@ -330,6 +334,7 @@ mod tests {
                 (
                     r.call.clone(),
                     r.country.clone(),
+                    r.dxcc,
                     r.grid.clone(),
                     r.band.clone(),
                     r.mode.clone(),
@@ -357,6 +362,16 @@ mod tests {
             );
             assert!(narrow.extra.is_empty() && narrow.contest.is_none());
         }
+        // The entity slots' read carries the DXCC number too: with the call, it names the row's
+        // entity.
+        let mut numbers = Vec::new();
+        db.each_narrow_after(ENTITY_COLUMNS, 0, &mut |_, r| numbers.push(r.dxcc))
+            .unwrap();
+        assert_eq!(numbers, all.iter().map(|r| r.dxcc).collect::<Vec<_>>());
+        assert!(
+            numbers.iter().any(Option::is_some),
+            "premise: some rows carry one"
+        );
         // After a rowid: the rows past it only.
         let mut tail = Vec::new();
         db.each_narrow_after(ENTITY_COLUMNS, rowids[29], &mut |rowid, _| tail.push(rowid))

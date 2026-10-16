@@ -17,8 +17,9 @@
 //! 1. Under the Engine lock: the store's read handles, and nothing else.
 //! 2. Off the lock, in ONE read transaction: `fill_ver`. The version it was asked to fill for →
 //!    done, and the launch has written nothing. Otherwise every contact lacking a country, or a
-//!    state where one can apply — a narrow read of four columns — resolved call by call, still
-//!    off the lock.
+//!    state where one can apply — a narrow read of a few columns — resolved contact by contact,
+//!    still off the lock: a country by the contact's DXCC number where it carries one, else by its
+//!    call, as an insert fills it (`station::country_from`).
 //! 3. [`crate::logwrite::fill`] writes what was found, a chunk at a time: each chunk's rows read
 //!    whole from the store with the lock released, and made under it only where the field is
 //!    still empty in the row as it now stands — a change in the writer's bulk lane (a contact
@@ -33,7 +34,9 @@
 //!
 //! The resolvers are the caller's, and must be the functions the engine's own are
 //! (`Engine::set_dxcc_resolver` / `set_state_resolver`): the command layer hands both the same
-//! functions, which is what makes a filled row the row an insert would have written. Whether a
+//! functions, which is what makes a filled row the row an insert would have written. The one
+//! that names a DXCC number's country is the engine's own, taken with its read handles
+//! (`Engine::set_dxcc_country_resolver`), so it cannot be another. Whether a
 //! state can apply to a contact at all (a US state or a Canadian province: its call places the
 //! station there, or nowhere) is the caller's answer too, and it must be yes wherever the state
 //! resolver can answer. A contact it rules out is one that resolver never fills, so the job
@@ -55,11 +58,11 @@ use crate::station::LogFill;
 /// The `log_meta` key naming the resolver data the store's fills come from.
 pub const FILL_VER: &str = "fill_ver";
 
-/// What the job reads of each contact: the call and grid the resolvers place it from, the two
-/// fields it fills, and the hunted park, whose contact's state the call never fills
+/// What the job reads of each contact: the call, grid and DXCC number the resolvers place it from,
+/// the two fields it fills, and the hunted park, whose contact's state the call never fills
 /// ([`crate::station::call_places_state`]).
 const FILLS: Narrow = Narrow {
-    columns: &["call", "grid", "country", "state", "ota_their_ref"],
+    columns: &["call", "grid", "dxcc", "country", "state", "ota_their_ref"],
     uploads: false,
 };
 
@@ -88,12 +91,12 @@ pub fn fill_log_store(
     state: &dyn Fn(&str, Option<&str>) -> Option<String>,
     state_applies: &dyn Fn(&str) -> bool,
 ) -> Result<FillOutcome, String> {
-    let rows = {
+    let (rows, number) = {
         let eng = engine_lock(engine);
         if eng.log_on_file() {
             return Ok(FillOutcome::default());
         }
-        eng.log_rows()
+        (eng.log_rows(), eng.station().dxcc_country.clone())
     };
     let LogRows::Store(reads) = rows;
     let ((current, lacking), _) = reads
@@ -109,6 +112,7 @@ pub fn fill_log_store(
                         id,
                         r.call.clone(),
                         r.grid.clone(),
+                        r.dxcc,
                         r.country.is_none(),
                         no_state,
                     ));
@@ -128,16 +132,20 @@ pub fn fill_log_store(
     // never resolved: the state resolver answers nothing for them.
     let lacking: Vec<_> = lacking
         .into_iter()
-        .filter_map(|(id, call, grid, no_country, no_state)| {
+        .filter_map(|(id, call, grid, dxcc, no_country, no_state)| {
             let no_state = no_state && state_applies(&call);
-            (no_country || no_state).then_some((id, call, grid, no_country, no_state))
+            (no_country || no_state).then_some((id, call, grid, dxcc, no_country, no_state))
         })
         .collect();
     let found = lacking.len();
     let fills: Vec<LogFill> = lacking
         .into_iter()
-        .filter_map(|(id, call, grid, no_country, no_state)| {
-            let country = no_country.then(|| country(&call)).flatten();
+        .filter_map(|(id, call, grid, dxcc, no_country, no_state)| {
+            let country = no_country
+                .then(|| {
+                    crate::station::country_from(number.as_deref(), Some(country), &call, dxcc)
+                })
+                .flatten();
             let state = no_state.then(|| state(&call, grid.as_deref())).flatten();
             (country.is_some() || state.is_some()).then_some(LogFill { id, country, state })
         })

@@ -25,6 +25,7 @@ import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate,
 import { SpotDialog } from './SpotDialog'
 import { ParkStateReview } from './ParkStateReview'
 import { ConfirmationReview } from './ConfirmationReview'
+import { LogCountryPicker } from './LogCountryPicker'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
 // Logbook actually shows it (same pattern as ConnectView's Globe3D) — a weak-GPU
@@ -46,6 +47,7 @@ import {
   markQslSentById,
   markQslCardById,
   setSatTagById,
+  setDxccById,
   lotwSatNames,
   purgeLog,
   qrzLookup,
@@ -912,6 +914,26 @@ export function Logbook({
         name
           ? t('logbook.sat.tagged', { call: q.call, sat: name })
           : t('logbook.sat.cleared', { call: q.call }),
+        'success',
+      )
+      load()
+    }
+  }
+
+  // Set — or CLEAR — by hand the DXCC entity a contact counts toward (ADIF DXCC), from its Country
+  // cell. `dxcc === null` is the clear, chosen from the picker's own entry like the satellite
+  // tag's: the contact counts by its call again — or by LoTW's number, which the log keeps where
+  // LoTW confirmed it as another entity, and which then stands as the log's. Desktop only, like
+  // the tag: no Remote capability carries it, so an observing browser shows the plain cell.
+  const onSetDxcc = async (q: LoggedQso, ref: RowRef | null, dxcc: number | null) => {
+    if (!ref) return
+    const answer = await withErrorToast(() => setDxccById(ref, dxcc), t('logbook.country.failed'))
+    if (answer && changeMade(answer, q.call)) {
+      const now = answer.kind === 'applied' ? answer.current.row : null
+      pushToast(
+        now && now.dxcc == null
+          ? t('logbook.country.cleared', { call: q.call })
+          : t('logbook.country.set', { call: q.call, entity: now?.entity ?? now?.country ?? '' }),
         'success',
       )
       load()
@@ -2651,11 +2673,20 @@ export function Logbook({
                     {q.call}
                   </button>
                 </span>
-                {/* The country is the DXCC entity the call resolves to, the one every award and the
-                    statistics already count: imported contacts carry their logger's own spelling
-                    of it ("UNITED STATES"), and they read as the same country as Nexus's own. The
-                    stored text stays on the tooltip, and shows where the call resolves to none. */}
-                <span className="log-cell log-country" title={q.country ?? ''}>{q.entity ?? q.country ?? '—'}</span>
+                {/* The country is the DXCC entity the contact is shown under (`q.entity`): the one
+                    its call resolves to, or the one its record's DXCC number names where that is
+                    another — a DXpedition on a 1×1 call, a deleted entity, a number set here by
+                    hand. Imported contacts carry their logger's own spelling of it ("UNITED
+                    STATES"), and they read as the same country as Nexus's own. The stored text
+                    stays on the tooltip, and shows where neither names an entity. On the station
+                    the cell is the picker that sets the number (LogCountryPicker). */}
+                <span className="log-cell log-country" title={q.country ?? ''}>
+                  {control && ref ? (
+                    <LogCountryPicker q={q} onPick={(dxcc) => void onSetDxcc(q, ref, dxcc)} />
+                  ) : (
+                    (q.entity ?? q.country ?? '—')
+                  )}
+                </span>
                 <span className="log-cell">{q.band}</span>
                 <span className="log-cell mono">{q.freqMhz.toFixed(4)}</span>
                 <span className="log-cell">{q.mode}</span>

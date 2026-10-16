@@ -2951,6 +2951,43 @@ pub(crate) fn sat_tagged(rec: &mut QsoRecord, sat_name: Option<&str>) -> bool {
     true
 }
 
+/// Set — or CLEAR — by hand the DXCC entity `rec` counts toward: ADIF `DXCC`, the number the
+/// awards count a contact by before its call. An old log's record that carries none (a 1×1 call
+/// like K1N, which cty.dat places in the United States whatever year it was) counts as the entity
+/// the operator names.
+///
+/// `Some(code)` sets the number, `None` clears it so the contact counts by its call again, and
+/// NOT CALLING THIS leaves it alone — the satellite tag's three states ([`sat_tagged`]), for its
+/// reason: the edit form reads a blank as "leave alone", so a clear has to be something the
+/// operator says.
+///
+/// LoTW's number, kept beside the log's where LoTW confirmed the contact under another entity
+/// ([`LOTW_DXCC_FIELD`]), is never overwritten: it still counts, and the Awards view lists the
+/// two. A number that agrees with it drops it, as a LoTW download that agrees does
+/// ([`crate::reconcile::reconcile_lotw`]). A clear leaves the log holding LoTW's, as a LoTW
+/// download fills a contact that has none: LoTW's counts wherever the log keeps it.
+///
+/// `COUNTRY` follows the number: `country` is the name the number this leaves gives the contact,
+/// or its call's entity where it is left with none, so the two never disagree. `None` leaves it
+/// as it is. Only this, the operator's own change, writes it — a contact the operator does not
+/// touch keeps the `COUNTRY` it was stored with.
+///
+/// ⚠️ It does not check the number names an entity, nor name the country — that table is
+/// `propagation`'s, which the caller consults ([`sat_tagged`] leaves its own list to its caller
+/// the same way).
+///
+/// ★ THE one implementation of [`LogOp::SetDxcc`] (SPEC-2 v3 §4.6).
+pub(crate) fn dxcc_set(rec: &mut QsoRecord, dxcc: Option<u32>, country: Option<&str>) {
+    let lotw = record_lotw_dxcc(rec);
+    rec.dxcc = dxcc.or(lotw);
+    if lotw.is_some() && rec.dxcc == lotw {
+        set_extra(rec, LOTW_DXCC_FIELD, None);
+    }
+    if let Some(country) = country {
+        rec.country = Some(country.to_string());
+    }
+}
+
 /// Stamp `status` on `rec`'s `service` leg: what that connector answered the last time this
 /// contact was pushed to it.
 ///

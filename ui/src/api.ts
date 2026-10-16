@@ -13,6 +13,7 @@ import type {
   AppSnapshot,
   AudioDevices,
   AwardSummary,
+  DxccEntityOption,
   GeoLogStats,
   LogTimeline,
   TimelineRange,
@@ -1597,6 +1598,15 @@ export async function setSatTagById(target: RowRef, satName: string | null): Pro
   return invoke<RowAnswer>('set_sat_tag_by_id', { target, satName })
 }
 
+/** Set — or CLEAR — by hand the DXCC entity the contact `target` counts toward (ADIF `DXCC`):
+ *  `dxcc` is the entity's number (`getDxccEntities`), and `null` clears it so the contact counts
+ *  by its call again. LoTW's number for the contact, where the log keeps one, still counts over
+ *  it. Its own command for the satellite tag's reason: a clear has to be an act the operator
+ *  chooses, never a blank box on the edit form. */
+export async function setDxccById(target: RowRef, dxcc: number | null): Promise<RowAnswer> {
+  return invoke<RowAnswer>('set_dxcc_by_id', { target, dxcc })
+}
+
 /** Delete the contact `target`. */
 export async function deleteQsoById(target: RowRef): Promise<RowAnswer> {
   return invoke<RowAnswer>('delete_qso_by_id', { target })
@@ -2600,6 +2610,13 @@ export async function getPrivilegeSpans(mode: string): Promise<PrivilegeSpans | 
  *  picker's "Other country…" search (F4MQS). */
 export async function getDxccEntityNames(): Promise<string[]> {
   return invoke<string[]>('dxcc_entity_names')
+}
+
+/** Every DXCC entity a contact can be set to count toward, current and deleted, in number
+ *  order — the Logbook's country picker. The station owns the table, so the picker offers
+ *  exactly the numbers `setDxccById` accepts. */
+export async function getDxccEntities(): Promise<DxccEntityOption[]> {
+  return invoke<DxccEntityOption[]>('dxcc_entities')
 }
 
 /** Every cty.dat entity name with its continent code (`[entity, 'EU']`), for band activity's
