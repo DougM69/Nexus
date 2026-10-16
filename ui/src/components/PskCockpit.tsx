@@ -356,6 +356,16 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     const id = setTimeout(() => setSettledHisCall(hisCall.trim().toUpperCase()), 500)
     return () => clearTimeout(id)
   }, [hisCall])
+  // …AND THE STRIP'S CALLSIGN BACK INTO THE DOCK (#406): one field, shown twice, as RTTY's is.
+  // The strip's box is the one captioned "Call", so it is where an operator types the station
+  // just decoded, and a call that reached only the strip left every {CALL} key refusing with
+  // "Enter their call first". The strip reports each change the fill above did not make
+  // (`onCallChange`), the clear after a contact is logged included; a value that arrives whole
+  // has no typing to wait out, so it is settled at once.
+  const setCallNow = (call: string) => {
+    setHisCall(call)
+    setSettledHisCall(call)
+  }
 
   const sending = psk?.sending === true
 
@@ -985,6 +995,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                 ? { call: settledHisCall, rst: null, name: null, confirmed: true }
                 : null
             }
+            // …and the strip's call back into the dock: one field (`setCallNow`).
+            onCallChange={setCallNow}
             onSnap={onSnap}
             // FIELD DAY IS ALL-MODE, AND PSK IS ITS DIGITAL CLASS. Non-null `snap.fieldDay`
             // (the master switch, gated engine-side on `fd_active`) flips this strip to the

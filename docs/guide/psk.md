@@ -66,11 +66,12 @@ fading text is a real signal that the copy is getting hard. Its head carries:
 offset from where you netted; **Re-acquire** rebuilds the demodulator from that frequency.*
 
 **The LOG pane** sits under the transcript — call, sent and received report, name, QTH,
-state, country, a POTA reference and private notes, with a **Log** button. The call you put
-in the dock's **{CALL}** field carries across to it once you stop typing, and the record is
-written with the sub-mode you were actually running (`PSK31` or `QPSK31`), not folded
-together. During [Field Day](contesting-pota.md) the strip becomes the class/section entry
-and the contact routes to the event log, scored as Digital.
+state, country, a POTA reference and private notes, with a **Log** button. Its callsign and
+the dock's **{CALL}** field are one field shown twice: type in either and both follow, and
+logging the contact clears both. The record is written with the sub-mode you were actually
+running (`PSK31` or `QPSK31`), not folded together. During [Field Day](contesting-pota.md)
+the strip becomes the class/section entry and the contact routes to the event log, scored as
+Digital.
 
 **The TX dock**, pinned at the bottom: four macros (**CQ**, **Answer**, **Exchange**, **73**),
 a **{CALL}** field for the station you are working, the compose bar, the continuous-TX latch,
@@ -103,9 +104,10 @@ beside it is how far the AFC has walked from where you clicked.*
 
 ### Work a station
 
-Put their call in the **{CALL}** field, then use the macros: **Answer** calls them,
-**Exchange** sends a report, **73** signs. The macros expand `{MYCALL}` and `{CALL}` as they
-are sent. Anything you type in the compose bar and send with Enter goes out as typed.
+Put their call in the **{CALL}** field or the LOG pane's callsign, then use the macros:
+**Answer** calls them, **Exchange** sends a report, **73** signs. The macros expand
+`{MYCALL}` and `{CALL}` as they are sent. Anything you type in the compose bar and send with
+Enter goes out as typed.
 
 To change what a macro sends, click **✎** on it, right-click it, or press **Ctrl+Shift**
 with its F-key (**Ctrl+Shift+F2** for F2). None of these sends anything. The editor is

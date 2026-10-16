@@ -24,6 +24,8 @@ import type { ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, waitFor, screen } from '@testing-library/react'
 import { PskCockpit } from './PskCockpit'
+import * as api from '../api'
+import * as toast from '../toast'
 import type { AppSnapshot, LoggedQso, PskState } from '../types'
 
 // THE BUDGET (2026-10-09). The slowest case here, "does not clobber a call the operator typed straight…", takes
@@ -250,8 +252,9 @@ describe('the PSK cockpit can log a contact (#159)', () => {
   })
 
   it('does not clobber a call the operator typed straight into the log strip', async () => {
-    // The dock field is empty and stays empty, so nothing settles and nothing fills. A fill
-    // path that fired on mount would wipe a hand-typed call on every render.
+    // The call goes into the dock and settles back as the call the strip already holds, so
+    // nothing fills over it. A fill path that fired on mount, or on that echo, would wipe a
+    // hand-typed call.
     await renderCockpit()
     const callBox = document.querySelector('.le-call') as HTMLInputElement
     await act(async () => {
@@ -358,5 +361,101 @@ describe('the PSK cockpit works FIELD DAY (all-mode FD, digital class)', () => {
     const rec = await logACall('w1aw')
     expect(rec.mode).toBe('PSK31')
     expect(contestLogManual).not.toHaveBeenCalled()
+  })
+})
+
+// THE CALL BOX AND THE LOG STRIP'S CALLSIGN ARE ONE FIELD (#406). The strip's box is the one
+// captioned "Call", so it is where an operator types the station just decoded, and every {CALL}
+// the dock sends must read it, as RTTY's and CW's do. An empty field still refuses, every way.
+describe('the Call box and the log callsign are one field: every {CALL} reads it (#406)', () => {
+  const pskSend = vi.mocked(api.pskSend)
+  const pushToast = vi.mocked(toast.pushToast)
+  const NO_CALL = ['Enter their call first (the {CALL} field)', 'info', 3000]
+  const dock = () => document.querySelector('.rtty-hiscall') as HTMLInputElement
+  const strip = () => document.querySelector('[data-pane="log"] .le-call') as HTMLInputElement
+  const answer = () => document.querySelector('[data-psk-macro="F2"] .cw-macro') as HTMLButtonElement
+  const compose = () => document.querySelector('.cw-type') as HTMLInputElement
+  /** What reached `psk_send`, and every toast on the way, so a red says why nothing did. */
+  const keyed = () => pskSend.mock.calls.map((c) => c[0])
+  const why = () => `toasts: ${JSON.stringify(pushToast.mock.calls)}`
+  const type = async (box: HTMLInputElement, value: string) => {
+    await act(async () => {
+      fireEvent.change(box, { target: { value } })
+    })
+  }
+  const click = async (button: HTMLElement) => {
+    await act(async () => {
+      fireEvent.click(button)
+    })
+  }
+  const press = async (key: string, target: Element) => {
+    await act(async () => {
+      fireEvent.keyDown(target, { key })
+    })
+  }
+
+  beforeEach(() => {
+    pskSend.mockClear()
+    pushToast.mockClear()
+  })
+
+  it('Answer after a call typed only in the strip keys that call', async () => {
+    await renderCockpit()
+    await type(strip(), 'k1abc')
+    await click(answer())
+    expect(keyed(), why()).toEqual(['K1ABC de KD9TAW KD9TAW k'])
+    expect(dock().value, 'the Call box shows the strip').toBe('K1ABC')
+  })
+
+  it('…and so do its F-key and a {CALL} typed in the compose bar', async () => {
+    await renderCockpit()
+    await type(strip(), 'k1abc')
+    await press('F2', strip())
+    await type(compose(), '{CALL} pse k')
+    await press('Enter', compose())
+    expect(keyed(), why()).toEqual(['K1ABC de KD9TAW KD9TAW k', 'K1ABC pse k'])
+  })
+
+  it('a call typed in the Call box still keys, and still reaches the strip', async () => {
+    // The path that always worked, and the control for the two above: this harness can key.
+    await renderCockpit()
+    await type(dock(), 'w1aw')
+    await click(answer())
+    expect(keyed(), why()).toEqual(['W1AW de KD9TAW KD9TAW k'])
+    await waitFor(() => expect(strip().value).toBe('W1AW'))
+  })
+
+  it('an empty Call field still refuses: the toast and nothing keyed, by click, F-key and compose bar', async () => {
+    await renderCockpit()
+    await click(answer())
+    await press('F2', compose())
+    await type(compose(), '{CALL} pse k')
+    await press('Enter', compose())
+    expect(keyed()).toEqual([])
+    expect(pushToast.mock.calls).toEqual([NO_CALL, NO_CALL, NO_CALL])
+  })
+
+  it('a call cleared from the strip leaves the Call box too, and Answer refuses again', async () => {
+    await renderCockpit()
+    await type(strip(), 'k1abc')
+    expect(dock().value, 'the Call box never had the call').toBe('K1ABC')
+    await type(strip(), '')
+    expect(dock().value).toBe('')
+    await click(answer())
+    expect(keyed()).toEqual([])
+    expect(pushToast.mock.calls).toEqual([NO_CALL])
+  })
+
+  it('logging the contact clears both, so the next Answer asks for a call', async () => {
+    await renderCockpit()
+    await type(dock(), 'w1aw')
+    await waitFor(() => expect(strip().value).toBe('W1AW'))
+    await click(document.querySelector('[data-pane="log"] .le-log-btn') as HTMLElement)
+    await waitFor(() => expect(logQso).toHaveBeenCalled())
+    await waitFor(() => expect(dock().value, 'the Call box kept the call just logged').toBe(''))
+    pushToast.mockClear() // the "Logged" toast
+    await click(answer())
+    expect(keyed()).toEqual([])
+    expect(pushToast.mock.calls).toEqual([NO_CALL])
   })
 })
