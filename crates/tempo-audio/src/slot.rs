@@ -471,10 +471,9 @@ pub(crate) fn key_slot_transmitter(
 /// already held the transmitter (`held`: the operator's own PTT stays theirs, and an over's hold
 /// ends at its own deadline); and only this over is dropped
 /// ([`Engine::drop_over_keyed_past_its_period`]): TX stays on and the next own period keys its over
-/// as usual, as WSJT-X's `stopTx` ends that over alone and leaves Enable Tx ticked, with a lane of
-/// its own saying so, until that many in a row turn TX off. An unkey the radio does not take halts
-/// TX as at an over's end ([`slot_unkey_failure`]), and the loop's idle self-heal goes on sending
-/// it.
+/// as usual, however many in a row, as WSJT-X's `stopTx` ends that over alone and leaves Enable Tx
+/// ticked, with a lane of its own saying so. An unkey the radio does not take halts TX as at an
+/// over's end ([`slot_unkey_failure`]), and the loop's idle self-heal goes on sending it.
 pub(crate) fn unkey_a_key_past_its_period(
     eng: &mut Engine,
     rig: &mut Rig,
@@ -2352,11 +2351,7 @@ mod tests {
             let lane = over_dropped(&self.eng)
                 .unwrap_or_else(|| panic!("{what}: nothing says the over was dropped"));
             self.says_how_late(&lane, answered, what);
-            assert_eq!(
-                (&lane["count"], lane.get("txStopped")),
-                (&serde_json::json!(in_a_row), None),
-                "{what}: {lane}"
-            );
+            assert_eq!(lane["count"], in_a_row, "{what}: {lane}");
         }
 
         /// [`Self::sent_nothing_and_unkeyed_at_once`] and [`Self::dropped_with_tx_left_on`].
@@ -2568,48 +2563,24 @@ mod tests {
     }
 
     #[test]
-    fn three_ft4_overs_dropped_in_a_row_turn_tx_off_and_the_lane_says_so() {
-        // ⭐ A LINK SLOW ENOUGH TO MISS EVERY OVER DOES NOT LOOP SILENTLY. A Call CQ run on FT4
-        // whose boundaries are each decided 5.6 s in, the split and the key taking 2.3 s (the
-        // carrier at 7.9 s): the first and the second are dropped with TX left on, the lane
-        // counting them; the third in a row is dropped too and turns TX off as Stop TX does, and
-        // the lane says so, not the refused key's. WSJT-X keeps trying every own period until its
-        // Tx watchdog, 6 minutes by default (`widgets/mainwindow.cpp:5109-5111`).
+    fn ft4_overs_dropped_in_a_row_leave_tx_on_and_the_lane_counts_them() {
+        // ⭐ HOWEVER MANY OVERS IN A ROW THE RADIO KEYS PAST THEIR PERIOD, TX STAYS ON, AS IN WSJT-X,
+        // whose next own period asserts PTT again until its Tx watchdog (6 minutes by default,
+        // `widgets/mainwindow.cpp:5109-5111`) ends the run. A Call CQ run on FT4 whose boundaries are
+        // each decided 5.6 s in, the split and the key taking 2.3 s (the carrier at 7.9 s): four in a
+        // row are each dropped, nothing sent and unkeyed at once, with TX left on and the lane
+        // counting them.
         let wave = rig_split_cq_run(tempo_app::dto::Tier::Ft4)
             .poll_tx(0)
             .remove(0);
         let mut eng = rig_split_cq_run(tempo_app::dto::Tier::Ft4);
-        for (in_a_row, slot) in [(1, 0), (2, 2)] {
+        for (in_a_row, slot) in [(1, 0), (2, 2), (3, 4), (4, 6)] {
             let what = format!("FT4, drop {in_a_row}");
             let mut dropped =
                 slow_split_boundary_of(eng, wave.clone(), slot, 5_600.0, (700, 200), false);
             dropped.dropped_at_once(200, in_a_row, &what);
             eng = dropped.eng;
         }
-        let what = "FT4, drop 3";
-        let mut third = slow_split_boundary_of(eng, wave, 4, 5_600.0, (700, 200), false);
-        let answered = third.sent_nothing_and_unkeyed_at_once(200, false, what);
-        assert!(
-            !third.eng.tx_enabled() && !third.eng.slot_tx_armed(),
-            "{what}: TX is still on after three in a row"
-        );
-        assert!(
-            third.eng.take_slot_tx_abort(),
-            "{what}: the loop is not told to stop, as Stop TX tells it"
-        );
-        assert_eq!(
-            third.eng.snapshot().radio.slot_key_refused,
-            None,
-            "{what}: on the refused key's line"
-        );
-        let lane = over_dropped(&third.eng)
-            .unwrap_or_else(|| panic!("{what}: nothing says the overs were dropped"));
-        third.says_how_late(&lane, answered, what);
-        assert_eq!(
-            (&lane["count"], &lane["txStopped"]),
-            (&serde_json::json!(3), &serde_json::json!(true)),
-            "{what}: {lane}"
-        );
     }
 
     #[test]

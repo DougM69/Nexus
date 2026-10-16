@@ -1286,9 +1286,6 @@ pub struct SlotOverDropped {
     pub late: String,
     /// How many in a row, this one included.
     pub count: u32,
-    /// Set when that many in a row turned TX off. Absent otherwise.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub tx_stopped: bool,
 }
 
 /// Current radio / slot-timing status.
@@ -1599,10 +1596,9 @@ pub struct RadioStatus {
     /// The last FT8 or FT4 over Nexus dropped because the radio keyed it only after its period had
     /// ended (a slow CAT link: Split Operation's commands and the key took the carrier past it): it
     /// unkeyed at once, sent nothing and left TX on for the next over, as WSJT-X starts no audio
-    /// once its window has closed. Shown while TX is on, until the next over the radio keys in its
-    /// period or TX is turned on again; after several in a row TX was turned off, and it says so
-    /// until TX is turned on again. ABSENT until it happens, so every snapshot before one is
-    /// byte-identical.
+    /// once its window has closed, however many in a row (the TX watchdog is the only stop, as in
+    /// WSJT-X). Shown while TX is on, until the next over the radio keys in its period or TX is
+    /// turned on again. ABSENT until it happens, so every snapshot before one is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_over_dropped: Option<SlotOverDropped>,
     /// The operator's last PTT press (Phone) did not key: right after the transmit slice left a

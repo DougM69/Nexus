@@ -228,9 +228,9 @@ end) is not implemented.
   each key, and on a slow serial link they can take seconds. If the radio keys
   only after your period has ended, Nexus unkeys it at once and sends nothing in
   the other station's period, as WSJT-X does, and keeps TX on for your next over;
-  the status line says the over was dropped and how late the radio was. Three
-  dropped in a row turn TX off, and the status line says why. A faster CAT baud
-  rate keys sooner.
+  the status line says the over was dropped and how late the radio was. However
+  many are dropped in a row, TX stays on, as in WSJT-X: the TX watchdog ends a
+  run that never gets an over out. A faster CAT baud rate keys sooner.
 - **Decode depth** (Fast / Normal / Deep) and the **decoder passband**
   (default 200–2900 Hz) are in
   [Settings ▸ Digital](settings-reference.md#digital-ft8ft4).

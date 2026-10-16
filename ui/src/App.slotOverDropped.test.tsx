@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 //
 // An FT8 or FT4 over the radio keyed only after its period had ended, in the Now-Bar's status lane.
-// The station dropped that over and left TX on, so the chip is a warning of its own, not the refused
-// key's "PTT REFUSED — TX STOPPED"; after that many in a row TX stopped, and the chip says so,
-// critical. It goes with the field. Not on the Remote page.
+// The station dropped that over and left TX on, however many in a row, so the chip is a warning of its
+// own, not the refused key's "PTT REFUSED — TX STOPPED". It goes with the field. Not on the Remote page.
 //
 // This mounts the REAL App and the real status bus: what is proved is the wiring from the snapshot
 // to the screen. The words are pinned in features/slotOverDropped.test.ts.
@@ -121,7 +120,6 @@ function droppedItem(): StatusItem | undefined {
 }
 
 const DROPPED = EN['shell.lane.slotOverDropped.message']
-const STOPPED = EN['shell.lane.slotOverDropped.stopped.message']
 
 describe('the Now-Bar for an FT8/FT4 over the radio keyed after its period had ended', () => {
   it('says the over was dropped as a warning of its own, with how late, and goes with the field', async () => {
@@ -138,13 +136,12 @@ describe('the Now-Bar for an FT8/FT4 over the radio keyed after its period had e
     expect(droppedItem()).toBeUndefined()
   })
 
-  it('says TX stopped, critical, once that many in a row turned it off', async () => {
+  it('stays a warning however many in a row: TX is on', async () => {
     await openApp()
-    act(() => state.push?.(withDrop({ at: AT, late: '0.3 s', count: 3, txStopped: true })))
-    await screen.findByText(STOPPED)
-    expect(chip(STOPPED)?.className).toContain('tier-critical')
-    expect(screen.queryByText(DROPPED)).toBeNull()
-    expect(droppedItem()?.detail).toContain('3 overs in a row')
+    act(() => state.push?.(withDrop({ at: AT, late: '0.3 s', count: 12 })))
+    await screen.findByText(DROPPED)
+    expect(chip(DROPPED)?.className).toContain('tier-warning')
+    expect(screen.queryByText(EN['shell.lane.slotKeyRefused.message'])).toBeNull()
   })
 
   it('is not on the Remote page', async () => {

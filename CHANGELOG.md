@@ -626,19 +626,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a slow CAT link each can take up to 2.5 s; the key itself can take 0.7 s more. A key that came
   that late, after your period had ended, sent the rest of the over in the other station's period,
   on their slot's timing, with the transmitter held up to 13.84 s into it (FT8) or 6.24 s (FT4).
-  Nexus now unkeys at once when the radio comes on after your period has ended and sends nothing,
-  as WSJT-X sends nothing once its window has closed, and, as WSJT-X does, TX stays on: only that
-  over is dropped, and your next over goes out in your next period. The status line says the over
-  was dropped and how late the radio was. Three dropped in a row turn TX off, and the status line
-  says so, rather than keying the radio in the other station's period every time until the TX
-  watchdog stops it. And the end of an FT8 or FT4 over is now the first thing each pass of the
-  radio loop checks, so something else holding the loop up (a double-click or a logger's Reply
-  while a decode finishes on a slow computer) no longer keeps the transmitter on past 13.84 s or
-  6.24 s for as long as it lasts. NEEDS-BENCH: with Split operation set to Rig on a radio with a
-  slow serial CAT link (an FT-710 at 4800 baud, a Xiegu), Call CQ about 11 s into your FT8 slot
-  several times: the radio must never stay keyed past the end of your slot; when it keys after it,
-  it unkeys at once, the status line says the over was dropped, TX stays on and your next over goes
-  out whole; three in a row turn TX off. An over that keys in time goes out as before.
+  Nexus now unkeys at once when the radio comes on after your period has ended and sends nothing, as
+  WSJT-X sends nothing once its window has closed, and, as WSJT-X does, TX stays on: only that over
+  is dropped, and your next over goes out in your next period. The status line says the over was
+  dropped and how late the radio was. However many are dropped in a row, TX stays on, as in WSJT-X:
+  the TX watchdog is what ends a run that never gets an over out. And the end of an FT8 or FT4 over
+  is now the first thing each pass of the radio loop checks, so something else holding the loop up
+  (a double-click or a logger's Reply while a decode finishes on a slow computer) no longer keeps
+  the transmitter on past 13.84 s or 6.24 s for as long as it lasts. NEEDS-BENCH: with Split
+  operation set to Rig on a radio with a slow serial CAT link (an FT-710 at 4800 baud, a Xiegu),
+  Call CQ about 11 s into your FT8 slot several times: the radio must never stay keyed past the end
+  of your slot; when it keys after it, it unkeys at once, the status line says the over was dropped,
+  TX stays on and your next over goes out whole, however many drop in a row until the TX watchdog.
+  An over that keys in time goes out as before.
 
 ### Security
 

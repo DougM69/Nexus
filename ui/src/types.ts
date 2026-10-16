@@ -1578,10 +1578,9 @@ export interface RadioStatus {
   slotAudioLost?: SlotAudioLost | null
   /** The last FT8 or FT4 over the station dropped because the radio keyed it only after its period
    *  had ended (a slow CAT link): it was unkeyed at once, nothing was sent, and TX was left on for
-   *  the next over, as WSJT-X does. After several in a row TX is turned off, and `txStopped` says
-   *  so. Cleared by the next over the radio keys in its period, or by turning TX on again, and
-   *  absent while TX is off but for the one that turned it off; absent otherwise, and from a
-   *  station older than it. */
+   *  the next over, however many in a row, as WSJT-X does. Cleared by the next over the radio keys
+   *  in its period, or by turning TX on again, and absent while TX is off; absent otherwise, and
+   *  from a station older than it. */
   slotOverDropped?: SlotOverDropped | null
   /** The operator's last PTT press did not key: right after the transmit slice left a digital mode,
    *  or native audio went off, the radio still took its transmit audio from the DAX Nexus set, not
@@ -5173,8 +5172,6 @@ export interface SlotOverDropped {
   late: string
   /** How many in a row, this one included. */
   count: number
-  /** Set when that many in a row turned TX off. Absent otherwise. */
-  txStopped?: boolean
 }
 
 /** What Parsec presence mode knows (mirror of the Rust ParsecPresenceDto). Tokens only — the
