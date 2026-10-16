@@ -341,6 +341,14 @@ Nexus on Windows, and an ISS pass no longer retunes the radio you are using for 
   MHz, an FT8 or JS8 Normal signal keys at a TX offset up to 3449 Hz and locks from 3450 Hz. Away
   from an edge nothing changes, and neither do the other digital modes or an operator with no US
   licence class. NEEDS-BENCH: a radio on 60 m into a dummy load, as a US General.
+<!-- BENCH (Fri 16 Oct): cut the bullet below if your own call with a prefix (#410) fails the bench. -->
+- **Your own call with a prefix or suffix keeps its signal report.** Operating as OE/PD1SCO, or with
+  any call FT8 counts as nonstandard (a prefix, or a suffix other than /P or /R), Nexus sent its
+  report and its roger without the number. It now shortens your own call to its hash in those two
+  overs, as WSJT-X does, so `PA0A <OE/PD1SCO> -01` and `R-01` go out and both reports reach both
+  logs. A roger re-sent to a partner who missed it keeps your call whole. Every other pair of calls
+  sends exactly what it did. (#410) NEEDS-BENCH: a CQ run with a nonstandard call, against a partner
+  who misses your RR73.
 
 Normal QSOs ran on the air with a test build of this timing. NEEDS-BENCH beside WSJT-X, on a dummy
 load: a Call CQ about 10 s and about 12 s into an FT8 slot (the first keys at once, the second
