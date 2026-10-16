@@ -93,7 +93,7 @@ Nexus on Windows, and an ISS pass no longer retunes the radio you are using for 
 - **Macro keys:** right-click a CW, RTTY or PSK key, or press Ctrl+Shift with its F-key, to change
   what it sends; **Send once** sends the change once and **Save** keeps it.
 - **The rail's mode badge** names the contest you are running (ILQP, NYQP, WFD), not FIELD DAY.
-<!-- PENDING: fix/cq-claimed-score-2026-10-14 -->
+<!-- BENCH (Fri 16 Oct): cut the bullet below if the CQ claimed score fails the bench (A0.S). -->
 - **CQ WW and CQ WPX logs claim their score**, apart from a single-band entry with contacts on
   another band.
 - **The Rotor box draws the station in your log entry on its rose** and says how far the antenna
@@ -179,7 +179,7 @@ Nexus on Windows, and an ISS pass no longer retunes the radio you are using for 
 - **The APRS map shows the stations inside your radius**, and your watched calls. With weather,
   objects or messages switched on, as all three are by default, the feed asked for the whole network
   and filled the map to its 2,000-station limit. A radius of 0 still means no limit.
-<!-- PENDING: fix/cq-claimed-score-2026-10-14 -->
+<!-- BENCH (Fri 16 Oct): cut the bullet below if the CQ claimed score fails the bench (A0.S). -->
 - **1.18.0 can over-claim a single-band CQ WW or WPX entry.** This release's contest rules add the
   claimed score to CQ WW and CQ WPX, and 1.18.0 takes them in through **Check for rules updates** on
   the Contesting tab (they apply when Nexus starts again). On 1.18.0, a log entered as one band that
@@ -270,7 +270,7 @@ Nexus on Windows, and an ISS pass no longer retunes the radio you are using for 
   again at 001, at a club only this laptop's contacts go, and nothing transmits. Contest Log
   Persistence, in the manual, names the journal file and says to start clean this way after a gear
   test.
-<!-- PENDING: fix/cq-claimed-score-2026-10-14 -->
+<!-- BENCH (Fri 16 Oct): cut the bullet below if the CQ claimed score fails the bench (A0.S). -->
 - **CQ WW CW and SSB and CQ WPX CW and SSB logs claim their score.** The Cabrillo file carries
   CLAIMED-SCORE, the score the Contest screen shows, as the CQ WW RTTY file already did. A
   single-band entry (Band category set to one band) whose log also holds a contact on another band
