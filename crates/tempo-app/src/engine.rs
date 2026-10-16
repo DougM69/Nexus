@@ -105,6 +105,9 @@ pub mod slices;
 mod stop_hold_tests;
 pub mod sub_controls;
 mod tx_alarms;
+/// A data frame judged across its whole width, and where it keys.
+#[cfg(test)]
+mod tx_frame_width_tests;
 #[cfg(test)]
 mod tx_gate_table;
 
@@ -5456,6 +5459,47 @@ struct TxGateStamp {
     /// re-stating the same class cancels nothing.
     license_class: crate::settings::LicenseClass,
     generation: u64,
+}
+
+/// THE AUDIO A DATA OVER OCCUPIES beside the carrier it is keyed from: from its lowest tone,
+/// `f0_hz` of audio away, up `bw_hz` more. The sideband puts it above the carrier (USB) or below it
+/// (LSB). What the licence gate judges of a data over ([`Engine::tx_allowed_for`]): the frame the
+/// operator's next over keys on the TX offset ([`Engine::tx_data_frame`]), or one keyed elsewhere,
+/// a JS8 heartbeat on its own spot.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct DataFrame {
+    /// Hz of audio from the carrier to the frame's lowest tone.
+    pub(crate) f0_hz: f64,
+    /// Hz the frame occupies above its lowest tone; 0 judges the lowest tone alone.
+    pub(crate) bw_hz: f64,
+}
+
+impl DataFrame {
+    /// The width a frame of `kind` occupies above its lowest tone: its tones times their spacing.
+    /// That is the bandwidth WSJT-X's User Guide gives FT8 (8 × 6.25 = 50 Hz) and FT4 (4 × 12000 /
+    /// 576 = 83.3 Hz), and the one JS8Call gives each JS8 speed (`JS8::Submode::bandwidth`, 8 × the
+    /// speed's spacing: 25, 50, 80, 160 or 250 Hz), which its waterfall draws from the TX offset up.
+    /// Not WSJT-X's Wide Graph bracket, which ends at the top tone's centre (43.75 Hz for FT8,
+    /// `markerWidthHz` in `ui/src/waterfall.ts`): the gate judges what the frame occupies.
+    ///
+    /// FT2's, a mode WSJT-X does not have, is counted the same way from its own modulator: its
+    /// [`modes::FT2_NTONES`] tones, each [`modes::FT2_TONE_SPACING_HZ`] (12 kHz over its 288 samples
+    /// a symbol) above the last, ≈ 166.7 Hz.
+    ///
+    /// 0 for every other mode (the Tempo modes, Q65, FST4, MSK144, JT65, WSPR), judged at its
+    /// lowest tone alone as before: a width for each of them is a decision of its own, not a claim
+    /// that they are narrow.
+    pub(crate) fn width_hz(kind: Option<modes::ModeKind>) -> f64 {
+        match kind {
+            Some(modes::ModeKind::Ft8) => 8.0 * 12_000.0 / 1920.0,
+            Some(modes::ModeKind::Ft4) => 4.0 * 12_000.0 / 576.0,
+            Some(modes::ModeKind::Ft2) => {
+                modes::FT2_NTONES as f64 * f64::from(modes::FT2_TONE_SPACING_HZ)
+            }
+            Some(modes::ModeKind::Js8 { speed }) => 8.0 * f64::from(speed.tone_spacing_hz()),
+            _ => 0.0,
+        }
+    }
 }
 
 /// WSJT-X's "dB reports to comments" line, byte-for-byte (logqso.cpp:143-145):
@@ -22889,8 +22933,28 @@ contact yourself."
     /// [`Self::tx_frequency_allowed`], the gate as it stood before the switch. While the Sub
     /// transmits it is that same judgement of the uplink, plus both sides of the carrier when
     /// Nexus commands the uplink no mode word, so the switch can only ever refuse more.
+    ///
+    /// A data over is judged as the frame the operator's next over keys, on the TX offset and as
+    /// wide as its mode ([`Self::tx_data_frame`]).
     pub fn tx_allowed(&self) -> bool {
-        self.connection_tx_refusal().is_none() && self.tx_source_verdict().tx_allowed
+        self.tx_allowed_for(self.tx_data_frame())
+    }
+
+    /// [`Self::tx_allowed`] for a data over keyed as `frame`: the same gate, every term of it, with
+    /// `frame` the data frame its Digital model judges ([`Self::data_frame_allowed`]). A JS8
+    /// heartbeat or HB ACK keys on its own spot in 500–1000 Hz rather than the operator's TX offset,
+    /// and is judged there ([`Self::plan_js8_tx`], [`Self::commit_tx`]).
+    pub(crate) fn tx_allowed_for(&self, frame: DataFrame) -> bool {
+        self.connection_tx_refusal().is_none() && self.tx_source_verdict_for(frame).tx_allowed
+    }
+
+    /// The data frame the operator's next over keys: its lowest tone on the TX offset, as wide as
+    /// the active tier's mode occupies ([`DataFrame::width_hz`]).
+    pub(crate) fn tx_data_frame(&self) -> DataFrame {
+        DataFrame {
+            f0_hz: f64::from(self.tx_offset_hz),
+            bw_hz: DataFrame::width_hz(self.tier_mode_kind(self.app.tier())),
+        }
     }
 
     /// Why the active radio's CAT connection refuses every transmission, when it does: the Icom
@@ -22939,7 +23003,9 @@ contact yourself."
 
     /// THE KEY-TIME JUDGEMENT OF THE FREQUENCY THE NEXT OVER IS EMITTED ON: the whole licence
     /// gate before the D1 switch, unchanged, and still the whole of it whenever Main transmits
-    /// ([`Self::tx_allowed`], [`Self::tx_source_verdict`]).
+    /// ([`Self::tx_allowed`], [`Self::tx_source_verdict`]). The verdict judges it of a given data
+    /// frame ([`Self::tx_allowed_as_for`]); this is the operator's own, which the gate table pins.
+    #[cfg(test)]
     fn tx_frequency_allowed(&self) -> bool {
         self.tx_allowed_as(self.settings.operating_mode)
     }
@@ -22948,7 +23014,12 @@ contact yourself."
     /// frequencies, each through `om`'s emission model. CW keyed from another section — the CW
     /// ID after an FT 73 — is judged as CW too ([`Self::poll_cw_one`]).
     fn tx_allowed_as(&self, om: crate::settings::OperatingMode) -> bool {
-        self.every_tx_frequency(|mhz| self.emission_in_use_allowed_as(om, mhz))
+        self.tx_allowed_as_for(om, self.tx_data_frame())
+    }
+
+    /// [`Self::tx_allowed_as`] with a data over keyed as `frame` ([`Self::tx_allowed_for`]).
+    fn tx_allowed_as_for(&self, om: crate::settings::OperatingMode, frame: DataFrame) -> bool {
+        self.every_tx_frequency(|mhz| self.emission_in_use_allowed_as(om, mhz, frame))
     }
 
     /// Does `judge` pass every frequency the next over is emitted on? The frame of
@@ -23147,30 +23218,37 @@ contact yourself."
     /// `tx_mode_effective` answers the dial's word while the rig still transmits in the uplink's.
     /// ANDed, so it only refuses more.
     fn emission_in_use_allowed(&self, mhz: f64) -> bool {
-        self.emission_in_use_allowed_as(self.settings.operating_mode, mhz)
+        self.emission_in_use_allowed_as(self.settings.operating_mode, mhz, self.tx_data_frame())
     }
 
-    /// [`Self::emission_in_use_allowed`] for section `om`.
-    fn emission_in_use_allowed_as(&self, om: crate::settings::OperatingMode, mhz: f64) -> bool {
-        self.emission_allowed(om, mhz, &self.settings.sideband)
-            && self.commanded_emission_allowed(om, mhz, &self.tx_mode_effective())
+    /// [`Self::emission_in_use_allowed`] for section `om`, a data over keyed as `frame`.
+    fn emission_in_use_allowed_as(
+        &self,
+        om: crate::settings::OperatingMode,
+        mhz: f64,
+        frame: DataFrame,
+    ) -> bool {
+        self.emission_allowed_for(om, mhz, &self.settings.sideband, frame)
+            && self.commanded_emission_allowed(om, mhz, &self.tx_mode_effective(), frame)
             && self
                 .sat_uplink_word()
-                .is_none_or(|word| self.commanded_emission_allowed(om, mhz, &word))
+                .is_none_or(|word| self.commanded_emission_allowed(om, mhz, &word, frame))
     }
 
-    /// Section `om`'s emission from carrier `mhz` with the transmitting VFO commanded `word`:
-    /// the second model [`Self::emission_in_use_allowed`] judges, one per section.
+    /// Section `om`'s emission from carrier `mhz` with the transmitting VFO commanded `word`, a
+    /// data over keyed as `frame`: the second model [`Self::emission_in_use_allowed`] judges, one
+    /// per section.
     fn commanded_emission_allowed(
         &self,
         om: crate::settings::OperatingMode,
         mhz: f64,
         word: &str,
+        frame: DataFrame,
     ) -> bool {
         use crate::settings::OperatingMode;
         match om {
             OperatingMode::Phone => self.phone_emission_allowed(mhz, word),
-            OperatingMode::Digital => self.digital_emission_allowed(mhz, word),
+            OperatingMode::Digital => self.digital_emission_allowed(mhz, word, frame),
             OperatingMode::Keyboard => self.keyboard_emission_allowed(mhz, word),
             OperatingMode::Rtty => self.rtty_emission_allowed(mhz, word),
             OperatingMode::Cw => self.cw_emission_allowed(mhz, word),
@@ -23215,22 +23293,33 @@ contact yourself."
     /// Phone, Digital, Keyboard, RTTY and CW, the mode actually commanded on top —
     /// [`Self::emission_in_use_allowed`]), and the per-(band, mode) dial memory re-runs it at
     /// restore time — the license class can change mid-session, so a remembered dial is
-    /// re-checked, never trusted.
+    /// re-checked, never trusted. Digital judges the frame the operator's next over keys
+    /// ([`Self::tx_data_frame`]).
     fn emission_allowed(
         &self,
         om: crate::settings::OperatingMode,
         dial: f64,
         sideband: &str,
     ) -> bool {
+        self.emission_allowed_for(om, dial, sideband, self.tx_data_frame())
+    }
+
+    /// [`Self::emission_allowed`] with Digital's data over keyed as `frame`.
+    fn emission_allowed_for(
+        &self,
+        om: crate::settings::OperatingMode,
+        dial: f64,
+        sideband: &str,
+        frame: DataFrame,
+    ) -> bool {
         use crate::settings::OperatingMode;
         let class = self.settings.license_class;
         let allow = |f: f64| crate::privileges::tx_allowed(class, f, om);
         match om {
+            // The data frame at its audio offset, across its width: ABOVE the dial on USB, BELOW
+            // on LSB.
             OperatingMode::Digital => {
-                // Narrow data signal at the audio offset: ABOVE the dial on USB, BELOW on LSB.
-                let off = self.tx_offset_hz as f64 / 1_000_000.0;
-                let lsb = sideband.eq_ignore_ascii_case("LSB");
-                allow(if lsb { dial - off } else { dial + off })
+                self.data_frame_allowed(dial, frame, sideband.eq_ignore_ascii_case("LSB"))
             }
             OperatingMode::Phone => {
                 // The band CONVENTION's sideband (LSB below 10 MHz except 60 m, USB from 30 m up) through the
@@ -23292,29 +23381,53 @@ contact yourself."
     }
 
     /// May the operator's class key a DIGITAL emission from the transmit dial `dial`, with the
-    /// transmitting VFO commanded `word`? The data signal is narrow and sits one TX audio offset
-    /// from the dial, on the side the WORD names — above it for `USB`/`PKTUSB`, below it for
+    /// transmitting VFO commanded `word`, the data over keyed as `frame`? The frame sits its audio
+    /// offset from the dial, on the side the WORD names — above it for `USB`/`PKTUSB`, below it for
     /// `LSB`/`PKTLSB` — which is where the radio puts it, whatever side the dial listens on.
     ///
     /// A word that names no side (`FM`, `PKTFM`, or one this model does not know) adds nothing:
     /// [`Self::emission_allowed`]'s stored-sideband judgement, which every caller ANDs in, is
     /// then the whole verdict, exactly as before. So this can only ever refuse more than the
     /// gate did before it knew the commanded word.
-    fn digital_emission_allowed(&self, dial: f64, word: &str) -> bool {
-        let off = self.tx_offset_hz as f64 / 1_000_000.0;
-        let allow = |f: f64| {
-            crate::privileges::tx_allowed(
-                self.settings.license_class,
-                f,
-                crate::settings::OperatingMode::Digital,
-            )
-        };
+    fn digital_emission_allowed(&self, dial: f64, word: &str, frame: DataFrame) -> bool {
         match Self::side_is_lsb(word) {
-            Some(false) => allow(dial + off),
-            Some(true) => allow(dial - off),
+            Some(lsb) => self.data_frame_allowed(dial, frame, lsb),
             // FM, PKTFM and any word this model does not know: no side to judge.
             None => true,
         }
+    }
+
+    /// May the operator's class key the data `frame` from the transmit dial `dial`, below it when
+    /// `lsb`? THE one data-frame model, which both Digital terms judge through (the stored side,
+    /// [`Self::emission_allowed_for`]; the commanded word's, [`Self::digital_emission_allowed`]).
+    /// The frame runs from its lowest tone, `frame.f0_hz` from the dial, up `frame.bw_hz` more,
+    /// mirrored below the dial on LSB, and the WHOLE of it must sit in ONE privileged data range
+    /// ([`crate::privileges::tx_span_allowed`]), the rule the phone passband keeps. So a frame whose
+    /// top reaches a privilege or segment edge is refused although its lowest tone is inside: the
+    /// edge is outside, as a segment's top is.
+    ///
+    /// ⭐ JUDGED ACROSS ITS WIDTH (operator ruling, 2026-10-15: "Judge the whole width, JS8 and FT.").
+    /// Before it, the lowest tone alone was judged, and a General at 5.363 MHz keyed any offset
+    /// under 3500 Hz while from 3450 Hz up a JS8 Normal frame's top was on or above 5366.5 kHz, the
+    /// top of the 60 m segment.
+    ///
+    /// ⚠️ IT CAN ONLY EVER REFUSE MORE than judging the lowest tone did: a frame is allowed only
+    /// where its lowest tone is, and a frame of no width is judged exactly as that tone was, so a
+    /// mode [`DataFrame::width_hz`] gives no width is judged as before.
+    fn data_frame_allowed(&self, dial: f64, frame: DataFrame, lsb: bool) -> bool {
+        let near = frame.f0_hz / 1_000_000.0;
+        let far = (frame.f0_hz + frame.bw_hz) / 1_000_000.0;
+        let (lo, hi) = if lsb {
+            (dial - far, dial - near)
+        } else {
+            (dial + near, dial + far)
+        };
+        crate::privileges::tx_span_allowed(
+            self.settings.license_class,
+            lo,
+            hi,
+            crate::settings::OperatingMode::Digital,
+        )
     }
 
     /// May the operator's class key a KEYBOARD-mode (PSK31) emission from the transmit dial
@@ -25603,8 +25716,11 @@ contact yourself."
         // NOT compare dial values (Doppler moves them by design). The privilege
         // gate therefore has to be re-run HERE, against wherever the correction
         // has since put us: identity being unchanged must never be read as
-        // permission for a frequency nobody re-checked.
-        if self.sat_dial_owner.is_some() && !self.tx_allowed() {
+        // permission for a frequency nobody re-checked. A JS8 frame is judged
+        // where it keys as well, a heartbeat on its own spot (`plan_js8_tx`).
+        if self.sat_dial_owner.is_some()
+            && !(self.tx_allowed() && self.js8_plan_frame_allowed(plan))
+        {
             self.app.set_transmitting(false);
             return Vec::new();
         }
@@ -65937,9 +66053,9 @@ mod digital_side_licence_tests {
         /// `tx_allowed()`, the gate under test.
         got: bool,
         /// TODAY'S MODEL, written out independently: the verdict before the commanded word was
-        /// known. In Digital, the carrier one offset from the transmit dial on the STORED
-        /// sideband's side — below it for `LSB`, above it for anything else; Keyboard and RTTY
-        /// carry their own ([`Soundcard::old`]).
+        /// known. In Digital, the frame one offset from the transmit dial on the STORED
+        /// sideband's side ([`side_allows`]) — below it for `LSB`, above it for anything else;
+        /// Keyboard and RTTY carry their own ([`Soundcard::old`]).
         stored: bool,
         /// The carrier on the side the transmit VFO's commanded word names; `None` for a word
         /// that names no side (FM).
@@ -65947,10 +66063,18 @@ mod digital_side_licence_tests {
         case: String,
     }
 
-    /// May `class` key a data carrier `off` MHz below (`lsb`) or above `tx_mhz`?
+    /// May `class` key a data frame whose lowest tone is `off` MHz below (`lsb`) or above
+    /// `tx_mhz`? The frame is FT8's, the tier the engine starts on: from that tone up the 50 Hz it
+    /// occupies, mirrored below on LSB, wholly in one privileged range, as the gate judges a frame.
     fn side_allows(class: LicenseClass, tx_mhz: f64, off: f64, lsb: bool) -> bool {
-        let carrier = if lsb { tx_mhz - off } else { tx_mhz + off };
-        crate::privileges::tx_allowed(class, carrier, OperatingMode::Digital)
+        let hz = (off * 1e6).round();
+        let (near, far) = (hz / 1e6, (hz + 50.0) / 1e6);
+        let (lo, hi) = if lsb {
+            (tx_mhz - far, tx_mhz - near)
+        } else {
+            (tx_mhz + near, tx_mhz + far)
+        };
+        crate::privileges::tx_span_allowed(class, lo, hi, OperatingMode::Digital)
     }
 
     /// The side a commanded word names: `Some(true)` below the dial, `Some(false)` above, `None`
@@ -67424,12 +67548,15 @@ mod digital_side_licence_tests {
     }
 
     /// CW IDs from the Digital section around every CW edge, for every class, TX offset, pitch
-    /// and sideband, on both keyers.
+    /// and sideband, on both keyers. The offsets add 400 Hz to the data sweeps' own: FT8's frame
+    /// from it on LSB, 500 Hz above a bottom edge, ends 50 Hz inside the edge while a 600 or 900 Hz
+    /// tone below that dial is outside it, so the sweep reaches IDs only the soundcard tone refuses
+    /// (from 500 Hz the frame now hangs below the edge, and FT8's own verdict refuses them).
     fn cw_id_verdicts() -> Vec<CwIdVerdict> {
         let mut out = Vec::new();
         for sc in Soundcard::CW {
             for class in CLASSES {
-                for off_hz in OFFSETS_HZ {
+                for off_hz in OFFSETS_HZ.into_iter().chain([400.0]) {
                     for pitch in sc.centres() {
                         let allow =
                             |f: f64| crate::privileges::tx_allowed(class, f, OperatingMode::Cw);

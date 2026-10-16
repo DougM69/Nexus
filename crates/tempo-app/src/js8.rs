@@ -24,7 +24,7 @@ use ::js8::proto::station::{heartbeat_speed, FreqHint, InboxState, StationSnapsh
 use ::js8::{Frame, MessageEvent, Origin, RawDecode, StationAction, StationConfig, Word87};
 use modes::Js8Speed;
 
-use super::{now_unix_secs, Engine, TxPlan, TxWaveform};
+use super::{now_unix_secs, DataFrame, Engine, TxPlan, TxWaveform};
 use crate::dto::{
     Js8ActivityRow, Js8Armed, Js8ComposerPrefill, Js8NotArmed, Js8PendingReply, Js8Presence,
     Js8QueueRow, Js8RowFlags, Js8State, Js8Unarmed, SourceKind, Tier,
@@ -1344,6 +1344,27 @@ impl Engine {
         }
     }
 
+    /// Whether the licence gate allows a JS8 frame keyed at `f0` Hz at `speed`: the whole gate
+    /// ([`Engine::tx_allowed_for`]), across the width the frame occupies at that speed. For a frame
+    /// on the operator's TX offset at the TX speed it is [`Engine::tx_allowed`]'s judgement.
+    pub(crate) fn js8_frame_allowed(&self, f0: f32, speed: Js8Speed) -> bool {
+        self.tx_allowed_for(DataFrame {
+            f0_hz: f64::from(f0),
+            bw_hz: DataFrame::width_hz(Some(modes::ModeKind::Js8 { speed })),
+        })
+    }
+
+    /// Whether the licence gate allows the JS8 frame `plan` keys, where it keys: on its own offset,
+    /// a heartbeat's spot included ([`Self::js8_frame_allowed`]). `true` for an over of any other
+    /// mode, which keys on the operator's TX offset that [`Engine::tx_allowed`] judges (FT8/FT4's
+    /// Split Operation moves the dial and the audio together, the RF unchanged).
+    pub(crate) fn js8_plan_frame_allowed(&self, plan: &TxPlan) -> bool {
+        match &plan.waveform {
+            TxWaveform::Js8 { speed, f0, .. } => self.js8_frame_allowed(*f0, *speed),
+            _ => true,
+        }
+    }
+
     /// Tier-routed TX planner — the ONLY place a `proto::TxFrame` becomes a `TxPlan`
     /// (spec invariant 13). Reached only after `plan_tx`'s mode-agnostic guards
     /// (`!tx_enabled || tuning || !tx_allowed()`, `tier_is_rx_only`, operating mode
@@ -1352,8 +1373,8 @@ impl Engine {
     /// Order: identity gate (a callsign for every frame, a locator for a message's first) →
     /// decode-only refusal → one-frame-per-period latch → station outbox → origin gate (the
     /// SECOND act, re-read at plan time every slot) → wall-clock watchdog (all origins but
-    /// Heartbeat) → f0 → book → plan. Nothing here moves the dial (invariant 9). Booking is at
-    /// plan time, the beacon / QSO arms' rule.
+    /// Heartbeat) → f0 → the licence gate at f0 → book → plan. Nothing here moves the dial
+    /// (invariant 9). Booking is at plan time, the beacon / QSO arms' rule.
     pub fn plan_js8_tx(&mut self, slot: u64) -> Option<TxPlan> {
         // Identity, fail-closed: Js8Mode declares `structured_identity`, so a blank or
         // unparsable MYCALL refuses here (`needs_grid = false`: the FT gate's 4-or-6-character
@@ -1503,6 +1524,25 @@ impl Engine {
             FreqHint::HbSubband(f) if (500.0..=1000.0).contains(&f) => f,
             FreqHint::HbSubband(_) => self.tx_offset_hz(),
         };
+        // THE LICENCE GATE, AT THE OFFSET THE FRAME KEYS ON (operator ruling, 2026-10-15: "Judge
+        // the heartbeat's own spot."). `plan_tx` judged the operator's TX offset; a heartbeat or
+        // HB ACK keys on its own spot, and on a dial just under a segment's bottom that spot is
+        // below it while the TX offset is inside. The whole gate, across the frame's width; for a
+        // frame on the TX offset it is the judgement `plan_tx` made. Refused, the frame is dropped,
+        // as a refusal outside the privileges drops what falls due (`js8_tick`), and nothing is
+        // booked.
+        if !self.js8_frame_allowed(f0, speed) {
+            tempo_core::applog::info(
+                "tx",
+                &format!(
+                    "JS8 {:?} frame not keyed: {f0} Hz is outside the licence's privileges: {}",
+                    tf.origin, tf.display
+                ),
+            );
+            self.js8_last_error = Some(JS8_REFUSED_PRIVILEGES.to_string());
+            self.set_transmitting(false);
+            return None;
+        }
         // Book the over (station bookkeeping: Last sent, idle counter; own-TX row; activity
         // row; ALL.TXT Tx line) — plan time, on the period-start axis. The heartbeat timer
         // re-based itself in `next_frame` when the message's last frame went.
