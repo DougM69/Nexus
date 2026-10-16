@@ -278,6 +278,15 @@ frame in flight complete, as in the FT8 screen; what is still queued, the rest o
 included, is dropped, not sent when TX comes back on. So is what waits while the dial is outside
 your license privileges, and the screen says so.
 
+**Your license privileges count the whole signal.** With a US license class set, 🔒 TX LOCKED
+judges each frame from your TX offset up the width its speed takes: 25 Hz at Slow, 50 at Normal,
+80 at Fast, 160 at JS8 40 and 250 at JS8 60. Near the edge of your privileges the top of the frame
+counts too. A General on 5.363 MHz, where the 60 m segment ends at 5366.5 kHz, keys a Normal frame
+at a TX offset up to 3449 Hz and sees TX LOCKED from 3450 Hz, where the frame would reach the edge.
+A heartbeat or acknowledgement on its own spot in 500–1000 Hz is judged on that spot: on a dial just
+below the bottom of a segment, with your TX offset inside it, a heartbeat whose spot falls below the
+segment is not sent, and the screen says why. JS8Call checks no privileges at all.
+
 **Typeahead.** After **Send** the message stays in the message box while it goes out, as
 JS8Call's does: the box shows it as it goes on the air (with your callsign and the addressee in
 front), and as each frame is sent its text moves out of the box to the line beside it. Keep typing
