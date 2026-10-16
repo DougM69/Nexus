@@ -447,6 +447,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so pskreporter.info can put the station on its map. Other spots still go without one. The NA
   VHF contest exchange that rogers a grid (`W9XYZ K1ABC R FN42`) is now spotted too, with its
   grid, as in WSJT-X. NEEDS-BENCH: look yourself up on pskreporter.info after some FT8.
+- **A slow DNS server can no longer hold up a transmission.** Every five minutes Nexus sends its
+  PSK Reporter spots, and it looked the server's address up in the loop that keys and unkeys the
+  radio, so a DNS server slow to answer held that loop, and an over due to end, for as long as it
+  took. The lookup and the upload now run on their own.
 - **AD1C's country file now carries its license notice.** Nexus finds a call's DXCC entity and
   zones in the cty.dat country file by Jim Reisert AD1C, which is MIT-licensed. That license asks
   for its notice to travel with every copy, and NOTICE named the license without reproducing it.

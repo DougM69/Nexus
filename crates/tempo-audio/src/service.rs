@@ -19384,6 +19384,76 @@ mod tests {
         );
     }
 
+    /// A slow DNS answer never holds the radio loop. The PSK Reporter flush runs in the loop's
+    /// tick, the tick that also unkeys, so a lookup of the server that takes seconds (a DNS server
+    /// that has stopped answering) must not be waited for there. The spot still goes, later.
+    #[test]
+    fn a_slow_psk_reporter_lookup_never_holds_the_radio_loop() {
+        /// Two seconds to answer, then the loopback port the target names.
+        fn slow_lookup(target: &str) -> std::io::Result<std::net::SocketAddr> {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let port = target.rsplit(':').next().and_then(|p| p.parse().ok());
+            Ok(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                port.unwrap_or(0),
+            )))
+        }
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let reporter = PskReporter::with_lookup(&format!("report.invalid:{port}"), slow_lookup);
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (addr, _log) = mock_rigctld_on(14_074_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let sinks = Sinks {
+            wsjtx: None,
+            psk: Some(&reporter),
+            cfg_dial_hz: 14_074_000,
+        };
+        let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let heard = build_spot("CQ W1AW FN31", -7, 1200.0, "FT8", 14_074_000, 1_700_000_000);
+        station.psk_spots = heard.into_iter().collect();
+        let now = 1_000_000.0;
+        station.last_psk_flush = now - PSK_FLUSH_SECS * 1000.0 - 1.0;
+        let started = std::time::Instant::now();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                now,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let tick = started.elapsed();
+        assert!(station.psk_spots.is_empty(), "control: the flush ran");
+        assert!(
+            tick < std::time::Duration::from_secs(1),
+            "the tick waited {tick:?} for the lookup"
+        );
+        let mut buf = [0u8; 2048];
+        let (n, _) = listener.recv_from(&mut buf).unwrap();
+        assert_eq!(
+            uploaded_spots(&buf[..n]),
+            vec![(
+                "W1AW".to_string(),
+                14_075_200,
+                -7,
+                "FT8".to_string(),
+                "FN31".to_string(),
+                1
+            )]
+        );
+    }
+
     fn test_settings() -> Settings {
         Settings {
             ptt_method: "cat".to_string(),

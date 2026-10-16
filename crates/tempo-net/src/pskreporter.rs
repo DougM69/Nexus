@@ -44,8 +44,13 @@
 //!   WSJT-X sends for every decode that is not a CQ. The frequency stays 4 bytes (theirs is 5):
 //!   the server reads the width the template declares, and 4 bytes reach 4.29 GHz.
 //!
+//! - The datagram leaves from the reporter's own thread, which looks the server up and sends it.
+//!   Whoever calls [`PskReporter::send_spots`] is the radio loop, the loop that also keys and
+//!   unkeys the radio, so a DNS server slow to answer must never be waited for there.
+//!
 //! Everything here builds bytes; tests assert structure and bind loopback only.
 
+use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Default PSK Reporter ingest endpoint.
@@ -79,11 +84,24 @@ pub struct Spot {
     pub time_secs: u32,
 }
 
+/// Looks a `host:port` up. [`system_lookup`] unless a test stands in a slow one.
+pub type Lookup = fn(&str) -> std::io::Result<SocketAddr>;
+
+/// The system's own lookup: the first address `target` resolves to.
+pub fn system_lookup(target: &str) -> std::io::Result<SocketAddr> {
+    target
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no address"))
+}
+
 /// Builds and sends PSK Reporter datagrams.
 pub struct PskReporter {
     target: String,
     /// Per-sender random identifier echoed in every datagram header.
     observation_id: u32,
+    /// The sender thread's queue. The thread ends when the reporter is dropped.
+    outbox: std::sync::mpsc::Sender<Vec<u8>>,
 }
 
 impl PskReporter {
@@ -94,9 +112,26 @@ impl PskReporter {
 
     /// New reporter sending to a custom `host:port`.
     pub fn with_target(target: &str) -> Self {
+        Self::with_lookup(target, system_lookup)
+    }
+
+    /// New reporter sending to `target`, looked up with `lookup` on the reporter's own thread.
+    pub fn with_lookup(target: &str, lookup: Lookup) -> Self {
+        let (outbox, queue) = std::sync::mpsc::channel::<Vec<u8>>();
+        let to = target.to_string();
+        // A thread that cannot start leaves the queue with no reader: every send then reports an
+        // error and nothing goes, as when the network is down.
+        let _ = std::thread::Builder::new()
+            .name("pskreporter".into())
+            .spawn(move || {
+                for dgram in queue {
+                    let _ = send_to(&to, lookup, &dgram);
+                }
+            });
         Self {
             target: target.to_string(),
             observation_id: derive_observation_id(),
+            outbox,
         }
     }
 
@@ -142,11 +177,12 @@ impl PskReporter {
         Some(dgram)
     }
 
-    /// Build and send the spot datagram for `spots` over UDP.
+    /// Build the spot datagram for `spots` and hand it to the sender thread, which looks the
+    /// server up and sends it over UDP. Never waits on DNS or the network.
     ///
-    /// Uses the current system time as the export time. Returns the number of
-    /// bytes sent, or an error. Does nothing (returns `Ok(0)`) if `spots` is
-    /// empty.
+    /// Uses the current system time as the export time. Returns the datagram's length once
+    /// queued, or an error if the sender thread has gone. Does nothing (returns `Ok(0)`) if
+    /// `spots` is empty.
     pub fn send_spots(
         &self,
         rx_call: &str,
@@ -161,8 +197,14 @@ impl PskReporter {
         let Some(dgram) = self.build_datagram(rx_call, rx_grid, software, spots, now) else {
             return Ok(0);
         };
-        let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
-        socket.send_to(&dgram, &self.target)
+        let n = dgram.len();
+        self.outbox.send(dgram).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "the PSK Reporter sender has stopped",
+            )
+        })?;
+        Ok(n)
     }
 }
 
@@ -170,6 +212,18 @@ impl Default for PskReporter {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Look `target` up and send `dgram` there, from a port of the address's own family. The sender
+/// thread's work; the address is looked up for each datagram, as a send to a host name was.
+fn send_to(target: &str, lookup: Lookup, dgram: &[u8]) -> std::io::Result<usize> {
+    let addr = lookup(target)?;
+    let bind = if addr.is_ipv6() {
+        "[::]:0"
+    } else {
+        "0.0.0.0:0"
+    };
+    UdpSocket::bind(bind)?.send_to(dgram, addr)
 }
 
 /// Round `n` up to the next multiple of 4 (IPFIX sets/records are 4-byte aligned).
