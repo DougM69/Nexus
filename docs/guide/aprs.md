@@ -84,8 +84,9 @@ controls.
 - **on \<radio name\>** appears only when more than one of your radios covers the
   band. The tap follows the active radio, and wrong-radio silence is
   indistinguishable from a dead band unless the app names the rig.
-- **The internet chip** — *Internet off / connecting / quiet / N* — is a second,
-  deliberately separate chip. The RF chain and the APRS-IS feed fail
+- **The internet chip** — *Internet off / connecting / quiet / N*, or *Internet
+  for JS8* when the feed is off but JS8's @APRSIS gateway is using APRS-IS — is a
+  second, deliberately separate chip. The RF chain and the APRS-IS feed fail
   independently, and a green internet chip beside a silent RF chip is the whole
   diagnostic: it proves the fault is in the radio path. Click it and it opens the
   feed's controls in place: the on/off switch, **Radius (km)**, and **Watched

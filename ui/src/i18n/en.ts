@@ -9291,6 +9291,16 @@ export const EN = {
   // place it rather than having it glued on after the fact.
   'aprs.inet.off.label': 'Internet off',
   'aprs.inet.off.detail': 'The APRS-IS feed is switched off.',
+  // The feed is off and the APRS-IS session is up for JS8 alone: its @APRSIS gateway, and its
+  // relay when that is on. `{{relay}}` is the relay sentence below, a WHOLE sentence with its own
+  // leading space, empty when the relay is off.
+  'aprs.inet.js8.label': 'Internet for JS8',
+  'aprs.inet.js8.detail':
+    "This screen's feed is off. APRS-IS is connected for JS8: its @APRSIS gateway sends what JS8 stations address to @APRSIS, under your callsign. Nothing from it is plotted here.{{relay}}",
+  'aprs.inet.js8.connecting':
+    "This screen's feed is off. Connecting to APRS-IS for JS8's @APRSIS gateway, retrying with backoff.{{relay}}",
+  'aprs.inet.js8.relay':
+    "JS8's relay listens on it too, for APRS messages to stations you hear on JS8.",
   'aprs.inet.connecting.label': 'Internet connecting',
   'aprs.inet.connecting.detail':
     'Not connected to APRS-IS yet — retrying with backoff.{{gate}}',

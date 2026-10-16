@@ -4082,6 +4082,9 @@ pub struct Engine {
     aprs_uplink_queue: VecDeque<String>,
     /// Live APRS-IS feed state, written by the socket thread. Session-only, never persisted.
     aprs_is_status: AprsIsStatus,
+    /// What the APRS-IS session is up for besides the screen's feed, as the app last brought it
+    /// in line: `(JS8's @APRSIS gateway, JS8's relay)`. See [`Self::set_aprs_is_for_js8`].
+    aprs_is_for_js8: (bool, bool),
     /// APRS holds the rig in FM SIMPLEX (session-only, never persisted). Set by [`Engine::aprs_tune`];
     /// makes `rig_mode_effective` command FM and forces the repeater config to simplex (APRS is not
     /// a Phone/Digital operating section, so it can't ride the Phone-FM override). Cleared by any
@@ -4759,6 +4762,12 @@ pub struct AprsIsStatus {
     pub gate_rejected: u64,
     /// The most recent refusal reason, for the tooltip.
     pub last_reject: Option<String>,
+    /// The session is up for JS8's @APRSIS gateway: what JS8 stations address to @APRSIS goes up
+    /// through it. With `enabled` false, that is why the session is up at all. Desktop only: the
+    /// Remote's APRS sample keeps the nine fields above (`remote_service::aprs::live`).
+    pub for_js8: bool,
+    /// …and JS8's relay listens on it for APRS messages to stations heard on JS8 (`t/m`).
+    pub for_js8_relay: bool,
 }
 /// SSTV gallery session-list cap (mirrors the on-disk `gallery.json` cap).
 pub(crate) const SSTV_GALLERY_CAP: usize = 200;
@@ -5911,6 +5920,7 @@ impl Engine {
             aprs_stations: std::collections::HashMap::new(),
             aprs_uplink_queue: VecDeque::new(),
             aprs_is_status: AprsIsStatus::default(),
+            aprs_is_for_js8: (false, false),
             aprs_auto_arm_declined: false,
             aprs_audio: Vec::new(),
             aprs_heard: Vec::new(),
@@ -19734,11 +19744,20 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.aprs_is_status = status;
     }
 
+    /// What the APRS-IS session is up for besides the screen's feed: JS8's @APRSIS gateway
+    /// (`gateway`) and JS8's relay (`relay`). Set each time the app brings the session in line
+    /// with what is wanted, so [`Self::aprs_is_status`] can say it; both false with no session.
+    pub fn set_aprs_is_for_js8(&mut self, gateway: bool, relay: bool) {
+        self.aprs_is_for_js8 = (gateway, relay);
+    }
+
     /// Snapshot of the APRS-IS feed for the cockpit's internet status chip.
     pub fn aprs_is_status(&self) -> AprsIsStatus {
         AprsIsStatus {
             enabled: self.settings.aprs_is_enabled,
             uplink_enabled: self.settings.aprs_is_uplink,
+            for_js8: self.aprs_is_for_js8.0,
+            for_js8_relay: self.aprs_is_for_js8.1,
             ..self.aprs_is_status.clone()
         }
     }
@@ -57411,6 +57430,33 @@ mod tests {
         let st = e.aprs_is_status();
         assert!(st.enabled && st.uplink_enabled);
         assert!(!st.connected, "no socket in a headless test");
+    }
+
+    /// The status says what the session is for. With the feed off and the session up for JS8's
+    /// @APRSIS gateway (and its relay), it says so, and the socket thread's once-a-second write of
+    /// the session's state does not wipe that out.
+    #[test]
+    fn aprs_is_status_says_when_the_session_is_up_for_js8() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_aprs_is_for_js8(true, true);
+        e.set_aprs_is_status(AprsIsStatus {
+            connected: true,
+            verified: true,
+            packets: 3,
+            ..Default::default()
+        });
+        let st = e.aprs_is_status();
+        let js8 = (st.enabled, st.connected, st.for_js8, st.for_js8_relay);
+        e.set_aprs_is_for_js8(true, false);
+        let st = e.aprs_is_status();
+        let gateway = (st.for_js8, st.for_js8_relay);
+        e.set_aprs_is_for_js8(false, false);
+        let st = e.aprs_is_status();
+        let gone = (st.for_js8, st.for_js8_relay);
+        assert_eq!(
+            (js8, gateway, gone),
+            ((false, true, true, true), (true, false), (false, false))
+        );
     }
 
     #[test]
