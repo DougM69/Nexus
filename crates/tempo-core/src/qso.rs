@@ -675,6 +675,15 @@ impl Station {
         }
     }
 
+    /// `msg` as the sequencer puts it on the air when `mycall` works `dxcall` — the
+    /// [`Self::hashed_form`] rewrite every queued over gets — for an over built outside a
+    /// running station, such as a roger re-sent after a CQ run has moved on. Built bare,
+    /// such an over names a nonstandard call in a field that cannot hold it, and the
+    /// packer sends the base call instead.
+    pub fn on_air_form(mycall: &str, dxcall: &str, msg: Msg) -> Msg {
+        Self::answering(mycall, "", dxcall).hashed_form(msg)
+    }
+
     /// The message to transmit on my next TX slot, if any (RV-agnostic).
     pub fn outgoing(&self) -> Option<Msg> {
         self.pending.clone().map(|m| self.hashed_form(m))

@@ -684,3 +684,26 @@ fn a_nonstandard_call_and_a_plain_call_exchange_both_reports_both_ways() {
         assert!(!st.report_impossible_exchange());
     }
 }
+
+#[test]
+fn an_over_built_outside_the_sequence_keeps_a_nonstandard_call_whole() {
+    // The roger a CQ run re-sends after it has moved on is built outside a running
+    // station. Built bare, a nonstandard call sits in a field that cannot hold it, and
+    // the packer keeps only the base call.
+    let bare = "PA0A OE/PD1SCO RR73";
+    let got = on_air(ModeKind::Ft8, bare);
+    assert!(
+        got.iter().any(|m| m == "PA0A PD1SCO RR73"),
+        "[{bare}] goes out as another call: {got:?}"
+    );
+    let rr73 = |to: &str, de: &str| Msg::Rr73 {
+        to: to.into(),
+        de: de.into(),
+    };
+    let m = Station::on_air_form("OE/PD1SCO", "PA0A", rr73("PA0A", "OE/PD1SCO"));
+    assert_eq!(m.to_text(), "<PA0A> OE/PD1SCO RR73");
+    assert_on_air(ModeKind::Ft8, &m.to_text());
+    // A plain pair is left exactly as built.
+    let m = Station::on_air_form("W9XYZ", "K1ABC", rr73("K1ABC", "W9XYZ"));
+    assert_eq!(m.to_text(), "K1ABC W9XYZ RR73");
+}
