@@ -57447,6 +57447,23 @@ mod tests {
         assert!(!st.connected, "no socket in a headless test");
     }
 
+    /// The ALC zone edge belongs to the reading it came with. An ALC reading on a scale whose 1.0
+    /// is the top of the zone (the Flex's meter stream) clears the edge a Yaesu reading left, and
+    /// an unkey clears it with the reading.
+    #[test]
+    fn an_alc_reading_without_a_zone_clears_the_last_one() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.observe_rig_tx_meters(None, Some(0.5), None, None);
+        e.observe_rig_tx_alc_zone(Some(0.5));
+        let yaesu = e.snapshot().radio.tx_alc_zone;
+        e.observe_rig_tx_meters(None, Some(0.7), None, None);
+        let flex = e.snapshot().radio.tx_alc_zone;
+        e.observe_rig_tx_alc_zone(Some(0.5));
+        e.clear_rig_tx_meters();
+        let unkeyed = e.snapshot().radio.tx_alc_zone;
+        assert_eq!((yaesu, flex, unkeyed), (Some(0.5), None, None));
+    }
+
     /// The status says what the session is for. With the feed off and the session up for JS8's
     /// @APRSIS gateway (and its relay), it says so, and the socket thread's once-a-second write of
     /// the session's state does not wipe that out.
