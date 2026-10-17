@@ -137,6 +137,14 @@ impl Client {
                 // The service holds another signing key for this station (S3-M1): said at the
                 // shack, because the way back is pairing again.
                 Some("stationKeyPinned") => "stationKeyPinned",
+                // One trial per callsign and per shack PC: approve refused for the station callsign
+                // this Nexus sent, or for this PC, each with its own next step at the shack.
+                Some("callsignInvalid") => "callsignInvalid",
+                Some("callsignNotLicensed") => "callsignNotLicensed",
+                Some("trialUsedByCallsign") => "trialUsedByCallsign",
+                Some("trialUsedOnThisPc") => "trialUsedOnThisPc",
+                // The service needs a newer Nexus at the shack to approve a station.
+                Some("updateRequired") => "updateRequired",
                 _ => match status {
                     401 | 403 => "accessDenied",
                     410 => "pairingExpired",
@@ -206,6 +214,11 @@ enum ServerMessage {
         #[serde(rename = "leaseId")]
         lease_id: String,
         payload: tempo_stream::protocol::BrowserSignal,
+        /// The service lets this session use the shack's own network only (an account whose
+        /// internet use has ended). Sent only to a station that advertised it
+        /// (`x-nexus-stream-lan-version`); absent, the session is an internet one.
+        #[serde(default, rename = "lanOnly")]
+        lan_only: bool,
     },
     /// The relay ends a session's stream: Remote access was switched off (operator decision
     /// 2026-09-27, "within about 2 s"), or another reason from the contract's closed set. Sent,
@@ -334,6 +347,14 @@ pub async fn connected(
             .to_string()
             .parse()
             .map_err(|_| "invalidResponse")?,
+    );
+    // And this build keeps a session the service lets use the shack's own network only on that
+    // network (`lanOnly`, `StreamLane::signal_lan_only`), so the relay may hand it one. A station
+    // without this header is never sent `lanOnly`, a field it would close this socket on.
+    #[cfg(windows)]
+    request.headers_mut().insert(
+        "x-nexus-stream-lan-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
     );
     // Nexus on another computer, through a pipe in the room (`super::tunnel`): advertised only by a
     // station that can serve one, so a relay never asks another to open a pipe (`pipeOpen`), a
@@ -545,9 +566,17 @@ where
                             stream_lane.session_gone(&session_id);
                             operation_connection.authority.disconnect_session(&session_id);
                         },
-                        ServerMessage::StreamSignal{session_id,device_id,lease_id,payload}=>{
+                        ServerMessage::StreamSignal{session_id,device_id,lease_id,payload,lan_only}=>{
                             if !identifier(&session_id)||!identifier(&device_id)||!identifier(&lease_id){return Err("invalidResponse")}
-                            if let Some(data) = stream_lane.signal(&stream_station, &stream_out, (session_id, device_id, lease_id), payload) {
+                            let ids = (session_id, device_id, lease_id);
+                            // A LAN-only session's media stays on this computer's own network: the
+                            // network its route leaves by, looked up as the offer arrives.
+                            let signalled = if lan_only {
+                                stream_lane.signal_lan_only(&stream_station, &stream_out, ids, payload, || tempo_stream::lan::look(None).network.ok())
+                            } else {
+                                stream_lane.signal(&stream_station, &stream_out, ids, payload)
+                            };
+                            if let Some(data) = signalled {
                                 outbound.send(Message::Text(data.into()))?;
                             }
                         },
@@ -956,6 +985,24 @@ mod server_message_schema {
         ]
     }
 
+    /// A LAN-only session's signals carry `lanOnly` (only to a station that advertised it); any
+    /// other's do not, and parse as an internet session's, exactly as before.
+    #[test]
+    fn a_stream_signal_says_whether_its_session_is_lan_only() {
+        let lan_only = |v: Value| match serde_json::from_value::<ServerMessage>(v).unwrap() {
+            ServerMessage::StreamSignal { lan_only, .. } => lan_only,
+            _ => panic!("not a streamSignal"),
+        };
+        let signal = json!({"type":"streamSignal","sessionId":ID,"deviceId":ID,"leaseId":ID,"payload":{"kind":"close"}});
+        assert!(!lan_only(signal.clone()));
+        let mut lan = signal.clone();
+        lan["lanOnly"] = true.into();
+        assert!(lan_only(lan));
+        let mut wrong = signal;
+        wrong["lanOnly"] = "yes".into();
+        assert!(serde_json::from_value::<ServerMessage>(wrong).is_err());
+    }
+
     /// The read lane's messages, each as an older relay wrote it.
     fn retired() -> Vec<Value> {
         vec![
@@ -1060,6 +1107,8 @@ mod server_message_schema {
         "#[serde(rename = \"leaseId\")]",
         "lease_id: String,",
         "payload: tempo_stream::protocol::BrowserSignal,",
+        "#[serde(default, rename = \"lanOnly\")]",
+        "lan_only: bool,",
         "},",
         "StreamEnd {",
         "#[serde(rename = \"sessionId\")]",

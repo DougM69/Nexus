@@ -24,7 +24,7 @@
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
 import type { BrowserIdentity, Entitlement, StationAccess, StationIdentity } from '../../ui/src/remote-monitor/relay'
 import { STREAM_ENTITLEMENT_CHECK_MS } from '../../ui/src/remote-web/stream-relay'
-import { Refusal, requireValue, trial } from './authority'
+import { readEntitlement, Refusal, requireValue } from './authority'
 import type { RemoteEnv } from './authority'
 
 /** Pipes one station carries at once: one per device, and no more than a station's observers. */
@@ -137,7 +137,7 @@ export class Pipes {
     pipe.checked = now
     let entitlement: Entitlement
     // A read that fails changes nothing: the last good reading stands, and the lease still ends it.
-    try { entitlement = await trial(this.env, pipe.device.accountId, now) } catch { return }
+    try { entitlement = await readEntitlement(this.env, pipe.device.accountId, now) } catch { return }
     if (this.pipes.get(pipe.id) !== pipe) return
     if (!entitlement.enabled || entitlement.expiresAt <= Date.now()) { this.close(pipe, 1008, 'accessEnded'); return }
     pipe.entitlement = entitlement

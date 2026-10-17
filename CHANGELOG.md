@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Nexus Remote: on the shack's own network, Remote stays free.** When an account's internet use has ended, Stream
+  and Listen still work from a browser already approved for the station, as long as that device is on the same
+  network as the shack. The stream is held to that network at both ends and never goes through the relay. A shack
+  running an older Nexus is named as the reason the stream cannot start.
+- **Nexus Remote: one trial per callsign and per shack computer.** Approving a station now sends the station
+  callsign from Settings ▸ Station and one-way hashes of this computer's hardware and installation IDs; the IDs
+  themselves never leave the computer. When the service refuses the approval for one of these reasons, Nexus at the
+  shack says which one and what to do about it.
 - **Nexus Remote: operate the shack from a second Windows PC with Nexus on it (Beta, test builds).** On your own
   network, choose **Operate from this computer** beside your shack in **Stations on this network**: the second PC shows
   the full Nexus screens for the shack's radio, plays its receive audio and sends your microphone, and Phone PTT, CW

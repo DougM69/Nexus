@@ -9,8 +9,8 @@ import { ObservationRelay } from '../../ui/src/remote-monitor/relay'
 import type { BrowserIdentity, Entitlement, ObserverCheckpoint, Peer, StationAccess, StationIdentity } from '../../ui/src/remote-monitor/relay'
 import type { FrameOrderState } from '../../ui/src/remote-monitor/protocol'
 import { ageFrame, MAX_FRAME_BYTES, parseFrame, STALE_MS } from '../../ui/src/remote-monitor/protocol'
-import { Refusal, trial } from './authority'
-import type { RemoteEnv } from './authority'
+import { lanEntitlement, readEntitlement, Refusal } from './authority'
+import type { AccountEntitlement, RemoteEnv } from './authority'
 import { AudioRelay } from '../../ui/src/remote-web/audio-relay'
 import { STREAM_ENTITLEMENT_CHECK_MS, StreamRelay } from '../../ui/src/remote-web/stream-relay'
 import { Pipes } from './pipe'
@@ -18,10 +18,13 @@ import type { PipeAttachment } from './pipe'
 
 type Saved = { access: StationAccess; order: FrameOrderState }
 type Sample = { requestId: string; at: number }
-type StationAttachment = { version: 1; role: 'station'; identity: StationIdentity; order: FrameOrderState; sample: Sample | null; operationVersion?: number; audioVersion?: number; streamVersion?: number; laneVersion?: number; pipeVersion?: number }
-type BrowserAttachment = Omit<ObserverCheckpoint, 'peer'> & { version: 1; role: 'browser'; operations?: OperationCheckpoint; commandUntil?: number }
+type StationAttachment = { version: 1; role: 'station'; identity: StationIdentity; order: FrameOrderState; sample: Sample | null; operationVersion?: number; audioVersion?: number; streamVersion?: number; streamLanVersion?: number; laneVersion?: number; pipeVersion?: number }
+type BrowserAttachment = Omit<ObserverCheckpoint, 'peer'> & { version: 1; role: 'browser'; operations?: OperationCheckpoint; commandUntil?: number; lan?: boolean }
 type Attachment = StationAttachment | BrowserAttachment
-type Admission = { access: StationAccess; identity: StationIdentity & BrowserIdentity; entitlement: Entitlement; sessionId: string; operationVersion?: number; audioVersion?: number; streamVersion?: number; laneVersion?: number; pipeVersion?: number; pipeId?: string }
+type Admission = { access: StationAccess; identity: StationIdentity & BrowserIdentity; entitlement: AccountEntitlement; sessionId: string; operationVersion?: number; audioVersion?: number; streamVersion?: number; streamLanVersion?: number; laneVersion?: number; pipeVersion?: number; pipeId?: string
+  /** 'lan': a LAN-only session (index.ts, a ticket of that scope). Taken at admission and kept with the
+   *  session; a renewal never changes it. */
+  scope?: 'lan' }
 
 /** When this browser's account may no longer command the station, from the entitlement the Worker
  *  has just read out of D1. Admission and renewal both reach here, so it is never staler than one
@@ -53,6 +56,14 @@ export class StationRoom extends DurableObject<RemoteEnv> {
   // must survive, and it rides the station's attachment.
   private stream = new StreamRelay()
   private streamVersions = new Map<WebSocket, number>()
+  // Whether the station keeps a LAN-only session on its own network (`x-nexus-stream-lan-version`). It
+  // rides the station's attachment, like the versions above.
+  private streamLanVersions = new Map<WebSocket, number>()
+  // The LAN-only sessions, each with its stream deadline from lanEntitlement(): a session is LAN-only
+  // exactly when it is a key here. The membership rides the browser's attachment; the deadline does not,
+  // because a woken room re-reads before the first offer it forwards, as it does for commandUntil's
+  // freshness. Such a session's commandUntil stays the account's own, so its commands stay refused.
+  private lanUntil = new Map<string, number>()
   // Whether the station takes the browser's proof on the operation and audio lanes (S1-M1). It rides the
   // station's attachment, like the versions above: a station that never advertised it is never handed
   // a proof, which its parser would refuse by closing its socket.
@@ -102,6 +113,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
           if(attachment.role==='station')this.operationVersions.set(ws,parseOperationVersion(attachment.operationVersion)??0)
           if (attachment.role === 'station') this.audioVersions.set(ws, attachment.audioVersion === 1 ? 1 : 0)
           if (attachment.role === 'station') this.streamVersions.set(ws, attachment.streamVersion === 1 ? 1 : 0)
+          if (attachment.role === 'station') this.streamLanVersions.set(ws, attachment.streamLanVersion === 1 ? 1 : 0)
           if (attachment.role === 'station') this.laneVersions.set(ws, attachment.laneVersion === 1 ? 1 : 0)
           if (attachment.role === 'station') this.pipeVersions.set(ws, attachment.pipeVersion === 1 ? 1 : 0)
           if (attachment.role === 'station' && attachment.sample) this.samples.set(ws, attachment.sample)
@@ -110,7 +122,9 @@ export class StationRoom extends DurableObject<RemoteEnv> {
             if (station) throw new Error('invalidCheckpoint')
             station = { peer, identity: attachment.identity }; order = attachment.order
           } else if (attachment.role === 'browser') {
-            observers.push({ ...attachment, peer })
+            const { lan, ...observer } = attachment
+            observers.push({ ...observer, peer })
+            if (lan === true) this.lanUntil.set(attachment.sessionId, 0)
             // An attachment written before this field existed carries none, and gets 0: that
             // session may watch and read but not command until its next renewal, which is at
             // most thirty seconds away. Fail closed across a deploy, and heal by itself.
@@ -128,9 +142,9 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         for (const ws of sockets) ws.close(1011, 'authorityUnavailable')
         this.peers.clear()
         this.samples.clear(); this.lanePeers.clear()
-        this.operations = new OperationRelay();this.operationVersions.clear();this.commandUntil.clear();this.commandChecked.clear();this.accessOff.clear()
+        this.operations = new OperationRelay();this.operationVersions.clear();this.commandUntil.clear();this.commandChecked.clear();this.accessOff.clear();this.lanUntil.clear()
         this.audio = new AudioRelay(); this.audioVersions.clear()
-        this.stream = new StreamRelay(); this.streamVersions.clear(); this.laneVersions.clear()
+        this.stream = new StreamRelay(); this.streamVersions.clear(); this.streamLanVersions.clear(); this.laneVersions.clear()
         this.pipes = new Pipes(ctx, env); this.pipeVersions.clear()
         this.relay = new ObservationRelay(this.saved.access)
       }
@@ -158,7 +172,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       }, close: (code, reason) => {
         if (!buffer?.pending) ws.close(code, reason)
         this.peers.delete(ws); this.samples.delete(ws)
-        this.lanePeers.delete(ws);this.operationVersions.delete(ws);this.audioVersions.delete(ws);this.streamVersions.delete(ws);this.laneVersions.delete(ws);this.pipeVersions.delete(ws)
+        this.lanePeers.delete(ws);this.operationVersions.delete(ws);this.audioVersions.delete(ws);this.streamVersions.delete(ws);this.streamLanVersions.delete(ws);this.laneVersions.delete(ws);this.pipeVersions.delete(ws)
       } }
       this.peers.set(ws, peer)
     }
@@ -200,7 +214,9 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       const relay = this.relay!, path = new URL(request.url).pathname, now = Date.now()
       if (path === '/policy') { await this.checkpoint(); return new Response(null, { status: 204 }) }
       if (path === '/renew') {
-        relay.renewObserver(input.sessionId, input.identity, input.entitlement, now)
+        const lan = this.lanUntil.has(input.sessionId)
+        relay.renewObserver(input.sessionId, input.identity, lan ? lanEntitlement(input.entitlement, now) : input.entitlement, now)
+        if (lan) this.lanUntil.set(input.sessionId, commandDeadline(lanEntitlement(input.entitlement, now), now))
         // Only after renewObserver has accepted it: a renewal the relay refuses must not
         // extend the right to command either.
         this.commandUntil.set(input.sessionId, commandDeadline(input.entitlement, now))
@@ -222,12 +238,15 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       if(path==='/station')this.operationVersions.set(server,parseOperationVersion(input.operationVersion)??0)
       if (path === '/station') this.audioVersions.set(server, input.audioVersion === 1 ? 1 : 0)
       if (path === '/station') this.streamVersions.set(server, input.streamVersion === 1 ? 1 : 0)
+      if (path === '/station') this.streamLanVersions.set(server, input.streamLanVersion === 1 ? 1 : 0)
       if (path === '/station') this.laneVersions.set(server, input.laneVersion === 1 ? 1 : 0)
       if (path === '/station') this.pipeVersions.set(server, input.pipeVersion === 1 ? 1 : 0)
       try {
         if (path === '/station') relay.connectStation(input.identity, peer, now)
         else {
-          relay.connectObserver(input.sessionId, input.identity, input.entitlement, peer, now)
+          const lan = input.scope === 'lan'
+          relay.connectObserver(input.sessionId, input.identity, lan ? lanEntitlement(input.entitlement, now) : input.entitlement, peer, now)
+          if (lan) this.lanUntil.set(input.sessionId, commandDeadline(lanEntitlement(input.entitlement, now), now))
           this.commandUntil.set(input.sessionId, commandDeadline(input.entitlement, now))
           this.accessOff.set(input.sessionId, input.entitlement?.state === 'disabled')
         }
@@ -391,9 +410,10 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     const observer = this.relay?.checkpoint().observers.find(o => o.sessionId === sessionId)
     if (!observer) return false
     try {
-      const entitlement = await trial(this.env, observer.identity.accountId, Date.now())
+      const entitlement = await readEntitlement(this.env, observer.identity.accountId, Date.now())
       const at = Date.now()
       this.commandUntil.set(sessionId, commandDeadline(entitlement, at))
+      if (this.lanUntil.has(sessionId)) this.lanUntil.set(sessionId, commandDeadline(lanEntitlement(entitlement, at), at))
       this.accessOff.set(sessionId, entitlement.state === 'disabled')
       this.commandChecked.set(sessionId, at)
     } catch { /* keep the last good reading; it expires on its own */ }
@@ -431,13 +451,13 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     if (!this.relay) return
     this.syncLanes(Date.now())
     const state = this.relay.checkpoint()
-    for (const id of this.commandUntil.keys()) if (!state.observers.some(o => o.sessionId === id)) { this.commandUntil.delete(id); this.commandChecked.delete(id); this.accessOff.delete(id) }
+    for (const id of this.commandUntil.keys()) if (!state.observers.some(o => o.sessionId === id)) { this.commandUntil.delete(id); this.commandChecked.delete(id); this.accessOff.delete(id); this.lanUntil.delete(id) }
     for (const [ws, peer] of this.peers) {
       let attachment: Attachment | undefined
-      if (state.station?.peer === peer) attachment = { version: 1, role: 'station', identity: state.station.identity, order: state.order, sample: this.samples.get(ws) ?? null, operationVersion:this.operationVersions.get(ws)??0, audioVersion: this.audioVersions.get(ws) ?? 0, streamVersion: this.streamVersions.get(ws) ?? 0, laneVersion: this.laneVersions.get(ws) ?? 0, pipeVersion: this.pipeVersions.get(ws) ?? 0 }
+      if (state.station?.peer === peer) attachment = { version: 1, role: 'station', identity: state.station.identity, order: state.order, sample: this.samples.get(ws) ?? null, operationVersion:this.operationVersions.get(ws)??0, audioVersion: this.audioVersions.get(ws) ?? 0, streamVersion: this.streamVersions.get(ws) ?? 0, streamLanVersion: this.streamLanVersions.get(ws) ?? 0, laneVersion: this.laneVersions.get(ws) ?? 0, pipeVersion: this.pipeVersions.get(ws) ?? 0 }
       else {
         const observer = state.observers.find(o => o.peer === peer)
-        if (observer) { const { peer: _peer, ...saved } = observer; attachment = { version: 1, role: 'browser', ...saved, operations:this.operations.checkpoint(observer.sessionId), commandUntil: this.commandUntil.get(observer.sessionId) ?? 0 } }
+        if (observer) { const { peer: _peer, ...saved } = observer; attachment = { version: 1, role: 'browser', ...saved, operations:this.operations.checkpoint(observer.sessionId), commandUntil: this.commandUntil.get(observer.sessionId) ?? 0, ...(this.lanUntil.has(observer.sessionId) ? { lan: true } : {}) } }
       }
       if (!attachment) { ws.close(1001, 'disconnected'); this.peers.delete(ws); continue }
       if (new TextEncoder().encode(JSON.stringify(attachment)).length > 2048) {
@@ -501,10 +521,14 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         this.lanePeers.set(socket, peer)
       }
       return [{ sessionId: observer.sessionId, deviceId:observer.identity.deviceId, peer,
-        commandUntil: this.commandUntil.get(observer.sessionId) ?? 0, accessOff: this.accessOff.get(observer.sessionId) === true }]
+        commandUntil: this.commandUntil.get(observer.sessionId) ?? 0, accessOff: this.accessOff.get(observer.sessionId) === true,
+        ...(this.lanUntil.has(observer.sessionId) ? { lanUntil: this.lanUntil.get(observer.sessionId) } : {}) }]
     })
+    // A LAN-only session gets no lane that would carry the station across the internet: the
+    // relayed receive audio. Its lease and Stop (operations) and its stream, held to the LAN, stay.
+    const internet = observers.filter(observer => observer.lanUntil === undefined)
     this.operations.sync(station?{peer:station.peer,supported:!!stationSocket&&parseOperationVersion(this.operationVersions.get(stationSocket))!==null,operationVersion:stationSocket?this.operationVersions.get(stationSocket):0,laneVersion:stationSocket?this.laneVersions.get(stationSocket):0}:null,observers,now)
-    this.audio.sync(station ? { peer: station.peer, supported: this.audioVersions.get(stationSocket!) === 1, laneVersion: this.laneVersions.get(stationSocket!) } : null, observers)
-    this.stream.sync(station ? { peer: station.peer, supported: this.streamVersions.get(stationSocket!) === 1 } : null, observers)
+    this.audio.sync(station ? { peer: station.peer, supported: this.audioVersions.get(stationSocket!) === 1, laneVersion: this.laneVersions.get(stationSocket!) } : null, internet)
+    this.stream.sync(station ? { peer: station.peer, supported: this.streamVersions.get(stationSocket!) === 1, lanVersion: this.streamLanVersions.get(stationSocket!) } : null, observers)
   }
 }

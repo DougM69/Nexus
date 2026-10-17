@@ -19,7 +19,10 @@ import { checkAnswer, checkPin, type StationPins } from './station-key'
 export type AccountSession = {
   accountId: string
   entitlement: { accountId: string; enabled: boolean; expiresAt: number
-    state: 'none' | 'active' | 'ended' | 'disabled'; startedAt: number | null; source: string | null }
+    state: 'none' | 'active' | 'ended' | 'disabled'; startedAt: number | null; source: string | null
+    /** What the account may do now: 'lan' is Remote on the shack's own network only, free once internet
+     *  use has ended. Absent from an older service. */
+    access?: 'internet' | 'lan' | 'none' }
   /** The service's clock. Dates are derived from this, never the browser's own, so a laptop
    *  with the wrong time still shows the right number of days remaining. */
   serverNow: number
@@ -173,11 +176,12 @@ export class BrowserClient {
   async post<T>(path: string, body: object = {}, signal?: AbortSignal): Promise<T> {
     return (await this.request<T>(path, body, signal)).body
   }
-  observationTicket(stationId: string, signal: AbortSignal): Promise<{ body: { ticket: string; serverNow: number }; startedAt: number }> {
-    return this.request(`stations/${stationId}/ticket`, {}, signal)
+  /** `lan`: a LAN-only session, the one an account whose internet use has ended may have. */
+  observationTicket(stationId: string, signal: AbortSignal, lan = false): Promise<{ body: { ticket: string; serverNow: number }; startedAt: number }> {
+    return this.request(`stations/${stationId}/ticket`, lan ? { scope: 'lan' } : {}, signal)
   }
-  renewObservation(stationId:string,sessionId:string,signal:AbortSignal):Promise<{body:{ok:boolean;serverNow?:number};startedAt:number}> {
-    return this.request(`stations/${stationId}/renew`,{sessionId},signal)
+  renewObservation(stationId:string,sessionId:string,signal:AbortSignal,lan=false):Promise<{body:{ok:boolean;serverNow?:number};startedAt:number}> {
+    return this.request(`stations/${stationId}/renew`,lan?{sessionId,scope:'lan'}:{sessionId},signal)
   }
   private async request<T>(path: string, body: object, signal?: AbortSignal): Promise<{ body: T; startedAt: number }> {
     let token: string
@@ -245,6 +249,10 @@ export class HostedConnection {
    *  browser was revoked, or the sign-in expired. The connection has already stopped retrying, and
    *  without this the page kept showing a workspace that could never come back. */
   onRefused: ((error: RemoteError) => void) | null = null
+  /** A LAN-only session: Remote on the shack's own network, free once the account's internet use has
+   *  ended. Its tickets ask for that scope, and its streams use no relay (`StreamEnvironment.lanOnly`).
+   *  Set before `start()`. */
+  lanOnly = false
 
   /** `device` is this browser's device for the station, and its key (A5): the stream's offer is
    *  signed with it for this session, and so is every message on the older lanes but Stop and `state`
@@ -284,6 +292,7 @@ export class HostedConnection {
       // The stream's relay, asked for as each stream starts. The request is this connection's,
       // so stopping or reconnecting cancels one still on its way.
       relayServers: streamEnvironment.relayServers ?? (() => this.client.post(`stations/${stationId}/turn`, {}, this.abort.signal)),
+      lanOnly: streamEnvironment.lanOnly ?? (() => this.lanOnly),
       signOffer: streamEnvironment.signOffer ?? (device && (async sdp => {
       // The session this offer is made in: the relay stamps its id on the offer, and the station
       // checks the signature against it.
@@ -471,8 +480,8 @@ export class HostedConnection {
       // supplies the request-start clock after obtaining its account token.
       const startedAt=performance.now()
       const result=typeof this.client.renewObservation==='function'
-        ? await this.client.renewObservation(this.stationId,this.sessionId,this.abort.signal)
-        : {body:await this.client.post<{ok:boolean;serverNow?:number}>(`stations/${this.stationId}/renew`,{sessionId:this.sessionId},this.abort.signal),startedAt}
+        ? await this.client.renewObservation(this.stationId,this.sessionId,this.abort.signal,this.lanOnly)
+        : {body:await this.client.post<{ok:boolean;serverNow?:number}>(`stations/${this.stationId}/renew`,this.lanOnly?{sessionId:this.sessionId,scope:'lan'}:{sessionId:this.sessionId},this.abort.signal),startedAt}
       if(this.socket!==socket||this.disposed)return
       if(result.body.serverNow!==undefined){
         if(!Number.isSafeInteger(result.body.serverNow)||result.body.serverNow<0)throw new RemoteError(503)
@@ -484,7 +493,7 @@ export class HostedConnection {
   private async connect(): Promise<void> {
     if (this.disposed || this.sleepState.asleep) return
     try {
-      const { body: ticket, startedAt: start } = await this.client.observationTicket(this.stationId, this.abort.signal)
+      const { body: ticket, startedAt: start } = await this.client.observationTicket(this.stationId, this.abort.signal, this.lanOnly)
       if (this.disposed || this.sleepState.asleep) return
       if (!/^[0-9a-f]{64}$/.test(ticket.ticket) || !Number.isSafeInteger(ticket.serverNow)) throw new RemoteError(403)
       this.anchor = { server: ticket.serverNow, start };this.sessionId=null;this.clockFailures=0;this.lastClockRenewal=-Infinity

@@ -273,6 +273,15 @@
         "streaming": false,
         "reason": "deviceKeyMismatch"
       }
+    },
+    {
+      "name": "refused: lanOnly",
+      "message": {
+        "type": "streamState",
+        "sessionId": "10000000-0000-4000-8000-000000000001",
+        "streaming": false,
+        "reason": "lanOnly"
+      }
     }
   ],
   "roomToBrowser": [
@@ -403,6 +412,14 @@
         "type": "streamState",
         "streaming": false,
         "reason": "deviceKeyMismatch"
+      }
+    },
+    {
+      "name": "refused: lanOnly",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "lanOnly"
       }
     }
   ],
@@ -654,6 +671,22 @@
         "type": "streamState",
         "streaming": false,
         "reason": "tryLater"
+      }
+    },
+    {
+      "name": "a LAN-only session's candidate that is not a private host one",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "lanOnly"
+      }
+    },
+    {
+      "name": "a LAN-only session to a station too old to hold it to the LAN",
+      "message": {
+        "type": "streamState",
+        "streaming": false,
+        "reason": "updateStation"
       }
     }
   ],

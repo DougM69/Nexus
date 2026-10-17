@@ -324,6 +324,15 @@ enum Road {
     },
 }
 
+/// The road a LAN-only session's offer takes: the LAN road's, on `network`, with a port of the
+/// operating system's choosing as the relay's road has (only the LAN road's own listener keeps the
+/// operator's port). With no network to hold it to, none: the offer is refused `lanOnly`.
+fn lan_only_road(network: Option<tempo_stream::lan::Network>) -> Result<Road, StreamReason> {
+    network
+        .map(|network| Road::Lan { network, port: 0 })
+        .ok_or(StreamReason::LanOnly)
+}
+
 impl Road {
     /// May a datagram from `source` reach the session? On the LAN road, only one from the shack's
     /// own subnet.
@@ -363,6 +372,29 @@ impl StreamLane {
         payload: BrowserSignal,
     ) -> Option<String> {
         self.signal_on(station, to_relay, ids, payload, Road::Relay)
+    }
+
+    /// A `streamSignal` the relay stamped for a session the service lets use the shack's own
+    /// network only (`lanOnly`: an account whose internet use has ended). Its offer runs on the LAN
+    /// road's terms, on the network `network` finds this computer's route on: no STUN, only the
+    /// shack's own address as a candidate, and nothing tried or heard off that subnet, so the media
+    /// cannot leave the LAN whatever the page or the relay sends. With no such network the offer is
+    /// refused `lanOnly`. Only an offer opens a session; anything else routes as on the relay's road.
+    pub fn signal_lan_only(
+        &mut self,
+        station: &Station,
+        to_relay: &tokio::sync::mpsc::UnboundedSender<String>,
+        ids: (String, String, String),
+        payload: BrowserSignal,
+        network: impl FnOnce() -> Option<tempo_stream::lan::Network>,
+    ) -> Option<String> {
+        if !matches!(payload, BrowserSignal::Offer { .. }) {
+            return self.signal_on(station, to_relay, ids, payload, Road::Relay);
+        }
+        match lan_only_road(network()) {
+            Ok(road) => self.signal_on(station, to_relay, ids, payload, road),
+            Err(reason) => state(&ids.0, false, Some(reason)),
+        }
     }
 
     /// The same for a session on the LAN road, which the LAN channel stamped from the key its

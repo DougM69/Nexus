@@ -125,6 +125,8 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean; micro
   verify?: false | ((answer: string, offer: string) => Promise<string | null>);
   /** The service's relay, when the page has one to ask; `refuseRelay` is a browser that will not build a peer with it. */
   relay?: () => Promise<unknown>; refuseRelay?: boolean
+  /** A LAN-only session (`StreamEnvironment.lanOnly`). */
+  lanOnly?: boolean
   /** The operator's Mic level: a browser that builds it (`ok`), one that cannot (`fails`), one that builds it only when
    *  the test says (`slow`, with `releaseLevel`); absent, a page with no level at all. `storedLevel` is what this browser
    *  kept, as its storage hands it back. */
@@ -150,6 +152,7 @@ export function harness(options: { codecs?: boolean; peerThrows?: boolean; micro
       const p = new FakePeer(iceServers); peers.push(p); return p
     },
     relayServers: options.relay,
+    lanOnly: options.lanOnly === undefined ? undefined : () => options.lanOnly === true,
     videoCodecs: () => options.codecs === false ? null : [{ mimeType: 'video/VP8', clockRate: 90000 }],
     audioCodecs: () => options.codecs === false ? null : [{ mimeType: 'audio/opus', clockRate: 48000, channels: 2, sdpFmtpLine: 'minptime=10;useinbandfec=1' }],
     microphone: options.microphone === 'none' ? undefined : constraints => {

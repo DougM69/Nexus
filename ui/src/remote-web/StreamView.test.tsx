@@ -670,6 +670,24 @@ it('A5: says in plain words why the station refused this browser\'s key, and wha
   }
 })
 
+// A LAN-only session (Remote on the shack's own network, free once internet use has ended): its two
+// refusals each say what the operator can do, the station's and the relay's alike.
+it('says in plain words why a LAN-only stream was refused, and what to do', async () => {
+  for (const [message, reason, words] of [
+    [byName(SIGNAL.roomToBrowser, 'refused: lanOnly'), 'lanOnly', 'Connect this device to the same network as the station, then start the stream again.'],
+    [byName(SIGNAL.roomToBrowserFromRelay, 'a LAN-only session\'s candidate that is not a private host one'), 'lanOnly', 'the stream works only on the shack\'s own network.'],
+    [byName(SIGNAL.roomToBrowserFromRelay, 'a LAN-only session to a station too old to hold it to the LAN'), 'updateStation', 'Streaming on the shack\'s own network needs a newer Nexus at the shack. Update Nexus there, then start the stream again.'],
+  ] as const) {
+    const v = view(controlling)
+    fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+    await act(async () => { await Promise.resolve() })
+    act(() => { v.link.receive(message) })
+    expect(v.link.getSnapshot()).toMatchObject({ phase: 'ended', reason })
+    expect(screen.getAllByText(new RegExp(words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length, reason).toBeGreaterThan(0)
+    cleanup()
+  }
+})
+
 // ── The microphone (S6; the operator's rulings R1 "Arms your mic" and R2 "State it + warn") ─────────
 
 const USB_NOTE = 'The rig must take its SSB audio from USB (its menu for the transmit audio source). Most radios come set to the front microphone, and then an over sends the shack\'s microphone instead of you.'

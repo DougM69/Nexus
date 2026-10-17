@@ -185,6 +185,26 @@ key; a 503 `relayUnavailable` means Cloudflare refused, answered something unusa
 answer within three seconds. `localStorage.removeItem('nexus.remote.relay')` puts streams back to
 direct first.
 
+## Paid access and trial identity (built, not configured)
+
+Two optional Worker settings, neither in `secrets.required`, so a deploy without them behaves as before:
+
+- `TRIAL_KEY`: the HMAC key trial markers and the US licence copy are kept under. **It can never be
+  rotated**: the callsigns and PC identifiers it was taken over are not kept, so a new key matches no
+  marker and every spent trial becomes available again. Set it, with the licence copy loaded, before
+  any Nexus sends a callsign. Without it, the approve route checks `callsign` and `pc` for shape only.
+- `TRIAL_IDENTITY_REQUIRED=1`: an approval that would start a trial must carry both fields
+  (`updateRequired` otherwise). Turn it on only once the Nexus releases that send them are out.
+
+The relay holds no payment key. It reads `subscriptions`, which only the separate, private billing
+Worker writes (it binds the same D1 database and receives the payment provider's webhook). The relay
+owns every migration, those tables included.
+
+The US licence copy is refreshed by `scripts/uls-import.mjs` from the FCC's public files (weekly full,
+daily changes); it writes SQL to apply with `wrangler d1 execute`. With `TRIAL_KEY` set and the copy
+more than three days old, US callsigns are refused a trial (`serviceUnavailable`) rather than waved
+through. Running the import with the production key is credential handling.
+
 ## Cloudflare and deployment
 
 The workflow `.github/workflows/remote-staging.yml` uses the **production** environment's

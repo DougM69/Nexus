@@ -508,6 +508,37 @@ it('goes back to the stations page and names the end when an open session is ref
   expect(h.stop).toHaveBeenCalled()
 })
 
+// LAN STAYS FREE. An account whose internet use has ended (the service says `access: 'lan'`) keeps
+// Stream and Listen for a browser already approved at the shack, held to the shack's own network: the
+// session it opens is LAN-only. Asking for a new approval stays internet use, and an older service that
+// never says `access` leaves the card exactly as it was.
+it('an ended trial keeps Stream and Listen on the shack\'s own network for an approved browser', async () => {
+  const h = openableStation()
+  h.session.stations.push({ id: crypto.randomUUID(), name: 'Away', device: null })
+  h.session.entitlement = { ...h.session.entitlement, enabled: false, state: 'ended', access: 'lan' }
+  let lanOnly: boolean | undefined
+  vi.mocked(HostedConnection.prototype.start).mockImplementation(function (this: HostedConnection) { lanOnly = this.lanOnly })
+  render(<RemoteApp />)
+  expect((await screen.findByText(/stays free/)).textContent).toMatch(/same network as the station/)
+  const [home, away] = await screen.findAllByRole('button', { name: 'Listen' })
+  expect((home as HTMLButtonElement).disabled).toBe(false)
+  expect((away as HTMLButtonElement).disabled, 'a new approval is not part of what stays free').toBe(true)
+  const states = [...document.querySelectorAll('.remote-station-state')].map(state => state.textContent)
+  expect(states[0]).not.toMatch(/^Your trial ended/)
+  expect(states[1]).toMatch(/^Your trial ended/)
+  fireEvent.click(home)
+  await screen.findByRole('button', { name: 'Disconnect and return to stations' })
+  expect(lanOnly).toBe(true)
+})
+
+it('an ended trial from a service that never says access leaves Stream and Listen off, as before', async () => {
+  const h = openableStation()
+  h.session.entitlement = { ...h.session.entitlement, enabled: false, state: 'ended' }
+  render(<RemoteApp />)
+  expect(((await screen.findByRole('button', { name: 'Listen' })) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.queryByText(/stays free/)).toBeNull()
+})
+
 it('names an expired sign-in, not an ended session, when that is why the ticket was refused', async () => {
   const h = openableStation()
   render(<RemoteApp />)

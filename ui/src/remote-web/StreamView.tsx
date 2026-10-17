@@ -656,6 +656,10 @@ function ended(reason: string | null): string {
     : reason === 'serviceAccessExpired' ? t('remote.stream.ended.accessExpired')
     : reason === 'remoteOff' ? t('remote.stream.ended.remoteOff')
     : reason === 'tryLater' ? t('remote.stream.ended.tryLater')
+    // A LAN-only session (free on the shack's own network) whose stream would have left it, or whose
+    // station is too old to keep it there.
+    : reason === 'lanOnly' ? t('remote.stream.ended.lanOnly')
+    : reason === 'updateStation' ? t('remote.stream.ended.updateStation')
     : reason === 'streamClosed' ? t('remote.stream.ended.station')
     : reason === 'streamDisabled' ? t('remote.stream.ended.disabled')
     : reason === 'streamInUse' ? t('remote.stream.ended.inUse')

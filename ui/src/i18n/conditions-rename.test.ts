@@ -30,8 +30,8 @@ const LOCALES: Record<string, { cat: Catalog; name: string; title: string; forme
 /** The view's old name as a word, in either script: "Connecté", "Connectors", "コネクター" and "connect" are
  *  not it. Its edges are Latin letters only: Japanese runs words together ("テレビでConnect"). */
 const OLD = /(?<![\p{Script=Latin}\p{N}])Connect(?![\p{Script=Latin}\p{N}])|コネクト(?![ー\p{Script=Katakana}])/u
-/** The two English strings where "Connect" is the verb, opening a sentence. */
-const VERB = new Set(['program.chirp.step.upload', 'settings.amplifier.note'])
+/** The English strings where "Connect" is the verb, opening a sentence. */
+const VERB = new Set(['program.chirp.step.upload', 'settings.amplifier.note', 'remote.stream.ended.lanOnly'])
 const text = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
 
 /** Every display string the rename touched, and the picker's words the default changed. */

@@ -1009,6 +1009,29 @@ it('the relay the service mints rides beside STUN; a page with no relay to ask b
   expect(direct.peer.iceServers).toEqual(STREAM_ICE_SERVERS)
 })
 
+// A LAN-ONLY SESSION (Remote on the shack's own network, free once internet use has ended): no relay
+// is asked for and no STUN server is given, so the browser gathers only its own host candidates, and of
+// those only a private or mDNS one goes, the ones the service lets such a session carry.
+it('a LAN-only stream asks for no relay, has no ICE server, and sends only private host candidates', async () => {
+  let asked = 0
+  const h = harness({ lanOnly: true, relay: async () => { asked++; return { iceServers: [RELAY] } } })
+  await h.link.start(LEASE)
+  expect(asked).toBe(0)
+  expect(h.peer.iceServers).toEqual([])
+  const sent = (candidate: string) => h.peer.onicecandidate?.({ candidate: { candidate, sdpMid: '0' } })
+  sent('candidate:1 1 udp 2122260223 4d2a8f1e-8c1b-4f3a-9e2d-2c3b4a5d6e7f.local 54321 typ host generation 0')
+  sent('candidate:2 1 udp 2122260223 192.168.1.20 54322 typ host generation 0')
+  sent('candidate:3 1 udp 1677729535 198.51.100.23 51234 typ srflx raddr 0.0.0.0 rport 0 generation 0')
+  sent('candidate:4 1 udp 2122260223 198.51.100.23 54323 typ host generation 0')
+  expect(h.signals.filter(s => s.payload.kind === 'candidate').map(s => (s.payload as { candidate: string }).candidate.split(' ')[0]))
+    .toEqual(['candidate:1', 'candidate:2'])
+  // The control: the same page off the LAN-only switch asks for its relay and keeps STUN.
+  const internet = harness({ lanOnly: false, relay: async () => { asked++; return { iceServers: [RELAY] } } })
+  await internet.link.start(LEASE)
+  expect(asked).toBe(1)
+  expect(internet.peer.iceServers).toEqual([...STREAM_ICE_SERVERS, RELAY])
+})
+
 it('a relay the service will not or cannot give leaves the stream direct', async () => {
   for (const [what, relay] of [
     ['refused: signed out, not entitled, no relay key, the provider down', () => Promise.reject(Error('relayUnavailable'))],

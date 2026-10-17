@@ -1488,6 +1488,8 @@ struct FakeCloud {
     /// While set, the device list and a removal are not answered (a 503), as a service that is down
     /// answers.
     refusing: Arc<AtomicBool>,
+    /// Every `enroll/approve` body, as sent.
+    approvals: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 fn device_list(approved: u8, expires_at: u64) -> String {
     json!({"devices":[{"id":BROWSER,"name":"Test browser","approved":approved,"expiresAt":expires_at}]})
@@ -1512,11 +1514,14 @@ async fn fake_cloud() -> FakeCloud {
     let held = station_key.clone();
     let refusing = Arc::new(AtomicBool::new(false));
     let down = refusing.clone();
+    let approvals = Arc::new(Mutex::new(Vec::new()));
+    let approved_bodies = approvals.clone();
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
             let served = served.clone();
             let held = held.clone();
             let down = down.clone();
+            let approved_bodies = approved_bodies.clone();
             tokio::spawn(async move {
                 let mut request = Vec::new();
                 let mut chunk = [0u8; 4096];
@@ -1561,6 +1566,9 @@ async fn fake_cloud() -> FakeCloud {
                         json!({"accountId":ACCOUNT,"approved":false}).to_string(),
                     )
                 } else if head.contains("/enroll/approve ") {
+                    if let Ok(sent) = serde_json::from_slice(&request[head_end..]) {
+                        approved_bodies.lock().unwrap().push(sent);
+                    }
                     // The service approves the browser that confirmed the pairing along with it, with
                     // the device key its confirm brought (A5), if it brought one: here, the key the
                     // browser list names for it.
@@ -1719,6 +1727,7 @@ async fn fake_cloud() -> FakeCloud {
         devices,
         station_key,
         refusing,
+        approvals,
     }
 }
 fn paired_vault(origin: &str) -> MemoryVault {
@@ -2968,6 +2977,7 @@ async fn a_closed_service_is_named_on_http_and_on_the_station_socket() {
         devices: Arc::new(Mutex::new(String::new())),
         station_key: Default::default(),
         refusing: Default::default(),
+        approvals: Default::default(),
     };
     let vault = paired_vault(&refused.origin);
     let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
@@ -2979,6 +2989,109 @@ async fn a_closed_service_is_named_on_http_and_on_the_station_socket() {
     })
     .await;
     assert_eq!(status.error, Some("serviceMoved"));
+}
+
+/// One trial per callsign and per shack PC: approving sends the station callsign configured here, as
+/// configured (trimmed; the service normalises it), and the PC's two identifiers as hashes only. The
+/// raw identifier never leaves the computer.
+#[tokio::test(flavor = "multi_thread")]
+async fn approving_sends_the_station_callsign_and_the_pc_hashes_never_the_raw_ids() {
+    let cloud = fake_cloud().await;
+    let vault = MemoryVault::default();
+    let settings = Settings {
+        mycall: " w1abc/p ".into(),
+        ..Settings::default()
+    };
+    let engine = Arc::new(Mutex::new(Engine::with_settings(settings)));
+    let service = launch(&cloud, &vault, &engine);
+    service
+        .action(Action::Begin {
+            name: "Test station".into(),
+        })
+        .await
+        .unwrap();
+    service.action(Action::Refresh {}).await.unwrap();
+    service
+        .action(Action::Approve {
+            enrollment_id: STATION.into(),
+            account_id: ACCOUNT.into(),
+            transmit: false,
+        })
+        .await
+        .unwrap();
+    let sent = cloud.approvals.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let body = sent[0].as_object().unwrap();
+    let mut keys: Vec<&str> = body.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["callsign", "credential", "id", "pc", "proof"]);
+    assert_eq!(body["callsign"], "w1abc/p");
+    let pc = body["pc"].as_object().unwrap();
+    let mut kinds: Vec<&str> = pc.keys().map(String::as_str).collect();
+    kinds.sort_unstable();
+    assert_eq!(kinds, ["hw", "os"]);
+    // By value where this computer has the identifier: the hash of the kind and the lower-cased id.
+    #[cfg(target_os = "linux")]
+    if let Some(id) = std::fs::read_to_string("/etc/machine-id")
+        .ok()
+        .map(|id| id.trim().to_ascii_lowercase())
+        .filter(|id| !id.is_empty())
+    {
+        let expected: String = ring::digest::digest(
+            &ring::digest::SHA256,
+            format!("nexus-pc:os:{id}").as_bytes(),
+        )
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+        assert_eq!(pc["os"], expected.as_str());
+        assert!(
+            !sent[0].to_string().contains(&id),
+            "the raw machine id was sent"
+        );
+    }
+    for kind in ["hw", "os"] {
+        assert!(
+            pc[kind].is_null() || pc[kind].as_str().is_some_and(|h| h.len() == 64),
+            "{kind}: {}",
+            pc[kind]
+        );
+    }
+}
+
+/// The service's refusals of a trial for this callsign or this PC, or of an older Nexus, are named at
+/// the shack. Unnamed, each 400 or 403 read as a failed request or `accessDenied`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_trial_identity_refusals_are_named_at_the_shack() {
+    for (status, code) in [
+        ("400 Bad Request", "callsignInvalid"),
+        ("403 Forbidden", "callsignNotLicensed"),
+        ("403 Forbidden", "trialUsedByCallsign"),
+        ("403 Forbidden", "trialUsedOnThisPc"),
+        ("403 Forbidden", "updateRequired"),
+    ] {
+        let body: &'static str = Box::leak(format!(r#"{{"error":"{code}"}}"#).into_boxed_str());
+        let origin = refusing_cloud(status, body).await;
+        let client = Client::new(&origin).unwrap();
+        assert_eq!(
+            client
+                .post("enroll/approve", None, json!({ "id": "pairing" }))
+                .await
+                .err(),
+            Some(code)
+        );
+    }
+    // The control: a code outside the list keeps the status mapping.
+    let origin = refusing_cloud("403 Forbidden", r#"{"error":"somethingElse"}"#).await;
+    let client = Client::new(&origin).unwrap();
+    assert_eq!(
+        client
+            .post("enroll/approve", None, json!({ "id": "pairing" }))
+            .await
+            .err(),
+        Some("accessDenied")
+    );
 }
 
 /// Approval refused because the same mailbox already has a trial running under another sign-in. Unnamed,

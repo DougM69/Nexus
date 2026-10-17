@@ -1,9 +1,10 @@
 // Same-origin browser API, the native client's API, and outbound station admission. No radio command router.
 import { account, access, body, bodyBytes, browserOrigin, caller, caller as callerKey, CHALLENGE_MS, cookie, device, deviceCookie, deviceKeys, digest,
-  deviceKinds, fieldsOf, id, keepApprovals, label, lifetime, native, nativeAccount, nativeDevice, nativeKind, proof, publicKey, rate, Refusal, requireAdmin, requireEligible,
-  requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, trial, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid } from './authority'
+  deviceKinds, fieldsOf, id, keepApprovals, label, lifetime, native, nativeAccount, nativeDevice, nativeKind, proof, publicKey, rate, readEntitlement, Refusal, requireAdmin,
+  lanEntitlement, requireMayPair, requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid } from './authority'
 import type { DeviceRow, RemoteEnv, StationRow } from './authority'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
+import { baseCall, hmac, markerInserts, requireUnspentMarkers, SPENT_MARKER, spentBindings, trialClaim } from './trial-identity'
 import type { Identity } from '../../ui/src/remote-monitor/relay'
 import { advertisedOperationVersion } from '../../ui/src/remote-web/operation-version'
 export { StationRoom } from './room'
@@ -92,6 +93,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
         // The stream's signalling lane, on the same terms: a station that does not send this header
         // is never handed a `streamSignal`.
         streamVersion: request.headers.get('x-nexus-stream-version') === '1' ? 1 : 0,
+        // A LAN-only session's stream, on the same terms: only a station that sends this header is
+        // handed one, with `lanOnly` on its signals, a field any other would close its socket on.
+        streamLanVersion: request.headers.get('x-nexus-stream-lan-version') === '1' ? 1 : 0,
         // The browser's proof on the operation and audio lanes (S1-M1): handed on only to a station that
         // takes it, because any other refuses a field it does not know by closing its socket.
         laneVersion: request.headers.get('x-nexus-lane-signature-version') === '1' ? 1 : 0,
@@ -106,14 +110,15 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // DELETE RETURNING makes replay refusal atomic across concurrent Worker instances.
     const ticket = await env.DB.prepare(`DELETE FROM tickets WHERE digest=? AND station_id=? AND expires_at>? RETURNING *`)
       .bind(await digest(protocols[1].slice(7)), stationId, now).first<{
-        account_id: string; device_id: string; device_generation: number; identity_until: number
+        account_id: string; device_id: string; device_generation: number; identity_until: number; scope: string
       }>()
     requireValue(ticket, 'invalidTicket', 401)
     const row = await station(env, stationId)
     return room(env, stationId, 'browser', { access: await access(env, row, now), sessionId: uuid(),
+      ...(ticket.scope === 'lan' ? { scope: 'lan' } : {}),
       identity: { accountId: ticket.account_id, deviceId: ticket.device_id,
         deviceGeneration: ticket.device_generation, expiresAt: ticket.identity_until },
-      entitlement: await trial(env, ticket.account_id, now) })
+      entitlement: await readEntitlement(env, ticket.account_id, now) })
   }
   requireValue(request.method === 'POST', 'methodNotAllowed', 405)
 
@@ -155,7 +160,11 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   }
   if (path === 'enroll/check' || path === 'enroll/approve') {
     requireValue(!request.headers.has('origin'), 'originDenied')
-    const input = await body(request, path.endsWith('approve') ? ['id', 'proof', 'credential'] : ['id', 'proof'])
+    // `callsign` and `pc` are optional and approve-only: the shack's station callsign and its PC's two
+    // identifier hashes, which a trial started here spends (trial-identity.ts). Accepted before any
+    // Nexus sends them, because this body refuses a key it does not know.
+    const input = path.endsWith('approve') ? await body(request, ['id', 'proof', 'credential'], ['callsign', 'pc'])
+      : await body(request, ['id', 'proof'])
     const stationId = id(input.id), hash = await digest(proof(input.proof))
     // Bounded by CALLER before it is bounded by the id the caller chose. The per-station bucket
     // is keyed on attacker-supplied input, and rate() writes one rate_limits row per distinct
@@ -182,8 +191,14 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // shack, so the two-act protection cannot see it. Everything permanent is below this line -
     // the station row, its credential, and the trial clock that can never return to 'none'.
     requireValue(pending.confirmed === 1, 'awaitingConfirmation', 409)
-    requireEligible(await trial(env, pending.account_id, now))
-    await requireUnspentIdentity(env, pending.account_id, now)
+    const before = await readEntitlement(env, pending.account_id, now)
+    await requireMayPair(env, before, now)
+    // A trial starts here only for an account that has neither had one nor holds a plan: paying never
+    // touches the trials row. Its markers are checked first for a clear refusal, and again inside the
+    // trial INSERT for the race.
+    const starts = before.state === 'none'
+    const claim = starts ? await trialClaim(env, input, pending.account_id, now) : null
+    if (claim) await requireUnspentMarkers(env, pending.account_id, claim)
     const credentialHash = await digest(proof(input.credential))
     // Approval at the shack is the moment the trial starts, so the clock is written in the same
     // batch as the station. Station insert first on purpose: a trial with no station is
@@ -223,13 +238,17 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // makes - mailbox hash, or an address hash recorded before that column existed - so the two
       // cannot drift into disagreeing about who is the same person. An account with no verified
       // address matches no sibling and is unaffected, which is the documented existing behaviour.
-      env.DB.prepare(`INSERT INTO trials(account_id, enabled, expires_at, started_at, source)
+      ...(starts ? [env.DB.prepare(`INSERT INTO trials(account_id, enabled, expires_at, started_at, source)
         SELECT ?,1,?,?,'trial' WHERE EXISTS(SELECT 1 FROM stations WHERE id=? AND credential_hash=?)
         AND NOT EXISTS(SELECT 1 FROM trials t JOIN accounts a ON a.id=t.account_id, accounts self
           WHERE self.id=? AND t.account_id<>self.id
           AND (a.mailbox_hash=self.mailbox_hash OR a.email_hash IN (self.email_hash, self.mailbox_hash)))
+        ${claim ? `AND NOT EXISTS(SELECT 1 FROM trial_markers m WHERE ${SPENT_MARKER})` : ''}
         ON CONFLICT(account_id) DO NOTHING`)
-        .bind(pending.account_id, now + TRIAL_MS, now, stationId, credentialHash, pending.account_id),
+        .bind(pending.account_id, now + TRIAL_MS, now, stationId, credentialHash, pending.account_id,
+          ...(claim ? spentBindings(pending.account_id, claim) : [])),
+      // What the trial spent, only if it was this approval that started it.
+      ...(claim ? markerInserts(env, pending.account_id, claim, now) : [])] : []),
     ])
     // Read both rows back before answering 200. That makes "the station and the clock landed
     // together" an observable property of the response rather than a claim about D1's rollback
@@ -237,12 +256,15 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     const accepted = await env.DB.prepare('SELECT id FROM stations WHERE id=? AND credential_hash=? AND enabled=1')
       .bind(stationId, credentialHash).first()
     requireValue(accepted, 'stationLimit', 409)
-    const started = await trial(env, pending.account_id, now)
+    const started = await readEntitlement(env, pending.account_id, now)
     // Losing the race above is not a service failure. The NOT EXISTS guard is what makes one
     // trial per person true under concurrency, and the loser deserves the same named refusal a
     // sequential caller would have been given - trialActiveElsewhere - rather than a bare 503
     // that reads as "try again", which is exactly what it must not do.
-    if (started.state !== 'active') await requireUnspentIdentity(env, pending.account_id, now)
+    if (started.state !== 'active') {
+      await requireUnspentIdentity(env, pending.account_id, now)
+      if (claim) await requireUnspentMarkers(env, pending.account_id, claim)
+    }
     requireValue(started.state === 'active', 'serviceUnavailable', 503)
     // The approved pairing browser, so the shack can give it station control and logging without
     // waiting for a browser list. Additive: the shack reads stationId and accountId by name and has
@@ -324,15 +346,19 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   // not something the wire needs to carry.
   const { subject, verified, ...identity } = await account(request, env, now)
   await rate(env, `account:${identity.accountId}`, now, 120)
-  const entitlement = await trial(env, identity.accountId, now)
+  const entitlement = await readEntitlement(env, identity.accountId, now)
   // The only privileged write in the service. It exists because every trial in a closed beta is
   // granted by hand, and the alternative was a wrangler command the operator can only run from a
   // laptop. Deliberately ONE action: each further admin verb is another way for a mistake here to
   // become an entitlement bypass.
   if (path === 'admin/grant-trial') {
     requireAdmin(env, subject)
-    const input = await body(request, ['accountId', 'days'])
+    // `callsign`, optional: support settling a squatted callsign records this account as its proven
+    // owner, so its future claims are never blocked by the squatter's. It writes no other marker.
+    const input = await body(request, ['accountId', 'days'], ['callsign'])
     const target = id(input.accountId)
+    const call = 'callsign' in input ? baseCall(input.callsign) : null
+    requireValue(call === null || env.TRIAL_KEY, 'serviceNotConfigured', 503)
     requireValue(Number.isInteger(input.days) && (input.days as number) >= 1 && (input.days as number) <= 365,
       'invalidRequest', 400)
     const expiresAt = now + (input.days as number) * 86400000
@@ -352,8 +378,13 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
         started_at=COALESCE(trials.started_at, excluded.started_at),
         source=CASE WHEN trials.source='trial' THEN 'trial+manual' ELSE 'manual' END`)
       .bind(expiresAt, now, target).run()
-    const granted = await trial(env, target, now)
+    const granted = await readEntitlement(env, target, now)
     requireValue(granted.state === 'active', 'stationUnavailable', 404)
+    if (call !== null) {
+      await env.DB.prepare(`INSERT INTO trial_markers(kind,value_hmac,account_id,proven,method,created_at) VALUES('call',?,?,1,'admin',?)
+        ON CONFLICT(kind,value_hmac,account_id) DO UPDATE SET proven=1, method='admin'`)
+        .bind(await hmac(env.TRIAL_KEY!, `call:${call}`), target, now).run()
+    }
     return json({ accountId: target, entitlement: granted })
   }
   if (path === 'session') {
@@ -390,8 +421,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       identityVerified: verified, serverNow: now })
   }
   if (path === 'pair/claim') {
-    requireEligible(entitlement)
-    await requireUnspentIdentity(env, identity.accountId, now)
+    await requireMayPair(env, entitlement, now)
     await rate(env, `claim:${identity.accountId}`, now, 5, 600000)
     const input = await body(request, ['code'])
     requireValue(typeof input.code === 'string' && /^[0-9a-f]{16}$/.test(input.code), 'invalidPairingCode', 400)
@@ -402,8 +432,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     return json({ station: row, accountId: identity.accountId })
   }
   if (path === 'pair/confirm') {
-    requireEligible(entitlement)
-    await requireUnspentIdentity(env, identity.accountId, now)
+    await requireMayPair(env, entitlement, now)
     await rate(env, `confirm:${identity.accountId}`, now, 10, 600000)
     const input = await body(request, ['id'], ['publicKey'])
     requireValue(typeof input.id === 'string' && /^[0-9a-f-]{36}$/.test(input.id), 'invalidPairingCode', 400)
@@ -456,7 +485,10 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     }
     return json({ ok: true }, 200, { 'set-cookie': cookie(row.id, '', 0) })
   }
-  requireTrial(entitlement, now)
+  // Free on the shack's own network (authority.ts lanEntitlement): an account whose internet use has
+  // ended may still take a LAN-only ticket for a browser already approved, and renew it. Registering a
+  // browser, the relay route and every other verb still need internet use.
+  if (!(entitlement.access === 'lan' && (verb === 'ticket' || verb === 'renew'))) requireTrial(entitlement, now)
   if (verb === 'device') {
     const input = await body(request, ['name'], ['publicKey']), name = label(input.name)
     // The browser's device key (A5), when the page sends one.
@@ -480,13 +512,20 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     return json({ deviceId, approved: false }, 200, { 'set-cookie': cookie(row.id, credential) })
   }
   if (verb === 'ticket' || verb === 'renew' || verb === 'turn') {
-    const input = await body(request, verb === 'renew' ? ['sessionId'] : [])
+    const input = await body(request, verb === 'renew' ? ['sessionId'] : [], verb === 'turn' ? [] : ['scope'])
+    // `scope: 'lan'` asks for a LAN-only session: its stream is held to the shack's own network, and an
+    // account whose internet use has ended may have one. Without it, the session is an internet one,
+    // exactly as before. A renewal's scope only gets it past the gate here: the room keeps the scope
+    // the session was admitted with.
+    requireValue(!('scope' in input) || input.scope === 'lan', 'invalidRequest', 400)
+    const lan = input.scope === 'lan'
+    if (!lan) requireTrial(entitlement, now)
     const current = await device(request, env, row.id, identity.accountId, now)
     requireValue(current?.approved === 1, 'deviceNotApproved')
     const browser = { ...identity, deviceId: current.id, deviceGeneration: current.generation,
       expiresAt: Math.min(identity.expiresAt, current.expires_at) }
     const policy = await access(env, row, now)
-    observerDeadline(policy, browser, entitlement, now)
+    observerDeadline(policy, browser, lan ? lanEntitlement(entitlement, now) : entitlement, now)
     // The stream's relay, for exactly the browser a ticket is for, past exactly the same checks.
     // It renews no approval: a page asks for a relay as a stream starts, and that is not use. The
     // credential lasts the longest session, and never past the entitlement that a stream needs.
@@ -505,8 +544,8 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     const ticket = secret()
     await env.DB.batch([
       env.DB.prepare('DELETE FROM tickets WHERE expires_at<=?').bind(now),
-      env.DB.prepare('INSERT INTO tickets(digest,station_id,account_id,device_id,device_generation,identity_until,expires_at) VALUES(?,?,?,?,?,?,?)')
-        .bind(await digest(ticket), row.id, identity.accountId, current.id, current.generation, browser.expiresAt, now + 15000),
+      env.DB.prepare('INSERT INTO tickets(digest,station_id,account_id,device_id,device_generation,identity_until,expires_at,scope) VALUES(?,?,?,?,?,?,?,?)')
+        .bind(await digest(ticket), row.id, identity.accountId, current.id, current.generation, browser.expiresAt, now + 15000, lan ? 'lan' : 'internet'),
     ])
     return json({ ticket, serverNow: now }, 200, await used(request, env, row.id, current, now))
   }
@@ -552,7 +591,7 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
   const reopening = !request.headers.has('authorization')
   const caller = reopening ? await reopener(request, env, match, now) : await nativeAccount(request, env, now)
   if (!reopening) await rate(env, `client:${caller.accountId}`, now, 120)
-  const entitlement = await trial(env, caller.accountId, now)
+  const entitlement = await readEntitlement(env, caller.accountId, now)
   if (path === 'client/challenge') {
     requireValue(request.method === 'POST', 'methodNotAllowed', 405)
     await body(request, [])

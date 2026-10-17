@@ -59,12 +59,25 @@ before any WebRTC state exists. A lapsed lease or a revoked device ends the stre
   the relay ended (below), and the two device-key refusals `deviceNotPinned` and
   `deviceKeyMismatch` (A5, below);
 - from the relay alone, which the station never sends: `serviceAccessExpired` (the account's
-  command entitlement has lapsed: the relay holds the offer) and `tryLater` (the page is over the
-  relay's signalling budget).
+  command entitlement has lapsed: the relay holds the offer), `tryLater` (the page is over the
+  relay's signalling budget) and `updateStation` (below);
+- from either: `lanOnly` (below).
 
-The relay answers a page itself, without the station, in three cases
+The relay answers a page itself, without the station, in five cases
 (`roomToBrowserFromRelay`): the station never advertised the stream (`streamUnavailable`), the
-entitlement lapsed (`serviceAccessExpired`), and the budget (`tryLater`).
+entitlement lapsed (`serviceAccessExpired`), the budget (`tryLater`), and the two of a LAN-only
+session (`lanOnly`, `updateStation`).
+
+**A LAN-only session** is one admitted on a ticket of scope `lan`: Remote on the shack's own network,
+which stays free once an account's internet use has ended. The relay holds its stream to the LAN by
+inspection, never by editing (the offer and the answer are signed): every candidate either side
+names, trickled or as an `a=candidate:` line in an SDP, must be a `typ host` candidate on a private
+IPv4 address (RFC 1918) or an mDNS `.local` name. Anything else is not forwarded, and the page is
+told `lanOnly`. The relay adds `"lanOnly": true` to every `streamSignal` of such a session it hands
+the station, and only to a station that sent `x-nexus-stream-lan-version: 1`; such a station takes
+the offer on its LAN road (its own address only, no STUN, nothing tried or heard off its subnet) and
+refuses it `lanOnly` when it has no private network to hold it to. A page's LAN-only session to a
+station without that header is refused `updateStation`, and nothing is forwarded but a `close`.
 
 **`streamEnd`** (`roomToStationEnd`). When Remote access is switched off by hand mid-stream, the
 relay sends the station `streamEnd { sessionId, reason: "remoteOff" }` (operator decision,
