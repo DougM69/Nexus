@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callsign from Settings ▸ Station and one-way hashes of this computer's hardware and installation IDs; the IDs
   themselves never leave the computer. When the service refuses the approval for one of these reasons, Nexus at the
   shack says which one and what to do about it.
+- **Yaesu FT-1000 and FT-1000D in the rig list.** Both now appear in the default list beside the FT-1000MP and
+  use their own Hamlib driver (the FT-1000 driver is marked Beta by Hamlib). NEEDS-BENCH: an FT-1000 or FT-1000D on CAT.
 - **Nexus Remote: operate the shack from a second Windows PC with Nexus on it (Beta, test builds).** On your own
   network, choose **Operate from this computer** beside your shack in **Stations on this network**: the second PC shows
   the full Nexus screens for the shack's radio, plays its receive audio and sends your microphone, and Phone PTT, CW
@@ -92,6 +94,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Update the shack first, or both together. **Install anyway** works only once you tick the warning, and after
   **Leave** the update installs as usual. When the shack does refuse a different version, the banner now names both
   versions and says which side to update. NEEDS-BENCH: two PCs, one of them a version behind.
+- **FT-1000 and FT-1000D owners: clicking a spot tunes the radio.** With neither radio in the rig list, the nearest
+  choice was the FT-1000MP, and its driver reads these radios' frequency in the wrong format. Nexus sent the spot's
+  frequency, read back a wrong one and followed it, so the dial never settled on the spot. Choose FT-1000 or FT-1000D
+  in your radio settings instead of FT-1000MP. An FT-1000MP itself was not affected. NEEDS-BENCH: an FT-1000 or
+  FT-1000D on CAT, clicking a cluster spot.
 - **Nexus Remote: the shack's screen fits the browser window.** Ctrl (⌘ on a Mac) with +, − or 0, Ctrl with the
   scroll wheel and a trackpad pinch now zoom the browser page instead of going to the shack, and on a short or zoomed
   window the controls move to the side rail when that shows the shack's screen larger. Stop TX stays in view at every

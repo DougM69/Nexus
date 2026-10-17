@@ -495,6 +495,8 @@ const APP_DEFAULT_BAUD = 38400
  */
 export const RIG_FIXED_BAUD = new Map<number, number>([
   // Yaesu
+  [1002, 4800], // FT-1000
+  [1003, 4800], // FT-1000D
   [1004, 4800], // FT-1000MP Mark-V
   [1010, 4800], // FT-736R
   [1014, 4800], // FT-920
