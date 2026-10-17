@@ -491,4 +491,74 @@ mod tests {
         e.poll_remote_transmit(t0 + Duration::from_millis(110));
         assert!(!e.mic_armed(), "the press re-armed after a stop");
     }
+
+    /// ⛔ A KEYING PRESS STILL QUEUED FOR THE RADIO LOOP DOES NOT OUTLIVE A STAND-DOWN. The rig's
+    /// ATU tune-up and a voice-memory PLAY wait for the loop's next poll; a Stop TX, a presence
+    /// lapse, or the stand-down moving on its own (Remote's Stop on the link, a lease lost) taken
+    /// before that poll drops them, so re-arming TX at once keys nothing. The halt drops them by
+    /// value, and the drain refuses any pressed under an earlier stand-down. A voice-memory STOP
+    /// queued is never dropped: it stops a transmission. CONTROL: with TX armed again, every gate
+    /// the press asks passes, and a press made after the stand-down fires.
+    #[test]
+    fn a_stand_down_drops_a_queued_atu_press_and_a_voice_memory_play() {
+        use crate::engine::VoiceMemCmd;
+        for end in ["stop", "presence", "stand-down"] {
+            let (mut e, transmit, presence, t0) = attached();
+            e.set_license_class("extra");
+            e.set_frequency(14.290, "20m", "USB");
+            e.set_operating_mode("phone", false);
+            e.observe_rig_tuner(Some(true), true);
+            let mut at = t0;
+            let mut end_it = |e: &mut Engine| match end {
+                "stop" => e.halt_tx(),
+                "presence" => {
+                    assert!(e.hold_remote_presence(presence.permit(at + PRESENCE).unwrap(), at));
+                    at += PRESENCE + Duration::from_secs(1);
+                    assert!(e.poll_remote_transmit(at), "{end}: the lapse halts");
+                }
+                _ => transmit.revoke(),
+            };
+            e.atu_tune()
+                .expect("scene guard: the rig may run its tuner");
+            assert!(e.request_voice_mem(1));
+            end_it(&mut e);
+            if end != "stand-down" {
+                assert!(
+                    e.pending_atu_tune.is_none(),
+                    "{end}: the halt drops the ATU press"
+                );
+                assert_eq!(e.pending_voice_mem, None, "{end}: the halt drops the PLAY");
+            }
+            e.set_tx_enabled(true);
+            assert!(
+                e.atu_tune_gate().is_ok(),
+                "{end}: scene guard, every gate passes"
+            );
+            assert!(
+                !e.take_atu_tune(),
+                "{end}: the ATU press keyed after the stand-down"
+            );
+            assert_eq!(
+                e.take_voice_mem(),
+                None,
+                "{end}: the PLAY keyed after the stand-down"
+            );
+            e.request_voice_mem_stop();
+            end_it(&mut e);
+            assert_eq!(
+                e.take_voice_mem(),
+                Some(VoiceMemCmd::Stop),
+                "{end}: a STOP still goes out"
+            );
+            e.set_tx_enabled(true);
+            e.atu_tune().expect("CONTROL: a press after the stand-down");
+            assert!(e.take_atu_tune(), "{end}: CONTROL, it fires");
+            assert!(e.request_voice_mem(2));
+            assert_eq!(
+                e.take_voice_mem(),
+                Some(VoiceMemCmd::Play(2)),
+                "{end}: CONTROL"
+            );
+        }
+    }
 }

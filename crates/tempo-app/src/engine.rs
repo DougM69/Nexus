@@ -3378,6 +3378,9 @@ pub struct Engine {
     /// request simply replaces an unconsumed one — the newest ask wins, as everywhere else
     /// in the one-shot family.
     pending_voice_mem: Option<VoiceMemCmd>,
+    /// The transmit stand-down generation a voice-memory PLAY was asked under: the drain drops a
+    /// PLAY asked before the stand-down moved ([`Self::take_voice_mem`]).
+    pending_voice_mem_stand_down: u64,
     /// One-shot: a halt (Stop TX, a logger's HaltTx, the SWR cutoff; see [`Self::halt_tx`]) asks
     /// the radio loop to also tell the rig in hand to stop a voice memory it may be playing, after
     /// the unkey and the aborts. Nexus never keyed that transmission, so nothing else in the halt
@@ -3727,6 +3730,9 @@ pub struct Engine {
     /// was pressed. Drained by the radio loop via [`Self::take_atu_tune`], which RE-RUNS the TX
     /// gate and enforces [`ATU_REQUEST_MAX_AGE_SECS`] before anything keys.
     pending_atu_tune: Option<u64>,
+    /// The transmit stand-down generation the pending ATU press was made under: the drain drops a
+    /// press made before the stand-down moved ([`Self::take_atu_tune`]).
+    pending_atu_tune_stand_down: u64,
     /// Rig RX passband width (Hz) from the poll; `None` = unknown / rig default. Observed-only.
     rig_passband: Option<u32>,
     /// The radio's RECEIVE frequency ranges (Hz, inclusive), read once per CAT confirmation from
@@ -5810,6 +5816,7 @@ impl Engine {
             observed_split: None,
             split_dirty: false,
             pending_voice_mem: None,
+            pending_voice_mem_stand_down: 0,
             voice_mem_halt: false,
             rit_hz: 0,
             xit_hz: 0,
@@ -5893,6 +5900,7 @@ impl Engine {
             rig_tuner: None,
             rig_atu_start_tune: true,
             pending_atu_tune: None,
+            pending_atu_tune_stand_down: 0,
             rig_passband: None,
             pending_passband: None,
             pending_scope_span: None,
@@ -7171,12 +7179,11 @@ impl Engine {
         // routing, satellite routing, the coverage fallback, the operator's own radio button —
         // arrives here, so this one line covers all of them.
         self.halt_tx_for_context_change("radio handoff");
-        // …and the two keying presses `halt_tx` leaves queued, both pressed for the radio being
-        // LEFT. The loop drains them later, against whichever radio it then holds: the ATU press
-        // at the incoming radio's first heavy poll (still inside `ATU_REQUEST_MAX_AGE_SECS`, and
-        // Phone is re-armed just above), the voice-memory command on the next tick. The latter
-        // goes whole, a STOP too, since the radio that may be playing is the one being left and
-        // the loop would send the STOP to the incoming one.
+        // …and the two keying presses pressed for the radio being LEFT. The context halt above
+        // already dropped the ATU press and a voice-memory PLAY (a halt drops both); these two
+        // lines keep the switch's own drop explicit, and take a queued STOP as well, which a halt
+        // keeps: the radio that may be playing is the one being left, and the loop would send
+        // the STOP to the incoming one.
         self.pending_atu_tune = None;
         self.pending_voice_mem = None;
         // …and exactly like a QSY, take the queued split one-shot
@@ -9223,6 +9230,7 @@ impl Engine {
             return false;
         }
         self.pending_voice_mem = Some(VoiceMemCmd::Play(ch));
+        self.pending_voice_mem_stand_down = self.remote_transmit_stand_down.generation();
         true
     }
 
@@ -9231,9 +9239,24 @@ impl Engine {
         self.pending_voice_mem = Some(VoiceMemCmd::Stop);
     }
 
-    /// One-shot consume for the radio loop — `take_split_request`'s shape.
+    /// One-shot consume for the radio loop — `take_split_request`'s shape. ⛔ A PLAY asked before
+    /// the transmit stand-down moved (a Stop TX, a presence lapse, Remote's Stop, a lease lost) is
+    /// dropped, never played: Stop wins over a press the loop had not reached yet. A STOP always
+    /// goes out.
     pub fn take_voice_mem(&mut self) -> Option<VoiceMemCmd> {
-        self.pending_voice_mem.take()
+        match self.pending_voice_mem.take() {
+            Some(VoiceMemCmd::Play(_))
+                if self.pending_voice_mem_stand_down
+                    != self.remote_transmit_stand_down.generation() =>
+            {
+                tempo_core::applog::info(
+                    "tx",
+                    "voice memory not played: stopped since it was asked",
+                );
+                None
+            }
+            cmd => cmd,
+        }
     }
 
     /// Did a halt ask for a voice-memory stop since the loop last looked? One-shot; see
@@ -11234,6 +11257,7 @@ impl Engine {
     pub fn atu_tune(&mut self) -> Result<(), String> {
         self.atu_tune_gate()?;
         self.pending_atu_tune = Some(now_unix_secs());
+        self.pending_atu_tune_stand_down = self.remote_transmit_stand_down.generation();
         Ok(())
     }
 
@@ -11251,13 +11275,19 @@ impl Engine {
     ///    and still a transmission nobody asked for at that moment. An ATU tune-up is a
     ///    here-and-now act, not a standing order to key later.
     ///
+    /// ⛔ And a third: a press made before the transmit stand-down moved (a Stop TX, a presence
+    /// lapse, Remote's Stop, a lease lost) is dropped, so a Stop and a quick TX On inside the
+    /// freshness window never fire a tune-up pressed before the Stop. [`Self::halt_tx`] drops the
+    /// press as well; this catches a stand-down that moved without a halt here.
+    ///
     /// The stand-down belongs to [`Self::note_atu_tune_started`], not here: draining a press is
     /// not a tune-up (#322 / review R4).
     pub fn take_atu_tune(&mut self) -> bool {
         let Some(at) = self.pending_atu_tune.take() else {
             return false;
         };
-        now_unix_secs().saturating_sub(at) <= ATU_REQUEST_MAX_AGE_SECS
+        self.pending_atu_tune_stand_down == self.remote_transmit_stand_down.generation()
+            && now_unix_secs().saturating_sub(at) <= ATU_REQUEST_MAX_AGE_SECS
             && self.atu_tune_gate().is_ok()
     }
 
@@ -16769,6 +16799,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // …and a voice memory the RIG may be playing on its own: Nexus never keyed it, so only
         // a stop of its own reaches it. The loop sends that after the unkey and the aborts.
         self.voice_mem_halt = true;
+        // ⛔ The two keying presses still queued for the loop go too, or a TX On inside their
+        // window would fire one pressed before the Stop: the rig's ATU tune-up, and a voice-memory
+        // PLAY. A queued voice-memory STOP stays: it stops a transmission.
+        self.pending_atu_tune = None;
+        if matches!(self.pending_voice_mem, Some(VoiceMemCmd::Play(_))) {
+            self.pending_voice_mem = None;
+        }
         self.tx_queue.clear();
         self.broadcast_queue.clear();
         // JS8: outbox, pending autoreply and HB schedule go too — halt is total (spec
