@@ -1889,6 +1889,10 @@ export const EN = {
     'Dupe: {{call}} is already in this position\'s log in {{mode}} — this contest counts a station once per mode, any band',
   'logEntry.fd.dupe.ownAnyBandOrMode':
     'Dupe: {{call}} is already in this position\'s log — this contest counts a station once, regardless of band or mode',
+  'logEntry.fd.dupe.badge': 'DUPE',
+  'logEntry.fd.dupe.workedAt': '{{time}} {{band}} {{mode}}',
+  'logEntry.fd.dupe.workedOn': '{{band}} {{mode}}',
+  'logEntry.fd.loggedDupe': 'Logged {{call}} {{exchange}} ({{mode}}) as a DUPE: worked before, it scores no points',
   'logEntry.fd.dupe.club': 'Club dupe: another position already worked {{call}} on {{band}} {{mode}} — logging is allowed but adds no points',
   'logEntry.fd.needField': 'Enter their {{field}} to log.',
   'logEntry.fd.badField': '{{field}} "{{value}}" isn\'t a known value — required to log.',

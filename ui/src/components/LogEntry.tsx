@@ -43,7 +43,7 @@ import { applyFill, EMPTY_FILL, historyFill, typedIn, type FillState } from '../
 import { fdFieldOk, fdSlotValue, fdVerdict, receivedCaption, slotCaption, slotExample, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
 import { contestUnsavedText } from '../features/contestUnsaved'
-import { contestDupe, type ContestDupeVerdict } from '../features/contestDupe'
+import { contestDupe, contestDupeRow, type ContestDupeVerdict } from '../features/contestDupe'
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
 import { askForOperatorBox, isOperatorBoxKey, isWipeKey } from '../features/contestKeys'
 import { isEditKey } from '../features/contestEdit'
@@ -90,6 +90,13 @@ const FD_RECEIVES_FALLBACK: ContestFieldSpec[] = [
  *  INVARIANT TOKEN; its caption is PROSE. A RECEIVED box is captioned by what it holds for this
  *  station's role (`receivedCaption`), as the contest log table and the edit caption it. */
 const fdFieldLabel = slotCaption
+
+/** A row's UTC time as HH:MM, the DUPE badge's "when". Digits only: an invariant token. */
+function utcHhMm(whenUnix: number): string {
+  const d = new Date(whenUnix * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`
+}
 
 /** One received value off a logged DTO row, by slot id.
  *
@@ -1970,15 +1977,21 @@ export function LogEntry({
         // The toast names what was copied, in receive order, whatever the slots are —
         // it read `class`/`section` off two named locals, which for CQP would have
         // announced a serial as a Field Day class.
-        pushToast(
-          t('logEntry.fd.logged', {
-            call,
-            // A blank optional slot (a DX station's QTH) is not a word in the toast.
-            exchange: ex.map(([, v]) => v).filter((v) => v !== '').join(' '),
-            mode: fmode,
-          }),
-          'success',
-        )
+        // A blank optional slot (a DX station's QTH) is not a word in the toast.
+        const exchangeWords = ex.map(([, v]) => v).filter((v) => v !== '').join(' ')
+        // ⭐ A DUPE IS LOGGED, MARKED AND SCORES ZERO in every shipped contest, so the press
+        // answers like any other — and said "Logged" exactly as for a new contact. The engine's
+        // own mark on the row it just wrote (the newest row for this call) says which it was.
+        const rows = r.fieldDay?.log ?? []
+        let newest: FieldDayQso | undefined
+        for (let i = rows.length - 1; i >= 0 && newest === undefined; i--) {
+          if (sameCall(rows[i].call, call)) newest = rows[i]
+        }
+        if (newest?.dupe) {
+          pushToast(t('logEntry.fd.loggedDupe', { call, exchange: exchangeWords, mode: fmode }), 'info')
+        } else {
+          pushToast(t('logEntry.fd.logged', { call, exchange: exchangeWords, mode: fmode }), 'success')
+        }
         if (entry) share.logged()
         fdSeenLen.current = Math.max(fdSeenLen.current, seenAtLog + 1)
         endFill(true)
@@ -2232,6 +2245,34 @@ export function LogEntry({
           : 'none'
   const fdOwnDupe = fdDupe === 'own'
   const fdClubDupe = fdDupe === 'club'
+  // ⭐ THE DUPE BADGE'S "WHEN" — the row the same check matched, so it names the contact that
+  // makes this one a dupe: under a rule that ignores band or mode, the row's own band and mode,
+  // never the dial's. A county line is an own dupe only when every county is one; its first
+  // county's row stands for the line.
+  const fdDupeRow = !fdOwnDupe
+    ? undefined
+    : fdLineDupes === undefined
+      ? contestDupeRow(fieldDay, fdTypedCall, snap.radio.band, fdModeClass, {
+          rx: fdRx,
+          tx: (slot) => composingSlot(fieldDay?.composing, slot),
+        })
+      : contestDupeRow(fieldDay, fdTypedCall, snap.radio.band, fdModeClass, {
+          rx: (slot) => (slot === fdLineBox!.key ? fdLineOwn[0] : fdRx(slot)),
+          tx: (slot) => composingSlot(fieldDay?.composing, slot),
+        })
+  const fdDupeWorked =
+    fdDupeRow === undefined
+      ? ''
+      : fdDupeRow.whenUnix
+        ? t('logEntry.fd.dupe.workedAt', {
+            time: utcHhMm(fdDupeRow.whenUnix),
+            band: fdDupeRow.band,
+            mode: fdDupeRow.submode || fdDupeRow.mode || '',
+          })
+        : t('logEntry.fd.dupe.workedOn', {
+            band: fdDupeRow.band,
+            mode: fdDupeRow.submode || fdDupeRow.mode || '',
+          })
   // ⭐ WHICH COMPONENTS THE OWN-DUPE SENTENCE MAY NAME — the same two flags `contestDupe` just
   // applied. It has always keyed on exactly what the rule names; the sentence did not, and
   // naming the rig's CURRENT band and mode under a rule that ignores them points the operator
@@ -2581,10 +2622,23 @@ export function LogEntry({
         ) : (
         <div className="le-fd-big">
           <label className="le-fd-field le-fd-field-call">
-            <span className="le-fd-cap">{t('logEntry.fd.call.label')}</span>
+            {/* ⭐ THE DUPE BADGE rides the Call caption's own line, so it adds no height and sits
+                nowhere near Stop or the ESM switch. The live region is always there, empty for a
+                new call, so a screen reader hears it fill. */}
+            <span className="le-fd-cap le-fd-cap-marked">
+              <span className="le-fd-cap-text">{t('logEntry.fd.call.label')}</span>
+              <span className="le-fd-dupe" aria-live="polite" title={fdDupeWorked || undefined}>
+                {fdDupeRow !== undefined && (
+                  <>
+                    <span className="le-fd-dupe-word">{t('logEntry.fd.dupe.badge')}</span>{' '}
+                    {fdDupeWorked}
+                  </>
+                )}
+              </span>
+            </span>
             <input
               ref={callInputRef}
-              className="settings-input mono le-fd-input le-fd-input-call"
+              className={`settings-input mono le-fd-input le-fd-input-call${fdDupeRow !== undefined ? ' le-fd-input-dupe' : ''}`}
               value={logCall}
               // SPACES ARE DROPPED, not kept: no callsign contains one, and the space bar is
               // the phone position's push-to-talk. An operator who reaches for it out of habit

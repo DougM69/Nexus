@@ -13457,6 +13457,33 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--accent);
   font-style: italic;
 }
+/* ⭐ THE DUPE BADGE (LogEntry): on the Call caption's line, in `.le-fd-cap-marked`'s zero-width
+   row, so it never widens the field or adds height; what does not fit is clipped (the whole
+   reading is its title). The word is a filled chip, the "when" beside it in the same colour.
+   The Call box itself goes the same colour, focus included (`.settings-input:focus` would
+   otherwise repaint the border the moment the operator types). Tokens only, both themes. */
+.le-fd-dupe {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--state-bad);
+}
+.le-fd-dupe-word {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--state-bad);
+  color: var(--accent-ink);
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+.settings-input.le-fd-input-dupe,
+.settings-input.le-fd-input-dupe:focus {
+  border-color: var(--state-bad);
+  background: color-mix(in srgb, var(--state-bad) 14%, var(--bg));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--state-bad) 35%, transparent);
+}
 
 /* THE CLUB BOARD'S BAND × MODE GRID (ContestView.tsx `ClubBandModeGrid`): who is on which band and
    mode, above the board's table. The contest's bands across, its mode classes down, each position's
