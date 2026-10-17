@@ -86,7 +86,9 @@ fn set_up_at_the_shack(e: &mut tempo_app::engine::Engine, over: &str) {
         e.halt_tx();
     }
     e.set_tx_enabled(false);
+    // The latch going down arms the aborts; taken, so an end must arm them again.
     e.take_slot_tx_abort();
+    e.take_sstv_abort();
 }
 
 /// The slot now, as the shack counts its four-second chat slots.

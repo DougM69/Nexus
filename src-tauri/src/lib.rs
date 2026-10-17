@@ -50560,10 +50560,10 @@ mod tests {
             let ran = ask(cmd, with(args.clone(), Some(now)));
             assert_ne!(ran, stopped, "{cmd} under the stand-down as it stands");
             if cmd == "resend_chat" {
-                assert_eq!(
-                    ran,
-                    Err("no resendable message for W1AW".to_string()),
-                    "CONTROL: it ran"
+                // It ran: re-queued a message that had failed, or said there was none.
+                assert!(
+                    ran.is_ok() || ran == Err("no resendable message for W1AW".to_string()),
+                    "CONTROL: it ran: {ran:?}"
                 );
             } else {
                 assert!(
