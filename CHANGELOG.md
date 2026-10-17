@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   these, the message now reads "Nexus could not set ATT.", "Nexus could not set PRE." or "Nexus could not set the
   monitor level." instead of a Remote sentence about station control permission.
 
+### Security
+- **The in-app updater no longer carries the `zip` library**, which three new advisories (RUSTSEC-2026-0367, -0368 and
+  -0369) cover. Nexus's updates are installers, not zip files, so the advisories' code was never used; it is now not
+  built in at all.
+
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
   your browser; the watch-and-control workspace it replaced is gone from the page.
