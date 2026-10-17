@@ -7049,12 +7049,12 @@ export const EN = {
     'This controller runs at {{rate}} baud — the rate its Hamlib backend declares. Leave it here.',
   'settings.rotator.baud.hint.wrong':
     '<b>This controller runs at {{rate}} baud, not {{set}}</b> — at the wrong rate it never answers and reads as broken hardware. Set {{rate}}, or re-pick the model above to fill it in.',
-  // In place of the baud hint when the model is PstRotatorAz (Hamlib model 3). `{{address}}`,
-  // `{{sent}}` and `{{bearing}}` are invariant tokens the panel supplies: where PstRotatorAz
-  // listens, and what Hamlib's backend for it sends for a bearing. UDP Control and Setup are names
+  // In place of the baud hint when the model is PstRotatorAz (model 3). `{{address}}` and
+  // `{{reply}}` are invariant tokens the panel supplies: where PstRotatorAz listens, and the UDP
+  // port its replies come back on (its port + 1). UDP Control, UDP Control Port and Setup are names
   // in PstRotatorAz's own English window.
   'settings.rotator.port.hint.pstRotator':
-    'PstRotatorAz: enter {{address}} as the port, and turn on UDP Control in its Setup (the baud is not used). Its Hamlib backend can garble the bearing it sends — {{sent}} for {{bearing}}° — so PstRotatorAz may not turn to it.',
+    'PstRotatorAz: enter {{address}} as the port (its UDP Control Port), and turn on UDP Control in its Setup (the baud is not used). Nexus listens for its replies on that port + 1, {{reply}}, so no other program may use it.',
   'settings.rotator.external.label': 'External rotctld (advanced)',
   // `{{example}}` is a host:port the panel supplies as an invariant token.
   'settings.rotator.external.placeholder': 'host:port — e.g. {{example}}',

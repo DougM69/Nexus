@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **PstRotatorAz: Nexus now talks to it directly.** The rotator picker's **PstRotatorAz / PstRotator (UDP)**
+  entry no longer goes through Hamlib's PstRotator backend, which sent every bearing garbled (90° went out as
+  `90.000000.2`) and could not stop the rotor. Nexus now sends PstRotatorAz the commands its own manual documents,
+  so pointing at a call or a bearing, STOP and the compass all work. STOP is sent twice, because UDP has no
+  acknowledgement. When PstRotatorAz does not answer, the compass shows "—" instead of the target or 0°. Nexus
+  listens for PstRotatorAz's replies on its UDP Control Port + 1 (12001 by default); if another program holds that
+  port, the Connections log names it and says how to move PstRotatorAz to another port. A station already set up
+  with this entry keeps its settings. Nobody has tried this against a real PstRotatorAz yet (NEEDS-BENCH).
 - **Nexus Remote: on the shack's own network, Remote stays free.** When an account's internet use has ended, Stream
   and Listen still work from a browser already approved for the station, as long as that device is on the same
   network as the shack. The stream is held to that network at both ends and never goes through the relay. A shack

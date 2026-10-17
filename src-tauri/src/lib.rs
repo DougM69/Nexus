@@ -15168,10 +15168,58 @@ async fn probe_cat_ports(
 /// settings change respawns only when something changed.
 type RotctldParams = (u32, String, u32, u16);
 
+/// The integrated rotator daemon: Hamlib's rotctld, or, for PstRotatorAz, Nexus's own UDP link,
+/// which answers the same rotctld protocol on the same loopback port, so every rotator command
+/// in Nexus reaches either one unchanged.
+enum RotDaemon {
+    Hamlib(tempo_audio::rigctld_proc::RigctldProc),
+    PstRotator(tempo_audio::pstrotator::PstRotatorLink),
+}
+
+impl RotDaemon {
+    fn is_alive(&mut self) -> bool {
+        match self {
+            RotDaemon::Hamlib(proc) => proc.is_alive(),
+            RotDaemon::PstRotator(link) => link.is_alive(),
+        }
+    }
+
+    /// What the daemon printed about itself. The link has no stderr: its start failures are
+    /// the `Err` it returns.
+    fn said(&self) -> Vec<String> {
+        match self {
+            RotDaemon::Hamlib(proc) => proc.said(),
+            RotDaemon::PstRotator(_) => Vec::new(),
+        }
+    }
+}
+
+impl From<tempo_audio::rigctld_proc::RigctldProc> for RotDaemon {
+    fn from(proc: tempo_audio::rigctld_proc::RigctldProc) -> Self {
+        RotDaemon::Hamlib(proc)
+    }
+}
+
+/// Start the integrated rotator daemon for `model`. PstRotatorAz's entry (model 3) keeps its
+/// number, so a station set up before the native link gets it with no change; Hamlib's backend
+/// for it is never run (`tempo_audio::pstrotator` says why). Every other model is Hamlib's.
+fn spawn_rotator_daemon(
+    model: u32,
+    port: &str,
+    baud: u32,
+    tcp_port: u16,
+) -> std::io::Result<RotDaemon> {
+    if model == tempo_audio::pstrotator::MODEL {
+        tempo_audio::pstrotator::PstRotatorLink::start(port, tcp_port).map(RotDaemon::PstRotator)
+    } else {
+        tempo_audio::rigctld_proc::spawn_rotctld(model, port, baud, tcp_port).map(RotDaemon::Hamlib)
+    }
+}
+
 /// The integrated rotctld, and what its supervisor remembers between reconciles.
 struct RotctldOwner {
     /// The running daemon and the params it was spawned with.
-    daemon: Option<(tempo_audio::rigctld_proc::RigctldProc, RotctldParams)>,
+    daemon: Option<(RotDaemon, RotctldParams)>,
     /// The params whose start failed and was REPORTED on the Connections log — one line per
     /// episode, however many times [`rotctld_tick`] tries again. Cleared when a daemon comes up
     /// or the rotator is unconfigured; a change of params is a new episode.
@@ -15294,7 +15342,7 @@ fn supervise_rotctld(engine: SharedEngine) {
                 &ROTCTLD,
                 || engine_lock(&engine).settings().clone(),
                 |owner, settings| {
-                    rotctld_tick(owner, &settings, tempo_audio::rigctld_proc::spawn_rotctld);
+                    rotctld_tick(owner, &settings, spawn_rotator_daemon);
                 },
             );
         });
@@ -15315,7 +15363,7 @@ fn supervise_rotctld(engine: SharedEngine) {
 fn rotctld_tick(
     owner: &mut RotctldOwner,
     st: &Settings,
-    spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<tempo_audio::rigctld_proc::RigctldProc>,
+    spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<RotDaemon>,
 ) -> Option<RotctldSync> {
     let want = st.rotator_host.trim().is_empty() && st.rotator_model > 0;
     let running = owner
@@ -15326,14 +15374,14 @@ fn rotctld_tick(
 }
 
 fn sync_rotctld_owned(owner: &mut RotctldOwner, st: &Settings) -> RotctldSync {
-    reconcile_rotctld(owner, st, tempo_audio::rigctld_proc::spawn_rotctld)
+    reconcile_rotctld(owner, st, spawn_rotator_daemon)
 }
 
 /// The reconcile itself, with the spawn handed in so a test can count its attempts.
 fn reconcile_rotctld(
     owner: &mut RotctldOwner,
     st: &Settings,
-    spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<tempo_audio::rigctld_proc::RigctldProc>,
+    spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<RotDaemon>,
 ) -> RotctldSync {
     let want = st.rotator_host.trim().is_empty() && st.rotator_model > 0;
     let params = (
@@ -15380,16 +15428,24 @@ fn reconcile_rotctld(
                         std::thread::sleep(std::time::Duration::from_millis(25));
                     }
                     if proc.is_alive() {
-                        conn_log(
-                            "Rotator",
-                            "info",
+                        let what = if let RotDaemon::PstRotator(_) = proc {
+                            format!(
+                                "PstRotatorAz link up (UDP to {}, rotctld :{port})",
+                                if params.1.is_empty() {
+                                    tempo_audio::pstrotator::DEFAULT_TARGET
+                                } else {
+                                    &params.1
+                                }
+                            )
+                        } else {
                             format!(
                                 "rotctld launched (model {} on {} @ {}, :{port})",
                                 params.0,
                                 if params.1.is_empty() { "-" } else { &params.1 },
                                 params.2
-                            ),
-                        );
+                            )
+                        };
+                        conn_log("Rotator", "info", what);
                         *slot = Some((proc, params));
                         owner.failing = None;
                         RotctldSync::Started
@@ -15425,6 +15481,24 @@ fn reconcile_rotctld(
                         owner.failing = Some(params);
                         RotctldSync::StartFailed { reported: report }
                     }
+                }
+                // The PstRotatorAz link's own words: an address that is not host:port, or a
+                // port another program holds, with the way out. It is not Hamlib, so the
+                // "Hamlib is missing" composer below would name the wrong cure.
+                Err(e) if params.0 == tempo_audio::pstrotator::MODEL => {
+                    if report {
+                        conn_log(
+                            "Rotator",
+                            "error",
+                            format!(
+                                "the PstRotatorAz link could not start: {e}. Nexus keeps trying \
+                                 every {} s.",
+                                ROTCTLD_RETRY.as_secs()
+                            ),
+                        );
+                    }
+                    owner.failing = Some(params);
+                    RotctldSync::StartFailed { reported: report }
                 }
                 Err(e) => {
                     // The shared per-platform composer, not a raw `{e}`: a Mac without
@@ -15537,7 +15611,7 @@ mod rotctld_supervisor_tests {
         let tries = Cell::new(0u32);
         let spawn = |m: u32, p: &str, b: u32, t: u16| {
             tries.set(tries.get() + 1);
-            tempo_audio::rigctld_proc::spawn_rotctld(m, p, b, t)
+            tempo_audio::rigctld_proc::spawn_rotctld(m, p, b, t).map(RotDaemon::from)
         };
 
         // Launch with the controller off: the start fails and the Connections log says so.
@@ -15581,7 +15655,7 @@ mod rotctld_supervisor_tests {
         let tries = Cell::new(0u32);
         let spawn = |m: u32, p: &str, b: u32, t: u16| {
             tries.set(tries.get() + 1);
-            tempo_audio::rigctld_proc::spawn_rotctld(m, p, b, t)
+            tempo_audio::rigctld_proc::spawn_rotctld(m, p, b, t).map(RotDaemon::from)
         };
         assert_eq!(
             reconcile_rotctld(&mut owner, &station(port, 1), spawn),
@@ -15629,6 +15703,61 @@ mod rotctld_supervisor_tests {
         let silent =
             std::io::Error::new(std::io::ErrorKind::TimedOut, "the rotator did not answer");
         assert_eq!(rotator_error(silent, ""), "the rotator did not answer");
+    }
+
+    /// PstRotatorAz (model 3) runs Nexus's own UDP link, not Hamlib's backend in a rotctld, on
+    /// the settings a station already has: the model and the address in the port box. A reply
+    /// port another program holds is a start failure the Connections log names, and the link
+    /// comes up on its own once the port is free.
+    #[test]
+    fn pstrotatoraz_gets_the_native_link_and_a_taken_reply_port_is_named() {
+        // A fake PstRotatorAz, and the port it replies on (its own + 1) held by "a logger".
+        let (pst, control, held) = (0..50)
+            .find_map(|_| {
+                let pst = std::net::UdpSocket::bind("127.0.0.1:0").ok()?;
+                let control = pst.local_addr().ok()?.port();
+                let held = std::net::UdpSocket::bind(("0.0.0.0", control + 1)).ok()?;
+                Some((pst, control, held))
+            })
+            .expect("a free UDP port pair");
+        let free = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = free.local_addr().expect("its port").port();
+        drop(free);
+        let mut st = station(port, 3);
+        st.rotator_port = format!("127.0.0.1:{control}");
+        let mut owner = owner();
+
+        assert_eq!(
+            sync_rotctld_owned(&mut owner, &st),
+            RotctldSync::StartFailed { reported: true }
+        );
+        let said = format!("UDP port {} is already in use", control + 1);
+        assert!(
+            get_connection_log().iter().any(|e| e.connector == "Rotator"
+                && e.message
+                    .starts_with("the PstRotatorAz link could not start")
+                && e.message.contains(&said)),
+            "the Connections log names the taken reply port, and not as a Hamlib problem"
+        );
+
+        // The other program lets go: same settings, and the link is up.
+        drop(held);
+        assert_eq!(sync_rotctld_owned(&mut owner, &st), RotctldSync::Started);
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 256];
+            while let Ok((n, _)) = pst.recv_from(&mut buf) {
+                if &buf[..n] == b"<PST>AZ?</PST>" {
+                    let _ = pst.send_to(b"AZ:42\r", ("127.0.0.1", control + 1));
+                }
+            }
+        });
+        let addr = effective_rotator_addr(&st).expect("a rotator");
+        assert_eq!(addr, format!("127.0.0.1:{port}"));
+        assert_eq!(tempo_audio::rotator::read_azimuth(&addr), Some(42.0));
+        let limits = tempo_audio::rotator::read_limits(&addr)
+            .expect("answered")
+            .expect("declared");
+        assert_eq!(limits.elevation(), None, "azimuth only");
     }
 
     #[test]

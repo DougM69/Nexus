@@ -693,9 +693,8 @@ right.*
   so the hint under the field names your model's rate and says plainly when the
   saved value cannot work. For **PstRotatorAz** the port is its UDP address,
   `127.0.0.1:12000` on the same PC, and the baud does not matter. Turn on UDP
-  Control in PstRotatorAz's Setup. The hint there also warns that Hamlib's backend
-  for it writes the bearing it sends oddly (123.4° goes out as `123.400002.2`), so
-  PstRotatorAz may not turn to it.
+  Control in PstRotatorAz's Setup. Nexus talks to PstRotatorAz itself and listens
+  for its replies on that port + 1 (12001), so no other program may use that port.
 - **External rotctld (advanced)** — a `host:port` for a rotctld you run yourself,
   or one on another machine. It OVERRIDES the model and port above and stops the
   integrated daemon. It needs the port: a bare host name is not an address.
