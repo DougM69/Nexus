@@ -268,6 +268,7 @@ export const DE: PartialCatalog = {
   "remote.nativeRevoked": "Der Zugang dieser Station wurde über einen Browser entzogen, daher verbindet sie sich nicht mehr. Hier ist nichts kaputt — koppele sie unten erneut, wenn du sie zurück willst.",
   "remote.nativeTrialEnded": "Dein Remote-Test ist abgelaufen, daher konnte diese Station nicht zum Konto hinzugefügt werden. Funkgerät, Log und Einstellungen bleiben unberührt.",
   "remote.nativeTrialDisabled": "Der Remote-Zugang für dieses Konto wurde abgeschaltet, daher konnte diese Station nicht hinzugefügt werden. Das ist nicht dasselbe wie ein abgelaufener Test. Funkgerät, Log und Einstellungen bleiben unberührt.",
+  "remote.nativeTrialActiveElsewhere": "Für diese E-Mail-Adresse läuft schon eine Remote-Testphase unter einer anderen Anmeldung, zum Beispiel Google statt Passwort, daher konnte diese Station nicht hinzugefügt werden. Melde dich im Browser ab, dann so an wie beim ersten Mal, und kopple diese Station erneut. Funkgerät, Log und Einstellungen bleiben unberührt.",
   "remote.stationName": "Stationsname",
   "remote.renameStation": "Umbenennen",
   "remote.saveName": "Namen speichern",

@@ -2922,6 +2922,22 @@ async fn a_closed_service_is_named_on_http_and_on_the_station_socket() {
     assert_eq!(status.error, Some("serviceMoved"));
 }
 
+/// Approval refused because the same mailbox already has a trial running under another sign-in. Unnamed,
+/// the 403 read as `accessDenied` and the shack told the operator access was denied, which says nothing
+/// about the sign-in that needs changing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_trial_running_under_another_sign_in_is_named_at_the_shack() {
+    let origin = refusing_cloud("403 Forbidden", r#"{"error":"trialActiveElsewhere"}"#).await;
+    let client = Client::new(&origin).unwrap();
+    assert_eq!(
+        client
+            .post("enroll/approve", None, json!({ "id": "pairing" }))
+            .await
+            .err(),
+        Some("trialActiveElsewhere")
+    );
+}
+
 /// Answers every request, HTTP or WebSocket upgrade, with one fixed status and JSON body.
 async fn refusing_cloud(status: &'static str, body: &'static str) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

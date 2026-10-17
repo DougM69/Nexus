@@ -412,6 +412,8 @@ it('tells an operator to confirm in the browser when they approve at the shack f
 it.each([
   ['trialEnded', /trial has ended/i, /switched off/i],
   ['trialDisabled', /switched off/i, /trial has ended/i],
+  // The same mailbox already has a trial under another sign-in: it used to read as access denied.
+  ['trialActiveElsewhere', /different sign-in/i, /trial has ended/i],
 ] as const)('tells the operator at the shack which refusal %s is', async (code, says, doesNotSay) => {
   const status: RemoteStationStatus = { phase: 'approval', origin: 'https://remote-staging.hamradiotools.io',
     stationId: null, accountId: crypto.randomUUID(), pairingId: crypto.randomUUID(),

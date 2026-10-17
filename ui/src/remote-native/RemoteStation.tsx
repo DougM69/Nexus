@@ -91,6 +91,9 @@ export function RemoteStation() {
       // need different next steps: an ended trial is not an account that was switched off.
       : issue === 'trialEnded' ? t('remote.nativeTrialEnded')
       : issue === 'trialDisabled' ? t('remote.nativeTrialDisabled')
+      // Approval refused because this mailbox already has a trial under another sign-in. It used to
+      // read as access denied, which does not say that the sign-in is what needs changing.
+      : issue === 'trialActiveElsewhere' ? t('remote.nativeTrialActiveElsewhere')
       // Approving at the shack before the browser agreed to attach the station. Falling through to
       // requestFailed would point an operator standing at the radio at their network.
       : issue === 'awaitingConfirmation' ? t('remote.nativeAwaitingConfirmation')

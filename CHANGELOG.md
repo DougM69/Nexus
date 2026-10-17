@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Phone screen: a refused ATT, PRE or monitor-level change says what failed.** When the radio does not take one of
   these, the message now reads "Nexus could not set ATT.", "Nexus could not set PRE." or "Nexus could not set the
   monitor level." instead of a Remote sentence about station control permission.
+- **Nexus Remote: pairing a station while a trial already runs under another sign-in says so at the shack.** It
+  used to say access was denied. It now says the email address already has a trial under a different sign-in (Google
+  instead of a password, for example) and that signing in the first way, then pairing again, adds the station.
 
 ### Security
 - **The in-app updater no longer carries the `zip` library**, which three new advisories (RUSTSEC-2026-0367, -0368 and

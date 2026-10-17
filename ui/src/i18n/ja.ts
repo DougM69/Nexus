@@ -273,6 +273,7 @@ export const JA: PartialCatalog = {
   "remote.nativeRevoked": "この局のアクセスはブラウザーから取り消されたため、接続を停止しました。ここに異常はありません。必要になったら下から再度ペアリングしてください。",
   "remote.nativeTrialEnded": "Remote の試用期間が終了しているため、この局をアカウントに追加できませんでした。無線機、ログ、設定はそのままです。",
   "remote.nativeTrialDisabled": "このアカウントの Remote アクセスは停止されているため、この局を追加できませんでした。試用期間の満了とは別です。無線機、ログ、設定はそのままです。",
+  "remote.nativeTrialActiveElsewhere": "このメールアドレスでは、別のサインイン方法（パスワードではなく Google など）で Remote の試用がすでに進行中のため、この局を追加できませんでした。ブラウザーでサインアウトし、最初と同じ方法でサインインしてから、この局をもう一度ペアリングしてください。無線機、ログ、設定はそのままです。",
   "remote.stationName": "局の名前",
   "remote.renameStation": "名前を変更",
   "remote.saveName": "名前を保存",

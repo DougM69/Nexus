@@ -283,6 +283,7 @@ export const ES: PartialCatalog = {
   "remote.nativeRevoked": "El acceso de esta estación se revocó desde un navegador, por eso ha dejado de conectarse. Aquí no hay nada roto: vuelve a vincularla abajo cuando quieras recuperarla.",
   "remote.nativeTrialEnded": "Tu periodo de prueba de Remote ha terminado, por eso no se pudo añadir esta estación a la cuenta. Tu equipo, tu log y tus ajustes están intactos.",
   "remote.nativeTrialDisabled": "El acceso a Remote de esta cuenta ha sido desactivado, por eso no se pudo añadir esta estación. No es lo mismo que el fin del periodo de prueba. Tu equipo, tu log y tus ajustes están intactos.",
+  "remote.nativeTrialActiveElsewhere": "Este correo ya tiene una prueba de Remote en marcha con otro inicio de sesión, por ejemplo Google en lugar de contraseña, por eso no se pudo añadir esta estación. En tu navegador, cierra sesión, inicia sesión como lo hiciste la primera vez y vuelve a vincular esta estación. Tu equipo, tu log y tus ajustes están intactos.",
   "remote.stationName": "Nombre de la estación",
   "remote.renameStation": "Renombrar",
   "remote.saveName": "Guardar nombre",
