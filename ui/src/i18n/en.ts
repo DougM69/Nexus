@@ -7015,6 +7015,16 @@ export const EN = {
   'settings.amplifier.port.label': 'Amplifier port',
   'settings.amplifier.port.hint':
     'Its own port, not the one CAT uses — a serial port can only be open once, so sharing it stops the radio connecting. The speed is worked out for you.',
+  'settings.amplifier.link.label': 'Connection',
+  'settings.amplifier.link.serial': 'USB or serial port',
+  'settings.amplifier.link.network': 'Network (KPA1500)',
+  'settings.amplifier.link.hint':
+    'A KPA1500 on your network can be reached by its IP address instead of a cable. The KPA500 has no network port.',
+  'settings.amplifier.host.label': 'Amplifier IP address',
+  'settings.amplifier.host.hint':
+    'Shown on the KPA1500\u2019s NET IP ADDRESS menu. Nexus talks to the amplifier\u2019s UDP server, which any number of programs can use at once, so Elecraft\u2019s KPA1500 Remote can stay connected beside it.',
+  'settings.amplifier.netPort.label': 'Port',
+  'settings.amplifier.netPort.hint': '1500 unless you changed the amplifier\u2019s command port.',
 
   // ── Settings ▸ Radio ▸ Rotator ──────────────────────────────────────────────────────
   // ⚠️ NOT HERE, and none of it may move: the ROTATOR MODEL NAMES and their Hamlib model

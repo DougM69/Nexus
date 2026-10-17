@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
   seconds of that PC dropping, as a transmission does; a track started at the shack runs on. NEEDS-BENCH.
+- **Elecraft KPA1500 over the network.** In Settings ▸ Radio ▸ Amplifier, a KPA1500 can now be reached by its IP
+  address instead of a USB cable: pick **Network (KPA1500)** under Connection and type the address from the
+  amplifier's NET IP ADDRESS menu (port 1500). Nexus uses the amplifier's UDP server, which any number of programs can
+  share, so Elecraft's KPA1500 Remote keeps working alongside. Readings, Operate/Standby and the band buttons work as
+  they do over USB, with the same refusals while you transmit; an amplifier that stops answering shows "Not
+  answering". NEEDS-BENCH: a KPA1500 on the LAN with KPA1500 Remote connected at the same time; readings, Operate,
+  Standby and a band step from Nexus; then unplug its network cable and plug it back in.
 
 ### Changed
 - **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each

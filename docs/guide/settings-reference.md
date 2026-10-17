@@ -774,6 +774,16 @@ commands the amplifier except Follow the radio's band".
   it is spoken to, and the KPA remembers its own rate, so Nexus finds it by asking
   at each of the rates Elecraft documents: the KPA500's four (4800 to 38400), then
   the KPA1500's three faster ones (57600, 115200 and 230400).
+- **Connection** (KPA only) — **USB or serial port**, or **Network (KPA1500)**.
+  A KPA1500 on your network is reached at its **Amplifier IP address** (shown on
+  its NET IP ADDRESS menu) and **Port**, 1500 unless you changed the amplifier's
+  command port. Nexus uses the KPA1500's UDP command server, which any number of
+  programs can share, so Elecraft's KPA1500 Remote keeps working alongside; the
+  single TCP connection the amplifier allows is left for it. The readings and the
+  three controls are the same as over USB, and so is every refusal: nothing is
+  sent to the amplifier while you transmit. A reading that does not come back is
+  asked for once more, then the pane says **Not answering**. The KPA500 has no
+  network port.
 
 - **Follow the radio's band** — step the amplifier to whatever band you tune to,
   without being asked. **Off unless you turn it on**, and appears only once a model

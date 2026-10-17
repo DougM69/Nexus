@@ -253,6 +253,7 @@ import { ARRL_SECTIONS_BY_DIVISION, RETIRED_SECTIONS } from '../features/arrlSec
 // end there (mac QA audit, 2026-08-17). The check moved to the shared platform module when
 // the modifier-chord labels needed it too.
 import { IS_MAC, IS_WINDOWS } from '../platform'
+import { ampPortIsNetwork, joinAmpAddress, KPA_NET_PORT, splitAmpAddress } from '../settings/ampAddress'
 
 interface Props {
   /** The live contest session, for the READ-ONLY role read-out on the Contesting tab.
@@ -983,6 +984,7 @@ const AMP_FAMILIES = [
 const AMP_EXAMPLES = {
   macPort: '/dev/cu.usbserial-1410',
   port: 'COM8 / /dev/ttyUSB2',
+  netHost: '192.168.1.50',
 } as const
 
 /**
@@ -7287,7 +7289,13 @@ export function SettingsPanel({
                 <select disabled={remote}
                   className="settings-input"
                   value={form.ampModel ?? ''}
-                  onChange={(e) => update('ampModel', e.target.value)}
+                  onChange={(e) => {
+                    update('ampModel', e.target.value)
+                    // Only a KPA1500 has a network port; any other family goes back to serial.
+                    if (e.target.value !== 'kpa' && ampPortIsNetwork(form.ampPort ?? '')) {
+                      update('ampPort', '')
+                    }
+                  }}
                   aria-label={t('settings.amplifier.model.label')}
                 >
                   <option value="">{t('settings.amplifier.model.none')}</option>
@@ -7303,7 +7311,62 @@ export function SettingsPanel({
               {/* The port field appears only once a family is picked — the rotator's pattern,
                   and the reason is the same: an empty port box under "no amplifier" invites an
                   operator to fill it in and then wonder why nothing happened. */}
-              {(form.ampModel ?? '') !== '' && (
+              {/* A KPA1500 can also be reached over the network. The choice is not stored on its
+                  own: an address of the form host:port IS the network (ui/src/settings/
+                  ampAddress.ts), so a radio profile carries it in the existing port field. */}
+              {(form.ampModel ?? '') === 'kpa' && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.amplifier.link.label')}</span>
+                  <select disabled={remote}
+                    className="settings-input"
+                    value={ampPortIsNetwork(form.ampPort ?? '') ? 'network' : 'serial'}
+                    onChange={(e) =>
+                      update('ampPort', e.target.value === 'network' ? joinAmpAddress('', KPA_NET_PORT) : '')
+                    }
+                    aria-label={t('settings.amplifier.link.label')}
+                  >
+                    <option value="serial">{t('settings.amplifier.link.serial')}</option>
+                    <option value="network">{t('settings.amplifier.link.network')}</option>
+                  </select>
+                  <span className="settings-hint">{t('settings.amplifier.link.hint')}</span>
+                </div>
+              )}
+              {(form.ampModel ?? '') === 'kpa' && ampPortIsNetwork(form.ampPort ?? '') && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.amplifier.host.label')}</span>
+                  <input disabled={remote}
+                    className="settings-input"
+                    type="text"
+                    value={splitAmpAddress(form.ampPort ?? '').host}
+                    placeholder={AMP_EXAMPLES.netHost}
+                    onChange={(e) =>
+                      update('ampPort', joinAmpAddress(e.target.value, splitAmpAddress(form.ampPort ?? '').port))
+                    }
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-label={t('settings.amplifier.host.label')}
+                  />
+                  <span className="settings-hint">{t('settings.amplifier.host.hint')}</span>
+                </div>
+              )}
+              {(form.ampModel ?? '') === 'kpa' && ampPortIsNetwork(form.ampPort ?? '') && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.amplifier.netPort.label')}</span>
+                  <input disabled={remote}
+                    className="settings-input"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={splitAmpAddress(form.ampPort ?? '').port}
+                    onChange={(e) =>
+                      update('ampPort', joinAmpAddress(splitAmpAddress(form.ampPort ?? '').host, Number(e.target.value)))
+                    }
+                    aria-label={t('settings.amplifier.netPort.label')}
+                  />
+                  <span className="settings-hint">{t('settings.amplifier.netPort.hint')}</span>
+                </div>
+              )}
+              {(form.ampModel ?? '') !== '' && !((form.ampModel ?? '') === 'kpa' && ampPortIsNetwork(form.ampPort ?? '')) && (
                 <div className="settings-field">
                   <span className="settings-label">{t('settings.amplifier.port.label')}</span>
                   <input disabled={remote}
