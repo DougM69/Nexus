@@ -2176,6 +2176,40 @@ export async function savePngToDownloads(filename: string, base64: string): Prom
   return invoke<string>('save_png_to_downloads', { filename, base64 })
 }
 
+/** The station folders a computer driving it from afar may fetch from (features/shackFiles.ts). */
+export type ShackFolder = 'recordings' | 'allTxt' | 'sstv'
+
+export interface ShackFile {
+  name: string
+  bytes: number
+  modifiedMs: number
+}
+
+/** The files in one of the station's three shared folders, newest first. */
+export async function shackFileList(folder: ShackFolder): Promise<ShackFile[]> {
+  return invoke<ShackFile[]>('shack_file_list', { folder })
+}
+
+/** One bounded piece of a station file from `offset` (base64), with the file's whole size. */
+export async function shackFileRead(
+  folder: ShackFolder,
+  name: string,
+  offset: number,
+): Promise<{ data: string; offset: number; size: number }> {
+  return invoke('shack_file_read', { folder, name, offset })
+}
+
+/** One piece of a station file, written into THIS computer's Downloads folder at `offset`;
+ *  returns the full saved path. */
+export async function shackFileSave(filename: string, base64: string, offset: number): Promise<string> {
+  return invoke<string>('shack_file_save', { filename, base64, offset })
+}
+
+/** One received SSTV picture from the station, whole (base64), by its gallery path. */
+export async function shackGalleryImage(path: string): Promise<string> {
+  return invoke<string>('shack_gallery_image', { path })
+}
+
 /** Open an external http(s) link in the system browser. Backing for the app-wide
  *  `target="_blank"` anchor interceptor (externalLinks.ts) — raw `_blank` anchors are dead
  *  in the Tauri webview (the opener plugin's injected handler is ACL-denied). */

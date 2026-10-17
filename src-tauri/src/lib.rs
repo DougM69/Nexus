@@ -99,6 +99,9 @@ mod remote_window;
 /// "Spot me": the operator's own activation to pota.app and the DX cluster, for the desktop and
 /// the Remote page alike.
 mod self_spot;
+/// The station's recordings, ALL.TXT and SSTV pictures, listed, read in pieces and saved by a
+/// computer that drives the station from afar.
+mod shack_files;
 /// A shipped build never carries the bench's road switch: the release never turns the feature on,
 /// and a build without it has none of it.
 #[cfg(test)]
@@ -36597,6 +36600,10 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         sstv_delete_image,
         reveal_recordings,
         reveal_sstv_gallery,
+        shack_files::shack_file_list,
+        shack_files::shack_file_read,
+        shack_files::shack_file_save,
+        shack_files::shack_gallery_image,
         get_data_folder,
         set_data_folder,
         clear_data_folder,

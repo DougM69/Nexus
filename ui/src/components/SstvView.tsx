@@ -74,6 +74,9 @@ import {
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { announce } from '../announce'
 import { pushToast, withErrorToast } from '../toast'
+import { drivesAnotherStation } from '../features/durableStore'
+import { stationPictureBytes, useStationPicture } from '../features/shackFiles'
+import { ShackFilesSave } from './ShackFilesSave'
 import { pollSingleFlight } from '../singleFlight'
 import { t } from '../i18n'
 // The 15 transmittable modes, their rasters and their exact key-down seconds. A pure
@@ -503,7 +506,11 @@ export function fmtUtc(iso: string): string {
  * would be hiding. Anything not .bmp keeps the broken-image indicator, which is at least
  * honest. Outside the shell (tests) → caption-only card. */
 export function GalleryThumb({ entry, remoteSrc }: { entry: SstvGalleryEntry; remoteSrc?: string | null }) {
-  const src = remoteSrc === undefined ? assetUrl(entry.path) : remoteSrc
+  // On a computer driving the station from afar the path is on the STATION's disk, so the
+  // picture is asked of the station rather than read here at that path.
+  const driving = remoteSrc === undefined && drivesAnotherStation()
+  const fetched = useStationPicture(entry.path, driving)
+  const src = remoteSrc !== undefined ? remoteSrc : driving ? fetched : assetUrl(entry.path)
   const isBmp = /\.bmp$/i.test(entry.path)
   const [fallback, setFallback] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -893,10 +900,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
    *  the BMP fallback already proved) and run it through the ORDINARY loadImage path,
    *  so sniffing, orientation and the ident treat it like any dropped file. */
   const editAndResend = async (g: SstvGalleryEntry) => {
+    const driving = drivesAnotherStation()
     const src = assetUrl(g.path)
-    if (!src) return
+    if (!src && !driving) return
     await withErrorToast(async () => {
-      const buf = await (await fetch(src)).arrayBuffer()
+      const buf = driving ? await stationPictureBytes(g.path) : await (await fetch(src!)).arrayBuffer()
       // A FILE NAME is never built from a translated word (the batch-8 ruling).
       const name = g.path.split(/[\\/]/).pop() ?? 'received-image'
       await loadImage(new File([buf], name))
@@ -2292,15 +2300,20 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           paneId="gallery"
           {...closeProps('gallery')}
           // #130: open the folder the pictures are saved in.
+          // From afar the station's file manager is out of reach: save its pictures here instead.
           actions={
-            <button
-              type="button"
-              className="cockpit-popout sstv-gallery-reveal"
-              title={t('sstv.gallery.reveal.title')}
-              onClick={() => void withErrorToast(() => revealSstvGallery(), t('sstv.gallery.reveal.failed'))}
-            >
-              {t('sstv.gallery.reveal.label')}
-            </button>
+            drivesAnotherStation() ? (
+              <ShackFilesSave folder="sstv" className="cockpit-popout sstv-gallery-reveal" />
+            ) : (
+              <button
+                type="button"
+                className="cockpit-popout sstv-gallery-reveal"
+                title={t('sstv.gallery.reveal.title')}
+                onClick={() => void withErrorToast(() => revealSstvGallery(), t('sstv.gallery.reveal.failed'))}
+              >
+                {t('sstv.gallery.reveal.label')}
+              </button>
+            )
           }
         >
           <div className="sstv-gallery-grid">

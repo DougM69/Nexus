@@ -58,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   control**. Confirm it and anything the other PC is transmitting stops at once, a satellite track ends, and this PC
   starts with TX off; the other PC's banner says it lost control and offers to take it back the same way. The shack's
   own screen and every Stop still work as before. NEEDS-BENCH: two client PCs and the shack, the radio into a dummy load.
+- **Nexus Remote: the shack's recordings, ALL.TXT and SSTV pictures reach the second PC.** The SSTV gallery and its
+  picture viewer now show the shack's pictures on the second PC (they were blank), and **Save a copy** saves the
+  shack's picture there. Where the shack shows **Reveal in folder** for ALL.TXT, the QSO recordings and the SSTV
+  gallery, the second PC shows **Save to this computer**, which copies the shack's file into its Downloads folder. Only
+  those three folders can be read from afar. NEEDS-BENCH: two PCs, a received picture and a recording at the shack.
 
 ### Changed
 - **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each

@@ -17,6 +17,7 @@ import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-libra
 import * as api from '../api'
 import { EN } from '../i18n/en'
 import { SstvViewer, SSTV_VIEWER_PANEL, SSTV_VIEWER_PATH_KEY, setViewerPicture } from './SstvViewer'
+import { setRemoteStation } from '../features/durableStore'
 
 // THE BUDGET (2026-10-09). The slowest case here, "steps to a neighbour rather than going blank when the…", takes
 // 4.00 s and 4.00 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -28,6 +29,7 @@ vi.mock('../api', () => ({
   closePanelWindow: vi.fn(async () => {}),
   revealSstvGallery: vi.fn(async () => {}),
   savePngToDownloads: vi.fn(async () => '/home/op/Downloads/pic.png'),
+  shackGalleryImage: vi.fn(),
 }))
 /** How long the picture's commit takes, in ms. Zero everywhere but the lost-key test, which
  *  makes it slow so React's scheduler yields between committing the gallery and running its
@@ -232,6 +234,30 @@ describe('the SSTV picture viewer', () => {
       ),
     )
     vi.unstubAllGlobals()
+  })
+
+  it('from afar saves the station’s own bytes, asked of the station, and offers no Reveal', async () => {
+    const save = api.savePngToDownloads as unknown as ReturnType<typeof vi.fn>
+    const station = api.shackGalleryImage as unknown as ReturnType<typeof vi.fn>
+    save.mockClear()
+    // The station's picture, base64 as `shack_gallery_image` answers it.
+    station.mockReset().mockResolvedValue(btoa(String.fromCharCode(9, 8, 7, 6, 5)))
+    const local = vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer }))
+    vi.stubGlobal('fetch', local)
+    setRemoteStation(true)
+    try {
+      setViewerPicture('/g/img-002-scottie1.png')
+      render(<SstvViewer />)
+      fireEvent.click(await screen.findByRole('button', { name: EN['sstv.viewer.save.label'] }))
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+      expect(station).toHaveBeenCalledWith('/g/img-002-scottie1.png')
+      expect(save.mock.calls[0][1]).toBe(btoa(String.fromCharCode(9, 8, 7, 6, 5)))
+      expect(local).not.toHaveBeenCalled()
+      expect(screen.queryByRole('button', { name: EN['sstv.gallery.reveal.label'] })).toBeNull()
+    } finally {
+      setRemoteStation(false)
+      vi.unstubAllGlobals()
+    }
   })
 
   it('says so rather than showing nothing when the gallery is empty', async () => {

@@ -194,6 +194,8 @@ import { elementBandParts } from '../features/elementBands'
 import { discoverFlex } from '../api'
 import { civDiagnosticLog, civDiagnosticStatus } from '../api'
 import { allTxtLocation, diagLogLocation, recordingsLocation, revealAllTxt, revealDiagLog, revealRecordings } from '../api'
+import { drivesAnotherStation } from '../features/durableStore'
+import { ShackFilesSave } from './ShackFilesSave'
 import { getCloudlogStations, type CloudlogStation } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { sayExportLacks } from '../features/exportLacks'
@@ -10704,15 +10706,21 @@ export function SettingsPanel({
                       </>
                     )}
                   </span>
-                  <button disabled={remote}
-                    type="button"
-                    className="settings-linkbtn"
-                    onClick={() => {
-                      revealAllTxt().catch(() => {})
-                    }}
-                  >
-                    {t('settings.integrations.allTxt.reveal')}
-                  </button>
+                  {/* From afar Reveal would open the station's file manager on the station's
+                      screen, so the file is saved to this computer instead. */}
+                  {drivesAnotherStation() ? (
+                    <ShackFilesSave folder="allTxt" className="settings-linkbtn" />
+                  ) : (
+                    <button disabled={remote}
+                      type="button"
+                      className="settings-linkbtn"
+                      onClick={() => {
+                        revealAllTxt().catch(() => {})
+                      }}
+                    >
+                      {t('settings.integrations.allTxt.reveal')}
+                    </button>
+                  )}
                 </div>
 
                 {/* The diagnostic log has no toggle — it is written from the first moments of
@@ -10811,15 +10819,21 @@ export function SettingsPanel({
                       </>
                     )}
                   </span>
-                  <button disabled={remote}
-                    type="button"
-                    className="settings-linkbtn"
-                    onClick={() => {
-                      revealRecordings().catch(() => {})
-                    }}
-                  >
-                    {t('settings.integrations.qsoWav.reveal')}
-                  </button>
+                  {/* From afar Reveal would open the station's file manager on the station's
+                      screen, so the file is saved to this computer instead. */}
+                  {drivesAnotherStation() ? (
+                    <ShackFilesSave folder="recordings" className="settings-linkbtn" />
+                  ) : (
+                    <button disabled={remote}
+                      type="button"
+                      className="settings-linkbtn"
+                      onClick={() => {
+                        revealRecordings().catch(() => {})
+                      }}
+                    >
+                      {t('settings.integrations.qsoWav.reveal')}
+                    </button>
+                  )}
                 </div>
 
                 <label className="settings-field">

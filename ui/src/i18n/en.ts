@@ -229,6 +229,20 @@ export const EN = {
   // reading shows the transmitter free, and only then STOPPED.
   'remote.stop.sending': 'Sending stop…',
   'remote.stop.sent': 'Stop sent',
+  'remote.stationFiles.save.label': 'Save to this computer',
+  'remote.stationFiles.save.title':
+    'Copy the file from the station into this computer’s Downloads folder',
+  'remote.stationFiles.save.one': 'Save {{name}} to this computer',
+  'remote.stationFiles.saving': 'Saving… {{pct}}%',
+  'remote.stationFiles.save.done': 'Saved to {{path}}',
+  'remote.stationFiles.save.failed': 'Could not save the station’s file to this computer',
+  'remote.stationFiles.list.label': 'Save to this computer…',
+  'remote.stationFiles.list.title.recordings': 'Recordings at the station',
+  'remote.stationFiles.list.title.sstv': 'SSTV pictures at the station',
+  'remote.stationFiles.list.loading': 'Asking the station…',
+  'remote.stationFiles.list.empty': 'The station has none yet.',
+  'remote.stationFiles.list.failed': 'Could not list the station’s files',
+  'remote.stationFiles.close': 'Close',
   'remote.stop.sent.title':
     'The station has accepted the Stop. It is not off the air until the station reports the transmitter free.',
   'remote.stop.stopped': 'Stopped',

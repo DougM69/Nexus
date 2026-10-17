@@ -1761,3 +1761,51 @@ fn a_save_goes_with_the_revision_of_the_read_its_copy_was_made_from() {
     assert!(ui.get(READ_REVISION).is_none(), "{ui}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// ★ A gallery picture arrives in client mode: the gallery and the viewer pop-out ask the station
+/// for it by the path its gallery names, and each window here is handed the station's bytes as the
+/// station read them. Saving a piece runs on this computer and sends nothing to the station.
+/// CONTROL: Reveal, which opens the station's own file manager, is still refused and never sent.
+#[test]
+fn a_gallery_picture_arrives_in_client_mode() {
+    let dir = scratch("gallery");
+    let gallery = dir.join("Nexus SSTV");
+    std::fs::create_dir_all(&gallery).unwrap();
+    let picture: Vec<u8> = (0..4096u32).map(|i| (i * 13) as u8).collect();
+    let path = gallery.join("20261017_120000_PD120.png");
+    std::fs::write(&path, &picture).unwrap();
+    let at_the_shack =
+        crate::shack_files::gallery_image_in(&gallery, path.to_str().unwrap()).unwrap();
+
+    let shack = FakeShack::new();
+    shack.answers(
+        "shack_gallery_image",
+        Answer::Value {
+            value: json!(at_the_shack),
+            revision: None,
+        },
+    );
+    let client = client_in(&dir, &shack);
+    let s = screens(&client);
+    let args = json!({ "path": path.to_str().unwrap() });
+    for window in [&s.main, &s.popout] {
+        let got = ask(window, "shack_gallery_image", args.clone()).expect("the picture");
+        let got = crate::b64_decode(got.as_str().expect("base64 text")).unwrap();
+        assert!(got == picture, "the station's bytes, as it read them");
+    }
+    assert_eq!(
+        shack.sent(),
+        vec!["shack_gallery_image", "shack_gallery_image"]
+    );
+    assert_eq!(lock(&shack.sent)[0].1, args);
+
+    let save = json!({ "filename": "a.png", "base64": "AA==", "offset": 0 });
+    assert_eq!(ask(&s.main, "shack_file_save", save), Ok(json!("ran here")));
+    assert_eq!(s.ran_here(), vec!["shack_file_save"]);
+    assert_eq!(
+        ask(&s.main, "reveal_sstv_gallery", json!({})),
+        refused("shackOnly")
+    );
+    assert_eq!(shack.sent().len(), 2, "nothing more crossed");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
