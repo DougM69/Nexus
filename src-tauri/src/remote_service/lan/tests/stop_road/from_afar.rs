@@ -1,5 +1,5 @@
-//! The Operate strip's Call CQ, a JS8 message and a CW macro, pressed on a computer driving the
-//! station, on the roadside the road tests use: the shack's real channel, command lane, Stop road
+//! The Operate strip's Call CQ, a JS8 message, the JS8 heartbeat, repeating CQ and automatic
+//! replies, and a CW macro, pressed on a computer driving the station, on the roadside the road tests use: the shack's real channel, command lane, Stop road
 //! and engine over loopback, and the app's own handlers reached as the main window reaches them
 //! (`command_dispatch::tauri_runner`). The shack runs each with only the arguments the screen sent
 //! and the stand-down the lane wrote, and each is ended by the link's Stop alone, by the road's
@@ -11,8 +11,17 @@ use crate::command_dispatch::{tauri_runner, Runner};
 const LONG: &str = "A MESSAGE FROM AFAR LONG ENOUGH TO NEED SEVERAL FRAMES AT NORMAL SPEED";
 
 /// The overs: the Operate strip's Call CQ (a CQ run), a JS8 message once its first frame is
-/// keyed, and a CW macro on the keyer.
-const OVERS: [&str; 3] = ["cq-run", "js8", "cw-macro"];
+/// keyed, the JS8 heartbeat and repeating CQ switched on, the automatic replies switched on with a
+/// reply asking, a yes to a reply, and a CW macro on the keyer.
+const OVERS: [&str; 7] = [
+    "cq-run",
+    "js8",
+    "js8-hb",
+    "js8-cq-repeat",
+    "js8-autoreply",
+    "js8-reply",
+    "cw-macro",
+];
 
 /// The ways an over ends: the link's Stop alone (the road's datagrams never sent), the road's Stop
 /// alone (the link no longer read), and presence lapsing while the link keeps the lease.
@@ -26,6 +35,23 @@ fn presses(over: &str) -> Vec<(&'static str, Value)> {
         "js8" => vec![
             ("set_tx_enabled", json!({"enabled": true})),
             ("js8_send", json!({"to": null, "text": LONG})),
+        ],
+        "js8-hb" => vec![
+            ("set_tx_enabled", json!({"enabled": true})),
+            ("js8_arm", json!({"which": "hb", "on": true})),
+        ],
+        "js8-cq-repeat" => vec![
+            ("set_tx_enabled", json!({"enabled": true})),
+            ("js8_cq_repeat", json!({"on": true})),
+        ],
+        "js8-autoreply" => vec![
+            ("set_tx_enabled", json!({"enabled": true})),
+            ("js8_arm", json!({"which": "autoreply", "on": true})),
+        ],
+        // The reply is named as the shack shows it, once it asks (filled in by the test).
+        "js8-reply" => vec![
+            ("set_tx_enabled", json!({"enabled": true})),
+            ("js8_answer_reply", json!({"yes": true})),
         ],
         "cw-macro" => vec![("send_cw", json!({"text": "CQ {MYCALL} {MYCALL} TEST"}))],
         _ => unreachable!(),
@@ -58,7 +84,10 @@ fn the_apps_handlers(r: &mut Roadside) -> (crate::tests::ShackApp, Got) {
 /// The station as the shack's own screen leaves it before the computer presses anything: FT8, or
 /// the JS8 tier; TX off.
 fn set_up_at_the_shack(e: &mut tempo_app::engine::Engine, over: &str) {
-    if over == "js8" {
+    if over.starts_with("js8") {
+        let mut settings = e.settings().clone();
+        settings.js8_hb_networking = true;
+        e.apply_settings(settings);
         e.js8_enter();
     } else {
         e.set_tier(tempo_app::dto::Tier::Ft8);
@@ -68,8 +97,9 @@ fn set_up_at_the_shack(e: &mut tempo_app::engine::Engine, over: &str) {
 }
 
 /// Whether the over is on the air as the shack keys it: the run armed and calling; the message's
-/// first frame keyed by the JS8 sender at its period with more still queued; the macro holding the
-/// transmitter on the keyer.
+/// first frame keyed by the JS8 sender at its period with more still queued; the heartbeat or the
+/// repeating CQ armed to key at its period; the automatic replies armed, with a reply asking; the
+/// reply queued; the macro holding the transmitter on the keyer.
 fn on_the_air(e: &mut tempo_app::engine::Engine, over: &str) -> bool {
     match over {
         "cq-run" => e.tx_enabled(),
@@ -78,19 +108,35 @@ fn on_the_air(e: &mut tempo_app::engine::Engine, over: &str) -> bool {
             let keyed = (now..now + 3).any(|slot| !e.poll_tx(slot).is_empty());
             keyed && !e.js8_state().queue.is_empty()
         }
+        "js8-hb" => e.js8_state().armed.hb,
+        "js8-cq-repeat" => e.js8_state().armed.cq,
+        "js8-autoreply" => {
+            let js8 = e.js8_state();
+            js8.armed.autoreply && js8.pending_reply.is_some()
+        }
+        "js8-reply" => !e.js8_state().queue.is_empty(),
         "cw-macro" => e.tx_owner().is_some(),
         _ => unreachable!(),
     }
 }
 
 /// What every end leaves, as the shack's own Stop TX leaves it: the transmitter free, TX off, an
-/// over in flight cut, the keyer aborted, and for JS8 the rest of the message dropped, so nothing
-/// keys once TX is armed again.
+/// over in flight cut, the keyer aborted, and for JS8 the queue, the heartbeat and repeating CQ
+/// schedules and any reply asking dropped and nothing armed, so nothing keys once TX is armed
+/// again.
 fn assert_over(e: &mut tempo_app::engine::Engine, over: &str, end: &str) {
     let what = format!("{over}, ended by the {end}");
     assert_stopped(e, if over == "cw-macro" { "cw" } else { "ft" });
-    if over == "js8" {
-        assert!(e.js8_state().queue.is_empty(), "{what}: the rest dropped");
+    if over.starts_with("js8") {
+        let js8 = e.js8_state();
+        assert!(js8.queue.is_empty(), "{what}: the queue dropped");
+        assert!(!js8.hb_on && !js8.cq_on, "{what}: the schedules ended");
+        assert!(js8.pending_reply.is_none(), "{what}: no reply asking");
+        let armed = js8.armed;
+        assert!(
+            !(armed.hb || armed.cq || armed.autoreply || armed.relay || armed.hb_ack),
+            "{what}: nothing armed: {armed:?}"
+        );
         e.set_tx_enabled(true);
         let now = tempo_core::timing::now_unix_ms() as u64 / 1000 / 15;
         for slot in now..now + 5 {
@@ -101,7 +147,8 @@ fn assert_over(e: &mut tempo_app::engine::Engine, over: &str, end: &str) {
 }
 
 /// ⛔ An over started from afar ends by each road alone and by presence. For the Operate strip's
-/// Call CQ, a JS8 message and a CW macro: the computer presses it, the shack's own handler runs it
+/// Call CQ, a JS8 message, the JS8 heartbeat, repeating CQ and automatic replies switched on, a
+/// yes to a JS8 reply, and a CW macro: the computer presses it, the shack's own handler runs it
 /// and the station keys it; then the link's Stop alone, the road's Stop alone, or presence lapsing
 /// (the heartbeats stop, the lease still kept) ends it, as the shack's own Stop TX would. The shack
 /// got only what the screen sent, and `afar` with the stand-down alone: no time crossed. CONTROL:
@@ -119,13 +166,29 @@ fn an_over_started_from_afar_ends_by_either_road_alone_and_by_presence() {
                 set_up_at_the_shack(&mut r.s.shared.engine.lock().unwrap(), over);
                 let mut seat = seated(&r).await;
                 seat.renewed().await;
-                let presses = presses(over);
-                for (n, (cmd, args)) in presses.iter().enumerate() {
+                let mut presses = presses(over);
+                for (n, (cmd, args)) in presses.iter_mut().enumerate() {
+                    if *cmd == "js8_answer_reply" {
+                        // A query heard at the shack; its reply asks, and the yes names it.
+                        let mut e = r.s.shared.engine.lock().unwrap();
+                        e.js8_api_hear_snr_query("W1AW");
+                        let reply = e.js8_state().pending_reply.expect("premise: a reply asks");
+                        args["display"] = json!(reply.display);
+                        args["firesAtMs"] = json!(reply.fires_at_ms);
+                    }
                     let said = seat.call(n as u64 + 1, cmd, args.clone()).await;
                     assert!(
                         said.get("refused").is_none() && said.get("error").is_none(),
                         "{what}: {cmd} {said}"
                     );
+                }
+                if over == "js8-autoreply" {
+                    // A query heard at the shack once the automatic replies are on.
+                    r.s.shared
+                        .engine
+                        .lock()
+                        .unwrap()
+                        .js8_api_hear_snr_query("W1AW");
                 }
                 assert!(
                     on_the_air(&mut r.s.shared.engine.lock().unwrap(), over),

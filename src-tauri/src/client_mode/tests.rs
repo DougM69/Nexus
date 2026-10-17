@@ -316,7 +316,11 @@ fn every_command_goes_where_its_class_says() {
     assert_eq!(way("js8_send", &json!({ "text": "HI" })), Way::Start);
     assert_eq!(
         way("js8_arm", &json!({ "which": "autoreply", "on": true })),
-        Way::Refused(Refusal::TransmitNotYet)
+        Way::Start
+    );
+    assert_eq!(
+        way("js8_typeahead", &json!({ "sentSeen": 0, "unsent": "MORE" })),
+        Way::Shack { stop: false }
     );
     assert_eq!(
         way("set_tune", &json!({ "on": true })),

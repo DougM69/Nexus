@@ -246,24 +246,22 @@ const FT_STARTS: [&str; 9] = [
     "start_search_and_pounce",
 ];
 
-/// The JS8 cockpit's sends, allowed from afar as at the shack: a message, a directed command, CQ,
-/// a heartbeat now, and more text for the message going out. Written here, as [`FT_STARTS`] is.
-const JS8_STARTS: [&str; 5] = [
+/// The JS8 cockpit's starts, allowed from afar as at the shack: a message, a directed command, CQ,
+/// a heartbeat now, the switches for the heartbeat, the automatic replies and the repeating CQ,
+/// and the yes to an automatic reply. Written here, as [`FT_STARTS`] is.
+const JS8_STARTS: [&str; 7] = [
+    "js8_answer_reply",
+    "js8_arm",
     "js8_call_cq",
+    "js8_cq_repeat",
     "js8_heartbeat_now",
     "js8_send",
     "js8_send_command",
-    "js8_typeahead",
 ];
 
 /// Keyboard CW and the CW macros (an F-key, or Enter Sends Message), which the shack's keyer
 /// times. Written here, as [`FT_STARTS`] is.
 const CW_STARTS: [&str; 2] = ["send_cw", "send_cw_armed"];
-
-/// The JS8 starts that stay refused from afar: the switches that let the station transmit later
-/// with no further press (the unattended paths and the repeating CQ), and the yes to an automatic
-/// reply, which names its moment.
-const JS8_REFUSED: [&str; 3] = ["js8_answer_reply", "js8_arm", "js8_cq_repeat"];
 
 /// Every start that runs as a command from afar: [`FT_STARTS`], [`JS8_STARTS`], [`CW_STARTS`] and
 /// the voice keyer's play.
@@ -348,14 +346,8 @@ fn the_ft_buttons_are_admitted_and_every_other_start_is_refused_by_name() {
             "{name}"
         );
     }
-    for name in JS8_REFUSED {
-        assert_eq!(class_of(name), Some(Class::StartsTx), "{name}");
-        assert_eq!(
-            transmit_from_afar(name),
-            Err(Refusal::TransmitNotYet),
-            "{name}"
-        );
-    }
+    // The typeahead adds text to a message already going out; the send was the start.
+    assert_eq!(class_of("js8_typeahead"), Some(Class::RunsAtShack));
     for (id, name) in FT_KEYING_NOTHING.into_iter().enumerate() {
         let expected = match class_of(name) {
             Some(Class::RunsAtShack) => "run",
@@ -470,13 +462,14 @@ fn time_like(name: &str, ty: &str) -> bool {
     words.iter().any(|w| WORDS.contains(&w.as_str())) || TYPES.iter().any(|t| ty.contains(t))
 }
 
-/// ★ No FT command from afar carries a time, nor any other start run from afar (the JS8 sends,
-/// keyboard CW and its macros): every parameter of each one's command, read
-/// off its own signature in `lib.rs`, names no time and has no time type, so slot timing, JS8's
-/// periods, the keyer's timing, the clock and the sequencer's timeouts stay at the shack. The prompt-to-log answer's record is the contact as the
-/// station proposed it, its logged times among its fields: what is written in the log, deciding
-/// nothing about when anything transmits, so it is the one parameter allowed, by name and by type.
-/// A new parameter that reads as a time fails this. CONTROL: the reader finds the times it must
+/// ★ No FT command from afar carries a time, nor any other start run from afar (the JS8 starts,
+/// keyboard CW and its macros): every parameter of each one's command, read off its own signature
+/// in `lib.rs`, names no time and has no time type, so slot timing, JS8's periods, the keyer's
+/// timing, the clock and the sequencer's timeouts stay at the shack. Two are allowed, by name and
+/// by type, as neither decides when anything transmits: the prompt-to-log answer's record is the
+/// contact as the station proposed it, its logged times among its fields, what is written in the
+/// log; and the yes to a JS8 automatic reply names that reply by the shack's own time for it, a
+/// yes to any other refused. A new parameter that reads as a time fails this. CONTROL: the reader finds the times it must
 /// (JS8's reply's `firesAtMs`, and made-up names and types), and passes plain ones.
 #[test]
 fn no_ft_command_from_afar_carries_a_time() {
@@ -511,6 +504,13 @@ fn no_ft_command_from_afar_carries_a_time() {
         for (name, ty) in parameters(cmd) {
             if cmd == "confirm_pending_log" && name == "record" {
                 assert_eq!(ty, "LoggedQso", "the record is the logged contact");
+                continue;
+            }
+            // The automatic reply the shack proposed, named by the shack's own time for it, as
+            // the screen was shown it: a Yes to any other is refused, and the reply goes in the
+            // shack's queue for its next period. It moves nothing.
+            if cmd == "js8_answer_reply" && name == "firesAtMs" {
+                assert_eq!(ty, "u64", "the reply's name, as the shack gave it");
                 continue;
             }
             assert!(
@@ -634,7 +634,7 @@ fn the_on_half_of_a_transmit_switch_is_its_class() {
     for (id, (name, ..)) in OFF_HALVES.iter().enumerate() {
         let admission = shack.admit(&controller(), call(id as u64 + 1, name, on_args(name)));
         let expected = match (class_of(name), transmit_from_afar(name)) {
-            (Some(Class::StartsTx), Ok(Wired::Ft)) => "run".to_string(),
+            (Some(Class::StartsTx), Ok(Wired::Ft | Wired::Js8)) => "run".to_string(),
             (Some(Class::StartsTx), Ok(Wired::HeldPress)) => refused(Refusal::HeldPress),
             (Some(Class::StartsTx), _) => refused(Refusal::TransmitNotYet),
             // Turning the RTTY sequencer on keys nothing, so it runs at the shack.
@@ -1449,6 +1449,10 @@ fn the_parameter_reader_reads_what_tauri_reads() {
             ("yes".to_string(), "bool".to_string()),
             ("display".to_string(), "String".to_string()),
             ("firesAtMs".to_string(), "u64".to_string()),
+            (
+                "afar".to_string(),
+                "Option<command_dispatch::Afar>".to_string()
+            ),
         ]
     );
     assert_eq!(

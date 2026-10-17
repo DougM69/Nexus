@@ -271,7 +271,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("js8_set_rx_speeds",              RunsAtShack, "The shack's JS8 receive speeds."),
     ("js8_set_speed",                  RunsAtShack, "The shack's JS8 transmit speed; keys nothing."),
     ("js8_store_message",              RunsAtShack, "Leaves a message in the shack's JS8 store for a station to query; keys nothing."),
-    ("js8_typeahead",                  StartsTx,    "Adds to what is still to go of the JS8 message on the air, which keys more frames."),
+    ("js8_typeahead",                  RunsAtShack, "Edits what is still to go of the JS8 message on the air; starts nothing."),
     ("js8_typeahead_state",            RunsAtShack, "What the shack's JS8 message on the air has still to send."),
     ("js8_word_check",                 RunsAtShack, "The JS8 dictionary at the shack; keys nothing."),
     ("js8_word_suggestions",           RunsAtShack, "The JS8 dictionary at the shack; keys nothing."),

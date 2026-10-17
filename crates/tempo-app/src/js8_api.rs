@@ -1378,6 +1378,44 @@ impl Engine {
         self.js8_ingest(&[decode], 0);
     }
 
+    /// TEST SEAM: `<call>: <own call> SNR?`, a directed query the station may answer with an
+    /// automatic reply, as the JS8 decoder hands it to `js8_ingest`: for tests that reach the
+    /// engine only from outside.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn js8_api_hear_snr_query(&mut self, call: &str) {
+        use ::js8::proto::callsign::CallRef;
+        let frame = ::js8::Frame::Directed {
+            from: CallRef::Base(call.to_string()),
+            to: CallRef::Base(self.settings.mycall.clone()),
+            cmd: ::js8::Command::SnrQuery,
+            num: None,
+            portable_from: false,
+            portable_to: false,
+        };
+        let i3 = ::js8::I3 {
+            first: true,
+            last: true,
+            data: false,
+        };
+        let word =
+            ::js8::proto::frame::encode_frame(&frame, i3, Js8Speed::Normal).expect("a query packs");
+        let decode = modes::Decode {
+            message: frame.render(),
+            sync: 5.0,
+            snr: -5,
+            dt: 0.1,
+            freq: 1500.0,
+            nap: 0,
+            qual: 0.9,
+            rv: None,
+            mode: Some(modes::ModeKind::Js8 {
+                speed: Js8Speed::Normal,
+            }),
+            raw: Some(*word.as_bytes()),
+        };
+        self.js8_ingest(&[decode], 0);
+    }
+
     /// The API is on: TCP or UDP.
     fn js8_api_on(&self) -> bool {
         self.settings.js8_api_tcp || self.settings.js8_api_udp
