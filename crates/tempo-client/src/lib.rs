@@ -75,6 +75,8 @@ pub mod native;
 pub mod outbox;
 /// The road to a paired station, for the window's page and the command link.
 pub mod road;
+/// "Still there?" on the internet road: the operator's input, measured.
+pub mod still_there;
 /// Stop's second road, beside the command link.
 pub mod stop_road;
 /// The LAN road's TLS, this computer's half.

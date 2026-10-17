@@ -258,6 +258,94 @@ pub fn token(answer: &serde_json::Value) -> Option<(String, u64)> {
     (shaped && lasts > 0).then(|| (token.to_string(), lasts))
 }
 
+/// One TURN server the service's `turn` route named: the host and port of a plain `turn:` URL over
+/// UDP, which is what this computer's TURN client speaks, and its credential. No `Debug`: the
+/// credential goes nowhere but that server.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TurnServer {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+}
+
+/// The TURN servers in the `turn` route's answer (`{"iceServers":[{urls,username,credential}]}`),
+/// UDP only, in the order given: a `turns:` URL or a `?transport=tcp` one is left out, since this
+/// computer's TURN client sends datagrams. At most four, as the service names at most four.
+pub fn turn_servers(answer: &serde_json::Value) -> Vec<TurnServer> {
+    let Some(servers) = answer.get("iceServers").and_then(|s| s.as_array()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for server in servers {
+        let text = |name: &str| {
+            server
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .filter(|v| !v.is_empty() && v.len() <= 1024)
+        };
+        let (Some(username), Some(password)) = (text("username"), text("credential")) else {
+            continue;
+        };
+        let urls: Vec<&str> = match server.get("urls") {
+            Some(serde_json::Value::String(url)) => vec![url.as_str()],
+            Some(serde_json::Value::Array(urls)) => {
+                urls.iter().filter_map(|u| u.as_str()).collect()
+            }
+            _ => continue,
+        };
+        for url in urls {
+            let Some(rest) = url.strip_prefix("turn:") else {
+                continue;
+            };
+            let (at, transport) = rest.split_once('?').unwrap_or((rest, "transport=udp"));
+            if transport != "transport=udp" {
+                continue;
+            }
+            let Some((host, port)) = at.rsplit_once(':') else {
+                continue;
+            };
+            let named = !host.is_empty()
+                && host.len() <= 253
+                && host
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+            let Some(port) = port.parse::<u16>().ok().filter(|p| *p != 0) else {
+                continue;
+            };
+            if named && out.len() < 4 {
+                out.push(TurnServer {
+                    host: host.to_ascii_lowercase(),
+                    port,
+                    username: username.to_string(),
+                    password: password.to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Whether the account's entitlement takes in the internet road now (N4: the internet road is the
+/// paid service's, the LAN is free). The service's own answer when it names one (`access`: only
+/// `"internet"` takes it in); a service that names none has only the trial, which takes it in while
+/// it is on and has not ended at `now_ms` (ms since the epoch). The service refuses the pipe by the
+/// same rule whatever this says: this is what the screen tells the operator before asking.
+pub fn internet_included(entitlement: &serde_json::Value, now_ms: u64) -> bool {
+    if let Some(access) = entitlement.get("access") {
+        return access.as_str() == Some("internet");
+    }
+    let enabled = entitlement
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    let until = entitlement
+        .get("expiresAt")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    enabled && until > now_ms
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,5 +524,63 @@ mod tests {
         assert_eq!(answer("", "Bearer", 60), None);
         assert_eq!(answer("a b", "Bearer", 60), None);
         assert_eq!(answer("a.b.c", "Bearer", 0), None);
+    }
+
+    /// ★ The `turn` route's answer read as the TURN servers this computer's client can use: plain
+    /// `turn:` over UDP, a single URL or a list, in order; `turns:`, TCP, a URL with no port or a
+    /// bad host, and an entry with no credential are left out, and never more than four.
+    #[test]
+    fn the_turn_routes_answer_gives_the_udp_servers() {
+        let answer = serde_json::json!({"iceServers":[
+            {"urls":["turn:turn.example.net:3478?transport=udp","turns:turn.example.net:5349?transport=tcp",
+                "turn:turn.example.net:3478?transport=tcp","turn:Other.Example.net:80"],
+             "username":"u1","credential":"p1"},
+            {"urls":"turn:third.example.net:3478","username":"u2","credential":"p2"},
+            {"urls":["turn:nocred.example.net:3478"],"username":"u3"},
+            {"urls":["turn:bad host:3478","turn:noport.example.net","turn:zero.example.net:0"],
+             "username":"u4","credential":"p4"}
+        ]});
+        let servers = turn_servers(&answer);
+        let named: Vec<(String, u16, String, String)> = servers
+            .into_iter()
+            .map(|s| (s.host, s.port, s.username, s.password))
+            .collect();
+        assert_eq!(
+            named,
+            vec![
+                ("turn.example.net".into(), 3478, "u1".into(), "p1".into()),
+                ("other.example.net".into(), 80, "u1".into(), "p1".into()),
+                ("third.example.net".into(), 3478, "u2".into(), "p2".into()),
+            ]
+        );
+        let many = serde_json::json!({"iceServers":[{"urls":["turn:a.net:1","turn:b.net:2",
+            "turn:c.net:3","turn:d.net:4","turn:e.net:5"],"username":"u","credential":"p"}]});
+        assert_eq!(turn_servers(&many).len(), 4);
+        assert!(turn_servers(&serde_json::json!({})).is_empty());
+    }
+
+    /// ★ N4's seam: the service's `access` decides when it names one, only `internet` taking in the
+    /// internet road, whatever the trial says; with none, the trial does, while on and unexpired.
+    #[test]
+    fn the_internet_road_is_the_entitlements_to_give() {
+        let now = 1_000_000;
+        let trial = |enabled: bool, until: u64| serde_json::json!({"enabled":enabled,"expiresAt":until,"state":"active"});
+        assert!(internet_included(&trial(true, now + 1), now));
+        assert!(!internet_included(&trial(true, now), now), "ended");
+        assert!(!internet_included(&trial(false, now + 1), now), "disabled");
+        assert!(!internet_included(&serde_json::json!({}), now));
+        let paid = |access: &str| {
+            let mut e = trial(false, 0);
+            e["access"] = serde_json::json!(access);
+            e
+        };
+        assert!(
+            internet_included(&paid("internet"), now),
+            "paid, trial over"
+        );
+        let mut lan = trial(true, now + 1);
+        lan["access"] = serde_json::json!("lan");
+        assert!(!internet_included(&lan, now), "LAN only, trial or not");
+        assert!(!internet_included(&paid("none"), now));
     }
 }
