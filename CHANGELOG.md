@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contest statistics per operator.** In a multi-operator contest the Contest screen's score area now has an
+  Operators section: each operator's QSOs, points and the multipliers they worked first, with their share of the
+  total, their rate over the last 10 and 60 minutes, their best clock hour, and a band × mode table. Dupes, banned
+  modes and removed contacts count for nobody, as in the score; contacts logged with no operator named are their own
+  row, shown as —. The Summary export carries the same section. A new **Operators** box, for Conditions, the
+  dashboard window and the rail beside a cockpit, shows who is at the key and the leaderboard while a contest runs.
 - **Nexus Remote: on the shack's own network, Remote stays free.** When an account's internet use has ended, Stream
   and Listen still work from a browser already approved for the station, as long as that device is on the same
   network as the shack. The stream is held to that network at both ends and never goes through the relay. A shack

@@ -12,7 +12,7 @@
 // globe stays the untouched centerpiece. See components/connect/* + features/connectConfig.
 import { useState, useEffect, useId, useMemo, useRef, lazy, Suspense, type ReactNode } from 'react'
 import type { NeedAlert, NeedTag, PropagationSnapshot, Station } from '../types'
-import type { AmpStatus } from '../types'
+import type { AmpStatus, FieldDayStatus } from '../types'
 import type { Theme } from '../useTheme'
 import { effectiveXray } from '../flareAlert'
 import { gpuCapableForGlobe, webgl2ForGlobe } from '../gpu'
@@ -382,6 +382,8 @@ interface Props {
   /** The active radio's amplifier status, off App's existing 300 ms snapshot poll. Null when
    * none is configured (the Amplifier pane then renders nothing). Read-only; it stops nothing. */
   amp?: AmpStatus | null
+  /** The running contest, off the same snapshot poll, for the Operators box. Null when none runs. */
+  fieldDay?: FieldDayStatus | null
   /** Open Connect in its own window (omit when already standalone). */
   onPopOut?: () => void
   /** The band the active radio is on, off App's existing snapshot poll: the band tiles ring it. */
@@ -424,6 +426,7 @@ export function ConnectView({
   needByCall,
   needAlerts,
   amp,
+  fieldDay,
   onPoint,
   onSelectSat,
   onPopOut,
@@ -551,6 +554,7 @@ export function ConnectView({
     spotsFeed,
     otaBoard,
     neededBoard,
+    fieldDay,
   })
   const { pathPred, bandOutlook, muf } = ctx
   // The one flux value the map renders (dev-override > fast lane > snapshot).

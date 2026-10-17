@@ -13494,6 +13494,97 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: var(--space-2);
   min-width: 0;
 }
+/* ── PER-OPERATOR STATISTICS (components/ContestOperators.tsx) ─────────────────────────────
+   The Contest summary's Operators section and the Operators box. Content styling only: the
+   summary scrolls with its view, the box inside its body. A wide table scrolls sideways in its
+   own wrapper rather than widening the view. */
+.fd-ops {
+  min-width: 0;
+  margin-top: var(--space-2);
+}
+.fd-ops-box {
+  margin-top: 0;
+}
+.fd-ops-heading {
+  margin: 0 0 var(--space-1);
+  font-size: calc(14px * var(--text-scale));
+}
+.fd-ops-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.fd-ops-table,
+.fd-ops-grid {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+/* The box fills its body; the summary's table takes its content's width, so a wide view does not
+   spread five numbers across the screen. */
+.fd-ops-box .fd-ops-table {
+  width: 100%;
+  font-size: 0.9em;
+}
+/* In a 200–300 px rail box the headings wrap rather than push the numbers out of the box. */
+.fd-ops-box .fd-ops-table thead th {
+  white-space: normal;
+  vertical-align: bottom;
+}
+.fd-ops-box .fd-ops-table th,
+.fd-ops-box .fd-ops-table td {
+  padding: 2px 4px;
+}
+.fd-ops-table th + th,
+.fd-ops-table td {
+  padding-left: var(--space-3);
+}
+.fd-ops-table th,
+.fd-ops-table td,
+.fd-ops-grid th,
+.fd-ops-grid td {
+  padding: 2px 6px;
+  text-align: right;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border-soft);
+}
+.fd-ops-table thead th,
+.fd-ops-grid thead th {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.fd-ops-table tbody th,
+.fd-ops-grid tbody th,
+.fd-ops-table thead th:first-child,
+.fd-ops-grid thead th:first-child {
+  text-align: left;
+}
+.fd-ops-table tbody th {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.fd-ops-share {
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+.fd-ops-grids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.fd-ops-grid caption {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.fd-ops-note {
+  margin: var(--space-1) 0 0;
+  color: var(--text-dim);
+  font-size: calc(12px * var(--text-scale));
+}
+.fd-ops-atkey {
+  margin: 0 0 var(--space-1);
+}
+
 .club-grid {
   position: relative;
   min-width: 0;

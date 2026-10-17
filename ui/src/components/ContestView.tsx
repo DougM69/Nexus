@@ -9,6 +9,7 @@ import type {
   FdClubLog,
   FdClubStatus,
   FdMergeReport,
+  FdOperatorStat,
   FieldDayQso,
   FieldDayStatus,
   ModeRequest,
@@ -33,6 +34,8 @@ import { composingSlot } from '../features/contestExchange'
 import { receivedCaption } from '../features/contestSlots'
 import { contestUnsavedText } from '../features/contestUnsaved'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
+import { bandRank, operatorSummaryLines } from '../features/contestOperators'
+import { OperatorStatsBoard } from './ContestOperators'
 import { stationMode, usePskName } from '../features/contestMode'
 import { CLEAR_TOAST_MS, REMOVE_CONFIRM_MS, SERVICE_NAMES, clearText, contactCount, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
 import { ContestContactEdit, type EditNote } from './ContestContactEdit'
@@ -481,13 +484,6 @@ export function ContestLogRow({
 // and save through saveTextToDownloads() like the Cabrillo/ADIF paths.
 // ---------------------------------------------------------------------------
 
-// Canonical band order (HF → VHF) so the summary lists bands top-down like a rig.
-const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '1.25m', '70cm', '33cm', '23cm']
-function bandRank(b: string): number {
-  const i = BAND_ORDER.indexOf(b)
-  return i === -1 ? BAND_ORDER.length : i
-}
-
 /** Count QSOs per band, in canonical HF→VHF order. */
 function bandCounts(log: FieldDayQso[]): { band: string; n: number }[] {
   const m = new Map<string, number>()
@@ -613,6 +609,8 @@ interface SummaryArgs {
   dupeRule?: DupeRule
   /** ARRL Field Day: lay the grid out as its summary sheet's item 18, rows and all. */
   fieldDaySheet?: boolean
+  /** Per-operator statistics (FieldDayStatus.operators); absent from an older station. */
+  operators?: FdOperatorStat[]
 }
 
 /**
@@ -657,6 +655,8 @@ export function buildSummaryText(a: SummaryArgs): string {
     L.push(`  Counted above: ${banned} contact${banned === 1 ? '' : 's'} in a mode this contest does not allow, logged at zero points.`)
   }
   L.push('')
+  // Each operator's share, when more than one operator logged (features/contestOperators).
+  L.push(...operatorSummaryLines(a.operators, a.contest?.multCount != null))
   if (a.contest) {
     // The score the engine computed: QSO points × multipliers, with no power tier and no
     // claimed bonuses — neither exists outside Field Day.
@@ -2954,6 +2954,9 @@ export function FieldDayScoreboard({
       ) : (
         <SectionsBoard workedSet={workedSet} />
       )}
+
+      {/* PER-OPERATOR STATISTICS — with two or more operators (ContestOperators). */}
+      <OperatorStatsBoard fieldDay={fieldDay} />
     </>
   )
 }
@@ -3487,6 +3490,7 @@ export function ContestView({
             : { sending: fieldDay?.composingText ?? '', multCount: fieldDay?.multCount ?? null },
           dupeRule: fieldDay?.dupeRule,
           fieldDaySheet: fdEventIsFieldDay && !isWfd,
+          operators: fieldDay?.operators,
         })
       } else if (format === 'dupesheet') {
         text = buildDupeSheetText(rows, fdEventIsFieldDay ? undefined : eventName)

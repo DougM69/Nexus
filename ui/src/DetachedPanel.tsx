@@ -723,6 +723,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           needAlerts={gatedAlerts}
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
+          fieldDay={snap?.fieldDay ?? null}
           // The Spots, POTA/SOTA and Needed boxes, with THIS window's board paths (`workNeed`,
           // `huntOta`, its Needed board above): the Spots box a spot as a need, as App's
           // handleWorkSpot does, and the board's own feeds — the spot poll above, and the same

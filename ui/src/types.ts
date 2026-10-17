@@ -3707,6 +3707,30 @@ export interface FieldDayStatus {
    *  Contest screen and the log strip say so in red. Absent when the last write was good, from
    *  an older station, and on Remote. Worded by `features/contestUnsaved.ts`. */
   unsaved?: { failedWrites: number; lastSavedUnix?: number }
+  /** Who is at the key now: the operator the next contact is stamped with, '' when nobody is
+   *  named. Absent from an older station. */
+  operatorNow?: string
+  /** ⭐ Per-operator statistics, best first (`FieldDayLog::operator_stats`): the contacts that
+   *  count, grouped by the operator stamped on each. Absent from an older station. */
+  operators?: FdOperatorStat[]
+}
+
+/** One operator's share of the contest log (FieldDayStatus.operators). */
+export interface FdOperatorStat {
+  /** The operator stamp; '' for the contacts that name nobody. */
+  operator: string
+  qsos: number
+  /** QSO points, before multipliers, power and bonuses. */
+  points: number
+  /** The multipliers this operator worked first. */
+  newMults: number
+  /** Contacts per hour over the last 10 minutes, and over the last hour. */
+  rate10: number
+  rate60: number
+  /** The best UTC clock hour: its start (Unix seconds) and its contacts; 0/0 with none. */
+  bestHourStartUnix: number
+  bestHourQsos: number
+  bandMode: { band: string; mode: string; qsos: number }[]
 }
 
 /** One exchange slot, as the entry strip renders a box for it.
