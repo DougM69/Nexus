@@ -113,6 +113,12 @@ pub struct Station {
     /// transmitting a parting 73 (the Fox segment must stay clean). Set by the
     /// engine when the operator's special-op mode is Hound.
     pub quiet_finish: bool,
+    /// WSJT-X 3.0's FT8/FT4/FST4 rule: when the partner repeats the over we are answering
+    /// (their report while we wait for RR73, their grid while we wait for the roger), the
+    /// report in our re-sent over is re-read from that newest decode. Older WSJT-X, and
+    /// 3.0 in every other mode, hold the report fixed once sent (`false`). Set by the
+    /// engine from the live tier.
+    pub report_follows_latest_decode: bool,
     /// True once the PARTNER has advanced this exchange at least once on the air —
     /// i.e. [`Self::observe`] moved the state, not [`Self::start`]'s resume table.
     /// Distinguishes a QSO that really ran from a `Done` SYNTHESIZED out of a single
@@ -173,6 +179,7 @@ impl Station {
             call_cap: None,
             confirm_with_rrr: false,
             quiet_finish: false,
+            report_follows_latest_decode: false,
             advanced_on_air: false,
             keyed_on_air: false,
             transcript: Vec::new(),
@@ -196,6 +203,7 @@ impl Station {
             call_cap: None,
             confirm_with_rrr: false,
             quiet_finish: false,
+            report_follows_latest_decode: false,
             advanced_on_air: false,
             keyed_on_air: false,
             transcript: Vec::new(),
@@ -395,6 +403,7 @@ impl Station {
             call_cap: None,
             confirm_with_rrr: prefer_rrr,
             quiet_finish: false,
+            report_follows_latest_decode: false,
             // `start()` resumes from a message we ALREADY had; the partner has not
             // answered US yet, and nothing has left our antenna for it. Only `observe`
             // sets the first; only `after_tx` sets the second.
@@ -1165,6 +1174,32 @@ impl Station {
                     self.log(
                         "DX answered grid-less (i3=4 cannot carry a report) → rogering".into(),
                     );
+                }
+                // THE PARTNER REPEATED THE OVER WE ARE ANSWERING: their report while we wait
+                // for RR73, their grid while we wait for the roger. They did not copy us, so
+                // the same over goes again — and in FT8/FT4/FST4 it carries the report of
+                // THIS decode, as WSJT-X 3.0.2 does (`mainwindow.cpp:9426`, the `m_mode ==
+                // "FT8" || "FT4" || "FST4"` clause re-reads `message.report()` into Tx2/Tx3;
+                // 2.7.0 held it fixed at `:6539`). Not an advance: the state, the step's TX
+                // count and anything the operator forced in place of a report stay as they
+                // are; only the number in a queued report moves. A grid-less call is not a
+                // repeated grid (upstream's `auto_sequence` never reads one).
+                (State::AwaitRr73, Msg::Report { to, de, .. })
+                | (State::AwaitRoger, Msg::Grid { to, de, .. })
+                    if self.report_follows_latest_decode
+                        && !matches!(&m, Msg::Grid { grid, .. } if grid.is_empty())
+                        && crate::message::same_call(to, &self.mycall)
+                        && self.from_dx(de) =>
+                {
+                    if let Some(Msg::Report { snr, .. } | Msg::RReport { snr, .. }) =
+                        &mut self.pending
+                    {
+                        *snr = rpt;
+                        self.log(format!(
+                            "{de} repeated → resending with report {}",
+                            crate::message::fmt_report(rpt)
+                        ));
+                    }
                 }
                 _ => {}
             }
@@ -2256,5 +2291,164 @@ mod harq_seq_tests {
             1,
             "RV unchanged (still awaiting ACK)"
         );
+    }
+}
+
+#[cfg(test)]
+mod report_refresh_tests {
+    //! WSJT-X 3.0.2 `mainwindow.cpp:9426`: in FT8/FT4/FST4 a partner who repeats the over we
+    //! are answering gets our same over back, carrying the report of THAT newest decode. 2.7.0
+    //! (`:6539`) held the report fixed once sent, as 3.0 still does in every other mode.
+    use super::*;
+    use crate::message::Msg;
+
+    const ME: &str = "PA2PAT";
+    const DX: &str = "PA1L";
+
+    fn dec(text: &str, snr: i32) -> Decode {
+        Decode {
+            message: text.into(),
+            sync: 1.0,
+            snr,
+            dt: 0.0,
+            freq: 734.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            raw: None,
+            mode: None,
+        }
+    }
+
+    /// We called PA1L, and at 171242 heard `PA2PAT PA1L -01` at +20: Tx3 is `R+20`, on air once.
+    fn awaiting_rr73(refresh: bool) -> Station {
+        let mut s = Station::start(ME, "JO21", DX, None, false, false);
+        s.report_follows_latest_decode = refresh;
+        s.observe(&[dec("PA2PAT PA1L -01", 20)]);
+        assert_eq!(s.state, State::AwaitRr73);
+        assert_eq!(s.pending_text().as_deref(), Some("PA1L PA2PAT R+20"));
+        s.after_tx();
+        s
+    }
+
+    /// We called CQ, PA1L answered with JO22 at -5: Tx2 is `-05`, on air once.
+    fn awaiting_roger(refresh: bool) -> Station {
+        let mut s = Station::calling_cq(ME, "JO21");
+        s.report_follows_latest_decode = refresh;
+        s.observe(&[dec("PA2PAT PA1L JO22", -5)]);
+        assert_eq!(s.state, State::AwaitRoger);
+        assert_eq!(s.pending_text().as_deref(), Some("PA1L PA2PAT -05"));
+        s.after_tx();
+        s
+    }
+
+    #[test]
+    fn a_repeated_report_resends_tx3_with_the_newest_snr() {
+        let mut s = awaiting_rr73(true);
+        // 171312: the same message, heard at +27.
+        s.observe(&[dec("PA2PAT PA1L -01", 27)]);
+        assert_eq!(s.pending_text().as_deref(), Some("PA1L PA2PAT R+27"));
+        assert_eq!(s.outgoing(), Some(Msg::parse("PA1L PA2PAT R+27")));
+        // Only the number moved: no step, so the step's TX count and the HARQ cycle carry on.
+        assert_eq!(s.state, State::AwaitRr73);
+        assert_eq!(s.tx_count, 1);
+        assert_eq!(s.rv_count, 1);
+        assert_eq!(s.rx_report, Some(-1));
+        // And the QSO still closes on their RR73.
+        s.observe(&[dec("PA2PAT PA1L RR73", 25)]);
+        assert_eq!(s.state, State::Done);
+        assert_eq!(s.pending_text().as_deref(), Some("PA1L PA2PAT 73"));
+    }
+
+    #[test]
+    fn a_repeated_grid_resends_tx2_with_the_newest_snr() {
+        let mut s = awaiting_roger(true);
+        s.observe(&[dec("PA2PAT PA1L JO22", 3)]);
+        assert_eq!(s.pending_text().as_deref(), Some("PA1L PA2PAT +03"));
+        assert_eq!(s.state, State::AwaitRoger);
+        assert_eq!(s.tx_count, 1);
+        assert_eq!(s.rv_count, 1);
+    }
+
+    #[test]
+    fn other_modes_hold_the_report_fixed() {
+        let mut s = awaiting_rr73(false);
+        s.observe(&[dec("PA2PAT PA1L -01", 27)]);
+        assert_eq!(s.pending_text().as_deref(), Some("PA1L PA2PAT R+20"));
+        let mut s = awaiting_roger(false);
+        s.observe(&[dec("PA2PAT PA1L JO22", 3)]);
+        assert_eq!(s.pending_text().as_deref(), Some("PA1L PA2PAT -05"));
+    }
+
+    #[test]
+    fn another_stations_report_to_us_changes_nothing() {
+        let mut s = awaiting_rr73(true);
+        s.observe(&[dec("PA2PAT PB9X -01", 27)]);
+        assert_eq!(s.pending_text().as_deref(), Some("PA1L PA2PAT R+20"));
+        let mut s = awaiting_roger(true);
+        s.observe(&[dec("PA2PAT PB9X JO22", 3)]);
+        assert_eq!(s.pending_text().as_deref(), Some("PA1L PA2PAT -05"));
+    }
+
+    #[test]
+    fn the_partner_working_someone_else_changes_nothing() {
+        let mut s = awaiting_rr73(true);
+        s.observe(&[dec("UA1AOF PA1L -01", 27)]);
+        assert_eq!(s.pending_text().as_deref(), Some("PA1L PA2PAT R+20"));
+        let mut s = awaiting_roger(true);
+        s.observe(&[dec("UA1AOF PA1L JO22", 3)]);
+        assert_eq!(s.pending_text().as_deref(), Some("PA1L PA2PAT -05"));
+    }
+
+    #[test]
+    fn a_different_over_from_the_partner_is_not_a_repeat() {
+        for text in ["PA2PAT PA1L JO22", "PA2PAT PA1L R-01", "PA2PAT PA1L"] {
+            let mut s = awaiting_rr73(true);
+            s.observe(&[dec(text, 27)]);
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("PA1L PA2PAT R+20"),
+                "{text} awaiting RR73"
+            );
+        }
+        // A grid-less call (here hashed, which is how one parses at all) is not a repeated
+        // grid: WSJT-X's `auto_sequence` reads only 3-word messages (`mainwindow.cpp:7504`).
+        let mut s = awaiting_roger(true);
+        s.observe(&[dec("PA2PAT <PA1L>", 3)]);
+        assert_eq!(s.pending_text().as_deref(), Some("PA1L PA2PAT -05"));
+    }
+
+    #[test]
+    fn contest_exchanges_carry_no_snr_to_refresh() {
+        for text in [
+            "PA2PAT PA1L 579 NY",
+            "PA2PAT PA1L R 579 NY",
+            "PA2PAT PA1L 2A EMA",
+            "PA2PAT PA1L R 2A EMA",
+            "PA2PAT PA1L 579 0013",
+        ] {
+            let mut s = awaiting_rr73(true);
+            s.observe(&[dec(text, 27)]);
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("PA1L PA2PAT R+20"),
+                "{text}"
+            );
+            let mut s = awaiting_roger(true);
+            s.observe(&[dec(text, 3)]);
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("PA1L PA2PAT -05"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_over_the_operator_forced_keeps_its_text() {
+        let mut s = awaiting_rr73(true);
+        s.override_next(Msg::parse("PA1L PA2PAT 73"));
+        s.observe(&[dec("PA2PAT PA1L -01", 27)]);
+        assert_eq!(s.pending_text().as_deref(), Some("PA1L PA2PAT 73"));
     }
 }

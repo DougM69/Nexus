@@ -68,6 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each
   station: Nexus runs on this PC and the radio follows your own clicks and pop-outs. Streaming the station's screen is
   still there as a smaller button after it, for when you only want to see the shack's screen.
+- **FT8, FT4 and FST4: when the other station repeats its report or grid, your repeated reply carries the new
+  signal report, as WSJT-X 3.0 does.** Heard at +20 and then again at +27, Nexus now sends R+27 the second time
+  instead of R+20, and logs +27 as the report sent. Nothing else about the sequence or its timing changes; other modes
+  keep the report fixed, as WSJT-X does. NEEDS-BENCH on the air.
 
 ### Fixed
 - **IC-7300, IC-705, IC-905 and IC-7300MK2: scope span, reference level and Center/Fixed now work.** With Native Icom

@@ -26941,6 +26941,11 @@ contact yourself."
                 } else {
                     decodes
                 };
+                // WSJT-X 3.0.2 `mainwindow.cpp:9426`: in FT8, FT4 and FST4 a repeated over
+                // from the partner re-reads the report we send back; every other mode keeps
+                // it fixed once sent.
+                station.report_follows_latest_decode =
+                    matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4 | Tier::Fst4);
                 station.observe(observed);
                 sequence_advanced = station.state != state_before;
                 // Quiet-finish (hound) completion sends NOTHING after the Fox's
@@ -42131,6 +42136,61 @@ mod tests {
             Some("-07"),
             "RST_SENT survives working a station that answered our CQ"
         );
+    }
+
+    /// Operator report, 2026-10-17: PA1L repeated `PA2PAT PA1L -01`, first heard at +20, then
+    /// at +27. WSJT-X 3.0.2 answers the repeat with `R+27` (`mainwindow.cpp:9426`, FT8/FT4/FST4);
+    /// Nexus re-sent `R+20`. The logged RST_SENT follows the report that went out last.
+    fn work_pa1l_through_a_repeated_report(tier: Tier) -> (Option<String>, Option<i32>, Engine) {
+        let mut e = Engine::new("PA2PAT", "JO21", 0);
+        e.set_tier(tier);
+        e.call_station("PA1L");
+        key_one_over(&mut e, 0);
+        // 171242: their report, heard at +20 → we send R+20.
+        e.ingest_decodes_for_test(&[dec_snr("PA2PAT PA1L -01", 20)], 1);
+        assert_eq!(
+            e.snapshot().qso.as_ref().and_then(|q| q.tx_now.clone()),
+            Some("PA1L PA2PAT R+20".into()),
+            "{tier:?}"
+        );
+        key_one_over(&mut e, 2);
+        // 171312: the same message, heard at +27.
+        e.ingest_decodes_for_test(&[dec_snr("PA2PAT PA1L -01", 27)], 3);
+        let tx_now = e.snapshot().qso.as_ref().and_then(|q| q.tx_now.clone());
+        (tx_now, e.qso_report_sent, e)
+    }
+
+    #[test]
+    fn a_repeated_report_is_answered_with_the_newest_snr_and_logged() {
+        let (tx_now, sent, mut e) = work_pa1l_through_a_repeated_report(Tier::Ft8);
+        assert_eq!(tx_now.as_deref(), Some("PA1L PA2PAT R+27"));
+        assert_eq!(sent, Some(27));
+        key_one_over(&mut e, 4);
+        e.ingest_decodes_for_test(&[dec_snr("PA2PAT PA1L RR73", 25)], 5);
+        let log = e.stored_log();
+        assert_eq!(log.len(), 1, "the QSO auto-logged");
+        assert_eq!(
+            log[0].rst_sent.as_deref(),
+            Some("+27"),
+            "RST_SENT is the report we sent last"
+        );
+        assert_eq!(log[0].rst_rcvd.as_deref(), Some("-01"));
+    }
+
+    #[test]
+    fn the_report_refresh_is_ft8_ft4_and_fst4_only() {
+        for tier in [Tier::Ft4, Tier::Fst4] {
+            let (tx_now, sent, _) = work_pa1l_through_a_repeated_report(tier);
+            assert_eq!(tx_now.as_deref(), Some("PA1L PA2PAT R+27"), "{tier:?}");
+            assert_eq!(sent, Some(27), "{tier:?}");
+        }
+        // WSJT-X 3.0.2 keeps the report fixed in every other mode; FT2 follows Decodium,
+        // whose clause names FT8/FT4/FST4 too.
+        for tier in [Tier::Ft2, Tier::Q65, Tier::Msk144] {
+            let (tx_now, sent, _) = work_pa1l_through_a_repeated_report(tier);
+            assert_eq!(tx_now.as_deref(), Some("PA1L PA2PAT R+20"), "{tier:?}");
+            assert_eq!(sent, Some(20), "{tier:?}");
+        }
     }
 
     #[test]
