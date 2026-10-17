@@ -330,6 +330,15 @@ impl Authority {
     pub fn hold_tunnel_devices(&self, devices: LanDevices) {
         let _ = self.tunnel_devices.set(devices);
     }
+    /// Is `device` one of the computers that hold station control here (the LAN's paired ones
+    /// while LAN is on, the tunnel's approved ones while hosted Remote is on)? A computer reads
+    /// only over its own pinned link, so the relay's lane answers no read in its name.
+    pub fn is_computer(&self, device: &str) -> bool {
+        [&self.lan_devices, &self.tunnel_devices]
+            .into_iter()
+            .filter_map(|devices| devices.get())
+            .any(|devices| devices().iter().any(|d| d == device))
+    }
     /// Synchronous invalidation does not wait for an in-flight file operation.
     /// Its epoch is reconciled before any next request or local grant.
     pub fn invalidate(&self) {
