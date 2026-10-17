@@ -666,7 +666,7 @@ pub(crate) mod tests_support {
     /// (`on_sub` false) or the Sub band. A plain frame acts on whichever band is selected when
     /// it arrives; a band-directed one ([`band_directed`]) on the band it names. Returns the
     /// reply to send: `None` = ack, `Some((0xFA, _))` = NAK, [`SILENT`] = say nothing.
-    fn act(r: &mut Regs, addr: u8, cmd: u8, data: &[u8], on_sub: bool) -> Option<(u8, Vec<u8>)> {
+    fn act(r: &mut Regs, cmd: u8, data: &[u8], on_sub: bool) -> Option<(u8, Vec<u8>)> {
         r.acted.push((on_sub, cmd, data.to_vec()));
         // See `Regs::drop_data_writes` and `Regs::nak_data_writes`.
         let data_write = cmd == 0x1A && data.first() == Some(&0x06) && data.len() > 1;
@@ -977,41 +977,32 @@ pub(crate) mod tests_support {
                     None => Some((0x16, vec![sub, file.get(&sub).copied().unwrap_or(0)])),
                 }
             }
-            // Scope CENTER/FIXED (`27 14`) — remembered so the span below can be
-            // refused. The mode is the LAST payload byte on both frame shapes
-            // (`27 14 <fixed>` single-scope, `27 14 <main_sub> <fixed>` dual).
-            // ⚠️ READ vs WRITE, and the distinction is load-bearing. A CI-V READ is
-            // the bare sub-command (`27 14`, len 1); a WRITE carries the mode after it
-            // (`27 14 <fixed>`, or `27 14 <main_sub> <fixed>` on a dual-scope rig). The
-            // arm below used to take `data.last()` unconditionally, so a READ would have
-            // been swallowed as a write of `0x14` — setting the mode to Center and
-            // answering nothing. A test built on that would have "passed" while the
-            // fixture quietly rewrote the state under it.
-            // A READ carries no mode byte; a WRITE does. Length alone cannot tell
-            // them apart, because a dual-scope rig puts a Main/Sub selector between the
-            // sub-command and the payload: a single-rig WRITE and a dual-rig READ are
-            // both two bytes. So ask the SAME question the real code asks — is this
-            // address dual — instead of guessing from the length.
-            (0x27, Some(0x14))
-                if data.len() == 1 + usize::from(crate::civ::scope::scope_is_dual(addr)) =>
-            {
-                Some((0x27, {
-                    let mut d = vec![0x14];
-                    if crate::civ::scope::scope_is_dual(addr) {
-                        d.push(0x00);
+            // Scope CONTROL (`27 14` CENTER/FIXED, `27 15` span, `27 19` ref level) — laid out
+            // as Icom's CI-V references draw them: the sub-command, then a Main/Sub selector
+            // byte, then the payload. The selector is there on EVERY model, single-scope ones
+            // included, where it is "00 (Fixed)": IC-7300 Full Manual pp. 19-14/19-15, IC-705
+            // CI-V guide p. 29, IC-905 p. 28, IC-7300MK2 p. 25. Hamlib 4.5.5 emits `27 15 00 …`
+            // to an IC-7300 too.
+            // ⚠️ A FRAME OF ANY OTHER LENGTH IS NAKED, AS THE RIG DOES. This fixture used to read
+            // the selector as present only on dual-scope addresses — the same wrong layout the
+            // daemon sent — so every test agreed with the bug and an IC-7300 refused every span,
+            // reference level and Center/Fixed write in the field. Reads are `27 14 00` (len 2);
+            // writes are `27 14 00 <mode>` (3), `27 15 00 <5 BCD>` (7), `27 19 00 <2 BCD> <sign>` (5).
+            (0x27, Some(sub @ (0x14 | 0x15 | 0x19))) => {
+                match (sub, data.len()) {
+                    (0x14, 2) => Some((0x27, vec![0x14, 0x00, u8::from(r.scope_fixed)])),
+                    (0x14, 3) => {
+                        r.scope_fixed = data[2] == 0x01;
+                        None
                     }
-                    d.push(u8::from(r.scope_fixed));
-                    d
-                }))
+                    // Scope SPAN — NAKed while the scope is in Fixed mode, which is the #275
+                    // refusal this fixture exists to produce.
+                    (0x15, 7) if r.scope_fixed => Some((0xFA, Vec::new())),
+                    (0x15, 7) | (0x19, 5) => None,
+                    _ => Some((0xFA, Vec::new())),
+                }
             }
-            (0x27, Some(0x14)) => {
-                r.scope_fixed = data.last().is_some_and(|&b| b == 0x01);
-                None
-            }
-            // Scope SPAN (`27 15`) — NAKed while the scope is in Fixed mode, which
-            // is the #275 refusal this fixture exists to produce.
-            (0x27, Some(0x15)) if r.scope_fixed => Some((0xFA, Vec::new())),
-            (0x27, _) => None, // scope enable/disable, span in centre
+            (0x27, _) => None, // scope enable/disable
             // Voice TX memory (`28 00`, `00` = stop): acked. Whether a real rig acks
             // a stop with nothing playing is a bench question; tests assert the frame.
             (0x28, Some(0x00)) => None,
@@ -1028,7 +1019,7 @@ pub(crate) mod tests_support {
     ///
     /// A radio without the command (`cmd29` false — the IC-9700 fixture) NAKs it, and so does
     /// the IC-7610 for any command its table does not mark. The selection is never touched.
-    fn band_directed(r: &mut Regs, addr: u8, data: &[u8]) -> Option<(u8, Vec<u8>)> {
+    fn band_directed(r: &mut Regs, data: &[u8]) -> Option<(u8, Vec<u8>)> {
         let nak = Some((0xFA, Vec::new()));
         let (Some(&band), Some(&cmd)) = (data.first(), data.get(1)) else {
             return nak;
@@ -1040,7 +1031,7 @@ pub(crate) mod tests_support {
         if !r.cmd29 || band > 0x01 || !marked {
             return nak;
         }
-        match act(r, addr, cmd, inner, band == 0x01) {
+        match act(r, cmd, inner, band == 0x01) {
             // Acks and refusals come back bare (p. 15); a lost reply stays lost.
             reply @ (None | Some((0xFA | SILENT, _))) => reply,
             Some((rcmd, rdata)) => {
@@ -1194,7 +1185,6 @@ pub(crate) mod tests_support {
                 if self.mute {
                     continue;
                 }
-                let addr = self.addr;
                 let action = {
                     // Poison-tolerant: a test asserting under the regs lock may
                     // panic; the engine thread must not cascade after it.
@@ -1208,10 +1198,10 @@ pub(crate) mod tests_support {
                     if r.off {
                         Some((SILENT, Vec::new()))
                     } else if f.cmd == 0x29 {
-                        band_directed(&mut r, addr, &f.data)
+                        band_directed(&mut r, &f.data)
                     } else {
                         let on_sub = r.sel_sub;
-                        act(&mut r, addr, f.cmd, &f.data, on_sub)
+                        act(&mut r, f.cmd, &f.data, on_sub)
                     }
                 };
                 match action {

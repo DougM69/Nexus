@@ -1841,11 +1841,12 @@ impl CivDaemon {
         );
     }
 
-    /// Main/Sub selector byte for the scope-CONTROL commands: `Some(0x00)` (Main) on dual-scope
-    /// rigs, `None` (omit) on single-scope rigs. The stream is already pinned to Main by
-    /// `scope_stream_frames`, so controlling the Main scope is what the operator sees.
-    fn scope_ms(&self) -> Option<u8> {
-        super::scope::scope_is_dual(self.civ_addr).then_some(0x00)
+    /// Main/Sub selector byte for the scope-CONTROL commands: `00` (Main) on EVERY model. Single-
+    /// scope rigs take it too ("00 (Fixed)" in their CI-V references) and answer NG without it,
+    /// which is how the IC-7300's span came to be refused. On a dual-scope rig the stream is
+    /// pinned to Main by `scope_stream_frames`, so the Main scope is the one the operator sees.
+    fn scope_ms(&self) -> u8 {
+        0x00
     }
 
     /// Set the rig's scope SPAN (`27 15`) — the ± half-width in Hz (rig table 2.5k..500k).
@@ -2131,6 +2132,85 @@ mod tests {
             regs.lock().unwrap().scope_fixed,
             "the refusal must leave the rig's scope mode exactly where the operator put it"
         );
+    }
+
+    /// ⭐ THE SINGLE-SCOPE ICOMS TAKE THE MAIN/SUB SELECTOR TOO. Nexus sent `27 14`, `27 15` and
+    /// `27 19` without it to the IC-7300, IC-705, IC-905 and IC-7300MK2, so the rig read the
+    /// first payload byte as the selector, found the frame a byte short, and answered NG: every
+    /// span button was "refused", and the Center-mode read that should have explained it came
+    /// back unanswered. Icom's references put `00` there on every one of these models (IC-7300
+    /// Full Manual pp. 19-14/19-15; IC-705 CI-V p. 29; IC-905 p. 28; IC-7300MK2 p. 25).
+    ///
+    /// Asserted BY VALUE on what reached the radio, and the IC-9700 rides along as the control:
+    /// its bytes were right before and must not move.
+    #[test]
+    fn every_icom_scope_control_frame_carries_the_main_selector() {
+        for model in [
+            IcomModel::Ic7300,
+            IcomModel::Ic705,
+            IcomModel::Ic905,
+            IcomModel::Ic7300Mk2,
+            IcomModel::Ic9700,
+        ] {
+            let addr = model.default_civ_addr();
+            let (radio, _push) = FakeRadio::new(addr);
+            let regs = radio.regs();
+            let d = CivDaemon::start_with_io(Box::new(radio), addr, 0, 1, Some(model)).unwrap();
+
+            d.set_scope_center_mode(false);
+            assert_eq!(
+                d.scope_center_mode(),
+                Some(false),
+                "{model:?}: Center reads back"
+            );
+            assert_eq!(
+                d.set_scope_span(100_000),
+                Ok(()),
+                "{model:?}: a ±100 kHz span in Center mode is taken"
+            );
+            d.set_scope_ref(-105);
+            d.set_scope_center_mode(true);
+            assert!(
+                regs.lock().unwrap().scope_fixed,
+                "{model:?}: the Fixed write landed"
+            );
+            assert_eq!(
+                d.scope_center_mode(),
+                Some(true),
+                "{model:?}: Fixed reads back"
+            );
+            // The #275 refusal still comes through: a span in Fixed mode is the rig's NG.
+            assert_eq!(d.set_scope_span(100_000), Err(CivError::Nak), "{model:?}");
+
+            // Whole frames as they crossed the wire: FE FE <rig> E0 27 <sub> 00 … FD.
+            let frame = |body: &[u8]| [&[0xFE, 0xFE, addr, 0xE0, 0x27][..], body, &[0xFD]].concat();
+            let span = frame(&[0x15, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00]);
+            let sent: Vec<Vec<u8>> = (regs.lock().unwrap().wire.iter())
+                .filter(|w| w.get(4) == Some(&0x27) && matches!(w.get(5), Some(0x14 | 0x15 | 0x19)))
+                .cloned()
+                .collect();
+            assert_eq!(
+                sent,
+                vec![
+                    frame(&[0x14, 0x00, 0x00]),             // Center write
+                    frame(&[0x14, 0x00]),                   // Center read
+                    span.clone(),                           // ±100 kHz
+                    frame(&[0x19, 0x00, 0x10, 0x50, 0x01]), // −10.5 dB
+                    frame(&[0x14, 0x00, 0x01]),             // Fixed write
+                    frame(&[0x14, 0x00]),                   // Fixed read
+                    span,                                   // refused
+                ],
+                "{model:?}: the wire bytes, selector first"
+            );
+            // CONTROL: the fixture refuses the old selector-less span, as the rig did, so it
+            // can never again agree with the frame that broke the IC-7300.
+            let short = Frame::command(addr, 0x27, &[0x15, 0x00, 0x00, 0x10, 0x00, 0x00]);
+            assert_eq!(
+                d.engine.handle().transact(short, Expect::Ack).map(|_| ()),
+                Err(CivError::Nak),
+                "{model:?}: a span without the selector is NG"
+            );
+        }
     }
 
     #[test]
