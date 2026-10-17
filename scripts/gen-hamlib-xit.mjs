@@ -39,7 +39,13 @@ const out = join(repo, 'crates/tempo-audio/tests/fixtures/hamlib_xit.json')
 
 // The same catalog pattern `gen-hamlib-serial-speeds.mjs` reads: `(model, "Friendly name"),`
 // rows anchored at line start, so a number inside a comment or a name cannot be mistaken for one.
-const models = [...readFileSync(catalog, 'utf8').matchAll(/^\s*\(\s*(\d+)\s*,/gm)]
+// Read only the two catalog functions, `rig_models` and `extended_rig_models`: the same shape
+// elsewhere in the file is not a rig (a test's `(64, 64.0 / 255.0)` tuple once added three).
+const source = readFileSync(catalog, 'utf8')
+const start = source.indexOf('pub fn rig_models()')
+const end = source.indexOf('pub fn all_rig_models()')
+if (start < 0 || end < start) throw new Error(`the catalog functions moved in ${catalog} — check the markers`)
+const models = [...source.slice(start, end).matchAll(/^\s*\(\s*(\d+)\s*,/gm)]
   .map((m) => Number(m[1]))
 const uniq = [...new Set(models)].sort((a, b) => a - b)
 if (uniq.length < 100) throw new Error(`only ${uniq.length} models parsed from ${catalog} — check the pattern`)
