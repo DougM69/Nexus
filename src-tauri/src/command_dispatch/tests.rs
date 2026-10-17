@@ -452,6 +452,9 @@ fn a_wired_start_needs_the_lease_and_its_roads() {
     let shack = shack();
     let mut id = 0;
     for name in starts_run_from_afar() {
+        // A station of its own for each start: six asks for each of every start wired would
+        // otherwise run into the computer's command rate, which is not what this test asks.
+        let shack = self::shack();
         let mut admit = |who: &Caller| {
             id += 1;
             kind(&shack.admit(who, call(id, name, on_args(name))))
