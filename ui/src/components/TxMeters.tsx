@@ -151,6 +151,13 @@ export function TxMeters({
   // the first case would be writing a radio off for never having been asked.
   const seen = useRef(new Set<MeterKey>())
   const everRead = useRef(false)
+  // The verdict is due only once an over that read something has ENDED. The keyed poll reads
+  // one meter per 150 ms, so 150 ms into the first over ALC/Po/COMP are meters not yet asked,
+  // not meters the rig lacks, and a ⊘ hung on them then would flash and go as they arrive.
+  const overJudged = useRef(false)
+  // Has the rig keyed since this panel mounted? The Operate cell gives every meter its slot
+  // from that moment on (below).
+  const keyedOnce = useRef(false)
 
   const rows: MeterRow[] = []
   {
@@ -221,6 +228,8 @@ export function TxMeters({
     everRead.current = true
     for (const r of rows) if (r.bar != null) seen.current.add(r.key)
   }
+  if (onAir) keyedOnce.current = true
+  else if (everRead.current) overJudged.current = true
 
   const pin = pinned || inline
   if (!pin) {
@@ -262,11 +271,13 @@ export function TxMeters({
   // viewport of 800; `remote/test/browser.test.mjs:2689`). The contract was right and its SCOPE
   // was wrong — a shared component inherited a ruling made about one of its three hosts.
   //
-  // So the cell keeps its pre-rebuild shape: only meters that have actually read, and the hint
-  // alone until one does. `seen` rather than `bar != null` so a meter that has read once does
-  // not drop out between overs and start the bouncing again from the other direction.
-  const visible = inline ? shown.filter((r) => r.bar != null || seen.current.has(r.key)) : shown
-  if (inline && visible.length === 0) {
+  // So the cell shows the hint ALONE until the rig first keys. From that moment it holds all
+  // four slots, each empty until its meter reads, in a fixed two-track grid (`.inline` in
+  // styles.css), and keeps them between overs (operator, 2026-10-17). It used to show only the
+  // meters that had read, in an `auto-fit` grid: the poll reads one meter per 150 ms, so the
+  // first over showed SWR alone and that one bar spanned the whole cell, then shrank to a third
+  // as the others arrived. Four slots in two rows is the height a four-meter rig already had.
+  if (inline && !keyedOnce.current) {
     return (
       <div className={`ph-txmeters${variant} idle`} role="group" aria-label={t('meters.tx.aria')}>
         <span className="ph-txmeters-hint">{t('meters.tx.idle', { when: TX_METERS_WHEN })}</span>
@@ -279,7 +290,7 @@ export function TxMeters({
       role="group"
       aria-label={t('meters.tx.aria')}
     >
-      {visible.map((r) => (
+      {shown.map((r) => (
         <div key={r.key} className="ph-txmeter" title={r.title}>
           <span className="ph-txmeter-label">{r.label}</span>
           {/* A display well (styles.css DISPLAY WELLS), in all three hosts alike: the zone colours
@@ -298,7 +309,7 @@ export function TxMeters({
               silent through it, so it is one the radio does not report — as against the
               blank rows before the first over, which say nothing about the radio and are
               answered by the hint below instead. */}
-          {everRead.current && !seen.current.has(r.key) && (
+          {overJudged.current && !seen.current.has(r.key) && (
             <span className="ph-unavail" role="note" title={t('phone.unavail.meter', { meter: r.label })}>
               <span aria-hidden="true">⊘</span> {t('phone.unavail.mark')}
             </span>
@@ -308,8 +319,9 @@ export function TxMeters({
       {/* Before the first over nothing is known about any meter — these fields are populated
           only while transmitting — so the panel says WHEN it reads rather than letting four
           dashes read as four missing features. It goes once a reading has arrived, because
-          from then on each row answers for itself. */}
-      {pin && !everRead.current && (
+          from then on each row answers for itself. The Operate cell shows it alone (above),
+          never beside its slots: a line that came and went would move the cell. */}
+      {pin && !inline && !everRead.current && (
         <span className="ph-txmeters-hint">{t('meters.tx.idle', { when: TX_METERS_WHEN })}</span>
       )}
     </div>

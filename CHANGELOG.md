@@ -50,6 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scale as an Icom on USB with Native Icom CI-V, so it now reads as a trusted number and the high-SWR cutoff can be
   turned on. An IC-7300MK2 on USB still shows "SWR?": Nexus drives it through Hamlib there, not through its own CI-V
   scale. Not yet checked against a known load on the network connection (NEEDS-BENCH).
+- **FT screen: the transmit meters no longer stretch and shrink at the start of an over.** The meters beside the
+  Tx messages used to appear one at a time as the radio reported them, so SWR alone spread across the whole space and
+  then shrank as ALC, power and compression arrived. From the moment the radio keys, SWR, ALC, PO and COMP now each
+  have their own place at a fixed width, empty until their reading comes in. A meter the radio does not report is
+  marked unavailable once the over ends, not a fraction of a second after it starts.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
