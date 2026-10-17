@@ -2949,6 +2949,21 @@ pub struct Settings {
     /// `false`.
     #[serde(default)]
     pub lotw_cursor_every_call: bool,
+    /// A download of the whole confirmation history made a year of contacts at a time, newest
+    /// first (`tempo_core::lotw::build_year_report_url`), is under way: the year of the contacts
+    /// it asks for next. 0 = none. Saved after each year LoTW answers in full, so a download LoTW
+    /// cuts short goes on from that year next time instead of starting again from the newest, and
+    /// cleared with the cursor (a changed username, Download everything again, a purged log).
+    #[serde(default)]
+    pub lotw_sweep_year: i32,
+    /// The `qso_qslsince` the year-by-year download leaves as the cursor when its last year is in:
+    /// the `APP_LoTW_LASTQSL` of its first, newest year (the day before that year was asked, when
+    /// it held no confirmation). That high-water belongs to a different
+    /// query (one year of contacts), so it is not this cursor because LoTW says so; it serves
+    /// because it is no later than the moment that first year was asked for, and a confirmation
+    /// a later year's request missed was matched after its own year was asked for, later still.
+    #[serde(default)]
+    pub lotw_sweep_since: String,
     /// LoTW **upload** Station Location name (the `-l` arg passed to TQSL). Non-
     /// secret; TQSL owns the certificate. Empty = upload not configured.
     pub lotw_station_location: String,
@@ -5439,6 +5454,8 @@ impl Default for Settings {
             lotw_username: String::new(),
             lotw_last_qsl: String::new(),
             lotw_cursor_every_call: false,
+            lotw_sweep_year: 0,
+            lotw_sweep_since: String::new(),
             lotw_station_location: String::new(),
             lotw_use_adif_location: false,
             tqsl_path: String::new(),

@@ -6805,6 +6805,18 @@ impl Engine {
     pub fn set_lotw_cursor(&mut self, high_water: String) -> Settings {
         self.settings.lotw_last_qsl = high_water;
         self.settings.lotw_cursor_every_call = true;
+        self.settings.lotw_sweep_year = 0;
+        self.settings.lotw_sweep_since.clear();
+        self.settings.clone()
+    }
+
+    /// Save how far a year-by-year download of the whole confirmation history has come
+    /// (`Settings::lotw_sweep_year`, `Settings::lotw_sweep_since`) without
+    /// [`Engine::apply_settings`]' side effects (see [`Engine::set_lotw_cursor`]). Returns the
+    /// updated [`Settings`] for the caller to persist.
+    pub fn set_lotw_sweep(&mut self, next_year: i32, since: String) -> Settings {
+        self.settings.lotw_sweep_year = next_year;
+        self.settings.lotw_sweep_since = since;
         self.settings.clone()
     }
 
@@ -6817,6 +6829,8 @@ impl Engine {
     /// Returns the updated [`Settings`] for the caller to persist.
     pub fn reset_lotw_cursor(&mut self) -> Settings {
         self.settings.lotw_last_qsl.clear();
+        self.settings.lotw_sweep_year = 0;
+        self.settings.lotw_sweep_since.clear();
         self.settings.clone()
     }
 
@@ -28465,6 +28479,8 @@ contact yourself."
     pub fn clear_logbook(&mut self) -> usize {
         let removed = self.station.clear_logbook();
         self.settings.lotw_last_qsl.clear();
+        self.settings.lotw_sweep_year = 0;
+        self.settings.lotw_sweep_since.clear();
         self.settings.eqsl_last_sync.clear();
         removed
     }
@@ -52393,6 +52409,7 @@ mod tests {
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.set_lotw_cursor("2026-08-04 21:12:44".to_string());
         e.set_eqsl_cursor("2026-08-04 21:12:44".to_string());
+        e.set_lotw_sweep(2019, "2026-08-04 21:12:44".to_string());
         e.import_adif(
             "<EOH>\n<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8\
              <QSO_DATE:8>20240101<TIME_ON:6>120000<QSL_RCVD:1>Y<EOR>\n",
@@ -52404,6 +52421,14 @@ mod tests {
             "the next LoTW sync must be a FULL pull, not an incremental one"
         );
         assert!(e.settings().eqsl_last_sync.is_empty(), "eQSL likewise");
+        assert_eq!(
+            (
+                e.settings().lotw_sweep_year,
+                e.settings().lotw_sweep_since.as_str()
+            ),
+            (0, ""),
+            "and a year-by-year download starts over"
+        );
     }
 
     /// ★ The first LoTW download after the update asks for the whole history. A settings file
@@ -52445,11 +52470,20 @@ mod tests {
             "the next asks from the full download's high-water: {}",
             asks_from(&reread)
         );
+        e.set_lotw_sweep(2019, "2026-10-12 10:00:00".to_string());
         e.reset_lotw_cursor();
         assert_eq!(
             e.settings().lotw_sync_cursor(),
             "",
             "Download everything again"
+        );
+        assert_eq!(
+            (
+                e.settings().lotw_sweep_year,
+                e.settings().lotw_sweep_since.as_str()
+            ),
+            (0, ""),
+            "and starts a year-by-year download over"
         );
     }
 

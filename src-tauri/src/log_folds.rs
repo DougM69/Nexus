@@ -168,6 +168,12 @@ const PENDING: Narrow = Narrow {
     uploads: true,
 };
 
+/// The contact's time alone.
+const WHEN: Narrow = Narrow {
+    columns: &["when_unix"],
+    uploads: false,
+};
+
 /// Keep a fold's answer against `mark`, and hand it back — unless the read behind it was stale
 /// (the writer had not taken every change made before it was asked), when the fold is refused
 /// ([`Freshness::or_refuse`]) and nothing is kept, so the next asker reads the store again.
@@ -674,6 +680,21 @@ pub(crate) fn oldest_pending_lotw_date(rows: &LogRows) -> Result<Option<String>,
     .map_err(unreadable)?
     .or_refuse()?;
     Ok(oldest.map(tempo_core::logbook::lotw_pull_date))
+}
+
+/// When the log's oldest contact was made, the year a whole LoTW download asks back to
+/// (`crate::lotw_history_by_year`). `None` for an empty log.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn oldest_contact_unix(rows: &LogRows) -> Result<Option<u64>, String> {
+    let mut oldest: Option<u64> = None;
+    rows.each(WHEN, Scope::All, Order::Log, &mut |q| {
+        oldest = Some(oldest.map_or(q.when_unix, |o| o.min(q.when_unix)));
+        ControlFlow::Continue(())
+    })
+    .map_err(unreadable)?
+    .or_refuse()?;
+    Ok(oldest)
 }
 
 // ── the compound calls the launch seeds the decoder with ────────────────────
