@@ -250,7 +250,7 @@ impl Link {
         internet: Option<&Internet>,
     ) -> Result<(Self, SocketAddrV4), &'static str> {
         let road::Reached {
-            mut socket,
+            socket,
             ids,
             app,
             contract,
@@ -258,6 +258,56 @@ impl Link {
             audio_road,
             at,
         } = road::reach(record, order).await?;
+        let welcomed = road::Welcomed {
+            session: ids.session.clone(),
+            app,
+            contract,
+            stop_road,
+            audio_road,
+        };
+        let link = Self::open(socket, ids, welcomed, Some(at), run, headset, internet).await?;
+        Ok((link, at))
+    }
+
+    /// The link through this computer's end of a pipe through the station's room
+    /// ([`crate::tunnel`]): the same TLS, hello, build check and `open` as on this network, with
+    /// internet roads beside it as `internet` gathers them. A road of this network's the welcome
+    /// names is never opened from here; without a road, Stop has this link alone.
+    pub async fn connect_tunnel(
+        pipe: tokio::io::DuplexStream,
+        record: &PairedStation,
+        run: u64,
+        headset: Option<Arc<dyn Headset>>,
+        internet: &Internet,
+    ) -> Result<Self, &'static str> {
+        let (socket, ids, welcomed) = road::reach_through(pipe, record).await?;
+        Self::open(socket, ids, welcomed, None, run, headset, Some(internet)).await
+    }
+
+    /// The link on a road the station welcomed this computer on: this build's check, the `open`,
+    /// and the roads beside it, this network's at `at` when it is this network's, or internet roads
+    /// as `internet` gathers them.
+    async fn open(
+        mut socket: Socket,
+        ids: Ids,
+        welcomed: road::Welcomed,
+        at: Option<SocketAddrV4>,
+        run: u64,
+        headset: Option<Arc<dyn Headset>>,
+        internet: Option<&Internet>,
+    ) -> Result<Self, &'static str> {
+        let road::Welcomed {
+            app,
+            contract,
+            stop_road,
+            audio_road,
+            ..
+        } = welcomed;
+        // Only a road on this network has an address for this network's roads.
+        let (stop_road, audio_road) = match at {
+            Some(_) => (stop_road, audio_road),
+            None => (None, None),
+        };
         let on_air = Arc::new(OnAir::default());
         let ours = (wire::APP, wire::contract());
         if let Some(reason) = wire::refusal(End::Computer, ours, (&app, &contract)) {
@@ -362,10 +412,13 @@ impl Link {
                     });
                 (stop, audio)
             }
-            None => (
-                Self::lan_stop_road(stop_road, at, &export, &on_air),
-                Self::lan_audio_road(audio_road, headset, at, &export, &on_air),
-            ),
+            None => match at {
+                Some(at) => (
+                    Self::lan_stop_road(stop_road, at, &export, &on_air),
+                    Self::lan_audio_road(audio_road, headset, at, &export, &on_air),
+                ),
+                None => (None, None),
+            },
         };
         let (sink, stream) = socket.split();
         let (outbox, writer) = Outbox::spawn(sink);
@@ -374,15 +427,12 @@ impl Link {
         let reader = tokio::spawn(read(stream, shared.clone()));
         let keeper = tokio::spawn(keep(outbox.clone(), writer, shared.clone()));
         let tasks = vec![writing, reader.abort_handle(), keeper.abort_handle()];
-        Ok((
-            Self {
-                outbox,
-                shared,
-                tasks,
-                ids,
-            },
-            at,
-        ))
+        Ok(Self {
+            outbox,
+            shared,
+            tasks,
+            ids,
+        })
     }
 
     /// Stop's second road on the LAN, from this session's own keys: at the address that welcomed

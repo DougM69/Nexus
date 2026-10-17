@@ -28,7 +28,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The command link's feeds: one raw-deflate stream for each feed (`wire`).
 flate2 = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+# `io-util`: the pipe through the station's room (`tunnel`), a byte stream TLS runs over.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 futures-util = { version = "0.3", features = ["sink"] }
 ring = "0.17"
 # The command link's WebSocket, on its own TLS stream: only the handshake, so no TLS of its own and

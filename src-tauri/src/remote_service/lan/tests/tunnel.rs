@@ -427,3 +427,129 @@ async fn a_session_through_the_room_ends_with_its_approval() {
         "taken past its approval: {again}"
     );
 }
+
+/// What the computer's own end keeps for a station it reaches through the room: the service's
+/// station id and the device id it gave this computer, the station key pinned at first sight
+/// (`station`), and this computer's device key for that station.
+fn through_record(s: &Shack, station: &str) -> crate::remote_service::vault::PairedStation {
+    crate::remote_service::vault::PairedStation {
+        station_id: STATION.into(),
+        device_id: APPROVED.into(),
+        station_key: station.into(),
+        pkcs8: s.computer.key.clone(),
+        addresses: Vec::new(),
+    }
+}
+
+/// ★ The computer's own end of the tunnel (the client core's `Link::connect_tunnel`, as client mode
+/// opens it): through the room it is welcomed under the device id the service gave it, this build
+/// at both ends; its Stop road comes up beside the tunnel on its own socket and ICE, through the
+/// relay alone; the lease is taken and the shack's state arrives on the link; and a Stop goes on the
+/// road and is acknowledged. CONTROL: the same computer pinning any other station key is refused
+/// `keyChanged` in the handshake and never welcomed.
+#[tokio::test]
+async fn the_computers_own_end_opens_the_link_and_its_stop_road_through_the_room() {
+    use crate::lan_client::link::{Internet, Link};
+    use tempo_client::ice::Relay;
+    use tempo_client::turn::stand_in::StandIn;
+    const USER: &str = "road";
+    const PASSWORD: &str = "throwaway-password";
+    // A shack whose commands run, so its state feeds publish.
+    let app = super::commands::App::new();
+    let s = super::commands::running(&app);
+    let approved = Arc::new(Approved::default());
+    approved.set(approved_for(Some(&s.computer)));
+    let tunnel = tunnel_of(&s, approved.roster(), &approved);
+    let (_stop, stop) = watch::channel(false);
+    let turn = StandIn::start(USER, PASSWORD);
+    let internet = Internet {
+        bind: Ipv4Addr::LOCALHOST.into(),
+        direct: false,
+        stun: None,
+        relay: Some(Relay {
+            server: turn.address,
+            username: USER.into(),
+            password: PASSWORD.into(),
+        }),
+    };
+    let impostor = tls::Identity::new(&fixture_key(), STATION.into())
+        .unwrap()
+        .public_key()
+        .to_string();
+    let refused = Link::connect_tunnel(
+        piped(&tunnel, stop.clone()).await,
+        &through_record(&s, &impostor),
+        41,
+        None,
+        &internet,
+    )
+    .await
+    .err();
+    assert_eq!(refused, Some("keyChanged"), "another station key was taken");
+    let link = Link::connect_tunnel(
+        piped(&tunnel, stop).await,
+        &through_record(&s, &s.public_key),
+        41,
+        None,
+        &internet,
+    )
+    .await
+    .expect("the link through the room");
+    assert_eq!(link.ids.device, APPROVED);
+    assert_eq!(link.ids.station, STATION);
+    let road = link.stop_road().expect("the Stop road beside the tunnel");
+    // The tunnel grants no control of its own: the shack gives it, as it does to any computer.
+    s.shared.authority.permit_station(APPROVED, true).unwrap();
+    let ask = |request: Value| {
+        let link = &link;
+        async move {
+            for _ in 0..50 {
+                let mut request = request.clone();
+                request["requestId"] = json!(id());
+                let answer = link
+                    .operation(request)
+                    .await
+                    .expect("an answer through the room");
+                if answer["error"] != "stationBusy" && answer["error"] != "remoteBusy" {
+                    return answer;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            panic!("the station stayed busy")
+        }
+    };
+    let state = ask(json!({"type":"state"})).await;
+    let boot = state["value"]["stationBootId"].clone();
+    let acquired = ask(json!({"type":"acquire","stationBootId":boot})).await;
+    assert_eq!(acquired["value"]["phase"], "controlling", "{acquired}");
+    road.lease(acquired["value"]["leaseId"].as_str().map(str::to_string));
+    assert!(link.watch(&["snapshot/1"]));
+    let mut arrived = false;
+    for _ in 0..400 {
+        if link.latest("snapshot/1").is_some() {
+            arrived = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(arrived, "the shack's state never arrived through the room");
+    road.stop(1);
+    let mut acknowledged = false;
+    for _ in 0..400 {
+        if road.heard().stopped.contains(&1) {
+            acknowledged = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(
+        acknowledged,
+        "the Stop on the road beside the tunnel was never acknowledged"
+    );
+    let crossed = turn.seen();
+    assert!(
+        crossed.sent_by_channel > 0 && crossed.delivered_by_channel > 0,
+        "the road never crossed the relay both ways: {crossed:?}"
+    );
+    link.close();
+}

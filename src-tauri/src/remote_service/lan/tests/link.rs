@@ -293,7 +293,13 @@ async fn the_computers_socket_sends_each_frame_at_once() {
         .await
         .expect("welcomed");
     assert_eq!(
-        reached.socket.get_ref().get_ref().0.nodelay().ok(),
+        reached
+            .socket
+            .get_ref()
+            .get_ref()
+            .0
+            .tcp()
+            .and_then(|tcp| tcp.nodelay().ok()),
         Some(true)
     );
 }

@@ -36,22 +36,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures_util::{SinkExt, StreamExt};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-use tokio_tungstenite::tungstenite::Message;
 
 use super::lan::Roster;
 use super::transport::{credential, identifier};
+// The largest message either end of the pipe may send: the room's bound.
+use tempo_client::tunnel::PIPE_MESSAGE_BYTES;
 
 /// Tunnels one station carries at once: the room's bound on a station's pipes.
 pub const MAX_TUNNELS: usize = 4;
-/// The largest message either end of the pipe may send: the room's bound (`PIPE_MESSAGE_BYTES`).
-const PIPE_MESSAGE_BYTES: usize = 64 * 1024;
-/// What is read from TLS for one message: a TLS record and a little more, well inside the bound.
-const CHUNK: usize = 16 * 1024 + 256;
 /// How long the station's end of the pipe has to open.
 const OPEN: Duration = Duration::from_secs(10);
 
@@ -209,59 +204,8 @@ fn config() -> WebSocketConfig {
         .write_buffer_size(0)
 }
 
-/// The pipe as one byte stream, for TLS: what the room passes in binary messages, in order, and what
-/// TLS writes, a message at a time. Two pumps, one each way, so neither waits on the other. Text, a
-/// close, an error or the end of either side ends both, and the stream reads its end.
-pub(crate) fn bridge<S>(
-    socket: tokio_tungstenite::WebSocketStream<S>,
-) -> (tokio::io::DuplexStream, tokio::task::JoinHandle<()>)
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-{
-    let (ours, theirs) = tokio::io::duplex(2 * PIPE_MESSAGE_BYTES);
-    let task = tokio::spawn(async move {
-        let (mut sink, mut source) = socket.split();
-        let (mut from_tls, mut to_tls) = tokio::io::split(theirs);
-        let inward = async {
-            while let Some(Ok(message)) = source.next().await {
-                match message {
-                    Message::Binary(bytes) => {
-                        if to_tls.write_all(&bytes).await.is_err() {
-                            break;
-                        }
-                    }
-                    // Answered by the socket itself.
-                    Message::Ping(_) | Message::Pong(_) => {}
-                    _ => break,
-                }
-            }
-            let _ = to_tls.shutdown().await;
-        };
-        let outward = async {
-            let mut chunk = vec![0; CHUNK];
-            loop {
-                match from_tls.read(&mut chunk).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if sink
-                            .send(Message::Binary(chunk[..n].to_vec().into()))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                }
-            }
-            let _ = sink.close().await;
-        };
-        tokio::select! {
-            () = inward => {}
-            () = outward => {}
-        }
-    });
-    (ours, task)
-}
+/// The pipe as one byte stream, for TLS (the client core's: both ends run the same).
+pub(crate) use tempo_client::tunnel::bridge;
 
 /// One tunnel, from the room's request to its end: the station's end of the pipe opened, and the
 /// channel served over it until either end closes or Remote stops.

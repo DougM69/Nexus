@@ -77,6 +77,8 @@ pub mod road;
 pub mod stop_road;
 /// The LAN road's TLS, this computer's half.
 pub mod tls;
+/// The pipe through a station's room, as a byte stream for TLS.
+pub mod tunnel;
 /// The TURN client the internet roads' relayed addresses come from.
 pub mod turn;
 /// The command link's wire, as both ends read and write it.

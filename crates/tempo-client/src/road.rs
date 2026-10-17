@@ -22,7 +22,9 @@
 //! last that worked first; the first to welcome this computer is the road.
 use std::collections::VecDeque;
 use std::net::SocketAddrV4;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
@@ -33,6 +35,7 @@ use rustls::ClientConfig;
 use serde::Deserialize;
 use serde_json::json;
 use tempo_stream::protocol::{self, BrowserSignal, RoomToPage, StationSignal, Validate};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
@@ -64,13 +67,71 @@ const OPERATION_VERSION: u8 = VERSIONS.2;
 /// session (src-tauri's `remote_service::lan::pairing`, the ceremony's both halves).
 pub const EXPORTER: &[u8] = b"EXPORTER-nexus-lan-pairing";
 
+/// What a road's TLS runs over: a TCP connection to the station's listener on this network, or this
+/// computer's end of a pipe through the station's room on the internet ([`crate::tunnel`]). TLS,
+/// the hello and everything after are the same on both.
+pub enum Carrier {
+    Tcp(TcpStream),
+    Pipe(tokio::io::DuplexStream),
+}
+
+impl Carrier {
+    /// The TCP connection, when it is one.
+    pub fn tcp(&self) -> Option<&TcpStream> {
+        match self {
+            Self::Tcp(tcp) => Some(tcp),
+            Self::Pipe(_) => None,
+        }
+    }
+}
+
+impl AsyncRead for Carrier {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(tcp) => Pin::new(tcp).poll_read(cx, buf),
+            Self::Pipe(pipe) => Pin::new(pipe).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for Carrier {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Self::Tcp(tcp) => Pin::new(tcp).poll_write(cx, buf),
+            Self::Pipe(pipe) => Pin::new(pipe).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(tcp) => Pin::new(tcp).poll_flush(cx),
+            Self::Pipe(pipe) => Pin::new(pipe).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(tcp) => Pin::new(tcp).poll_shutdown(cx),
+            Self::Pipe(pipe) => Pin::new(pipe).poll_shutdown(cx),
+        }
+    }
+}
+
 #[cfg(not(feature = "bench-road-switch"))]
-pub type Socket = WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
-/// In a test build every road to a station's listener is under the road switch it was opened
-/// under, if it was opened under one (`crate::bench_road_switch`).
+pub type Socket = WebSocketStream<tokio_rustls::client::TlsStream<Carrier>>;
+/// In a test build every road to a station is under the road switch it was opened under, if it was
+/// opened under one (`crate::bench_road_switch`).
 #[cfg(feature = "bench-road-switch")]
 pub type Socket =
-    WebSocketStream<tokio_rustls::client::TlsStream<crate::bench_road_switch::Gated<TcpStream>>>;
+    WebSocketStream<tokio_rustls::client::TlsStream<crate::bench_road_switch::Gated<Carrier>>>;
 
 /// A TLS session with a station, upgraded: the socket, the key the station presented (SPKI) and
 /// this session's exporter, which a pairing's proofs are bound to.
@@ -139,12 +200,47 @@ pub async fn open(at: SocketAddrV4, config: Arc<ClientConfig>) -> Result<Opened,
     // Every frame goes as it is written, the station's way too: a Stop is a small frame, and
     // Nagle can hold one for the acknowledgement of the frame before (about 40 ms, measured).
     let _ = tcp.set_nodelay(true);
+    let carrier = Carrier::Tcp(tcp);
     #[cfg(feature = "bench-road-switch")]
-    let tcp = crate::bench_road_switch::Gated::new(tcp, switch);
+    let carrier = crate::bench_road_switch::Gated::new(carrier, switch);
+    secure(carrier, config).await
+}
+
+/// TLS with `config` and the upgrade over this computer's end of a pipe through the station's room
+/// ([`crate::tunnel`]). In a test build it is under the road switch it was opened under, as a TCP
+/// connection is, so a blocked command link blocks it too.
+pub async fn open_pipe(
+    pipe: tokio::io::DuplexStream,
+    config: Arc<ClientConfig>,
+) -> Result<Opened, Failed> {
+    #[cfg(feature = "bench-road-switch")]
+    let switch = crate::bench_road_switch::Switch::opening();
+    #[cfg(feature = "bench-road-switch")]
+    if switch
+        .as_ref()
+        .is_some_and(|switch| switch.blocks(crate::bench_road_switch::Road::Link))
+    {
+        tokio::time::sleep(CONNECT).await;
+        return Err(Failed::NotConnected(std::io::ErrorKind::TimedOut));
+    }
+    let carrier = Carrier::Pipe(pipe);
+    #[cfg(feature = "bench-road-switch")]
+    let carrier = crate::bench_road_switch::Gated::new(carrier, switch);
+    secure(carrier, config).await
+}
+
+#[cfg(not(feature = "bench-road-switch"))]
+type Carried = Carrier;
+#[cfg(feature = "bench-road-switch")]
+type Carried = crate::bench_road_switch::Gated<Carrier>;
+
+/// TLS with `config`, the station's key checked before this computer's own is sent, and the
+/// upgrade, over `carrier`.
+async fn secure(carrier: Carried, config: Arc<ClientConfig>) -> Result<Opened, Failed> {
     let name = rustls::pki_types::ServerName::try_from("nexus-station")
         .map_err(|_| Failed::Unreachable)?;
     let tls = tokio_rustls::TlsConnector::from(config)
-        .connect(name, tcp)
+        .connect(name, carrier)
         .await
         .map_err(|e| refused_or_gone(&e))?;
     let station = tls
@@ -284,15 +380,31 @@ async fn hello(
     config: Arc<ClientConfig>,
     record: &PairedStation,
 ) -> Result<(Socket, Welcomed), &'static str> {
-    let Opened { mut socket, .. } = open(at, config).await.map_err(|failed| match failed {
-        Failed::Unreachable => "unreachable",
+    let opened = open(at, config).await.map_err(|failed| match failed {
         // Nothing answered at the address: why, in the words the card uses for it.
         Failed::NotConnected(how) => {
             tempo_stream::lan::unreached(&how.into(), tempo_stream::lan::here(*at.ip()))
         }
+        failed => said(failed),
+    })?;
+    hello_on(opened, record).await
+}
+
+/// Why a TLS session did not open, in the card's words.
+fn said(failed: Failed) -> &'static str {
+    match failed {
+        Failed::Unreachable | Failed::NotConnected(_) => "unreachable",
         Failed::KeyChanged => "keyChanged",
         Failed::Refused => "notPaired",
-    })?;
+    }
+}
+
+/// The hello on a TLS session open to the station `record` names: the socket and what the station
+/// welcomed it with, or why not.
+async fn hello_on(
+    Opened { mut socket, .. }: Opened,
+    record: &PairedStation,
+) -> Result<(Socket, Welcomed), &'static str> {
     let (protocol, stream, operation) = VERSIONS;
     let hello = json!({"type":"hello","protocol":protocol,"stream":stream,"operation":operation});
     say(&mut socket, hello.to_string())
@@ -477,6 +589,31 @@ pub async fn reach(
         }
     }
     Err(told)
+}
+
+/// The hello to the station `record` names through this computer's end of a pipe through its room
+/// ([`crate::tunnel`]): TLS 1.3 with this computer's key for it and its station key pinned, then the
+/// same hello as on this network. What it welcomed this computer with, or why not; a road of this
+/// network's it names is never taken here.
+pub async fn reach_through(
+    pipe: tokio::io::DuplexStream,
+    record: &PairedStation,
+) -> Result<(Socket, Ids, Welcomed), &'static str> {
+    let config =
+        tls::client::config(&record.pkcs8, &record.station_key).ok_or("storeUnavailable")?;
+    let reached = async {
+        let opened = open_pipe(pipe, config).await.map_err(said)?;
+        hello_on(opened, record).await
+    };
+    let (socket, welcomed) = tokio::time::timeout(HANDSHAKE, reached)
+        .await
+        .unwrap_or(Err("unreachable"))?;
+    let ids = Ids {
+        station: record.station_id.clone(),
+        device: record.device_id.clone(),
+        session: welcomed.session.clone(),
+    };
+    Ok((socket, ids, welcomed))
 }
 
 /// Is `answer` the station's own (S3-M1): signed with `station_key` (SPKI, lowercase hex, the key
