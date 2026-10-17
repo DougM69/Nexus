@@ -86,18 +86,13 @@ function tallyBy(log: LoggedQso[], key: (q: LoggedQso) => string | null | undefi
  * entries, none of which was the operator's phone total. Nothing else folds: FM and AM are
  * modes in their own right, not sidebands.
  *
- * ⛔ DELIBERATELY NOT `callHistory.modeKey`, which is the same fold for the live UI. This
- * module is a LEAF on purpose: `remote/test/insights-reference.mjs` transpiles it standalone
- * and runs it as an independent comparator for the native Remote summary, with an explicit
- * dependency allow-list. Importing `modeKey` drags in `callHistory` and its own `../band`
- * import, and the guard goes red — correctly. Three lines of duplication is the cheaper side
- * of that trade; the fold is also spelled out in `logbook.rs dedup_mode` and four other
- * places, so this is the shape the codebase already has.
+ * Its own fold rather than `callHistory.modeKey`, which is the same fold for the live UI: three
+ * lines of duplication, and the fold is also spelled out in `logbook.rs dedup_mode` and four
+ * other places, so this is the shape the codebase already has.
  *
  * Every other spelling is passed through UNCHANGED, case included — this folds the sidebands
  * and nothing else. Uppercasing the rest would quietly merge "ssb" with "SSB" too, a wider
- * change than the defect asks for, and it would diverge from the Remote-side roll-up in
- * `remote_service/query/insights.rs`, which the native Remote gate compares against this one. */
+ * change than the defect asks for. */
 function phoneModeLabel(mode: string | null | undefined): string {
   const m = (mode ?? '').trim()
   const u = m.toUpperCase()

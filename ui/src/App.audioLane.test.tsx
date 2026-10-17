@@ -10,9 +10,8 @@
 // to the screen. The words are pinned as text (features/audioError.test.ts holds every kind).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, act, waitFor } from '@testing-library/react'
-import settingsFixture from './components/__fixtures__/defaultSettings.json'
 import { subscribeStatus, type StatusItem } from './status'
-import type { AppSnapshot, AudioErrorKind, Settings } from './types'
+import type { AppSnapshot, AudioErrorKind} from './types'
 
 const base = {
   mycall: 'KD9TAW', mygrid: 'EN52', mode: 'Normal',
@@ -146,24 +145,4 @@ describe('the Now-Bar for the station audio-error line', () => {
     expect(audioItem()?.detail).toBe(MONITOR)
   })
 
-  it('on the Remote page, names the kind, and heads a line from a station too old to name it plainly', async () => {
-    const remote = (snapshot: AppSnapshot) => ({
-      snapshot,
-      settings: settingsFixture as unknown as Settings,
-      bandPlan: [],
-      status: <div>Observer</div>,
-    })
-    state.snap = withLine(PTT, 'ptt')
-    render(<App remote={remote(withLine(PTT, 'ptt'))} />)
-    await screen.findByText('Observer')
-    expect(document.querySelector('.app.remote-workspace'), 'premise: the Remote page mounted').not.toBeNull()
-    await screen.findByText('PTT NOT ACCEPTED')
-    // A station older than the field sends the sentence alone.
-    await waitFor(() => expect(state.push).not.toBeNull())
-    act(() => state.push?.(withLine(PTT)))
-    await screen.findByText('RADIO ALERT')
-    expect(chip('RADIO ALERT')?.className).toContain('tier-critical')
-    expect(screen.queryByText('PTT NOT ACCEPTED')).toBeNull()
-    expect(audioItem()?.detail).toBe(PTT)
-  })
 })

@@ -3,7 +3,7 @@ import settings from './__fixtures__/configuration-settings.json'
 import programming from './__fixtures__/configuration-programming.json'
 import keysOf1130 from './__fixtures__/settings-keys-1.13.0.json'
 import {parseConfiguration,settingsForm,type SettingsConfiguration} from './configuration'
-import {NEWER_SETTINGS,SETTINGS_KEYS,STATION_LOCAL_SETTINGS_KEYS,WITHHELD_RADIO_KEYS,WITHHELD_SETTINGS_KEYS,WRITABLE_CONTROL_SETTINGS_KEYS,WRITABLE_LOGGING_SETTINGS_KEYS} from './configuration-schema'
+import {NEWER_SETTINGS,SETTINGS_KEYS,STATION_LOCAL_SETTINGS_KEYS,WITHHELD_SETTINGS_KEYS,WRITABLE_CONTROL_SETTINGS_KEYS,WRITABLE_LOGGING_SETTINGS_KEYS} from './configuration-schema'
 it('accepts the native serialized station choices and excludes account fields instead of supplying defaults',()=>{
   const parsed=parseConfiguration(structuredClone(settings),'settings') as SettingsConfiguration
   expect(parsed.settings.mycall).toBe('W1AW');expect(parsed.settings.mygrid).toBe('FN31RX09')
@@ -155,78 +155,6 @@ it('refuses a settings value the station itself declared withheld', async () => 
   ;(leaked.settings as Record<string, unknown>).futureSecret = 'hunter2'
   leaked.withheld = [...(leaked.withheld as string[]), 'futureSecret']
   expect(() => parseConfiguration(leaked, 'settings')).toThrow()
-})
-
-// THE GATE THAT WOULD HAVE CAUGHT TONIGHT'S BUG.
-//
-// The settings projection is maintained by hand in three places - settings.rs says outright that
-// `ui/src/types.ts` and `defaultSettings.json` are copy-pasted from it - and the browser validates
-// the payload against a CLOSED schema. So exposing a setting on the Rust side without adding it
-// here does not degrade gracefully: the browser refuses the whole settings document and the views
-// that depend on it go blank. Eleven contest settings and `cwReverse` were added natively and not
-// here, and Remote's Field Day and settings surfaces were dark for every operator until it was
-// found by reading a CI failure backwards.
-//
-// This reads the Rust list the way BrowserApplication.test.tsx already does rather than keeping a
-// fourth copy to drift. `application.rs` carries the smaller LIVE-STREAM projection, which is a
-// deliberate subset, so it is checked for containment and not equality.
-it('keeps the browser settings schema identical to the native projection it must accept', async () => {
-  const { readFileSync } = await import('node:fs')
-  const { resolve } = await import('node:path')
-  const list = (path: string) => {
-    const src = readFileSync(resolve(path), 'utf8')
-    const block = src.match(/const SETTINGS_KEYS: &\[&str\] = &\[([\s\S]*?)\];/)
-    expect(block, `no SETTINGS_KEYS in ${path}`).toBeTruthy()
-    return [...block![1].matchAll(/"([a-zA-Z0-9]+)"/g)].map(m => m[1])
-  }
-  const projection = list('../src-tauri/src/remote_service/query/configuration.rs')
-  const stream = list('../src-tauri/src/remote_service/application.rs')
-
-  // Positive control: the reader really finds keys, so an empty match cannot pass as agreement.
-  expect(projection.length).toBeGreaterThan(200)
-  expect(stream.length).toBeGreaterThan(20)
-
-  expect([...SETTINGS_KEYS].sort()).toEqual([...projection].sort())
-  expect(stream.filter(key => !projection.includes(key)),
-    'the live settings stream may narrow the projection, never exceed it').toEqual([])
-  expect(SETTINGS_KEYS.filter(key => (WITHHELD_SETTINGS_KEYS as readonly string[]).includes(key)),
-    'a withheld key must never also be exposed').toEqual([])
-
-  // The WITHHELD lists were never tied together in either direction. That matters more than the
-  // exposed list, not less: the most likely edit to it is adding a NEWLY WITHHELD CREDENTIAL, and
-  // until now nothing would have noticed the browser's copy going stale. Compared as SETS - the
-  // runtime rule is containment, deliberately, so a station may withhold more than this browser
-  // knows - but inside the repo the two must say the same thing.
-  const named = (path: string, constant: string) => {
-    const src = readFileSync(resolve(path), 'utf8')
-    const block = src.match(new RegExp(`const ${constant}: &\\[&str\\] = &\\[([\\s\\S]*?)\\];`))
-    expect(block, `no ${constant} in ${path}`).toBeTruthy()
-    return [...block![1].matchAll(/"([a-zA-Z0-9]+)"/g)].map(m => m[1])
-  }
-  const CONFIG = '../src-tauri/src/remote_service/query/configuration.rs'
-  const withheld = named(CONFIG, 'WITHHELD_KEYS')
-  expect(withheld.length, 'positive control: the reader really finds withheld keys').toBeGreaterThan(10)
-  expect([...WITHHELD_SETTINGS_KEYS, ...STATION_LOCAL_SETTINGS_KEYS].sort()).toEqual([...withheld].sort())
-
-  // RADIO_WITHHELD_KEYS is empty today and that is the point - it is where the first per-radio
-  // credential goes. Empty on both sides is agreement; empty on one is the drift this catches.
-  const radioWithheld = named(CONFIG, 'RADIO_WITHHELD_KEYS')
-  expect([...WITHHELD_RADIO_KEYS].sort()).toEqual([...radioWithheld].sort())
-  const radioKeys = named(CONFIG, 'RADIO_KEYS')
-  expect(radioKeys.length, 'positive control: RADIO_KEYS really read').toBeGreaterThan(30)
-  expect(radioKeys.filter(key => radioWithheld.includes(key)),
-    'a withheld per-radio key must never also be exposed').toEqual([])
-
-  // The settings a browser may CHANGE: the same on both sides, and every other exposed setting
-  // explicitly denied by the station. The station's own coverage test holds the denial list too.
-  const writableControl = named(CONFIG, 'WRITABLE_CONTROL_KEYS'), writableLogging = named(CONFIG, 'WRITABLE_LOGGING_KEYS')
-  const denied = named(CONFIG, 'WRITE_DENIED_KEYS')
-  expect(writableControl.length, 'positive control: WRITABLE_CONTROL_KEYS really read').toBeGreaterThan(20)
-  expect(denied.length, 'positive control: WRITE_DENIED_KEYS really read').toBeGreaterThan(200)
-  expect([...WRITABLE_CONTROL_SETTINGS_KEYS].sort()).toEqual([...writableControl].sort())
-  expect([...WRITABLE_LOGGING_SETTINGS_KEYS].sort()).toEqual([...writableLogging].sort())
-  expect(SETTINGS_KEYS.filter(key => ![...writableControl, ...writableLogging, ...denied].includes(key)),
-    'an exposed setting nobody classified as writable or denied').toEqual([])
 })
 
 // Relaxing the exact key count is what lets a station one release ahead be understood at all.

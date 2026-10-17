@@ -2159,12 +2159,6 @@ export async function sstvDeleteImage(path: string): Promise<void> {
   await invoke('sstv_delete_image', { path })
 }
 
-/** The same delete FROM A BROWSER, which has no station path to name and must never be given one:
- * it names the picture by what its own gallery row showed and the station resolves the file. */
-export async function sstvDeleteImageRemote(finishedUtc: string, mode: string): Promise<void> {
-  await invoke('sstv_delete_image', { finishedUtc, mode })
-}
-
 /** Toggle Skip Tx1 (WSJT-X parity) — a session-only flag, resets each launch. */
 export async function setSkipTx1(enabled: boolean, context?: FtRuntimeGesture): Promise<void> {
   await invoke('set_skip_tx1', { enabled, ...ftRuntimeArgs(context) })
@@ -2605,11 +2599,8 @@ export async function getLicensedBandPlan(mode: string): Promise<BandChannel[]> 
 }
 /** The licence-class band edges a scope tints: where the station's class may transmit the section
  * `mode`'s emission ('digital' | 'phone' | 'cw' | 'rtty' | 'keyboard', the snapshot's
- * `radio.operatingMode`), from the transmit gate's own table. Display only. The Remote page's
- * commands are a closed set this is not part of, so there it answers null without asking, and its
- * scopes draw no edges. */
+ * `radio.operatingMode`), from the transmit gate's own table. Display only. */
 export async function getPrivilegeSpans(mode: string): Promise<PrivilegeSpans | null> {
-  if (remoteApplicationTransport()) return null
   return invoke<PrivilegeSpans>('get_privilege_spans', { mode })
 }
 
@@ -2953,7 +2944,6 @@ export async function readRotatorState(): Promise<RotatorState | null> {
 /** Single-signal CW decode of the recent RX audio (live readout: text + estimated WPM).
  * `sensitivity` (0..1, 0.5 = default gates) scales the decoder's presence + SNR gates. */
 export async function cwDecode(sensitivity: number): Promise<CwDecodeResult> {
-  if (remoteApplicationTransport()) return invoke<CwDecodeResult>('get_cw_state')
   return invoke<CwDecodeResult>('cw_decode', { sensitivity })
 }
 
@@ -3276,18 +3266,6 @@ export async function repeaterTune(
   toneHz: number,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('repeater_tune', { outputMhz, shift, offsetHz, toneHz })
-}
-
-/** Recall a station memory from the hosted page (Remote only; the control transport maps it to
- * the closed recall intent). The installed desktop recalls through Settings + `workSpot`. */
-export async function remoteRecallMemory(args: {
-  section: 'cw' | 'phone' | 'digital'
-  dialMhz: number
-  band: string
-  sideband: 'USB' | 'LSB' | null
-  fm: { shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number } | null
-}): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('remote_recall_memory', args)
 }
 
 /** Arm/disarm the RTTY RX decoder (session-only; RX decode, never TX). */
@@ -4225,7 +4203,6 @@ export async function getScopeRow(
   hiHz: number,
   window?: ScopeWindow,
 ): Promise<Spectrum> {
-  if (remoteApplicationTransport()) return invoke<Spectrum>('get_scope_snapshot')
   return invoke<Spectrum>('get_scope_row', { loHz, hiHz, window })
 }
 
@@ -4238,10 +4215,6 @@ export async function getScopeRow(
  * copies of a source that sweeps slower than it polls. Two answers come back whatever `lastSeq`
  * says, because neither means "nothing new": a source that went quiet answers its EMPTY frame, and
  * a row nobody numbered (the Companion path) comes back unsequenced (`seq` 0) on every poll.
- *
- * The Remote application transport has no frame command (its wire carries the row), so there the
- * row comes back as an unsequenced frame, and every answer is a new row, as before. Its scale is
- * what each source's producer states: the audio feed's dBFS axis, a radio's own relative scale.
  */
 export async function getScopeFrame(
   loHz: number,
@@ -4249,20 +4222,6 @@ export async function getScopeFrame(
   window: ScopeWindow | undefined,
   lastSeq: number,
 ): Promise<SpectrumFrameWire | null> {
-  if (remoteApplicationTransport()) {
-    const s = await invoke<Spectrum>('get_scope_snapshot')
-    const source = s.source ?? ''
-    return {
-      seq: 0,
-      tMs: Date.now(),
-      source,
-      // The legacy extent, for a backend too old to report one (PhoneScope's own fallback).
-      loHz: s.loHz ?? 200,
-      hiHz: s.hiHz ?? 2900,
-      scale: source === 'flex' || source === 'civ' || source === 'yaesu' ? { kind: 'relative' } : { kind: 'dbfs', loDb: -120, hiDb: 0 },
-      bins: s.row ?? [],
-    }
-  }
   return invoke<SpectrumFrameWire | null>('get_scope_frame', { loHz, hiHz, window, lastSeq })
 }
 
@@ -4275,26 +4234,8 @@ export async function getScopeFrame(
  * THE POLL IS THE PANE'S REQUEST. In a data mode the station streams the Icom CI-V scope only while
  * this is being polled (the request lapses two seconds after the last poll), because that stream
  * shares the CAT link with the PTT of every over.
- *
- * The Remote application transport has no frame command: there the station's own scope row comes
- * back as an unsequenced frame when it is a radio's panadapter, and as an empty frame otherwise. A
- * remote viewer asks for nothing — it sees the station's scope only while the station streams it.
  */
 export async function getRfFrame(lastSeq: number): Promise<SpectrumFrameWire | null> {
-  if (remoteApplicationTransport()) {
-    const s = await invoke<Spectrum>('get_scope_snapshot')
-    const source = s.source ?? ''
-    const rf = source === 'flex' || source === 'civ' || source === 'yaesu'
-    return {
-      seq: 0,
-      tMs: Date.now(),
-      source: rf ? source : '',
-      loHz: rf ? s.loHz ?? 0 : 0,
-      hiHz: rf ? s.hiHz ?? 0 : 0,
-      scale: { kind: 'relative' },
-      bins: rf ? s.row ?? [] : [],
-    }
-  }
   return invoke<SpectrumFrameWire | null>('get_rf_frame', { lastSeq })
 }
 

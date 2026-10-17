@@ -11,7 +11,7 @@
 // The bearing shown being the one Point turns to is proven by value in src-tauri
 // (`the_bearing_the_box_shows_is_the_one_point_turns_the_antenna_to`).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react'
 import type { Mock } from 'vitest'
 
 vi.mock('./api', async (importOriginal) => {
@@ -31,10 +31,8 @@ vi.mock('./components/MapView', () => ({ MapView: () => <div data-testid="map" /
 
 import * as api from './api'
 import App from './App'
-import { StationControlContext } from './stationAccess'
 import { APP_SNAPSHOT, COCKPIT_MAIN } from './appCockpits.testkit'
-import settingsFixture from './components/__fixtures__/defaultSettings.json'
-import type { AppSnapshot, CallBearing, Settings } from './types'
+import type { CallBearing} from './types'
 import { t } from './i18n'
 import { fmtDistanceKm, resolveUnits, UNITS_KEY } from './units'
 
@@ -203,36 +201,5 @@ describe('the cockpits with no log entry', () => {
     await waitFor(() => expect(rail()!.querySelector('.rotor-az')?.textContent).toContain('100°T'))
     expect(railLine2()).toBeNull()
     expect(api.rotatorBearingToCall).not.toHaveBeenCalled()
-  })
-})
-
-describe('from afar', () => {
-  it('the hosted Remote page, with the same records and the same QSO, draws no line 2 and asks for no bearing', async () => {
-    localStorage.setItem('nexus.dashrail.sections', JSON.stringify({ operate: true }))
-    localStorage.setItem(
-      'nexus.panels.operate.main',
-      JSON.stringify({ v: 2, state: { box1: 'docked' }, share: {}, boxes: { box1: 'rotor' } }),
-    )
-    window.location.hash = '#operate'
-    // Without station control, as the hosted page mounts App (remote-web/BrowserApplication).
-    render(
-      <StationControlContext.Provider value={false}>
-        <App
-          remote={{
-            snapshot: { ...APP_SNAPSHOT, qso: { state: 'AwaitReport', dxcall: 'EC1DD', rxReport: null, running: false, cqRunning: false } } as unknown as AppSnapshot,
-            settings: settingsFixture as unknown as Settings,
-            bandPlan: [],
-            status: <div>Observer</div>,
-            cwPhone: true,
-          }}
-        />
-      </StationControlContext.Provider>,
-    )
-    await screen.findByText('Observer')
-    await act(async () => {})
-    expect(document.querySelector('.app.remote-workspace'), 'premise: the Remote page mounted').not.toBeNull()
-    expect(document.querySelector('.rotor-aim')).toBeNull()
-    expect(api.rotatorBearingToCall).not.toHaveBeenCalled()
-    cleanup()
   })
 })

@@ -12,8 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, act, within, waitFor, fireEvent } from '@testing-library/react'
 import { dismissToast, subscribeToasts, type Toast } from './toast'
 import { t } from './i18n'
-import settingsFixture from './components/__fixtures__/defaultSettings.json'
-import type { AppSnapshot, KeptFile, Settings } from './types'
+import type { AppSnapshot, KeptFile} from './types'
 
 const base = {
   mycall: 'KD9TAW', mygrid: 'EN52', mode: 'Normal',
@@ -160,22 +159,6 @@ describe('a file the station could not read, and kept', () => {
     act(() => state.push?.({ ...base, keptFiles: [MOVED, later] }))
     await screen.findByText(t('shell.keptFile.other', { path: later.path }))
     expect(notices(), 'the second file, and only it, is new').toHaveLength(2)
-  })
-
-  it('stays off the Remote', async () => {
-    const snapshot = { ...base, keptFiles: [MOVED] } as AppSnapshot
-    state.snap = snapshot
-    const page = render(
-      <App remote={{ snapshot, settings: settingsFixture as unknown as Settings, bandPlan: [], status: <div>Observer</div> }} />,
-    )
-    await screen.findByText('Observer')
-    expect(document.querySelector('.app.remote-workspace'), 'premise: the Remote page mounted').not.toBeNull()
-    expect(notices(), 'a Remote page raises no notice').toHaveLength(0)
-    page.unmount()
-    // The control: the same snapshot on the station's own screen does raise it.
-    await openApp()
-    await screen.findByText(t('shell.keptFile.pendingQso', { path: ASIDE }))
-    expect(notices()).toHaveLength(1)
   })
 
   it('shows nothing on a healthy launch, or from a station older than the rule', async () => {

@@ -96,13 +96,4 @@ describe('App folds the retired wanted list', () => {
     await waitFor(() => expect(foldRetiredWantedList).toHaveBeenCalled())
   })
 
-  it('not on a Remote browser', async () => {
-    const { container } = render(
-      <App remote={{ snapshot, settings, bandPlan: [], status: <div data-testid="remote-status">Observer</div> }} />,
-    )
-    // Positive control: the Remote App is up (the same shell, observing).
-    await waitFor(() => expect(container.querySelector('[data-testid="remote-status"]')).not.toBeNull())
-    await new Promise((r) => setTimeout(r, 50))
-    expect(foldRetiredWantedList).not.toHaveBeenCalled()
-  })
 })

@@ -8,9 +8,8 @@
 // to the screen. The words are pinned in features/slotOverDropped.test.ts.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, act, waitFor } from '@testing-library/react'
-import settingsFixture from './components/__fixtures__/defaultSettings.json'
 import { subscribeStatus, type StatusItem } from './status'
-import type { AppSnapshot, Settings, SlotOverDropped } from './types'
+import type { AppSnapshot, SlotOverDropped } from './types'
 import { EN } from './i18n/en'
 
 const base = {
@@ -144,24 +143,4 @@ describe('the Now-Bar for an FT8/FT4 over the radio keyed after its period had e
     expect(screen.queryByText(EN['shell.lane.slotKeyRefused.message'])).toBeNull()
   })
 
-  it('is not on the Remote page', async () => {
-    const snapshot = withDrop({ at: AT, late: '1.2 s', count: 1 })
-    state.snap = snapshot
-    render(
-      <App
-        remote={{
-          snapshot,
-          settings: settingsFixture as unknown as Settings,
-          bandPlan: [],
-          status: <div>Observer</div>,
-        }}
-      />,
-    )
-    await screen.findByText('Observer')
-    expect(document.querySelector('.app.remote-workspace'), 'premise: the Remote page mounted').not.toBeNull()
-    await waitFor(() => expect(state.push).not.toBeNull())
-    act(() => state.push?.(snapshot))
-    expect(screen.queryByText(DROPPED)).toBeNull()
-    expect(droppedItem()).toBeUndefined()
-  })
 })
