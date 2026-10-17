@@ -11,8 +11,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, act, waitFor } from '@testing-library/react'
 import { t } from './i18n'
-import settingsFixture from './components/__fixtures__/defaultSettings.json'
-import type { AppSnapshot, ParsecPresence, Settings } from './types'
+import type { AppSnapshot, ParsecPresence} from './types'
 
 const base = {
   mycall: 'KD9TAW', mygrid: 'EN52', mode: 'Normal',
@@ -131,18 +130,4 @@ describe('the Now-Bar after Parsec presence mode stopped a transmission', () => 
     await screen.findByText(chip())
   })
 
-  it('stays off the Remote page', async () => {
-    state.snap = stoppedPtt
-    const page = render(
-      <App remote={{ snapshot: stoppedPtt, settings: settingsFixture as unknown as Settings, bandPlan: [], status: <div>Observer</div> }} />,
-    )
-    await screen.findByText('Observer')
-    expect(document.querySelector('.app.remote-workspace'), 'premise: the Remote page mounted').not.toBeNull()
-    expect(screen.queryByText(chip())).toBeNull()
-    page.unmount()
-    // The control: the same snapshot on the station's own screen does raise it.
-    await openApp()
-    act(() => state.push?.(stoppedPtt))
-    await screen.findByText(chip())
-  })
 })

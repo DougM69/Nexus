@@ -10,8 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, act, waitFor } from '@testing-library/react'
 import { t } from './i18n'
-import settingsFixture from './components/__fixtures__/defaultSettings.json'
-import type { AppSnapshot, Settings } from './types'
+import type { AppSnapshot} from './types'
 
 const base = {
   mycall: 'KD9TAW', mygrid: 'EN52', mode: 'Normal',
@@ -132,18 +131,4 @@ describe('the quit dialog is mounted by the desktop App (C10)', () => {
     expect(screen.getByRole('button', { name: t('quit.logbook.quitWithout', { count: 2 }) })).toBeTruthy()
   })
 
-  it('stays off the Remote page, which has no quit to report', async () => {
-    const snapshot = base as AppSnapshot
-    const page = render(
-      <App remote={{ snapshot, settings: settingsFixture as unknown as Settings, bandPlan: [], status: <div>Observer</div> }} />,
-    )
-    await screen.findByText('Observer')
-    expect(document.querySelector('.app.remote-workspace'), 'premise: the Remote page mounted').not.toBeNull()
-    await act(async () => {})
-    expect(handlers['logbook-save-failed'], 'a Remote page does not listen').toBeUndefined()
-    page.unmount()
-    // The control: the station's own window, with the same bridge, does listen.
-    await openApp()
-    await waitFor(() => expect(handlers['logbook-save-failed']).toBeDefined())
-  })
 })

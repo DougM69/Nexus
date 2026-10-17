@@ -1,14 +1,8 @@
-//! One picture of the log for a Remote read — SPEC-2 v3's **C18** (§4.8), the station's half.
-//!
-//! A browser's questions about the log — the Log collection, recall, the award summary and the
-//! statistics, the JS8 roster's history, the Connect and satellite coverage — were answered from
-//! the whole copy of the log held in memory, 128 contacts at a time: each chunk took the Engine
-//! lock, checked the log's read token, copied and let go, and a change between two chunks refused
-//! the whole answer as busy, because a mixed log must never be reported as complete. They read the
-//! logbook store now, and the chunks are gone: ONE read transaction is one picture of the log,
+//! One picture of the log — SPEC-2 v3's **C18** (§4.8): the search the log commands make for the
+//! row the log view showed ([`super::find`]). ONE read transaction is one picture of the log,
 //! whatever commits while it runs.
 //!
-//! # What every Remote read of the log keeps to
+//! # What every read of the log here keeps to
 //!
 //! 1. **Handles under the lock, the read after it.** Under the Engine lock a reader takes the
 //!    log's rows (`Engine::log_rows` — the store's handles, or a copy of pointers on the 1.13
@@ -19,10 +13,8 @@
 //!    between.
 //! 3. **Never an answer older than the question (P4).** The read first waits, bounded, for the
 //!    store to hold every change made before its rows were taken. If the writer is still behind
-//!    when the wait runs out, the read is REFUSED as busy — the answer a page already retries —
-//!    rather than served. The desktop's folds serve such an answer and do not keep it; a Remote
-//!    capture is kept and shared with every browser, and one missing a contact logged a moment
-//!    ago would call that station new.
+//!    when the wait runs out, the read is REFUSED as busy rather than served: the log command says
+//!    the log could not be read, and changes nothing.
 //!
 //! SQL narrows, Rust decides (SPEC-2 v3 P2): a reader names the columns it reads ([`Narrow`])
 //! and runs its own test on every contact it is handed, so its answer is the one the log in
@@ -31,8 +23,6 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
-#[cfg(test)]
-use std::sync::Arc;
 
 use tempo_app::logstore::{Freshness, LogRows, READ_WAIT};
 use tempo_core::logbook::sqlite::{LogDb, Narrow, Order, Scope};
@@ -43,19 +33,16 @@ use tempo_core::logbook::{QsoRecord, RecordId};
 const UNREADABLE: &str = "applicationUnavailable";
 
 /// The log as one read sees it: the store inside one read transaction, on either path — the log is
-/// only ever in a store (SPEC-2 v3 C19). [`read`] makes it, for the length of one read. A test may
-/// hand a reader rows of its own making instead (`Memory`), to hold an algorithm to rows it chose.
-pub(in crate::remote_service) enum Picture<'a> {
+/// only ever in a store (SPEC-2 v3 C19). [`read`] makes it, for the length of one read.
+pub(super) enum Picture<'a> {
     Store(&'a LogDb),
-    #[cfg(test)]
-    Memory(&'a [Arc<QsoRecord>]),
 }
 
 /// A contact a pass handed over: its place in log order in this picture (among the contacts its
 /// pass visited), and its id — what its whole record is fetched by ([`Picture::whole`]). Two
 /// picks of one pass are the same pick when they are the same place, which is the same contact.
 #[derive(Debug, Clone, Copy)]
-pub(in crate::remote_service) struct Pick {
+pub(super) struct Pick {
     pub(super) at: usize,
     id: Option<RecordId>,
 }
@@ -78,42 +65,12 @@ impl Ord for Pick {
 }
 
 impl Picture<'_> {
-    /// Hand `each` every contact, in log order, with (at least) `narrow`'s fields filled, and its
-    /// [`Pick`]. The first refusal `each` answers ends the pass, and is the answer.
-    pub(in crate::remote_service) fn each(
-        &self,
-        narrow: Narrow,
-        each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
-    ) -> Result<(), &'static str> {
-        self.each_in(Scope::All, narrow, each)
-    }
-
-    /// [`Self::each`], each contact with its SUBMODE as well (`LogDb::each_narrow_with_submode`):
-    /// what a search of the log looks in beside the MODE, which nothing else reads.
-    pub(in crate::remote_service) fn each_with_submode(
-        &self,
-        narrow: Narrow,
-        each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
-    ) -> Result<(), &'static str> {
-        self.pass(Scope::All, narrow, true, &[], each)
-    }
-
-    /// [`Self::each`], each contact with the passthrough fields `extras` names as well
-    /// (`LogDb::each_narrow_with`): what the award fold reads beside its columns, the CQ zone and
-    /// LoTW's DXCC (`tempo_core::logbook::AWARD_EXTRAS`).
-    pub(in crate::remote_service) fn each_with(
-        &self,
-        narrow: Narrow,
-        extras: &[&str],
-        each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
-    ) -> Result<(), &'static str> {
-        self.pass(Scope::All, narrow, false, extras, each)
-    }
-
-    /// [`Self::each`] over only the contacts `scope` holds: on the store through the index that
+    /// Hand `each` every contact `scope` holds, in log order, with (at least) `narrow`'s fields
+    /// filled, and its [`Pick`]; the first refusal `each` answers ends the pass, and is the answer.
+    /// On the store it goes through the index that
     /// holds them, on the 1.13 path by the same test made here. A scope narrows, it never decides
     /// (P2): a reader still tests every contact it is handed.
-    pub(in crate::remote_service) fn each_in(
+    pub(super) fn each_in(
         &self,
         scope: Scope<'_>,
         narrow: Narrow,
@@ -122,10 +79,8 @@ impl Picture<'_> {
         self.pass(scope, narrow, false, &[], each)
     }
 
-    /// The pass [`Self::each_in`], [`Self::each_with_submode`] and [`Self::each_with`] make;
-    /// `submode` reads each contact's SUBMODE as well, and `extras` the passthrough fields it
-    /// names (never both: no reader asks for both). A test's own rows are whole, and carry them
-    /// already.
+    /// The pass [`Self::each_in`] makes; `submode` reads each contact's SUBMODE as well, and
+    /// `extras` the passthrough fields it names.
     fn pass(
         &self,
         scope: Scope<'_>,
@@ -134,8 +89,6 @@ impl Picture<'_> {
         extras: &[&str],
         each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
     ) -> Result<(), &'static str> {
-        #[cfg(test)]
-        seam(Seam::Each);
         match self {
             Picture::Store(db) => {
                 let (mut at, mut answer) = (0, Ok(()));
@@ -158,23 +111,12 @@ impl Picture<'_> {
                 .map_err(|_| UNREADABLE)?;
                 answer
             }
-            #[cfg(test)]
-            Picture::Memory(rows) => rows
-                .iter()
-                .enumerate()
-                .filter(|(_, q)| holds(scope, q))
-                .try_for_each(|(at, q)| each(Pick { at, id: q.id }, q)),
         }
     }
 
     /// The whole records of `picks`, in the order given — from this same picture, so a contact
     /// edited or deleted since the pass that picked it is still the contact it picked.
-    pub(in crate::remote_service) fn whole(
-        &self,
-        picks: &[Pick],
-    ) -> Result<Vec<QsoRecord>, &'static str> {
-        #[cfg(test)]
-        seam(Seam::Whole);
+    pub(super) fn whole(&self, picks: &[Pick]) -> Result<Vec<QsoRecord>, &'static str> {
         match self {
             Picture::Store(db) => {
                 let ids = picks
@@ -192,61 +134,19 @@ impl Picture<'_> {
                     .map(|id| found.remove(id).ok_or(UNREADABLE))
                     .collect()
             }
-            #[cfg(test)]
-            Picture::Memory(rows) => picks
-                .iter()
-                .map(|p| {
-                    rows.get(p.at)
-                        .map(|r| QsoRecord::clone(r))
-                        .ok_or(UNREADABLE)
-                })
-                .collect(),
         }
     }
 
     /// How many contacts the log holds.
+    #[cfg(test)]
     pub(super) fn count(&self) -> Result<usize, &'static str> {
-        #[cfg(test)]
-        seam(Seam::Count);
         match self {
             Picture::Store(db) => db
                 .row_count()
                 .map(|n| usize::try_from(n).unwrap_or(usize::MAX))
                 .map_err(|_| UNREADABLE),
-            #[cfg(test)]
-            Picture::Memory(rows) => Ok(rows.len()),
         }
     }
-}
-
-/// Whether `scope` holds the contact `q`: the store's own test for each scope ([`Scope`]), made on
-/// a test's own rows.
-#[cfg(test)]
-fn holds(scope: Scope<'_>, q: &QsoRecord) -> bool {
-    match scope {
-        Scope::All => true,
-        Scope::Since(t) => q.when_unix >= t,
-        Scope::CallNorm(norm) => tempo_core::logbook::sqlite::call_norm_of(&q.call) == norm,
-    }
-}
-
-/// The two seconds a Remote read of the log has always had, from before it takes the Engine
-/// lock: checked every 128 contacts — once per chunk of the reads this replaced, which checked it
-/// as they took the lock for each — a pass past it is refused as busy, as theirs were.
-pub(super) fn within(deadline: std::time::Instant, pick: Pick) -> Result<(), &'static str> {
-    if pick.at.is_multiple_of(128) && past(deadline) {
-        Err("applicationBusy")
-    } else {
-        Ok(())
-    }
-}
-
-/// Whether a Remote read's `deadline` has passed, on the box's clock — in a test, less the time a
-/// hook held the read's clock ([`with_the_read_clock_held`]).
-pub(super) fn past(deadline: std::time::Instant) -> bool {
-    #[cfg(test)]
-    let deadline = deadline + HELD.with(std::cell::Cell::get);
-    std::time::Instant::now() >= deadline
 }
 
 /// Run `f` against ONE picture of the log `rows` names — taken under the Engine lock by the
@@ -255,7 +155,7 @@ pub(super) fn past(deadline: std::time::Instant) -> bool {
 /// behind; then everything `f` reads comes from one read transaction.
 ///
 /// ⚠️ Never call it holding the Engine lock; a debug build panics.
-pub(in crate::remote_service) fn read<T>(
+pub(super) fn read<T>(
     rows: &LogRows,
     f: impl FnOnce(&Picture<'_>) -> Result<T, &'static str>,
 ) -> Result<T, &'static str> {
@@ -273,77 +173,11 @@ pub(in crate::remote_service) fn read<T>(
     }
 }
 
-/// Where a test may step into a read: as it counts the log, as its pass starts, and as it
-/// fetches the whole records its pass picked — between two statements of one read transaction.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::remote_service) enum Seam {
-    Count,
-    Each,
-    Whole,
-}
-
-#[cfg(test)]
-type SeamHook = Box<dyn FnMut(Seam)>;
-
-#[cfg(test)]
-thread_local! {
-    // A test's hook into the reads this thread makes ([`at_seams`]). Per thread: a Remote read
-    // runs on the thread that asks, and the harness runs tests in parallel.
-    static SEAM: std::cell::RefCell<Option<SeamHook>> = const { std::cell::RefCell::new(None) };
-    // How long the hook held the clock of this thread's reads while `at_seams` runs.
-    static HELD: std::cell::Cell<std::time::Duration> =
-        const { std::cell::Cell::new(std::time::Duration::ZERO) };
-}
-
-/// Run `f` with the clock of the read it interrupts held ([`past`]). For a hook that does what
-/// would happen BESIDE a read — another window's commit — on the read's own thread: there the
-/// time it takes, a slow disk's flushes, was spent from the read's own two seconds, which a
-/// commit on another thread never touches. What `f` does still lands inside the read; only the
-/// read's budget does not pay for it.
-#[cfg(test)]
-pub(in crate::remote_service) fn with_the_read_clock_held<T>(f: impl FnOnce() -> T) -> T {
-    let start = std::time::Instant::now();
-    let answer = f();
-    HELD.with(|held| held.set(held.get() + start.elapsed()));
-    answer
-}
-
-#[cfg(test)]
-fn seam(at: Seam) {
-    // Taken out while it runs, so a hook that reads the log itself cannot re-enter itself.
-    if let Some(mut hook) = SEAM.with(|s| s.borrow_mut().take()) {
-        hook(at);
-        SEAM.with(|s| *s.borrow_mut() = Some(hook));
-    }
-}
-
-/// Run `hook` at every [`Seam`] of every read this thread makes while `body` runs.
-#[cfg(test)]
-pub(in crate::remote_service) fn at_seams<T>(
-    hook: impl FnMut(Seam) + 'static,
-    body: impl FnOnce() -> T,
-) -> T {
-    struct Clear;
-    impl Drop for Clear {
-        fn drop(&mut self) {
-            SEAM.with(|s| *s.borrow_mut() = None);
-            HELD.with(|held| held.set(std::time::Duration::ZERO));
-        }
-    }
-    SEAM.with(|s| *s.borrow_mut() = Some(Box::new(hook)));
-    HELD.with(|held| held.set(std::time::Duration::ZERO));
-    let _clear = Clear;
-    body()
-}
-
 #[cfg(test)]
 mod tests {
-    //! The three rules, each shown on the Log collection's window — the reader whose old form
-    //! held the Engine lock across the whole log (SPEC-2 v3 F5).
-    use super::super::log_tests::{launch, memory, parse_one, settle, synthetic_log, Dir};
-    use super::super::log_window;
+    //! The three rules, each shown on a count of the log.
     use super::*;
+    use crate::remote_service::log_tests::{launch, memory, parse_one, settle, synthetic_log, Dir};
     use std::time::Duration;
     use tempo_core::logbook::sqlite::WriteHold;
 
@@ -356,11 +190,11 @@ mod tests {
         r
     }
 
-    /// The window for ZD7AA, read as the Log collection reads it: the rows under the lock, the
-    /// read after it is released.
+    /// How many contacts the log holds, read as every reader reads it: the rows under the lock,
+    /// the read after it is released.
     fn window(e: &crate::SharedEngine) -> Result<usize, &'static str> {
         let rows = e.lock().unwrap().log_rows();
-        read(&rows, |log| log_window(log, "zd7aa", false)).map(|(_, total)| total)
+        read(&rows, |log| log.count())
     }
 
     /// ★ P4, AND THE ENGINE FREE: asked straight after a contact is logged — while its write is
@@ -371,7 +205,7 @@ mod tests {
         let d = Dir::new("p4");
         std::fs::write(d.log(), synthetic_log(200, 0x000C_18A4)).unwrap();
         let e = launch(&d);
-        assert_eq!(window(&e), Ok(0), "premise: ZD7AA is not in the log");
+        let before = window(&e).expect("premise: the log reads");
         let hold = WriteHold::take(&d.db()).unwrap();
         e.lock().unwrap().log_qso(zd7());
         let found = std::thread::scope(|s| {
@@ -403,7 +237,7 @@ mod tests {
         });
         assert_eq!(
             found,
-            Ok(1),
+            Ok(before + 1),
             "the read has the contact logged before it was asked"
         );
         settle(&e);
@@ -418,6 +252,7 @@ mod tests {
         let d = Dir::new("stale");
         std::fs::write(d.log(), synthetic_log(50, 0x000C_18A5)).unwrap();
         let e = launch(&d);
+        let before = window(&e).expect("premise: the log reads");
         let hold = WriteHold::take(&d.db()).unwrap();
         e.lock().unwrap().log_qso(zd7());
         let stale = window(&e);
@@ -427,10 +262,14 @@ mod tests {
         // lets the writer start, and on a loaded machine its commit can outlast the read's own
         // wait (`READ_WAIT`), which made the control a refusal too.
         settle(&e);
-        assert_eq!(window(&e), Ok(1), "control: once written, the read answers");
+        assert_eq!(
+            window(&e),
+            Ok(before + 1),
+            "control: once written, the read answers"
+        );
     }
 
-    /// ★ POSITIVE CONTROL for the fence every Remote read of the log passes: made while this
+    /// ★ POSITIVE CONTROL for the fence every read of the log passes: made while this
     /// thread holds an Engine guard, it is a panic in a debug build.
     #[test]
     #[cfg(debug_assertions)]

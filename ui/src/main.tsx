@@ -5,7 +5,6 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { DetachedPanel } from './DetachedPanel'
 import { redockAllStalePopouts } from './features/panelState'
 import { loadDurable, setRemoteStation } from './features/durableStore'
-import { startMemoryPublisher } from './remote-native/memoryPublisher'
 import { installStreamInput } from './remote-native/stream-input'
 import { initLocale, installCatalog } from './i18n'
 import { DE } from './i18n/de'
@@ -114,7 +113,6 @@ void (async () => {
   setRemoteStation(driving)
   await loadDurable()
 })().finally(() => {
-  if (!panel && !driving) startMemoryPublisher()
   // A streamed Remote operator's input, as DOM events in this window and nowhere else. The main
   // window only: the station sends it nowhere else. Inert until a stream is admitted at the shack.
   if (!panel && !driving) installStreamInput()

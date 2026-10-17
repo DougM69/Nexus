@@ -220,9 +220,6 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
         engine,
         feeds: Feeds {
             monitor: crate::remote_monitor::Publisher::default(),
-            spectrum: None,
-            meters: Default::default(),
-            sources: None,
             #[cfg(feature = "radio")]
             audio: None,
             stream: super::super::stream::Host::default(),

@@ -1,7 +1,5 @@
 //! Local approval and the Remote background task. Engine access is restricted to
-//! bounded observation, reviewed application reads and separately approved manual logging.
-mod application;
-mod aprs;
+//! bounded observation, the stream, the lease and Stop, and the separately approved FT gestures.
 /// Receive audio for a listening browser. Gated with the radio feature because the
 /// encoder lives in tempo-audio, which a build without it does not have at all.
 #[cfg(feature = "radio")]
@@ -10,9 +8,9 @@ mod audio;
 pub(crate) mod lan;
 /// The relay's older lanes, held to the browser's own key (security review S1-M1).
 mod lanes;
+#[cfg(test)]
+pub(crate) mod log_tests;
 pub(crate) mod operations;
-pub(crate) mod query;
-pub(crate) mod sstv;
 /// The station's own signing key, which signs its stream answers (security review S3-M1).
 mod station_key;
 #[cfg(test)]
@@ -553,7 +551,6 @@ impl Remembered {
 #[derive(Default)]
 struct Control {
     operations: Arc<operations::Authority>,
-    memories: query::memories::Bank,
     enabled: bool,
     cancel: Option<watch::Sender<bool>>,
     generation: u64,
@@ -593,9 +590,6 @@ impl Control {
             .store(false, std::sync::atomic::Ordering::SeqCst);
         self.operations.invalidate();
         self.enabled = false;
-        if let Ok(mut bank) = self.memories.lock() {
-            *bank = None;
-        }
         self.generation = self.generation.wrapping_add(1);
         if let Some(cancel) = self.cancel.take() {
             let _ = cancel.send(true);
@@ -743,13 +737,9 @@ fn valid_name(name: &str) -> bool {
     !name.trim().is_empty() && name.chars().count() <= 48 && !name.chars().any(char::is_control)
 }
 impl Service {
-    #[allow(clippy::too_many_arguments)] // one for each part of the app the service serves from
     pub fn new(
         engine: crate::SharedEngine,
         publisher: crate::remote_monitor::Publisher,
-        spectrum: tempo_app::engine::SpectrumFeed,
-        meters: tempo_app::engine::MeterFeed,
-        sources: Option<query::Sources>,
         // `audio`: the station's bounded receive-audio copy, for a listening browser.
         // `None` leaves the audio lane unadvertised, so nothing is ever offered it.
         #[cfg(feature = "radio")] audio: Option<Arc<tempo_audio::receive_audio::ReceiveAudioFeed>>,
@@ -762,9 +752,6 @@ impl Service {
             .configure_remote_settings_store(crate::settings_path());
         let feeds = transport::Feeds {
             monitor: publisher,
-            spectrum: Some(spectrum),
-            meters,
-            sources,
             // One encoder for the station, whoever listens: the Listen lane and every stream.
             #[cfg(feature = "radio")]
             audio: audio.map(audio::ReceiveFanout::new),
@@ -848,9 +835,6 @@ impl Service {
             engine,
             transport::Feeds {
                 monitor: publisher,
-                spectrum: None,
-                meters: Default::default(),
-                sources: None,
                 #[cfg(feature = "radio")]
                 audio: None,
                 stream: stream::Host::default(),
@@ -882,15 +866,7 @@ impl Service {
             .spawn(move || write_remembered(writer_vault, decisions))
             .ok()
             .map(|_| writer);
-        let operations = Arc::new(
-            operations::Authority::with_spots(feeds.sources.as_ref().map(|s| s.spots.clone()))
-                .placing(
-                    feeds
-                        .sources
-                        .as_ref()
-                        .map(|s| (s.ota.clone(), s.parks.clone())),
-                ),
-        );
+        let operations = Arc::new(operations::Authority::default());
         // A stand-down at the shack retires remote transmit authority. Handing the engine this
         // revocation is what makes `Engine::halt_tx` — the verb every local stop funnels through,
         // including WSJT-X's UDP HaltTx — move the generation a browser carries as its
@@ -906,11 +882,6 @@ impl Service {
         tempo_app::engine::engine_lock(&engine).set_remote_mic_feed(feeds.stream.mic.clone());
         let control = Arc::new(Mutex::new(Control {
             operations,
-            memories: feeds
-                .sources
-                .as_ref()
-                .map(|s| s.memories.clone())
-                .unwrap_or_default(),
             vault_writer,
             ..Default::default()
         }));
@@ -1010,22 +981,6 @@ impl Service {
             .map_err(|_| "serviceUnavailable")?
             .lan
             .clone())
-    }
-    fn publish_memories(&self, generation: &str, bank: Option<&str>) -> bool {
-        // Parse outside the control lock. Recheck the local enable generation at
-        // admission so an old WebView reply cannot revive a disabled snapshot.
-        let value = bank.and_then(query::memories::parse);
-        let Ok(control) = self.control.try_lock() else {
-            return false;
-        };
-        if !control.enabled || control.generation.to_string() != generation {
-            return false;
-        }
-        let Ok(mut cache) = control.memories.try_lock() else {
-            return false;
-        };
-        *cache = value.map(|v| (std::time::Instant::now(), Arc::new(v)));
-        cache.is_some()
     }
     pub async fn action(&self, action: Action) -> Result<Status, &'static str> {
         match &action {
@@ -1991,16 +1946,4 @@ pub async fn remote_station_action(
     action: Action,
 ) -> Result<Status, &'static str> {
     service.action(action).await
-}
-
-// The canonical desktop WebView owns the in-memory bank. Detached windows and
-// the hosted browser cannot publish it or send a generic durable-state map.
-#[tauri::command]
-pub fn publish_remote_memory_bank(
-    service: tauri::State<'_, Service>,
-    window: tauri::WebviewWindow,
-    generation: String,
-    bank: Option<String>,
-) -> bool {
-    window.label() == "main" && service.publish_memories(&generation, bank.as_deref())
 }

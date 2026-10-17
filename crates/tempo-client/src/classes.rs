@@ -322,7 +322,6 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("psk_set_mode",                   RunsAtShack, "The shack's PSK sub-mode."),
     ("psk_stop",                       StopsTx,     "Stops PSK transmit now."),
     ("psk_type",                       StartsTx,    "Types into a live PSK transmission."),
-    ("publish_remote_memory_bank",     RefusedHere, "Feeds hosted Remote from the shack's own main window."),
     ("purge_log",                      RefusedHere, "Deletes every contact in the shack's logbook, irreversibly."),
     ("qrz_correct_apply",              RunsAtShack, "Sends one correction to QRZ from the shack."),
     ("qrz_correct_preview",            RunsAtShack, "Reads QRZ's copy of one contact from the shack."),

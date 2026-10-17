@@ -254,18 +254,15 @@ pub(crate) fn needs_finish(
     keep(kept, mark, (), needs, fresh)
 }
 
-/// The award-needs model of the whole log, folded again only when the log's content moves, with
-/// the log's identity for Remote's staleness check taken under the same lock (see
-/// [`crate::PropContext`]).
+/// The award-needs model of the whole log, folded again only when the log's content moves.
 pub(crate) fn needs_kept(
     engine: &Mutex<Engine>,
     tallies: &LogTallies,
-) -> Result<(Arc<propagation::LogNeeds>, u64), String> {
+) -> Result<Arc<propagation::LogNeeds>, String> {
     let eng = engine_lock(engine);
-    let log = crate::prop_log_identity(&eng);
     let capture = needs_capture(&eng, &tallies.needs);
     drop(eng);
-    Ok((needs_finish(capture, &tallies.needs)?, log))
+    needs_finish(capture, &tallies.needs)
 }
 
 // ── the award summary, and the Stats pane's index ────────────────────────────
@@ -1263,7 +1260,7 @@ mod tests {
         vec![
             answer(
                 "needs",
-                observed(&needs_kept(e, tallies).expect("reads").0),
+                observed(&needs_kept(e, tallies).expect("reads")),
                 observed(&needs_old(&held)),
             ),
             answer(
@@ -1750,7 +1747,7 @@ mod tests {
         let tallies = LogTallies::default();
         let held = records(&e);
         assert_eq!(held.len(), 8, "premise: every contact converted");
-        let (needs, _) = needs_kept(&e, &tallies).unwrap();
+        let needs = needs_kept(&e, &tallies).unwrap();
         assert_eq!(
             observed(&needs),
             observed(&needs_old(&held)),
@@ -1882,12 +1879,12 @@ mod tests {
         let helena = test_country("ZD7AA").expect("premise: cty.dat places ZD7");
         let worked = |n: &propagation::LogNeeds| n.worked_entity_names().contains(&helena);
         assert!(
-            !worked(&needs_kept(&e, &tallies).unwrap().0),
+            !worked(&needs_kept(&e, &tallies).unwrap()),
             "premise: {helena} is new"
         );
 
         let needs = asked_straight_after(&d, &e, contact("ZD7AA", NOW as u64), || {
-            needs_kept(&e, &tallies).map(|(needs, _)| needs)
+            needs_kept(&e, &tallies)
         });
         assert!(worked(&needs), "the needs model has the contact");
 
@@ -2016,7 +2013,7 @@ mod tests {
                     "the needs model",
                     s.spawn(|| {
                         needs_kept(&e, &tallies)
-                            .map(|(n, _)| format!("{} entities", n.worked_entity_names().len()))
+                            .map(|n| format!("{} entities", n.worked_entity_names().len()))
                     }),
                 ),
                 (

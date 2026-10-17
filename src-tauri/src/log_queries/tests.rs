@@ -929,7 +929,7 @@ type Counts = (Vec<String>, usize, Vec<String>, Value, Value);
 fn counts(engine: &SharedEngine) -> Counts {
     let tallies = crate::LogTallies::default();
     let awards = crate::log_folds::awards_kept(engine, &tallies).expect("awards");
-    let (needs, _) = crate::log_folds::needs_kept(engine, &tallies).expect("needs");
+    let needs = crate::log_folds::needs_kept(engine, &tallies).expect("needs");
     let q: LogQuestion = serde_json::from_value(json!({"kind": "statistics"})).expect("asked");
     let stats = LogQueries::default()
         .answer(engine, &q, &shown, &on_card, &counted)

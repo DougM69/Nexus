@@ -1,7 +1,7 @@
 // One hibernating room per station. Socket attachments carry admission and bounded
 // ordering/ACK state; neither D1 nor Durable Object storage receives observations.
 import { entitledCommand, OperationRelay, type OperationCheckpoint } from '../../ui/src/remote-web/operation-relay'
-import { OPERATION_REQUEST_BYTES } from '../../ui/src/remote-web/operation-protocol'
+import { OPERATION_EXPORT_RESPONSE_BYTES, OPERATION_REQUEST_BYTES } from '../../ui/src/remote-web/operation-protocol'
 import { OPERATION_ENTITLEMENT_CHECK_MS, OPERATION_ENTITLEMENT_MS } from '../../ui/src/remote-web/operation-limits'
 import { parseOperationVersion } from '../../ui/src/remote-web/operation-version'
 import { DurableObject } from 'cloudflare:workers'
@@ -9,12 +9,8 @@ import { ObservationRelay } from '../../ui/src/remote-monitor/relay'
 import type { BrowserIdentity, Entitlement, ObserverCheckpoint, Peer, StationAccess, StationIdentity } from '../../ui/src/remote-monitor/relay'
 import type { FrameOrderState } from '../../ui/src/remote-monitor/protocol'
 import { ageFrame, MAX_FRAME_BYTES, parseFrame, STALE_MS } from '../../ui/src/remote-monitor/protocol'
-import { knownApplicationVersion } from './application-version'
 import { Refusal, trial } from './authority'
 import type { RemoteEnv } from './authority'
-import { ApplicationRelay } from '../../ui/src/remote-web/application-relay'
-import type { ApplicationCheckpoint } from '../../ui/src/remote-web/application-relay'
-import { APPLICATION_MAX_BYTES, APPLICATION_REQUEST_BYTES } from '../../ui/src/remote-web/application-protocol'
 import { AudioRelay } from '../../ui/src/remote-web/audio-relay'
 import { STREAM_ENTITLEMENT_CHECK_MS, StreamRelay } from '../../ui/src/remote-web/stream-relay'
 import { Pipes } from './pipe'
@@ -22,10 +18,10 @@ import type { PipeAttachment } from './pipe'
 
 type Saved = { access: StationAccess; order: FrameOrderState }
 type Sample = { requestId: string; at: number }
-type StationAttachment = { version: 1; role: 'station'; identity: StationIdentity; order: FrameOrderState; sample: Sample | null; applicationVersion?: number; operationVersion?: number; audioVersion?: number; streamVersion?: number; laneVersion?: number; pipeVersion?: number }
-type BrowserAttachment = Omit<ObserverCheckpoint, 'peer'> & { version: 1; role: 'browser'; application?: ApplicationCheckpoint; operations?: OperationCheckpoint; commandUntil?: number }
+type StationAttachment = { version: 1; role: 'station'; identity: StationIdentity; order: FrameOrderState; sample: Sample | null; operationVersion?: number; audioVersion?: number; streamVersion?: number; laneVersion?: number; pipeVersion?: number }
+type BrowserAttachment = Omit<ObserverCheckpoint, 'peer'> & { version: 1; role: 'browser'; operations?: OperationCheckpoint; commandUntil?: number }
 type Attachment = StationAttachment | BrowserAttachment
-type Admission = { access: StationAccess; identity: StationIdentity & BrowserIdentity; entitlement: Entitlement; sessionId: string; applicationVersion?: number; operationVersion?: number; audioVersion?: number; streamVersion?: number; laneVersion?: number; pipeVersion?: number; pipeId?: string }
+type Admission = { access: StationAccess; identity: StationIdentity & BrowserIdentity; entitlement: Entitlement; sessionId: string; operationVersion?: number; audioVersion?: number; streamVersion?: number; laneVersion?: number; pipeVersion?: number; pipeId?: string }
 
 /** When this browser's account may no longer command the station, from the entitlement the Worker
  *  has just read out of D1. Admission and renewal both reach here, so it is never staler than one
@@ -46,7 +42,6 @@ export class StationRoom extends DurableObject<RemoteEnv> {
   private samples = new Map<WebSocket, Sample>()
   private saved: Saved | undefined
   private alarmAt: number | null = null
-  private application = new ApplicationRelay()
   private operations = new OperationRelay()
   // Receive audio. Runtime only: no checkpoint, no storage, no alarm. A bundle that
   // does not survive a hibernation is a gap the player conceals, which is the right
@@ -82,8 +77,9 @@ export class StationRoom extends DurableObject<RemoteEnv> {
   // Deliberately NOT checkpointed: a woken room re-reads before the first command it forwards,
   // which is the safe direction and costs one read.
   private commandChecked = new Map<string, number>()
-  private applicationVersions = new Map<WebSocket, number>()
-  private applicationPeers = new Map<WebSocket, Peer>()
+  // Each socket's peer as the lanes see it: the station's closes it through the relay, an
+  // observer's retires its session there.
+  private lanePeers = new Map<WebSocket, Peer>()
 
   constructor(ctx: DurableObjectState, env: RemoteEnv) {
     super(ctx, env)
@@ -98,7 +94,6 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         let station: { peer: Peer; identity: StationIdentity } | null = null
         let order = this.saved.order
         const observers: ObserverCheckpoint[] = []
-        const applicationSaved: { sessionId: string; value: ApplicationCheckpoint }[] = []
         for (const ws of sockets) {
           const attachment = ws.deserializeAttachment() as Attachment | PipeAttachment
           if (attachment?.version !== 1) throw new Error('invalidCheckpoint')
@@ -114,31 +109,25 @@ export class StationRoom extends DurableObject<RemoteEnv> {
           if (attachment.role === 'station') {
             if (station) throw new Error('invalidCheckpoint')
             station = { peer, identity: attachment.identity }; order = attachment.order
-            this.applicationVersions.set(ws, knownApplicationVersion(attachment.applicationVersion ?? 0) ? attachment.applicationVersion! : 0)
           } else if (attachment.role === 'browser') {
             observers.push({ ...attachment, peer })
             // An attachment written before this field existed carries none, and gets 0: that
             // session may watch and read but not command until its next renewal, which is at
             // most thirty seconds away. Fail closed across a deploy, and heal by itself.
             this.commandUntil.set(attachment.sessionId, Number.isSafeInteger(attachment.commandUntil) ? attachment.commandUntil! : 0)
-            if (attachment.application) applicationSaved.push({ sessionId: attachment.sessionId, value: attachment.application })
           }
           else throw new Error('invalidCheckpoint')
         }
         this.relay = ObservationRelay.restore(this.saved.access, order, station, observers, Date.now())
         this.pipes.settle()
         this.pipes.enforce(this.relay.checkpoint().access, Date.now())
-        this.syncApplication(Date.now())
-        for (const saved of applicationSaved) {
-          if (this.application.checkpoint(saved.sessionId)) this.application.restore(saved.sessionId, saved.value)
-        }
+        this.syncLanes(Date.now())
         for(const ws of sockets){const a=ws.deserializeAttachment() as Attachment;if(a.role==='browser'&&a.operations)this.operations.restore(a.sessionId,a.operations)}
         await this.checkpoint()
       } catch {
         for (const ws of sockets) ws.close(1011, 'authorityUnavailable')
         this.peers.clear()
-        this.samples.clear(); this.applicationPeers.clear(); this.applicationVersions.clear()
-        this.application = new ApplicationRelay()
+        this.samples.clear(); this.lanePeers.clear()
         this.operations = new OperationRelay();this.operationVersions.clear();this.commandUntil.clear();this.commandChecked.clear();this.accessOff.clear()
         this.audio = new AudioRelay(); this.audioVersions.clear()
         this.stream = new StreamRelay(); this.streamVersions.clear(); this.laneVersions.clear()
@@ -169,7 +158,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       }, close: (code, reason) => {
         if (!buffer?.pending) ws.close(code, reason)
         this.peers.delete(ws); this.samples.delete(ws)
-        this.applicationVersions.delete(ws); this.applicationPeers.delete(ws);this.operationVersions.delete(ws);this.audioVersions.delete(ws);this.streamVersions.delete(ws);this.laneVersions.delete(ws);this.pipeVersions.delete(ws)
+        this.lanePeers.delete(ws);this.operationVersions.delete(ws);this.audioVersions.delete(ws);this.streamVersions.delete(ws);this.laneVersions.delete(ws);this.pipeVersions.delete(ws)
       } }
       this.peers.set(ws, peer)
     }
@@ -235,7 +224,6 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       if (path === '/station') this.streamVersions.set(server, input.streamVersion === 1 ? 1 : 0)
       if (path === '/station') this.laneVersions.set(server, input.laneVersion === 1 ? 1 : 0)
       if (path === '/station') this.pipeVersions.set(server, input.pipeVersion === 1 ? 1 : 0)
-      if (path === '/station') this.applicationVersions.set(server, knownApplicationVersion(input.applicationVersion ?? 0) ? input.applicationVersion! : 0)
       try {
         if (path === '/station') relay.connectStation(input.identity, peer, now)
         else {
@@ -244,7 +232,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
           this.accessOff.set(input.sessionId, input.entitlement?.state === 'disabled')
         }
       } catch (error) {
-        this.peers.delete(server); this.samples.delete(server); this.applicationVersions.delete(server)
+        this.peers.delete(server); this.samples.delete(server)
         // The relay's admission refusals are decisions about this peer, and the only thing this
         // room may answer with a 403: the station turns Remote off on one, permanently, so nothing
         // that is not an approval decision - a socket the runtime would not close, say - may reach
@@ -276,11 +264,11 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     if (!peer || !this.relay || typeof message !== 'string') {
       ws.close(1008, 'invalidMessage'); await this.disconnected(ws); return
     }
-    this.syncApplication(Date.now())
-    // Bounds apply before parsing. The larger envelope is available only to an
-    // authenticated station that advertised this application protocol version.
-    const limit = attachment.role === 'station' && knownApplicationVersion(this.applicationVersions.get(ws) ?? 0)
-      ? APPLICATION_MAX_BYTES : attachment.role === 'station' ? MAX_FRAME_BYTES + 256 : Math.max(APPLICATION_REQUEST_BYTES,OPERATION_REQUEST_BYTES)
+    this.syncLanes(Date.now())
+    // Bounds apply before parsing. A station's largest message is an observation frame, or an
+    // export's answer from a station old enough to still serve one.
+    const limit = attachment.role === 'station'
+      ? Math.max(MAX_FRAME_BYTES, OPERATION_EXPORT_RESPONSE_BYTES) + 256 : OPERATION_REQUEST_BYTES
     if (new TextEncoder().encode(message).length > limit) {
       ws.close(1008, 'invalidMessage'); await this.disconnected(ws); return
     }
@@ -309,7 +297,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         if (offer && await this.refreshEntitlement(sessionId, Date.now())) {
           // The await yielded, and the socket may have gone meanwhile - as in the operation lane.
           if (!this.peers.has(ws)) return
-          this.syncApplication(Date.now())
+          this.syncLanes(Date.now())
         }
         this.stream.receiveBrowser(sessionId, parsed, Date.now())
       })()
@@ -339,7 +327,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         // Publish the refreshed deadline into the relay before it reads it. Only when there is
         // one: a heartbeat spends the relay's whole budget four times a second and must not pay
         // for a second sweep of every peer to learn nothing changed.
-        if (refreshed) this.syncApplication(Date.now())
+        if (refreshed) this.syncLanes(Date.now())
         this.operations.receiveBrowser(attachment.sessionId,parsed,Date.now())
         // A running stream commands the station peer to peer, where no relay can gate it. So while
         // one runs, its session's entitlement is re-read as the page's socket heartbeats arrive (after
@@ -347,16 +335,11 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         // a lapse ends the stream at the station: Remote switched off by hand mid-stream ends within
         // about 2 s (operator decision, 2026-09-27).
         if (this.stream.streaming(attachment.sessionId)) {
-          if (await this.refreshEntitlement(attachment.sessionId, Date.now(), STREAM_ENTITLEMENT_CHECK_MS)) this.syncApplication(Date.now())
+          if (await this.refreshEntitlement(attachment.sessionId, Date.now(), STREAM_ENTITLEMENT_CHECK_MS)) this.syncLanes(Date.now())
           this.stream.enforce(Date.now())
         }
       }
       await this.checkpoint();return
-    }
-    if (parsed && typeof parsed === 'object' && typeof parsed.type === 'string' && parsed.type.startsWith('application')) {
-      if (attachment.role === 'station') this.application.receiveStation(parsed, Date.now())
-      else this.application.receiveBrowser(attachment.sessionId, parsed, Date.now())
-      await this.checkpoint(); return
     }
     if (attachment.role === 'station') {
       const sample = this.samples.get(ws), now = Date.now()
@@ -428,14 +411,13 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     }
     this.peers.delete(ws)
     this.samples.delete(ws)
-    this.applicationPeers.delete(ws); this.applicationVersions.delete(ws)
+    this.lanePeers.delete(ws)
     await this.checkpoint()
   }
   async alarm(): Promise<void> {
     this.alarmAt = null
     this.relay?.expire(Date.now())
     if (this.relay) this.pipes.enforce(this.relay.checkpoint().access, Date.now())
-    this.application.expire(Date.now())
     for (const [ws, sample] of this.samples) {
       if (Date.now() - sample.at >= STALE_MS) {
         const peer = this.peers.get(ws)
@@ -447,15 +429,15 @@ export class StationRoom extends DurableObject<RemoteEnv> {
 
   private async checkpoint(): Promise<void> {
     if (!this.relay) return
-    this.syncApplication(Date.now())
+    this.syncLanes(Date.now())
     const state = this.relay.checkpoint()
     for (const id of this.commandUntil.keys()) if (!state.observers.some(o => o.sessionId === id)) { this.commandUntil.delete(id); this.commandChecked.delete(id); this.accessOff.delete(id) }
     for (const [ws, peer] of this.peers) {
       let attachment: Attachment | undefined
-      if (state.station?.peer === peer) attachment = { version: 1, role: 'station', identity: state.station.identity, order: state.order, sample: this.samples.get(ws) ?? null, applicationVersion: this.applicationVersions.get(ws) ?? 0, operationVersion:this.operationVersions.get(ws)??0, audioVersion: this.audioVersions.get(ws) ?? 0, streamVersion: this.streamVersions.get(ws) ?? 0, laneVersion: this.laneVersions.get(ws) ?? 0, pipeVersion: this.pipeVersions.get(ws) ?? 0 }
+      if (state.station?.peer === peer) attachment = { version: 1, role: 'station', identity: state.station.identity, order: state.order, sample: this.samples.get(ws) ?? null, operationVersion:this.operationVersions.get(ws)??0, audioVersion: this.audioVersions.get(ws) ?? 0, streamVersion: this.streamVersions.get(ws) ?? 0, laneVersion: this.laneVersions.get(ws) ?? 0, pipeVersion: this.pipeVersions.get(ws) ?? 0 }
       else {
         const observer = state.observers.find(o => o.peer === peer)
-        if (observer) { const { peer: _peer, ...saved } = observer; attachment = { version: 1, role: 'browser', ...saved, application: this.application.checkpoint(observer.sessionId),operations:this.operations.checkpoint(observer.sessionId), commandUntil: this.commandUntil.get(observer.sessionId) ?? 0 } }
+        if (observer) { const { peer: _peer, ...saved } = observer; attachment = { version: 1, role: 'browser', ...saved, operations:this.operations.checkpoint(observer.sessionId), commandUntil: this.commandUntil.get(observer.sessionId) ?? 0 } }
       }
       if (!attachment) { ws.close(1001, 'disconnected'); this.peers.delete(ws); continue }
       if (new TextEncoder().encode(JSON.stringify(attachment)).length > 2048) {
@@ -474,8 +456,6 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     if (coreDeadline !== null) deadlines.push(coreDeadline)
     const operationDeadline=this.operations.nextDeadline()
     if(operationDeadline!==null)deadlines.push(operationDeadline)
-    const applicationDeadline = this.application.nextDeadline()
-    if (applicationDeadline !== null) deadlines.push(applicationDeadline)
     const pipeDeadline = this.pipes.nextDeadline()
     if (pipeDeadline !== null) deadlines.push(pipeDeadline)
     const next = deadlines.length ? Math.min(...deadlines) : null
@@ -493,35 +473,36 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     const socket = station ? [...this.peers].find(([, peer]) => peer === station.peer)?.[0] : undefined
     return socket ? { socket, pipe: this.pipeVersions.get(socket) === 1 } : null
   }
-  private syncApplication(now: number): void {
+  /** Hands the relay's current station and observers to the lanes (operation, audio, stream), each
+   *  with the command deadline and access its session holds now. */
+  private syncLanes(now: number): void {
     this.relay?.expire(now)
     const state = this.relay?.checkpoint()
     const stationSocket = [...this.peers].find(([, peer]) => peer === state?.station?.peer)?.[0]
-    let station: { peer: Peer; version: number } | null = null
+    let station: { peer: Peer } | null = null
     if (stationSocket && state?.station) {
-      let peer = this.applicationPeers.get(stationSocket)
+      let peer = this.lanePeers.get(stationSocket)
       if (!peer) {
         const original = state.station.peer
         peer = { send: message => stationSocket.send(message), close: (code, reason) => this.relay?.disconnectStation(original, code, reason) }
-        this.applicationPeers.set(stationSocket, peer)
+        this.lanePeers.set(stationSocket, peer)
       }
-      station = { peer, version: this.applicationVersions.get(stationSocket) ?? 0 }
+      station = { peer }
     }
-    // Application refusals/timeouts must leave the authoritative observer set
-    // immediately, rather than waiting for the runtime's socket-close callback.
+    // A lane's refusal must leave the authoritative observer set immediately, rather than
+    // waiting for the runtime's socket-close callback.
     const observers = (state?.observers ?? []).flatMap(observer => {
       const socket = [...this.peers].find(([, peer]) => peer === observer.peer)?.[0]
       if (!socket) return []
-      let peer = this.applicationPeers.get(socket)
+      let peer = this.lanePeers.get(socket)
       if (!peer) {
         peer = { send: message => observer.peer.send(message),
           close: (code, reason) => this.relay?.disconnectObserver(observer.sessionId, code, reason) }
-        this.applicationPeers.set(socket, peer)
+        this.lanePeers.set(socket, peer)
       }
       return [{ sessionId: observer.sessionId, deviceId:observer.identity.deviceId, peer,
         commandUntil: this.commandUntil.get(observer.sessionId) ?? 0, accessOff: this.accessOff.get(observer.sessionId) === true }]
     })
-    this.application.sync(station, observers, now)
     this.operations.sync(station?{peer:station.peer,supported:!!stationSocket&&parseOperationVersion(this.operationVersions.get(stationSocket))!==null,operationVersion:stationSocket?this.operationVersions.get(stationSocket):0,laneVersion:stationSocket?this.laneVersions.get(stationSocket):0}:null,observers,now)
     this.audio.sync(station ? { peer: station.peer, supported: this.audioVersions.get(stationSocket!) === 1, laneVersion: this.laneVersions.get(stationSocket!) } : null, observers)
     this.stream.sync(station ? { peer: station.peer, supported: this.streamVersions.get(stationSocket!) === 1 } : null, observers)

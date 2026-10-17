@@ -216,51 +216,6 @@ fn disable_preempts_a_full_command_queue() {
 }
 
 #[test]
-fn memory_publication_obeys_enable_generation_and_disable_preemption() {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let (commands, _receiver) = mpsc::channel(1);
-    let service = Service {
-        commands,
-        status: Default::default(),
-        control: Default::default(),
-    };
-    let bank = service.control.lock().unwrap().memories.clone();
-    let raw = include_str!("../../../ui/src/remote-web/__fixtures__/memories.json");
-    assert!(!service.publish_memories("0", Some(raw)));
-    assert!(service.status().unwrap().observation_generation.is_none());
-    service.control.lock().unwrap().enabled = true;
-    assert_eq!(
-        service.status().unwrap().observation_generation.as_deref(),
-        Some("0")
-    );
-    assert!(service.publish_memories("0", Some(raw)));
-    assert!(query::memories::read(&bank).is_ok());
-    assert!(!service.publish_memories("0", Some("{}")));
-    assert!(query::memories::read(&bank).is_err());
-    assert!(service.publish_memories("0", Some(raw)));
-    let (reply, _) = oneshot::channel();
-    service
-        .commands
-        .try_send((Action::Refresh {}, 0, 0, reply))
-        .unwrap();
-    assert_eq!(
-        runtime.block_on(service.action(Action::Disable {})).err(),
-        Some("remoteBusy")
-    );
-    assert!(query::memories::read(&bank).is_err());
-    service.control.lock().unwrap().enabled = true;
-    assert!(
-        !service.publish_memories("0", Some(raw)),
-        "old enable replies cannot revive the bank"
-    );
-    assert!(query::memories::read(&bank).is_err());
-    assert!(service.publish_memories("1", Some(raw)));
-    assert!(query::memories::read(&bank).is_ok());
-    assert!(!service.publish_memories("1", None));
-    assert!(query::memories::read(&bank).is_err());
-}
-
-#[test]
 fn refused_enable_does_not_change_local_authority() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let (commands, _receiver) = mpsc::channel(1);
@@ -279,25 +234,6 @@ fn refused_enable_does_not_change_local_authority() {
         Err("remoteBusy")
     ));
     assert!(!service.control.lock().unwrap().enabled);
-}
-
-/// A station read asked as the page asks one (`askAgainWhenBusy`, ui/src/remote-web/application-client.ts):
-/// `applicationBusy` is asked again, three attempts at most and 250 ms apart. Any other answer, and a third
-/// busy, comes back as it came. The station's reads take the Engine with try_lock, so in the probe they
-/// answer busy whenever its readings thread holds it.
-fn ask_again_when_busy<T>(
-    mut read: impl FnMut() -> Result<T, &'static str>,
-) -> Result<T, &'static str> {
-    let mut attempt = 1;
-    loop {
-        match read() {
-            Err("applicationBusy") if attempt < 3 => {
-                attempt += 1;
-                std::thread::sleep(Duration::from_millis(250));
-            }
-            answer => return answer,
-        }
-    }
 }
 
 #[test]
@@ -323,23 +259,8 @@ fn cloud_runtime_probe() {
             std::path::Path::new(config["configurationRoot"].as_str().unwrap())
                 .join("settings.json"),
         );
-        let chars: Vec<_> = "CQ W1AW"
-            .chars()
-            .map(|ch| tempo_core::textmode::DecodedChar {
-                ch,
-                confidence: 0.3,
-            })
-            .collect();
-        e.set_rtty_armed(true);
-        e.set_psk_armed(true);
-        e.set_psk_mode(tempo_core::psk::PskModeKind::Qpsk31, true)
-            .unwrap();
-        e.push_rtty_decode(&chars, -12.5, true);
-        e.push_psk_decode(&chars, 7.5, true);
     }
     let read_engine = engine.clone();
-    let scope_feed = tempo_app::engine::SpectrumFeed::default();
-    let read_scope = scope_feed.clone();
     let readings_stop = Arc::new(AtomicBool::new(false));
     let stop = readings_stop.clone();
     let readings = std::thread::spawn(move || {
@@ -377,44 +298,16 @@ fn cloud_runtime_probe() {
                 },
             );
             drop(e);
-            read_scope.publish_audio(tempo_app::dto::Spectrum {
-                row: vec![0.25; 8],
-                lo_hz: 0.0,
-                hi_hz: 4000.0,
-                source: "audio".into(),
-            });
             std::thread::sleep(Duration::from_millis(100));
         }
     });
     let vault = MemoryVault::default();
-    let prop_cache: crate::PropCache = Default::default();
-    let sstv_files = sstv::fixture::Gallery::new();
-    let sources = query::Sources {
-        needs: Default::default(),
-        spots: Default::default(),
-        live_paths: Default::default(),
-        region_paths: crate::SharedRegionPaths(Default::default()),
-        ota: Default::default(),
-        parks: Default::default(),
-        pounces: Default::default(),
-        health: Default::default(),
-        propagation: prop_cache.clone(),
-        memories: Default::default(),
-        navigation: Default::default(),
-        sstv: sstv_files.source(),
-    };
-    let ota_cache = sources.ota.clone();
-    let park_index = sources.parks.clone();
-    let pounce_recent = sources.pounces.clone();
     let mut service = Service::start(
         origin.clone(),
         Box::new(vault.clone()),
         engine.clone(),
         transport::Feeds {
             monitor: crate::remote_monitor::Publisher::default(),
-            spectrum: Some(scope_feed.clone()),
-            meters: Default::default(),
-            sources: Some(sources.clone()),
             #[cfg(feature = "radio")]
             audio: None,
             stream: Default::default(),
@@ -485,26 +378,6 @@ fn cloud_runtime_probe() {
                 "pendingQsoLogKey":e.pending_qso_log_key(),"pendingLog":snapshot.pending_log,
                 "records":e.stored_records().into_iter().map(tempo_app::dto::LoggedQso::from).collect::<Vec<_>>(),"adif":std::fs::read_to_string(root.join("ft-contacts.adi")).unwrap_or_default(),
                 "journal":root.join("ft-pending.json").is_file(),"samples":samples,"txEnabled":e.tx_enabled()})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "settingsEvidence" {
-            // What a browser's preference change did: the live value, the saved file, the revision
-            // the Settings document shows, and the TX-enable latch and dial it must not move.
-            let e = engine.lock().unwrap();
-            let path = std::path::Path::new(config["configurationRoot"].as_str().unwrap())
-                .join("settings.json");
-            let saved: serde_json::Value = std::fs::read(path)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                .unwrap_or(serde_json::Value::Null);
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"revision":super::query::settings_revision(e.settings()).unwrap(),
-                "autoLog":e.settings().auto_log,"contestCheck":e.settings().contest_check,
-                "savedAutoLog":saved["autoLog"],"savedContestCheck":saved["contestCheck"],
-                "txEnabled":e.tx_enabled(),"dialHz":e.settings().dial_hz()})
             );
             std::io::stdout().flush().unwrap();
             continue;
@@ -626,357 +499,14 @@ fn cloud_runtime_probe() {
             std::io::stdout().flush().unwrap();
             continue;
         }
-        if value["type"] == "seedConfiguration" {
-            let root = std::path::Path::new(config["configurationRoot"].as_str().unwrap());
-            let path = crate::radioprog_path();
-            assert!(
-                path.starts_with(root),
-                "the actual station sidecar must resolve inside the isolated probe profile"
-            );
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            let file: crate::RadioProgFile =
-                serde_json::from_value(json!({"version":1,"projects":value["projects"]})).unwrap();
-            let bytes = serde_json::to_vec(&file).unwrap();
-            std::fs::write(&path, &bytes).unwrap();
-            let result = ask_again_when_busy(|| query::configuration_probe(&engine)).unwrap();
-            assert_eq!(std::fs::read(&path).unwrap(), bytes);
-            assert!(!engine.lock().unwrap().snapshot().radio.tx_enabled);
-            println!("REMOTE_TEST:{}", result);
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedNavigation" {
-            let (call, grid, log) = {
-                let e = engine.lock().unwrap();
-                (
-                    e.settings().mycall.clone(),
-                    e.settings().mygrid.clone(),
-                    e.log_revision(),
-                )
-            };
-            let mut prop = propagation::offline(crate::now_unix(), &call, &grid);
-            prop.source = "live".into();
-            *prop_cache.lock().unwrap() = Some((
-                Instant::now(),
-                prop.clone(),
-                crate::PropContext { call, grid, log },
-            ));
-            let seed = query::navigation::test_fresh_catalog();
-            let expected_tles = seed.elements.len();
-            assert!(expected_tles > 300);
-            *crate::TLES.lock().unwrap() = Some(seed);
-            *crate::SATNOGS.lock().unwrap() = Some(Default::default());
-            let e = engine.lock().unwrap();
-            assert!(!e.snapshot().radio.tx_enabled);
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"prop":serde_json::from_slice::<serde_json::Value>(&serde_json::to_vec(&prop).unwrap()).unwrap(),"tleCount":expected_tles,"logCount":e.stored_log().len(),"live":query::navigation::live(&e).unwrap()})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedStationModes" {
-            let mut e = engine.lock().unwrap();
-            sstv_files.seed(&mut e);
-            aprs::seed(&mut e);
-            let images:Vec<_>=e.sstv_gallery().iter().map(|g| json!({"extension":std::path::Path::new(&g.path).extension().unwrap().to_str().unwrap(),
-                "base64":crate::b64_encode(&std::fs::read(&g.path).unwrap())})).collect();
-            assert!(!e.snapshot().radio.tx_enabled);
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"sstv":crate::sstv_state_dto(&e),"aprs":aprs::live(&e).unwrap(),
-                "heard":e.aprs_heard(),"roster":e.aprs_stations(crate::now_unix()),"images":images})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedJs8" {
-            let mut e = engine.lock().unwrap();
-            let mut settings = e.settings().clone();
-            settings.mycall = "N0CALL".into();
-            e.apply_settings(settings);
-            e.js8_load_journal(&value["journal"].to_string());
-            e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
-                .unwrap();
-            assert!(!e.snapshot().radio.tx_enabled);
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"state":e.js8_state(),"log":e.stored_records().into_iter().map(|r| {
-                    let mut q = tempo_app::dto::LoggedQso::from(r);
-                    q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
-                    q
-                }).collect::<Vec<_>>()})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedTempo" {
-            let mut e = engine.lock().unwrap();
-            e.set_tier(serde_json::from_value(value["tier"].clone()).unwrap());
-            e.load_conversations(serde_json::from_value(value["conversations"].clone()).unwrap());
-            let snapshot = e.snapshot();
-            assert!(!snapshot.radio.tx_enabled);
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"conversations":snapshot.conversations,"tier":snapshot.link.tier})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedFieldDay" {
-            let mut e = engine.lock().unwrap();
-            let mut settings = e.settings().clone();
-            settings.fd_active = true;
-            settings.fd_event = "arrlfd".into();
-            settings.fd_class = "1D".into();
-            settings.fd_section = "EMA".into();
-            settings.fd_operator = "W1AW".into();
-            settings.fd_power_mult = 2;
-            settings.fd_bonuses = vec!["emergency-power".into()];
-            settings.fd_bonuses_planned = vec!["natural-power".into()];
-            e.apply_settings(settings);
-            e.restore_field_day_if_enabled();
-            assert!(e.fd_log_manual("K1ABC", "2A", "WI", "CW").unwrap());
-            assert!(e.fd_log_manual("K2ABC", "2A", "WI", "PH").unwrap());
-            println!("REMOTE_TEST:{}", json!({"seeded":true}));
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedSweepstakes" {
-            // Sweepstakes works a station once and wants a repeat LOGGED, marked and scored
-            // zero, so the station counts one contact fewer than its log holds. Field Day is left
-            // first: a save made while a contest runs keeps that contest.
-            let mut e = engine.lock().unwrap();
-            let mut settings = e.settings().clone();
-            settings.fd_active = false;
-            e.apply_settings(settings.clone());
-            settings.fd_active = true;
-            settings.fd_event = "arrlss_cw".into();
-            settings.contest_check = "68".into();
-            settings.fd_section = "EMA".into();
-            settings.contest_category_assisted = "NON-ASSISTED".into();
-            settings.contest_category_power = "LOW".into();
-            e.apply_settings(settings);
-            for nr in ["1", "2"] {
-                let fields = [
-                    ("NR", nr),
-                    ("PREC", "A"),
-                    ("CALL", "K9XYZ"),
-                    ("CK", "72"),
-                    ("SEC", "IL"),
-                ]
-                .map(|(k, v)| (k.to_string(), v.to_string()));
-                assert!(e.contest_log_manual("K9XYZ", &fields, "CW", None).unwrap());
-            }
-            let fd = e.snapshot().field_day.unwrap();
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"event":fd.event,"qsoCount":fd.qso_count,"rows":fd.log.len()})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedOta" {
-            let fixture: serde_json::Value = serde_json::from_str(include_str!(
-                "../../../ui/src/remote-web/__fixtures__/ota.json"
-            ))
-            .unwrap();
-            let mut cache = ota_cache.lock().unwrap();
-            cache.clear();
-            for feed in fixture["feeds"].as_array().unwrap() {
-                let program = feed["program"].as_str().unwrap();
-                if value["missing"].as_str() == Some(program) {
-                    continue;
-                }
-                let mut rows: Vec<propagation::OtaSpot> =
-                    serde_json::from_value(feed["spots"].clone()).unwrap();
-                // The states a spot's park or summit is in, by reference, as the feed's parser
-                // sets them (they are never serialized, so the fixture cannot carry them).
-                for row in &mut rows {
-                    if let Some(states) = value["states"][row.reference.as_str()].as_array() {
-                        row.states = states
-                            .iter()
-                            .map(|s| s.as_str().unwrap().to_owned())
-                            .collect();
-                    }
-                }
-                cache.insert(
-                    program.into(),
-                    (crate::now_unix() - value["age"].as_i64().unwrap_or(0), rows),
-                );
-            }
-            drop(cache);
-            let mut e = engine.lock().unwrap();
-            e.set_hunted_parks_import(vec!["US-0003".into()]);
-            e.set_activation("POTA", "US-0001", Vec::new()).unwrap();
-            e.set_hunt_target("K2ABC", "POTA", "US-0004", Vec::new())
-                .unwrap();
-            println!("REMOTE_TEST:{}", json!({ "seeded": true }));
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "publishMemories" {
-            let generation = service
-                .status()
-                .unwrap()
-                .observation_generation
-                .unwrap_or_default();
-            let accepted = service.publish_memories(&generation, value["bank"].as_str());
-            println!("REMOTE_TEST:{}", json!({ "accepted": accepted }));
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedDxpeditions" {
-            let mut e = engine.lock().unwrap();
-            let mut settings = e.settings().clone();
-            settings.mycall = "W1AW".into();
-            e.apply_settings(settings);
-            let mut snapshot = propagation::offline(
-                crate::now_unix(),
-                &e.settings().mycall,
-                &e.settings().mygrid,
-            );
-            snapshot.source = "live".into();
-            snapshot
-                .dxpeditions
-                .workable_now
-                .push(propagation::WorkableCard {
-                    call: "3Y0TEST".into(),
-                    entity: "Bouvet Island".into(),
-                    need: propagation::NeedKind::Atno,
-                    band: "20m".into(),
-                    bearing_deg: 145.,
-                    octant: "SE".into(),
-                    distance_km: 12500.,
-                    status: propagation::WorkStatus::WorkNow,
-                    likelihood: "Good".into(),
-                    likelihood_score: 0.8,
-                    live_confirmed: true,
-                    how_to_call: "Synthetic test advice".into(),
-                    ft8_mode: None,
-                    window_hint: "1400–1700Z".into(),
-                    priority: 100,
-                    modes: vec!["CW".into()],
-                });
-            snapshot.dxpeditions.active.push("3Y0TEST".into());
-            let context = crate::PropContext {
-                call: e.settings().mycall.clone(),
-                grid: e.settings().mygrid.clone(),
-                log: e.log_revision(),
-            };
-            let result = json!({ "boardJson": serde_json::to_string(&snapshot.dxpeditions).unwrap(), "source": snapshot.source, "asOf": snapshot.as_of });
-            *prop_cache.lock().unwrap() = Some((Instant::now(), snapshot, context));
-            println!("REMOTE_TEST:{result}");
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "keyboardState" {
-            let e = engine.lock().unwrap();
-            println!(
-                "REMOTE_TEST:{}",
-                json!({ "rtty": crate::rtty_state_dto(&e), "psk": crate::psk_state_dto(&e),
-                "txEnabled": e.snapshot().radio.tx_enabled, "logCount": e.stored_records().len() })
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
         // Test-only park directory. The response is the desktop search_parks and
         // lookup_park answer for the same search, for parity checks.
-        if value["type"] == "seedParks" {
-            let index = tempo_core::pota::ParkIndex::parse_csv(value["csv"].as_str().unwrap());
-            let search = value["search"].as_str().unwrap();
-            let parks: Vec<_> = index
-                .search(search, 12)
-                .into_iter()
-                .map(crate::ParkDto::from)
-                .collect();
-            let exact = index.lookup(search).map(crate::ParkDto::from);
-            *park_index.lock().unwrap() = index;
-            println!("REMOTE_TEST:{}", json!({ "parks": parks, "exact": exact }));
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
         // Test-only rare-DX input: spots run through the desktop's own Pounce detector. The
         // response is what the desktop raised (its `pounce` event payloads), for parity checks.
-        if value["type"] == "seedPounce" {
-            let mut e = engine.lock().unwrap();
-            let mut settings = e.settings().clone();
-            settings.pounce_threshold = tempo_app::settings::PounceThreshold::Atno;
-            e.apply_settings(settings);
-            drop(e);
-            let (tx, rx) = crate::pouncer::channel();
-            for spot in value["spots"].as_array().unwrap() {
-                tx.offer(crate::pouncer::SpotHint {
-                    call: spot["call"].as_str().unwrap().into(),
-                    freq_mhz: spot["freqMhz"].as_f64().unwrap(),
-                    mode: spot["mode"].as_str().unwrap().into(),
-                    spotted_unix: crate::now_unix(),
-                });
-            }
-            drop(tx);
-            let mut fired = Vec::new();
-            crate::pouncer::run(
-                engine.clone(),
-                Default::default(),
-                ota_cache.clone(),
-                rx,
-                pounce_recent.clone(),
-                |p| fired.push(p),
-            );
-            println!("REMOTE_TEST:{}", json!({ "fired": fired }));
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
         // Test-only desktop truth for the hosted Awards diagnostics: the report the
         // desktop get_confirmation_diagnostics command returns for the seeded log.
-        if value["type"] == "confirmationDiagnostics" {
-            let e = engine.lock().unwrap();
-            let report = tempo_app::dto::DiagnosticsReportDto::from(
-                e.confirmation_diagnostics(crate::now_unix(), |call| {
-                    propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
-                })
-                .expect("the test's log reads"),
-            );
-            let log_count = e.stored_records().len();
-            drop(e);
-            println!(
-                "REMOTE_TEST:{}",
-                json!({ "report": report, "logCount": log_count })
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
         // Test-only input to the in-memory engine. The production controller has
         // no import action; the response supplies desktop truth for parity checks.
-        if value["type"] == "seedRecallLog" {
-            let mut e = engine.lock().unwrap();
-            e.import_adif(value["adif"].as_str().unwrap());
-            let my_call = e.settings().mycall.clone();
-            let records = e.stored_records();
-            drop(e);
-            let awards = crate::awards_for_records(&records, &my_call);
-            // The desktop's geography fold: each contact with what its record carries.
-            let geography = {
-                let mut stats = propagation::stats::LogStatsAccumulator::new(&my_call);
-                for q in &records {
-                    stats.add(&q.call, crate::log_folds::award_fields(q));
-                }
-                stats.summary()
-            };
-            let mut log: Vec<_> = records
-                .into_iter()
-                .map(tempo_app::dto::LoggedQso::from)
-                .collect();
-            for q in &mut log {
-                q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
-            }
-            println!(
-                "REMOTE_TEST:{}",
-                json!({ "log": log, "awards": awards, "geography": geography })
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
         let result = match value["type"].as_str() {
             Some("status") => service.status(),
             Some("vaultFailure") => {
@@ -993,9 +523,6 @@ fn cloud_runtime_probe() {
                     engine.clone(),
                     transport::Feeds {
                         monitor: crate::remote_monitor::Publisher::default(),
-                        spectrum: Some(scope_feed.clone()),
-                        meters: Default::default(),
-                        sources: Some(sources.clone()),
                         #[cfg(feature = "radio")]
                         audio: None,
                         stream: Default::default(),
@@ -1088,7 +615,7 @@ fn actual_native_socket_refuses_cloud_commands_after_a_valid_publication() {
             });
             let token = transport::random_secret().unwrap();
             let result = transport::connected(&client, "00000000-0000-4000-8000-000000000001", &token,
-                cancellation, &engine, &transport::Feeds { monitor: publisher.clone(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() }, &status).await;
+                cancellation, &engine, &transport::Feeds { monitor: publisher.clone(), #[cfg(feature = "radio")] audio: None, stream: Default::default() }, &status).await;
             assert_eq!(result, Err("invalidResponse"));
             server.await.unwrap();
             assert_eq!(serde_json::to_value(engine.lock().unwrap().snapshot().radio).unwrap(), before);
@@ -1126,7 +653,7 @@ fn an_unparseable_service_message_reconnects_and_never_turns_remote_off() {
             }
         });
         let binding = Binding { origin: origin.clone(), station_id: STATION.into(), account_id: ACCOUNT.into() };
-        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() };
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), #[cfg(feature = "radio")] audio: None, stream: Default::default() };
         let supervised = tokio::spawn(transport::supervise(client, binding, transport::random_secret().unwrap(), cancellation, engine, feeds, status.clone()));
         let mut seen = None;
         for _ in 0..250 {
@@ -1141,6 +668,63 @@ fn an_unparseable_service_message_reconnects_and_never_turns_remote_off() {
         assert_eq!((seen.phase.as_str(), seen.error), ("reconnecting", Some("invalidResponse")), "a parse failure backs off; it is not an access decision");
         assert!(control.lock().unwrap().enabled, "Remote is still on");
         assert!(!supervised.is_finished(), "the supervisor is still trying");
+        let _ = cancel.send(true);
+        supervised.await.unwrap();
+        server.abort();
+    });
+}
+/// An operation the hosted page used to send and this station no longer takes — a retired request
+/// or a station control that is neither an FT gesture nor the held contact's log action — is
+/// answered `stationUnsupported`, as an older station answers what it cannot do, and the socket
+/// stays up with Stop's road on it. CONTROL: the parse failure above still reconnects.
+#[test]
+fn a_retired_operation_is_refused_by_name_and_the_station_stays_connected() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    const SESSION: &str = "20000000-0000-4000-8000-000000000001";
+    let retired = [
+        json!({"type":"logManual","requestId":"30000000-0000-4000-8000-000000000001"}),
+        json!({"type":"activationExport","requestId":"30000000-0000-4000-8000-000000000002"}),
+        json!({"type":"stationControl","requestId":"30000000-0000-4000-8000-000000000003",
+            "action":{"action":"decoder.clear","receiver":"cw"}}),
+    ];
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let client = Client::new(&origin).unwrap();
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let control = Arc::new(Mutex::new(Control { enabled: true, ..Default::default() }));
+        let status = SessionStatus { status: Arc::new(Mutex::new(Status::default())), control: control.clone(), generation: 0 };
+        let (cancel, cancellation) = watch::channel(false);
+        let (answers, mut answered) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+        let requests = retired.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            for request in requests {
+                let message = json!({"type":"operationRequest","sessionId":SESSION,"deviceId":SESSION,"operationVersion":4,"request":request});
+                socket.send(Message::Text(message.to_string().into())).await.unwrap();
+                loop {
+                    match tokio::time::timeout(Duration::from_secs(5), socket.next()).await {
+                        Ok(Some(Ok(Message::Text(text)))) => { let _ = answers.send(serde_json::from_str(&text).unwrap()); break }
+                        Ok(Some(Ok(_))) => continue,
+                        _ => return,
+                    }
+                }
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(30), socket.next()).await;
+        });
+        let binding = Binding { origin: origin.clone(), station_id: STATION.into(), account_id: ACCOUNT.into() };
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), #[cfg(feature = "radio")] audio: None, stream: Default::default() };
+        let supervised = tokio::spawn(transport::supervise(client, binding, transport::random_secret().unwrap(), cancellation, engine, feeds, status.clone()));
+        for request in &retired {
+            let answer = tokio::time::timeout(Duration::from_secs(10), answered.recv()).await.expect("the station answers").expect("an answer");
+            assert_eq!(answer, json!({"type":"operationResponse","sessionId":SESSION,"requestId":request["requestId"],"error":"stationUnsupported"}));
+        }
+        let current = status.status.lock().unwrap().clone();
+        assert_eq!((current.phase.as_str(), current.error), ("connected", None), "the socket stayed up");
+        assert!(control.lock().unwrap().enabled, "Remote is still on");
         let _ = cancel.send(true);
         supervised.await.unwrap();
         server.abort();
@@ -1166,9 +750,6 @@ fn a_station_that_can_serve_a_tunnel_advertises_the_pipe_and_opens_its_end_of_ea
                 Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
             let feeds = transport::Feeds {
                 monitor: crate::remote_monitor::Publisher::default(),
-                spectrum: None,
-                meters: Default::default(),
-                sources: None,
                 #[cfg(feature = "radio")]
                 audio: None,
                 stream: Default::default(),
@@ -1344,7 +925,7 @@ fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
     const PIPE: usize = 4096;
-    const READS: usize = 8;
+    const READS: usize = 40;
     const DEVICE: &str = "10000000-0000-4000-8000-00000000000d";
     const SESSION: &str = "20000000-0000-4000-8000-00000000000e";
     async fn text(
@@ -1389,9 +970,10 @@ fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
             socket.send(operation(json!({"type":"state","requestId":id(3)}))).await.unwrap();
             let epoch = text(&mut socket).await["value"]["transmitEpoch"].as_str().expect("the controller holds the stop token").to_owned();
             relay_engine.lock().unwrap().set_tx_enabled(true);
-            // Fill the pipe: legacy reads the station answers inline, none of them read here.
+            // Fill the pipe: retired operations the station refuses inline, none of the refusals
+            // read here.
             for n in 0..READS as u32 {
-                socket.send(Message::Text(json!({"type":"applicationRead","requestId":id(0x10 + n),"command":"get_snapshot","revision":null}).to_string().into())).await.unwrap();
+                socket.send(operation(json!({"type":"logManual","requestId":id(0x30 + n)}))).await.unwrap();
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
             // The station's writer is stuck. Stop must still get through.
@@ -1407,35 +989,32 @@ fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
             let mut answers = Vec::new();
             loop {
                 let answer = text(&mut socket).await;
-                if answer["type"] == "operationResponse" { answers.push(answer); break; }
-                assert_eq!(answer["type"], "applicationResult");
+                let refused = answer["error"] == "stationUnsupported";
                 answers.push(answer);
+                if !refused { break; }
             }
             assert_eq!(answers.len(), READS + 1);
             let queued: usize = answers[..READS].iter().map(|a| a.to_string().len()).sum();
-            assert!(queued > PIPE, "positive control: {queued} bytes of read answers outgrow the {PIPE}-byte pipe nobody was draining, so the writer was stuck when the Stop went in");
+            assert!(queued > PIPE, "positive control: {queued} bytes of refusals outgrow the {PIPE}-byte pipe nobody was draining, so the writer was stuck when the Stop went in");
             assert_eq!(answers[READS]["requestId"], id(0x20));
             assert_eq!(answers[READS]["value"], json!({"stop":"accepted"}));
             stop_remote(&mut socket, &cancel).await;
         });
         let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
         let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
-        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() };
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), #[cfg(feature = "radio")] audio: None, stream: Default::default() };
         let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
         relay.await.unwrap();
         assert_eq!(served, Ok(()), "the session ended because Remote stopped, not because a send timed out");
     });
 }
 
-/// Operation v5: the station SAYS when a rig-touching control settles. Before it, every such
-/// control answered `pending` by construction and the browser learned the outcome by polling -
-/// a `state` read, a `result` read, each a relay round trip, with a 1 s back-off between them.
-/// The station knew the answer the whole time: the radio loop finishes the `Completion` the
-/// receipt holds. Here a v5 browser gets an `operationEvent` with the outcome and a fresh state
-/// (new command window, advanced revision) the moment the readback lands, having sent NOTHING
-/// after the control. The positive control is the same exchange at v4: nothing arrives until
-/// the browser asks with a `result` read - the old path, kept exactly for a browser that never
-/// negotiated the push, and the proof that the event is version-gated rather than broadcast.
+/// Operation v5: the station SAYS when a control settles, with a fresh state (new command window,
+/// advanced revision), and the browser sends NOTHING after the control to learn it. The positive
+/// control is the same exchange at v4: nothing arrives until the browser asks with a `result`
+/// read - the old path, kept exactly for a browser that never negotiated the push, and the proof
+/// that the event is version-gated rather than broadcast. The control here is the held FT
+/// contact's discard with no contact held, which the station refuses at once.
 #[test]
 #[cfg(feature = "radio")]
 fn a_settled_control_is_pushed_to_a_v5_browser_and_polled_by_a_v4_one() {
@@ -1454,41 +1033,18 @@ fn a_settled_control_is_pushed_to_a_v5_browser_and_polled_by_a_v4_one() {
             }
         }
     }
-    fn sample(
-        engine: &crate::SharedEngine,
-        radio: &tempo_app::remote_monitor::provenance::Connection,
-        hz: u64,
-    ) {
-        let mut e = engine.lock().unwrap();
-        let read = e.remote_radio_read(radio, Instant::now()).unwrap();
-        e.remote_observe_cat(Some(&read), Some(true));
-        e.remote_observe_dial(Some(&read), Some(hz));
-        e.remote_observe_mode(Some(&read), Some("PKTUSB"));
-        e.remote_observe_ptt(Some(&read), Some(false));
-    }
     for version in [5_u8, 4] {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
             let (station_io, relay_io) = tokio::io::duplex(65536);
-            let dir = std::env::temp_dir().join(format!("nexus-push-completion-{version}-{}", std::process::id()));
-            let _ = std::fs::create_dir_all(&dir);
             let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN52", 0)));
-            let radio = {
-                let mut e = engine.lock().unwrap();
-                e.configure_remote_settings_store(dir.join("settings.json"));
-                e.set_tx_enabled(false);
-                e.set_frequency(14.074, "20m", "USB");
-                e.take_immediate_retune();
-                e.remote_open_radio().unwrap()
-            };
-            sample(&engine, &radio, 14_074_000);
             // The browser's key, pinned at the radio: what it sends carries a proof (S1-M1).
             let key = LaneKey::new();
             let status = pinned_station(&key, DEVICE);
             let authority = status.control.lock().unwrap().operations.clone();
             authority.permit_station(DEVICE, true).unwrap();
+            authority.permit(DEVICE, true).unwrap();
             let (cancel, cancellation) = watch::channel(false);
-            let relay_engine = engine.clone();
             let relay = tokio::spawn(async move {
                 let mut socket = tokio_tungstenite::accept_async(relay_io).await.unwrap();
                 let mut seq = 0;
@@ -1513,53 +1069,56 @@ fn a_settled_control_is_pushed_to_a_v5_browser_and_polled_by_a_v4_one() {
                 socket.send(operation(json!({"type":"stationControl","requestId":id(4),"stationBootId":boot,
                     "leaseId":state["leaseId"],"expectedRevision":before,"commandWindowId":state["commandWindowId"],
                     "clientSequence":state["nextSequence"],"context":state["controls"]["context"],
-                    "action":{"action":"radio.frequency","dialMhz":7.074,"band":"40m","sideband":"USB"}}))).await.unwrap();
-                let answer = text(&mut socket, reply).await.unwrap();
+                    "action":{"action":"qso.discard","expectedKey":"0123456789abcdef"}}))).await.unwrap();
+                // The answer and, at v5, the event: in either order, since the control settled
+                // before its answer left.
+                let mut answer = text(&mut socket, reply).await.unwrap();
+                let mut event = None;
+                if answer["type"] == "operationEvent" {
+                    event = Some(answer);
+                    answer = text(&mut socket, reply).await.unwrap();
+                }
                 assert_eq!(answer["requestId"], id(4));
-                assert_eq!(answer["value"]["outcome"], "pending", "a rig-touching control is pending by construction");
-                // The radio loop: take the target, write it, read it back.
-                let work = relay_engine.lock().unwrap().take_remote_radio().unwrap();
-                assert_eq!(work.target(), (7_074_000, "PKTUSB"));
-                work.permission().begin_write(Instant::now()).unwrap();
-                sample(&relay_engine, &radio, 7_074_000);
-                let power = work.power_limit();
-                assert!(work.commit_tuning_readback(&mut tempo_app::engine::engine_lock(&relay_engine), power, None));
+                assert_eq!(answer["value"]["outcome"], "rejected");
+                assert_eq!(answer["value"]["reason"], "contextChanged");
                 if version == 5 {
                     // Unprompted: the browser sent nothing after the control.
-                    let event = text(&mut socket, reply).await.expect("the station pushed the outcome");
+                    let event = match event {
+                        Some(event) => event,
+                        None => text(&mut socket, reply).await.expect("the station pushed the outcome"),
+                    };
                     assert_eq!(event["type"], "operationEvent");
                     assert_eq!(event["sessionId"], SESSION);
                     assert_eq!(event["operationId"], id(4));
                     assert_eq!(event["value"]["operation"], "stationControl");
                     assert_eq!(event["value"]["operationId"], id(4));
-                    assert_eq!(event["value"]["outcome"], "applied");
-                    assert_eq!(event["value"]["evidence"], "radioReadback");
+                    assert_eq!(event["value"]["outcome"], "rejected");
                     let fresh = &event["state"];
                     assert_eq!(fresh["phase"], "controlling");
                     assert!(fresh["commandWindowId"].is_string(), "a new window, the control having spent the old one");
                     assert_ne!(fresh["commandWindowId"], state["commandWindowId"]);
-                    assert!(fresh["revision"].as_u64().unwrap() > before, "the revision moved with the dial");
+                    assert!(fresh["revision"].as_u64().unwrap() > before, "the revision moved with the control");
                     assert_eq!(fresh["nextSequence"].as_u64().unwrap(), state["nextSequence"].as_u64().unwrap() + 1);
                     assert!(fresh["controls"]["capabilities"].as_array().unwrap().contains(&json!("outcomePush")));
                     assert_eq!(event.as_object().unwrap().len(), 5, "exactly type, sessionId, operationId, value, state");
                 } else {
                     // Positive control: a v4 browser is told nothing it did not ask for...
+                    assert!(event.is_none(), "no push to a v4 browser");
                     assert_eq!(text(&mut socket, Duration::from_millis(500)).await, None, "no push to a v4 browser");
                     // ...and learns the outcome the old way, by asking.
                     socket.send(operation(json!({"type":"result","requestId":id(5),"operationId":id(4)}))).await.unwrap();
                     let polled = text(&mut socket, reply).await.unwrap();
                     assert_eq!(polled["requestId"], id(5));
-                    assert_eq!(polled["value"]["outcome"], "applied");
+                    assert_eq!(polled["value"]["outcome"], "rejected");
                 }
                 stop_remote(&mut socket, &cancel).await;
             });
             let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
             let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
-            let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, audio: None, stream: Default::default() };
+            let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), audio: None, stream: Default::default() };
             let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
             relay.await.unwrap();
             assert_eq!(served, Ok(()));
-            let _ = std::fs::remove_dir_all(&dir);
         });
     }
 }
@@ -1799,7 +1358,7 @@ fn s1m1_the_operation_lane_takes_only_what_the_pinned_device_key_signed() {
         });
         let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
         let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
-        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() };
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), #[cfg(feature = "radio")] audio: None, stream: Default::default() };
         let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
         relay.await.unwrap();
         assert_eq!(served, Ok(()), "the session ended because Remote stopped");
@@ -1853,7 +1412,7 @@ fn s1m1_listen_takes_only_what_the_pinned_device_key_signed() {
         });
         let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
         let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
-        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, audio: Some(audio::ReceiveFanout::new(feed.feed.clone())), stream: Default::default() };
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), audio: Some(audio::ReceiveFanout::new(feed.feed.clone())), stream: Default::default() };
         let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
         relay.await.unwrap();
         assert_eq!(served, Ok(()), "the session ended because Remote stopped");

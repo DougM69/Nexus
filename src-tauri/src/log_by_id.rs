@@ -19,17 +19,25 @@
 //! QSL-sent and paper-card marks where the form changes them, in one commit — where the form
 //! used to send three commands, each its own write.
 
+use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::fmt::Write as _;
 use std::sync::Arc;
 use tauri::State;
 use tempo_app::dto::LoggedQso;
+#[cfg(test)]
+use tempo_app::engine::Engine;
+use tempo_app::logstore::LogRows;
 use tempo_app::station::{MadeRow, RowRefusal};
+use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Scope};
 use tempo_core::logbook::{LogOp, QsoEdit, QsoRecord, RecordId};
+
+mod picture;
 
 use crate::{durable_command, qsl_via_arg, sat_name_arg, SharedEngine};
 
-/// One contact, as the version whose edit key is `edit_key`. The same shape a Remote page
-/// names a row by (`remote_service::operations::logging::Target::Id`).
+/// One contact, as the version whose edit key is `edit_key`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RowRef {
@@ -305,6 +313,149 @@ pub async fn delete_qso_by_id(
 pub(crate) async fn delete_row(engine: SharedEngine, target: RowRef) -> Result<RowAnswer, String> {
     change_row(engine, target, LogOp::Delete).await
 }
+
+// ── A row the log view showed, found again by its content ───────────────────────────────────
+//
+// The view hands back the row it showed (`LoggedQso`), never a position; these find the contact
+// whose own row that is, with the Engine lock released (one picture of the log, `picture::read`).
+
+/// The contact a log command names: the row the log view showed, keyed ([`seen_target`]). It is
+/// found as it stands now, or refused as stale.
+#[derive(Clone, Debug)]
+pub(crate) struct KeyTarget {
+    call: String,
+    when_unix: u64,
+    key: String,
+}
+
+/// The bytes a row key is the SHA-256 of. Numbers are compared in millionths, so a float and the
+/// same integer agree.
+fn row_canonical(value: &Value) -> String {
+    fn walk(value: &Value, out: &mut String) {
+        match value {
+            Value::Null => out.push('z'),
+            Value::Bool(b) => out.push(if *b { 't' } else { 'f' }),
+            Value::Number(n) => {
+                let x = n.as_f64().unwrap_or(0.0);
+                let micro = (x.abs() * 1e6).round();
+                let sign = if x < 0.0 && micro != 0.0 { "-" } else { "" };
+                let _ = write!(out, "n{sign}{micro:.0};");
+            }
+            Value::String(s) => {
+                let _ = write!(out, "s{}:{s}", s.len());
+            }
+            Value::Array(items) => {
+                let _ = write!(out, "a{}[", items.len());
+                items.iter().for_each(|item| walk(item, out));
+                out.push(']');
+            }
+            Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                let _ = write!(out, "o{}{{", keys.len());
+                for k in keys {
+                    let _ = write!(out, "s{}:{k}", k.len());
+                    walk(&map[k], out);
+                }
+                out.push('}');
+            }
+        }
+    }
+    let mut out = String::new();
+    walk(value, &mut out);
+    out
+}
+
+fn value_key(row: &Value) -> String {
+    digest(&SHA256, row_canonical(row).as_bytes())
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The key of a stored record, built as the log view's row is built (the DTO plus its entity,
+/// [`crate::log_queries::shown`]). If that row shape changes, keys stop matching and every change
+/// is refused as stale — safe, and caught by the echoed-row test.
+pub(crate) fn row_key(record: &QsoRecord) -> String {
+    let mut q = tempo_app::dto::LoggedQso::from(record.clone());
+    q.entity = crate::log_queries::shown(record);
+    serde_json::to_value(q)
+        .map(|v| value_key(&v))
+        .unwrap_or_default()
+}
+
+/// The identity of a row the log view showed: the row itself, exactly as the view was handed it,
+/// keyed by its canonical bytes' SHA-256. [`find`] then finds the record whose OWN key matches
+/// (the change checks it is still that version where it is made), so the row is a claim to be
+/// matched, never an address to trust. The view computes no hash (the desktop webview has no proven `crypto.subtle`), and
+/// the view is handed no such keys: keying a whole log on every reload would cost a serialise and a
+/// digest per record under the engine lock, where keying one row on one click costs nothing anyone
+/// can notice.
+pub(crate) fn seen_target(seen: &tempo_app::dto::LoggedQso) -> KeyTarget {
+    KeyTarget {
+        call: seen.call.clone(),
+        when_unix: seen.when_unix,
+        key: serde_json::to_value(seen)
+            .map(|v| value_key(&v))
+            .unwrap_or_default(),
+    }
+}
+
+/// What finding a key target's contact reads of the contacts with its call: the call and the
+/// time, the two things the target names outright.
+const CANDIDATES: Narrow = Narrow {
+    columns: &["call", "when_unix"],
+    uploads: false,
+};
+
+/// The contact the log view saw as a [`RowRef`]: its id and the edit key of the version found,
+/// or `None` when no contact is that row any more. A position is never the answer: one kept from
+/// an earlier read is stale the moment another writer deletes above it, and acting on it deleted
+/// or rewrote a different contact.
+///
+/// It is the FIRST contact in log order whose own row is
+/// the row the view saw ([`row_key`]), as the search of the log in memory took it, found in ONE
+/// picture of the log with the Engine lock released (SPEC-2 v3 C18). SQL narrows to the contacts
+/// whose `call_norm` is the call's, which holds every contact with exactly that call; the call,
+/// the time and the key are tested here, on whole records from that same picture.
+///
+/// ⚠️ A key target reads the store: never under the Engine lock (a debug build panics). Take
+/// `rows` (`Engine::log_rows`) under it; the change checks what was found where it is made
+/// ([`crate::change_found`]).
+pub(crate) fn find(rows: &LogRows, t: &KeyTarget) -> Result<Option<RowRef>, &'static str> {
+    let call = call_norm_of(&t.call);
+    picture::read(rows, |log| {
+        let mut picks = Vec::new();
+        log.each_in(Scope::CallNorm(&call), CANDIDATES, &mut |pick, q| {
+            if q.call == t.call && q.when_unix == t.when_unix {
+                picks.push(pick);
+            }
+            Ok(())
+        })?;
+        let first = log.whole(&picks)?.into_iter().find(|r| row_key(r) == t.key);
+        Ok(first.and_then(|r| {
+            Some(RowRef {
+                id: r.id?.to_string(),
+                edit_key: QsoEdit::project(&r).key(),
+            })
+        }))
+    })
+}
+
+/// The check a change makes where it is made ([`crate::change_found`]: the version found is still the
+/// contact's), asked of the store alone — for a test that holds what [`find`] found. The id, or
+/// `None` when the contact is gone or another version.
+///
+/// ⚠️ It reads the store: a test holding the Engine lock holds it raw.
+#[cfg(test)]
+pub(crate) fn locate(engine: &Engine, row: &RowRef) -> Option<RecordId> {
+    let id = row.id.parse().ok()?;
+    engine.fresh_log_row(id, &row.edit_key).ok().map(|_| id)
+}
+
+#[cfg(test)]
+mod find_tests;
 
 #[cfg(test)]
 mod tests {

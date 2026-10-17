@@ -3,7 +3,6 @@ import { account, access, body, bodyBytes, browserOrigin, caller, CHALLENGE_MS, 
   deviceKinds, fieldsOf, id, keepApprovals, label, lifetime, native, nativeAccount, nativeDevice, nativeKind, proof, publicKey, rate, Refusal, requireAdmin, requireEligible,
   requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, trial, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid } from './authority'
 import type { DeviceRow, RemoteEnv, StationRow } from './authority'
-import { APPLICATION_VERSION, negotiatedApplicationVersion } from './application-version'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
 import type { Identity } from '../../ui/src/remote-monitor/relay'
 import { advertisedOperationVersion } from '../../ui/src/remote-web/operation-version'
@@ -46,7 +45,6 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     nativeClientId: nativeClientId(env),
     ready: env.AUTH0_CLIENT_ID !== 'unconfigured',
     revision: env.REMOTE_BUILD_REVISION ?? 'local',
-    applicationVersion: APPLICATION_VERSION,
     operationVersion: 2,
     operationMaxVersion: 3,
     operationFtVersion: 1,
@@ -80,9 +78,6 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // Approvals given under the thirty/ninety-day rule last until removed from here on.
       await keepApprovals(env, stationId, now)
       return room(env, stationId, 'station', { access: await access(env, row, now),
-        // Derived from the one ordered table in ./application-version, which also carries the
-        // per-header audit. The ladder used to be a fifteen-deep ternary here.
-        applicationVersion: negotiatedApplicationVersion(request.headers),
         operationVersion: advertisedOperationVersion(
           ['1','2'].includes(request.headers.get('x-nexus-operation-version')??'') ? Number(request.headers.get('x-nexus-operation-version')) : 0,
           request.headers.get('x-nexus-operation-max-version') === '3' ? 3 : 0,

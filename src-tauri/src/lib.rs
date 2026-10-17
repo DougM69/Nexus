@@ -157,24 +157,9 @@ struct ConnectWebState {
 }
 type SharedConnectWebState = Arc<Mutex<ConnectWebState>>;
 
-/// Cached propagation nowcast: `(fetched_at, snapshot, context)`. Caching enforces PSK
-/// Reporter's ≥5-minute-per-dataset query limit across UI polls.
-type PropCache = Arc<
-    Mutex<
-        Option<(
-            std::time::Instant,
-            propagation::PropagationSnapshot,
-            PropContext,
-        )>,
-    >,
->;
-/// Context of the base DX board, captured alongside the log needs. Remote readers
-/// must not relabel a cache built for a previous identity or log revision.
-struct PropContext {
-    call: String,
-    grid: String,
-    log: u64,
-}
+/// Cached propagation nowcast: `(fetched_at, snapshot)`. Caching enforces PSK Reporter's
+/// ≥5-minute-per-dataset query limit across UI polls.
+type PropCache = Arc<Mutex<Option<(std::time::Instant, propagation::PropagationSnapshot)>>>;
 
 /// A whole-log result, kept with the log watermark it was built from and `K`, whatever else it
 /// was built from. Each watermark moves on every write of the kinds it names (one choke point,
@@ -253,14 +238,6 @@ thread_local! {
 fn note_log_tally() {
     #[cfg(debug_assertions)]
     LOG_TALLIES.with(|c| c.set(c.get() + 1));
-}
-
-/// The log's identity, for the context a propagation board is labelled with ([`PropContext`]):
-/// its revision, which moves on every change to the log, as the read token it replaces did.
-/// Remote compares it with the revision its own reads take, and a board built from an older log
-/// is not relabelled as this one's. A watermark, not a read of the log.
-fn prop_log_identity(eng: &Engine) -> u64 {
-    eng.log_revision()
 }
 
 #[cfg(test)]
@@ -368,7 +345,7 @@ mod whole_log_reader_tests {
         );
         LOG_TALLIES.with(|c| c.set(0));
 
-        let (refetch, _) = needs_kept(&engine, &tallies).expect("the log reads");
+        let refetch = needs_kept(&engine, &tallies).expect("the log reads");
         assert_eq!(
             observed(&refetch),
             oracle,
@@ -405,7 +382,7 @@ mod whole_log_reader_tests {
         )
         .0
         .expect("the import is made");
-        let (after, _) = needs_kept(&engine, &tallies).expect("the log reads");
+        let after = needs_kept(&engine, &tallies).expect("the log reads");
         assert_eq!(
             observed(&after),
             observed(&needs_the_old_way(&engine)),
@@ -7144,8 +7121,8 @@ async fn get_propagation(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .filter(|(when, _, _)| when.elapsed().as_secs() < PROP_TTL_SECS)
-            .map(|(_, snap, _)| snap.clone())
+            .filter(|(when, _)| when.elapsed().as_secs() < PROP_TTL_SECS)
+            .map(|(_, snap)| snap.clone())
     };
 
     // Track whether THIS poll fetched fresh space weather — only then do we push a
@@ -7188,29 +7165,22 @@ async fn get_propagation(
             //
             // Only HERE, where a refetch will use them — never on the cache-hit polls in
             // between — and kept against the log's content, so a refetch over an unchanged
-            // log does not fold it again. The context's log identity is taken in the same
-            // lock, so Remote labels the board with the log the needs were built from. Read
-            // from the logbook store, so on the blocking pool with the fetch.
+            // log does not fold it again. Read from the logbook store, so on the blocking pool
+            // with the fetch.
             let (mc, mg) = (mycall.clone(), mygrid.clone());
             let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
             tauri::async_runtime::spawn_blocking(move || {
-                let (needs, log) = needs_kept(&engine, &tallies)?;
-                let context = PropContext {
-                    call: mc.clone(),
-                    grid: mg.clone(),
-                    log,
-                };
+                let needs = needs_kept(&engine, &tallies)?;
                 propagation::live::snapshot_with_spots(&mc, &mg, 1800, &*needs, &extra)
-                    .map(|snap| (snap, context))
             })
             .await
             .map_err(|e| e.to_string())?
         };
 
         match live {
-            Ok((snap, context)) => {
+            Ok(snap) => {
                 if let Ok(mut guard) = cache.lock() {
-                    *guard = Some((std::time::Instant::now(), snap.clone(), context));
+                    *guard = Some((std::time::Instant::now(), snap.clone()));
                 }
                 fetched_fresh = true;
                 snap
@@ -7221,7 +7191,7 @@ async fn get_propagation(
                 let guard = cache.lock().map_err(|e| e.to_string())?;
                 guard
                     .as_ref()
-                    .map(|(_, s, _)| {
+                    .map(|(_, s)| {
                         let mut s = s.clone();
                         s.source = "cached".to_string();
                         s
@@ -7492,7 +7462,7 @@ async fn get_path_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s, _)| propagation::SpaceWx {
+            .map(|(_, s)| propagation::SpaceWx {
                 sfi: s.space_wx.sfi,
                 ssn: LAST_SSN.lock().ok().and_then(|g| *g),
                 kp: s.space_wx.kp,
@@ -7551,7 +7521,7 @@ async fn get_band_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s, _)| propagation::SpaceWx {
+            .map(|(_, s)| propagation::SpaceWx {
                 // R12 only matters to p533; withholding it from the heuristic keeps
                 // that path byte-identical to its pre-engine-seam behavior.
                 ssn: if p533 {
@@ -7733,7 +7703,7 @@ async fn get_dxped_windows(
     // cached snapshot (the same values the dashboard itself was built from).
     let (targets, wx) = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        let Some((_, s, _)) = guard.as_ref() else {
+        let Some((_, s)) = guard.as_ref() else {
             return Ok(Vec::new()); // no snapshot yet — the board is empty too
         };
         let mut seen = std::collections::HashSet::new();
@@ -8007,7 +7977,7 @@ async fn get_pca(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s, _)| s.space_wx.kp as f64)
+            .map(|(_, s)| s.space_wx.kp as f64)
             .unwrap_or(0.0)
     };
     let now = now_unix();
@@ -9925,17 +9895,6 @@ static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// legacy in-config location, which keeps them hermetic and writes nothing into a real home dir.
 static DOCUMENTS_DIR: OnceLock<PathBuf> = OnceLock::new();
 static PICTURES_DIR: OnceLock<PathBuf> = OnceLock::new();
-
-/// Point the gallery at a scratch directory for the duration of a test process, so a test can
-/// exercise the real delete without touching the operator's own pictures. Set once, as at launch.
-#[cfg(test)]
-pub(crate) fn test_pictures_dir() -> &'static PathBuf {
-    PICTURES_DIR.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("nexus-test-pictures-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("Nexus SSTV")).unwrap();
-        dir
-    })
-}
 
 /// The bundled TLE seed snapshot — `resources/tles/tles.json`, the mirror
 /// payload verbatim. Resource dir first (the packaged app), then the
@@ -12335,10 +12294,10 @@ async fn start_sat_track(
     arm_sat_track(&state, name, aos_unix, None)
 }
 
-/// The arm itself, with no Tauri in it, so a Remote browser's own gesture reaches exactly this
-/// code rather than a second copy of it (`remote_service::operations::station`).
+/// The arm itself, with no Tauri in it, so an arm made from afar can reach exactly this code
+/// rather than a second copy of it.
 ///
-/// `standing` is the browser authority the gesture was admitted under, `None` for a gesture made
+/// `standing` is the remote authority the gesture was admitted under, `None` for a gesture made
 /// at the shack. A track steers the dial and the mast for the length of a pass, so a remotely
 /// armed one must not outlive the browser that armed it: the loop ends the pass — dial handback
 /// and all — as soon as that authority stops being held (`SatTrackLoss::RemoteAuthorityEnded`).
@@ -16995,8 +16954,7 @@ async fn get_aprs_health(
 
 /// Why what was queued for APRS was last dropped instead of sent (TX off, or outside the licence's
 /// privileges), for the cockpit's status line; `None` once a frame keys. A read of its own, polled
-/// beside the health: the other APRS reads are also the Remote's (`remote_service::aprs`), and the
-/// hosted page checks them against exact key lists.
+/// beside the health.
 #[tauri::command]
 async fn get_aprs_tx_notice(state: State<'_, SharedEngine>) -> Result<Option<String>, String> {
     with_engine(&state, |eng| eng.aprs_tx_notice().map(str::to_string)).await
@@ -17830,8 +17788,6 @@ struct SstvStateDto {
     /// Why the last picture that waited for the transmitter was dropped instead of sent (TX off,
     /// or outside the licence's privileges), or why the radio loop cut short the one going out
     /// (`Engine::sstv_tx_cut`): the cockpit's warning line. Absent otherwise.
-    /// DESKTOP ONLY: the Remote strips it (`remote_service::application`), because the hosted
-    /// page reads this sample against an exact key list and refuses one with a key it lacks.
     #[serde(skip_serializing_if = "Option::is_none")]
     tx_notice: Option<String>,
 }
@@ -18282,33 +18238,14 @@ fn set_peg_lock(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot,
     Ok(engine_lock(&state).snapshot())
 }
 
-/// Peg-lock, with no Tauri in it, so a Remote browser's 🔒 in the satellite radio-binding line
-/// reaches exactly this code. `radio_pegged` is live roster state a whole-settings payload cannot
-/// carry, which is why this is its own verb (see the command above).
+/// Peg-lock, with no Tauri in it. `radio_pegged` is live roster state a whole-settings payload
+/// cannot carry, which is why this is its own verb (see the command above).
 fn write_peg_lock(state: &SharedEngine, on: bool) -> tempo_app::settings::writer::Ticket {
     let mut eng = engine_lock(state);
     eng.set_radio_pegged(on);
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: set_peg_lock save failed: {e}")
     })
-}
-
-/// The readiness rail's Doppler fix: the one Settings switch the satellite section turns on where
-/// the operator already is. `satDopplerOff` is an ordinary persisted preference, so this goes
-/// through the atomic remote-preference save — but it names its OWN key rather than widening the
-/// browser's general settings allow-list: turning Doppler on is a satellite gesture, and nothing
-/// here should make `satDopplerOff` writable from a preferences form.
-///
-/// Fail-safe direction is preserved: this only ever writes the switch the operator clicked, and
-/// the per-tick consent gates inside `sat_doppler_tick` are untouched — a confirmed uplink mapping
-/// is still what admits the transmit leg.
-fn write_sat_doppler(
-    state: &SharedEngine,
-    on: bool,
-) -> Result<(), tempo_app::remote_control::Reason> {
-    let mut values = serde_json::Map::new();
-    values.insert("satDopplerOff".into(), serde_json::Value::Bool(!on));
-    engine_lock(state).save_remote_preferences(&values, &["satDopplerOff"])
 }
 
 /// Add a radio to the roster (dual-radio). Appends a new profile with distinct daemon ports; does
@@ -18717,7 +18654,7 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
 /// part-way through, `repairRunning` while a repair is already running and `nothingToRepair` when
 /// none is on offer. The prompt waits for an answer, so this runs on the blocking pool, never on
 /// an async worker. Nexus Remote has no road to it: the prompt would wait on a screen nobody may
-/// be sitting at (`remote_service::application::Command` has no variant).
+/// be sitting at (the full client's class table refuses it from afar).
 #[tauri::command]
 async fn repair_clock(state: State<'_, SharedEngine>) -> Result<bool, String> {
     #[cfg(feature = "radio")]
@@ -18779,8 +18716,8 @@ async fn club_firewall_status(
 /// `onAir` while anything is transmitting, `running` while a press is still waiting on Windows,
 /// `path` or `port` when the command cannot be built, and `unsupported` off Windows. The prompt
 /// waits for an answer, so this runs on the blocking pool. Nexus Remote has no road to it: the
-/// prompt would wait on a screen nobody may be sitting at (`remote_service::application::Command`
-/// has no variant).
+/// prompt would wait on a screen nobody may be sitting at (the full client's class table refuses
+/// it from afar).
 #[tauri::command]
 async fn club_firewall_press(
     state: State<'_, SharedEngine>,
@@ -20954,9 +20891,8 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
 }
 
 /// The log commands below take the ROW the UI showed (`target`, as the log view was handed it),
-/// and never a position. The station keys that row exactly as a Remote browser keys its page
-/// row (call + time + a SHA-256 of the row) and finds the record whose own key matches — see
-/// `remote_service::operations::logging::{seen_target, find, locate}`. They used to take
+/// and never a position. The station keys that row (call + time + a SHA-256 of the row) and
+/// finds the record whose own key matches — see `log_by_id::{seen_target, find}`. They used to take
 /// `index: usize` under the premise "indices shift after a delete — the UI reloads the log",
 /// which held while the desktop was the log's only writer. Remote made it a second writer:
 /// a browser's delete removed a row and shifted every later one, and the shack's next Delete
@@ -20969,7 +20905,7 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
 /// under it — and the change is made only while it is still the version found
 /// ([`change_found`]), so a change landing between the two is refused like any other.
 fn find_seen(engine: &SharedEngine, seen: &LoggedQso) -> Result<log_by_id::RowRef, String> {
-    use remote_service::operations::logging::{find, seen_target};
+    use log_by_id::{find, seen_target};
     let rows = engine_lock(engine).log_rows();
     match find(&rows, &seen_target(seen)) {
         Ok(Some(row)) => Ok(row),
@@ -29512,7 +29448,7 @@ fn build_connect_board(
 ) -> Option<tempo_app::connect_web::ConnectBoardData> {
     use tempo_app::connect_web::{ConnectBand, ConnectBoardData, ConnectOpening};
     // One bounded clone under each lock; everything else is built off-lock.
-    let snap = prop.lock().ok()?.as_ref().map(|(_, p, _)| p.clone())?;
+    let snap = prop.lock().ok()?.as_ref().map(|(_, p)| p.clone())?;
     let (call, grid) = {
         let e = engine_lock(engine);
         let s = e.settings();
@@ -32080,8 +32016,7 @@ const RADIOPROG_NOT_SAVED: &str =
     "radioprog.json could not be read and could not be moved aside, so it was not saved over";
 
 /// The ONE writer of `radioprog.json`. `path` is a parameter rather than `radioprog_path()` so a
-/// test can point it at a scratch file — the remote curation path (`remote_service::operations::
-/// program_edit`) writes through this same function, so there is never a second writer to drift.
+/// test can point it at a scratch file.
 fn store_radioprog(path: &Path, f: &RadioProgFile) -> Result<(), String> {
     let json = serde_json::to_string_pretty(f).map_err(|e| e.to_string())?;
     std::fs::write(path, json).map_err(|e| format!("couldn't save programming projects: {e}"))
@@ -36133,7 +36068,6 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
     handle.manage(remote_service_for(
         &d,
         handle.state::<remote_monitor::Publisher>().inner().clone(),
-        handle.state::<LogTallies>().needs.clone(),
         &handle,
     ));
     // Pounce detector. Raises an alert to every window when a rare one appears — the
@@ -36413,7 +36347,6 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_snapshot,
         remote_monitor::get_remote_monitor_frame,
         remote_service::get_remote_station_status,
-        remote_service::publish_remote_memory_bank,
         remote_service::remote_station_action,
         send_message,
         resend_chat,
@@ -37100,7 +37033,6 @@ fn main_window_handle(_: &tauri::AppHandle) -> Option<isize> {
 fn remote_service_for(
     d: &BuildDeps,
     publisher: remote_monitor::Publisher,
-    needs: NeedsKept,
     handle: &tauri::AppHandle,
 ) -> remote_service::Service {
     // Remote as a stream: a streamed operator's input goes to THIS app's main window, as a DOM
@@ -37139,30 +37071,6 @@ fn remote_service_for(
     remote_service::Service::new(
         d.engine.clone(),
         publisher,
-        d.spectrum_feed.clone(),
-        d.meter_feed.clone(),
-        Some(remote_service::query::Sources {
-            needs,
-            spots: d.spots.clone(),
-            live_paths: d.live_paths.clone(),
-            region_paths: d.region_paths.clone(),
-            ota: d.ota_spots.clone(),
-            parks: d.parks.clone(),
-            pounces: d.pounces.clone(),
-            health: d.health.clone(),
-            propagation: d.prop_cache.clone(),
-            memories: Default::default(),
-            navigation: remote_service::query::navigation::Source::new(
-                d.aurora_cache.clone(),
-                d.kc2g_cache.clone(),
-                d.proton_cache.clone(),
-                d.scales_cache.clone(),
-            ),
-            sstv: remote_service::sstv::Source::new(vec![
-                sstv_gallery_dir(),
-                legacy_sstv_gallery_dir(),
-            ]),
-        }),
         // Receive audio for a listening browser. Without this the lane is never
         // advertised and no browser is ever offered the control.
         #[cfg(feature = "radio")]
@@ -38894,12 +38802,12 @@ mod tests {
                 assert!(body.contains(call), "{command} must go through {call}");
             }
         }
-        // The Remote dispatcher's change table. The POSITIVE CONTROL: it does carry the
-        // Logbook's delete, so a check that read nothing could not pass for one that read it.
+        // The Remote dispatcher's log actions. The POSITIVE CONTROL: they do reach the log, so a
+        // check that read nothing could not pass for one that read it.
         let remote = include_str!("remote_service/operations/logging.rs");
         assert!(
-            remote.contains("LogOp::Delete"),
-            "the control: Remote's own delete is there"
+            remote.contains("log_current_qso_for_sync"),
+            "the control: Remote's own append is there"
         );
         for name in [
             "contest_removal",
@@ -38955,11 +38863,11 @@ mod tests {
                 );
             }
         }
-        // POSITIVE CONTROL: Remote's change table carries the Logbook's delete.
+        // POSITIVE CONTROL: Remote's log actions reach the log.
         let remote = include_str!("remote_service/operations/logging.rs");
         assert!(
-            remote.contains("LogOp::Delete"),
-            "the control: Remote's own delete is there"
+            remote.contains("log_current_qso_for_sync"),
+            "the control: Remote's own append is there"
         );
         assert!(
             !remote.contains("contest_unmerged"),
@@ -38997,13 +38905,10 @@ mod tests {
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
             include_str!("remote_service/operations/logging.rs"),
-            include_str!("remote_service/operations/settings.rs"),
-            include_str!("remote_service/query.rs"),
-            include_str!("remote_service/query/field_day.rs"),
         ]
         .concat();
         assert!(
-            remote.contains("LogOp::Delete") && remote.contains("bounded_field_day_status"),
+            remote.contains("log_current_qso_for_sync") && remote.contains("execute_transmit"),
             "the control: the dispatchers read here are the ones that reach the engine"
         );
         assert!(
@@ -39050,13 +38955,10 @@ mod tests {
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
             include_str!("remote_service/operations/logging.rs"),
-            include_str!("remote_service/operations/settings.rs"),
-            include_str!("remote_service/query.rs"),
-            include_str!("remote_service/query/field_day.rs"),
         ]
         .concat();
         assert!(
-            remote.contains("LogOp::Delete") && remote.contains("bounded_field_day_status"),
+            remote.contains("log_current_qso_for_sync") && remote.contains("execute_transmit"),
             "the control: the dispatchers read here are the ones that reach the engine"
         );
         assert!(
@@ -39095,13 +38997,10 @@ mod tests {
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
             include_str!("remote_service/operations/logging.rs"),
-            include_str!("remote_service/operations/settings.rs"),
-            include_str!("remote_service/query.rs"),
-            include_str!("remote_service/query/field_day.rs"),
         ]
         .concat();
         assert!(
-            remote.contains("LogOp::Delete") && remote.contains("bounded_field_day_status"),
+            remote.contains("log_current_qso_for_sync") && remote.contains("execute_transmit"),
             "the control: the dispatchers read here are the ones that reach the engine"
         );
         assert!(

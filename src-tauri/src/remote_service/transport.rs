@@ -176,31 +176,6 @@ enum ServerMessage {
         #[serde(default)]
         proof: Option<super::lanes::Proof>,
     },
-    ApplicationQuery {
-        #[serde(flatten)]
-        request: super::query::Request,
-    },
-    ApplicationWatch {
-        #[serde(rename = "watchId")]
-        watch_id: String,
-        topics: Vec<super::application::Command>,
-        #[serde(rename = "requestId")]
-        request_id: Option<String>,
-    },
-    ApplicationCredit {
-        #[serde(rename = "watchId")]
-        watch_id: String,
-        #[serde(rename = "previousRequestId")]
-        previous_request_id: String,
-        #[serde(rename = "requestId")]
-        request_id: String,
-    },
-    ApplicationRead {
-        #[serde(rename = "requestId")]
-        request_id: String,
-        command: super::application::Command,
-        revision: Option<u64>,
-    },
     Watch {
         enabled: bool,
         #[serde(rename = "requestId")]
@@ -265,9 +240,6 @@ struct Publication {
 #[derive(Clone)]
 pub struct Feeds {
     pub monitor: crate::remote_monitor::Publisher,
-    pub spectrum: Option<tempo_app::engine::SpectrumFeed>,
-    pub meters: tempo_app::engine::MeterFeed,
-    pub sources: Option<super::query::Sources>,
     /// The bounded copy of receive audio, for a listening browser. `None` on a build or
     /// a launch with no capture path, and then the audio lane is never advertised at all
     /// — so a browser is never offered a control the station cannot honour.
@@ -308,92 +280,8 @@ pub async fn connected(
             .parse()
             .map_err(|_| "credentialStoreUnavailable")?,
     );
-    request.headers_mut().insert(
-        "x-nexus-application-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    // Old services still recognize the legacy contract during rollback. Only a
-    // stream-aware service consumes the separate v2 capability advertisement.
-    request.headers_mut().insert(
-        "x-nexus-application-stream-version",
-        "2".parse().map_err(|_| "invalidResponse")?,
-    );
-    request.headers_mut().insert(
-        "x-nexus-application-query-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    // Preserve all previous advertisements for rollback to a v1/v2/v3 service.
-    request.headers_mut().insert(
-        "x-nexus-application-recall-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    // Keyboard samples are separately advertised; older services keep their
-    // exact v1/v2/v3/v4 contracts when rolling back the hosted deployment.
-    request.headers_mut().insert(
-        "x-nexus-application-keyboard-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    request.headers_mut().insert(
-        "x-nexus-application-insights-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    request.headers_mut().insert(
-        "x-nexus-application-dxpeditions-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    request.headers_mut().insert(
-        "x-nexus-application-memories-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    request.headers_mut().insert(
-        "x-nexus-application-ota-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    request.headers_mut().insert(
-        "x-nexus-application-field-day-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    request.headers_mut().insert(
-        "x-nexus-application-js8-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    request.headers_mut().insert(
-        "x-nexus-application-station-modes-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    request.headers_mut().insert(
-        "x-nexus-application-configuration-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    request.headers_mut().insert(
-        "x-nexus-application-navigation-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    // Park directory search and confirmation diagnostics. A v14 service ignores
-    // this header and keeps the exact v14 contract.
-    request.headers_mut().insert(
-        "x-nexus-application-lookups-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    // The rare-DX alerts the station's Pounce detector raised. A v15 service ignores this
-    // header and keeps the exact v15 contract.
-    request.headers_mut().insert(
-        "x-nexus-application-alerts-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    // Where the rotator is pointing. A v16 service ignores this header and keeps the exact v16
-    // contract, so a browser on an older service simply never sees a heading.
-    request.headers_mut().insert(
-        "x-nexus-application-rotator-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
-    // Each activator's state on the POTA/SOTA board. A v17 service ignores this header and keeps
-    // the exact v17 contract: it never tells this station a browser agreed v18, so it never asks
-    // for a spot with a state in it, and no page that cannot read one is ever sent one.
-    request.headers_mut().insert(
-        "x-nexus-application-ota-states-version",
-        "1".parse().map_err(|_| "invalidResponse")?,
-    );
+    // No `x-nexus-application-*` header: the read lane is retired, so a service still carrying it
+    // negotiates none with this station and hands it no application message.
     request.headers_mut().insert(
         "x-nexus-operation-version",
         "2".parse().map_err(|_| "invalidResponse")?,
@@ -478,14 +366,42 @@ pub async fn connected(
     serve(socket, stop, engine, feeds, status, ends).await
 }
 
+/// The hosted page's operations this station no longer takes. A relay forwards each to any station
+/// that negotiated its operation version, so one can still arrive.
+const RETIRED_OPERATIONS: [&str; 4] = [
+    "logManual",
+    "logChange",
+    "activationExport",
+    "programExport",
+];
+
+/// The `stationUnsupported` answer to a well-formed operation request this station no longer takes:
+/// a retired operation, or a station control that is neither an FT gesture nor the held contact's
+/// log action. `None` for anything else, which stays a protocol error.
+fn retired_operation(text: &str) -> Option<String> {
+    let message: Value = serde_json::from_str(text).ok()?;
+    let session = message.get("sessionId")?.as_str()?;
+    let request = message.get("request")?;
+    let id = request.get("requestId")?.as_str()?;
+    let kind = request.get("type")?.as_str()?;
+    let control = request.pointer("/action/action").and_then(Value::as_str);
+    let retired = RETIRED_OPERATIONS.contains(&kind)
+        || kind == "stationControl"
+            && control
+                .is_some_and(|action| !action.starts_with("ft.") && !action.starts_with("qso."));
+    (message.get("type")?.as_str()? == "operationRequest" && retired && identifier(session) && identifier(id))
+        .then(|| json!({"type":"operationResponse","sessionId":session,"requestId":id,"error":"stationUnsupported"}).to_string())
+}
+
 /// The station socket configuration, one definition for the real connection and the tests: the
-/// relay's messages are small, and the write buffer holds one full application batch.
+/// relay's messages are small, and the write buffer holds the largest message the station sends,
+/// an observation publication.
 pub(super) fn socket_config() -> WebSocketConfig {
     WebSocketConfig::default()
         .max_message_size(Some(8192))
         .max_frame_size(Some(8192))
         .write_buffer_size(0)
-        .max_write_buffer_size(super::application::MAX_BYTES + 1024)
+        .max_write_buffer_size(tempo_app::remote_monitor::MAX_FRAME_BYTES + 1024)
 }
 
 /// The station's side of an open socket, until the service ends it or Remote stops. Generic over
@@ -503,7 +419,7 @@ where
 {
     // Reading and writing are decoupled: the loop below only ever reads the socket, and
     // everything it sends goes through `outbound`, whose own task writes. A send that is slow
-    // to drain (a full application batch on a slow shack uplink) therefore never stops the
+    // to drain (a publication on a slow shack uplink) therefore never stops the
     // loop reading — and Stop is read, and admitted, inline, exactly as before.
     let (sink, mut socket) = socket.split();
     let (outbound, mut writer) = Outbound::spawn(sink);
@@ -532,25 +448,6 @@ where
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut pong_at = Instant::now();
     let mut pending = None;
-    let mut application =
-        super::application::Publisher::with_feeds(feeds.spectrum.clone(), feeds.meters.clone());
-    let queries = std::sync::Arc::new(std::sync::Mutex::new(super::query::Publisher::default()));
-    application.sstv_images = queries
-        .lock()
-        .map_err(|_| "applicationUnavailable")?
-        .sstv_images
-        .clone();
-    application.journal = Some(
-        queries
-            .lock()
-            .map_err(|_| "applicationUnavailable")?
-            .journal
-            .clone(),
-    );
-    let mut query_task: Option<tokio::task::JoinHandle<String>> = None;
-    let mut stream = super::application::Stream::default();
-    let mut application_tick = tokio::time::interval(Duration::from_millis(100));
-    application_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // The receive-audio lane. It holds no share of the station's encoder until a browser
     // asks to listen, and its select branch below is guarded on that, so on a station nobody
     // is listening to this timer is never even polled.
@@ -624,7 +521,17 @@ where
             }
             message = socket.next() => match message {
                 Some(Ok(Message::Text(text))) => {
-                    let message: ServerMessage = serde_json::from_str(&text).map_err(|_| "invalidResponse")?;
+                    let message: ServerMessage = match serde_json::from_str(&text) {
+                        Ok(message) => message,
+                        Err(_) => {
+                            // An operation this station no longer takes, from a relay that still
+                            // forwards it: refused as an older station refuses what it cannot do,
+                            // so the socket, and Stop's road on it, stay up.
+                            let Some(data) = retired_operation(&text) else { return Err("invalidResponse") };
+                            outbound.send(Message::Text(data.into()))?;
+                            continue;
+                        }
+                    };
                     match message {
                         ServerMessage::OperationDisconnect{session_id}=>{
                             if !identifier(&session_id){return Err("invalidResponse")}
@@ -739,28 +646,6 @@ where
                                 }));
                             }
                         },
-                        ServerMessage::ApplicationQuery { request } => {
-                            if !request.valid() { return Err("invalidResponse"); }
-                            if query_task.is_some() {
-                                let data = json!({ "type": "applicationQueryError", "requestId": request.request_id, "error": "applicationBusy" }).to_string();
-                                outbound.send(Message::Text(data.into()))?;
-                            } else {
-                                let engine = engine.clone(); let queries = queries.clone(); let sources = feeds.sources.clone();
-                                query_task = Some(tokio::task::spawn_blocking(move || {
-                                    let now = Instant::now();
-                                    queries.lock().map_err(|_| "applicationUnavailable").and_then(|mut q| q.read(&request, &engine, sources.as_ref(), now))
-                                        .unwrap_or_else(|error| json!({ "type": "applicationQueryError", "requestId": request.request_id, "error": error }).to_string())
-                                }));
-                            }
-                        }
-                        ServerMessage::ApplicationWatch { watch_id, topics, request_id } => stream.watch(watch_id, topics, request_id)?,
-                        ServerMessage::ApplicationCredit { watch_id, previous_request_id, request_id } => stream.credit(&watch_id, &previous_request_id, request_id)?,
-                        ServerMessage::ApplicationRead { request_id, command, revision } => {
-                            if !identifier(&request_id) || !command.legacy() { return Err("invalidResponse"); }
-                            let data = application.read(engine, command, &request_id, revision, Instant::now())
-                                .unwrap_or_else(|error| json!({ "type": "applicationError", "requestId": request_id, "error": error }).to_string());
-                            outbound.send(Message::Text(data.into()))?;
-                        }
                         ServerMessage::Watch { enabled, request_id } => {
                             if enabled && !request_id.as_deref().is_some_and(identifier) { return Err("invalidResponse"); }
                             if !enabled && request_id.is_some() { return Err("invalidResponse"); }
@@ -773,11 +658,6 @@ where
                 Some(Ok(Message::Ping(_))) => {},
                 Some(Ok(Message::Close(_))) | None => return Err("serviceUnavailable"),
                 _ => return Err("invalidResponse"),
-            },
-            result = async { match query_task.as_mut() { Some(task) => task.await, None => std::future::pending().await } }, if query_task.is_some() => {
-                query_task = None;
-                let data = result.map_err(|_| "applicationUnavailable")?;
-                outbound.send(Message::Text(data.into()))?;
             },
             // A control settled (operation v5). The event is built on its own blocking task,
             // never on this loop and never in the operation task's slot - so a browser request
@@ -804,11 +684,6 @@ where
                     outbound.send(Message::Text(text.into()))?;
                 }
             },
-            _ = application_tick.tick(), if stream.active() => {
-                if let Some(data) = stream.next(&mut application, engine, Instant::now())? {
-                    outbound.send(Message::Text(data.into()))?;
-                }
-            },
             _ = tick.tick(), if pending.is_some() => {
                 if *stop.borrow() { return Ok(()); }
                 if let Ok(frame) = feeds.monitor.read(engine, Instant::now()) {
@@ -824,7 +699,7 @@ where
             }
             // LAST, deliberately. Every branch above shares one writer, so audio has to
             // be the thing that yields: it sits after the stop signal, every operation
-            // response, the observation publication and the application batch, and it is
+            // response and the observation publication, and it is
             // guarded on somebody actually listening so an idle station never polls it.
             //
             // It also never queues. `Outbound::idle` asks whether anything is still on its
@@ -873,9 +748,8 @@ where
 /// send that is slow to reach the relay never stops the loop reading.
 ///
 /// BACKPRESSURE. Every lane that can produce more than one message is already flow-controlled
-/// upstream of this queue: an application batch spends a relay credit and the next waits for it
-/// (`application::Stream`), a monitor publication spends its watch request, at most one operation
-/// and one query task run at a time, a ping goes every 30 s, and the audio lane sends only into
+/// upstream of this queue: a monitor publication spends its watch request, at most one operation
+/// task runs at a time, a ping goes every 30 s, and the audio lane sends only into
 /// an idle queue and DISCARDS otherwise (`idle`). So the queue holds a handful of messages in
 /// normal use, and a full one means the relay has fallen `CAPACITY` whole messages behind - not
 /// a slow link, a stalled one - and the session ends (`serviceUnavailable`) to be rebuilt, as a
@@ -936,10 +810,9 @@ impl Outbound {
 }
 
 /// How long one message may take to reach the wire before the relay is judged gone: the 2 s
-/// every send used to get, plus a second per 32 KiB, so an 8 KB publication still has about 2 s
-/// and a full 768 KB application batch has 26 s - a 256 kbit/s floor - where 2 s flat tore the
-/// session down on any uplink under 3 Mbit/s and sent the same batch again on reconnect. Each
-/// message is timed on its own, so a small one is never charged for the large one ahead of it. A
+/// every send used to get, plus a second per 32 KiB - a 256 kbit/s floor - so an 8 KB publication
+/// still has about 2 s. Each message is timed on its own, so a small one is never charged for the
+/// large one ahead of it. A
 /// relay that has stopped reading altogether is also caught by the 65 s pong deadline above.
 fn send_deadline(bytes: usize) -> Duration {
     Duration::from_secs(2) + Duration::from_millis((bytes / 32) as u64)
@@ -1049,9 +922,12 @@ mod server_message_schema {
     //! remembers it, on any relay message it cannot parse (`ServerMessage` refuses unknown
     //! fields), so the shape of `ServerMessage` is a contract with every station in the field
     //! that its remote operator cannot repair. This reads that shape out of the parser itself —
-    //! each message's keys, which of them it requires, what it does with a key it does not know,
-    //! which collections a query may name — and holds it to a snapshot. A change to the snapshot
-    //! is a decision about the oldest stations, taken on purpose, never a side effect.
+    //! each message's keys, which of them it requires, what it does with a key it does not know —
+    //! and holds it to a snapshot. A change to the snapshot is a decision about the oldest
+    //! stations, taken on purpose, never a side effect.
+    //!
+    //! The read lane's four messages are refused, on purpose: a relay sends them only to a station
+    //! that advertised the lane (`x-nexus-application-*`), and this station advertises none.
     use super::ServerMessage;
     use serde_json::{json, Value};
 
@@ -1069,11 +945,6 @@ mod server_message_schema {
             json!({"type":"operationDisconnect","sessionId":ID}),
             json!({"type":"operationRequest","sessionId":ID,"deviceId":ID,"operationVersion":null,
                 "request":{"type":"state","requestId":ID},"proof":proof()}),
-            json!({"type":"applicationQuery","requestId":ID,"collection":"log","cursor":null,
-                "search":"","unconfirmed":false,"after":null,"queryVersion":18}),
-            json!({"type":"applicationWatch","watchId":ID,"topics":["get_snapshot"],"requestId":null}),
-            json!({"type":"applicationCredit","watchId":ID,"previousRequestId":ID,"requestId":ID}),
-            json!({"type":"applicationRead","requestId":ID,"command":"get_snapshot","revision":null}),
             json!({"type":"watch","enabled":true,"requestId":ID}),
             json!({"type":"audioListen","sessionId":ID,"deviceId":ID,"listening":true,"leaseId":ID,"proof":proof()}),
             json!({"type":"streamSignal","sessionId":ID,"deviceId":ID,"leaseId":ID,"payload":{"kind":"close"}}),
@@ -1082,38 +953,16 @@ mod server_message_schema {
         ]
     }
 
-    /// Every collection name a query has ever carried, and two it must not: the paged log a
-    /// newer page may ask a newer station for (SPEC-2 v3 C18b), and a name that is no collection.
-    const COLLECTIONS: &[&str] = &[
-        "decodes",
-        "needs",
-        "spots",
-        "log",
-        "entities",
-        "health",
-        "recall",
-        "awards",
-        "statistics",
-        "dxpeditions",
-        "memories",
-        "ota",
-        "fieldDay",
-        "js8Context",
-        "sstvImage",
-        "aprs",
-        "settings",
-        "programming",
-        "connect",
-        "path",
-        "satellites",
-        "satellite",
-        "parks",
-        "confirmations",
-        "pounce",
-        "rotator",
-        "logPage",
-        "notACollection",
-    ];
+    /// The read lane's messages, each as an older relay wrote it.
+    fn retired() -> Vec<Value> {
+        vec![
+            json!({"type":"applicationQuery","requestId":ID,"collection":"log","cursor":null,
+                "search":"","unconfirmed":false,"after":null,"queryVersion":18}),
+            json!({"type":"applicationWatch","watchId":ID,"topics":["get_snapshot"],"requestId":null}),
+            json!({"type":"applicationCredit","watchId":ID,"previousRequestId":ID,"requestId":ID}),
+            json!({"type":"applicationRead","requestId":ID,"command":"get_snapshot","revision":null}),
+        ]
+    }
 
     fn accepts(v: &Value) -> bool {
         serde_json::from_value::<ServerMessage>(v.clone()).is_ok()
@@ -1144,15 +993,16 @@ mod server_message_schema {
             };
             out.push(format!("{kind}.<unknown key>: {said}"));
         }
-        for name in COLLECTIONS {
-            let mut query = seeds()[2].clone();
-            query["collection"] = json!(name);
-            let said = if accepts(&query) {
+        for message in retired() {
+            let said = if accepts(&message) {
                 "accepted"
             } else {
                 "refused"
             };
-            out.push(format!("applicationQuery.collection {name}: {said}"));
+            out.push(format!(
+                "{} (retired): {said}",
+                message["type"].as_str().unwrap()
+            ));
         }
         let said = if accepts(&json!({"type":"notAMessage"})) {
             "accepted"
@@ -1182,31 +1032,6 @@ mod server_message_schema {
         "request: Box<super::operations::Request>,",
         "#[serde(default)]",
         "proof: Option<super::lanes::Proof>,",
-        "},",
-        "ApplicationQuery {",
-        "#[serde(flatten)]",
-        "request: super::query::Request,",
-        "},",
-        "ApplicationWatch {",
-        "#[serde(rename = \"watchId\")]",
-        "watch_id: String,",
-        "topics: Vec<super::application::Command>,",
-        "#[serde(rename = \"requestId\")]",
-        "request_id: Option<String>,",
-        "},",
-        "ApplicationCredit {",
-        "#[serde(rename = \"watchId\")]",
-        "watch_id: String,",
-        "#[serde(rename = \"previousRequestId\")]",
-        "previous_request_id: String,",
-        "#[serde(rename = \"requestId\")]",
-        "request_id: String,",
-        "},",
-        "ApplicationRead {",
-        "#[serde(rename = \"requestId\")]",
-        "request_id: String,",
-        "command: super::application::Command,",
-        "revision: Option<u64>,",
         "},",
         "Watch {",
         "enabled: bool,",
@@ -1243,101 +1068,17 @@ mod server_message_schema {
         "pipe_id: String,",
         "},",
         "}",
-        "#[serde(rename_all = \"camelCase\", deny_unknown_fields)]",
-        "pub struct Request {",
-        "pub request_id: String,",
-        "pub collection: Collection,",
-        "pub cursor: Option<String>,",
-        "pub search: String,",
-        "pub unconfirmed: bool,",
-        "pub after: Option<u64>,",
-        "pub query_version: Option<u8>,",
-        "}",
-        "#[serde(rename_all = \"camelCase\")]",
-        "pub enum Collection {",
-        "Decodes,",
-        "Needs,",
-        "Spots,",
-        "Log,",
-        "Entities,",
-        "Health,",
-        "Recall,",
-        "Awards,",
-        "Statistics,",
-        "Dxpeditions,",
-        "Memories,",
-        "Ota,",
-        "FieldDay,",
-        "Js8Context,",
-        "SstvImage,",
-        "Aprs,",
-        "Settings,",
-        "Programming,",
-        "Connect,",
-        "Path,",
-        "Satellites,",
-        "Satellite,",
-        "Parks,",
-        "Confirmations,",
-        "Pounce,",
-        "Rotator,",
-        "}",
     ];
 
     /// The shape as it stood when the snapshot was taken (SPEC-2 v3 C18a, which changed nothing
     /// a relay sends).
     const SNAPSHOT: &[&str] = &[
         "<unknown type>: refused",
-        "applicationCredit.<unknown key>: refused",
-        "applicationCredit.previousRequestId: required",
-        "applicationCredit.requestId: required",
-        "applicationCredit.watchId: required",
-        "applicationQuery.<unknown key>: refused",
-        "applicationQuery.after: optional",
-        "applicationQuery.collection aprs: accepted",
-        "applicationQuery.collection awards: accepted",
-        "applicationQuery.collection confirmations: accepted",
-        "applicationQuery.collection connect: accepted",
-        "applicationQuery.collection decodes: accepted",
-        "applicationQuery.collection dxpeditions: accepted",
-        "applicationQuery.collection entities: accepted",
-        "applicationQuery.collection fieldDay: accepted",
-        "applicationQuery.collection health: accepted",
-        "applicationQuery.collection js8Context: accepted",
-        "applicationQuery.collection log: accepted",
-        "applicationQuery.collection logPage: refused",
-        "applicationQuery.collection memories: accepted",
-        "applicationQuery.collection needs: accepted",
-        "applicationQuery.collection notACollection: refused",
-        "applicationQuery.collection ota: accepted",
-        "applicationQuery.collection parks: accepted",
-        "applicationQuery.collection path: accepted",
-        "applicationQuery.collection pounce: accepted",
-        "applicationQuery.collection programming: accepted",
-        "applicationQuery.collection recall: accepted",
-        "applicationQuery.collection rotator: accepted",
-        "applicationQuery.collection satellite: accepted",
-        "applicationQuery.collection satellites: accepted",
-        "applicationQuery.collection settings: accepted",
-        "applicationQuery.collection spots: accepted",
-        "applicationQuery.collection sstvImage: accepted",
-        "applicationQuery.collection statistics: accepted",
-        "applicationQuery.collection: required",
-        "applicationQuery.cursor: optional",
-        // Named by a relay only to a station that advertised x-nexus-application-ota-states-version,
-        // so no older station is ever sent it.
-        "applicationQuery.queryVersion: optional",
-        "applicationQuery.requestId: required",
-        "applicationQuery.search: required",
-        "applicationQuery.unconfirmed: required",
-        "applicationRead.<unknown key>: refused",
-        "applicationRead.command: required",
-        "applicationRead.requestId: required",
-        "applicationRead.revision: optional",
-        "applicationWatch.<unknown key>: refused",
-        "applicationWatch.requestId: optional",
-        "applicationWatch.topics: required",
-        "applicationWatch.watchId: required",
+        // The read lane, retired: a relay sends it only to a station that advertised it.
+        "applicationCredit (retired): refused",
+        "applicationQuery (retired): refused",
+        "applicationRead (retired): refused",
+        "applicationWatch (retired): refused",
         "audioListen.<unknown key>: refused",
         "audioListen.deviceId: required",
         "audioListen.leaseId: required",
@@ -1395,17 +1136,8 @@ mod server_message_schema {
     #[test]
     fn the_declarations_a_relay_message_is_parsed_by_are_the_snapshot() {
         let transport = include_str!("transport.rs");
-        let query = include_str!("query.rs");
-        let now = [
-            declaration(transport, "#[serde(tag = \"type\", rename_all = \"camelCase\", deny_unknown_fields)]\nenum ServerMessage {"),
-            declaration(query, "#[serde(rename_all = \"camelCase\", deny_unknown_fields)]\npub struct Request {"),
-            declaration(query, "#[serde(rename_all = \"camelCase\")]\npub enum Collection {"),
-        ]
-        .concat();
-        assert!(
-            now.len() > 80,
-            "premise: the three declarations were found whole"
-        );
+        let now = declaration(transport, "#[serde(tag = \"type\", rename_all = \"camelCase\", deny_unknown_fields)]\nenum ServerMessage {");
+        assert!(now.len() > 40, "premise: the declaration was found whole");
         assert!(
             now == DECLARATIONS,
             "a declaration a relay message is parsed by changed; the oldest stations turn Remote \

@@ -285,7 +285,7 @@ mod tests {
         let tallies = crate::LogTallies::default();
         crate::LOG_TALLIES.with(|c| c.set(0));
         let pounce = snapshot_needs(&engine, &tallies.needs).expect("the engine is there");
-        let (board, _) = crate::needs_kept(&engine, &tallies).expect("the log reads");
+        let board = crate::needs_kept(&engine, &tallies).expect("the log reads");
         let again = snapshot_needs(&engine, &tallies.needs).expect("the engine is there");
         assert!(
             Arc::ptr_eq(&pounce, &board) && Arc::ptr_eq(&board, &again),
