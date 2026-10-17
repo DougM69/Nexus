@@ -155,8 +155,9 @@ export function cloudflare(env = process.env, fetcher = fetch, row = target(env)
     // 'extra-binding' fault asserts. What changed is that a DECLARED secret is now expected
     // rather than treated as an intruder - without this, setting ADMIN_SUBJECT made a successful
     // deploy fail its own verification, after the Worker was already live.
-    const required = requiredSecrets(config)
-    requireValue(Array.isArray(settings?.bindings) && settings.bindings.length === Object.keys(config.vars).length + 3 + required.length,
+    const required = requiredSecrets(config), services = config.services ?? []
+    requireValue(Array.isArray(settings?.bindings)
+      && settings.bindings.length === Object.keys(config.vars).length + 3 + required.length + services.length,
       'Uploaded Worker binding inventory differs from the artifact')
     const bindings = new Map(settings.bindings.map(binding => [binding.name, binding]))
     requireValue(bindings.size === settings.bindings.length && Object.entries(config.vars).every(([name, text]) =>
@@ -171,15 +172,21 @@ export function cloudflare(env = process.env, fetcher = fetch, row = target(env)
       && bindings.get('STATIONS').class_name === 'StationRoom'
       && (!bindings.get('STATIONS').script_name || bindings.get('STATIONS').script_name === TARGET.name),
     'Uploaded Worker service bindings differ from the artifact')
+    // The billing Worker binding, exactly as the artifact declares it (none until the row says it is deployed).
+    requireValue(services.every(({ binding, service }) => bindings.get(binding)?.type === 'service'
+      && bindings.get(binding).service === service), 'Uploaded Worker billing binding differs from the artifact')
     // Observability is non-versioned. Read its dedicated endpoint; the combined
     // version settings response can omit it. Wrangler normalizes absent settings
     // to disabled, but explicit log/trace overrides must also remain disabled.
     const script = (await api(`/workers/scripts/${TARGET.name}/script-settings`, 'Worker script configuration read')).result
     requireValue(script && typeof script === 'object' && !Array.isArray(script), 'Worker script settings have an unexpected shape')
     const obs = script.observability
+    // Logpush and a Tail Worker are the other two ways a request's log leaves the relay; both stay off.
     const runtime = { dateMatches: settings.compatibility_date === config.compatibility_date,
       observabilityDisabled: (obs == null || typeof obs === 'object' && !Array.isArray(obs))
-        && [obs?.enabled, obs?.logs?.enabled, obs?.traces?.enabled].every(value => value === undefined || value === false) }
+        && [obs?.enabled, obs?.logs?.enabled, obs?.traces?.enabled].every(value => value === undefined || value === false),
+      logExportsDisabled: [undefined, null, false].includes(script.logpush)
+        && (script.tail_consumers == null || Array.isArray(script.tail_consumers) && script.tail_consumers.length === 0) }
     const content = await requestBytes(`${base}/workers/scripts/${TARGET.name}/content/v2`, {
       headers: { authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
     }, fetcher, 'Worker content read')
@@ -187,7 +194,7 @@ export function cloudflare(env = process.env, fetcher = fetch, row = target(env)
     try { digest = await workerDigest(content, additional) }
     catch (error) { throw new Error(`${error.message}; runtime comparison: ${JSON.stringify(runtime)}`) }
     requireValue(digest === expectedHash, 'Uploaded Worker bytes differ from the artifact')
-    requireValue(runtime.dateMatches && runtime.observabilityDisabled,
+    requireValue(runtime.dateMatches && runtime.observabilityDisabled && runtime.logExportsDisabled,
       `Uploaded Worker runtime configuration differs from the artifact: ${JSON.stringify(runtime)}`)
     return { worker, result }
   }

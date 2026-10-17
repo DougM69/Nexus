@@ -306,3 +306,20 @@ change. Review compatibility before restoring code;
 do not automatically roll back after an ambiguous upload or revive revoked trust.
 The normal Nexus release, marketing Pages site and in-app update feed have their own
 workflows and are outside this staging operation.
+
+## Production (prepared, not created)
+
+`.github/workflows/remote-production.yml` is the same administration aimed at the production row of
+`remote/scripts/staging-common.mjs` (`nexus-remote`, `remote.hamradiotools.io`, issuer exactly
+`https://login.hamradiotools.io/`). Its first job, `remote/scripts/production-guard.mjs`, holds no
+environment and no secret, and stops the run while that row still holds placeholder values or while
+the `remote-production` environment is missing, lets administrators bypass it, lacks the required
+reviewer, or deploys from anything but `main` and `v*` tags. GitHub creates an environment, with no
+protection, the first time a job names one that does not exist, so nothing names `remote-production`
+until the guard passes. It never uses the shared `production` environment. There is no `grant-trial`
+operation in production; trials there go through the Worker's admin route.
+
+Each row also names its private billing Worker (`billing.service`). The relay binds it as `BILLING`
+only once that row's `billing.deployed` is true, and the upload check then demands exactly that
+binding. The relay's no-logs rule covers Logpush and Tail Workers as well as Workers Logs: an upload
+with any of them on fails its own verification.

@@ -6,6 +6,10 @@
 // Auth0 issuer and client ID VALUES are not here: they arrive from the GitHub environment's
 // variables (REMOTE_AUTH0_ISSUER, REMOTE_AUTH0_CLIENT_ID). What the row pins is the RULE an issuer
 // must satisfy and the exact API audience.
+//
+// `billing` names the private billing Worker the relay reaches through a `BILLING` service binding.
+// The binding is written only once `deployed` is true, a reviewed one-line change made after that
+// Worker exists: until then the relay's deploys carry no binding and verify that none is present.
 export const TARGETS = Object.freeze({
   staging: Object.freeze({
     target: 'staging',
@@ -16,6 +20,7 @@ export const TARGETS = Object.freeze({
     audience: 'https://remote-staging.hamradiotools.io/api',
     tag: 'nexus-remote-observation-staging',
     issuer: Object.freeze({ hostSuffix: '.auth0.com' }),
+    billing: Object.freeze({ service: 'nexus-billing-staging', deployed: false }),
   }),
   // PLACEHOLDER. None of these resources exist, and the hostname and sign-in domain are proposals
   // still awaiting the operator's decisions. `deployable()` refuses this row everywhere a script
@@ -31,6 +36,7 @@ export const TARGETS = Object.freeze({
     audience: 'https://remote.hamradiotools.io/api',
     tag: 'nexus-remote-production',
     issuer: Object.freeze({ exact: 'https://login.hamradiotools.io/' }),
+    billing: Object.freeze({ service: 'nexus-billing', deployed: false }),
   }),
 })
 export const STAGING = TARGETS.staging
@@ -70,6 +76,10 @@ export function deployable(row) {
   requireValue(row && TARGETS[row.target] === row, 'Unknown Remote deployment target')
   requireValue(!row.placeholder, `The ${row.target} target holds placeholder values (${row.placeholder}); nothing was sent`)
   return row
+}
+
+export function billingServices(row) {
+  return row.billing.deployed ? [{ binding: 'BILLING', service: row.billing.service }] : []
 }
 
 export function databaseId(value) {
@@ -120,6 +130,8 @@ export function stagingConfig(template, values, row = target()) {
   config.workers_dev = false
   config.preview_urls = false
   config.observability = { enabled: false }
+  const services = billingServices(row)
+  if (services.length > 0) config.services = services
   return config
 }
 
