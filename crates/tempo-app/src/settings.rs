@@ -300,11 +300,15 @@ pub const SWR_VERIFIED_FLEX_RIGS: [u32; 2] = [2036, 23005];
 
 /// Can Nexus put a number to this radio's SWR — i.e. may the high-SWR cutoff be offered at all?
 ///
-/// TWO paths and nothing else, because those are the two places a raw meter reading is turned
+/// THREE paths and nothing else, because those are the places a raw meter reading is turned
 /// into a ratio by something we can point at:
 /// * **Native Icom CI-V** — the operator's `icom_native_cat` opt-in, on a transport the daemon
 ///   can actually own (not network, not OmniRig — the same two refusals
 ///   [`native_civ_reachable`] makes), for a model in [`SWR_VERIFIED_CIV_RIGS`].
+/// * **The Icom network connection** — whenever [`icom_lan_reachable`] holds, because that
+///   client carries the SAME CI-V daemon over its session, so `SWR` is answered by the same
+///   `swr_from_raw` curve. That covers the IC-7300MK2 and IC-7760 there; over USB both are
+///   driven by rigctld, whose `l SWR` is Hamlib's figure, so they stay unverified on USB.
 /// * **FlexRadio over the network**, for a model in [`SWR_VERIFIED_FLEX_RIGS`].
 ///
 /// Everything else — every plain rigctld rig — reaches `Engine::observe_rig_tx_meters` with
@@ -315,15 +319,20 @@ pub fn swr_scale_verified(
     rig_model: u32,
     rig_conn: &str,
     rig_addr: &str,
+    icom_lan_host: &str,
     icom_native_cat: bool,
 ) -> bool {
     let network = rig_conn_is_network(rig_conn, rig_addr);
+    // `!icom_lan`: the serial daemon never opens a port on that connection (see
+    // `tempo_audio::service::native_civ_model`), so the toggle left on from USB counts for nothing.
     let native_civ = icom_native_cat
         && !network
         && !rig_conn_is_omnirig(rig_conn)
+        && !rig_conn_is_icom_lan(rig_conn)
         && SWR_VERIFIED_CIV_RIGS.contains(&rig_model);
+    let icom_lan = icom_lan_reachable(rig_model, rig_conn, icom_lan_host);
     let flex_vita = network && SWR_VERIFIED_FLEX_RIGS.contains(&rig_model);
-    native_civ || flex_vita
+    native_civ || icom_lan || flex_vita
 }
 
 /// Hamlib model numbers of the radios that have NO XIT (transmit incremental tuning) at all.
@@ -6787,6 +6796,7 @@ impl Settings {
             self.rig_model,
             &self.rig_conn,
             &self.rig_addr,
+            &self.icom_lan_host,
             self.icom_native_cat,
         )
     }
@@ -7963,6 +7973,70 @@ mod tests {
             !native_civ_reachable(3081, "omnirig", ""),
             "…and an OmniRig one cannot — OmniRig owns the port"
         );
+    }
+
+    #[test]
+    fn a_network_icoms_swr_is_verified_because_it_rides_the_same_ci_v_daemon() {
+        // The Icom network client carries the very CivDaemon the USB path runs, so its `SWR`
+        // answer is the same `swr_from_raw` curve. What decides "verified" is that daemon,
+        // not the model's name.
+        let lan = |model: u32, host: &str| Settings {
+            rig_model: model,
+            rig_conn: "icomlan".into(),
+            icom_lan_host: host.into(),
+            ..Settings::default()
+        };
+        // Positive control: the USB IC-7300 the allow-list was written for.
+        let usb = Settings {
+            rig_model: 3073,
+            rig_conn: "serial".into(),
+            icom_native_cat: true,
+            ..Settings::default()
+        };
+        assert!(usb.swr_scale_is_verified(), "control: USB IC-7300, native CI-V");
+        assert!(
+            lan(3094, "192.0.2.7").swr_scale_is_verified(),
+            "IC-7300MK2 on the Icom network connection"
+        );
+        for m in ICOM_LAN_RIGS {
+            assert!(
+                lan(m, "192.0.2.7").swr_scale_is_verified(),
+                "model {m} on the Icom network connection"
+            );
+        }
+        // No usable address: the daemon never starts, so nothing reads the curve.
+        assert!(!lan(3094, "").swr_scale_is_verified(), "no address");
+        assert!(!lan(3094, "radio.local").swr_scale_is_verified(), "not IPv4");
+        // An IC-7300 has no network server; a Xiegu is not served by the network client.
+        assert!(!lan(3073, "192.0.2.7").swr_scale_is_verified(), "IC-7300");
+        assert!(!lan(3088, "192.0.2.7").swr_scale_is_verified(), "Xiegu G90");
+        // The native toggle left on from a USB setup does not count on this connection: the
+        // serial daemon never opens a port there, and with no address nothing else runs.
+        let stale_toggle = Settings {
+            icom_native_cat: true,
+            ..lan(3078, "")
+        };
+        assert!(!stale_toggle.swr_scale_is_verified(), "IC-7610, no address");
+        // ⛔ The IC-7300MK2 over USB is driven by rigctld (Hamlib's unscaled `l SWR`), never
+        // by the CI-V daemon, so the native toggle does not put it on the curve.
+        let mk2_usb = Settings {
+            rig_model: 3094,
+            rig_conn: "serial".into(),
+            icom_native_cat: true,
+            ..Settings::default()
+        };
+        assert!(!mk2_usb.swr_scale_is_verified(), "IC-7300MK2 over USB");
+        // ⛔ OmniRig holds the port and passes its own figure: never verified.
+        for m in SWR_VERIFIED_CIV_RIGS.into_iter().chain(ICOM_LAN_RIGS) {
+            let omni = Settings {
+                rig_model: m,
+                rig_conn: "omnirig".into(),
+                icom_native_cat: true,
+                icom_lan_host: "192.0.2.7".into(),
+                ..Settings::default()
+            };
+            assert!(!omni.swr_scale_is_verified(), "model {m} over OmniRig");
+        }
     }
 
     /// Helper for the patch test above: the patch a Save would build from a profile.

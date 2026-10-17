@@ -45,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Nexus Remote: pairing a station while a trial already runs under another sign-in says so at the shack.** It
   used to say access was denied. It now says the email address already has a trial under a different sign-in (Google
   instead of a password, for example) and that signing in the first way, then pairing again, adds the station.
+- **Icom network connection: the SWR reading no longer shows "SWR?".** On the "Icom network (LAN / Wi-Fi)"
+  connection (IC-7610, IC-9700, IC-705, IC-905, IC-7760, IC-7300MK2) the SWR figure comes through the same calibrated
+  scale as an Icom on USB with Native Icom CI-V, so it now reads as a trusted number and the high-SWR cutoff can be
+  turned on. An IC-7300MK2 on USB still shows "SWR?": Nexus drives it through Hamlib there, not through its own CI-V
+  scale. Not yet checked against a known load on the network connection (NEEDS-BENCH).
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
