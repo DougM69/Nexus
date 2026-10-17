@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seconds of that PC dropping, as a transmission does; a track started at the shack runs on. NEEDS-BENCH.
 
 ### Fixed
+- **IC-7300, IC-705, IC-905 and IC-7300MK2: scope span, reference level and Center/Fixed now work.** With Native Icom
+  CI-V on, these radios refused every scope span button ("SCOPE SPAN REFUSED … did not answer when asked whether its
+  scope is in Center mode"), and the reference level and Center/Fixed controls did nothing, whatever the scope was set
+  to. Nexus left one byte out of those commands that Icom's own command tables show for these models. The IC-9700,
+  IC-7610 and IC-7760 send exactly what they sent before. NEEDS-BENCH: on an IC-7300, set each span from ±2.5 to
+  ±500 kHz, change the reference level, and switch Center/Fixed.
 - **Nexus Remote: the shack's screen fits the browser window.** Ctrl (⌘ on a Mac) with +, − or 0, Ctrl with the
   scroll wheel and a trackpad pinch now zoom the browser page instead of going to the shack, and on a short or zoomed
   window the controls move to the side rail when that shows the shack's screen larger. Stop TX stays in view at every

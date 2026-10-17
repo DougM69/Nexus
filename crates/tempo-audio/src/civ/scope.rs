@@ -128,10 +128,10 @@ pub fn scope_stream_frames(radio: u8, on: bool) -> Vec<Frame> {
 }
 
 /// True for dual-receiver Icoms (two scopes: Main + Sub) — IC-7610 (0x98), IC-9700 (0xA2) and
-/// IC-7760 (0xB2) by CI-V default address. Their `27 14/15/19` scope-CONTROL commands take a
-/// leading Main/Sub selector byte that single-scope rigs (IC-7300/705/905/7300MK2) omit; the
-/// IC-7760's `27 14`, `27 17` and `27 19` formats carry it as `00=MAIN, 01=SUB` (A7788-8EX-2 PDF
-/// pp. 25–26), and it selects its scope with `27 12` (p. 17).
+/// IC-7760 (0xB2) by CI-V default address. Only these get the `27 12 00` Main pin before the
+/// stream (the IC-7760 selects its scope with `27 12`, A7788-8EX-2 PDF p. 17). It does NOT decide
+/// the `27 14/15/19` scope-CONTROL selector byte: every model sends that one, single-scope rigs
+/// included (`commands::scope_ctrl_frame`).
 pub fn scope_is_dual(radio: u8) -> bool {
     matches!(radio, 0x98 | 0xA2 | 0xB2)
 }
