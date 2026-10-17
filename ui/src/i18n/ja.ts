@@ -6270,7 +6270,7 @@ export const JA: PartialCatalog = {
   "rtty.header.power.label": "出力",
   "rtty.header.power.title": "RF 出力 — RTTY は送信の間ずっとキャリアを出し続けるため、ほとんどの無線機では SSB 定格よりかなり低めが安全です",
   "rtty.header.band.title": "無線機の現在のバンドを表示しています",
-  "rtty.waterfall.hint": "クリックでデコーダーを合わせる",
+  "rtty.waterfall.hint": "クリックでデコーダーと送信トーンを合わせる",
   "rtty.tuning.title": "同調",
   "rtty.tuning.scope.aria": "同調スコープ：{{state}}",
   "rtty.tuning.tuned": "同調済み",

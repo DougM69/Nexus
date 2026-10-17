@@ -17188,11 +17188,11 @@ fn rtty_afc_reset(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String
 /// tuning-scope nudge — rebuilds the demod around the new mark/space pair. NOT
 /// RX-only: the AFSK transmitter follows the netted center too, so this moves the
 /// transmit tone (see `Engine::rtty_net`); the privilege gate judges the netted
-/// emission at keying.
+/// emission at keying, and the engine refuses a net while RTTY transmits.
 #[tauri::command(async)]
 fn rtty_net(state: State<'_, SharedEngine>, hz: f32) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
-    eng.rtty_net(hz);
+    eng.rtty_net(hz)?;
     Ok(rtty_state_dto(&eng))
 }
 

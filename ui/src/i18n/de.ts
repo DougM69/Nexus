@@ -6674,7 +6674,7 @@ export const DE: PartialCatalog = {
   "rtty.header.power.label": "Leistung",
   "rtty.header.power.title": "HF-Ausgangsleistung — bei RTTY steht der Träger die ganze Sendung über an; die meisten Geräte wollen deutlich weniger als ihre SSB-Nennleistung",
   "rtty.header.band.title": "Zeigt das aktuelle Band des Funkgeräts",
-  "rtty.waterfall.hint": "Klick setzt den Dekoder darauf",
+  "rtty.waterfall.hint": "Klick setzt Dekoder und Sendetöne darauf",
   "rtty.tuning.title": "Abstimmung",
   "rtty.tuning.scope.aria": "Abstimmanzeige: {{state}}",
   "rtty.tuning.tuned": "Abgestimmt",

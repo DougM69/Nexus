@@ -308,7 +308,9 @@ The figure between the buttons is the mark tone in hertz.
 follows the decoder's centre, exactly as a waterfall click does, so a nudge is
 also a change to where your own signal lands. That is why both buttons are
 greyed out while you transmit (an over, continuous TX or Tune): a held button
-cannot slide your tone in the middle of an over.
+cannot slide your tone in the middle of an over. Nexus also refuses any net while
+RTTY is transmitting, so a click on the waterfall mid-over does not move your
+tone either; net between overs.
 
 ![The tuning scope beside the decoded text, showing a crossed-ellipse "+" with ◀ M 2125 ▶ and the words "Signal 18 Hz low" under it.](../img/manual/rtty-tuning-scope.webp)
 

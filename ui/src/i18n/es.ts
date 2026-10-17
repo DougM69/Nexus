@@ -5009,7 +5009,7 @@ export const ES: PartialCatalog = {
   "rtty.stream.sent.title": "Enviado por esta estación",
   "rtty.stream.title": "Texto RTTY decodificado — los caracteres tenues son copia de baja confianza (la métrica blanda del demodulador)",
   "rtty.type.failed": "Escritura en RTTY rechazada",
-  "rtty.waterfall.hint": "clic para enganchar el decodificador",
+  "rtty.waterfall.hint": "clic para enganchar el decodificador y tus tonos de transmisión",
   "rtty.tuning.title": "Sintonía",
   "rtty.tuning.scope.aria": "Indicador de sintonía: {{state}}",
   "rtty.tuning.tuned": "Sintonizado",

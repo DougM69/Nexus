@@ -9942,7 +9942,7 @@ export const EN = {
   'rtty.header.power.title':
     'RF output power — RTTY keys the carrier for the whole over, so most rigs want well under their SSB rating',
   'rtty.header.band.title': "Showing the rig's current band",
-  'rtty.waterfall.hint': 'click nets the decoder',
+  'rtty.waterfall.hint': 'click nets the decoder and your transmit tones',
   'rtty.tuning.title': 'Tuning',
   'rtty.tuning.scope.aria': 'Tuning scope: {{state}}',
   'rtty.tuning.tuned': 'Tuned',

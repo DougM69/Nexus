@@ -20635,11 +20635,24 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// a held button cannot slide the tone mid-over. (This doc said "RX-only … safe
     /// during TX" until 2026-10-17; the gate's own history records the same sentence
     /// being proved false once already.)
-    pub fn rtty_net(&mut self, hz: f32) {
+    ///
+    /// ⛔ REFUSED WHILE RTTY TRANSMITS (Err, nothing moved). A waterfall click mid-over
+    /// netted and so slid the AFSK tone of the over on the air. The cockpit now refuses
+    /// it too, but this is the guard: every way in (click, nudge, a future auto-tune,
+    /// Remote) goes through here, whatever a screen does.
+    pub fn rtty_net(&mut self, hz: f32) -> Result<(), String> {
+        if self.tx_owner() == Some(TxOwner::Rtty) {
+            return Err(
+                "RTTY is transmitting: netting now would move the transmit tone \
+                        mid-over. Stop or let the over finish, then net."
+                    .to_string(),
+            );
+        }
         self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.rtty_center = Some(hz.clamp(300.0, 3700.0));
         // Rebuild the demod around the new center (zeros AFC + arms the reset).
         self.request_rtty_afc_reset();
+        Ok(())
     }
 
     // --- PSK31 RX (armed decoder on the RX audio path; decode runs in the
@@ -32107,6 +32120,49 @@ mod tests {
         assert!(!e.snapshot().radio.qso_recording);
     }
 
+    /// A net mid-over moves the AFSK tone on the air, so the engine refuses it while RTTY
+    /// transmits — an over going out, or the continuous-TX latch — and moves NOTHING. CONTROL:
+    /// the same net, unkeyed, is taken, by value.
+    #[test]
+    fn rtty_net_is_refused_while_rtty_transmits_and_moves_nothing() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let before = (
+            e.rtty_center_hz(),
+            e.rtty_state().mark_hz,
+            e.rtty_state().space_hz,
+        );
+        e.rtty_sending = true;
+        assert!(
+            e.rtty_net(1500.0).is_err(),
+            "a net during an over must be refused"
+        );
+        assert_eq!(
+            (
+                e.rtty_center_hz(),
+                e.rtty_state().mark_hz,
+                e.rtty_state().space_hz
+            ),
+            before,
+            "a refused net moved the tones"
+        );
+        assert!(!e.take_rtty_afc_reset(), "a refused net rebuilt the demod");
+        e.rtty_sending = false;
+        e.rtty_latched = true;
+        assert!(
+            e.rtty_net(1500.0).is_err(),
+            "the continuous-TX latch is a transmission too"
+        );
+        assert_eq!(e.rtty_center_hz(), before.0);
+        e.rtty_latched = false;
+        e.rtty_type_buf.clear();
+        e.rtty_net(1500.0).expect("unkeyed, the net is taken");
+        assert_eq!(e.rtty_center_hz(), 1500.0);
+        assert_eq!(
+            (e.rtty_state().mark_hz, e.rtty_state().space_hz),
+            (1415.0, 1585.0)
+        );
+    }
+
     #[test]
     fn rtty_scope_is_live_only_while_armed_and_not_transmitting() {
         use tempo_core::rtty::scope::ScopeFrame;
@@ -39742,7 +39798,7 @@ mod tests {
         // The operator clicks the waterfall and nets the centre up to 3700 Hz. The real mark is
         // now 3700 - 85 = 3615 Hz, so the emission is 14.0275 - 0.003615 = 14.023885 — BELOW
         // the 14.025 floor. The gate must now refuse.
-        e.rtty_net(3700.0);
+        e.rtty_net(3700.0).expect("unkeyed: the net is taken");
         assert!(
             !e.rtty_emission_ok(dial),
             "THE REGRESSION: the netted emission is at 14.0239, below the General 14.025 floor, \
@@ -39750,7 +39806,7 @@ mod tests {
         );
 
         // And the other direction still works: netting back down makes it legal again.
-        e.rtty_net(2210.0);
+        e.rtty_net(2210.0).expect("unkeyed: the net is taken");
         assert!(
             e.rtty_emission_ok(dial),
             "back at the default centre it is legal again"
@@ -66578,7 +66634,9 @@ mod digital_side_licence_tests {
         fn net(self, e: &mut Engine, centre_hz: f32) {
             match self {
                 Soundcard::Psk => e.psk_net(centre_hz),
-                Soundcard::RttyAfsk | Soundcard::RttyFsk => e.rtty_net(centre_hz),
+                Soundcard::RttyAfsk | Soundcard::RttyFsk => {
+                    e.rtty_net(centre_hz).expect("unkeyed: the net is taken")
+                }
                 Soundcard::CwTone | Soundcard::CwKeyer => e.settings.cw_pitch_hz = centre_hz,
             }
         }

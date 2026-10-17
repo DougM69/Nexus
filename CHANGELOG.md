@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sits low, with the same reading in words under it ("Tuned", "Signal 20 Hz low"). ◀ ▶ under it move the decoder
   5 Hz at a time (hold to repeat); in AFSK that moves your transmit tone too, so they are off while you transmit.
   It is the ⊞ Panels entry **Tuning**, shown by default, and it works on a second computer driving the station with
-  Nexus's own Remote client. (idea: the Diddle project by WW2DX)
+  Nexus's own Remote client. Netting is refused while transmitting, from the waterfall too: a click mid-over
+  used to move the AFSK tone of the over on the air. (idea: the Diddle project by WW2DX)
 - **Nexus Remote: on the shack's own network, Remote stays free.** When an account's internet use has ended, Stream
   and Listen still work from a browser already approved for the station, as long as that device is on the same
   network as the shack. The stream is held to that network at both ends and never goes through the relay. A shack
