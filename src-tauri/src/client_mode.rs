@@ -602,6 +602,11 @@ pub(crate) struct Status {
     /// A test build's road switch: Normal, or the road this computer blocks.
     #[cfg(feature = "bench-road-switch")]
     pub(crate) bench: crate::bench_road_switch::Position,
+    /// This computer's Nexus version.
+    pub(crate) computer_build: &'static str,
+    /// The station's Nexus version, as its last welcome said it, the link opened or refused for
+    /// another build: `None` until a welcome has said it.
+    pub(crate) station_build: Option<String>,
 }
 
 /// This computer's PTT between the screen's re-assertions.
@@ -698,6 +703,8 @@ impl Client {
                 udp_blocked: false,
                 #[cfg(feature = "bench-road-switch")]
                 bench: Default::default(),
+                computer_build: tempo_client::wire::APP,
+                station_build: None,
             }),
             station_id,
             shack: Mutex::new(None),
@@ -1412,15 +1419,22 @@ impl Client {
             #[cfg(feature = "bench-road-switch")]
             let connecting = self.road_switch.over(connecting);
             let probed = self.lan_backoff.load(Ordering::SeqCst) > 1;
-            let reached = match connecting.await {
-                Ok((link, at)) => Ok((link, Some(at))),
-                // Not on this network (nothing answered, or not the station): the internet road,
-                // when one is kept for this station. LAN first, always.
-                Err(why) if road::look_further(why) || why == "notThisStation" => {
-                    self.over_the_internet(why).await.map(|link| (link, None))
+            // The station's version, heard from its welcome on either road, for a refusal to name.
+            let (reached, heard) = crate::lan_client::link::hearing_build(async {
+                match connecting.await {
+                    Ok((link, at)) => Ok((link, Some(at))),
+                    // Not on this network (nothing answered, or not the station): the internet
+                    // road, when one is kept for this station. LAN first, always.
+                    Err(why) if road::look_further(why) || why == "notThisStation" => {
+                        self.over_the_internet(why).await.map(|link| (link, None))
+                    }
+                    Err(why) => Err(why),
                 }
-                Err(why) => Err(why),
-            };
+            })
+            .await;
+            if heard.is_some() {
+                lock(&self.status).station_build = heard;
+            }
             if let (true, Ok((_, None))) = (probed, &reached) {
                 // This network's road was found by a try but would not open: wait longer next time.
                 let backoff = self.lan_backoff.load(Ordering::SeqCst);

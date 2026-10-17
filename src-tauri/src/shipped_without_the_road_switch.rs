@@ -398,11 +398,13 @@ fn without_the_feature_there_is_no_switch() {
     assert_eq!(
         keys,
         [
+            "computerBuild",
             "internet",
             "over",
             "phase",
             "reason",
             "station",
+            "stationBuild",
             "stillThere",
             "udpBlocked"
         ]

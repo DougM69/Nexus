@@ -68,6 +68,8 @@ const update = (over: Partial<SelfUpdate>): SelfUpdate => ({
   progress: null,
   error: null,
   install: () => {},
+  installAnyway: () => {},
+  held: null,
   dismiss: () => {},
   downloadInstead: () => {},
   ...over,
