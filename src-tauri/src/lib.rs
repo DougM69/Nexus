@@ -17184,9 +17184,11 @@ fn rtty_afc_reset(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String
     Ok(rtty_state_dto(&eng))
 }
 
-/// Net the RTTY decoder onto a new audio center (Hz) from a waterfall click —
-/// rebuilds the demod around the new mark/space pair. RX-only decoder state, so
-/// it needs no TX/privilege gate and is safe during a transmission.
+/// Net the RTTY decoder onto a new audio center (Hz) from a waterfall click or a
+/// tuning-scope nudge — rebuilds the demod around the new mark/space pair. NOT
+/// RX-only: the AFSK transmitter follows the netted center too, so this moves the
+/// transmit tone (see `Engine::rtty_net`); the privilege gate judges the netted
+/// emission at keying.
 #[tauri::command(async)]
 fn rtty_net(state: State<'_, SharedEngine>, hz: f32) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);

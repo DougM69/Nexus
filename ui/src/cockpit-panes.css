@@ -815,16 +815,31 @@
   overflow-y: auto;
   overflow-x: hidden;
 }
-/* The square. Its canvas is out of flow (the measured-box pattern), so the bitmap never sizes it. */
+/* The square: the column's width tall, and it YIELDS. On a pane shorter than the column (RTTY's stock
+   split leaves the text about 140 px at 1280×800, measured in Chrome) it gives up height first, so
+   the nudges and the words under it stay on screen; the picture is drawn as the largest square the
+   box holds. No floor (this sheet's rule: `min-height: 0` everywhere but the region), so the words
+   carry the reading when the pane leaves the picture no room; the column still scrolls past that. The picture and its canvas are out of flow (the
+   measured-box pattern), so the bitmap never sizes it; the ✕ sits in its top corner. */
 .rtty-tuning-box {
   position: relative;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   width: 100%;
   aspect-ratio: 1 / 1;
+  min-height: 0;
+}
+.rtty-tuning-picture {
+  position: absolute;
+  inset: 0;
 }
 .rtty-tuning-canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+}
+.rtty-tuning-close {
+  position: absolute;
+  top: 0;
+  right: 0;
 }

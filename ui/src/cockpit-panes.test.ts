@@ -442,6 +442,38 @@ describe("FT'S ARRANGED COLUMNS (2026-10-07): stacks that scroll, FT's gap, and 
   })
 })
 
+describe('THE RTTY TUNING SCOPE (2026-10-17): a yielding row, a column that scrolls, a square that never sizes from its bitmap', () => {
+  // The column (square + nudges + words) is content that cannot shrink, inside a stream pane whose
+  // height the operator's divider sets. Shorter than the stack, the COLUMN must scroll; the row must
+  // yield like the transcript it replaced as the grower; and the text keeps the larger share.
+  it('the RX row is a grower that yields', () => {
+    expect(classWinner('rtty-rx-row', blockDecl('display'))?.value).toBe('flex')
+    expect(classWinner('rtty-rx-row', blockDecl('flex'))?.value).toBe('1 1 0')
+    expect(classWinner('rtty-rx-row', blockDecl('min-height'))?.value, 'a grower with a content floor clips').toBe('0')
+  })
+
+  it('the column scrolls its own deficit and never takes most of the row', () => {
+    const y = classWinner('rtty-tuning', blockOverflowY)
+    expect(y && SCROLLS(y.value), `the tuning column does not scroll: ${JSON.stringify(y)}`).toBe(true)
+    expect(classWinner('rtty-tuning', blockDecl('min-height'))?.value).toBe('0')
+    expect(classWinner('rtty-tuning', blockDecl('flex'))?.value, 'the column must not grow or shrink').toBe('0 0 auto')
+    expect(classWinner('rtty-tuning', blockDecl('max-width'))?.value).toBe('45%')
+    // Grows with the window between a floor and a ceiling, through the zoom-aware width only.
+    expect(classWinner('rtty-tuning', blockDecl('width'))?.value).toMatch(/^clamp\(\S+em, calc\(\S+ \* var\(--vw-eff[^)]*\)\), \S+em\)$/)
+  })
+
+  it('the square is the column wide, yields height to a short pane, and its canvas is out of flow', () => {
+    expect(classWinner('rtty-tuning-box', blockDecl('aspect-ratio'))?.value).toBe('1 / 1')
+    expect(classWinner('rtty-tuning-box', blockDecl('position'))?.value).toBe('relative')
+    // Shrinks before the nudges and the words do (they are content-height and come after it).
+    expect(classWinner('rtty-tuning-box', blockDecl('flex'))?.value).toBe('1 1 auto')
+    expect(classWinner('rtty-tuning-box', blockDecl('min-height'))?.value, 'an aspect-ratio box will not shrink without it').toBe('0')
+    expect(classWinner('rtty-tuning-picture', blockDecl('position'))?.value).toBe('absolute')
+    expect(classWinner('rtty-tuning-canvas', blockDecl('position'))?.value).toBe('absolute')
+    expect(classWinner('rtty-tuning-canvas', blockDecl('inset'))?.value).toBe('0')
+  })
+})
+
 describe('the region owns exactly one scroll behaviour per state', () => {
   it("flow='stack': the REGION scrolls (the operator's scrollbar comes back)", () => {
     const st = REGION_STATES[0]

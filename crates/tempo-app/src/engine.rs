@@ -20624,10 +20624,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
             .unwrap_or(RTTY_AFSK_MARK_HZ as f32 + self.rtty_shift_hz() as f32 / 2.0)
     }
 
-    /// Net the RTTY decoder onto a new audio center (Hz) — a waterfall click.
-    /// Clamps into the audio passband, then rebuilds the demod around the new
-    /// center the same clean acquire-then-freeze way an AFC reset does. RX-only
-    /// decoder state, so this is safe during TX and needs no privilege gate.
+    /// Net the RTTY decoder onto a new audio center (Hz) — a waterfall click or a
+    /// tuning-scope nudge. Clamps into the audio passband, then rebuilds the demod
+    /// around the new center the same clean acquire-then-freeze way an AFC reset does.
+    ///
+    /// ⚠️ NOT RX-ONLY. Since 1.9.0 the AFSK transmitter follows this center too
+    /// ([`Self::rtty_tx_mark_hz`]), so a net is also a TRANSMIT-tone change: the
+    /// privilege gate judges the netted emission, not a fixed 2125 Hz, and the
+    /// cockpit's tuning-scope nudges are disabled while anything of ours is keyed so
+    /// a held button cannot slide the tone mid-over. (This doc said "RX-only … safe
+    /// during TX" until 2026-10-17; the gate's own history records the same sentence
+    /// being proved false once already.)
     pub fn rtty_net(&mut self, hz: f32) {
         self.remote_receiver_gen = self.remote_receiver_gen.saturating_add(1);
         self.rtty_center = Some(hz.clamp(300.0, 3700.0));

@@ -176,7 +176,9 @@ export function RttyTuningScope({
       const c = colours()
       const cx = devW / 2
       const cy = devH / 2
-      const r = Math.min(devW, devH) * 0.45
+      // The largest square the box holds, centred: the box yields height on a short pane.
+      const side = Math.min(devW, devH)
+      const r = side * 0.45
       // The phosphor: the last picture dims instead of vanishing. Without a live frame, clear.
       ctx.globalAlpha = s?.live && s.xy.length ? FADE : 1
       ctx.fillStyle = c.bg
@@ -184,7 +186,7 @@ export function RttyTuningScope({
       ctx.globalAlpha = 1
       // Crosshair and axis tags (M along X, S along Y).
       ctx.strokeStyle = c.grid
-      ctx.lineWidth = Math.max(1, devW / 200)
+      ctx.lineWidth = Math.max(1, side / 200)
       ctx.beginPath()
       ctx.moveTo(cx - r, cy)
       ctx.lineTo(cx + r, cy)
@@ -192,10 +194,10 @@ export function RttyTuningScope({
       ctx.lineTo(cx, cy + r)
       ctx.stroke()
       ctx.fillStyle = c.tag
-      ctx.font = `${Math.round(devW / 14)}px sans-serif`
+      ctx.font = `${Math.max(7, Math.round(side / 14))}px sans-serif`
       ctx.textBaseline = 'middle'
-      ctx.fillText(AXIS_MARK, cx + r - devW / 14, cy - devW / 20)
-      ctx.fillText(AXIS_SPACE, cx + devW / 40, cy - r + devW / 28)
+      ctx.fillText(AXIS_MARK, cx + r - side / 14, cy - side / 20)
+      ctx.fillText(AXIS_SPACE, cx + side / 40, cy - r + side / 28)
       if (!s?.live || !s.xy.length || s.peak <= 0) {
         scale = 0
         return
@@ -203,7 +205,7 @@ export function RttyTuningScope({
       // Fast attack, slow decay: the frame's own peak against a level that remembers.
       scale = s.peak > scale ? s.peak : scale * SCALE_DECAY + s.peak * (1 - SCALE_DECAY)
       const k = (r * (s.peak / scale)) / 127
-      const dot = Math.max(1, Math.round(devW / 130))
+      const dot = Math.max(1, Math.round(side / 130))
       ctx.fillStyle = c.trace
       for (let i = 0; i + 1 < s.xy.length; i += 2) {
         ctx.fillRect(cx + s.xy[i] * k - dot / 2, cy - s.xy[i + 1] * k - dot / 2, dot, dot)
@@ -297,16 +299,20 @@ export function RttyTuningScope({
   const title = t('rtty.tuning.title')
   return (
     <div className="rtty-tuning" role="group" aria-label={title}>
-      {closeProps && (
-        <div className="rtty-tuning-head">
-          <span className="rtty-tuning-title">{title}</span>
-          <PaneCloseButton title={title} onRemove={closeProps.onRemove} hideNote={closeProps.hideNote} />
+      {/* The square. It YIELDS (cockpit-panes.css): on a short pane it gives up height so the nudges
+          and the words stay on screen, and the picture is drawn as the largest square that fits. Its
+          ✕ sits in its corner rather than on a head row of its own, which would cost the picture. */}
+      <div className="rtty-tuning-box">
+        <div className="rtty-tuning-picture" role="img" aria-label={t('rtty.tuning.scope.aria', { state: nextWords })}>
+          <canvas ref={canvasRef} className="rtty-tuning-canvas" aria-hidden="true" />
+          {/* The words below already say this to a screen reader. */}
+          {plate && <span className="rtty-tuning-plate" aria-hidden="true">{plate}</span>}
         </div>
-      )}
-      <div className="rtty-tuning-box" role="img" aria-label={t('rtty.tuning.scope.aria', { state: nextWords })}>
-        <canvas ref={canvasRef} className="rtty-tuning-canvas" aria-hidden="true" />
-        {/* The words below already say this to a screen reader. */}
-        {plate && <span className="rtty-tuning-plate" aria-hidden="true">{plate}</span>}
+        {closeProps && (
+          <span className="rtty-tuning-close">
+            <PaneCloseButton title={title} onRemove={closeProps.onRemove} hideNote={closeProps.hideNote} />
+          </span>
+        )}
       </div>
       <div className="rtty-tuning-nudge">
         {nudge(-1, t('rtty.tuning.down.aria', { hz: NUDGE_HZ }), '◀')}

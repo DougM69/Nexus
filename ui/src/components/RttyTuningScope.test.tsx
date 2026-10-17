@@ -150,12 +150,15 @@ describe('the nudges', () => {
   it('stop a hold the instant an over starts, before the next step can move the tone', () => {
     vi.useFakeTimers()
     const onNet = vi.fn()
-    const { rerender } = render(<RttyTuningScope {...base} onNet={onNet} />)
+    // Not polling (`active` off), so the only timer is the hold's own.
+    const props = { ...base, active: false, onNet }
+    const { rerender } = render(<RttyTuningScope {...props} />)
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Tune down 5 Hz' }), { button: 0 })
     act(() => vi.advanceTimersByTime(HOLD_DELAY_MS))
     expect(onNet.mock.calls).toEqual([[2205], [2200]])
     // The button is still held (no pointerup) when the station keys.
-    rerender(<RttyTuningScope {...base} onNet={onNet} keyed />)
+    rerender(<RttyTuningScope {...props} keyed />)
+    expect(vi.getTimerCount(), 'the repeat is still scheduled after the over started').toBe(0)
     act(() => vi.advanceTimersByTime(20 * HOLD_REPEAT_MS))
     expect(onNet).toHaveBeenCalledTimes(2)
   })

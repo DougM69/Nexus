@@ -1015,8 +1015,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           dividers' kind; hiding the strip takes the divider with it and hands the height to the
           pane frames below, the shell's growers, and the stored height stays for its return.
 
-          It hosts no stop control — the cursors and click-to-net are the decoder's tuning aid,
-          and net() moves the DECODER, not the rig's key. Stop TX and the TX-enable latch are in
+          It hosts no stop control — the cursors and click-to-net are the tuning aid. A net moves
+          the decoder AND the AFSK transmit tone (the transmitter follows the netted centre since
+          1.9.0), but never the rig's key. Stop TX and the TX-enable latch are in
           the TX strip below it, the Esc/Stop macro and the sequencer's Abort in the dock (THE STOP LINE).
           With this and `stream` both unticked the cockpit still holds all four. */}
       {rtty && shown('scope') && (
