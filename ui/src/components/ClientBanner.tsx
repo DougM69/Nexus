@@ -26,12 +26,18 @@
 // In a test build it carries the road switch too (`src-tauri/src/bench_road_switch.rs`): Normal,
 // Block the command link, Block the Stop road, one click each, and a mark while a road is blocked.
 // Only a test build's status names the switch, so a shipped build draws none of it.
+//
+// While another device holds the station it offers Take control, asked inline (a modal would
+// stand between the operator and Stop TX): confirmed, that device's over ends as its Stop would and
+// this computer starts with TX off. A computer control was taken from says so, and can take it back
+// the same way.
 
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 import {
   benchRoadSwitch,
   clientStatus,
   clientStillHere,
+  clientTakeControl,
   isTauri,
   leaveClientMode,
   type BenchPosition,
@@ -108,6 +114,7 @@ export function overLine(over: ClientOver | null | undefined): string | null {
 
 function line(status: ClientStatus): string {
   const station = status.station
+  if (status.phase === 'busy' && status.reason === 'takenOver') return t('client.banner.takenOver')
   if (status.internet) {
     switch (status.phase) {
       case 'live': return t('client.banner.internet.live')
@@ -228,9 +235,19 @@ export function ClientInput() {
 export function ClientBanner() {
   const [status, setStatus] = useClientStatus()
   const [leaving, setLeaving] = useState(false)
+  const [confirming, setConfirming] = useState(false)
   useStillHereInput(status?.internet === true)
+  // A question asked while another device held the station goes once it no longer does.
+  const busy = status?.phase === 'busy'
+  useEffect(() => {
+    if (!busy) setConfirming(false)
+  }, [busy])
 
   if (!status) return null
+  const take = () => {
+    setConfirming(false)
+    void clientTakeControl().catch(() => undefined)
+  }
   const over = overLine(status.over)
   const idleEnded = status.phase === 'refused' && status.reason === 'idle'
   const leave = () => {
@@ -243,6 +260,7 @@ export function ClientBanner() {
       className="client-banner"
       data-phase={status.phase}
       data-bench={bench}
+      data-confirming={busy && confirming ? 'true' : undefined}
       role="status"
       aria-live="polite"
     >
@@ -258,6 +276,22 @@ export function ClientBanner() {
         <button type="button" className="client-banner-leave" onClick={() => void clientStillHere().catch(() => undefined)}>
           {idleEnded ? t('client.banner.connectAgain') : t('client.banner.stillHere')}
         </button>
+      )}
+      {busy && !confirming && (
+        <button type="button" className="client-banner-leave" onClick={() => setConfirming(true)}>
+          {t('client.banner.takeControl')}
+        </button>
+      )}
+      {busy && confirming && (
+        <span className="client-banner-confirm" role="group" aria-label={t('client.banner.takeControl')}>
+          <span className="client-banner-over">{t('client.banner.takeControl.confirm')}</span>
+          <button type="button" className="client-banner-leave" onClick={take}>
+            {t('client.banner.takeControl')}
+          </button>
+          <button type="button" className="client-banner-leave" onClick={() => setConfirming(false)}>
+            {t('client.banner.takeControl.cancel')}
+          </button>
+        </span>
       )}
       {bench && (
         <RoadSwitch

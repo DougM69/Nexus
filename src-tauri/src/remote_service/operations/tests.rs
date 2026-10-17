@@ -161,6 +161,9 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
             || body.contains("rotator.point")
             || body.contains("test_live_sat_track")
             || body.contains("run_simulated_pass")
+            || body.contains("TakeControl")
+            || body.contains("\"takeControl\"")
+            || body.contains("take_on(")
     }
     /// `run_simulated_pass` counts as guarded: its helper takes the same mutex around the whole
     /// pass (`lib.rs`, `run_simulated_pass_as`). That is a DIFFERENT shape from `alone()` — taken

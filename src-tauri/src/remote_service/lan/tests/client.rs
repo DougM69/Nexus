@@ -337,3 +337,82 @@ fn a_lease_heartbeat_answered_busy_keeps_the_lease() {
         "(held before, looked through it, looks when the lease was not the one held before)"
     );
 }
+
+/// ★ Take control from a second computer, through client mode end to end. Computer A holds the
+/// station; B, started after it, is kept out ("another device"), with nothing said of a take. B's
+/// Take control: B holds control, and A's banner says another computer took it. A takes it back
+/// the same way, and B's banner says so. CONTROL: before B's take, A held control and B was out.
+#[test]
+fn a_second_computer_takes_control_and_the_first_can_take_it_back() {
+    let app = App::new();
+    let (s, at, _listening) = tauri::async_runtime::block_on(async {
+        let s = running(&app);
+        s.shared.authority.permit_station(&s.device, true).unwrap();
+        let (stopper, stop) = watch::channel(false);
+        let at = behind_a_port(&s, stop).await;
+        (s, at, stopper)
+    });
+    let record = paired_record(&s, at);
+    let drive = |name: &str| {
+        let dir = scratch(name);
+        let this = ThisComputer::read(dir.join("settings.json"), dir.join("ui-state.json"));
+        let client = Arc::new(Client::new(STATION.to_string(), this));
+        let screens = screens(&client);
+        let (device, key, pkcs8) = (
+            record.device_id.clone(),
+            record.station_key.clone(),
+            record.pkcs8.clone(),
+        );
+        let find: Find = Arc::new(move |_| {
+            Ok(Some(PairedStation {
+                station_id: STATION.into(),
+                device_id: device.clone(),
+                station_key: key.clone(),
+                pkcs8: pkcs8.clone(),
+                addresses: vec![at.to_string()],
+            }))
+        });
+        let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
+            screens.main.app_handle().clone(),
+            find,
+            Arc::new(|_| Ok(Vec::new())),
+            Some(at),
+        ));
+        (client, driving, dir, screens)
+    };
+    let seen = |client: &Client| {
+        let status = client.status();
+        (status.phase, status.reason)
+    };
+    let (a, a_driving, a_dir, _a_screens) = drive("take-control-a");
+    eventually("A holds control", || a.lease_held().is_some());
+    let (b, b_driving, b_dir, _b_screens) = drive("take-control-b");
+    eventually("B is kept out", || seen(&b) == (Phase::Busy, None));
+    assert!(a.lease_held().is_some(), "premise: A holds control");
+
+    b.take_control();
+    eventually("B holds control", || {
+        b.lease_held().is_some() && seen(&b) == (Phase::Live, None)
+    });
+    eventually("A is told another took control", || {
+        seen(&a) == (Phase::Busy, Some("takenOver".into()))
+    });
+    // …and it stays said over the lease's later turns, which find the station held.
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(seen(&a), (Phase::Busy, Some("takenOver".into())));
+    assert!(a.lease_held().is_none());
+
+    a.take_control();
+    eventually("A holds control again", || {
+        a.lease_held().is_some() && seen(&a) == (Phase::Live, None)
+    });
+    eventually("B is told another took control", || {
+        seen(&b) == (Phase::Busy, Some("takenOver".into()))
+    });
+
+    for (client, driving, dir) in [(a, a_driving, a_dir), (b, b_driving, b_dir)] {
+        driving.abort();
+        tauri::async_runtime::block_on(client.let_go());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

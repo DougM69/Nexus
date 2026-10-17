@@ -54,6 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   continuous TX's own limit. Stop on either road ends each of them, and so does losing the second PC for about 5 s:
   continuous TX and an RTTY Auto run end too, and nothing keys again until you start it again. NEEDS-BENCH: two PCs,
   the radio into a dummy load.
+- **Nexus Remote: take control from a second PC.** When another PC is operating the shack, the banner now offers **Take
+  control**. Confirm it and anything the other PC is transmitting stops at once, a satellite track ends, and this PC
+  starts with TX off; the other PC's banner says it lost control and offers to take it back the same way. The shack's
+  own screen and every Stop still work as before. NEEDS-BENCH: two client PCs and the shack, the radio into a dummy load.
 
 ### Changed
 - **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each

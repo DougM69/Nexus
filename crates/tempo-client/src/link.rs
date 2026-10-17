@@ -57,8 +57,16 @@ use crate::outbox::Outbox;
 use crate::wire::{self, Assembly, End, Inflate, Whole, OUTCOMES};
 use crate::PairedStation;
 
-/// The operation requests the link carries, as the window's road does.
-const OPERATIONS: [&str; 5] = ["state", "acquire", "heartbeat", "release", "stopTransmit"];
+/// The operation requests the link carries: the window's road's, and Take control, which only this
+/// computer's own banner asks for.
+const OPERATIONS: [&str; 6] = [
+    "state",
+    "acquire",
+    "heartbeat",
+    "release",
+    "stopTransmit",
+    "takeControl",
+];
 /// Events kept for a screen that has fallen behind.
 const EVENTS: usize = 64;
 /// How often this computer's newly found candidates go to the station while an internet road

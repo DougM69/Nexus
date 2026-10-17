@@ -641,6 +641,12 @@ pub(crate) struct Client {
     live_once: AtomicBool,
     /// The link and the lease this computer holds on it, handed back as Nexus quits.
     held: Mutex<Option<(Arc<Link>, String)>>,
+    /// The operator asked to take control from the device holding it ([`Client::take_control`]):
+    /// done on the lease's next turn, and asked again while the shack is only busy a moment.
+    take: AtomicBool,
+    /// Another device took control from this computer, so the banner says so until this one holds
+    /// control again.
+    taken_over: AtomicBool,
     /// Stop's second roads: the link's now, and each earlier link's for its last minute.
     roads: Mutex<Vec<Arc<StopRoad>>>,
     /// The number of the last snapshot each window's poll fetched, on the link there is now.
@@ -704,6 +710,8 @@ impl Client {
             gone: Mutex::new(Vec::new()),
             live_once: AtomicBool::new(false),
             held: Mutex::new(None),
+            take: AtomicBool::new(false),
+            taken_over: AtomicBool::new(false),
             roads: Mutex::new(Vec::new()),
             fetched: Mutex::new(HashMap::new()),
             before_install: OnceLock::new(),
@@ -750,6 +758,15 @@ impl Client {
         if self.idle_ended.swap(false, Ordering::SeqCst) {
             self.set(Phase::Connecting, None);
             self.answered.notify_one();
+        }
+    }
+
+    /// The operator confirmed Take control in the banner while another device holds the station:
+    /// the lease's next turn takes it, ending that device's over as its Stop would, and this
+    /// computer starts with TX off. Nothing while this computer is not kept out by another.
+    pub(crate) fn take_control(&self) {
+        if lock(&self.status).phase == Phase::Busy {
+            self.take.store(true, Ordering::SeqCst);
         }
     }
 
@@ -1729,6 +1746,12 @@ impl Client {
                     Some(held)
                 }
                 Err(code) if busy(code) => Some(held),
+                // Another device holds it now: it took control from this one.
+                Err("notController") => {
+                    self.taken_over.store(true, Ordering::SeqCst);
+                    self.set(Phase::Busy, Some(TAKEN_OVER));
+                    None
+                }
                 // Gone, or taken back by the station: taken again next turn, if control is free.
                 Err(_) => None,
             };
@@ -1737,10 +1760,12 @@ impl Client {
             Ok(state) => state,
             Err(_) => return None,
         };
+        let taking = self.take.swap(false, Ordering::SeqCst) && state["phase"] == "occupied";
         match state["phase"].as_str() {
             Some("available") | Some("controlling") => {}
+            Some("occupied") if taking => {}
             Some("occupied") => {
-                self.set(Phase::Busy, None);
+                self.set(Phase::Busy, self.taken_over());
                 return None;
             }
             _ => {
@@ -1748,22 +1773,38 @@ impl Client {
                 return None;
             }
         }
-        let acquire = json!({"type":"acquire","stationBootId":state["stationBootId"]});
+        let acquire = if taking {
+            json!({"type":"takeControl","stationBootId":state["stationBootId"]})
+        } else {
+            json!({"type":"acquire","stationBootId":state["stationBootId"]})
+        };
         match operate(link, acquire).await {
             Ok(taken) => {
                 let lease = taken["leaseId"].as_str().map(str::to_string);
                 if lease.is_some() {
+                    self.taken_over.store(false, Ordering::SeqCst);
                     link.watch(&FEEDS);
                     self.set(Phase::Live, None);
                 }
                 lease
             }
             Err("controllerBusy") => {
-                self.set(Phase::Busy, None);
+                self.set(Phase::Busy, self.taken_over());
                 None
             }
-            Err(_) => None,
+            Err(code) => {
+                // The shack was busy a moment: the take is asked again next turn.
+                if taking && busy(code) {
+                    self.take.store(true, Ordering::SeqCst);
+                }
+                None
+            }
         }
+    }
+
+    /// The banner's reason while another device holds control: that it took it from this one.
+    fn taken_over(&self) -> Option<&'static str> {
+        self.taken_over.load(Ordering::SeqCst).then_some(TAKEN_OVER)
     }
 
     /// Asks the shack what became of the calls a dropped link left unanswered, and says so in the
@@ -1808,6 +1849,9 @@ async fn operate(link: &Link, mut request: Value) -> Result<Value, &'static str>
         None => Ok(answer["value"].clone()),
     }
 }
+
+/// The banner's reason when another device took control from this computer.
+const TAKEN_OVER: &str = "takenOver";
 
 /// The operation errors client mode tells apart; any other reads as `refused`.
 const KNOWN: [&str; 7] = [
@@ -1913,6 +1957,15 @@ pub(crate) fn client_status(app: tauri::AppHandle) -> Option<Status> {
 pub(crate) fn client_still_here(app: tauri::AppHandle) {
     if let Some(client) = app.try_state::<Arc<Client>>() {
         client.still_here();
+    }
+}
+
+/// The operator confirmed Take control in the banner: this computer takes control from the device
+/// holding the station. Nothing on a computer running its own station.
+#[tauri::command]
+pub(crate) fn client_take_control(app: tauri::AppHandle) {
+    if let Some(client) = app.try_state::<Arc<Client>>() {
+        client.take_control();
     }
 }
 

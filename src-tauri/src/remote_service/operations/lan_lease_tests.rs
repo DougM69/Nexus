@@ -375,3 +375,232 @@ fn lan_ids_are_never_relay_ids() {
     let next = f.authority.start_lan_connection();
     assert_ne!(next, lan, "two LAN connections share an id");
 }
+
+/// A computer's Take control, on `connection`: under the station boot its state names.
+fn take_on(
+    f: &Fixture,
+    connection: u64,
+    who: (&str, &str),
+    now: Instant,
+) -> Result<Value, &'static str> {
+    let boot = state_on(f, connection, who, now)["stationBootId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    on(
+        f,
+        connection,
+        who,
+        &Request::TakeControl {
+            request_id: id(),
+            station_boot_id: boot,
+        },
+        now,
+    )
+}
+
+/// ★ Take control from another computer. A holds the station with an FT CQ on the air and its
+/// stream's presence; B, kept out (`controllerBusy`), takes control. A's over ends, its presence
+/// and everything bound to it end, A is no longer the controller (`notController`), and B holds
+/// control with TX off. Then A takes it back the same way, and B is out. CONTROL: before the take,
+/// A was on the air with its presence held.
+#[test]
+fn a_computer_takes_control_from_another_and_starts_with_tx_off() {
+    let _alone = alone();
+    let f = Fixture::new();
+    let now = f.now();
+    let (lan_a, lan_b) = (
+        f.authority.start_lan_connection(),
+        f.authority.start_lan_connection(),
+    );
+    let (a, b) = ((LAN_SESSION, LAN_DEVICE), (LAN_OTHER_SESSION, LAN_OTHER));
+    let held = control_on(&f, lan_a, a, now).unwrap();
+    keyed_under(&f, a, now);
+    let lease = held["leaseId"].as_str().unwrap();
+    let presence = f
+        .authority
+        .stream_presence(LAN_SESSION, LAN_DEVICE, lease, now)
+        .unwrap();
+    let standing = {
+        let mut e = f.engine.lock().unwrap();
+        assert!(e.hold_remote_presence(presence.clone(), now));
+        e.remote_presence_standing(now)
+            .expect("premise: A's presence is live")
+    };
+    assert!(
+        standing.held() && f.engine.lock().unwrap().remote_ft_tx_owned(),
+        "premise: A on the air, its presence held"
+    );
+    assert_eq!(control_on(&f, lan_b, b, now), Err("controllerBusy"));
+
+    let taken = take_on(&f, lan_b, b, now).unwrap();
+    assert_eq!(taken["phase"], "controlling", "{taken}");
+    assert_ne!(taken["leaseId"], held["leaseId"]);
+    {
+        let e = f.engine.lock().unwrap();
+        assert_eq!(
+            (e.tx_enabled(), e.remote_ft_tx_owned()),
+            (false, false),
+            "(TX enabled, A's over owned) after B took control"
+        );
+    }
+    assert!(!presence.valid(now), "A's presence outlived the take");
+    assert!(
+        !standing.held(),
+        "what A started under its presence goes on"
+    );
+    assert_eq!(heartbeat_on(&f, lan_a, a, &held, now), Err("notController"));
+    assert_eq!(state_on(&f, lan_a, a, now)["phase"], "occupied");
+
+    // A takes it back the same way.
+    let back = take_on(&f, lan_a, a, now).unwrap();
+    assert_eq!(back["phase"], "controlling", "{back}");
+    assert_eq!(
+        heartbeat_on(&f, lan_b, b, &taken, now),
+        Err("notController")
+    );
+}
+
+/// ⛔ The computer taking control starts with TX off, whoever turned it on: the TX-enable latch
+/// turned on at the shack while A held control is off once B takes it, as a Stop leaves it. And
+/// taking a station nobody holds is an Acquire: it stops nothing. CONTROL: the latch was on.
+#[test]
+fn taking_control_never_carries_the_tx_latch_over() {
+    let _alone = alone();
+    let f = Fixture::new();
+    let now = f.now();
+    let (lan_a, lan_b) = (
+        f.authority.start_lan_connection(),
+        f.authority.start_lan_connection(),
+    );
+    let (a, b) = ((LAN_SESSION, LAN_DEVICE), (LAN_OTHER_SESSION, LAN_OTHER));
+    control_on(&f, lan_a, a, now).unwrap();
+    f.engine.lock().unwrap().set_tx_enabled(true);
+    assert!(f.engine.lock().unwrap().tx_enabled(), "premise: TX on");
+    f.authority.permit_station(b.1, true).unwrap();
+    assert_eq!(take_on(&f, lan_b, b, now).unwrap()["phase"], "controlling");
+    assert!(
+        !f.engine.lock().unwrap().tx_enabled(),
+        "B started with TX on"
+    );
+
+    let g = Fixture::new();
+    let lan = g.authority.start_lan_connection();
+    g.authority.permit_station(b.1, true).unwrap();
+    g.engine.lock().unwrap().set_tx_enabled(true);
+    assert_eq!(take_on(&g, lan, b, now).unwrap()["phase"], "controlling");
+    assert!(
+        g.engine.lock().unwrap().tx_enabled(),
+        "a take with nobody to take from stopped the station"
+    );
+}
+
+/// ⛔ A take that is refused changes nothing: from a device without station control
+/// (`localPermissionRequired`), under another boot of the station (`staleStation`), or from the
+/// relay's road, where browsers are (`stationUnsupported`). After each, A still holds control and
+/// TX is still on. CONTROL: the same take, allowed, ends both.
+#[test]
+fn a_refused_take_leaves_the_controller_and_its_over_alone() {
+    let _alone = alone();
+    for refusal in ["permission", "boot", "relay", "allowed"] {
+        let f = Fixture::new();
+        let now = f.now();
+        let (lan_a, lan_b) = (
+            f.authority.start_lan_connection(),
+            f.authority.start_lan_connection(),
+        );
+        let (a, b) = ((LAN_SESSION, LAN_DEVICE), (LAN_OTHER_SESSION, LAN_OTHER));
+        let held = control_on(&f, lan_a, a, now).unwrap();
+        f.engine.lock().unwrap().set_tx_enabled(true);
+        if refusal != "permission" {
+            f.authority.permit_station(b.1, true).unwrap();
+        }
+        let said = match refusal {
+            "boot" => on(
+                &f,
+                lan_b,
+                b,
+                &Request::TakeControl {
+                    request_id: id(),
+                    station_boot_id: id(),
+                },
+                now,
+            ),
+            "relay" => take_on(&f, f.connection, b, now),
+            _ => take_on(&f, lan_b, b, now),
+        };
+        let expected = match refusal {
+            "permission" => Err("localPermissionRequired"),
+            "boot" => Err("staleStation"),
+            "relay" => Err("stationUnsupported"),
+            _ => Ok(json!("controlling")),
+        };
+        assert_eq!(said.map(|s| s["phase"].clone()), expected, "{refusal}");
+        let kept = heartbeat_on(&f, lan_a, a, &held, now).is_ok();
+        let on_air = f.engine.lock().unwrap().tx_enabled();
+        assert_eq!(
+            (kept, on_air),
+            (refusal != "allowed", refusal != "allowed"),
+            "{refusal}: (A keeps control, TX still on)"
+        );
+    }
+}
+
+/// The lease's own requests are unchanged on the wire by Take control: Acquire, Heartbeat and
+/// Release serialize to exactly the bytes they always have.
+#[test]
+fn the_lease_requests_are_byte_identical() {
+    let r = "10000000-0000-4000-8000-00000000000a".to_string();
+    let x = "20000000-0000-4000-8000-00000000000b".to_string();
+    let bytes = |request: Request| serde_json::to_string(&request).unwrap();
+    assert_eq!(
+        bytes(Request::Acquire {
+            request_id: r.clone(),
+            station_boot_id: x.clone()
+        }),
+        format!(r#"{{"type":"acquire","requestId":"{r}","stationBootId":"{x}"}}"#)
+    );
+    assert_eq!(
+        bytes(Request::Heartbeat {
+            request_id: r.clone(),
+            lease_id: x.clone()
+        }),
+        format!(r#"{{"type":"heartbeat","requestId":"{r}","leaseId":"{x}"}}"#)
+    );
+    assert_eq!(
+        bytes(Request::Release {
+            request_id: r.clone(),
+            lease_id: x.clone()
+        }),
+        format!(r#"{{"type":"release","requestId":"{r}","leaseId":"{x}"}}"#)
+    );
+}
+
+/// ⛔ Taking control ends a live satellite track, as the Stop it runs does, and hands the dial
+/// back: the station steering by itself after its controller changed is what the track's rule
+/// forbids. CONTROL: the track and the dial were live before the take.
+#[test]
+#[cfg(feature = "radio")]
+fn taking_control_ends_a_live_satellite_track() {
+    let _alone = alone();
+    let f = holding_a_transponder(true);
+    let now = f.now();
+    assert!(crate::SAT_TRACK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some());
+    assert!(f.engine.lock().unwrap().sat_transponder_held().is_some());
+    let (lan_a, lan_b) = (
+        f.authority.start_lan_connection(),
+        f.authority.start_lan_connection(),
+    );
+    let (a, b) = ((LAN_SESSION, LAN_DEVICE), (LAN_OTHER_SESSION, LAN_OTHER));
+    control_on(&f, lan_a, a, now).unwrap();
+    f.authority.permit_station(b.1, true).unwrap();
+    assert_eq!(take_on(&f, lan_b, b, now).unwrap()["phase"], "controlling");
+    assert!(track_ended(), "the take left the track flying");
+    assert!(
+        f.engine.lock().unwrap().sat_transponder_held().is_none(),
+        "the dial is the operator's again"
+    );
+}
