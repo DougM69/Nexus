@@ -170,20 +170,17 @@ describe('the Operate cell keeps its own shape', () => {
     expect(panel().querySelector('.ph-txmeters-hint')).not.toBeNull()
   })
 
-  it('shows only the meters that actually read, not all four', () => {
-    // A rig reporting power and nothing else: one row, not four.
+  it('once keyed it holds all four slots, so a lone reading cannot span the cell', () => {
+    // Superseded (operator, 2026-10-17): it used to show only the meters that had read, and a
+    // lone one stretched across the whole cell. TxMeters.slots.test.tsx carries the detail.
     render(<TxMeters radio={keyed({ txPoW: 42 })} inline />)
-    expect(labels()).toHaveLength(1)
-    expect(labels()[0]).toContain('PO')
+    expect(labels()).toEqual(['SWR', 'ALC', 'PO', 'COMP'])
   })
 
-  it('keeps a meter that has read once, so the cell does not bounce between overs', () => {
-    // The reason the filter is `seen`, not `bar != null`: dropping a row when the over ends
-    // would restart the very bouncing the dock ruling exists to stop, just in the other host.
+  it('keeps its slots between overs, so the cell does not bounce', () => {
     const { rerender } = render(<TxMeters radio={keyed({ txPoW: 42 })} inline />)
-    expect(labels()).toHaveLength(1)
     rerender(<TxMeters radio={radio()} inline />)
-    expect(labels(), 'PO read once; it must not vanish when the over ends').toHaveLength(1)
+    expect(labels(), 'the slots must not vanish when the over ends').toHaveLength(4)
   })
 
   it('leaves the DOCK at four rows — the ruling above is untouched', () => {

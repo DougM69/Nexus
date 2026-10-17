@@ -11900,10 +11900,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   min-width: 3.2em;
 }
 /* Inline telemetry-cell variant (the Operate strip's fixed-width .cq-telemetry):
-   pinned semantics in cell geometry — narrower bar floor so SWR/ALC/Po/COMP fit
-   the 21em cell, zero padding (the cell/strip own the spacing). */
+   pinned semantics in cell geometry, zero padding (the cell/strip own the spacing).
+   TWO FIXED TRACKS, never auto-fit: TxMeters renders all four slots from the first
+   moment of an over, and auto-fit collapsed the tracks of meters not yet read, so a
+   lone SWR bar spanned the whole cell and shrank as the others arrived. */
 .ph-txmeters.inline {
-  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px var(--space-2);
   padding: 0;
 }
