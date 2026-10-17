@@ -10,7 +10,7 @@ import { useViewport } from '../useViewport'
 import { StreamView } from '../remote-web/StreamView'
 import type { StreamEnvironment } from '../remote-web/stream-link'
 import { LanConnection, lanStream } from './connection'
-import { codeShaped, groupedKey, readTold, socketUrl, type ClosedReason, type ConnectReason, type InternetReason, type LanFound, type LanStation, type PairReason } from './protocol'
+import { codeShaped, groupedKey, readTold, socketUrl, type ClosedReason, type ConnectReason, type InternetReason, type LanChoice, type LanFound, type LanStation, type PairReason } from './protocol'
 import { lanFindLine, lanReachLine, lanUnreached } from '../remote-native/lanReach'
 import '../remote-monitor/monitor.css'
 import '../remote-web/remote.css'
@@ -80,7 +80,7 @@ function internetSentence(reason: InternetReason): string {
     case 'signInTimedOut': return t('lanWindow.internet.reason.signInTimedOut')
     case 'signInRefused': return t('lanWindow.internet.reason.signInRefused')
     case 'signInUnderWay': return t('lanWindow.internet.reason.signInUnderWay')
-    case 'whichStation': return t('lanWindow.internet.reason.whichStation')
+    case 'stationNotChosen': return t('lanWindow.internet.reason.stationNotChosen')
     case 'deviceLimit': return t('lanWindow.internet.reason.deviceLimit')
     case 'stationUnavailable': return t('lanWindow.internet.reason.stationUnavailable')
     case 'updateStation': return t('lanWindow.internet.reason.updateStation')
@@ -133,6 +133,8 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const [road, setRoad] = useState<Road | null>(null)
   const current = useRef<Road | null>(null)
   const [forgetting, setForgetting] = useState<string | null>(null)
+  // Adding the internet road for an account with more than one station: which one this is.
+  const [choosing, setChoosing] = useState<LanChoice[] | null>(null)
   // Operate from this computer, asked first: it closes this Nexus and starts it again driving the
   // station, with this computer's own station off until Leave.
   const [operating, setOperating] = useState<string | null>(null)
@@ -153,7 +155,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
       setRoad(null)
     }
     ws.onopen = () => { setPhase('open'); ws.send(JSON.stringify({ type: 'stations' })) }
-    ws.onclose = () => { setPhase('lost'); setBusy(null); leave() }
+    ws.onclose = () => { setPhase('lost'); setBusy(null); setChoosing(null); leave() }
     ws.onmessage = event => {
       if (typeof event.data !== 'string') return
       let told
@@ -164,6 +166,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           setInternet(told.internet)
           setComputer(told.computer)
           setStoreFailed(told.error !== null)
+          if (told.forgetUnreached !== null) setSaid({ text: t('lanWindow.internet.forgetUnreached'), alert: true })
           return
         case 'found':
           setFound({ shacks: told.shacks, available: told.available })
@@ -205,13 +208,17 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
         case 'signingIn':
           setSaid({ text: t('lanWindow.internet.signingIn'), alert: false })
           return
+        case 'chooseStation':
+          setChoosing(told.stations)
+          setSaid(null)
+          return
         case 'internetAdded':
-          setBusy(null)
+          setBusy(null); setChoosing(null)
           setSaid({ text: told.waiting ? t('lanWindow.internet.waiting') : t('lanWindow.internet.ready'), alert: false })
           say({ type: 'stations' })
           return
         case 'internetRefused':
-          setBusy(null)
+          setBusy(null); setChoosing(null)
           setSaid({ text: internetSentence(told.reason), alert: true })
           return
         case 'station':
@@ -288,6 +295,16 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
       {phase === 'lost' && <p className="rm-warning" role="alert">{t('lanWindow.lost')}</p>}
       {storeFailed && <p className="rm-warning" role="alert">{t('lanWindow.reason.storeUnavailable')}</p>}
       {said && <p className={said.alert ? 'rm-warning' : 'remote-site-status'} role={said.alert ? 'alert' : 'status'}>{said.text}</p>}
+      {choosing && <section className="rm-card remote-section remote-site-card--action" aria-label={t('lanWindow.internet.chooseTitle')}>
+        <h2>{t('lanWindow.internet.chooseTitle')}</h2>
+        <p>{t('lanWindow.internet.choose')}</p>
+        <div className="remote-actions">{choosing.map(choice =>
+          <button type="button" key={choice.id} className="remote-button"
+            onClick={() => { setChoosing(null); say({ type: 'chooseStation', stationId: choice.id }) }}>{choice.name || choice.id}</button>)}
+          <button type="button" className="remote-button remote-button--quiet"
+            onClick={() => { setChoosing(null); say({ type: 'chooseStation', stationId: null }) }}>{t('lanWindow.cancel')}</button>
+        </div>
+      </section>}
       <section className="rm-card remote-section">
         <h2>{t('lanWindow.paired')}</h2>
         {stations.length === 0 && <p>{t('lanWindow.none')}</p>}

@@ -516,7 +516,8 @@ fn reach(store: StationStore) -> Reach {
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
         operate: Arc::new(|_| {}),
-        add_internet: Arc::new(|_| Box::pin(async { Err("internetNotReady") })),
+        add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
+        forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     }
 }
 
@@ -699,6 +700,164 @@ async fn the_pages_socket_answers_its_own_words_only() {
         matches!(ended, Ok(None | Some(Ok(Message::Close(_))) | Some(Err(_)))),
         "the session outlived a word the page never says: {ended:?}"
     );
+}
+
+/// ★ Forget on this computer ends the internet road's approval at the service too, with the road
+/// it kept (signed by that road's key, `internet::Service::forget`), and then forgets here. The
+/// service out of reach is said (`forgetUnreached`) and the station is forgotten here all the same.
+/// CONTROL: a station with no internet road asks the service nothing and is told nothing.
+#[tokio::test]
+async fn forgetting_a_station_ends_its_internet_road_at_the_service_first() {
+    let road = || {
+        let (station_key, _) = ComputerKey::generate().unwrap();
+        let (_, pkcs8) = ComputerKey::generate().unwrap();
+        InternetRoad {
+            station_id: "20000000-0000-4000-8000-000000000001".into(),
+            device_id: "30000000-0000-4000-8000-000000000002".into(),
+            station_key: station_key.public_key().to_string(),
+            pkcs8,
+        }
+    };
+    for (kept, service) in [
+        (true, Ok(())),
+        (true, Err("serviceUnavailable")),
+        (false, Ok(())),
+    ] {
+        let store = StationStore::default();
+        let stations = Stations::new(Arc::new(store.clone()));
+        stations
+            .keep(&record(STATION, &["192.168.1.20:42075"]))
+            .unwrap();
+        let kept_road = road();
+        if kept {
+            stations.keep_internet(STATION, &kept_road).unwrap();
+        }
+        let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+        let told = asked.clone();
+        let origin = Origin::start(Reach {
+            forget_internet: Arc::new(move |road: InternetRoad| {
+                told.lock().unwrap().push(road.pkcs8);
+                Box::pin(async move { service })
+            }),
+            ..reach(store.clone())
+        })
+        .unwrap();
+        let mut socket = page_socket(&origin).await;
+        socket
+            .send(Message::Text(
+                json!({"type":"forget","stationId":STATION})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_secs(5), socket.next()).await
+        else {
+            panic!("no answer")
+        };
+        let answer: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(answer["type"], "stations", "{answer}");
+        assert_eq!(answer["stations"], json!([]), "forgotten here: {answer}");
+        let stations = Stations::new(Arc::new(store));
+        assert!(stations.get(STATION).unwrap().is_none());
+        assert!(stations.internet(STATION).unwrap().is_none());
+        let asked = asked.lock().unwrap().clone();
+        if kept {
+            assert_eq!(asked, vec![kept_road.pkcs8.clone()], "the road's own key");
+        } else {
+            assert!(asked.is_empty(), "asked the service with no road kept");
+        }
+        assert_eq!(
+            answer.get("forgetUnreached"),
+            service.err().map(|reason| json!(reason)).as_ref(),
+            "{answer}"
+        );
+    }
+}
+
+/// ★ Adding the internet road for an account with two stations: the page is offered each one
+/// (`chooseStation`), and the one the operator picks goes back to the add, which then says it was
+/// added. CONTROL: cancelled (no station), the add is told none was picked.
+#[tokio::test]
+async fn the_page_picks_the_station_while_the_internet_road_is_added() {
+    use super::internet::Choice;
+    const CLUB: &str = "20000000-0000-4000-8000-0000000000c1";
+    for pick in [Some(STATION), None] {
+        let picked: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+        let kept = picked.clone();
+        let origin = Origin::start(Reach {
+            add_internet: Arc::new(move |_, choose| {
+                let kept = kept.clone();
+                Box::pin(async move {
+                    let offered = vec![
+                        Choice {
+                            id: CLUB.into(),
+                            name: "Club station".into(),
+                        },
+                        Choice {
+                            id: STATION.into(),
+                            name: "Shack".into(),
+                        },
+                    ];
+                    let answer = choose(offered).await;
+                    kept.lock().unwrap().push(answer.clone());
+                    answer.map(|_| true).ok_or("stationNotChosen")
+                })
+            }),
+            ..reach(StationStore::default())
+        })
+        .unwrap();
+        let mut socket = page_socket(&origin).await;
+        let mut heard = Vec::new();
+        socket
+            .send(Message::Text(
+                json!({"type":"addInternet","stationId":STATION})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            let Ok(Some(Ok(Message::Text(text)))) =
+                tokio::time::timeout(Duration::from_secs(5), socket.next()).await
+            else {
+                panic!("no answer after {heard:?}")
+            };
+            heard.push(serde_json::from_str::<Value>(&text).unwrap());
+        }
+        assert_eq!(heard[0], json!({"type":"signingIn"}));
+        assert_eq!(
+            heard[1],
+            json!({"type":"chooseStation","stations":[{"id":CLUB,"name":"Club station"},
+                {"id":STATION,"name":"Shack"}]})
+        );
+        socket
+            .send(Message::Text(
+                json!({"type":"chooseStation","stationId":pick})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_secs(5), socket.next()).await
+        else {
+            panic!("no answer after the pick")
+        };
+        let told: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(*picked.lock().unwrap(), vec![pick.map(str::to_string)]);
+        match pick {
+            Some(_) => assert_eq!(
+                told,
+                json!({"type":"internetAdded","stationId":STATION,"waiting":true})
+            ),
+            None => assert_eq!(
+                told,
+                json!({"type":"internetRefused","reason":"stationNotChosen"})
+            ),
+        }
+    }
 }
 
 /// The window's own page socket on `origin`: the secret in its path and the window's own origin.

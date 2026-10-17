@@ -345,7 +345,7 @@ fn reach(app: &tauri::AppHandle) -> Reach {
         },
         add_internet: {
             let app = app.clone();
-            Arc::new(move |station: String| {
+            Arc::new(move |station: String, choose| {
                 let (app, stations) = (app.clone(), Arc::clone(&stations));
                 Box::pin(async move {
                     use tauri_plugin_opener::OpenerExt;
@@ -361,11 +361,19 @@ fn reach(app: &tauri::AppHandle) -> Reach {
                         station,
                         computer_name(),
                         open,
+                        choose,
                     )
                     .await
                 })
             })
         },
+        forget_internet: Arc::new(|road| {
+            Box::pin(async move {
+                crate::lan_client::internet::Service::new(REMOTE_ORIGIN)?
+                    .forget(&road)
+                    .await
+            })
+        }),
     }
 }
 

@@ -275,13 +275,30 @@ async fn pipe(stream: TcpStream, seen: Arc<Mutex<Seen>>) {
 }
 
 /// The road this computer keeps once registered with the stand-in.
+/// The operator's pick when the account has more than one station: `pick`, or none; and every list
+/// offered.
+fn picking(pick: Option<&str>) -> (Choose, Arc<Mutex<Vec<Vec<Choice>>>>) {
+    let offered: Arc<Mutex<Vec<Vec<Choice>>>> = Arc::default();
+    let (kept, pick) = (offered.clone(), pick.map(str::to_string));
+    let choose: Choose = Arc::new(move |stations| {
+        kept.lock().unwrap().push(stations);
+        let pick = pick.clone();
+        Box::pin(async move { pick })
+    });
+    (choose, offered)
+}
+
 async fn registered(origin: &str, seen: &Arc<Mutex<Seen>>) -> InternetRoad {
     let (station_key, _) = ComputerKey::generate().unwrap();
     seen.lock().unwrap().session =
         Some(json!({"entitlement":{"enabled":true,"expiresAt":u64::MAX},
         "stations":[{"id":STATION,"name":"Shack","stationKey":station_key.public_key()}]}));
     let service = Service::new(origin).unwrap();
-    let (road, approved) = register_with(&service, "token-1", "Den PC").await.unwrap();
+    let (choose, offered) = picking(None);
+    let (road, approved) = register_with(&service, "token-1", "Den PC", choose)
+        .await
+        .unwrap();
+    assert!(offered.lock().unwrap().is_empty(), "asked with one station");
     assert!(!approved);
     assert_eq!(road.station_key, station_key.public_key());
     road
@@ -291,7 +308,7 @@ async fn registered(origin: &str, seen: &Arc<Mutex<Seen>>) -> InternetRoad {
 /// new key of its own as a device, signed by that key over a challenge the account was given; the
 /// road kept is the service's station id, the device id it gave and the station key it listed.
 /// CONTROL: an entitlement that does not take in the internet road registers nothing
-/// (`internetNotIncluded`), and an account with two stations is asked which (`whichStation`).
+/// (`internetNotIncluded`).
 #[tokio::test]
 async fn adding_the_road_registers_a_new_key_for_the_accounts_station() {
     let (origin, seen) = service().await;
@@ -311,7 +328,9 @@ async fn adding_the_road_registers_a_new_key_for_the_accounts_station() {
     seen.lock().unwrap().session = Some(json!({"entitlement":{"enabled":true,"expiresAt":1},
         "stations":[{"id":STATION,"name":"Shack","stationKey":key.public_key()}]}));
     assert_eq!(
-        register_with(&service, "token-1", "Den PC").await.err(),
+        register_with(&service, "token-1", "Den PC", picking(None).0)
+            .await
+            .err(),
         Some("internetNotIncluded")
     );
     let asked: Vec<String> = seen.lock().unwrap().requests[before..]
@@ -323,12 +342,63 @@ async fn adding_the_road_registers_a_new_key_for_the_accounts_station() {
         vec!["/api/remote/client/session".to_string()],
         "nothing registered"
     );
-    seen.lock().unwrap().session = Some(json!({"entitlement":{"access":"internet"},
-        "stations":[{"id":STATION,"stationKey":key.public_key()},{"id":DEVICE,"stationKey":key.public_key()}]}));
+}
+
+/// ★ An account with two stations: the operator is offered each one's id and name, and the station
+/// picked is the one registered with, and its listed key the one kept. CONTROL: no pick (cancelled,
+/// or the window gone), or an id the service never listed, registers nothing (`stationNotChosen`).
+#[tokio::test]
+async fn an_account_with_two_stations_asks_which_and_registers_with_the_one_picked() {
+    const CLUB: &str = "20000000-0000-4000-8000-0000000000c1";
+    let (origin, seen) = service().await;
+    let (club_key, _) = ComputerKey::generate().unwrap();
+    let (shack_key, _) = ComputerKey::generate().unwrap();
+    seen.lock().unwrap().session = Some(json!({"entitlement":{"access":"internet"},"stations":[
+        {"id":CLUB,"name":"Club station","stationKey":club_key.public_key()},
+        {"id":STATION,"name":"Shack","stationKey":shack_key.public_key()}]}));
+    let service = Service::new(&origin).unwrap();
+    let device = format!("/api/remote/stations/{STATION}/client/device");
+    let registers = |seen: &Arc<Mutex<Seen>>| {
+        seen.lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|(_, path)| path.ends_with("/client/device"))
+            .count()
+    };
+    for pick in [None, Some("30000000-0000-4000-8000-0000000000ff")] {
+        let (choose, offered) = picking(pick);
+        assert_eq!(
+            register_with(&service, "token-1", "Den PC", choose)
+                .await
+                .err(),
+            Some("stationNotChosen"),
+            "{pick:?}"
+        );
+        assert_eq!(offered.lock().unwrap().len(), 1);
+        assert_eq!(registers(&seen), 0, "{pick:?}: registered");
+    }
+    let (choose, offered) = picking(Some(STATION));
+    let (road, _) = register_with(&service, "token-1", "Den PC", choose)
+        .await
+        .unwrap();
     assert_eq!(
-        register_with(&service, "token-1", "Den PC").await.err(),
-        Some("whichStation")
+        offered.lock().unwrap().as_slice(),
+        [vec![
+            Choice {
+                id: CLUB.into(),
+                name: "Club station".into()
+            },
+            Choice {
+                id: STATION.into(),
+                name: "Shack".into()
+            },
+        ]]
     );
+    assert_eq!(road.station_id, STATION);
+    assert_eq!(road.station_key, shack_key.public_key());
+    let asked = seen.lock().unwrap().requests.clone();
+    assert_eq!(asked.last(), Some(&("POST".to_string(), device)));
 }
 
 /// ★ Reopening needs no sign-in: TURN credentials and a renewal are asked as the device, each
@@ -352,6 +422,32 @@ async fn reopening_is_signed_by_the_roads_key_with_no_sign_in() {
         ..road
     };
     assert_eq!(service.renew(&impostor).await.err(), Some("accessDenied"));
+}
+
+/// ★ Forget asks the service, as the device and with no sign-in, to end this device's approval:
+/// signed by the road's key over a challenge given for that device. CONTROL: a road holding another
+/// key is refused (`accessDenied`).
+#[tokio::test]
+async fn forgetting_is_signed_by_the_roads_key_with_no_sign_in() {
+    let (origin, seen) = service().await;
+    let road = registered(&origin, &seen).await;
+    let service = Service::new(&origin).unwrap();
+    let before = seen.lock().unwrap().requests.len();
+    service.forget(&road).await.unwrap();
+    let asked = seen.lock().unwrap().requests[before..].to_vec();
+    assert_eq!(
+        asked.last(),
+        Some(&(
+            "POST".to_string(),
+            format!("/api/remote/stations/{STATION}/client/forget")
+        ))
+    );
+    let (_, other) = ComputerKey::generate().unwrap();
+    let impostor = InternetRoad {
+        pkcs8: other,
+        ..road
+    };
+    assert_eq!(service.forget(&impostor).await.err(), Some("accessDenied"));
 }
 
 /// ★ The pipe is a WebSocket signed as the device (a GET with no body), and carries bytes both

@@ -337,6 +337,35 @@ describe('The internet road', () => {
     expect(screen.queryByRole('button', { name: EN['lanWindow.internet.add'] })).toBeNull()
   })
 
+  it('asks which station, when the account has more than one, and sends the one picked; Cancel sends none', () => {
+    const club = { id: '20000000-0000-4000-8000-0000000000c1', name: 'Club station' }
+    for (const pick of ['Shack', EN['lanWindow.cancel']]) {
+      page()
+      told()
+      fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.add'] }))
+      socket.tell({ type: 'signingIn' })
+      socket.tell({ type: 'chooseStation', stations: [club, { id: STATION, name: 'Shack' }] })
+      const asking = screen.getByRole('region', { name: EN['lanWindow.internet.chooseTitle'] })
+      expect(within(asking).getByText(EN['lanWindow.internet.choose'])).toBeTruthy()
+      expect(within(asking).getByRole('button', { name: 'Club station' })).toBeTruthy()
+      fireEvent.click(within(asking).getByRole('button', { name: pick }))
+      expect(last(socket.sent)).toEqual({ type: 'chooseStation', stationId: pick === 'Shack' ? STATION : null })
+      expect(screen.queryByRole('region', { name: EN['lanWindow.internet.chooseTitle'] })).toBeNull()
+      cleanup()
+    }
+  })
+
+  it('says, after a forget, that Nexus Remote could not be told, and where to remove this computer', () => {
+    page()
+    told()
+    socket.tell({ type: 'stations', computer: 'DEN-PC', internet: [], stations: [], forgetUnreached: 'serviceUnavailable' })
+    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.internet.forgetUnreached'])
+    cleanup()
+    page()
+    socket.tell({ type: 'stations', computer: 'DEN-PC', internet: [], stations: [] })
+    expect(screen.queryByRole('alert'), 'CONTROL: a forget the service heard says nothing').toBeNull()
+  })
+
   it('says why it was not added, and every reason this computer’s Nexus gives is a sentence', () => {
     page()
     told()

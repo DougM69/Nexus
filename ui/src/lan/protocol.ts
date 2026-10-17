@@ -14,6 +14,8 @@ export type LanStation = { id: string; addresses: string[]; key: string }
  *  bits of its key's fingerprint). A hint for the address field, never an identity: the road takes
  *  only the key pinned at pairing. */
 export type LanFound = { name: string; address: string; protocol: number; key: string }
+/** One of the Remote account's stations, offered while the internet road is added. */
+export type LanChoice = { id: string; name: string }
 
 /** The road, open: the ids the station stamped and the key this computer pinned for it. */
 export type LanRoad = { stationId: string; deviceId: string; sessionId: string; stationKey: string; address: string }
@@ -43,7 +45,7 @@ export const ANSWER_REFUSALS = ['stationKeyMismatch', 'stationNotSigned'] as con
 
 /** Why the internet road was not added (`lan_client::internet`). */
 export const INTERNET_REASONS = ['internetNotIncluded', 'internetNotReady', 'signInPortBusy', 'signInTimedOut',
-  'signInRefused', 'signInFailed', 'signInUnderWay', 'whichStation', 'deviceLimit', 'stationUnavailable', 'updateStation',
+  'signInRefused', 'signInFailed', 'signInUnderWay', 'stationNotChosen', 'deviceLimit', 'stationUnavailable', 'updateStation',
   'serviceUnavailable', 'tryLater', 'accessDenied', 'invalidResponse', 'originDenied', 'storeUnavailable', 'unknownStation',
   'stationsFull', 'notStation', 'notApprovedThere', 'waitingApproval', 'relayUnavailable', 'pipeClosed', 'invalidRequest'] as const
 export type InternetReason = (typeof INTERNET_REASONS)[number]
@@ -52,8 +54,9 @@ export type InternetReason = (typeof INTERNET_REASONS)[number]
 const STATION_MESSAGES = ['operationResponse', 'streamSignal', 'streamState', 'status'] as const
 
 export type Told =
-  /** `internet`: the stations the internet road has been added to. */
-  | { type: 'stations'; stations: LanStation[]; internet: string[]; computer: string; error: string | null }
+  /** `internet`: the stations the internet road has been added to. `forgetUnreached`: after a
+   *  forget, why Nexus Remote could not be told to end this computer's approval there. */
+  | { type: 'stations'; stations: LanStation[]; internet: string[]; computer: string; error: string | null; forgetUnreached: string | null }
   | { type: 'found'; shacks: LanFound[]; available: boolean }
   | { type: 'paired'; station: LanStation }
   | { type: 'pairRefused'; reason: PairReason }
@@ -68,6 +71,8 @@ export type Told =
   /** The internet road was added to a station; `waiting` while the station has not approved it. */
   | { type: 'internetAdded'; stationId: string; waiting: boolean }
   | { type: 'internetRefused'; reason: InternetReason }
+  /** Adding the internet road: the account has more than one station, and the operator picks this one. */
+  | { type: 'chooseStation'; stations: LanChoice[] }
   | { type: 'station'; message: Record<string, unknown> }
 
 type Fields = Record<string, unknown>
@@ -76,6 +81,8 @@ const HEX64 = /^[0-9a-f]{64}$/
 const SPKI = /^3059301306072a8648ce3d020106082a8648ce3d03010703420004[0-9a-f]{128}$/
 /** A look by name keeps at most this many records, so it never finds more stations. */
 const MOST_FOUND = 256
+/** The most stations offered at once (`lan_client::internet`). */
+const MOST_CHOICES = 16
 
 function fields(raw: unknown, keys: string[]): Fields {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalidLanMessage')
@@ -97,6 +104,10 @@ function station(raw: unknown): LanStation {
   if (!Array.isArray(value.addresses) || value.addresses.length < 1 || value.addresses.length > 4) throw Error('invalidLanMessage')
   return { id: text(value.id, UUID), addresses: value.addresses.map(a => text(a, /^[0-9.]+:[0-9]+$/, 21)), key: text(value.key, HEX64) }
 }
+function choice(raw: unknown): LanChoice {
+  const value = fields(raw, ['id', 'name'])
+  return { id: text(value.id, UUID), name: text(value.name, undefined, 96) }
+}
 function found(raw: unknown): LanFound {
   const value = fields(raw, ['name', 'address', 'protocol', 'key'])
   if (typeof value.protocol !== 'number' || !Number.isInteger(value.protocol) || value.protocol < 0) throw Error('invalidLanMessage')
@@ -109,13 +120,14 @@ export function readTold(raw: unknown): Told {
   if ((STATION_MESSAGES as readonly unknown[]).includes(type)) return { type: 'station', message: raw as Fields }
   switch (type) {
     case 'stations': {
-      const keys = ['type', 'stations', 'computer', ...((raw as Fields).internet === undefined ? [] : ['internet'])]
-      const value = fields(raw, (raw as Fields).error === undefined ? keys : [...keys, 'error'])
+      const optional = ['internet', 'error', 'forgetUnreached'].filter(key => (raw as Fields)[key] !== undefined)
+      const value = fields(raw, ['type', 'stations', 'computer', ...optional])
       if (!Array.isArray(value.stations) || value.stations.length > 8) throw Error('invalidLanMessage')
       const internet = value.internet === undefined ? [] : value.internet
       if (!Array.isArray(internet) || internet.length > 8) throw Error('invalidLanMessage')
       return { type, stations: value.stations.map(station), internet: internet.map(id => text(id, UUID)),
-        computer: text(value.computer, undefined, 64), error: value.error === undefined ? null : text(value.error) }
+        computer: text(value.computer, undefined, 64), error: value.error === undefined ? null : text(value.error),
+        forgetUnreached: value.forgetUnreached === undefined ? null : text(value.forgetUnreached) }
     }
     case 'found': {
       const value = fields(raw, ['type', 'shacks', 'available'])
@@ -140,6 +152,11 @@ export function readTold(raw: unknown): Told {
       return { type, stationId: text(value.stationId, UUID), waiting: value.waiting }
     }
     case 'internetRefused': return { type, reason: oneOf(INTERNET_REASONS, fields(raw, ['type', 'reason']).reason) }
+    case 'chooseStation': {
+      const value = fields(raw, ['type', 'stations'])
+      if (!Array.isArray(value.stations) || value.stations.length < 2 || value.stations.length > MOST_CHOICES) throw Error('invalidLanMessage')
+      return { type, stations: value.stations.map(choice) }
+    }
     default: throw Error('invalidLanMessage')
   }
 }

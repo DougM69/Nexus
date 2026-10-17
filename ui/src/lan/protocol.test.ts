@@ -8,8 +8,11 @@ const STATION = { id: '60000000-0000-4000-8000-000000000001', addresses: ['192.1
 const KEY = `3059301306072a8648ce3d020106082a8648ce3d03010703420004${'cd'.repeat(64)}`
 
 it('reads every message this computer’s Nexus sends, and passes the station’s own through', () => {
-  expect(readTold({ type: 'stations', stations: [STATION], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [STATION], internet: [], computer: 'DEN-PC', error: null })
-  expect(readTold({ type: 'stations', stations: [STATION], internet: [STATION.id], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [STATION], internet: [STATION.id], computer: 'DEN-PC', error: null })
+  expect(readTold({ type: 'stations', stations: [STATION], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [STATION], internet: [], computer: 'DEN-PC', error: null, forgetUnreached: null })
+  expect(readTold({ type: 'stations', stations: [STATION], internet: [STATION.id], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [STATION], internet: [STATION.id], computer: 'DEN-PC', error: null, forgetUnreached: null })
+  expect(readTold({ type: 'stations', stations: [], internet: [], computer: 'DEN-PC', forgetUnreached: 'serviceUnavailable' })).toMatchObject({ forgetUnreached: 'serviceUnavailable' })
+  const club = { id: '20000000-0000-4000-8000-0000000000c1', name: 'Club station' }
+  expect(readTold({ type: 'chooseStation', stations: [club, { id: STATION.id, name: '' }] })).toEqual({ type: 'chooseStation', stations: [club, { id: STATION.id, name: '' }] })
   expect(readTold({ type: 'signingIn' })).toEqual({ type: 'signingIn' })
   expect(readTold({ type: 'internetAdded', stationId: STATION.id, waiting: true })).toEqual({ type: 'internetAdded', stationId: STATION.id, waiting: true })
   expect(readTold({ type: 'internetRefused', reason: 'internetNotIncluded' })).toEqual({ type: 'internetRefused', reason: 'internetNotIncluded' })
@@ -43,6 +46,11 @@ it('refuses anything else: another word, a field too many or too few, a reason n
     { type: 'internetAdded', stationId: STATION.id, waiting: 'yes' },
     { type: 'internetRefused', reason: 'wrongCode' },
     { type: 'signingIn', token: 'x' },
+    { type: 'stations', stations: [], computer: 'X', forgetUnreached: 7 },
+    { type: 'chooseStation', stations: [{ id: STATION.id, name: 'Shack' }] },
+    { type: 'chooseStation', stations: [{ id: 'not-an-id', name: 'A' }, { id: STATION.id, name: 'B' }] },
+    { type: 'chooseStation', stations: [{ id: STATION.id, name: 'A', key: KEY }, { id: STATION.id, name: 'B' }] },
+    { type: 'chooseStation', stations: Array.from({ length: 17 }, () => ({ id: STATION.id, name: 'A' })) },
     { type: 'connected', stationId: STATION.id, deviceId: 'x', sessionId: STATION.id, stationKey: KEY, address: '192.168.1.20:42075' },
     { type: 'connected', stationId: STATION.id, deviceId: STATION.id, sessionId: STATION.id, stationKey: 'ab'.repeat(91), address: '192.168.1.20:42075' },
     null, 'stations', [],
