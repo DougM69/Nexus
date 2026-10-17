@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **RTTY: a tuning scope beside the decoded text.** The classic crossed-ellipse picture: a tuned signal draws a
+  square "+", and a mistuned one turns the cross clockwise when the signal sits high and counter-clockwise when it
+  sits low, with the same reading in words under it ("Tuned", "Signal 20 Hz low"). ◀ ▶ under it move the decoder
+  5 Hz at a time (hold to repeat); in AFSK that moves your transmit tone too, so they are off while you transmit.
+  It is the ⊞ Panels entry **Tuning**, shown by default, and it works on a second computer driving the station with
+  Nexus's own Remote client. (idea: the Diddle project by WW2DX)
 - **Nexus Remote: on the shack's own network, Remote stays free.** When an account's internet use has ended, Stream
   and Listen still work from a browser already approved for the station, as long as that device is on the same
   network as the shack. The stream is held to that network at both ends and never goes through the relay. A shack
