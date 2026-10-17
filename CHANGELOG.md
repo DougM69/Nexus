@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
   seconds of that PC dropping, as a transmission does; a track started at the shack runs on. NEEDS-BENCH.
 
+### Changed
+- **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each
+  station: Nexus runs on this PC and the radio follows your own clicks and pop-outs. Streaming the station's screen is
+  still there as a smaller button after it, for when you only want to see the shack's screen.
+
 ### Fixed
 - **IC-7300, IC-705, IC-905 and IC-7300MK2: scope span, reference level and Center/Fixed now work.** With Native Icom
   CI-V on, these radios refused every scope span button ("SCOPE SPAN REFUSED … did not answer when asked whether its

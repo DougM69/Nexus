@@ -202,7 +202,7 @@ describe('the pairing dialog', () => {
       cleanup()
       page()
       socket.tell({ type: 'stations', computer: '', stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '00'.repeat(32) }] })
-      fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.stream'] }))
+      fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.streamInstead'] }))
       expect(last(socket.sent)).toEqual({ type: 'connect', stationId: STATION })
       socket.tell({ type: 'connectRefused', reason })
       expect(screen.getByRole('alert').textContent, reason)
@@ -313,6 +313,21 @@ describe('Operate from this computer', () => {
     socket.tell({ type: 'connectRefused', reason: 'unknownStation' })
     expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.reason.unknownStation'])
     expect((screen.getByRole('button', { name: EN['lanWindow.operate'] }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('is each station’s main action, first and the only primary; the stream is the quiet fallback after it', () => {
+    page()
+    socket.tell({ type: 'stations', computer: 'DEN-PC',
+      stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }] })
+    const card = screen.getByText(EN['lanWindow.stationAt'].replace('{{address}}', '192.168.1.20:42075')).closest('.lan-station') as HTMLElement
+    const buttons = within(card).getAllByRole('button')
+    expect(buttons.map(b => b.textContent).slice(0, 2)).toEqual([EN['lanWindow.operate'], EN['lanWindow.streamInstead']])
+    expect(buttons.filter(b => b.classList.contains('remote-button--primary')).map(b => b.textContent)).toEqual([EN['lanWindow.operate']])
+    expect(buttons[1].classList.contains('remote-button--quiet')).toBe(true)
+    expect(within(card).getByText(EN['lanWindow.choiceHint'])).toBeTruthy()
+    expect(screen.queryByText(EN['lanWindow.intro'])?.textContent).not.toMatch(/stream/i)
+    fireEvent.click(buttons[1])
+    expect(last(socket.sent)).toEqual({ type: 'connect', stationId: STATION })
   })
 })
 

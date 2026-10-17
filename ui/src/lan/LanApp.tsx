@@ -323,12 +323,17 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
               <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'} onClick={() => { setOperating(null); setBusy(`operate:${station.id}`); setSaid(null); say({ type: 'operate', stationId: station.id }) }}>{t('lanWindow.operateYes')}</button>
               <button type="button" className="remote-button remote-button--quiet" onClick={() => setOperating(null)}>{t('lanWindow.operateNo')}</button>
             </div>
-          </> : <div className="remote-actions">
-            <button type="button" className="remote-button remote-button--primary" disabled={!!busy || phase !== 'open'} onClick={() => connect(station.id)}>
-              {busy === `connect:${station.id}` ? t('lanWindow.connecting') : t('lanWindow.stream')}</button>
-            <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'} onClick={() => setOperating(station.id)}>{t('lanWindow.operate')}</button>
-            <button type="button" className="remote-button remote-button--quiet" disabled={!!busy} onClick={() => setForgetting(station.id)}>{t('lanWindow.forget')}</button>
-          </div>}
+          </> : <>
+            {/* Operating is the main action: Nexus runs here and the radio takes this computer's clicks and
+                pop-outs. The stream, a picture of the station's screen, is only the fallback. */}
+            <div className="remote-actions">
+              <button type="button" className="remote-button remote-button--primary" disabled={!!busy || phase !== 'open'} onClick={() => setOperating(station.id)}>{t('lanWindow.operate')}</button>
+              <button type="button" className="remote-button remote-button--quiet" disabled={!!busy || phase !== 'open'} onClick={() => connect(station.id)}>
+                {busy === `connect:${station.id}` ? t('lanWindow.connecting') : t('lanWindow.streamInstead')}</button>
+              <button type="button" className="remote-button remote-button--quiet" disabled={!!busy} onClick={() => setForgetting(station.id)}>{t('lanWindow.forget')}</button>
+            </div>
+            <p className="settings-hint">{t('lanWindow.choiceHint')}</p>
+          </>}
           {internet.includes(station.id)
             ? <p className="remote-site-status">{t('lanWindow.internet.added')}</p>
             : forgetting !== station.id && operating !== station.id && <div className="remote-actions">
