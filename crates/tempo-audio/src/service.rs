@@ -31860,18 +31860,21 @@ mod tests {
         }
     }
 
+    /// The strip's view of an over in the snapshot: (SWR, ALC, Po, COMP, busy reason).
+    type StripView = (
+        Option<f32>,
+        Option<f32>,
+        Option<f32>,
+        Option<f32>,
+        Option<String>,
+    );
+
     /// What one CW word showed, read off the engine the UI renders and off the radio's wire.
     struct CwOver {
         /// Transmit-meter reads while the word was going out.
         reads: Vec<String>,
-        /// The snapshot near the end of the word: (SWR, ALC, Po, COMP, busy reason).
-        during: (
-            Option<f32>,
-            Option<f32>,
-            Option<f32>,
-            Option<f32>,
-            Option<String>,
-        ),
+        /// The snapshot near the end of the word.
+        during: StripView,
         /// The snapshot well after the word: (SWR, busy reason).
         after: (Option<f32>, Option<String>),
         /// Transmit-meter reads in the last second, long after the word.
