@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seconds of that PC dropping, as a transmission does; a track started at the shack runs on. NEEDS-BENCH.
 
 ### Fixed
+- **Contest contacts no longer upload to QRZ, ClubLog and the other logging services while the contest runs.** With
+  contest mode on, a contact logged anywhere but the contest entry strip (the everyday log form, the Logbook, a screen
+  that had left the contest) went to every logging service the moment it was logged. It now waits: the contest's
+  contacts go out when you merge the contest log into your Logbook, as designed, and any other contact logged while
+  contest mode was on goes out, paced, when you turn contest mode off. LoTW's automatic upload waits for the end of
+  the contest too.
 - **Nexus Remote: the shack's screen fits the browser window.** Ctrl (⌘ on a Mac) with +, − or 0, Ctrl with the
   scroll wheel and a trackpad pinch now zoom the browser page instead of going to the shack, and on a short or zoomed
   window the controls move to the side rail when that shows the shack's screen larger. Stop TX stays in view at every
