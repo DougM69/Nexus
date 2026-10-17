@@ -114,10 +114,13 @@ fn resolve(target: &str) -> std::io::Result<SocketAddr> {
         .ok_or_else(|| bad("it resolved to nothing".into()))
 }
 
-/// The UDP socket PstRotatorAz's replies arrive on: every interface, its control port + 1, so a
-/// PstRotatorAz on another PC reaches it too. Commands are sent from it as well, so a
-/// PstRotatorAz that answers the sender's port and one that answers its own port + 1 land in
-/// the same place.
+/// The UDP socket PstRotatorAz's replies arrive on, at its control port + 1. Commands are sent
+/// from it as well, so a PstRotatorAz that answers the sender's port and one that answers its own
+/// port + 1 land in the same place.
+///
+/// ⚠️ **Loopback when PstRotatorAz is on this PC** (the default, 127.0.0.1): nothing on the
+/// network can reach the socket at all. Only a PstRotatorAz on another PC needs every interface,
+/// and then [`Peer::azimuth`] reads nothing whose source is not that PC.
 fn bind_replies(to: SocketAddr) -> std::io::Result<UdpSocket> {
     let port = to.port();
     let reply = port.checked_add(1).ok_or_else(|| {
@@ -128,10 +131,10 @@ fn bind_replies(to: SocketAddr) -> std::io::Result<UdpSocket> {
             ),
         )
     })?;
-    let any: std::net::IpAddr = if to.is_ipv6() {
-        Ipv6Addr::UNSPECIFIED.into()
-    } else {
-        Ipv4Addr::UNSPECIFIED.into()
+    let any: std::net::IpAddr = match to.ip() {
+        ip if ip.is_loopback() => ip,
+        ip if ip.is_ipv6() => Ipv6Addr::UNSPECIFIED.into(),
+        _ => Ipv4Addr::UNSPECIFIED.into(),
     };
     UdpSocket::bind(SocketAddr::new(any, reply)).map_err(|e| {
         let other = port.saturating_add(2);
@@ -185,11 +188,15 @@ impl Peer {
                     return None;
                 }
                 match self.udp.recv_from(&mut buf) {
-                    Ok((n, _)) => {
+                    // Only PstRotatorAz's own address may report a position: anyone else who
+                    // can reach the port could otherwise set the bearing the compass shows. The
+                    // manual names no source PORT for replies, so none is required.
+                    Ok((n, from)) if from.ip() == self.to.ip() => {
                         if let Some(az) = parse_azimuth(&buf[..n]) {
                             return Some(az);
                         }
                     }
+                    Ok(_) => {}
                     Err(e)
                         if matches!(
                             e.kind(),
@@ -539,6 +546,46 @@ mod tests {
         assert_eq!(pst.commands(), vec!["<PST><AZIMUTH>90</AZIMUTH></PST>"]);
         let e = rotator::stop(&a).expect_err("an unconfirmed STOP is not a STOP");
         assert!(e.to_string().contains("RPRT -5"), "{e}");
+    }
+
+    #[test]
+    fn a_reply_from_another_address_is_ignored_and_pstrotatoraz_s_own_is_read() {
+        // 127.0.0.2 is this machine too, but it is not the PstRotatorAz the port box names.
+        let spoof = UdpSocket::bind("127.0.0.2:0").expect("a second loopback address");
+        let (pst, link) = fake_late(Some("AZ:12\r"), Duration::from_millis(150));
+        let reply = ("127.0.0.1", pst.port + 1);
+        let a = addr(&link);
+        let flood = std::thread::spawn(move || {
+            for _ in 0..30 {
+                let _ = spoof.send_to(b"AZ:999\r", reply);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        assert_eq!(
+            rotator::read_azimuth(&a),
+            Some(12.0),
+            "the spoofed bearing is not read"
+        );
+        flood.join().unwrap();
+    }
+
+    #[test]
+    fn a_loopback_pstrotatoraz_is_heard_on_loopback_only() {
+        // This PC's address on its network, if it has one: `connect` on UDP only picks a route.
+        let lan = UdpSocket::bind("0.0.0.0:0")
+            .and_then(|s| s.connect("192.0.2.1:9").map(|()| s))
+            .and_then(|s| s.local_addr())
+            .map(|a| a.ip())
+            .ok()
+            .filter(|ip| !ip.is_loopback() && !ip.is_unspecified());
+        let Some(lan) = lan else {
+            eprintln!("!! NOT RUN, and NOT A PASS: no non-loopback address on this machine");
+            return;
+        };
+        let (pst, _link) = fake(Some("AZ:12\r"));
+        // The link holds only 127.0.0.1:<reply>, so the same port on the network address is free:
+        // nothing on the LAN can reach the socket the link reads.
+        UdpSocket::bind((lan, pst.port + 1)).expect("the reply port is not bound on the LAN");
     }
 
     #[test]
