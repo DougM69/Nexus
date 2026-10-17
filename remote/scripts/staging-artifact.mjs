@@ -88,12 +88,36 @@ export async function verifyArtifact(root, expectedRevision, row = target()) {
   return { manifest, config }
 }
 
-export async function verifyPublicSource(sha, fetcher = fetch) {
+// Asking anonymously is the proof that the source is public: a private repository or a missing commit
+// answers 404. GitHub allows 60 anonymous API calls an hour per address and hosted runners share
+// addresses, so a 403 or 429 waits for the reset GitHub names (at most five minutes a time, five tries)
+// rather than authenticating, which would also see a private repository.
+export async function verifyPublicSource(sha, fetcher = fetch, wait = delay) {
   sha = revision(sha)
-  const commit = await requestJson(`https://api.github.com/repos/kd9taw/Nexus/git/commits/${sha}`,
-    { headers: { accept: 'application/vnd.github+json', 'user-agent': 'nexus-remote-staging' } }, fetcher, 'Public corresponding source')
-  requireValue(commit.sha === sha, 'The exact source commit is not publicly available')
-  return sourceUrl(sha)
+  const url = `https://api.github.com/repos/kd9taw/Nexus/git/commits/${sha}`
+  const options = { headers: { accept: 'application/vnd.github+json', 'user-agent': 'nexus-remote-staging' } }
+  for (let attempt = 1; ; attempt++) {
+    const result = await requestBytes(url, options, fetcher, 'Public corresponding source')
+    if ((result.status === 403 || result.status === 429) && attempt < 5) {
+      await wait(rateLimitWait(result.headers, attempt))
+      continue
+    }
+    requireValue(result.status >= 200 && result.status < 300, `Public corresponding source failed (HTTP ${result.status})`)
+    let commit
+    try { commit = JSON.parse(result.bytes.toString('utf8')) }
+    catch { throw new Error('Public corresponding source returned invalid JSON') }
+    requireValue(commit.sha === sha, 'The exact source commit is not publicly available')
+    return sourceUrl(sha)
+  }
+}
+
+function rateLimitWait(headers, attempt) {
+  const after = Number(headers.get('retry-after'))
+  const reset = Number(headers.get('x-ratelimit-reset')) * 1000 - Date.now()
+  const ms = after > 0 ? after * 1000
+    : headers.get('x-ratelimit-remaining') === '0' && reset > 0 ? reset + 1000
+      : 1000 * 2 ** attempt
+  return Math.min(ms, 5 * 60 * 1000)
 }
 
 export async function verifyLive({ manifest, config }, fetcher = fetch, row = target()) {
