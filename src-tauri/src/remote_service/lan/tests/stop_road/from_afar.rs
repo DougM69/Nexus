@@ -71,12 +71,12 @@ fn presses(over: &str) -> Vec<(&'static str, Value)> {
 }
 
 /// Each call the shack's handlers got, with its arguments, in order.
-type Got = Arc<Mutex<Vec<(String, Value)>>>;
+pub(super) type Got = Arc<Mutex<Vec<(String, Value)>>>;
 
 /// The shack's handlers for these commands, the app's own, on the roadside's engine, reached as
 /// the main window reaches them. Every call the lane hands over is recorded with its arguments as
 /// the handler got them; the snapshot feed's polls are answered here, as the other road tests do.
-fn the_apps_handlers(r: &mut Roadside) -> (crate::tests::ShackApp, Got) {
+pub(super) fn the_apps_handlers(r: &mut Roadside) -> (crate::tests::ShackApp, Got) {
     let (app, main) = crate::tests::shack_app_for_starts_from_afar(r.s.shared.engine.clone());
     let runner: Runner = tauri_runner(app.handle().clone());
     let got = Arc::new(Mutex::new(Vec::new()));

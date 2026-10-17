@@ -50,6 +50,8 @@ mod ends;
 mod entry;
 /// A CQ run, a JS8 message and a CW macro started from afar, ended by each road and by presence.
 mod from_afar;
+/// APRS, an SSTV picture and chat started from afar, ended by each road and by presence.
+mod from_afar_aprs_sstv_chat;
 /// Stop's road over the internet: ICE, through a TURN relay.
 mod internet;
 /// Stop's second road through a relay, as the internet stands between the two computers.
@@ -613,11 +615,18 @@ impl Seat {
 
     /// One call on the command link, and its answer, whatever comes before it.
     async fn call(&mut self, id: u64, cmd: &str, args: Value) -> Value {
-        send(
-            &mut self.socket,
-            json!({"type":"call","id":id,"cmd":cmd,"args":args}),
-        )
-        .await;
+        let call = json!({"type":"call","id":id,"cmd":cmd,"args":args});
+        if call.to_string().len() > wire::MESSAGE_BYTES {
+            // Bigger than one message (an SSTV picture): in pieces, as the computer sends it.
+            for frame in wire::split(wire::Whole::Text(call.to_string()), 1) {
+                self.socket
+                    .send(Message::Binary(frame.into()))
+                    .await
+                    .unwrap();
+            }
+        } else {
+            send(&mut self.socket, call).await;
+        }
         loop {
             let said = self.text().await;
             if said["type"] == "result" && said["id"] == id {

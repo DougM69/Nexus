@@ -129,6 +129,7 @@ use tempo_app::dto::{
     WinlinkSession,
 };
 use tempo_app::engine::contest_entry::EntryClaim;
+use tempo_app::engine::remote_stream::OnItsOwn;
 use tempo_app::engine::{engine_lock, engine_lock_result, engine_try_lock, Engine};
 use tempo_app::settings::writer::SettingsWriter;
 use tempo_app::settings::{Settings, VoiceMessage};
@@ -6949,28 +6950,33 @@ async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Str
 }
 
 /// Queue an outbound free-text message to `peer` (auto-chunked + presence-gated
-/// store-and-forward by the engine). Returns the refreshed snapshot.
+/// store-and-forward by the engine). Returns the refreshed snapshot. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn send_message(
     state: State<'_, SharedEngine>,
     peer: String,
     text: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.send_message(&peer, &text);
     Ok(eng.snapshot())
 }
 
 /// One-click resend of a terminal (no-ack / abandoned) chat bubble: re-queues the same
 /// text with a fresh cycle budget, re-pointing the SAME bubble (no re-typing). `ack_id`
-/// targets the exact bubble; omitted = the newest terminal one.
+/// targets the exact bubble; omitted = the newest terminal one. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn resend_chat(
     state: State<'_, SharedEngine>,
     peer: String,
     ack_id: Option<char>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     if !eng.resend_message(&peer, ack_id) {
         return Err(format!("no resendable message for {peer}"));
     }
@@ -12288,7 +12294,7 @@ impl SatDopplerConsent {
 ///
 /// `afar`: written by the command lane for a computer driving this station, `None` from the shack's
 /// own screen. From afar the track is bound to that computer's presence and ends, dial handback and
-/// all, when it lapses ([`sat_track_standing`]).
+/// all, when it lapses ([`presence_standing`]).
 #[tauri::command]
 async fn start_sat_track(
     state: State<'_, SharedEngine>,
@@ -12296,7 +12302,7 @@ async fn start_sat_track(
     aos_unix: Option<i64>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<Option<SatTrackDto>, String> {
-    let standing = sat_track_standing(
+    let standing = presence_standing(
         &engine_lock(&state),
         afar.as_ref(),
         std::time::Instant::now(),
@@ -12304,13 +12310,15 @@ async fn start_sat_track(
     arm_sat_track(&state, name, aos_unix, standing)
 }
 
-/// ⛔ What a track started from afar is bound to: the presence of the computer that started it, as
-/// live now. A track steers the dial and the mast for a whole pass on its own, so one a computer
-/// started must not outlive that computer's being there; it ends the way that computer's
-/// transmissions are cut when its presence lapses. With no presence live it does not start. A Stop
-/// leaves it running: a Stop ends a transmission, not the session. `None` from the shack's own
-/// screen, whose track nothing here touches.
-fn sat_track_standing(
+/// ⛔ What work started from afar that runs on by itself is bound to (`command_dispatch::PRESENCE_BOUND`):
+/// the presence of the computer that started it, as live now. A track steers the dial and the mast
+/// for a whole pass on its own, and APRS's automatic ack, the presence beacon and the chat CQ run
+/// transmit with no further press, so none a computer started may outlive that computer's being
+/// there; each ends the way that computer's transmissions are cut when its presence lapses. With no
+/// presence live it does not start. A Stop leaves it as the shack's own Stop does: a Stop ends a
+/// transmission, not the session. `None` from the shack's own screen, whose work nothing here
+/// touches.
+fn presence_standing(
     engine: &tempo_app::engine::Engine,
     afar: Option<&command_dispatch::Afar>,
     now: std::time::Instant,
@@ -13538,9 +13546,14 @@ fn get_meters(meters: State<'_, tempo_app::engine::MeterFeed>) -> Result<MeterRe
 }
 
 /// Set the operating mode: "chat" | "qso-run" | "qso-monitor" | "fieldday-run"
-/// | "fieldday-sp". Returns the refreshed snapshot.
+/// | "fieldday-sp". Returns the refreshed snapshot. `afar`: as [`set_tx_enabled`]'s, for a run
+/// mode, which calls CQ; a passive one is a Stop, and runs whenever it is asked.
 #[tauri::command(async)]
-fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot, String> {
+fn set_mode(
+    state: State<'_, SharedEngine>,
+    mode: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     // A switch that opens a contest session — Field Day entered from another mode — has the
     // session's rows read from the logbook first, off the lock, and opens the session with its
     // dupe sweep in the same hold of the lock as the switch (SPEC-2 v3 C19). Every other switch
@@ -13556,6 +13569,9 @@ fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot,
             // every structured TX tier, not just FT8/FT4). Calling CQ sends a grid (CQ/Tx1); a
             // Field Day run sends an exchange with no grid (callsign only). qso-monitor /
             // fieldday-sp are passive on entry (the backstop covers TX).
+            if !tempo_client::dispatch::is_stop("set_mode", &serde_json::json!({ "mode": mode })) {
+                command_dispatch::still_bound(eng, afar.as_ref())?;
+            }
             match mode.as_str() {
                 "qso-run" => eng.structured_tx_ready(true)?,
                 "fieldday-run" => eng.structured_tx_ready(false)?,
@@ -14734,10 +14750,16 @@ fn civ_diagnostic_status() -> String {
     tempo_audio::civ::diag::status().unwrap_or_default()
 }
 
-/// Transmit an open broadcast (FT8-style "to all") free-text message.
+/// Transmit an open broadcast (FT8-style "to all") free-text message. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn broadcast(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
+fn broadcast(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.broadcast(&text);
     Ok(eng.snapshot())
 }
@@ -16940,12 +16962,21 @@ async fn get_rtty_state(state: State<'_, SharedEngine>) -> Result<RttyStateDto, 
 
 /// Arm/disarm the APRS (AFSK-1200 / AX.25) RX decoder (session-only; never launches armed). The
 /// aprs-rx thread starts decoding the 12 kHz RX tap into the heard list. Returns it (empty on arm).
+/// `afar`: as [`set_tx_enabled`]'s; armed from afar, the automatic ack it allows ends with that
+/// computer's presence ([`presence_standing`]).
 #[tauri::command(async)]
 fn aprs_arm(
     state: State<'_, SharedEngine>,
     on: bool,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<Vec<tempo_app::engine::AprsHeard>, String> {
     let mut eng = engine_lock(&state);
+    let standing = if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+        presence_standing(&eng, afar.as_ref(), std::time::Instant::now())?
+    } else {
+        None
+    };
     // An EXPLICIT operator act — the only arm that permits an unattended auto-ack. View entry
     // goes through `aprs_auto_arm` instead, which cannot confer that.
     eng.set_aprs_arm(if on {
@@ -16953,6 +16984,7 @@ fn aprs_arm(
     } else {
         tempo_app::engine::AprsArm::Off
     });
+    eng.bind_to_presence(OnItsOwn::AprsAck, standing);
     Ok(eng.aprs_heard())
 }
 
@@ -17018,6 +17050,8 @@ async fn get_aprs_is_status(
 /// keys. The engine validates every gate (TX armed, privileges, no tune carrier, no other over)
 /// and returns WHY a send was refused; the radio loop keys the rendered AFSK audio with PTT.
 /// `symbol_table`/`symbol_code` are single chars (default `/` and `>`); `path` is the digi aliases.
+/// `afar`: as [`set_tx_enabled`]'s.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn aprs_send_beacon(
     state: State<'_, SharedEngine>,
@@ -17027,8 +17061,10 @@ fn aprs_send_beacon(
     symbol_code: String,
     comment: String,
     path: Vec<String>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<(), String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     let table = symbol_table.chars().next().unwrap_or('/');
     let code = symbol_code.chars().next().unwrap_or('>');
     eng.aprs_beacon(lat, lon, table, code, &comment, &path)
@@ -17036,13 +17072,16 @@ fn aprs_send_beacon(
 
 /// Queue an APRS text message to `addressee` — an explicit operator send. The engine validates the
 /// same TX gate as the beacon, assigns a line number for acking, and returns WHY a send was refused.
+/// `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn aprs_send_message(
     state: State<'_, SharedEngine>,
     addressee: String,
     text: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<(), String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.aprs_send_message(&addressee, &text)
 }
 
@@ -17957,7 +17996,8 @@ fn parse_sstv_mode(slug: &str) -> Option<tempo_sstv::SstvMode> {
 /// waveform OFF the engine lock, then hands it to the engine's gated TX path (which keys
 /// nothing until the radio loop takes it behind every safety gate). Returns the fresh
 /// state (with `sending` true). Refuses — with the reason — on an unknown mode, a
-/// dimension mismatch, or any TX gate being down.
+/// dimension mismatch, or any TX gate being down. `afar`: as [`set_tx_enabled`]'s, checked in the
+/// hold the picture is handed over in.
 #[tauri::command(async)]
 fn sstv_send(
     state: State<'_, SharedEngine>,
@@ -17970,6 +18010,7 @@ fn sstv_send(
     // already carries. §97.119(b)(4) is satisfied by the call being in the image emission; it
     // does not say WE must have drawn it. Optional so every existing caller keeps the plate.
     id_in_image: Option<bool>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<SstvStateDto, String> {
     let sstv_mode = parse_sstv_mode(&mode).ok_or_else(|| format!("Unknown SSTV mode: {mode}"))?;
     let spec = tempo_sstv::for_mode(sstv_mode);
@@ -18056,6 +18097,7 @@ fn sstv_send(
     // Re-take the lock and hand it to the gated engine path (re-runs the full gate + the
     // duration-budget check; nothing keys until the radio loop takes it).
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.sstv_send(samples, spec.name.to_string())?;
     Ok(sstv_state_dto(&eng))
 }
@@ -19919,11 +19961,24 @@ fn set_tx_cycle_auto(state: State<'_, SharedEngine>, auto: bool) -> Result<AppSn
 }
 
 /// Toggle the presence heartbeat — a periodic low-cadence beacon so listening Tempo
-/// stations enter each other's rosters and store-and-forward can deliver. Persisted.
+/// stations enter each other's rosters and store-and-forward can deliver. Persisted. `afar`: as
+/// [`set_tx_enabled`]'s; turned on from afar, it ends with that computer's presence
+/// ([`presence_standing`]).
 #[tauri::command(async)]
-fn set_beacon(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
+fn set_beacon(
+    state: State<'_, SharedEngine>,
+    on: bool,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    let standing = if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+        presence_standing(&eng, afar.as_ref(), std::time::Instant::now())?
+    } else {
+        None
+    };
     eng.set_beacon(on);
+    eng.bind_to_presence(OnItsOwn::Beacon, standing);
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist heartbeat setting: {e}")
     });
@@ -20041,19 +20096,38 @@ fn call_cq(
 }
 
 /// Toggle the chat CQ RUN (Tempo keep-calling loop): on = immediate CQ + re-send
-/// every idle TX slot until answered (auto-pauses) or stopped.
+/// every idle TX slot until answered (auto-pauses) or stopped. `afar`: as [`set_tx_enabled`]'s;
+/// turned on from afar, the run ends with that computer's presence ([`presence_standing`]).
 #[tauri::command(async)]
-fn set_chat_cq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
+fn set_chat_cq(
+    state: State<'_, SharedEngine>,
+    on: bool,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    let standing = if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+        presence_standing(&eng, afar.as_ref(), std::time::Instant::now())?
+    } else {
+        None
+    };
     eng.set_chat_cq(on)?;
+    eng.bind_to_presence(OnItsOwn::ChatCq, standing);
     Ok(eng.snapshot())
 }
 
-/// Resume a paused chat CQ run now (skip the idle auto-resume wait).
+/// Resume a paused chat CQ run now (skip the idle auto-resume wait). `afar`: as
+/// [`set_chat_cq`]'s.
 #[tauri::command(async)]
-fn resume_chat_cq(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+fn resume_chat_cq(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
+    let standing = presence_standing(&eng, afar.as_ref(), std::time::Instant::now())?;
     eng.resume_chat_cq()?;
+    eng.bind_to_presence(OnItsOwn::ChatCq, standing);
     Ok(eng.snapshot())
 }
 
@@ -44315,7 +44389,7 @@ mod tests {
     #[test]
     fn a_pass_armed_from_afar_ends_when_that_computers_presence_lapses() {
         use crate::command_dispatch::{Afar, NO_PRESENCE};
-        use crate::sat_track_standing;
+        use crate::presence_standing;
         use std::time::{Duration, Instant};
         use tempo_app::remote_control::transmit::TransmitAuthority;
         let cfg = tempo_core::rotator::RotatorConfig::default();
@@ -44336,21 +44410,21 @@ mod tests {
 
         // No presence live: from afar it does not start; from the shack it does.
         assert_eq!(
-            sat_track_standing(&station, Some(&afar), t0)
+            presence_standing(&station, Some(&afar), t0)
                 .err()
                 .as_deref(),
             Some(NO_PRESENCE),
             "from afar with no presence"
         );
-        assert!(matches!(sat_track_standing(&station, None, t0), Ok(None)));
+        assert!(matches!(presence_standing(&station, None, t0), Ok(None)));
 
         assert!(
             station.hold_remote_presence(presence.permit(t0 + Duration::from_secs(5)).unwrap(), t0)
         );
-        let from_afar = sat_track_standing(&station, Some(&afar), t0)
+        let from_afar = presence_standing(&station, Some(&afar), t0)
             .expect("armed from afar under live presence")
             .expect("bound to that presence");
-        let at_the_shack = sat_track_standing(&station, None, t0).expect("armed at the shack");
+        let at_the_shack = presence_standing(&station, None, t0).expect("armed at the shack");
         assert!(
             at_the_shack.is_none(),
             "the shack's own track is bound to nothing"
@@ -44375,7 +44449,7 @@ mod tests {
         assert!(
             station.hold_remote_presence(presence.permit(t1 + Duration::from_secs(5)).unwrap(), t1)
         );
-        let first = sat_track_standing(&station, Some(&afar), t1)
+        let first = presence_standing(&station, Some(&afar), t1)
             .unwrap()
             .unwrap();
         let renewed = presence.permit(t1 + Duration::from_secs(6)).unwrap();
@@ -49996,6 +50070,10 @@ mod tests {
     /// macro is reachable only from the module that defines it.
     pub(crate) fn shack_app_for_starts_from_afar(engine: crate::SharedEngine) -> ShackApp {
         use crate::{
+            aprs_arm, aprs_send_beacon, aprs_send_message, broadcast, resend_chat, resume_chat_cq,
+            send_message, set_beacon, set_chat_cq, set_mode, sstv_send, sstv_stop,
+        };
+        use crate::{
             halt_tx, js8_answer_reply, js8_arm, js8_call_cq, js8_cq_repeat, js8_heartbeat_now,
             js8_send, js8_send_command, js8_typeahead, send_cw, send_cw_armed, set_tx_enabled,
             start_running, start_search_and_pounce, stop_cw,
@@ -50003,6 +50081,18 @@ mod tests {
         let app = tauri::test::mock_builder()
             .manage(engine)
             .invoke_handler(tauri::generate_handler![
+                aprs_arm,
+                aprs_send_beacon,
+                aprs_send_message,
+                broadcast,
+                resend_chat,
+                resume_chat_cq,
+                send_message,
+                set_beacon,
+                set_chat_cq,
+                set_mode,
+                sstv_send,
+                sstv_stop,
                 halt_tx,
                 js8_answer_reply,
                 js8_arm,
@@ -50298,6 +50388,250 @@ mod tests {
             said.is_ok() && !engine_lock(&engine).js8_state().queue.is_empty(),
             "CONTROL: the shack's own name for it: {said:?}"
         );
+    }
+
+    /// An SSTV picture the size its mode needs, for a send from afar: its mode's name, width,
+    /// height and pixels as the screen sends them.
+    pub(crate) fn sstv_picture() -> serde_json::Value {
+        let spec = tempo_sstv::for_mode(tempo_sstv::lookup_slug("robot36").expect("robot36"));
+        let rgb = vec![0x80u8; spec.line_pixels as usize * spec.image_lines as usize * 3];
+        serde_json::json!({
+            "mode": "robot36",
+            "width": spec.line_pixels,
+            "height": spec.image_lines,
+            "rgbBase64": b64_encode(&rgb),
+        })
+    }
+
+    /// ⛔ APRS, SSTV and chat from afar, through the shack's own handlers, run only under the
+    /// stand-down the command lane read them under. For each start (Monitor armed by hand, a
+    /// beacon, a message, a picture, a chat message, a broadcast, a message sent again, the CQ run
+    /// turned on or resumed, the presence beacon, a CQ run entered as a mode): named with a
+    /// stand-down a halt has moved since, it is refused `STOPPED_SINCE` and leaves nothing on or
+    /// queued; named with the stand-down as it stands, it runs (CONTROL: what it starts is seen),
+    /// and so it does from the shack's own screen. What transmits by itself afterwards (the ack,
+    /// the beacon, the CQ run) is refused from afar with no presence live, and starts nothing.
+    #[test]
+    fn an_aprs_sstv_or_chat_start_from_afar_runs_only_under_the_stand_down_it_was_read_under() {
+        use crate::command_dispatch::{tauri_runner, Runner, NO_PRESENCE, STOPPED_SINCE};
+        use serde_json::{json, Value};
+        use std::time::{Duration, Instant};
+        use tempo_app::engine::{AprsArm, TxOwner};
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let (app, _main) = shack_app_for_starts_from_afar(engine.clone());
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the handler answered")
+        };
+        let with = |mut args: Value, stand_down: Option<u64>| {
+            if let Some(stand_down) = stand_down {
+                args["afar"] = json!({ "standDown": stand_down });
+            }
+            args
+        };
+        // The slots the shack's sequencer is asked about, each once, in order.
+        let slot = std::cell::Cell::new(0u64);
+        let next_slots = || {
+            let from = slot.get();
+            slot.set(from + 8);
+            from..from + 8
+        };
+        // The station as the shack's own screen leaves it before each: Stopped, in the section
+        // the start belongs to, with nothing of APRS or chat on and a chat peer heard, and TX on
+        // where the start keys only with it on (at the shack, which moves no stand-down).
+        let set_up = |e: &mut tempo_app::engine::Engine, cmd: &str| {
+            e.halt_tx();
+            e.set_aprs_arm(AprsArm::Off);
+            e.set_beacon(false);
+            e.set_chat_cq(false).unwrap();
+            e.set_operating_mode(
+                if cmd == "sstv_send" {
+                    "phone"
+                } else {
+                    "digital"
+                },
+                false,
+            );
+            match cmd {
+                "set_mode" => {
+                    e.set_mode("qso-monitor").unwrap();
+                    e.set_tier(tempo_app::dto::Tier::Ft8);
+                }
+                _ if cmd.starts_with("aprs_") || cmd == "sstv_send" => {}
+                _ => {
+                    e.set_mode("chat").unwrap();
+                    e.hear_for_test("CQ W1AW FN31", -5, next_slots().start);
+                }
+            }
+            if cmd == "resume_chat_cq" {
+                // A run on at the shack, then Stopped: on, and TX off.
+                e.set_chat_cq(true).unwrap();
+                e.halt_tx();
+            }
+            let stale = e.remote_transmit_stand_down_generation();
+            e.halt_tx();
+            if matches!(
+                cmd,
+                "aprs_send_beacon"
+                    | "aprs_send_message"
+                    | "sstv_send"
+                    | "broadcast"
+                    | "send_message"
+            ) {
+                e.set_tx_enabled(true);
+            }
+            stale
+        };
+        // What the start puts on, or on the air.
+        let started = |e: &mut tempo_app::engine::Engine, cmd: &str| -> bool {
+            match cmd {
+                "aprs_arm" => e.aprs_arm_source() == AprsArm::Explicit,
+                // The frame the radio loop keys next.
+                "aprs_send_beacon" | "aprs_send_message" => e.poll_aprs_tx().is_some(),
+                "sstv_send" => e.tx_owner() == Some(TxOwner::Sstv),
+                "broadcast" | "send_message" => {
+                    next_slots().any(|slot| !e.poll_tx(slot).is_empty())
+                }
+                "set_beacon" => e.beacon_enabled(),
+                "set_chat_cq" => e.chat_cq_state() != "off",
+                // Each arms TX as its CQ goes out.
+                "resume_chat_cq" | "set_mode" => e.tx_enabled(),
+                // There is no message to send again: it ran, and the shack said so.
+                "resend_chat" => false,
+                _ => unreachable!("{cmd}"),
+            }
+        };
+        let presence = TransmitAuthority::default();
+        let stopped = Err(STOPPED_SINCE.to_string());
+        let mut ran_after_a_stop = Vec::new();
+        for (cmd, args) in [
+            ("aprs_arm", json!({"on": true})),
+            (
+                "aprs_send_beacon",
+                json!({"lat": 41.9, "lon": -87.6, "symbolTable": "/", "symbolCode": ">",
+                       "comment": "FROM AFAR", "path": ["WIDE1-1"]}),
+            ),
+            (
+                "aprs_send_message",
+                json!({"addressee": "W1AW", "text": "HELLO FROM AFAR"}),
+            ),
+            ("sstv_send", sstv_picture()),
+            ("broadcast", json!({"text": "HELLO FROM AFAR"})),
+            (
+                "send_message",
+                json!({"peer": "W1AW", "text": "HELLO FROM AFAR"}),
+            ),
+            ("resend_chat", json!({"peer": "W1AW"})),
+            ("set_chat_cq", json!({"on": true})),
+            ("resume_chat_cq", json!({})),
+            ("set_beacon", json!({"on": true})),
+            ("set_mode", json!({"mode": "qso-run"})),
+        ] {
+            {
+                let now = Instant::now();
+                let permit = presence.permit(now + Duration::from_secs(60)).unwrap();
+                assert!(engine_lock(&engine).hold_remote_presence(permit, now));
+            }
+            let stale = set_up(&mut engine_lock(&engine), cmd);
+            let voided = ask(cmd, with(args.clone(), Some(stale)));
+            let after = started(&mut engine_lock(&engine), cmd);
+            if voided != stopped || after {
+                let said = match &voided {
+                    Ok(_) => "ran".to_string(),
+                    Err(error) => error.clone(),
+                };
+                ran_after_a_stop.push(format!("{cmd}: {said}, started {after}"));
+            }
+            set_up(&mut engine_lock(&engine), cmd);
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let ran = ask(cmd, with(args.clone(), Some(now)));
+            assert_ne!(ran, stopped, "{cmd} under the stand-down as it stands");
+            if cmd == "resend_chat" {
+                assert_eq!(
+                    ran,
+                    Err("no resendable message for W1AW".to_string()),
+                    "CONTROL: it ran"
+                );
+            } else {
+                assert!(
+                    started(&mut engine_lock(&engine), cmd),
+                    "CONTROL {cmd}: it started: {ran:?}"
+                );
+            }
+            set_up(&mut engine_lock(&engine), cmd);
+            let ran = ask(cmd, args.clone());
+            assert_ne!(ran, stopped, "CONTROL {cmd}, from the shack's own screen");
+            if cmd != "resend_chat" {
+                assert!(
+                    started(&mut engine_lock(&engine), cmd),
+                    "CONTROL {cmd}, from the shack's own screen: {ran:?}"
+                );
+            }
+        }
+        assert!(
+            ran_after_a_stop.is_empty(),
+            "ran from afar after a Stop: {ran_after_a_stop:#?}"
+        );
+        // ⛔ The off half of each switch is a Stop: named with a stand-down a halt has moved since,
+        // it still runs, and turns the switch off. Leaving a run mode for a passive one too.
+        let on = |e: &tempo_app::engine::Engine, cmd: &str| match cmd {
+            "aprs_arm" => e.aprs_arm_source() != AprsArm::Off,
+            "set_beacon" => e.beacon_enabled(),
+            "set_chat_cq" => e.chat_cq_state() != "off",
+            _ => e.snapshot().qso.is_some_and(|qso| qso.running),
+        };
+        for (cmd, on_half, off_half) in [
+            ("aprs_arm", json!({"on": true}), json!({"on": false})),
+            ("set_beacon", json!({"on": true}), json!({"on": false})),
+            ("set_chat_cq", json!({"on": true}), json!({"on": false})),
+            (
+                "set_mode",
+                json!({"mode": "qso-run"}),
+                json!({"mode": "qso-monitor"}),
+            ),
+        ] {
+            let stale = set_up(&mut engine_lock(&engine), cmd);
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let said = ask(cmd, with(on_half, Some(now)));
+            assert!(
+                said.is_ok() && on(&engine_lock(&engine), cmd),
+                "{cmd}: premise, on: {said:?}"
+            );
+            let said = ask(cmd, with(off_half, Some(stale)));
+            assert!(
+                said.is_ok() && !on(&engine_lock(&engine), cmd),
+                "{cmd}: the off half after a Stop: {said:?}"
+            );
+        }
+        // ⛔ What transmits by itself, from afar with no presence live: refused by its own words,
+        // and nothing turned on. CONTROL: with presence, it turns on (above).
+        let lapsed = Instant::now() + Duration::from_secs(120);
+        engine_lock(&engine).poll_remote_transmit(lapsed);
+        for (cmd, args) in [
+            ("aprs_arm", json!({"on": true})),
+            ("set_beacon", json!({"on": true})),
+            ("set_chat_cq", json!({"on": true})),
+            ("resume_chat_cq", json!({})),
+        ] {
+            set_up(&mut engine_lock(&engine), cmd);
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let said = ask(cmd, with(args, Some(now)));
+            assert_eq!(said, Err(NO_PRESENCE.to_string()), "{cmd}");
+            assert!(!started(&mut engine_lock(&engine), cmd), "{cmd} started");
+        }
     }
 
     /// ⛔ From afar a section entry arms nothing. Called through the shack's own runner, as the

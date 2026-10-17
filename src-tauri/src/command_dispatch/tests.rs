@@ -236,14 +236,16 @@ fn a_shack_only_command_is_refused_at_both_ends() {
 
 /// The desktop's FT buttons that start a transmission, as the operator signed them for a computer
 /// driving the shack: Enable TX, CQ and directed CQ, a reply to a decode, Tx5 and the next-message
-/// choice, resend, and the Operate strip's Call CQ and contest S&P. Written here, not read from the
-/// table, so a change to the table cannot move them.
-const FT_STARTS: [&str; 9] = [
+/// choice, resend, the Operate strip's Call CQ and contest S&P, and a run mode entered (a CQ run,
+/// or Field Day's Running). Written here, not read from the table, so a change to the table cannot
+/// move them.
+const FT_STARTS: [&str; 10] = [
     "call_cq",
     "call_station",
     "override_next_tx",
     "qso_freetext",
     "qso_resend",
+    "set_mode",
     "set_tx_enabled",
     "start_cq",
     "start_running",
@@ -269,13 +271,34 @@ const JS8_STARTS: [&str; 8] = [
 /// times. Written here, as [`FT_STARTS`] is.
 const CW_STARTS: [&str; 2] = ["send_cw", "send_cw_armed"];
 
-/// Every start that runs as a command from afar: [`FT_STARTS`], [`JS8_STARTS`], [`CW_STARTS`] and
-/// the voice keyer's play.
+/// APRS's starts, as at the shack: Monitor armed by hand, which lets the automatic ack key, a
+/// beacon, and a message. Written here, as [`FT_STARTS`] is.
+const APRS_STARTS: [&str; 3] = ["aprs_arm", "aprs_send_beacon", "aprs_send_message"];
+
+/// An SSTV picture. Written here, as [`FT_STARTS`] is.
+const SSTV_STARTS: [&str; 1] = ["sstv_send"];
+
+/// Chat's starts, Nexus to Nexus: a message, a broadcast, a message sent again, the CQ run turned
+/// on or resumed, and the presence beacon turned on. Written here, as [`FT_STARTS`] is.
+const CHAT_STARTS: [&str; 6] = [
+    "broadcast",
+    "resend_chat",
+    "resume_chat_cq",
+    "send_message",
+    "set_beacon",
+    "set_chat_cq",
+];
+
+/// Every start that runs as a command from afar: [`FT_STARTS`], [`JS8_STARTS`], [`CW_STARTS`],
+/// [`APRS_STARTS`], [`SSTV_STARTS`], [`CHAT_STARTS`] and the voice keyer's play.
 fn starts_run_from_afar() -> Vec<&'static str> {
     FT_STARTS
         .into_iter()
         .chain(JS8_STARTS)
         .chain(CW_STARTS)
+        .chain(APRS_STARTS)
+        .chain(SSTV_STARTS)
+        .chain(CHAT_STARTS)
         .chain(["play_voice_message"])
         .collect()
 }
@@ -310,6 +333,9 @@ fn the_starts_wired_from_afar_are_the_ft_buttons_the_voice_keyer_and_the_held_pr
     let mut expected: Vec<(&str, Wired)> = FT_STARTS.iter().map(|n| (*n, Wired::Ft)).collect();
     expected.extend(JS8_STARTS.iter().map(|n| (*n, Wired::Js8)));
     expected.extend(CW_STARTS.iter().map(|n| (*n, Wired::Cw)));
+    expected.extend(APRS_STARTS.iter().map(|n| (*n, Wired::Aprs)));
+    expected.extend(SSTV_STARTS.iter().map(|n| (*n, Wired::Sstv)));
+    expected.extend(CHAT_STARTS.iter().map(|n| (*n, Wired::Chat)));
     expected.push(("play_voice_message", Wired::VoiceKeyer));
     expected.push(("set_ptt", Wired::HeldPress));
     expected.sort_unstable_by_key(|(name, _)| *name);
@@ -531,6 +557,9 @@ fn no_ft_command_from_afar_carries_a_time() {
         .into_iter()
         .chain(JS8_STARTS)
         .chain(CW_STARTS)
+        .chain(APRS_STARTS)
+        .chain(SSTV_STARTS)
+        .chain(CHAT_STARTS)
         .chain(FT_KEYING_NOTHING)
     {
         for (name, ty) in parameters(cmd) {
@@ -666,7 +695,9 @@ fn the_on_half_of_a_transmit_switch_is_its_class() {
     for (id, (name, ..)) in OFF_HALVES.iter().enumerate() {
         let admission = shack.admit(&controller(), call(id as u64 + 1, name, on_args(name)));
         let expected = match (class_of(name), transmit_from_afar(name)) {
-            (Some(Class::StartsTx), Ok(Wired::Ft | Wired::Js8)) => "run".to_string(),
+            (Some(Class::StartsTx), Ok(Wired::Ft | Wired::Js8 | Wired::Aprs | Wired::Chat)) => {
+                "run".to_string()
+            }
             (Some(Class::StartsTx), Ok(Wired::HeldPress)) => refused(Refusal::HeldPress),
             (Some(Class::StartsTx), _) => refused(Refusal::TransmitNotYet),
             // Turning the RTTY sequencer on keys nothing, so it runs at the shack.
@@ -687,16 +718,21 @@ fn set_mode_is_a_stop_only_into_a_passive_mode() {
         );
         assert_eq!(kind(&admission), "stop", "{mode}");
     }
-    // A run mode calls CQ, and a mode this table does not know is never read as off.
+    // A run mode calls CQ: a start, run from afar under the start's rules. A mode this table does
+    // not know is never read as off: it goes as a start too, and the shack's own handler refuses it.
     for (id, mode) in ["qso-run", "fieldday-run", "bogus", "QSO-MONITOR"]
         .into_iter()
         .enumerate()
     {
+        let args = json!({ "mode": mode });
+        assert!(!is_stop("set_mode", &args), "{mode}");
         let admission = shack.admit(
             &controller(),
-            call(id as u64 + 10, "set_mode", json!({ "mode": mode })),
+            call(id as u64 + 10, "set_mode", args.clone()),
         );
-        assert_eq!(kind(&admission), refused(Refusal::TransmitNotYet), "{mode}");
+        assert_eq!(kind(&admission), "run", "{mode}");
+        let admission = shack.admit(&other_device(), call(id as u64 + 20, "set_mode", args));
+        assert_eq!(kind(&admission), refused(Refusal::NotController), "{mode}");
     }
 }
 

@@ -36,9 +36,10 @@
 //! here, and 200 ms without audio, in the microphone's predicate, which ends the press with it. A
 //! press is admitted only while presence is live and in Phone, the one cockpit whose PTT it stands
 //! for, and every other gate the arm checks is the microphone's own.
-use super::Engine;
+use super::{AprsArm, Engine};
 use crate::remote_control::ptt_hold::PttHold;
 use crate::remote_control::transmit::TransmitPermit;
+use crate::remote_control::Standing;
 use crate::settings::OperatingMode;
 use std::time::Instant;
 
@@ -89,6 +90,53 @@ impl Engine {
             .then(|| self.remote_presence_ended.standing())
     }
 
+    /// Bind `what` to the presence it was turned on under: `Some` from a computer driving the
+    /// station, which ends it once that presence lapses or another session's takes its place;
+    /// `None` from the shack's own screen, or as it is turned off, which unbinds it. The latest
+    /// press owns it.
+    pub fn bind_to_presence(&mut self, what: OnItsOwn, standing: Option<Standing>) {
+        self.presence_bound.retain(|(bound, _)| *bound != what);
+        if let Some(standing) = standing {
+            self.presence_bound.push((what, standing));
+        }
+    }
+
+    /// ⛔ End what a computer that is no longer here turned on: each [`OnItsOwn`] whose presence no
+    /// longer stands is turned off, as the shack's own screen turns it off. Only ever stops.
+    fn end_what_presence_left(&mut self) {
+        if self
+            .presence_bound
+            .iter()
+            .all(|(_, standing)| standing.held())
+        {
+            return;
+        }
+        let (ended, kept) = std::mem::take(&mut self.presence_bound)
+            .into_iter()
+            .partition::<Vec<_>, _>(|(_, standing)| !standing.held());
+        self.presence_bound = kept;
+        for (what, _) in ended {
+            tempo_core::applog::warn(
+                "tx",
+                &format!("remote presence ended: {what:?} turned on from afar is turned off"),
+            );
+            match what {
+                // The decoder keeps listening, receive only, as a view's own arm leaves it.
+                OnItsOwn::AprsAck => {
+                    if self.aprs_arm == AprsArm::Explicit {
+                        self.aprs_arm = AprsArm::Auto;
+                        self.aprs_health.arm = AprsArm::Auto;
+                    }
+                }
+                OnItsOwn::Beacon => self.set_beacon(false),
+                OnItsOwn::ChatCq => {
+                    // Turning the run off cannot fail.
+                    let _ = self.set_chat_cq(false);
+                }
+            }
+        }
+    }
+
     /// Share the stream's held-PTT state with the engine. Installed once, when Remote is built.
     pub fn set_remote_ptt_hold(&mut self, hold: PttHold) {
         self.remote_ptt_hold = Some(hold);
@@ -117,6 +165,7 @@ impl Engine {
     /// The press's "key" is the microphone over's ARM (M1); it stays up while the over does.
     pub(super) fn poll_remote_stream(&mut self, now: Instant) -> bool {
         let halted = self.poll_remote_presence(now);
+        self.end_what_presence_left();
         if let Some(hold) = self.remote_ptt_hold.clone() {
             let may_key = self.remote_presence_live(now)
                 && self.settings.operating_mode == OperatingMode::Phone;
@@ -138,6 +187,21 @@ impl Engine {
         }
         halted
     }
+}
+
+/// What a computer driving the station can turn on there that then transmits by itself, with no
+/// further press: so each ends when that computer is no longer there ([`Engine::bind_to_presence`]),
+/// as its transmissions are cut. A Stop leaves each as the shack's own Stop does: TX off and held,
+/// so none keys until an operator arms TX again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnItsOwn {
+    /// APRS Monitor armed by hand, which lets the automatic ack key. Ended, the decoder listens on,
+    /// receive only.
+    AprsAck,
+    /// Chat's presence beacon.
+    Beacon,
+    /// Chat's CQ run.
+    ChatCq,
 }
 
 #[cfg(test)]
@@ -511,5 +575,73 @@ mod tests {
         hold.hold(PRESS, t0 + Duration::from_millis(100));
         e.poll_remote_transmit(t0 + Duration::from_millis(110));
         assert!(!e.mic_armed(), "the press re-armed after a stop");
+    }
+
+    /// What each [`OnItsOwn`] is, read off the station: APRS's automatic ack allowed, the presence
+    /// beacon on, the chat CQ run on.
+    fn on_its_own(e: &Engine) -> [bool; 3] {
+        [
+            e.aprs_arm_source() == AprsArm::Explicit,
+            e.beacon_enabled(),
+            e.chat_cq_state() != "off",
+        ]
+    }
+
+    /// Turn each [`OnItsOwn`] on as its handler does, bound to `standing`.
+    fn turn_on(e: &mut Engine, standing: Option<Standing>) {
+        e.set_aprs_arm(AprsArm::Explicit);
+        e.bind_to_presence(OnItsOwn::AprsAck, standing.clone());
+        e.set_beacon(true);
+        e.bind_to_presence(OnItsOwn::Beacon, standing.clone());
+        e.set_chat_cq(true).expect("the CQ run starts");
+        e.bind_to_presence(OnItsOwn::ChatCq, standing);
+        assert_eq!(on_its_own(e), [true; 3], "CONTROL: each is on");
+    }
+
+    /// ⛔ What a computer driving the station turned on that transmits by itself (APRS's automatic
+    /// ack, the presence beacon, the chat CQ run) ends when that computer's presence lapses, on the
+    /// radio loop's tick, and when another session's presence takes its place. The decoder listens
+    /// on, receive only. A Stop leaves each as the shack's own Stop does, and so does the session's
+    /// own renewed heartbeat. CONTROL: the same three turned on at the shack outlive the lapse, and
+    /// once ended none keys with TX armed again.
+    #[test]
+    fn what_transmits_by_itself_ends_with_the_presence_it_was_turned_on_under() {
+        let (mut e, _transmit, presence, t0) = attached();
+        let standing = e.remote_presence_standing(t0);
+        assert!(standing.is_some(), "premise: presence is live");
+        turn_on(&mut e, standing);
+        e.halt_tx();
+        assert!(!e.poll_remote_transmit(t0 + Duration::from_secs(1)));
+        assert_eq!(on_its_own(&e), [true; 3], "a Stop leaves each on");
+        let renewed = t0 + Duration::from_secs(4);
+        assert!(e.hold_remote_presence(presence.permit(renewed + PRESENCE).unwrap(), renewed));
+        assert!(!e.poll_remote_transmit(renewed + Duration::from_secs(1)));
+        assert_eq!(on_its_own(&e), [true; 3], "its own heartbeat keeps each");
+        assert!(e.poll_remote_transmit(renewed + PRESENCE));
+        assert_eq!(on_its_own(&e), [false; 3], "the lapse ended each");
+        assert_eq!(e.aprs_arm_source(), AprsArm::Auto, "the decoder listens on");
+        // Nothing keys with TX armed again: no CQ, no beacon, no ack.
+        e.set_tx_enabled(true);
+        for slot in 0..16 {
+            assert!(e.poll_tx(slot).is_empty(), "keyed at {slot}");
+        }
+        e.aprs_auto_ack("N0CALL-7", "W9XYZ", "042");
+        assert!(e.poll_aprs_tx().is_none(), "an ack keyed");
+        e.set_tx_enabled(false);
+
+        // Another session's presence takes the place of the one they were turned on under.
+        let t1 = renewed + Duration::from_secs(10);
+        assert!(e.hold_remote_presence(presence.permit(t1 + PRESENCE).unwrap(), t1));
+        let standing = e.remote_presence_standing(t1);
+        turn_on(&mut e, standing);
+        let other = TransmitAuthority::default();
+        assert!(e.hold_remote_presence(other.permit(t1 + PRESENCE).unwrap(), t1));
+        e.poll_remote_transmit(t1);
+        assert_eq!(on_its_own(&e), [false; 3], "another's presence ended each");
+
+        // CONTROL: turned on at the shack, each outlives a lapse.
+        turn_on(&mut e, None);
+        assert!(e.poll_remote_transmit(t1 + PRESENCE));
+        assert_eq!(on_its_own(&e), [true; 3], "the shack's own stay on");
     }
 }

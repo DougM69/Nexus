@@ -3284,6 +3284,9 @@ pub struct Engine {
     /// place: what work a computer started at the station for as long as it is there is bound to
     /// (`remote_presence_standing`).
     remote_presence_ended: crate::remote_control::Revocation,
+    /// What a computer driving the station turned on there that transmits by itself, each with the
+    /// presence it was turned on under: see `engine/remote_stream.rs`.
+    presence_bound: Vec<(remote_stream::OnItsOwn, crate::remote_control::Standing)>,
     remote_ptt_hold: Option<crate::remote_control::ptt_hold::PttHold>,
     /// The streamed operator's microphone over, and what it needs: see `engine/remote_mic.rs`.
     mic: crate::mic::MicLatch,
@@ -5789,6 +5792,7 @@ impl Engine {
             remote_transmit: None,
             remote_presence: None,
             remote_presence_ended: Default::default(),
+            presence_bound: Vec::new(),
             remote_ptt_hold: None,
             mic: crate::mic::MicLatch::default(),
             mic_feed: None,

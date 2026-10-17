@@ -155,9 +155,17 @@ pub(crate) const ENTRIES: [&str; 3] = ["set_operating_mode", "sstv_tune", "work_
 
 /// ⛔ The work started from afar that runs on at the station by itself, and so ends when the
 /// computer that started it is no longer there: a satellite track, which steers the dial and the
-/// mast for a whole pass. From afar it is bound to that computer's presence, as its transmissions
-/// are; from the shack's own screen it runs as it always has.
-pub(crate) const PRESENCE_BOUND: [&str; 1] = ["start_sat_track"];
+/// mast for a whole pass, and what transmits with no further press (APRS Monitor armed by hand,
+/// which lets the automatic ack key; chat's presence beacon; chat's CQ run, turned on or resumed).
+/// From afar each is bound to that computer's presence, as its transmissions are; from the shack's
+/// own screen each runs as it always has.
+pub(crate) const PRESENCE_BOUND: [&str; 5] = [
+    "aprs_arm",
+    "resume_chat_cq",
+    "set_beacon",
+    "set_chat_cq",
+    "start_sat_track",
+];
 
 /// Whether the command lane writes [`Afar`] into an admitted call of `cmd`: each wired start but
 /// the held press, which never runs as a command, each section entry ([`ENTRIES`]) and the work
@@ -165,7 +173,13 @@ pub(crate) const PRESENCE_BOUND: [&str; 1] = ["start_sat_track"];
 pub(crate) fn takes_afar(cmd: &str) -> bool {
     matches!(
         transmit_from_afar(cmd),
-        Ok(Wired::Ft | Wired::VoiceKeyer | Wired::Js8 | Wired::Cw)
+        Ok(Wired::Ft
+            | Wired::VoiceKeyer
+            | Wired::Js8
+            | Wired::Cw
+            | Wired::Aprs
+            | Wired::Sstv
+            | Wired::Chat)
     ) || ENTRIES.contains(&cmd)
         || PRESENCE_BOUND.contains(&cmd)
 }
@@ -666,11 +680,17 @@ fn class_refusal(
         Some(Class::StartsTx) => match transmit_from_afar(cmd) {
             Err(refusal) => Some(refusal),
             Ok(Wired::HeldPress) => Some(Refusal::HeldPress),
-            Ok(Wired::Ft | Wired::VoiceKeyer | Wired::Js8 | Wired::Cw) => {
-                argument_refusal(cmd, args)
-                    .or_else(|| (!caller.holds_lease).then_some(Refusal::NotController))
-                    .or_else(|| caller.roads.err())
-            }
+            Ok(
+                Wired::Ft
+                | Wired::VoiceKeyer
+                | Wired::Js8
+                | Wired::Cw
+                | Wired::Aprs
+                | Wired::Sstv
+                | Wired::Chat,
+            ) => argument_refusal(cmd, args)
+                .or_else(|| (!caller.holds_lease).then_some(Refusal::NotController))
+                .or_else(|| caller.roads.err()),
         },
         // Admitted before the journal, under Stop's rules.
         Some(Class::StopsTx) => None,

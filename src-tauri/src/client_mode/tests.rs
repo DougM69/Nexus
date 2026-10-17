@@ -266,7 +266,15 @@ fn expected(cmd: &str, args: &Value) -> Way {
         Class::StartsTx => match transmit_from_afar(cmd) {
             Err(refusal) => Way::Refused(refusal),
             Ok(Wired::HeldPress) => Way::Press,
-            Ok(Wired::Ft | Wired::VoiceKeyer | Wired::Js8 | Wired::Cw) => Way::Start,
+            Ok(
+                Wired::Ft
+                | Wired::VoiceKeyer
+                | Wired::Js8
+                | Wired::Cw
+                | Wired::Aprs
+                | Wired::Sstv
+                | Wired::Chat,
+            ) => Way::Start,
         },
         Class::RunsAtShack => match cmd {
             "ui_state_load" | "ui_state_save" => Way::Split,
@@ -340,6 +348,32 @@ fn every_command_goes_where_its_class_says() {
         way("set_tune", &json!({ "on": true })),
         Way::Refused(Refusal::TransmitNotYet)
     );
+    for (cmd, args) in [
+        ("aprs_arm", json!({ "on": true })),
+        ("aprs_send_beacon", json!({ "comment": "HI" })),
+        (
+            "aprs_send_message",
+            json!({ "addressee": "W1AW", "text": "HI" }),
+        ),
+        ("sstv_send", json!({ "mode": "robot36" })),
+        ("broadcast", json!({ "text": "HI" })),
+        ("send_message", json!({ "peer": "W1AW", "text": "HI" })),
+        ("resend_chat", json!({ "peer": "W1AW" })),
+        ("set_chat_cq", json!({ "on": true })),
+        ("resume_chat_cq", json!({})),
+        ("set_beacon", json!({ "on": true })),
+        ("set_mode", json!({ "mode": "qso-run" })),
+    ] {
+        assert_eq!(way(cmd, &args), Way::Start, "{cmd} {args}");
+    }
+    for (cmd, args) in [
+        ("aprs_arm", json!({ "on": false })),
+        ("set_chat_cq", json!({ "on": false })),
+        ("set_beacon", json!({ "on": false })),
+        ("set_mode", json!({ "mode": "qso-monitor" })),
+    ] {
+        assert_eq!(way(cmd, &args), Way::Shack { stop: true }, "{cmd} {args}");
+    }
     assert_eq!(
         way("set_ptt", &json!({ "on": false })),
         Way::Shack { stop: true }
