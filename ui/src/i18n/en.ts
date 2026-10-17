@@ -9943,6 +9943,21 @@ export const EN = {
     'RF output power — RTTY keys the carrier for the whole over, so most rigs want well under their SSB rating',
   'rtty.header.band.title': "Showing the rig's current band",
   'rtty.waterfall.hint': 'click nets the decoder',
+  'rtty.tuning.title': 'Tuning',
+  'rtty.tuning.scope.aria': 'Tuning scope: {{state}}',
+  'rtty.tuning.tuned': 'Tuned',
+  'rtty.tuning.high': 'Signal {{hz}} Hz high',
+  'rtty.tuning.low': 'Signal {{hz}} Hz low',
+  'rtty.tuning.noSignal': 'No signal',
+  'rtty.tuning.disarmed': 'Arm the decoder to tune',
+  'rtty.tuning.keyed': 'Paused while we send',
+  'rtty.tuning.unavailable': 'Not on this link',
+  'rtty.tuning.down.aria': 'Tune down {{hz}} Hz',
+  'rtty.tuning.up.aria': 'Tune up {{hz}} Hz',
+  'rtty.tuning.nudge.title': 'Moves the decoder and the transmit tone together. Hold to repeat.',
+  'rtty.tuning.nudge.keyed': 'Off while transmitting: a nudge also moves the transmit tone.',
+  'rtty.tuning.mark': 'M {{hz}}',
+  'rtty.tuning.mark.title': 'The mark tone the decoder is listening to (Hz)',
 
   // ── RTTY ▸ the decoded-text pane ────────────────────────────────────────────────────
   // The pane's own name is lower-case where the frame prints it and title-case in the ⊞

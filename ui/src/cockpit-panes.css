@@ -788,3 +788,43 @@
   flex-direction: column;
   gap: var(--space-3);
 }
+
+/* THE RTTY TUNING SCOPE (⊞ `tuning`, 2026-10-17): a square column LEFT of the decoded text, the
+   text shrinking to fit (RttyTuningScope.tsx). The RX row holds the column and the transcript in
+   the stream pane's body and takes the height the transcript used to (`flex: 1 1 0`, a grower
+   that yields); the transcript stays its own scroller inside it.
+   The column is about 150 px at the 1024 floor and grows with the window to about 210 px, never
+   more than 45% of the row so the text keeps the larger share. It is a stack of content (the
+   square, the nudges, the words) that cannot shrink, so where the pane is shorter than that stack
+   the COLUMN scrolls — the second legal fate of deficit — and nothing clips. It hosts no stop
+   control and sits below the stream head, so it never covers or displaces one. */
+.rtty-rx-row {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+  gap: var(--space-2);
+}
+.rtty-tuning {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: clamp(9.5em, calc(0.11 * var(--vw-eff, 1280px)), 13em);
+  max-width: 45%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* The square. Its canvas is out of flow (the measured-box pattern), so the bitmap never sizes it. */
+.rtty-tuning-box {
+  position: relative;
+  flex: 0 0 auto;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+}
+.rtty-tuning-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}

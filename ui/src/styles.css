@@ -27187,6 +27187,64 @@ button.sat-chip:disabled {
   background: var(--accent);
   border-color: var(--accent);
 }
+/* RTTY TUNING SCOPE — the insides of the column (its size is cockpit-panes.css `.rtty-tuning`).
+   The picture's colours are read off the canvas's own computed tokens (--bg, --rx, --text-faint,
+   --text-dim), so it follows both themes with no token of its own. */
+.rtty-tuning-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+}
+.rtty-tuning-title {
+  font-size: calc(10px * var(--text-scale));
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+/* Shown over the square when there is nothing to draw: disarmed, or our own over. */
+.rtty-tuning-plate {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2);
+  text-align: center;
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-dim);
+}
+.rtty-tuning-nudge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+}
+.rtty-tuning-btn {
+  min-width: 2.2em;
+  padding: 1px var(--space-2);
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  touch-action: none;
+}
+.rtty-tuning-btn:disabled {
+  opacity: 0.4;
+}
+.rtty-tuning-mark {
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.rtty-tuning-status {
+  margin: 0;
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text);
+  text-align: center;
+}
 /* AFC readout pill — "+12 Hz 🔒" once acquired-then-frozen on a signal. */
 .rtty-afc-pill {
   font-family: var(--font-mono);

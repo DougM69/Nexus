@@ -439,7 +439,10 @@ const CASES: CloseCase[] = [
     // `stream` HOSTS A STOP CONTROL of its own (the Auto toggle) and is still hideable —
     // that is THE STOP LINE holding, not a hole in it. Its hide ENDS nothing (unmounting the
     // pane calls no wire), so it correctly carries no consequence note, on the tick or the ✕.
-    panes: [['stream', 'Decoded text']],
+    panes: [
+      ['tuning', 'Tuning'],
+      ['stream', 'Decoded text'],
+    ],
     unremovable: ['Log'],
     Host: ({ panels }) => <RttyCockpit snap={snap} panels={as(panels)} onSetTxEnabled={() => {}} />,
   },

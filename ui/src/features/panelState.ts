@@ -1399,8 +1399,14 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
  *  allowed, because Stop TX and the TX-enable latch are in the TX strip and the Esc/Stop macro
  *  and the sequencer's Abort are in the dock, none of them with an id. Its hide ENDS nothing
  *  (unmounting the pane calls no wire), so it correctly carries no ⊞ note. This is the pane
- *  that falsified the FOURTH wording a second time — see the header. */
-export const RTTY_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'stream', STATS_PANEL_ID] as const
+ *  that falsified the FOURTH wording a second time — see the header.
+ *
+ *  `tuning` (2026-10-17) is the crossed-ellipse tuning scope, a square column LEFT of the decoded
+ *  text, shown by default. Display plus two nudges that net the decoder (and with it the AFSK
+ *  transmit tone) by 5 Hz; the nudges are disabled while anything of ours is keyed. It hosts no
+ *  control that stops a transmission and none that starts one, and hiding it ends nothing, so it
+ *  carries no ⊞ note and THE STOP LINE is untouched by it. */
+export const RTTY_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'tuning', 'stream', STATS_PANEL_ID] as const
 export type RttyPanelId = (typeof RTTY_PANEL_IDS)[number]
 
 export const RTTY_PANELS: PanelVocabulary<RttyPanelId> = {
