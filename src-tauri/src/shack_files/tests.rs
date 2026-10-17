@@ -158,8 +158,13 @@ fn the_size_bound_holds() {
 /// place is refused, and the name cannot lead out of the folder.
 #[test]
 fn the_save_lands_on_this_computer() {
-    let shack = scratch("shack");
-    let downloads = scratch("downloads");
+    // Downloads sits inside a folder of this run's own, so the escape checked below would land
+    // in that folder and nowhere another run (or a mutant of this test) can have written.
+    let root = scratch("save");
+    let shack = root.join("shack");
+    let downloads = root.join("Downloads");
+    std::fs::create_dir_all(&shack).unwrap();
+    std::fs::create_dir_all(&downloads).unwrap();
     let file = bytes(PIECE_BYTES + 77);
     std::fs::write(shack.join("qso-KD9TAW-1.wav"), &file).unwrap();
     std::fs::write(
@@ -190,7 +195,6 @@ fn the_save_lands_on_this_computer() {
 
     let saved = save_piece_in(&downloads, "../escape.wav", &first.data, 0);
     assert!(saved.is_err(), "{saved:?}");
-    assert!(!downloads.join("../escape.wav").exists());
-    std::fs::remove_dir_all(&shack).unwrap();
-    std::fs::remove_dir_all(&downloads).unwrap();
+    assert!(!root.join("escape.wav").exists());
+    std::fs::remove_dir_all(&root).unwrap();
 }
