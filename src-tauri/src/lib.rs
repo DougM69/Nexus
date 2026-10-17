@@ -17178,6 +17178,7 @@ fn rtty_send(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.rtty_send_text(&text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(rtty_state_dto(&eng))
 }
 
@@ -17204,6 +17205,9 @@ fn rtty_set_latched(
         command_dispatch::still_bound(&eng, afar.as_ref())?;
     }
     eng.set_rtty_latched(on)?;
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(rtty_state_dto(&eng))
 }
 
@@ -17219,6 +17223,7 @@ fn rtty_type(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.rtty_type(&text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(rtty_state_dto(&eng))
 }
 
@@ -17326,6 +17331,7 @@ fn psk_send(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.psk_send_text(&text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(psk_state_dto(&eng))
 }
 
@@ -17348,6 +17354,9 @@ fn psk_set_latched(
         command_dispatch::still_bound(&eng, afar.as_ref())?;
     }
     eng.set_psk_latched(on)?;
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(psk_state_dto(&eng))
 }
 
@@ -17363,6 +17372,7 @@ fn psk_type(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.psk_type(&text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(psk_state_dto(&eng))
 }
 
@@ -17539,6 +17549,7 @@ fn js8_send(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.js8_send(to, text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.js8_state())
 }
 
@@ -17555,6 +17566,7 @@ fn js8_send_command(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.js8_send_command(to, cmd, arg)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.js8_state())
 }
 
@@ -17568,6 +17580,7 @@ fn js8_call_cq(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.js8_call_cq()?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.js8_state())
 }
 
@@ -17588,6 +17601,9 @@ fn js8_arm(
         command_dispatch::still_bound(&eng, afar.as_ref())?;
     }
     eng.js8_arm(which, on)?;
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     if which != tempo_app::engine::js8::Js8Switch::Hb {
         persist_settings(eng.settings().clone(), |e| {
             eprintln!("tempo: failed to persist JS8 switch: {e}")
@@ -17612,6 +17628,9 @@ fn js8_cq_repeat(
         command_dispatch::still_bound(&eng, afar.as_ref())?;
     }
     eng.js8_set_cq_repeat(on)?;
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(eng.js8_state())
 }
 
@@ -17634,6 +17653,9 @@ fn js8_answer_reply(
         command_dispatch::still_bound(&eng, afar.as_ref())?;
     }
     eng.js8_answer_reply(yes, display, fires_at_ms)?;
+    if yes {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(eng.js8_state())
 }
 
@@ -17676,6 +17698,7 @@ fn js8_heartbeat_now(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.js8_heartbeat_now()?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.js8_state())
 }
 
@@ -17703,6 +17726,7 @@ fn js8_typeahead(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.js8_typeahead(sent_seen, unsent)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.js8_typeahead_state())
 }
 
@@ -17881,6 +17905,7 @@ fn rtty_auto_cq(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.rtty_auto_cq()?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(rtty_state_dto(&eng))
 }
 
@@ -17895,6 +17920,7 @@ fn rtty_auto_answer(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.rtty_auto_answer(&call)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(rtty_state_dto(&eng))
 }
 
@@ -18293,6 +18319,9 @@ fn set_tx_enabled(
     if enabled && !eng.tx_enabled() && eng.clock_repair_holds_tx() {
         return Err(tempo_app::engine::CLOCK_REPAIR_HOLDS_TX.to_string());
     }
+    if enabled {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(eng.snapshot())
 }
 
@@ -18578,6 +18607,9 @@ fn set_tune(
         command_dispatch::still_bound(&eng, afar.as_ref())?;
     }
     eng.set_tune(on);
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(eng.snapshot())
 }
 
@@ -18596,6 +18628,7 @@ fn atu_tune(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.atu_tune()?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -19380,6 +19413,7 @@ fn send_cw(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.send_cw(&text);
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -19396,6 +19430,7 @@ fn send_cw_armed(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.send_cw_armed(&text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -20120,6 +20155,7 @@ fn start_cq(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.start_cq(dir.as_deref())?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -20150,7 +20186,9 @@ fn start_running_on(
         |eng| eng.start_running_opens_session(),
         |eng| {
             command_dispatch::still_bound(eng, afar)?;
-            eng.start_running_with_cq(dir.as_deref())
+            eng.start_running_with_cq(dir.as_deref())?;
+            command_dispatch::started_from_afar(eng, afar);
+            Ok(())
         },
         |eng| eng.snapshot(),
     )
@@ -20178,7 +20216,9 @@ fn start_search_and_pounce_on(
         |eng| eng.start_search_and_pounce_opens_session(),
         |eng| {
             command_dispatch::still_bound(eng, afar)?;
-            eng.start_search_and_pounce()
+            eng.start_search_and_pounce()?;
+            command_dispatch::started_from_afar(eng, afar);
+            Ok(())
         },
         |eng| eng.snapshot(),
     )
@@ -20197,6 +20237,7 @@ fn call_cq(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.call_cq(dir.as_deref())?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -20254,6 +20295,7 @@ fn override_next_tx(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.override_next_tx(&call, grid.as_deref(), &text);
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -20828,6 +20870,7 @@ fn call_station_on(
             // mode plugin decides which tiers are gated (Capabilities::structured_identity).
             eng.structured_tx_ready(true)?;
             eng.work_station(call, g, msg, snr, dx_freq)?;
+            command_dispatch::started_from_afar(eng, afar);
             // Tag only a QSO that really started — `call_station_ctx` answers `Ok` to a few calls
             // it does not act on, and a pend armed for one would wait four hours to stamp the park
             // on some later contact. Ambiguous or absent: the pending hunt is left exactly as it
@@ -20885,6 +20928,7 @@ fn qso_resend(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.qso_resend();
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -20900,6 +20944,7 @@ fn qso_freetext(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.qso_freetext(&text);
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -51173,6 +51218,216 @@ mod tests {
                 assert!(!started(&mut engine_lock(&engine), cmd), "{cmd} started");
             }
         }
+    }
+
+    /// ⛔ An FT, JS8, CW, tune, RTTY or PSK start from afar ends when the stand-down it ran under is
+    /// revoked with no halt (the computer's permission to transmit withdrawn), as an APRS, SSTV or
+    /// chat start does. Called through the shack's own runner, as the command lane calls them, with
+    /// the stand-down as it stands: each runs (CONTROL), then the stand-down is revoked and the
+    /// radio loop ticks. The station halts: TX off, no carrier, neither latch up. CONTROL: the same
+    /// start from the shack's own screen (no `afar`) outlives a bare revocation, as it always has.
+    #[test]
+    fn a_start_from_afar_ends_when_its_stand_down_is_revoked_with_no_halt() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::{
+            atu_tune, call_cq, call_station, js8_answer_reply, js8_arm, js8_call_cq, js8_cq_repeat,
+            js8_heartbeat_now, js8_send, js8_send_command, js8_typeahead, override_next_tx,
+            psk_send, psk_set_latched, psk_type, qso_freetext, qso_resend, rtty_auto_answer,
+            rtty_auto_cq, rtty_send, rtty_set_latched, rtty_type, send_cw, send_cw_armed, set_tune,
+            set_tx_enabled, start_cq, start_running, start_search_and_pounce,
+        };
+        use serde_json::{json, Value};
+        use std::time::Instant;
+        use tempo_app::engine::js8::Js8Switch;
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let transmit = TransmitAuthority::default();
+        engine_lock(&engine).set_remote_transmit_revocation(transmit.revocation());
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .manage(crate::SharedOtaSpots::default())
+            .manage(crate::SharedParks::default())
+            .invoke_handler(tauri::generate_handler![
+                atu_tune,
+                call_cq,
+                call_station,
+                js8_answer_reply,
+                js8_arm,
+                js8_call_cq,
+                js8_cq_repeat,
+                js8_heartbeat_now,
+                js8_send,
+                js8_send_command,
+                js8_typeahead,
+                override_next_tx,
+                psk_send,
+                psk_set_latched,
+                psk_type,
+                qso_freetext,
+                qso_resend,
+                rtty_auto_answer,
+                rtty_auto_cq,
+                rtty_send,
+                rtty_set_latched,
+                rtty_type,
+                send_cw,
+                send_cw_armed,
+                set_tune,
+                set_tx_enabled,
+                start_cq,
+                start_running,
+                start_search_and_pounce
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the handler answered")
+        };
+        // The station as the shack's own screen leaves it for the start: Stopped, in the start's
+        // section, TX on where the start keys only with it on (at the shack, which moves no
+        // stand-down), and what the start needs in place.
+        let set_up = |cmd: &str, args: &mut Value| {
+            let mut e = engine_lock(&engine);
+            e.halt_tx();
+            e.take_slot_tx_abort();
+            if cmd.starts_with("js8_") {
+                let mut settings = e.settings().clone();
+                settings.js8_hb_networking = true;
+                e.apply_settings(settings);
+                e.js8_arm(Js8Switch::Autoreply, false).unwrap();
+                e.js8_enter();
+            } else if cmd.starts_with("send_cw") {
+                e.set_operating_mode("cw", false);
+            } else if cmd.starts_with("rtty") {
+                e.set_operating_mode("rtty", false);
+            } else if cmd.starts_with("psk") {
+                e.set_operating_mode("keyboard", false);
+            } else if cmd == "atu_tune" {
+                e.set_license_class("extra");
+                e.set_frequency(14.290, "20m", "USB");
+                e.set_operating_mode("phone", false);
+                e.observe_rig_tuner(Some(true), true);
+            } else if cmd != "set_tune" {
+                e.set_operating_mode("digital", false);
+                e.set_tier(tempo_app::dto::Tier::Ft8);
+            }
+            e.set_tx_enabled(true);
+            match cmd {
+                "rtty_auto_cq" | "rtty_auto_answer" => {
+                    e.set_rtty_auto(true).expect("premise: Auto on")
+                }
+                "rtty_type" => e.set_rtty_latched(true).expect("premise: latched"),
+                "psk_type" => e.set_psk_latched(true).expect("premise: latched"),
+                "js8_typeahead" => e.js8_send(None, "A MESSAGE GOING OUT".into()).unwrap(),
+                "js8_answer_reply" => {
+                    // A query heard at the shack, whose automatic reply asks the operator first;
+                    // the yes names it as the screen was shown it.
+                    e.js8_api_hear_snr_query("W1AW");
+                    let reply = e.js8_state().pending_reply.expect("premise: a reply asks");
+                    args["display"] = json!(reply.display);
+                    args["firesAtMs"] = json!(reply.fires_at_ms);
+                }
+                _ => {}
+            }
+        };
+        // Revoke the stand-down with no halt and tick the radio loop: whether it halted, and
+        // what is left (TX armed, the tune carrier, either latch).
+        let revoke_and_tick = || {
+            transmit.revoke();
+            let mut e = engine_lock(&engine);
+            let halted = e.poll_remote_transmit(Instant::now());
+            (
+                halted,
+                (
+                    e.tx_enabled(),
+                    e.tuning(),
+                    e.rtty_latched(),
+                    e.psk_latched(),
+                ),
+            )
+        };
+        let mut kept_after_a_revocation = Vec::new();
+        for (cmd, args) in [
+            ("call_cq", json!({})),
+            ("call_station", json!({"call": "K1ABC"})),
+            (
+                "override_next_tx",
+                json!({"call": "K1ABC", "text": "K1ABC W9XYZ EN52"}),
+            ),
+            ("qso_freetext", json!({"text": "TNX 73"})),
+            ("qso_resend", json!({})),
+            ("set_tx_enabled", json!({"enabled": true})),
+            ("start_cq", json!({})),
+            ("start_running", json!({})),
+            ("start_search_and_pounce", json!({})),
+            ("js8_call_cq", json!({})),
+            ("js8_heartbeat_now", json!({})),
+            ("js8_send", json!({"to": null, "text": "HELLO FROM AFAR"})),
+            (
+                "js8_send_command",
+                json!({"to": "W1AW", "cmd": 0, "arg": ""}),
+            ),
+            ("js8_arm", json!({"which": "autoreply", "on": true})),
+            ("js8_typeahead", json!({"sentSeen": 0, "unsent": "MORE"})),
+            ("js8_cq_repeat", json!({"on": true})),
+            ("js8_answer_reply", json!({"yes": true})),
+            ("send_cw", json!({"text": "CQ {MYCALL}"})),
+            ("send_cw_armed", json!({"text": "TU {MYCALL}"})),
+            ("set_tune", json!({"on": true})),
+            ("rtty_send", json!({"text": "CQ FROM AFAR"})),
+            ("rtty_set_latched", json!({"on": true})),
+            ("rtty_type", json!({"text": "TYPED FROM AFAR"})),
+            ("rtty_auto_cq", json!({})),
+            ("rtty_auto_answer", json!({"call": "W1AW"})),
+            ("psk_send", json!({"text": "CQ FROM AFAR"})),
+            ("psk_set_latched", json!({"on": true})),
+            ("psk_type", json!({"text": "TYPED FROM AFAR"})),
+            // Last: its set-up moves the dial to a phone frequency.
+            ("atu_tune", json!({})),
+        ] {
+            let mut afar = args.clone();
+            set_up(cmd, &mut afar);
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            afar["afar"] = json!({ "standDown": now });
+            let ran = ask(cmd, afar);
+            assert!(ran.is_ok(), "CONTROL {cmd}: it ran from afar: {ran:?}");
+            let (halted, left) = revoke_and_tick();
+            if !halted || left != (false, false, false, false) {
+                kept_after_a_revocation.push(format!(
+                    "{cmd}: halted {halted}, (TX, tuning, RTTY latched, PSK latched) {left:?}"
+                ));
+            }
+            let mut own = args;
+            set_up(cmd, &mut own);
+            let ran = ask(cmd, own);
+            assert!(ran.is_ok(), "CONTROL {cmd}: it ran from the shack: {ran:?}");
+            let (halted, _) = revoke_and_tick();
+            assert!(
+                !halted,
+                "CONTROL {cmd}: the shack's own start outlives a bare revocation"
+            );
+        }
+        engine_lock(&engine).halt_tx();
+        assert!(
+            kept_after_a_revocation.is_empty(),
+            "kept after its stand-down was revoked: {kept_after_a_revocation:#?}"
+        );
     }
 
     /// ⛔ From afar a section entry arms nothing. Called through the shack's own runner, as the
