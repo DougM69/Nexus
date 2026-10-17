@@ -11,11 +11,13 @@
 //! take a lock among THEMSELVES ([`Rings::play`], [`Rings::sound`], [`Rings::take_mic`]), so each
 //! ring keeps one producer and one consumer, and a callback never takes it.
 //!
-//! ## What is heard: the hosted page's rules, at the LAN's cushion
+//! ## What is heard: the hosted page's rules, at the road's cushion
 //!
-//! - **A fixed cushion** ([`CUSHION_MS`]): playback starts once that much is waiting, and again the
-//!   same way whenever it runs dry. Past the cushion and 100 ms more ([`CEILING_MS`]) the oldest
-//!   audio goes, back down to the cushion: a drop, never a speed-up or a slow-down.
+//! - **A fixed cushion** ([`CUSHION_MS`] on the LAN, [`INTERNET_CUSHION_MS`] on the internet, set by
+//!   the road the link opened on, [`Rings::set_cushion_ms`]): playback starts once that much is
+//!   waiting, and again the same way whenever it runs dry. Past the cushion and 100 ms more
+//!   ([`CEILING_MS`] on the LAN) the oldest audio goes, back down to the cushion: a drop, never a
+//!   speed-up or a slow-down.
 //! - **A quiet bed in a known gap** ([`BED_LEVEL`]): while listening with nothing to play, a noise
 //!   some 8 dB under a quiet band, as the page plays, so a gap never sounds like a dead link and
 //!   never bursts.
@@ -44,8 +46,12 @@ use crate::ring::SpscRing;
 
 /// The cushion on the LAN: playback starts once this much is waiting.
 pub const CUSHION_MS: u32 = 60;
-/// Past this much waiting, the oldest audio goes, back down to the cushion.
-pub const CEILING_MS: u32 = CUSHION_MS + 100;
+/// The cushion on the internet, where jitter is larger: twice the LAN's.
+pub const INTERNET_CUSHION_MS: u32 = 120;
+/// How far past the cushion audio may wait before the oldest goes, back down to the cushion.
+pub const HEADROOM_MS: u32 = 100;
+/// Past this much waiting on the LAN, the oldest audio goes, back down to the cushion.
+pub const CEILING_MS: u32 = CUSHION_MS + HEADROOM_MS;
 /// The bed, in the station's own scale before the gain: the hosted page's, about -68 dBFS RMS.
 pub const BED_LEVEL: f32 = 0.0006;
 /// The station's level lifted by the hosted page's default volume.
@@ -98,6 +104,8 @@ pub struct Rings {
     lift: AtomicU32,
     /// Samples of the shack's audio the output had no room for.
     dropped: AtomicU64,
+    /// The cushion for the road the link is on, in ms: [`CUSHION_MS`] until one is set.
+    cushion_ms: AtomicU32,
 }
 
 impl Default for Rings {
@@ -117,6 +125,7 @@ impl Default for Rings {
             opened: AtomicU64::new(0),
             lift: AtomicU32::new(gain().to_bits()),
             dropped: AtomicU64::new(0),
+            cushion_ms: AtomicU32::new(CUSHION_MS),
         }
     }
 }
@@ -153,6 +162,17 @@ impl Rings {
         let db = db.clamp(VOLUME_DB_MIN, VOLUME_DB_MAX);
         self.lift
             .store(10f32.powf(db / 20.0).to_bits(), Ordering::Release);
+    }
+
+    /// The cushion for the road the link opened on: [`CUSHION_MS`] on the LAN,
+    /// [`INTERNET_CUSHION_MS`] on the internet. The output takes it at its next callback.
+    pub fn set_cushion_ms(&self, ms: u32) {
+        self.cushion_ms.store(ms, Ordering::Release);
+    }
+
+    /// The cushion set for the road the link is on, in ms.
+    pub fn cushion_ms(&self) -> u32 {
+        self.cushion_ms.load(Ordering::Acquire)
     }
 
     /// The factor the shack's audio is lifted by: the operator's volume, [`gain`] until one is set.
@@ -236,8 +256,16 @@ impl Rings {
     }
 }
 
+/// `ms` of audio at `rate`, in samples.
+fn samples(rate: u32, ms: u32) -> usize {
+    (rate as usize) * (ms as usize) / 1000
+}
+
 /// The output callback's own state: whether it is playing or filling the cushion, and the bed.
 pub struct Cushion {
+    rate: u32,
+    /// The cushion in ms these two were made for.
+    made_for: u32,
     cushion: usize,
     ceiling: usize,
     playing: bool,
@@ -251,10 +279,11 @@ pub struct Cushion {
 impl Cushion {
     /// The cushion for an output at `rate`.
     pub fn new(rate: u32) -> Self {
-        let samples = |ms: u32| (rate as usize) * (ms as usize) / 1000;
         Self {
-            cushion: samples(CUSHION_MS),
-            ceiling: samples(CEILING_MS),
+            rate,
+            made_for: CUSHION_MS,
+            cushion: samples(rate, CUSHION_MS),
+            ceiling: samples(rate, CEILING_MS),
             playing: false,
             bed: BED_LEVEL * gain(),
             noise: 0x2545_f491,
@@ -266,6 +295,12 @@ impl Cushion {
     /// At the top of each output callback: the mute, the bed at the operator's volume, and the
     /// ceiling. REALTIME.
     pub fn begin(&mut self, rings: &Rings) {
+        let ms = rings.cushion_ms.load(Ordering::Acquire);
+        if ms != self.made_for {
+            self.made_for = ms;
+            self.cushion = samples(self.rate, ms);
+            self.ceiling = samples(self.rate, ms + HEADROOM_MS);
+        }
         self.muted = rings.muted.load(Ordering::Acquire);
         self.listening = rings.listening.load(Ordering::Acquire);
         self.bed = BED_LEVEL * rings.lift();
@@ -438,6 +473,35 @@ mod tests {
             again.iter().all(|s| (s - lifted).abs() < 1e-6),
             "never played again"
         );
+    }
+
+    /// ★ On the internet the cushion is 120 ms: playback waits for it, and past it and 100 ms more
+    /// the oldest goes, back to it. CONTROL: on the LAN's 60 ms, what was waiting then plays.
+    #[test]
+    fn on_the_internet_playback_waits_for_the_longer_cushion() {
+        let rings = Rings::default();
+        rings.listen(true);
+        rings.set_cushion_ms(INTERNET_CUSHION_MS);
+        let mut cushion = Cushion::new(RATE);
+        rings.play(&vec![0.01; ms(100)]);
+        let bed = |samples: &[f32]| samples.iter().all(|s| s.abs() <= BED_LEVEL * gain());
+        assert!(
+            bed(&out(&mut cushion, &rings, ms(10))),
+            "played before 120 ms waited"
+        );
+        rings.play(&vec![0.01; ms(30)]);
+        rings.play(&vec![0.01; ms(200)]);
+        let _ = out(&mut cushion, &rings, 0);
+        assert_eq!(rings.waiting(), ms(INTERNET_CUSHION_MS), "the ceiling");
+        let lifted = 0.01 * gain();
+        let playing = out(&mut cushion, &rings, ms(20));
+        assert!(playing.iter().all(|s| (s - lifted).abs() < 1e-6));
+        let lan = Rings::default();
+        lan.listen(true);
+        let mut cushion = Cushion::new(RATE);
+        lan.play(&vec![0.01; ms(100)]);
+        let playing = out(&mut cushion, &lan, ms(10));
+        assert!(playing.iter().all(|s| (s - lifted).abs() < 1e-6), "LAN");
     }
 
     /// ★ Past the cushion and 100 ms more, the oldest audio goes, back to the cushion: the listener

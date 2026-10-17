@@ -322,9 +322,10 @@ pub struct LanOrigin(Mutex<Option<Origin>>);
 /// What the window's page can reach: the app's own embedded files (the same the main window
 /// loads, so nothing is read from disk and nothing can differ from the shipped page), this
 /// computer's paired stations in the OS credential store, and the stations Windows' own DNS-SD
-/// finds by name.
+/// finds by name; and adding the internet road to one of them, through the system browser.
 fn reach(app: &tauri::AppHandle) -> Reach {
     let files = app.clone();
+    let stations = Arc::new(Stations::new(Arc::new(SystemVault)));
     Reach {
         assets: Arc::new(move |path: &str| {
             let resolver = files.asset_resolver();
@@ -333,7 +334,7 @@ fn reach(app: &tauri::AppHandle) -> Reach {
                 .or_else(|| resolver.get(path.to_string()))?;
             Some((asset.bytes, asset.mime_type))
         }),
-        stations: Arc::new(Stations::new(Arc::new(SystemVault))),
+        stations: Arc::clone(&stations),
         find: Arc::new(tempo_stream::lan::dnssd::find),
         name: computer_name(),
         operate: {
@@ -342,6 +343,37 @@ fn reach(app: &tauri::AppHandle) -> Reach {
                 crate::client_mode::start_again(&app, vec![crate::client_mode::ARG.into(), station])
             })
         },
+        add_internet: {
+            let app = app.clone();
+            Arc::new(move |station: String, choose| {
+                let (app, stations) = (app.clone(), Arc::clone(&stations));
+                Box::pin(async move {
+                    use tauri_plugin_opener::OpenerExt;
+                    let service = crate::lan_client::internet::Service::new(REMOTE_ORIGIN)?;
+                    let open = |url: &str| {
+                        app.opener()
+                            .open_url(url, None::<&str>)
+                            .map_err(|e| e.to_string())
+                    };
+                    crate::lan_client::internet::add(
+                        &service,
+                        stations,
+                        station,
+                        computer_name(),
+                        open,
+                        choose,
+                    )
+                    .await
+                })
+            })
+        },
+        forget_internet: Arc::new(|road| {
+            Box::pin(async move {
+                crate::lan_client::internet::Service::new(REMOTE_ORIGIN)?
+                    .forget(&road)
+                    .await
+            })
+        }),
     }
 }
 

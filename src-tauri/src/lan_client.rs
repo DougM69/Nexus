@@ -79,6 +79,8 @@
 pub(crate) use tempo_client::audio_road;
 /// The command link, protocol 2, which client mode drives (the client core's).
 pub(crate) use tempo_client::link;
+/// The internet road: adding it to a paired station, and opening it again.
+pub(crate) mod internet;
 mod origin;
 pub(crate) mod pairing;
 /// The road to a paired station (the client core's).
@@ -103,7 +105,7 @@ pub(crate) use tempo_client::{ComputerKey, StationView};
 use tempo_stream::protocol;
 
 use crate::remote_service::lan::{valid_name, NAME_CHARS};
-use crate::remote_service::vault::{PairedStation, PairedStations, StationVault};
+use crate::remote_service::vault::{InternetRoad, PairedStation, PairedStations, StationVault};
 
 /// The most stations this computer keeps a pairing with.
 pub(crate) const MAX_STATIONS: usize = 8;
@@ -165,6 +167,15 @@ fn sound(record: &PairedStation) -> bool {
             .iter()
             .all(|a| tempo_stream::lan::typed(a).is_some())
         && ComputerKey::restore(&record.pkcs8).is_some()
+}
+
+/// Is this an internet road this module could have written: the service's ids, a station key that
+/// is a P-256 SPKI, and a key that is one? One that is not reads as none: the road is added again.
+fn sound_road(road: &InternetRoad) -> bool {
+    protocol::identifier(&road.station_id)
+        && protocol::identifier(&road.device_id)
+        && protocol::device_key(&road.station_key)
+        && ComputerKey::restore(&road.pkcs8).is_some()
 }
 
 /// The stations this computer is paired with, in the OS credential store. The store can block, so
@@ -270,14 +281,46 @@ impl Stations {
             .map_err(|_| "storeUnavailable")
     }
 
-    /// Forget station `id` on this computer: its record, with this computer's key for it, first,
-    /// then the list. A list that still names it after a failure names a record that is gone,
-    /// which reads as no pairing.
+    /// The internet road kept for station `id`, if the store holds a sound one.
+    pub(crate) fn internet(&self, id: &str) -> Result<Option<InternetRoad>, &'static str> {
+        if !protocol::identifier(id) {
+            return Ok(None);
+        }
+        Ok(self
+            .vault
+            .internet_road(id)
+            .map_err(|_| "storeUnavailable")?
+            .filter(sound_road))
+    }
+
+    /// Keep the internet road to station `id`, paired here: a new one replaces any before it.
+    pub(crate) fn keep_internet(&self, id: &str, road: &InternetRoad) -> Result<(), &'static str> {
+        let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
+        if self.get(id)?.is_none() {
+            return Err("unknownStation");
+        }
+        if !sound_road(road) {
+            return Err("notStation");
+        }
+        if !fits(road) {
+            return Err("stationsFull");
+        }
+        self.vault
+            .save_internet_road(id, road)
+            .map_err(|_| "storeUnavailable")
+    }
+
+    /// Forget station `id` on this computer: its internet road and its record, with this
+    /// computer's keys for it, first, then the list. A list that still names it after a failure
+    /// names a record that is gone, which reads as no pairing.
     pub(crate) fn forget(&self, id: &str) -> Result<(), &'static str> {
         let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
         if !protocol::identifier(id) {
             return Err("unknownStation");
         }
+        self.vault
+            .remove_internet_road(id)
+            .map_err(|_| "storeUnavailable")?;
         self.vault
             .remove_paired_station(id)
             .map_err(|_| "storeUnavailable")?;

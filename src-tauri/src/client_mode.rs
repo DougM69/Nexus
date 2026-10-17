@@ -126,11 +126,14 @@ use crate::command_dispatch::{
     is_stop, join_ui_state, route, split_ui_state, store_access, transmit_from_afar, Refusal,
     Route, Store, Wired, IN_FLIGHT, PER_COMMAND,
 };
-use crate::lan_client::audio_road::{self, Headset, Recording, ThisHeadset};
+use crate::lan_client::audio_road::{
+    self, Headset, Recording, ThisHeadset, CUSHION_MS, INTERNET_CUSHION_MS,
+};
 use crate::lan_client::link::{run_id, Answer, Link};
 use crate::lan_client::road::{self, Look};
 use crate::lan_client::stop_road::{Over, StopRoad};
 use crate::remote_service::vault::PairedStation;
+use tempo_client::still_there::{Idle, IdleWatch};
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -346,6 +349,60 @@ pub(crate) type Answering = Pin<Box<dyn Future<Output = (u64, Answer)> + Send>>;
 pub(crate) type Find =
     Arc<dyn Fn(&str) -> Result<Option<PairedStation>, &'static str> + Send + Sync>;
 
+/// The internet road, as client mode opens it when the station is not on this network: the Remote
+/// service's pipe through the station's room and its relay in the app (`lan_client::internet`), a
+/// stand-in in a test. Each is asked by the station's id here, and reads the road's record itself.
+pub(crate) trait Afar: Send + Sync + 'static {
+    /// Whether an internet road is kept for the station paired here as `id`. The store can block,
+    /// so it is asked off the async threads.
+    fn has_road(&self, id: &str) -> bool;
+    /// The command link through the station's room, its internet roads beside it, its audio on
+    /// `headset` when this computer has one: or why it did not open.
+    fn open(
+        &self,
+        id: String,
+        headset: Option<Arc<dyn Headset>>,
+    ) -> Pin<Box<dyn Future<Output = Result<Link, &'static str>> + Send>>;
+    /// The pipe's minute renewed, or why not.
+    fn renew(&self, id: String) -> Pin<Box<dyn Future<Output = Result<(), &'static str>> + Send>>;
+}
+
+/// The internet road's clocks. A test shortens them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Timing {
+    /// How long an internet link's Stop road may take to find a pair before this network is said
+    /// to block the datagram roads.
+    pub(crate) udp_grace: Duration,
+    /// How often, while on the internet, the station's addresses on this network are tried.
+    pub(crate) lan_probe: Duration,
+    /// "Still there?" and the end after it, by the operator's input (N5).
+    pub(crate) idle_prompt: Duration,
+    pub(crate) idle_end: Duration,
+    /// How often the pipe is renewed.
+    pub(crate) renew: Duration,
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Self {
+            udp_grace: UDP_GRACE,
+            lan_probe: LAN_PROBE,
+            idle_prompt: tempo_client::still_there::PROMPT,
+            idle_end: tempo_client::still_there::END,
+            renew: crate::lan_client::internet::RENEW_EVERY,
+        }
+    }
+}
+
+/// How long an internet Stop road has to find a pair: ICE's own checks finish well inside it.
+const UDP_GRACE: Duration = Duration::from_secs(10);
+/// How often the station's addresses on this network are tried while on the internet.
+const LAN_PROBE: Duration = Duration::from_secs(30);
+/// The longest wait between those tries, after one that found the station but could not open.
+const LAN_PROBE_MOST: u32 = 10;
+/// How long each of the station's addresses has to answer a try.
+const LAN_PROBE_WAIT: Duration = Duration::from_secs(1);
+
 /// The shack, as client mode reaches it: the command link in the app, a stand-in in a test.
 pub(crate) trait Shack: Send + Sync + 'static {
     /// One call, with the revision of the copy a save was made from and how many Stops had been
@@ -525,6 +582,12 @@ pub(crate) struct Status {
     /// This computer's over, as the station last said it on Stop's road: on the air with its holes,
     /// ended and why, or no word while a press is held.
     pub(crate) over: Option<Over>,
+    /// The link runs over the internet (through the station's room), not this network.
+    pub(crate) internet: bool,
+    /// "Still there?": nothing from the operator for a quarter of an hour on the internet.
+    pub(crate) still_there: bool,
+    /// On the internet, this network lets no datagram road through: watch, tune and log only.
+    pub(crate) udp_blocked: bool,
     /// A test build's road switch: Normal, or the road this computer blocks.
     #[cfg(feature = "bench-road-switch")]
     pub(crate) bench: crate::bench_road_switch::Position,
@@ -588,6 +651,21 @@ pub(crate) struct Client {
     /// only, so every launch starts with both roads open.
     #[cfg(feature = "bench-road-switch")]
     road_switch: Arc<crate::bench_road_switch::Switch>,
+    /// The internet road, when this computer may open one ([`Afar`]), and its clocks.
+    afar: OnceLock<Arc<dyn Afar>>,
+    timing: Mutex<Timing>,
+    /// The link there is now runs over the internet.
+    on_internet: AtomicBool,
+    /// On the internet, this network has let no datagram road through ([`Timing::udp_grace`]).
+    udp_blocked: AtomicBool,
+    /// The operator's input, for "Still there?" (N5); and whether nobody answered it, so nothing
+    /// connects again until the operator does ([`Client::still_here`]).
+    idle: Mutex<IdleWatch>,
+    idle_ended: AtomicBool,
+    answered: tokio::sync::Notify,
+    /// How many times longer than [`Timing::lan_probe`] the next try of this network waits: it
+    /// doubles each time the station was found here but the link would not open.
+    lan_backoff: std::sync::atomic::AtomicU32,
 }
 
 impl Client {
@@ -598,6 +676,9 @@ impl Client {
                 phase: Phase::Connecting,
                 reason: None,
                 over: None,
+                internet: false,
+                still_there: false,
+                udp_blocked: false,
                 #[cfg(feature = "bench-road-switch")]
                 bench: Default::default(),
             }),
@@ -622,6 +703,42 @@ impl Client {
             recording: Mutex::new(None),
             #[cfg(feature = "bench-road-switch")]
             road_switch: Arc::default(),
+            afar: OnceLock::new(),
+            timing: Mutex::new(Timing::default()),
+            on_internet: AtomicBool::new(false),
+            udp_blocked: AtomicBool::new(false),
+            idle: Mutex::new({
+                let timing = Timing::default();
+                IdleWatch::bounded(timing.idle_prompt, timing.idle_end, Instant::now())
+            }),
+            idle_ended: AtomicBool::new(false),
+            answered: tokio::sync::Notify::new(),
+            lan_backoff: std::sync::atomic::AtomicU32::new(1),
+        }
+    }
+
+    /// The internet road this computer may open when the station is not on this network. Given
+    /// once, before [`Client::drive`]; without it, this network's road alone.
+    pub(crate) fn reach_afar(&self, afar: Arc<dyn Afar>) {
+        let _ = self.afar.set(afar);
+    }
+
+    /// The internet road's clocks, for a test that cannot wait for them.
+    #[cfg(test)]
+    pub(crate) fn time_with(&self, timing: Timing) {
+        let idle = IdleWatch::bounded(timing.idle_prompt, timing.idle_end, Instant::now());
+        *lock(&self.idle) = idle;
+        *lock(&self.timing) = timing;
+    }
+
+    /// The operator did something here: a click, a key or the wheel in a window (the banner says
+    /// so, [`client_still_here`]). It answers "Still there?", and after a link nobody answered it
+    /// for, lets this computer connect again.
+    pub(crate) fn still_here(&self) {
+        lock(&self.idle).active(Instant::now());
+        if self.idle_ended.swap(false, Ordering::SeqCst) {
+            self.set(Phase::Connecting, None);
+            self.answered.notify_one();
         }
     }
 
@@ -638,8 +755,12 @@ impl Client {
             .shack()
             .and_then(|shack| shack.stop_road())
             .and_then(|road| road.over(std::time::Instant::now()));
+        let internet = self.on_internet.load(Ordering::SeqCst);
         Status {
             over,
+            internet,
+            still_there: internet && lock(&self.idle).state(Instant::now()) == Idle::Prompt,
+            udp_blocked: internet && self.udp_blocked.load(Ordering::SeqCst),
             #[cfg(feature = "bench-road-switch")]
             bench: self.road_switch.position(),
             ..lock(&self.status).clone()
@@ -721,6 +842,12 @@ impl Client {
     /// there. The shack judges the start again, by its own clock.
     fn ready_to_start(&self, now: Instant) -> Result<Arc<StopRoad>, &'static str> {
         let shack = self.shack().ok_or("notLive")?;
+        // ⛔ On the internet with no datagram road through this network, Stop would have the link
+        // alone: nothing starts here (watch, tune and log only). Presence, below, would refuse it
+        // too, since presence comes only over Stop's road; this says why.
+        if self.on_internet.load(Ordering::SeqCst) && self.udp_blocked.load(Ordering::SeqCst) {
+            return Err("udpBlocked");
+        }
         let road = shack.stop_road().ok_or(Refusal::NoStopRoad.code())?;
         if !road.presence_live(now) {
             return Err(Refusal::NoPresence.code());
@@ -735,6 +862,8 @@ impl Client {
     /// ends. A press that ended other than by the screen letting go is refused until the screen
     /// lets go: it never keys again.
     fn press(&self) -> Result<Value, String> {
+        // A held PTT is the operator at work, for as long as the screen re-asserts it.
+        lock(&self.idle).active(Instant::now());
         let mut held = lock(&self.press);
         match &*held {
             Press::Held { press, road } => {
@@ -1225,6 +1354,10 @@ impl Client {
             });
         }
         loop {
+            // Nobody answered "Still there?": nothing connects again until the operator does.
+            while self.idle_ended.load(Ordering::SeqCst) {
+                self.answered.notified().await;
+            }
             let id = self.station_id.clone();
             let found = find.clone();
             let record = tokio::task::spawn_blocking(move || found(&id))
@@ -1250,22 +1383,49 @@ impl Client {
             // In a test build, what this link opens is under the road switch.
             #[cfg(feature = "bench-road-switch")]
             let connecting = self.road_switch.over(connecting);
-            let wait = match connecting.await {
+            let probed = self.lan_backoff.load(Ordering::SeqCst) > 1;
+            let reached = match connecting.await {
+                Ok((link, at)) => Ok((link, Some(at))),
+                // Not on this network (nothing answered, or not the station): the internet road,
+                // when one is kept for this station. LAN first, always.
+                Err(why) if road::look_further(why) || why == "notThisStation" => {
+                    self.over_the_internet(why).await.map(|link| (link, None))
+                }
+                Err(why) => Err(why),
+            };
+            if let (true, Ok((_, None))) = (probed, &reached) {
+                // This network's road was found by a try but would not open: wait longer next time.
+                let backoff = self.lan_backoff.load(Ordering::SeqCst);
+                self.lan_backoff
+                    .store((backoff * 2).min(LAN_PROBE_MOST), Ordering::SeqCst);
+            } else if let Ok((_, Some(_))) = &reached {
+                self.lan_backoff.store(1, Ordering::SeqCst);
+            }
+            let wait = match reached {
                 // The station proved the key pinned for this pairing; one that then names itself
-                // another station is not the one asked for, and runs nothing from here.
-                Ok((link, _)) if link.ids.station != self.station_id => {
+                // another station is not the one asked for, and runs nothing from here. Over the
+                // internet the station proved the key the service listed for it, which is the
+                // identity there.
+                Ok((link, Some(_))) if link.ids.station != self.station_id => {
                     link.close();
                     self.set(Phase::Refused, Some("notThisStation"));
                     AGAIN_REFUSED
                 }
                 Ok((link, at)) => {
-                    self.at(at.to_string());
-                    self.on_the_link(&app, Arc::new(link), &shown).await;
-                    self.set(Phase::NotLive, None);
+                    let internet = at.is_none();
+                    if let Some(at) = at {
+                        self.at(at.to_string());
+                    }
+                    self.on_the_link(&app, Arc::new(link), &shown, internet, (&find, typed))
+                        .await;
+                    if !self.idle_ended.load(Ordering::SeqCst) {
+                        self.set(Phase::NotLive, None);
+                    }
                     AGAIN
                 }
                 Err(reason) => {
-                    let lasting = LASTING.contains(&reason);
+                    let lasting =
+                        LASTING.contains(&reason) || crate::lan_client::internet::lasting(reason);
                     let phase = if !lasting && self.live_once.load(Ordering::SeqCst) {
                         Phase::NotLive
                     } else {
@@ -1314,14 +1474,62 @@ impl Client {
         }
     }
 
+    /// The link over the internet road, when one is kept for this station: or `why`, this
+    /// network's reason, when none is, or the internet road's own reason it did not open.
+    async fn over_the_internet(&self, why: &'static str) -> Result<Link, &'static str> {
+        let Some(afar) = self.afar.get().cloned() else {
+            return Err(why);
+        };
+        let (asked, id) = (Arc::clone(&afar), self.station_id.clone());
+        let kept = tokio::task::spawn_blocking(move || asked.has_road(&id))
+            .await
+            .unwrap_or(false);
+        if !kept {
+            return Err(why);
+        }
+        let headset = self
+            .headset
+            .get()
+            .map(|headset| Arc::clone(headset) as Arc<dyn Headset>);
+        afar.open(self.station_id.clone(), headset).await
+    }
+
     /// One link, open, until it ends: the lease, the feeds, the events, and the calls the last
-    /// link left unanswered.
+    /// link left unanswered. On the internet (`internet`), also: its pipe renewed, "Still there?",
+    /// whether this network lets the datagram roads through, and a try of the station's addresses
+    /// on this network now and then (`lan`: the record `find` reads, and the address the operator
+    /// typed), which ends this link for that road when one answers and nothing is on the air.
     async fn on_the_link<R: Runtime>(
         &self,
         app: &tauri::AppHandle<R>,
         link: Arc<Link>,
         shown: &AtomicBool,
+        internet: bool,
+        lan: (&Find, Option<SocketAddrV4>),
     ) {
+        let timing = *lock(&self.timing);
+        let opened = Instant::now();
+        self.on_internet.store(internet, Ordering::SeqCst);
+        self.udp_blocked.store(false, Ordering::SeqCst);
+        if internet {
+            // The operator's time away began when this link did.
+            lock(&self.idle).active(opened);
+        }
+        // The cushion for this road: twice the LAN's on the internet, where jitter is larger.
+        if let Some(headset) = self.mic.get() {
+            let cushion = if internet {
+                INTERNET_CUSHION_MS
+            } else {
+                CUSHION_MS
+            };
+            headset.rings().set_cushion_ms(cushion);
+        }
+        let renewing = match (internet, self.afar.get()) {
+            (true, Some(afar)) => Some(self.renew_the_pipe(Arc::clone(afar), &link, timing.renew)),
+            _ => None,
+        };
+        let lan_found = Arc::new(AtomicBool::new(false));
+        let probing = internet.then(|| self.try_this_network(lan, timing, &lan_found));
         self.install(Some(link.clone() as Arc<dyn Shack>));
         let forwarding = {
             let (app, mut events) = (app.clone(), link.events());
@@ -1381,10 +1589,121 @@ impl Client {
                     let _ = main.eval("window.location.reload()");
                 }
             }
+            if !internet {
+                continue;
+            }
+            let now = Instant::now();
+            let blocked =
+                now >= opened + timing.udp_grace && link.internet_stop_road() != Some(true);
+            self.udp_blocked.store(blocked, Ordering::SeqCst);
+            if lock(&self.idle).state(now) == Idle::End {
+                // Nobody answered "Still there?": the station is let go, as Leave lets it go.
+                self.idle_ended.store(true, Ordering::SeqCst);
+                if let Some(held) = lease.take() {
+                    let release = operate(&link, json!({"type":"release","leaseId":held}));
+                    let _ = tokio::time::timeout(Duration::from_secs(1), release).await;
+                }
+                link.close();
+                self.set(Phase::Refused, Some("idle"));
+                break;
+            }
+            if lan_found.load(Ordering::SeqCst) && self.nothing_on_the_air(now) {
+                // The station answers on this network again: its road is free, and comes first.
+                tempo_core::applog::info(
+                    "client",
+                    "the station answers on this network again: leaving the internet road for it",
+                );
+                link.close();
+                break;
+            }
+        }
+        if let Some(renewing) = renewing {
+            renewing.abort();
+        }
+        if let Some(probing) = probing {
+            probing.abort();
         }
         forwarding.abort();
         *lock(&self.held) = None;
         self.install(None);
+        self.udp_blocked.store(false, Ordering::SeqCst);
+    }
+
+    /// Renews the pipe under `link` every `every` while it lives; a refusal that asking again will
+    /// not change ends the link, as the room will itself within its minute.
+    fn renew_the_pipe(
+        &self,
+        afar: Arc<dyn Afar>,
+        link: &Arc<Link>,
+        every: Duration,
+    ) -> tauri::async_runtime::JoinHandle<()> {
+        let (id, link) = (self.station_id.clone(), Arc::clone(link));
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(every).await;
+                match afar.renew(id.clone()).await {
+                    Err(why) if crate::lan_client::internet::lasting(why) => {
+                        tempo_core::applog::warn(
+                            "client",
+                            &format!("the internet road's pipe was not renewed ({why})"),
+                        );
+                        link.close();
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        })
+    }
+
+    /// Tries the station's addresses on this network, the typed one first, every [`Timing::lan_probe`] (longer after a
+    /// try that found it but could not open, [`Client::lan_backoff`]) until one answers, then
+    /// says so in `found`.
+    fn try_this_network(
+        &self,
+        (find, typed): (&Find, Option<SocketAddrV4>),
+        timing: Timing,
+        found: &Arc<AtomicBool>,
+    ) -> tauri::async_runtime::JoinHandle<()> {
+        let (find, id, found) = (find.clone(), self.station_id.clone(), Arc::clone(found));
+        let every = timing.lan_probe * self.lan_backoff.load(Ordering::SeqCst);
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(every).await;
+                let asked = (find.clone(), id.clone());
+                let record = tokio::task::spawn_blocking(move || (asked.0)(&asked.1)).await;
+                let addresses: Vec<SocketAddrV4> = match record {
+                    Ok(Ok(Some(record))) => road::order(&record, typed),
+                    _ => Vec::new(),
+                };
+                for at in addresses {
+                    let answered =
+                        tokio::time::timeout(LAN_PROBE_WAIT, tokio::net::TcpStream::connect(at))
+                            .await;
+                    if matches!(answered, Ok(Ok(_))) {
+                        found.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                }
+            }
+        })
+    }
+
+    /// Nothing is on the air: no press is held, this computer's over is not on the air as its
+    /// Stop road last heard it, and the station's newest snapshot does not say it is transmitting.
+    /// A link may then be left for another road without cutting an over. A courtesy, not a guard:
+    /// leaving a link mid-over ends the over, which is the safe way to be wrong.
+    fn nothing_on_the_air(&self, now: Instant) -> bool {
+        let pressed = matches!(&*lock(&self.press), Press::Held { .. });
+        let shack = self.shack();
+        let over = shack
+            .as_ref()
+            .and_then(|shack| shack.stop_road())
+            .and_then(|road| road.over(now));
+        let transmitting = shack
+            .and_then(|shack| shack.latest("snapshot/1"))
+            .is_some_and(|(_, snapshot)| snapshot["radio"]["transmitting"] == true);
+        !pressed && !transmitting && !matches!(over, Some(Over::OnAir { .. } | Over::NoWord))
     }
 
     /// One turn of the lease: renewed while held, taken when control is free, and the banner told
@@ -1576,6 +1895,16 @@ pub(crate) fn client_status(app: tauri::AppHandle) -> Option<Status> {
     app.try_state::<Arc<Client>>().map(|client| client.status())
 }
 
+/// The operator did something in a window: a click, a key or the wheel. On the internet road it
+/// answers "Still there?", and after a link nobody answered it for, connects again. Nothing on a
+/// computer running its own station.
+#[tauri::command]
+pub(crate) fn client_still_here(app: tauri::AppHandle) {
+    if let Some(client) = app.try_state::<Arc<Client>>() {
+        client.still_here();
+    }
+}
+
 /// This computer ▸ Audio as it stands: the output and the microphone chosen ("" for the system's
 /// default), this computer's devices to choose from, and why either would not open, if it would
 /// not. Only on a computer driving a station.
@@ -1754,12 +2083,17 @@ pub(crate) fn run(station: String) {
                 crate::capture_all_window_geometry(&handle);
                 tempo_core::applog::flush();
             }));
-            let find: Find = {
-                let stations = Arc::new(crate::lan_client::Stations::new(Arc::new(
-                    crate::remote_service::vault::SystemVault,
-                )));
-                Arc::new(move |id: &str| stations.get(id))
-            };
+            let stations = Arc::new(crate::lan_client::Stations::new(Arc::new(
+                crate::remote_service::vault::SystemVault,
+            )));
+            match crate::lan_client::internet::Roads::new(Arc::clone(&stations)) {
+                Ok(roads) => driving.reach_afar(Arc::new(roads)),
+                Err(why) => tempo_core::applog::warn(
+                    "client",
+                    &format!("no internet road from this computer ({why})"),
+                ),
+            }
+            let find: Find = Arc::new(move |id: &str| stations.get(id));
             let look: Look = Arc::new(tempo_stream::lan::dnssd::find);
             tauri::async_runtime::spawn(driving.drive(app.handle().clone(), find, look, None));
             Ok(())

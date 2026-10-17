@@ -467,6 +467,8 @@ async fn the_window_closing_mid_over_ends_it_at_once() {
             find: Arc::new(|_| Ok(Vec::new())),
             name: "Den PC".into(),
             operate: Arc::new(|_| {}),
+            add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
+            forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
         })
         .unwrap();
         let mut page = page_socket(&origin).await;

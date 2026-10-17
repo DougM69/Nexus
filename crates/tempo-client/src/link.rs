@@ -590,6 +590,16 @@ impl Link {
         self.shared.audio.clone()
     }
 
+    /// Whether this link's Stop road goes over the internet, and if it does, whether its ICE has
+    /// selected a pair to send on: `None` for a link with no internet Stop road.
+    pub fn internet_stop_road(&self) -> Option<bool> {
+        self.shared
+            .ice
+            .iter()
+            .find(|(name, _)| *name == "stop")
+            .map(|(_, ice)| ice.route().is_some())
+    }
+
     /// Each internet road's pair as its ICE selected it, by the road's name: for a test.
     #[cfg(any(test, feature = "test-util"))]
     pub fn internet_routes(&self) -> Vec<(&'static str, Option<crate::ice::Route>)> {

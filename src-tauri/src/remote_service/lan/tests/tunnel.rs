@@ -9,10 +9,10 @@ use std::collections::BTreeMap;
 
 /// The device id the service gave the computer when it registered: a hosted device's, never the
 /// LAN's, which is made from the key.
-const APPROVED: &str = "10000000-0000-4000-8000-00000000000d";
+pub(super) const APPROVED: &str = "10000000-0000-4000-8000-00000000000d";
 
 /// Who the tunnel takes: `computer`, approved under [`APPROVED`] with no end in sight, or nobody.
-fn approved_for(computer: Option<&Computer>) -> BTreeMap<[u8; 32], (String, u64)> {
+pub(super) fn approved_for(computer: Option<&Computer>) -> BTreeMap<[u8; 32], (String, u64)> {
     approved_until(computer, u64::MAX)
 }
 
@@ -25,7 +25,7 @@ fn approved_until(computer: Option<&Computer>, until: u64) -> BTreeMap<[u8; 32],
 }
 
 /// `s`'s tunnel, held to `roster`, its internet roads on loopback.
-fn tunnel_of(s: &Shack, roster: Roster, approved: &Arc<Approved>) -> Tunnel {
+pub(super) fn tunnel_of(s: &Shack, roster: Roster, approved: &Arc<Approved>) -> Tunnel {
     let deps = TunnelDeps {
         authority: s.shared.authority.clone(),
         engine: s.shared.engine.clone(),
@@ -47,7 +47,7 @@ fn tunnel_of(s: &Shack, roster: Roster, approved: &Arc<Approved>) -> Tunnel {
 
 /// A pipe through an in-memory room, the station's end served by `tunnel` until `stop`: the
 /// computer's end, as the byte stream its TLS runs over.
-async fn piped(tunnel: &Tunnel, stop: watch::Receiver<bool>) -> tokio::io::DuplexStream {
+pub(super) async fn piped(tunnel: &Tunnel, stop: watch::Receiver<bool>) -> tokio::io::DuplexStream {
     let (station_side, room_side) = tokio::io::duplex(256 * 1024);
     let room = tokio::spawn(async move { tokio_tungstenite::accept_async(room_side).await });
     let (station_end, _) = tokio_tungstenite::client_async("ws://room/pipe", station_side)
@@ -431,7 +431,10 @@ async fn a_session_through_the_room_ends_with_its_approval() {
 /// What the computer's own end keeps for a station it reaches through the room: the service's
 /// station id and the device id it gave this computer, the station key pinned at first sight
 /// (`station`), and this computer's device key for that station.
-fn through_record(s: &Shack, station: &str) -> crate::remote_service::vault::PairedStation {
+pub(super) fn through_record(
+    s: &Shack,
+    station: &str,
+) -> crate::remote_service::vault::PairedStation {
     crate::remote_service::vault::PairedStation {
         station_id: STATION.into(),
         device_id: APPROVED.into(),
@@ -552,4 +555,82 @@ async fn the_computers_own_end_opens_the_link_and_its_stop_road_through_the_room
         "the road never crossed the relay both ways: {crossed:?}"
     );
     link.close();
+}
+
+/// ★ A station that is not honest, through the room: its welcome names roads of this network
+/// (Stop's second road and the audio road, a port and a tag each), which an honest station's
+/// welcome through the room never does. This computer has no address on the station's network to
+/// take them at, so it leaves them and offers its internet roads in its `open` all the same: Stop
+/// keeps a road of its own beside the tunnel. CONTROL: the honest welcome, naming none, gets the
+/// same `open`.
+#[tokio::test]
+async fn a_welcome_through_the_room_naming_this_networks_roads_leaves_them() {
+    use crate::lan_client::link::{Internet, Link};
+    let key = fixture_key();
+    let identity = tls::Identity::new(&key, STATION.into()).unwrap();
+    let record = crate::remote_service::vault::PairedStation {
+        station_id: STATION.into(),
+        device_id: APPROVED.into(),
+        station_key: identity.public_key().to_string(),
+        pkcs8: Computer::new().key,
+        addresses: Vec::new(),
+    };
+    let config = tls::server(&identity, Arc::new(|_: &[u8; 32]| None), Arc::new(|| true)).unwrap();
+    let internet = Internet {
+        bind: Ipv4Addr::LOCALHOST.into(),
+        direct: true,
+        stun: None,
+        relay: None,
+    };
+    for hostile in [true, false] {
+        let (computer_end, station_end) = tokio::io::duplex(256 * 1024);
+        let config = config.clone();
+        let station = tokio::spawn(async move {
+            let tls = tokio_rustls::TlsAcceptor::from(config)
+                .accept(station_end)
+                .await
+                .unwrap();
+            let mut socket = tokio_tungstenite::accept_async(tls).await.unwrap();
+            let mut heard = Vec::new();
+            while let Some(Ok(message)) = socket.next().await {
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let said: Value = serde_json::from_str(&text).unwrap();
+                let answer = match said["type"].as_str() {
+                    Some("hello") => {
+                        let mut welcome = json!({"type":"welcome","sessionId":id(),
+                            "deviceId":APPROVED,"stationId":STATION,"app":super::super::wire::APP,
+                            "contract":super::super::wire::contract()});
+                        if hostile {
+                            welcome["stopRoad"] = json!({"port":42077,"tag":"0123456789abcdef"});
+                            welcome["audioRoad"] = json!({"port":42076,"tag":"fedcba9876543210"});
+                        }
+                        welcome
+                    }
+                    _ => json!({"type":"refused","reason":"otherBuild"}),
+                };
+                heard.push(said);
+                let _ = socket.send(Message::Text(answer.to_string().into())).await;
+            }
+            heard
+        });
+        let refused = Link::connect_tunnel(computer_end, &record, 41, None, &internet)
+            .await
+            .err();
+        assert_eq!(
+            refused,
+            Some("otherBuild"),
+            "hostile={hostile}: the script ran"
+        );
+        let heard = station.await.unwrap();
+        let open = heard
+            .iter()
+            .find(|said| said["type"] == "open")
+            .expect("an open");
+        assert!(
+            open["roads"]["stop"].is_object(),
+            "hostile={hostile}: no internet Stop road offered: {open}"
+        );
+    }
 }

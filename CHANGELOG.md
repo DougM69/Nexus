@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at the shack. Stop works from the second PC on its own road, and the shack unkeys within about 5 s if the network or
   the second PC drops. Passwords and remote-access settings stay at the shack, both PCs must run the same version, and
   there is no paddle from afar. NEEDS-BENCH: two Windows PCs on one network, the radio into a dummy load.
+- **Nexus Remote: operate from the second PC over the internet too (Beta, test builds).** In **Stations on this
+  network**, press **Add the internet road** beside your shack and sign in to Nexus Remote in your web browser, then
+  approve the PC at the shack under Remote access. From then on, when the shack is not on the network you are on,
+  **Operate from this computer** reaches it over the internet instead, and it moves back to your own network by itself
+  when the shack answers there again. The internet road is part of Remote's paid service; on your own network it stays
+  free. Stop keeps its own road over the internet as well, so nothing transmits unless that road is working; on a
+  network that blocks it (some hotels and offices) you can still watch, tune and log, and transmitting is off. After 15
+  minutes with no click, key or PTT, Nexus asks "Still there?" and ends the internet link a minute later if nobody
+  answers. Receive audio waits 120 ms before playing over the internet (60 ms on your own network) to ride out the
+  internet's jitter. NEEDS-BENCH: the shack on one network and the second PC on another (a phone hotspot), the radio
+  into a dummy load.
 - **Nexus Remote from a second PC: every JS8 switch, and satellite tracks that end when the second PC goes.** HB, Relay,
   HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within

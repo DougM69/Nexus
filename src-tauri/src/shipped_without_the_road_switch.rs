@@ -395,7 +395,18 @@ fn without_the_feature_there_is_no_switch() {
         .map(String::as_str)
         .collect();
     keys.sort();
-    assert_eq!(keys, ["over", "phase", "reason", "station"]);
+    assert_eq!(
+        keys,
+        [
+            "internet",
+            "over",
+            "phase",
+            "reason",
+            "station",
+            "stillThere",
+            "udpBlocked"
+        ]
+    );
     assert_eq!(status["phase"], "connecting", "CONTROL");
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -12,6 +12,7 @@ use std::net::IpAddr;
 use std::sync::atomic::AtomicUsize;
 use tokio_tungstenite::tungstenite::Message;
 
+mod afar;
 mod ceremony;
 mod client;
 mod commands;

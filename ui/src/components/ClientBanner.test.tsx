@@ -13,13 +13,15 @@ let desktop = true
 const mockStatus = vi.fn<() => Promise<ClientStatus | null>>()
 const mockLeave = vi.fn<() => Promise<void>>()
 const mockSwitch = vi.fn<(to: BenchPosition) => Promise<BenchPosition>>()
+const mockStillHere = vi.fn<() => Promise<void>>()
 vi.mock('../api', () => ({
   isTauri: () => desktop,
   clientStatus: () => mockStatus(),
   leaveClientMode: () => mockLeave(),
   benchRoadSwitch: (to: BenchPosition) => mockSwitch(to),
+  clientStillHere: () => mockStillHere(),
 }))
-import { ClientBanner, CLIENT_STATUS_EVERY_MS } from './ClientBanner'
+import { ClientBanner, ClientInput, CLIENT_STATUS_EVERY_MS, STILL_HERE_EVERY_MS } from './ClientBanner'
 
 const AT = '192.168.1.20:42075'
 const fill = (text: string, values: Record<string, string>) =>
@@ -31,6 +33,7 @@ beforeEach(() => {
   mockStatus.mockReset()
   mockLeave.mockReset().mockResolvedValue(undefined)
   mockSwitch.mockReset()
+  mockStillHere.mockReset().mockResolvedValue(undefined)
 })
 afterEach(() => {
   cleanup()
@@ -279,3 +282,87 @@ describe('a test build’s road switch', () => {
     )
   })
 })
+
+describe('over the internet road', () => {
+  it('says it is the internet, and when this network blocks the datagram roads, that transmitting is off', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, internet: true, udpBlocked: true })
+    await shown()
+    const banner = screen.getByRole('status')
+    expect(banner.textContent).toContain(EN['client.banner.internet.live'])
+    expect(banner.textContent).not.toContain(AT)
+    expect(banner.textContent).toContain(EN['client.banner.udpBlocked'])
+    cleanup()
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, internet: true, udpBlocked: false })
+    await shown()
+    expect(screen.getByRole('status').textContent).not.toContain(EN['client.banner.udpBlocked'])
+  })
+
+  it('asks “Still there?” with a button that answers it, and after nobody did, offers Connect again', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, internet: true, stillThere: true })
+    await shown()
+    expect(screen.getByRole('status').textContent).toContain(EN['client.banner.stillThere'])
+    fireEvent.click(screen.getByRole('button', { name: EN['client.banner.stillHere'] }))
+    expect(mockStillHere).toHaveBeenCalled()
+    cleanup()
+    mockStillHere.mockClear()
+    mockStatus.mockResolvedValue({ station: AT, phase: 'refused', reason: 'idle', internet: true })
+    await shown()
+    expect(screen.getByRole('status').textContent).toContain(EN['client.reason.idle'])
+    fireEvent.click(screen.getByRole('button', { name: EN['client.banner.connectAgain'] }))
+    expect(mockStillHere).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a click, a key or the wheel at most every few seconds, and only on the internet', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, internet: true })
+    await shown()
+    fireEvent.pointerDown(window)
+    fireEvent.keyDown(window, { key: 'a' })
+    expect(mockStillHere).toHaveBeenCalledTimes(1)
+    await act(async () => { vi.advanceTimersByTime(STILL_HERE_EVERY_MS) })
+    fireEvent.wheel(window)
+    expect(mockStillHere).toHaveBeenCalledTimes(2)
+    cleanup()
+    mockStillHere.mockClear()
+    // CONTROL: on this network nothing is reported.
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, internet: false })
+    await shown()
+    await act(async () => { vi.advanceTimersByTime(STILL_HERE_EVERY_MS) })
+    fireEvent.pointerDown(window)
+    expect(mockStillHere).not.toHaveBeenCalled()
+  })
+
+  it('a pop-out reports its input as the banner does, and draws nothing', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, internet: true })
+    const { container } = render(<ClientInput />)
+    await act(async () => { await Promise.resolve() })
+    expect(container.innerHTML).toBe('')
+    fireEvent.keyDown(window, { key: 'a' })
+    expect(mockStillHere).toHaveBeenCalledTimes(1)
+    await act(async () => { vi.advanceTimersByTime(STILL_HERE_EVERY_MS) })
+    fireEvent.pointerDown(window)
+    expect(mockStillHere).toHaveBeenCalledTimes(2)
+    cleanup()
+    mockStillHere.mockClear()
+    // CONTROL: on this network, and on a station's own screen, nothing is reported.
+    for (const status of [{ station: AT, phase: 'live' as const, reason: null, internet: false }, null]) {
+      mockStatus.mockResolvedValue(status)
+      render(<ClientInput />)
+      await act(async () => { await Promise.resolve() })
+      await act(async () => { vi.advanceTimersByTime(STILL_HERE_EVERY_MS) })
+      fireEvent.pointerDown(window)
+      cleanup()
+    }
+    expect(mockStillHere).not.toHaveBeenCalled()
+  })
+
+  it('says each of the internet road’s refusals in its own words', async () => {
+    for (const reason of ['internetNotIncluded', 'notApprovedThere', 'waitingApproval', 'internetNotReady',
+      'stationUnavailable', 'serviceUnavailable', 'tryLater', 'accessDenied', 'pipeClosed'] as const) {
+      mockStatus.mockResolvedValue({ station: AT, phase: 'refused', reason })
+      await shown()
+      expect(screen.getByRole('status').textContent, reason).toContain((EN as Record<string, unknown>)[`client.reason.${reason}`] as string)
+      cleanup()
+    }
+  })
+})
+

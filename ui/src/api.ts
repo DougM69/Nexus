@@ -4396,6 +4396,12 @@ export interface ClientStatus {
   phase: 'connecting' | 'live' | 'notLive' | 'busy' | 'refused'
   reason: string | null
   over?: ClientOver | null
+  /** The link runs over the internet road (Beta), through the station's room. */
+  internet?: boolean
+  /** "Still there?": nothing from the operator here for a quarter of an hour on the internet. */
+  stillThere?: boolean
+  /** On the internet, this network lets no datagram road through: watch, tune and log only. */
+  udpBlocked?: boolean
   /** A test build's road switch: where it is. A shipped build's status never names it. */
   bench?: BenchPosition
 }
@@ -4444,6 +4450,12 @@ export async function clientAudioLevel(): Promise<{
 /** A test note in this computer's output. */
 export async function clientAudioTest(): Promise<{ played: boolean; trouble?: string | null }> {
   return invoke('client_audio_test')
+}
+
+/** The operator did something here (a click, a key, the wheel): it answers the internet road's
+ *  "Still there?", and after a link nobody answered it for, connects again. */
+export async function clientStillHere(): Promise<void> {
+  return invoke<void>('client_still_here')
 }
 
 export async function clientStatus(): Promise<ClientStatus | null> {

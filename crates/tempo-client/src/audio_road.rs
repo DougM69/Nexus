@@ -52,7 +52,8 @@ use crate::datagram::{End, Keys, Opener, Sealer, Tag, AUDIO_MAX, EXPORTED};
 use crate::ice::{IceRoad, Path};
 
 pub use tempo_codec::headset::{
-    sound, Rings, Sound, GAIN_DB as VOLUME_DB, VOLUME_DB_MAX, VOLUME_DB_MIN,
+    sound, Rings, Sound, CUSHION_MS, GAIN_DB as VOLUME_DB, INTERNET_CUSHION_MS, VOLUME_DB_MAX,
+    VOLUME_DB_MIN,
 };
 /// This computer's headset for client mode (`tempo_audio::headset::Headset`).
 #[cfg(feature = "device")]
