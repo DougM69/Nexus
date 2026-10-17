@@ -9943,6 +9943,12 @@ export const EN = {
     'RF output power — RTTY keys the carrier for the whole over, so most rigs want well under their SSB rating',
   'rtty.header.band.title': "Showing the rig's current band",
   'rtty.waterfall.hint': 'click nets the decoder',
+  'rtty.waterfall.hint.keyed': 'tuning held while transmitting',
+  'rtty.autoTune.label': 'Auto-tune',
+  'rtty.autoTune.title': 'Net onto the nearest RTTY signal at this shift, near the current tones. This moves the transmit tones too.',
+  'rtty.autoTune.keyed.title': 'Auto-tune is off while transmitting: it would move the transmit tones mid-over',
+  'rtty.autoTune.none': 'Auto-tune: no RTTY signal at this shift near the current tones',
+  'rtty.autoTune.failed': 'Auto-tune could not read the spectrum',
 
   // ── RTTY ▸ the decoded-text pane ────────────────────────────────────────────────────
   // The pane's own name is lower-case where the frame prints it and title-case in the ⊞

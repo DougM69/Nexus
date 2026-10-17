@@ -27201,6 +27201,15 @@ button.sat-chip:disabled {
   color: var(--state-good);
   border-color: var(--state-good);
 }
+/* Auto-tune, in the RTTY waterfall's header (the pop-out button's chrome). Disabled while we
+   are keyed: a net moves the transmit tones. */
+.rtty-autotune {
+  white-space: nowrap;
+}
+.rtty-autotune:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 /* RTTY sending indicator (header, beside the backend pill) — an over is on the air. */
 .rtty-tx-pill {
   font-size: var(--fs-label);

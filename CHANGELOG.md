@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
   seconds of that PC dropping, as a transmission does; a track started at the shack runs on. NEEDS-BENCH.
+- **RTTY screen: the waterfall shades the mark and space tones, and Auto-tune nets onto a signal.** A band now fills
+  the waterfall between mark and space where the decoder is listening, and follows the AFC. It turns red while you
+  transmit. **Auto-tune**, in the waterfall's header, finds the nearest signal near the current tones whose two tones
+  sit at your shift, passing over single carriers and signals at another shift, and nets onto it. Netting moves your
+  transmit tones too, so Auto-tune is off while you transmit. NEEDS-BENCH: a real RTTY signal off the air.
 
 ### Changed
 - **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each
@@ -78,6 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   then shrank as ALC, power and compression arrived. From the moment the radio keys, SWR, ALC, PO and COMP now each
   have their own place at a fixed width, empty until their reading comes in. A meter the radio does not report is
   marked unavailable once the over ends, not a fraction of a second after it starts.
+- **RTTY screen: a click on the waterfall no longer moves your transmit tones during an over.** Netting moves the
+  AFSK transmit tones as well as the decoder, so a click while transmitting slid the signal you were sending to
+  wherever you clicked. While an over is on the air or queued, continuous TX is on or Tune is keyed, a click now does
+  nothing, and the waterfall's hint says tuning is held.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to

@@ -101,7 +101,9 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-const heldLabel = () => screen.queryByText(/transmitting/i)
+// The held badge ("TRANSMITTING — display held"), by its own words: the waterfall's hint also says
+// "transmitting" while keyed (tuning is held then), so the bare word matches two elements.
+const heldLabel = () => screen.queryByText(/display held/i)
 
 describe('RTTY: the held waterfall says so during a tune too (#230)', () => {
   it('a keyed tune carrier gets the held-display label', async () => {
