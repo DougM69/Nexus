@@ -157,6 +157,7 @@ pub struct Report {
 }
 
 impl Report {
+    #[cfg(test)]
     pub fn any_posted(self) -> bool {
         self.pota == PotaResult::Posted || self.cluster == ClusterResult::Queued
     }

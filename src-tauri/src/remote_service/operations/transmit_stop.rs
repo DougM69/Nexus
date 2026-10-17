@@ -250,7 +250,7 @@ impl Authority {
 /// `halt_tx` leaves the TX-enable latch off exactly as a local Stop TX does. The shack's own Stop
 /// controls are untouched.
 ///
-/// ⭐ **AND IT ENDS AN ACTIVE SATELLITE TRACK** (`satellite::disarm_track` — the rail Stop's own
+/// ⭐ **AND IT ENDS AN ACTIVE SATELLITE TRACK** (`disarm_track` — the rail Stop's own
 /// verb: disarm, hand the dial back, halt the mast). This is the ONE place the browser's Stop does
 /// more than the desktop's Stop TX does, and it is deliberate. At the shack those are two
 /// controls, a metre apart, and the operator picks; a browser has one Stop, and a satellite track
@@ -298,7 +298,7 @@ pub(super) fn stop_station(engine: &crate::SharedEngine) {
                 // Already off the accepting thread; the mast halt needs no second one.
                 #[cfg(feature = "radio")]
                 if let Some(addr) = halt {
-                    super::station::satellite::halt_mast(addr);
+                    halt_mast(addr);
                 }
                 #[cfg(not(feature = "radio"))]
                 let _ = halt;
@@ -316,7 +316,7 @@ fn stop(e: &mut tempo_app::engine::Engine) -> Option<String> {
         "remote Stop TX: stopping every transmission at the station",
     );
     #[cfg(feature = "radio")]
-    let halt = super::station::satellite::disarm_track(e);
+    let halt = disarm_track(e);
     #[cfg(not(feature = "radio"))]
     let halt = None;
     e.stop_cw();
@@ -328,6 +328,19 @@ fn stop(e: &mut tempo_app::engine::Engine) -> Option<String> {
     halt
 }
 
+/// Disarm the desktop's satellite track under the guard Stop already holds, returning the mast halt
+/// for the caller to run once it has let the lock go.
+#[cfg(feature = "radio")]
+fn disarm_track(eng: &mut tempo_app::engine::Engine) -> Option<String> {
+    crate::disarm_sat_track_locked(eng)
+}
+
+/// The mast halt on its own: a blocking socket write, with nothing of Engine left in it.
+#[cfg(feature = "radio")]
+fn halt_mast(addr: String) {
+    let _ = tempo_audio::rotator::stop(&addr);
+}
+
 /// A blocking socket write, so the thread that owes the browser its acceptance never runs it. A
 /// thread that cannot be spawned runs it here instead — a Stop that quietly declined to halt the
 /// mast is not an option.
@@ -337,10 +350,10 @@ fn halt_off_thread(addr: Option<String>) {
         let owned = addr.clone();
         if std::thread::Builder::new()
             .name("remote-stop-rotator".into())
-            .spawn(move || super::station::satellite::halt_mast(owned))
+            .spawn(move || halt_mast(owned))
             .is_err()
         {
-            super::station::satellite::halt_mast(addr);
+            halt_mast(addr);
         }
     }
     #[cfg(not(feature = "radio"))]

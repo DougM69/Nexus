@@ -33,9 +33,6 @@ pub(super) fn with_lan(
         engine.clone(),
         transport::Feeds {
             monitor: crate::remote_monitor::Publisher::default(),
-            spectrum: None,
-            meters: Default::default(),
-            sources: None,
             #[cfg(feature = "radio")]
             audio: None,
             stream: stream::Host::default(),

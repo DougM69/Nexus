@@ -1,11 +1,10 @@
-//! Station-owned authority for manual logging and typed station controls.
+//! Station-owned authority for the lease, Stop and the FT gestures.
 //! Cloud admission routes an approved browser; only a local grant (given at the
 //! shack, or restored for a still-approved browser) permits a lease. FT8/FT4 CQ
 //! and TX On/Off require a separate local transmit grant, and no grant arms TX;
-//! Stop has independent admission. Deferred hardware
-//! writes carry a revocable permit and a separate completion receipt.
-//! A log append already begun cannot be rolled back on disconnect. Its bounded
-//! receipt remains queryable by the same device while locally permitted.
+//! Stop has independent admission. A held FT contact's log append already begun
+//! cannot be rolled back on disconnect. Its bounded receipt remains queryable by
+//! the same device while locally permitted.
 use super::transport::identifier;
 use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
@@ -18,15 +17,22 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tempo_app::remote_control::{transmit::TransmitAuthority, Completion, Outcome, Revocation};
 
-mod export;
-/// `pub(crate)` for the row key: the desktop's log commands find a row by the same
-/// [`logging::Target`] the browser sends, so the two writers cannot disagree about identity.
-pub(crate) mod logging;
-mod program_edit;
-mod program_export;
-mod settings;
+mod logging;
 mod station;
 mod transmit_stop;
+
+/// A fresh random id in the UUID shape: the station's boot, a lease, a command window.
+fn snapshot_id() -> Result<String, &'static str> {
+    let s = super::transport::random_secret()?;
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &s[..8],
+        &s[8..12],
+        &s[12..16],
+        &s[16..20],
+        &s[20..32]
+    ))
+}
 
 const LEASE: Duration = Duration::from_secs(5);
 const WINDOW: Duration = Duration::from_secs(2);
@@ -74,21 +80,6 @@ pub enum Request {
         #[serde(rename = "operationId")]
         operation_id: String,
     },
-    LogManual {
-        #[serde(rename = "requestId")]
-        request_id: String,
-        #[serde(rename = "stationBootId")]
-        station_boot_id: String,
-        #[serde(rename = "leaseId")]
-        lease_id: String,
-        #[serde(rename = "expectedRevision")]
-        expected_revision: u64,
-        #[serde(rename = "commandWindowId")]
-        command_window_id: String,
-        #[serde(rename = "clientSequence")]
-        client_sequence: u64,
-        record: Box<ManualRecord>,
-    },
     StationControl {
         #[serde(rename = "requestId")]
         request_id: String,
@@ -105,52 +96,6 @@ pub enum Request {
         context: station::Context,
         action: Box<station::Action>,
     },
-    /// Edit or delete a logged contact. Operation v4, the logging grant, and the manual log's own
-    /// lease, window, sequence and receipt rules.
-    LogChange {
-        #[serde(rename = "requestId")]
-        request_id: String,
-        #[serde(rename = "stationBootId")]
-        station_boot_id: String,
-        #[serde(rename = "leaseId")]
-        lease_id: String,
-        #[serde(rename = "expectedRevision")]
-        expected_revision: u64,
-        #[serde(rename = "commandWindowId")]
-        command_window_id: String,
-        #[serde(rename = "clientSequence")]
-        client_sequence: u64,
-        change: Box<logging::Change>,
-    },
-    /// Read one POTA/SOTA activation file, or the list of activations, under the logging grant and
-    /// this browser's current lease. Operation v4. It spends no sequence and writes nothing.
-    ActivationExport {
-        #[serde(rename = "requestId")]
-        request_id: String,
-        #[serde(rename = "stationBootId")]
-        station_boot_id: String,
-        #[serde(rename = "leaseId")]
-        lease_id: String,
-        /// Null asks for the list. Required: serde would fill a missing `Option` with None.
-        #[serde(deserialize_with = "Option::deserialize")]
-        selection: Option<export::Selection>,
-        index: u32,
-    },
-    /// Read the station's working channel list as a CHIRP or spreadsheet CSV, under STATION
-    /// CONTROL and this browser's current lease. Operation v4. It spends no sequence and writes
-    /// nothing — see `program_export`.
-    ProgramExport {
-        #[serde(rename = "requestId")]
-        request_id: String,
-        #[serde(rename = "stationBootId")]
-        station_boot_id: String,
-        #[serde(rename = "leaseId")]
-        lease_id: String,
-        format: program_export::Format,
-        #[serde(rename = "nameCap")]
-        name_cap: u32,
-        index: u32,
-    },
 }
 impl Request {
     pub fn id(&self) -> &str {
@@ -161,97 +106,8 @@ impl Request {
             | Self::Release { request_id, .. }
             | Self::StopTransmit { request_id, .. }
             | Self::Result { request_id, .. }
-            | Self::LogManual { request_id, .. }
-            | Self::StationControl { request_id, .. }
-            | Self::LogChange { request_id, .. }
-            | Self::ActivationExport { request_id, .. }
-            | Self::ProgramExport { request_id, .. } => request_id,
+            | Self::StationControl { request_id, .. } => request_id,
         }
-    }
-}
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ManualRecord {
-    call: String,
-    grid: Option<String>,
-    country: Option<String>,
-    state: Option<String>,
-    band: String,
-    freq_mhz: f64,
-    mode: String,
-    rst_sent: Option<String>,
-    rst_rcvd: Option<String>,
-    name: Option<String>,
-    qth: Option<String>,
-    comment: Option<String>,
-    notes: Option<String>,
-    when_unix: Option<u64>,
-    confirmed: bool,
-    award_confirmed: bool,
-    #[serde(default)]
-    ota: Option<ManualOta>,
-}
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ManualOta {
-    their_program: String,
-    their_ref: String,
-}
-impl ManualRecord {
-    fn valid(&self, now_unix: u64) -> bool {
-        let text = |s: &str, max: usize| {
-            s.len() <= max && !s.chars().any(|c| c.is_control() && c != '\n' && c != '\t')
-        };
-        let field = |s: &Option<String>, max| s.as_ref().is_none_or(|s| text(s, max));
-        self.call.len() >= 3
-            && self.call.len() <= 32
-            && self
-                .call
-                .bytes()
-                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'/')
-            && !self.confirmed
-            && !self.award_confirmed
-            && self.freq_mhz.is_finite()
-            && self.freq_mhz > 0.0
-            && self.freq_mhz <= 250_000.0
-            && self
-                .when_unix
-                .is_none_or(|at| at > 0 && at <= now_unix.saturating_add(300))
-            && text(&self.band, 16)
-            && !self.band.is_empty()
-            && text(&self.mode, 32)
-            && !self.mode.is_empty()
-            && field(&self.grid, 16)
-            && field(&self.country, 96)
-            && field(&self.state, 16)
-            && field(&self.rst_sent, 16)
-            && field(&self.rst_rcvd, 16)
-            && field(&self.name, 128)
-            && field(&self.qth, 256)
-            && field(&self.comment, 512)
-            && field(&self.notes, 1024)
-            && self.ota.as_ref().is_none_or(|o| {
-                // The stored program as the log holds it (POTA, SOTA, or an ADIF SIG such as
-                // WWFF kept verbatim), so an edit hands back what it read and rewrites nothing.
-                // Mirrors `manualRecord` in ui/src/remote-web/operation-protocol.ts.
-                (2..=16).contains(&o.their_program.len())
-                    && o.their_program
-                        .bytes()
-                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
-                    && !o.their_ref.is_empty()
-                    && o.their_ref.len() <= 32
-                    && o.their_ref
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'-')
-            })
-    }
-    fn record(&self) -> Result<tempo_app::dto::LoggedQso, &'static str> {
-        let mut value = serde_json::to_value(self).map_err(|_| "invalidRequest")?;
-        value["whenUnix"] = json!(self.when_unix.unwrap_or_else(|| super::now_ms() / 1000));
-        if self.ota.is_none() {
-            value.as_object_mut().ok_or("invalidRequest")?.remove("ota");
-        }
-        serde_json::from_value(value).map_err(|_| "invalidRequest")
     }
 }
 struct Window {
@@ -350,7 +206,7 @@ impl Default for Core {
             epoch: 0,
             connection: 0,
             lease_epoch: 0,
-            boot: super::query::snapshot_id().ok(),
+            boot: snapshot_id().ok(),
             grants: BTreeSet::new(),
             control_grants: BTreeSet::new(),
             transmit_grants: BTreeSet::new(),
@@ -378,11 +234,6 @@ enum Grant {
 }
 #[derive(Default)]
 pub struct Authority {
-    spots: Option<crate::SharedSpots>,
-    /// The station's hunter-feed cache and park list, which place the park or summit a browser
-    /// hunts or activates ([`crate::ota_park_places`]). Unset in a service built without them: it
-    /// places nothing, and the contact takes its state as before.
-    places: Option<(crate::SharedOtaSpots, crate::SharedParks)>,
     epoch: AtomicU64,
     connection: AtomicU64,
     lease_epoch: AtomicU64,
@@ -422,29 +273,7 @@ pub struct Authority {
     tunnel_devices: std::sync::OnceLock<LanDevices>,
     #[cfg(test)]
     before_sync: Option<Box<dyn Fn() + Send + Sync>>,
-    /// Tests post self-spots here, one poster per target. A test build has no path to pota.app or
-    /// the shared cluster outbox at all.
-    #[cfg(test)]
-    spot_pota: Option<PotaPoster>,
-    #[cfg(test)]
-    spot_cluster: Option<ClusterPoster>,
-    /// A test's own self-spot session (login latch, repeat limit), never the process's.
-    #[cfg(test)]
-    spot_gate: crate::self_spot::Gate,
-    /// Tests turn self-spot off here, to prove `logging::SELF_SPOT` still refuses when false.
-    #[cfg(test)]
-    self_spot_off: bool,
 }
-#[cfg(test)]
-type PotaPoster = Box<
-    dyn Fn(
-            &propagation::live::pota::SpotPost,
-        ) -> Result<propagation::live::pota::SpotAnswer, String>
-        + Send
-        + Sync,
->;
-#[cfg(test)]
-type ClusterPoster = Box<dyn Fn(f64, &str, &str) -> Result<(), String> + Send + Sync>;
 /// The device ids of the LAN road's paired computers while LAN is on, and none while it is off.
 /// Called under Core: it may take no lock that is ever held while Core is taken.
 pub type LanDevices = Box<dyn Fn() -> Vec<String> + Send + Sync>;
@@ -458,59 +287,6 @@ impl Authority {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Self-spot posts publicly from the station's own call, to pota.app and its cluster login, so
-    /// it has its own switch (`logging::SELF_SPOT`).
-    fn self_spot_enabled(&self) -> bool {
-        #[cfg(test)]
-        if self.self_spot_off {
-            return false;
-        }
-        logging::SELF_SPOT
-    }
-    #[cfg(not(test))]
-    fn self_spot(&self, context: &crate::self_spot::Context) -> crate::self_spot::Report {
-        crate::self_spot::send(context)
-    }
-    /// The test build, unit tests and the native harness alike, reaches neither network target:
-    /// a target with no poster installed is refused (it reads `failed`), never posted.
-    #[cfg(test)]
-    fn self_spot(&self, context: &crate::self_spot::Context) -> crate::self_spot::Report {
-        const NONE: &str = "test build: no spot poster installed";
-        crate::self_spot::send_with(
-            &self.spot_gate,
-            Instant::now(),
-            context,
-            |spot| {
-                self.spot_pota
-                    .as_ref()
-                    .map_or(Err(NONE.into()), |post| post(spot))
-            },
-            |freq, call, comment| {
-                self.spot_cluster
-                    .as_ref()
-                    .map_or(Err(NONE.into()), |post| post(freq, call, comment))
-            },
-        )
-    }
-    /// A public spot of ANOTHER station, through the station's own cluster door — the same one
-    /// the desktop Spot dialog reaches, with its callsign rule and its no-node-connected refusal.
-    /// The contest rule that allows spotting only over RF was asked when the change was
-    /// prepared, under the Engine lock.
-    #[cfg(not(test))]
-    fn cluster_spot(&self, freq_mhz: f64, call: &str, comment: &str) -> Result<(), String> {
-        crate::queue_spot(freq_mhz, call.into(), comment.into())
-    }
-    /// The test build reaches no cluster at all: the poster a test installed answers, and with none
-    /// installed the spot is refused. This is the self-spot's own hook, so a test can never put a
-    /// real spot in front of the world.
-    #[cfg(test)]
-    fn cluster_spot(&self, freq_mhz: f64, call: &str, comment: &str) -> Result<(), String> {
-        self.spot_cluster
-            .as_ref()
-            .map_or(Err("test build: no spot poster installed".into()), |post| {
-                post(freq_mhz, call, comment)
-            })
-    }
     /// The transmit authority's revocation, for the ENGINE to hold so that a local stand-down
     /// (`Engine::halt_tx`) retires remote transmit the way Remote's own Stop does. Shares the
     /// counter a browser is shown as `transmitEpoch`.
@@ -529,34 +305,6 @@ impl Authority {
     fn revoke_relay_execution(&self) {
         if self.lan_lease.load(Ordering::SeqCst) == 0 {
             self.revoke_execution();
-        }
-    }
-    pub fn with_spots(spots: Option<crate::SharedSpots>) -> Self {
-        Self {
-            spots,
-            ..Self::default()
-        }
-    }
-    /// The caches that place a hunted park or summit (see `places`).
-    pub fn placing(mut self, places: Option<(crate::SharedOtaSpots, crate::SharedParks)>) -> Self {
-        self.places = places;
-        self
-    }
-    /// Where the park or summit a browser's hunt or activation names is, read with no other lock
-    /// held: before Core and before the Engine. Nothing for any other request.
-    fn places_for(&self, request: &Request) -> Vec<String> {
-        let (Some((ota, parks)), Request::LogChange { change, .. }) = (&self.places, request)
-        else {
-            return Vec::new();
-        };
-        match &**change {
-            logging::Change::Hunt {
-                program, reference, ..
-            }
-            | logging::Change::Activation { program, reference } => {
-                crate::ota_park_places(ota, parks, program, reference)
-            }
-            _ => Vec::new(),
         }
     }
     /// The LAN road's paired computers hold station control while LAN is on, whatever clears
@@ -779,15 +527,6 @@ impl Authority {
             return Err("authorityUnavailable");
         }
         c.revision += 1;
-        Ok(())
-    }
-    /// Re-take Core to record what a write that ran with it released came back with. Waiting is
-    /// fine here: nothing else holds Core across anything slow, and this thread holds nothing.
-    fn record(&self, id: &str, value: Value) -> Result<(), &'static str> {
-        let mut c = self.core.lock().map_err(|_| "authorityUnavailable")?;
-        if let Some(receipt) = c.receipts.iter_mut().find(|r| r.id == id) {
-            receipt.value = Some(value);
-        }
         Ok(())
     }
     /// The transport's queue for settled controls. One socket at a time holds the station, so
@@ -1184,7 +923,7 @@ impl Authority {
                 .is_none_or(|w| now.saturating_duration_since(w.at) >= Duration::from_millis(500))
         {
             c.windows.push_back(Window {
-                id: super::query::snapshot_id()?,
+                id: snapshot_id()?,
                 at: now,
             });
             while c.windows.len() > 4 {
@@ -1197,7 +936,8 @@ impl Authority {
             "commandWindowId":if owned{c.windows.back().map(|w|w.id.as_str())}else{None},
             "nextSequence":if owned{c.lease.as_ref().map(|l|l.sequence+1)}else{None},
             "leaseRemainingMs":if owned{c.lease.as_ref().map(|l|l.until.saturating_duration_since(now).as_millis() as u64)}else{None},
-            "actions":if c.grants.contains(device){vec!["log.manual"]}else{vec![]},"txArmed":false});
+            // `actions` names no action any more, and stays: every shipped page requires the field.
+            "actions":Vec::<&str>::new(),"txArmed":false});
         if control
             .as_ref()
             .is_some_and(|(version, _, _, _)| *version >= 4)
@@ -1214,30 +954,12 @@ impl Authority {
             };
         }
         if let Some((version, context, ft_available, tx_owned)) = control {
-            let mut capabilities = if c.control_grants.contains(device) {
-                station::capabilities(version)
-            } else {
-                vec![]
-            };
+            let mut capabilities = vec![];
             if version >= 4 {
                 if c.grants.contains(device) {
                     capabilities.push("qsoLogging");
-                    capabilities.extend(logging::CAPABILITIES);
-                    if self.self_spot_enabled() {
-                        capabilities.push("selfSpot");
-                    }
                 }
-                // Station preferences are changed under station control (see `settings.rs`), and
-                // so is a public spot of another station: it posts from this station's cluster
-                // login rather than touching the log.
                 if c.control_grants.contains(device) {
-                    capabilities.push("settingsControl");
-                    capabilities.push("postSpot");
-                    // Rendering the working channel list to a CHIRP/CSV file the browser saves,
-                    // and curating that list. The hints are what let an older station stay silent
-                    // and an older page never offer the buttons.
-                    capabilities.push("programExport");
-                    capabilities.push("programEdit");
                     // Listening to the station's receive audio. The hint is what makes
                     // the negotiation work in BOTH directions: a browser that has never
                     // heard of it never offers a listen control, and a station built
@@ -1277,20 +999,14 @@ impl Authority {
     }
     /// The serialized size and fingerprint a replay is matched on.
     ///
-    /// ⚠️ **This list must be exactly the variants of the receipt-bearing arm in
-    /// [`Self::handle_version`], which is an OR-PATTERN over three of them.** Writing
-    /// `LogManual` alone here — as the first cut of this did — leaves `StationControl` and
-    /// `LogChange` with no fingerprint, and the arm they share then refuses them
-    /// `invalidRequest`. Twelve tests said so at once.
+    /// ⚠️ **This must match exactly the receipt-bearing arm in [`Self::handle_version`]**: a
+    /// request that arm takes with no fingerprint is refused `invalidRequest`.
     ///
     /// `None` for every other request, deliberately: one whose arm keeps no receipt must not
     /// acquire a lookup it never had. The size is returned rather than bounded here so the
     /// 4 KiB refusal keeps its old position inside the arm.
     fn replay_fingerprint(request: &Request) -> Result<Option<(usize, Vec<u8>)>, &'static str> {
-        if !matches!(
-            request,
-            Request::LogManual { .. } | Request::StationControl { .. } | Request::LogChange { .. }
-        ) {
+        if !matches!(request, Request::StationControl { .. }) {
             return Ok(None);
         }
         let bytes = serde_json::to_vec(request).map_err(|_| "invalidRequest")?;
@@ -1318,30 +1034,6 @@ impl Authority {
         engine: &crate::SharedEngine,
         now: Instant,
     ) -> Result<Value, &'static str> {
-        self.handle_found(
-            (connection, version),
-            session,
-            device,
-            request,
-            engine,
-            now,
-            None,
-        )
-    }
-    /// [`Self::handle_version`], given `found`: a log change's key target as [`logging::find`]
-    /// found it with every lock released, when the request is taken again from the top with it
-    /// (see the log change below).
-    #[allow(clippy::too_many_arguments)] // `handle_version`'s own, and what its first pass found
-    fn handle_found(
-        &self,
-        (connection, version): (u64, u8),
-        session: &str,
-        device: &str,
-        request: &Request,
-        engine: &crate::SharedEngine,
-        now: Instant,
-        found: Option<Option<crate::log_by_id::RowRef>>,
-    ) -> Result<Value, &'static str> {
         if matches!(request, Request::StopTransmit { .. }) {
             if version != 4 {
                 return Err("stationUnsupported");
@@ -1352,7 +1044,6 @@ impl Authority {
         }
         if !matches!(version, 1..=5)
             || matches!(request, Request::StationControl { action, .. } if version < action.minimum_version())
-            || matches!(request, Request::LogChange { .. } | Request::ActivationExport { .. } | Request::ProgramExport { .. } if version < 4)
         {
             return Err("stationUnsupported");
         }
@@ -1362,7 +1053,6 @@ impl Authority {
         if !identifier(session) || !identifier(device) || !identifier(request.id()) {
             return Err("invalidRequest");
         }
-        let places = self.places_for(request);
         let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
         self.reconcile(&mut c, now)?;
         // A permission refusal never depends on Engine contention: a device that
@@ -1455,49 +1145,6 @@ impl Authority {
         match request {
             Request::StopTransmit { .. } => unreachable!("handled before ordinary operations"),
             Request::State { .. } => self.state(&mut c, session, device, now, control),
-            Request::ActivationExport {
-                station_boot_id,
-                lease_id,
-                selection,
-                index,
-                ..
-            } => {
-                // A read under the logging grant (checked above) and this browser's own lease. It
-                // spends no sequence or command window and writes nothing.
-                if c.boot.as_deref() != Some(station_boot_id.as_str()) {
-                    return Err("staleStation");
-                }
-                let l = c.lease.as_ref().ok_or("leaseExpired")?;
-                if l.id != *lease_id || l.session != session || l.device != device {
-                    return Err("notController");
-                }
-                // The log's handles under the Engine lock, and nothing more: the list and the
-                // file are read from the store with BOTH locks released, so neither the radio
-                // loop nor another browser's operation waits behind the read.
-                let rows = engine.log_rows();
-                drop(engine);
-                drop(c);
-                export::respond(&rows, selection.as_ref(), *index)
-            }
-            Request::ProgramExport {
-                station_boot_id,
-                lease_id,
-                format,
-                name_cap,
-                index,
-                ..
-            } => {
-                // A read under station control (checked above) and this browser's own lease. Same
-                // shape as the activation read beside it: no sequence, no command window, no write.
-                if c.boot.as_deref() != Some(station_boot_id.as_str()) {
-                    return Err("staleStation");
-                }
-                let l = c.lease.as_ref().ok_or("leaseExpired")?;
-                if l.id != *lease_id || l.session != session || l.device != device {
-                    return Err("notController");
-                }
-                program_export::respond(&crate::radioprog_path(), *format, *name_cap, *index)
-            }
             Request::Acquire {
                 station_boot_id, ..
             } => {
@@ -1515,7 +1162,7 @@ impl Authority {
                     }
                 } else {
                     c.lease = Some(Lease {
-                        id: super::query::snapshot_id()?,
+                        id: snapshot_id()?,
                         session: session.into(),
                         device: device.into(),
                         until: now + LEASE,
@@ -1555,23 +1202,7 @@ impl Authority {
                 self.state(&mut c, session, device, now, control)
             }
             Request::Result { .. } => unreachable!("handled before the Engine lock"),
-            Request::LogManual {
-                station_boot_id,
-                lease_id,
-                expected_revision,
-                command_window_id,
-                client_sequence,
-                ..
-            }
-            | Request::StationControl {
-                station_boot_id,
-                lease_id,
-                expected_revision,
-                command_window_id,
-                client_sequence,
-                ..
-            }
-            | Request::LogChange {
+            Request::StationControl {
                 station_boot_id,
                 lease_id,
                 expected_revision,
@@ -1628,92 +1259,6 @@ impl Authority {
                 }
                 if c.receipts.iter().any(Receipt::pending) {
                     return Err("remoteBusy");
-                }
-                if let Request::LogChange { change, .. } = request {
-                    // Refused like an older station would, before the sequence advances.
-                    if matches!(**change, logging::Change::SelfSpot { .. })
-                        && !self.self_spot_enabled()
-                    {
-                        return Err("stationUnsupported");
-                    }
-                    if !change.valid(super::now_ms() / 1000) {
-                        return Err("invalidRecord");
-                    }
-                    // A key target's contact is found in the store with BOTH locks released —
-                    // a read of the log never runs under the Engine lock — and the request is
-                    // then taken again from the top with it, every check above made again
-                    // against the station as it stands by then. Nothing has advanced, so a read
-                    // the store's writer is still behind is `stationBusy`, as a busy Engine is.
-                    // The change is made only while the contact is still the version found
-                    // (`logging::change_found`).
-                    if let (Some(target @ logging::Target::Key(_)), None) =
-                        (change.target(), &found)
-                    {
-                        let rows = engine.log_rows();
-                        drop(engine);
-                        drop(c);
-                        let row =
-                            logging::find(&rows, target).map_err(export::in_operation_words)?;
-                        return self.handle_found(
-                            (connection, version),
-                            session,
-                            device,
-                            request,
-                            shared_engine,
-                            now,
-                            Some(row),
-                        );
-                    }
-                    // The commit boundary, as for a manual entry: a rewrite begun here cannot be
-                    // rolled back by a disconnect, and its receipt answers any replay.
-                    self.advance(&mut c)?;
-                    c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
-                    let prepared = logging::prepare_change(
-                        &mut engine,
-                        change,
-                        found.flatten().as_ref(),
-                        places,
-                    );
-                    drop(engine);
-                    // Engine is released, and so is Core: the receipt goes in as in flight first,
-                    // so a replay meanwhile is told the station is busy rather than posting twice,
-                    // and a revoke, audio recheck or status read at the shack never waits behind
-                    // the network post or the file sync that follow. A self-spot's pota.app post
-                    // can take 15 s; while Core was held across it, a revoke silently did nothing.
-                    c.open(Receipt {
-                        id: request.id().into(),
-                        session: session.into(),
-                        device: device.into(),
-                        fingerprint,
-                        at: current,
-                        value: None,
-                        control: None,
-                        result_version: 4,
-                    });
-                    drop(c);
-                    // A change to a contact is made now, with every lock released: planned with the
-                    // Engine lock released and made under it (SPEC-2 v3 C19).
-                    let prepared = match prepared {
-                        Ok(logging::ChangeWork::Row(row)) => {
-                            logging::change_found(shared_engine, change, &row)
-                        }
-                        prepared => prepared,
-                    };
-                    #[cfg(test)]
-                    if let Some(probe) = &self.before_sync {
-                        probe();
-                    }
-                    let outcome = match prepared {
-                        // Nothing is held; a spot is posted only now, and only once per receipt.
-                        Ok(work) => work.finish(
-                            |context| self.self_spot(context),
-                            |freq_mhz, call, comment| self.cluster_spot(freq_mhz, call, comment),
-                        ),
-                        Err(reason) => logging::ChangeOutcome::Rejected { reason, spot: None },
-                    };
-                    let value = logging::change_value(request.id(), &outcome);
-                    self.record(request.id(), value.clone())?;
-                    return Ok(value);
                 }
                 if let Request::StationControl {
                     action, context, ..
@@ -1781,7 +1326,8 @@ impl Authority {
                     } else {
                         None
                     };
-                    let permit = self
+                    // Taken for an FT gesture as it always was, and held to the end of this arm.
+                    let _permit = self
                         .hardware
                         .permit(deadline)
                         .ok_or("authorityUnavailable")?;
@@ -1790,14 +1336,9 @@ impl Authority {
                     let executed = if let Some(transmit_permit) = transmit_permit {
                         station::execute_transmit(&mut engine, context, action, transmit_permit)
                     } else {
-                        station::execute(
-                            &mut engine,
-                            shared_engine,
-                            context,
-                            action,
-                            permit,
-                            self.spots.as_ref(),
-                        )
+                        // Every action but the logging ones is an FT gesture, which carries its
+                        // transmit epoch.
+                        Err(tempo_app::remote_control::Reason::UnsupportedAction)
                     };
                     let completion = match executed {
                         Ok(result) => result,
@@ -1833,62 +1374,7 @@ impl Authority {
                     );
                     return Ok(value);
                 }
-                let Request::LogManual { record, .. } = request else {
-                    return Err("invalidRequest");
-                };
-                if !record.valid(super::now_ms() / 1000) {
-                    return Err("invalidRecord");
-                }
-                if engine.settings().fd_active {
-                    return Err("fieldDayUnsupported");
-                }
-                if engine.settings().save_qso_wav {
-                    return Err("recordingUnsupported");
-                }
-                let rec = record.record()?;
-                // This is the operation's commit boundary. After this point an
-                // append may exist even if its response or file sync is lost.
-                self.advance(&mut c)?;
-                c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
-                let outcome = engine.log_qso_for_sync(rec.into());
-                drop(engine);
-                // The file sync runs with Core released too (see the log change above).
-                c.open(Receipt {
-                    id: request.id().into(),
-                    session: session.into(),
-                    device: device.into(),
-                    fingerprint,
-                    at: current,
-                    value: None,
-                    control: None,
-                    result_version: 1,
-                });
-                drop(c);
-                let value = match outcome {
-                    tempo_app::engine::LogWriteOutcome::PendingSync(receipts) => {
-                        #[cfg(test)]
-                        if let Some(probe) = &self.before_sync {
-                            probe();
-                        }
-                        if receipts
-                            .into_iter()
-                            .try_for_each(|receipt| receipt.sync())
-                            .is_ok()
-                        {
-                            json!({"outcome":"applied","evidence":"fileSynced","uploads":"stationPipeline","operationId":request.id()})
-                        } else {
-                            json!({"outcome":"unknown","reason":"persistenceUnconfirmed","operationId":request.id()})
-                        }
-                    }
-                    tempo_app::engine::LogWriteOutcome::Unconfirmed => {
-                        json!({"outcome":"unknown","reason":"persistenceUnconfirmed","operationId":request.id()})
-                    }
-                    tempo_app::engine::LogWriteOutcome::Duplicate => {
-                        json!({"outcome":"rejected","reason":"alreadyPresent","operationId":request.id()})
-                    }
-                };
-                self.record(request.id(), value.clone())?;
-                Ok(value)
+                Err("invalidRequest")
             }
         }
     }
@@ -1900,18 +1386,6 @@ fn permitted(c: &Core, version: u8, device: &str, request: &Request) -> bool {
     match request {
         Request::Acquire { .. } | Request::Result { .. } => {
             c.grants.contains(device) || version >= 2 && c.control_grants.contains(device)
-        }
-        Request::LogManual { .. } | Request::ActivationExport { .. } => c.grants.contains(device),
-        // The channel list itself is already readable by any observing browser (the `programming`
-        // collection), so this read reveals nothing new — but it renders a station file through a
-        // station writer, which is what station control means here, and it is the same grant the
-        // channel TUNE beside it already needs.
-        Request::ProgramExport { .. } => c.control_grants.contains(device),
-        // A log change needs the logging grant; a preference change needs what its keys need.
-        Request::LogChange { change, .. } => {
-            let (logging, control) = change.grants();
-            (!logging || c.grants.contains(device))
-                && (!control || c.control_grants.contains(device))
         }
         Request::StationControl { action, .. } => {
             if action.is_logging() {

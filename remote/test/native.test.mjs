@@ -1,15 +1,12 @@
 import { test } from 'node:test'
-import { readFile, mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
-import { tempoConversations } from './tempo-fixture.mjs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { runtime, roomStatus } from './runtime.mjs'
-import { recallReference, recallAdif } from './recall-reference.mjs'
-import { insightsReference, insightsAdif } from './insights-reference.mjs'
 
 /** A browser's device key, made for the run, and the proof it puts on what the relay's older lanes
  *  carry (security review S1-M1), made the way the page makes it: the real station requires it on
@@ -405,67 +402,6 @@ test('actual native S1-M1/S3-M1: the station\'s key is recorded for its pages, a
   }
 })
 
-/** One collection query, asked as the page's own collection source asks it (`RemoteCollections.page`
- *  over `ApplicationQueryClient`): every answer is acknowledged at once, and `applicationBusy` is asked
- *  again, three times at most and 250 ms apart. The station reads a collection with the Engine's
- *  try_lock, so a read that lands while another thread holds the Engine (the radio loop; here the
- *  probe's readings) is refused rather than queued. Every other answer goes back to the caller. */
-async function queryPage(socket, args) {
-  for (let attempt = 1; ; attempt++) {
-    const requestId = crypto.randomUUID()
-    socket.send({ type: 'applicationQuery', requestId, ...args })
-    const page = await socket.take(value => value.requestId === requestId)
-    socket.send({ type: 'applicationQueryAck', requestId })
-    if (attempt === 3 || page.type !== 'applicationQueryError' || page.error !== 'applicationBusy') return page
-    await delay(250)
-  }
-}
-
-/** One v1 sample, asked as the page's own v1 client asks it (`ApplicationClient.invoke`): every answer is
- *  acknowledged at once, and `applicationBusy` is asked again, three times at most and 250 ms apart. The station
- *  answers busy for a sample it holds no fresh copy of while another thread holds the Engine. Every other answer goes
- *  back to the caller.
- *  With `since` (a `performance.now()` time) a sample taken before it is asked again the same way: while another
- *  thread holds the Engine the station serves the sample it already has, with its true age, if that is under a
- *  second old, so a read just after a change at the shack can get the sample from before the change. A sample counts
- *  as taken after `since` only when its age is under the time from `since` to the request: that can take a new
- *  sample for an old one, which is asked again, and never an old one for a new one. */
-async function applicationRead(socket, command, since = null) {
-  for (let attempt = 1; ; attempt++) {
-    const requestId = crypto.randomUUID(), asked = performance.now()
-    socket.send({ type: 'applicationRead', requestId, command, revision: null })
-    const result = await socket.take(value => value.requestId === requestId)
-    socket.send({ type: 'applicationAck', requestId })
-    const older = since !== null && result.type === 'applicationResult' && result.ageMs >= asked - since
-    if (attempt === 3 || !(older || result.type === 'applicationError' && result.error === 'applicationBusy')) return result
-    await delay(250)
-  }
-}
-
-/** The first sample of each topic, read as the page's stream reads it (`ApplicationClient.invoke` on v2 and later):
- *  a frame is acknowledged with the next credit as it lands, and a topic the station answered `applicationBusy` is
- *  read again from a later frame, three times at most and 250 ms apart. Every other answer goes back to the caller.
- *  Returns each topic's update and the credit of the last frame taken, which the caller acknowledges. */
-async function frameSamples(socket, requestId, topics) {
-  const samples = new Map(), attempts = new Map()
-  for (let credit = requestId; ;) {
-    const frame = await socket.take(value => value.type === 'applicationFrame')
-    assert.equal(frame.requestId, credit)
-    for (const update of frame.updates) {
-      if (!topics.includes(update.command) || samples.has(update.command)) continue
-      const attempt = (attempts.get(update.command) ?? 0) + 1
-      attempts.set(update.command, attempt)
-      if (attempt < 3 && update.type === 'applicationError' && update.error === 'applicationBusy') continue
-      samples.set(update.command, update)
-    }
-    if (topics.every(topic => samples.has(topic))) return { samples, requestId: credit }
-    const next = crypto.randomUUID()
-    socket.send({ type: 'applicationFrameAck', requestId: credit, nextRequestId: next })
-    credit = next
-    await delay(250)
-  }
-}
-
 async function nativeProbe(binary, origin) {
   const profile=await mkdtemp(join(tmpdir(),'nexus-native-profile-'))
   const child = spawn(binary, ['--ignored', '--exact', 'remote_service::tests::cloud_runtime_probe', '--nocapture'], { stdio: ['pipe', 'pipe', 'pipe'], env:{...process.env,XDG_CONFIG_HOME:profile,APPDATA:profile,NEXUS_DATA_DIR:join(profile,'shared'),NEXUS_PROFILE:''} })
@@ -571,448 +507,11 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.ok(first.frame.station.radio.readings.dial.ageMs < 3000)
     socket.send({ type: 'ack', epoch: first.frame.epoch, sequence: first.frame.sequence })
     socket.ackObservations()
-    socket.send({ type: 'applicationHello' })
-    const capabilities = await socket.take(value => value.type === 'applicationCapabilities')
-    assert.equal(capabilities.version, 1)
-    assert.deepEqual(capabilities.commands, ['get_snapshot', 'get_settings', 'get_band_plan', 'get_spectrum_row', 'get_meters'])
-    let originalTier
-    for (const command of capabilities.commands) {
-      const result = await applicationRead(socket, command)
-      assert.equal(result.type, 'applicationResult', `${command} must return the actual native DTO (${result.error ?? result.type})`)
-      assert.equal(result.command, command)
-      assert.equal(result.baseRevision, null)
-      assert.ok(result.ageMs < 3000)
-      if (command === 'get_snapshot') {
-        originalTier = result.data.link.tier
-        assert.equal(result.data.mycall, 'N0CALL')
-        assert.equal(result.data.radio.txEnabled, false)
-        assert.ok(Array.isArray(result.data.stations))
-      } else if (command === 'get_settings') {
-        assert.equal(result.data.mycall, 'N0CALL')
-        assert.equal(result.data.mygrid, 'AA00')
-        for (const privateKey of ['radioProfiles','radios','qrzPassword','cloudlogKey','ampPort']) {
-          assert.equal(Object.hasOwn(result.data, privateKey), false, 'unreviewed settings must stay at the shack')
-        }
-      } else if (command === 'get_band_plan') assert.ok(result.data.length > 0)
-      else if (command === 'get_meters') assert.deepEqual(Object.keys(result.data).sort(), ['cwToneHz','rxLevel','smeterDb'])
-      else assert.deepEqual(Object.keys(result.data).sort(), ['hiHz','loHz','row','source'])
-    }
-    for (const tier of ['TempoFast','TempoDeep']) {
-      const native = await probe.send({type:'seedTempo',tier,conversations:tempoConversations(tier)})
-      const seeded = performance.now()
-      await delay(550) // The existing snapshot producer shares one sample per 500 ms.
-      // A sample taken after the seed: one from before it shows the previous tier.
-      const result = await applicationRead(socket, 'get_snapshot', seeded)
-      assert.equal(result.type,'applicationResult')
-      assert.equal(result.data.link.tier,tier)
-      assert.deepEqual(result.data.conversations,native.conversations,'the original v1 stream preserves every native delivery field and legacy message')
-      assert.ok(native.conversations.some(c=>c.messages.some(m=>m.delivered)))
-      assert.ok(native.conversations.some(c=>c.messages.some(m=>m.confirmed)))
-      assert.equal(result.data.radio.txEnabled,false)
-    }
-    await probe.send({type:'seedTempo',tier:originalTier,conversations:[]})
-    const { value: streamTicket } = await browser.post(`stations/${stationId}/ticket`)
-    const stream = await browser.open(stationId, streamTicket.ticket)
-    await stream.take(value => value.type === 'session')
-    stream.send({ type: 'applicationHello', version: 2 })
-    const streaming = await stream.take(value => value.type === 'applicationCapabilities')
-    assert.equal(streaming.version, 2, 'the real native handshake advertises the stream extension')
-    assert.equal(streaming.commands.length, 7)
-    let requestId = crypto.randomUUID()
-    stream.send({ type: 'applicationSubscribe', topics: streaming.commands, requestId })
-    const received = new Set(), values = new Map()
-    for (let batch = 0; batch < 25 && (batch < 3 || received.size < streaming.commands.length); batch++) {
-      const frame = await stream.take(value => value.type === 'applicationFrame')
-      assert.equal(frame.requestId, requestId)
-      for (const update of frame.updates) {
-        if (update.type === 'applicationError') { assert.equal(update.error, 'applicationBusy'); continue }
-        assert.equal(update.type, 'applicationResult', `${update.command} returns a real native sample`)
-        assert.ok(update.ageMs < 3000)
-        const previous = values.get(update.command)
-        if (update.baseRevision !== null) assert.equal(previous?.revision, update.baseRevision)
-        const data = update.baseRevision === null ? update.data : { ...previous.data, ...update.data }
-        for (const key of update.removed) delete data[key]
-        values.set(update.command, { revision: update.revision, data })
-        received.add(update.command)
-        if (update.command === 'get_scope_snapshot') assert.deepEqual(Object.keys(data).sort(), ['hiHz', 'loHz', 'row', 'source'])
-        if (update.command === 'get_cw_state') {
-          assert.equal(typeof data.text, 'string'); assert.ok(Array.isArray(data.sent))
-        }
-      }
-      const nextRequestId = crypto.randomUUID()
-      stream.send({ type: 'applicationFrameAck', requestId, nextRequestId })
-      requestId = nextRequestId
-    }
-    assert.deepEqual([...received].sort(), [...streaming.commands].sort())
-    stream.send({ type: 'applicationSubscribe', topics: [], requestId: null })
-    stream.close()
-    const { value: queryTicket } = await browser.post(`stations/${stationId}/ticket`)
-    const query = await browser.open(stationId, queryTicket.ticket)
-    await query.take(value => value.type === 'session')
-    query.send({ type: 'applicationHello', version: 3 })
-    const queryCapabilities = await query.take(value => value.type === 'applicationCapabilities')
-    assert.equal(queryCapabilities.version, 3)
-    assert.ok(queryCapabilities.commands.includes('get_remote_page'))
-    for (const collection of ['entities', 'log', 'decodes']) {
-      let cursor = null, count = 0, snapshotId = null
-      do {
-        const page = await queryPage(query, { collection, cursor, search: '', unconfirmed: false, after: null })
-        assert.equal(page.type, 'applicationPage', 'real native producer must decode and answer the closed query envelope: ' + JSON.stringify({ collection, type: page.type, error: page.error }))
-        assert.equal(page.offset, count)
-        if (snapshotId) assert.equal(page.snapshotId, snapshotId)
-        snapshotId = page.snapshotId; count += page.rows.length; cursor = page.nextCursor
-        assert.ok(page.rows.length <= 128 && page.retained <= 3000)
-      } while (cursor)
-      if (collection === 'entities') assert.ok(count > 300, 'positive control: actual station DXCC table crossed multiple pages')
-    }
-    query.close()
-    const keyboardBefore = await probe.send({ type: 'keyboardState' })
-    const { value: keyboardTicket } = await browser.post(`stations/${stationId}/ticket`)
-    const keyboard = await browser.open(stationId, keyboardTicket.ticket)
-    await keyboard.take(value => value.type === 'session')
-    keyboard.send({ type: 'applicationHello', version: 5 })
-    const keyboardCapabilities = await keyboard.take(value => value.type === 'applicationCapabilities')
-    assert.equal(keyboardCapabilities.version, 5, 'actual native headers and room admission negotiate keyboard samples')
-    assert.equal(keyboardCapabilities.commands.length, 11)
-    let keyboardCredit = crypto.randomUUID()
-    keyboard.send({ type: 'applicationSubscribe', topics: ['get_rtty_state', 'get_psk_state'], requestId: keyboardCredit })
-    const keyboardReceived = new Set()
-    for (let batch = 0; batch < 10 && keyboardReceived.size < 2; batch++) {
-      const frame = await keyboard.take(value => value.type === 'applicationFrame')
-      assert.equal(frame.requestId, keyboardCredit)
-      for (const update of frame.updates) {
-        if (update.type === 'applicationError') { assert.equal(update.error, 'applicationBusy'); continue }
-        assert.equal(update.type, 'applicationResult')
-        assert.ok(['get_rtty_state', 'get_psk_state'].includes(update.command))
-        if (keyboardReceived.has(update.command)) continue
-        assert.equal(update.baseRevision, null)
-        const mode = update.command === 'get_rtty_state' ? 'rtty' : 'psk'
-        assert.deepEqual(update.data, keyboardBefore[mode], 'wire result equals the native cockpit DTO')
-        assert.equal(update.data.text, 'CQ W1AW')
-        assert.deepEqual(update.data.charConf, [30, 30, 30, 30, 30, 30, 30])
-        assert.equal(update.data.armed, true)
-        assert.equal(update.data.sending, false)
-        assert.equal(update.data.latched, false)
-        keyboardReceived.add(update.command)
-      }
-      const nextRequestId = crypto.randomUUID()
-      keyboard.send({ type: 'applicationFrameAck', requestId: keyboardCredit, nextRequestId })
-      keyboardCredit = nextRequestId
-    }
-    assert.equal(keyboardReceived.size, 2)
-    assert.equal(keyboardBefore.psk.mode, 'qpsk31')
-    assert.equal(keyboardBefore.psk.reverse, true)
-    keyboard.send({ type: 'applicationSubscribe', topics: [], requestId: null })
-    assert.deepEqual(await probe.send({ type: 'keyboardState' }), keyboardBefore, 'remote reads do not alter decoder state, TX or contacts')
-    keyboard.close()
-    const { log } = await probe.send({ type: 'seedRecallLog', adif: recallAdif() })
-    assert.ok(log.length > 40, 'the independent desktop reference must receive the seeded log')
-    const reference = await recallReference()
-    const { value: recallTicket } = await browser.post(`stations/${stationId}/ticket`)
-    const recall = await browser.open(stationId, recallTicket.ticket)
-    await recall.take(value => value.type === 'session')
-    recall.send({ type: 'applicationHello', version: 5 })
-    assert.ok((await recall.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_recall'))
-    for (const call of ['W1AW', 'W1AW/P', 'DL2ABC', 'JA1ABC', '000']) {
-      const page = await queryPage(recall, { collection: 'recall', cursor: null, search: call, unconfirmed: false, after: null })
-      assert.equal(page.type, 'applicationPage')
-      const source = page.meta.source
-      const { qsos, dupeThisBand: _dupe, ...history } = reference.callHistory(log, call, '20m', 'FT8', true)
-      assert.deepEqual(source.history, history, `complete exact-call history: ${call}`)
-      assert.deepEqual(source.slots, reference.entitySlots(log, source.entity), `desktop entity slots and unknown-band rules: ${call}`)
-      assert.deepEqual(page.rows, [...qsos].sort((a, b) => b.whenUnix - a.whenUnix).slice(0, 20))
-      for (const band of ['20m', '40M', '80m']) for (const mode of ['CW', 'FT8', 'FT4', 'SSB']) for (const match of [false, true]) {
-        const dupe = source.workedBandModes.some(([b, m]) => b === band.toLowerCase() && (!match || m === mode))
-        assert.equal(dupe, reference.callHistory(log, call, band, mode, match).dupeThisBand)
-      }
-    }
-    recall.close()
-    const desktop = await probe.send({ type: 'seedRecallLog', adif: insightsAdif() })
-    assert.ok(desktop.log.length > 2000, 'summary must cover contacts beyond the browser log window')
-    assert.ok(desktop.awards.vucc.satWorked > 0 && desktop.awards.iota.cardConfirmed > 0, 'the independent award reference exercises satellite and card-only IOTA credit')
-    const statsReference = await insightsReference()
-    const { value: summaryTicket } = await browser.post(`stations/${stationId}/ticket`)
-    const summaries = await browser.open(stationId, summaryTicket.ticket)
-    await summaries.take(value => value.type === 'session')
-    summaries.send({ type: 'applicationHello', version: 6 })
-    assert.ok((await summaries.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_insights'))
-    for (const collection of ['awards', 'statistics']) {
-      const page = await queryPage(summaries, { collection, cursor: null, search: '', unconfirmed: false, after: null })
-      assert.equal(page.type, 'applicationPage', JSON.stringify({ collection, type: page.type, error: page.error }))
-      const value = statsReference.parseInsights(page, collection)
-      assert.equal(value.logCount, desktop.log.length)
-      if (collection === 'awards') assert.deepEqual(value.awards, desktop.awards, 'same native award inputs, credits and satellite split')
-      else {
-        assert.deepEqual(value.statistics, statsReference.computeLogStats(desktop.log), 'existing desktop Statistics roll-up, including locale tie ordering')
-        assert.deepEqual(value.geography, desktop.geography, 'existing geographic result')
-      }
-      assert.ok(!JSON.stringify(page).includes('synthetic note'), 'the summary carries no contact notes')
-    }
-    summaries.close()
-    const dxpeditions = await probe.send({ type: 'seedDxpeditions' })
-    const { value: dxTicket } = await browser.post(`stations/${stationId}/ticket`)
-    const dx = await browser.open(stationId, dxTicket.ticket)
-    await dx.take(value => value.type === 'session')
-    dx.send({ type: 'applicationHello', version: 7 })
-    assert.ok((await dx.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_dxpeditions'))
-    const dxPage = await queryPage(dx, { collection: 'dxpeditions', cursor: null, search: '', unconfirmed: false, after: null })
-    assert.equal(dxPage.type, 'applicationPage', JSON.stringify({ collection: 'dxpeditions', type: dxPage.type, error: dxPage.error }))
-    const board = statsReference.parseDxpeditions(dxPage)
-    assert.deepEqual(board.dxpeditions, JSON.parse(dxpeditions.boardJson), 'the compiled native projection preserves every desktop wire field, including f32 scores')
-    assert.equal(board.source, dxpeditions.source); assert.equal(board.asOf, dxpeditions.asOf)
-    assert.equal(board.windows, null, 'a cold prediction cache remains absent')
-    dx.close()
-    const bank = JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/memories.json', import.meta.url), 'utf8'))
-    assert.equal((await probe.send({ type: 'publishMemories', bank: JSON.stringify(bank) })).accepted, true)
-    const { value: memoryTicket } = await browser.post(`stations/${stationId}/ticket`)
-    const memories = await browser.open(stationId, memoryTicket.ticket)
-    await memories.take(value => value.type === 'session')
-    memories.send({ type: 'applicationHello', version: 8 })
-    assert.ok((await memories.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_memories'))
-    for (const valid of [true, false, true]) {
-      assert.equal((await probe.send({ type: 'publishMemories', bank: valid ? JSON.stringify(bank) : '{}' })).accepted, valid)
-      const page = await queryPage(memories, { collection: 'memories', cursor: null, search: '', unconfirmed: false, after: null })
-      if (valid) {
-        assert.equal(page.type, 'applicationPage')
-        assert.deepEqual(statsReference.parseMemories(page).bank, bank, 'native cache and compiled UI parser preserve every canonical bank field')
-      } else { assert.equal(page.type, 'applicationQueryError'); assert.equal(page.error, 'applicationUnavailable') }
-    }
-    memories.close()
-    const { value: otaTicket } = await browser.post(`stations/${stationId}/ticket`)
-    const ota = await browser.open(stationId, otaTicket.ticket)
-    await ota.take(value => value.type === 'session')
-    ota.send({ type: 'applicationHello', version: 9 })
-    assert.ok((await ota.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_ota'))
-    // Where each fixture spot is, as the feed's parser would say. The log seeded above holds
-    // California on 20 m (K6ABC) and no contact in North Dakota or Arizona on any band.
-    const otaStates = { 'US-0002': ['US-CA', 'US-ND'], 'US-0003': ['US-CA'], 'US-0004': [], 'W7A/MN-001': ['US-AZ'] }
-    // The keys a page before v18 lists for a spot, refusing any other (ota.ts as 1.16 shipped it).
-    const olderSpotKeys = ['activator', 'bandOpen', 'comment', 'freqKhz', 'grid', 'lat', 'lon', 'mode', 'name', 'newPark', 'program', 'reference', 'spotTimeUnix', 'spotter']
-    for (const [age, missing] of [[0, null], [900, 'SOTA'], [0, null]]) {
-      assert.equal((await probe.send({ type: 'seedOta', age, missing, states: otaStates })).seeded, true)
-      const page = await queryPage(ota, { collection: 'ota', cursor: null, search: '', unconfirmed: false, after: null })
-      assert.equal(page.type, 'applicationPage')
-      for (const spot of page.meta.source.feeds.flatMap(feed => feed.spots)) assert.deepEqual(Object.keys(spot).sort(), olderSpotKeys, 'a v9 page is never sent a key it does not list')
-      const value = statsReference.parseOta(page)
-      assert.equal(value.feeds[0].status, age ? 'expired' : 'ready')
-      assert.equal(value.feeds[1].status, missing ? 'unavailable' : 'ready')
-      if (!age) {
-        assert.equal(value.feeds[0].spots.length, 3)
-        assert.equal(value.feeds[0].spots[1].newPark, false, 'station imported hunted parks remain worked')
-        assert.equal(value.hunt.reference, 'US-0004')
-        assert.equal(value.activation.reference, 'US-0001')
-      }
-    }
-    ota.close()
-    const { value: fdTicket } = await browser.post(`stations/${stationId}/ticket`)
-    const fd = await browser.open(stationId, fdTicket.ticket)
-    await fd.take(value => value.type === 'session')
-    fd.send({ type: 'applicationHello', version: 10 })
-    assert.ok((await fd.take(value => value.type === 'applicationCapabilities')).commands.includes('get_remote_field_day'))
-    for (const active of [false, true]) {
-      if (active) assert.equal((await probe.send({type:'seedFieldDay'})).seeded,true)
-      const page=await queryPage(fd,{collection:'fieldDay',cursor:null,search:'',unconfirmed:false,after:null})
-      assert.equal(page.type,'applicationPage')
-      const value=statsReference.parseFieldDay(page)
-      assert.equal(value.active,active)
-      if(active){
-        assert.equal(value.fieldDay.qsoCount,2)
-        assert.equal(value.fieldDay.points,3)
-        assert.equal(value.fieldDay.totalScore,106)
-        assert.deepEqual(value.settings.fdBonusesPlanned,['natural-power'])
-        assert.deepEqual(value.settings.fdBonuses,['emergency-power'])
-      } else assert.equal(value.fieldDay,null)
-    }
-    // Sweepstakes LOGS a repeat and scores it zero, so the station counts one contact fewer than its log holds. The page
-    // required the two to be equal and refused that capture whole, which showed the station as unavailable.
-    assert.deepEqual(await probe.send({type:'seedSweepstakes'}),{event:'arrlss_cw',qsoCount:1,rows:2},'the station counts the first contact and logs the repeat')
-    const contest=statsReference.parseFieldDay(await queryPage(fd,{collection:'fieldDay',cursor:null,search:'',unconfirmed:false,after:null}))
-    assert.equal(contest.fieldDay.qsoCount,1)
-    assert.deepEqual(contest.fieldDay.log.map(q=>[q.call,q.dupe===true]),[['K9XYZ',false],['K9XYZ',true]])
-    fd.close()
-    const js8Fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/js8.json',import.meta.url),'utf8'))
-    // The fixture's stations carry ★ and ☎, and its inbox holds a message for K2ABC too long to hand
-    // over at Normal, so the desktop's state carries the marks and the Inbox's note.
-    const nativeJs8=await probe.send({type:'seedJs8',journal:{inbox:js8Fixture.state.inbox,heard:js8Fixture.state.stations,allcallReplied:[],nextInboxId:3}})
-    assert.equal(nativeJs8.state.inbox.length,2)
-    assert.ok(nativeJs8.state.queue.length>1)
-    const {value:js8Ticket}=await browser.post(`stations/${stationId}/ticket`)
-    const js8=await browser.open(stationId,js8Ticket.ticket)
-    await js8.take(value=>value.type==='session')
-    js8.send({type:'applicationHello',version:11})
-    const js8Caps=await js8.take(value=>value.type==='applicationCapabilities')
-    assert.equal(js8Caps.version,11)
-    assert.ok(js8Caps.commands.includes('get_js8_state'))
-    const js8Request=crypto.randomUUID()
-    js8.send({type:'applicationSubscribe',topics:['get_js8_state'],requestId:js8Request})
-    const js8Frame=await frameSamples(js8,js8Request,['get_js8_state'])
-    const js8Sample=js8Frame.samples.get('get_js8_state')
-    assert.equal(js8Sample.type,'applicationResult',`the JS8 sample: ${js8Sample.error}`)
-    // The station read is the native JS8 state whole: the desktop's `presence` (heartbeat networking, the QSO pause),
-    // `controls` (the waterfall controls and the band schedule's notice), `inboxTooLong`, and each station's `ackMs` and
-    // `cqMs` (★ and ☎) ride in it, and the page's parser takes them. The controls: the desktop's state carries each.
-    assert.ok(Object.hasOwn(nativeJs8.state,'presence'),'control: the desktop state carries presence')
-    assert.ok(Object.hasOwn(nativeJs8.state,'controls'),'control: the desktop state carries controls')
-    assert.ok(nativeJs8.state.stations.some(h=>Object.hasOwn(h,'ackMs'))&&nativeJs8.state.stations.some(h=>Object.hasOwn(h,'cqMs')),'control: the desktop state carries the stations’ marks')
-    // The fixture's note is the one the station makes of that message, so the page's fixture says what a station says.
-    assert.deepEqual(nativeJs8.state.inboxTooLong,js8Fixture.state.inboxTooLong,'control: the desktop state carries the Inbox’s too-long note')
-    assert.deepEqual(js8Sample.data.state,nativeJs8.state,'the station read is the native JS8 DTO, every key of it')
-    assert.deepEqual(statsReference.parseJs8Sample(js8Sample.data,0,js8Sample.data.capturedAtMs),nativeJs8.state)
-    // The page's fixture has the keys a station's state has.
-    assert.deepEqual(Object.keys(js8Sample.data.state).sort(),Object.keys(js8Fixture.state).sort())
-    js8.send({type:'applicationFrameAck',requestId:js8Frame.requestId,nextRequestId:crypto.randomUUID()})
-    js8.send({type:'applicationSubscribe',topics:[],requestId:null})
-    const js8Page=await queryPage(js8,{collection:'js8Context',cursor:null,search:'',unconfirmed:false,after:null})
-    assert.equal(js8Page.type,'applicationPage')
-    const js8Context=statsReference.parseJs8Context(js8Page)
-    for(const call of ['W1AW','K2ABC']){
-      const history=reference.callHistory(nativeJs8.log,call,'')
-      const last=history.qsos.length?history.qsos.reduce((a,b)=>b.whenUnix>a.whenUnix?b:a):null
-      assert.deepEqual(js8Context.history[call],{count:history.count,lastUnix:history.lastUnix,
-        grid:(last?.grid??'').trim(),name:(last?.name??'').trim(),comment:(last?.comment??'').trim()})
-    }
-    assert.ok(js8Context.plan.length>0)
-    js8.close()
-    const nativeModes=await probe.send({type:'seedStationModes'})
-    const {value:modesTicket}=await browser.post(`stations/${stationId}/ticket`)
-    const modes=await browser.open(stationId,modesTicket.ticket)
-    modes.ackObservations()
-    await modes.take(value=>value.type==='session')
-    modes.send({type:'applicationHello',version:18})
-    const modesCapabilities=await modes.take(value=>value.type==='applicationCapabilities')
-    assert.equal(modesCapabilities.version,18,'the actual station advertises the lookups, alerts, rotator and activator-state extensions')
-    assert.ok(modesCapabilities.commands.includes('get_remote_navigation'))
-    assert.ok(modesCapabilities.commands.includes('get_remote_parks'))
-    assert.ok(modesCapabilities.commands.includes('get_remote_pounce'))
-    assert.ok(modesCapabilities.commands.includes('get_remote_rotator'))
-    // The newest page's POTA/SOTA board, on this session (a new socket would cross the ticket rate cap).
-    // The station's cache still holds the spots seeded above, each with its states; the v9 page above
-    // was sent none of them.
-    const placedPage = await queryPage(modes, { collection: 'ota', cursor: null, search: '', unconfirmed: false, after: null })
-    assert.equal(placedPage.type, 'applicationPage')
-    // The station's own rule: per band, US states only. CA is in the log on 20 m, not on 40 m.
-    assert.deepEqual(statsReference.parseOta(placedPage).feeds.flatMap(feed => feed.spots).map(s => [s.reference, s.states, s.neededStates]), [
-      ['US-0002', ['US-CA', 'US-ND'], ['US-ND']],
-      ['US-0003', ['US-CA'], ['US-CA']],
-      ['US-0004', [], []],
-      ['W7A/MN-001', ['US-AZ'], ['US-AZ']],
-    ])
-    const modesRequest=crypto.randomUUID()
-    modes.send({type:'applicationSubscribe',topics:['get_sstv_state','get_remote_aprs_state'],requestId:modesRequest})
-    const modesFrame=await frameSamples(modes,modesRequest,['get_sstv_state','get_remote_aprs_state'])
-    const sstvSample=modesFrame.samples.get('get_sstv_state')
-    const aprsSample=modesFrame.samples.get('get_remote_aprs_state')
-    assert.equal(sstvSample.type,'applicationResult',`the SSTV sample: ${sstvSample.error}`);assert.equal(aprsSample.type,'applicationResult',`the APRS sample: ${aprsSample.error}`)
-    const sstvState=statsReference.parseSstvSample(sstvSample.data,0)
-    assert.deepEqual({...sstvState,gallery:sstvState.gallery.map((g,i)=>({...g,path:nativeModes.sstv.gallery[i].path}))},nativeModes.sstv)
-    assert.ok(sstvState.gallery.every(g=>/^[a-f0-9-]{36}\.(png|bmp)$/.test(g.path)))
-    const liveAprs=statsReference.parseAprsLive(aprsSample.data,0)
-    assert.deepEqual(liveAprs.health,nativeModes.aprs.health)
-    assert.deepEqual(liveAprs.isStatus,nativeModes.aprs.isStatus)
-    assert.deepEqual(liveAprs.settings,nativeModes.aprs.settings)
-    modes.send({type:'applicationFrameAck',requestId:modesFrame.requestId,nextRequestId:crypto.randomUUID()})
-    modes.send({type:'applicationSubscribe',topics:[],requestId:null})
-    const collectionSource={page:async args=>{
-      await delay(140)
-      const page=await queryPage(modes,args)
-      assert.equal(page.type,'applicationPage',JSON.stringify({collection:args.collection,type:page.type,error:page.error}))
-      return page
-    }}
-    const aprsRoster=await statsReference.loadAprsRoster(collectionSource,()=>true)
-    assert.deepEqual(aprsRoster.heard,nativeModes.heard)
-    assert.deepEqual(aprsRoster.roster,nativeModes.roster)
-    assert.equal(aprsRoster.roster.stations.length,2000)
-    assert.equal(aprsRoster.heard.length,300)
-    for(const [i,g] of sstvState.gallery.entries()){
-      const image=await statsReference.loadSstvImage(collectionSource,g.path)
-      assert.deepEqual(Buffer.from(await image.arrayBuffer()),Buffer.from(nativeModes.images[i].base64,'base64'))
-    }
-    // Reuse the negotiated browser session as the real app does across sections.
-    // Opening one synthetic socket per section exceeds the real ticket rate cap.
-    console.log('Navigation probe: seed')
-    const nativeNavigation=await probe.send({type:'seedNavigation'})
-    console.log('Navigation probe: subscribe')
-    const navigation=modes
-    const navigationRequest=crypto.randomUUID()
-    navigation.send({type:'applicationSubscribe',topics:['get_remote_satellite_state'],requestId:navigationRequest})
-    const navigationFrame=await frameSamples(navigation,navigationRequest,['get_remote_satellite_state'])
-    const navigationLive=navigationFrame.samples.get('get_remote_satellite_state')
-    assert.equal(navigationLive.type,'applicationResult',`the live satellite sample: ${navigationLive.error}`)
-    console.log('Navigation probe: live sample')
-    const liveState=statsReference.parseSatelliteLive(navigationLive.data,0)
-    assert.deepEqual(liveState.settings,nativeNavigation.live.settings)
-    assert.deepEqual(liveState.held,nativeNavigation.live.held)
-    navigation.send({type:'applicationFrameAck',requestId:navigationFrame.requestId,nextRequestId:crypto.randomUUID()})
-    navigation.send({type:'applicationSubscribe',topics:[],requestId:null})
-    const navigationSource={page:async args=>{
-      for(let attempt=0;attempt<50;attempt++){
-        await delay(140)
-        const requestId=crypto.randomUUID()
-        navigation.send({type:'applicationQuery',requestId,...args})
-        const page=await navigation.take(value=>value.requestId===requestId).catch(error=>{console.log('Navigation probe timeout',{collection:args.collection,hasCursor:!!args.cursor,closed:navigation.closed,code:navigation.closeCode,reason:navigation.closeReason});throw error})
-        if(page.type==='applicationQueryError'&&page.error==='applicationBusy'){navigation.send({type:'applicationQueryAck',requestId});continue}
-        assert.equal(page.type,'applicationPage',JSON.stringify({collection:args.collection,type:page.type,error:page.error}))
-        navigation.send({type:'applicationQueryAck',requestId})
-        return page
-      }
-      throw new Error('native navigation worker did not produce its document')
-    }}
-    console.log('Navigation probe: connect capture')
-    const connect=await statsReference.loadNavigation(navigationSource,'connect','',()=>true)
-    assert.deepEqual(connect.value.prop,nativeNavigation.prop)
-    assert.equal(connect.value.coverage.logCount,nativeNavigation.logCount)
-    console.log('Navigation probe: path capture')
-    const path=await statsReference.loadNavigation(navigationSource,'path','PM95',()=>true)
-    assert.equal(path.value.grid,'PM95');assert.ok(path.value.prediction.bands.length>0)
-    assert.equal(path.stationContextId,connect.stationContextId)
-    console.log('Navigation probe: full satellite capture')
-    const satellites=await statsReference.loadNavigation(navigationSource,'satellites','',()=>true)
-    assert.ok(satellites.value.view.birds.length>250,'full native catalog must survive chunked workerd transfer')
-    assert.ok(satellites.value.view.birds.some(b=>b.name==='ISS (ZARYA)'))
-    console.log('Navigation probe: detail capture')
-    const satellite=await statsReference.loadNavigation(navigationSource,'satellite','ISS (ZARYA)',()=>true)
-    assert.equal(satellite.value.detail.name,'ISS (ZARYA)')
-    assert.equal(satellite.value.logCount,nativeNavigation.logCount)
-    assert.equal(satellite.stationContextId,connect.stationContextId)
-    const programFixture=JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/configuration-programming.json',import.meta.url),'utf8'))
-    const nativeConfiguration=await probe.send({type:'seedConfiguration',projects:programFixture.projects})
-    const settingsDoc=await statsReference.loadNavigation(navigationSource,'settings','',()=>true)
-    assert.deepEqual(settingsDoc.value,nativeConfiguration.settings)
-    const programmingDoc=await statsReference.loadNavigation(navigationSource,'programming','',()=>true)
-    assert.deepEqual(programmingDoc.value,nativeConfiguration.programming)
-    assert.equal(programmingDoc.value.projects[0].channels.length,1200)
-    const parkCsv='reference,name,grid,location\n'+Array.from({length:40},(_,i)=>`US-${String(i).padStart(4,'0')},Synthetic Park ${i},FN31,US-CT`).join('\n')+'\nUS-9999,Acadia National Park,FN54,US-ME\n'
-    // The desktop's parks also say where each park is (`states`, which its log form places a contact by). The page lists six
-    // keys and refuses a park with any other, so the station sends the desktop's answer without that one.
-    const pageKeys=park=>{const {states,...rest}=park;assert.deepEqual(states,[park.location],'the desktop answer carries the park\'s state');return rest}
-    for(const search of ['US-00','US-0001','ACADIA','ZZ-99']){
-      const desktopParks=await probe.send({type:'seedParks',csv:parkCsv,search})
-      const parks=statsReference.parseParks(await navigationSource.page({collection:'parks',cursor:null,search,unconfirmed:false,after:null}))
-      assert.deepEqual(parks.parks,desktopParks.parks.map(pageKeys),`the station answers ${search} exactly as the desktop search does, without the key the page does not list`)
-      assert.deepEqual(parks.exact,desktopParks.exact&&pageKeys(desktopParks.exact))
-      assert.equal(parks.parkCount,41)
-    }
-    const desktopConfirmations=await probe.send({type:'confirmationDiagnostics'})
-    assert.ok(desktopConfirmations.report.diagnoses.length>0,'the seeded station log must carry diagnoses to compare')
-    const confirmations=statsReference.parseConfirmations(await navigationSource.page({collection:'confirmations',cursor:null,search:'',unconfirmed:false,after:null}))
-    assert.equal(confirmations.logCount,desktopConfirmations.logCount)
-    assert.deepEqual(confirmations.report.diagnoses,desktopConfirmations.report.diagnoses.slice(0,50),'the desktop diagnoses, in the same order, cut to the panel')
-    assert.deepEqual(confirmations.report.buckets,desktopConfirmations.report.buckets.map(({kind,count})=>({kind,count,qsoIndices:[]})))
-    assert.deepEqual(confirmations.report.oneAway,desktopConfirmations.report.oneAway)
-    assert.equal(confirmations.report.waitingOnPartner,desktopConfirmations.report.waitingOnPartner)
-    assert.equal(confirmations.report.pendingLag,desktopConfirmations.report.pendingLag)
-    const desktopPounce=await probe.send({type:'seedPounce',spots:[{call:'3Y0J',freqMhz:14.025,mode:'CW'},{call:'3Y0J',freqMhz:14.026,mode:'CW'},{call:'FT5ZM',freqMhz:99.9,mode:'FT8'},{call:'FT5ZM',freqMhz:21.074,mode:'FT8'}]})
-    assert.ok(desktopPounce.fired.length>0,'the station detector must raise alerts for the comparison to mean anything')
-    const servedPounce=statsReference.parsePounce(await navigationSource.page({collection:'pounce',cursor:null,search:'',unconfirmed:false,after:null}))
-    assert.deepEqual(servedPounce.alerts,desktopPounce.fired,'the browser reads exactly the alerts the desktop Pounce raised')
-    assert.equal(servedPounce.threshold,'atno')
-    navigation.close()
     const second = await socket.take(value => value.type === 'observation')
     assert.ok(second.frame.sequence > first.frame.sequence)
     assert.equal(socket.closed,false,'observation must still be live before the local disable action')
     assert.equal((await probe.send({ type: 'disable' })).ok, true)
     await socket.take(value => value.type === 'closed')
-    assert.equal((await probe.send({ type: 'publishMemories', bank: JSON.stringify(bank) })).accepted, false)
     const restarted = await probe.send({ type: 'restart' })
     assert.equal(restarted.status.stationId, stationId)
     assert.equal(restarted.status.phase, 'disabled')
@@ -1042,7 +541,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
 // it on the live client's own 30 s wall clock, which puts the budget on the GAP between renewals
 // (measured max 30.3 s against 60 s) instead of on the length of the block, so adding operations
 // here no longer walks toward that cliff. The node clock above still bounds the whole run.
-for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native operations v${operationVersion} produce one durable QSO, preserve receipts and refuse local takeover`, {timeout:operationVersion>=4?180000:60000},async()=>{
+for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native operations v${operationVersion} hold the lease, take Stop and refuse local takeover`, {timeout:operationVersion>=4?180000:60000},async()=>{
  assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
  const app=await runtime(),probe=await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY,app.origin)
  let socket
@@ -1095,134 +594,12 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   state=(await allowed(()=>operation({type:'state'}))).response.value;assert.equal(state.phase,'localPermissionRequired');assert.equal((await operation({type:'acquire',stationBootId:state.stationBootId})).response.error,'localPermissionRequired')
   await probe.send({type:'refresh'});const permission=await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal(permission.ok,true,permission.error);assert.deepEqual(permission.status.loggingPermissions,[device.deviceId])
   state=(await allowed(()=>operation({type:'acquire',stationBootId:state.stationBootId}))).response.value;assert.equal(state.phase,'controlling');assert.equal(state.txArmed,false)
-  const record={call:'W1AW',grid:'FN31',country:null,state:null,band:'20m',freqMhz:14.25,mode:'SSB',rstSent:'59',rstRcvd:'57',name:'Joe',qth:'Newington',comment:'Cloud/native append test',notes:'Do not duplicate',whenUnix:Math.floor(Date.now()/1000),confirmed:false,awardConfirmed:false}
   const heartbeat=()=>allowed(()=>operation({type:'heartbeat',leaseId:state.leaseId}))
-  const logRequest=s=>({type:'logManual',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,record})
-  const logged=await allowed(()=>operation(logRequest(state)),async()=>operation(logRequest((await heartbeat()).response.value)));assert.equal(logged.response.value?.outcome,'applied');assert.equal(logged.response.value?.evidence,'fileSynced')
-  let evidence=await probe.send({type:'loggingEvidence'});assert.equal(evidence.count,1);assert.match(evidence.adif,/W1AW/);assert.match(evidence.adif,/Do not duplicate/);assert.equal(evidence.txEnabled,false)
-  await delay(270);socket.send(await signed(envelope(logged.request)));const replay=await socket.take(v=>v.type==='operationResponse'&&v.requestId===logged.request.requestId);assert.deepEqual(replay,logged.response);assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
-  if(operationVersion===4){
-   // Edit and delete a contact through the real relay and native authority, found by the key of the
-   // row the station's own log page serves. The logging grant alone allows it; nothing keys.
-   const {createHash}=await import('node:crypto')
-   const labeled=(peer,label,predicate)=>peer.take(predicate).catch(error=>{throw new Error(`${label} timed out; closed=${peer.closed} code=${peer.closeCode} reason=${peer.closeReason}`,{cause:error})})
-   const canon=v=>v===null?'z':typeof v==='boolean'?(v?'t':'f'):typeof v==='number'?`n${v<0&&Math.round(Math.abs(v)*1e6)!==0?'-':''}${BigInt(Math.round(Math.abs(v)*1e6))};`:typeof v==='string'?`s${Buffer.byteLength(v)}:${v}`:Array.isArray(v)?`a${v.length}[${v.map(canon).join('')}]`:`o${Object.keys(v).length}{${Object.keys(v).sort().map(k=>canon(k)+canon(v[k])).join('')}}`
-   const target=row=>({call:row.call,whenUnix:row.whenUnix,key:createHash('sha256').update(canon(row),'utf8').digest('hex')})
-   // One page socket for the whole block: any browser leaving ends the shared logging lease.
-   const {value:pageTicket}=await browser.post(`stations/${stationId}/ticket`);const pages=await browser.open(stationId,pageTicket.ticket);pages.ackObservations();observing(pages,(await labeled(pages,'page session',v=>v.type==='session')).sessionId);pages.send({type:'applicationHello',version:3});await labeled(pages,'page capabilities',v=>v.type==='applicationCapabilities')
-   const logRows=async()=>{const page=await queryPage({send:m=>pages.send(m),take:p=>labeled(pages,'log page',p)},{collection:'log',cursor:null,search:'',unconfirmed:false,after:null});assert.equal(page.type,'applicationPage',JSON.stringify({type:page.type,error:page.error}));return page.rows}
-   // The station shares a page-zero capture for a few seconds, so read until the page shows the change.
-   // A real page heartbeats every second whatever it is showing; without that the 5 s lease lapses mid-poll.
-   const rowFor=async(call,accept)=>{for(let i=0;i<40;i++){const row=(await logRows()).find(r=>r.call===call);if(row&&accept(row))return row;await heartbeat();await delay(250)}throw new Error(`the log page never showed ${call} as expected`)}
-   const fresh=async()=>{const {response}=await heartbeat();assert.ok(response.value,`the logging lease heartbeat was refused: ${JSON.stringify(response)}`);return response.value}
-   const write=build=>allowed(async()=>operation(build(await fresh())),async()=>operation(build(await fresh())))
-   const changeRequest=(s,change)=>({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change})
-   const second={...record,call:'K1ABC',comment:'Second contact',notes:null,whenUnix:record.whenUnix-60}
-   assert.equal((await write(s=>({...logRequest(s),record:second}))).response.value?.outcome,'applied')
-   const capable=await fresh();assert.ok(capable.controls.capabilities.includes('logEdit'));assert.deepEqual(capable.actions,['log.manual'])
-   const before=await rowFor('K1ABC',()=>true)
-   const edited=await write(s=>changeRequest(s,{kind:'edit',target:target(before),record:{...second,comment:'Edited from the browser'}}))
-   assert.deepEqual(edited.response.value,{operation:'logChange',operationId:edited.request.requestId,outcome:'applied',evidence:'fileSynced'})
-   const afterEdit=await probe.send({type:'loggingEvidence'});assert.equal(afterEdit.count,2);assert.match(afterEdit.adif,/Edited from the browser/);assert.equal(afterEdit.txEnabled,false)
-   await delay(270);socket.send(await signed(envelope(edited.request)));assert.deepEqual(await labeled(socket,'edit replay',v=>v.type==='operationResponse'&&v.requestId===edited.request.requestId),edited.response);assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
-   // Positive control: the pre-edit row is stale now, so a delete aimed at it changes nothing.
-   const stale=await write(s=>changeRequest(s,{kind:'delete',target:target(before)}))
-   assert.equal(stale.response.value?.outcome,'rejected',JSON.stringify(stale.response));assert.equal(stale.response.value?.reason,'contextChanged');assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
-   const edit=await rowFor('K1ABC',row=>row.comment==='Edited from the browser')
-   const carded=await write(s=>changeRequest(s,{kind:'qslCard',target:target(edit),received:true}))
-   assert.equal(carded.response.value?.outcome,'applied',JSON.stringify(carded.response));assert.equal(carded.response.value?.evidence,'fileSynced')
-   const current=await rowFor('K1ABC',row=>row.qslRcvd?.card===true)
-   const removed=await write(s=>changeRequest(s,{kind:'delete',target:target(current)}))
-   assert.equal(removed.response.value?.outcome,'applied',JSON.stringify(removed.response))
-   evidence=await probe.send({type:'loggingEvidence'});assert.equal(evidence.count,1);assert.match(evidence.adif,/W1AW/);assert.doesNotMatch(evidence.adif,/K1ABC/)
-   // A hunt tags the station's next contact with that call; it is station state, not a log write.
-   const hunted=await write(s=>({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change:{kind:'hunt',call:'K2ABC',program:'POTA',reference:'US-0004'}}))
-   assert.deepEqual(hunted.response.value,{operation:'logChange',operationId:hunted.request.requestId,outcome:'applied',evidence:'stationState'})
-   assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence);assert.equal(evidence.txEnabled,false)
-   // Your activation is station context too. End it again so nothing logged later in this run is stamped.
-   const context=(s,change)=>({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change})
-   const activated=await write(s=>context(s,{kind:'activation',program:'POTA',reference:'US-0001'}))
-   assert.deepEqual(activated.response.value,{operation:'logChange',operationId:activated.request.requestId,outcome:'applied',evidence:'stationState'})
-   // One activation's ADIF, read back in chunks through the relay: the station's own file, digest checked,
-   // holding the activation's contact and none of the rest of the log.
-   const activeContact={...record,call:'K3ACT',comment:'Activation contact',notes:null,whenUnix:record.whenUnix-120}
-   assert.equal((await write(s=>({...logRequest(s),record:activeContact}))).response.value?.outcome,'applied')
-   assert.ok((await fresh()).controls.capabilities.includes('activationExport'))
-   const readExport=async(selection,index)=>{const s=await fresh();const {response}=await allowed(()=>operation({type:'activationExport',stationBootId:s.stationBootId,leaseId:s.leaseId,selection,index}));assert.ok(response.value,JSON.stringify(response));return response.value}
-   const listed=await readExport(null,0),mine=listed.activations.find(a=>a.reference==='US-0001');assert.ok(mine,JSON.stringify(listed))
-   const selection={reference:mine.reference,dayStartUnix:mine.dayStartUnix,callsign:mine.callsign}
-   const firstChunk=await readExport(selection,0),parts=[Buffer.from(firstChunk.base64,'base64')]
-   for(let i=1;i<firstChunk.file.chunks;i++)parts.push(Buffer.from((await readExport(selection,i)).base64,'base64'))
-   const exported=Buffer.concat(parts);assert.equal(exported.length,firstChunk.file.byteLength);assert.equal(createHash('sha256').update(exported).digest('hex'),firstChunk.file.sha256)
-   assert.match(exported.toString(),/K3ACT/);assert.doesNotMatch(exported.toString(),/W1AW/)
-   // Leave the log as the rest of this run expects it: remove the activation contact by its row key.
-   const activeRow=await rowFor('K3ACT',()=>true)
-   assert.equal((await write(s=>changeRequest(s,{kind:'delete',target:target(activeRow)}))).response.value?.outcome,'applied')
-   evidence=await probe.send({type:'loggingEvidence'});assert.doesNotMatch(evidence.adif,/K3ACT/);assert.equal(evidence.txEnabled,false)
-   // A logging preference under the logging grant: confirmed by the station and saved to its settings file. The TX
-   // latch and the dial do not move, the revision it was made against is stale afterwards, and a station preference
-   // needs station control, which this browser does not hold here. Put the preference back for the rest of the run.
-   const shownPrefs=await probe.send({type:'settingsEvidence'})
-   const pref=await write(s=>changeRequest(s,{kind:'settings',revision:shownPrefs.revision,values:{autoLog:!shownPrefs.autoLog}}))
-   assert.deepEqual(pref.response.value,{operation:'logChange',operationId:pref.request.requestId,outcome:'applied',evidence:'settingsSaved'})
-   const savedPrefs=await probe.send({type:'settingsEvidence'})
-   assert.equal(savedPrefs.autoLog,!shownPrefs.autoLog);assert.equal(savedPrefs.savedAutoLog,!shownPrefs.autoLog)
-   assert.equal(savedPrefs.txEnabled,false);assert.equal(savedPrefs.dialHz,shownPrefs.dialHz)
-   const stalePref=await write(s=>changeRequest(s,{kind:'settings',revision:shownPrefs.revision,values:{autoLog:shownPrefs.autoLog}}))
-   assert.equal(stalePref.response.value?.outcome,'rejected');assert.equal(stalePref.response.value?.reason,'contextChanged')
-   const noControl=await allowed(async()=>operation(changeRequest(await fresh(),{kind:'settings',revision:savedPrefs.revision,values:{contestCheck:'73'}})))
-   assert.equal(noControl.response.error,'localPermissionRequired')
-   // Rendering the channel list to a file is station control too, and this browser holds only the
-   // logging grant here. NOTHING is read: the refusal is the grant's, not the file's.
-   const noProgram=await allowed(async()=>{const s=await fresh();return operation({type:'programExport',stationBootId:s.stationBootId,leaseId:s.leaseId,format:'csv',nameCap:7,index:0})})
-   assert.equal(noProgram.response.error,'localPermissionRequired')
-   const restored=await write(s=>changeRequest(s,{kind:'settings',revision:savedPrefs.revision,values:{autoLog:shownPrefs.autoLog}}))
-   assert.equal(restored.response.value?.evidence,'settingsSaved',JSON.stringify(restored.response));assert.equal((await probe.send({type:'settingsEvidence'})).autoLog,shownPrefs.autoLog)
-   const ended=await write(s=>context(s,{kind:'clearActivation'}))
-   assert.equal(ended.response.value?.evidence,'stationState',JSON.stringify(ended.response));assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
-   // Closing the page socket ends the lease, as any departure does. Wait for that, then take it again.
-   leaving(pages)
-   for(let i=0;i<50&&(await allowed(()=>operation({type:'state'}))).response.value?.phase==='controlling';i++)await delay(100)
-   state=(await allowed(()=>operation({type:'acquire',stationBootId:state.stationBootId}))).response.value;assert.equal(state.phase,'controlling')
-  }
+  const evidence=await probe.send({type:'loggingEvidence'});assert.deepEqual(evidence,{count:0,adif:'',txEnabled:false})
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await allowed(()=>operation({type:'state'}))).response.value
-   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning','fmReceiver','aiCw','redecode','splitTuning','ritTuning','workDigitalSpot','repeaterTuning','memoryRecall','aprsTuning','rotator','rigScope','workRttySpot','sstvGallery','satellite','subReceiverLevels',...(operationVersion===4?['qsoLogging','logEdit','qslMarks','otaHunt','otaActivation','activationExport','settingsLogging','selfSpot','settingsControl','postSpot','programExport','programEdit','audioListen']:[])]:['decoder','amplifier'])
-   const clearRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
-   const cleared=await allowed(()=>operation(clearRequest(controls)),async()=>operation(clearRequest((await heartbeat()).response.value)))
-   assert.equal(cleared.response.value?.outcome,'applied');assert.equal(cleared.response.value?.evidence,'receiverState')
-   assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
-   if(operationVersion===4){
-    // Program, both halves, over the real relay and the real station — ONE state read shared by
-    // both, because this browser's access has a lifetime and every extra round trip spends it.
-    // Placed AFTER the clear above: that one uses the `controls` command window captured before it,
-    // so anything slipped in between leaves it stale.
-    //
-    // The station's profile is a fresh temp dir with no radioprog.json, so the export's honest
-    // answer is that there is nothing to export, and a curation against a revision this station
-    // cannot be holding is stale. Both are the station's own file reader replying; the refusal
-    // earlier in this run proved neither can be reached without station control. The export spends
-    // no sequence or window, so the curation after it can use the same state.
-    const s4=(await heartbeat()).response.value
-    const exported=await allowed(()=>operation({type:'programExport',stationBootId:s4.stationBootId,leaseId:s4.leaseId,format:'chirp',nameCap:7,index:0}))
-    assert.deepEqual(exported.response.value,{operation:'programExport',refused:'notFound'},JSON.stringify(exported.response))
-    const curate=await allowed(()=>operation({type:'logChange',stationBootId:s4.stationBootId,leaseId:s4.leaseId,expectedRevision:s4.revision,commandWindowId:s4.commandWindowId,clientSequence:s4.nextSequence,change:{kind:'programEdit',revision:'a'.repeat(64),edit:{action:'clear'}}}))
-    assert.equal(curate.response.value?.outcome,'rejected',JSON.stringify(curate.response))
-    assert.equal(curate.response.value?.reason,'contextChanged')
-   }
-   if(operationVersion>=3){
-    // FT8/FT4 Work is its own v3 action. It must cross the real relay and native parser without
-    // dropping the socket or the lease. The band does not match the dial, so the station answers a
-    // closed rejection and leaves no pending receipt for the controls below (the probe has no radio
-    // owner to answer a readback).
-    const workRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'radio.workDigitalSpot',tier:'FT4',dialMhz:14.0815,band:'40m',call:'JA2DEF'}})
-    const worked=await allowed(async()=>operation(workRequest((await heartbeat()).response.value)),async()=>operation(workRequest((await heartbeat()).response.value)))
-    assert.equal(worked.response.value?.operation,'stationControl',JSON.stringify(worked.response))
-    assert.equal(worked.response.value?.outcome,'rejected')
-    assert.equal((await heartbeat()).response.value?.phase,'controlling')
-    assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
-   }
+   assert.deepEqual(controls.controls.capabilities,operationVersion===4?['qsoLogging','audioListen']:[])
    if (operationVersion === 4) {
      // Stop anything (operator decision 2026-09-14): station control alone holds the stop token, and a
      // browser's Stop unkeys a transmission started at the shack. Key locally through the probe (the
@@ -1251,18 +628,10 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
      // renew the lease the wait would otherwise outlast.
      await stopWindow()
      await heartbeat()
-     // A station preference under station control: confirmed, saved, and the TX latch and dial untouched.
-     const shownStation=await probe.send({type:'settingsEvidence'})
-     const stationPref=s=>({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change:{kind:'settings',revision:shownStation.revision,values:{contestCheck:'73'}}})
-     const savedStation=await allowed(async()=>operation(stationPref((await heartbeat()).response.value)))
-     assert.deepEqual(savedStation.response.value,{operation:'logChange',operationId:savedStation.request.requestId,outcome:'applied',evidence:'settingsSaved'})
-     const afterStation=await probe.send({type:'settingsEvidence'})
-     assert.equal(afterStation.contestCheck,'73');assert.equal(afterStation.savedContestCheck,'73')
-     assert.equal(afterStation.txEnabled,false);assert.equal(afterStation.dialHz,shownStation.dialHz)
      // Stop anything (operator decision 2026-09-14): from v4 the stop token goes to any browser
      // holding station control, before and without any transmit permission; versions 1-3 carry no
      // token at all. This line used to assert null unconditionally, which contradicted the same
-     // object's assertion above. A preference save must not clear the token either.
+     // object's assertion above.
      if (operationVersion >= 4) assert.match(controls.transmitEpoch, /^[0-9a-f]{16}$/)
      else assert.equal(controls.transmitEpoch, null)
      const grant = await probe.send({type:'transmitPermission',deviceId:device.deviceId,allow:true})
@@ -1313,7 +682,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
        ft=await ftState()
        const cq = await action(ft,{action:'ft.cq',expectedTier:tier,direction:'DX'})
        assert.equal(cq.response.value?.outcome,'applied',JSON.stringify(cq.response))
-       assert.deepEqual(await probe.send({type:'ftEvidence'}),{tier,txEnabled:true,owned:true,logCount:1})
+       assert.deepEqual(await probe.send({type:'ftEvidence'}),{tier,txEnabled:true,owned:true,logCount:0})
        // Live RX and Skip Tx1 use the active FT owner without acquiring a new
        // transmitter or moving the TX marker. Exercise the actual cloud/host path.
        for(const change of [{kind:'rxOffset',hz:900},{kind:'skipTx1',on:true},{kind:'skipTx1',on:false}]){
@@ -1343,7 +712,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
        assert.deepEqual((await operation(stop)).response.value,{stop:'accepted'})
        // The acknowledgement alone is not evidence of the native engine stopping.
        for(let i=0;i<30&&(await probe.send({type:'ftEvidence'})).txEnabled;i++)await delay(50)
-       assert.deepEqual(await probe.send({type:'ftEvidence'}),{tier,txEnabled:false,owned:false,logCount:1})
+       assert.deepEqual(await probe.send({type:'ftEvidence'}),{tier,txEnabled:false,owned:false,logCount:0})
        // The Stop retired this state's transmit epoch, so the command is stale on purpose. A busy answer is asked
        // again with the same command, never through `action`, whose retry builds it from a state read afresh.
        assert.equal((await allowed(()=>command(ft,{action:'ft.cq',expectedTier:tier,direction:null}))).response.error,'staleContext')
@@ -1407,7 +776,6 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   let restored=null;for(let i=0;i<100&&!restored;i++){const {status}=await probe.send({type:'status'});if(status.loggingPermissions?.includes(device.deviceId))restored=status;else await delay(100)}
   assert.ok(restored,'the browser\'s logging did not come back at Turn on')
   const again=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,again.ticket);socket.ackObservations();observing(socket,session=(await socket.take(v=>v.type==='session')).sessionId)
-  assert.equal((await allowed(()=>operation({type:'result',operationId:logged.request.requestId}))).response.value?.outcome,'applied')
   leaving(socket);socket=null
   // Remote remembers being on (operator decision 2026-09-13), and since the one-approval decision the
   // same day, FT8/FT4 transmit is remembered too. Restarting the actual native controller turns Remote

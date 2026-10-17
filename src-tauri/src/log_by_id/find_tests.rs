@@ -1,10 +1,10 @@
 //! A change's contact found in the store with the Engine lock released (`find`, then `locate`
 //! under the lock), held to the code before SPEC-2 v3 C18 moved it: C16's `locate`, its body
 //! VERBATIM (`old_locate`), over the log in memory, beside the store that log mirrors — and on the
-//! 1.13 path. Every contact's own row, near misses and id targets, on logs with ties in call and
+//! 1.13 path. Every contact's own row and near misses, on logs with ties in call and
 //! time, identical twins and calls outside ASCII, and after every one of the app's kinds of change.
 use super::*;
-use crate::remote_service::query::log_tests::{
+use crate::remote_service::log_tests::{
     launch, random_change, settle, synthetic, test_country, test_state, Dir, Gen, MY_CALL,
 };
 use crate::remote_service::stored_log_tests::StoredLog;
@@ -15,8 +15,7 @@ use tempo_core::logbook::adif_record_own_log;
 // ── the code before C18, VERBATIM ────────────────────────────────────────────────────────────
 
 /// The id of the contact a writer saw — the browser's log page or the shack's log view — or
-/// `None` when no contact is that row any more: none holds exactly that content (a key
-/// target), or the contact is gone or no longer the version the writer held (an id target).
+/// `None` when no contact is that row any more: none holds exactly that content.
 /// A position is never the answer: one kept from an earlier read is stale the moment the
 /// OTHER writer deletes above it, and acting on it deleted or rewrote a different contact.
 /// Another instance's changes are folded in first, so the answer is about the log as it is.
@@ -24,25 +23,19 @@ use tempo_core::logbook::adif_record_own_log;
 /// A key target is found in the log as the store holds it ([`StoredLog`]), in place of the copy
 /// in memory: these tests hold the old search against the new over the same rows, and whether
 /// the store holds what the old write path wrote (P6) is the Stage-1 lockstep suite's job.
-fn old_locate(engine: &mut Engine, target: &Target) -> Option<RecordId> {
+fn old_locate(engine: &mut Engine, t: &KeyTarget) -> Option<RecordId> {
     engine.take_in_shared_log();
-    match target {
-        Target::Key(t) => engine
-            .stored_log()
-            .into_iter()
-            .find(|r| r.call == t.call && r.when_unix == t.when_unix && row_key(r) == t.key)
-            .and_then(|r| r.id),
-        Target::Id(t) => {
-            let id = t.id.parse().ok()?;
-            engine.fresh_log_row(id, &t.edit_key).ok().map(|_| id)
-        }
-    }
+    engine
+        .stored_log()
+        .into_iter()
+        .find(|r| r.call == t.call && r.when_unix == t.when_unix && row_key(r) == t.key)
+        .and_then(|r| r.id)
 }
 
 /// The new code's answer, as the change path gets it: the log's rows under the Engine lock, the
 /// search with it released, and the found version still the contact's when the change is made
 /// (the check `change_found` makes, asked of the store here).
-fn new_locate(e: &crate::SharedEngine, target: &Target) -> Option<RecordId> {
+fn new_locate(e: &crate::SharedEngine, target: &KeyTarget) -> Option<RecordId> {
     let rows = e.lock().unwrap().log_rows();
     let found = find(&rows, target).expect("the log reads")?;
     let id = found.id.parse().ok()?;
@@ -85,39 +78,25 @@ fn loaded(d: &Dir) -> crate::SharedEngine {
     Arc::new(Mutex::new(e))
 }
 
-/// Every target a writer can send for this log: each contact's own row as a key target, as the
-/// page and the shack build it, and its id target; and near misses — for every seventh contact
-/// the row a second later, the call in lower case, a key no row has, and an edit key no version
-/// has.
-fn targets(e: &crate::SharedEngine) -> Vec<Target> {
+/// Every target the shack can send for this log: each contact's own row as a key target; and
+/// near misses — for every seventh contact the row a second later, the call in lower case, and a
+/// key no row has.
+fn targets(e: &crate::SharedEngine) -> Vec<KeyTarget> {
     let eng = e.lock().unwrap();
-    let key = |call: &str, when_unix: u64, key: String| {
-        Target::Key(KeyTarget {
-            call: call.to_string(),
-            when_unix,
-            key,
-        })
+    let key = |call: &str, when_unix: u64, key: String| KeyTarget {
+        call: call.to_string(),
+        when_unix,
+        key,
     };
     let mut out = Vec::new();
     for (i, r) in eng.stored_log().iter().enumerate() {
         out.push(key(&r.call, r.when_unix, row_key(r)));
-        let id =
-            r.id.expect("every row the log holds carries an id")
-                .to_string();
-        out.push(Target::Id(RowRef {
-            id: id.clone(),
-            edit_key: QsoEdit::project(r).key(),
-        }));
         if i % 7 == 0 {
             out.push(key(&r.call, r.when_unix + 1, row_key(r)));
             if r.call.to_lowercase() != r.call {
                 out.push(key(&r.call.to_lowercase(), r.when_unix, row_key(r)));
             }
             out.push(key(&r.call, r.when_unix, "0".repeat(64)));
-            out.push(Target::Id(RowRef {
-                id,
-                edit_key: "0".repeat(16),
-            }));
         }
     }
     out
@@ -130,7 +109,7 @@ fn assert_found_as_before(e: &crate::SharedEngine, what: &str) -> (usize, usize)
     for t in targets(e) {
         let new = new_locate(e, &t);
         let old = old_locate(&mut e.lock().unwrap(), &t);
-        assert_eq!(new, old, "{what}: {}", serde_json::to_string(&t).unwrap());
+        assert_eq!(new, old, "{what}: {t:?}");
         if new.is_some() {
             found += 1;
         } else {
@@ -174,11 +153,7 @@ fn every_target_is_found_as_the_old_locate_found_it() {
     for (arm, e) in [("the store", &store), ("the 1.13 path", &loaded(&m))] {
         let contacts = e.lock().unwrap().stored_log().len();
         let (found, refused) = assert_found_as_before(e, arm);
-        assert_eq!(
-            found,
-            2 * contacts,
-            "{arm}: every contact, by its row and by its id"
-        );
+        assert_eq!(found, contacts, "{arm}: every contact, by its row");
         assert!(refused > 500, "{arm}: premise: near misses: {refused}");
     }
     settle(&store);
@@ -203,7 +178,7 @@ fn after_every_change_every_target_is_found_as_before() {
 }
 
 /// What was found is checked under the lock: an edit landing between the search and the lock
-/// makes the contact another version, and it is refused, as an id target would be; an upload
+/// makes the contact another version, and it is refused; an upload
 /// stamp does not, since the edit key covers only what an edit writes. The control: nothing
 /// landing, it is found.
 #[test]
@@ -214,14 +189,14 @@ fn what_the_search_found_is_checked_again_under_the_lock() {
     let first = |e: &crate::SharedEngine| {
         let eng = e.lock().unwrap();
         let r = QsoRecord::clone(&eng.stored_log()[0]);
-        let t = Target::Key(KeyTarget {
+        let t = KeyTarget {
             call: r.call.clone(),
             when_unix: r.when_unix,
             key: row_key(&r),
-        });
+        };
         (r, t)
     };
-    let search = |e: &crate::SharedEngine, t: &Target| {
+    let search = |e: &crate::SharedEngine, t: &KeyTarget| {
         let rows = e.lock().unwrap().log_rows();
         find(&rows, t).expect("the log reads").expect("found")
     };
@@ -258,12 +233,48 @@ fn a_key_target_searched_under_the_engine_lock_is_refused() {
     std::fs::write(d.log(), twins_log(5, 0x0C18_A2F3)).unwrap();
     let e = launch(&d);
     let r = QsoRecord::clone(&e.lock().unwrap().stored_log()[0]);
-    let t = Target::Key(KeyTarget {
+    let t = KeyTarget {
         call: r.call.clone(),
         when_unix: r.when_unix,
         key: row_key(&r),
-    });
+    };
     let eng = tempo_app::engine::engine_lock(&e);
     let rows = eng.log_rows();
     let _ = find(&rows, &t);
+}
+
+/// The desktop hands a row back exactly as `get_log` gave it, and [`seen_target`] keys that echo.
+/// The key it derives must be the key [`row_key`] holds for the record, or every shack action
+/// would be refused as stale. Pins the JSON round trip (`LoggedQso` → wire → `LoggedQso`) as
+/// key-preserving, so a serde attribute that drops or defaults a field on one side cannot creep in
+/// unnoticed — on rows reaching outside ASCII, an ADIF SIG park and an escaped comment.
+#[test]
+fn the_shacks_echoed_row_keys_to_the_stations_own_key() {
+    let d = Dir::new("echoed-row");
+    let e = launch(&d);
+    e.lock().unwrap().import_adif(
+        "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<FREQ:6>14.074<QSO_DATE:8>20260909<TIME_ON:6>010000<NAME:4>Joe <EOR>\n\
+         <CALL:5>K1ABC<BAND:3>40m<MODE:2>CW<FREQ:5>7.030<QSO_DATE:8>20260909<TIME_ON:6>020000<EOR>\n\
+         <CALL:6>DL1ABC<BAND:3>20m<MODE:3>SSB<FREQ:6>14.250<QSO_DATE:8>20260909<TIME_ON:6>040000\
+         <SIG:4>WWFF<SIG_INFO:9>DLFF-0001<NAME:9>José 日本<COMMENT:4>a\"b}<EOR>\n",
+    );
+    let handed_out: Vec<(QsoRecord, LoggedQso)> = {
+        let eng = e.lock().unwrap();
+        assert_eq!(eng.stored_log().len(), 3, "premise: three contacts");
+        eng.stored_log()
+            .iter()
+            .map(|r| (r.as_ref().clone(), crate::logged_qso(r)))
+            .collect()
+    };
+    for (record, handed_out) in handed_out {
+        // Over the wire and back, as Tauri's IPC carries it.
+        let echoed: LoggedQso =
+            serde_json::from_value(serde_json::to_value(&handed_out).unwrap()).unwrap();
+        assert_eq!(
+            seen_target(&echoed).key,
+            row_key(&record),
+            "{}",
+            record.call
+        );
+    }
 }
