@@ -6377,6 +6377,8 @@ export const DE: PartialCatalog = {
   "phone.sub.unconfirmed": "Für den Unterempfänger nicht bestätigt: {{plates}}",
   "phone.sub.setNotRead": "Von Nexus gesetzt — das Funkgerät meldet die Pegel des Unterempfängers nicht zurück.",
   "phone.sub.failed": "Nexus konnte {{plate}} des Unterempfängers nicht setzen.",
+  "phone.chain.failed": "Nexus konnte {{plate}} nicht setzen.",
+  "phone.monitor.failed": "Nexus konnte den Monitorpegel nicht setzen.",
   "phone.chain.off": "Aus",
   "phone.chain.att.aria": "Abschwächer",
   "phone.chain.att.title": "Das Eingangsdämpfungsglied in Dezibel — der Abschwächer, den dieses Funkgerät veröffentlicht. Nutze ihn, wenn eine starke Nachbarstation die AGC pumpen lässt; er kostet dich auch schwache Signale.",

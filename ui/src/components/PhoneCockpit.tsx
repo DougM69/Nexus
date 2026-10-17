@@ -673,7 +673,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
     setMon(pct)
     void setMonitorGain(pct / 100)
       .then((s) => s && onSnap?.(s))
-      .catch(() => pushToast(t('remote.controlRequestFailed'), 'error'))
+      .catch(() => pushToast(t('phone.monitor.failed'), 'error'))
   }
   /**
    * ⛔ A PAD IS PICKED, NOT SET, so this sends the operator's chip and nothing else.
@@ -688,7 +688,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
     if (!control) return
     void (which === 'ATT' ? setAttDb(db) : setPreampDb(db))
       .then((s) => s && onSnap?.(s))
-      .catch(() => pushToast(t('remote.controlRequestFailed'), 'error'))
+      .catch(() => pushToast(t('phone.chain.failed', { plate: which }), 'error'))
   }
   const [nr, setNr] = useState(30) // % noise-reduction level — pushed once touched
   const nrDragging = useRef(false)

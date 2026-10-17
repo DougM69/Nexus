@@ -2622,6 +2622,8 @@
 "5","phone.sub.unconfirmed","Not confirmed for the sub receiver: {{plates}}","","{{plates}}",""
 "5","phone.sub.setNotRead","Set from Nexus — the radio does not report the sub receiver’s levels back.","","Nexus",""
 "5","phone.sub.failed","Nexus could not set the sub receiver’s {{plate}}.","","{{plate}} | Nexus",""
+"5","phone.chain.failed","Nexus could not set {{plate}}.","","{{plate}} | Nexus",""
+"5","phone.monitor.failed","Nexus could not set the monitor level.","","Nexus",""
 "5","phone.chain.receiver.aria","Receiver chain — what you are hearing","","",""
 "5","phone.chain.transmitter.aria","Transmitter chain — how your voice goes out","","",""
 "5","phone.chain.off","Off","","","Short label on: Phone (SSB) cockpit. The same English text ""Off"" is used by 15 different keys (e.g. monitor.off, roam.status.off, settings.alerts.scope.off) — each can take a different Portuguese word, so choose the one that fits THIS screen."

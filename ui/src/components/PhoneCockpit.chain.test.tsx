@@ -25,7 +25,8 @@ import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
 import { PHONE_PANEL_IDS } from '../features/panelState'
-import { setAttDb, setPreampDb } from '../api'
+import { setAttDb, setPreampDb, setMonitorGain } from '../api'
+import { pushToast } from '../toast'
 
 // THE BUDGET (2026-10-09). The slowest case here, "the receive chain and the transmit chain are each ONE…", takes
 // 0.38 s and 0.19 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -465,5 +466,39 @@ describe('the attenuator and the preamp are picked from the list the RADIO publi
     expect(document.querySelectorAll('[data-chain="ATT"] .ph-unavail'), 'a dead link was reported as a missing list').toHaveLength(0)
     expect(footLine('receiver'), 'a dead link was read as a radio with no pads').toBe('')
     expect(chips('ATT').every((c) => c.getAttribute('aria-disabled') === 'true')).toBe(true)
+  })
+})
+
+// The desktop's own pad and monitor-level calls once toasted the Remote page's sentence about
+// station control permission, which a desktop operator holds by definition. A failure here says
+// which control Nexus could not set.
+describe('a pad or monitor level the radio did not take says so in the desktop’s words', () => {
+  const toast = pushToast as unknown as ReturnType<typeof vi.fn>
+  beforeEach(() => toast.mockClear())
+
+  it('a refused attenuator pad names the ATT', async () => {
+    mockSetAttDb.mockRejectedValueOnce(new Error('20 dB is not on this radio'))
+    mount({ ...FULL_RIG, attStepsDb: [6, 12, 18], attDb: 0 })
+    fireEvent.click(document.querySelectorAll<HTMLButtonElement>('[data-chain="ATT"] .theme-chip')[1])
+    await vi.waitFor(() => expect(toast).toHaveBeenCalled())
+    expect(toast.mock.calls).toEqual([['Nexus could not set ATT.', 'error']])
+  })
+
+  it('a refused preamp position names the PRE', async () => {
+    mockSetPreampDb.mockRejectedValueOnce(new Error('no'))
+    mount({ ...FULL_RIG })
+    fireEvent.click(document.querySelectorAll<HTMLButtonElement>('[data-chain="PRE"] .theme-chip')[1])
+    await vi.waitFor(() => expect(toast).toHaveBeenCalled())
+    expect(toast.mock.calls).toEqual([['Nexus could not set PRE.', 'error']])
+  })
+
+  it('a refused monitor level names the monitor level', async () => {
+    const mockSetMonitorGain = setMonitorGain as unknown as ReturnType<typeof vi.fn>
+    mockSetMonitorGain.mockRejectedValueOnce(new Error('no'))
+    mount({ ...FULL_RIG })
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-chain="MON"] input')!, { target: { value: '55' } })
+    await vi.waitFor(() => expect(toast).toHaveBeenCalled())
+    expect(mockSetMonitorGain).toHaveBeenCalledWith(0.55)
+    expect(toast.mock.calls).toEqual([['Nexus could not set the monitor level.', 'error']])
   })
 })
