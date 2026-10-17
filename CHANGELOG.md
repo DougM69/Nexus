@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scroll wheel and a trackpad pinch now zoom the browser page instead of going to the shack, and on a short or zoomed
   window the controls move to the side rail when that shows the shack's screen larger. Stop TX stays in view at every
   size.
+- **Nexus Remote: a stream that "Still there?" ended no longer keeps the page connected.** The page now sleeps as a
+  hidden tab does, after Stop has finished with this browser, and Start reconnects it.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
