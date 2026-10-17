@@ -39,6 +39,103 @@ struct Service {
     opens: AtomicUsize,
     renewals: AtomicUsize,
     renewal: Mutex<Result<(), &'static str>>,
+    room: Arc<Room>,
+}
+
+/// What the room (or the internet on the way to it) does to the pipe's bytes once, or from now on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Act {
+    /// One byte changed in the next piece this computer sends.
+    Tamper,
+    /// One byte changed in the next piece the shack sends.
+    TamperDown,
+    /// The next piece this computer sends, delivered twice.
+    Duplicate,
+    /// The next piece this computer sends, held back and delivered after the one behind it.
+    Reorder,
+}
+
+/// The room between this computer and the shack, in the computer's pipe: it passes the bytes
+/// either way as they come, but can act on them once ([`Act`]), or go silent both ways for good
+/// (the internet gone, nobody told).
+#[derive(Default)]
+struct Room {
+    act: Mutex<Option<Act>>,
+    acted: AtomicBool,
+    silent: AtomicBool,
+}
+
+impl Room {
+    fn arm(&self, act: Act) {
+        self.acted.store(false, Ordering::SeqCst);
+        *self.act.lock().unwrap() = Some(act);
+    }
+
+    /// The act armed for a piece going this way, taken: it is done once.
+    fn take(&self, up: bool) -> Option<Act> {
+        let mut act = self.act.lock().unwrap();
+        let mine = act.filter(|act| (*act == Act::TamperDown) != up);
+        if mine.is_some() {
+            *act = None;
+            self.acted.store(true, Ordering::SeqCst);
+        }
+        mine
+    }
+
+    /// The computer's end of `pipe`, through this room.
+    fn between(self: &Arc<Self>, pipe: tokio::io::DuplexStream) -> tokio::io::DuplexStream {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (computer, room) = tokio::io::duplex(256 * 1024);
+        let (mut from_computer, mut to_computer) = tokio::io::split(room);
+        let (mut from_shack, mut to_shack) = tokio::io::split(pipe);
+        let down = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 64 * 1024];
+            while let Ok(n @ 1..) = from_shack.read(&mut buf).await {
+                if down.silent.load(Ordering::SeqCst) {
+                    continue;
+                }
+                if down.take(false).is_some() {
+                    buf[n - 1] ^= 0x01;
+                }
+                if to_computer.write_all(&buf[..n]).await.is_err() {
+                    break;
+                }
+            }
+            let _ = to_computer.shutdown().await;
+        });
+        let up = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 64 * 1024];
+            let mut held: Option<Vec<u8>> = None;
+            while let Ok(n @ 1..) = from_computer.read(&mut buf).await {
+                if up.silent.load(Ordering::SeqCst) {
+                    continue;
+                }
+                let mut piece = buf[..n].to_vec();
+                let mut out = Vec::new();
+                match up.take(true) {
+                    Some(Act::Tamper) => {
+                        piece[n - 1] ^= 0x01;
+                        out.push(piece);
+                    }
+                    Some(Act::Duplicate) => out.extend([piece.clone(), piece]),
+                    Some(Act::Reorder) => held = Some(piece),
+                    _ => {
+                        out.push(piece);
+                        out.extend(held.take());
+                    }
+                }
+                for piece in out {
+                    if to_shack.write_all(&piece).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            let _ = to_shack.shutdown().await;
+        });
+        computer
+    }
 }
 
 impl Afar for Service {
@@ -53,6 +150,7 @@ impl Afar for Service {
     ) -> Pin<Box<dyn Future<Output = Result<Link, &'static str>> + Send>> {
         self.opens.fetch_add(1, Ordering::SeqCst);
         let (tunnel, stop, relay) = (self.tunnel.clone(), self.stop.clone(), self.relay);
+        let room = Arc::clone(&self.room);
         let record = PairedStation {
             addresses: Vec::new(),
             station_id: STATION.into(),
@@ -71,7 +169,7 @@ impl Afar for Service {
                     password: PASSWORD.into(),
                 }),
             };
-            let pipe = piped(&tunnel, stop).await;
+            let pipe = room.between(piped(&tunnel, stop).await);
             Link::connect_tunnel(pipe, &record, 41, headset, &internet).await
         })
     }
@@ -129,6 +227,7 @@ impl Afield {
             opens: AtomicUsize::new(0),
             renewals: AtomicUsize::new(0),
             renewal: Mutex::new(Ok(())),
+            room: Arc::default(),
         });
         let dir = scratch(label);
         let this = ThisComputer::read(dir.join("settings.json"), dir.join("ui-state.json"));
@@ -407,5 +506,302 @@ fn a_renewal_refused_for_good_ends_the_internet_link() {
     t.live_over_the_internet();
     *t.service.renewal.lock().unwrap() = Err("notApprovedThere");
     eventually("the link ended", || t.client.status().phase != Phase::Live);
+    t.end();
+}
+
+// ----- The internet road dropping, and a room that is not honest -----
+
+/// "At once", for a link the shack has ended: the end itself ends the press, not a lapse.
+const AT_ONCE: Duration = Duration::from_secs(1);
+
+/// The shack's radio loop at its own tick, on a thread of its own as in Nexus: each tick polls the
+/// press's hold on the transmitter and the streamed microphone as `tempo_audio::service` does, and
+/// notes whether the microphone over is armed, until `done`.
+fn shack_loop(
+    engine: crate::SharedEngine,
+    done: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<Vec<(Instant, bool)>> {
+    std::thread::spawn(move || {
+        let mut ticks = Vec::new();
+        while !done.load(Ordering::SeqCst) {
+            let now = Instant::now();
+            let armed = {
+                let mut e = engine.lock().unwrap();
+                e.poll_remote_transmit(now);
+                e.poll_mic(now, super::drops::TICK.as_millis() as f64, 1);
+                e.mic_armed()
+            };
+            ticks.push((now, armed));
+            std::thread::sleep(super::drops::TICK);
+        }
+        ticks
+    })
+}
+
+/// When the over first came off the air after `since`, having been on until then.
+fn off_after(ticks: &[(Instant, bool)], since: Instant) -> Option<Instant> {
+    assert!(
+        ticks.iter().any(|&(at, armed)| armed && at < since),
+        "premise: never on the air before {since:?}"
+    );
+    ticks
+        .iter()
+        .find(|&&(at, armed)| at >= since && !armed)
+        .map(|&(at, _)| at)
+}
+
+/// A press held on this computer's screen, as the screen holds one: the shack in Phone, the first
+/// press taken, then re-asserted every 100 ms until `done`, each answer kept, while the screen
+/// keeps reading the shack's state (presence wants it fresh); and the shack's loop.
+struct Held {
+    done: Arc<AtomicBool>,
+    screen: std::thread::JoinHandle<Vec<Result<Value, Value>>>,
+    shack: std::thread::JoinHandle<Vec<(Instant, bool)>>,
+}
+
+impl Held {
+    fn on(t: &Afield) -> Self {
+        {
+            // The engine holds the stream's press and microphone as the service gives them it.
+            let mut e = t.s.shared.engine.lock().unwrap();
+            e.set_remote_ptt_hold(t.s.shared.feeds.stream.ptt.clone());
+            e.set_remote_mic_feed(t.s.shared.feeds.stream.mic.clone());
+            e.set_operating_mode("phone", false);
+        }
+        let done = Arc::new(AtomicBool::new(false));
+        let shack = shack_loop(t.s.shared.engine.clone(), done.clone());
+        eventually("presence live for a press", || {
+            let _ = ask(&t.screens.main, "get_snapshot", json!({}));
+            ask(&t.screens.main, "set_ptt", json!({"on": true})).is_ok()
+        });
+        let (window, until) = (t.screens.main.clone(), done.clone());
+        let screen = std::thread::spawn(move || {
+            let mut said = Vec::new();
+            while !until.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(100));
+                if said.len() % 3 == 0 {
+                    let _ = ask(&window, "get_snapshot", json!({}));
+                }
+                said.push(ask(&window, "set_ptt", json!({"on": true})));
+            }
+            said
+        });
+        eventually("the press armed at the shack", || {
+            t.s.shared.engine.lock().unwrap().mic_armed()
+        });
+        Self {
+            done,
+            screen,
+            shack,
+        }
+    }
+
+    fn end(self) -> (Vec<Result<Value, Value>>, Vec<(Instant, bool)>) {
+        self.done.store(true, Ordering::SeqCst);
+        (self.screen.join().unwrap(), self.shack.join().unwrap())
+    }
+}
+
+/// ★ A relay alone (no direct path is even tried, as behind a network that allows no other): the
+/// road's datagrams cross the relay both ways, a press held on the screen arms the shack's
+/// microphone over, it stays armed while held, and letting go disarms it.
+#[test]
+fn over_a_relay_alone_a_held_press_keys_the_shack_and_letting_go_unkeys_it() {
+    let _alone = alone();
+    let t = Afield::new("afar-relay", true, quick());
+    t.live_over_the_internet();
+    let held = Held::on(&t);
+    std::thread::sleep(Duration::from_millis(1000));
+    assert!(
+        t.s.shared.engine.lock().unwrap().mic_armed(),
+        "a held press stayed armed"
+    );
+    let crossed = t._turn.as_ref().unwrap().seen();
+    assert!(
+        crossed.sent_by_channel + crossed.sent_by_indication > 0
+            && crossed.delivered_by_channel + crossed.delivered_by_indication > 0,
+        "the road never crossed the relay both ways: {crossed:?}"
+    );
+    let (said, _) = held.end();
+    assert!(said.iter().all(Result::is_ok), "{said:?}");
+    assert!(ask(&t.screens.main, "set_ptt", json!({"on": false})).is_ok());
+    eventually("let go at the shack", || {
+        !t.s.shared.engine.lock().unwrap().mic_armed()
+    });
+    t.end();
+}
+
+/// ⛔ The internet road drops mid-over. The room ends the pipe (the shack ends the session, and
+/// the press with it at once), or the whole internet goes silent both ways with nobody told (the
+/// pipe and the relay alike: the press ends at its hold's gap). Either way the shack's microphone
+/// over comes off, the screen's next re-assertions are refused (`pressEnded`), and nothing at the
+/// shack keys again. CONTROL: each press was armed and held until the drop.
+#[test]
+fn over_the_internet_a_link_dropped_mid_press_unkeys_the_shack_and_nothing_stays_keyed() {
+    let _alone = alone();
+    for silent in [false, true] {
+        let t = Afield::new("afar-drop", true, quick());
+        t.live_over_the_internet();
+        let held = Held::on(&t);
+        std::thread::sleep(Duration::from_millis(500));
+        let dropped = Instant::now();
+        if silent {
+            t.service.room.silent.store(true, Ordering::SeqCst);
+            t._turn.as_ref().unwrap().mute(true);
+        } else {
+            t._listening.send(true).unwrap();
+        }
+        // Silent, presence as this computer heard it lapses only at its deadline (5 s), and the
+        // screen's press ends there.
+        std::thread::sleep(Duration::from_millis(if silent { 6500 } else { 2500 }));
+        let (said, ticks) = held.end();
+        let off = off_after(&ticks, dropped).expect("the press never came off the air");
+        eprintln!(
+            "measured: silent={silent}: off the air {:?} after the drop",
+            off - dropped
+        );
+        assert!(
+            off - dropped < AT_ONCE,
+            "silent={silent}: off the air only {:?} after the drop",
+            off - dropped
+        );
+        let after = ticks.iter().filter(|&&(at, _)| at > off);
+        assert!(
+            after.clone().all(|&(_, armed)| !armed),
+            "silent={silent}: keyed again after the drop"
+        );
+        assert_eq!(
+            said.last(),
+            Some(&Err(json!("nexusClient:pressEnded"))),
+            "silent={silent}: {said:?}"
+        );
+        let e = t.s.shared.engine.lock().unwrap();
+        assert!(!e.mic_armed() && !e.manual_ptt() && !e.tx_enabled());
+        drop(e);
+        t.end();
+    }
+}
+
+/// ⛔ A room that is not honest: one byte changed on the way to the shack or from it, a piece
+/// delivered twice, or two pieces delivered out of order, mid-press. Each is refused: the TLS at
+/// the end that reads it ends the session, so a station command sent after it never runs (and a
+/// duplicate never runs twice), the press comes off at once, the screen's re-assertions are
+/// refused, and client mode opens a new link. CONTROL: the same press and commands through an
+/// honest room: both commands run, the press stays armed, and no new link is opened.
+#[test]
+fn over_the_internet_a_tampered_duplicated_or_reordered_piece_is_refused() {
+    let _alone = alone();
+    for act in [
+        None,
+        Some(Act::Tamper),
+        Some(Act::TamperDown),
+        Some(Act::Duplicate),
+        Some(Act::Reorder),
+    ] {
+        let t = Afield::new("afar-room", true, quick());
+        t.live_over_the_internet();
+        let held = Held::on(&t);
+        let runs = || {
+            t.app
+                .ran()
+                .iter()
+                .filter(|cmd| *cmd == "get_settings")
+                .count()
+        };
+        let (before, opens) = (runs(), t.service.opens.load(Ordering::SeqCst));
+        let acted = Instant::now();
+        if let Some(act) = act {
+            t.service.room.arm(act);
+        }
+        let asked = [
+            ask(&t.screens.main, "get_settings", json!({})),
+            ask(&t.screens.main, "get_settings", json!({})),
+        ];
+        if act.is_some() {
+            eventually("the room acted", || {
+                t.service.room.acted.load(Ordering::SeqCst)
+            });
+            eventually("a new link", || {
+                t.service.opens.load(Ordering::SeqCst) > opens
+            });
+        } else {
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+        let (said, ticks) = held.end();
+        let ran = runs() - before;
+        match act {
+            None => {
+                assert!(asked.iter().all(Result::is_ok), "{asked:?}");
+                assert_eq!(ran, 2);
+                assert_eq!(t.service.opens.load(Ordering::SeqCst), opens);
+                assert!(said.iter().all(Result::is_ok), "{said:?}");
+                assert!(
+                    ticks.last().is_some_and(|&(_, armed)| armed),
+                    "CONTROL: still armed"
+                );
+            }
+            Some(act) => {
+                match act {
+                    Act::Tamper | Act::Reorder => assert_eq!(ran, 0, "{act:?}: ran after it"),
+                    Act::Duplicate => assert!(ran <= 1, "{act:?}: ran {ran} times"),
+                    // Read at the shack before the answer was changed on its way back.
+                    Act::TamperDown => assert!(ran <= 2),
+                }
+                let off = off_after(&ticks, acted).expect("the press never came off the air");
+                eprintln!(
+                    "measured: {act:?}: off the air {:?} after the act",
+                    off - acted
+                );
+                assert!(
+                    off - acted < AT_ONCE + Duration::from_secs(1),
+                    "{act:?}: {:?}",
+                    off - acted
+                );
+                assert!(
+                    ticks
+                        .iter()
+                        .filter(|&&(at, _)| at > off)
+                        .all(|&(_, armed)| !armed),
+                    "{act:?}: keyed again"
+                );
+                assert_eq!(
+                    said.last(),
+                    Some(&Err(json!("nexusClient:pressEnded"))),
+                    "{act:?}"
+                );
+            }
+        }
+        t.end();
+    }
+}
+
+/// ★ A held PTT is the operator at work: "Still there?" is never asked while the screen holds a
+/// press, however long, and nothing else is reported. CONTROL: once it is let go, with nothing
+/// else from the operator, the prompt comes.
+#[test]
+fn a_held_press_keeps_still_there_from_asking() {
+    let _alone = alone();
+    let timing = Timing {
+        idle_prompt: Duration::from_millis(2500),
+        idle_end: Duration::from_millis(4000),
+        ..quick()
+    };
+    let t = Afield::new("afar-held-idle", true, timing);
+    t.live_over_the_internet();
+    let held = Held::on(&t);
+    let mut asked = false;
+    for _ in 0..60 {
+        std::thread::sleep(Duration::from_millis(100));
+        asked |= t.client.status().still_there;
+    }
+    let (said, _) = held.end();
+    assert!(said.iter().all(Result::is_ok), "{said:?}");
+    let status = t.client.status();
+    assert!(
+        !asked && status.phase == Phase::Live,
+        "asked while held: {status:?}"
+    );
+    assert!(ask(&t.screens.main, "set_ptt", json!({"on": false})).is_ok());
+    eventually("asked once let go", || t.client.status().still_there);
     t.end();
 }
