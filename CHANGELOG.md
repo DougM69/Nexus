@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   internet's jitter. NEEDS-BENCH: the shack on one network and the second PC on another (a phone hotspot), the radio
   into a dummy load.
 
+### Changed
+- **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each
+  station: Nexus runs on this PC and the radio follows your own clicks and pop-outs. Streaming the station's screen is
+  still there as a smaller button after it, for when you only want to see the shack's screen.
+
 ### Fixed
 - **Nexus Remote: the shack's screen fits the browser window.** Ctrl (⌘ on a Mac) with +, − or 0, Ctrl with the
   scroll wheel and a trackpad pinch now zoom the browser page instead of going to the shack, and on a short or zoomed

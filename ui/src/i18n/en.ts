@@ -474,7 +474,7 @@ export const EN = {
   // and {{example}} are a station's address, its key's fingerprint and an address, and {{name}} the
   // name a station advertises (`Nexus` and the start of its key), all invariant.
   "lanWindow.title": "Stations on this network",
-  "lanWindow.intro": "Operate a station on this computer’s network with no internet. Pair this computer with it once, with the code it shows, then stream it here.",
+  "lanWindow.intro": "Operate a station on this computer’s network with no internet. Pair this computer with it once, with the code it shows, then operate it from here.",
   "lanWindow.opening": "Starting…",
   "lanWindow.lost": "This window lost touch with Nexus. Close it, then open it again from Settings.",
   "lanWindow.paired": "Paired stations",
@@ -531,6 +531,8 @@ export const EN = {
   "lanWindow.operateConfirm": "Operate this station from here? Nexus closes and starts again driving it over this network, and this computer’s own station stays off until you press Leave.",
   "lanWindow.operateYes": "Close and operate",
   "lanWindow.operateNo": "Not now",
+  "lanWindow.streamInstead": "Stream the station’s screen instead",
+  "lanWindow.choiceHint": "Operate runs Nexus here and works the radio from your own clicks and pop-outs. Streaming only shows a picture of the station’s screen.",
   "lanWindow.operating": "Nexus is closing, to start again driving the station…",
   "lanWindow.internet.add": "Add the internet road (Beta)…",
   "lanWindow.internet.adding": "Signing in…",
