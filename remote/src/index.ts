@@ -1,5 +1,5 @@
 // Same-origin browser API, the native client's API, and outbound station admission. No radio command router.
-import { account, access, body, bodyBytes, browserOrigin, caller, CHALLENGE_MS, cookie, device, deviceCookie, deviceKeys, digest,
+import { account, access, body, bodyBytes, browserOrigin, caller, caller as callerKey, CHALLENGE_MS, cookie, device, deviceCookie, deviceKeys, digest,
   deviceKinds, fieldsOf, id, keepApprovals, label, lifetime, native, nativeAccount, nativeDevice, nativeKind, proof, publicKey, rate, Refusal, requireAdmin, requireEligible,
   requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, trial, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid } from './authority'
 import type { DeviceRow, RemoteEnv, StationRow } from './authority'
@@ -547,7 +547,7 @@ async function revokeStation(env: RemoteEnv, stationId: string, now: number): Pr
 // Until its signature is checked a reopening request is anyone's who knows a device id, so it is held
 // in buckets of its own (`reopener`) and charged to its account's only once its key has signed it
 // (`signer`): charged first, a flood of unsigned ones spent the account's whole minute and locked out
-// its signed-in computer and every device of it. Its challenges are its device's alone, four at most.
+// its signed-in computer and every device of it. Its challenges are its device's alone, four at most from each requester.
 async function client(request: Request, env: RemoteEnv, path: string, match: RegExpExecArray | null, now: number): Promise<Response> {
   const reopening = !request.headers.has('authorization')
   const caller = reopening ? await reopener(request, env, match, now) : await nativeAccount(request, env, now)
@@ -581,14 +581,17 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
     requireValue(reopening && request.method === 'POST', 'notFound', 404)
     await body(request, [])
     const challenge = secret(), expiresAt = now + CHALLENGE_MS, deviceId = id(request.headers.get('x-nexus-device-id'))
-    // The newest four a device are kept and any older one given up, so asking is never refused for
-    // the challenges somebody else asked in this device's name.
+    const requester = callerKey(request.headers.get('cf-connecting-ip')).caller
+    // The newest four a device are kept for each requester (an IPv4 address or IPv6 /64, as the
+    // reopen buckets key it) and any older one of that requester's given up. So asking is never
+    // refused, and asking in this device's name from elsewhere never gives up the device's own.
     await env.DB.batch([
       env.DB.prepare('DELETE FROM challenges WHERE expires_at<=?').bind(now),
-      env.DB.prepare('INSERT INTO challenges(digest,account_id,device_id,expires_at) VALUES(?,?,?,?)')
-        .bind(await digest(challenge), caller.accountId, deviceId, expiresAt),
-      env.DB.prepare(`DELETE FROM challenges WHERE device_id=? AND rowid NOT IN
-        (SELECT rowid FROM challenges WHERE device_id=? ORDER BY rowid DESC LIMIT 4)`).bind(deviceId, deviceId),
+      env.DB.prepare('INSERT INTO challenges(digest,account_id,device_id,requester,expires_at) VALUES(?,?,?,?,?)')
+        .bind(await digest(challenge), caller.accountId, deviceId, requester, expiresAt),
+      env.DB.prepare(`DELETE FROM challenges WHERE device_id=? AND requester=? AND rowid NOT IN
+        (SELECT rowid FROM challenges WHERE device_id=? AND requester=? ORDER BY rowid DESC LIMIT 4)`)
+        .bind(deviceId, requester, deviceId, requester),
     ])
     return json({ challenge, expiresAt })
   }

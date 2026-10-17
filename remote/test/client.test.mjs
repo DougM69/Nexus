@@ -754,6 +754,23 @@ test('a reopening challenge is its device\'s alone, a few at a time, and never a
   for (const challenge of asked.slice(2)) assert.equal((await renew(a, challenge, 404)).value.error, 'pipeClosed')
 })
 
+test('a flood of reopening challenges from elsewhere never gives up the one a device asked from its own address', async () => {
+  const pair = await app.paired(), path = `stations/${pair.stationId}/client`, bare = app.client(null, '', null)
+  const a = await computer(pair)
+  const ask = async address => (await bare.post(`${path}/challenge`, {}, 200, { 'x-nexus-device-id': a.deviceId, 'cf-connecting-ip': address })).value.challenge
+  const renew = async (challenge, expected) => bare.post(`${path}/renew`, {}, expected, { 'x-nexus-device-id': a.deviceId,
+    'cf-connecting-ip': '198.51.100.20', 'x-nexus-challenge': challenge,
+    'x-nexus-signature': await sign(a.key, challenge, 'POST', `/api/remote/${path}/renew`, '{}') })
+  const own = await ask('198.51.100.20')
+  // Ten asks in this device's name from one /64, each from an address of its own.
+  const flood = []
+  for (let i = 0; i < 10; i++) flood.push(await ask(`2001:db8:abcd:1::${(i + 1).toString(16)}`))
+  assert.equal((await renew(own, 404)).value.error, 'pipeClosed', 'the device\'s own challenge outlived the flood')
+  // That /64 is one requester: it still holds only its newest four.
+  for (const challenge of flood.slice(0, 6)) assert.equal((await renew(challenge, 401)).value.error, 'invalidChallenge')
+  for (const challenge of flood.slice(6)) assert.equal((await renew(challenge, 404)).value.error, 'pipeClosed')
+})
+
 test('the service names its Native application for Nexus to sign in to, and never the page\'s', async () => {
   const config = async service => (await service.mf.dispatchFetch(`${service.origin}/api/remote/config`)).json()
   assert.equal((await config(app)).nativeClientId, NATIVE)
