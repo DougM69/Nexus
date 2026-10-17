@@ -8,8 +8,8 @@ import { BetaNote } from './BetaNote'
 import type { HostedConnection } from './client'
 
 /** What the stream view uses of a connection: the hosted one, or the window's road to a station on
- *  the shack's own network (`../lan/connection.ts`). */
-export type StreamConnection = Pick<HostedConnection, 'operations' | 'stream' | 'audio' | 'source'>
+ *  the shack's own network (`../lan/connection.ts`), which has no relay room to let sleep. */
+export type StreamConnection = Pick<HostedConnection, 'operations' | 'stream' | 'audio' | 'source'> & Partial<Pick<HostedConnection, 'rest' | 'wake'>>
 import { transmitEpoch } from './operation-protocol'
 import { IdReminder } from './id-reminder'
 import { MIC_LEVEL_DB, MIC_METER_FLOOR_DB, MIC_METER_TOP_DB, meterDb } from './mic-level'
@@ -72,6 +72,9 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
   const [wanted, setWanted] = useState(false)
   // The last stream ended because nobody answered "Still there?".
   const [idled, setIdled] = useState(false)
+  // And the page let the relay room go with it (`HostedConnection.rest`), until Start is pressed again.
+  const [resting, setResting] = useState(false)
+  const asleep = resting && !ops.connected
   // Why the last Start came to nothing, until the next one: the refusal's code.
   const [refused, setRefused] = useState<string | null>(null)
   const video = useRef<HTMLVideoElement>(null)
@@ -123,6 +126,12 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
 
   const start = () => {
     if (listen && lease) { relayAudio.listen(lease); return }
+    if (resting) {
+      setResting(false); connection.wake?.()
+      // Asleep, there is no station state to start from yet: the press is carried as the card's is,
+      // and the view starts the first moment Start could be pressed.
+      if (!ops.connected) { setIdled(false); setRefused(null); autostarting.current = true; return }
+    }
     setWanted(true)
     setIdled(false)
     setRefused(null)
@@ -147,8 +156,13 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
     autostarting.current = false
     begin.current()
   }, [ops.connected, ops.fresh, ops.busy, ops.reading, state?.phase])
-  // Unanswered, "Still there?" ends the stream as End the stream does, and says why afterwards.
-  const asking = useStillThere(running, link, () => { end(); setIdled(true) })
+  // Unanswered, "Still there?" ends the stream as End the stream does, and says why afterwards. Nobody
+  // is there, so the page lets the relay room sleep too: it bills for every second a socket holds it
+  // awake. The connection waits for this browser's Stop to retire first, as a hidden tab's does.
+  const asking = useStillThere(running, link, () => {
+    end(); setIdled(true)
+    if (connection.rest) { setResting(true); connection.rest() }
+  })
   const stopTx = () => {
     link.stopTransmit(target)
     if (ops.stopAvailable) void operations.stopTransmit().catch(() => {})
@@ -286,12 +300,13 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
       </div>}
       {!listen && stream.phase !== 'live' && stream.phase !== 'stalled' && <div className="remote-stream-placeholder">
         {!running && idled && <p role="note">{t('remote.stream.idle.ended')}</p>}
-        <p role={running ? undefined : 'status'}>{stream.phase === 'connecting' ? t('remote.stream.waitingForPicture') : status}</p>
+        {/* Asleep on purpose, the page has nothing to report until Start: "Connecting" or "not online" would be untrue. */}
+        {!asleep && <p role={running ? undefined : 'status'}>{stream.phase === 'connecting' ? t('remote.stream.waitingForPicture') : status}</p>}
         {/* A5: the station asks for this browser to be approved there with its key; this is the key to compare. */}
         {!running && browserKey && ((keyRefusal(stream.reason) && stream.phase === 'ended') || keyRefusal(refused)) &&
           <p>{t('remote.thisBrowserKey', { key: shortFingerprint(browserKey) })}</p>}
         {!running && identify === 'end' && <p className="remote-stream-identify" role="note">{t('remote.stream.id.end')}</p>}
-        {!running && (state?.phase === 'available' || state?.phase === 'controlling') && <>
+        {!running && (asleep || state?.phase === 'available' || state?.phase === 'controlling') && <>
           {/* Lit through the once-a-second read, as Release is: a press then waits it out (acquire). */}
           <button type="button" className="remote-button remote-button--primary" disabled={wanted || (ops.busy && !ops.reading)} onClick={start}>{t('remote.stream.start')}</button>
           {/* What the stream needs at the shack, as far as the capture code shows it. */}

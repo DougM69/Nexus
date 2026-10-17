@@ -231,6 +231,8 @@ export class HostedConnection {
   private clockFailures = 0
   private anchor: { server: number; start: number } | null = null
   private sleepState: FeedView
+  /** The page has let the room go (`rest`): asleep, or on the way there, until the operator asks again. */
+  private resting = false
   private feedListeners = new Set<() => void>()
   /** Removes the visibilitychange listener; set for the life of the connection. */
   private watching: (() => void) | undefined
@@ -349,13 +351,28 @@ export class HostedConnection {
     this.sleepState = { ...this.sleepState, ...value }
     for (const f of this.feedListeners) f()
   }
+  /** The operator has left the page as it is - a stream nobody answered "Still there?" for - so the
+   *  room may go back to sleep as it does for a hidden tab, on the same terms: never while this browser
+   *  can still stop a transmission (`considerSleep`). Being shown again does not undo it, and keeping
+   *  watching does not hold it up: only `wake`, the operator asking again, does. */
+  rest(): void {
+    if (this.disposed) return
+    this.resting = true
+    this.considerSleep()
+  }
+  /** The operator is back: what `rest` let go comes back as a tab being shown does. */
+  wake(): void {
+    if (!this.resting) return
+    this.resting = false
+    if (typeof document !== 'undefined' && document.hidden && !this.sleepState.keepWatching) this.considerSleep(); else this.shown()
+  }
   private setKeepWatching(value: boolean): void {
     this.keep.write(value)
     this.publishFeed({ keepWatching: value })
     if (value) { if (this.sleepState.asleep) this.shown() }
     else if (typeof document !== 'undefined' && document.hidden) this.considerSleep()
   }
-  /** Hidden, and deciding whether to let the room go back to sleep.
+  /** Hidden or resting, and deciding whether to let the room go back to sleep.
    *
    *  ⚠️ NEVER WHILE THIS BROWSER CAN STILL STOP A TRANSMISSION. Stop deliberately outlives the
    *  control lease (operator ruling, 2026-09-15), and closing the socket is what takes it away:
@@ -366,7 +383,8 @@ export class HostedConnection {
    *  carry a null `transmitEpoch`. That is why this waits on the operation client's own updates
    *  rather than a clock - there is nothing to time, only something to be told. */
   private considerSleep(): void {
-    if (this.disposed || this.sleepState.keepWatching || (typeof document !== 'undefined' && !document.hidden)) {
+    const hidden = typeof document !== 'undefined' && document.hidden
+    if (this.disposed || !(this.resting || (hidden && !this.sleepState.keepWatching))) {
       this.deferred?.(); this.deferred = undefined
       return
     }
@@ -392,10 +410,11 @@ export class HostedConnection {
     this.socket = null
     this.publishFeed({ asleep: true, resumed: false })
     // Nulled and marked asleep first, so this close is not read as a drop worth reconnecting from.
-    socket?.close(1000, 'backgrounded')
+    socket?.close(1000, this.resting ? 'idle' : 'backgrounded')
   }
   /** Back on screen. */
   private shown(): void {
+    if (this.resting) return
     this.deferred?.(); this.deferred = undefined
     if (this.disposed) return
     // Someone is looking now, which is the strongest "try now" there is: a tab returning to a

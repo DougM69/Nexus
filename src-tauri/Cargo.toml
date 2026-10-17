@@ -74,7 +74,11 @@ tauri-plugin-notification = "2"
 # Signed self-update (0.17.17). Apache-2.0 OR MIT (Tauri first-party, same licence as tauri
 # itself, already vendored) — compatible with our GPL-3.0-only. OSS-integration checklist run
 # 2026-07-25; NOTICE updated.
-tauri-plugin-updater = "2"
+# Without the default `zip` feature: it only unpacks a .zip (Windows) or .tar.gz (Linux)
+# payload, and ours are the bare NSIS -setup.exe and the bare AppImage, which take the
+# non-archive path either way (macOS .app.tar.gz extraction is not behind the feature). It
+# also drops zip 4.x and its RustSec advisories from the shipped tree.
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls"] }
 # "Start Nexus when I sign in to this computer" (Settings ▸ Start at sign-in), so a Remote
 # station survives a reboot. Tauri first-party, Apache-2.0 OR MIT; it pulls auto-launch (MIT),
 # dirs (MIT OR Apache-2.0) and winreg (MIT) — all compatible with our GPL-3.0-only. Writes the

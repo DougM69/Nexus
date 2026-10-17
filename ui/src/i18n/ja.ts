@@ -7034,6 +7034,8 @@ export const JA: PartialCatalog = {
   "phone.sub.unconfirmed": "サブ受信機では未確認: {{plates}}",
   "phone.sub.setNotRead": "Nexus から設定した値です — 無線機はサブ受信機のレベルを報告しません。",
   "phone.sub.failed": "Nexus はサブ受信機の {{plate}} を設定できませんでした。",
+  "phone.chain.failed": "Nexus は {{plate}} を設定できませんでした。",
+  "phone.monitor.failed": "Nexus はモニターレベルを設定できませんでした。",
   "phone.chain.off": "オフ",
   "phone.chain.att.aria": "アッテネーター",
   "phone.chain.att.title": "入力アッテネーター（デシベル）— この無線機が公開している段です。強い隣接局が AGC を振らせるときに使います。弱い信号も同じだけ下がります。",

@@ -7,11 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Nexus Remote: operate the shack from a second Windows PC with Nexus on it (Beta, test builds).** On your own
+  network, choose **Operate from this computer** beside your shack in **Stations on this network**: the second PC shows
+  the full Nexus screens for the shack's radio, plays its receive audio and sends your microphone, and Phone PTT, CW
+  from the keyboard and its macros, FT8 and FT4 (answering, Call CQ and contest S&P, timed by the shack) and JS8 work as
+  at the shack. Stop works from the second PC on its own road, and the shack unkeys within about 5 s if the network or
+  the second PC drops. Passwords and remote-access settings stay at the shack, both PCs must run the same version, and
+  there is no paddle from afar. NEEDS-BENCH: two Windows PCs on one network, the radio into a dummy load.
+
 ### Fixed
 - **Nexus Remote: the shack's screen fits the browser window.** Ctrl (⌘ on a Mac) with +, − or 0, Ctrl with the
   scroll wheel and a trackpad pinch now zoom the browser page instead of going to the shack, and on a short or zoomed
   window the controls move to the side rail when that shows the shack's screen larger. Stop TX stays in view at every
   size.
+- **Nexus Remote: a stream that "Still there?" ended no longer keeps the page connected.** The page now sleeps as a
+  hidden tab does, after Stop has finished with this browser, and Start reconnects it.
+- **Phone screen: a refused ATT, PRE or monitor-level change says what failed.** When the radio does not take one of
+  these, the message now reads "Nexus could not set ATT.", "Nexus could not set PRE." or "Nexus could not set the
+  monitor level." instead of a Remote sentence about station control permission.
 - **Nexus Remote: the shack's Nexus window takes the shape of the browser showing it.** A full-screen browser of a
   different shape from the shack's monitor showed the shack's screen with wide empty bands round it. While a browser
   streams, the shack's Nexus window now takes the shape of the browser's picture area, as large as the shack monitor's
@@ -21,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
   your browser; the watch-and-control workspace it replaced is gone from the page.
+
+### Security
+- **The in-app updater no longer carries the `zip` library**, which three new advisories (RUSTSEC-2026-0367, -0368 and
+  -0369) cover. Nexus's updates are installers, not zip files, so the advisories' code was never used; it is now not
+  built in at all.
 
 ## [1.19.0] — 2026-10-16
 

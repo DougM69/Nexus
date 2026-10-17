@@ -4155,6 +4155,8 @@ export const ES: PartialCatalog = {
   "phone.sub.unconfirmed": "Sin confirmar para el receptor secundario: {{plates}}",
   "phone.sub.setNotRead": "Ajustado desde Nexus — la radio no informa los niveles del receptor secundario.",
   "phone.sub.failed": "Nexus no pudo ajustar {{plate}} del receptor secundario.",
+  "phone.chain.failed": "Nexus no pudo ajustar {{plate}}.",
+  "phone.monitor.failed": "Nexus no pudo ajustar el nivel del monitor.",
   "phone.chain.off": "Apagado",
   "phone.chain.att.aria": "Atenuador",
   "phone.chain.att.title": "El atenuador de entrada, en decibelios — el que publica esta radio. Úsalo cuando una estación vecina fuerte haga bombear el CAG; también te cuesta las señales débiles.",

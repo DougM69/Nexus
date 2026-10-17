@@ -4155,6 +4155,8 @@ export const FR: PartialCatalog = {
   "phone.sub.unconfirmed": "Non confirmé pour le récepteur secondaire : {{plates}}",
   "phone.sub.setNotRead": "Réglé depuis Nexus — la radio ne renvoie pas les niveaux du récepteur secondaire.",
   "phone.sub.failed": "Nexus n’a pas pu régler {{plate}} du récepteur secondaire.",
+  "phone.chain.failed": "Nexus n’a pas pu régler {{plate}}.",
+  "phone.monitor.failed": "Nexus n’a pas pu régler le niveau du moniteur.",
   "phone.chain.off": "Arrêt",
   "phone.chain.att.aria": "Atténuateur",
   "phone.chain.att.title": "L’atténuateur d’entrée, en décibels — celui que cette station publie. À utiliser quand une station voisine puissante fait pomper la CAG ; il vous coûte aussi les signaux faibles.",

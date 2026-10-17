@@ -712,6 +712,44 @@ test('source verification is anonymous and checks the exact full commit, includi
   await assert.rejects(verifyPublicSource(ids.revision, async () => new Response('', { status: 404 })), /HTTP 404/)
 })
 
+test('source verification waits out an anonymous rate limit and still demands the public commit', async () => {
+  const waits = [], wait = async ms => { waits.push(ms) }
+  // A private repository and a missing commit both answer 404 to an anonymous caller: never retried.
+  let calls = 0
+  await assert.rejects(verifyPublicSource(ids.revision, async () => { calls++; return new Response('', { status: 404 }) }, wait), /HTTP 404/)
+  assert.equal(calls, 1)
+  assert.deepEqual(waits, [])
+  // A 403 with the limit spent waits until the reset GitHub names, then succeeds anonymously.
+  const reset = String(Math.floor(Date.now() / 1000) + 30)
+  const answers = [new Response('', { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': reset } }),
+    new Response('', { status: 429, headers: { 'retry-after': '7' } }), Response.json({ sha: ids.revision })]
+  const urls = []
+  const limited = async (url, options) => {
+    assert.equal(options.headers.authorization, undefined)
+    urls.push(String(url))
+    return answers.shift()
+  }
+  assert.equal(await verifyPublicSource(ids.revision, limited, wait), `https://github.com/kd9taw/Nexus/tree/${ids.revision}`)
+  assert.equal(urls.length, 3)
+  assert.ok(urls.every(url => url === `https://api.github.com/repos/kd9taw/Nexus/git/commits/${ids.revision}`))
+  assert.equal(waits.length, 2)
+  assert.ok(waits[0] > 25000 && waits[0] <= 32000, `waited ${waits[0]} ms for the reset`)
+  assert.equal(waits[1], 7000)
+  // A retried answer is checked like the first: the wrong commit still fails.
+  waits.length = 0
+  const wrong = [new Response('', { status: 403 }), Response.json({ sha: 'wrong' })]
+  await assert.rejects(verifyPublicSource(ids.revision, async () => wrong.shift(), wait), /exact source/)
+  assert.deepEqual(waits, [2000])
+  // The limit never lifting fails the run after five tries, each wait capped at five minutes.
+  waits.length = 0
+  calls = 0
+  const far = String(Math.floor(Date.now() / 1000) + 3600)
+  await assert.rejects(verifyPublicSource(ids.revision, async () => { calls++
+    return new Response('', { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': far } }) }, wait), /HTTP 403/)
+  assert.equal(calls, 5)
+  assert.deepEqual(waits, [300000, 300000, 300000, 300000])
+})
+
 test('artifact verification rejects changed bytes, unlisted files, symlinks and overwrite', async () => {
   const directory = join(scratch, 'remote/staging-artifact'), path = join(directory, 'worker.js'), original = await readFile(path)
   await writeFile(path, Buffer.concat([original, Buffer.from('\n// tampered')]))
