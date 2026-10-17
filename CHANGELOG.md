@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scroll wheel and a trackpad pinch now zoom the browser page instead of going to the shack, and on a short or zoomed
   window the controls move to the side rail when that shows the shack's screen larger. Stop TX stays in view at every
   size.
+- **Nexus Remote: the shack's Nexus window takes the shape of the browser showing it.** A full-screen browser of a
+  different shape from the shack's monitor showed the shack's screen with wide empty bands round it. While a browser
+  streams, the shack's Nexus window now takes the shape of the browser's picture area, as large as the shack monitor's
+  work area allows, on the monitor it is already on, and goes back to its own size, place and maximized or full-screen
+  state when the stream ends, however it ends.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to

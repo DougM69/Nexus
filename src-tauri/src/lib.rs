@@ -37175,6 +37175,8 @@ fn remote_service_for(
             awake: tempo_stream::keep_awake::KeepAwake::system(Arc::new(|line: &str| {
                 tempo_core::applog::warn("remote", line)
             })),
+            // …and that window takes the page's shape while it is shown, then goes back.
+            shape: Some(Arc::new(window_state::MainShape(handle.clone()))),
         },
         commands,
     )

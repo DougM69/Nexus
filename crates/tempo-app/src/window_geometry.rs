@@ -234,6 +234,53 @@ pub fn capture(
     is_plausible(&cur).then_some(cur)
 }
 
+/// The box the main window takes while a streamed page shows it: the inner size and the outer
+/// top-left, in the monitor's **physical** px.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Followed {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+}
+
+/// The main window in the shape of a streamed page's picture area of `view` (only its shape is
+/// read): the largest inner box of that shape that, with the window's `frame` (outer size less
+/// inner, physical px) round it, fits `work`, centred there. `work` is the monitor the window was
+/// on when the stream began, so the window never leaves it. A shape past the shell minimum
+/// ([`MIN_INNER`], logical) is floored there, as the window manager would anyway, and the page
+/// shows the picture with bars on that side; nothing is ever cut off the picture. `None` for a
+/// view with no area, or a work area with no room for the frame.
+pub fn follow(
+    view: (u32, u32),
+    work: &WorkArea,
+    frame: (f64, f64),
+    min_inner: (f64, f64),
+) -> Option<Followed> {
+    let (vw, vh) = (f64::from(view.0), f64::from(view.1));
+    let room_w = (work.w - frame.0).floor();
+    let room_h = (work.h - frame.1).floor();
+    // Written so a NaN anywhere fails it.
+    if !(vw >= 1.0 && vh >= 1.0 && room_w >= 1.0 && room_h >= 1.0) {
+        return None;
+    }
+    // Whichever side of the room the shape reaches first, compared cross-multiplied.
+    let (w, h) = if room_w * vh <= room_h * vw {
+        (room_w, (room_w * vh / vw).round())
+    } else {
+        ((room_h * vw / vh).round(), room_h)
+    };
+    let scale = if work.scale > 0.0 { work.scale } else { 1.0 };
+    let w = w.max((min_inner.0 * scale).ceil()).min(room_w);
+    let h = h.max((min_inner.1 * scale).ceil()).min(room_h);
+    Some(Followed {
+        x: (work.x + ((work.w - w - frame.0) / 2.0).floor()) as i32,
+        y: (work.y + ((work.h - h - frame.1) / 2.0).floor()) as i32,
+        w: w as u32,
+        h: h as u32,
+    })
+}
+
 /// Read the record at `path`. `None` for missing, unreadable or unparsable — every one
 /// of which means "no saved geometry", which [`restore`] already handles. Sanity is
 /// [`restore`]'s job, not this function's.
@@ -711,5 +758,106 @@ mod tests {
         std::fs::write(&path, r#"{"w":1400,"h":900,"x":10,"y":20}"#).unwrap();
         assert_eq!(load(&path), Some(geom(1400.0, 900.0, 10.0, 20.0)));
         let _ = std::fs::remove_file(&path);
+    }
+
+    // ---- follow: the window in a streamed page's shape -------------------------------
+
+    /// A decorated window's frame on Windows 11 at 100 %: the invisible 8 px resize borders on
+    /// the sides and bottom, and the 31 px title bar over the top one.
+    const FRAME: (f64, f64) = (16.0, 39.0);
+
+    #[test]
+    fn a_full_screen_browser_gets_the_largest_window_of_its_shape() {
+        // Chrome full screen on 1920×1080, the page's header over the picture: a 1914×992 area.
+        assert_eq!(
+            follow((1914, 992), &primary(), FRAME, MIN_INNER),
+            Some(Followed {
+                x: 0,
+                y: 7,
+                w: 1904,
+                h: 987
+            })
+        );
+    }
+
+    #[test]
+    fn a_browser_wider_than_the_shack_is_matched_across_its_width() {
+        assert_eq!(
+            follow((3440, 1300), &primary(), FRAME, MIN_INNER),
+            Some(Followed {
+                x: 0,
+                y: 140,
+                w: 1904,
+                h: 720
+            })
+        );
+    }
+
+    #[test]
+    fn a_tall_view_is_matched_down_its_height_and_floored_at_the_minimum() {
+        // 2560×1440 at 150 %, its taskbar 48 px; a phone held upright.
+        let qhd = WorkArea {
+            x: 0.0,
+            y: 0.0,
+            w: 2560.0,
+            h: 1392.0,
+            scale: 1.5,
+        };
+        let frame = (24.0, 58.0);
+        assert_eq!(
+            follow((390, 700), &qhd, frame, MIN_INNER),
+            Some(Followed {
+                x: 593,
+                y: 0,
+                w: 1350,
+                h: 1334
+            }),
+            "900 logical px is the narrowest the window goes"
+        );
+        // A 4:3 tablet on its side needs no floor: its own shape, the work area's full height.
+        assert_eq!(
+            follow((2048, 1536), &qhd, frame, MIN_INNER),
+            Some(Followed {
+                x: 378,
+                y: 0,
+                w: 1779,
+                h: 1334
+            })
+        );
+    }
+
+    #[test]
+    fn the_window_stays_on_the_monitor_it_was_on() {
+        // A second monitor to the right of the primary, its top 200 px lower.
+        let right = WorkArea {
+            x: 1920.0,
+            y: 200.0,
+            w: 1920.0,
+            h: 1040.0,
+            scale: 1.0,
+        };
+        assert_eq!(
+            follow((1914, 992), &right, FRAME, MIN_INNER),
+            Some(Followed {
+                x: 1920,
+                y: 207,
+                w: 1904,
+                h: 987
+            })
+        );
+    }
+
+    #[test]
+    fn a_view_with_no_area_or_no_room_for_the_frame_changes_nothing() {
+        assert_eq!(follow((0, 992), &primary(), FRAME, MIN_INNER), None);
+        assert_eq!(follow((1914, 0), &primary(), FRAME, MIN_INNER), None);
+        assert_eq!(
+            follow((1914, 992), &primary(), (1920.0, 39.0), MIN_INNER),
+            None
+        );
+        assert_eq!(
+            follow((1914, 992), &primary(), (f64::NAN, 39.0), MIN_INNER),
+            None
+        );
     }
 }
