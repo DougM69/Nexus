@@ -165,7 +165,13 @@ pub(crate) const PRESENCE_BOUND: [&str; 1] = ["start_sat_track"];
 pub(crate) fn takes_afar(cmd: &str) -> bool {
     matches!(
         transmit_from_afar(cmd),
-        Ok(Wired::Ft | Wired::VoiceKeyer | Wired::Js8 | Wired::Cw)
+        Ok(Wired::Ft
+            | Wired::VoiceKeyer
+            | Wired::Js8
+            | Wired::Cw
+            | Wired::Tune
+            | Wired::Rtty
+            | Wired::Psk)
     ) || ENTRIES.contains(&cmd)
         || PRESENCE_BOUND.contains(&cmd)
 }
@@ -666,11 +672,17 @@ fn class_refusal(
         Some(Class::StartsTx) => match transmit_from_afar(cmd) {
             Err(refusal) => Some(refusal),
             Ok(Wired::HeldPress) => Some(Refusal::HeldPress),
-            Ok(Wired::Ft | Wired::VoiceKeyer | Wired::Js8 | Wired::Cw) => {
-                argument_refusal(cmd, args)
-                    .or_else(|| (!caller.holds_lease).then_some(Refusal::NotController))
-                    .or_else(|| caller.roads.err())
-            }
+            Ok(
+                Wired::Ft
+                | Wired::VoiceKeyer
+                | Wired::Js8
+                | Wired::Cw
+                | Wired::Tune
+                | Wired::Rtty
+                | Wired::Psk,
+            ) => argument_refusal(cmd, args)
+                .or_else(|| (!caller.holds_lease).then_some(Refusal::NotController))
+                .or_else(|| caller.roads.err()),
         },
         // Admitted before the journal, under Stop's rules.
         Some(Class::StopsTx) => None,

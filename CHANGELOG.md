@@ -39,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
   seconds of that PC dropping, as a transmission does; a track started at the shack runs on. NEEDS-BENCH.
 
+- **Nexus Remote: Tune, ATU, RTTY and PSK now work from the second PC (Beta, test builds).** Tune, the radio's own
+  tuner (ATU), RTTY and PSK sends, continuous TX with typing, and RTTY Auto's CQ and answer now work from the second PC
+  as at the shack. Every transmit check at the shack still applies, including the tune carrier's time limit and
+  continuous TX's own limit. Stop on either road ends each of them, and so does losing the second PC for about 5 s:
+  continuous TX and an RTTY Auto run end too, and nothing keys again until you start it again. NEEDS-BENCH: two PCs,
+  the radio into a dummy load.
+
 ### Changed
 - **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each
   station: Nexus runs on this PC and the radio follows your own clicks and pop-outs. Streaming the station's screen is
