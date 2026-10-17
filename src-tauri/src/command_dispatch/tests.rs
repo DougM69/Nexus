@@ -768,13 +768,15 @@ fn the_on_half_of_a_transmit_switch_is_its_class() {
         let expected = match (class_of(name), transmit_from_afar(name)) {
             (
                 Some(Class::StartsTx),
-                Ok(Wired::Ft
-                | Wired::Js8
-                | Wired::Tune
-                | Wired::Rtty
-                | Wired::Psk
-                | Wired::Aprs
-                | Wired::Chat),
+                Ok(
+                    Wired::Ft
+                    | Wired::Js8
+                    | Wired::Tune
+                    | Wired::Rtty
+                    | Wired::Psk
+                    | Wired::Aprs
+                    | Wired::Chat,
+                ),
             ) => "run".to_string(),
             (Some(Class::StartsTx), Ok(Wired::HeldPress)) => refused(Refusal::HeldPress),
             (Some(Class::StartsTx), _) => refused(Refusal::TransmitNotYet),
