@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are <!-- make-kit:rows -->7,073<!-- /make-kit --> rows in the CSV and about sixty words that appear in hundreds of them. If one
+There are <!-- make-kit:rows -->7,081<!-- /make-kit --> rows in the CSV and about sixty words that appear in hundreds of them. If one
 of those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -21,7 +21,7 @@ The checker (`verify-it.py`) enforces this list per row, using the `do_not_trans
 
 | Term | Rows | Why it stays |
 |---|---:|---|
-| Nexus | 284 | The program's name. |
+| Nexus | 286 | The program's name. |
 | QSO / QSOs | 107 / 60 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 116 | ARRL's Logbook of The World — a service name. |
 | CAT | 94 | Computer Aided Transceiver — the radio control protocol. |
@@ -97,19 +97,19 @@ in, and use only that word in the CSV.
 | English | Rows | Where it turns up | Your Italian word |
 |---|---:|---|---|
 | band | 357 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
-| radio | 317 | The rig itself, and the radio list in Settings. | |
+| radio | 322 | The rig itself, and the radio list in Settings. | |
 | mode | 249 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 174 | Same object as "radio" — decide whether Italian keeps two words or one. | |
-| log / logbook | 204 / 98 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
-| settings | 168 | The Settings screen and every reference to it. | |
+| log / logbook | 209 / 98 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
+| settings | 173 | The Settings screen and every reference to it. | |
 | grid | 135 | The Maidenhead locator. Many operators say "grid" — your call. | |
 | audio | 139 | Sound cards, levels, routing. | |
-| station | 322 | Both your own station and the one you are working. | |
+| station | 329 | Both your own station and the one you are working. | |
 | port | 106 | Serial and network ports. | |
 | dial | 104 | The dial frequency. A radio term, but the word itself is prose. | |
 | transmit / receive | 132 / 38 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 88 | A satellite pass. | |
-| callsign | 103 | Appears constantly. Whatever you choose, choose it once. | |
+| callsign | 106 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 96 | "Worked before", "stations you have worked". | |
 | frequency | 93 | | |
 | tune | 55 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |

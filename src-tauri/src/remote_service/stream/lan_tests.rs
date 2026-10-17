@@ -329,3 +329,65 @@ fn the_lan_roads_socket_hears_and_tries_only_the_shacks_subnet() {
     assert!(Road::Relay.hears("203.0.113.9:50001".parse().unwrap()));
     assert!(Road::Relay.tries(off));
 }
+
+/// ★ A session the service lets use the shack's own network only (`lanOnly`): its offer takes the
+/// LAN road on the network the station's route is on, so nothing off that subnet is heard or tried
+/// and no STUN is asked; with no such network it is refused `lanOnly` at once and starts nothing.
+/// Its other signals route as on the relay's road, and never look the network up. CONTROL: the same
+/// offer without `lanOnly` is taken to admission on the relay's road.
+#[test]
+fn a_lan_only_session_takes_the_lan_road_or_is_refused() {
+    let network = tempo_stream::lan::Network::new("192.168.1.20".parse().unwrap(), 24).unwrap();
+    match lan_only_road(Some(network)) {
+        Ok(Road::Lan { network: on, port }) => {
+            assert_eq!(on, network);
+            assert_eq!(port, 0);
+        }
+        _ => panic!("a LAN-only offer did not take the LAN road"),
+    }
+    assert!(matches!(lan_only_road(None), Err(StreamReason::LanOnly)));
+
+    let now = Instant::now();
+    let l = lan(now);
+    let (to_relay, mut said) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let payload = |l: &Lan| {
+        let offer = offer(l, &l.key, (STATION, DEVICE, SESSION));
+        BrowserSignal::Offer {
+            sdp: offer.sdp,
+            public_key: offer.public_key,
+            signature: offer.signature,
+        }
+    };
+    let ids = (SESSION.to_string(), DEVICE.to_string(), l.lease.clone());
+    let mut lane = StreamLane::default();
+    let refused = lane.signal_lan_only(&l.station, &to_relay, ids.clone(), payload(&l), || None);
+    let refused: Value =
+        serde_json::from_str(refused.as_deref().expect("an answer at once")).unwrap();
+    assert_eq!(
+        refused,
+        serde_json::json!({"type":"streamState","sessionId":SESSION,"streaming":false,"reason":"lanOnly"})
+    );
+    assert!(
+        lane.live.is_none(),
+        "a session was started with no network to hold it to"
+    );
+    let candidate = BrowserSignal::Candidate {
+        candidate: "candidate:1 1 udp 2122260223 192.168.1.33 50000 typ host".into(),
+        sdp_mid: "0".into(),
+    };
+    assert_eq!(
+        lane.signal_lan_only(&l.station, &to_relay, ids.clone(), candidate, || panic!(
+            "looked the network up for a candidate"
+        )),
+        None
+    );
+    // CONTROL: on the relay's road the same offer reaches admission, and the session thread answers.
+    assert_eq!(lane.signal(&l.station, &to_relay, ids, payload(&l)), None);
+    let ended: Value = serde_json::from_str(
+        &said
+            .blocking_recv()
+            .expect("the session thread said how it stands"),
+    )
+    .unwrap();
+    assert_eq!(ended["reason"], "streamUnavailable", "{ended}");
+}

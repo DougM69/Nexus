@@ -98,6 +98,14 @@ export function RemoteStation() {
       // need different next steps: an ended trial is not an account that was switched off.
       : issue === 'trialEnded' ? t('remote.nativeTrialEnded')
       : issue === 'trialDisabled' ? t('remote.nativeTrialDisabled')
+      // One trial per callsign and per shack PC: approval refused for the callsign this Nexus sent, or
+      // for this PC, each with what the operator can do about it here. And a service that needs a newer
+      // Nexus to approve at all.
+      : issue === 'callsignInvalid' ? t('remote.nativeCallsignInvalid')
+      : issue === 'callsignNotLicensed' ? t('remote.nativeCallsignNotLicensed')
+      : issue === 'trialUsedByCallsign' ? t('remote.nativeTrialUsedByCallsign')
+      : issue === 'trialUsedOnThisPc' ? t('remote.nativeTrialUsedOnThisPc')
+      : issue === 'updateRequired' ? t('remote.nativeUpdateRequired')
       // Approval refused because this mailbox already has a trial under another sign-in. It used to
       // read as access denied, which does not say that the sign-in is what needs changing.
       : issue === 'trialActiveElsewhere' ? t('remote.nativeTrialActiveElsewhere')

@@ -441,6 +441,12 @@ it('tells an operator to confirm in the browser when they approve at the shack f
 it.each([
   ['trialEnded', /trial has ended/i, /switched off/i],
   ['trialDisabled', /switched off/i, /trial has ended/i],
+  // One trial per callsign and per shack PC: each names its own next step, never "access denied".
+  ['callsignInvalid', /set your station callsign/i, /request could not be completed/i],
+  ['callsignNotLicensed', /not an active US licence/i, /set your station callsign/i],
+  ['trialUsedByCallsign', /write to support from the email address on your licence/i, /this computer/i],
+  ['trialUsedOnThisPc', /this computer has already had a Remote trial/i, /callsign/i],
+  ['updateRequired', /needs a newer Nexus/i, /request could not be completed/i],
   // The same mailbox already has a trial under another sign-in: it used to read as access denied.
   ['trialActiveElsewhere', /different sign-in/i, /trial has ended/i],
 ] as const)('tells the operator at the shack which refusal %s is', async (code, says, doesNotSay) => {

@@ -11,6 +11,8 @@ mod lanes;
 #[cfg(test)]
 pub(crate) mod log_tests;
 pub(crate) mod operations;
+/// The shack PC's two identifiers, hashed, sent when approving a station may start a trial.
+mod pc_identity;
 /// The station's own signing key, which signs its stream answers (security review S3-M1).
 mod station_key;
 #[cfg(test)]
@@ -1730,12 +1732,21 @@ impl Controller {
                 };
                 // Confirm the OS vault works before creating cloud station authority.
                 self.vault.stage(&binding, &token)?;
+                // One trial per callsign and per shack PC: the station callsign configured here (sent
+                // as it is, blank included, for the service to judge) and the PC's two hashed
+                // identifiers (`pc_identity`), read only now, when approving may start a trial.
+                let callsign = tempo_app::engine::engine_lock(&self.engine)
+                    .settings()
+                    .mycall
+                    .trim()
+                    .to_string();
                 let result = self
                     .client
                     .post(
                         "enroll/approve",
                         None,
-                        json!({ "id": pending.id, "proof": pending.proof, "credential": token }),
+                        json!({ "id": pending.id, "proof": pending.proof, "credential": token,
+                            "callsign": callsign, "pc": pc_identity::pc() }),
                     )
                     .await;
                 let value = match result {

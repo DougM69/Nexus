@@ -2255,6 +2255,123 @@ test('a revoked entitlement refuses a stream offer at the relay, and a live one 
   live.browser.close(); live.station.close()
 })
 
+// LAN STAYS FREE. An account whose internet use has ended keeps its stations on the shack's own
+// network: it takes a LAN-only ticket (`scope: 'lan'`), and the relay holds that session's stream to
+// the LAN by refusing every candidate that is not a private host one, from either side, and by telling
+// the station `lanOnly` (only one that advertised `x-nexus-stream-lan-version`). The relay route stays
+// refused, and so does every command.
+const LAN_HEADERS = { ...STREAM_HEADERS, ...OPERATION_HEADERS, 'x-nexus-stream-lan-version': '1' }
+const endTrial = pair => app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() - 1000, pair.browser.accountId).run()
+async function lanAdmitted(pair, deviceId, extensions = LAN_HEADERS) {
+  const station = await pair.native.open(pair.stationId, undefined, 101, { 'x-nexus-application-version': '1', ...extensions })
+  await station.take(value => value.type === 'watch' && value.enabled === false)
+  const { value: ticket } = await pair.browser.post(`stations/${pair.stationId}/ticket`, { scope: 'lan' })
+  const browser = await pair.browser.open(pair.stationId, ticket.ticket)
+  const session = await browser.take(type('session'))
+  return { station, browser, deviceId, session, ticket }
+}
+const nothing = async (socket, predicate, ms = 700) => { try { await socket.take(predicate, ms); return false } catch { return true } }
+const MDNS = 'candidate (mDNS host; the station ignores what it cannot resolve)'
+/** A live station and a page heartbeating through a stream, as the switch-off test above has them:
+ *  the heartbeats are what make the room re-read the entitlement while a stream runs. */
+function serving(live, leaseId) {
+  const boot = crypto.randomUUID()
+  let on = true
+  live.browser.ackObservations()
+  const loop = (async () => {
+    while (on) {
+      let asked
+      try { asked = await live.station.take(value => (value.type === 'watch' && value.enabled) || value.type === 'operationRequest', 200) } catch { continue }
+      if (asked.type === 'watch') {
+        const frame = sample(); frame.sequence = ++settleSequence
+        live.station.send({ type: 'publication', requestId: asked.requestId, frame })
+      } else live.station.send({ type: 'operationResponse', sessionId: asked.sessionId, requestId: asked.request.requestId,
+        value: { stationBootId: boot, allowed: true, phase: 'controlling', leaseId, revision: 2, commandWindowId: crypto.randomUUID(),
+          nextSequence: 2, leaseRemainingMs: 5000, actions: [], txArmed: false } })
+    }
+  })()
+  const beat = setInterval(() => live.browser.send({ type: 'operationRequest', operationVersion: 4,
+    request: { type: 'heartbeat', requestId: crypto.randomUUID(), leaseId } }), 1000)
+  return async () => { clearInterval(beat); on = false; await loop }
+}
+const SHACK_HOST = 'candidate (host: the shack\'s own LAN address, for a browser on its network)'
+
+test('LAN stays free: an ended trial streams with a LAN-only ticket, held to the LAN, with no relay and no commands', async () => {
+  const pair = await app.paired(), deviceId = await app.approved(pair)
+  await endTrial(pair)
+  // THE CONTROLS: the internet ticket and the relay route refuse an ended trial exactly as before.
+  assert.equal((await pair.browser.post(`stations/${pair.stationId}/ticket`, {}, 403)).value.error, 'trialRequired')
+  assert.equal((await pair.browser.post(`stations/${pair.stationId}/turn`, {}, 403)).value.error, 'trialRequired', 'no TURN for a LAN-only account')
+  assert.equal((await pair.browser.post(`stations/${pair.stationId}/ticket`, { scope: 'internet' }, 400)).value.error, 'invalidRequest')
+  const live = await lanAdmitted(pair, deviceId), sessionId = live.session.sessionId, leaseId = crypto.randomUUID()
+  live.browser.send(pageSignal('offer', leaseId))
+  assert.deepEqual(await live.station.take(typed('streamSignal')), { ...streamCase('roomToStation', 'offer'), sessionId, deviceId, leaseId, lanOnly: true },
+    'the offer reaches the station, told to keep this session on its network')
+  live.browser.send(pageSignal(MDNS, leaseId))
+  assert.deepEqual(await live.station.take(typed('streamSignal')), { ...streamCase('roomToStation', MDNS), sessionId, deviceId, leaseId, lanOnly: true })
+  // A reflexive candidate would agree a path through the internet: refused, never forwarded.
+  live.browser.send(pageSignal('candidate (reflexive)', leaseId))
+  assert.deepEqual(await live.browser.take(typed('streamState')), { type: 'streamState', streaming: false, reason: 'lanOnly' })
+  assert.equal(await nothing(live.station, typed('streamSignal')), true, 'the page\'s reflexive candidate never reached the station')
+  // The station's end, the same: its host candidate goes, its reflexive one does not.
+  live.station.send(stationMessage(SHACK_HOST, sessionId))
+  assert.deepEqual(await live.browser.take(typed('streamSignal')), streamContract.roomToBrowser.find(c => c.name === SHACK_HOST).message)
+  live.station.send(stationMessage('candidate (reflexive)', sessionId))
+  assert.deepEqual(await live.browser.take(value => typed('streamSignal')(value) || typed('streamState')(value)),
+    { type: 'streamState', streaming: false, reason: 'lanOnly' }, 'the station\'s reflexive candidate never reached the page')
+  // A command through the relay is still the internet's, and refused.
+  assert.equal(await commandReachesStation(live), false, 'a LAN-only session commands nothing through the relay')
+  // It streams, and keeps streaming through the entitlement re-reads its heartbeats bring.
+  live.station.send(stationMessage('streaming', sessionId))
+  assert.deepEqual(await live.browser.take(typed('streamState')), { type: 'streamState', streaming: true })
+  const stop = serving(live, leaseId)
+  try { await assert.rejects(live.station.take(typed('streamEnd'), 4000), /timeout/, 'a LAN stream is not ended for the trial') }
+  finally { await stop() }
+  assert.equal(live.station.closed, false, 'and the station is still up, so this observed a live room')
+  // Nor does the station's application data cross the relay to it ('application reads use approved
+  // sockets…' above is the control: an internet session's read reaches the station).
+  live.browser.send({ type: 'applicationHello' })
+  live.browser.send({ type: 'applicationRead', requestId: crypto.randomUUID(), command: 'get_snapshot', revision: null })
+  assert.equal(await nothing(live.station, type('applicationRead')), true, 'a LAN-only session reads nothing through the relay')
+  live.browser.close(); live.station.close()
+})
+
+test('a LAN-only session to a station that cannot hold it to the LAN is refused by name, and survives a hibernation', async () => {
+  const pair = await app.paired(), deviceId = await app.approved(pair)
+  await endTrial(pair)
+  const old = await lanAdmitted(pair, deviceId, { ...STREAM_HEADERS, ...OPERATION_HEADERS })
+  old.browser.send(pageSignal('offer'))
+  assert.deepEqual(await old.browser.take(typed('streamState')), { type: 'streamState', streaming: false, reason: 'updateStation' })
+  assert.equal(await nothing(old.station, typed('streamSignal')), true, 'an older station is never handed the session')
+  old.browser.close(); old.station.close()
+  // A hibernated room still knows the session is LAN-only: the offer goes with `lanOnly`, and a
+  // reflexive candidate is still refused (lost, the session would be refused as an ended trial).
+  const live = await lanAdmitted(pair, deviceId)
+  await app.evict(pair.stationId)
+  live.browser.send(pageSignal('offer'))
+  assert.equal((await live.station.take(typed('streamSignal'))).lanOnly, true)
+  live.browser.send(pageSignal('candidate (reflexive)'))
+  assert.equal((await live.browser.take(typed('streamState'))).reason, 'lanOnly')
+  live.browser.close(); live.station.close()
+})
+
+test('Remote switched off by hand ends a LAN-only stream too, and refuses its ticket', async () => {
+  const pair = await app.paired(), deviceId = await app.approved(pair)
+  await endTrial(pair)
+  const live = await lanAdmitted(pair, deviceId), leaseId = crypto.randomUUID()
+  live.browser.send(pageSignal('offer', leaseId))
+  await live.station.take(typed('streamSignal'))
+  live.station.send(stationMessage('streaming', live.session.sessionId))
+  assert.equal((await live.browser.take(typed('streamState'))).streaming, true)
+  const stop = serving(live, leaseId)
+  try {
+    await app.db.prepare('UPDATE trials SET enabled=0 WHERE account_id=?').bind(pair.browser.accountId).run()
+    assert.deepEqual(await live.station.take(typed('streamEnd'), 5000), { type: 'streamEnd', sessionId: live.session.sessionId, reason: 'remoteOff' })
+  } finally { await stop() }
+  assert.equal((await pair.browser.post(`stations/${pair.stationId}/ticket`, { scope: 'lan' }, 403)).value.error, 'trialRequired')
+  live.browser.close(); live.station.close()
+})
+
 // THE STREAM'S RELAY. `turn` mints Cloudflare Realtime TURN credentials for one stream, for a
 // browser a ticket would be given to, and nobody else. The provider is a fake in every test
 // (runtime.mjs `relay`), and the key id and token below are generated here, never real.

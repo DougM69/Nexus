@@ -191,6 +191,10 @@ gdk = "0.18"
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38"
 windows-core = "0.61"
+# The shack PC's identifiers for the Remote trial (`remote_service::pc_identity`): the firmware's
+# SMBIOS table and the registry's MachineGuid. Already in the build through tempo-audio and
+# street-map at this version (MIT OR Apache-2.0), so this adds features, not a crate.
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_System_SystemInformation"] }
 
 [dev-dependencies]
 # The same crate as above with one more feature, for this crate's tests only: `test_util`, the log

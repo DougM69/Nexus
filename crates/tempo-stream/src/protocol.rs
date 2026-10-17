@@ -388,6 +388,13 @@ pub enum StreamReason {
     /// Relay-originated: the page is over the relay's signalling budget. The station never sends
     /// it.
     TryLater,
+    /// A session the service lets use the shack's own network only (`lanOnly` on its signals): the
+    /// station ends or refuses it with this when its media would leave that network, and the relay
+    /// refuses a candidate that is not a private host one with it.
+    LanOnly,
+    /// Relay-originated: a session the service lets use the shack's own network only, offered to a
+    /// station too old to keep it there. The station never sends it.
+    UpdateStation,
 }
 
 /// Page → relay, before the relay stamps it.
@@ -979,13 +986,13 @@ mod tests {
     fn every_signalling_case_round_trips_on_its_hop() {
         assert_eq!(round_trip::<PageToRoom>(SIGNAL, "browserToRoom"), 5);
         assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStation"), 5);
-        assert_eq!(round_trip::<StationToRoom>(SIGNAL, "stationToRoom"), 15);
-        assert_eq!(round_trip::<RoomToPage>(SIGNAL, "roomToBrowser"), 15);
+        assert_eq!(round_trip::<StationToRoom>(SIGNAL, "stationToRoom"), 16);
+        assert_eq!(round_trip::<RoomToPage>(SIGNAL, "roomToBrowser"), 16);
         // The relay's own: it ends a station's stream, and it answers a page by itself.
         assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStationEnd"), 2);
         assert_eq!(
             round_trip::<RoomToPage>(SIGNAL, "roomToBrowserFromRelay"),
-            3
+            5
         );
     }
 

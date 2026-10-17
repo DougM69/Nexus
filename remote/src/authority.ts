@@ -1,7 +1,7 @@
 // Only this adapter turns provider claims and credential digests into authority.
 // ObservationRelay never receives identity data taken directly from a socket.
 import { createRemoteJWKSet, jwtVerify } from 'jose'
-import type { Entitlement, Identity, StationAccess } from '../../ui/src/remote-monitor/relay'
+import { OBSERVER_LEASE_MS, type Entitlement, type Identity, type StationAccess } from '../../ui/src/remote-monitor/relay'
 
 export interface RemoteEnv {
   DB: D1Database
@@ -25,6 +25,13 @@ export interface RemoteEnv {
   TURN_KEY_ID?: string
   TURN_KEY_TOKEN?: string
   REMOTE_BUILD_REVISION?: string
+  /** The HMAC key for trial markers and the licence copy (trial-identity.ts). Unset, the callsign and
+   *  shack-PC fields are checked for shape and nothing more: no marker is written or read. It can never
+   *  be rotated, because the values it was taken over are not kept. */
+  TRIAL_KEY?: string
+  /** '1' once every Nexus that pairs sends its callsign and PC: an approve without them is refused
+   *  `updateRequired` instead of starting a trial guarded by the mailbox alone. */
+  TRIAL_IDENTITY_REQUIRED?: string
 }
 
 export class Refusal extends Error {
@@ -234,14 +241,64 @@ export function requireAdmin(env: RemoteEnv, subject: string): void {
 // its trial waiting. The one place that writes this is the approve batch in index.ts.
 export const TRIAL_MS = 14 * 24 * 60 * 60 * 1000
 
-export async function trial(env: RemoteEnv, accountId: string, now: number): Promise<Entitlement> {
-  const row = await env.DB.prepare('SELECT enabled, expires_at, started_at, source FROM trials WHERE account_id=?')
-    .bind(accountId).first<{ enabled: number; expires_at: number; started_at: number | null; source: string | null }>()
+/** After a paid period ends, the days it still counts: one, or seven while a payment is failing and
+ *  the provider is still retrying it. */
+export const PAID_GRACE_MS = 24 * 60 * 60 * 1000
+export const PAST_DUE_GRACE_MS = 7 * 24 * 60 * 60 * 1000
+
+export type Plan = { kind: 'trial' | 'manual' | 'subscription' | null; status: string | null; periodEnd: number | null; renews: boolean }
+/** The one answer to "what may this account do now", from its trial and its subscription together.
+ *  `enabled`, `expiresAt` and `state` keep their meaning on the wire: internet use allowed, until when,
+ *  and the four named situations, so every gate that reads them is unchanged. `access` adds whether the
+ *  account may still use its stations on its own network ('lan') once internet use has ended, and
+ *  `plan` is what the page needs to say why. */
+export type AccountEntitlement = Entitlement & { access: 'internet' | 'lan' | 'none'; plan: Plan }
+export type EntitlementRow = { enabled: number | null; expires_at: number | null; started_at: number | null; source: string | null
+  status: string | null; plan: string | null; period_end: number | null; cancel_at_period_end: number | null }
+
+/** Until when a subscription in this status allows internet use; 0 when it does not. A subscription
+ *  that is not on one of our prices has no plan, and pays for nothing. */
+function paidUntil(row: EntitlementRow): number {
+  if (row.status === null || row.period_end === null || row.plan === null) return 0
+  if (row.status === 'active' || row.status === 'trialing') return row.period_end + PAID_GRACE_MS
+  if (row.status === 'past_due') return row.period_end + PAST_DUE_GRACE_MS
+  return 0
+}
+
+export function entitlementOf(accountId: string, row: EntitlementRow, now: number): AccountEntitlement {
+  // A disabled trials row is an operator's ban, and outranks anything paid: no internet, no LAN.
+  const disabled = row.enabled !== null && row.enabled !== 1
+  const until = disabled ? 0 : Math.max(row.enabled === 1 ? row.expires_at ?? 0 : 0, paidUntil(row))
+  const internet = until > now
   // Four distinct situations, named. Callers must never re-derive these from enabled+expiresAt:
   // that is the arithmetic this field exists to stop two separate consumers from guessing at.
-  const state = !row ? 'none' : row.enabled !== 1 ? 'disabled' : row.expires_at > now ? 'active' : 'ended'
-  return { accountId, enabled: row?.enabled === 1, expiresAt: row?.expires_at ?? 0,
-    state, startedAt: row?.started_at ?? null, source: row?.source ?? null }
+  const state = disabled ? 'disabled' : internet ? 'active' : row.enabled !== null || row.status !== null ? 'ended' : 'none'
+  const kind = row.status !== null ? 'subscription' : row.enabled === null ? null : row.source?.startsWith('trial') ? 'trial' : 'manual'
+  return { accountId, enabled: !disabled && until > 0, expiresAt: disabled ? row.expires_at ?? 0 : until,
+    state, startedAt: row.started_at ?? null, source: row.source ?? null,
+    access: internet ? 'internet' : disabled ? 'none' : 'lan',
+    plan: { kind, status: row.status, periodEnd: row.period_end,
+      renews: row.plan !== null && (row.status === 'active' || row.status === 'trialing') && row.cancel_at_period_end !== 1 } }
+}
+
+export async function readEntitlement(env: RemoteEnv, accountId: string, now: number): Promise<AccountEntitlement> {
+  const row = await env.DB.prepare(`SELECT t.enabled, t.expires_at, t.started_at, t.source,
+    s.status, s.plan, s.period_end, s.cancel_at_period_end
+    FROM (SELECT ? AS id) a LEFT JOIN trials t ON t.account_id=a.id LEFT JOIN subscriptions s ON s.account_id=a.id`)
+    .bind(accountId).first<EntitlementRow>()
+  requireValue(row, 'serviceUnavailable', 503)
+  return entitlementOf(accountId, row, now)
+}
+
+/** The account as a LAN-only session sees it (a ticket of scope 'lan'): usable on the shack's own
+ *  network for as long as Remote is not switched off for the account, whatever its internet use. The
+ *  date is a lease the session renews, never the account's: the observer and stream deadlines taken
+ *  from it end the session within one lease of a switch-off, and nothing internet-only reads it. Only
+ *  the session's observation, its lease and Stop, and a stream held to the LAN (stream-relay.ts) are
+ *  open to such a session (room.ts); every other lane keeps the account's own entitlement. */
+export function lanEntitlement(entitlement: AccountEntitlement, now: number): AccountEntitlement {
+  // Named, never "not none": a reading without the field is no permission.
+  return { ...entitlement, enabled: entitlement.access === 'lan' || entitlement.access === 'internet', expiresAt: now + OBSERVER_LEASE_MS }
 }
 
 // The strict gate: is the service usable right now? Called in index.ts for the browser's `device`,
@@ -263,6 +320,14 @@ export function requireTrial(entitlement: Entitlement, now: number): void {
 export function requireEligible(entitlement: Entitlement): void {
   if (entitlement.state === 'active' || entitlement.state === 'none') return
   throw new Refusal(entitlement.state === 'ended' ? 'trialEnded' : 'trialDisabled')
+}
+
+/** The pairing gate, at the three steps that lead to an approval: eligible, and, unless the account
+ *  already has internet use (a running trial, or a plan), not a person whose trial was spent under
+ *  another sign-in. A subscriber pairs whatever a sibling account spent. */
+export async function requireMayPair(env: RemoteEnv, entitlement: AccountEntitlement, now: number): Promise<void> {
+  requireEligible(entitlement)
+  if (entitlement.access !== 'internet') await requireUnspentIdentity(env, entitlement.accountId, now)
 }
 
 /** Has the PERSON behind this account already consumed a trial under another sign-in?

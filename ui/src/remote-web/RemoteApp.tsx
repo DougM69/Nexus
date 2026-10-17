@@ -159,6 +159,9 @@ export function RemoteApp() {
     const station = session?.stations.find(station => station.id === stationId), device = station?.device
     const next = new HostedConnection(client!, stationId, true, undefined,
       device ? { id: device.id, key: () => deviceKey(stationId) } : undefined, station?.stationKey ?? null)
+    // Internet use has ended, and Remote on the shack's own network stays free: this session is held
+    // to it (the service refuses anything else, and so does the station).
+    next.lanOnly = session?.entitlement.access === 'lan'
     // A refused ticket is final: the trial ended mid-session, the station or this browser was
     // revoked, or the sign-in expired. The workspace used to stay up saying "Station data
     // unavailable… check that Nexus is running", which blamed the shack. Go back to the account
@@ -191,6 +194,9 @@ export function RemoteApp() {
   // with the service about whether the trial is live.
   const trial = session?.entitlement
   const entitled = trial?.state === 'active'
+  // Internet use has ended (or never started), and the station can still be used on its own network,
+  // free: Stream and Listen stay, held to that network. The service says so; an older one never does.
+  const lanOnly = !entitled && trial?.access === 'lan'
   // An account that has never held a trial may pair - that is the self-serve path, and gating
   // the pairing form on `entitled` made it unreachable for exactly the people who need it.
   const canPair = trial?.state === 'active' || trial?.state === 'none'
@@ -216,9 +222,11 @@ export function RemoteApp() {
     : trial?.state === 'disabled' ? t('remote.trialDisabled') : t('remote.trialNotStarted')
   // The card's two ways in: Stream, the big one, and Listen, audio only. Stream only from a service
   // that carries the stream's signalling, and not while the station's key has changed (S3-L1).
-  const stationActions = (stream: () => void, listen: () => void, streamOff = false) => <div className="remote-actions remote-station-actions">
-    {(client?.streamVersion ?? 0) >= 1 && <button className="remote-button remote-button--primary remote-station-stream" disabled={busy || !entitled || streamOff} onClick={stream}>{t('remote.stream.open')}</button>}
-    <button className="remote-button remote-station-listen" disabled={busy || !entitled} onClick={listen}>{t('remote.listen.open')}</button>
+  // `usable`: on the shack's own network only, a browser already approved there; asking for a new
+  // approval is not part of what stays free.
+  const stationActions = (stream: () => void, listen: () => void, streamOff = false, usable = entitled) => <div className="remote-actions remote-station-actions">
+    {(client?.streamVersion ?? 0) >= 1 && <button className="remote-button remote-button--primary remote-station-stream" disabled={busy || !usable || streamOff} onClick={stream}>{t('remote.stream.open')}</button>}
+    <button className="remote-button remote-station-listen" disabled={busy || !usable} onClick={listen}>{t('remote.listen.open')}</button>
   </div>
 
   // `trialRequired` is deliberately absent: the trial-state line above already tells the operator
@@ -310,6 +318,7 @@ export function RemoteApp() {
           : t('remote.trialRunning', { days: daysLeft, from: utcDate(trial.startedAt), until: utcDate(trial.expiresAt) })}</p>}
         {trial?.state === 'ended' && <p className="remote-site-status remote-site-status--stopped" role="status">{t('remote.trialEnded', { until: utcDate(trial.expiresAt) })}</p>}
         {trial?.state === 'disabled' && <p className="remote-site-status remote-site-status--stopped" role="status">{t('remote.trialDisabled')}</p>}
+        {lanOnly && session.stations.length > 0 && <p className="remote-site-status" role="status">{t('remote.lanFree')}</p>}
         {(trial?.state === 'ended' || trial?.state === 'disabled') &&
           <p><a href={BETA_CHANNEL} target="_blank" rel="noopener noreferrer">{t('remote.askAboutAccess')}</a></p>}
         {session.stations.map(station => <section className="rm-card remote-section" key={station.id}>
@@ -336,7 +345,7 @@ export function RemoteApp() {
               (the operator, 2026-10-02: "Each station card has one big "Stream" button and a small
               "Listen" for audio only"). Not asked yet, Stream and Listen ask: the shack pops the
               question up with this browser's name and key. Asked, the next step is at the shack. */}
-          <p className="remote-station-state" role="status">{!entitled ? trialReason
+          <p className="remote-station-state" role="status">{!(entitled || (lanOnly && station.device?.approved === 1)) ? trialReason
             : station.device?.approved === 1 ? t('remote.card.ready')
             : station.device ? keys[station.id]
               ? t('remote.card.waiting', { browser: station.device.name, key: shortFingerprint(keys[station.id]) })
@@ -353,7 +362,7 @@ export function RemoteApp() {
             </div>
           </>}
           {station.device?.approved === 1 ? <>
-            {stationActions(() => open(station.id, station.name), () => open(station.id, null, station.name), keyChanged(station.id))}
+            {stationActions(() => open(station.id, station.name), () => open(station.id, null, station.name), keyChanged(station.id), entitled || lanOnly)}
             {keys[station.id] && <p>{t('remote.thisBrowserKey', { key: shortFingerprint(keys[station.id]) })}</p>}
             {stationKeys[station.id] && !keyChanged(station.id) && <p>{t('remote.thisStationKey', { key: shortFingerprint(stationKeys[station.id].print) })}</p>}
             {/* How long this browser stays approved, off the service's clock: until removed at the shack, or
