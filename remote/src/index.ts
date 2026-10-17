@@ -5,6 +5,7 @@ import { account, access, body, bodyBytes, browserOrigin, caller, CHALLENGE_MS, 
 import type { DeviceRow, RemoteEnv, StationRow } from './authority'
 import { APPLICATION_VERSION, negotiatedApplicationVersion } from './application-version'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
+import type { Identity } from '../../ui/src/remote-monitor/relay'
 import { advertisedOperationVersion } from '../../ui/src/remote-web/operation-version'
 export { StationRoom } from './room'
 
@@ -40,6 +41,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   const path = url.pathname.slice('/api/remote/'.length)
   if (request.method === 'GET' && path === 'config') return json({
     issuer: env.AUTH0_ISSUER, audience: env.AUTH0_AUDIENCE, clientId: env.AUTH0_CLIENT_ID,
+    // The Native application Nexus signs in to for the internet road, or null while there is none:
+    // never the page's own, which no native route takes.
+    nativeClientId: nativeClientId(env),
     ready: env.AUTH0_CLIENT_ID !== 'unconfigured',
     revision: env.REMOTE_BUILD_REVISION ?? 'local',
     applicationVersion: APPLICATION_VERSION,
@@ -533,12 +537,20 @@ async function revokeStation(env: RemoteEnv, stationId: string, now: number): Pr
 //   POST client/challenge              a challenge for the next signed request, good for a minute
 //   POST client/session                the account's stations, each with its station key
 //   POST stations/:id/client/device    this device's key registered (signed by that key), or found again
+//   POST stations/:id/client/challenge a challenge for an approved device reopening, with no token
 //   POST stations/:id/client/turn      TURN credentials for its internet roads
 //   GET  stations/:id/client/pipe      its pipe to the station, through the room (pipe.ts)
 //   POST stations/:id/client/renew     the pipe's lease renewed, as a browser renews its session
 //   POST stations/:id/client/forget    its own approval ended, as a browser forgets itself
+//
+// REOPENING. A request with no account token is an approved device opening its station again
+// (`reopener`): the device it names, approved at the shack and not removed, is its caller, under its
+// station's account, and each of its verbs is signed by its key as any other. So Nexus keeps no
+// account credential on the computer, and signs in only to register a device. Registering, the
+// account's stations and a challenge without a station all still need the token.
 async function client(request: Request, env: RemoteEnv, path: string, match: RegExpExecArray | null, now: number): Promise<Response> {
-  const caller = await nativeAccount(request, env, now)
+  const reopening = !request.headers.has('authorization')
+  const caller = reopening ? await reopener(request, env, match, now) : await nativeAccount(request, env, now)
   await rate(env, `client:${caller.accountId}`, now, 120)
   const entitlement = await trial(env, caller.accountId, now)
   if (path === 'client/challenge') {
@@ -564,6 +576,17 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
   requireValue(match, 'notFound', 404)
   const row = await station(env, match[1]), verb = match[2].slice('client/'.length)
   requireValue(row.account_id === caller.accountId && row.enabled === 1, 'stationUnavailable', 404)
+  if (verb === 'challenge') {
+    // Only for reopening: a signed-in computer asks `client/challenge`.
+    requireValue(reopening && request.method === 'POST', 'notFound', 404)
+    await body(request, [])
+    const challenge = secret(), expiresAt = now + CHALLENGE_MS
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM challenges WHERE expires_at<=?').bind(now),
+      env.DB.prepare('INSERT INTO challenges(digest,account_id,expires_at) VALUES(?,?,?)').bind(await digest(challenge), caller.accountId, expiresAt),
+    ])
+    return json({ challenge, expiresAt })
+  }
   // Every verb but `device` is this device's own: the device the request names, of this account and
   // station, within its approval or its wait for one, and the request signed by its key.
   const signer = async (bytes: Uint8Array): Promise<DeviceRow> => {
@@ -600,6 +623,8 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
   }
   requireTrial(entitlement, now)
   if (verb === 'device') {
+    // A new device is the account's to add: signed in, never reopening.
+    requireValue(!reopening, 'signInRequired', 401)
     const input = fieldsOf(bytes, ['name', 'kind', 'platform', 'publicKey'])
     const name = label(input.name), key = await publicKey(input.publicKey), { kind, platform } = nativeKind(input.kind, input.platform)
     // Signed by the key it registers, so whoever sends it holds that key.
@@ -636,6 +661,31 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
     return json({ ok: true, serverNow: now })
   }
   throw new Refusal('notFound', 404)
+}
+
+// The caller of a request with no account token: the native device it names (`x-nexus-device-id`), of
+// the station the path names, approved there and not removed, acting under that station's account for
+// at most an hour, as a token would. What it may do is still each verb's own, signed by the device's
+// key. No Origin and no cookie, as for any native caller. Refused alike, and before anything is read,
+// for a path with no station or a device that is not one approved there: no token, no reopening.
+async function reopener(request: Request, env: RemoteEnv, match: RegExpExecArray | null, now: number): Promise<Identity & { subject: string; verified: boolean }> {
+  requireValue(!request.headers.has('origin') && !request.headers.has('cookie'), 'originDenied')
+  requireValue(nativeClientId(env), 'serviceNotConfigured', 503)
+  requireValue(match, 'signInRequired', 401)
+  const deviceId = request.headers.get('x-nexus-device-id') ?? ''
+  requireValue(/^[0-9a-f-]{36}$/.test(deviceId), 'signInRequired', 401)
+  await rate(env, `reopen:${match[1]}:${deviceId}`, now, 60)
+  const row = await station(env, match[1]).catch(() => null)
+  requireValue(row, 'signInRequired', 401)
+  const current = await nativeDevice(request, env, row.id, row.account_id, now)
+  requireValue(current?.public_key && current.approved === 1, 'signInRequired', 401)
+  return { accountId: row.account_id, expiresAt: Math.min(current.expires_at, now + 3600000), subject: '', verified: false }
+}
+
+// The Native application's client id, or null while the service has none: unset, or the page's own.
+function nativeClientId(env: RemoteEnv): string | null {
+  const id = env.AUTH0_NATIVE_CLIENT_ID
+  return id && id !== 'unconfigured' && id !== env.AUTH0_CLIENT_ID ? id : null
 }
 
 // A browser's use of its approval (operator decision 2026-10-10: an approval lasts until removed).

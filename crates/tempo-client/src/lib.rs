@@ -69,6 +69,8 @@ pub mod dispatch;
 pub mod ice;
 /// The command link, protocol 2, which client mode drives.
 pub mod link;
+/// The internet road's account side: signed requests and the first sign-in.
+pub mod native;
 /// One connection's writer, at either end of the command link.
 pub mod outbox;
 /// The road to a paired station, for the window's page and the command link.

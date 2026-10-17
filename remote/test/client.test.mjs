@@ -593,3 +593,83 @@ test('a pipe survives a hibernation of the room: both ends come back paired, and
   assert.equal(await pipesOf(c.stationId), 0)
   c.station.close()
 })
+
+// --- Reopening with the device's key alone ------------------------------------------------------
+
+/** A request with no account token, no Origin and no cookie: the computer reopening its station by its
+ *  key, signed over a challenge its station gave the device for that. */
+async function reopened(c, verb, value = {}, expected = 200, { key = c.key, device = c.deviceId } = {}) {
+  const bare = app.client(null, '', null), path = `stations/${c.stationId}/client`
+  const { value: { challenge } } = await bare.post(`${path}/challenge`, {}, 200, { 'x-nexus-device-id': device })
+  return bare.post(`${path}/${verb}`, value, expected, { 'x-nexus-device-id': device, 'x-nexus-challenge': challenge,
+    'x-nexus-signature': await sign(key, challenge, 'POST', `/api/remote/${path}/${verb}`, JSON.stringify(value)) })
+}
+
+test('reopening: an approved computer opens its station again by its key alone, and its pipe with it, with no token', async () => {
+  const c = await computer()
+  // Past every check a token's request passes: no pipe is open, which is what renew says.
+  assert.equal((await reopened(c, 'renew', {}, 404)).value.error, 'pipeClosed')
+  // TURN: past the device, the trial and the approval, to the relay this runtime has none of.
+  assert.equal((await reopened(c, 'turn', {}, 503)).value.error, 'relayNotConfigured')
+  // The pipe itself, signed as a GET over an empty body, with no token.
+  const station = await c.pair.native.open(c.stationId, null, 101, PIPE)
+  const bare = app.client(null, '', null), path = `stations/${c.stationId}/client`
+  const { value: { challenge } } = await bare.post(`${path}/challenge`, {}, 200, { 'x-nexus-device-id': c.deviceId })
+  const opening = upgrade(`${path}/pipe`, { ...bare.headers(), 'x-nexus-device-id': c.deviceId, 'x-nexus-challenge': challenge,
+    'x-nexus-signature': await sign(c.key, challenge, 'GET', `/api/remote/${path}/pipe`, '') })
+  const asked = await station.take(type('pipeOpen'))
+  const end = await stationEnd(c.pair, asked.pipeId), client = await opening
+  assert.equal(client.status, 101, 'the computer\'s end opens on its key alone')
+  client.peer.ws.send(record(0x16)); assert.deepEqual(await end.peer.take(binary), record(0x16))
+  client.peer.ws.close(); station.close()
+  // It forgets itself the same way, and then reopens nothing.
+  await reopened(c, 'forget')
+  assert.equal((await bare.post(`${path}/challenge`, {}, 401, { 'x-nexus-device-id': c.deviceId })).value.error, 'signInRequired')
+})
+
+test('reopening opens nothing else: no new device, no stations, no waiting or removed device, no other key, no page', async () => {
+  const pair = await app.paired(), path = `stations/${pair.stationId}/client`
+  const c = await computer(pair), bare = app.client(null, '', null)
+  // CONTROL: the same computer reopens.
+  assert.equal((await reopened(c, 'renew', {}, 404)).value.error, 'pipeClosed')
+  // A signed-in computer asks its challenge where it always has: the station's is reopening's alone.
+  assert.equal((await (await nativeCaller(pair)).post(`${path}/challenge`, {}, 404)).value.error, 'notFound')
+  // Registering a device, the account's stations and an unbound challenge all need the token.
+  assert.equal((await reopened(c, 'device', { name: 'Other', kind: 'computer', platform: 'windows', publicKey: (await deviceKey()).publicKey }, 401)).value.error, 'signInRequired')
+  for (const route of ['client/challenge', 'client/session']) {
+    assert.equal((await bare.post(route, {}, 401, { 'x-nexus-device-id': c.deviceId })).value.error, 'signInRequired', route)
+  }
+  // A device waiting for the shack, one removed there, a browser, an unknown id or station: one answer.
+  const waiting = await computer(pair, { approve: false })
+  const removed = await computer(pair)
+  await pair.native.post(`stations/${pair.stationId}/native/revoke-device`, { deviceId: removed.deviceId })
+  const { value: keyed } = await pair.browser.post(`stations/${pair.stationId}/device`, { name: 'A browser', publicKey: (await deviceKey()).publicKey })
+  await pair.native.post(`stations/${pair.stationId}/native/approve-device`, { deviceId: keyed.deviceId }, 200, LIFETIME)
+  for (const [why, device, at] of [['waiting', waiting.deviceId, path], ['removed', removed.deviceId, path],
+    ['a browser', keyed.deviceId, path], ['unknown', crypto.randomUUID(), path], ['no id', '', path],
+    ['another station', c.deviceId, `stations/${crypto.randomUUID()}/client`]]) {
+    const headers = device ? { 'x-nexus-device-id': device } : {}
+    assert.equal((await bare.post(`${at}/challenge`, {}, 401, headers)).value.error, 'signInRequired', why)
+  }
+  // Another device's key over this device's challenge.
+  assert.equal((await reopened(c, 'renew', {}, 401, { key: (await deviceKey()) })).value.error, 'invalidSignature')
+  // A page (its Origin, or a cookie) is refused before anything is read.
+  assert.equal((await bare.post(`${path}/challenge`, {}, 403, { origin: app.origin, 'x-nexus-device-id': c.deviceId })).value.error, 'originDenied')
+  assert.equal((await bare.post(`${path}/challenge`, {}, 403, { cookie: 'a=b', 'x-nexus-device-id': c.deviceId })).value.error, 'originDenied')
+  // An entitlement that ended ends reopening's pipe and relay as it ends a token's.
+  await app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() - 1000, pair.browser.accountId).run()
+  assert.equal((await reopened(c, 'turn', {}, 403)).value.error, 'trialRequired')
+})
+
+test('the service names its Native application for Nexus to sign in to, and never the page\'s', async () => {
+  const config = async service => (await service.mf.dispatchFetch(`${service.origin}/api/remote/config`)).json()
+  assert.equal((await config(app)).nativeClientId, NATIVE)
+  for (const bindings of [{}, { AUTH0_NATIVE_CLIENT_ID: 'unconfigured' }, { AUTH0_NATIVE_CLIENT_ID: 'remote-test-client' }]) {
+    const service = await runtime({ bindings })
+    try {
+      const said = await config(service)
+      assert.equal(said.nativeClientId, null, JSON.stringify(bindings))
+      assert.equal(said.clientId, 'remote-test-client')
+    } finally { await service.mf.dispose() }
+  }
+})
