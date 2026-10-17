@@ -63,6 +63,10 @@ mod contest_removal_tests;
 #[cfg(test)]
 mod contest_setup_tests;
 pub mod contest_unmerged;
+/// While contest mode is on no contact goes to the logging services live; turning it off sends
+/// what it held, once and paced, and LoTW's automatic upload waits for it.
+#[cfg(test)]
+mod contest_upload_hold_tests;
 mod field_day_display;
 /// Every contact held in one form: one band, one phone mode, whichever way it came in.
 #[cfg(test)]
@@ -2488,6 +2492,11 @@ pub struct StationGrids {
 /// the fallback for the realtime-only path.
 pub const CATCHUP_UPLOAD_SPACING_SECS: i64 = 15;
 
+/// How many contacts logged with contest mode on wait for it to go off
+/// ([`Engine::release_contest_uploads`]): a weekend's run logged through the everyday form, and
+/// no growth without limit when contest mode is never turned off.
+const CONTEST_HELD_UPLOADS_CAP: usize = 4096;
+
 /// Where the STANDING N1MM broadcast should go, or `None` when it is off.
 ///
 /// Two independent conditions, both required: the operator's toggle, and an
@@ -2523,7 +2532,9 @@ pub fn n1mm_broadcast_target(s: &Settings) -> Option<String> {
 /// (required by TQSL unless signing from the ADIF, which is already refused above), and
 /// the interval itself.
 pub fn lotw_auto_upload_due(s: &Settings, suspended: bool, now_unix: u64) -> bool {
-    if !s.lotw_auto_upload || suspended {
+    // Contest mode on waits too: a contest's contacts go to LoTW after it ends, as they go to
+    // every other service, and the first batch after it takes them all.
+    if !s.lotw_auto_upload || suspended || s.fd_active {
         return false;
     }
     if s.lotw_use_adif_location || s.lotw_station_location.trim().is_empty() {
@@ -3033,6 +3044,11 @@ pub struct Engine {
     /// not in the engine. Bounded at [`PENDING_LOG_QUEUE_CAP`], for the same reason the queue
     /// itself is: what fills it is an unattended run.
     unconfirmed_auto_logs: Vec<QsoRecord>,
+    /// The contacts logged while contest mode is on, kept from the logging services until it
+    /// is turned off ([`Self::release_contest_uploads`]): a contest's contacts reach QRZ,
+    /// ClubLog and the rest through the merge at the end, never live. In memory, like the
+    /// upload queue: a contact still held when the app closes stays in the Logbook unsent.
+    contest_held_uploads: Vec<QsoRecord>,
     /// How many contacts have been logged unreviewed SINCE THE OPERATOR LAST ANSWERED THE
     /// POPUP — the number the popup itself shows, on the desktop and on Remote.
     ///
@@ -5720,6 +5736,7 @@ impl Engine {
             recent_partner: None,
             pending_logs: VecDeque::new(),
             unconfirmed_auto_logs: Vec::new(),
+            contest_held_uploads: Vec::new(),
             pending_logs_auto_logged: 0,
             pending_log_identity: std::sync::Arc::new(()),
             pending_log_epoch: 0,
@@ -6214,6 +6231,9 @@ impl Engine {
         // settings land for the same reason: the reconcile below ends that session and opens the
         // new one ([`Self::save_switches_contest`]).
         let switches_contest = self.save_switches_contest(&s);
+        // Whether contest mode was on before this save: the save that turns it off sends what
+        // it held ([`Self::release_contest_uploads`]).
+        let contest_was_on = self.settings.fd_active;
         // Rebind identity IN PLACE (not a fresh AppState) so editing the callsign or
         // grid in Settings — or a GPS/UDP grid update routed through a save — does
         // NOT wipe conversation history, the `*` band feed, or the roster.
@@ -6579,6 +6599,9 @@ impl Engine {
             // Chat — a no-op — and a save made mid-QSO wrote away the contact.
             // Only the FD exit ever needed this line.
             self.leave_field_day();
+        }
+        if contest_was_on && !self.settings.fd_active {
+            self.release_contest_uploads();
         }
         // …and the RTTY auto-sequencer is reconciled with the SAME switch, for the same
         // reason the mode is: it caches the exchange it was armed with, so the master
@@ -14642,23 +14665,64 @@ impl Engine {
         self.pending_udp_qsos.push_back(rec.clone());
         // …and a JS8 contact to the programs on JS8Call's API, as JS8Call tells them.
         self.js8_api_note_logged(&rec);
-        // Queue for the shell's connector auto-upload worker (QRZ/ClubLog/eQSL).
-        // This is THE funnel: auto-logged FT8 QSOs, cockpit logs, and manual
-        // Logbook entries all pass through here, so the Settings auto-upload
-        // toggles can never be dead for one path again. The queue's own door decides
-        // what a full queue drops, and reports it (#290).
-        self.station.enqueue_upload(PendingUpload {
-            rec,
-            // LIVE, and it must stay that way: this is the contact at the key, and the
-            // catch-up pacing added for #193 deliberately does not touch it.
-            origin: UploadOrigin::Live,
-            legs: upload_legs::ALL,
-            attempts: 0,
-            retry_after_unix: 0, // due now — a fresh log has no prior failure to back off from
-        });
+        // ⛔ NOT WHILE CONTEST MODE IS ON. A contest's contacts go to the logging services when
+        // its log is merged at the end, never live (a CW contest operator saw QRZ refuse its
+        // uploads during a contest, and only then). A contact that reaches the Logbook
+        // with the switch on (the everyday log form, the Logbook's own add, a screen that has
+        // left the contest's session) is held and sent, paced, when the switch goes off. The
+        // operator's switch decides, not the mode: a visit to Chat leaves the session and keeps
+        // the switch on, and that station is still working the contest.
+        if self.settings.fd_active {
+            self.hold_contest_upload(rec);
+        } else {
+            // Queue for the shell's connector auto-upload worker (QRZ/ClubLog/eQSL).
+            // This is THE funnel: auto-logged FT8 QSOs, cockpit logs, and manual
+            // Logbook entries all pass through here, so the Settings auto-upload
+            // toggles can never be dead for one path again. The queue's own door decides
+            // what a full queue drops, and reports it (#290).
+            self.station.enqueue_upload(PendingUpload {
+                rec,
+                // LIVE, and it must stay that way: this is the contact at the key, and the
+                // catch-up pacing added for #193 deliberately does not touch it.
+                origin: UploadOrigin::Live,
+                legs: upload_legs::ALL,
+                attempts: 0,
+                retry_after_unix: 0, // due now — a fresh log has no prior failure to back off from
+            });
+        }
         match persisted {
             Some(receipts) if sync => LogWriteOutcome::PendingSync(receipts),
             _ => LogWriteOutcome::Unconfirmed,
+        }
+    }
+
+    /// Keep a contact logged with contest mode on from the logging services until the mode is
+    /// turned off. Bounded like the upload queue's reports: past the cap the oldest goes, named
+    /// in the diagnostic log, and stays in the Logbook unsent.
+    fn hold_contest_upload(&mut self, rec: QsoRecord) {
+        if self.contest_held_uploads.len() >= CONTEST_HELD_UPLOADS_CAP {
+            let dropped = self.contest_held_uploads.remove(0);
+            tempo_core::applog::warn(
+                "upload",
+                &format!(
+                    "the QSO with {} logged during the contest will not be uploaded when \
+                     contest mode is turned off: {CONTEST_HELD_UPLOADS_CAP} contacts are \
+                     already waiting",
+                    dropped.call
+                ),
+            );
+        }
+        self.contest_held_uploads.push(rec);
+    }
+
+    /// Contest mode went off: send what it held, once, as catch-up — paced one slot apart,
+    /// because a contest's worth of contacts arriving at once is history, not news (the merge's
+    /// own rule). Every leg is owed, as for a contact at the key; the worker still sends only
+    /// to the services the operator has turned on.
+    fn release_contest_uploads(&mut self) {
+        for rec in std::mem::take(&mut self.contest_held_uploads) {
+            self.station
+                .requeue_upload_at(rec, upload_legs::ALL, 0, 0, UploadOrigin::CatchUp);
         }
     }
 
@@ -44797,8 +44861,16 @@ mod tests {
 
         // The converse: an ordinary contact logged DURING an FD session is a
         // genuinely different QSO (it is not in the contest log), so it still
-        // reaches the general forwarder exactly once.
+        // reaches the general forwarder exactly once — when contest mode goes off,
+        // never live while it is on (`contest_upload_hold_tests`).
         e.log_qso(qrec("N0CALL", "20m"));
+        assert!(
+            e.take_pending_uploads().is_empty(),
+            "held while contest mode is on"
+        );
+        let mut s = e.settings().clone();
+        s.fd_active = false;
+        e.apply_settings(s);
         let pending = e.take_pending_uploads();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].rec.call, "N0CALL");
