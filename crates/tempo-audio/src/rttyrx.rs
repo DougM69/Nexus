@@ -5,6 +5,12 @@
 //! OFF-lock, and pushes decoded characters (+ per-char ATC confidence) and the
 //! AFC state back into the engine for the `get_rtty_state` poll.
 //!
+//! The same audio feeds the tuning scope (`tempo_core::rtty::scope`), whose resonators sit on
+//! the demod's AFC-corrected mark and space, and its newest frame goes to the engine for the
+//! `get_rtty_scope` poll. While anything of ours holds the transmitter the scope is cleared and
+//! the frame goes dark: the receive audio is then our own signal (or the rig's muted input),
+//! and drawing it as a tuned "+" would invite a nudge that tunes nothing.
+//!
 //! RX ONLY: nothing here keys PTT, emits TX audio, or touches `rtty_afsk`/
 //! `rtty_fsk`. Disarmed = the buffer stays empty and this loop does nothing but
 //! a brief flag check, so everyone else pays nothing.
@@ -13,13 +19,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tempo_app::engine::{engine_lock, Engine};
-use tempo_core::rtty::{tone_pair, RttyConfig, RttyDemod, RttyDemodulator};
+use tempo_core::rtty::scope::{ScopeFrame, TuningScope};
+use tempo_core::rtty::{demod::SAMPLE_RATE, tone_pair, RttyConfig, RttyDemod, RttyDemodulator};
 
 use crate::service::SHUTDOWN;
 
 /// Drain cadence: short enough that decoded text flows char-by-char, long
 /// enough that the disarmed idle cost is negligible (one lock + bool read).
 const POLL: Duration = Duration::from_millis(100);
+
+/// The points one scope frame carries: about 85 ms at 3 kS/s, a little under one poll's worth,
+/// so a frame is never mostly a repeat of the last. 256 pairs of i8 keep it near 2 KB as JSON.
+const SCOPE_POINTS: usize = 256;
 
 /// Spawn the RTTY RX decode thread (call once at startup, beside `spawn_ai_cw`).
 pub fn spawn_rtty_rx(engine: Arc<Mutex<Engine>>) {
@@ -40,12 +51,14 @@ fn run(engine: Arc<Mutex<Engine>>) {
     let mut demod: Option<RttyDemodulator> = None;
     // (baud, shift, reverse, center) the demod was built with
     let mut applied = (0.0f64, 0u32, false, 0.0f32);
+    // The tuning scope, built on first use and kept across demod rebuilds (it follows the tones).
+    let mut scope: Option<TuningScope> = None;
     loop {
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
         std::thread::sleep(POLL);
-        let (armed, cfg, reset) = {
+        let (armed, cfg, reset, keyed) = {
             let mut e = engine_lock(&engine);
             (
                 e.rtty_armed(),
@@ -56,10 +69,13 @@ fn run(engine: Arc<Mutex<Engine>>) {
                     e.rtty_center_hz(),
                 ),
                 e.take_rtty_afc_reset(),
+                // THE ONE ARBITER every TX gate asks: any keying source the engine can see.
+                e.tx_owner().is_some(),
             )
         };
         if !armed {
             demod = None;
+            scope = None;
             continue;
         }
         if reset || cfg != applied {
@@ -83,6 +99,66 @@ fn run(engine: Arc<Mutex<Engine>>) {
         // The heavy part — mixers, FFT filters, ATC, clock recovery — off-lock.
         let chars = d.feed(&audio);
         let (afc_hz, afc_locked) = (d.afc_offset_hz(), d.afc_locked());
-        engine_lock(&engine).push_rtty_decode(&chars, afc_hz, afc_locked);
+        let cfg = d.config();
+        let tones = (cfg.mark_hz + afc_hz, cfg.space_hz + afc_hz);
+        let frame = scope_step(&mut scope, keyed, tones, &audio);
+        let mut e = engine_lock(&engine);
+        e.push_rtty_decode(&chars, afc_hz, afc_locked);
+        e.push_rtty_scope(frame);
+    }
+}
+
+/// One drain's worth of the tuning scope: follow the AFC-corrected `tones`, run `audio` through
+/// it and return the newest frame, or clear it and return `None` while `keyed` (our own
+/// transmission gates it off, and it starts clean afterwards).
+fn scope_step(
+    scope: &mut Option<TuningScope>,
+    keyed: bool,
+    tones: (f32, f32),
+    audio: &[f32],
+) -> Option<ScopeFrame> {
+    let s = scope.get_or_insert_with(|| TuningScope::new(SAMPLE_RATE, tones.0, tones.1));
+    if keyed {
+        s.clear();
+        return None;
+    }
+    s.retune(tones.0, tones.1);
+    s.feed(audio);
+    Some(s.frame(SCOPE_POINTS))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn carrier(f: f32, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * f * i as f32 / SAMPLE_RATE).sin() * 0.5)
+            .collect()
+    }
+
+    #[test]
+    fn the_scope_draws_on_receive_and_goes_dark_while_we_transmit() {
+        let mut scope = None;
+        let audio = carrier(2125.0, 1200);
+        let rx = scope_step(&mut scope, false, (2125.0, 2295.0), &audio).expect("a frame on RX");
+        assert_eq!(rx.xy.len(), 2 * SCOPE_POINTS);
+        assert!(rx.peak > 0.0);
+
+        // Keyed: no frame, and the picture is cleared rather than held.
+        assert_eq!(scope_step(&mut scope, true, (2125.0, 2295.0), &audio), None);
+        assert!(scope.as_ref().is_some_and(|s| s.is_empty()));
+
+        // Back on receive it starts from the new audio only.
+        let after = scope_step(&mut scope, false, (2125.0, 2295.0), &audio[..40]).unwrap();
+        assert_eq!(after.xy.len(), 2 * 40 / tempo_core::rtty::scope::DECIMATE);
+    }
+
+    #[test]
+    fn the_scope_follows_the_afc_corrected_tones() {
+        let mut scope = None;
+        scope_step(&mut scope, false, (2125.0, 2295.0), &carrier(2125.0, 120));
+        scope_step(&mut scope, false, (2137.0, 2307.0), &carrier(2137.0, 120));
+        assert_eq!(scope.unwrap().tones(), (2137.0, 2307.0));
     }
 }

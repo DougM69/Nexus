@@ -27,6 +27,7 @@ import type {
   SkimHit,
   PskState,
   KeyboardMacroProfile,
+  RttyScope,
   RttyState,
   SstvState,
   ClubLogPushResult,
@@ -3290,6 +3291,11 @@ export async function rttyAutoArm(): Promise<RttyState> {
 /** Live RTTY state (poll while the RTTY cockpit is visible). */
 export async function getRttyState(): Promise<RttyState> {
   return invoke<RttyState>('get_rtty_state')
+}
+
+/** The RTTY tuning scope's newest frame (poll while its pane is shown). Receive-only. */
+export async function getRttyScope(): Promise<RttyScope> {
+  return invoke<RttyScope>('get_rtty_scope')
 }
 
 /** Queue RTTY text to transmit — an explicit operator send (the engine validates

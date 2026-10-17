@@ -16938,6 +16938,40 @@ async fn get_rtty_state(state: State<'_, SharedEngine>) -> Result<RttyStateDto, 
     with_engine(&state, |eng| rtty_state_dto(&eng)).await
 }
 
+/// The RTTY tuning scope's newest frame (`tempo_core::rtty::scope`): about 2 KB.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RttyScopeDto {
+    /// Armed and receiving. False while disarmed and while we transmit.
+    live: bool,
+    /// Counts every point the scope has kept: a frame with the number last drawn is not new.
+    seq: u64,
+    /// The frame's largest |x| or |y|, in audio units: the drawing's auto-scale follows it.
+    peak: f32,
+    /// Interleaved x (mark resonator), y (space resonator) pairs, scaled so `peak` is ±127.
+    xy: Vec<i8>,
+    /// How far the signal sits from the decoder's tones (Hz, positive = higher); absent with no
+    /// signal.
+    offset_hz: Option<f32>,
+}
+
+/// The RTTY tuning scope (polled while its pane is shown and the RTTY cockpit is visible).
+/// Receive-only: it reads what the decode thread pushed and changes nothing.
+#[tauri::command]
+async fn get_rtty_scope(state: State<'_, SharedEngine>) -> Result<RttyScopeDto, String> {
+    with_engine(&state, |eng| {
+        let s = eng.rtty_scope();
+        RttyScopeDto {
+            live: s.live,
+            seq: s.frame.seq,
+            peak: s.frame.peak,
+            xy: s.frame.xy,
+            offset_hz: s.frame.offset_hz,
+        }
+    })
+    .await
+}
+
 /// Arm/disarm the APRS (AFSK-1200 / AX.25) RX decoder (session-only; never launches armed). The
 /// aprs-rx thread starts decoding the 12 kHz RX tap into the heard list. Returns it (empty on arm).
 #[tauri::command(async)]
@@ -36468,6 +36502,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         rtty_arm,
         rtty_auto_arm,
         get_rtty_state,
+        get_rtty_scope,
         aprs_arm,
         aprs_auto_arm,
         get_aprs_heard,
@@ -42391,10 +42426,11 @@ mod tests {
     /// #335: the engine-locking commands the UI POLLS — every one it asks at 2 s or faster, plus
     /// the propagation and need-alert polls. Each must reach the engine through `with_engine`,
     /// on the blocking pool, and never wait for the lock on a runtime worker.
-    const POLLED_ENGINE_COMMANDS: [&str; 19] = [
+    const POLLED_ENGINE_COMMANDS: [&str; 20] = [
         "get_snapshot",
         "cw_decode",
         "get_rtty_state",
+        "get_rtty_scope",
         "get_psk_state",
         "get_js8_state",
         "get_sstv_state",

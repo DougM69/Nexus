@@ -3916,6 +3916,8 @@ pub struct Engine {
     rtty_afc_hz: f32,
     /// Whether the RTTY demodulator's AFC has acquired-then-frozen (locked).
     rtty_afc_locked: bool,
+    /// The tuning scope's newest frame, pushed by the decode thread beside the characters.
+    rtty_scope: RttyScope,
     /// One-shot: drop + rebuild the RX demodulator (the AFC-reset command — a
     /// wrong-neighbor acquire-then-freeze recovers by re-acquiring from scratch).
     rtty_afc_reset: bool,
@@ -4961,6 +4963,15 @@ pub struct RttyRxState {
     pub tx_cut: bool,
 }
 
+/// The RTTY tuning scope's newest frame for the `get_rtty_scope` poll (see
+/// [`tempo_core::rtty::scope`]). `live` is false while the decoder is disarmed and while we
+/// transmit: our own over is not a signal to tune, and the picture would show it as one.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RttyScope {
+    pub live: bool,
+    pub frame: tempo_core::rtty::scope::ScopeFrame,
+}
+
 /// One RTTY transmission as the cockpit's TX line and the transcript echo see it (#379).
 ///
 /// A ONE-SHOT over (an F-key macro, a line sent with Enter, every auto-sequencer over)
@@ -5949,6 +5960,7 @@ impl Engine {
             rtty_chars: VecDeque::new(),
             rtty_afc_hz: 0.0,
             rtty_afc_locked: false,
+            rtty_scope: RttyScope::default(),
             rtty_afc_reset: false,
             rtty_center: None,
             rtty_queue: VecDeque::new(),
@@ -19558,6 +19570,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.rtty_auto_arm_declined = false;
         } else {
             self.rtty_audio.clear();
+            // A stopped decoder draws nothing: the last frame would sit there looking live.
+            self.rtty_scope = RttyScope::default();
             // An operator who stopped the decoder has made a decision. Remember it for
             // the rest of the session.
             self.rtty_auto_arm_declined = true;
@@ -20479,6 +20493,31 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // ACCUMULATES (the human-initiate gate), so this can never self-start.
         if self.rtty_seq.is_some() {
             self.rtty_drive(RttyOp::Feed(chars.to_vec()));
+        }
+    }
+
+    /// The tuning scope's newest frame, or `None` while it is gated off (our own transmission):
+    /// the frame then goes dark rather than freezing on the last picture. Called by the decode
+    /// thread under the same lock as [`Self::push_rtty_decode`].
+    pub fn push_rtty_scope(&mut self, frame: Option<tempo_core::rtty::scope::ScopeFrame>) {
+        self.rtty_scope = match frame {
+            Some(frame) => RttyScope { live: true, frame },
+            None => RttyScope {
+                live: false,
+                frame: tempo_core::rtty::scope::ScopeFrame {
+                    seq: self.rtty_scope.frame.seq,
+                    ..Default::default()
+                },
+            },
+        };
+    }
+
+    /// The tuning scope the UI polls (`get_rtty_scope`). Not live while disarmed.
+    pub fn rtty_scope(&self) -> RttyScope {
+        if self.rtty_armed {
+            self.rtty_scope.clone()
+        } else {
+            RttyScope::default()
         }
     }
 
@@ -32059,6 +32098,41 @@ mod tests {
         assert!(!e.is_qso_recording());
         assert!(e.qso_record_path().is_none(), "path cleared on stop");
         assert!(!e.snapshot().radio.qso_recording);
+    }
+
+    #[test]
+    fn rtty_scope_is_live_only_while_armed_and_not_transmitting() {
+        use tempo_core::rtty::scope::ScopeFrame;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let frame = ScopeFrame {
+            seq: 7,
+            peak: 0.5,
+            xy: vec![127, 3, -127, -3],
+            offset_hz: Some(-12.0),
+        };
+        // Disarmed: whatever was pushed, the poll shows nothing.
+        e.push_rtty_scope(Some(frame.clone()));
+        assert_eq!(e.rtty_scope(), RttyScope::default());
+
+        e.set_rtty_armed(true);
+        e.push_rtty_scope(Some(frame.clone()));
+        let live = e.rtty_scope();
+        assert!(live.live);
+        assert_eq!(live.frame, frame);
+
+        // Gated (our own over): dark, not frozen, and the count carries on so a reader redraws.
+        e.push_rtty_scope(None);
+        let gated = e.rtty_scope();
+        assert!(!gated.live);
+        assert!(gated.frame.xy.is_empty());
+        assert_eq!(gated.frame.offset_hz, None);
+        assert_eq!(gated.frame.seq, 7);
+
+        // Disarming drops the picture, so a re-arm never starts on a stale one.
+        e.push_rtty_scope(Some(frame));
+        e.set_rtty_armed(false);
+        e.set_rtty_armed(true);
+        assert_eq!(e.rtty_scope(), RttyScope::default());
     }
 
     #[test]
