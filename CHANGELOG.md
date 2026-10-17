@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scroll wheel and a trackpad pinch now zoom the browser page instead of going to the shack, and on a short or zoomed
   window the controls move to the side rail when that shows the shack's screen larger. Stop TX stays in view at every
   size.
+- **Phone screen: a refused ATT, PRE or monitor-level change says what failed.** When the radio does not take one of
+  these, the message now reads "Nexus could not set ATT.", "Nexus could not set PRE." or "Nexus could not set the
+  monitor level." instead of a Remote sentence about station control permission.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
