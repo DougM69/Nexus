@@ -39,6 +39,13 @@ ignore = [
     "RUSTSEC-2025-0081", # unic-char-property
     "RUSTSEC-2025-0098", # unic-ucd-version
     "RUSTSEC-2025-0100", # unic-ucd-ident
+    # zbus 5's helper crates: folded into zbus 6.0 (as its `names`/`wire` modules and
+    # derives), so the standalone crates are flagged unmaintained. Reached only through
+    # notify-rust (tauri-plugin-notification) and tauri-plugin-opener, for D-Bus on
+    # Linux. No vulnerability; goes when those plugins move to zbus 6.
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
 ]
 
 [licenses]
