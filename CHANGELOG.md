@@ -82,9 +82,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wrong rig model picked (the FT-1000MP driver on an FT-1000D, for one), or a garbled reply, the radio could be read
   as sitting on 115.2 MHz while its own driver says it covers 0.1–30 MHz. Nexus took that as a turn of the knob,
   moved its dial there, and sent 115.2 MHz back to the radio on the next mode change. Now a reading outside the
-  radio's own receive range is ignored, the dial stays where it was, and the CAT status says once what the radio
-  reported and suggests checking the rig model in Settings → Radio. A radio whose range Nexus cannot read is
-  followed exactly as before.
+  radio's own receive range is ignored, the dial stays where it was (Remote shows the same dial), and the CAT
+  status says once what the radio reported and suggests checking the rig model in Settings → Radio. A radio whose
+  range Nexus cannot read is followed exactly as before.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to

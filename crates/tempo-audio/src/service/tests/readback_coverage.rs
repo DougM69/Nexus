@@ -141,6 +141,28 @@ impl Bench {
     fn dial_mhz(&self) -> f64 {
         self.engine.lock().unwrap().settings().dial_mhz
     }
+
+    /// A Remote viewer (the stream page or a second PC) watches this radio, and one poll has
+    /// shown it the settled dial.
+    fn watched_remotely(mut self) -> Self {
+        self.state.applied = Transport::from_settings(engine_lock(&self.engine).settings());
+        self.state.remote_radio_id = Some(engine_lock(&self.engine).settings().active_radio);
+        self.steps(2);
+        assert_eq!(
+            self.remote_dial_mhz(),
+            Some(14.250),
+            "the premise: Remote shows the radio's dial"
+        );
+        self
+    }
+
+    /// The radio's dial as the Remote reading reports it.
+    fn remote_dial_mhz(&self) -> Option<f64> {
+        engine_lock(&self.engine)
+            .remote_monitor_observation()
+            .radio
+            .rig_dial_mhz
+    }
 }
 
 /// The FT-1000MP driver's own `\dump_state` RX range: 100 kHz to 30 MHz.
@@ -240,4 +262,38 @@ fn the_heal_after_a_refused_dial_does_not_adopt_it_either() {
     );
     assert_ne!(b.state.last_dial, 115_200_000);
     assert!((b.dial_mhz() - 115.2).abs() > 1e-3, "{}", b.dial_mhz());
+}
+
+/// Remote readings hold the same line: a Remote viewer keeps the last good dial the cockpit keeps,
+/// never 115.2 MHz while the shack shows 14.250.
+#[test]
+fn a_remote_viewer_keeps_the_last_good_dial_too() {
+    let mut b = Bench::new(hf_only()).watched_remotely();
+    b.reads(115_200_000);
+    assert_eq!(b.remote_dial_mhz(), Some(14.250));
+}
+
+/// The fast dial mirror feeds Remote too. Positive control first: an in-range knob turn read on
+/// the fast path alone reaches the Remote reading.
+#[test]
+fn the_fast_dial_mirror_keeps_remote_on_the_last_good_dial_too() {
+    let mut b = Bench::new(hf_only()).watched_remotely();
+    *b.radio.read.lock().unwrap() = 7_074_000;
+    b.fast_steps(3);
+    assert_eq!(
+        b.remote_dial_mhz(),
+        Some(7.074),
+        "the premise: the fast path feeds Remote"
+    );
+    *b.radio.read.lock().unwrap() = 115_200_000;
+    b.fast_steps(3);
+    assert_eq!(b.remote_dial_mhz(), Some(7.074));
+}
+
+/// Unknown coverage: Remote reports what the radio said, as before.
+#[test]
+fn with_unknown_coverage_remote_reports_the_read_as_before() {
+    let mut b = Bench::new(Some(vec![])).watched_remotely();
+    b.reads(115_200_000);
+    assert_eq!(b.remote_dial_mhz(), Some(115.2));
 }

@@ -6165,9 +6165,7 @@ impl RadioLoop {
     /// read, as before. The first such read in a run goes to the app log, the CI-V diagnostic and
     /// the CAT status line, keeping the breaker's verdict; the next read inside coverage re-arms it.
     fn read_outside_coverage(&mut self, hz: u64, engine: &Arc<Mutex<Engine>>) -> bool {
-        let outside = matches!(&self.rx_ranges,
-            Some(r) if !r.is_empty() && !r.iter().any(|&(lo, hi)| (lo..=hi).contains(&hz)));
-        if !outside {
+        if !self.outside_coverage(hz) {
             self.outside_read_noted = false;
             return false;
         }
@@ -6183,6 +6181,13 @@ impl RadioLoop {
             engine_lock(engine).set_cat_status(self.cat_ok, note);
         }
         true
+    }
+
+    /// The check alone, with no note: is `hz` outside a range list positively parsed off this radio?
+    /// Remote readings use it too, so a Remote viewer keeps the last good dial the cockpit keeps.
+    fn outside_coverage(&self, hz: u64) -> bool {
+        matches!(&self.rx_ranges,
+            Some(r) if !r.is_empty() && !r.iter().any(|&(lo, hi)| (lo..=hi).contains(&hz)))
     }
 
     /// Is this dial read the Fake-It over's TX dial, before the radio has been read off it? Then
@@ -8235,7 +8240,9 @@ impl RadioLoop {
                         {
                             let mut eng = engine_lock(engine);
                             eng.remote_observe_cat(remote_read.as_ref(), Some(true));
-                            eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
+                            if !self.outside_coverage(hz) {
+                                eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
+                            }
                         }
                         self.freq_misses = 0; // a good read clears the breaker's miss run
                                               // A tripped breaker's re-probe answered: the link is BACK. Reset the health
@@ -9347,7 +9354,9 @@ impl RadioLoop {
                     {
                         let mut eng = engine_lock(engine);
                         eng.remote_observe_cat(remote_read.as_ref(), Some(true));
-                        eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
+                        if !self.outside_coverage(hz) {
+                            eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
+                        }
                     }
                     if !self.fake_it_transient(hz)
                         && !self.read_outside_coverage(hz, engine)
