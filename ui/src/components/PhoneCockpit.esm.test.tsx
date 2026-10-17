@@ -76,6 +76,8 @@ vi.mock('../api', () => ({
   searchParks: vi.fn(async () => []),
   setCwPeerInfo: vi.fn(async () => {}),
   setLogFormGrid: vi.fn(async () => {}),
+  // The Stats pane (shown here) asks about a call that stands in the log line; the question never answers.
+  getCallStats: vi.fn(() => new Promise(() => {})),
 }))
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
@@ -208,7 +210,7 @@ describe('Enter Sends Message in the Phone cockpit', () => {
     expect(loggedCalls()).toEqual(['K9AAA'])
   })
 
-  // ⭐ AGN IS ON F8, as the CW and RTTY contest sets and N1MM's default message sets send it (the
+  // ⭐ AGN IS ON F8, as the CW and RTTY contest sets send it (the
   // operator, 2026-10-10); it was F5. Every other step plays the slot it played before (CQ F1, my
   // exchange F2, TU F3, my call F4), and AGN plays F8, which holds the recording F5 held: the
   // settings tests prove that copy byte for byte (`agn_f8_tests`). So each Enter sends the message
@@ -230,7 +232,7 @@ describe('Enter Sends Message in the Phone cockpit', () => {
     expect(loggedCalls()).toEqual(['K9AAA'])
   })
 
-  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule, like N1MM). The keyer has no
+  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule). The keyer has no
   // QSO B4 slot — its slots are F1–F6 and F8, none labelled B4 — so Enter plays nothing for a dupe
   // and the strip names the step, until a slot you recorded is mapped to it in Settings.
   describe('a dupe while running', () => {

@@ -562,12 +562,13 @@ mod tests {
     #[test]
     fn no_sensitive_command_is_allowlisted() {
         const FORBIDDEN: &[&str] = &[
-            "get_snapshot",    // dial frequency, transmit state, the roster
-            "get_settings",    // ports, hosts, every knob
-            "get_log",         // the log
-            "get_log_delta",   // the log, one change at a time
-            "get_log_stats",   // the log, aggregated
-            "get_need_alerts", // the needs board
+            "get_snapshot",     // dial frequency, transmit state, the roster
+            "get_settings",     // ports, hosts, every knob
+            "get_log",          // the log
+            "get_log_delta",    // the log, one change at a time
+            "get_log_stats",    // the log, aggregated
+            "get_log_timeline", // the log, aggregated over time
+            "get_need_alerts",  // the needs board
             "get_credentials_status",
             "set_frequency",
             "set_tx_enabled",

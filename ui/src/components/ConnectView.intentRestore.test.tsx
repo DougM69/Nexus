@@ -30,7 +30,7 @@ vi.mock('../api', async (importOriginal) => ({
   getOtaMapSpots: vi.fn(async () => []),
 }))
 vi.mock('./Globe3D', () => ({ default: () => <div data-testid="globe3d-stub" /> }))
-vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => true }))
+vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => true, webgl2ForGlobe: () => true }))
 import { ConnectView } from './ConnectView'
 
 // THE BUDGET (2026-10-09). The slowest case here, "Chase DX → POTA/SOTA → Chase DX restores the Chase DX…", takes

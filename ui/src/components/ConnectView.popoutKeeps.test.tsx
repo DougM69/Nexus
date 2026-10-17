@@ -36,7 +36,7 @@ vi.mock('../api', async (importOriginal) => ({
 }))
 vi.mock('./Globe3D', () => ({ default: () => <div data-testid="globe3d-stub" /> }))
 const gpu = { ok: true }
-vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => gpu.ok }))
+vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => gpu.ok, webgl2ForGlobe: () => true }))
 import { ConnectView } from './ConnectView'
 import { DEFAULT_LAYERS } from './MapView'
 import { pastTheSwitch } from './ConnectView.testkit'

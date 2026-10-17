@@ -39,7 +39,6 @@ import { WatchTile } from './WatchTile'
 import { useWatchMatch, watchLabel } from '../watchlist'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { useStationControl, useStationCapability } from '../stationAccess'
-import { useLogChange } from '../remote-web/operations'
 
 interface Props {
   /** THE PANE'S OWN ✕ (panelHost.closeProps) — the SAME setPanelState the ⊞ Panels tick
@@ -186,7 +185,7 @@ export function OperateRoster({
   const control = useStationControl()
   // A public spot of another station posts from the station's own cluster login, so it rides
   // STATION CONTROL rather than the logging grant; a browser without it sees the button dead.
-  const spotControl = control || useLogChange('postSpot')
+  const spotControl = control
   const callControl = useStationCapability('ftCall')
   // QTH magnetic declination (WMM) — the Brg column's tooltip shows the compass
   // heading a rotator zeroed on magnetic north needs.

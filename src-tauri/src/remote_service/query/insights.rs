@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::TryLockError;
 use std::time::{Duration, Instant};
 use tempo_core::logbook::sqlite::Narrow;
-use tempo_core::logbook::QsoRecord;
+use tempo_core::logbook::{QsoRecord, AWARD_EXTRAS};
 
 const TEXT_BYTES: usize = 256;
 const GROUPS: usize = 2048;
@@ -19,7 +19,9 @@ const READ_TEXT_BYTES: usize = 32 * 1024 * 1024;
 const TIME_CLIP_SECONDS: u64 = 8_640_000_000_000;
 
 /// What the summaries read of every contact — [`Row::copy`]'s inputs, and the four
-/// confirmation channels its `confirmed`, `award_confirmed` and channel flags are read from.
+/// confirmation channels its `confirmed`, `award_confirmed` and channel flags are read from. Both
+/// summaries read the passthrough fields `AWARD_EXTRAS` names beside them, as the desktop's award,
+/// statistics and geography folds do: each counts a contact as the awards do.
 const SUMMARIES: Narrow = Narrow {
     columns: &[
         "call",
@@ -36,6 +38,7 @@ const SUMMARIES: Narrow = Narrow {
         "lotw_rcvd_raw",
         "eqsl_rcvd_raw",
         "qrz_status_raw",
+        "dxcc",
     ],
     uploads: false,
 };
@@ -59,6 +62,8 @@ struct Row {
     eqsl: bool,
     credited: bool,
     satellite: bool,
+    /// The record's DXCC, LoTW's DXCC and CQ zone — numbers, no text.
+    fields: propagation::RecordFields,
 }
 impl Row {
     fn copy(q: &QsoRecord) -> Result<Self, &'static str> {
@@ -115,6 +120,7 @@ impl Row {
             eqsl: q.qsl_rcvd.eqsl,
             credited: q.credit_granted.iter().any(|c| c.starts_with("DXCC")),
             satellite: crate::qso_is_sat(q.prop_mode.as_deref()),
+            fields: crate::log_folds::award_fields(q),
         })
     }
     fn award(&self, awards: &mut propagation::Awards) {
@@ -131,6 +137,7 @@ impl Row {
             self.grid.as_deref(),
             self.iota.as_deref(),
             self.satellite,
+            self.fields,
         );
     }
 }
@@ -188,9 +195,15 @@ impl Statistics {
             return Err("applicationTooLarge");
         }
         self.calls.insert(call);
-        let entity = propagation::dxcc::resolve(&q.call)
-            .map(|i| i.entity)
-            .or(q.country.as_deref());
+        // The entity the awards count the contact toward — its record's DXCC number, LoTW's
+        // first, else its call — as the desktop's statistics count it; the stored country only
+        // where that names none.
+        let entity = propagation::awards::counted_entity(
+            propagation::dxcc::resolve(&q.call).as_ref(),
+            &q.fields,
+        )
+        .map(|c| c.name)
+        .or(q.country.as_deref());
         if let Some(entity) = entity.map(str::trim).filter(|v| !v.is_empty()) {
             let key = entity.to_uppercase();
             if !self.entities.contains_key(&key) && self.entities.len() >= GROUPS {
@@ -210,8 +223,8 @@ impl Statistics {
         // handling included: `remote/test/insights-reference.mjs` runs that module as an
         // independent comparator against this roll-up, so the two must agree input for input.
         tally(&mut self.modes, phone_mode_label(&q.mode))?;
-        // WAS is gated on the entity the headline counts: the one the call resolves to, the
-        // stored country only where it resolves to none. A US-family entity (the United States,
+        // WAS is gated on the entity the headline counts: the one the contact counts toward, the
+        // stored country only where that names none. A US-family entity (the United States,
         // Alaska, Hawaii) counts however its source spelled COUNTRY, LoTW's and DXKeeper's
         // "UNITED STATES OF AMERICA" included, and a foreign entity's contact stored with a US
         // country does not. This mirrors `wasState` in `ui/src/features/logStats.ts` EXACTLY:
@@ -292,7 +305,7 @@ pub(super) fn read_engine(
         if count > LOG_ROWS {
             return Err("applicationTooLarge");
         }
-        log.each(SUMMARIES, &mut |pick, q| {
+        log.each_with(SUMMARIES, AWARD_EXTRAS, &mut |pick, q| {
             super::picture::within(deadline, pick)?;
             let row = Row::copy(q)?;
             text_bytes += row.text_bytes;
@@ -303,7 +316,7 @@ pub(super) fn read_engine(
                 row.award(&mut awards)
             } else {
                 stats.append(&row)?;
-                geo.add(&row.call)
+                geo.add(&row.call, row.fields)
             }
             Ok(())
         })?;
@@ -395,6 +408,117 @@ mod tests {
         assert_eq!(
             stats["statistics"]["byState"],
             json!(["AK", "CT", "HI", "MA", "WI"].map(|label| json!({ "label": label, "count": 1 })))
+        );
+    }
+    /// ★ The Remote award summary counts each contact by what its record carries beyond the call —
+    /// its DXCC number, LoTW's DXCC and its CQ zone — over the store's rows, exactly as the
+    /// desktop's fold does over whole records.
+    #[test]
+    fn the_award_summary_counts_by_each_records_own_numbers_as_the_desktop_does() {
+        let row = |call: &str, date: &str, fields: &str| {
+            format!(
+                "<CALL:{}>{call}<QSO_DATE:8>{date}<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+                 <LOTW_QSL_RCVD:1>Y{fields}<EOR>\n",
+                call.len()
+            )
+        };
+        let mut e = tempo_app::engine::Engine::with_settings(Default::default());
+        e.import_adif(
+            &[
+                row("K1N", "20150210", "<DXCC:3>182<CQZ:1>8"),
+                row("K1B", "20021201", "<DXCC:3>291<APP_NEXUS_LOTW_DXCC:2>20"),
+                row("K3J", "20010101", "<DXCC:3>123"),
+                row("Y24UK", "19890101", "<DXCC:3>229"),
+                row("K1ABC", "20200101", "<CQZ:1>3<STATE:2>CA"),
+                row("KP4ABC", "20200102", "<DXCC:3>291<STATE:2>FL"),
+            ]
+            .concat(),
+        );
+        let (log, my_call) = (e.stored_log(), e.settings().mycall.clone());
+        assert_eq!(log.len(), 6);
+        let engine = Arc::new(Mutex::new(e));
+        let awards = read_engine(&engine, Collection::Awards).unwrap();
+        assert_eq!(
+            awards["awards"],
+            serde_json::to_value(crate::awards_for_records(&log, &my_call)).unwrap()
+        );
+        let a = &awards["awards"];
+        assert_eq!(
+            (&a["dxccConfirmed"], &a["dxccConfirmedTotal"]),
+            (&json!(4), &json!(5))
+        );
+        assert_eq!(a["wazConfirmed"], 4);
+        assert_eq!(a["was"]["confirmed"], 2);
+        assert_eq!(
+            a["dxccDisagreements"],
+            json!([{
+                "call": "K1B", "whenUnix": 1_038_746_040, "band": "20m", "mode": "CW",
+                "loggedDxcc": 291, "loggedEntity": "United States",
+                "lotwDxcc": 20, "lotwEntity": "Baker & Howland Islands",
+            }])
+        );
+    }
+    /// ★ The Remote statistics count each contact under the entity the awards count it toward —
+    /// its record's DXCC number (LoTW's first), else its call, a WAE area as the entity it belongs
+    /// to — and so does their geography, as the desktop's does: by value, and the geography the
+    /// desktop's own fold of the same log.
+    #[test]
+    fn the_statistics_count_each_contact_as_the_awards_do_as_the_desktop_does() {
+        let row = |call: &str, date: &str, fields: &str| {
+            format!(
+                "<CALL:{}>{call}<QSO_DATE:8>{date}<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+                 <LOTW_QSL_RCVD:1>Y{fields}<EOR>\n",
+                call.len()
+            )
+        };
+        let settings = tempo_app::settings::Settings {
+            mycall: "KD9TAW".into(),
+            ..Default::default()
+        };
+        let mut e = tempo_app::engine::Engine::with_settings(settings);
+        e.import_adif(
+            &[
+                row("K1N", "20150210", "<DXCC:3>182<CQZ:1>8"),
+                row("K1B", "20021201", "<DXCC:3>291<APP_NEXUS_LOTW_DXCC:2>20"),
+                row("K3J", "20010101", "<DXCC:3>123"),
+                row("Y24UK", "19890101", "<DXCC:3>229"),
+                row("K1ABC", "20200101", "<CQZ:1>3<STATE:2>CA"),
+                row("KP4ABC", "20200102", "<DXCC:3>291<STATE:2>FL"),
+                row("IT9ABC", "20200103", ""),
+                row("W1AW", "20200104", "<STATE:2>CT"),
+            ]
+            .concat(),
+        );
+        assert_eq!(e.stored_log().len(), 8);
+        let engine = Arc::new(Mutex::new(e));
+        let stats = read_engine(&engine, Collection::Statistics).unwrap();
+        let s = &stats["statistics"];
+        assert_eq!(
+            s["topEntities"],
+            json!([
+                { "label": "Baker & Howland Islands", "count": 1 },
+                { "label": "GERMAN DEMOCRATIC REPUBLIC", "count": 1 },
+                { "label": "Italy", "count": 1 },
+                { "label": "Johnston Island", "count": 1 },
+                { "label": "Navassa Island", "count": 1 },
+                { "label": "United States", "count": 3 },
+            ])
+        );
+        assert_eq!(s["dxccEntities"], 6);
+        assert_eq!(
+            s["byState"],
+            json!(["CA", "CT", "FL"].map(|label| json!({ "label": label, "count": 1 })))
+        );
+        let g = &stats["geography"];
+        assert_eq!((&g["domestic"], &g["dx"]), (&json!(3), &json!(5)));
+        assert_eq!(
+            *g,
+            serde_json::to_value(
+                crate::log_stats(&engine, &crate::LogTallies::default())
+                    .unwrap()
+                    .as_ref()
+            )
+            .unwrap()
         );
     }
     #[test]
@@ -639,7 +763,7 @@ mod tests {
                     row.award(&mut awards)
                 } else {
                     stats.append(&row)?;
-                    geo.add(&row.call)
+                    geo.add(&row.call, row.fields)
                 }
             }
             after_chunk(offset);

@@ -1,14 +1,14 @@
 //! Per-speed JS8 decode cost at depth 3 — the number B5's multi-speed
-//! scheduler (`js8_multi_decode_due`) and the all-four-speeds-by-default
-//! ruling are gated on: four decodes must finish well inside Turbo's 6 s
-//! cycle (in parallel under std::thread::scope; here they are timed one at a
+//! scheduler (`js8_multi_decode_due`) and the every-speed-by-default
+//! ruling are gated on: every speed's decode must finish well inside JS8 60's
+//! 4 s cycle (in parallel under std::thread::scope; here they are timed one at a
 //! time so each number is attributable). Realistic load: three signals at
 //! −8/−14/−18 dB plus noise, so the candidate list and pass 2/3 are
 //! exercised, not a single clean frame. Timed = decode() only.
 //!
 //! Run (release — debug numbers are meaningless):
 //!   cargo run --release -p js8 --example decode_bench
-//! Record the four lines in crates/js8/src/phy/decoder.rs's `Bench` header
+//! Record the per-speed lines in crates/js8/src/phy/decoder.rs's `Bench` header
 //! line with the date and box; re-run rather than trust them, they are
 //! machine-specific (the ft8 explore_early_pass_cost rule).
 
@@ -86,5 +86,5 @@ fn main() {
         total_ms += best;
         println!("{speed:?}: {ndec} of 3 decoded, {best:7.1} ms (best of 3, depth 3)");
     }
-    println!("all four serial: {total_ms:7.1} ms  (Turbo cycle budget 6000 ms)");
+    println!("every speed serial: {total_ms:7.1} ms  (JS8 60 cycle budget 4000 ms)");
 }

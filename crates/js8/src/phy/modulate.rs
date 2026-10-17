@@ -38,6 +38,23 @@ pub fn encode_word(word: &Word87, speed: Speed) -> [u8; 79] {
 /// rectangular 8-FSK at `f0_hz`, `sample_rate` samples/s (12 000 in the engine; 48 000
 /// reproduces Modulator.cpp's own frame rate).
 pub fn modulate(tones: &[u8; 79], speed: Speed, f0_hz: f32, sample_rate: f32) -> Vec<f32> {
+    modulate_moved(tones, speed, &[(0, f0_hz)], sample_rate)
+}
+
+/// [`modulate`]'s wave with its offset moved while it plays: `moves` are `(sample, offset)` pairs
+/// in the order of their samples, the first at sample 0, each offset holding from its sample of
+/// the wave until the next move. The tones sit on whichever offset holds, and the phase runs on
+/// unbroken across a move, as JS8Call's Modulator takes a new audio frequency at the next sample
+/// it makes, its phase carried on (`m_audioFrequency != m_audioFrequency0` → `m_dphi`, `m_phi +=
+/// m_dphi`, Modulator.cpp:217-229): what "Allow Tx frequency changes while transmitting" does to a
+/// frame on the air. Up to its first move's sample the wave is [`modulate`]'s at the first offset,
+/// sample for sample, and it is as long.
+pub fn modulate_moved(
+    tones: &[u8; 79],
+    speed: Speed,
+    moves: &[(usize, f32)],
+    sample_rate: f32,
+) -> Vec<f32> {
     let fs = f64::from(sample_rate);
     let spsym = (speed.nsps() as f64 * fs / 12_000.0).round() as usize;
     let delay = (f64::from(speed.delay_ms()) * fs / 1000.0).round() as usize;
@@ -49,9 +66,14 @@ pub fn modulate(tones: &[u8; 79], speed: Speed, f0_hz: f32, sample_rate: f32) ->
     let mut out = vec![0f32; delay + n];
     let mut phi = 0f64;
     let mut amp = 1f64;
+    let mut moved = 0;
     for ic in 0..n {
         let tone = f64::from(tones[ic / spsym]);
-        let dphi = tau * (f64::from(f0_hz) + tone * spacing) / fs;
+        while moved + 1 < moves.len() && moves[moved + 1].0 <= delay + ic {
+            moved += 1;
+        }
+        let f = moves.get(moved).map_or(0.0, |m| m.1);
+        let dphi = tau * (f64::from(f) + tone * spacing) / fs;
         phi += dphi;
         if phi > tau {
             phi -= tau;
@@ -223,6 +245,80 @@ mod tests {
         }
         // The last sample is faded: 0.98^(~10) ≈ 0.82 upper bound on |amp|.
         assert!(wave[wave.len() - 1].abs() < 0.85);
+    }
+
+    /// The offset moved at sample `at` (JS8Call's Modulator taking a new frequency mid-frame): up to
+    /// `at` the wave is the one keyed at the old offset, sample for sample; a whole symbol after it
+    /// sits on the new offset (its sign changes count the new tone's cycles, 300 Hz × 160 ms = 48
+    /// cycles more than the old's); and no sample around the move jumps further than the wave at the
+    /// new offset ever steps. Moved at the first sample it is the new offset's wave; never moved, the
+    /// old one's.
+    #[test]
+    fn a_moved_wave_is_the_old_wave_up_to_the_move_and_the_new_offset_after_it() {
+        let tones = encode_word(&word(), Speed::Normal);
+        let old = modulate(&tones, Speed::Normal, 1500.0, 12_000.0);
+        let new = modulate(&tones, Speed::Normal, 1800.0, 12_000.0);
+        let delay = 500 * 12;
+        let at = delay + 30 * 1920 + 123;
+        let move_at = |at: usize| {
+            modulate_moved(
+                &tones,
+                Speed::Normal,
+                &[(0, 1500.0), (at, 1800.0)],
+                12_000.0,
+            )
+        };
+        let moved = move_at(at);
+        assert_eq!(moved.len(), old.len());
+        assert_eq!(moved[..at], old[..at], "the old wave up to the move");
+        let crossings = |w: &[f32]| {
+            w.windows(2)
+                .filter(|p| (p[0] < 0.0) != (p[1] < 0.0))
+                .count()
+        };
+        let sym = |w: &[f32], k: usize| w[delay + k * 1920..delay + (k + 1) * 1920].to_vec();
+        for k in [31, 40, 70] {
+            let (got, at_new, at_old) = (
+                crossings(&sym(&moved, k)),
+                crossings(&sym(&new, k)),
+                crossings(&sym(&old, k)),
+            );
+            assert!(got.abs_diff(at_new) <= 1, "symbol {k}: {got} vs {at_new}");
+            assert!(got.abs_diff(at_old) >= 90, "symbol {k}: {got} vs {at_old}");
+        }
+        let step = |w: &[f32], r: std::ops::Range<usize>| {
+            w[r].windows(2)
+                .map(|p| (p[1] - p[0]).abs())
+                .fold(0.0f32, f32::max)
+        };
+        let steady = step(&new, delay..new.len() - 1920);
+        assert!(
+            step(&moved, at - 50..at + 50) <= steady + 1e-6,
+            "no jump at the move: {} against {steady}",
+            step(&moved, at - 50..at + 50)
+        );
+        assert_eq!(
+            move_at(0),
+            new,
+            "moved before it starts: the new offset's wave"
+        );
+        assert_eq!(move_at(old.len()), old, "never moved: the old one");
+        // Moved twice: the second move carries on from where the first left the phase.
+        let twice = modulate_moved(
+            &tones,
+            Speed::Normal,
+            &[(0, 1500.0), (at, 1800.0), (at + 4000, 1650.0)],
+            12_000.0,
+        );
+        assert_eq!(
+            twice[..at + 4000],
+            moved[..at + 4000],
+            "the first move as it was"
+        );
+        assert!(
+            step(&twice, at + 3950..at + 4050) <= steady + 1e-6,
+            "no jump at the second move"
+        );
     }
 
     #[test]

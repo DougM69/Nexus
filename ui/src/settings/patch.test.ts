@@ -3,7 +3,7 @@
 // always DISAGREE with the copy a surface would have held, so a save built on the copy fails.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { getSettings, setSettings } from '../api'
-import { changedSince, patchSettings } from './patch'
+import { changedSince, mergeListEdit, patchSettings } from './patch'
 import defaultSettings from '../components/__fixtures__/defaultSettings.json'
 import type { Settings } from '../types'
 
@@ -121,5 +121,24 @@ describe('changedSince', () => {
 
   it('with nothing loaded to compare against, is the whole form', () => {
     expect(changedSince(null, loaded)).toBe(loaded)
+  })
+})
+
+// A list the backend adds to while a form is open (the JS8 55-minute rule and its "never
+// acknowledge" list): the form's edit, made against the list as it is now.
+describe('mergeListEdit', () => {
+  const loaded = ['N0XYZ', 'K9ZZZ']
+  const now = ['N0XYZ', 'K9ZZZ', 'W1AW']
+  it('keeps a call added since the form loaded, and applies what the form took out and put in', () => {
+    expect(mergeListEdit(loaded, ['N0XYZ', 'K1ABC'], now)).toEqual(['N0XYZ', 'W1AW', 'K1ABC'])
+  })
+  it('with the list unedited, is the list as it is now', () => {
+    expect(mergeListEdit(loaded, loaded, now)).toEqual(now)
+  })
+  it('a call the form took out goes, however the live list writes it', () => {
+    expect(mergeListEdit(loaded, ['K9ZZZ'], ['n0xyz ', 'K9ZZZ', 'W1AW'])).toEqual(['K9ZZZ', 'W1AW'])
+  })
+  it('a call the form put in that is there already, or twice, is there once', () => {
+    expect(mergeListEdit(loaded, [...loaded, 'W1AW', 'K1ABC', 'K1ABC'], now)).toEqual([...now, 'K1ABC'])
   })
 })

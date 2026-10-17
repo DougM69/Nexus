@@ -66,7 +66,7 @@ fn numbers(e: &Engine) -> (usize, usize, u32, u32, u32, Option<u32>, Vec<String>
 }
 
 /// ⭐ **Enter on a dupe logs it, marked, for 0 points** (the operator's ruling, 2026-10-11: "Enter
-/// on a dupe logs it marked as a dupe for 0 points, as N1MM does"), in Field Day and the Illinois
+/// on a dupe logs it marked as a dupe for 0 points"), in Field Day and the Illinois
 /// party, from the CW, Phone and RTTY strips: the engine says it entered the log, the Contest
 /// screen shows it marked, the numbers on screen are as they were, and the journal on disk holds
 /// it.

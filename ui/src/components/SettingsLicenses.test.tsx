@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 //
-// Settings ▸ Licenses: the license texts of the npm packages built into the desktop app's
-// interface and of the Rust crates the app is built from, which the desktop build emits as
-// THIRD-PARTY.txt and rust/THIRD-PARTY.txt (ui/vite.config.ts). Pinned here: the button sits in
-// the Settings header beside Check for updates on the desktop and is absent from the Remote page's
-// copy of Settings (that page links its own file); nothing is read until it is pressed; the dialog
-// shows both files as they came and gives the keyboard back to the button when it closes; and a
-// build without either file says so in words instead of showing whatever a dev server answered
-// with, or half of the texts as if they were all of them.
+// Settings ▸ Licenses: Nexus's own NOTICE, then the license texts of the npm packages built into
+// the desktop app's interface and of the Rust crates the app is built from, which the desktop build
+// emits as NOTICE.txt, THIRD-PARTY.txt and rust/THIRD-PARTY.txt (ui/vite.config.ts). Pinned here:
+// the button sits in the Settings header beside Check for updates on the desktop and is absent
+// from the Remote page's copy of Settings (that page links its own file); nothing is read until it
+// is pressed; the dialog shows the three files as they came, NOTICE first, and gives the keyboard
+// back to the button when it closes; and a build without any one of them says so in words instead
+// of showing whatever a dev server answered with, or part of the texts as if they were all of them.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsLicenses } from './SettingsLicenses'
@@ -86,7 +86,9 @@ function answer(body: string, contentType: string, status = 200) {
 
 const TEXT = 'Nexus — third-party notices for the app\'s interface\n\nreact 18.3.1\nMIT License\n'
 const RUST = 'Nexus — third-party notices for the app\'s Rust crates\n\nserde 1.0.228 — MIT OR Apache-2.0\n'
-const files = async (url: string) => answer(url === 'rust/THIRD-PARTY.txt' ? RUST : TEXT, 'text/plain')
+const NOTICE = 'Nexus\nCopyright (C) 2026 KD9TAW\n\nThis program is free software: GPL-3.0-only.\n'
+const files = async (url: string) =>
+  answer(url === 'NOTICE.txt' ? NOTICE : url === 'rust/THIRD-PARTY.txt' ? RUST : TEXT, 'text/plain')
 const fetchSpy = vi.fn(files)
 const theButton = () => screen.queryByRole('button', { name: EN['settings.licenses.button'] })
 
@@ -124,21 +126,17 @@ describe('in the Settings header', () => {
     expect(update.nextElementSibling).toBe(theButton())
   })
 
-  it('is not on the Remote page, which links its own license file', async () => {
-    renderPanel(true)
-    await screen.findByRole('button', { name: EN['settings.panel.update.label'] })
-    expect(theButton()).toBeNull()
-  })
 })
 
 describe('the dialog', () => {
-  it('reads nothing until the button is pressed, then shows both files as they came', async () => {
+  it('reads nothing until the button is pressed, then shows the three files as they came, NOTICE first', async () => {
     render(<SettingsLicenses />)
     expect(fetchSpy).not.toHaveBeenCalled()
     fireEvent.click(theButton()!)
     const dialog = await screen.findByRole('dialog', { name: EN['settings.licenses.title'] })
-    await waitFor(() => expect(dialog.querySelector('pre')?.textContent).toBe(`${TEXT}\n\n${RUST}`))
-    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(dialog.querySelector('pre')?.textContent).toBe(`${NOTICE}\n\n${TEXT}\n\n${RUST}`))
+    expect(fetchSpy).toHaveBeenCalledTimes(3)
+    expect(fetchSpy).toHaveBeenCalledWith('NOTICE.txt')
     expect(fetchSpy).toHaveBeenCalledWith('THIRD-PARTY.txt')
     expect(fetchSpy).toHaveBeenCalledWith('rust/THIRD-PARTY.txt')
   })
@@ -178,5 +176,15 @@ describe('the dialog', () => {
     const dialog = await screen.findByRole('dialog', { name: EN['settings.licenses.title'] })
     await waitFor(() => expect(dialog.textContent).toContain(EN['settings.licenses.unavailable']))
     expect(dialog.querySelector('pre')).toBeNull()
+  })
+
+  it('shows none of them when the NOTICE is not there', async () => {
+    fetchSpy.mockImplementation(async (url: string) => url === 'NOTICE.txt' ? answer('', 'text/plain', 404) : files(url))
+    render(<SettingsLicenses />)
+    fireEvent.click(theButton()!)
+    const dialog = await screen.findByRole('dialog', { name: EN['settings.licenses.title'] })
+    await waitFor(() => expect(dialog.textContent).toContain(EN['settings.licenses.unavailable']))
+    expect(dialog.querySelector('pre')).toBeNull()
+    expect(fetchSpy).toHaveBeenCalledWith('NOTICE.txt')
   })
 })

@@ -504,6 +504,10 @@ impl Tier {
 
 /// The heard-station row, straight from the message layer (serde-derived there).
 pub use js8::proto::station::Heard as Js8Heard;
+/// A held message too long to hand over at the current speed, `{ id, frames, max, fitsAt }`.
+pub use js8::proto::station::HeldTooLong as Js8InboxTooLong;
+/// A message a cap took out of the inbox, `{ atMs, why: "count" | "bytes", entry }`.
+pub use js8::proto::station::InboxDrop as Js8InboxDrop;
 /// One inbox row (UNREAD / READ / STORE / DELIVERED), straight from the message layer.
 pub use js8::proto::station::InboxEntry as Js8InboxEntry;
 /// The inbox row state — lowercase on the wire (`"unread" | "read" | "store" | "delivered"`).
@@ -526,12 +530,39 @@ pub struct Js8Armed {
     pub cq: bool,
 }
 
+/// Why an armed HB ACK would not answer a heartbeat heard now (`"speed" | "arriving" |
+/// "qsoPause"`), the station's own reason.
+pub use js8::proto::station::HbAckSuppressed as Js8HbAckSuppressed;
 /// Per origin, why it is not armed while its switch is on: `None` when it is armed or off.
 /// The same five camelCase keys as [`Js8Armed`].
 pub use js8::proto::station::Readiness as Js8NotArmed;
 /// Why an automatic origin whose switch is on is not armed, the station's own reason
 /// (`"idle" | "txOff" | "needsHb" | "needsAuto" | "needsHbAndAuto" | "unscheduled"`).
 pub use js8::proto::station::Unarmed as Js8Unarmed;
+
+/// Heartbeat networking, the QSO pause and what holds an HB ACK back, as JS8Call 3.0.3 has them:
+/// the desktop cockpit's, and the Remote page's sample carries it too. That page's parser refuses a
+/// key it does not list, so a page from before this key refuses the sample: the page goes up first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Presence {
+    /// JS8Call's "Enable Heartbeat Networking": the HB button shows only with it on.
+    pub hb_networking: bool,
+    /// The TX speed sends heartbeats ([`js8::proto::station::heartbeat_speed`]).
+    pub hb_speed: bool,
+    /// The QSO pause holds the HB repeat until the To box is cleared.
+    pub hb_paused: bool,
+    /// Why an armed HB ACK would not answer a heartbeat heard now; `None` when it would, or when
+    /// the switch is off or not armed (its chip says why then).
+    pub hb_ack_suppressed: Option<Js8HbAckSuppressed>,
+    /// The stations the 55-minute rule has stopped acknowledging, oldest first.
+    pub hb_ack_rate_blocked: Vec<String>,
+    /// The QSO pause setting, which the cockpit reads to clear its To box when the HB repeat goes
+    /// on (JS8Call clears its selected call).
+    pub qso_pause: bool,
+    /// "Do not participate in the @ALLCALL group".
+    pub avoid_allcall: bool,
+}
 
 /// One activity-pane row: a decoded frame (or a reassembled multi-frame message).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -555,6 +586,21 @@ pub struct Js8ActivityRow {
     pub complete: bool,
     /// Decode quality below JS8Call's 0.17 low-confidence threshold.
     pub low_conf: bool,
+    /// Where the row stands in its message, which the cockpit's RX pane and Band activity join
+    /// frames by (JS8Call's `displayTextForFreq`, mainwindow.cpp:3106-3170), on the desktop and on
+    /// the Remote page. Every row has it; a station from before it sent none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flags: Option<Js8RowFlags>,
+}
+
+/// JS8Call's i3 First and Last bits of the frame a row is (`JS8CallFirst`/`JS8CallLast`), or the
+/// reassembled line of a multi-frame message (`assembled`, never a frame of its own).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8RowFlags {
+    pub first: bool,
+    pub last: bool,
+    pub assembled: bool,
 }
 
 /// One outbox row (empty in the receive-only build).
@@ -588,6 +634,30 @@ pub struct Js8ComposerPrefill {
     pub text: String,
 }
 
+/// JS8Call's waterfall controls as stored (the decode filter and the passband centre for QSY to
+/// centre), and the band schedule's change waiting out its notice, if any.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Controls {
+    pub filter: crate::settings::Js8Filter,
+    pub qsy_center_hz: u16,
+    pub hop: Option<Js8HopNotice>,
+}
+
+/// A scheduled JS8 frequency change waiting out its notice (JS8Call's self-destructing
+/// "Scheduled Frequency Change" box): where it goes, when, the row's description, and whether a
+/// transmission is holding it back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8HopNotice {
+    pub mhz: f64,
+    /// When it is made unless cancelled (unix ms); 0 once "Change now" was pressed.
+    pub fires_at_ms: u64,
+    pub description: String,
+    /// Due, and waiting for the station to stop transmitting or the message going out to end.
+    pub held: bool,
+}
+
 /// The live JS8 state the cockpit polls (~500 ms while visible) — `PskRxState`'s role.
 /// Every field is computed from engine truth at poll time; nothing here is cached UI state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -597,6 +667,10 @@ pub struct Js8State {
     pub speed: Js8Speed,
     /// Bitmask of decoded speeds (`Js8Speed::bit()`).
     pub rx_speeds: u8,
+    /// JS8Call's waterfall controls and the band schedule's notice ([`Js8Controls`]), on the
+    /// desktop and on the Remote page. Always set here; a station from before it sent none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controls: Option<Js8Controls>,
     pub tx_enabled: bool,
     pub sending: bool,
     pub hb_on: bool,
@@ -621,11 +695,36 @@ pub struct Js8State {
     pub activity: Vec<Js8ActivityRow>,
     pub stations: Vec<Js8Heard>,
     pub inbox: Vec<Js8InboxEntry>,
+    /// What a cap took out of the inbox, oldest first, at most ten, until the operator clears
+    /// the notes: which, and why. Left out while there are none, so a Remote page that does not
+    /// know the key reads the station's sample as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inbox_dropped: Vec<Js8InboxDrop>,
+    /// The held messages too long to hand over at the current speed, which the station does not
+    /// offer: which, the frames each needs, the cap, and the speed it would go at. Left out while
+    /// there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inbox_too_long: Vec<Js8InboxTooLong>,
     pub queue: Vec<Js8QueueRow>,
     pub pending_reply: Option<Js8PendingReply>,
     /// The last refused verb's reason (a send that would not compose, a forbidden
     /// destination), cleared by the next successful verb.
     pub last_error: Option<String>,
+    /// Heartbeat networking and presence ([`Js8Presence`]), on the desktop and on the Remote page.
+    /// Always set here; a station from before it sent none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence: Option<Js8Presence>,
+}
+
+/// The JS8 compose box's typeahead, JS8Call's: what has gone of the operator's message going out
+/// and what is still to go, as its frames render, and whether the box may change it (not a MSG or
+/// relay). Native only, never part of [`Js8State`]: the Remote has no compose box.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Typeahead {
+    pub sent: String,
+    pub unsent: String,
+    pub locked: bool,
 }
 
 /// A single chat message (inbound or outbound) within a conversation.
@@ -1153,6 +1252,11 @@ pub struct SlotKeyRefused {
     /// its transmit audio from: the UI says that in its own words. Absent for every other refusal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flex_audio: Option<FlexAudioRefusal>,
+    /// Set when Nexus kept the key off the air itself because the sound card's transmit audio
+    /// output would not open (`why` is then the sound card's own error): the radio refused
+    /// nothing, so the UI says so in its own words. Absent for every other refusal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tx_audio_failed: bool,
 }
 
 /// What a FlexRadio reports about its own tune carrier, while Nexus's Flex client tunes with it
@@ -1268,6 +1372,19 @@ pub struct SlotUnkeyFailed {
 pub struct SlotAudioLost {
     /// When, in Unix seconds.
     pub at: u64,
+}
+
+/// The last FT8 or FT4 over Nexus dropped because the radio keyed it only after its period had
+/// ended ([`RadioStatus::slot_over_dropped`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotOverDropped {
+    /// When, in Unix seconds.
+    pub at: u64,
+    /// How long after its period had ended the radio keyed it, "1.2 s". Data: shown as it is.
+    pub late: String,
+    /// How many in a row, this one included.
+    pub count: u32,
 }
 
 /// Current radio / slot-timing status.
@@ -1401,6 +1518,13 @@ pub struct RadioStatus {
     pub tx_swr: Option<f32>,
     #[serde(default)]
     pub tx_alc: Option<f32>,
+    /// Where the radio's own ALC zone ends on the `tx_alc` bar: `Some(0.5)` on the FT-991A,
+    /// FT-710 and FTDX10, whose ALC is read on the radio's own full bar and whose zone ends at
+    /// half scale; `None` where 1.0 is the top of the zone (Hamlib's ALC scales, Nexus's own Icom
+    /// CI-V path, the Flex). Display only: the bar's colours follow it, never the bar.
+    /// Left out of the JSON when `None`, so a snapshot without it stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_alc_zone: Option<f32>,
     #[serde(default)]
     pub tx_po_w: Option<f32>,
     #[serde(default)]
@@ -1513,6 +1637,17 @@ pub struct RadioStatus {
     /// transmitting on (field report 2026-08-25). `None` on an old snapshot.
     #[serde(default)]
     pub tx_emission_mhz: Option<f64>,
+    /// Upper sideband is the only phone the licence allows where this radio transmits: 60 m, for
+    /// every US class (`privileges::usb_only_phone`). The Phone cockpit greys its LSB, AM and FM
+    /// picks and says why. Skipped when false, so every other snapshot is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub phone_usb_only: bool,
+    /// The licence lock is the phone MODE alone: the pick is LSB, AM or FM on 60 m, and a USB pick
+    /// would key (`Engine::phone_mode_refused`). `tx_allowed` is false with it, and the cockpit
+    /// names that rule instead of "this frequency is outside your license privileges". Skipped
+    /// when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub phone_mode_refused: bool,
     /// Whether the operator is holding a steady tune carrier (for ATU / amp
     /// tuning). While true the radio plays a continuous f0 sine instead of slots.
     #[serde(default)]
@@ -1564,6 +1699,14 @@ pub struct RadioStatus {
     /// ABSENT until it happens, so every snapshot before one is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_audio_lost: Option<SlotAudioLost>,
+    /// The last FT8 or FT4 over Nexus dropped because the radio keyed it only after its period had
+    /// ended (a slow CAT link: Split Operation's commands and the key took the carrier past it): it
+    /// unkeyed at once, sent nothing and left TX on for the next over, as WSJT-X starts no audio
+    /// once its window has closed, however many in a row (the TX watchdog is the only stop, as in
+    /// WSJT-X). Shown while TX is on, until the next over the radio keys in its period or TX is
+    /// turned on again. ABSENT until it happens, so every snapshot before one is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_over_dropped: Option<SlotOverDropped>,
     /// The operator's last PTT press (Phone) did not key: right after the transmit slice left a
     /// digital mode, or native audio went off, the radio still took its transmit audio from the
     /// DAX Nexus set, not its mic, and Nexus's own Flex client kept the key off the air. Cleared by
@@ -2548,6 +2691,16 @@ pub struct FieldDayStatus {
     /// serialised. The export it is about runs only at the station.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cabrillo_missing: Vec<String>,
+    /// ⭐ **This session sends a serial number** (Sweepstakes, CQ WPX) — `ContestSession::serial_now`
+    /// has a number to give — so Clear test contacts starts the serials again at 001, and only then
+    /// does the Contest screen say so. False for a contest that sends none: both Field Day events and
+    /// the QSO parties that send a county.
+    ///
+    /// ⚠️ **Never sent to Remote**, for `composing_text_phone`'s reason: the hosted page refuses a
+    /// key it does not list, so `leave_out_the_hosts_own` clears it and a false one is not
+    /// serialised. Clear test contacts is not offered there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sends_serial: bool,
     /// The bands this contest runs on (`"20m"`), from the ruleset, as ADVISORY data — the strip
     /// says so when the rig is elsewhere, and nothing refuses a contact over it. Empty when the
     /// ruleset names none, which is every contest before CQ WW RTTY.
@@ -2596,6 +2749,25 @@ pub struct FieldDayStatus {
     /// that takes it is deployed before the release that writes it. Absent when `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept_out: Option<FdKeptOutDto>,
+    /// ⭐ **The contest journal's last writes FAILED** — the contacts since the last good one are
+    /// in memory only, and a power cut loses them. The Contest screen and the log strip say so in
+    /// red. `None` when the last write was good. A later good write clears it.
+    ///
+    /// ⚠️ **Never sent to Remote**, for `cabrillo_missing`'s reason: the hosted page refuses a key
+    /// it does not list, so `leave_out_the_hosts_own` empties it. The remedy is at the station.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsaved: Option<FdUnsavedDto>,
+}
+
+/// [`FieldDayStatus::unsaved`]: the contest journal writes that failed since the last good one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdUnsavedDto {
+    /// Writes that failed in a row.
+    pub failed_writes: u32,
+    /// When the last good write landed (Unix UTC seconds); absent when none has this run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_saved_unix: Option<u64>,
 }
 
 /// [`FieldDayStatus::kept_out`]: the journal's rows of another contest, and of another
@@ -4288,7 +4460,7 @@ pub struct AppSnapshot {
     /// unless there is one, until the next period of the new band or mode decodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub late_decodes: Option<LateDecodes>,
-    /// JTAlert-style UDP callsign highlights (call → CSS colors) for the
+    /// UDP callsign highlights (call → CSS colors) for the
     /// decode panes. Empty unless a cooperating app sent HighlightCallsign.
     #[serde(default)]
     pub highlights: Vec<HighlightEntry>,
@@ -4898,8 +5070,15 @@ mod tests {
             assert_eq!(Tier::from_mode_kind(kind), Tier::Js8);
             assert_eq!(Tier::Js8.mode_kind(60, 0, 120, 15, 0, i as u8), Some(kind));
         }
+        assert_eq!(
+            Tier::js8_kind(4),
+            ModeKind::Js8 {
+                speed: Js8Speed::Ultra
+            },
+            "index 4 is JS8 60"
+        );
         // A stale or hand-edited index degrades to Normal instead of refusing to decode.
-        assert_eq!(Tier::js8_kind(4), ModeKind::JS8_NORMAL);
+        assert_eq!(Tier::js8_kind(5), ModeKind::JS8_NORMAL);
         assert_eq!(Tier::js8_kind(255), ModeKind::JS8_NORMAL);
     }
 
@@ -4911,6 +5090,20 @@ mod tests {
         let s = Js8State {
             speed: Js8Speed::Turbo,
             rx_speeds: 15,
+            controls: Some(Js8Controls {
+                filter: crate::settings::Js8Filter {
+                    enabled: true,
+                    center_hz: 1500,
+                    width_hz: 2000,
+                },
+                qsy_center_hz: 1500,
+                hop: Some(Js8HopNotice {
+                    mhz: 7.078,
+                    fires_at_ms: 30_000,
+                    description: "40 m net".to_string(),
+                    held: false,
+                }),
+            }),
             tx_enabled: false,
             sending: false,
             hb_on: false,
@@ -4951,9 +5144,12 @@ mod tests {
                 mine: false,
                 complete: true,
                 low_conf: false,
+                flags: None,
             }],
             stations: Vec::new(),
             inbox: Vec::new(),
+            inbox_dropped: Vec::new(),
+            inbox_too_long: Vec::new(),
             queue: vec![Js8QueueRow {
                 origin: js8::Origin::HbAck,
                 display: "x".to_string(),
@@ -4962,11 +5158,13 @@ mod tests {
             }],
             pending_reply: None,
             last_error: None,
+            presence: None,
         };
         let json = serde_json::to_string(&s).unwrap();
         for k in [
             "\"speed\":\"turbo\"",
             "\"rxSpeeds\":15",
+            "\"controls\":{\"filter\":{\"enabled\":true,\"centerHz\":1500,\"widthHz\":2000},\"qsyCenterHz\":1500,\"hop\":{\"mhz\":7.078,\"firesAtMs\":30000,\"description\":\"40 m net\",\"held\":false}}",
             "\"txEnabled\":false",
             "\"hbOn\":false",
             "\"hbNextAtMs\":null",

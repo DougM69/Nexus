@@ -36,7 +36,7 @@
 //! once. [`reference`] answers every question from a whole log, exactly as `answerFrom` does, and
 //! is the oracle the engine's own paths are held to.
 
-use super::{QsoRecord, UploadOutcome};
+use super::{record_lotw_dxcc, QsoRecord, UploadOutcome};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::cmp::Ordering;
@@ -297,7 +297,7 @@ enum SortVal {
     Num(f64),
 }
 
-/// `entity` is the row's resolved DXCC entity, asked for only when the column is the country.
+/// `entity` is the row's DXCC entity (`q.entity`), asked for only when the column is the country.
 fn sort_val(r: &QsoRecord, k: SortKey, entity: Option<&str>) -> SortVal {
     let text = |s: &str| SortVal::Text(js_upper(s).into_boxed_str());
     match k {
@@ -340,18 +340,30 @@ fn sort_val_cmp(a: &SortVal, b: &SortVal) -> Ordering {
 }
 
 /// Whether the Logbook shows `r` under `query` (`matchesLogQuery`, verbatim): not an
-/// award-confirmed contact under the chip, and the search in any of eight fields — the formatted
-/// time among them, whose trailing `Z` is why a search for "z" finds every row.
-pub fn matches(r: &QsoRecord, query: &LogQuery) -> bool {
+/// award-confirmed contact under the chip, and the search in any of nine fields — the formatted
+/// time among them, whose trailing `Z` is why a search for "z" finds every row, and the country
+/// the Logbook shows, the row's DXCC entity (`resolve`, `q.entity`).
+pub fn matches(
+    r: &QsoRecord,
+    query: &LogQuery,
+    resolve: &dyn Fn(&QsoRecord) -> Option<String>,
+) -> bool {
     shown(
         r,
         query.needs_confirm_only,
         &js_lower(js_trim(&query.search)),
+        || resolve(r),
     )
 }
 
-/// [`matches`], with the search already trimmed and lower-cased (`t`).
-fn shown(r: &QsoRecord, needs_confirm_only: bool, t: &str) -> bool {
+/// [`matches`], with the search already trimmed and lower-cased (`t`). `entity` is the row's
+/// DXCC entity, asked for last and only when no other field has the search.
+fn shown(
+    r: &QsoRecord,
+    needs_confirm_only: bool,
+    t: &str,
+    entity: impl FnOnce() -> Option<String>,
+) -> bool {
     if needs_confirm_only && r.award_confirmed {
         return false;
     }
@@ -367,6 +379,9 @@ fn shown(r: &QsoRecord, needs_confirm_only: bool, t: &str) -> bool {
         || has(&mode_key(&r.mode))
         || submode(r).is_some_and(has)
         || has(&fmt_utc(r.when_unix))
+        // …and the country the Logbook shows, so a QRZ `Germany` row is found by its entity,
+        // "Fed. Rep. of Germany", as well as by the stored text above.
+        || entity().as_deref().is_some_and(has)
 }
 
 /// A contact's SUBMODE, from its passthrough: among them the sideband of a phone contact, which
@@ -380,14 +395,27 @@ fn submode(r: &QsoRecord) -> Option<&str> {
         .map(|(_, v)| v.as_str())
 }
 
+/// A row's DXCC entity (`q.entity`) — its call's, or the one its record's DXCC number names —
+/// asked once per distinct call and number (`cache`).
+fn entity_of<'m>(
+    cache: &'m mut HashMap<(String, Option<u32>), Option<String>>,
+    resolve: &dyn Fn(&QsoRecord) -> Option<String>,
+    r: &QsoRecord,
+) -> Option<&'m str> {
+    cache
+        .entry((r.call.clone(), r.dxcc))
+        .or_insert_with(|| resolve(r))
+        .as_deref()
+}
+
 /// The rows `query` shows, as their handles in display order — the order vector (`logOrder`,
 /// SPEC-2 v3 §4.3). `rows` are `(handle, row)` in LOG ORDER; a row the query does not show is
-/// left out; `resolve` is a call's live DXCC entity, which the country column sorts on. See
-/// [`OrderBuilder`], which this is.
+/// left out; `resolve` is a row's DXCC entity (`q.entity`), which the country column sorts on and
+/// the search looks in. See [`OrderBuilder`], which this is.
 pub fn order<H, R>(
     rows: impl IntoIterator<Item = (H, R)>,
     query: &LogQuery,
-    resolve: &dyn Fn(&str) -> Option<String>,
+    resolve: &dyn Fn(&QsoRecord) -> Option<String>,
 ) -> Vec<H>
 where
     R: Borrow<QsoRecord>,
@@ -410,15 +438,16 @@ pub struct OrderBuilder<'a, H> {
     needs_confirm_only: bool,
     /// The search, trimmed and lower-cased once.
     t: String,
-    /// A call's live DXCC entity, resolved once per distinct call and only for the country
-    /// column, as the statistics resolve theirs ([`LogStatCounter`]).
-    resolve: &'a dyn Fn(&str) -> Option<String>,
-    entity_of: HashMap<String, Option<String>>,
+    /// A row's DXCC entity (`q.entity`) — its call's, or the one its record's DXCC number names
+    /// — asked only for the country column or a search, once per distinct call and number, as
+    /// the statistics ask theirs ([`LogStatCounter`]).
+    resolve: &'a dyn Fn(&QsoRecord) -> Option<String>,
+    entity_of: HashMap<(String, Option<u32>), Option<String>>,
     kept: Vec<(H, SortVal, u64)>,
 }
 
 impl<'a, H> OrderBuilder<'a, H> {
-    pub fn new(query: &LogQuery, resolve: &'a dyn Fn(&str) -> Option<String>) -> Self {
+    pub fn new(query: &LogQuery, resolve: &'a dyn Fn(&QsoRecord) -> Option<String>) -> Self {
         Self {
             sort: query.sort,
             asc: query.asc,
@@ -439,17 +468,15 @@ impl<'a, H> OrderBuilder<'a, H> {
 
     /// The next row, in LOG ORDER after every row pushed before it.
     pub fn push(&mut self, h: H, r: &QsoRecord) {
-        if !shown(r, self.needs_confirm_only, &self.t) {
+        let resolve = self.resolve;
+        let cache = &mut self.entity_of;
+        if !shown(r, self.needs_confirm_only, &self.t, || {
+            entity_of(cache, resolve, r).map(str::to_string)
+        }) {
             return;
         }
         let entity = match self.sort {
-            SortKey::Country => {
-                let resolve = self.resolve;
-                self.entity_of
-                    .entry(r.call.clone())
-                    .or_insert_with(|| resolve(&r.call))
-                    .as_deref()
-            }
+            SortKey::Country => entity_of(&mut self.entity_of, resolve, r),
             _ => None,
         };
         self.kept
@@ -959,9 +986,10 @@ const WAS_STATES: [&str; 50] = [
 ];
 
 /// `wasState(q)`: a contact's state as a WAS code, only for a contact of a US-family entity.
-/// `named` is the name its entity is counted under: its DXCC entity, or its stored country where
-/// its call resolves to none. So a LoTW download's `UNITED STATES OF AMERICA` counts, and a
-/// foreign entity's contact stored with a US country does not.
+/// `named` is the name its entity is counted under: the DXCC entity its row is given
+/// ([`LogStatCounter`]'s `resolve`), or its stored country where that names none. So a LoTW
+/// download's `UNITED STATES OF AMERICA` counts, and a foreign entity's contact stored with a US
+/// country does not.
 fn was_state(named: &str, r: &QsoRecord) -> Option<String> {
     if !US_ENTITIES.contains(&js_upper(named).as_str()) {
         return None;
@@ -980,11 +1008,14 @@ fn phone_mode_label(mode: &str) -> String {
 }
 
 /// `countLogStats(log)`, a row at a time (`statistics`): the dashboard's counts, with each
-/// contact's entity its call's live one (`resolve`, once per distinct call in the pass) and the
-/// stored country where it has none.
+/// contact's entity the one `resolve` names for its row (`q.entity`) and the stored country where
+/// it names none. In the app that is the entity the awards count the contact toward: its
+/// record's DXCC number (LoTW's first), else its call's live entity. `resolve` answers from the
+/// call and the record's two DXCC numbers ([`QsoRecord::dxcc`], [`record_lotw_dxcc`]), so it is
+/// asked once per distinct three in the pass: a lifetime log repeats them.
 pub struct LogStatCounter<'a> {
-    resolve: &'a dyn Fn(&str) -> Option<String>,
-    entity_of: HashMap<String, Option<String>>,
+    resolve: &'a dyn Fn(&QsoRecord) -> Option<String>,
+    entity_of: HashMap<(String, Option<u32>, Option<u32>), Option<String>>,
     counts: LogStatCounts,
     calls: HashSet<String>,
     countries: HashSet<String>,
@@ -996,7 +1027,7 @@ pub struct LogStatCounter<'a> {
 }
 
 impl<'a> LogStatCounter<'a> {
-    pub fn new(resolve: &'a dyn Fn(&str) -> Option<String>) -> Self {
+    pub fn new(resolve: &'a dyn Fn(&QsoRecord) -> Option<String>) -> Self {
         Self {
             resolve,
             entity_of: HashMap::new(),
@@ -1019,8 +1050,8 @@ impl LogFold for LogStatCounter<'_> {
         let resolve = self.resolve;
         let entity = self
             .entity_of
-            .entry(r.call.clone())
-            .or_insert_with(|| resolve(&r.call));
+            .entry((r.call.clone(), r.dxcc, record_lotw_dxcc(r)))
+            .or_insert_with(|| resolve(r));
         let c = &mut self.counts;
         c.total += 1;
         self.calls.insert(js_upper(js_trim(&r.call)));
@@ -1063,6 +1094,139 @@ impl LogFold for LogStatCounter<'_> {
             by_state: self.states.counts,
             entities: self.entities.counts,
             ..self.counts
+        }
+    }
+}
+
+// ── the timeline: contacts per mode over the past day, 30 days or year ─────────────────────────
+
+/// The Statistics view's timeline windows, in UTC as the log is. Each ends with the current hour,
+/// day or month, and each bucket holds the contacts logged at or after its first instant and
+/// before the next bucket's:
+///
+/// - `PastDay`: 24 hourly buckets, the last the current UTC hour;
+/// - `Past30Days`: 30 daily buckets, the last today (UTC);
+/// - `PastYear`: 12 monthly buckets, the last the current UTC month.
+///
+/// So the window runs from the first bucket's first instant to the end of the current hour, day
+/// or month, and a contact stamped after that (a clock running ahead) is in none of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TimelineRange {
+    PastDay,
+    Past30Days,
+    PastYear,
+}
+
+impl TimelineRange {
+    /// The window's bucket edges at `now` (Unix seconds): each bucket's first instant, oldest
+    /// first, and then the instant the window ends — one more edge than there are buckets.
+    pub fn edges(self, now: u64) -> Vec<u64> {
+        const HOUR: u64 = 3_600;
+        const DAY: u64 = 86_400;
+        match self {
+            TimelineRange::PastDay => {
+                let first = (now - now % HOUR).saturating_sub(23 * HOUR);
+                (0..=24).map(|i| first + i * HOUR).collect()
+            }
+            TimelineRange::Past30Days => {
+                let first = (now - now % DAY).saturating_sub(29 * DAY);
+                (0..=30).map(|i| first + i * DAY).collect()
+            }
+            TimelineRange::PastYear => {
+                let (year, month, ..) = super::datetime_utc(now);
+                // Months counted from year 0: the current one, and the eleven before it.
+                let current = i64::from(year) * 12 + i64::from(month) - 1;
+                (current - 11..=current + 1)
+                    .map(|m| {
+                        let (y, m) = (m.div_euclid(12), m.rem_euclid(12) + 1);
+                        super::unix_from_ymdhms(y as i32, m as u32, 1, 0, 0, 0)
+                    })
+                    .collect()
+            }
+        }
+    }
+}
+
+/// The timeline's answer (`LogTimeline`): the window's bucket edges ([`TimelineRange::edges`]),
+/// and each mode's contacts per bucket. A mode is labelled as the "By mode" card labels it
+/// ([`phone_mode_label`]: the sidebands fold into SSB, and nothing else folds), the modes are in
+/// first-seen order, and a mode with no contact in the window is not there. Which modes get a
+/// line of their own is the window's choice, as ordering the statistics is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogTimeline {
+    pub edges: Vec<u64>,
+    pub modes: Vec<TimelineMode>,
+}
+
+/// One mode's contacts in each bucket of the window, oldest bucket first.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineMode {
+    pub label: String,
+    pub counts: Vec<usize>,
+}
+
+/// The timeline, a row at a time: each contact inside the window counted in its bucket under its
+/// mode. It decides the window itself on every row it is handed, so it answers the same over the
+/// whole log as over the store's rows since [`Self::since`] (SPEC-2 v3 P2: SQL narrows, Rust
+/// decides).
+pub struct TimelineCounter {
+    edges: Vec<u64>,
+    at: HashMap<String, usize>,
+    modes: Vec<TimelineMode>,
+}
+
+impl TimelineCounter {
+    pub fn new(range: TimelineRange, now: u64) -> Self {
+        Self {
+            edges: range.edges(now),
+            at: HashMap::new(),
+            modes: Vec::new(),
+        }
+    }
+
+    /// The window's first instant: no contact logged before it is counted.
+    pub fn since(&self) -> u64 {
+        self.edges[0]
+    }
+}
+
+impl LogFold for TimelineCounter {
+    type Answer = LogTimeline;
+
+    fn add(&mut self, r: &QsoRecord) {
+        let end = self.edges[self.edges.len() - 1];
+        if r.when_unix < self.edges[0] || r.when_unix >= end {
+            return;
+        }
+        // The last bucket that starts at or before the contact.
+        let bucket = self.edges.partition_point(|&e| e <= r.when_unix) - 1;
+        // A blank mode is on no line, as it is on no bar of the "By mode" card.
+        let label = phone_mode_label(&r.mode);
+        if label.is_empty() {
+            return;
+        }
+        let buckets = self.edges.len() - 1;
+        let at = match self.at.get(&label) {
+            Some(&at) => at,
+            None => {
+                self.at.insert(label.clone(), self.modes.len());
+                self.modes.push(TimelineMode {
+                    label,
+                    counts: vec![0; buckets],
+                });
+                self.modes.len() - 1
+            }
+        };
+        self.modes[at].counts[bucket] += 1;
+    }
+
+    fn finish(self) -> LogTimeline {
+        LogTimeline {
+            edges: self.edges,
+            modes: self.modes,
         }
     }
 }
@@ -1135,12 +1299,12 @@ pub mod reference {
             .collect()
     }
 
-    /// The order vector of the whole log, as log positions; `resolve` is a call's live DXCC
-    /// entity, which the country column sorts on.
+    /// The order vector of the whole log, as log positions; `resolve` is a row's DXCC entity
+    /// (`q.entity`), which the country column sorts on.
     pub fn order<R: Borrow<QsoRecord>>(
         log: &[R],
         query: &LogQuery,
-        resolve: &dyn Fn(&str) -> Option<String>,
+        resolve: &dyn Fn(&QsoRecord) -> Option<String>,
     ) -> Vec<usize> {
         super::order(log.iter().map(|r| r.borrow()).enumerate(), query, resolve)
     }

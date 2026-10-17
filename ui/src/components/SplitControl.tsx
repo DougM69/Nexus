@@ -25,7 +25,6 @@ import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot } from '../types'
 import { setSplit } from '../api'
 import { t } from '../i18n'
-import { controlFailureMessage } from '../remote-web/control-failure'
 
 /** kHz per ± press. One is the pile-up convention; the operator holds for more. */
 const SPLIT_STEP_KHZ = 1
@@ -53,9 +52,7 @@ export function SplitControl({ snap, onSnap, onError, unavailable }: Props) {
   const control = useStationControl()
   // A browser needs the station's splitTuning hint; it is off while that browser's TX is armed.
   const allowed = (useStationCapability('splitTuning') || control) && unavailable == null
-  // Local keeps its own wording; a browser is told what the station answered (busy, not sent,
-  // outside the licence).
-  const failed = (local: string) => (error: unknown) => onError?.(control ? local : controlFailureMessage(error))
+  const failed = (local: string) => () => onError?.(local)
   // The desired TX dial lives in the snapshot; a plain retune clears it (backend).
   // Offset is kHz off the RX dial; default +5, the common pileup.
   const [splitOffsetKhz, setSplitOffsetKhz] = useState(5)

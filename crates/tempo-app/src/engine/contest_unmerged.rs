@@ -111,12 +111,13 @@ impl Engine {
         );
         if !report.written.is_empty() {
             // Filled and appended as the end-of-contest merge's are (`fd_merge_planned`).
-            let (country, state) = (
+            let (country, number, state) = (
                 self.station.dxcc_resolve.as_deref(),
+                self.station.dxcc_country.as_deref(),
                 self.station.state_resolve.as_deref(),
             );
             for rec in &mut report.written {
-                crate::station::fill_with(rec, country, state);
+                crate::station::fill_with(rec, country, number, state);
             }
             let (written, _) = self
                 .station

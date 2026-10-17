@@ -154,6 +154,8 @@ impl Engine {
                     .map(str::to_string)
                     .collect()
             },
+            // A serial to give is a serial sent: what Clear test contacts starts again at 001.
+            sends_serial: log.session.serial_now().is_some(),
             bands: rs.bands.iter().map(|b| b.to_string()).collect(),
             // The dupe rule's mode grouping, so the strip's badge and the engine's
             // refusal answer the same question.
@@ -215,6 +217,16 @@ impl Engine {
                     other_running: running as u32,
                 }),
             },
+            // The journal's writes that failed since its last good one: the operator is told.
+            unsaved: self
+                .station
+                .fd_log_path
+                .as_ref()
+                .and_then(|p| self.station.journals.trouble(p))
+                .map(|t| crate::dto::FdUnsavedDto {
+                    failed_writes: t.failed,
+                    last_saved_unix: t.last_good_unix,
+                }),
         })
     }
 

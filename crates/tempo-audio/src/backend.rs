@@ -36,6 +36,15 @@ pub trait AudioBackend {
     fn capture(&mut self) -> Vec<f32>;
     /// Queue 12 kHz mono samples for transmission.
     fn play(&mut self, samples: &[f32]);
+    /// Open the transmit audio route now, ahead of the over that will use it, and say whether an
+    /// over handed to [`Self::play`] would reach the radio: `Ok`, or `Err` with the reason it would
+    /// not, in the sound card's own words. The radio loop calls it when slot TX is armed and again
+    /// right before a slot over keys ([`crate::slot::key_slot_transmitter`]), and keys nothing on
+    /// an `Err`: a radio keyed with no audio puts a dead carrier on the air for the whole over.
+    /// Default `Ok`: a backend with no real device carries every over.
+    fn prepare_tx(&mut self) -> Result<(), String> {
+        Ok(())
+    }
     /// Smoothed RX input RMS (0.0–1.0), measured on the audio callback. Since 2026-08-01 the
     /// APP UI meters via the rx-dsp thread's `MeterFeed` (fast attack / standard decay,
     /// CAT-stall-immune) — this remains for standalone diagnostics (`examples/audio_probe`).
@@ -86,6 +95,16 @@ pub trait AudioBackend {
     /// ring. Returns the count discarded (for tests).
     fn flush_output(&mut self) -> usize {
         0
+    }
+    /// Play the rest of the over on the air anew: `tail(left, before)` is given how many 12 kHz
+    /// samples of what [`Self::play`] was handed have not played yet, and how many of the ones
+    /// before them the route needs as well (a resampler's look-back), and returns those, `before`
+    /// then `left`, built again (the same stretch of the over). For JS8's "Allow TX offset
+    /// changes while sending", which moves a frame mid-air (`Engine::js8_retune_on_air`). Never
+    /// lengthens the over. `false` when this route cannot take it: the over plays on as it was.
+    /// Default `false`; the real sound card overrides it.
+    fn retune_tx(&mut self, _tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
+        false
     }
     /// Start / stop / retune the dark headphone monitor in place, WITHOUT rebuilding
     /// the capture/TX streams (the decode path must never restart). `enabled` is the
@@ -173,6 +192,17 @@ pub struct MockBackend {
     /// Scripted stream death: the next `take_stream_error()` returns this and clears it,
     /// standing in for the OS killing a capture/playback stream out from under the loop.
     pub stream_error: Option<String>,
+    /// Scripted transmit-audio failure: while set, every `prepare_tx()` answers `Err` with it,
+    /// standing in for a sound card whose output will not open (another program holds it, or it
+    /// is unplugged). Clearing it stands in for the device coming back.
+    pub tx_open_error: Option<String>,
+    /// How many times `prepare_tx` was called.
+    pub prepare_tx_calls: usize,
+    /// How many of the samples in `played` the mock sound card has not played yet, which a
+    /// `retune_tx` replaces: a test says how far playback has got.
+    pub tx_unplayed: usize,
+    /// How many times `retune_tx` replaced the rest of an over.
+    pub retunes: usize,
 }
 
 impl MockBackend {
@@ -219,9 +249,24 @@ impl AudioBackend for MockBackend {
     fn play(&mut self, samples: &[f32]) {
         self.played.extend_from_slice(samples);
     }
+    fn prepare_tx(&mut self) -> Result<(), String> {
+        self.prepare_tx_calls += 1;
+        match &self.tx_open_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(()),
+        }
+    }
     fn flush_output(&mut self) -> usize {
         self.flush_calls += 1;
         0
+    }
+    fn retune_tx(&mut self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
+        let left = self.tx_unplayed.min(self.played.len());
+        let rest = tail(left, 0);
+        self.played.truncate(self.played.len() - left);
+        self.played.extend_from_slice(&rest[..rest.len().min(left)]);
+        self.retunes += 1;
+        true
     }
     fn set_voice_mic(&mut self, device: Option<&str>) -> Result<(), String> {
         self.voice_mic_calls.push(device.map(str::to_string));

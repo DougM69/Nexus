@@ -62,7 +62,9 @@ export default defineConfig({
     // repository), and CI's `ui` job fails when that committed copy differs from what this emits.
     // The Rust crates' texts go beside it as rust/THIRD-PARTY.txt, copied from
     // licenses/rust/THIRD-PARTY.txt, which scripts/gen-rust-licenses.py writes and CI's `deny`
-    // job keeps current with src-tauri's Cargo.lock; the dialog shows both.
+    // job keeps current with src-tauri's Cargo.lock; the dialog shows both. The repository's NOTICE
+    // goes beside them as NOTICE.txt, as it is, and the dialog shows it first; the installers
+    // carry the same file as resources/NOTICE (src-tauri/tauri.conf.json).
     name: 'desktop-license-texts',
     generateBundle(_options, bundle) {
       const modules = new Set(Object.values(bundle).flatMap(chunk => chunk.type === 'chunk' ? Object.keys(chunk.modules) : []))
@@ -76,6 +78,8 @@ export default defineConfig({
         readFileSync(new URL('./src/data/cqzones.LICENSE.txt', import.meta.url), 'utf8') + '\n' + bundledLicenses(modules) })
       this.emitFile({ type: 'asset', fileName: 'rust/THIRD-PARTY.txt',
         source: readFileSync(new URL('../licenses/rust/THIRD-PARTY.txt', import.meta.url), 'utf8') })
+      this.emitFile({ type: 'asset', fileName: 'NOTICE.txt',
+        source: readFileSync(new URL('../NOTICE', import.meta.url), 'utf8') })
     },
   }],
   define: {

@@ -24,7 +24,8 @@ import { BOX_IDS, PHONE_PANELS, RTTY_PANELS, coercePanelLayout, panelStorageKey,
 const SPEC = PHONE_PANELS.arrange!
 const all = () => true
 // The cockpit's own panes on screen and its boxes hidden, as every box ships (features/panelState).
-const stockShown = (id: PhonePanelId) => !(BOX_IDS as readonly string[]).includes(id)
+// A stock screen: the boxes and the Stats pane (2026-10-14) ship hidden.
+const stockShown = (id: PhonePanelId) => !(BOX_IDS as readonly string[]).includes(id) && id !== 'stats'
 
 describe('the placement a record may carry', () => {
   it('keeps a place only for the panes the cockpit arranges: an id outside it, or no id at all, is dropped', () => {
@@ -75,7 +76,7 @@ describe('the placement a record may carry', () => {
 
 describe('the columns a placement gives', () => {
   it('with nothing arranged, is the stock grouping', () => {
-    expect(placedColumns(SPEC, undefined)).toEqual({ a: [...SPEC.columns.a], b: [...SPEC.columns.b], log: [] })
+    expect(placedColumns(SPEC, undefined)).toEqual({ a: [...SPEC.columns.a], b: [...SPEC.columns.b], log: ['stats'] })
   })
 
   it('puts every pane in exactly one column, and one the record does not name at the end of its stock column', () => {
@@ -84,7 +85,7 @@ describe('the columns a placement gives', () => {
       // The boxes too stand at the end of their stock column, the record naming none of them.
       a: ['needed', 'voiceKeyer', 'spots', ...BOX_IDS],
       b: ['rigscope', 'receiver', 'transmitter'],
-      log: ['bandActivity'],
+      log: ['bandActivity', 'stats'],
     })
     const seen = PANE_COLUMNS.flatMap((c) => cols[c])
     expect([...seen].sort()).toEqual([...arrangeIds(SPEC)].sort())
@@ -95,7 +96,7 @@ describe('the groups each tier renders', () => {
   const shownOf = (hidden: PhonePanelId[]) => (id: PhonePanelId) => !hidden.includes(id)
 
   it('three tracks: a | b | log, only what is shown', () => {
-    expect(regionGroups(SPEC, undefined, 3, shownOf(['spots', 'needed', ...BOX_IDS]))).toEqual([
+    expect(regionGroups(SPEC, undefined, 3, shownOf(['spots', 'needed', 'stats', ...BOX_IDS]))).toEqual([
       { col: 'a', ids: ['bandActivity', 'voiceKeyer'] },
       { col: 'b', ids: ['rigscope', 'receiver', 'transmitter'] },
       { col: 'log', ids: [] },
@@ -141,7 +142,7 @@ describe('a move', () => {
     const toA = movePane(SPEC, undefined, undefined, 'transmitter', 'left', all)!
     expect(placedColumns(SPEC, toA).a).toEqual(['bandActivity', 'voiceKeyer', 'spots', ...BOX_IDS, 'transmitter'])
     const toLog = movePane(SPEC, undefined, undefined, 'needed', 'right', all)!
-    expect(placedColumns(SPEC, toLog).log).toEqual(['needed'])
+    expect(placedColumns(SPEC, toLog).log).toEqual(['stats', 'needed'])
     expect(movePane(SPEC, undefined, undefined, 'bandActivity', 'left', all), 'no column left of a').toBeNull()
     expect(movePane(SPEC, toLog, undefined, 'needed', 'right', all), 'no column right of log').toBeNull()
     // The columns in another order on screen: left and right follow it.

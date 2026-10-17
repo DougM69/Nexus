@@ -320,7 +320,7 @@ pub enum Inbound {
     Replay { id: String },
     /// **Location (type 11)** — a GPS feeder updates our Maidenhead grid.
     Location { id: String, location: String },
-    /// **HighlightCallsign (type 13)** — JTAlert-style row coloring for a
+    /// **HighlightCallsign (type 13)** — row coloring for a
     /// callsign in Band Activity. Empty/invalid colors clear the highlight.
     HighlightCallsign {
         id: String,

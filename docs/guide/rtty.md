@@ -296,7 +296,7 @@ the characters to ask **AGN** about rather than the ones to write in the log.*
 
 ### Key up and type
 
-The dock's **TX** button keys up and stays keyed, the way MMTTY does. It reads
+The dock's **TX** button keys up and stays keyed. It reads
 **Continuous** when it is off and **On air** while you are transmitting. Type
 and the characters go out as you type them; between keystrokes the air carries
 diddle — the LTRS idle every RTTY station sends — so the far end holds sync

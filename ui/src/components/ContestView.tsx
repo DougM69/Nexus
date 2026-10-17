@@ -14,7 +14,7 @@ import type {
   ModeRequest,
   Settings,
 } from '../types'
-import { contestMergeUnmerged, contestRemoveLast, contestRemoved, contestRestore, contestUnmerged, exportLog, fdClubAllowBack, fdClubExport, fdClubGivePosition, fdClubLogNewest, fdClubRemovePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type ContestUnmerged, type FdGiveAnswer, type FdRemoveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
+import { contestClear, contestMergeUnmerged, contestRemoveLast, contestRemoved, contestRestore, contestUnmerged, exportLog, fdClubAllowBack, fdClubExport, fdClubGivePosition, fdClubLogNewest, fdClubRemovePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type ContestUnmerged, type FdGiveAnswer, type FdRemoveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
 import { isStreamInput } from '../remote-native/stream-input'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
@@ -31,9 +31,10 @@ import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlS
 import { contestDomain, multCode, multTotal, type DomainGroup } from '../features/contestDomains'
 import { composingSlot } from '../features/contestExchange'
 import { receivedCaption } from '../features/contestSlots'
+import { contestUnsavedText } from '../features/contestUnsaved'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { stationMode, usePskName } from '../features/contestMode'
-import { REMOVE_CONFIRM_MS, SERVICE_NAMES, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
+import { CLEAR_TOAST_MS, REMOVE_CONFIRM_MS, SERVICE_NAMES, clearText, contactCount, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
 import { ContestContactEdit, type EditNote } from './ContestContactEdit'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
@@ -212,6 +213,10 @@ interface Props {
    *  so the screen has one. Absent, the scoreboard keeps its box, as with no contest running, in the
    *  torn-off scoreboard and on the Remote page. */
   operatorBoxAbove?: boolean
+  /** The contest entry (`ContestLargeEntry`) is drawn above this screen in the same window: the main
+   *  window and the logger window. It carries the save-failure line, so the screen draws none of its
+   *  own and the window shows it once. Absent in the popped-out screen, which has no entry. */
+  entryAbove?: boolean
   /** Opens this screen in a window of its own (App's, in the main window only — never the logger
    *  window's copy, the window itself or the Remote page): its Pop out, at the end of the banner. */
   onPopOut?: () => void
@@ -2969,6 +2974,7 @@ export function ContestView({
   operatorAsk,
   onOperatorFocused,
   operatorBoxAbove = false,
+  entryAbove = false,
   onPopOut,
 }: Props) {
   const observed = observation !== undefined
@@ -3041,6 +3047,22 @@ export function ContestView({
     const id = window.setTimeout(() => setRemoveAsk(null), Math.max(0, removeAsk.at + REMOVE_CONFIRM_MS - Date.now()))
     return () => window.clearTimeout(id)
   }, [removeAsk])
+  // ⭐ CLEAR TEST CONTACTS — every contact of this running out of the contest log at once, each the
+  // way Remove takes the newest: kept under Removed, Restore brings each back, the club seqs stay
+  // spent; in a contest that sends a serial the run starts again at 001, and only there do the button's
+  // words say so (`sendsSerial`). For the contacts logged as a test before the start. It asks first, on the button itself,
+  // naming how many, and a second click within REMOVE_CONFIRM_MS clears exactly the log it named: a
+  // contact logged in between asks again, and the engine refuses a log that changed. At a club only
+  // this laptop's contacts go (its log holds no other), and the club drops them as it drops a removed
+  // one. The button sits with the exports, far from the log and the Removed list (at 1024×768 they
+  // are out of view below it), so the question is the button's own label and the answer is a toast
+  // as well as the Removed list's note.
+  const [clearAsk, setClearAsk] = useState<{ rows: number; contacts: number; call: string; whenUnix: number; at: number } | null>(null)
+  useEffect(() => {
+    if (!clearAsk) return
+    const id = window.setTimeout(() => setClearAsk(null), Math.max(0, clearAsk.at + REMOVE_CONFIRM_MS - Date.now()))
+    return () => window.clearTimeout(id)
+  }, [clearAsk])
   const removeNewest = () => {
     if (!newest) return
     // Only at the station: a press that comes through the Remote stream removes nothing, as
@@ -3050,6 +3072,7 @@ export function ContestView({
       setRemovedNote({ text: t('logEntry.remove.remote'), alert: true })
       return
     }
+    setClearAsk(null)
     const now = Date.now()
     const asked = removeAsk != null && removeAsk.call === newest.call && removeAsk.whenUnix === newest.whenUnix
     if (!asked || now - removeAsk.at > REMOVE_CONFIRM_MS) {
@@ -3066,6 +3089,42 @@ export function ContestView({
           return contestRemoved().then(setRemovedList)
         },
         () => setRemovedNote({ text: t('logEntry.remove.failed'), alert: true }),
+      )
+      .catch(() => {})
+  }
+  const clearAll = () => {
+    if (!newest) return
+    const say = (text: string, alert: boolean) => {
+      setRemovedNote({ text, alert })
+      pushToast(text, alert ? 'error' : 'info', CLEAR_TOAST_MS)
+    }
+    // Only at the station, as removal is: a press through the Remote stream clears nothing. Read
+    // before anything awaits, inside the stream's dispatch.
+    if (isStreamInput()) {
+      setClearAsk(null)
+      say(t('contest.clear.remote'), true)
+      return
+    }
+    setRemoveAsk(null)
+    const now = Date.now()
+    const asked =
+      clearAsk != null &&
+      clearAsk.rows === log.length &&
+      clearAsk.call === newest.call &&
+      clearAsk.whenUnix === newest.whenUnix
+    if (!asked || now - clearAsk.at > REMOVE_CONFIRM_MS) {
+      setRemovedNote(null)
+      setClearAsk({ rows: log.length, contacts: contactCount(log), call: newest.call, whenUnix: newest.whenUnix, at: now })
+      return
+    }
+    setClearAsk(null)
+    contestClear(clearAsk.rows, clearAsk.call, clearAsk.whenUnix)
+      .then(
+        (answer) => {
+          say(clearText(answer, fieldDay?.sendsSerial === true), answer.outcome === 'refused')
+          return contestRemoved().then(setRemovedList)
+        },
+        () => say(t('contest.clear.failed'), true),
       )
       .catch(() => {})
   }
@@ -3747,6 +3806,24 @@ export function ContestView({
           >
             {busy === 'dupesheet' ? t('fieldDay.export.busy') : t('fieldDay.export.dupeSheet.label')}
           </button>
+          {/* Clear test contacts: beside the exports rather than on a row of its own, so the log
+              keeps every pixel. Asked, it says what the second click does. */}
+          {removable && (
+            <button
+              type="button"
+              className="export-btn"
+              aria-pressed={clearAsk != null}
+              disabled={log.length === 0}
+              onClick={clearAll}
+              title={fieldDay?.sendsSerial ? t('contest.clear.title.serial') : t('contest.clear.title')}
+            >
+              {clearAsk == null
+                ? t('contest.clear.label')
+                : fieldDay?.sendsSerial
+                  ? t('contest.clear.confirm.serial', { count: clearAsk.contacts })
+                  : t('contest.clear.confirm', { count: clearAsk.contacts })}
+            </button>
+          )}
           </div>}
 
         {/* ⭐ WHERE THIS SESSION'S MERGED CONTACTS GO — §18.1, per session, default OFF.
@@ -3878,6 +3955,13 @@ export function ContestView({
       )}
       {/* What the journal restore kept out of this session, and why. Nothing was deleted. */}
       {fieldDay?.keptOut && <FdKeptOutNote keptOut={fieldDay.keptOut} contest={eventName} />}
+      {/* The contest journal's writes are failing: the contacts since the last good one are in
+          memory only. Red until a write lands. Once per window: the entry above says it when there is one. */}
+      {fieldDay?.unsaved && !entryAbove && (
+        <p className="fd-score-note fd-unsaved" role="alert">
+          {contestUnsavedText(fieldDay.unsaved)}
+        </p>
+      )}
       {/* …and the ones past its four days that the logbook does not hold, with their merge: never
           asked for by a Remote observer, so never shown there, and never pressed from afar. */}
       {(unmerged.length > 0 || unmergedReport || unmergedError) && (

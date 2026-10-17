@@ -190,6 +190,18 @@ if [ "$(uname -m)" = x86_64 ]; then
   export LDAI_RUNTIME_FILE="$tauri_tools/runtime-x86_64"
 fi
 ok "the bundler's tools are pinned and sha256-verified (${#pinned[@]})"
+# BUILD PATHS: map $HOME to `~` for every compiler `cargo tauri build` runs, as
+# build-windows-cross.sh does (its comment has the detail). rustc embeds source paths for panic
+# locations, gcc for __FILE__, gfortran for its run-time and I/O error messages, and built under a
+# home directory each of them carries the account name into the binary. Not set before
+# fetch-hamlib-unix.sh: Hamlib's configure leaves out its default -O2 when CFLAGS is set, and it
+# builds in a temporary directory, so it embeds no home path anyway. RUSTFLAGS REPLACES `rustflags`
+# from a cargo config file rather than adding to it; this repo sets none there. gfortran ignores
+# -ffile-prefix-map for those paths, hence the launcher.
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$HOME=~"
+export CFLAGS="${CFLAGS:+$CFLAGS }-ffile-prefix-map=$HOME=~"
+export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-ffile-prefix-map=$HOME=~"
+export CMAKE_Fortran_COMPILER_LAUNCHER="$REPO/scripts/fortran-remap-home.sh${CMAKE_Fortran_COMPILER_LAUNCHER:+;$CMAKE_Fortran_COMPILER_LAUNCHER}"
 # The signature Tauri makes HERE is over bytes the repack below replaces, so it is deleted the
 # moment the build finishes and remade at the end over the final file. `latest.json` is generated
 # FROM the `.sig`, and a stale one does NOT fail anything: it ships, and every Linux self-update

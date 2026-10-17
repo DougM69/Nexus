@@ -16,6 +16,7 @@
 pub mod decode;
 pub mod mode;
 pub mod source;
+pub mod wsjt77;
 
 pub use decode::Decode;
 pub use mode::{
@@ -28,6 +29,10 @@ pub use source::{DecodeRequest, NativeSource, SignalSource, WsjtxUdpSource};
 /// new band's audio is not probed with stale prior-cycle AP hypotheses.
 pub use ft8::a7_reset as reset_ft8_a7;
 pub use ft8::A7ResetGuard as Ft8A7ResetGuard;
+
+/// FT2's tone count and tone spacing (Hz), from its modulator, so the engine can size the band an
+/// FT2 frame occupies without naming the modem crate.
+pub use ft2::{BAUD as FT2_TONE_SPACING_HZ, NTONES as FT2_NTONES};
 
 #[cfg(test)]
 mod tests {

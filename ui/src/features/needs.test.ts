@@ -213,7 +213,7 @@ describe('workTarget', () => {
     expect(p?.freqMhz).toBe(14.25)
   })
 
-  it('a Digital need QSYs to the exact spot freq and opens the digital cockpit (N1MM-style)', () => {
+  it('a Digital need QSYs to the exact spot freq and opens the digital cockpit', () => {
     const t = workTarget(alert('A', 'Digital', '20m', 14.074), BAND_PLAN)
     expect(t).toEqual({ call: 'A', view: 'operate', freqMhz: 14.074, band: '20m' })
   })

@@ -81,6 +81,7 @@ vi.mock('../api', async (importOriginal) => {
     // so the auto-stub's `{}` is not a usable log — this suite runs against an empty one.
     getLicensedBandPlan: vi.fn(async () => []),
     haltTx: vi.fn(async () => ({})),
+    getCallStats: vi.fn(async () => null),
   }
 })
 vi.mock('../toast', () => ({
@@ -100,7 +101,10 @@ vi.mock('./PhoneScope', () => ({ PhoneScope: (p: { feed?: string }) => <div data
 vi.mock('./Waterfall', () => ({
   Waterfall: (p: { stripRef?: Ref<HTMLDivElement> }) => <div className="waterfall-wrap" ref={p.stripRef} />,
 }))
-vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
+// A click stands in for a call settling in the strip (LogEntry `onEntryCall`): the Stats pane's source.
+vi.mock('./LogEntry', () => ({
+  LogEntry: (p: { onEntryCall?: (call: string) => void }) => <div data-testid="log-stub" onClick={() => p.onEntryCall?.('W1AW')} />,
+}))
 
 const js8Enter = api.js8Enter as ReturnType<typeof vi.fn>
 const js8SetSpeed = api.js8SetSpeed as ReturnType<typeof vi.fn>
@@ -230,7 +234,9 @@ describe('Js8Cockpit pane shell', () => {
   })
 
   it('every operator-content block renders through a CockpitPaneFrame inside the region', async () => {
-    await renderCockpit()
+    // The RX pane is JS8Call's: it prints what is heard on the RX offset, so RX sits on the
+    // fixture's CQ (1210 Hz) here.
+    await renderCockpit({ snap: { ...snap, radio: { ...snap.radio, rxOffsetHz: 1210 } } as AppSnapshot })
     for (const id of ['activity', 'offsets', 'stations', 'inbox', 'log']) {
       const pane = document.querySelector(`[data-pane="${id}"]`)
       expect(pane, `pane "${id}" missing`).not.toBeNull()
@@ -238,7 +244,7 @@ describe('Js8Cockpit pane shell', () => {
       expect(pane!.closest('.cockpit-panes'), `"${id}" renders outside the region`).not.toBeNull()
     }
     expect(document.querySelector('[data-pane="activity"] .js8-row')).not.toBeNull()
-    expect(document.querySelector('[data-pane="stations"] .js8-station-call')!.textContent).toBe('W0IND')
+    expect(document.querySelector('[data-pane="stations"] .js8-station:not(.js8-group) .js8-station-call')!.textContent).toBe('W0IND')
     expect(document.querySelector('[data-pane="inbox"] .js8-inbox-row')).not.toBeNull()
     expect(document.querySelector('[data-pane="log"] [data-testid="log-stub"]')).not.toBeNull()
   })
@@ -292,13 +298,30 @@ describe('Js8Cockpit pane shell', () => {
   it('the speed chips render in the header and ask the ENGINE for a speed change', async () => {
     await renderCockpit()
     const chips = Array.from(document.querySelectorAll('.cockpit-header .js8-speed-chip'))
-    expect(chips.map((c) => c.textContent)).toEqual(['Slow', 'Normal', 'Fast', 'Turbo'])
+    expect(chips.map((c) => c.textContent)).toEqual(['Slow', 'Normal', 'Fast', 'JS8 40', 'JS8 60'])
     expect(chips[1].getAttribute('aria-pressed')).toBe('true')
     await act(async () => {
       fireEvent.click(chips[2])
     })
     expect(js8SetSpeed).toHaveBeenCalledWith(2)
     expect(document.querySelector('.cockpit-txdock .js8-speed-chip')).toBeNull()
+  })
+
+  // JS8Call 3.0's names on the chips, the old and internal ones in the tooltip, and JS8 60 a
+  // speed the operator can pick: index 4 to the engine, as the other chips send theirs.
+  it('names JS8 40 and JS8 60 as JS8Call 3.0 does, Turbo and Ultra in their tooltips', async () => {
+    await renderCockpit()
+    const chips = Array.from(document.querySelectorAll<HTMLElement>('.cockpit-header .js8-speed-chip'))
+    expect(chips[3].title).toContain('Turbo')
+    expect(chips[4].title).toContain('Ultra')
+    expect(chips[4].title).toContain('4 s')
+    expect(chips[2].title).not.toContain('Turbo')
+    await act(async () => {
+      fireEvent.click(chips[4])
+    })
+    expect(js8SetSpeed).toHaveBeenCalledWith(4)
+    // The fixture's mask is the 2.3-era four (15): four of five speeds decode.
+    expect(document.querySelector('.cockpit-header .js8-multi')?.textContent).toContain('4/5')
   })
 
   it('survives the keep-alive hide/show round trip with its structure intact', async () => {
@@ -407,7 +430,7 @@ describe('Js8Cockpit column dividers', () => {
     expect(dividers(region)).toEqual([['log column width', 'cockpit-colseam-2']])
     await tier(region, 1800)
     expect(dividers(region)).toEqual([
-      ['Activity column / Stations column', 'cockpit-colseam-2'],
+      ['RX column / Stations column', 'cockpit-colseam-2'],
       ['log column width', 'cockpit-colseam-3'],
     ])
     await tier(region, 900)
@@ -480,23 +503,23 @@ describe('Js8Cockpit dividers between panes', () => {
 
   it('exist only in the bounded flow, each between its own pair, at three columns and at two', async () => {
     const region = await mountLive()
-    expect(seam(/^Activity \/ Band activity$/), 'a stack cannot be divided').toBeNull()
+    expect(seam(/^RX \/ Band activity$/), 'a stack cannot be divided').toBeNull()
     await tier(region, 1800)
-    expect(around(seam(/^Activity \/ Band activity$/)!)).toEqual(['activity', 'offsets'])
+    expect(around(seam(/^RX \/ Band activity$/)!)).toEqual(['activity', 'offsets'])
     expect(around(seam(/^Stations \/ Inbox$/)!)).toEqual(['stations', 'inbox'])
     // A column's dividers, marked as such: the class the sheet keys their in-gap margins on
     // (styles.css `.in-column`; cockpit-shells.test.ts computes the net).
-    for (const name of [/^Activity \/ Band activity$/, /^Stations \/ Inbox$/]) {
+    for (const name of [/^RX \/ Band activity$/, /^Stations \/ Inbox$/]) {
       expect(seam(name)!.parentElement!.classList.contains('cockpit-col')).toBe(true)
       expect(seam(name)!.classList.contains('in-column'), `${name} takes a 12 px gap of its own`).toBe(true)
     }
     // Two columns: all four in the leading column, each divider still between its own pair.
     await tier(region, 1200)
     expect(region.getAttribute('data-cols')).toBe('2')
-    expect(around(seam(/^Activity \/ Band activity$/)!)).toEqual(['activity', 'offsets'])
+    expect(around(seam(/^RX \/ Band activity$/)!)).toEqual(['activity', 'offsets'])
     expect(around(seam(/^Stations \/ Inbox$/)!)).toEqual(['stations', 'inbox'])
     await tier(region, 900)
-    expect(seam(/^Activity \/ Band activity$/)).toBeNull()
+    expect(seam(/^RX \/ Band activity$/)).toBeNull()
     expect(seam(/^Stations \/ Inbox$/)).toBeNull()
   })
 
@@ -515,13 +538,13 @@ describe('Js8Cockpit dividers between panes', () => {
     const rect = (top: number, h: number) => () => ({ top, bottom: top + h, height: h, left: 0, right: 600, width: 600, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
     pane('activity').getBoundingClientRect = rect(100, 300)
     pane('offsets').getBoundingClientRect = rect(412, 150)
-    fireEvent.keyDown(seam(/^Activity \/ Band activity$/)!, { key: 'ArrowDown' })
+    fireEvent.keyDown(seam(/^RX \/ Band activity$/)!, { key: 'ArrowDown' })
     const [a, b] = seamShares(300 / 450 + 0.05)
     expect(JSON.parse(localStorage.getItem(panelStorageKey('js8'))!).share).toEqual({ activity: a, offsets: b })
     expect(Number(pane('activity').style.getPropertyValue('--pane-share'))).toBeCloseTo(a * 1.5, 10)
     expect(Number(pane('offsets').style.getPropertyValue('--pane-share'))).toBeCloseTo(b * 1.5, 10)
     // Backspace: the stock split back, no share of its own left behind.
-    fireEvent.keyDown(seam(/^Activity \/ Band activity$/)!, { key: 'Backspace' })
+    fireEvent.keyDown(seam(/^RX \/ Band activity$/)!, { key: 'Backspace' })
     expect(JSON.parse(localStorage.getItem(panelStorageKey('js8'))!).share).toEqual({})
     expect(pane('activity').style.getPropertyValue('--pane-share')).toBe('')
   })
@@ -530,7 +553,7 @@ describe('Js8Cockpit dividers between panes', () => {
     localStorage.setItem(panelStorageKey('js8'), JSON.stringify({ v: 2, state: { offsets: 'removed' }, share: { activity: 0.3, offsets: 1.7 } }))
     const region = await mountLive()
     await tier(region, 1800)
-    expect(seam(/^Activity \/ Band activity$/)).toBeNull()
+    expect(seam(/^RX \/ Band activity$/)).toBeNull()
     expect(pane('activity').style.getPropertyValue('--pane-share'), 'a lone pane took a split share').toBe('')
     expect(pane('activity').style.minHeight, 'a lone pane took a split floor').toBe('var(--cockpit-fill-min, 0)')
   })
@@ -598,5 +621,34 @@ describe('the JS8 waterfall divider', () => {
     await renderCockpit({ panels: fakePanels(['scope']) })
     expect(screen.queryByRole('separator', { name: 'waterfall height' })).toBeNull()
     expect(localStorage.getItem('nexus.split.js8.waterfall')).toBe('30')
+  })
+})
+
+// THE STATS PANE (2026-10-14): under JS8's log pane in the log column, its own height, asking for the call the strip
+// reports on the radio's band in JS8 — and only beside a log pane: with the log hidden it has nothing to follow.
+describe('the Stats pane beside the log pane', () => {
+  it('stands under the log pane in the log column, its own height, and follows the strip’s call', async () => {
+    vi.mocked(api.getCallStats).mockClear()
+    await renderCockpit({ panels: fakePanels() })
+    const stats = document.querySelector('[data-pane="stats"]')!
+    expect(stats, 'ticked, the Stats pane is not on screen').not.toBeNull()
+    expect(stats.getAttribute('data-fit')).toBe('content')
+    expect(stats.previousElementSibling?.getAttribute('data-pane'), 'not directly under the log pane').toBe('log')
+    expect(api.getCallStats).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('log-stub'))
+    await act(async () => {})
+    expect(api.getCallStats).toHaveBeenCalledWith('W1AW', '20m', 'JS8')
+  })
+
+  it('stands only beside the log pane: with the log hidden it has nothing to follow, and is gone', async () => {
+    await renderCockpit({ panels: fakePanels(['log']) })
+    expect(document.querySelector('[data-pane="stats"]')).toBeNull()
+    expect(document.querySelector('[data-pane="activity"]'), 'control: the region rendered').not.toBeNull()
+  })
+
+  it('is one ⊞ tick', async () => {
+    await renderCockpit({ panels: fakePanels(['stats']) })
+    expect(document.querySelector('[data-pane="stats"]')).toBeNull()
+    expect(document.querySelector('[data-pane="log"]')).not.toBeNull()
   })
 })

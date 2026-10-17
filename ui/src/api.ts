@@ -14,7 +14,10 @@ import type {
   AppSnapshot,
   AudioDevices,
   AwardSummary,
+  DxccEntityOption,
   GeoLogStats,
+  LogTimeline,
+  TimelineRange,
   BandChannel,
   PrivilegeSpans,
   CatTestResult,
@@ -42,7 +45,10 @@ import type {
   ImportStats,
   JourneySummary,
   Js8ComposerPrefill,
+  Js8Filter,
+  Js8Freq,
   Js8State,
+  Js8Typeahead,
   Js8InboxState,
   Js8Switch,
   LoggedQso,
@@ -849,6 +855,22 @@ export async function contestRestore(id: number): Promise<ContestRemovalAnswer> 
   return invoke<ContestRemovalAnswer>('contest_restore', { id })
 }
 
+/** What a Clear test contacts came to: how many contacts left the contest log (each now under
+ *  Removed), where any of them had already gone, and at a club whether the club drops them now —
+ *  or why nothing was cleared. */
+export type ContestClearAnswer =
+  | { outcome: 'cleared'; contacts: number; sentTo: ContestSentTo; club?: ContestClubRoute }
+  | { outcome: 'refused'; refusal: ContestRemovalRefusal }
+
+/** ⭐ **Clear test contacts** — every contact of this running out of the contest log, each kept
+ *  under Removed as `contestRemoveLast` keeps one, when the log is still what the screen named
+ *  (`rowCount` rows, the newest contact `call` at `whenUnix`), else `refused: changed`. Club seqs
+ *  stay spent, and the serial run starts again at 1. At a club the club takes each back too (`club`). Answers once the contest
+ *  journal holds the change. Never keys or stops TX. */
+export async function contestClear(rowCount: number, call: string, whenUnix: number): Promise<ContestClearAnswer> {
+  return invoke<ContestClearAnswer>('contest_clear', { rowCount, call, whenUnix })
+}
+
 /** The removed contacts, oldest removal first. */
 export async function contestRemoved(): Promise<RemovedContest[]> {
   return invoke<RemovedContest[]>('contest_removed')
@@ -1584,6 +1606,15 @@ export async function setSatTagById(target: RowRef, satName: string | null): Pro
   return invoke<RowAnswer>('set_sat_tag_by_id', { target, satName })
 }
 
+/** Set — or CLEAR — by hand the DXCC entity the contact `target` counts toward (ADIF `DXCC`):
+ *  `dxcc` is the entity's number (`getDxccEntities`), and `null` clears it so the contact counts
+ *  by its call again. LoTW's number for the contact, where the log keeps one, still counts over
+ *  it. Its own command for the satellite tag's reason: a clear has to be an act the operator
+ *  chooses, never a blank box on the edit form. */
+export async function setDxccById(target: RowRef, dxcc: number | null): Promise<RowAnswer> {
+  return invoke<RowAnswer>('set_dxcc_by_id', { target, dxcc })
+}
+
 /** Delete the contact `target`. */
 export async function deleteQsoById(target: RowRef): Promise<RowAnswer> {
   return invoke<RowAnswer>('delete_qso_by_id', { target })
@@ -1601,9 +1632,20 @@ export async function getAwards(): Promise<AwardSummary> {
   return invoke<AwardSummary>('get_awards')
 }
 
+/** The Stats pane: what the log holds for `call`, typed in a log entry on `band` in `mode` —
+ *  counted by the award fold itself, in the station. */
+export async function getCallStats(call: string, band: string, mode: string): Promise<import('./types').CallStats> {
+  return invoke('get_call_stats', { call, band, mode })
+}
+
 /** Geographic log stats — continent / CQ-zone / DX-vs-domestic (cty.dat-resolved per call). */
 export async function getLogStats(): Promise<GeoLogStats> {
   return invoke<GeoLogStats>('get_log_stats')
+}
+
+/** The Statistics view's timeline: contacts per mode over the past day, 30 days or year (UTC). */
+export async function getLogTimeline(range: TimelineRange): Promise<LogTimeline> {
+  return invoke<LogTimeline>('get_log_timeline', { range })
 }
 
 /** The Journey snapshot — the in-app, beginner-first achievement layer (firsts,
@@ -2058,6 +2100,11 @@ export async function importPotaLog(text: string): Promise<PotaStampResult> {
   return invoke<PotaStampResult>('import_pota_log', { text })
 }
 
+/** The native title bar's theme on Windows: the operator's pick, or null for System. */
+export async function setTitleBarTheme(theme: 'light' | 'dark' | null): Promise<void> {
+  await invoke('set_title_bar_theme', { theme })
+}
+
 /** Open a station's QRZ.com profile in the system browser (roster/logbook affordance). */
 export async function openQrzPage(call: string): Promise<void> {
   await invoke('open_qrz_page', { call })
@@ -2249,7 +2296,7 @@ export async function workSpot(
   park?: { program: string; reference: string } | null,
 ): Promise<AppSnapshot> {
   // `call` lets the backend look up the spot's pile-up split ("UP 2") and
-  // configure rig split automatically — the N1MM behavior. `tier` is the digital
+  // configure rig split automatically. `tier` is the digital
   // spot's protocol: passing it here makes the tier switch and the QSY ONE atomic
   // backend call — as two calls, the radio loop could command the tier's default
   // dial to the rig in the gap before the spot's exact frequency ("hitting a
@@ -2573,6 +2620,13 @@ export async function getDxccEntityNames(): Promise<string[]> {
   return invoke<string[]>('dxcc_entity_names')
 }
 
+/** Every DXCC entity a contact can be set to count toward, current and deleted, in number
+ *  order — the Logbook's country picker. The station owns the table, so the picker offers
+ *  exactly the numbers `setDxccById` accepts. */
+export async function getDxccEntities(): Promise<DxccEntityOption[]> {
+  return invoke<DxccEntityOption[]>('dxcc_entities')
+}
+
 /** Every cty.dat entity name with its continent code (`[entity, 'EU']`), for band activity's
  *  hide-by-continent (#229) — a decode row carries the entity name, never the continent. */
 export async function getDxccEntityContinents(): Promise<[string, string][]> {
@@ -2775,6 +2829,9 @@ export interface RadioProfilePatch {
   flexNativeAudio: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta; per-radio, as above). */
   flexNativeCat: boolean
+  /** This radio's Beta setting that lets the Flex client send CW, Tune and ATU before a bench has
+   *  confirmed them (off by default; per-radio, as above). */
+  flexNativeUnbenched: boolean
   /** This radio's address, network user and control port for the Icom network connection (Beta;
    *  per-radio, as above). Its password is never here: the OS keychain holds it. */
   icomLanHost: string
@@ -3155,6 +3212,12 @@ export interface AprsIsStatus {
   gateRejected: number
   /** The most recent refusal reason, for the tooltip. */
   lastReject: string | null
+  /** The session is up for JS8's @APRSIS gateway: what JS8 stations address to @APRSIS goes up
+   * through it. With the feed off, that is why it is up. Desktop only: the Remote page's sample
+   * keeps the nine fields above, which its validator requires exactly. */
+  forJs8?: boolean
+  /** …and JS8's relay listens on it for APRS messages to stations heard on JS8. Desktop only. */
+  forJs8Relay?: boolean
 }
 
 /** Poll the APRS-IS feed's status beside the decoder health. */
@@ -3258,7 +3321,7 @@ export async function rttySend(text: string): Promise<RttyState> {
   return invoke<RttyState>('rtty_send', { text })
 }
 
-/** Continuous TX on/off (the MMTTY "TX" latch): stay keyed and type into a live
+/** Continuous TX on/off (the "TX" latch): stay keyed and type into a live
  * transmission instead of one keyed over per Enter. ON runs the same gate a send
  * runs; OFF lets what was already typed finish keying, then unkeys — it is a mode
  * toggle, not the emergency stop (Stop TX and the TX-enable latch are). */
@@ -3370,7 +3433,7 @@ export async function pskSend(text: string): Promise<PskState> {
   return invoke<PskState>('psk_send', { text })
 }
 
-/** Continuous TX on/off — the PSK cockpit's TX button (the MMTTY-style latch).
+/** Continuous TX on/off — the PSK cockpit's TX button (the same latch RTTY carries).
  * ON runs the same gate a send runs; OFF lets what was typed finish keying.
  * NOT the emergency stop: Stop TX / Esc / the TX-enable latch cut instantly. */
 export async function pskSetLatched(on: boolean): Promise<PskState> {
@@ -3408,16 +3471,44 @@ export async function js8LocatorRefusal(): Promise<string | null> {
   return invoke<string | null>('js8_locator_refusal')
 }
 
-/** Select the TRANSMIT speed (0 Slow | 1 Normal | 2 Fast | 3 Turbo). Persisted; the slot
+/** Select the TRANSMIT speed (0 Slow | 1 Normal | 2 Fast | 3 JS8 40 | 4 JS8 60). Persisted; the slot
  * clock and the boundary decode window follow. Never touches the TX latch. */
 export async function js8SetSpeed(speed: number): Promise<Js8State> {
   return invoke<Js8State>('js8_set_speed', { speed })
 }
 
-/** Select which speeds the receiver decodes (bitmask slow 1 · normal 2 · fast 4 · turbo 8).
+/** Select which speeds the receiver decodes (bitmask slow 1 · normal 2 · fast 4 · turbo 8 · ultra 16).
  * Persisted; a mask that decodes nothing is refused (the engine returns why). */
 export async function js8SetRxSpeeds(mask: number): Promise<Js8State> {
   return invoke<Js8State>('js8_set_rx_speeds', { mask })
+}
+
+/** JS8Call's decode filter (on/off, centre and width in Hz): the waterfall controls and the row
+ *  menus' "Centre filter at …Hz". Receive only. Persisted. */
+export async function js8SetFilter(filter: Js8Filter): Promise<Js8State> {
+  return invoke<Js8State>('js8_set_filter', { filter })
+}
+
+/** JS8Call 3.0.3's own frequency table as rows of the operator's list: what Settings shows while
+ *  no list of the operator's own is kept, and what Reset returns to. */
+export async function js8DefaultFrequencies(): Promise<Js8Freq[]> {
+  return invoke<Js8Freq[]>('js8_default_frequencies')
+}
+
+/** The passband centre "QSY to centre" puts the transmit offset on, Hz. Moves nothing by itself. */
+export async function js8SetQsyCenter(hz: number): Promise<Js8State> {
+  return invoke<Js8State>('js8_set_qsy_center', { hz })
+}
+
+/** JS8Call's QSY: move the dial so the transmit offset sits on the passband centre. MOVES THE RIG;
+ *  refused while anything transmits or a JS8 message is going out (the engine says why). */
+export async function js8QsyToCentre(): Promise<Js8State> {
+  return invoke<Js8State>('js8_qsy_to_centre')
+}
+
+/** Answer a scheduled frequency change's notice: `go` = change now, otherwise cancel (stay). */
+export async function js8HopAnswer(go: boolean): Promise<Js8State> {
+  return invoke<Js8State>('js8_hop_answer', { go })
 }
 
 /** Queue a message to `to` (a callsign, an @GROUP, or null for @ALLCALL). An explicit
@@ -3432,23 +3523,24 @@ export async function js8SendCommand(to: string, cmd: number, arg: string): Prom
   return invoke<Js8State>('js8_send_command', { to, cmd, arg })
 }
 
-/** Call CQ (`idx` = the CQ variant 0..7: "CQ CQ CQ" … "CQ"). */
-export async function js8CallCq(idx: number): Promise<Js8State> {
-  return invoke<Js8State>('js8_call_cq', { idx })
+/** Call CQ with the CQ message from Settings (`js8CqText`, JS8Call's CQ message), its macros
+ * replaced by the station. */
+export async function js8CallCq(): Promise<Js8State> {
+  return invoke<Js8State>('js8_call_cq')
 }
 
-/** The SECOND act of the two-act rule: autoreply | relay | hback (persisted) or hb
+/** The SECOND act of the two-act rule: autoreply | relay | hback | hbnet (persisted) or hb
  * (session-only). Turning a switch on never keys by itself — the session TX latch is the
  * first act, re-checked at plan time on every slot. */
 export async function js8Arm(which: Js8Switch, on: boolean): Promise<Js8State> {
   return invoke<Js8State>('js8_arm', { which, on })
 }
 
-/** Arm/disarm JS8Call's repeating CQ (`idx` = the CQS variant to send). Session-only and
- * never persisted, like the HB toggle; the interval is the persisted half (js8CqIntervalMin).
+/** Arm/disarm JS8Call's repeating CQ, which sends the CQ message from Settings. Session-only
+ * and never persisted, like the HB toggle; the interval is the persisted half (js8CqIntervalMin).
  * Arming keys nothing — the session TX latch is the first act. */
-export async function js8CqRepeat(on: boolean, idx: number): Promise<Js8State> {
-  return invoke<Js8State>('js8_cq_repeat', { on, idx })
+export async function js8CqRepeat(on: boolean): Promise<Js8State> {
+  return invoke<Js8State>('js8_cq_repeat', { on })
 }
 
 /** The native cockpit's compose box, both ways: whether it holds text, and the id of the reply
@@ -3456,6 +3548,35 @@ export async function js8CqRepeat(on: boolean, idx: number): Promise<Js8State> {
  * off, as JS8Call fills its compose box), or null. Keys nothing. */
 export async function js8Composer(composing: boolean, taken: number | null): Promise<Js8ComposerPrefill | null> {
   return invoke<Js8ComposerPrefill | null>('js8_composer', { composing, taken })
+}
+
+/** JS8Call's typeahead: what is still to go of the operator's message going out, `sentSeen` the
+ * characters of it the box had seen go. Taken just before the next frame; answered with what the box
+ * shows, or null once nothing of the box's is going out. Native only. */
+export async function js8Typeahead(sentSeen: number, unsent: string): Promise<Js8Typeahead | null> {
+  return invoke<Js8Typeahead | null>('js8_typeahead', { sentSeen, unsent })
+}
+
+/** What the compose box shows of the operator's message going out, or null once it has gone. */
+export async function js8TypeaheadState(): Promise<Js8Typeahead | null> {
+  return invoke<Js8Typeahead | null>('js8_typeahead_state')
+}
+
+/** The compose box's words JS8Call underlines (its word check): one answer per word, in order,
+ * true where the JSC dictionary codes the word in pieces. The dictionary only; nothing keys. */
+export async function js8WordCheck(words: string[]): Promise<boolean[]> {
+  return invoke<boolean[]>('js8_word_check', { words })
+}
+
+/** What JS8Call's right-click offers for an underlined word. */
+export interface Js8WordSuggestions {
+  /** Up to five cheaper words, cheapest first. */
+  words: string[]
+  /** The dictionary holds some prefix of the word: "No suggestions" when `words` is empty. */
+  found: boolean
+}
+export async function js8WordSuggestions(word: string): Promise<Js8WordSuggestions> {
+  return invoke<Js8WordSuggestions>('js8_word_suggestions', { word })
 }
 
 /** The operator's Yes or No to the automatic reply the dock asks about (JS8Call's
@@ -3478,6 +3599,49 @@ export async function js8InboxMark(id: number, state: Js8InboxState): Promise<Js
 /** Delete an inbox row. Journaled. */
 export async function js8InboxDelete(id: number): Promise<Js8State> {
   return invoke<Js8State>('js8_inbox_delete', { id })
+}
+
+/** "Send heartbeat now" (JS8Call's HB button menu): one heartbeat in the next period, the repeat
+ * left as it is. Refused with heartbeat networking off or at a speed with no heartbeats; keys only
+ * with TX on. */
+export async function js8HeartbeatNow(): Promise<Js8State> {
+  return invoke<Js8State>('js8_heartbeat_now')
+}
+
+/** The call in the To box (null when empty): JS8Call's selected call, which the QSO pause reads.
+ * Keys nothing. */
+export async function js8SelectCall(call: string | null): Promise<void> {
+  return invoke<void>('js8_select_call', { call })
+}
+
+/** JS8Call's "Store message…": leave `text` at this station for `to`, handed over when `to` asks
+ * (QUERY MSGS, then QUERY MSG n). Keys nothing. Refused with the reason. Journaled. */
+export async function js8StoreMessage(to: string, text: string): Promise<Js8State> {
+  return invoke<Js8State>('js8_store_message', { to, text })
+}
+
+/** Clear the Inbox's notes of what a cap dropped. Journaled. */
+export async function js8InboxDroppedClear(): Promise<Js8State> {
+  return invoke<Js8State>('js8_inbox_dropped_clear')
+}
+
+/** The JS8 call list's "Block this station": the RX block list (Settings `js8RxBlocklist`), that one
+ *  field, never the settings form. Resolves with the list as saved, for the UI's settings mirror. */
+export async function js8SetRxBlocklist(calls: string[]): Promise<string[]> {
+  return invoke<string[]>('js8_set_rx_blocklist', { calls })
+}
+
+/** The JS8 call list's group joins and leaves (Settings `js8Groups`), that one field, never the
+ *  settings form; refused for @APRSIS and @JS8NET. Resolves with the groups as saved. */
+export async function js8SetGroups(groups: string[]): Promise<string[]> {
+  return invoke<string[]>('js8_set_groups', { groups })
+}
+
+/** The JS8 call list's Remove on @ALLCALL and Add of @ALLCALL (Settings `js8AvoidAllcall`, JS8Call's
+ *  "Do not participate in the @ALLCALL group"), that one field, never the settings form. Resolves
+ *  with the setting as saved. */
+export async function js8SetAvoidAllcall(avoid: boolean): Promise<boolean> {
+  return invoke<boolean>('js8_set_avoid_allcall', { avoid })
 }
 
 /** Arm/disarm the SSTV RX decoder by an EXPLICIT operator act (session-only; RX

@@ -78,7 +78,7 @@ const OLD_PROFILE = {
     { key: 'F3', label: 'Exch', text: '! DE {MYCALL} {RST} {EXCH} {EXCH} K' },
   ],
 }
-/** The active profile, the operator's own, N1MM-style. */
+/** The active profile, the operator's own. */
 const MINE = {
   name: 'Mine',
   macros: [

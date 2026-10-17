@@ -181,7 +181,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // The #145 declarations. The words here are the SYMPTOM, not the setting name — an
       // operator whose rig keys the moment Nexus opens does not search for "handshake".
       'serial handshake', 'flow control', 'xonxoff', 'rts state', 'dtr state', 'keying line',
-      'keys at launch', 'transmits at startup', 'stuck ptt', 'stuck transmit'],
+      'keys at launch', 'transmits at startup', 'stuck ptt', 'stuck transmit',
+      // The Flex client's Beta setting for CW, Tune and the ATU, under the words for what it
+      // switches on: an operator looking for it asks how to get CW or the tuner through the client.
+      'flex cw', 'cwx', 'flex tune', 'flex atu'],
   },
   {
     id: 'audio',
@@ -353,9 +356,20 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'JS8',
     tab: 'digital',
     keywords: ['js8', 'js8call', 'heartbeat', 'hb', 'autoreply', 'relay', 'inbox',
-      'store and forward', 'slow', 'normal', 'fast', 'turbo', '7.078', '14.078',
+      'store and forward', 'slow', 'normal', 'fast', 'turbo', 'js8 40', 'js8 60', 'ultra', '7.078', '14.078',
+      'cq message', 'reply message', 'saved messages', 'macros', 'send at once', 'immediately transmit',
+      'pills', 'word suggestions', 'spellcheck',
       'idle watchdog', 'allcall', 'callsign aging', 'aging', 'confirmation', 'confirm', 'allow list', 'deny list',
-      'only autoreply', 'never autoreply', 'band activity aging', 'activity aging'],
+      'only autoreply', 'never autoreply', 'band activity aging', 'activity aging',
+      'heartbeat networking', 'hb net', 'qso pause', 'heartbeat acknowledgement', '55 minutes',
+      'outside 500', 'do not participate',
+      'hold ptt', 'ptt between frames', 'tx offset', 'offset while sending', 'tx delay', 'ptt delay',
+      'js8 frequencies', 'frequency list', 'calling frequencies', '1.8435', '5.363', 'last used frequency',
+      'band schedule', 'frequency schedule', 'switch bands', 'band hopping',
+      'spot', 'spotting', 'js8net', 'aprsis', 'aprs-is', 'never spot', 'aprs relay',
+      'rx block list', 'block list', 'hide callsigns', 'highlight', 'end of transmission', 'missing frame',
+      'js8 sounds', 'notifications',
+      'js8call api', 'api', 'tcp', 'udp', '2442', '2242', 'accept requests'],
   },
   {
     id: 'sstv',
@@ -433,7 +447,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'logging',
     keywords: ['wsjt-x', 'udp', 'gridtracker', 'jtalert', 'hrd', 'ham radio deluxe', 'psk',
       'pskreporter', 'cluster', 'rbn', 'reverse beacon', 'spot source', 'cluster node',
-      'dxspider', 'cc cluster', 'all.txt', 'wav',
+      'dxspider', 'cc cluster', 'all.txt', 'directed.txt', 'wav',
       'recording', 'propagation', 'diagnostic log', 'nexus-diag.log', 'log file', 'debug log',
       'troubleshooting', 'bug report', 'crash'],
   },

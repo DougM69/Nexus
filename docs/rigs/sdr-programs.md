@@ -220,7 +220,7 @@ Nexus at it as **NET rigctl**, as described under
 
 - [FlexRadio Setup](flexradio.md): the same idea for a Flex, with SmartSDR CAT
   serving CAT and DAX carrying the audio.
-- [Rig Setup Guides](index.md): the three connection types, and Test CAT.
+- [Rig Setup Guides](index.md): the connection types, and Test CAT.
 - [Settings reference ▸ Rig & CAT](../guide/settings-reference.md#rig--cat):
   every field in that section.
 - [Troubleshooting](../troubleshooting.md): CAT and audio problems on any rig.

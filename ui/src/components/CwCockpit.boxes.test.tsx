@@ -155,20 +155,21 @@ async function mount(lend = true) {
 }
 const FIRST = SHARED_PANES.map((e) => e.id)
 const paneOf = (entry: string) => SHARED_PANES.find((e) => e.id === entry)!.pane
-/** CW's own panes on screen in this fixture (the two feeds only once ticked). */
-const ownShown = (id: CwPanelId) => id !== 'spots' && id !== 'needed' ? true : api!.stateOf(id) !== 'removed'
+/** CW's own panes on screen in this fixture (the two feeds and the Stats pane only once ticked). */
+const ownShown = (id: CwPanelId) => (id !== 'spots' && id !== 'needed' && id !== 'stats' ? true : api!.stateOf(id) !== 'removed')
 
 /** What the record says the region shows: the Rig controls frame at the head of column 2 (and, below
  *  three tracks, where column 2's panes begin, ahead of the feeds on the stock placement). */
 function expected(tracks: number, shownNow: (id: CwPanelId) => boolean) {
   const place = api!.layout.place
   const g3 = regionGroups(CW_PANELS.arrange!, place, 3, shownNow)
-  if (tracks === 3) return [g3[0].ids, ['rigctl', ...g3[1].ids], [...g3[2].ids, 'log']]
+  // The log form heads its column (2026-10-14): a pane placed there stands under it.
+  if (tracks === 3) return [g3[0].ids, ['rigctl', ...g3[1].ids], ['log', ...g3[2].ids]]
   const merged = regionGroups(CW_PANELS.arrange!, place, 2, shownNow)[0].ids
   const stock = isStockPlacement(CW_PANELS.arrange!, place)
   const mid = merged.findIndex((id) => !g3[0].ids.includes(id) || (stock && (id === 'spots' || id === 'needed')))
   const at = mid < 0 ? merged.length : mid
-  return [[...merged.slice(0, at), 'rigctl', ...merged.slice(at)], [...g3[2].ids, 'log']]
+  return [[...merged.slice(0, at), 'rigctl', ...merged.slice(at)], ['log', ...g3[2].ids]]
 }
 
 describe('CW with boxes', () => {
@@ -194,7 +195,7 @@ describe('CW with boxes', () => {
     expect(rendered()).toEqual([['decode', 'sent'], ['rigctl', 'bandActivity', 'copilot', 'box1'], ['log']])
     expect(bodyOf('box1')).toBe(`box-body-${paneOf(FIRST[0])}`)
     fireEvent.click(screen.getByRole('button', { name: t('panels.box.add.log.aria') }))
-    expect(rendered()[2]).toEqual(['box2', 'log'])
+    expect(rendered()[2]).toEqual(['log', 'box2'])
   })
 
   it('picking the Spots board while CW’s own Spots pane shows it moves the board into the box', async () => {

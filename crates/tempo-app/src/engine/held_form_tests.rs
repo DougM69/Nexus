@@ -39,7 +39,7 @@ fn an_imported_20m_and_a_logged_20m_are_one_band() {
     assert_eq!(added, 1, "premise: the import added the contact");
     e.log_qso(contact("W9XYZ", "20m", "FT8", 1_791_000_000));
     let log = e.stored_records();
-    let counts = reference::fold(&log, LogStatCounter::new(&|_: &str| None));
+    let counts = reference::fold(&log, LogStatCounter::new(&|_: &QsoRecord| None));
     assert_eq!(
         counts.by_band,
         vec![LabelCount {

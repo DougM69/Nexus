@@ -94,10 +94,13 @@ WSJT-X muscle memory works unchanged inside a UI built this decade.
 - **🎚️ Real rig control, not just CAT.** On a native-CI-V Icom (IC-7300 / 7610 / 9700 / 705 / 905)
   Nexus drives the radio directly and streams the rig's **own spectrum scope** into the cockpit as a
   real RF panadapter, alongside AGC speed, noise reduction and blanker, notch, filter width, mic
-  gain, and SWR / ALC / power / compression meters on the rig's own calibration curves. FlexRadio
-  streams the SmartSDR panadapter and DAX audio over the network (VITA-49), which keeps working
-  under Remote Desktop where the DAX sound devices are invisible. Every other rig runs through
-  bundled Hamlib and still gets click-to-tune and drag-a-passband on the audio scope.
+  gain, and SWR / ALC / power / compression meters on the rig's own calibration curves. The six
+  Icoms with a network port (IC-7610 / 9700 / 705 / 905 / 7760 / 7300MK2) can also connect over
+  your LAN or Wi-Fi, with frequency and mode, the meters and the rig's own panadapter: a Beta,
+  receive and control only. FlexRadio streams the SmartSDR panadapter over the network (VITA-49),
+  and through the Flex native client (Beta), Nexus's own SmartSDR client, the DAX audio too, which
+  keeps working under Remote Desktop where the DAX sound devices are invisible. Every other rig
+  runs through bundled Hamlib and still gets click-to-tune and drag-a-passband on the audio scope.
 - **🔧 Rig control that recovers by itself.** Nexus stops polling a radio that has stopped
   answering, which is right, but that state used to be permanent: any hiccup cost you rig control
   until you restarted the app. It now retries quietly, backing off to about once every thirty
@@ -145,7 +148,7 @@ WSJT-X muscle memory works unchanged inside a UI built this decade.
 - **🏞️ POTA, SOTA and Field Day.** Live activator spots with **NEW PARK** and **BAND OPEN** badges
   and a one-click **HUNT**. ARRL FD and Winter FD event modes with correct date rules and scoring
   (per-mode points, dupes per band *per mode*, legal power tiers, live bonus checklist), a
-  worked-sections board for all 83 sections, submittable Cabrillo 3.0, and every contact pushed in
+  worked-sections board for all 85 sections, submittable Cabrillo 3.0, and every contact pushed in
   real time to the club's **N3FJP** master log over its official TCP API and broadcast as native
   **N1MM+** `<contactinfo>` datagrams. The event log is journalled, so a mid-event crash comes back
   with your log intact.
@@ -320,8 +323,11 @@ still says what a thing does *not* do, and so does every entry in the changelog.
 - **APRS is on the air**, receiving and mapping, with the internet feed and the receive-only iGate
   confirmed against a live APRS-IS connection. Transmit (beacons, messages, acks) stays behind an
   explicit TX arm; opening the screen only ever starts a receive-only decoder.
-- **The FlexRadio native path** (SmartSDR panadapter, DAX RX and TX audio, native meters) is opt-in,
-  off by default, and **not yet confirmed on hardware here**. Turn it back off if decodes stop.
+- **The FlexRadio native path** (the Flex native client, SmartSDR panadapter, DAX RX and TX audio,
+  native meters) is opt-in, off by default, and **not yet confirmed on hardware here**. Turn it back
+  off if decodes stop.
+- **The Icom network connection** (LAN / Wi-Fi, for the six Icoms with a network port) is a Beta,
+  receive and control only, and **not yet tried on a radio**. USB stays the default.
 - The **TempoFast/TempoDeep tiers work on the air** (first decode 2026-07-21, first two-station QSO
   2026-07-26), and their **sensitivity figures are still simulation numbers**. On-air
   decode-rate-vs-SNR is the open gate and the single most useful contribution you can make.
@@ -330,7 +336,8 @@ still says what a thing does *not* do, and so does every entry in the changelog.
   RTTY among them) the log strip takes that contest's exchange and flags dupes, and the contest log
   exports to Cabrillo. Neither cockpit runs a contest for you.
 - **Windows, macOS, Linux and Raspberry Pi** builds ship together every release.
-- Not implemented yet: **contest modes** (NA VHF, RTTY RU, WW Digi), the **Fox role** (running a
+- Not implemented yet: WSJT-X's **RTTY Roundup and WW Digi contest modes** (FT8 and FT4 send its
+  Field Day and NA VHF Contest messages), the **Fox role** (running a
   DXpedition end), **transmit-side iGating** (deliberately never, since it means a radio keying up
   unattended), and programming DMR / D-STAR / Fusion repeaters (they are listed with badges so you
   know they're there). Shared RepeaterBook access for every user, with no token to set up, is
@@ -416,7 +423,8 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   Development Group. Nexus's digital modem (`libtempo/`) is **derived from WSJT-X**: the FT8/FT4 codec,
   the 77-bit message packing, the LDPC(174,91) FEC, the CRC-14 check, and the Q65 / FST4 / FST4W /
   MSK144 / JT65 / WSPR mode sources are their GPL-licensed work, vendored and reused via a
-  foreign-function interface (see **[NOTICE](NOTICE)** for the full lineage and marked
+  foreign-function interface, and the FT8/FT4 transmit encoder is also translated into Rust from
+  those sources (`crates/modes/src/wsjt77/`; see **[NOTICE](NOTICE)** for the full lineage and marked
   modifications). Nexus interoperates with their ecosystem over the standard WSJT-X UDP protocol;
   its auto-sequencer is original Rust modeled on WSJT-X's on-air behavior.
   **Nexus is not endorsed by nor affiliated with the WSJT Development Group.** GPLv3.
@@ -433,7 +441,8 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   a halved symbol time. Decodium's on-air behavior is the compatibility baseline for the mode
   (see **[NOTICE](NOTICE)** for the per-file provenance split).
 - **[JS8Call](https://github.com/js8call/js8call)** (GPLv3) — **Jordan Sherer KN4CRD** and the
-  JS8Call contributors. Nexus's **JS8** mode is on-air compatible with JS8Call, implemented in Rust
+  JS8Call contributors, and **[JS8Call-improved](https://github.com/JS8Call-improved/JS8Call-improved)**
+  (GPLv3), which continues it as JS8Call 3.0. Nexus's **JS8** mode is on-air compatible with JS8Call, implemented in Rust
   (`crates/js8/`) from JS8Call's source read as the protocol reference; the transcribed tables
   (Costas arrays, LDPC(174,87) parity tables from WSJT-X, alphabets, command and group tables,
   the JSC dictionary) are credited in **[NOTICE](NOTICE)**. No JS8Call code is copied.
@@ -477,6 +486,9 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   their network, so it is validated against signals that actually arrived at an antenna and not only
   against another implementation of the same theory. Thanks to stations 1696, 4803, 5049 and 5062
   and their operators (see **[NOTICE](NOTICE)** for what is redistributed where).
+- **[AD1C Country Files](https://www.country-files.com/)** (MIT) — **Jim Reisert AD1C**. `cty.dat`
+  maps callsigns to DXCC entities and CQ/ITU zones for the awards, the map and the Needed board
+  (see **[NOTICE](NOTICE)**).
 - **Street maps** (optional download) — map data © **[OpenStreetMap](https://www.openstreetmap.org/copyright)**
   contributors (ODbL), from the **[Protomaps basemap](https://github.com/protomaps/basemaps)**;
   drawn with **[MapLibre GL JS](https://github.com/maplibre/maplibre-gl-js)** (BSD-3-Clause) and
@@ -509,6 +521,12 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   which carry the SQLite C amalgamation; ADIF is still written alongside it as a plain-text
   mirror, so your log stays readable without Nexus. SQLite is not licensed — it is dedicated
   to the public domain (see **[NOTICE](NOTICE)** for the per-file verification).
+- **AD1C's `cty.csv`** (MIT) — **Jim Reisert AD1C** ([country-files.com](https://www.country-files.com/)).
+  From the same release as `cty.dat`, it gives each country-file entity its DXCC number, so the
+  awards count a contact by the entity its log or LoTW records (see **[NOTICE](NOTICE)**).
+- **[TrustedQSL](https://www.arrl.org/tqsl-download)** (the ARRL's BSD-style licence) — the **ARRL**.
+  The list of the 62 deleted DXCC entities is transcribed from TrustedQSL's configuration data
+  (see **[NOTICE](NOTICE)**).
 - **[Hamlib](https://hamlib.github.io/)** — `rigctld` for CAT control, bundled on every platform
   (tools GPL-2.0-or-later, library LGPL-2.1-or-later; launched as a separate process, not linked).
 - **[OpenSSL](https://www.openssl.org/)** (Apache-2.0) — the secure connection for HRDLog.net

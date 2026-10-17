@@ -84,7 +84,7 @@
 //! verdict), so it can only ever refuse more. The engine's gate table
 //! (`engine::tx_gate_table`) pins the answers row by row, and the five rows the switch moved.
 
-use super::Engine;
+use super::{DataFrame, Engine};
 use crate::bandplan::band_for_dial;
 use crate::dualrx::{self, CapState, Pairing, ReceiverId, RxStage, StageOwner};
 
@@ -437,9 +437,18 @@ impl Engine {
     /// COMMANDED (nothing reads it back on this path), exactly as XIT is the offset commanded;
     /// and RTTY takes its side from the radio's reported mode word, which on a two-receiver
     /// radio is Main's.
+    ///
+    /// A data over is judged as the frame the operator's next over keys
+    /// ([`Engine::tx_data_frame`]).
     pub fn tx_source_verdict(&self) -> TxSourceVerdict {
+        self.tx_source_verdict_for(self.tx_data_frame())
+    }
+
+    /// [`Self::tx_source_verdict`] for a data over keyed as `frame` ([`Engine::tx_allowed_for`]):
+    /// a JS8 heartbeat on its own spot.
+    pub(crate) fn tx_source_verdict_for(&self, frame: DataFrame) -> TxSourceVerdict {
         let class = self.settings.license_class;
-        let judged = self.tx_frequency_allowed();
+        let judged = self.tx_allowed_as_for(self.settings.operating_mode, frame);
         let Some(up) = self.sub_uplink() else {
             return TxSourceVerdict {
                 source: ReceiverId::Main,
@@ -461,11 +470,11 @@ impl Engine {
                 | crate::settings::OperatingMode::Cw
         );
         let both_sides = |f: f64| {
-            self.emission_allowed(om, f, "USB")
-                && self.emission_allowed(om, f, "LSB")
+            self.emission_allowed_for(om, f, "USB", frame)
+                && self.emission_allowed_for(om, f, "LSB", frame)
                 && (!d1x
-                    || (self.commanded_emission_allowed(om, f, "USB")
-                        && self.commanded_emission_allowed(om, f, "LSB")))
+                    || (self.commanded_emission_allowed(om, f, "USB", frame)
+                        && self.commanded_emission_allowed(om, f, "LSB", frame)))
         };
         let side_unknown_ok = up.commanded
             || if self.xit_hz != 0 {

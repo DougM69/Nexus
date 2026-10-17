@@ -16,6 +16,7 @@ import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { LogEntry } from './LogEntry'
+import { CallStatsFrame, statsHere, withStats } from './CallStatsPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
@@ -74,7 +75,6 @@ import { usePinnedScroll } from '../usePinnedScroll'
 import { t } from '../i18n'
 import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
 import { useEscStop } from '../useEscStop'
-import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 
 interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
@@ -149,6 +149,7 @@ const rttyPanelLabels = (): Record<RttyPanelId, string> => ({
   scope: t('rtty.panel.waterfall'),
   rfScope: t('rfScope.title'),
   stream: t('rtty.panel.stream'),
+  stats: t('callStats.pane.title'),
 })
 
 /** The transcript renderer is SHARED with the PSK cockpit (and every keyboard
@@ -323,7 +324,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // NOT "all TX chrome is pinned" — the `stream` pane hosts the Auto toggle, whose off-click is
   // a real stop (see the pane comment below). What is pinned is this cockpit's stop-line census.
   const host = panels
-    ? panelHost(panels, { menu: RTTY_PANEL_IDS, side: [], main: 'stream', labels: rttyPanelLabels(), shipsHidden: RTTY_PANELS.defaultRemoved })
+    ? panelHost(panels, { menu: withStats(RTTY_PANEL_IDS), side: [], main: 'stream', labels: rttyPanelLabels(), shipsHidden: RTTY_PANELS.defaultRemoved })
     : null
   // No panel record (a render without a host): every pane at its vocabulary's default — shown,
   // except the RF scope pane, which ships hidden (`defaultRemoved`).
@@ -484,6 +485,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // also carries the clear after a contact is logged. A value that arrives whole — a grab, or
   // the strip's own — is settled at once: there is no typing to wait out.
   const [settledHisCall, setSettledHisCall] = useState('')
+  // The call the Stats pane follows: the log strip's, once it has stood (LogEntry `onEntryCall`).
+  const [statsCall, setStatsCall] = useState('')
   useEffect(() => {
     const id = setTimeout(() => setSettledHisCall(hisCall.trim().toUpperCase()), 500)
     return () => clearTimeout(id)
@@ -624,7 +627,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // i18n guard reads them as the measurements they are.
   const tones = rtty ? `${rtty.baud} · ${rtty.shiftHz} Hz` : control ? DEFAULT_TONES : '—'
 
-  // --- CONTINUOUS TX (the MMTTY "TX" latch) -----------------------------------
+  // --- CONTINUOUS TX (the "TX" latch) -----------------------------------------
   // Stay keyed and type into a live transmission (the air carries LTRS diddle
   // between keystrokes) instead of one keyed over per Enter. The engine owns all
   // of the safety: it runs the same gate a send runs before the latch comes up,
@@ -958,7 +961,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             )
           }
           remoteFrequency
-          remoteMode="rtty"
           onCommitDial={frequencyControl && onSetFrequency ? commitDial : undefined}
           digitTune={onSetFrequency != null}
           wheelSensitivity={wheelSensitivity}
@@ -1284,10 +1286,13 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           share={streamShare != null ? (2 - streamShare) * STREAM_LOG_SPLIT : undefined}
           paneRef={logFrameRef}
         >
-          {!control ? <RemoteRecallEntry snap={snap} mode={RTTY} onOpenLog={onOpenLogbook} /> : (
+          {!control ? null : (
           <LogEntry
             onOpenLogbook={onOpenLogbook}
-            onEntryCall={onEntryCall}
+            onEntryCall={(c) => {
+              setStatsCall(c)
+              onEntryCall?.(c)
+            }}
             snap={snap}
             mode={RTTY}
             defaultRst="599"
@@ -1313,6 +1318,15 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           />
           )}
         </CockpitPaneFrame>
+      )}
+
+      {/* THE STATS PANE (CallStatsPane), under the log strip: what the log holds for the call typed
+          there. A third frame, content-height, so it takes from the two above only what it shows;
+          it ships hidden here, where the two are already short of room at the supported floor
+          (PskCockpit's measured table, which this shell shares), one tick away in ⊞ Panels. No
+          stop control, nothing sent. */}
+      {snap && shown('stats') && statsHere() && (
+        <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={RTTY} logTick={snap.logTick} />
       )}
 
       {/* TX DOCK — the auto-sequencer row, the macros (each one a one-click transmit), the
@@ -1464,7 +1478,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           title={
             !control ? t('remote.applicationObserver') : latched
               ? 'Continuous TX ON — the transmitter stays keyed and idles on diddle; type and it goes out as you type. Click to stop transmitting once what you have typed has gone out. (Stop TX or Esc cuts immediately.)'
-              : 'Continuous TX — key up and stay keyed, then type into the live transmission (MMTTY-style), instead of pressing Enter for every line'
+              : 'Continuous TX — key up and stay keyed, then type into the live transmission, instead of pressing Enter for every line'
           }
         >
           <span className="cw-macro-key">TX</span>

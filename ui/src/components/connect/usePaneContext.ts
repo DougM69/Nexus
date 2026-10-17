@@ -2,10 +2,7 @@
 // cockpits hand their boxes the same `PaneContext`, built by the same code from the same feeds, so a
 // box reads the same wherever it sits — and neither surface can grow a heuristic of its own.
 //
-// The feeds come from the window's one poll (features/connectFeeds). The hosted Remote page is the
-// one surface that does not poll: its copies come from the station's navigation collections, and
-// `remoteFeeds` maps them exactly as ConnectView's old effect did (a stale scales/MUF copy is none;
-// an X-ray reading older than two minutes against the snapshot is none; no expedition windows).
+// The feeds come from the window's one poll (features/connectFeeds).
 import { useMemo } from 'react'
 import type {
   AlertView,
@@ -24,7 +21,6 @@ import type {
 } from '../../types'
 import type { Theme } from '../../useTheme'
 import type { MapIntent } from '../MapView'
-import type { ConnectData } from '../../remote-web/navigation'
 import { latLonToGrid } from '../../grid'
 import { useUnits } from '../../units'
 import { useEntityCentroids } from '../../features/entityCentroids'
@@ -111,21 +107,6 @@ export function useConnectFeeds(enabled = true): ConnectFeedValues {
   }
 }
 
-/** The hosted Remote page's copies of the feeds, from the station's `connect` collection. */
-export function remoteFeeds(d: ConnectData | null | undefined, ageMs: number): ConnectFeedValues {
-  const scales = d?.scales && d.scales.ageMs + ageMs < d.scales.validForMs ? d.scales.value : null
-  return {
-    bandOutlook: d?.bandOutlook ?? null,
-    getout: d?.gettingOut ?? null,
-    scales: scales?.[0] ?? null,
-    alerts: scales?.[1] ?? [],
-    muf: d?.muf && d.muf.ageMs + ageMs < d.muf.validForMs ? d.muf.value : [],
-    xrayNow:
-      d?.xray && d.prop.asOf + Math.floor((d.sourceAgeMs + ageMs) / 1000) - d.xray.asOf < 120 ? d.xray.flux : null,
-    dxpedWindows: new Map(),
-  }
-}
-
 export interface PaneContextInput {
   myGrid: string
   theme: Theme
@@ -142,8 +123,6 @@ export interface PaneContextInput {
   onPoint?: (call: string) => void
   focusBand: string | null
   toggleFocusBand: (band: string) => void
-  /** The hosted Remote page's copies (never polled here); null on every desktop surface. */
-  remote: { feeds: ConnectFeedValues; pathPred: PathPrediction | null } | null
   /** The Spots, POTA/SOTA and Needed boxes' boards, lent by the window (PaneContext `spotsFeed` /
    *  `otaBoard` / `neededBoard`); absent where it has none to lend, and those boxes then show their one line. */
   spotsFeed?: SpotsFeed
@@ -160,10 +139,8 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
   // plain functions that cannot hold the hook themselves.
   const entityCentroids = useEntityCentroids()
   const units = useUnits()
-  const polled = useConnectFeeds(i.remote == null)
-  const path = useKeyedFeed(PATH_OUTLOOK, i.remote == null ? i.selection.selGrid : null).value ?? null
-  const f = i.remote?.feeds ?? polled
-  const pathPred = i.remote ? i.remote.pathPred : path
+  const f = useConnectFeeds()
+  const pathPred = useKeyedFeed(PATH_OUTLOOK, i.selection.selGrid).value ?? null
   const { selStation, selSpot, selDxped, selGrid } = i.selection
   const ctx: PaneContext = {
     myGrid: i.myGrid,

@@ -65,6 +65,9 @@ mod contest_lists;
 /// Is the data folder somewhere a DATABASE must not live — a network share, or a folder some
 /// consumer sync client is also writing to? The log is the one thing here that cannot be rebuilt.
 mod data_folder_location;
+/// JS8Call's API for other programs on this computer: TCP and UDP on 127.0.0.1, read-only, off
+/// until the operator turns a side on. What each line says is `tempo_app::engine::js8_api`.
+mod js8_api;
 /// Remote over this network on the PC an operator works from: its key for each station, pairing,
 /// the pinned road, and the loopback origin the window's page comes from. No engine, no command.
 mod lan_client;
@@ -226,8 +229,8 @@ type NeedsKept = Arc<Tally<(), propagation::LogNeeds>>;
 struct LogTallies {
     /// The needs model — see [`NeedsKept`].
     needs: NeedsKept,
-    /// The award summary, per operator call.
-    awards: Arc<Tally<String, propagation::AwardSummary>>,
+    /// The award summary and the Stats pane's index, folded together, per operator call.
+    awards: Arc<Tally<String, log_folds::AwardsKept>>,
     /// The Journey model, per the settings it reads.
     journey: Arc<Tally<JourneyKey, propagation::JourneyModel>>,
     /// The log statistics, per operator call.
@@ -309,6 +312,7 @@ mod whole_log_reader_tests {
                 q.state.as_deref(),
                 q.award_confirmed,
                 qso_is_sat(q.prop_mode.as_deref()),
+                crate::log_folds::award_fields(&q),
             );
         }
         needs
@@ -430,10 +434,14 @@ mod whole_log_reader_tests {
         let engine = engine_with_log();
         let old = {
             let my_call = engine_lock(&engine).settings().mycall.clone();
-            // The log as the store holds it, as `needs_the_old_way` reads it.
+            // The log as the store holds it, as `needs_the_old_way` reads it: each contact with
+            // what its record carries.
             let log = engine.lock().unwrap().stored_records();
-            let calls: Vec<String> = log.into_iter().map(|q| q.call).collect();
-            propagation::compute_log_stats(&calls, &my_call)
+            let mut stats = propagation::stats::LogStatsAccumulator::new(&my_call);
+            for q in &log {
+                stats.add(&q.call, crate::log_folds::award_fields(q));
+            }
+            stats.summary()
         };
         assert!(old.total > 0, "premise: there is something to count");
         let tallies = LogTallies::default();
@@ -984,7 +992,7 @@ fn is_real_call(call: &str) -> bool {
         && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '/')
 }
 
-/// Connect ALL enabled spot sources (SpotCollector-style aggregation): the RBN CW + RBN
+/// Connect ALL enabled spot sources (one aggregated feed): the RBN CW + RBN
 /// digital skimmer firehoses, plus the human DX-cluster nodes — the SSB/phone aggregator —
 /// that should run: the nodes Nexus picks, or every node in the operator's own list (see
 /// `cluster_nodes`). RBN endpoints are wired once via fixed latches; the human nodes are
@@ -1104,26 +1112,42 @@ struct AprsIsFeed {
 
 static APRS_IS_FEED: Mutex<Option<AprsIsFeed>> = Mutex::new(None);
 
-/// Reconcile the APRS-IS feed with settings: start it, stop it, or reconnect it under a changed
-/// server/filter/callsign. Called at startup and after every Save, so a filter edit takes effect
-/// without a restart.
+/// What the one APRS-IS session should be: whether it runs, its login line, the server, and what
+/// the socket thread does with a line (the APRS screen's store; JS8's inbound relay). No `Debug`,
+/// deliberately: the login line carries the passcode, and nothing may print it.
+struct AprsIsSession {
+    want: bool,
+    login: String,
+    addr: String,
+    screen: bool,
+    relay: bool,
+    /// Up for JS8: a gateway line waits or was just handed over, or the relay listens.
+    js8: bool,
+}
+
+/// [`AprsIsSession`] from Settings and JS8's demand (`Engine::js8_aprs_link`). Pure, so the login a
+/// session presents is a test.
 ///
-/// ⚠️ **Deliberately independent of the APRS RF decoder's arm state.** See the doc comment on
-/// `Settings::aprs_is_enabled` for why: the feed costs no RF resource, can key nothing, and its
-/// value as a diagnostic depends on it running while the RF side is silent.
-fn sync_aprs_is_feed(engine: &SharedEngine) {
-    let (want, login, addr) = {
-        let eng = engine_lock(engine);
-        let s = eng.settings();
-        let call = s.mycall.trim().to_string();
-        // A real callsign is required even read-only: it is the login identity on a public
-        // amateur service, and `pass -1` still names us to every server on the network.
-        let want = s.aprs_is_enabled && is_real_call(&call);
-        // The uplink additionally needs the passcode, which is derived from that same callsign.
-        let code = s
-            .aprs_is_uplink
-            .then(|| tempo_core::aprs::is::passcode(&call));
-        let filter = tempo_core::aprs::is::FilterSpec {
+/// **JS8's @APRSIS gateway rides the APRS screen's session.** While JS8 runs with the gateway on,
+/// the login carries the passcode, logging in exactly as the iGate does; the session comes up when
+/// a gateway line waits (and stays a minute after the last is handed over) or while the inbound
+/// relay listens, whose filter term `t/m` is JS8Call's. Up for JS8 alone, it subscribes to nothing
+/// else and puts nothing on the APRS screen.
+fn aprs_is_session(
+    s: &tempo_app::settings::Settings,
+    js8: tempo_app::engine::js8_links::Js8AprsLink,
+) -> AprsIsSession {
+    let call = s.mycall.trim().to_string();
+    // A real callsign is required even read-only: it is the login identity on a public
+    // amateur service, and `pass -1` still names us to every server on the network.
+    let real = is_real_call(&call);
+    let screen = s.aprs_is_enabled && real;
+    let want = screen || (js8.want && real);
+    // The uplink additionally needs the passcode, which is derived from that same callsign.
+    // JS8's gateway uploads too, so it logs in the same way while it is armed.
+    let code = (s.aprs_is_uplink || js8.armed).then(|| tempo_core::aprs::is::passcode(&call));
+    let mut filter = if screen {
+        tempo_core::aprs::is::FilterSpec {
             range_km: Some(s.aprs_is_radius_km),
             center: propagation::geo::maidenhead_to_latlon(s.mygrid.trim()),
             buddies: s.aprs_is_watch_calls.clone(),
@@ -1131,24 +1155,65 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
             objects: s.aprs_is_objects,
             messages: s.aprs_is_messages,
         }
-        .build();
-        let login = tempo_core::aprs::is::login_line(
-            &call,
-            code,
-            "Nexus",
-            env!("CARGO_PKG_VERSION"),
-            &filter,
-        );
-        let host = s.aprs_is_host.trim();
-        let host = if host.is_empty() {
-            "rotate.aprs2.net"
-        } else {
-            host
-        };
-        (want, login, format!("{host}:{}", s.aprs_is_port))
+        .build()
+    } else {
+        String::new()
+    };
+    if js8.relay {
+        if !filter.is_empty() {
+            filter.push(' ');
+        }
+        filter.push_str("t/m");
+    }
+    let login =
+        tempo_core::aprs::is::login_line(&call, code, "Nexus", env!("CARGO_PKG_VERSION"), &filter);
+    let host = s.aprs_is_host.trim();
+    let host = if host.is_empty() {
+        "rotate.aprs2.net"
+    } else {
+        host
+    };
+    AprsIsSession {
+        want,
+        login,
+        addr: format!("{host}:{}", s.aprs_is_port),
+        screen,
+        relay: js8.relay,
+        js8: js8.want && real,
+    }
+}
+
+/// Reconcile the APRS-IS feed with settings: start it, stop it, or reconnect it under a changed
+/// server/filter/callsign. Called at startup and after every Save, so a filter edit takes effect
+/// without a restart.
+///
+/// ⚠️ **Deliberately independent of the APRS RF decoder's arm state.** See the doc comment on
+/// `Settings::aprs_is_enabled` for why: the feed costs no RF resource, can key nothing, and its
+/// value as a diagnostic depends on it running while the RF side is silent.
+///
+/// **JS8's @APRSIS gateway rides the same session**: see [`aprs_is_session`]. Called again by the
+/// JS8 links thread every few seconds, so the session follows JS8's demand; it returns at once
+/// when nothing changed.
+fn sync_aprs_is_feed(engine: &SharedEngine) {
+    let AprsIsSession {
+        want,
+        login,
+        addr,
+        screen,
+        relay,
+        js8: _,
+    } = {
+        let mut eng = engine_lock(engine);
+        let link = eng.js8_aprs_link(now_unix().max(0) as u64);
+        let session = aprs_is_session(eng.settings(), link);
+        // What the session is for, so its status can say it (the screen's feed may be off).
+        eng.set_aprs_is_for_js8(session.js8, session.js8 && session.relay);
+        session
     };
 
-    let fingerprint = format!("{addr}\u{1}{login}");
+    // What the socket thread does with a line is fixed when it starts, so a change in it is a
+    // new session too.
+    let fingerprint = format!("{addr}\u{1}{login}\u{1}{screen}{relay}");
     let mut slot = APRS_IS_FEED.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(f) = slot.as_ref() {
         if want && f.fingerprint == fingerprint {
@@ -1188,20 +1253,7 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
                 tempo_net::aprsis::run(
                     &addr,
                     &login,
-                    |line| {
-                        let Some(pkt) = tempo_core::aprs::AprsPacket::from_tnc2(line) else {
-                            return;
-                        };
-                        {
-                            let mut e = engine_lock(&eng);
-                            e.push_aprs_heard(tempo_app::engine::AprsHeard::from_packet(
-                                &pkt,
-                                now_unix(),
-                                tempo_app::engine::AprsSource::Inet,
-                                String::from_utf8_lossy(line).into_owned(),
-                            ));
-                        }
-                    },
+                    |line| aprs_is_line(&eng, line, screen, relay),
                     &stop,
                     &state,
                     &outbox,
@@ -1220,6 +1272,30 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
             .spawn(move || aprs_is_bridge(eng, stop, state, outbox))
             .expect("spawn aprs-is-gate");
     }
+}
+
+/// One line off the APRS-IS session. JS8's inbound relay sees an APRS message, parsed strictly
+/// before the engine sees it (untrusted internet input that may be keyed). Only the APRS screen's
+/// own feed reaches its store, tagged `Inet` so nothing downstream has to guess where a station
+/// came from: a session up for JS8 alone puts nothing there.
+fn aprs_is_line(engine: &SharedEngine, line: &[u8], screen: bool, relay: bool) {
+    if relay {
+        if let Some(msg) = tempo_core::aprs::js8gate::parse_inbound_message(line) {
+            engine_lock(engine).js8_aprs_inbound(&msg);
+        }
+    }
+    if !screen {
+        return;
+    }
+    let Some(pkt) = tempo_core::aprs::AprsPacket::from_tnc2(line) else {
+        return;
+    };
+    engine_lock(engine).push_aprs_heard(tempo_app::engine::AprsHeard::from_packet(
+        &pkt,
+        now_unix(),
+        tempo_app::engine::AprsSource::Inet,
+        String::from_utf8_lossy(line).into_owned(),
+    ));
 }
 
 /// Carry packets between the engine and the APRS-IS socket once per second: publish the feed's
@@ -1242,14 +1318,33 @@ fn aprs_is_bridge(
     let mut last_reject: Option<String> = None;
     while !stop.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_secs(1));
-        let (queued, igate_call, uplink_on) = {
+        let verified = state.verified.load(Ordering::Relaxed);
+        let (queued, igate_call, uplink_on, js8_lines) = {
             let mut e = engine_lock(&engine);
             let call = e.settings().mycall.trim().to_string();
             let on = e.settings().aprs_is_uplink;
-            (e.take_aprs_uplink(), call, on)
+            // JS8's @APRSIS gateway lines wait in the engine until a VERIFIED login can take
+            // them (and expire there after five minutes, as JS8Call's do).
+            let js8 = if verified {
+                e.take_js8_aprs_uplink(now_unix().max(0) as u64)
+            } else {
+                Vec::new()
+            };
+            (e.take_aprs_uplink(), call, on, js8)
         };
         let now = now_unix();
         let mut to_send: Vec<Vec<u8>> = Vec::new();
+        // JS8's lines are not RF-heard packets: no iGate gating or q-construct applies (each
+        // already carries the one JS8Call gives it). They share the iGate's per-minute cap, so
+        // the two together never spend the callsign faster than it allows.
+        for line in js8_lines {
+            if !rate.accept(now) {
+                rejected += 1;
+                last_reject = Some("rate cap".into());
+                continue;
+            }
+            to_send.push(line.into_bytes());
+        }
         // Only a VERIFIED login may upload; without one the server refuses us anyway, and gating
         // work on packets that can never be sent is pointless.
         if uplink_on && state.verified.load(Ordering::Relaxed) {
@@ -1281,9 +1376,10 @@ fn aprs_is_bridge(
             }
         }
         let last_packet = state.last_packet_unix.load(Ordering::Relaxed);
-        {
-            let mut e = engine_lock(&engine);
-            e.set_aprs_is_status(tempo_app::engine::AprsIsStatus {
+        publish_aprs_is_status(
+            &engine,
+            &stop,
+            tempo_app::engine::AprsIsStatus {
                 // `enabled` / `uplink_enabled` are re-derived from settings by the getter.
                 connected: state.connected.load(Ordering::Relaxed),
                 verified: state.verified.load(Ordering::Relaxed),
@@ -1293,8 +1389,268 @@ fn aprs_is_bridge(
                 gate_rejected: rejected,
                 last_reject: last_reject.clone(),
                 ..Default::default()
-            });
+            },
+        );
+    }
+}
+
+/// The bridge's once-a-second write of the session's state for the status chip, skipped once the
+/// session is stopped. The app stops a session before it resets the status under this same lock,
+/// so a write that finds `stop` clear lands before the reset and is overwritten, and one after it
+/// finds `stop` set: a stopped session never leaves the status reading connected.
+fn publish_aprs_is_status(
+    engine: &SharedEngine,
+    stop: &std::sync::atomic::AtomicBool,
+    status: tempo_app::engine::AprsIsStatus,
+) {
+    let mut e = engine_lock(engine);
+    if !stop.load(std::sync::atomic::Ordering::SeqCst) {
+        e.set_aprs_is_status(status);
+    }
+}
+
+/// JS8's internet links, off the radio loop: once a minute the JS8NET batch
+/// (`Engine::take_js8net`) goes to `spot.js8call.com:50000` as JS8Call 3.0.3 sends it, and every
+/// few seconds the APRS-IS session is brought in line with what JS8's @APRSIS gateway and relay
+/// need (`sync_aprs_is_feed`). Outbound only: a UDP port bound for each batch and dropped after.
+/// The DNS lookup happens here, never on the radio loop, and a failed one costs that minute's
+/// batch only.
+fn start_js8_links(engine: SharedEngine) {
+    std::thread::Builder::new()
+        .name("js8-links".into())
+        .spawn(move || {
+            let version = format!("Nexus {}", env!("CARGO_PKG_VERSION"));
+            let mut client = tempo_net::js8net::SpotClient::new();
+            let mut tick: u64 = 0;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                tick += 1;
+                sync_aprs_is_feed(&engine);
+                if !tick.is_multiple_of(12) {
+                    continue;
+                }
+                let batch = engine_lock(&engine).take_js8net(&version);
+                if let Err(e) = client.send(&batch) {
+                    conn_log("JS8NET", "error", format!("spots not sent: {e}"));
+                }
+            }
+        })
+        .expect("spawn js8-links");
+}
+
+#[cfg(test)]
+mod aprs_is_session_tests {
+    use super::*;
+    use tempo_app::engine::js8_links::Js8AprsLink;
+    use tempo_app::settings::Settings;
+    use tempo_core::aprs::is::{login_line, passcode};
+
+    fn station() -> Settings {
+        Settings {
+            mycall: "W1AW".into(),
+            mygrid: "FN31".into(),
+            ..Default::default()
         }
+    }
+
+    const JS8_OFF: Js8AprsLink = Js8AprsLink {
+        armed: false,
+        want: false,
+        relay: false,
+    };
+
+    /// The login the iGate presents for W1AW, with `filter`. Compared with `==` and a message,
+    /// never printed: it carries the passcode.
+    fn igate_login(filter: &str) -> String {
+        login_line(
+            "W1AW",
+            Some(passcode("W1AW")),
+            "Nexus",
+            env!("CARGO_PKG_VERSION"),
+            filter,
+        )
+    }
+
+    #[test]
+    fn js8_alone_brings_the_session_up_only_when_it_needs_it_and_logs_in_as_the_igate_does() {
+        let s = station();
+        let idle = aprs_is_session(
+            &s,
+            Js8AprsLink {
+                armed: true,
+                want: false,
+                relay: false,
+            },
+        );
+        assert!(!idle.want, "armed with nothing waiting: no session");
+        let up = aprs_is_session(
+            &s,
+            Js8AprsLink {
+                armed: true,
+                want: true,
+                relay: false,
+            },
+        );
+        assert!(up.want && !up.screen && !up.relay);
+        assert!(
+            up.login == igate_login(""),
+            "the gateway's login is the iGate's, subscribing to nothing"
+        );
+        let relay = aprs_is_session(
+            &s,
+            Js8AprsLink {
+                armed: true,
+                want: true,
+                relay: true,
+            },
+        );
+        assert!(relay.want && relay.relay && !relay.screen);
+        assert!(
+            relay.login == igate_login("t/m"),
+            "the relay adds JS8Call's message filter and nothing else"
+        );
+        assert_eq!(up.addr, "rotate.aprs2.net:14580");
+        // CONTROL: no real callsign, no session, whatever JS8 wants.
+        let mut nocall = station();
+        nocall.mycall = String::new();
+        assert!(
+            !aprs_is_session(
+                &nocall,
+                Js8AprsLink {
+                    armed: true,
+                    want: true,
+                    relay: true
+                }
+            )
+            .want
+        );
+    }
+
+    #[test]
+    fn a_session_up_for_js8_alone_puts_nothing_on_the_aprs_screen() {
+        let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(station())));
+        let line = b"N0CALL-9>APDR16,TCPIP*,qAC,T2TEXAS:!4140.00N/07200.00W>test";
+        aprs_is_line(&engine, line, false, true);
+        assert!(
+            engine_lock(&engine).aprs_heard().is_empty(),
+            "JS8 alone: nothing stored"
+        );
+        // CONTROL: the screen's own feed stores the same line.
+        aprs_is_line(&engine, line, true, false);
+        assert_eq!(engine_lock(&engine).aprs_heard().len(), 1);
+    }
+
+    #[test]
+    fn the_aprs_screen_feed_is_unchanged_until_js8_arms_and_then_carries_the_passcode() {
+        let mut s = station();
+        s.aprs_is_enabled = true;
+        s.aprs_is_radius_km = 100;
+        let read_only = aprs_is_session(&s, JS8_OFF);
+        assert!(read_only.want && read_only.screen && !read_only.relay);
+        assert!(
+            read_only.login.contains(" filter r/"),
+            "precondition: the screen subscribes to a range"
+        );
+        assert!(
+            read_only.login.contains(" pass -1 "),
+            "read-only, as before: no passcode"
+        );
+        let armed = aprs_is_session(
+            &s,
+            Js8AprsLink {
+                armed: true,
+                want: false,
+                relay: false,
+            },
+        );
+        assert!(armed.want && armed.screen);
+        assert!(
+            armed
+                .login
+                .contains(&format!(" pass {} ", passcode("W1AW")))
+                && !armed.login.contains(" pass -1 "),
+            "JS8 armed: the same session logs in with the passcode"
+        );
+        assert!(
+            armed.login.split(" filter ").nth(1) == read_only.login.split(" filter ").nth(1),
+            "and keeps the screen's own filter"
+        );
+    }
+
+    /// The session says what it is for, so its status can: the screen's feed, JS8 (a gateway
+    /// line waiting or just handed over, or the relay listening), or both. JS8 armed with nothing
+    /// to send keeps no session up and is not what one is for.
+    #[test]
+    fn the_session_says_what_it_is_for() {
+        let link = |want, relay| Js8AprsLink {
+            armed: true,
+            want,
+            relay,
+        };
+        let off = station();
+        let mut on = station();
+        on.aprs_is_enabled = true;
+        let mut no_call = station();
+        no_call.mycall = String::new();
+        let purposes: Vec<(&str, bool, bool, bool)> = [
+            (
+                "feed off, JS8 idle",
+                aprs_is_session(&off, link(false, false)),
+            ),
+            (
+                "feed off, a gateway line",
+                aprs_is_session(&off, link(true, false)),
+            ),
+            (
+                "feed off, the relay",
+                aprs_is_session(&off, link(true, true)),
+            ),
+            ("feed on, JS8 off", aprs_is_session(&on, JS8_OFF)),
+            (
+                "feed on, a gateway line",
+                aprs_is_session(&on, link(true, false)),
+            ),
+            ("no real call", aprs_is_session(&no_call, link(true, true))),
+        ]
+        .into_iter()
+        .map(|(what, s)| (what, s.want, s.screen, s.js8))
+        .collect();
+        assert_eq!(
+            purposes,
+            vec![
+                ("feed off, JS8 idle", false, false, false),
+                ("feed off, a gateway line", true, false, true),
+                ("feed off, the relay", true, false, true),
+                ("feed on, JS8 off", true, true, false),
+                ("feed on, a gateway line", true, true, true),
+                ("no real call", false, false, false),
+            ]
+        );
+    }
+
+    /// A stopped session never writes its status back. The bridge publishes once a second; the
+    /// app stops a session and then resets the status, and a last write landing after that reset
+    /// left the status reading connected with no session at all.
+    #[test]
+    fn a_stopped_session_never_writes_its_status_back() {
+        let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(station())));
+        let connected = || tempo_app::engine::AprsIsStatus {
+            connected: true,
+            verified: true,
+            packets: 9,
+            ..Default::default()
+        };
+        let stop = std::sync::atomic::AtomicBool::new(true);
+        publish_aprs_is_status(&engine, &stop, connected());
+        let stopped = engine_lock(&engine).aprs_is_status().connected;
+        stop.store(false, std::sync::atomic::Ordering::SeqCst);
+        publish_aprs_is_status(&engine, &stop, connected());
+        let running = engine_lock(&engine).aprs_is_status().connected;
+        assert_eq!(
+            (stopped, running),
+            (false, true),
+            "stopped: no write; running (the control): written"
+        );
     }
 }
 
@@ -5717,6 +6073,30 @@ fn flush_all_txt(lines: &[String]) {
     }
 }
 
+/// JS8Call's DIRECTED.TXT (every directed message heard), beside ALL.TXT.
+fn directed_txt_path() -> PathBuf {
+    local_data_dir().join("DIRECTED.TXT")
+}
+
+/// Append JS8's DIRECTED.TXT lines, as [`flush_all_txt`] appends ALL.TXT's.
+fn flush_directed_txt(lines: &[String]) {
+    if lines.is_empty() {
+        return;
+    }
+    use std::io::Write;
+    let path = directed_txt_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "{}", lines.join("\n"));
+    }
+}
+
 /// The resolved absolute `ALL.TXT` path, for the Settings panel to show the operator
 /// exactly where the decode log lives.
 #[tauri::command]
@@ -6567,6 +6947,8 @@ async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Str
     // then release the lock before the file append so the UI poll never waits on disk.
     with_engine(&state, |mut eng| {
         let all_txt = eng.take_all_txt_pending();
+        // JS8's DIRECTED.TXT, written beside ALL.TXT under the same switch, the same way.
+        let directed_txt = eng.take_js8_directed_pending();
         // ⭐ R3: the same shape as the ALL.TXT drain beside it — the engine buffers what it
         // cannot say (the Connections log lives here, not there), the poll takes it under the
         // lock and writes it after releasing. Deliberately NOT the connector worker the #290
@@ -6580,6 +6962,7 @@ async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Str
         let snap = eng.snapshot();
         drop(eng);
         flush_all_txt(&all_txt);
+        flush_directed_txt(&directed_txt);
         for line in unconfirmed_auto_log_lines(&auto_logged) {
             conn_log("Logbook", "error", line);
         }
@@ -7996,18 +8379,36 @@ fn country_resolver() -> Arc<tempo_app::station::DxccResolve> {
     Arc::clone(&SHARED)
 }
 
+/// The station's two country resolvers, wired as the launch wires them: the entity a call places
+/// a contact in ([`country_resolver`]), and the country a record's own DXCC number gives it
+/// ([`log_queries::dxcc_country`]), which the contact's `COUNTRY` follows.
+fn wire_country_resolvers(eng: &mut Engine) {
+    eng.set_dxcc_resolver_shared(country_resolver());
+    eng.set_dxcc_country_resolver(log_queries::dxcc_country);
+}
+
+/// The fill rule's own version in [`log_fill_version`]. Bump it whenever the rule changes, so a
+/// store filled under an older rule is filled again. 2: a contact carrying a DXCC number is filled
+/// with the number's name ([`log_queries::dxcc_country`]), not its call's entity.
+const FILL_RULES: u32 = 2;
+
 /// The version of the resolvers' data the logbook's country and state fills are written for —
 /// what `fill_ver` in the store records (SPEC-2 v3 D2-A). It changes with anything that can
-/// change what [`country_of`] or [`subdivision_hint`] answers: this build (their rules, the
-/// embedded cty.dat, the grid and province tables), the cty.dat active this session, and the
-/// FCC index the resolver holds. Bump `FILL_RULES` if the fill rule itself ever changes. Which
-/// contacts the job counts is not the fill rule: [`subdivision_applies`] leaves out only contacts
-/// the hint never answers for, so what is written does not change with it.
+/// change what [`country_of`], [`log_queries::dxcc_country`] or [`subdivision_hint`] answers: this
+/// build (their rules, the embedded cty.dat and DXCC tables, the grid and province tables), the
+/// cty.dat active this session, and the FCC index the resolver holds. Bump [`FILL_RULES`] if the
+/// fill rule itself ever changes. Which contacts the job counts is not the fill rule:
+/// [`subdivision_applies`] leaves out only contacts the hint never answers for, so what is written
+/// does not change with it.
 fn log_fill_version() -> i64 {
-    const FILL_RULES: u32 = 1;
+    fill_version(FILL_RULES)
+}
+
+/// [`log_fill_version`] under the fill rule `rules`: what a build of that rule wrote as `fill_ver`.
+fn fill_version(rules: u32) -> i64 {
     let fcc = FCC_LOADED.read().map(|g| g.clone()).unwrap_or_default();
     let key = format!(
-        "fill-rules:{FILL_RULES}|build:{}|cty:{}|fcc:{fcc}",
+        "fill-rules:{rules}|build:{}|cty:{}|fcc:{fcc}",
         env!("CARGO_PKG_VERSION"),
         propagation::dxcc::active_stats().ver.unwrap_or_default(),
     );
@@ -8021,8 +8422,9 @@ fn log_fill_version() -> i64 {
 
 /// Write the country and state the logbook store lacks — once per resolver-data version
 /// ([`log_fill_version`]), after the window is up, on a thread of its own and never the radio
-/// loop's — with the resolvers the engine fills every insert with ([`country_of`],
-/// [`subdivision_hint`]), counting a contact without a state only where one can apply
+/// loop's — with the resolvers the engine fills every insert with ([`country_of`], the engine's
+/// own DXCC-number names, [`subdivision_hint`]), counting a contact without a state only where one
+/// can apply
 /// ([`subdivision_applies`]). See `tempo_app::logfill` (SPEC-2 v3 D2-A).
 fn spawn_log_fill(engine: SharedEngine) {
     let spawned = std::thread::Builder::new()
@@ -14081,15 +14483,21 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
 ///
 /// A backup from before the cluster node choice chooses by its node list, exactly as an upgraded
 /// settings file does. A restore runs none of `Settings::load`'s migrations, and the field's
-/// default would otherwise switch a restored list of the operator's own to automatic.
+/// default would otherwise switch a restored list of the operator's own to automatic. A backup
+/// from before JS8 heartbeat networking chooses it as an upgraded file does too, or a restored
+/// heartbeat user would lose the HB button.
 fn settings_from_bundle(
     settings_json: serde_json::Value,
 ) -> Result<tempo_app::settings::Settings, String> {
     let predates_node_choice = settings_json.get("clusterNodesAuto").is_none();
+    let predates_hb_networking = settings_json.get("js8HbNetworking").is_none();
     let mut settings: tempo_app::settings::Settings = serde_json::from_value(settings_json)
         .map_err(|e| format!("The settings in that backup could not be read: {e}"))?;
     if predates_node_choice {
         settings.choose_cluster_nodes_for_old_settings();
+    }
+    if predates_hb_networking {
+        settings.choose_js8_hb_networking_for_old_settings();
     }
     Ok(settings)
 }
@@ -16702,7 +17110,7 @@ fn rtty_send(state: State<'_, SharedEngine>, text: String) -> Result<RttyStateDt
     Ok(rtty_state_dto(&eng))
 }
 
-/// Continuous TX on/off — the cockpit's TX button, the MMTTY latch: stay keyed
+/// Continuous TX on/off — the cockpit's TX button, a latch: stay keyed
 /// and type into a live transmission instead of one keyed over per Enter.
 ///
 /// ON runs the SAME gate a send runs (so the latch can never key where a send
@@ -16830,7 +17238,7 @@ fn psk_send(state: State<'_, SharedEngine>, text: String) -> Result<PskStateDto,
     Ok(psk_state_dto(&eng))
 }
 
-/// Continuous TX on/off — the PSK cockpit's TX button, the same MMTTY-style
+/// Continuous TX on/off — the PSK cockpit's TX button, the same
 /// latch RTTY carries: ON runs the SAME gate a send runs; OFF lets what was
 /// typed finish keying, then unkeys. NOT the emergency stop — Stop TX, the
 /// Esc/Stop macro and the TX-enable latch cut instantly and each also drops
@@ -16950,6 +17358,69 @@ fn js8_set_rx_speeds(
     Ok(eng.js8_state())
 }
 
+/// JS8Call's decode filter (the waterfall controls, and the row menus' "Centre filter at …Hz"):
+/// on/off, centre and width in Hz. Receive only. Persisted.
+#[tauri::command(async)]
+fn js8_set_filter(
+    state: State<'_, SharedEngine>,
+    filter: tempo_app::settings::Js8Filter,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_filter(filter);
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
+/// JS8Call 3.0.3's own frequency table as rows of the operator's list (no descriptions, as
+/// JS8Call's defaults have none): what Settings shows, and what Reset returns to.
+#[tauri::command]
+fn js8_default_frequencies() -> Vec<tempo_app::settings::Js8Freq> {
+    tempo_app::bandplan::js8_band_plan()
+        .into_iter()
+        .map(|c| tempo_app::settings::Js8Freq {
+            mhz: c.dial_mhz,
+            description: String::new(),
+        })
+        .collect()
+}
+
+/// The passband centre "QSY to centre" puts the transmit offset on (JS8Call's waterfall
+/// `Center`), Hz. Moves nothing by itself. Persisted.
+#[tauri::command(async)]
+fn js8_set_qsy_center(
+    state: State<'_, SharedEngine>,
+    hz: u16,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_qsy_center(hz);
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
+/// JS8Call's QSY: move the dial so the transmit offset sits on the passband centre. MOVES THE
+/// RIG through the operator's own tune path; refused while anything transmits or a JS8 message
+/// is going out (the engine says why). Persisted, as every QSY is.
+#[tauri::command(async)]
+fn js8_qsy_to_centre(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_qsy_to_centre()?;
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
+/// The answer to a scheduled frequency change's notice: `go` changes it now (held while anything
+/// transmits), otherwise it is cancelled and the frequency stays. Persisted, as a QSY is.
+#[tauri::command(async)]
+fn js8_hop_answer(
+    state: State<'_, SharedEngine>,
+    go: bool,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_hop_answer(go)?;
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
 /// Queue a message (`to` = a callsign, `@GROUP`, or null for @ALLCALL). REFUSED in this
 /// receive-only build; the operator-gated TX batch supplies the body behind it.
 #[tauri::command(async)]
@@ -16976,14 +17447,11 @@ fn js8_send_command(
     Ok(eng.js8_state())
 }
 
-/// Call CQ (`idx` = the CQ variant 0..=7). Refused here.
+/// Call CQ with the CQ message from Settings (JS8Call's `CQMessage`). Refused here.
 #[tauri::command(async)]
-fn js8_call_cq(
-    state: State<'_, SharedEngine>,
-    idx: u8,
-) -> Result<tempo_app::dto::Js8State, String> {
+fn js8_call_cq(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
-    eng.js8_call_cq(idx)?;
+    eng.js8_call_cq()?;
     Ok(eng.js8_state())
 }
 
@@ -17006,7 +17474,7 @@ fn js8_arm(
     Ok(eng.js8_state())
 }
 
-/// Arm/disarm JS8Call's repeating CQ (`idx` = the CQS variant to send). SESSION-ONLY and
+/// Arm/disarm JS8Call's repeating CQ, which sends the CQ message from Settings. SESSION-ONLY and
 /// never written to disk, exactly like the HB toggle — a relaunch can never come back calling
 /// CQ. The repeat INTERVAL is the persisted half and lives in Settings (`js8CqIntervalMin`).
 /// Arming keys nothing: the TX latch is the first act and is re-read at plan time every slot.
@@ -17014,10 +17482,9 @@ fn js8_arm(
 fn js8_cq_repeat(
     state: State<'_, SharedEngine>,
     on: bool,
-    idx: u8,
 ) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
-    eng.js8_set_cq_repeat(on, idx)?;
+    eng.js8_set_cq_repeat(on)?;
     Ok(eng.js8_state())
 }
 
@@ -17037,6 +17504,21 @@ fn js8_answer_reply(
     Ok(eng.js8_state())
 }
 
+/// The compose box's words that JS8Call underlines, one answer per word in order (its word
+/// check, "Suggest alternative word choices…", on by default). The JSC dictionary only: no engine
+/// lock, and nothing keys.
+#[tauri::command(async)]
+fn js8_word_check(words: Vec<String>) -> Vec<bool> {
+    tempo_app::engine::js8::js8_word_check(&words)
+}
+
+/// What JS8Call's right-click offers for one underlined word: up to five cheaper words, cheapest
+/// first, and whether the dictionary held any prefix of it. The JSC dictionary only.
+#[tauri::command(async)]
+fn js8_word_suggestions(word: String) -> tempo_app::engine::js8::Js8WordSuggestions {
+    tempo_app::engine::js8::js8_word_suggestions(&word)
+}
+
 /// The native cockpit's compose box, both ways (polled with the state while JS8 is visible):
 /// whether it holds text and the id of the reply it took; answered with the reply waiting for
 /// the box (AUTO off, as JS8Call puts it in its compose box). Keys nothing.
@@ -17047,6 +17529,49 @@ async fn js8_composer(
     taken: Option<u32>,
 ) -> Result<Option<tempo_app::dto::Js8ComposerPrefill>, String> {
     with_engine(&state, move |mut eng| eng.js8_composer(composing, taken)).await
+}
+
+/// "Send Heartbeat Now", from the HB button's menu: one heartbeat in the next period, the repeat
+/// left as it is. Refused where JS8Call has no HB button (heartbeat networking off, a speed with
+/// no heartbeats). Keys only through the JS8 TX route, so only with TX on.
+#[tauri::command(async)]
+fn js8_heartbeat_now(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_heartbeat_now()?;
+    Ok(eng.js8_state())
+}
+
+/// The call in the native cockpit's To box (null when empty): JS8Call's selected call, which the
+/// QSO pause reads. Keys nothing.
+#[tauri::command]
+async fn js8_select_call(
+    state: State<'_, SharedEngine>,
+    call: Option<String>,
+) -> Result<(), String> {
+    with_engine(&state, move |mut eng| eng.js8_select_call(call)).await
+}
+
+/// The native cockpit's compose box while its message goes out (JS8Call's typeahead): what is still
+/// to go, `sent_seen` the characters of it the box had seen go. Taken just before the next frame,
+/// which goes out through every JS8 gate; answered with what the box shows, or none once nothing of
+/// the box's is going out.
+#[tauri::command(async)]
+fn js8_typeahead(
+    state: State<'_, SharedEngine>,
+    sent_seen: usize,
+    unsent: String,
+) -> Result<Option<tempo_app::dto::Js8Typeahead>, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_typeahead(sent_seen, unsent)?;
+    Ok(eng.js8_typeahead_state())
+}
+
+/// What the compose box shows of the operator's message going out, or none once it has gone.
+#[tauri::command(async)]
+fn js8_typeahead_state(
+    state: State<'_, SharedEngine>,
+) -> Result<Option<tempo_app::dto::Js8Typeahead>, String> {
+    Ok(engine_lock(&state).js8_typeahead_state())
 }
 
 /// Drop the outbox — a SENDER-class control, not a stop (Stop TX is `halt_tx`).
@@ -17083,6 +17608,66 @@ fn js8_inbox_delete(
     let mut eng = engine_lock(&state);
     eng.js8_inbox_delete(id)?;
     Ok(eng.js8_state())
+}
+
+/// "Store message…" (JS8Call's): leave `text` here for `to`, handed over when `to` asks with
+/// QUERY MSGS and QUERY MSG n. Keys nothing. Journaled.
+#[tauri::command(async)]
+fn js8_store_message(
+    state: State<'_, SharedEngine>,
+    to: String,
+    text: String,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_store_message(to, text)?;
+    Ok(eng.js8_state())
+}
+
+/// Clear the Inbox's notes of what a cap dropped. Journaled.
+#[tauri::command(async)]
+fn js8_inbox_dropped_clear(
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_inbox_dropped_clear();
+    Ok(eng.js8_state())
+}
+
+/// The JS8 call list's "Block this station" (JS8Call 3.0's RX block list, `RXCallsignBlocklist`):
+/// that one field, never the settings form. Answers the list as saved, for the UI's mirror.
+#[tauri::command(async)]
+fn js8_set_rx_blocklist(
+    state: State<'_, SharedEngine>,
+    calls: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_rx_blocklist(calls);
+    js8_persist_settings(&eng);
+    Ok(eng.settings().js8_rx_blocklist.clone())
+}
+
+/// The JS8 call list's "Add new station or group…" with a @GROUP, and "Remove this group": the
+/// joined groups, that one field, never the settings form. Answers the groups as saved.
+#[tauri::command(async)]
+fn js8_set_groups(
+    state: State<'_, SharedEngine>,
+    groups: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_groups(groups)?;
+    js8_persist_settings(&eng);
+    Ok(eng.settings().js8_groups.clone())
+}
+
+/// The JS8 call list's "Remove" on `@ALLCALL` and "Add" of `@ALLCALL` (JS8Call's
+/// `set_avoid_allcall`): "Do not participate in the @ALLCALL group", that one field, never the
+/// settings form. Answers the setting as saved.
+#[tauri::command(async)]
+fn js8_set_avoid_allcall(state: State<'_, SharedEngine>, avoid: bool) -> Result<bool, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_avoid_allcall(avoid);
+    js8_persist_settings(&eng);
+    Ok(eng.settings().js8_avoid_allcall)
 }
 
 /// Clear the decoded-PSK transcript (display only; the decoder keeps running).
@@ -18412,7 +18997,8 @@ fn get_licensed_band_plan(
     // RTTY / SSTV / PSK / JS8: fixed standard watering-hole channels (like WSJT-X's
     // per-mode dials), license-filtered per band — a Technician sees only the
     // bands their class can key there (RTTY, PSK and JS8 ride data privileges, SSTV
-    // rides phone). JS8's list is JS8Call's FrequencyList defaults (bandplan::js8_band_plan).
+    // rides phone). JS8's list is JS8Call's FrequencyList defaults (bandplan::js8_band_plan),
+    // or the operator's own (bandplan::js8_plan_from).
     let lower = mode.to_ascii_lowercase();
     if lower == "rtty" || lower == "sstv" || lower == "psk" || lower == "js8" {
         let (plan, priv_mode) = if lower == "rtty" {
@@ -18426,7 +19012,11 @@ fn get_licensed_band_plan(
                 OperatingMode::Keyboard,
             )
         } else if lower == "js8" {
-            (tempo_app::bandplan::js8_band_plan(), OperatingMode::Digital)
+            // The operator's own JS8 list when there is one (Settings ▸ Digital ▸ JS8).
+            (
+                tempo_app::bandplan::js8_plan_from(eng.settings().js8_frequencies.as_deref()),
+                OperatingMode::Digital,
+            )
         } else {
             (tempo_app::bandplan::sstv_band_plan(), OperatingMode::Phone)
         };
@@ -18589,7 +19179,7 @@ fn work_spot(
     };
     // Pile-up SPLIT: if the freshest cluster spot for this call names a listening
     // offset ("UP 2" / "QSX …"), configure rig split so TX lands where the DX is
-    // listening — the N1MM behavior, using the spot we already hold. Tolerant
+    // listening, using the spot we already hold. Tolerant
     // lookup (3Y0J/MM matches 3Y0J); no spot or no offset → simplex.
     let split_up_khz = call.as_deref().and_then(|c| {
         spots
@@ -20223,10 +20813,14 @@ async fn log_qso(
 }
 
 /// The cty.dat-resolved DXCC entity for a callsign, or null — the log-entry
-/// form keys its "new one" badge on this, not on the QRZ country string.
+/// form and Operate key their "new one" badges on this, not on the QRZ country string.
+/// It is the callsign card's entity (`propagation::dxcc::card_entity`), the one an entity's
+/// worked slots keep a contact under ([`log_queries::on_card`]): a WAE area's call is the DXCC
+/// entity its number names (IT9 is Italy), as the Logbook shows a contact carrying that number.
 #[tauri::command]
 fn resolve_entity(call: String) -> Option<String> {
-    propagation::dxcc::resolve(&call).map(|i| i.entity.to_string())
+    propagation::dxcc::card_entity(propagation::dxcc::resolve(&call).as_ref(), None)
+        .map(str::to_string)
 }
 
 /// Every entity name paired with its cty.dat representative location, as
@@ -20253,6 +20847,31 @@ fn dxcc_entity_names() -> Vec<String> {
     propagation::dxcc::dxcc_entity_names()
         .into_iter()
         .map(str::to_string)
+        .collect()
+}
+
+/// One DXCC entity as the Logbook's country picker lists it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DxccEntityRow {
+    code: u32,
+    name: String,
+    deleted: bool,
+}
+
+/// Every DXCC entity a contact can be set to count toward, current and deleted, by number
+/// (`propagation::dxcc::entities`) — the Logbook's country picker. The backend owns the table, so
+/// the picker offers exactly the numbers [`log_by_id::set_dxcc_by_id`] accepts. Same arrangement
+/// as [`dxcc_entity_names`].
+#[tauri::command]
+fn dxcc_entities() -> Vec<DxccEntityRow> {
+    propagation::dxcc::entities()
+        .into_iter()
+        .map(|e| DxccEntityRow {
+            code: e.code,
+            name: e.name.to_string(),
+            deleted: e.deleted,
+        })
         .collect()
 }
 
@@ -20390,7 +21009,7 @@ fn durability_failed(why: String) -> String {
 /// left it, so a follow-up (a QSL mark from the same edit form) can key the row it just changed.
 fn logged_qso(r: &tempo_core::logbook::QsoRecord) -> LoggedQso {
     let mut q = LoggedQso::from(r.clone());
-    q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+    q.entity = log_queries::shown(r);
     q
 }
 
@@ -20712,11 +21331,39 @@ async fn get_awards(
         .await
 }
 
+/// The Stats pane beside a log entry: what the log holds for the call typed there — its DXCC
+/// entity's band × mode grid, its state's (WAS) and its CQ zone's (WAZ), the NEW ONE / NEW BAND /
+/// NEW MODE flags for `band` and `mode`, and the confirmation channels held for its country and
+/// for the call ([`propagation::CallStats`]).
+///
+/// Counted by the award fold itself, so every slot is one the Awards view counts
+/// ([`log_folds::call_stats_kept`]): folded again only when the log's content or the operator's
+/// call moves, and asked of the kept index for each call. The station typed has no record, so its
+/// entity and zone come from its call, and its state from the licence index, as for a station
+/// heard ([`us_state_hint`]).
+#[tauri::command]
+async fn get_call_stats(
+    state: State<'_, SharedEngine>,
+    tallies: State<'_, LogTallies>,
+    call: String,
+    band: String,
+    mode: String,
+) -> Result<propagation::CallStats, String> {
+    let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
+    log_folds::off_the_runtime(move || {
+        log_folds::call_stats_for(&engine, &tallies, &call, &band, &mode, |c| {
+            us_state_hint(c, None).map(|(s, _)| s)
+        })
+    })
+    .await
+}
+
 /// The geographic slice of the logbook — QSOs by WAC continent, by CQ zone, and a DX-vs-domestic
 /// split — the dimensions the frontend `StatsView` can't derive on its own (the stored record has
-/// no continent/zone; both re-resolve per callsign here via cty.dat, anchored on the operator's
-/// own call for the DX split). The rest of the Statistics dashboard (band/mode/year/hour/state/
-/// confirmations) is the `statistics` log question's ([`log_queries`]). Pure/offline.
+/// no continent; each contact is placed where the awards count it, by the DXCC number and CQ zone
+/// its record carries, else by its callsign via cty.dat, anchored on the operator's own call for
+/// the DX split). The rest of the Statistics dashboard (band/mode/year/hour/state/confirmations)
+/// is the `statistics` log question's ([`log_queries`]). Pure/offline.
 ///
 /// Folded again only when the log's content or the operator's call moves ([`log_stats`]), from
 /// the logbook store, on the blocking pool.
@@ -20728,6 +21375,23 @@ async fn get_log_stats(
     let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
     log_folds::off_the_runtime(move || log_stats(&engine, &tallies).map(|s| s.as_ref().clone()))
         .await
+}
+
+/// The Statistics view's timeline — contacts per mode over the past day (by hour), the past 30
+/// days (by day) or the past year (by month), each window ending with the current UTC hour, day
+/// or month. Counted where the log is, from the window's contacts alone
+/// ([`log_folds::log_timeline`]), on the blocking pool. Pure/offline.
+#[tauri::command]
+async fn get_log_timeline(
+    state: State<'_, SharedEngine>,
+    range: tempo_core::logbook::query::TimelineRange,
+) -> Result<tempo_core::logbook::query::LogTimeline, String> {
+    let engine = state.inner().clone();
+    log_folds::off_the_runtime(move || {
+        let rows = engine_lock(&engine).log_rows();
+        log_folds::log_timeline(&rows, range, now_unix())
+    })
+    .await
 }
 
 /// The Journey snapshot — the in-app, beginner-first achievement layer (auto-detected
@@ -20774,7 +21438,7 @@ fn confirmation_diagnostics(engine: &Mutex<Engine>) -> Result<DiagnosticsReportD
     })
 }
 
-/// One raw cluster/RBN spot for the Spots panel (the SpotCollector-style firehose view).
+/// One raw cluster/RBN spot for the Spots panel (the firehose view).
 /// UNLIKE the Needed board, this is NOT needs-gated — every recent spot is returned and
 /// the UI filters client-side. `mode` is the frequency-derived class (CW/Phone/Digital) that
 /// drives the filter chips + privilege gate; `submode` carries the RBN skimmer's specific mode
@@ -26695,6 +27359,56 @@ mod stamp_subject_tests {
     }
 }
 
+/// The contact a logbook service is sent, from the row the push was handed: its `COUNTRY` the
+/// name its own DXCC number gives it ([`log_queries::sent`]), so a service is never handed a
+/// `DXCC` and a `COUNTRY` that disagree. The one conversion each push below — QRZ, HRDLog.net,
+/// Club Log, eQSL, Cloudlog/Wavelog — builds its ADIF from.
+fn upload_record(record: LoggedQso) -> tempo_core::logbook::QsoRecord {
+    log_queries::sent(record.into())
+}
+
+#[cfg(test)]
+mod upload_record_tests {
+    /// The body of the top-level `fn name(…)` in this file: through the `}` that closes it.
+    fn body(src: &'static str, name: &str) -> &'static str {
+        let start = src
+            .find(&format!("\nfn {name}("))
+            .unwrap_or_else(|| panic!("no fn {name}"));
+        let len = src[start..].find("\n}\n").expect("its end");
+        &src[start..start + len]
+    }
+
+    /// Every service push sends the contact `upload_record` makes of its row, and the DXKeeper
+    /// push the contact `log_queries::sent` makes, so each names `COUNTRY` by the DXCC number; and
+    /// the launch wires the station's resolver of that country. These reach the keychain, the
+    /// network or the whole launch, which no test drives, so the source is read: what is checked
+    /// is that no push is left serialising the row another way. `upload_record` and `sent`
+    /// themselves are held to their answers by value (`log_by_id`'s tests).
+    #[test]
+    fn every_push_and_the_launch_follow_the_dxcc_number_for_country() {
+        let src = include_str!("lib.rs");
+        for name in [
+            "qrz_push_qso_impl",
+            "hrdlog_push_qso_impl",
+            "clublog_push_qso_impl",
+            "eqsl_push_qso_impl",
+            "cloudlog_push_qso_impl",
+        ] {
+            let body = body(src, name);
+            assert!(
+                body.contains("let rec = upload_record(")
+                    && body.contains("adif_record(&rec)")
+                    && !body.contains(".into();"),
+                "{name} must send the row as `upload_record` makes it"
+            );
+        }
+        let launch = body(src, "start_on_the_logbook");
+        assert!(launch.contains("wire_country_resolvers(&mut eng);"));
+        assert!(launch.contains("adif_record_own_log(&log_queries::sent(rec.clone()))"));
+        assert_eq!(launch.matches("dxkeeper_push_async(").count(), 1);
+    }
+}
+
 fn qrz_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
@@ -26769,7 +27483,7 @@ fn qrz_push_qso_impl(
     // The row this push is for, kept for the stamp (see `stamp_subject`); the payload below
     // is built from the record without it, as it always was.
     let named = record.id.clone();
-    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let rec = upload_record(record);
     let adif = tempo_core::logbook::adif_record(&rec);
     let body = tempo_core::qrz::build_insert_body(&key, &adif, false);
     let resp = propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)?;
@@ -27278,7 +27992,7 @@ fn hrdlog_push_qso_impl(
     let code = hrdlog_keychain()?
         .get_password()
         .map_err(|_| "No HRDLog.net upload code stored — set it in Settings.".to_string())?;
-    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let rec = upload_record(record);
     let adif = tempo_core::logbook::adif_record(&rec);
 
     // Build + POST without the lock; the body carries the code — never logged.
@@ -27380,7 +28094,7 @@ fn clublog_push_qso_impl(
         .map_err(|_| "No ClubLog app-password stored — set it in Settings.".to_string())?;
     // The row this push is for, kept for the stamp (see `stamp_subject`).
     let named = record.id.clone();
-    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let rec = upload_record(record);
     let adif = tempo_core::logbook::adif_record(&rec);
 
     let (status, resp) = {
@@ -27529,7 +28243,7 @@ fn eqsl_push_qso_impl(
     }
     // The row this push is for, kept for the stamp (see `stamp_subject`).
     let named = record.id.clone();
-    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let rec = upload_record(record);
     let adif = tempo_core::logbook::adif_record(&rec);
 
     // Build + POST without the lock; the body carries the password — never logged.
@@ -27886,7 +28600,7 @@ fn cloudlog_push_qso_impl(
             status: None,
         });
     }
-    let rec: tempo_core::logbook::QsoRecord = dto.clone().into();
+    let rec = upload_record(dto.clone());
     let adif = tempo_core::logbook::adif_record(&rec);
     // The station-location check runs before sending and is said only if the instance refuses:
     // Wavelog is the authority, so the QSO goes either way. The QSO's side is what the record
@@ -29329,6 +30043,154 @@ async fn contest_restore(
     })
 }
 
+/// What a Clear test contacts came to.
+#[derive(serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+enum ContestClearDto {
+    #[serde(rename_all = "camelCase")]
+    Cleared {
+        /// The contacts taken out, each now under Removed.
+        contacts: usize,
+        /// Where any of them had already gone — places a removal cannot take one back from.
+        sent_to: ContestSentToDto,
+        /// At a club: `"linked"` or `"away"`, as for a removal. Absent without club sync.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        club: Option<&'static str>,
+    },
+    Refused {
+        refusal: &'static str,
+    },
+}
+
+/// ⭐ **Clear test contacts** — the contest screen's two-click action: every contact of this
+/// running out of the contest log, each the way [`contest_remove_last`] takes the newest, when the
+/// log is still what the screen named (`row_count` rows, the newest contact `call` at `when_unix`).
+/// Kept under Removed, never deleted; club seqs stay spent, and the serial run starts again at 1.
+/// At a club the club takes each back too (`club`). Answers once the contest journal holds the change; the logbook's copies
+/// are read with the engine lock released, on the blocking pool, in one read.
+///
+/// ⛔ Not one of Remote's operations: removal is refused from afar.
+#[tauri::command]
+async fn contest_clear(
+    state: State<'_, SharedEngine>,
+    row_count: usize,
+    call: String,
+    when_unix: u64,
+) -> Result<ContestClearDto, String> {
+    let engine = Arc::clone(&state);
+    let answer = tokio::task::spawn_blocking(move || {
+        tempo_app::engine::contest_removal::clear(&engine, row_count, &call, when_unix)
+    })
+    .await
+    .map_err(|e| format!("contest log task failed: {e}"))??;
+    Ok(clear_answer(answer))
+}
+
+/// What the contest screen is told after Clear test contacts: how many contacts left the log, every
+/// place any of them had already gone (the first host and address named, WSJT-X if any went
+/// there, the services holding a logbook copy of any), and the club's route — or why nothing was
+/// cleared.
+fn clear_answer(
+    answer: Result<
+        tempo_app::engine::contest_removal::ContestCleared,
+        tempo_app::engine::contest_removal::ContestRefusal,
+    >,
+) -> ContestClearDto {
+    match answer {
+        Ok(cleared) => {
+            let removals = &cleared.removals;
+            ContestClearDto::Cleared {
+                contacts: removals.len(),
+                sent_to: ContestSentToDto {
+                    n3fjp: removals.iter().find_map(|r| r.sent.n3fjp.clone()),
+                    n1mm: removals.iter().find_map(|r| r.sent.n1mm.clone()),
+                    wsjtx: removals.iter().any(|r| r.sent.wsjtx),
+                    logbook: cleared.logbook.is_some(),
+                    uploaded: cleared.logbook.clone().unwrap_or_default(),
+                },
+                club: club_route(removals.first().and_then(|r| r.club)),
+            }
+        }
+        Err(refusal) => ContestClearDto::Refused {
+            refusal: refusal.code(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod contest_clear_answer_tests {
+    use super::*;
+    use tempo_app::engine::contest_removal::{
+        ContestCleared, ContestRefusal, ContestRemoval, ContestSentTo,
+    };
+    use tempo_core::fieldday::RemovedQso;
+
+    fn removal(sent: ContestSentTo, club: Option<bool>) -> ContestRemoval {
+        ContestRemoval {
+            entry: RemovedQso {
+                rows: Vec::new(),
+                removed_unix: 0,
+            },
+            rows: Vec::new(),
+            sent,
+            qids: Vec::new(),
+            club,
+        }
+    }
+
+    /// The wire the contest screen reads (`ContestClearAnswer` in ui/src/api.ts), by value: the
+    /// contacts counted, every place any of them had gone, the logbook's services, the club's
+    /// route; and a refusal by its code.
+    #[test]
+    fn a_clear_answers_the_screen_by_value() {
+        let cleared = ContestCleared {
+            removals: vec![
+                removal(ContestSentTo::default(), Some(true)),
+                removal(
+                    ContestSentTo {
+                        n3fjp: Some("192.168.1.20".into()),
+                        n1mm: None,
+                        wsjtx: true,
+                    },
+                    Some(true),
+                ),
+                removal(ContestSentTo::default(), Some(true)),
+            ],
+            logbook: Some(vec!["lotw"]),
+        };
+        assert_eq!(
+            serde_json::to_value(clear_answer(Ok(cleared))).unwrap(),
+            serde_json::json!({
+                "outcome": "cleared",
+                "contacts": 3,
+                "sentTo": {
+                    "n3fjp": "192.168.1.20",
+                    "wsjtx": true,
+                    "logbook": true,
+                    "uploaded": ["lotw"],
+                },
+                "club": "linked",
+            })
+        );
+        let quiet = ContestCleared {
+            removals: vec![removal(ContestSentTo::default(), None)],
+            logbook: None,
+        };
+        assert_eq!(
+            serde_json::to_value(clear_answer(Ok(quiet))).unwrap(),
+            serde_json::json!({
+                "outcome": "cleared",
+                "contacts": 1,
+                "sentTo": { "wsjtx": false, "logbook": false, "uploaded": [] },
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(clear_answer(Err(ContestRefusal::Changed))).unwrap(),
+            serde_json::json!({ "outcome": "refused", "refusal": "changed" })
+        );
+    }
+}
+
 /// What an edit came to: the contact as it was and as it is now, and where it had already gone,
 /// which the edit does not reach — or why nothing changed.
 #[derive(serde::Serialize)]
@@ -29945,7 +30807,7 @@ fn hunted_parks_count(state: State<'_, SharedEngine>) -> Result<usize, String> {
         .hunted_parks_import_count())
 }
 
-/// Import a park directory from CSV text the operator downloaded (the HRD workflow). Caches it and
+/// Import a park directory from CSV text the operator downloaded. Caches it and
 /// swaps in the new index. Returns the park count. Always works regardless of the download URL.
 #[tauri::command]
 fn import_parks_csv(parks: State<'_, SharedParks>, csv: String) -> Result<usize, String> {
@@ -32550,10 +33412,11 @@ fn qrz_url(call: &str) -> Option<String> {
         .split(|c: char| c.is_whitespace() || c == '-')
         .next()
         .unwrap_or("");
-    // Longest slash-separated token = the base call (portable prefixes/suffixes are
-    // shorter than the call itself in practice: PJ4/K1ABC, K1ABC/P), the last of equal
-    // ones. Each is sanitized BEFORE it is measured: the browser's copy counts UTF-16
-    // units, not bytes, so measuring the raw text could pick a different token there.
+    // The base call is the slash-separated token that looks like a callsign, one with a
+    // digit (W1AW/PORTABLE, K1A/QRP), and among those the longest (PJ4/K1ABC, K1ABC/P),
+    // the last of equal ones; with no digit anywhere, the longest. Each is sanitized
+    // BEFORE it is measured: the browser's copy counts UTF-16 units, not bytes, so
+    // measuring the raw text could pick a different token there.
     let base = station
         .split('/')
         .map(|t| {
@@ -32561,7 +33424,7 @@ fn qrz_url(call: &str) -> Option<String> {
                 .filter(|c| c.is_ascii_alphanumeric())
                 .collect::<String>()
         })
-        .max_by_key(String::len)
+        .max_by_key(|t| (t.bytes().any(|b| b.is_ascii_digit()), t.len()))
         .unwrap_or_default()
         .to_ascii_uppercase();
     (!base.is_empty()).then(|| format!("https://www.qrz.com/db/{base}"))
@@ -32576,6 +33439,26 @@ fn open_qrz_page(app: tauri::AppHandle, call: String) -> Result<(), String> {
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+/// The native title bar's theme, from the operator's theme pick: `"light"`, `"dark"`, or
+/// `None` for System, the computer's own setting. Windows only: there the title bar
+/// otherwise follows the computer whatever the operator picked. On Linux tao's "follow the
+/// computer" forces GTK light whatever the desktop says, which would break System on a dark
+/// desktop, and macOS draws the title bar from the system appearance itself, so off Windows
+/// this does nothing (and the UI never asks).
+#[tauri::command]
+fn set_title_bar_theme(app: tauri::AppHandle, theme: Option<String>) -> Result<(), String> {
+    let theme = match theme.as_deref() {
+        None => None,
+        Some("light") => Some(tauri::Theme::Light),
+        Some("dark") => Some(tauri::Theme::Dark),
+        Some(other) => return Err(format!("no title bar theme {other:?}")),
+    };
+    if cfg!(windows) {
+        app.set_theme(theme);
+    }
+    Ok(())
 }
 
 /// Which page a DXpedition calendar entry opens: the operation's own site when the
@@ -32720,6 +33603,9 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     // held has already done it, before it waited on anything; the second run finds the loop gone
     // and returns at once, and sweeps any daemon started since.
     stop_the_radio();
+    // Programs on JS8Call's API hear that the station is closing, as JS8Call tells them. After the
+    // unkey, and bounded: it never delays taking the transmitter off the air.
+    js8_api::closing();
     // The last settings change, still on its way to `settings.json` on the writer's thread. On
     // every quit, attached or not: it is only what the operator changed, written late.
     flush_settings();
@@ -33489,6 +34375,7 @@ pub fn run() {
         icom_native_cat: settings.icom_native_cat,
         flex_native_cat: settings.flex_native_cat,
         flex_radio_ip: settings.flex_radio_ip.clone(),
+        flex_native_unbenched: settings.flex_native_unbenched,
         icom_lan_host: settings.icom_lan_host.clone(),
         icom_lan_user: settings.icom_lan_user.clone(),
         icom_lan_port: settings.icom_lan_port,
@@ -33607,6 +34494,7 @@ pub fn run() {
     // The APRS-IS feed is independent of the APRS RF decoder's arm state by design, so it comes
     // up here with the other network feeds rather than when the APRS view is entered.
     sync_aprs_is_feed(&engine);
+    start_js8_links(engine.clone());
     // Integrated rotator: launch the bundled rotctld when a model is configured, and keep it
     // running — a controller switched on later comes online on its own (`supervise_rotctld`).
     sync_rotctld(&engine);
@@ -33855,8 +34743,9 @@ fn start_on_the_logbook(
         // so new-DXCC decode highlighting works; set it BEFORE loading the log so
         // the initial worked-entity index is populated. The SAME shared resolver the store
         // keyed the hot index with when it opened, so the attach below installs that index
-        // rather than building one under this lock.
-        eng.set_dxcc_resolver_shared(country_resolver());
+        // rather than building one under this lock. Beside it, the country a record's own DXCC
+        // number gives it, which the contact's COUNTRY follows.
+        wire_country_resolvers(&mut eng);
         // Wire the subdivision resolver — `us_state_hint`, the SAME function the heard side
         // uses (get_need_alerts / the spot rows), plus the Canadian province. That shared
         // function is the whole point of the fix: the worked side used to have no resolver at
@@ -34475,12 +35364,13 @@ fn start_on_the_logbook(
                     // publication, and stripping it would leave their master log missing what
                     // they typed in Nexus. The line this fix draws is a nominated local logger
                     // vs a service or a broadcast — flip this one word if the operator wants it
-                    // drawn elsewhere.
+                    // drawn elsewhere. Its COUNTRY is the one its DXCC number gives it, as
+                    // every service's is (`log_queries::sent`).
                     dxkeeper_push_async(
                         host,
                         base,
                         uploads,
-                        tempo_core::logbook::adif_record_own_log(&rec),
+                        tempo_core::logbook::adif_record_own_log(&log_queries::sent(rec.clone())),
                     );
                 }
                 let failed = auto_push_one(
@@ -34713,6 +35603,11 @@ fn start_on_the_logbook(
             }
         });
     }
+
+    // JS8Call's API for other programs on this computer, read-only: one manager thread in the
+    // CAT-broker mold above, hot-applying the TCP and UDP switches. Off by default — nothing is
+    // bound or sent until the operator turns a side on.
+    js8_api::spawn(engine.clone());
 
     // Field Day club sync: one manager thread in the CAT-broker mold above —
     // poll settings 1 s, hot-apply both roles. HOST role (fd_host_enable) =
@@ -35497,6 +36392,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         pick_data_folder,
         reveal_all_txt,
         open_qrz_page,
+        set_title_bar_theme,
         open_dxped_page,
         open_external_url,
         os_notify,
@@ -35571,6 +36467,13 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         js8_locator_refusal,
         js8_set_speed,
         js8_set_rx_speeds,
+        js8_word_check,
+        js8_word_suggestions,
+        js8_set_filter,
+        js8_default_frequencies,
+        js8_set_qsy_center,
+        js8_qsy_to_centre,
+        js8_hop_answer,
         js8_send,
         js8_send_command,
         js8_call_cq,
@@ -35578,9 +36481,18 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         js8_cq_repeat,
         js8_answer_reply,
         js8_composer,
+        js8_typeahead,
+        js8_typeahead_state,
         js8_drop_queue,
         js8_inbox_mark,
         js8_inbox_delete,
+        js8_heartbeat_now,
+        js8_select_call,
+        js8_store_message,
+        js8_inbox_dropped_clear,
+        js8_set_rx_blocklist,
+        js8_set_groups,
+        js8_set_avoid_allcall,
         psk_clear,
         psk_afc_reset,
         psk_net,
@@ -35607,6 +36519,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_licensed_band_plan,
         privilege_spans::get_privilege_spans,
         dxcc_entity_names,
+        dxcc_entities,
         dxcc_entity_continents,
         cloudlog_station_info,
         dxcc_entity_locations,
@@ -35725,6 +36638,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         contest_entry_put,
         contest_remove_last,
         contest_restore,
+        contest_clear,
         contest_removed,
         contest_edit,
         fd_merge_to_general,
@@ -35789,12 +36703,15 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_by_id::mark_qsl_sent_by_id,
         log_by_id::mark_qsl_card_by_id,
         log_by_id::set_sat_tag_by_id,
+        log_by_id::set_dxcc_by_id,
         log_by_id::delete_qso_by_id,
         log_queries::ask_log,
         purge_log,
         get_awards,
+        get_call_stats,
         get_journey,
         get_log_stats,
+        get_log_timeline,
         get_confirmation_diagnostics,
         import_adif,
         sync_lotw_report,
@@ -37870,10 +38787,10 @@ mod tests {
         );
     }
 
-    /// ⭐ Removing the newest contest contact, and editing one, reach the app only if their
-    /// commands are REGISTERED, and the three that change the contest log answer only once its
-    /// journal holds the change (the tempo-app functions that wait for it). And none of them is
-    /// one of Remote's operations: removal and edit are refused from afar, so the Remote
+    /// ⭐ Removing the newest contest contact, clearing every one, and editing one, reach the app
+    /// only if their commands are REGISTERED, and the four that change the contest log answer only
+    /// once its journal holds the change (the tempo-app functions that wait for it). And none of
+    /// them is one of Remote's operations: removal and edit are refused from afar, so the Remote
     /// dispatcher must never name them.
     #[test]
     fn the_contest_removal_commands_are_registered_journaled_and_not_remote() {
@@ -37888,6 +38805,7 @@ mod tests {
         for (command, waits_through) in [
             ("contest_remove_last", Some("contest_removal::remove_last(")),
             ("contest_restore", Some("contest_removal::restore(")),
+            ("contest_clear", Some("contest_removal::clear(")),
             ("contest_removed", None),
             ("contest_edit", Some("contest_edit::edit(")),
         ] {
@@ -37918,6 +38836,7 @@ mod tests {
             "contest_removal",
             "contest_remove_last",
             "contest_restore",
+            "contest_clear",
             "contest_edit",
         ] {
             assert!(!remote.contains(name), "Remote must not reach {name}");
@@ -38332,6 +39251,53 @@ mod tests {
             !body.contains("unwrap_or_default"),
             "a defaulted name would turn the removal into a refused empty name"
         );
+    }
+
+    /// The Logbook's country picker lists what `ui/src/api.ts`'s `getDxccEntities` reads: the
+    /// command is defined and registered (a missing one fails only at runtime, as the satellite
+    /// tag's test above says), and it sends every entity the station can set, deleted ones among
+    /// them, under the names the picker reads.
+    #[test]
+    fn the_country_picker_list_is_registered_and_holds_the_deleted_entities() {
+        let src = include_str!("lib.rs");
+        assert!(
+            src.lines().any(|l| l.starts_with("fn dxcc_entities(")),
+            "dxcc_entities is invoked by the UI but defined nowhere"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "dxcc_entities,"),
+            "dxcc_entities is not registered"
+        );
+        let all = serde_json::to_value(crate::dxcc_entities()).expect("serializes");
+        let rows = all.as_array().expect("a list");
+        assert_eq!(rows.len(), 402);
+        assert!(rows.contains(
+            &serde_json::json!({"code": 229, "name": "GERMAN DEMOCRATIC REPUBLIC", "deleted": true})
+        ));
+        assert!(rows.contains(
+            &serde_json::json!({"code": 182, "name": "Navassa Island", "deleted": false})
+        ));
+    }
+
+    /// The row a log command answers with shows the contact as a page of the log does: under the
+    /// entity its record's DXCC number names, where that is another than its call's.
+    #[test]
+    fn a_log_commands_row_shows_the_entity_its_records_number_names() {
+        let row = |dxcc: &str| {
+            let adif = format!(
+                "<CALL:3>K1N<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20150210<TIME_ON:6>123400{dxcc}<EOR>"
+            );
+            crate::logged_qso(&tempo_core::logbook::parse_adif(&adif).remove(0)).entity
+        };
+        assert_eq!(row("<DXCC:3>182").as_deref(), Some("Navassa Island"));
+        assert_eq!(row("").as_deref(), Some("United States"), "by its call");
     }
 
     /// THE CONNECT DASHBOARD'S WINDOW IS WIRED END TO END. What makes the pop-out
@@ -42536,6 +43502,7 @@ mod tests {
             rec.grid.as_deref(),
             rec.ota.iota.as_deref(),
             qso_is_sat(rec.prop_mode.as_deref()),
+            crate::log_folds::award_fields(rec),
         );
         awards.summary()
     }
@@ -45039,6 +46006,7 @@ mod tests {
                 q.grid.as_deref(),
                 q.ota.iota.as_deref(),
                 qso_is_sat(q.prop_mode.as_deref()),
+                crate::log_folds::award_fields(&q),
             );
         }
         awards.summary()
@@ -45364,6 +46332,51 @@ mod tests {
             "a saved choice is kept"
         );
         assert!(!restored(&shipped, Some(false)), "…either way");
+    }
+
+    /// A backup from before JS8 heartbeat networking restores as the same settings file loads: a
+    /// heartbeat user (HB ACK on, or an HB repeat interval set) keeps the HB button, everyone else
+    /// gets JS8Call's default, off, and a backup that carries the switch keeps it. A restore runs
+    /// none of `Settings::load`'s migrations, so this is the restore's own call to the same rule.
+    #[test]
+    fn a_restored_backup_from_before_heartbeat_networking_chooses_as_the_file_would_load() {
+        let dir = std::env::temp_dir().join(format!("nexus-hbnet-restore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("settings.json");
+        let both = |hb_ack: bool, interval: u16, saved: Option<bool>| {
+            let s = tempo_app::settings::Settings {
+                js8_hb_ack: hb_ack,
+                js8_hb_interval_min: interval,
+                ..Default::default()
+            };
+            let mut v = serde_json::to_value(&s).unwrap();
+            let fields = v.as_object_mut().unwrap();
+            match saved {
+                Some(on) => {
+                    fields.insert("js8HbNetworking".into(), on.into());
+                }
+                None => assert!(fields.remove("js8HbNetworking").is_some()),
+            }
+            std::fs::write(&file, serde_json::to_string(&v).unwrap()).unwrap();
+            (
+                super::settings_from_bundle(v).unwrap().js8_hb_networking,
+                tempo_app::settings::Settings::load(&file).js8_hb_networking,
+            )
+        };
+        for (hb_ack, interval, saved, want) in [
+            (false, 0, None, false),
+            (true, 0, None, true),
+            (false, 10, None, true),
+            (true, 10, Some(false), false),
+            (false, 0, Some(true), true),
+        ] {
+            assert_eq!(
+                both(hb_ack, interval, saved),
+                (want, want),
+                "HB ACK {hb_ack}, interval {interval}, saved {saved:?}: restored, and loaded"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The bundle must not carry secrets: it is written to Downloads and operators mail these

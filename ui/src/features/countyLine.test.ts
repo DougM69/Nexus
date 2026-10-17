@@ -71,8 +71,8 @@ describe('editing a county line', () => {
   })
 })
 
-// `+` joins a county line exactly as `/` does: N3FJP's loggers take `COOK+WILL`, so an operator
-// coming from one types that. Each verdict is asserted BY VALUE for both marks, so the two cannot
+// `+` joins a county line exactly as `/` does: some loggers take `COOK+WILL`, so an operator
+// used to one types that. Each verdict is asserted BY VALUE for both marks, so the two cannot
 // agree by both being wrong.
 describe('a county line joined by +', () => {
   it('is a county line, and no county on the chart has either mark in its code or name', () => {

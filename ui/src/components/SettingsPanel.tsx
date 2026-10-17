@@ -1,17 +1,16 @@
-import { useStationCapability } from '../stationAccess'
-import { useNavigation } from '../remote-web/useNavigation'
-import { settingsForm, type SettingsConfiguration } from '../remote-web/configuration'
-import { useAmplifierFollow } from '../remote-web/useAmplifierFollow'
-import { useReceiverGain } from '../remote-web/useReceiverGain'
-import { useRemotePreferences } from '../remote-web/useRemotePreferences'
+import { useStationCapability, useStationControl } from '../stationAccess'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
 import { RemoteStationsWindow } from '../remote-native/RemoteStationsWindow'
 import { LanStation } from '../remote-native/LanStation'
+import { isStreamInput } from '../remote-native/stream-input'
 import { BetaNote } from '../remote-web/BetaNote'
 import { SAT_VFO_MAPS } from '../features/satVfo'
-import { JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
+import { JS8_ALL_SPEEDS_MASK, JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
+import { Js8ComposeSettings } from './Js8ComposeSettings'
+import { js8CqTextRefused } from '../js8Compose'
 import { confirmDialog } from '../confirm'
+import { Js8FrequencySettings } from './Js8FrequencySettings'
 import { checkRigForm, blocks, dataModePickerShown, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
@@ -205,6 +204,7 @@ import { cloudlogLocationMismatch } from '../settings/cloudlogLocation'
 import { SettingsStation } from './SettingsStation'
 import { SettingsClusterNodes } from './SettingsClusterNodes'
 import { SettingsStreetMaps } from './SettingsStreetMaps'
+import { Js8ApiSettings } from './Js8ApiSettings'
 import { getClusterNodes } from '../api'
 import type { ClusterNodes } from '../types'
 import { SetupHealth } from './SetupHealth'
@@ -220,9 +220,11 @@ import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
 import { SettingsSearch } from './SettingsSearch'
 import { SettingsLicenses } from './SettingsLicenses'
 import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
+import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
+import { Js8ListsSettings } from './Js8ListsSettings'
 import { resolveTarget } from '../settings/registry'
 import { ThisComputerAudio, useDriving } from './ThisComputerAudio'
-import { changedSince, patchSettings } from '../settings/patch'
+import { changedSince, mergeListEdit, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
 // the cockpit's canvas/waterfall/api surface into every SettingsPanel test's `../api` mock.
 import { FSK_ID_SECONDS_LABEL, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
@@ -896,6 +898,7 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     yaesuRfScope: s.yaesuRfScope ?? false,
     flexNativeAudio: s.flexNativeAudio ?? false,
     flexNativeCat: s.flexNativeCat ?? false,
+    flexNativeUnbenched: s.flexNativeUnbenched ?? false,
     icomLanHost: s.icomLanHost ?? '',
     icomLanUser: s.icomLanUser ?? '',
     icomLanPort: s.icomLanPort ?? 50001,
@@ -1126,15 +1129,9 @@ export function SettingsPanel({
   motion = 'system',
   onMotionChange,
 }: Props) {
-  const configuration=useNavigation<SettingsConfiguration>('settings')
-  const remote=configuration.remote
+  const remote = !useStationControl()
   const canSelectRadio = useStationCapability('radioSelection')
-  const remoteFollow = useAmplifierFollow(configuration.value, activeRadioId, configuration.refresh)
-  const remoteGain = useReceiverGain(configuration.value, activeRadioId, radio, configuration.refresh)
-  // Remote: the operating preferences the station lets this browser change. Every other field stays
-  // read-only (`disabled={remote}`); these follow the station's offer instead.
-  const remotePrefs = useRemotePreferences(configuration.value, configuration.refresh)
-  const locked = (key: FieldKey) => remote && !remotePrefs.canEdit(key)
+  const locked = (_key: FieldKey) => remote
   // Restore-from-backup (#28 item 4). A hidden file input, the same shape the Logbook's ADIF
   // import uses — Tauri has no native picker wired here and this needs none.
   const backupFileRef = useRef<HTMLInputElement | null>(null)
@@ -1289,12 +1286,6 @@ export function SettingsPanel({
       if (picked) setDataFolderPath(picked)
     }, t('settings.dataFolder.browse.failed'))
   }
-  useEffect(()=>{
-    if(!remote)return
-    const next=configuration.value?settingsForm(configuration.value):null
-    // A refreshed document keeps unsaved preference edits unless the station changed that setting.
-    setForm(remotePrefs.rebase(form,next,configuration.value));dirtyRef.current=false;savedRef.current=next;setStatus('idle')
-  },[remote,configuration.value])
   // The blocklist editor's text — its OWN write path (apiSetBlockedCalls, the narrow
   // verb), never the form save: the engine deliberately ignores blockedCalls in a
   // whole-struct save so a stale form can't revert a mid-QSO Alt-click. Seeded from the
@@ -1833,11 +1824,6 @@ export function SettingsPanel({
     }
     if (lastActiveRef.current === activeRadioId) return
     lastActiveRef.current = activeRadioId
-    if (remote) {
-      configuration.refresh()
-      setEditingRadioId(activeRadioId)
-      return
-    }
     void getSettings()
       .then((s) => {
         setForm(s)
@@ -1956,12 +1942,32 @@ export function SettingsPanel({
     )
   }
 
+  // True while the form edits a radio that is NOT the one in use. Its RX Gain and Tx Power then edit
+  // the form only, and Save stores them on that radio: `set_rx_gain` / `set_tx_level` take no radio,
+  // so applying them live would change the radio in use. Keyed on the LIVE active radio, as the
+  // satellite VFO map's guard is, because that is the radio the two verbs act on.
+  const editingOtherRadio = editingRadioId != null && editingRadioId !== (activeRadioId ?? form?.activeRadio)
+  // …and the hint both sliders show then, in place of their own: those call Tx Power the cockpit
+  // Pwr's control and say the RX Level meter answers RX Gain, which holds for the radio in use only.
+  const otherRadioLevelHint = (
+    <T
+      k="settings.audio.multiRadio.levelHint"
+      tags={{ b: <strong /> }}
+      vals={{
+        radio:
+          form?.radios?.find((r) => r.id === editingRadioId)?.name ??
+          t('settings.audio.multiRadio.selectedRadio'),
+      }}
+    />
+  )
+
   // Apply RX capture gain to the LIVE audio stream (not just the form). Called on
   // release — `set_rx_gain` persists + returns a snapshot, so we commit once the
   // operator lets go of the slider rather than on every drag tick (which would
   // disk-thrash). The RX Level meter then responds within a poll, so the control
   // visibly "works" instead of appearing dead until a full Save.
   const applyRxGainLive = (value: number) => {
+    if (editingOtherRadio) return
     void setRxGain(value).catch(() => pushToast(t('settings.audio.rxGain.failed'), 'error'))
   }
 
@@ -1973,6 +1979,7 @@ export function SettingsPanel({
   // bypasses the throttle window so the final settled value is never silently dropped by it.
   const txLevelThrottleRef = useRef(0)
   const applyTxLevelLive = (value: number, force = false) => {
+    if (editingOtherRadio) return
     const now = Date.now()
     if (!force && now - txLevelThrottleRef.current < 60) return
     txLevelThrottleRef.current = now
@@ -1983,8 +1990,11 @@ export function SettingsPanel({
   // (radio.txLevel). When the cockpit changes it, mirror the live value into the form so the slider
   // tracks it (previously the form was a stale copy, so cockpit→Settings never showed). setForm
   // directly (not updateNum) so this live-sync never spuriously marks the form dirty.
+  // Not while the form edits another radio: the live value is the drive of the radio in use, and
+  // mirrored into another radio's form it was saved as that radio's drive.
   useEffect(() => {
     if(remote)return
+    if (editingOtherRadio) return
     const live = radio?.txLevel
     if (live == null) return
     setForm((prev) => (prev && Math.abs(prev.txLevel - live) > 1e-6 ? { ...prev, txLevel: live } : prev))
@@ -2102,13 +2112,29 @@ export function SettingsPanel({
   }
   // JS8Call's allow/deny lists, one comma-separated field each, upper-cased as JS8Call's
   // `splitWords` reads them (Configuration.cpp:2416-2428).
-  const setJs8CallList = (key: 'js8AutoreplyAllow' | 'js8AutoreplyDeny' | 'js8HbAckDeny', raw: string) => {
+  const setJs8CallList = (
+    key: 'js8AutoreplyAllow' | 'js8AutoreplyDeny' | 'js8HbAckDeny' | 'js8SpotNever',
+    raw: string,
+  ) => {
     markDirty()
     const calls = raw
       .split(',')
       .map((c) => c.trim().toUpperCase())
       .filter(Boolean)
     setForm((prev) => (prev ? { ...prev, [key]: calls } : prev))
+  }
+  // The JS8 lists, marks and sounds (Js8ListsSettings): each list as it parses, each mark as typed.
+  const setJs8Words = (key: 'js8RxBlocklist' | 'js8HighlightPrimary' | 'js8HighlightSecondary', list: string[]) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, [key]: list } : prev))
+  }
+  const setJs8Mark = (key: 'js8Eot' | 'js8Mfi', value: string) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
+  }
+  const setJs8Sounds = (events: string[]) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, js8Sounds: events } : prev))
   }
   const parseJs8Groups = (raw: string): string[] =>
     raw
@@ -2461,7 +2487,20 @@ export function SettingsPanel({
       onSaved?.()
     })
   }
-  const handleAddRadio = () => {
+  const handleAddRadio = async () => {
+    // Selecting the new radio for editing (below) replaces what the rig form holds, so unsaved
+    // edits get the same confirm as Edit gives them.
+    if (
+      dirtyRef.current &&
+      !(await confirmDialog({
+        title: t('settings.radios.edit.confirm.title'),
+        body: t('settings.radios.edit.confirm.body'),
+        confirmLabel: t('settings.radios.edit.confirm.action'),
+        danger: true,
+      }))
+    ) {
+      return
+    }
     // Adding does not switch the station onto the new radio -- see Engine::add_radio. Select it
     // for EDITING instead, so the operator lands on the profile they just made and can configure
     // it, while the rig they are actually operating keeps running.
@@ -2470,7 +2509,13 @@ export function SettingsPanel({
       reloadRadios()
       const fresh = await getSettings()
       const added = fresh.radios?.[fresh.radios.length - 1]
-      if (added) setEditingRadioId(added.id)
+      if (!added) return
+      // …with ITS config in the form, as Edit loads one. Selected without it, the form still held
+      // the radio it was editing before, and the first Save copied that radio's port, baud and
+      // sound card onto the new one (two Yaesus on a Mac, 2026-10-14).
+      setForm((prev) => (prev ? { ...prev, ...radioPatch(added) } : prev))
+      setEditingRadioId(added.id)
+      dirtyRef.current = false
     })
   }
   const handleRemoveRadio = async (id: number) => {
@@ -2489,8 +2534,16 @@ export function SettingsPanel({
     ) {
       return
     }
-    void withErrorToast(() => removeRadio(id), t('settings.radios.remove.failed')).then((s) => {
+    void withErrorToast(() => removeRadio(id), t('settings.radios.remove.failed')).then(async (s) => {
       if (!s) return
+      // …and its fields with it. Handed to the operating radio still holding the deleted radio's
+      // port, baud and sound card, the form's next Save folded them into the operating radio.
+      if (editingRadioId === id) {
+        const fresh = await getSettings()
+        const operating = fresh.radios?.find((p) => p.id === (activeRadioId ?? fresh.activeRadio))
+        if (operating) setForm((prev) => (prev ? { ...prev, ...radioPatch(operating) } : prev))
+        dirtyRef.current = false
+      }
       // If the deleted radio was the one the rig form is editing, retarget the form: a
       // dangling editingRadioId routes every later Save through update_radio_profile(<gone
       // id>), which no-ops on a missing id — so station-wide edits (callsign, credentials)
@@ -2695,14 +2748,6 @@ export function SettingsPanel({
     }
     void withErrorToast(() => setActiveRadio(id), t('settings.radios.switch.failed')).then((s) => {
       if (!s) return
-      if (remote) {
-        // The streamed Settings projection is deliberately smaller than this
-        // form. Refresh its complete configuration document after selection.
-        configuration.refresh()
-        setEditingRadioId(id)
-        onSaved?.()
-        return
-      }
       void getSettings().then((full) => {
         setForm(full)
         dirtyRef.current = false
@@ -2879,9 +2924,19 @@ export function SettingsPanel({
   // `forced` reaches the backend whatever the form held when it loaded: the contest-over checklist's
   // put-backs, which "what changed since" would drop when a value was changed elsewhere after Settings
   // opened (a seat swap in the pop-out scoreboard) and is being put back to what the form still holds.
+  //
+  // One list another writer adds to while the form is open: the 55-minute rule puts the stations it
+  // stops on the JS8 "never acknowledge" list. The form's edit of it goes over the list as it is now
+  // (`mergeListEdit`), so a station the rule added since Settings opened is never written away.
   const saveForm = (payload: NonNullable<typeof form>, forced: Partial<Settings> = {}) => {
     const changes = changedSince(savedRef.current, payload)
-    return patchSettings((live) => ({ ...(live.activeRadio === payload.activeRadio ? changes : payload), ...forced }))
+    return patchSettings((live) => {
+      const sent: Partial<Settings> = { ...(live.activeRadio === payload.activeRadio ? changes : payload), ...forced }
+      if ('js8HbAckDeny' in sent) {
+        sent.js8HbAckDeny = mergeListEdit(savedRef.current?.js8HbAckDeny ?? [], payload.js8HbAckDeny ?? [], live.js8HbAckDeny ?? [])
+      }
+      return sent
+    })
   }
 
   // Persist the rig form to the radio it actually describes.
@@ -2936,6 +2991,24 @@ export function SettingsPanel({
     } else {
       await saveForm({ ...next, mycall: next.mycall.trim().toUpperCase() }, forced)
     }
+    // The form's `radios` is a copy, and the writes above changed the profiles it copies, so take
+    // it again. Edit loads a radio from this copy and `withActiveRadioConfig` writes the operating
+    // radio back from it: left stale, a saved baud, port or sound card came back on the radio
+    // re-opened for Edit, and the operating radio's went back at the next save of the other one.
+    const { radios } = await getSettings()
+    setForm((prev) => (prev ? { ...prev, radios } : prev))
+    // The baseline the next Save is diffed against (`saveForm`) holds the radio fields as the form
+    // now holds them. With another radio open the flat fields hold THAT radio, while a station-wide
+    // save sends the radio in use's own config from `radios` (`withActiveRadioConfig`), so the
+    // baseline holds the same. With the edited radio's fields there, or an older copy than `radios`,
+    // a field of the radio in use read as a change, and the next Save sent that copy's drive and
+    // gain back over the cockpit's newer ones. Test CAT and Auto-test save through here too, so the
+    // radio fields move here for every caller; `commitSave` then takes the whole of what this returns.
+    const saved = { ...next, radios }
+    const baseline =
+      editingRadioId != null && editingRadioId !== next.activeRadio ? withActiveRadioConfig(saved) : saved
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(baseline), radios }
+    return baseline
   }
 
   // A station-wide save (LoTW/eQSL credentials, config profiles) that must NOT carry the rig
@@ -3457,7 +3530,6 @@ export function SettingsPanel({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if(remote){await remoteFollow.save();await remotePrefs.save(form);return}
     if (!form) return
     if (!form.mycall.trim()) {
       // Don't dead-end on another tab: route the operator to where the fix is instead of a
@@ -3501,6 +3573,13 @@ export function SettingsPanel({
     if (unjoinable) {
       setTab('digital')
       setError(t('settings.save.js8GroupCannotJoin', { group: unjoinable }))
+      return
+    }
+    // JS8Call's Settings refuse a CQ message that is not empty, does not start with CQ and does not
+    // hold the callsign (Configuration.cpp:3003-3008), and so does this Save.
+    if (js8CqTextRefused(form.js8CqText ?? '', form.mycall ?? '')) {
+      setTab('digital')
+      setError(t('settings.save.js8CqText'))
       return
     }
     // Check the RADIO before saving it. Until now the callsign was the only validated field, so
@@ -3555,9 +3634,9 @@ export function SettingsPanel({
       // Editing a NON-active radio writes ONLY that radio's CAT/audio/PTT/rotator/native config;
       // the active radio, its flat mirror and station-wide settings are untouched (the backend
       // re-syncs the flat mirror from the still-active radio). No live rig swap.
-      await persistRadioForm(next, forced)
+      const saved = await persistRadioForm(next, forced)
       dirtyRef.current = false
-      savedRef.current = next
+      savedRef.current = saved
       setStatus('saved')
       onSaved?.()
     } catch (err) {
@@ -3580,13 +3659,13 @@ export function SettingsPanel({
     setOverOffer(null)
   }
 
-  if (!form || (remote&&!configuration.value)) {
+  if (!form) {
     return (
       <section className="panel settings-panel" data-remote-configuration={remote || undefined}>
         <div className="panel-header">
           <h2>{t('settings.panel.title')}</h2>
         </div>
-        <p className="empty" role="status">{remote ? configuration.loading ? t('remote.collectionLoading') : t('remote.collectionUnavailable') : t('settings.panel.loading')}</p>
+        <p className="empty" role="status">{t('settings.panel.loading')}</p>
       </section>
     )
   }
@@ -3808,8 +3887,6 @@ export function SettingsPanel({
           ))}
         </div>
         <div className="settings-scroll">
-          {remote && <p className="settings-note" role="status">{remoteFollow.supported || remoteGain.supported || remotePrefs.supported ? t('remote.configurationControls') : t('remote.configurationObserver')}</p>}
-          {remote && remotePrefs.supported && <p className="settings-note">{t('remote.settingsEditable')}</p>}
           {remote && (tab==='logging'||tab==='configurations') && <p className="settings-note">{t('remote.configurationLocal')}</p>}
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
           {tab === 'configurations' && !remote && (
@@ -5597,8 +5674,8 @@ export function SettingsPanel({
                       OmniRig is named in the docs and in half the Windows logging ecosystem, so
                       a mac/Linux operator who goes looking for it must find the answer here
                       instead of concluding the build is broken. */}
-                  <option value="omnirig" disabled={omnirigChoiceFor(remote ? configuration.value?.platform==='windows' : IS_WINDOWS).disabled}>
-                    {omnirigChoiceFor(remote ? configuration.value?.platform==='windows' : IS_WINDOWS).label}
+                  <option value="omnirig" disabled={omnirigChoiceFor(IS_WINDOWS).disabled}>
+                    {omnirigChoiceFor(IS_WINDOWS).label}
                   </option>
                   {/* Offered only for the six Icoms with a network server built in, and kept while
                       chosen so the select always shows its own value; Detect never picks it, and a
@@ -5615,7 +5692,7 @@ export function SettingsPanel({
                     k="settings.rigControl.conn.omnirig.hint"
                     tags={{ b: <strong />, em: <em /> }}
                     vals={{
-                      availability: omnirigChoiceFor(remote ? configuration.value?.platform==='windows' : IS_WINDOWS).disabled
+                      availability: omnirigChoiceFor(IS_WINDOWS).disabled
                         ? t('settings.rigControl.conn.omnirig.unavailable.why')
                         : t('settings.rigControl.conn.omnirig.install'),
                     }}
@@ -6204,6 +6281,41 @@ export function SettingsPanel({
                 </label>
               )}
 
+              {/* The client's Beta setting for CW, Tune and the ATU, which no bench has confirmed yet
+                  (operator ruling, 2026-10-14, "A Beta setting, off by default"). Per radio, and
+                  shown only where Nexus's own Flex client is this radio's connection, the one place
+                  it means anything (`flex_client_reachable` and the opt-in above). Only at the
+                  shack: a press that comes through the Remote stream changes nothing. */}
+              {form.rigConn === 'network' &&
+                [2036, 23005].includes(form.rigModel) &&
+                form.flexNativeCat &&
+                (form.flexRadioIp ?? '').trim() !== '' && (
+                  <label className="settings-field">
+                    <span className="settings-label">
+                      {t('settings.rigControl.flexUnbenched.label')}
+                    </span>
+                    <button disabled={remote}
+                      type="button"
+                      role="switch"
+                      aria-checked={form.flexNativeUnbenched ?? false}
+                      className={`toggle${form.flexNativeUnbenched ? ' on' : ''}`}
+                      onClick={() => {
+                        // Read before anything else, while the stream's dispatch is still running.
+                        if (isStreamInput()) {
+                          pushToast(t('remote.lan.atShackOnly'), 'error')
+                          return
+                        }
+                        updateBool('flexNativeUnbenched', !form.flexNativeUnbenched)
+                      }}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                    <span className="settings-hint">
+                      <T k="settings.rigControl.flexUnbenched.hint" tags={{ b: <strong /> }} />
+                    </span>
+                  </label>
+                )}
+
               {/* The log records Nexus's own CI-V engine, so it is offered where that engine drives
                   the radio, asked the way the native switch above asks it: by the model NUMBER and
                   the connection (`civBlocked`, the engine's `native_civ_model`), with the switch on,
@@ -6481,7 +6593,11 @@ export function SettingsPanel({
                   aria-label={t('settings.audio.txPower.aria')}
                 />
                 <span className="settings-hint">
-                  <T k="settings.audio.txPower.hint" tags={{ b: <strong />, em: <em /> }} />
+                  {editingOtherRadio ? (
+                    otherRadioLevelHint
+                  ) : (
+                    <T k="settings.audio.txPower.hint" tags={{ b: <strong />, em: <em /> }} />
+                  )}
                 </span>
               </label>
 
@@ -6502,25 +6618,23 @@ export function SettingsPanel({
               <label className="settings-field">
                 <span className="settings-label">
                   {t('settings.audio.rxGain.label')}{' '}
-                  <span className="settings-value">×{remote ? remoteGain.gain?.toFixed(1) ?? '—' : (form.rxGain ?? 1).toFixed(1)}</span>
+                  <span className="settings-value">×{(form.rxGain ?? 1).toFixed(1)}</span>
                 </span>
-                <input disabled={remote && !remoteGain.canEdit}
+                <input disabled={remote}
                   className="settings-slider"
                   type="range"
                   min="1"
                   max="8"
                   step="0.1"
-                  value={String(remote ? remoteGain.gain ?? 1 : form.rxGain ?? 1)}
-                  onPointerDown={() => { if (remote) remoteGain.begin() }}
-                  onKeyDown={(e) => { if (remote && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) remoteGain.begin() }}
-                  onChange={(e) => remote ? remoteGain.change(Number(e.target.value)) : updateNum('rxGain', Number(e.target.value))}
-                  onPointerUp={(e) => remote ? void remoteGain.commit() : applyRxGainLive(Number((e.target as HTMLInputElement).value))}
-                  onKeyUp={(e) => remote ? void remoteGain.commit() : applyRxGainLive(Number((e.target as HTMLInputElement).value))}
-                  onPointerCancel={() => { if (remote) remoteGain.cancel() }}
-                  onBlur={() => { if (remote) remoteGain.cancel() }}
+                  value={String(form.rxGain ?? 1)}
+                  onChange={(e) => updateNum('rxGain', Number(e.target.value))}
+                  onPointerUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
+                  onKeyUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
                   aria-label={t('settings.audio.rxGain.aria')}
                 />
-                <span className="settings-hint">{t('settings.audio.rxGain.hint')}</span>
+                <span className="settings-hint">
+                  {editingOtherRadio ? otherRadioLevelHint : t('settings.audio.rxGain.hint')}
+                </span>
               </label>
             </div>
           </fieldset>
@@ -7211,15 +7325,14 @@ export function SettingsPanel({
               {(form.ampModel ?? '') !== '' && (form.ampPort ?? '') !== '' && (
                 <div className="settings-field">
                   <label className="settings-check">
-                    <input disabled={remote && !remoteFollow.canEdit}
+                    <input disabled={remote}
                       type="checkbox"
-                      checked={remote ? remoteFollow.follow : form.ampFollowBand ?? false}
-                      onChange={(e) => remote ? remoteFollow.change(e.target.checked) : updateBool('ampFollowBand', e.target.checked)}
+                      checked={form.ampFollowBand ?? false}
+                      onChange={(e) => updateBool('ampFollowBand', e.target.checked)}
                     />
                     <span>{t('settings.amplifier.follow.label')}</span>
                   </label>
                   <span className="settings-hint">{t('settings.amplifier.follow.hint')}</span>
-                  {remote && remoteFollow.waitingForIdle && <span className="settings-hint">{t('remote.followNeedsIdle')}</span>}
                 </div>
               )}
             </div>
@@ -9022,7 +9135,7 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('js8Speed', Number(e.target.value))}
                 >
                   {JS8_SPEED_LIST.map((s) => (
-                    <option key={s.key} value={s.idx}>
+                    <option key={s.key} value={s.idx} title={s.alias ?? undefined}>
                       {s.label}
                     </option>
                   ))}
@@ -9034,10 +9147,10 @@ export function SettingsPanel({
                 <div className="js8-rx-speeds">
                   {JS8_SPEED_LIST.map((s) => {
                     const bit = 1 << s.idx
-                    const mask = form.js8RxSpeeds ?? 15
+                    const mask = form.js8RxSpeeds ?? JS8_ALL_SPEEDS_MASK
                     const on = (mask & bit) !== 0
                     return (
-                      <label key={s.key} className="settings-toggle">
+                      <label key={s.key} className="settings-toggle" title={s.alias ?? undefined}>
                         <span className="settings-label">{s.label}</span>
                         <button disabled={remote}
                           type="button"
@@ -9090,6 +9203,17 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.js8.activityAgingMin.hint')}</span>
               </label>
             </div>
+
+            {/* JS8Call's Settings ▸ Frequencies: the operator's own list, returning to the last
+                frequency, and the band schedule (its own file). */}
+            <Js8FrequencySettings
+              form={form}
+              disabled={remote}
+              onChange={(patch) => {
+                markDirty()
+                setForm((prev) => (prev ? { ...prev, ...patch } : prev))
+              }}
+            />
 
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.js8.automatic.title')}</span>
@@ -9147,6 +9271,7 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">{t('settings.js8.hbAckDeny.hint')}</span>
               </label>
+              <Js8HeartbeatSettings form={form} disabled={remote} update={updateBool} />
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.js8.autoreply.label')}</span>
@@ -9269,6 +9394,122 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.js8.groups.hint')}</span>
               </label>
             </div>
+
+            {/* Sending: two of JS8Call's transmit options, both off by default as there. */}
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.js8.sending.title')}</span>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.holdPtt.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.js8HoldPtt === true}
+                    className={`toggle${form.js8HoldPtt === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8HoldPtt', form.js8HoldPtt !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.holdPtt.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.txOffsetWhileSending.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.js8TxOffsetWhileSending === true}
+                    className={`toggle${form.js8TxOffsetWhileSending === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8TxOffsetWhileSending', form.js8TxOffsetWhileSending !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.txOffsetWhileSending.hint')}</span>
+              </div>
+              {/* JS8Call's Tx delay: its spin box's 0.1 to 0.5 s, 0.2 s by default. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.txDelay.label')}</span>
+                <select disabled={remote}
+                  className="settings-input"
+                  value={String(form.js8TxDelayMs ?? 200)}
+                  onChange={(e) => updateNum('js8TxDelayMs', Number(e.target.value))}
+                >
+                  {[100, 200, 300, 400, 500].map((ms) => (
+                    <option key={ms} value={String(ms)}>
+                      {t('settings.js8.txDelay.option', { s: (ms / 1000).toFixed(1) })}
+                    </option>
+                  ))}
+                </select>
+                <span className="settings-hint">{t('settings.js8.txDelay.hint')}</span>
+              </label>
+            </div>
+            <Js8ComposeSettings
+              form={form}
+              disabled={remote}
+              onChange={(patch) => {
+                markDirty()
+                setForm((prev) => (prev ? { ...prev, ...patch } : prev))
+              }}
+            />
+
+            {/* JS8Call's SPOT block: spotting rides the PSK Reporter switch, as JS8Call's SPOT
+                carries PSK Reporter and JS8NET together; these are the @APRSIS gateway, the
+                inbound APRS-IS relay (it keys unattended, so it ships off) and the never-spot
+                list. */}
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.js8.spotting.title')}</span>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.spotAprs.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    // Off by default, though JS8Call ships it on: an absent key reads as off.
+                    aria-checked={form.js8SpotAprs === true}
+                    className={`toggle${form.js8SpotAprs === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8SpotAprs', form.js8SpotAprs !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.spotAprs.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.aprsRelay.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.js8AprsRelay === true}
+                    className={`toggle${form.js8AprsRelay === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8AprsRelay', form.js8AprsRelay !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.aprsRelay.hint')}</span>
+              </div>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.spotNever.label')}</span>
+                <ListInput disabled={remote}
+                  className="settings-input"
+                  entries={form.js8SpotNever ?? []}
+                  onText={(raw) => setJs8CallList('js8SpotNever', raw)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.spotNever.hint')}</span>
+              </label>
+            </div>
+            <Js8ListsSettings form={form} disabled={remote} setList={setJs8Words} setMark={setJs8Mark} setSounds={setJs8Sounds} />
+
+            {/* JS8Call's API for programs on this computer: read-only, 127.0.0.1 only, both
+                sides off by default (its own file says what keeps each promise). Never on the
+                Remote page: the keys are withheld from Remote's settings projection, so the page
+                could only show a guess. */}
+            {!remote && <Js8ApiSettings form={form} onSwitch={updateBool} onPort={updateNum} />}
           </fieldset>
           )}
 
@@ -10449,6 +10690,9 @@ export function SettingsPanel({
                   </label>
                   <span className="settings-hint">
                     {t('settings.integrations.allTxt.hint')}
+                    {/* JS8Call's one "write logs" switch covers its DIRECTED.TXT too. */}
+                    {' '}
+                    {t('settings.integrations.allTxt.js8')}
                     {allTxtPath && (
                       <>
                         {' '}
@@ -13649,23 +13893,6 @@ export function SettingsPanel({
         </div>
 
         <div className="settings-actions">
-          {remote && remoteFollow.error && <span className="settings-error" role="alert">{remoteFollow.error === 'contextChanged' ? t('remote.followChanged')
-            : remoteFollow.error === 'persistenceFailed' ? t('remote.followSaveFailed') : ['unconfirmed', 'hardwareUnconfirmed'].includes(remoteFollow.error) ? t('remote.followUnconfirmed') : t('remote.followRefused')}</span>}
-          {remote && remoteFollow.confirming && <span className="settings-ok" role="status">{t('remote.followSavedRefreshing')}</span>}
-          {remote && remoteFollow.saved && <span className="settings-ok" role="status">{t('settings.panel.saved')}</span>}
-          {remote && remotePrefs.result && (
-            <span className={remotePrefs.result === 'saved' ? 'settings-ok' : 'settings-error'} role={remotePrefs.result === 'saved' ? 'status' : 'alert'}>
-              {remotePrefs.result === 'saved' ? t('settings.panel.saved')
-                : remotePrefs.result === 'contextChanged' ? t('remote.settingsChanged')
-                  : remotePrefs.result === 'tooLarge' ? t('remote.settingsTooLarge')
-                    : remotePrefs.result === 'unconfirmed' ? t('remote.settingsUnconfirmed')
-                      : remotePrefs.result === 'notSent' ? t('remote.controlNotSent') : t('remote.settingsRefused')}
-            </span>
-          )}
-          {remote && remotePrefs.result === 'unconfirmed' && <>
-            <button type="button" className="settings-refresh" onClick={remotePrefs.check}>{t('remote.logChangeCheck')}</button>
-            <button type="button" className="settings-refresh" onClick={remotePrefs.acknowledge}>{t('remote.settingsCheckedStation')}</button>
-          </>}
           {/* Warnings from the last save. They did NOT block it -- the save went through -- so
               they are stated once and left visible rather than interrupting. An operator whose
               setup is unusual but correct must be able to read them and carry on. */}
@@ -13685,9 +13912,9 @@ export function SettingsPanel({
             className="settings-save"
             // Not disabled on an empty callsign — clicking routes to the Station tab with a clear
             // message (handleSubmit), rather than a greyed button that gives no reason or fix.
-            disabled={remote ? !(remoteFollow.canSave || remotePrefs.canSave(form)) : status === 'saving'}
+            disabled={status === 'saving'}
           >
-            {(remote ? remoteFollow.saving || remotePrefs.saving : status === 'saving') ? t('settings.panel.saving') : t('settings.panel.save')}
+            {status === 'saving' ? t('settings.panel.saving') : t('settings.panel.save')}
           </button>
         </div>
       </form>

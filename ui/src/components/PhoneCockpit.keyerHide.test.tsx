@@ -97,6 +97,8 @@ vi.mock('../api', () => ({
   cancelVoiceRecording,
   clearVoiceMessage: vi.fn(async () => []),
   importVoiceMessage: vi.fn(async () => []),
+  // The Stats pane (shown here) asks about a call that stands in the log line; the question never answers.
+  getCallStats: vi.fn(() => new Promise(() => {})),
 }))
 vi.mock('../toast', () => ({
   pushToast,

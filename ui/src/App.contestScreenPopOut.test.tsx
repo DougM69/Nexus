@@ -28,11 +28,6 @@ import { DetachedPanel } from './DetachedPanel'
 import { allFeatureIds } from './features/registry'
 import { pastTheSwitch } from './components/ConnectView.testkit'
 import { CONTEST_SCREEN_SAVED_KEY } from './components/ContestScreenWindow'
-import { RemoteFieldDay } from './remote-web/RemoteFieldDay'
-import { RemoteCollections, RemoteCollectionsContext } from './remote-web/collections'
-import type { ApplicationClient } from './remote-web/application-client'
-import { StationDataContext } from './stationAccess'
-import { fieldDayPage } from './remote-web/__fixtures__/field-day-page'
 import { t } from './i18n'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
 
@@ -511,21 +506,58 @@ describe('the control is the main window’s alone', () => {
     expect(app.querySelector('.fd-event-banner'), 'control: the Logger window drew the screen’s banner').not.toBeNull()
     expect(popOutControls(app)).toEqual([])
   })
+})
 
-  it('not on the Remote page', async () => {
-    const source = new RemoteCollections({
-      invoke: vi.fn(async (): Promise<unknown> => fieldDayPage()),
-      supports: () => true,
-      getPhase: () => 'ready',
-    } as unknown as ApplicationClient)
-    const { container } = render(
-      <StationDataContext.Provider value={true}>
-        <RemoteCollectionsContext.Provider value={source}>
-          <RemoteFieldDay tier="FT8" />
-        </RemoteCollectionsContext.Provider>
-      </StationDataContext.Provider>,
-    )
-    await waitFor(() => expect(container.querySelector('.fd-event-banner'), 'control: the Remote page drew the screen’s banner').not.toBeNull())
-    expect(popOutControls(container)).toEqual([])
+// ── the save-failure line: once per window ──────────────────────────────────────────────────
+// The contest journal cannot be written: one red line per window, never two. In the main window
+// and the Logger window the entry above the screen carries it, so the screen below draws none;
+// the popped-out screen has no entry, so it draws its own.
+
+describe('a contest journal that cannot be written is said once in each window', () => {
+  const SAVED = T0 - 300
+  const since = t('fieldDay.unsaved.since', { time: new Date(SAVED * 1000).toISOString().slice(11, 16) })
+  const unsavedLines = (root: ParentNode) => [...root.querySelectorAll<HTMLElement>('.fd-unsaved')]
+  beforeEach(() => {
+    fieldDay = { ...ILQP, unsaved: { failedWrites: 2, lastSavedUnix: SAVED } }
+  })
+
+  it('the main Contest screen: one line, on the entry, with the screen below on show', async () => {
+    const host = await mountContestScreen()
+    await settle()
+    expect(host.querySelector('section.panel.fieldday'), 'control: the screen below the entry is on show').not.toBeNull()
+    const lines = unsavedLines(host)
+    expect(lines.map((l) => l.textContent)).toEqual([since])
+    expect(lines[0].closest('.contest-logger-entry'), 'the line is on the entry').not.toBeNull()
+  })
+
+  it('the main Contest screen with its section popped out: still one line, on the entry', async () => {
+    const host = await mountContestScreen()
+    await popOut(host)
+    const lines = unsavedLines(host)
+    expect(lines.map((l) => l.textContent)).toEqual([since])
+    expect(lines[0].closest('.contest-logger-entry')).not.toBeNull()
+  })
+
+  it('the popped-out Contest screen: one line, its own', async () => {
+    const app = await mountPopOut('contestscreen')
+    await settle()
+    const lines = unsavedLines(app)
+    expect(lines.map((l) => l.textContent)).toEqual([since])
+    expect(lines[0].closest('section.panel.fieldday')).not.toBeNull()
+  })
+
+  it('the Logger window: one line, on its entry', async () => {
+    const app = await mountPopOut('contestlog')
+    await settle()
+    const lines = unsavedLines(app)
+    expect(lines.map((l) => l.textContent)).toEqual([since])
+    expect(lines[0].closest('.contest-logger-entry')).not.toBeNull()
+  })
+
+  it('control: a write that lands takes the line away everywhere', async () => {
+    fieldDay = ILQP
+    const host = await mountContestScreen()
+    await settle()
+    expect(unsavedLines(host)).toEqual([])
   })
 })

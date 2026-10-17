@@ -673,8 +673,8 @@ fn a_confirmation_report_carries_only_the_keys_the_page_takes() {
 fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
     use tempo_app::dto::{
         DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FdClubKeptOutDto,
-        FdClubOtherLocationDto, FdClubRefusedDto, FdKeptOutDto, FieldDayQso, FieldDayStatus,
-        LocationWarningDto,
+        FdClubOtherLocationDto, FdClubRefusedDto, FdKeptOutDto, FdUnsavedDto, FieldDayQso,
+        FieldDayStatus, LocationWarningDto,
     };
     let status = |what: &str, status: &Value| {
         takes_optional(
@@ -1039,6 +1039,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         composing_text: "1D EMA".into(),
         composing_text_phone: "1D EMA".into(),
         cabrillo_missing: vec!["CATEGORY-POWER".into()],
+        sends_serial: true,
         bands: vec!["20m".into()],
         dupe_mode_groups: vec![vec!["CW".into(), "DIG".into()]],
         dupe_rule: DupeRuleDto {
@@ -1060,6 +1061,11 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             other_contest: 1,
             other_running: 3,
         }),
+        // The journal writes that failed: the station's own screen's, left out too.
+        unsaved: Some(FdUnsavedDto {
+            failed_writes: 2,
+            last_saved_unix: Some(1_782_509_000),
+        }),
     };
     let native = serde_json::to_value(&written).unwrap();
     assert!(
@@ -1070,10 +1076,13 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             && native["club"]["board"][0]["heardSecs"] == 12
             && native["club"]["otherLocation"][0]["sent"] == "KANE"
             && native["composingTextPhone"] == "1D EMA"
-            && native["cabrilloMissing"][0] == "CATEGORY-POWER",
+            && native["cabrilloMissing"][0] == "CATEGORY-POWER"
+            && native["sendsSerial"] == true
+            && native["unsaved"]["failedWrites"] == 2,
         "CONTROL: the station's own snapshot carries the Give button's handle, the club codes, \
          the host board's link words, the positions sending another county, the phone form of \
-         the exchange and the Cabrillo lines the export would leave out"
+         the exchange, the Cabrillo lines the export would leave out, whether the contest sends a \
+         serial and the failed journal writes"
     );
     // What the capture sends: the station's status with what only its own screen acts on left
     // out, by the capture's own function.
@@ -1663,10 +1672,14 @@ fn the_satellite_sample_carries_only_the_keys_the_page_takes() {
     );
 }
 
-/// The JS8 cockpit's sample (`js8.ts`): two keys at its root, twenty-four the state, five what is
-/// armed and five why not, nine each station heard and each inbox message, eleven a decoded row,
-/// and four a queued row and a pending reply. The station and the message come from the station's
-/// own journal; a decoded row, a queued one and a pending reply are written field by field.
+/// The JS8 cockpit's sample (`js8.ts`): two keys at its root; twenty-six the state, and the Inbox's
+/// two kinds of notes while there are any; five what is armed and five why not; seven heartbeat
+/// networking (`presence`); three the waterfall controls, three their filter and four the band
+/// schedule's notice; nine each station heard, and its ★ and ☎ once it has them; nine each inbox
+/// message; twelve a decoded row and three its place in its message; four a queued row, a pending
+/// reply and a held message's too-long note. The station and the message come from the station's
+/// own journal; a decoded row, a queued one, a pending reply, the schedule's notice and a too-long
+/// note are written field by field.
 #[test]
 fn the_js8_sample_carries_only_the_keys_the_page_takes() {
     const DECODED: &[&str] = &[
@@ -1681,13 +1694,18 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
         "mine",
         "complete",
         "lowConf",
+        "flags",
     ];
+    const PLACE: &[&str] = &["first", "last", "assembled"];
+    const HOP: &[&str] = &["mhz", "firesAtMs", "description", "held"];
+    const TOO_LONG: &[&str] = &["id", "frames", "max", "fitsAt"];
     const QUEUED: &[&str] = &["origin", "display", "first", "last"];
     const PENDING: &[&str] = &["origin", "to", "display", "firesAtMs"];
     let engine = engine();
     engine.lock().unwrap().js8_load_journal(
         &json!({"heard": [{"call": "W1AW", "grid": "FN31", "snrDb": -8, "freqHz": 1500.0,
-            "speed": "normal", "lastMs": 1, "lastHb": true, "lastCq": false, "storedMsgs": 1}],
+            "speed": "normal", "lastMs": 1, "lastHb": true, "lastCq": false, "storedMsgs": 1,
+            "ackMs": 1, "cqMs": 1}],
         "inbox": [{"id": 1, "from": "W1AW", "to": "K2ABC", "text": "HELLO", "path": ["W1AW"],
             "state": "unread", "atMs": 1, "freqHz": 1500.0, "snrDb": -8}],
         "allcallReplied": [], "nextInboxId": 2})
@@ -1700,7 +1718,7 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
     );
     takes("js8: the sample", &data, &["state", "capturedAtMs"]);
     let state = &data["state"];
-    takes(
+    takes_optional(
         "js8: the state",
         state,
         &[
@@ -1728,7 +1746,10 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
             "queue",
             "pendingReply",
             "lastError",
+            "controls",
+            "presence",
         ],
+        &["inboxDropped", "inboxTooLong"],
     );
     takes(
         "js8: what is armed",
@@ -1740,6 +1761,29 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
         &state["notArmed"],
         &["autoreply", "relay", "hbAck", "hb", "cq"],
     );
+    takes(
+        "js8: heartbeat networking",
+        &state["presence"],
+        &[
+            "hbNetworking",
+            "hbSpeed",
+            "hbPaused",
+            "hbAckSuppressed",
+            "hbAckRateBlocked",
+            "qsoPause",
+            "avoidAllcall",
+        ],
+    );
+    takes(
+        "js8: the waterfall controls",
+        &state["controls"],
+        &["filter", "qsyCenterHz", "hop"],
+    );
+    takes(
+        "js8: the decode filter",
+        &state["controls"]["filter"],
+        &["enabled", "centerHz", "widthHz"],
+    );
     let (stations, inbox) = (
         state["stations"].as_array().unwrap(),
         state["inbox"].as_array().unwrap(),
@@ -1748,6 +1792,7 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
         !stations.is_empty() && !inbox.is_empty(),
         "scene guard: the journal's station and message are sent"
     );
+    // The journal's station has sent to me and called CQ, so it carries ★ and ☎.
     for station in stations {
         takes(
             "js8: a station",
@@ -1762,6 +1807,8 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
                 "lastHb",
                 "lastCq",
                 "storedMsgs",
+                "ackMs",
+                "cqMs",
             ],
         );
     }
@@ -1796,11 +1843,36 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
         mine: false,
         complete: true,
         low_conf: false,
+        flags: Some(tempo_app::dto::Js8RowFlags {
+            first: true,
+            last: true,
+            assembled: false,
+        }),
+    };
+    let decoded = serde_json::to_value(decoded).unwrap();
+    takes("js8: a decoded row, every field", &decoded, DECODED);
+    takes("js8: a decoded row's place", &decoded["flags"], PLACE);
+    let hop = tempo_app::dto::Js8HopNotice {
+        mhz: 7.078,
+        fires_at_ms: 1,
+        description: "40 m evening net".into(),
+        held: false,
     };
     takes(
-        "js8: a decoded row, every field",
-        &serde_json::to_value(decoded).unwrap(),
-        DECODED,
+        "js8: the band schedule's notice, every field",
+        &serde_json::to_value(hop).unwrap(),
+        HOP,
+    );
+    let too_long = tempo_app::dto::Js8InboxTooLong {
+        id: 1,
+        frames: 45,
+        max: 39,
+        fits_at: Some(serde_json::from_value(json!("fast")).unwrap()),
+    };
+    takes(
+        "js8: a too-long note, every field",
+        &serde_json::to_value(too_long).unwrap(),
+        TOO_LONG,
     );
     let queued = tempo_app::dto::Js8QueueRow {
         origin: serde_json::from_value(json!("operator")).unwrap(),

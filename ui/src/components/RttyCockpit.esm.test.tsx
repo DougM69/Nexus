@@ -112,7 +112,7 @@ const snap = {
   fieldDay: ILQP,
 } as unknown as AppSnapshot
 
-/** RTTY's Contest set, as it ships: N1MM's layout. */
+/** RTTY's Contest set, as it ships: the contest layout. */
 const CONTEST_SET = { rttyProfiles: [], activeRttyProfile: 'contest' } as unknown as Settings['macros']
 
 async function flush() {
@@ -179,8 +179,8 @@ describe('Enter Sends Message in the RTTY cockpit', () => {
     expect(loggedCalls()).toEqual(['K9AAA'])
   })
 
-  // ⭐ AGN IS ON F8 AND B4 ON F7 in the contest set (the operator, 2026-10-10: as in N1MM's
-  // default message sets). Enter's AGN sends the text it sent from F7 before.
+  // ⭐ AGN IS ON F8 AND B4 ON F7 in the contest set (the operator, 2026-10-10). Enter's AGN
+  // sends the text it sent from F7 before.
   it('asks AGN from F8 while his exchange is not copied, and sends the AGN it always sent; F7 is B4', async () => {
     await renderCockpit()
     fireEvent.keyDown(window, { key: 'F1' }) // CQ, by hand: ESM goes to Run
@@ -199,7 +199,7 @@ describe('Enter Sends Message in the RTTY cockpit', () => {
     expect(sent[sent.length - 1], 'F8 by hand').toBe('\r\nAGN? AGN? ')
   })
 
-  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule, like N1MM): Enter sends the
+  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule): Enter sends the
   // contest set's QSO B4 from F7, through the same path, once; the next Enter logs the dupe.
   it('running, a dupe gets QSO B4 from F7 once, and the next Enter logs it, sending nothing', async () => {
     const worked = {

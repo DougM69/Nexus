@@ -10,9 +10,7 @@
 // projection ids, and the SP/LP path abbreviations below. The prose is in the catalog
 // under `map.*`. Nothing drawn on the canvas is prose — every fillText draws a token.
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useContext } from 'react'
 import { flushSync } from 'react-dom'
-import { NavigationMapContext } from '../remote-web/useNavigation'
 import type { AprsStation } from '../api'
 import { bandLabelForMhz } from '../band'
 import type { OtaMapSpot } from '../types'
@@ -835,10 +833,6 @@ export function MapView({
   embedded,
   layersRev = 0,
 }: Props) {
-  const remoteMap=useContext(NavigationMapContext)
-  const remoteConnect=remoteMap?.connect
-  const remoteFeed=<T,>(feed:{value:T;ageMs:number;validForMs:number}|null|undefined):T|null=>
-    feed&&feed.ageMs+(remoteMap?.ageMs??Infinity)<feed.validForMs?feed.value:null
   // The roster, CONTENT-keyed. App sends a new array on every 300 ms snapshot whether or not
   // anything was decoded; `placed`, `rxLines`, `selStation` and the draw effect all key on this,
   // so identity-keyed they cleared and redrew the whole canvas ~3×/s for identical content.
@@ -1079,7 +1073,7 @@ export function MapView({
   // Amateur satellites — polled only while the layer is on (subpoints move
   // ~4°/min; 30 s keeps dots honest without hammering the 10-min view cache).
   const [nativeSats, setSats] = useState<SatView | null>(null)
-  const sats=remoteMap?remoteMap.satellites:nativeSats
+  const sats=nativeSats
   // Satellite hitboxes, captured at draw time (positions interpolate every tick,
   // so hit-testing must read what was actually drawn, not recompute).
   const placedSatsRef = useRef<
@@ -1098,7 +1092,6 @@ export function MapView({
   )
   const satsOn = layers.sats.visible
   useEffect(() => {
-    if(remoteMap)return
     if (!satsOn) {
       setSats(null)
       return
@@ -1114,7 +1107,7 @@ export function MapView({
       live = false
       clearInterval(id)
     }
-  }, [satsOn,!!remoteMap])
+  }, [satsOn])
   // Birds the ★ filter hides when it hides EVERYTHING: stars exist but none
   // matched (a starred bird aged past the backend's 30-day element cutoff, or
   // left the group file). filterSatsToChased is honest about zero stars (shows
@@ -1401,7 +1394,6 @@ export function MapView({
   const [otaFetched, setOtaFetched] = useState<OtaMapSpot[]>([])
   const otaOn = layers.ota.visible
   useEffect(() => {
-    if(remoteMap)return
     if (!otaOn) {
       setOtaFetched([])
       return
@@ -1417,7 +1409,7 @@ export function MapView({
       live = false
       clearInterval(id)
     }
-  }, [otaOn,!!remoteMap])
+  }, [otaOn])
   // An explicit `ota` prop wins when a host supplies one (the APRS layer's shape);
   // otherwise the layer feeds itself.
   const otaSpots = ota ?? otaFetched
@@ -1439,10 +1431,9 @@ export function MapView({
   // Aurora oval — fetched only while the layer is on (polite; OVATION updates
   // ~30–45 min, so a 10-min refresh is ample). Cleared when the layer is off.
   const [nativeAuroraPts, setAuroraPts] = useState<AuroraPoint[]>([])
-  const auroraPts=remoteMap?remoteFeed(remoteConnect?.aurora)??[]:nativeAuroraPts
+  const auroraPts=nativeAuroraPts
   const auroraOn = layers.aurora.visible
   useEffect(() => {
-    if(remoteMap)return
     if (!auroraOn) {
       setAuroraPts([])
       return
@@ -1458,16 +1449,15 @@ export function MapView({
       live = false
       clearInterval(id)
     }
-  }, [auroraOn,!!remoteMap])
+  }, [auroraOn])
 
   // Proton polar-cap absorption — fetched only while the layer is on (the
   // backend caches the GOES feed 5 min; a matching poll is ample). Null =
   // no proton data (offline); empty points = quiet sky. Both draw nothing.
   const [nativePca, setPca] = useState<PcaView | null>(null)
-  const pca=remoteMap?remoteFeed(remoteConnect?.pca):nativePca
+  const pca=nativePca
   const pcaOn = layers.pca.visible
   useEffect(() => {
-    if(remoteMap)return
     if (!pcaOn) {
       setPca(null)
       return
@@ -1483,14 +1473,13 @@ export function MapView({
       live = false
       clearInterval(id)
     }
-  }, [pcaOn,!!remoteMap])
+  }, [pcaOn])
 
   // Magnetic declination at the QTH (WMM2025) — quasi-static, fetched once;
   // lets hover bearings show the compass heading beside true.
   const [nativeDeclination, setDeclination] = useState<number | null>(null)
-  const declination=remoteMap?remoteConnect?.declination??null:nativeDeclination
+  const declination=nativeDeclination
   useEffect(() => {
-    if(remoteMap)return
     getDeclination()
       .then(setDeclination)
       .catch(() => {})
@@ -1526,10 +1515,9 @@ export function MapView({
   // backend dependency. Fetched only while the layer + that dimension are active. ----
   const [nativeWorkedGrids, setWorkedGrids] = useState<Set<string> | null>(null)
   const [nativeWorkedZones, setWorkedZones] = useState<Set<number> | null>(null)
-  const workedGrids=useMemo(()=>remoteMap?(remoteConnect?new Set(remoteConnect.coverage.grids):null):nativeWorkedGrids,[!!remoteMap,remoteConnect,nativeWorkedGrids])
-  const workedZones=useMemo(()=>remoteMap?(remoteConnect?new Set(remoteConnect.coverage.zones):null):nativeWorkedZones,[!!remoteMap,remoteConnect,nativeWorkedZones])
+  const workedGrids=nativeWorkedGrids
+  const workedZones=nativeWorkedZones
   useEffect(() => {
-    if(remoteMap)return
     if (!coverageOn || coverageDim !== 'grids' || workedGrids) return
     let live = true
     logSource()
@@ -1544,7 +1532,6 @@ export function MapView({
     }
   }, [coverageOn, coverageDim, workedGrids])
   useEffect(() => {
-    if(remoteMap)return
     if (!coverageOn || coverageDim !== 'zones' || workedZones) return
     let live = true
     getLogStats()

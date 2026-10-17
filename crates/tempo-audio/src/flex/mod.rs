@@ -57,7 +57,9 @@
 //! No panadapter stream from this session (the older native pan still opens its own), no
 //! persisted client id (every connect registers as a new GUI client), and no tune carrier, ATU or
 //! CW keyer: the core has a readback profile for each, but its admission refuses those starts
-//! until a tester's bench confirms them. The stops for all of them are in place: `T 0`, teardown
+//! until a tester's bench confirms them, unless the operator has turned on the radio's Beta setting
+//! that lets the client start them before then (`RadioProfile::flex_native_unbenched`, off by
+//! default; [`FlexDaemon::start`]). The stops for all of them are in place: `T 0`, teardown
 //! and the radio loop's belief ([`FlexDaemon::keyed`]) cover a transmission of any kind. The CW
 //! path is built up to that refusal: the WPM control sets the radio's keyer speed (`cw wpm`, which
 //! keys nothing), each word goes to the radio's keyer timed at its speed, and a word the client
@@ -348,16 +350,21 @@ pub struct FlexDaemon {
 
 impl FlexDaemon {
     /// Start against the radio at `ip` (its SmartSDR API, port 4992), serving rigctld on
-    /// `127.0.0.1:<tcp_port>`.
-    pub fn start_for_ip(ip: &str, tcp_port: u16) -> std::io::Result<FlexDaemon> {
-        Self::start(radio_addr(ip)?, tcp_port)
+    /// `127.0.0.1:<tcp_port>`, with the radio's Beta setting for CW, Tune and the ATU at `beta`.
+    pub fn start_for_ip(ip: &str, tcp_port: u16, beta: bool) -> std::io::Result<FlexDaemon> {
+        Self::start(radio_addr(ip)?, tcp_port, beta)
     }
 
-    /// Start against the radio at `radio`, serving rigctld on `127.0.0.1:<tcp_port>`.
-    pub fn start(radio: SocketAddr, tcp_port: u16) -> std::io::Result<FlexDaemon> {
+    /// Start against the radio at `radio`, serving rigctld on `127.0.0.1:<tcp_port>`. `beta` is the
+    /// operator's Beta setting for this radio (`RadioProfile::flex_native_unbenched`, off by
+    /// default): on, the session's admission takes the starts no bench has confirmed yet as well
+    /// ([`session::Config::beta`]), and this client tunes with the radio's own carrier, runs its
+    /// ATU and sends CW through its keyer. It is fixed for the session's life.
+    pub fn start(radio: SocketAddr, tcp_port: u16, beta: bool) -> std::io::Result<FlexDaemon> {
         let station = Station::new(STATION).expect("the station name is a safe token");
         let mut config = session::Config::new(station);
         config.previous_handles = previous_handles(radio);
+        config.beta = beta;
         Self::start_with(radio, tcp_port, config)
     }
 
@@ -519,8 +526,9 @@ impl FlexDaemon {
     // ── The radio's own tune carrier (Beta, switched off until a tester's bench) ─────────────
 
     /// Whether Tune is the radio's own carrier on this client (`transmit tune`): its readback is
-    /// switched on ([`tempo_net::flex::admission::BENCHED`]). Until a tester's bench confirms it,
-    /// it is not, and the radio loop tunes as it does over any CAT link: `T 1` and Nexus's tone.
+    /// switched on, by a tester's bench ([`tempo_net::flex::admission::BENCHED`]) or by the radio's
+    /// Beta setting ([`tempo_net::flex::admission::BETA`]). Off, as it ships, the radio loop tunes
+    /// as it does over any CAT link: `T 1` and Nexus's tone.
     pub fn tunes_natively(&self) -> bool {
         self.conn().switched_on(StartKind::Tune)
     }
@@ -549,9 +557,10 @@ impl FlexDaemon {
 
     // ── The radio's own ATU (Beta, switched off until a tester's bench) ──────────────────────
 
-    /// Whether this client runs the radio's own ATU (`atu start`): its readback is switched on
-    /// ([`tempo_net::flex::admission::BENCHED`]). Until a tester's bench confirms it, it is not:
-    /// the shim does not answer `u TUNER`, so no ATU button is offered on this client, as before.
+    /// Whether this client runs the radio's own ATU (`atu start`): its readback is switched on, by
+    /// a tester's bench ([`tempo_net::flex::admission::BENCHED`]) or by the radio's Beta setting
+    /// ([`tempo_net::flex::admission::BETA`]). Off, as it ships, the shim does not answer
+    /// `u TUNER`, so no ATU button is offered on this client.
     pub fn runs_atu(&self) -> bool {
         self.conn().switched_on(StartKind::Atu)
     }
@@ -586,7 +595,9 @@ impl FlexDaemon {
     // ── CW through the radio's keyer (Beta, switched off until a tester's bench) ──────────────
 
     /// Whether this client sends CW through the radio's keyer (`cwx send`): its readback is
-    /// switched on. Until then every word is refused, and says why.
+    /// switched on, by a tester's bench or by the radio's Beta setting
+    /// ([`tempo_net::flex::admission::BETA`]). Off, as it ships, every word is refused, and says
+    /// why.
     pub fn sends_cw(&self) -> bool {
         self.conn().switched_on(StartKind::Cwx)
     }
@@ -982,6 +993,12 @@ impl Drop for FlexDaemon {
     }
 }
 
+/// Where the radio's Beta switch for the client's CW, Tune and ATU is, in the words a refusal shows
+/// while it is off (`RadioProfile::flex_native_unbenched`): its Settings label and place, and the
+/// dummy load a first try belongs on.
+pub(crate) const BETA_SWITCH: &str = "\"Let Nexus send CW, Tune and ATU through the native Flex \
+     client\" in Settings ▸ Radio ▸ Rig & CAT ▸ Advanced (dummy load first)";
+
 /// The PTT line's words for a tune of the radio's own carrier the client did not start
 /// ([`FlexDaemon::tune_on`]): what kept it back, and what to do. `None`: the session has gone.
 pub(crate) fn tune_refusal_words(refusal: Option<&Refusal>) -> String {
@@ -991,6 +1008,10 @@ pub(crate) fn tune_refusal_words(refusal: Option<&Refusal>) -> String {
                                  radio's carrier would sit off the frequency Nexus checked. Turn \
                                  XIT off."
             .to_string(),
+        Some(Refusal::NoReadback(_)) => format!(
+            "Tune not keyed: Tune through the Flex native client is not bench-tested yet. To try \
+             it, turn on {BETA_SWITCH}."
+        ),
         Some(other) => format!("Tune not keyed: {other}."),
     }
 }
@@ -1004,6 +1025,10 @@ pub(crate) fn atu_refusal_words(refusal: Option<&Refusal>) -> String {
                                  the radio's carrier would sit off the frequency Nexus checked. \
                                  Turn XIT off."
             .to_string(),
+        Some(Refusal::NoReadback(_)) => format!(
+            "ATU not started: the ATU through the Flex native client is not bench-tested yet. To \
+             try it, turn on {BETA_SWITCH}."
+        ),
         Some(other) => format!("ATU not started: {other}."),
     }
 }

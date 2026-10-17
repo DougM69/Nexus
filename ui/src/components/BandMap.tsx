@@ -82,7 +82,7 @@ function ageLabel(secs: number): string {
  * frequencies, and every value in a spot's tooltip — `modeLabel` is CW/SSB, `detail` is the
  * spot line assembled from data, and `de <spotter>` is the cluster's own shorthand.
  *
- * Vertical N1MM-style band map — the same live cluster spots as `BandStrip`, on a vertical
+ * Vertical band map — the same live cluster spots as `BandStrip`, on a vertical
  * frequency axis (high freq at top) with a labeled gridline scale, COLORED by need/worked exactly
  * like the operating roster (a marker carries `need-${cls}` from `needByCall`, struck through when
  * worked). Click a marker to QSY + prefill the log. Unlike the full-band horizontal strip, the map

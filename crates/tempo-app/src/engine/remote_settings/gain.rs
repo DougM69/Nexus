@@ -2,8 +2,8 @@ use super::*;
 
 impl Engine {
     /// Save the active capture gain through the native narrow setter. The
-    /// displayed flat value is authoritative: a preceding local narrow edit
-    /// can legitimately leave the in-memory profile mirror behind its save.
+    /// displayed flat value is authoritative, and the active profile's copy
+    /// takes the new gain with it, as it does on a local narrow edit.
     pub fn save_remote_rx_gain(
         &mut self,
         radio_id: u32,

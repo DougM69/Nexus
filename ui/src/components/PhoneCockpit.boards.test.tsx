@@ -30,8 +30,6 @@ import { PhoneCockpit } from './PhoneCockpit'
 import { SpotsPanel } from './SpotsPanel'
 import { NeededPanel } from './NeededPanel'
 import { PHONE_PANELS, panelStorageKey, seamShares, usePanelLayout } from '../features/panelState'
-import { StationControlContext } from '../stationAccess'
-import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
 import type { AppSnapshot, BandChannel, NeedAlert, SpotRow } from '../types'
 
 // THE BUDGET (2026-10-09). The slowest case here, "a fresh Phone screen shows neither, and ⊞ Panels offers…", takes
@@ -613,44 +611,5 @@ describe('working a spot from the pane', () => {
     fireEvent.click(row)
     expect(wiring.neededBoard.onWork).toHaveBeenCalledWith(ALERTS[0])
     expect(api.setPtt).not.toHaveBeenCalled()
-  })
-})
-
-describe('on the Remote page', () => {
-  // ONE state object per source, as the real store keeps them in a Map: useSyncExternalStore
-  // reads a fresh object on every call as a change, and re-renders until React gives up.
-  const source = (phase: 'loading' | 'ready' | 'unavailable') => {
-    const state = { phase, total: 0, retained: 0, at: 0 }
-    return { subscribe: () => () => {}, state: () => state } as unknown as RemoteCollections
-  }
-
-  it('a pane whose data the page does not carry shows the existing unavailable status', () => {
-    render(
-      <StationControlContext.Provider value={false}>
-        <RemoteCollectionsContext.Provider value={source('unavailable')}>
-          <Live />
-        </RemoteCollectionsContext.Provider>
-      </StationControlContext.Provider>,
-    )
-    fireEvent.click(box(/^Spots$/))
-    fireEvent.click(box(/^Needed$/))
-    expect(pane('spots')!.querySelector('.np-board'), 'a board drawn with no station data').toBeNull()
-    expect(pane('spots')!.textContent).toContain('Remote spot data unavailable.')
-    expect(pane('needed')!.querySelector('.np-board')).toBeNull()
-    expect(pane('needed')!.textContent).toMatch(/unavailable/i)
-  })
-
-  it('with the collections ready, the same panes draw the boards from what the page already has', () => {
-    render(
-      <StationControlContext.Provider value={false}>
-        <RemoteCollectionsContext.Provider value={source('ready')}>
-          <Live />
-        </RemoteCollectionsContext.Provider>
-      </StationControlContext.Provider>,
-    )
-    fireEvent.click(box(/^Spots$/))
-    fireEvent.click(box(/^Needed$/))
-    expect(callsIn(pane('spots'))).toEqual(['W1AW'])
-    expect(pane('needed')!.querySelector('.np-board')).not.toBeNull()
   })
 })

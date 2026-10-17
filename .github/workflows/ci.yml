@@ -434,6 +434,8 @@ jobs:
       - name: Native Remote controller through the Cloudflare runtime
         run: npm --prefix remote run test:native
 
+  # The hosted page is the stream page. The old watch/control workspace and the observer view take no
+  # new features; new Remote work goes to the stream, the LAN stream window or the native client.
   remote-web:
     name: Remote browser and Cloudflare service (local only)
     runs-on: ubuntu-latest
@@ -466,19 +468,18 @@ jobs:
 
   # The compiled-browser sweep, split out of `remote-web` and SHARDED on 2026-09-20.
   #
-  # It was one step of 47.7 minutes inside a 50-minute job, which made `remote-web` the
-  # workflow's second-longest job and, once the Rust job was split, would have been its
-  # critical path. The suite is 30 independent full-browser scenarios — 18 application
-  # versions plus 12 feature scenarios, each doing PKCE, local device approval,
-  # observation and viewport checks — and node:test runs tests within a file in series.
+  # It is the stream page's two scenarios, at a desktop's size and at a phone's, each doing
+  # PKCE, local device approval and the stream end to end in real Chrome; node:test runs
+  # tests within a file in series, so each shard runs one. The old workspace's 28 scenarios
+  # went with the workspace.
   #
-  # Nothing is skipped and no scenario was deleted. The shards PARTITION the same 30.
+  # The shards PARTITION the scenarios, and a shard that selects none refuses to run.
   #
   # The count is stated LITERALLY below and must equal the matrix length. `strategy.job-total`
   # would derive it and was tried first, but `scripts/gates` cannot expand a runtime context,
   # so it marked the step BLOCKED and the sweep stopped running locally altogether. A literal
-  # keeps it runnable here: gates expands `matrix.shard`, lists all three shards, and together
-  # they still run all 30 scenarios on this box.
+  # keeps it runnable here: gates expands `matrix.shard`, lists every shard, and together
+  # they still run every scenario on this box.
   #
   # Stating it twice is a desync risk, so it is GUARDED, not trusted:
   # `scripts/gates.test.mjs` asserts the matrix length equals the NEXUS_BROWSER_SHARDS this
@@ -492,9 +493,8 @@ jobs:
   # a red run must name every failing scenario once, not stop at the first shard and
   # leave the others to be discovered on the next push.
   #
-  # NOT path-filtered, deliberately. Once sharded this job is ~18 minutes against the
-  # Rust job's ~37, so it is no longer the critical path, and the repository is public
-  # so Actions minutes are free. A filter would buy no wall-clock time and no money,
+  # NOT path-filtered, deliberately. It is not the critical path, and the repository is
+  # public so Actions minutes are free. A filter would buy no wall-clock time and no money,
   # and would add a way for the sweep to be silently skipped.
   remote-browser:
     name: Compiled browser (shard ${{ matrix.shard }})
@@ -502,7 +502,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0, 1]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -534,7 +534,7 @@ jobs:
       - name: Compiled browser sign-in, approval, observation and responsive layouts
         env:
           NEXUS_BROWSER_SHARD: ${{ matrix.shard }}
-          NEXUS_BROWSER_SHARDS: "3"   # must equal the matrix length above — guarded by scripts/gates.test.mjs
+          NEXUS_BROWSER_SHARDS: "2"   # must equal the matrix length above — guarded by scripts/gates.test.mjs
           NEXUS_REMOTE_BROWSER_ARTIFACTS: browser-artifacts
         run: |
           google-chrome --version

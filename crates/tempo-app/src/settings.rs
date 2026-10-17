@@ -715,8 +715,8 @@ pub enum LicenseClass {
 
 /// How CW is transmitted. **Cat** = the rig's own keyer via Hamlib `send_morse` (rig in
 /// CW; clean, but older rigs like the IC-756PRO III don't implement it). **Serial** = the
-/// app toggles a DTR/RTS keyline into the rig's KEY jack (rig in CW; the classic
-/// N1MM/fldigi method — clean, needs only a keying cable; see `cw_key_port`/`cw_key_line`).
+/// app toggles a DTR/RTS keyline into the rig's KEY jack (rig in CW; clean, needs only a
+/// keying cable; see `cw_key_port`/`cw_key_line`).
 /// **WinKeyer** = a K1EL hardware keyer (rig in CW; jitter-free). **Soundcard** = the app
 /// keys an audio tone through SSB (rig in USB; works on any rig, but an SSB-audio workaround
 /// — shape it and keep it below ALC).
@@ -898,19 +898,62 @@ pub struct Settings {
     pub q65_submode: u8,
     // --- JS8 (JS8Call-compatible keyboard-to-keyboard; `crates/js8`) ---
     /// JS8 TRANSMIT speed as an index into `Js8Speed::ALL`: 0 Slow (30 s), 1 Normal (15 s),
-    /// 2 Fast (10 s), 3 Turbo (6 s). An index rather than the enum — the house shape of
+    /// 2 Fast (10 s), 3 Turbo (6 s; "JS8 40" in JS8Call 3.0), 4 Ultra (4 s; "JS8 60", 3.0's
+    /// experimental speed). An index rather than the enum — the house shape of
     /// `q65_submode`/`jt65_submode` — so a stale or hand-edited file degrades to Normal
     /// (`Tier::js8_kind`) instead of refusing to load. Sets the slot clock and the boundary
     /// decode window; receive decodes every speed in `js8_rx_speeds` regardless.
     #[serde(default = "default_js8_speed")]
     pub js8_speed: u8,
     /// Bitmask of speeds the receiver decodes each cycle: Slow 1 · Normal 2 · Fast 4 ·
-    /// Turbo 8. Defaults to 15 (all four) — JS8Call's `SubModeMultiDecode=true` — so a
-    /// fresh install hears every station on the watering hole with zero toggles. 0 is
-    /// treated as 15 by the scheduler (a mask that decodes nothing is never what anyone
-    /// meant).
+    /// Turbo 8 · Ultra 16. Defaults to 31 (all five) — JS8Call 3.0's `SubModeMultiDecode=true`
+    /// (mainwindow.cpp:528-529), whose every-speed decode includes JS8 60 — so a fresh install
+    /// hears every station on the watering hole with zero toggles. A stored mask is kept as
+    /// it is: a file saved before JS8 60 existed decodes the speeds it names, and the JS8 60
+    /// switch adds it. 0 is treated as every speed by the scheduler (a mask that decodes
+    /// nothing is never what anyone meant).
     #[serde(default = "default_js8_rx_speeds")]
     pub js8_rx_speeds: u8,
+    // --- JS8 frequencies, the decode filter, QSY to centre and the band schedule (JS8Call
+    // 3.0.3's Settings ▸ Frequencies and its waterfall controls) ---
+    /// The operator's own JS8 frequency list: JS8Call's working frequencies, with the
+    /// descriptions 3.0 added. `None`, the default and what a file from before this setting
+    /// loads as, is JS8Call 3.0.3's own table (`bandplan::js8_band_plan`), and JS8Call's Reset
+    /// returns to it. `Some` replaces that table wherever JS8 reads one (`bandplan::js8_plan_from`):
+    /// the cockpit's band picker, the dial entering JS8 tunes to, the Remote's list. It may be
+    /// empty, as JS8Call's may.
+    #[serde(default)]
+    pub js8_frequencies: Option<Vec<Js8Freq>>,
+    /// JS8Call's "Monitor returns to last used frequency" (`MonitorLastUsed`), OFF by default
+    /// as JS8Call ships it (Configuration.cpp:2297): on, entering JS8 tunes the rig back to the
+    /// dial last used there (`js8_last_dial_mhz`) instead of the band's JS8 frequency.
+    #[serde(default)]
+    pub js8_return_to_last_dial: bool,
+    /// The dial last used on JS8, MHz (JS8Call's `DialFreq`, its `m_lastMonitoredFrequency`);
+    /// 0 = none yet. ENGINE-OWNED: written while JS8 runs, and kept across a Settings form save
+    /// (a form's copy is a snapshot from whenever it loaded).
+    #[serde(default)]
+    pub js8_last_dial_mhz: f64,
+    /// JS8Call's decode filter (its waterfall controls' `FilterEnabled`, `FilterCenter`,
+    /// `FilterWidth`): on, the JS8 decoder searches only centre ± width/2. ON at 1500 Hz ± 1000
+    /// by default, as JS8Call ships it (WideGraph.cpp:237-241). ENGINE-OWNED: the cockpit's
+    /// controls write it (`Engine::js8_set_filter`), and a form save keeps the live value.
+    #[serde(default)]
+    pub js8_filter: Js8Filter,
+    /// JS8Call's passband centre for QSY (waterfall controls `CenterOffset`, default 1500 Hz):
+    /// "QSY to centre" moves the dial so the transmit offset lands here. ENGINE-OWNED, as the
+    /// filter is.
+    #[serde(default = "default_js8_qsy_center_hz")]
+    pub js8_qsy_center_hz: u16,
+    /// JS8Call's "Automatically switch bands / frequencies at specific times of day"
+    /// (`AutoSwitchBands`), OFF by default as JS8Call ships it (Configuration.cpp:2124). On, the
+    /// JS8 station changes the rig's frequency BY ITSELF at the times in `js8_schedule`, with
+    /// nobody at the radio — never while transmitting or with a message going out.
+    #[serde(default)]
+    pub js8_band_hop: bool,
+    /// JS8Call's Frequency Schedule (`stations`): a dial and a UTC window to switch to it in.
+    #[serde(default)]
+    pub js8_schedule: Vec<Js8Hop>,
     /// Heartbeat repeat interval in minutes; 0 = on demand (JS8Call `HBInterval` default).
     /// Whether HB is ON is NOT a setting — it is session-only (`Engine.js8_hb_on`), so the
     /// app can never launch beaconing.
@@ -972,6 +1015,34 @@ pub struct Settings {
     /// JS8Call's field runs 0-1440.
     #[serde(default = "default_js8_activity_aging_min")]
     pub js8_activity_aging_min: u16,
+    /// JS8Call's CQ message (`CQMessage`, default `CQ CQ CQ <MYGRID4>`): what the CQ button and
+    /// the CQ repeat send, its macros replaced (`js8::proto::macros`). Empty sends `CQ CQ CQ` and
+    /// the square, as JS8Call does. A file from before this setting loads the default, which keys
+    /// the same CQ frame every earlier Nexus keyed.
+    #[serde(default = "default_js8_cq_text")]
+    pub js8_cq_text: String,
+    /// JS8Call's reply message (`Reply`, default `HW CPY?`): the cockpit's REPLY button sends it
+    /// to the call in the To box.
+    #[serde(default = "default_js8_reply_text")]
+    pub js8_reply_text: String,
+    /// JS8Call's saved messages (`Macros`, default the one `TNX 73 GL`): the dock's Saved menu, in
+    /// this order, each with its macros replaced when it is used. An empty list stays empty.
+    #[serde(default = "default_js8_saved_messages")]
+    pub js8_saved_messages: Vec<String>,
+    /// JS8Call's "Immediately transmit CQ, Reply, Info, Saved, and Directed messages from the
+    /// menu" (`TransmitDirected`, default ON). Off, those buttons and a station row's one-click
+    /// asks only fill the compose box, and Send sends it.
+    #[serde(default = "default_true")]
+    pub js8_send_at_once: bool,
+    /// JS8Call 3.0's "Display callsigns and commands as pills" in the compose box
+    /// (`PillsEnabled`, default ON). Display only.
+    #[serde(default = "default_true")]
+    pub js8_pills: bool,
+    /// JS8Call's "Suggest alternative word choices for more efficient message transmission"
+    /// (`Spellcheck`, default ON): a word the JSC dictionary codes in pieces is underlined in the
+    /// compose box, and a right-click on it offers cheaper words. Display only.
+    #[serde(default = "default_true")]
+    pub js8_word_suggestions: bool,
     /// Free text answered to `INFO?` (JS8Call "My Info").
     #[serde(default)]
     pub js8_info: String,
@@ -981,6 +1052,130 @@ pub struct Settings {
     /// Joined @GROUP names (e.g. `@FUN`) the station answers directed traffic for.
     #[serde(default)]
     pub js8_groups: Vec<String>,
+    // --- JS8 heartbeat networking and presence, as JS8Call 3.0.3 has them ---
+    /// JS8Call's "Enable Heartbeat Networking" (its Mode menu's `SubModeHB`, off by default): the
+    /// cockpit's HB button shows only with it on, and no heartbeat or heartbeat acknowledgement
+    /// goes out without it. The HB repeat itself stays session-only (`Engine.js8_hb_on`).
+    #[serde(default)]
+    pub js8_hb_networking: bool,
+    /// JS8Call's "Allow heartbeat transmissions outside of heartbeat sub-channel (500Hz -
+    /// 1000Hz)" (`BeaconAnywhere`, off by default): on, a heartbeat or heartbeat acknowledgement
+    /// keys on the TX offset instead of a free spot in 500-1000 Hz.
+    #[serde(default)]
+    pub js8_hb_anywhere: bool,
+    /// JS8Call's "Pause heartbeat transmissions while in a QSO (i.e., callsign is selected)"
+    /// (`HeartbeatQSOPause`, ON by default, and what a file from before this setting loads as):
+    /// while the cockpit's To box holds a call the HB repeat pauses until the box is cleared, no
+    /// heartbeat is acknowledged, and the repeating CQ stops.
+    #[serde(default = "default_js8_hb_qso_pause")]
+    pub js8_hb_qso_pause: bool,
+    /// JS8Call 3.0's "Suppress ACK to stations that send heartbeats at less than 55 minute
+    /// intervals" (`HBRateLimit`, off by default): a station heard heartbeating again within 55
+    /// minutes of its last acknowledged heartbeat is acknowledged no more.
+    #[serde(default)]
+    pub js8_hb_ack_rate_limit: bool,
+    /// JS8Call's "Do not participate in the @ALLCALL group" (`AvoidAllcall`, off by default):
+    /// nothing addressed to @ALLCALL is answered or shown as addressed to you, a heartbeat and a
+    /// CQ aside.
+    #[serde(default)]
+    pub js8_avoid_allcall: bool,
+    /// JS8Call's "Hold PTT between frames while there are more to be transmitted" (`HoldPTT`,
+    /// off by default, JS8_UI/Configuration.cpp:2404). On, the radio stays keyed from the end of
+    /// one frame of a message to the key of its next, as JS8Call's `stopTx2` leaves PTT up while
+    /// frames of the message remain (mainwindow.cpp:2919-2932); off, PTT drops after every frame
+    /// and keys again at the next boundary. Never past the message's last frame, and never once
+    /// anything stops it (`Engine::js8_holds_ptt_between_frames`).
+    #[serde(default)]
+    pub js8_hold_ptt: bool,
+    /// JS8Call's "Allow Tx frequency changes while transmitting" (`TxQSYAllowed`, off by default,
+    /// JS8_UI/Configuration.cpp:2305), for the TX offset. Off, the offset cannot be moved while a
+    /// message is queued or going out, as JS8Call's `changeFreq` refuses it
+    /// (mainwindow.cpp:5381-5386); on, a move is taken and the frames still to go key at it.
+    #[serde(default)]
+    pub js8_tx_offset_while_sending: bool,
+    /// JS8Call's "Tx delay" (`TxDelay`, 0.2 s by default, JS8_UI/Configuration.cpp:2275; 0.1 to
+    /// 0.5 s on its spin box, Configuration.ui `sbTxDelay`), in ms: a JS8 frame keys this long
+    /// before its period, its first tone still at the period's start delay
+    /// (`Engine::js8_tx_delay_ms`, which takes a value outside that range as the nearer end).
+    #[serde(default = "default_js8_tx_delay_ms")]
+    pub js8_tx_delay_ms: u32,
+    /// JS8Call's "Enable spotting @APRSIS messages to the APRS-IS network" (`SpotToAPRS`,
+    /// Configuration.cpp:2300): a heard `@APRSIS GRID` becomes an APRS-IS position and an
+    /// `@APRSIS CMD` a raw APRS packet, uploaded under this station's callsign on the APRS-IS
+    /// session, which logs in with the passcode computed from that callsign as the iGate's does.
+    /// Only while PSK Reporter uploads (JS8Call's SPOT) and the callsign is real. OFF by default,
+    /// where JS8Call ships it on: a stranger's `@APRSIS CMD` packet would go up under the
+    /// operator's own verified login, so the operator turns it on. A file without the key (an
+    /// upgrader's) loads it off.
+    #[serde(default = "default_js8_spot_aprs")]
+    pub js8_spot_aprs: bool,
+    /// JS8Call 3.0's "Relay APRS-IS messages to stations in the Heard List" (`APRSISRelay`, OFF by
+    /// default, Configuration.cpp:2301). It TRANSMITS with nobody at the radio: an APRS message for
+    /// a station heard on JS8 is keyed as `@APRSIS MSG TO:<call> <text> DE <sender>`, through the
+    /// JS8 transmit route and every guard. Needs `js8_spot_aprs` and PSK Reporter on.
+    #[serde(default)]
+    pub js8_aprs_relay: bool,
+    /// JS8Call's "Never spot these callsigns" (`SpotBlacklist`, default empty): a station on it, as
+    /// heard or by its base call, is spotted to no network (PSK Reporter, JS8NET, APRS-IS) and is
+    /// relayed no APRS message.
+    #[serde(default)]
+    pub js8_spot_never: Vec<String>,
+    // --- JS8 lists, views and sounds: JS8Call 3.0.3's own settings for them, at its defaults ---
+    /// JS8Call 3.0's "Hide messages from these callsigns in the RX pane" (`RXCallsignBlocklist`, empty
+    /// by default, Configuration.cpp:2137): a station on it, by its call as heard or its base call,
+    /// prints nothing in the cockpit's RX pane and is marked ✕ in the call list
+    /// (mainwindow.cpp:3108-3123, displayCallActivity.cpp:218-232). Display only: nothing the station
+    /// answers, files or sends reads it. The call list's "Block this station" adds to it
+    /// (`Engine::js8_set_rx_blocklist`).
+    #[serde(default)]
+    pub js8_rx_blocklist: Vec<String>,
+    /// JS8Call's "Highlight these words or callsigns with the primary background color"
+    /// (`PrimaryHighlightWords`, empty by default): a Band activity row holding one of these words,
+    /// or the call list row of one of these calls, takes the primary highlight
+    /// (displayBandActivity.cpp:328-337, displayCallActivity.cpp:427-432). Display only.
+    #[serde(default)]
+    pub js8_highlight_primary: Vec<String>,
+    /// The same with the secondary background (`SecondaryHighlightWords`); the primary wins a row
+    /// both name, as JS8Call paints the primary last.
+    #[serde(default)]
+    pub js8_highlight_secondary: Vec<String>,
+    /// JS8Call's "End of Transmission Character Indicator" (`EOTCharacter`, ♢ by default,
+    /// Configuration.cpp:2146): printed after the last frame of a message in the RX pane and in Band
+    /// activity. Empty prints nothing there.
+    #[serde(default = "default_js8_eot")]
+    pub js8_eot: String,
+    /// JS8Call's "Missing Frame Character Indicator" (`MFICharacter`, …… by default,
+    /// Configuration.cpp:2147): printed where a message's next frame did not come within one and a
+    /// half periods (mainwindow.cpp:6127-6162).
+    #[serde(default = "default_js8_mfi")]
+    pub js8_mfi: String,
+    /// JS8Call's notification sounds (`EnableNotifications` and its table, every row off by default,
+    /// Configuration.cpp:1996-2002, :2464): the events that play one, of "cq", "hb", "ack",
+    /// "directed", "inbox", "callNew" and "callOld". Empty, the default, plays none.
+    #[serde(default)]
+    pub js8_sounds: Vec<String>,
+    // --- JS8Call's API for other programs on this computer (`engine/js8_api.rs`) ---
+    /// Serve JS8Call's TCP API (`TCPEnabled`): OFF by default, as JS8Call ships it. Read-only, and
+    /// on 127.0.0.1 only whatever else changes (`src-tauri/src/js8_api.rs`).
+    #[serde(default)]
+    pub js8_api_tcp: bool,
+    /// Its port (`TCPServerPort`, JS8Call's 2442).
+    #[serde(default = "default_js8_api_tcp_port")]
+    pub js8_api_tcp_port: u16,
+    /// Send JS8Call's UDP API datagrams (`UDPEnabled`): OFF by default, as JS8Call ships it.
+    #[serde(default)]
+    pub js8_api_udp: bool,
+    /// The port on 127.0.0.1 they go to (`UDPServerPort`, JS8Call's 2242).
+    #[serde(default = "default_js8_api_udp_port")]
+    pub js8_api_udp_port: u16,
+    /// Answer requests a TCP program sends (`AcceptTCPRequests`): OFF by default, as JS8Call ships
+    /// it, so a TCP program hears what the station sends and is answered nothing.
+    #[serde(default)]
+    pub js8_api_tcp_accept: bool,
+    /// Answer requests a UDP program sends (`AcceptUDPRequests`): OFF by default, as JS8Call ships
+    /// it.
+    #[serde(default)]
+    pub js8_api_udp_accept: bool,
     /// FM repeater offset override in Hz (0 = use the band convention from
     /// [`Self::rptr_offset_hz`]). Set by the Program section's tune-now so
     /// odd-split machines (e.g. +1 MHz on 2 m) key the right input.
@@ -1167,7 +1362,7 @@ pub struct Settings {
     #[serde(default)]
     pub contest_power: String,
     /// ENTER SENDS MESSAGE in the CW cockpit's contest strip: Enter sends the contact's next
-    /// message from the macro set's keys, step by step, as N1MM Logger+'s ESM does. OFF by
+    /// message from the macro set's keys, step by step. OFF by
     /// default, and nothing but the operator's own switch turns it on: it makes Enter a way to
     /// start a transmission. One switch per cockpit, so an operator can run CW with it and
     /// leave Phone without it.
@@ -1864,6 +2059,18 @@ pub struct Settings {
     /// per-radio truth is `RadioProfile::flex_native_cat` and this is the active radio's mirror.
     #[serde(default)]
     pub flex_native_cat: bool,
+    /// Let Nexus's own Flex client start, on this radio, the transmissions no tester's bench has
+    /// confirmed yet: CW through the radio's keyer (CWX), Tune with the radio's own carrier and
+    /// the radio's ATU (`tempo_net::flex::admission::BETA`). OFF by default, for every radio and
+    /// every settings file written before it existed (operator ruling, 2026-10-14: "A Beta
+    /// setting, off by default"). It changes only which starts the client's admission takes past
+    /// its "no readback yet" refusal: every other Flex-side check, and every gate the engine runs
+    /// in front of it (the TX-enable latch, licence privileges, the watchdog, the one
+    /// transmitter), still decides each one. It means something only where the client serves the
+    /// radio (`flex_native_cat`), and a change restarts the client. The per-radio truth is
+    /// `RadioProfile::flex_native_unbenched` and this is the active radio's mirror.
+    #[serde(default)]
+    pub flex_native_unbenched: bool,
     /// The radio's own address for Nexus's Icom network client (the "Icom network (LAN / Wi-Fi)"
     /// Connection choice, Beta): the radio's "IP Address (LAN)". IPv4. The per-radio truth is
     /// `RadioProfile::icom_lan_host` and this is the active radio's mirror. The network user's
@@ -1944,7 +2151,7 @@ pub struct Settings {
     /// Connect to spot networks for need-aware spots (takes effect at startup). When on,
     /// the RBN CW (7000) + RBN digital (7001) skimmer firehoses are connected for the big
     /// CW + digital evidence, PLUS the human DX-cluster node in `cluster_host` for SSB/phone
-    /// (which RBN doesn't carry). SpotCollector-style multi-source aggregation.
+    /// (which RBN doesn't carry). Multi-source aggregation.
     pub cluster_enabled: bool,
     /// LEGACY single human DX-cluster endpoint — kept only to seed `cluster_hosts` on
     /// upgrade (and for back-compat). `cluster_hosts` is the live source of truth.
@@ -3016,6 +3223,57 @@ pub struct WorkingFreq {
     pub mhz: f64,
 }
 
+/// One row of the operator's own JS8 frequency list ([`Settings::js8_frequencies`]): JS8Call's
+/// working frequency, a dial in MHz and the free-text description 3.0 added. JS8Call's other
+/// two columns are fixed here: the mode is JS8 and the IARU region all regions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Freq {
+    pub mhz: f64,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// JS8Call's decode filter ([`Settings::js8_filter`]). Fields default one by one, so a partial
+/// object (a hand edit) still loads.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Js8Filter {
+    pub enabled: bool,
+    /// Audio offset the filter is centred on, Hz.
+    pub center_hz: u16,
+    /// Its full width, Hz: the decoder searches centre ± width/2.
+    pub width_hz: u16,
+}
+
+impl Default for Js8Filter {
+    /// JS8Call's defaults: on, 1500 Hz, 2000 Hz wide (WideGraph.cpp:237-241).
+    fn default() -> Self {
+        Js8Filter {
+            enabled: true,
+            center_hz: 1500,
+            width_hz: 2000,
+        }
+    }
+}
+
+/// One row of JS8Call's Frequency Schedule ([`Settings::js8_schedule`]): switch the dial to
+/// `mhz` while the UTC time of day is inside the window. Both ends count (JS8Call compares
+/// `switch_at <= now <= switch_until`, mainwindow.cpp:243-254), and a window whose end is
+/// before its start runs over midnight. JS8Call's band column is derived from the dial.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Hop {
+    pub mhz: f64,
+    /// Minutes after 00:00 UTC the window opens (0..=1439): JS8Call's "Switch at (UTC)".
+    pub from_min: u16,
+    /// Minutes after 00:00 UTC it closes: JS8Call's "Until (UTC)". The frequency does not
+    /// return at the end; a later row does that.
+    pub until_min: u16,
+    #[serde(default)]
+    pub description: String,
+}
+
 fn default_on() -> bool {
     true
 }
@@ -3839,6 +4097,10 @@ pub struct RadioProfile {
     /// [`Settings::flex_native_cat`]). Per-radio, as above.
     #[serde(default)]
     pub flex_native_cat: bool,
+    /// Let the Flex client start THIS radio's CW, Tune and ATU before a bench has confirmed them
+    /// (Beta, off by default; see [`Settings::flex_native_unbenched`]). Per-radio, as above.
+    #[serde(default)]
+    pub flex_native_unbenched: bool,
     /// THIS radio's address, network user and control port for the Icom network client (see
     /// [`Settings::icom_lan_host`]). Per-radio, as above. Its password is in the OS keychain.
     #[serde(default)]
@@ -3943,6 +4205,9 @@ pub struct RadioProfilePatch {
     /// sends it, and a payload without it must fail loudly rather than quietly turn the opt-in
     /// off on every save.
     pub flex_native_cat: bool,
+    /// See `RadioProfile::flex_native_unbenched`. No serde default, for the same reason: a payload
+    /// without it must fail loudly rather than quietly decide the setting on every save.
+    pub flex_native_unbenched: bool,
     /// See `RadioProfile::icom_lan_host`. No serde default, for the reason above: a save that
     /// lost the address would leave the radio unreachable with nothing to say why.
     pub icom_lan_host: String,
@@ -4009,6 +4274,7 @@ impl RadioProfilePatch {
         }
         p.flex_native_audio = self.flex_native_audio;
         p.flex_native_cat = self.flex_native_cat;
+        p.flex_native_unbenched = self.flex_native_unbenched;
         p.icom_lan_host = self.icom_lan_host;
         p.icom_lan_user = self.icom_lan_user;
         p.icom_lan_port = self.icom_lan_port;
@@ -4130,6 +4396,7 @@ impl Default for RadioProfile {
             yaesu_fix_starts: Default::default(),
             flex_native_audio: false,
             flex_native_cat: false,
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: ICOM_LAN_DEFAULT_PORT,
@@ -4657,14 +4924,36 @@ fn default_msk144_period_s() -> u16 {
     15
 }
 
+/// JS8Call's CQ message. See [`Settings::js8_cq_text`].
+fn default_js8_cq_text() -> String {
+    ::js8::proto::macros::DEFAULT_CQ.to_string()
+}
+
+/// JS8Call's reply message. See [`Settings::js8_reply_text`].
+fn default_js8_reply_text() -> String {
+    ::js8::proto::macros::DEFAULT_REPLY.to_string()
+}
+
+/// JS8Call's one saved message out of the box (`Macros`, Configuration.cpp:2308-2309). See
+/// [`Settings::js8_saved_messages`].
+fn default_js8_saved_messages() -> Vec<String> {
+    vec!["TNX 73 GL".to_string()]
+}
+
 /// JS8 Normal = index 1 of `Js8Speed::ALL`. See [`Settings::js8_speed`].
 fn default_js8_speed() -> u8 {
     1
 }
 
-/// All four JS8 speeds (Slow 1 | Normal 2 | Fast 4 | Turbo 8). See [`Settings::js8_rx_speeds`].
+/// All five JS8 speeds (Slow 1 | Normal 2 | Fast 4 | Turbo 8 | Ultra 16). See
+/// [`Settings::js8_rx_speeds`].
 fn default_js8_rx_speeds() -> u8 {
-    15
+    modes::Js8Speed::ALL_BITS
+}
+
+/// JS8Call's `CenterOffset` default (WideGraph.cpp:216).
+fn default_js8_qsy_center_hz() -> u16 {
+    1500
 }
 
 /// JS8Call ships autoreply ON (G3). See [`Settings::js8_autoreply`].
@@ -4682,14 +4971,50 @@ fn default_js8_relay() -> bool {
     true
 }
 
+/// The @APRSIS gateway ships OFF, though JS8Call ships its `SpotToAPRS` on: see
+/// [`Settings::js8_spot_aprs`].
+fn default_js8_spot_aprs() -> bool {
+    false
+}
+
+/// JS8Call's `TxDelay` default, 0.2 s, in ms. See [`Settings::js8_tx_delay_ms`].
+fn default_js8_tx_delay_ms() -> u32 {
+    200
+}
+
 /// JS8Call's `TxIdleWatchdog` default (minutes). See [`Settings::js8_idle_watchdog_min`].
 fn default_js8_idle_watchdog_min() -> u16 {
     60
 }
 
+/// JS8Call's `EOTCharacter` default. See [`Settings::js8_eot`].
+fn default_js8_eot() -> String {
+    "\u{2662}".to_string()
+}
+
+/// JS8Call's `MFICharacter` default. See [`Settings::js8_mfi`].
+fn default_js8_mfi() -> String {
+    "\u{2026}\u{2026}".to_string()
+}
+
 /// JS8Call's `ActivityAging` default (minutes). See [`Settings::js8_activity_aging_min`].
 fn default_js8_activity_aging_min() -> u16 {
     2
+}
+
+/// JS8Call ships HeartbeatQSOPause ON. See [`Settings::js8_hb_qso_pause`].
+fn default_js8_hb_qso_pause() -> bool {
+    true
+}
+
+/// JS8Call's TCP API port. See [`Settings::js8_api_tcp_port`].
+fn default_js8_api_tcp_port() -> u16 {
+    crate::engine::js8_api::DEFAULT_TCP_PORT
+}
+
+/// JS8Call's UDP API port. See [`Settings::js8_api_udp_port`].
+fn default_js8_api_udp_port() -> u16 {
+    crate::engine::js8_api::DEFAULT_UDP_PORT
 }
 
 impl Default for Settings {
@@ -4729,6 +5054,13 @@ impl Default for Settings {
             q65_submode: 0,
             js8_speed: default_js8_speed(),
             js8_rx_speeds: default_js8_rx_speeds(),
+            js8_frequencies: None,
+            js8_return_to_last_dial: false,
+            js8_last_dial_mhz: 0.0,
+            js8_filter: Js8Filter::default(),
+            js8_qsy_center_hz: default_js8_qsy_center_hz(),
+            js8_band_hop: false,
+            js8_schedule: Vec::new(),
             js8_hb_interval_min: 0,
             js8_cq_interval_min: 0,
             js8_hb_ack: false,
@@ -4741,9 +5073,38 @@ impl Default for Settings {
             js8_idle_watchdog_min: default_js8_idle_watchdog_min(),
             js8_callsign_aging_min: 0,
             js8_activity_aging_min: default_js8_activity_aging_min(),
+            js8_cq_text: default_js8_cq_text(),
+            js8_reply_text: default_js8_reply_text(),
+            js8_saved_messages: default_js8_saved_messages(),
+            js8_send_at_once: true,
+            js8_pills: true,
+            js8_word_suggestions: true,
             js8_info: String::new(),
             js8_status: String::new(),
             js8_groups: Vec::new(),
+            js8_hb_networking: false,
+            js8_hb_anywhere: false,
+            js8_hb_qso_pause: default_js8_hb_qso_pause(),
+            js8_hb_ack_rate_limit: false,
+            js8_avoid_allcall: false,
+            js8_hold_ptt: false,
+            js8_tx_offset_while_sending: false,
+            js8_tx_delay_ms: default_js8_tx_delay_ms(),
+            js8_spot_aprs: default_js8_spot_aprs(),
+            js8_aprs_relay: false,
+            js8_spot_never: Vec::new(),
+            js8_rx_blocklist: Vec::new(),
+            js8_highlight_primary: Vec::new(),
+            js8_highlight_secondary: Vec::new(),
+            js8_eot: default_js8_eot(),
+            js8_mfi: default_js8_mfi(),
+            js8_sounds: Vec::new(),
+            js8_api_tcp: false,
+            js8_api_tcp_port: default_js8_api_tcp_port(),
+            js8_api_udp: false,
+            js8_api_udp_port: default_js8_api_udp_port(),
+            js8_api_tcp_accept: false,
+            js8_api_udp_accept: false,
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this
             fd_class: String::new(),
@@ -4912,6 +5273,7 @@ impl Default for Settings {
             flex_native_pan: false,
             flex_native_audio: false,
             flex_native_cat: false,
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: ICOM_LAN_DEFAULT_PORT,
@@ -5141,6 +5503,20 @@ impl Settings {
         self.cluster_nodes_auto = auto;
     }
 
+    /// Choose [`Settings::js8_hb_networking`] for settings written before it existed: on for an
+    /// operator whose settings show they used heartbeats, off (JS8Call's default) for everyone
+    /// else, so today's heartbeat users keep their HB button. "Used heartbeats" is read from what
+    /// the settings kept of it: the HB ACK switch on, or an HB repeat interval set. Whether the
+    /// HB repeat itself was on was never stored (it is session-only, `Engine.js8_hb_on`), and an
+    /// interval of 0, the default, sends a heartbeat only when asked, which leaves no trace.
+    ///
+    /// Called by [`Settings::load`] for a file without the key, and by the backup restore for a
+    /// backup without it: the restore deserialises directly and runs none of `load`'s
+    /// migrations, so without this a restored heartbeat user would lose the HB button.
+    pub fn choose_js8_hb_networking_for_old_settings(&mut self) {
+        self.js8_hb_networking = self.js8_hb_ack || self.js8_hb_interval_min > 0;
+    }
+
     /// Is DX cluster / RBN spot ingestion EFFECTIVELY on? Cluster and RBN spots are
     /// callsign-and-frequency identification from other people's receivers — the textbook
     /// QSO-finding assistance, named by both CQ WW and ARRL.
@@ -5250,6 +5626,7 @@ impl Settings {
             yaesu_fix_starts: Default::default(),
             flex_native_audio: self.flex_native_audio,
             flex_native_cat: self.flex_native_cat,
+            flex_native_unbenched: self.flex_native_unbenched,
             icom_lan_host: self.icom_lan_host.clone(),
             icom_lan_user: self.icom_lan_user.clone(),
             icom_lan_port: self.icom_lan_port,
@@ -5661,6 +6038,7 @@ impl Settings {
         self.flex_native_pan = p.flex_native_pan;
         self.flex_native_audio = p.flex_native_audio;
         self.flex_native_cat = p.flex_native_cat;
+        self.flex_native_unbenched = p.flex_native_unbenched;
         self.icom_lan_host = p.icom_lan_host;
         self.icom_lan_user = p.icom_lan_user;
         self.icom_lan_port = p.icom_lan_port;
@@ -5706,6 +6084,7 @@ impl Settings {
             flex_native_pan,
             flex_native_audio,
             flex_native_cat,
+            flex_native_unbenched,
             icom_lan_host,
             icom_lan_user,
             icom_lan_port,
@@ -5742,6 +6121,7 @@ impl Settings {
             self.flex_native_pan,
             self.flex_native_audio,
             self.flex_native_cat,
+            self.flex_native_unbenched,
             self.icom_lan_host.clone(),
             self.icom_lan_user.clone(),
             self.icom_lan_port,
@@ -5779,6 +6159,7 @@ impl Settings {
             p.flex_native_pan = flex_native_pan;
             p.flex_native_audio = flex_native_audio;
             p.flex_native_cat = flex_native_cat;
+            p.flex_native_unbenched = flex_native_unbenched;
             p.icom_lan_host = icom_lan_host;
             p.icom_lan_user = icom_lan_user;
             p.icom_lan_port = icom_lan_port;
@@ -5837,7 +6218,7 @@ impl Settings {
     }
 
     /// ONE-TIME MIGRATION (2026-10-10): AGN moved to F8 in the Phone, CW, RTTY and PSK contest
-    /// keys, as in N1MM's default message sets. In the CW, RTTY and PSK contest sets it traded keys
+    /// keys. In the CW, RTTY and PSK contest sets it traded keys
     /// with B4, now on F7, and nothing else moved. In Phone it was on F5, which is free now: on CW
     /// F5 sends his call, and a recording cannot say a callsign. The voice keyer gains an F8 slot
     /// for it.
@@ -6008,6 +6389,9 @@ impl Settings {
         // reason as `satDoppler`: once parsed, the field's default cannot be told from a saved
         // `true`, and a file without the key is one from before the choice existed.
         let mut node_choice_saved = false;
+        // …and whether it says if JS8 heartbeat networking is on, for the same reason: a file
+        // without the key is from before the switch (`choose_js8_hb_networking_for_old_settings`).
+        let mut hb_networking_saved = false;
         let mut s: Settings = match std::fs::read_to_string(path) {
             // Missing file: a normal first run.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
@@ -6037,6 +6421,15 @@ impl Settings {
                     node_choice_saved = serde_json::from_str::<NodeChoice>(&text)
                         .ok()
                         .and_then(|c| c.auto)
+                        .is_some();
+                    #[derive(Deserialize)]
+                    struct HbNetworking {
+                        #[serde(rename = "js8HbNetworking")]
+                        on: Option<bool>,
+                    }
+                    hb_networking_saved = serde_json::from_str::<HbNetworking>(&text)
+                        .ok()
+                        .and_then(|c| c.on)
                         .is_some();
                     s
                 }
@@ -6138,6 +6531,12 @@ impl Settings {
         // key wrote its own choice and is never overruled.
         if !node_choice_saved {
             s.choose_cluster_nodes_for_old_settings();
+        }
+        // Migration (2026-10-15): JS8 heartbeat networking, for a file from before the switch —
+        // see `choose_js8_hb_networking_for_old_settings`. A file that has the key is never
+        // overruled.
+        if !hb_networking_saved {
+            s.choose_js8_hb_networking_for_old_settings();
         }
         // Migration (2026-09-16): the default list was the ve7cc + wa9pie PAIR, and both died
         // on the same day — every default-config install lost its only SSB/phone sources at
@@ -6513,13 +6912,15 @@ impl Settings {
         // WHICH SIDE the section policy below works on. Two different questions,
         // deliberately not unified: Digital's side is a property of the tuned CHANNEL
         // (FT8 on 40 m is USB-side — the band convention would say LSB and be wrong),
-        // while Phone and CW follow the hard band convention (LSB below 10 MHz).
+        // while Phone and CW follow the hard band convention (LSB below 10 MHz; Phone is USB on
+        // 60 m, `bandplan::phone_is_lsb`).
         let lsb = match self.operating_mode {
             OperatingMode::Digital => sideband.trim().eq_ignore_ascii_case("LSB"),
             // Keyboard modes are ALWAYS USB-side: the PSK31 convention is USB on
             // every band (80/40 m included — unlike RTTY's LSB and phone's
             // below-10-MHz rule), so the band fallthrough would be wrong here.
             OperatingMode::Keyboard => false,
+            OperatingMode::Phone => crate::bandplan::phone_is_lsb(dial_mhz),
             _ => dial_mhz < 10.0,
         };
         self.rig_mode_on_sideband(lsb)
@@ -6846,6 +7247,7 @@ mod tests {
             )])),
             flex_native_audio: true,
             flex_native_cat: true,
+            flex_native_unbenched: true,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
@@ -7186,6 +7588,7 @@ mod tests {
             yaesu_fix_starts: None,
             flex_native_audio: false,
             flex_native_cat: false,
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
@@ -7339,6 +7742,7 @@ mod tests {
             flex_native_pan: false,
             flex_native_audio: false,
             flex_native_cat: false,
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
@@ -7409,6 +7813,7 @@ mod tests {
             "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
             "rotctldPort": 4533, "nativeScope": "auto", "flexRadioIp": "",
             "flexNativePan": false, "flexNativeAudio": false, "flexNativeCat": false,
+            "flexNativeUnbenched": false,
             "icomLanHost": "", "icomLanUser": "", "icomLanPort": 50001,
             "ampModel": "", "ampPort": "", "ampFollowBand": false
         }"#;
@@ -7598,6 +8003,7 @@ mod tests {
             yaesu_fix_starts: Some(p.yaesu_fix_starts.clone()),
             flex_native_audio: p.flex_native_audio,
             flex_native_cat: p.flex_native_cat,
+            flex_native_unbenched: p.flex_native_unbenched,
             icom_lan_host: p.icom_lan_host.clone(),
             icom_lan_user: p.icom_lan_user.clone(),
             icom_lan_port: p.icom_lan_port,
@@ -7710,6 +8116,126 @@ mod tests {
             e.settings().flex_native_audio,
             "the Flex's choice comes back with it"
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// ⭐ The Flex client's Beta setting for CW, Tune and the ATU (`flex_native_unbenched`) is OFF
+    /// for everyone: a fresh station, a radio added later, and a settings file written before it
+    /// existed, on the flat mirror and on every radio. Turned on for one radio it is that radio's
+    /// alone: through a save and a load, a switch to another radio and back, and the per-radio
+    /// patch the Settings form saves a radio not in use with, which must state it.
+    #[test]
+    fn the_flex_beta_setting_is_off_by_default_and_stays_with_its_radio() {
+        let mut fresh = crate::engine::Engine::with_settings(Settings::default());
+        let added = fresh.add_radio();
+        assert!(!fresh.settings().flex_native_unbenched, "a fresh station");
+        assert!(
+            fresh
+                .settings()
+                .radios
+                .iter()
+                .all(|r| !r.flex_native_unbenched),
+            "its radios, radio {added} included"
+        );
+        assert!(!RadioProfile::default().flex_native_unbenched);
+        // A station with no radio profile yet makes its first from the flat mirror, setting and all.
+        let mut flat_only = Settings {
+            flex_native_unbenched: true,
+            ..Settings::default()
+        };
+        flat_only.ensure_radio_profiles();
+        assert!(flat_only.radios[0].flex_native_unbenched);
+
+        // The 1.18.0 file: the client on for the Flex, and no key for this anywhere.
+        let dir = std::env::temp_dir().join("tempo_settings_flex_unbenched");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("flex_unbenched_{}.json", std::process::id()));
+        let old = serde_json::json!({
+            "mycall": "KD9TAW",
+            "activeRadio": 1,
+            "rigModel": 2036,
+            "rigConn": "network",
+            "flexNativeCat": true,
+            "radios": [
+                { "id": 0, "name": "FTDX10", "rigModel": 1042 },
+                { "id": 1, "name": "FLEX-6400", "rigModel": 2036, "rigConn": "network",
+                  "rigAddr": "127.0.0.1:5002", "flexRadioIp": "192.0.2.77",
+                  "flexNativeCat": true },
+            ],
+        });
+        std::fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
+        let mut s = Settings::load(&path);
+        assert!(
+            s.flex_native_cat,
+            "precondition: the client serves the Flex"
+        );
+        assert!(!s.flex_native_unbenched, "an old file loads it off");
+        assert!(
+            s.radios.iter().all(|r| !r.flex_native_unbenched),
+            "on every radio"
+        );
+
+        // On for the Flex, the radio in use, as the form saves it: the flat mirror, then the file.
+        s.flex_native_unbenched = true;
+        s.sync_active_from_flat();
+        s.save(&path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let radio = |id: u32| {
+            written["radios"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["id"] == serde_json::json!(id))
+                .expect("the radio is written")["flexNativeUnbenched"]
+                .clone()
+        };
+        assert_eq!(written["flexNativeUnbenched"], serde_json::json!(true));
+        assert_eq!(radio(1), serde_json::json!(true), "the Flex's, on");
+        assert_eq!(radio(0), serde_json::json!(false), "the other radio's, off");
+
+        let mut e = crate::engine::Engine::with_settings(Settings::load(&path));
+        assert!(e.settings().flex_native_unbenched, "it loads again, on");
+        e.set_active_radio(0);
+        assert!(
+            !e.settings().flex_native_unbenched,
+            "the other radio has its own, off"
+        );
+        e.set_active_radio(1);
+        assert!(
+            e.settings().flex_native_unbenched,
+            "the Flex's comes back with it"
+        );
+
+        // The patch for a radio not in use carries it both ways, by value, and a payload that does
+        // not state it is refused rather than read as either.
+        let mut ftdx = e
+            .settings()
+            .radios
+            .iter()
+            .find(|r| r.id == 0)
+            .unwrap()
+            .clone();
+        RadioProfilePatch {
+            flex_native_unbenched: true,
+            ..patch_of(&ftdx)
+        }
+        .apply_to(&mut ftdx);
+        assert!(ftdx.flex_native_unbenched);
+        RadioProfilePatch {
+            flex_native_unbenched: false,
+            ..patch_of(&ftdx)
+        }
+        .apply_to(&mut ftdx);
+        assert!(!ftdx.flex_native_unbenched);
+        let mut payload = serde_json::to_value(patch_of(&ftdx)).unwrap();
+        assert!(payload
+            .as_object_mut()
+            .unwrap()
+            .remove("flexNativeUnbenched")
+            .is_some());
+        assert!(serde_json::from_value::<RadioProfilePatch>(payload).is_err());
 
         let _ = std::fs::remove_file(&path);
     }
@@ -7837,8 +8363,8 @@ mod tests {
     /// written in these two words can be right for both brands at once.
     ///
     /// Nothing on the air changes either way (`CW` and `CWR` are the same emission on the same
-    /// dial), so this is a receive preference — which is how the rig manuals and N1MM both
-    /// model it, and why it is now a checkbox with no band term.
+    /// dial), so this is a receive preference — which is how the rig manuals model it, and
+    /// why it is now a checkbox with no band term.
     #[test]
     fn cw_commands_the_rigs_own_normal_cw_on_every_band() {
         let mut s = Settings::default();
@@ -8085,6 +8611,26 @@ mod tests {
         assert_eq!(s.rig_mode(), "USB");
         s.dial_mhz = 7.200;
         assert_eq!(s.rig_mode(), "LSB");
+    }
+
+    /// 60 m phone is upper sideband. 47 CFR 97.303(h) sets the J3E carrier 1.5 kHz BELOW each
+    /// channel centre and holds the emission to 2.8 kHz, which only USB satisfies; the IARU
+    /// Region 1 plan and RAC's plan say USB too. The below-10-MHz LSB convention stops at 60 m.
+    #[test]
+    fn phone_on_60m_commands_usb_and_the_other_bands_keep_their_convention() {
+        let mut s = Settings::default();
+        s.operating_mode = OperatingMode::Phone;
+        s.phone_mode = "ssb".into();
+        // Controls first: the bands either side keep their sideband.
+        for (dial, want) in [(3.8, "LSB"), (7.2, "LSB"), (14.2, "USB")] {
+            s.dial_mhz = dial;
+            assert_eq!(s.rig_mode(), want, "phone at {dial} MHz");
+        }
+        // The four US channel carriers and one dial inside the 5351.5-5366.5 kHz segment.
+        for dial in [5.3305, 5.3465, 5.3570, 5.3715, 5.4035] {
+            s.dial_mhz = dial;
+            assert_eq!(s.rig_mode(), "USB", "60 m phone at {dial} MHz");
+        }
     }
 
     #[test]
@@ -9717,6 +10263,82 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The compose box's six JS8 fields: JS8Call 3.0.3's own defaults (`CQMessage`, `Reply`,
+    /// `Macros`, `TransmitDirected`, `PillsEnabled`, `Spellcheck`), the exact camelCase wire keys,
+    /// an upgrader's file, a cleared list and text that stay cleared, and the TS mirror read from
+    /// `ui/src/types.ts` itself.
+    #[test]
+    fn js8_compose_settings_defaults_wire_keys_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(s.js8_cq_text, "CQ CQ CQ <MYGRID4>", "JS8Call CQMessage");
+        assert_eq!(s.js8_reply_text, "HW CPY?", "JS8Call Reply");
+        assert_eq!(
+            s.js8_saved_messages,
+            vec!["TNX 73 GL".to_string()],
+            "JS8Call Macros"
+        );
+        assert!(s.js8_send_at_once, "JS8Call TransmitDirected: on");
+        assert!(s.js8_pills, "JS8Call PillsEnabled: on");
+        assert!(s.js8_word_suggestions, "JS8Call Spellcheck: on");
+
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"js8CqText\":\"CQ CQ CQ <MYGRID4>\"",
+            "\"js8ReplyText\":\"HW CPY?\"",
+            "\"js8SavedMessages\":[\"TNX 73 GL\"]",
+            "\"js8SendAtOnce\":true",
+            "\"js8Pills\":true",
+            "\"js8WordSuggestions\":true",
+        ] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        // An upgrader's file predates every key: JS8Call's defaults, so the CQ button keys the CQ
+        // it always keyed.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.js8_cq_text, "CQ CQ CQ <MYGRID4>");
+        assert_eq!(old.js8_saved_messages, vec!["TNX 73 GL".to_string()]);
+        assert!(old.js8_send_at_once && old.js8_pills && old.js8_word_suggestions);
+        // What the operator cleared or turned off stays so, not the default.
+        let mine: Settings = serde_json::from_str(
+            r#"{"js8CqText":"","js8ReplyText":"TNX FER CALL","js8SavedMessages":[],"js8SendAtOnce":false,"js8Pills":false,"js8WordSuggestions":false}"#,
+        )
+        .unwrap();
+        assert_eq!(mine.js8_cq_text, "", "an empty CQ message stays empty");
+        assert_eq!(mine.js8_reply_text, "TNX FER CALL");
+        assert!(
+            mine.js8_saved_messages.is_empty(),
+            "no saved messages stays none"
+        );
+        assert!(!mine.js8_send_at_once && !mine.js8_pills && !mine.js8_word_suggestions);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&mine).unwrap()).unwrap();
+        assert_eq!(back, mine);
+
+        // The TS mirror carries every key, as a typed field line (`  js8CqText: string`).
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in [
+            "js8CqText",
+            "js8ReplyText",
+            "js8SavedMessages",
+            "js8SendAtOnce",
+            "js8Pills",
+            "js8WordSuggestions",
+        ] {
+            assert!(
+                body.lines()
+                    .any(|l| l.trim_start().starts_with(&format!("{key}:"))),
+                "ui/src/types.ts Settings is missing `{key}`"
+            );
+        }
+        // CONTROL: the scan finds nothing that is not there.
+        assert!(!body
+            .lines()
+            .any(|l| l.trim_start().starts_with("js8CqIdx:")));
+    }
+
     /// The ten JS8 fields: JS8Call's own defaults (G3, operator-approved 2026-09-05), the
     /// exact camelCase wire keys, an upgrader's file, and the TS mirror — read from
     /// `ui/src/types.ts` itself, the `the_typescript_patch_carries_every_field_the_rust_patch_does`
@@ -9727,8 +10349,8 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.js8_speed, 1, "Normal is index 1 of Speed::ALL");
         assert_eq!(
-            s.js8_rx_speeds, 15,
-            "all four speeds decode with zero toggles"
+            s.js8_rx_speeds, 31,
+            "all five speeds, JS8 60 too, decode with zero toggles"
         );
         assert_eq!(
             s.js8_hb_interval_min, 0,
@@ -9768,7 +10390,7 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let keys = [
             "\"js8Speed\":1",
-            "\"js8RxSpeeds\":15",
+            "\"js8RxSpeeds\":31",
             "\"js8HbIntervalMin\":0",
             "\"js8CqIntervalMin\":0",
             "\"js8HbAck\":false",
@@ -9791,6 +10413,13 @@ mod tests {
         // An upgrader's file predates every key: defaults apply, nothing fails to load.
         let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
         assert_eq!(old.js8_speed, 1);
+        assert_eq!(old.js8_rx_speeds, 31, "no key: every speed, JS8 60 too");
+        // A mask saved before JS8 60 existed keeps its meaning — the four speeds it names.
+        let four: Settings = serde_json::from_str(r#"{"js8RxSpeeds":15}"#).unwrap();
+        assert_eq!(
+            four.js8_rx_speeds, 15,
+            "a stored mask is never widened on load"
+        );
         assert!(old.js8_autoreply && old.js8_relay && !old.js8_hb_ack);
         assert!(
             old.js8_autoreply_confirmation,
@@ -9866,6 +10495,330 @@ mod tests {
             !body.lines().any(|l| l.trim_start().starts_with("js8HbOn:"))
                 && !body.lines().any(|l| l.trim_start().starts_with("js8CqOn:")),
             "HB and CQ-repeat on/off are session-only and must never be settings"
+        );
+    }
+
+    /// The five heartbeat-and-presence switches: JS8Call 3.0.3's defaults (networking, HB
+    /// anywhere, the 55-minute rule and @ALLCALL avoidance off; the QSO pause on), the exact
+    /// camelCase wire keys, an upgrader's file, an explicit choice surviving the round trip, and
+    /// the TS mirror read from `ui/src/types.ts` itself.
+    #[test]
+    fn js8_heartbeat_and_presence_settings_defaults_wire_keys_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(
+            (
+                s.js8_hb_networking,
+                s.js8_hb_anywhere,
+                s.js8_hb_qso_pause,
+                s.js8_hb_ack_rate_limit,
+                s.js8_avoid_allcall
+            ),
+            (false, false, true, false, false),
+            "JS8Call's SubModeHB, BeaconAnywhere, HeartbeatQSOPause, HBRateLimit, AvoidAllcall"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"js8HbNetworking\":false",
+            "\"js8HbAnywhere\":false",
+            "\"js8HbQsoPause\":true",
+            "\"js8HbAckRateLimit\":false",
+            "\"js8AvoidAllcall\":false",
+        ] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            (
+                old.js8_hb_networking,
+                old.js8_hb_anywhere,
+                old.js8_hb_qso_pause,
+                old.js8_hb_ack_rate_limit,
+                old.js8_avoid_allcall
+            ),
+            (false, false, true, false, false),
+            "an upgrader's file takes JS8Call's defaults"
+        );
+        let chosen: Settings = serde_json::from_str(
+            r#"{"js8HbNetworking":true,"js8HbAnywhere":true,"js8HbQsoPause":false,"js8HbAckRateLimit":true,"js8AvoidAllcall":true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                chosen.js8_hb_networking,
+                chosen.js8_hb_anywhere,
+                chosen.js8_hb_qso_pause,
+                chosen.js8_hb_ack_rate_limit,
+                chosen.js8_avoid_allcall
+            ),
+            (true, true, false, true, true),
+            "every choice, the QSO pause off included, survives the load"
+        );
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in [
+            "js8HbNetworking",
+            "js8HbAnywhere",
+            "js8HbQsoPause",
+            "js8HbAckRateLimit",
+            "js8AvoidAllcall",
+        ] {
+            assert!(
+                body.lines()
+                    .any(|l| l.trim_start().starts_with(&format!("{key}:"))),
+                "ui/src/types.ts Settings is missing `{key}`"
+            );
+        }
+    }
+
+    /// JS8 heartbeat networking, for a file from before the switch: on for an operator whose
+    /// settings show they used heartbeats (HB ACK on, or an HB repeat interval set), so the HB
+    /// button they had stays; off, JS8Call's default, for everyone else. A file that has the key
+    /// keeps its own choice, whatever else it holds.
+    #[test]
+    fn a_file_from_before_heartbeat_networking_keeps_a_heartbeat_user_s_hb_button() {
+        let path = scratch_dir("hbnet").join("settings.json");
+        let load = |hb_ack: bool, interval: u16, saved: Option<bool>| {
+            let s = Settings {
+                js8_hb_ack: hb_ack,
+                js8_hb_interval_min: interval,
+                ..Settings::default()
+            };
+            let mut v = serde_json::to_value(&s).unwrap();
+            let fields = v.as_object_mut().unwrap();
+            match saved {
+                Some(on) => {
+                    fields.insert("js8HbNetworking".into(), on.into());
+                }
+                None => assert!(
+                    fields.remove("js8HbNetworking").is_some(),
+                    "the key was there to remove, or this writes a current file and proves nothing"
+                ),
+            }
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+            Settings::load(&path).js8_hb_networking
+        };
+        assert_eq!(
+            [
+                load(false, 0, None),
+                load(true, 0, None),
+                load(false, 10, None),
+                load(true, 10, None)
+            ],
+            [false, true, true, true],
+            "an upgrader: on with HB ACK on or an HB repeat interval set, off otherwise"
+        );
+        assert_eq!(
+            [load(true, 10, Some(false)), load(false, 0, Some(true))],
+            [false, true],
+            "a file with the key keeps its own choice"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// JS8Call's two send options, off by default as JS8Call ships them: Hold PTT between frames
+    /// (`HoldPTT`) and Allow Tx frequency changes while transmitting (`TxQSYAllowed`), the TX
+    /// offset's half. The wire keys, an upgrader's file (off), an explicit on that survives the
+    /// round trip, and the TS mirror.
+    #[test]
+    fn js8_send_options_default_off_and_round_trip() {
+        let s = Settings::default();
+        assert!(!s.js8_hold_ptt, "JS8Call HoldPTT default: off");
+        assert!(
+            !s.js8_tx_offset_while_sending,
+            "JS8Call TxQSYAllowed default: off"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        for k in ["\"js8HoldPtt\":false", "\"js8TxOffsetWhileSending\":false"] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(
+            !old.js8_hold_ptt && !old.js8_tx_offset_while_sending,
+            "an upgrader's file holds no PTT and moves no offset mid-message"
+        );
+        let on: Settings =
+            serde_json::from_str(r#"{"js8HoldPtt":true,"js8TxOffsetWhileSending":true}"#).unwrap();
+        assert!(on.js8_hold_ptt && on.js8_tx_offset_while_sending);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back, on);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in ["js8HoldPtt: boolean", "js8TxOffsetWhileSending: boolean"] {
+            assert!(
+                body.lines().any(|l| l.trim_start() == key),
+                "ui/src/types.ts Settings lacks `{key}`"
+            );
+        }
+    }
+
+    /// JS8Call's TX delay, 0.2 s by default (`TxDelay`), stored in ms: the wire key, an upgrader's
+    /// file (0.2 s), a value of the operator's own surviving the round trip, and the TS mirror.
+    #[test]
+    fn js8_tx_delay_defaults_to_js8calls_and_round_trips() {
+        let s = Settings::default();
+        assert_eq!(s.js8_tx_delay_ms, 200, "JS8Call TxDelay default: 0.2 s");
+        assert!(serde_json::to_string(&s)
+            .unwrap()
+            .contains("\"js8TxDelayMs\":200"));
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.js8_tx_delay_ms, 200, "an upgrader keys 0.2 s early");
+        let set: Settings = serde_json::from_str(r#"{"js8TxDelayMs":400}"#).unwrap();
+        assert_eq!(set.js8_tx_delay_ms, 400);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&set).unwrap()).unwrap();
+        assert_eq!(back, set);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        assert!(
+            body.lines()
+                .any(|l| l.trim_start() == "js8TxDelayMs: number"),
+            "ui/src/types.ts Settings lacks `js8TxDelayMs: number`"
+        );
+    }
+
+    /// JS8's internet links: the defaults (the @APRSIS gateway OFF, though JS8Call ships its
+    /// SpotToAPRS on; the inbound APRS-IS relay OFF; nobody on the never-spot list), on the wire
+    /// under their own keys, an upgrader's file loading those defaults, an explicit choice
+    /// surviving the round trip, and the TS mirror.
+    #[test]
+    fn js8_link_settings_defaults_wire_keys_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(
+            (
+                s.js8_spot_aprs,
+                s.js8_aprs_relay,
+                s.js8_spot_never.is_empty()
+            ),
+            (false, false, true),
+            "the @APRSIS gateway off until the operator turns it on; JS8Call's APRSISRelay off (it \
+             keys unattended); JS8Call's SpotBlacklist empty"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"js8SpotAprs\":false",
+            "\"js8AprsRelay\":false",
+            "\"js8SpotNever\":[]",
+        ] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        // An upgrader's file has none of the three keys: the gateway loads off.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            (
+                old.js8_spot_aprs,
+                old.js8_aprs_relay,
+                old.js8_spot_never.is_empty()
+            ),
+            (false, false, true),
+            "an upgrader who never set them: the gateway and the relay off, the list empty"
+        );
+        // Each explicit choice differs from its default, so a key read back proves itself.
+        let chosen: Settings = serde_json::from_str(
+            r#"{"js8SpotAprs":true,"js8AprsRelay":true,"js8SpotNever":["W1AW","K1ABC"]}"#,
+        )
+        .unwrap();
+        assert!(chosen.js8_spot_aprs && chosen.js8_aprs_relay);
+        assert_eq!(chosen.js8_spot_never, vec!["W1AW", "K1ABC"]);
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in ["js8SpotAprs", "js8AprsRelay", "js8SpotNever"] {
+            assert!(
+                body.lines()
+                    .any(|l| l.trim_start().starts_with(&format!("{key}:"))),
+                "ui/src/types.ts Settings is missing `{key}`"
+            );
+        }
+    }
+
+    /// The JS8 lists, the end and missing-frame marks and the sounds: JS8Call 3.0.3's defaults
+    /// (an empty RX block list and highlight lists, ♢ and ……, every sound off), the exact camelCase
+    /// wire keys, an upgrader's file, a round trip of chosen values, and the TS mirror.
+    #[test]
+    fn js8_list_mark_and_sound_settings_default_as_js8call_and_round_trip() {
+        let s = Settings::default();
+        assert!(s.js8_rx_blocklist.is_empty(), "RXCallsignBlocklist: empty");
+        assert!(
+            s.js8_highlight_primary.is_empty() && s.js8_highlight_secondary.is_empty(),
+            "Primary/SecondaryHighlightWords: empty"
+        );
+        assert_eq!(s.js8_eot, "\u{2662}", "EOTCharacter: ♢");
+        assert_eq!(s.js8_mfi, "\u{2026}\u{2026}", "MFICharacter: ……");
+        assert!(s.js8_sounds.is_empty(), "EnableNotifications: off");
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"js8RxBlocklist\":[]",
+            "\"js8HighlightPrimary\":[]",
+            "\"js8HighlightSecondary\":[]",
+            "\"js8Eot\":\"\u{2662}\"",
+            "\"js8Mfi\":\"\u{2026}\u{2026}\"",
+            "\"js8Sounds\":[]",
+        ] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            (old.js8_eot.as_str(), old.js8_mfi.as_str()),
+            ("\u{2662}", "\u{2026}\u{2026}"),
+            "an upgrader's file prints JS8Call's marks"
+        );
+        assert!(old.js8_rx_blocklist.is_empty() && old.js8_sounds.is_empty());
+        let chosen: Settings = serde_json::from_str(
+            r#"{"js8RxBlocklist":["W1AW"],"js8HighlightPrimary":["@FUN","K1ABC"],"js8HighlightSecondary":["NET"],"js8Eot":"","js8Mfi":"...","js8Sounds":["inbox","cq"]}"#,
+        )
+        .unwrap();
+        assert_eq!(chosen.js8_rx_blocklist, ["W1AW"]);
+        assert_eq!(chosen.js8_highlight_primary, ["@FUN", "K1ABC"]);
+        assert_eq!(chosen.js8_highlight_secondary, ["NET"]);
+        assert_eq!(
+            chosen.js8_eot, "",
+            "an empty end mark stays empty, not the default"
+        );
+        assert_eq!(chosen.js8_mfi, "...");
+        assert_eq!(chosen.js8_sounds, ["inbox", "cq"]);
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let typed = |key: &str| {
+            body.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{key}:")))
+        };
+        for key in [
+            "js8RxBlocklist",
+            "js8HighlightPrimary",
+            "js8HighlightSecondary",
+            "js8Eot",
+            "js8Mfi",
+            "js8Sounds",
+        ] {
+            assert!(typed(key), "ui/src/types.ts Settings is missing `{key}`");
+        }
+        assert!(
+            !typed("js8RxBlockList"),
+            "control: a near miss is not found"
         );
     }
 

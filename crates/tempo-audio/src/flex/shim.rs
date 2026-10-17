@@ -558,10 +558,12 @@ fn word_wpm(model: &StatusModel, state: &ClientState) -> u32 {
 /// The CW line's words for a word the client did not send: what kept it back, and what to do.
 pub(crate) fn cw_refusal_words(refusal: &Refusal) -> String {
     match refusal {
-        Refusal::NoReadback(_) => "CW not sent: the Flex native client does not send CW yet. For \
-                                   CW, turn the Flex native client off (SmartSDR CAT sends it), \
-                                   or use the WinKeyer or Soundcard keyer."
-            .to_string(),
+        Refusal::NoReadback(_) => format!(
+            "CW not sent: CW through the Flex native client is not bench-tested yet. To try it, \
+             turn on {}, or turn the Flex native client off (SmartSDR CAT sends CW), or use the \
+             WinKeyer or Soundcard keyer.",
+            super::BETA_SWITCH
+        ),
         Refusal::NotCw { mode } if mode.is_empty() => "CW not sent: the radio has not said which \
                                                         mode its transmit slice is in."
             .to_string(),

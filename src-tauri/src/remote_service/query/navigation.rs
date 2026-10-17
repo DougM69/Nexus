@@ -10,6 +10,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+use tempo_core::logbook::AWARD_EXTRAS;
 
 const DOCUMENT_BYTES: usize = 2 * 1024 * 1024;
 const CHUNK_BYTES: usize = 16 * 1024;
@@ -677,8 +678,10 @@ struct LogContext {
     count: usize,
 }
 /// What the coverage reads of every contact: the needs model's inputs (`LogNeeds::add_qso`,
-/// with the four confirmation channels `award_confirmed` is read from) and the grid and call its
-/// squares and zones come from.
+/// with the four confirmation channels `award_confirmed` is read from) and the grid, call and
+/// DXCC number its squares and zones come from — with the passthrough fields `AWARD_EXTRAS` names
+/// (the CQ zone, and LoTW's DXCC), read beside them: the coverage counts each contact as the
+/// awards do, as the desktop's needs model and map do.
 const COVERAGE: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
     columns: &[
         "call",
@@ -691,6 +694,7 @@ const COVERAGE: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlit
         "lotw_rcvd_raw",
         "eqsl_rcvd_raw",
         "qrz_status_raw",
+        "dxcc",
     ],
     uploads: false,
 };
@@ -722,7 +726,7 @@ fn log_context(
         if out.count > 1_000_000 {
             return Err("applicationTooLarge");
         }
-        log.each(COVERAGE, &mut |pick, q| {
+        log.each_with(COVERAGE, AWARD_EXTRAS, &mut |pick, q| {
             super::picture::within(deadline, pick)?;
             for s in [&q.call, &q.band, &q.mode].into_iter().chain(
                 [q.grid.as_ref(), q.state.as_ref(), q.prop_mode.as_ref()]
@@ -737,6 +741,7 @@ fn log_context(
             if text_bytes > 64 * 1024 * 1024 {
                 return Err("applicationTooLarge");
             }
+            let fields = crate::log_folds::award_fields(q);
             out.needs.add_qso(
                 &q.call,
                 &q.band,
@@ -745,6 +750,7 @@ fn log_context(
                 q.state.as_deref(),
                 q.award_confirmed,
                 crate::qso_is_sat(q.prop_mode.as_deref()),
+                fields,
             );
             if let Some(g) = q
                 .grid
@@ -754,9 +760,12 @@ fn log_context(
             {
                 out.grids.insert(g.chars().take(4).collect());
             }
-            if let Some(info) = propagation::dxcc::resolve(&q.call) {
-                if (1..=40).contains(&info.cq_zone) {
-                    out.zones.insert(info.cq_zone);
+            // The zones the desktop's map shades: the log statistics' (`LogStatsAccumulator`),
+            // each contact's zone as the awards count it, for a contact in some entity.
+            let resolved = propagation::dxcc::resolve(&q.call);
+            if propagation::awards::counted_entity(resolved.as_ref(), &fields).is_some() {
+                if let Some(zone) = propagation::awards::counted_zone(resolved.as_ref(), &fields) {
+                    out.zones.insert(zone);
                 }
             }
             if out.grids.len() > 65_536 {
@@ -1341,11 +1350,15 @@ mod tests {
                         q.state.clone(),
                         q.award_confirmed,
                         crate::qso_is_sat(q.prop_mode.as_deref()),
+                        // Since the coverage counts each contact as the awards do, the oracle
+                        // reads the record's numbers off the whole record — the store's narrow
+                        // read must carry them to match it.
+                        crate::log_folds::award_fields(q),
                     ));
                 }
                 rows
             };
-            for (call, band, mode, grid, state, confirmed, satellite) in rows {
+            for (call, band, mode, grid, state, confirmed, satellite, fields) in rows {
                 out.needs.add_qso(
                     &call,
                     &band,
@@ -1354,6 +1367,7 @@ mod tests {
                     state.as_deref(),
                     confirmed,
                     satellite,
+                    fields,
                 );
                 if let Some(g) = grid
                     .as_ref()
@@ -1362,9 +1376,12 @@ mod tests {
                 {
                     out.grids.insert(g.chars().take(4).collect());
                 }
-                if let Some(info) = propagation::dxcc::resolve(&call) {
-                    if (1..=40).contains(&info.cq_zone) {
-                        out.zones.insert(info.cq_zone);
+                let resolved = propagation::dxcc::resolve(&call);
+                if propagation::awards::counted_entity(resolved.as_ref(), &fields).is_some() {
+                    if let Some(zone) =
+                        propagation::awards::counted_zone(resolved.as_ref(), &fields)
+                    {
+                        out.zones.insert(zone);
                     }
                 }
                 if out.grids.len() > 65_536 {
@@ -1449,6 +1466,72 @@ mod tests {
         assert!(c.zones.len() > 5 && c.grids.len() > 100, "premise");
         assert_coverage_is_the_old_coverage(&store, "the store");
         assert_coverage_is_the_old_coverage(&memory(&d, &text), "the 1.13 path");
+        settle(&store);
+    }
+
+    /// ★ The coverage counts each contact as the awards do — the entity by its record's DXCC
+    /// number (LoTW's first) else its call, the zone by its record's CQ zone else its call's —
+    /// read from the store, and it is what the desktop's needs model and map coverage hold: the
+    /// worked entities a satellite pass is judged by, and the zones the map shades.
+    #[test]
+    fn the_coverage_counts_each_contact_as_the_awards_do_as_the_desktop_does() {
+        let row = |call: &str, date: &str, fields: &str| {
+            format!(
+                "<CALL:{}>{call}<QSO_DATE:8>{date}<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+                 <LOTW_QSL_RCVD:1>Y{fields}<EOR>\n",
+                call.len()
+            )
+        };
+        let d = Dir::new("coverage-by-record");
+        std::fs::write(
+            d.log(),
+            format!(
+                "{}{}",
+                tempo_core::logbook::adif_header(),
+                [
+                    row("K1N", "20150210", "<DXCC:3>182<CQZ:1>8"),
+                    row("K1B", "20021201", "<DXCC:3>291<APP_NEXUS_LOTW_DXCC:2>20"),
+                    row("K3J", "20010101", "<DXCC:3>123"),
+                    row("Y24UK", "19890101", "<DXCC:3>229"),
+                    row("K1ABC", "20200101", "<CQZ:1>3<STATE:2>CA"),
+                    row("KP4ABC", "20200102", "<DXCC:3>291<STATE:2>FL"),
+                    row("IT9ABC", "20200103", ""),
+                    row("W1AW", "20200104", "<STATE:2>CT"),
+                ]
+                .concat()
+            ),
+        )
+        .unwrap();
+        let store = launch_with_grid(&d);
+        let c = log_context(&Context::read(&store).unwrap(), &store).unwrap();
+        assert_eq!(c.count, 8, "premise");
+        let names: std::collections::BTreeSet<&str> = c
+            .needs
+            .worked_entity_names()
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            names,
+            std::collections::BTreeSet::from([
+                "Baker & Howland Islands",
+                "Italy",
+                "Johnston Island",
+                "Navassa Island",
+                "United States",
+            ])
+        );
+        assert_eq!(c.zones, std::collections::BTreeSet::from([3, 5, 8, 14, 15]));
+        let tallies = crate::LogTallies::default();
+        let (desktop, _) = crate::needs_kept(&store, &tallies).unwrap();
+        assert_eq!(c.needs.worked_entity_names(), desktop.worked_entity_names());
+        let shaded: std::collections::BTreeSet<u8> = crate::log_stats(&store, &tallies)
+            .unwrap()
+            .by_zone
+            .iter()
+            .map(|z| z.zone)
+            .collect();
+        assert_eq!(c.zones, shaded);
         settle(&store);
     }
 

@@ -6,6 +6,10 @@
 //! WSJT-X strips its `~` sync marker (the `msg.mid(0,15)+msg.mid(18,-1)` surgery) before
 //! writing, so ALL.TXT carries no `~`. Example:
 //! `231114_221320    14.074 Rx FT8    -10  0.2 1500 CQ W1ABC FN42`
+//!
+//! A JS8 frame's line names its speed with JS8Call's letter after the audio offset, where
+//! JS8Call's own ALL.TXT line has it ([`js8_all_txt_line`]):
+//! `260122_235830     7.078 Rx JS8    -11  0.1  645 A KD2UWR: @HB HEARTBEAT FN30`
 
 use tempo_core::logbook::datetime_utc;
 
@@ -72,6 +76,38 @@ pub fn all_txt_line(
     )
 }
 
+/// One ALL.TXT line for a JS8 frame heard (`is_tx=false`) or keyed: [`all_txt_line`]'s, mode
+/// `JS8`, with the letter JS8Call 3.0.3 writes for the frame's `speed` (`submodeChar`,
+/// DecodedText.cpp:33-48: Normal A, Fast B, JS8 40 C, Slow E, JS8 60 I) after the audio offset,
+/// where JS8Call's own line has it (`DecodedText::string`, :323-342). JS8Call's line for its own
+/// transmission carries no letter (`write_transmit_entry`, mainwindow.cpp:6994-7019); a Tx line
+/// here names its speed as an Rx line does.
+#[allow(clippy::too_many_arguments)]
+pub fn js8_all_txt_line(
+    unix: u64,
+    dial_mhz: f64,
+    is_tx: bool,
+    speed: modes::Js8Speed,
+    snr: i32,
+    dt: f32,
+    audio_hz: f32,
+    message: &str,
+) -> String {
+    let message = format!("{} {}", speed.letter(), message.trim());
+    all_txt_line(unix, dial_mhz, is_tx, "JS8", snr, dt, audio_hz, &message)
+}
+
+/// One decode's line: a JS8 frame's with its speed's letter ([`js8_all_txt_line`]), any other
+/// mode's as [`all_txt_line`] writes it under `mode`.
+pub fn decode_line(unix: u64, dial_mhz: f64, mode: &str, d: &modes::Decode) -> String {
+    match d.mode {
+        Some(modes::ModeKind::Js8 { speed }) => js8_all_txt_line(
+            unix, dial_mhz, false, speed, d.snr, d.dt, d.freq, &d.message,
+        ),
+        _ => all_txt_line(unix, dial_mhz, false, mode, d.snr, d.dt, d.freq, &d.message),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +130,61 @@ mod tests {
         assert_eq!(
             line,
             "231114_221320    14.074 Tx FT8      0  0.0 1200 W1ABC KD9TAW R-09"
+        );
+    }
+
+    /// A decode's line: any other mode's as WSJT-X writes it, a JS8 frame's with its speed's
+    /// letter between the offset and the message; a keyed JS8 frame's too.
+    #[test]
+    fn a_js8_line_carries_its_speeds_letter_and_no_other_line_changes() {
+        use modes::Js8Speed;
+        let decode = |mode| modes::Decode {
+            message: "CQ W1ABC FN42".into(),
+            sync: 5.0,
+            snr: -10,
+            dt: 0.2,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            mode,
+            raw: None,
+        };
+        for mode in [Some(modes::ModeKind::Ft8), None] {
+            assert_eq!(
+                decode_line(T, 14.074, "FT8", &decode(mode)),
+                "231114_221320    14.074 Rx FT8    -10  0.2 1500 CQ W1ABC FN42"
+            );
+        }
+        for (speed, letter) in [
+            (Js8Speed::Slow, 'E'),
+            (Js8Speed::Normal, 'A'),
+            (Js8Speed::Fast, 'B'),
+            (Js8Speed::Turbo, 'C'),
+            (Js8Speed::Ultra, 'I'),
+        ] {
+            assert_eq!(
+                decode_line(
+                    T,
+                    14.078,
+                    "JS8",
+                    &decode(Some(modes::ModeKind::Js8 { speed }))
+                ),
+                format!("231114_221320    14.078 Rx JS8    -10  0.2 1500 {letter} CQ W1ABC FN42")
+            );
+        }
+        assert_eq!(
+            js8_all_txt_line(
+                T,
+                14.078,
+                true,
+                Js8Speed::Fast,
+                0,
+                0.0,
+                1500.0,
+                "KD9TAW: HI "
+            ),
+            "231114_221320    14.078 Tx JS8      0  0.0 1500 B KD9TAW: HI"
         );
     }
 

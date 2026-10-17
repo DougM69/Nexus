@@ -1438,6 +1438,10 @@ export interface RadioStatus {
    * txSwr = SWR ratio (1.0–6.0), txAlc = ALC 0–1, txPoW = output watts, txCompDb = COMP dB. */
   txSwr?: number | null
   txAlc?: number | null
+  /** Where the radio's own ALC zone ends on the `txAlc` bar: 0.5 on the FT-991A, FT-710 and
+   * FTDX10, whose bar is the radio's own and whose zone ends at half scale. Absent where 1.0 is
+   * the top of the zone. Display only: it moves the bar's colours, never the bar. */
+  txAlcZone?: number | null
   txPoW?: number | null
   txCompDb?: number | null
   /** Can Nexus put a NUMBER to this radio's SWR — i.e. may the high-SWR cutoff be offered?
@@ -1539,6 +1543,12 @@ export interface RadioStatus {
    *  has acknowledged one, else the operator's dial. Lets the lock NAME the frequency it is
    *  judging instead of saying "this frequency" about one you may not be transmitting on. */
   txEmissionMhz?: number | null
+  /** Upper sideband is the only phone the licence allows where this radio transmits (60 m, every
+   *  US class): the Phone cockpit greys its LSB, AM and FM picks. Absent when false. */
+  phoneUsbOnly?: boolean
+  /** The licence lock is the phone MODE alone: LSB, AM or FM on 60 m, where a USB pick would key.
+   *  Name that rule instead of the frequency. `txAllowed` is false with it. Absent when false. */
+  phoneModeRefused?: boolean
   /** Whether a tune carrier is currently keyed. */
   tuning: boolean
   /** ⭐ WHO HOLDS THE TRANSMITTER, or null/undefined when nobody does — the engine's
@@ -1570,6 +1580,12 @@ export interface RadioStatus {
    *  under it, or its DAX transmit route went, so the station ended it there and halted transmit.
    *  Kept until TX is turned on again; absent otherwise, and from a station older than it. */
   slotAudioLost?: SlotAudioLost | null
+  /** The last FT8 or FT4 over the station dropped because the radio keyed it only after its period
+   *  had ended (a slow CAT link): it was unkeyed at once, nothing was sent, and TX was left on for
+   *  the next over, however many in a row, as WSJT-X does. Cleared by the next over the radio keys
+   *  in its period, or by turning TX on again, and absent while TX is off; absent otherwise, and
+   *  from a station older than it. */
+  slotOverDropped?: SlotOverDropped | null
   /** The operator's last PTT press did not key: right after the transmit slice left a digital mode,
    *  or native audio went off, the radio still took its transmit audio from the DAX Nexus set, not
    *  its mic, so Nexus's own Flex client kept the key off the air. Cleared by the next press that
@@ -1846,13 +1862,23 @@ export interface PskState {
 
 // ---- JS8 (the `get_js8_state` poll; mirrors tempo_app::dto::Js8State field for field) ----
 
-/** JS8 speed, lowercase on the wire (serde `rename_all = "lowercase"`). */
-export type Js8Speed = 'slow' | 'normal' | 'fast' | 'turbo'
+/** JS8 speed, lowercase on the wire (serde `rename_all = "lowercase"`). `turbo` and `ultra` are
+ * the enum's names for what JS8Call 3.0 calls JS8 40 and JS8 60 (js8Vocab). */
+export type Js8Speed = 'slow' | 'normal' | 'fast' | 'turbo' | 'ultra'
 /** Who originated a queued/pending frame (serde camelCase). A CQ the operator CLICKS is
- * `operator`; a CQ the repeat schedule produced is `cqRepeat`, an automatic origin. */
-export type Js8Origin = 'operator' | 'heartbeat' | 'hbAck' | 'autoReply' | 'relay' | 'cqRepeat'
-/** The second act of the two-act rule: three persisted switches + the session-only HB. */
-export type Js8Switch = 'autoreply' | 'relay' | 'hback' | 'hb'
+ * `operator`; a CQ the repeat schedule produced is `cqRepeat`, an automatic origin. An APRS-IS
+ * message relayed to a heard station (`js8AprsRelay`) is `aprsRelay`, automatic as well. */
+export type Js8Origin =
+  | 'operator'
+  | 'heartbeat'
+  | 'hbAck'
+  | 'autoReply'
+  | 'relay'
+  | 'cqRepeat'
+  | 'aprsRelay'
+/** The second act of the two-act rule: three persisted switches + the session-only HB, and the
+ * persisted heartbeat networking (`hbnet`), which keys nothing by itself. */
+export type Js8Switch = 'autoreply' | 'relay' | 'hback' | 'hb' | 'hbnet'
 /** Inbox row state, lowercase on the wire. */
 export type Js8InboxState = 'unread' | 'read' | 'store' | 'delivered'
 
@@ -1901,6 +1927,16 @@ export interface Js8ActivityRow {
   complete: boolean
   /** Decode quality below JS8Call's 0.17 low-confidence threshold. */
   lowConf: boolean
+  /** Where the row stands in its message: the frame's i3 First/Last bits, or the reassembled line
+   *  of a multi-frame message. Absent from a station older than this key (on the Remote page). */
+  flags?: Js8RowFlags
+}
+/** JS8Call's `JS8CallFirst`/`JS8CallLast` bits of a frame row, or `assembled` for the reassembled
+ *  line of a multi-frame message (never a frame of its own). */
+export interface Js8RowFlags {
+  first: boolean
+  last: boolean
+  assembled: boolean
 }
 
 /** A heard station (the message layer's own row, serde camelCase). */
@@ -1914,6 +1950,12 @@ export interface Js8Heard {
   lastHb: boolean
   lastCq: boolean
   storedMsgs: number
+  /** JS8Call's `ackTimestamp` (★ "Hearing your station"): when this station last sent something
+   *  addressed to my call. Absent until it has, and from a station older than this key. */
+  ackMs?: number
+  /** JS8Call's `cqTimestamp` (☎ for five minutes): when this station last called CQ. Absent until
+   *  it has, and from a station older than this key. */
+  cqMs?: number
 }
 
 /** One inbox row. */
@@ -1928,6 +1970,27 @@ export interface Js8InboxEntry {
   atMs: number
   freqHz: number
   snrDb: number
+}
+
+/** Which cap took a message out of the inbox: the count (100 a half) or the bytes (64 KB). */
+export type Js8DropReason = 'count' | 'bytes'
+
+/** A message a cap took out of the inbox: when, why, and the row itself (its `state` says whose
+ * mail it was). Kept until the operator clears the notes. */
+export interface Js8InboxDrop {
+  atMs: number
+  why: Js8DropReason
+  entry: Js8InboxEntry
+}
+
+/** A held message too long to hand over at the current speed, which the station does not offer:
+ * its hand-over needs `frames`, one transmission at this speed holds `max`, and it goes at
+ * `fitsAt` (null: at no speed). */
+export interface Js8InboxTooLong {
+  id: number
+  frames: number
+  max: number
+  fitsAt: Js8Speed | null
 }
 
 /** One outbox row (empty in the receive-only build). */
@@ -1946,6 +2009,15 @@ export interface Js8ComposerPrefill {
   text: string
 }
 
+/** The compose box's typeahead, JS8Call's: what has gone of the operator's message going out and
+ * what is still to go, as its frames render, and whether the box may change it (not a MSG or relay).
+ * Native only, never part of Js8State. */
+export interface Js8Typeahead {
+  sent: string
+  unsent: string
+  locked: boolean
+}
+
 export interface Js8PendingReply {
   origin: Js8Origin
   to: string
@@ -1955,11 +2027,53 @@ export interface Js8PendingReply {
 
 /** The live JS8 state (poll ~500 ms while the cockpit is visible). Every field is engine
  * truth at poll time. */
+/** JS8Call's decode filter: on, the decoder searches only centre ± width/2 (Hz). */
+export interface Js8Filter {
+  enabled: boolean
+  centerHz: number
+  widthHz: number
+}
+
+/** One row of the operator's own JS8 frequency list: a dial (MHz) and its description. */
+export interface Js8Freq {
+  mhz: number
+  description: string
+}
+
+/** One row of JS8Call's Frequency Schedule: switch the dial to `mhz` while the UTC time of day is
+ *  inside [fromMin, untilMin] (minutes after 00:00 UTC; both ends count, and a window that ends
+ *  before it starts runs over midnight). */
+export interface Js8Hop {
+  mhz: number
+  fromMin: number
+  untilMin: number
+  description: string
+}
+
+/** A scheduled frequency change waiting out its notice. `firesAtMs` is 0 once "Change now" was
+ *  pressed; `held` = due, and waiting for a transmission or a message going out to end. */
+export interface Js8HopNotice {
+  mhz: number
+  firesAtMs: number
+  description: string
+  held: boolean
+}
+
+/** JS8Call's waterfall controls as stored, and the schedule's change waiting out its notice. */
+export interface Js8Controls {
+  filter: Js8Filter
+  qsyCenterHz: number
+  hop: Js8HopNotice | null
+}
+
 export interface Js8State {
   /** The TRANSMIT speed (= the slot clock). */
   speed: Js8Speed
-  /** Bitmask of decoded speeds: slow 1 · normal 2 · fast 4 · turbo 8. */
+  /** Bitmask of decoded speeds: slow 1 · normal 2 · fast 4 · turbo 8 · ultra 16. */
   rxSpeeds: number
+  /** JS8Call's waterfall controls and the band schedule's notice. Absent from a station older than
+   *  this key (on the Remote page). */
+  controls?: Js8Controls | null
   txEnabled: boolean
   sending: boolean
   hbOn: boolean
@@ -1985,10 +2099,40 @@ export interface Js8State {
   activity: Js8ActivityRow[]
   stations: Js8Heard[]
   inbox: Js8InboxEntry[]
+  /** What a cap took out of the inbox, oldest first, at most ten. Absent while there are none. */
+  inboxDropped?: Js8InboxDrop[]
+  /** Held messages too long to hand over at the current speed. Absent while there are none, and
+   * from a station older than this key. */
+  inboxTooLong?: Js8InboxTooLong[]
   queue: Js8QueueRow[]
   pendingReply: Js8PendingReply | null
   /** The last refused verb's reason, cleared by the next successful verb. */
   lastError: string | null
+  /** Heartbeat networking, the QSO pause and what holds an HB ACK back. A station older than this
+   * key sends none (on the Remote page), and the cockpit then shows the HB controls as before. */
+  presence?: Js8Presence
+}
+
+/** Why a heartbeat heard now would draw no acknowledgement although HB ACK is armed. */
+export type Js8HbAckSuppressed = 'speed' | 'arriving' | 'qsoPause'
+
+/** The desktop cockpit's view of heartbeat networking and presence (JS8Call 3.0.3). */
+export interface Js8Presence {
+  /** JS8Call's "Enable Heartbeat Networking": the HB button shows only with it on. */
+  hbNetworking: boolean
+  /** The TX speed sends heartbeats (Slow, Normal, Fast): false at Turbo, where JS8Call hides HB. */
+  hbSpeed: boolean
+  /** The QSO pause holds the HB repeat until the To box is cleared. */
+  hbPaused: boolean
+  /** Why an armed HB ACK would not answer a heartbeat heard now; null when it would. */
+  hbAckSuppressed: Js8HbAckSuppressed | null
+  /** Stations the 55-minute rule has stopped acknowledging, oldest first. */
+  hbAckRateBlocked: string[]
+  /** The QSO pause setting: turning the HB repeat on then clears the To box, as JS8Call clears
+   * its selected call. */
+  qsoPause: boolean
+  /** "Do not participate in the @ALLCALL group": @ALLCALL leaves the To box's list. */
+  avoidAllcall: boolean
 }
 
 /** One saved SSTV image in the local gallery (a BMP in the sstv-gallery folder
@@ -2452,6 +2596,29 @@ export interface EntityNeed {
   bands: string[]
 }
 
+/** A contact LoTW confirmed under another DXCC entity than the log records for it. The awards
+ * count it by LoTW's; the log keeps its own. An entity name is absent when the number is one the
+ * station's table does not know. */
+export interface DxccDisagreement {
+  call: string
+  whenUnix: number
+  band: string
+  mode: string
+  loggedDxcc: number
+  loggedEntity?: string | null
+  lotwDxcc: number
+  lotwEntity?: string | null
+}
+
+/** One DXCC entity a contact can be set to count toward (the station's `dxcc_entities`): its
+ * ARRL number, the name Nexus gives it — cty.dat's for a current entity, the ARRL's for a deleted
+ * one — and whether it is one of the deleted entities. */
+export interface DxccEntityOption {
+  code: number
+  name: string
+  deleted: boolean
+}
+
 /** A gamification milestone (unlocked, or locked-with-progress). */
 export interface Achievement {
   /** Stable id (e.g. "dxcc-100") — the key the UI tracks "seen" by. */
@@ -2663,7 +2830,7 @@ export interface NeedAlert {
   stateFrom?: 'park' | 'license' | 'grid' | null
 }
 
-/** One raw cluster/RBN spot for the Spots panel (the SpotCollector-style firehose).
+/** One raw cluster/RBN spot for the Spots panel (the firehose).
  *  NOT needs-gated — every recent spot; the panel filters client-side. */
 export interface SpotRow {
   call: string
@@ -3093,9 +3260,15 @@ export interface DiagnosticsReport {
 export interface AwardSummary {
   qsos: number
   confirmedQsos: number
-  /** Distinct DXCC entities worked / confirmed (100 confirmed = basic DXCC). */
+  /** Distinct CURRENT DXCC entities worked / confirmed (100 confirmed = basic DXCC). */
   dxccWorked: number
   dxccConfirmed: number
+  /** The same, the deleted entities included — LoTW's "total". Absent from a station older
+   * than the count by each record's own DXCC number. */
+  dxccWorkedTotal?: number
+  dxccConfirmedTotal?: number
+  /** Contacts LoTW confirmed under another DXCC entity than the log records, in log order. */
+  dxccDisagreements?: DxccDisagreement[]
   /** Distinct DXCC entities with ARRL credit granted (official standing). */
   dxccCredited: number
   /** Confirmed-but-not-credited entities (confirmed − credited) — ready to submit. */
@@ -3136,6 +3309,65 @@ export interface AwardSummary {
   /** WORK chase: entities worked on most award bands but missing a few — the
    * listed bands are ones to WORK (a new contact). Closest-to-complete first. */
   bandTargets: EntityNeed[]
+  /** DXCC, WAS and WAZ needed per band. Absent from a station older than the Stats pane. */
+  bandNeeds?: AwardBandNeeds
+}
+
+/** One band's chase for one award: never worked there, and worked there but not confirmed by
+ *  anything the award credits. Entities and states alphabetical, zones 1 to 40. */
+export interface BandNeed {
+  band: string
+  unworked: string[]
+  unconfirmed: string[]
+}
+
+/** The per-band chase (`AwardSummary.bandNeeds`). DXCC lists only the bands that earn DXCC credit
+ *  (not 60 m or 4 m); WAZ counts an Authenticity-Guaranteed eQSL as a confirmation. */
+export interface AwardBandNeeds {
+  dxcc: BandNeed[]
+  was: BandNeed[]
+  waz: BandNeed[]
+}
+
+/** Where one slot of a Stats pane grid stands for its award. */
+export type StatsSlot = 'unworked' | 'worked' | 'confirmed' | 'noCredit'
+
+/** The channels a confirmation came through. */
+export interface QslChannels {
+  card: boolean
+  lotw: boolean
+  eqsl: boolean
+  /** The eQSL came from an Authenticity-Guaranteed member (WAZ credits it). */
+  eqslAg: boolean
+  qrz: boolean
+}
+
+/** One award's grid in the Stats pane: a row per mode class, a slot per band. */
+export interface StatsGrid {
+  /** The entity's name, the state's postal code, or the zone's number. */
+  label: string
+  /** The entity's DXCC number (DXCC only). */
+  code: number | null
+  rows: StatsSlot[][]
+}
+
+/** What the log holds for the call typed in a log entry (`get_call_stats`). */
+export interface CallStats {
+  call: string
+  /** The grids' columns, 160 m to 2 m. */
+  bands: string[]
+  /** The grids' rows: CW, Phone, Digital. */
+  modes: string[]
+  newOne: boolean
+  newBand: boolean
+  newMode: boolean
+  dxcc: StatsGrid | null
+  /** The station is in the United States, Alaska or Hawaii, so it has a state for WAS. */
+  wasFamily: boolean
+  was: StatsGrid | null
+  waz: StatsGrid | null
+  countryQsl: QslChannels | null
+  callQsl: QslChannels
 }
 
 /** QSOs worked on one WAC continent, with the distinct-entity span. */
@@ -3169,6 +3401,20 @@ export interface GeoLogStats {
   byContinent: ContinentTally[]
   /** By CQ zone, ascending; only zones with a QSO. */
   byZone: ZoneTally[]
+}
+
+/** The Statistics view's timeline windows (`get_log_timeline`), each ending with the current UTC
+ * hour, day or month: 24 hourly, 30 daily or 12 monthly buckets. */
+export type TimelineRange = 'pastDay' | 'past30Days' | 'pastYear'
+
+/** Contacts per mode over a timeline window (`get_log_timeline`, counted where the log is). */
+export interface LogTimeline {
+  /** Each bucket's first instant (Unix seconds, UTC), oldest first, then the window's end — one
+   * more edge than buckets. A bucket holds the contacts from its first instant up to the next. */
+  edges: number[]
+  /** Each mode's contacts per bucket, labelled as the "By mode" card labels it, in first-seen
+   * order; a mode with no contact in the window is not here. */
+  modes: { label: string; counts: number[] }[]
 }
 
 /** Result of importing an external ADIF logbook (deduped merge). */
@@ -3420,6 +3666,10 @@ export interface FieldDayStatus {
    *  the export writes. Names, not prose: the Contest screen words each one. Absent when nothing
    *  is missing, for a contest whose requirements this build does not read, and on Remote. */
   cabrilloMissing?: string[]
+  /** This session sends a serial number (CQ WPX, Sweepstakes), so Clear test contacts starts the
+   *  serials again at 001 and says so. Absent for a contest that sends none (both Field Days, a QSO
+   *  party sending a county), from an older station, and on Remote. */
+  sendsSerial?: boolean
   /** ⭐ What `{EXCH}` keys right now: this session's sent exchange WITHOUT the signal
    *  report, as macro text — `'5'` in CQ WW CW, `'5 MA'` for a W/VE station in CQ WW
    *  RTTY, `'3A WI'` in Field Day. The CW keyer's `{EXCH}` is the same string.
@@ -3452,6 +3702,11 @@ export interface FieldDayStatus {
    *  contest's, and another running of this one's (a rehearsal before it). They stay in the
    *  journal, untouched. Absent when nothing was kept out, and from an older station. */
   keptOut?: { otherContest: number; otherRunning: number }
+  /** ⭐ The contest journal's last writes FAILED: the contacts since the last good one
+   *  (`lastSavedUnix`, Unix UTC; absent when none landed this run) are in memory only. The
+   *  Contest screen and the log strip say so in red. Absent when the last write was good, from
+   *  an older station, and on Remote. Worded by `features/contestUnsaved.ts`. */
+  unsaved?: { failedWrites: number; lastSavedUnix?: number }
 }
 
 /** One exchange slot, as the entry strip renders a box for it.
@@ -3937,11 +4192,29 @@ export interface Settings {
   /** JT65 submode 0/1/2 for A/B/C (tone spacing 1x/2x/4x). */
   jt65Submode: number
   /** JS8 TRANSMIT speed as an index: 0 Slow (30 s) | 1 Normal (15 s) | 2 Fast (10 s) |
-   * 3 Turbo (6 s). Receive decodes every speed in `js8RxSpeeds` regardless. */
+   * 3 Turbo / JS8 40 (6 s) | 4 Ultra / JS8 60 (4 s). Receive decodes every speed in
+   * `js8RxSpeeds` regardless. */
   js8Speed: number
-  /** Bitmask of speeds the receiver decodes: Slow 1 · Normal 2 · Fast 4 · Turbo 8.
-   * Default 15 (all four — JS8Call's SubModeMultiDecode). */
+  /** Bitmask of speeds the receiver decodes: Slow 1 · Normal 2 · Fast 4 · Turbo 8 · Ultra 16.
+   * Default 31 (all five — JS8Call 3.0's SubModeMultiDecode). */
   js8RxSpeeds: number
+  /** The operator's own JS8 frequency list (JS8Call's working frequencies with descriptions);
+   *  null/absent = JS8Call 3.0.3's own table. */
+  js8Frequencies?: Js8Freq[] | null
+  /** JS8Call's "Monitor returns to last used frequency": entering JS8 tunes back to the dial last
+   *  used there. Off by default. */
+  js8ReturnToLastDial?: boolean
+  /** The dial last used on JS8 (MHz; 0 = none). Engine-owned: a form save keeps the live one. */
+  js8LastDialMhz?: number
+  /** JS8Call's decode filter. Engine-owned (the cockpit's waterfall controls write it). */
+  js8Filter?: Js8Filter
+  /** The passband centre "QSY to centre" moves the TX offset to (Hz). Engine-owned. */
+  js8QsyCenterHz?: number
+  /** JS8Call's "Automatically switch bands / frequencies at specific times of day". Off by
+   *  default; on, the rig's frequency changes by itself with nobody at the radio. */
+  js8BandHop?: boolean
+  /** JS8Call's Frequency Schedule. */
+  js8Schedule?: Js8Hop[]
   /** Heartbeat repeat interval in minutes; 0 = on demand. HB on/off itself is
    * session-only and is NOT here — the app can never launch beaconing. */
   js8HbIntervalMin: number
@@ -3978,12 +4251,88 @@ export interface Settings {
    * 0-1440): a Band activity row whose newest decode is this old leaves the pane, unless RX is on
    * its offset. Display only. */
   js8ActivityAgingMin: number
+  /** JS8Call's CQ message (default `CQ CQ CQ <MYGRID4>`): what the CQ button and the CQ repeat
+   * send, its macros replaced. Empty sends `CQ CQ CQ` and the square, as JS8Call does. */
+  js8CqText: string
+  /** JS8Call's reply message (default `HW CPY?`): REPLY sends it to the call in the To box. */
+  js8ReplyText: string
+  /** JS8Call's saved messages (default the one `TNX 73 GL`): the dock's Saved menu, in order. */
+  js8SavedMessages: string[]
+  /** JS8Call's "Immediately transmit CQ, Reply, Info, Saved, and Directed messages from the menu"
+   * (default on). Off, those buttons and a station row's asks only fill the compose box. */
+  js8SendAtOnce: boolean
+  /** JS8Call 3.0's pills for calls and commands in the compose box (default on). */
+  js8Pills: boolean
+  /** JS8Call's word suggestions from the JSC dictionary in the compose box (default on). */
+  js8WordSuggestions: boolean
   /** Free text answered to INFO?. */
   js8Info: string
   /** Free text answered to STATUS?; empty = JS8Call's `IDLE <min> VERSION …`. */
   js8Status: string
   /** Joined @GROUP names the station answers directed traffic for. */
   js8Groups: string[]
+  /** JS8Call's "Enable Heartbeat Networking" (default off): the HB button shows only with it on,
+   * and no heartbeat or heartbeat acknowledgement goes out without it. */
+  js8HbNetworking: boolean
+  /** JS8Call's "Allow heartbeat transmissions outside of heartbeat sub-channel (500Hz - 1000Hz)"
+   * (default off): heartbeats and their acknowledgements key on the TX offset. */
+  js8HbAnywhere: boolean
+  /** JS8Call's QSO pause (default ON): while the To box holds a call the HB repeat pauses, no
+   * heartbeat is acknowledged and the repeating CQ stops. */
+  js8HbQsoPause: boolean
+  /** JS8Call 3.0's "Suppress ACK to stations that send heartbeats at less than 55 minute
+   * intervals" (default off). */
+  js8HbAckRateLimit: boolean
+  /** JS8Call's "Do not participate in the @ALLCALL group" (default off). */
+  js8AvoidAllcall: boolean
+  /** JS8Call's "Hold PTT between frames" (off by default): the radio stays keyed from the end of
+   * one frame of a message to the key of its next, while frames of it remain. */
+  js8HoldPtt: boolean
+  /** JS8Call's "Allow Tx frequency changes while transmitting", for the TX offset (off by
+   * default): off, the offset cannot be moved while a message is queued or going out; on, a move
+   * applies from the next frame. */
+  js8TxOffsetWhileSending: boolean
+  /** JS8Call's "Tx delay" in ms (0.2 s by default, 0.1 to 0.5 s): a JS8 frame keys this long before
+   * its period, its first tone still at the period's start delay. */
+  js8TxDelayMs: number
+  /** JS8Call's "spot @APRSIS messages to APRS-IS" (default off; JS8Call ships it on): a heard
+   * @APRSIS GRID becomes an APRS-IS position and an @APRSIS CMD a raw packet, under this callsign.
+   * Needs PSK Reporter on. */
+  js8SpotAprs: boolean
+  /** JS8Call 3.0's inbound APRS-IS relay (default OFF): an APRS message for a heard station is
+   * keyed as `@APRSIS MSG TO:<call> <text> DE <sender>` with nobody at the radio. */
+  js8AprsRelay: boolean
+  /** JS8Call's "never spot these callsigns": sent to no network, and relayed no APRS message. */
+  js8SpotNever: string[]
+  /** JS8Call 3.0's "Hide messages from these callsigns in the RX pane" (empty by default): matched by
+   *  the call as heard or its base call; such a station is marked ✕ in the call list. Display only. */
+  js8RxBlocklist: string[]
+  /** JS8Call's primary highlight words or callsigns (empty by default): Band activity rows holding
+   *  one, and the call list rows of those calls. Display only. */
+  js8HighlightPrimary: string[]
+  /** The same with the secondary highlight; the primary wins a row both name. */
+  js8HighlightSecondary: string[]
+  /** JS8Call's end-of-transmission mark (♢ by default), after a message's last frame. */
+  js8Eot: string
+  /** JS8Call's missing-frame mark (…… by default). */
+  js8Mfi: string
+  /** The JS8 events that play a sound (JS8Call's notifications, all off by default): cq, hb, ack,
+   *  directed, inbox, callNew, callOld. */
+  js8Sounds: string[]
+  /** JS8Call's TCP API for programs on this computer: read-only, on 127.0.0.1 only. Off by
+   * default, as in JS8Call. */
+  js8ApiTcp?: boolean
+  /** Its port (JS8Call's 2442). */
+  js8ApiTcpPort?: number
+  /** JS8Call's UDP API: datagrams to a program on this computer, read-only. Off by default. */
+  js8ApiUdp?: boolean
+  /** The port on 127.0.0.1 they go to (JS8Call's 2242). */
+  js8ApiUdpPort?: number
+  /** Answer requests a TCP program sends ("Accept TCP requests"). Off by default, as in JS8Call:
+   * the program hears what the station sends and is answered nothing. */
+  js8ApiTcpAccept?: boolean
+  /** Answer requests a UDP program sends ("Accept UDP requests"). Off by default, as in JS8Call. */
+  js8ApiUdpAccept?: boolean
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number
@@ -4177,6 +4526,9 @@ export interface Settings {
   /** Opt-in to Nexus's own Flex client as the radio's CAT (Beta; off by default). SmartSDR CAT
    *  stays the default and the fallback. */
   flexNativeCat?: boolean
+  /** Let the Flex client send CW, Tune and ATU before a tester's bench has confirmed them (Beta;
+   *  off by default). Means something only where the client serves the radio. */
+  flexNativeUnbenched?: boolean
   /** The radio's own address for the Icom network connection (Beta): its "IP Address (LAN)". */
   icomLanHost?: string
   /** The network user the radio was set up with. Not secret; the password is in the OS keychain. */
@@ -4835,6 +5187,8 @@ export interface RadioProfile {
   flexNativeAudio?: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta). */
   flexNativeCat?: boolean
+  /** This radio's Beta setting for the Flex client's CW, Tune and ATU (off by default). */
+  flexNativeUnbenched?: boolean
   /** This radio's Icom network address, user and control port (Beta). */
   icomLanHost?: string
   icomLanUser?: string
@@ -4891,7 +5245,7 @@ export interface AppSnapshot {
   /** The period a band or mode change caught while it was decoding (see `LateDecodes`). Absent
    *  unless there is one, until the first period of the new band or mode decodes. */
   lateDecodes?: LateDecodes
-  /** JTAlert-style UDP callsign highlights for the decode panes. */
+  /** UDP callsign highlights for the decode panes. */
   highlights?: { call: string; bg?: string | null; fg?: string | null }[]
   /** Bumped by an inbound UDP Clear — panes erase on change. */
   clearTick?: number
@@ -5050,6 +5404,10 @@ export interface SlotKeyRefused {
   /** Set when Nexus's own Flex client kept the key off the air itself, for where the radio takes
    *  its transmit audio from: the lane then says that in its own words. Absent otherwise. */
   flexAudio?: FlexAudioRefusal | null
+  /** Set when Nexus kept the key off the air itself because the sound card's transmit audio output
+   *  would not open (`why` is then the sound card's own error): the lane says that in its own
+   *  words. Absent otherwise. */
+  txAudioFailed?: boolean
 }
 
 /** Why Nexus's own Flex client kept a slot over's key off the air (mirror of the Rust
@@ -5100,6 +5458,18 @@ export interface SlotUnkeyFailed {
 export interface SlotAudioLost {
   /** When it happened (unix seconds). */
   at: number
+}
+
+/** The last FT8 or FT4 over the station dropped because the radio keyed it only after its period
+ *  had ended (mirror of the Rust SlotOverDropped). The words are the UI's, in
+ *  features/slotOverDropped.ts. */
+export interface SlotOverDropped {
+  /** When it happened (unix seconds). */
+  at: number
+  /** How long after the period's end the radio keyed it ("1.2 s"): data, never translated. */
+  late: string
+  /** How many in a row, this one included. */
+  count: number
 }
 
 /** What Parsec presence mode knows (mirror of the Rust ParsecPresenceDto). Tokens only — the

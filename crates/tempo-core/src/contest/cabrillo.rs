@@ -30,7 +30,7 @@
 //! fills is a field that ships empty, and an emitted header nobody set is the defect above
 //! written a second time.
 //!
-//! ⭐ **The declarations N1MM's Cabrillo dialog offers** — `CATEGORY-TRANSMITTER` (a
+//! ⭐ **The declarations a contest logger's Cabrillo dialog offers** — `CATEGORY-TRANSMITTER` (a
 //! multi-operator entry's class), `CATEGORY-OVERLAY`, the mailing address and `SOAPBOX` — are
 //! the entrant's settings too, written only for a contest whose sponsor's template names them
 //! (the ruleset's `cabrillo.transmitter_categories`, `overlay_categories`, `address` and

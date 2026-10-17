@@ -16,7 +16,7 @@ import type { OperationState } from './operation-protocol'
 import type { OperationView } from './operation-client'
 import { ANSWER, LEASE, harness, last } from './stream-link.testkit'
 import { parseStreamInput } from './stream-protocol'
-import { streamLayout } from './stream-layout'
+import { HEADER_SHARE_FOR_RAIL, RAIL_WIDTH, railShowsMore, streamLayout } from './stream-layout'
 import { chainOf, expandWith, parseRules, reachesChain, tokensAt, winnerAt } from '../cssCascade'
 
 // THE BUDGET (2026-10-09). The slowest case here, "nothing goes while the picture is not live: what was…", takes
@@ -142,10 +142,87 @@ describe('the layout, from the window the page has', () => {
   })
 })
 
+describe('a short or zoomed window: the rail where the header leaves the picture small', () => {
+  const WIDE = 1920 / 1080, ULTRA = 3440 / 1440
+  const rail = (W: number, H: number, header: number, shape: number) => railShowsMore({ width: W, height: H }, { width: W, height: H - header }, shape)
+  it('takes the rail when the header takes a large share of the height and the rail shows the shack\'s picture larger', () => {
+    // A 1280 x 720 window at 125 %: the header row (174 px, wrapped) left a 714 px picture; beside the rail it is 904.
+    expect(rail(1024, 576, 174, WIDE)).toBe(true)
+    // A 1440 x 900 window at 150 % (757 -> 840), and a 1024 x 768 one at 150 % (556 -> 563: bigger is bigger).
+    expect([rail(960, 600, 174, WIDE), rail(683, 512, 199, WIDE)]).toEqual([true, true])
+    // A 1280 x 720 laptop's browser at 100 %, under its own bars.
+    expect(rail(1280, 600, 122, WIDE)).toBe(true)
+  })
+  it('keeps the header where the rail would not show more, or where the header leaves the picture its room', () => {
+    // A 1080p browser at 100 %: the rail would show a 16:9 shack 10 % wider, but a header of 9 % leaves no small picture.
+    expect(rail(1920, 960, 87, WIDE)).toBe(false)
+    // 1024 x 768 at 125 %: the header takes 28 %, but the picture is as wide as the page and the rail would narrow it.
+    expect(rail(819, 614, 174, WIDE)).toBe(false)
+    // The same short window as the first case with a 3440 x 1440 shack: wider than the page's shape, so width-bound.
+    expect(rail(1024, 576, 174, ULTRA)).toBe(false)
+  })
+  it('turns at exactly its two edges: the header\'s share, and a picture that is larger, not the same', () => {
+    const edge = Math.round(HEADER_SHARE_FOR_RAIL * 1000)
+    expect([rail(2000, 1000, edge - 1, WIDE), rail(2000, 1000, edge, WIDE)], 'the share').toEqual([false, true])
+    // 1120 x 600 under a 200 px header: 1000 px wide beside the rail and min(1120, 400 x shape) under the header.
+    expect([rail(1120, 600, 200, 2.5), rail(1120, 600, 200, 2.49)], 'the same width, then larger').toEqual([false, true])
+    // Nothing laid out, or no picture yet: nothing to compare.
+    expect([railShowsMore({ width: 0, height: 0 }, { width: 0, height: 0 }, WIDE), rail(1024, 576, 174, 0)]).toEqual([false, false])
+  })
+
+  it('the page measures its own header, takes the rail, and comes back to the header when the window has room again', async () => {
+    // jsdom lays nothing out, so the boxes are the ones a browser gives: the header row is 87 px on one line from 1400 px
+    // wide and 174 px wrapped below that; beside the rail the stage is the page less the rail's width.
+    const boxes = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const W = window.innerWidth, H = window.innerHeight, header = W >= 1400 ? 87 : 174
+      const onRail = (this.closest('.remote-stream-app') as HTMLElement | null)?.dataset.layout === 'rail'
+      if (this.classList.contains('remote-stream-app')) return new DOMRect(0, 0, W, H)
+      if (this.classList.contains('remote-stream-stage')) return onRail ? new DOMRect(0, 0, W - RAIL_WIDTH, H) : new DOMRect(0, header, W, H - header)
+      return new DOMRect()
+    })
+    try {
+      const v = await streaming(1024, 576)
+      const frame = async (width: number, height: number) => {
+        Object.defineProperty(v.video, 'videoWidth', { configurable: true, value: width })
+        Object.defineProperty(v.video, 'videoHeight', { configurable: true, value: height })
+        await act(async () => { v.video.dispatchEvent(new Event('resize')) })
+      }
+      await frame(1920, 1080)
+      expect(v.app.dataset.layout, '1280 x 720 at 125 %, a 16:9 shack').toBe('rail')
+      await windowSize(1920, 960)
+      expect(v.app.dataset.layout, 'a 1080p browser').toBe('header')
+      await windowSize(1024, 576)
+      expect(v.app.dataset.layout, 'short again').toBe('rail')
+      // The station's cut to even sides moves the shape by a hair as the stage changes: that is the same screen, and the
+      // page is not laid out again for it, so More, open over the picture, stays open.
+      fireEvent.click(button('More'))
+      await frame(904, 508)
+      expect(v.app.dataset.layout, 'the same shape, near enough').toBe('rail')
+      expect(screen.queryByRole('group', { name: 'More' }), 'More stays open').toBeTruthy()
+      fireEvent.click(button('More'))
+      // Typing holds the rail while the window's height changes, and the layout is then measured with the header row
+      // as it always is, never from the rail: 1024 x 640 still leaves a 16:9 picture larger beside it.
+      fireEvent.click(button('Keyboard'))
+      const field = screen.getByRole('textbox', { name: 'Type here for the field selected at the shack' })
+      await windowSize(1024, 640)
+      expect(v.app.dataset.layout, 'held while typing').toBe('rail')
+      fireEvent.blur(field)
+      await act(async () => { await Promise.resolve() })
+      expect(v.app.dataset.layout, 'measured once the box lets go').toBe('rail')
+      await frame(3440, 1440)
+      expect(v.app.dataset.layout, 'a 3440 x 1440 shack: the rail would narrow it').toBe('header')
+      // CONTROL: a window the old rule already gave the rail keeps it, whatever the shape.
+      await windowSize(915, 412)
+      expect(v.app.dataset.layout).toBe('rail')
+    } finally { boxes.mockRestore() }
+  })
+})
+
 describe('on its side: the rail', () => {
   it('the picture has the whole height, beside a 120 px rail that scrolls, never the page', async () => {
     const v = await streaming(915, 412)
-    expect(computed(v.app, 'grid-template-columns')).toBe('minmax(0, 1fr) 120px')
+    expect(computed(v.app, 'grid-template-columns')).toBe(`minmax(0, 1fr) ${RAIL_WIDTH}px`)
+    expect(RAIL_WIDTH, 'the width the layout is chosen with').toBe(120)
     expect(computed(v.app, 'grid-template-rows')).toBe('minmax(0, 1fr)')
     const header = v.app.querySelector('.remote-stream-header')!, stage = v.app.querySelector('.remote-stream-stage')!
     expect([computed(stage, 'grid-area'), computed(header, 'grid-area')]).toEqual(['stage', 'rail'])

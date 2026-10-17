@@ -97,6 +97,12 @@ impl Inbox {
     pub fn observe(&mut self, decodes: &[Decode], slot: u64) {
         for d in decodes {
             self.roster.observe(d, slot);
+            // A WSPR or FST4W beacon is no chat frame and names no talker: read as one, a Type 1
+            // beacon (`TI4JWC EK70 30`) made its grid the current talker, and the Type 2 line
+            // after it (`KI4TWB/0 23`) was filed as text from that "station" (#408).
+            if crate::beacon::is_beacon_mode(d.mode) {
+                continue;
+            }
             let m = Msg::parse(&d.message);
             // A FREE-TEXT frame can masquerade as a structured one: a chunk ending in "73"
             // ("A22NOON ES 73") and a bare broadcast ("DE KD9TAW 73") both parse as `Bye73`,

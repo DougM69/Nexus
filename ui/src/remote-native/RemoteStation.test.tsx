@@ -229,7 +229,7 @@ it('in every language the FT8/FT4 permission names the Remote page, and the swit
       expect(say(key), `${loc} ${key}`).toContain(PAGE[loc])
     for (const key of ['settings.remoteStream.hint', 'remote.controlLocalHint', 'remote.approval.body', 'remote.approval.bodyAgain'])
       expect(say(key), `${loc} ${key}`).toContain(INCLUDED[loc])
-    for (const key of ['remote.configurationLocal', 'remote.settingsEditable'])
+    for (const key of ['remote.configurationLocal'])
       expect(say(key), `${loc} ${key}`).toContain(STREAMED[loc])
     expect(say('remote.controlLocalHint'), `${loc} still says a transmission needs its own permission`).not.toContain(OLD_LIMIT[loc])
   }

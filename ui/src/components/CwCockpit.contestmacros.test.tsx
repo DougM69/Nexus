@@ -7,7 +7,7 @@
 // `CQ FD DE …` — Field Day's own call, on the air, in somebody else's contest. There is now a
 // third set: the same contest cadence with the universal contest call, `CQ TEST`.
 //
-// All three now follow N1MM's contest layout, the one Enter Sends Message sends from (F2 his call
+// All three now follow the contest layout, the one Enter Sends Message sends from (F2 his call
 // and the exchange, F3 TU, …), and Field Day keeps its own `CQ FD`: that is asserted here rather
 // than assumed.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -154,7 +154,7 @@ describe('the CW macro set follows the contest that is running', () => {
   it('keys CQ TEST in another contest, CQ FD in Field Day, and CQ outside a contest', async () => {
     await renderCockpit({ fieldDay: ILQP })
     expect(macroRows()[0]).toEqual({ key: 'F1', label: 'CQ TEST' })
-    // The rest is N1MM's contest layout, F3 the TU.
+    // The rest is the contest layout, F3 the TU.
     expect(macroRows().map((m) => m.key)).toEqual(['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8'])
     expect(macroRows()[2].label).toBe('TU')
 

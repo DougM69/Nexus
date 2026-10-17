@@ -121,7 +121,7 @@ describe('what an edit sends', () => {
   })
 })
 
-describe('Ctrl+Y is the key, as N1MM binds it', () => {
+describe('Ctrl+Y is the key that edits the last contact', () => {
   it('Ctrl alone, never with Alt, Shift or Cmd', () => {
     const key = (init: Partial<KeyboardEvent>) =>
       isEditKey({ key: 'y', ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...init } as KeyboardEvent)

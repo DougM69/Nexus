@@ -95,7 +95,19 @@ impl Picture<'_> {
         narrow: Narrow,
         each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
     ) -> Result<(), &'static str> {
-        self.pass(Scope::All, narrow, true, each)
+        self.pass(Scope::All, narrow, true, &[], each)
+    }
+
+    /// [`Self::each`], each contact with the passthrough fields `extras` names as well
+    /// (`LogDb::each_narrow_with`): what the award fold reads beside its columns, the CQ zone and
+    /// LoTW's DXCC (`tempo_core::logbook::AWARD_EXTRAS`).
+    pub(in crate::remote_service) fn each_with(
+        &self,
+        narrow: Narrow,
+        extras: &[&str],
+        each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
+    ) -> Result<(), &'static str> {
+        self.pass(Scope::All, narrow, false, extras, each)
     }
 
     /// [`Self::each`] over only the contacts `scope` holds: on the store through the index that
@@ -107,16 +119,19 @@ impl Picture<'_> {
         narrow: Narrow,
         each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
     ) -> Result<(), &'static str> {
-        self.pass(scope, narrow, false, each)
+        self.pass(scope, narrow, false, &[], each)
     }
 
-    /// The pass [`Self::each_in`] and [`Self::each_with_submode`] make; `submode` reads each
-    /// contact's SUBMODE as well. A test's own rows are whole, and carry it already.
+    /// The pass [`Self::each_in`], [`Self::each_with_submode`] and [`Self::each_with`] make;
+    /// `submode` reads each contact's SUBMODE as well, and `extras` the passthrough fields it
+    /// names (never both: no reader asks for both). A test's own rows are whole, and carry them
+    /// already.
     fn pass(
         &self,
         scope: Scope<'_>,
         narrow: Narrow,
         submode: bool,
+        extras: &[&str],
         each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
     ) -> Result<(), &'static str> {
         #[cfg(test)]
@@ -138,7 +153,7 @@ impl Picture<'_> {
                 if submode {
                     db.each_narrow_with_submode(narrow, scope, Order::Log, &mut visit)
                 } else {
-                    db.each_narrow(narrow, scope, Order::Log, &mut visit)
+                    db.each_narrow_with(narrow, extras, scope, Order::Log, &mut visit)
                 }
                 .map_err(|_| UNREADABLE)?;
                 answer

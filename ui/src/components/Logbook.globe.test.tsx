@@ -20,7 +20,7 @@ beforeAll(() => {
 })
 
 // A capable GPU, so the globe's own gate is open and only the new setting decides.
-vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => true }))
+vi.mock('../gpu', () => ({ gpuCapableForGlobe: () => true, webgl2ForGlobe: () => true }))
 vi.mock('./QsoGlobe', () => ({ default: () => <div data-testid="qso-globe" /> }))
 /** The log the engine holds: `askLog` answers from it as the engine does (features/logAnswers.testkit). */
 const engineLog = vi.hoisted(() => vi.fn())

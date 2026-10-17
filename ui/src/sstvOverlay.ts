@@ -9,8 +9,8 @@
 // TWO STYLES, one physics argument (idcard.rs is the authority):
 //  - `crisp`: the ID plate's bitmap font, integer-scaled, fillRect only. Survives the
 //    demod at any size the controls allow, exactly like the ident does.
-//  - `banner`: bold system font with a thick contrasting outline or a solid plate —
-//    what MMSSTV draws. Legible on the wire because the treatment keeps a LUMINANCE
+//  - `banner`: bold system font with a thick contrasting outline or a solid plate.
+//    Legible on the wire because the treatment keeps a LUMINANCE
 //    edge; the size floor keeps the antialiased fringe a small fraction of the stroke.
 //    Mixed case allowed: at banner sizes the x-height detail survives.
 //

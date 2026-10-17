@@ -81,8 +81,9 @@ mode** can instead ride an upstream WSJT-X/JTDX decode stream over UDP :2237 —
 another app owns the rig. **Always-on decode** means there is no Monitor toggle to forget: the
 decoder runs every RX slot regardless of TX state.
 
-*Not yet:* the Fox role (running a DXpedition end) and contest modes (NA VHF / RTTY RU /
-WW Digi). **Q65, FST4, FST4W, MSK144, JT65 and WSPR have since shipped and transmit**, each
+*Not yet:* the Fox role (running a DXpedition end) and WSJT-X's RTTY Roundup and WW Digi contest
+modes (FT8 and FT4 send its Field Day and NA VHF Contest messages, in ARRL Field Day and the ARRL
+VHF contests). **Q65, FST4, FST4W, MSK144, JT65 and WSPR have since shipped and transmit**, each
 keeping its own operating rhythm rather than inheriting FT8's — MSK144 waits twelve transmit
 periods before giving up where FT8 waits three, and WSPR and FST4W never touch the QSO
 sequencer at all. Per-QSO WAV save has shipped too — Settings ▸ Logging & Connectors ▸ Save
@@ -90,8 +91,7 @@ received audio.
 
 ## The CW cockpit
 
-A casual/ragchew CW station in software, deliberately scoped: no contest serials, no auto-ESM —
-the operator keys every message.
+A casual/ragchew CW station in software, deliberately scoped: the operator keys every message.
 
 Three keyer back-ends ship today: **CAT** (Hamlib `send_morse`; the rig generates Morse, speed
 pushed via KEYSPD), **Soundcard** (Nexus synthesizes PARIS-timed, click-free Morse — 5 ms
@@ -106,7 +106,7 @@ license-class gate blocks keying out of segment — including the Technician CW-
 80/40/15 m. The log strip pre-fills CW/599, and a Needed-board click lands here with the
 callsign already typed.
 
-*Not yet:* paddle/iambic input, contest exchanges.
+*Not yet:* paddle/iambic input.
 
 ## The Phone cockpit
 
@@ -325,15 +325,16 @@ load while this layer earns its stripes.
 **Production-grade today:** FT8/FT4 operating, logbook/awards/connectors, Needed board,
 POTA/SOTA hunter, Field Day in Contest mode, Conditions map, setup/CAT.
 
-**Casual-grade by design:** CW and Phone cockpits (no contests).
+**Casual-grade by design:** CW and Phone cockpits; in a contest picked on the Contesting tab
+their log strips take that contest's exchange and flag dupes.
 
 **On the air, with bench numbers still to confirm:** the TempoFast/TempoDeep chat tiers.
 They have closed real links — first decode 2026-07-21, first two-station QSO 2026-07-26 —
 and every published sensitivity figure for them is a simulation number until on-air
 decode-rate-versus-SNR reports come back.
 
-**Not yet:** the Fox role (running a DXpedition end), contest modes (NA VHF, RTTY RU,
-WW Digi), transmit-side iGating (deliberately never — it means a radio keying up
+**Not yet:** the Fox role (running a DXpedition end), WSJT-X's RTTY Roundup and WW Digi
+contest modes, transmit-side iGating (deliberately never — it means a radio keying up
 unattended), and mobile/web clients.
 
 **Windows, Linux and Raspberry Pi build from the same tree and ship together every

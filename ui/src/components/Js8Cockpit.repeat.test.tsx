@@ -112,20 +112,24 @@ describe('the CQ button is a one-shot at interval 0 and the repeat above it', ()
     await act(async () => {
       fireEvent.click(btn)
     })
-    expect(js8CallCq).toHaveBeenCalledWith(0)
+    // The CQ is the CQ message in Settings, which the station composes: the call names nothing else.
+    expect(js8CallCq).toHaveBeenCalledTimes(1)
+    expect(js8CallCq).toHaveBeenCalledWith()
     expect(js8CqRepeat).not.toHaveBeenCalled()
   })
 
-  it('becomes the checkable repeat once an interval is set, and arms with the chosen CQ variant', async () => {
+  it('becomes the checkable repeat once an interval is set, and arms it', async () => {
     state.current = { ...base(), cqIntervalMin: 10 }
     await renderCockpit()
-    fireEvent.change(q<HTMLSelectElement>('.js8-cq-select'), { target: { value: '3' } })
+    // No CQ form to pick in the dock: the CQ message in Settings is what both send, as JS8Call's
+    // (what it keys is pinned in the station, `the_cq_message_is_what_the_cq_repeat_keys`).
+    expect(q('.js8-cq-select')).toBeNull()
     const btn = q<HTMLButtonElement>('.js8-cq')
     expect(btn.getAttribute('aria-pressed')).toBe('false')
     await act(async () => {
       fireEvent.click(btn)
     })
-    expect(js8CqRepeat).toHaveBeenCalledWith(true, 3)
+    expect(js8CqRepeat).toHaveBeenCalledWith(true)
     expect(js8CallCq).not.toHaveBeenCalled()
   })
 
@@ -135,7 +139,7 @@ describe('the CQ button is a one-shot at interval 0 and the repeat above it', ()
     await act(async () => {
       fireEvent.click(q('.js8-cq'))
     })
-    expect(js8CqRepeat).toHaveBeenCalledWith(false, 0)
+    expect(js8CqRepeat).toHaveBeenCalledWith(false)
   })
 })
 

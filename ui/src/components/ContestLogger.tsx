@@ -323,6 +323,7 @@ export function ContestLogger({
           operatorAsk={operatorAsk}
           onOperatorFocused={() => setOperatorAsk(0)}
           operatorBoxAbove={fd != null}
+          entryAbove={fd != null}
         />
       </main>
     </>

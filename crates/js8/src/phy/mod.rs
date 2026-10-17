@@ -25,7 +25,7 @@ pub(crate) mod testutil;
 pub use crc12::crc12;
 pub use decoder::decode;
 pub use frame::{Payload72, Word87, I3};
-pub use modulate::{encode_word, modulate};
+pub use modulate::{encode_word, modulate, modulate_moved};
 pub use speed::Speed;
 
 /// One CRC-verified decode from [`decode`] (B3) — phy never emits an unverified word.

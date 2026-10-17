@@ -44,7 +44,9 @@ enum Class {
 ///
 /// * the frame falls to the hashed i3=4 forms when either call is nonstandard, or when
 ///   one `/P` sits opposite one `/R` (one `i3` cannot mean both suffixes at once);
-/// * a numeric report then survives only from a sender that is a bare c28 call.
+/// * a numeric report then survives only beside a bare c28 call: from a sender that is
+///   one, or — WSJT-X's own form — from a nonstandard sender that hashes ITS OWN call
+///   opposite one.
 fn hashed(my: Class, dx: Class) -> bool {
     use Class::*;
     my == Nonstandard
@@ -54,7 +56,7 @@ fn hashed(my: Class, dx: Class) -> bool {
 
 /// True when a station of class `me` can put a NUMBER on the air in this pair.
 fn number_rides(me: Class, other: Class) -> bool {
-    !hashed(me, other) || me == Class::Plain
+    !hashed(me, other) || me == Class::Plain || (me == Class::Nonstandard && other == Class::Plain)
 }
 
 /// The station that calls CQ (`dx`) and the station that answers it (`my`).

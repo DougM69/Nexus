@@ -3,9 +3,9 @@
 // active."; the Remote page's logging hint said to log "Field Day contacts" at the shack, which is
 // true of every contest's (an entry made there goes to the station's general logbook).
 //
-// Read off all five catalogs and the pt-BR kit's rows: neither string names Field Day in any language,
-// each names the contest by that language's own word for it (the one the rail's Contest item uses),
-// and the kit carries the catalog's English with no Field Day left to keep untranslated.
+// Read off all five catalogs and the pt-BR kit's rows: the string names Field Day in no language, it
+// names the contest by that language's own word for it (the one the rail's Contest item uses), and
+// the kit carries the catalog's English with no Field Day left to keep untranslated.
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -17,7 +17,7 @@ import { JA } from './ja'
 
 type Catalog = Readonly<Record<string, unknown>>
 const CATALOGS: Record<string, Catalog> = { en: EN, de: DE, es: ES, fr: FR, ja: JA }
-const KEYS = ['detached.fieldDay.inactive', 'remote.loggingHint'] as const
+const KEYS = ['detached.fieldDay.inactive'] as const
 
 describe('the contest is not called Field Day', () => {
   it.each(Object.entries(CATALOGS).flatMap(([lang, cat]) => KEYS.map((key) => [lang, key, cat] as const)))(

@@ -69,7 +69,7 @@ function ensureCtx(): AudioContext | null {
 }
 
 /** Short two-tone beep. Frequencies differ by alert kind so they're distinguishable. */
-function beep(freq: number): void {
+export function beep(freq: number): void {
   const ctx = ensureCtx()
   if (!ctx) return
   const now = ctx.currentTime

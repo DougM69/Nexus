@@ -70,6 +70,7 @@ vi.mock('../api', () => ({
   setDecodeDepth: vi.fn(async () => null),
   atuTune: vi.fn(async () => null),
   setMsk144Period: vi.fn(async () => null),
+  getCallStats: vi.fn(async () => null),
 }))
 vi.mock('./Waterfall', () => ({ Waterfall: () => <div data-testid="waterfall-stub" /> }))
 vi.mock('./OperateDecodes', async (importOriginal) => {
@@ -260,5 +261,37 @@ describe('#204 — the station being called', () => {
     await waitFor(() =>
       expect(within(cardEl() as HTMLElement).getByText('K9XYZ')).toBeTruthy(),
     )
+  })
+})
+
+// THE STATS PANE (2026-10-14): FT ships it hidden (its side rail already shares its height between the card and
+// the Stations list); ticked, it stands under the callsign card in the side rail, in both layouts, and asks for
+// the station the card is about, on the radio's band, in the tier on the air.
+describe('the Stats pane under the callsign card', () => {
+  it('ships hidden: the stock rail is the card over Stations, as it was', () => {
+    renderCockpit()
+    expect(document.querySelector('[data-pane="stats"]')).toBeNull()
+    expect(cardEl(), 'control: the card is up').not.toBeNull()
+  })
+
+  for (const layout of ['classic', 'roster'] as const) {
+    it(`${layout}: ticked, it stands under the card in the side rail and asks for the card's station`, async () => {
+      const { getCallStats } = await import('../api')
+      vi.mocked(getCallStats).mockClear()
+      renderCockpit({ layout, panelState: { stats: 'docked' } })
+      const stats = document.querySelector('[data-pane="stats"]')!
+      expect(stats, 'ticked, the Stats pane is not on screen').not.toBeNull()
+      expect(rail()!.contains(stats), 'not in the side rail').toBe(true)
+      expect(stats.previousElementSibling, 'not directly under the callsign card').toBe(cardEl())
+      expect(stats.getAttribute('data-fit')).toBe('content')
+      await waitFor(() => expect(getCallStats).toHaveBeenCalledWith('W1ABC', '20m', 'FT8'))
+    })
+  }
+
+  it('with no station selected it still stands in the rail, and says what it is for', () => {
+    renderCockpit({ selectedCall: null, panelState: { stats: 'docked', stations: 'removed' } })
+    const stats = document.querySelector('[data-pane="stats"]')!
+    expect(rail()!.contains(stats)).toBe(true)
+    expect(stats.querySelector('.cstats-empty')).not.toBeNull()
   })
 })

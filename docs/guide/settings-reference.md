@@ -512,6 +512,16 @@ Baud continue across to the right.*
   DAX, while Phone at the shack keeps the radio's own mic, and the voice keyer
   switches the radio to DAX for each message. Both are Beta and **unverified on hardware**, so both are opt-in; if
   the scope stays blank or decodes stop, turn them back off.
+- **Let Nexus send CW, Tune and ATU through the native Flex client (not yet
+  bench-tested)** — appears once the **Flex native client (Beta)** serves the
+  radio (switched on, with the radio's IP set). Off by default, per radio. On
+  the client Nexus does not send CW through the radio's keyer, tune with the
+  radio's own carrier or run its ATU until a tester has checked each on a real
+  radio; this switch lets it do all three on that radio before then. Every
+  other check still applies, the TX-enable latch, your licence privileges and
+  the TX watchdog among them. **Not yet checked on a real Flex**: try them into
+  a dummy load first. Save to apply; Nexus reconnects to the radio. It changes
+  only at the shack, never through the Remote stream.
 - **CI-V bus diagnostic log** — appears once native CI-V is on. Records every
   byte to and from the radio to a file in your Downloads, for hardware-only
   issues like the IC-9700 PTT flicker. Turn on, reproduce, turn off, send the
@@ -561,12 +571,19 @@ target to copy.*
   Settings." Flat means no audio on that input.
 - **Tx Power** — the audio **drive** into the rig, the same control as the
   cockpit **Pwr** slider (they always match). "Trim down until your rig's ALC is
-  just zero. This is *not* the rig's RF watts — set those on the radio."
+  just zero. This is *not* the rig's RF watts — set those on the radio." On a Yaesu
+  that turns its power down with the ALC, such as the FT-991A, the ALC reads above
+  zero whenever the power is below full, so set the drive at full power.
 - **RX Level** — a live dB meter like WSJT-X. "Aim for around 30 dB. Anything
   from ~15–60 dB decodes fine; red means too hot." An audio error shows here.
 - **RX Gain** — "Boost a quiet interface until RX Level reads around 30 dB — the
   meter responds as you release the slider. Leave at ×1.0 unless the meter reads
   low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much."
+
+While you **Edit** a radio that is not the one in use, Tx Power and RX Gain are
+that radio's own levels: moving them changes nothing on the radio in use,
+**Save** stores them on the radio you are editing, and it uses them once it
+becomes the active radio.
 
 ### Receive audio on this computer
 
@@ -895,7 +912,7 @@ with the radio.
 - **Keyer backend** — four ways to send, also switchable live from the CW
   cockpit. **CAT** uses the rig's internal keyer (Hamlib `send_morse`), but older
   rigs (e.g. IC-756PRO III) don't support it. **Serial keyline** toggles DTR/RTS
-  into the rig's KEY jack — the clean N1MM/fldigi method, needs only a keying
+  into the rig's KEY jack — a clean method that needs only a keying
   cable. **WinKeyer** drives a K1EL. **Soundcard** keys an audio tone through SSB
   — a workaround; set drive so ALC reads zero.
 - **Sidetone pitch (Hz)** — 300–1200 Hz. Sets the soundcard keyer tone and the CW
@@ -1275,12 +1292,14 @@ lives here is what JS8Call keeps in its own settings and Nexus cannot infer.
 
 **Speed & receiving**
 
-- **Transmit speed** — Slow (30 s periods), Normal (15 s), Fast (10 s) or Turbo (6 s).
-  The period the TX clock follows; Normal is what most of the band runs. The speed chips
-  in the JS8 header change this same setting.
-- **Decode these speeds** — all four on by default, exactly as JS8Call's multi-decode:
-  a Slow station and a Turbo station on the same band both print, each activity row
-  marked with its speed letter (E/A/B/C). Untick a speed to save CPU on a small machine.
+- **Transmit speed** — Slow (30 s periods), Normal (15 s), Fast (10 s), JS8 40 (6 s) or
+  JS8 60 (4 s), the names JS8Call 3.0 uses: JS8 40 was called Turbo before 3.0, and JS8 60
+  is 3.0's experimental fifth speed. The period the TX clock follows; Normal is what most of
+  the band runs. The speed chips in the JS8 header change this same setting.
+- **Decode these speeds** — all five on by default, exactly as JS8Call 3.0's multi-decode:
+  a Slow station and a JS8 60 station on the same band both print, each activity row
+  marked with its speed letter (E/A/B/C/I). Untick a speed to save CPU on a small machine.
+  Settings saved before JS8 60 arrived keep the four speeds they had; tick JS8 60 to add it.
 - **Callsign aging (minutes)** — off (0) by default, as in JS8Call. Otherwise a station
   not heard for this many minutes drops off the cockpit's Stations list (the one you have
   selected, or one with an unread message for you, stays) and is left out of your
@@ -1288,6 +1307,24 @@ lives here is what JS8Call keeps in its own settings and Nexus cannot infer.
 - **Band activity aging (minutes)** — 2 by default, as in JS8Call. A row of the cockpit's
   Band activity pane whose newest decode is this many minutes old leaves the pane, unless RX
   is on its offset. 0 keeps every row. Up to 1440, a day.
+
+**Frequencies**
+
+- **Return to the last used frequency** — off by default, as in JS8Call. On, opening JS8
+  tunes the rig back to the frequency you last used in JS8, instead of the band's JS8
+  frequency.
+- **JS8 frequencies** — JS8Call 3.0.3's suggested frequencies until you change, add or remove
+  one; then the list is your own, each row a dial in MHz and an optional description. The JS8
+  band picker shows it, and opening JS8 tunes the first one on the band. **Reset** puts
+  JS8Call's list back (asked first); **Export…** saves yours to Downloads as a file and
+  **Import…** reads one back (it asks before replacing a list of your own).
+- **Change frequency by schedule** — off by default, as in JS8Call. On, Nexus changes the
+  rig's frequency **by itself**, with nobody at the radio, at the times in the schedule: a
+  notice in the JS8 screen first, then the change 30 seconds later unless you cancel it. Never
+  while transmitting or while a message is going out. Each row of the **Schedule (UTC)** is a
+  frequency and a window (both ends count; one that ends before it starts runs over midnight;
+  where rows overlap, the one starting later wins). Nothing changes back when a row ends: add
+  a row for that. Move off a scheduled frequency yourself and that row leaves you there.
 
 **Automatic transmissions**
 
@@ -1302,6 +1339,27 @@ nothing until you enable TX in the cockpit, every session.
   signal report (`HEARTBEAT SNR`), one frame per station, and a message you hold for
   that station is offered to it. **Never acknowledge heartbeats from these callsigns**,
   comma-separated and empty by default, leaves those stations unanswered.
+- **Heartbeat networking** — off by default, as in JS8Call (its *Enable Heartbeat
+  Networking*). On, the cockpit shows the **HB** button and **Answer heartbeats** can answer;
+  off, no heartbeat and no acknowledgement goes out. It is the cockpit's **HB NET** switch.
+  Updating from a version without it turns it on if **Answer heartbeats** was on or a
+  heartbeat interval was set, so the **HB** button stays.
+  Heartbeats and acknowledgements go out at Slow, Normal and Fast only, never at Turbo.
+- **Allow heartbeats outside 500–1000 Hz** — off by default, as in JS8Call. On, heartbeats
+  and acknowledgements go out on your own TX offset instead of a free spot in 500–1000 Hz.
+- **Pause heartbeats while a call is in the To box** — on by default, as in JS8Call's
+  pause while in a QSO. While the To box holds a call the heartbeat repeat pauses (it starts
+  again one interval after you clear the box), no heartbeat is acknowledged, and a repeating
+  CQ stops. Switching **HB** on clears the To box.
+- **Don't acknowledge stations that heartbeat more often than every 55 minutes** — off by
+  default, as in JS8Call 3.0. On, a station heard heartbeating again within 55 minutes of its
+  last acknowledged heartbeat is added to **Never acknowledge heartbeats from these callsigns**,
+  as JS8Call adds it to its list, and is not acknowledged then or later; the **HB ACK** chip
+  names it. Take it off that list to acknowledge it again; turning this off leaves the list as
+  it is. A station added while this screen is open is kept when you save it.
+- **Do not take part in @ALLCALL** — off by default, as in JS8Call. On, nothing addressed to
+  `@ALLCALL` is answered (`QUERY MSGS` included) or marked as addressed to you, and
+  `@ALLCALL` leaves the To box's list. Heartbeats and CQs are handled as before.
 - **Auto-reply to queries** — on by default, as in JS8Call: `SNR?`, `GRID?`, `INFO?`,
   `STATUS?`, `HEARING?` and `QUERY MSGS` addressed to you are answered, and a `MSG` to you
   or a group you joined, or a `MSG TO:` you hold for another station, gets an `ACK`. On
@@ -1338,7 +1396,107 @@ nothing until you enable TX in the cockpit, every session.
 - **Groups** — the `@GROUP` names you belong to, comma-separated; a message to one of
   them counts as addressed to you. `@ALLCALL` is everyone and is always on. `@APRSIS` and
   `@JS8NET` cannot be joined, as in JS8Call: Settings will not save while either is in
-  this field, and says so.
+  this field, and says so. The call list's **Add new station or group…** and **Remove this
+  group** change this same list.
+
+**Lists and marks**
+
+- **Hide these callsigns in the RX pane** — JS8Call 3.0's RX block list, comma-separated and
+  empty by default. Nothing a listed station sends prints in the RX pane (by its call as heard
+  or its base call), and the call list marks it ✕; it is still heard, answered and filed as
+  before, and it still shows in Band activity. The call list's **Block this station** adds to
+  it.
+- **Highlight these words or callsigns** — two lists, primary and secondary colour, empty by
+  default as in JS8Call. A Band activity row holding one of the words, and the call list row of
+  one of the calls, is tinted; a row both lists name takes the primary.
+- **End of transmission mark** — ♢ by default, as in JS8Call; up to two characters. It follows
+  the last frame of a message in the RX pane and Band activity.
+- **Missing frame mark** — …… by default, as in JS8Call. It stands where the next frame of a
+  message did not come within one and a half periods.
+
+**Sounds**
+
+A short tone of its own for each of: a CQ, a heartbeat, an ACK for you, a message directed to
+you or your group, a message filed in your Inbox, a new callsign, a callsign you have worked.
+All off by default, as JS8Call's notifications are; **Test** plays one. They sound while the
+JS8 screen is open. JS8Call plays a sound file you pick for each; Nexus plays its own tones.
+
+**Sending**
+
+- **Hold PTT between frames** — off by default, as in JS8Call: PTT drops after each frame
+  of a message and keys again for the next (at Normal the radio is unkeyed for about 1.4
+  seconds between two frames). On, the radio stays keyed from the end of one frame to the
+  start of the next. It still drops after the message's last frame, never holds from one
+  message into the next, and drops at once on Stop TX or TX Off.
+- **Allow TX offset changes while sending** — off by default, as in JS8Call: while a
+  message is waiting to go or going out, the TX offset stays where it is, and the cockpit
+  says why when you try to move it (a list row's **Jump to … Hz** is greyed out). On, the move
+  or the jump is taken at once: the frame on the air
+  moves too, from where it has got to (a heartbeat on its own spot stays there), and the
+  frames still to go are sent at the new offset.
+- **TX delay** — 0.2 seconds by default, as in JS8Call (0.1 to 0.5): how long before each
+  period a frame keys the radio. The frame's first tone still goes out at the period's start
+  delay, so a radio slow to switch to transmit no longer sends it late. Lengthen it for an
+  amplifier or a radio whose relay is slow.
+
+**Composing**
+
+The JS8 compose box as JS8Call 3.0.3 keeps it; the [JS8 chapter](js8.md#composing) shows it
+at work.
+
+- **CQ message** — what the **CQ** button and the repeating CQ send. JS8Call's default,
+  `CQ CQ CQ <MYGRID4>`, is one CQ frame, and so is any of the eight CQ forms the field offers
+  (`CQ DX <MYGRID4>` and the rest). Longer text takes more frames. It must start with `CQ` or
+  hold your callsign, as in JS8Call: Settings will not save otherwise, and says so. Empty
+  sends `CQ CQ CQ` and your square.
+- **Reply message** — what **REPLY** sends to the call in the To box; `HW CPY?` by default,
+  as in JS8Call.
+- **Saved messages** — the dock's **Saved** menu, in this order: add, edit, move up or down,
+  delete. `TNX 73 GL` to start with, as in JS8Call; a list you empty stays empty. The
+  macros a message may carry are listed under it, and work in the CQ and reply messages,
+  INFO and STATUS too: `<MYCALL>`, `<MYGRID4>`, `<MYGRID12>`, `<MYINFO>`, `<MYCQ>`, `<MYHB>`,
+  `<MYREPLY>`, `<MYSTATUS>`, `<MYVERSION>`, `<MYIDLE>`, and for the call in the To box once
+  it has been heard, `<CALL>`, `<SNR>` and `<TDELTA>`.
+- **Send CQ, REPLY, SNR, INFO, STATUS, saved messages and a station's asks at once** — on by
+  default, as JS8Call's *Immediately transmit…*. Off, those buttons and a station row's quick
+  asks put their message in the compose box, and **Send** sends it. The repeating CQ always
+  sends.
+- **Show calls and commands as pills in the compose box** — on by default, as in JS8Call 3.0.
+- **Suggest cheaper words in the compose box** — on by default, as in JS8Call. A word the JS8
+  dictionary sends in pieces is underlined; right-click it for words that take less airtime.
+
+**Spotting and APRS-IS**
+
+Spotting itself follows the **PSK Reporter** switch in
+[Integrations & Feeds](#integrations--feeds), as JS8Call's SPOT button carries PSK Reporter
+and JS8NET together: while it is on, the stations you hear on JS8 go to PSK Reporter and to
+JS8NET, and commands sent to a `@group` go to JS8NET. The [JS8 chapter](js8.md) has the details.
+
+- **Spot @APRSIS messages to APRS-IS** — off by default (JS8Call ships it on). A station heard
+  sending `@APRSIS GRID` is put on the APRS map at that locator, and the text after
+  `@APRSIS CMD` goes to APRS-IS as a raw packet, under your callsign; Nexus logs in to APRS-IS
+  with the passcode worked out from it, as the iGate does.
+- **Relay APRS-IS messages to heard stations** — off by default. **It transmits with nobody at
+  the radio:** an APRS message for a station heard on JS8 is keyed to it as `@APRSIS MSG TO:`,
+  only while TX is on and through every transmit guard, and never to a station on the
+  never-spot list. Needs the switch above.
+- **Never spot these callsigns** — comma-separated, empty by default, as in JS8Call. A station
+  on it, as heard or by its base call, is spotted to no network.
+
+**JS8Call API**
+
+For programs written for JS8Call (loggers, maps, message tools) on this computer; the
+[JS8 chapter](js8.md#programs-written-for-js8call) says what they get. Read-only: they cannot
+send, tune or change a setting. Both listen on 127.0.0.1 only, and none of these settings can be
+seen or changed from the Remote page.
+
+- **TCP API** — off by default, as in JS8Call. Programs connect to 127.0.0.1 on **TCP port**
+  (JS8Call's 2442), one at a time.
+- **UDP API** — off by default, as in JS8Call. Nexus sends to a program listening on 127.0.0.1
+  at **UDP port** (JS8Call's 2242) and answers it there.
+- **Accept TCP requests** / **Accept UDP requests** — off by default, as in JS8Call. Off, a
+  program on that side gets what Nexus hears and sends, and its requests get no answer. On, Nexus
+  answers its requests to read; a request to send, tune or change a setting is never answered.
 
 ### SSTV
 
@@ -2175,8 +2333,8 @@ the assistance record lists them.
 
 ### Enter Sends Message
 
-ESM, as N1MM Logger+ calls it. "With ESM on, Enter in the contest log strip sends
-the contact’s next message from your F-keys, as N1MM Logger+ does, and the
+ESM for short. "With ESM on, Enter in the contest log strip sends
+the contact’s next message from your F-keys, and the
 contact logs at its last step. ESM is off until you turn it on, in each cockpit
 separately. Enter never turns TX on, and nothing is sent by a timer." How a
 contact runs, step by step, and the rules ESM keeps are in the

@@ -119,11 +119,15 @@ fn settings(engine: &Engine) -> serde_json::Value {
 
 #[test]
 fn decoder_settings_match_native_policy_and_preserve_all_other_saved_choices() {
-    for (tier, choices) in [(Tier::Js8, [0, 2, 3, 1]), (Tier::Msk144, [5, 10, 30, 15])] {
+    // JS8's walk takes in JS8 60 (index 4), JS8Call 3.0's fifth speed.
+    for (tier, choices) in [
+        (Tier::Js8, &[0, 2, 3, 4, 1][..]),
+        (Tier::Msk144, &[5, 10, 30, 15][..]),
+    ] {
         let mut remote = Station::new(tier);
         let mut native = Station::new(tier);
         let source = remote.engine.source.clone();
-        for next in choices {
+        for &next in choices {
             remote.sample(Some(false), Duration::ZERO);
             let setting = remote.setting(next);
             remote.apply(setting).unwrap();
@@ -285,13 +289,14 @@ fn decoder_setting_requires_exact_values_context_and_live_permission() {
         let original = settings(&s.engine);
         let malformed = if tier == Tier::Js8 {
             [
+                // 5: past JS8 60, the last speed.
                 DecoderSetting::Js8Speed {
-                    expected: 4,
+                    expected: 5,
                     speed: 0,
                 },
                 DecoderSetting::Js8Speed {
                     expected: 1,
-                    speed: 4,
+                    speed: 5,
                 },
                 DecoderSetting::Js8Speed {
                     expected: 1,
@@ -457,7 +462,10 @@ fn local_decoder_choices_retire_pending_remote_hardware_work_without_rewriting_t
         assert_eq!(receipt.outcome(), Outcome::Pending);
         let tx_generation = s.engine.tx_gate_gen;
         if tier == Tier::Js8 {
-            assert!(s.engine.js8_set_speed(4).is_err());
+            assert!(
+                s.engine.js8_set_speed(5).is_err(),
+                "5 is past JS8 60, the last speed"
+            );
             assert!(work.permission().check(Instant::now()).is_ok());
             s.engine.js8_set_speed(s.engine.settings.js8_speed).unwrap();
         } else {

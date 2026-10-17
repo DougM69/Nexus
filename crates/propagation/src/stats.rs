@@ -1,12 +1,14 @@
 //! Descriptive logbook geography — the continent / CQ-zone / DX-vs-domestic breakdowns the
-//! frontend `StatsView` can't compute on its own. The stored QSO record carries neither a
-//! continent nor a CQ zone, so both are re-resolved here per callsign through the same cty.dat
-//! resolver the awards and journey engines use (`dxcc::resolve`). Pure over a slice of callsigns
-//! plus the operator's own call, so it unit-tests offline.
+//! frontend `StatsView` can't compute on its own. Each contact is placed where the awards count
+//! it ([`counted_entity`], [`counted_zone`]): in the DXCC entity and CQ zone its record carries
+//! (LoTW's DXCC first), else the ones cty.dat gives its call; the stored record carries no
+//! continent, so that is its zone's. Pure over callsigns and what their records carry, plus the
+//! operator's own call, so it unit-tests offline.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+use crate::awards::{counted_entity, counted_zone, RecordFields};
 use crate::dxcc;
 use crate::journey::{continent_of_zone, CONTINENTS};
 
@@ -31,15 +33,17 @@ pub struct ZoneTally {
 }
 
 /// The geographic slice of the logbook: continent / CQ-zone / DX-vs-domestic. Everything is keyed
-/// on the resolved callsign — a QSO whose call cty.dat can't place is counted in `total` but in no
-/// breakdown, surfaced honestly as `total - resolved`. This is descriptive ("who have I worked,
-/// geographically"), NOT award credit, so WAE/CQ-only entities (Sicily, …) are counted too.
+/// on the entity each QSO counts toward — a QSO in none (a call cty.dat can't place with no DXCC
+/// number on its record, or a record's DXCC 0) is counted in `total` but in no breakdown, surfaced
+/// honestly as `total - resolved`. This is descriptive ("who have I worked, geographically"), NOT
+/// award credit: a WAE/CQ-only area counts as the entity it belongs to (Sicily as Italy), as the
+/// awards count it, and a deleted entity as itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LogStats {
     /// All QSOs scanned.
     pub total: usize,
-    /// QSOs whose callsign resolved to a DXCC entity (the base for every breakdown).
+    /// QSOs placed in a DXCC entity (the base for every breakdown).
     pub resolved: usize,
     /// Resolved QSOs with an entity different from the operator's own (entity-based DX).
     pub dx: usize,
@@ -51,14 +55,15 @@ pub struct LogStats {
     pub by_zone: Vec<ZoneTally>,
 }
 
-/// Roll a set of worked callsigns into the geographic stats, anchored on the operator's own call
-/// for the DX-vs-domestic split (entity equality, matching the Journey/Awards engines). If the
-/// operator's own call can't be resolved, every resolved QSO counts as DX (there's no home entity
-/// to be domestic against).
+/// Roll a set of worked callsigns into the geographic stats, each by its call alone (a record
+/// carrying no DXCC number or CQ zone), anchored on the operator's own call for the
+/// DX-vs-domestic split (entity equality, matching the Awards engine). If the operator's own call
+/// can't be resolved, every resolved QSO counts as DX (there's no home entity to be domestic
+/// against).
 pub fn compute_log_stats<S: AsRef<str>>(calls: &[S], my_call: &str) -> LogStats {
     let mut stats = LogStatsAccumulator::new(my_call);
     for call in calls {
-        stats.add(call.as_ref());
+        stats.add(call.as_ref(), RecordFields::default());
     }
     stats.summary()
 }
@@ -77,33 +82,39 @@ pub struct LogStatsAccumulator {
     zone_qsos: HashMap<u8, usize>,
 }
 impl LogStatsAccumulator {
+    /// Home is the entity a contact from `my_call` counts toward, so the two compare alike (an
+    /// IT9 operator is home in Italy).
     pub fn new(my_call: &str) -> Self {
         Self {
-            my_entity: dxcc::resolve(my_call).map(|i| i.entity),
+            my_entity: counted_entity(dxcc::resolve(my_call).as_ref(), &RecordFields::default())
+                .map(|c| c.name),
             ..Self::default()
         }
     }
-    pub fn add(&mut self, call: &str) {
+    /// Count one contact: its call, and what its record carries beyond it.
+    pub fn add(&mut self, call: &str, rec: RecordFields) {
         self.total += 1;
-        let Some(info) = dxcc::resolve(call) else {
+        let resolved = dxcc::resolve(call);
+        let Some(entity) = counted_entity(resolved.as_ref(), &rec) else {
             return;
         };
         self.resolved += 1;
-        if self.my_entity.is_some() && Some(info.entity) == self.my_entity {
+        if self.my_entity.is_some() && Some(entity.name) == self.my_entity {
             self.domestic += 1;
         } else {
             self.dx += 1;
         }
-        if let Some(cont) = continent_of_zone(info.cq_zone) {
+        let Some(zone) = counted_zone(resolved.as_ref(), &rec) else {
+            return;
+        };
+        if let Some(cont) = continent_of_zone(zone) {
             *self.cont_qsos.entry(cont).or_default() += 1;
             self.cont_entities
                 .entry(cont)
                 .or_default()
-                .insert(info.entity);
+                .insert(entity.name);
         }
-        if (1..=40).contains(&info.cq_zone) {
-            *self.zone_qsos.entry(info.cq_zone).or_default() += 1;
-        }
+        *self.zone_qsos.entry(zone).or_default() += 1;
     }
     pub fn summary(&self) -> LogStats {
         let by_continent = CONTINENTS

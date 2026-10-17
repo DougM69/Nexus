@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// ⭐ CTRL+Y IN THE CONTEST STRIP — N1MM's edit-last: it opens the newest contact for edit in place
+// ⭐ CTRL+Y IN THE CONTEST STRIP — edit last: it opens the newest contact for edit in place
 // of the entry boxes. Rendered with the props the cockpits give the strip and a live Enter Sends
 // Message host, because the danger is a key that SENDS: Enter in the edit saves the edit and
 // nothing else, with ESM on. The key is a WINDOW key, fired at `window` as the browser delivers it.

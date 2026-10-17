@@ -1,8 +1,8 @@
 # CW
 
 The CW cockpit is a casual/ragchew CW station in software. It is deliberately
-scoped: you key every message yourself — there are no contest serials and no
-auto-sequencing. What it gives you is a keyboard keyer with F-key macros, a live
+scoped: you key every message yourself, and there is no auto-sequencing. What it
+gives you is a keyboard keyer with F-key macros, a live
 CW decoder so you can read the other station, on-the-fly speed control, a
 zero-beat scope, and your license privileges enforced — so you can call CQ and
 hold a conversation without a paddle and without copying by ear if you'd rather
@@ -24,7 +24,7 @@ own explanation, so you can read the others before you switch:
 - **CAT** — the rig generates the Morse (Hamlib `send_morse`), with speed pushed
   over CAT. Zero extra hardware; needs a rig that supports CW keying over CAT.
 - **Serial** — Nexus toggles DTR or RTS into the rig's KEY jack and the rig
-  shapes the signal (rig in CW). This is the N1MM/fldigi method for a rig with no
+  shapes the signal (rig in CW). This is the clean method for a rig with no
   CAT keying command. Set the keyline port and line in
   [Settings ▸ CW](settings-reference.md#cw).
 - **WinKeyer** — a K1EL WinKeyer hardware keyer over serial (rig in CW). It's the
@@ -294,8 +294,6 @@ for your first over. The Log pane pre-fills **CW / 599**.
 - **Unassisted mode turns the AI decoder off**, whatever the switch says, because
   a declared unassisted entry means no machine copy. That is the one case where
   the AI decoder is silent with the setting still on.
-- **No contest exchanges or serials** — this is a casual keyboard station by
-  design. (Contest exchange modes aren't built.)
 
 The license-class gate blocks keying outside your segment — including the
 Technician CW-only segments on 80/40/15 m. Set your class in

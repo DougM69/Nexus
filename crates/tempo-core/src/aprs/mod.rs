@@ -17,6 +17,7 @@
 pub mod frame;
 pub mod hdlc;
 pub mod is;
+pub mod js8gate;
 pub mod mice;
 pub mod modem;
 pub mod packet;

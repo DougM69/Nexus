@@ -31,7 +31,8 @@ One **map picker** at the top of the map chooses the view:
 
 - **Globe** — a 2-D globe you can spin and zoom (where a new view starts),
 - **3D** — the shaded WebGL globe (greyed out on a PC whose graphics can't run
-  it),
+  it, or have no WebGL2; if the globe stops working while it is shown, the map
+  says so, and the picker and the rest of Conditions carry on),
 - **Flat** — the world map with shaded relief,
 - **Beam** — an azimuthal-equidistant beam map with true great-circle headings
   from your QTH.

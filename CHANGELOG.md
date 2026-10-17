@@ -7,8 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Nexus Remote: the shack's screen fits the browser window.** Ctrl (⌘ on a Mac) with +, − or 0, Ctrl with the
+  scroll wheel and a trackpad pinch now zoom the browser page instead of going to the shack, and on a short or zoomed
+  window the controls move to the side rail when that shows the shack's screen larger. Stop TX stays in view at every
+  size.
+
+### Removed
+- **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
+  your browser; the watch-and-control workspace it replaced is gone from the page.
+
+## [1.19.0] — 2026-10-16
+
 ### Added
 
+- **JS8: each frame keys the radio 0.2 s before its period, as JS8Call does, and its first tone
+  goes out on time.** Nexus keyed on the period's start, so the time a radio took to switch to
+  transmit (hundreds of milliseconds on a slow CAT link) made every frame late, and stations read
+  your DT late. Now PTT goes up the TX delay before the period (Settings ▸ Digital ▸ JS8 ▸ TX
+  delay, 0.2 s by default as in JS8Call, 0.1 to 0.5 s) and the frame waits in silence for the
+  period's start delay. A radio that keys later than the start delay leaves out what it missed
+  and sends the rest of the frame on time, however late it keys, as JS8Call does; only one that
+  keys after the frame's last tone (about 13.1 s into a Normal period) sends nothing of that frame
+  and is unkeyed at once, as JS8Call stops there, TX staying on for the rest of the message, and
+  the JS8 screen says why. Stop TX or TX Off
+  during the delay unkeys at once and sends nothing. Heartbeats and acknowledgements key the same
+  way; with Hold PTT between frames on, the frames after the first start on their period.
+  NEEDS-BENCH: checked on the radio loop with a simulated rig only.
+- **JS8: keep typing while your message goes out (typeahead), as in JS8Call.** After Send the
+  message stays in the message box while it is sent, and each frame's text moves out of the box to
+  the line beside it as it goes. Type more, or change what has not gone yet, and the frames still to
+  go send what the box holds, taken just before each frame; text typed after the last frame goes
+  straight after it. Enter and Send do not queue a second message meanwhile. MSG and relay messages
+  stay as sent (the box is read-only), as in JS8Call. While it goes out, REPLY, SNR, INFO, STATUS
+  and Saved are greyed out and the one-click buttons add nothing to the box, as in JS8Call, and the
+  macros you type, all but `<CALL>`, `<SNR>` and `<TDELTA>`, are replaced as Send replaces them.
+  NEEDS-BENCH.
+- **JS8: Hold PTT between frames, JS8Call's option (off by default).** On (Settings ▸ Digital ▸
+  JS8), the radio stays keyed from the end of one frame of a message to the start of the next,
+  instead of dropping PTT after each frame and keying again (about 1.4 s unkeyed between frames at
+  Normal, 3.8 s at Slow). PTT still drops after the message's last frame, never holds from one message
+  into the next, and drops at once on Stop TX or TX Off. NEEDS-BENCH: checked on the radio loop with
+  a simulated rig only.
+- **A Timeline card in Statistics.** A line chart of your QSOs over the past day (by hour), the
+  past 30 days (by day) or the past year (by month), each ending with the current hour, day or month
+  in UTC, as the log is. One line per mode, counted as the By mode card counts them (USB and LSB are
+  SSB); past six modes, the five you worked most in that range keep a line each and the rest share
+  one Other line. Each line has its own dash pattern and marker as well as its colour. Point at the
+  chart, or focus it and use the arrow keys, to read each hour, day or month; a screen reader gets
+  every count as a table. It opens on the past 30 days. A Remote observer's Statistics does not
+  show it yet.
+- **JS8: pills and cheaper words in the compose box, as in JS8Call 3.0.** As you type, the parts of
+  a message are drawn as pills: who it goes to (a call, a relay route or a group), who it is from,
+  and the command. Point at one to read what it does. A word the JS8 dictionary sends in pieces is
+  underlined, and a right-click on it offers up to five words that take less airtime. Both are on
+  by default, and Settings ▸ Digital ▸ JS8 ▸ Composing turns either off.
+- **JS8: REPLY, SNR, INFO, STATUS and saved messages, as in JS8Call.** The buttons sit under the
+  compose box. REPLY puts the call in the To box and your reply message (HW CPY? unless you change
+  it) in the compose box, SNR that call and the report you hear from it, and INFO and STATUS
+  yours; each goes in where the cursor is and then the whole box is sent, with anything you had
+  typed, as JS8Call's buttons send it (with "GM" typed, REPLY sends "W1AW GM W1AW HW CPY?", as
+  JS8Call does). The Saved menu does the same with a saved message in one click (TNX 73 GL to start
+  with), saves what is in the
+  compose box, opens Settings to edit the list, and restores the last message you sent. Saved
+  messages, the CQ and reply messages, INFO and STATUS may carry JS8Call's 13 macros, such as
+  `<MYCALL>`, `<MYGRID4>`, `<CALL>` and `<SNR>`, replaced when the message is used, and a macro
+  typed into the compose box is replaced when you press Send. The answers to INFO? and STATUS?
+  replace them too. NEEDS-BENCH: a REPLY, an SNR and an INFO? answered with macros in INFO, on the
+  air beside JS8Call.
+- **JS8: the one-click buttons can fill the compose box instead of sending.** JS8Call's
+  "Immediately transmit…" switch, in Settings ▸ Digital ▸ JS8 ▸ Composing, on by default. Off, CQ,
+  REPLY, SNR, INFO, STATUS, a saved message and a station row's quick asks put their message in the
+  compose box, and Send sends it. The repeating CQ always sends.
 - **Change what an RTTY, PSK or CW macro key sends on the fly.** Right-click a key, or press
   Ctrl+Shift with its F-key (Ctrl+Shift+F3 for F3), and that key's editor opens with the cursor in
   its message. Neither sends anything, and the browser's menu no longer opens over a key. The editor
@@ -62,7 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   went quiet, about 20 seconds later. Club sync is still v4: a laptop or host on an earlier v4 build
   works with one on this one as before, and shows its own board. The hosted Remote page is sent
   nothing new and shows the station's own board, and the score is unchanged (the club score was
-  already the club's).
+  already the club's). NEEDS-BENCH: two laptops on a LAN.
 - **The contest logger window says to log a satellite pass's contacts on the Satellites screen.**
   Its log line logs every contact on the band the radio is on, with no satellite, so at ARRL Field
   Day a pass contact logged there would count as an ordinary 2 m or 70 cm contact, and Winter Field
@@ -77,16 +147,271 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until one sends the club's county again. Its contacts are still taken as sent. A state, province
   or section that differs is named the same way. The host sees what a laptop sends once it has
   logged a contact, and the warning is on the host's own screen only, not on the Remote page.
+- **The Rotor box shows on its rose where the station in your log entry is.** Beside a cockpit, the
+  bearing on the box's second line is now drawn on the rose as well: a dotted line from the middle
+  with a small marker on the rim, in amber, under the antenna's own needle. The second line also
+  says how far the antenna is off that bearing the short way round, for example "→ EC1DD 227°
+  (1531 km) 20° off", so you can tell at a glance whether to press Point. The line and the number
+  follow the call and the antenna as they move. With no call in the entry, a station Nexus cannot
+  place, or no grid of your own there is no line and no number, and a rotator that does not report
+  its position gets the line without a number. Nexus Remote is unchanged.
+- **JS8 heartbeats as JS8Call 3.0 has them: HB NET, and Send heartbeat now.** A new **HB NET**
+  switch in the JS8 dock (also Settings ▸ Digital ▸ JS8 ▸ Heartbeat networking) is JS8Call's
+  Enable Heartbeat Networking: off by default and remembered, it sends nothing itself, and the HB
+  button and heartbeat acknowledgements exist only while it is on. Right-click **HB**, or click the
+  **▾** beside it, for **Send heartbeat now** (one heartbeat in the next period, the repeat left as
+  it is) and, with a repeat interval set, **Start** or **Stop heartbeat timer**. The first repeated
+  heartbeat still goes one interval after you switch the repeat on, as in JS8Call. NEEDS-BENCH.
+- **JS8: no heartbeats at JS8 40 or JS8 60.** Heartbeats and heartbeat acknowledgements go out at
+  Slow, Normal and Fast only, as in JS8Call: at JS8 40 (once called Turbo) and JS8 60 HB disappears,
+  HB NET is greyed out, a running heartbeat repeat stops, and an acknowledgement still waiting is
+  dropped. NEEDS-BENCH.
+- **JS8 QSO pause, on by default.** While the To box holds a call, the heartbeat repeat pauses and
+  starts again one interval after you clear the box, no heartbeat is acknowledged, and a repeating
+  CQ stops; switching HB on clears the To box. Settings ▸ Digital ▸ JS8 ▸ Pause heartbeats while a
+  call is in the To box turns it off. NEEDS-BENCH.
+- **Three more JS8Call options in Settings ▸ Digital ▸ JS8, all off by default.** *Allow heartbeats
+  outside 500–1000 Hz* sends your heartbeats and acknowledgements on your own TX offset. *Don't
+  acknowledge stations that heartbeat more often than every 55 minutes* is JS8Call 3.0's rule: such
+  a station is added to *Never acknowledge heartbeats from these callsigns* (Settings ▸ Digital ▸
+  JS8), as JS8Call adds it to its list, gets no acknowledgement again, and the HB ACK chip names it;
+  take it off that list to acknowledge it again (turning the option off leaves the list as it is).
+  Once the list holds 500 calls the rule adds no more, but a station it stops is still not
+  acknowledged until you turn the option off. A station the rule adds while Settings is open is
+  kept when you save it. *Do not take part in
+  @ALLCALL*: nothing addressed to @ALLCALL is answered
+  or marked as addressed to you, and @ALLCALL leaves the To box's list. NEEDS-BENCH.
+- **The JS8 HB ACK chip says when an acknowledgement is held back.** When HB ACK is armed but would
+  not answer right now (at JS8 40 or JS8 60, while a message is still arriving, or while a call is in the To
+  box), the chip reads not armed and its tooltip says why, as JS8Call drops "ACK" from its HB
+  button then.
+- **JS8 60, JS8Call 3.0's fifth speed, to receive and to transmit.** A fifth speed chip in the
+  JS8 header, **JS8 60**: 4-second periods, a 250 Hz wide signal, each frame about 2.6 s on the
+  air, as JS8Call 3.0 sends it (JS8Call calls it experimental; it is for strong signals). A new
+  install decodes it with the other four at once, and Nexus transmits at it when you pick its
+  chip or Settings ▸ Digital ▸ JS8 ▸ Transmit speed. Its activity rows carry the letter I. Checked
+  both ways in the lab against JS8Call 3.0.3's own transmitter and receiver — what Nexus sends
+  prints in JS8Call 3.0.3 and what JS8Call 3.0.3 sends prints in Nexus, text for text — but not
+  yet on the air. JS8Call 2.x does not decode JS8 60. A settings file saved before this release
+  keeps decoding the four speeds it had: tick JS8 60 under Decode these speeds to add it.
+  NEEDS-BENCH: JS8 60 to and from JS8Call 3.0.3 on the air.
+- **JS8: QUERY CALL and AGN? are answered, as JS8Call 3.0.3 answers them.** A station that sends
+  "QUERY CALL W1AW?" to you, to a group you joined or to @ALLCALL hears back "YES -12 (5M)", the
+  SNR and how long ago you last heard W1AW, when you have heard it; on @ALLCALL each station is
+  answered once in 15 minutes, and with AUTOREPLY off nothing is sent. "AGN?" to your call sends
+  your last transmission again as it went out; with AUTOREPLY off it goes into the message box for
+  you to send. Both ask first while "Ask for confirmation" is on, wait while you are typing or a
+  message to you is still arriving, follow the only-reply and never-reply lists, and stop with the
+  idle watchdog, as every automatic reply does. NEEDS-BENCH against JS8Call 3.0.3.
+- **JS8: a message left for a group is handed to each member.** A `MSG TO:@GROUP` held at your
+  station is offered once to each station that sends QUERY MSGS to that group, if you joined it,
+  and handed over whenever a station asks for it with QUERY MSG n, a second time too, as JS8Call
+  hands it. It is held 48 hours, as long as JS8Call offers one. NEEDS-BENCH.
+- **JS8: Store… leaves a message at your station for a heard station.** The button at the end of a
+  row in Stations opens a box ("Store this message locally for W1AW:"). The message waits in the
+  Inbox, from your call, and goes out only when that station asks for it with QUERY MSGS and QUERY
+  MSG n, under the same rules as every automatic reply. Storing it sends nothing. NEEDS-BENCH for
+  the hand-over.
+- **JS8: your own frequency list.** Settings ▸ Digital ▸ JS8 ▸ Frequencies shows JS8Call 3.0.3's
+  suggested frequencies. Change, add or remove one and the list becomes yours, each frequency with
+  a description if you like: the JS8 band picker shows it, and opening JS8 tunes its first
+  frequency on the band. Reset puts JS8Call's list back; Export… saves yours to Downloads and
+  Import… reads such a file back.
+- **JS8: return to the last used frequency.** Off by default, as in JS8Call. On, opening JS8 tunes
+  the rig back to the frequency you last used in JS8 instead of the band's JS8 frequency.
+  NEEDS-BENCH: it moves the rig.
+- **JS8: the decode filter.** The new Filter plate on the JS8 waterfall shows what the decoder
+  listens to and opens the waterfall controls: the filter on or off, its centre and width, and
+  Centre on my RX offset. As in JS8Call it is on out of the box, at 1500 Hz and 2000 Hz wide, so JS8
+  now decodes 500–2500 Hz unless you widen it or switch it off (it decoded 200–2900 Hz before).
+- **JS8: QSY to centre.** In the same waterfall controls: moves the rig's dial so your TX offset
+  sits on the passband centre (1500 Hz unless you change it), for narrow filters and rigs whose
+  passband is uneven. Your RX offset and the stations heard move with it. Never while transmitting
+  or while a message is going out. NEEDS-BENCH: it moves the rig.
+- **JS8: the band schedule.** Settings ▸ Digital ▸ JS8 ▸ Change frequency by schedule, off by
+  default as in JS8Call. Give each row a frequency and a UTC window, and Nexus changes the rig's
+  frequency by itself, with nobody at the radio, 30 seconds after a notice you can cancel. Never
+  while transmitting or while a message is going out: it waits until both are clear. Move off the
+  scheduled frequency yourself and that row leaves you there. NEEDS-BENCH: it moves the rig with
+  nobody at it.
+- **JS8: DIRECTED.TXT.** With Write ALL.TXT decode log on, JS8 also writes JS8Call's DIRECTED.TXT
+  beside ALL.TXT, as JS8Call writes it: one line per directed message heard, with the date and time
+  (UTC), the dial, the offset, the SNR and the message, ♢ where it ended.
+- **JS8 spots the stations you hear, as JS8Call does.** With the PSK Reporter switch on, every
+  station heard on JS8 (a heartbeat, a CQ, a directed message, the first frame of a plain message)
+  now shows on PSK Reporter as a JS8 spot with its grid, where before almost none did. The same
+  stations, and every command sent to a @group, go to JS8NET, JS8Call's spotting network, once a
+  minute. Spots of every mode now carry the station's grid field to PSK Reporter, empty where none
+  was heard, as WSJT-X sends it.
+- **The JS8 @APRSIS gateway.** A station heard sending `@APRSIS GRID` is put on the APRS map at
+  that locator, and the text after `@APRSIS CMD` goes to APRS-IS as a raw packet, under your
+  callsign: Nexus logs in to APRS-IS with the passcode worked out from your callsign, as the iGate
+  does, only while JS8 is open and something waits to go. Off by default (JS8Call ships it on):
+  switch it on in Settings ▸ Digital ▸ JS8. **Never spot these callsigns** there keeps a station
+  off PSK Reporter, JS8NET and APRS-IS. NEEDS-BENCH: seeing the spots arrive needs a station on
+  the air.
+- **JS8 can relay APRS-IS messages to stations you hear (JS8Call 3.0), off by default.** Turned
+  on, it transmits with nobody at the radio: an APRS message for a station heard on JS8 is
+  acknowledged on APRS-IS in that station's name and keyed to it as `@APRSIS MSG TO:`, only while
+  TX is on and through every transmit guard. A message relayed to you this way lands in your JS8
+  Inbox from APRS. NEEDS-BENCH before it is used on the air.
+- **JS8: the RX pane, Band activity and the call list work as JS8Call 3.0.3's.** The RX pane
+  shows what is sent on your RX offset and what is addressed to you or your groups anywhere in
+  the passband, each message on one line as it arrives, with ♢ after its last frame, …… where a
+  frame went missing, and your own transmissions among them. Band activity keeps every frame
+  heard at an offset, joined, and can hide heartbeats and their ACKs. The call list puts
+  `@ALLCALL` and your groups on top and gives each station JS8Call's mark: ✕ blocked, ⚑ a
+  message for you, ★ hearing you, ☎ a CQ in the last five minutes, ⚟ heard through a relay. Each
+  list's ⋯ chooses its columns and its order (any of JS8Call's sorts) and clears it, or every
+  list. Each row's ⋯, or a right-click on it, has JS8Call's row menu: jump to the row's offset
+  (your RX and TX offsets both, as JS8Call has one offset; while a message is queued, only with
+  "Allow TX offset changes while sending" on, as in JS8Call) or its speed, centre the decode
+  filter there while the filter is on, show the station's messages, add a station or a group,
+  remove one (a group is left;
+  removing @ALLCALL turns on "Do not take part in @ALLCALL" in Settings, and adding
+  it turns that off), block one, remove an offset's activity. Needs a bench check: a jump moves
+  where your next message keys, as a Ctrl-click on the waterfall does (with that option on, the
+  frame on the air too), and removing @ALLCALL changes what Nexus answers.
+- **JS8: the Inbox works as JS8Call's message panel.** Click a message to read it; tick several
+  and delete them together; sort by any column; show one station's messages; **Reply** puts
+  `<path> MSG [MESSAGE]` in the compose box with `[MESSAGE]` ready to type over, and sends
+  nothing; while a message of yours is going out it puts nothing in, as JS8Call. A new message to
+  you puts a notice up for five minutes, as JS8Call's box stays, with **Show** to open it.
+- **JS8: JS8Call's list settings and sounds.** Settings ▸ Digital ▸ JS8 gains the callsigns to hide
+  in the RX pane, two highlight lists (words or callsigns, tinted in Band activity and the call
+  list), the end and missing-frame marks (♢ and ……), and a sound for a CQ, a heartbeat, an ACK
+  for you, a message to you, a message in your Inbox, a new callsign and a callsign you have
+  worked. All as JS8Call ships them: the lists empty, every sound off. Nexus plays a tone of its
+  own for each where JS8Call plays a file you pick.
+- **Programs written for JS8Call can read from Nexus.** Turn on JS8Call's API in Settings ▸
+  Digital ▸ JS8 (TCP on 2442, UDP on 2242, both off until you do, as in JS8Call), and a logger, map
+  or message tool made for JS8Call gets what Nexus hears, in JS8Call's own messages. Turn on
+  **Accept TCP requests** or **Accept UDP requests** as well (also off, as in JS8Call) and it can
+  ask for the stations heard, the band activity, the inbox, the station details, the call in your
+  To box, the decode filter, the dial, the speed, whether you are transmitting and what is going
+  out. It is read-only: such a program cannot
+  send, tune or change a setting through Nexus. Only programs on this computer can connect, and the
+  Remote page cannot turn it on.
+- **Clear test contacts on the Contest screen.** A gear test logged before the start stayed in the
+  event's log unless you deleted the journal file with Nexus closed. **Clear test contacts**, beside
+  the exports, takes every contact of this running out of the contest log at once: the first click
+  names how many, and a second within 5 seconds clears them. Each goes as Remove takes one: it waits
+  under Removed, where Restore puts it back, and it leaves the score, the dupe check and every
+  export. In a contest that sends a serial the numbers start again: the next contact is 001, after
+  a restart too, and only such a contest's button and notice say so (Field Day and the QSO parties
+  that send a county never mention a serial). A contact you restore afterwards keeps the number it
+  was sent, so a later contact can send that number again. At a club only this laptop's contacts go,
+  and the club drops them on every laptop as it drops a removed one. Nothing transmits.
+- **Settings ▸ Licenses shows Nexus's NOTICE.** The Licenses screen now opens with the NOTICE file
+  the installers carry, before the license texts of the interface's npm packages and the Rust
+  crates.
+- **FlexRadio: a Beta switch lets the Flex native client send CW, run Tune and run the ATU before
+  a tester has checked them on a radio. Off by default.** **Settings ▸ Radio ▸ Rig & CAT ▸
+  Advanced ▸ Let Nexus send CW, Tune and ATU through the native Flex client (not yet
+  bench-tested)**, shown only while the Flex native client (Beta) serves the radio, turns all three
+  on for that radio: CW goes to the radio's keyer a word at a time, Tune is the radio's own carrier
+  at its tune power, and the ATU button runs the radio's tuner. It is off for every radio until you
+  turn it on, it is kept per radio, and it changes only at the shack, never through the Remote
+  stream. It lifts only the client's "not yet checked on a radio" refusal: every other check still
+  decides each transmission, the TX-enable latch, your licence privileges and the TX watchdog
+  among them, and the client's own checks (Nexus's slice the transmit slice, nothing else keying
+  the radio, XIT off, break-in on and Sync CWX off for CW, a tuner fitted for the ATU). Saving a
+  change reconnects Nexus to the radio. Beta, not yet checked on a real Flex: try it into a dummy
+  load first. While it is off, a CW word, a Tune or an ATU press the client holds back says so and
+  names this switch. NEEDS-BENCH on a FLEX radio, into a dummy load: CW, Tune and the ATU through
+  the client.
+- **JS8Call's API tells a program the JS8 contacts you log, and counts Tune as transmitting, as
+  JS8Call does.** With the API on, a program made for JS8Call gets JS8Call's LOG.QSO each time you
+  log a JS8 contact, with the contact as JS8Call's log writes it, and RIG.PTT on and off for a tune
+  carrier; asked while you tune, it reads the transmitter keyed with TUNE going out. NEEDS-BENCH
+  with a program made for JS8Call.
+- **JS8NET gets your INFO with its macros replaced, as JS8Call sends it:** `<MYCALL>`,
+  `<MYVERSION>` and the rest, as an INFO? reply has them. NEEDS-BENCH: a capture of what goes to
+  JS8NET.
+- **JS8 on Nexus Remote shows what the station's JS8 screen shows.** HB NET and what is holding HB
+  ACK back, the call list's ★ (hearing you) and ☎ (called CQ in the last five minutes), the Inbox's
+  note on a held message too long to hand over at this speed, the decode filter's plate over the
+  waterfall, and the RX pane with a line for each message, closed by its end mark. The call list and
+  the RX pane follow the station's JS8 groups, RX block list and @ALLCALL choice: a message to a
+  group the station joined shows, a blocked station's does not and its call is marked ✕, and
+  @ALLCALL leaves the list when the station has left it. They are there to see: the decode filter,
+  QSY to centre, the band schedule, the groups and the block list are changed at the station only,
+  as before. A station on 1.18.0 or earlier shows its JS8 screen on the Remote as it did.
+  NEEDS-BENCH: a station on this build, watched on the Remote page from a phone.
+- **A Stats pane beside the log entry: the DXCC, WAS and WAZ standing of the call you type.**
+  Type a call and the pane shows NEW ONE, NEW BAND and NEW MODE for the band you are on and the
+  mode you log; which confirmations your log holds through LoTW, a card, eQSL and QRZ, for the
+  station's country and for this call; and a grid for its DXCC entity, its state (WAS) and its CQ
+  zone (WAZ), CW, phone and digital by 160 m to 2 m, each slot not worked, worked or confirmed.
+  Confirmed means what that award takes: DXCC and WAS a LoTW or paper confirmation, WAZ also an
+  eQSL from an Authenticity-Guaranteed member. The grids count exactly what the Awards view counts,
+  contact by contact, by each contact's own DXCC number and CQ zone, and 60 m and 4 m earn no DXCC
+  slot. The pane keeps one height whatever it shows, so nothing beside it moves while you type, log
+  and clear a call. In Phone, CW and JS8 it stands under the log form and shows by itself on a
+  window with room for it beside everything the form shows (a maximized window on a 2560×1440
+  screen, or any window about 1440 px tall); on a smaller window, 1920×1080 included, and in FT
+  (under the callsign card, about the station the card shows), RTTY and PSK (under the log strip),
+  tick **Stats** in ⊞ Panels. Your tick or untick wins at every window size. It moves like any other
+  pane in ⊞ Panels ▸ Arrange in Phone, CW, JS8 and FT. In Phone and CW the log form now heads its
+  column: a box you put in that column stands under it. NEEDS-BENCH: the pane in each cockpit with a
+  log entry.
+- **Awards: needed by band.** For DXCC, WAS and WAZ, each band's count of what you have never
+  worked there and what you have worked there but not confirmed, with the list behind each count.
+  NEEDS-BENCH: each band's counts against the Needed board.
+- **WAZ counts an eQSL from an Authenticity-Guaranteed member as a confirmation**, as CQ does.
+  The eQSL download now keeps that mark on the contact the card confirms (it used to drop it), so
+  the Awards view's WAZ total, the Needed board's zone confirmations and the Stats pane agree.
+  DXCC and WAS still count only LoTW and cards. NEEDS-BENCH: the WAZ confirmations in Awards and the
+  Stats pane against the Needed board.
+- **Set a contact's country by hand in the Logbook.** Click a contact's Country and pick its DXCC
+  entity from a list you can search by name or by number; the 62 deleted entities are in it too.
+  Nexus keeps the entity's number on the contact as its ADIF `DXCC`, written to every export and
+  read back by an import, and the awards, the Needed board and the statistics count the contact as
+  that entity. It is for an old log whose contacts carry no DXCC number: a 1×1 call like K1N counts
+  as the United States by its call, and as Navassa Island once you pick it. **Clear the DXCC
+  number** in the same list puts the contact back to counting by its call. Where LoTW confirmed the
+  contact as another entity, LoTW's still counts, and the Awards view lists the two side by side.
+  The Country column shows and sorts each contact by the entity its record's number names, and the
+  new-entity and new-band badges beside a call you type in the log form, or pick in Operate, count
+  it there too. The contact's ADIF `COUNTRY` follows the number: picking an entity writes its name
+  on the contact, and every export and upload names a contact that carries a DXCC number by that
+  number's entity, so the two never disagree. The number is followed strictly: a Sicily contact
+  carrying Italy's 248 is shown and written as Italy, as ADIF names it, and so are the other WAE
+  areas carrying their DXCC entity's number. The badges beside a call count the same way: a call
+  from Sicily or another WAE area is its DXCC entity there (IT9 is Italy), so they find every
+  contact with Italy, a Sicily contact logged in Nexus without a number included, and a Sicily call
+  is no longer new when you have worked mainland Italy.
+  A contact that arrives with a DXCC number and no
+  country, from an import or another program, is given the number's entity (K1N with 182 as Navassa
+  Island). A contact imported with a `COUNTRY` its number contradicts goes out under the number's
+  name; Nexus changes the stored contact only when you change it. On the station only: a Remote
+  browser shows the country but cannot change it.
 
 ### Changed
 
+- **JS8: the TX offset stays put while a message is going out, as in JS8Call.** Moving the TX
+  offset between two frames of a message used to send the rest of the message on the new offset, so
+  one message went out on two. Now the move is refused while a message is waiting to go or going out,
+  and the screen says why; once it has gone, the offset moves as before. **Allow TX offset changes
+  while sending** in Settings ▸ Digital ▸ JS8 (JS8Call's option, off by default) takes the move at
+  once, as JS8Call does: the frame on the air moves to the new offset a tenth of a second later,
+  from where it has got to (receivers lose that frame, as with JS8Call), and the frames still to go
+  are sent there (at Slow, a move in a frame's first few seconds lands near its end). A heartbeat on
+  its own spot stays there, and a move out of your privileges leaves the frame where it is.
+  NEEDS-BENCH.
 - **On Windows, Nexus follows your computer's light or dark setting until you pick a theme.** A new
   install there opens in System, so the very first screen already matches Windows, and it changes
   when Windows does. On Linux, the Raspberry Pi and macOS, Nexus opens Dark until you pick, as
   before, and so do the hosted Remote page and its station monitor. Settings ▸ Appearance ▸ Theme ▸
   System is there on every computer. A theme you picked stays as you picked it. Earlier versions
   saved Dark for everyone who never picked one, so a computer that ran them keeps Dark: pick System
-  to follow the computer.
+  to follow the computer. NEEDS-BENCH: Windows, switched between light and dark.
+- **JS8: CQ sends your CQ message.** The CQ button and the repeating CQ send the CQ message set in
+  Settings ▸ Digital ▸ JS8 ▸ Composing, JS8Call's `CQ CQ CQ <MYGRID4>` by default, which keys the
+  same one CQ frame as before. The CQ form picker beside the button is gone: put the form you want
+  in the CQ message, or keep a few as saved messages. Pressing CQ, or turning the repeating CQ on,
+  clears the To box, as JS8Call does. NEEDS-BENCH: a CQ and a repeating CQ with a changed CQ
+  message, on the air beside JS8Call.
 - **Light has the softer silver look of the Silver chassis theme.** A pale silver page, white
   panels, graphite text and steel blue keys, by day and with Night on, and the scopes and meters
   take Silver's lit keys and digits. If you had Silver chassis picked, you see Light, which looks
@@ -114,8 +439,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screen's header no longer show the long amber sentence. A small outlined **FT8 · no credit** (or
   **FT4 · no credit**) chip says it instead, beside the mode on the log line and where the sentence
   was in the banner (on the Remote page's Contest view too) and the FT header; hovering it shows the
-  whole sentence. It shows on exactly the modes the warning did, and the contact still logs: what is
-  logged and scored is unchanged.
+  whole sentence. It shows on exactly the modes the warning did, and the contact still logs, though
+  it now scores nothing (see Fixed).
 - **The manual's Illinois QSO Party club checklists gain three lines.** No test contacts from 1700Z
   on Saturday: every contact logged with Contest mode on from then is in the party's log, so in the
   club's file and its claimed score, even before the party starts, and Ctrl+D twice takes back one
@@ -123,8 +448,171 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exports the Club Cabrillo before Contest over?, while Contest mode is still on, because its button
   is on the Contest screen only then. The guide's page on ending a contest now says the last two for
   every club contest.
+- **FT8 and FT4 overs now start and end on the slot clock, as WSJT-X's do.** An over used to run
+  from the moment the radio keyed, so anything that made the key late (a CAT exchange at the start
+  of the slot, a decode still running, a busy computer) moved every tone late by the same amount and
+  cut the end of the over at the next boundary. The tones are now placed on the slot clock, as
+  WSJT-X places them: a late key skips the first symbols and the over still ends on time, and an
+  on-time over is unchanged (its tones start 0.5 s into the slot). The over now ends where WSJT-X
+  ends it: FT8's audio stops 13.64 s into the slot and PTT drops at 13.84 s (it dropped at about
+  13.39 s, 0.45 s before WSJT-X, with half the room for the sound card's delay); FT4's audio stops
+  at 6.04 s and PTT drops at 6.24 s (it held about 0.56 s longer). FT4 keeps its tones 0.5 s into
+  the slot. A decode still running when your slot starts no longer delays your over: Nexus builds
+  the over it is about to send before that decode begins, and keys it on time; an over you change in
+  the last seconds of the slot (a new TX frequency or message) is built then, and no longer waits
+  either (see Fixed). A Call CQ or double-click inside your own slot still keys at
+  once, now with its tones on the slot clock and its PTT ending inside the slot (it ran 0.25 s into
+  the next one), and it now keys as late as WSJT-X does: while the slot is under 75 % of its period,
+  up to 11.25 s into an FT8 slot or 5.6 s into FT4, sending the symbols that remain (1.18.0 keyed
+  one only up to about 7.9 s into FT8 and 5.0 s into FT4). An FT4 Call CQ between 5.54 s, where Nexus's FT4 tones end, and that limit has
+  nothing left to send: Nexus keys and holds the transmitter, silent, until the over's usual end at
+  6.24 s, as WSJT-X does (1.18.0 waited for your next slot). Later than that it waits for your next
+  slot.
+  The same limit holds when your slot's own key comes late (a decode that finished late, a busy
+  computer): past 75 % of the slot Nexus does not key it, as WSJT-X does not, and the over goes out
+  at your next slot instead (1.18.0 keyed it however late, and the boundary cut the over short). An
+  FT4 one that comes between 5.54 s and that limit is keyed and held silent to 6.24 s, as the Call CQ
+  is, and so is one that comes before the limit but whose over takes long enough to build that the
+  key lands after it. And an FT8 over keyed in time whose radio comes on after its last tone (more
+  than about 1.9 s late: split commands on a slow radio link, a busy computer) is held silent to its
+  usual end at 13.84 s, as WSJT-X holds it.
+  NEEDS-BENCH: an FT8 and an FT4 over on a dummy load beside WSJT-X, a Call CQ about 10 s into an
+  FT8 slot and another about 12 s in (the first keys at once, the second waits for the next slot, in
+  both programs), an FT4 Call CQ about 5.6 s into your slot (TX on at once with nothing sent and off
+  at about 6.2 s, in both programs; the window is 85 ms wide, so it takes a few tries), and FT8 on a
+  slow computer (a Raspberry Pi) watching the TX start against the clock.
+- **On Windows the title bar follows your theme pick.** Pick Light or Dark in Settings ▸
+  Appearance ▸ Theme and the window's title bar turns light or dark with it; System, the Windows
+  default, follows the computer's own setting as before. Linux, the Raspberry Pi and macOS are
+  unchanged. NEEDS-BENCH: Windows, with Light, Dark and System picked in turn.
+- **JS8 HB ACK needs heartbeat networking, not the HB repeat.** As in JS8Call, heartbeat
+  acknowledgements answer while HB NET and AUTOREPLY are on, whether or not your own heartbeat
+  repeat is running; before, they answered only while HB was on. After the update HB NET is on if
+  you had HB ACK on or a heartbeat repeat interval set, so your HB button and acknowledgements carry
+  on, and off for everyone else, as JS8Call ships it. NEEDS-BENCH.
+- **JS8's Turbo speed is called JS8 40, as JS8Call 3.0 calls it.** The speed chip, Settings and
+  the activity help say JS8 40, and the chip's tooltip says it is the speed once called Turbo
+  (JS8 60's says Ultra, its name in JS8Call's code). The speed itself is unchanged: 6-second
+  periods, the letter C, the same signal on the air.
+- **JS8: replies about held messages read as JS8Call 3.0's.** QUERY MSGS is answered "YES MSG ID 4
+  +2" when two more wait after message 4, a delivery ends "NEXT MSG ID 5" when another waits (and
+  "+1" past that), and a heartbeat acknowledgement says "MSG ID 4 +2)", as JS8Call 3.0.3 sends it.
+  With one message waiting the replies read as before. NEEDS-BENCH against JS8Call 3.0.3.
+- **JS8: a message held for one station stays until you delete it.** It no longer goes after 48
+  hours, as JS8Call keeps it too; one left for a group still goes after 48 hours. The inbox still
+  holds at most 100 messages (and 64 KB) of your own and as many held for others. When it is full a
+  message already handed over goes first, then the oldest, and the Inbox now lists which message
+  went and why until you press Clear notes.
+- **JS8: a station's heartbeat is acknowledged at most once in 15 minutes, as in JS8Call.** JS8Call
+  counts a heartbeat as @ALLCALL traffic: once it acknowledges a station's heartbeat it neither
+  acknowledges that station again nor answers its @ALLCALL QUERY CALL or QUERY MSGS for 15 minutes,
+  and a station it answered on @ALLCALL gets no acknowledgement for 15 minutes. Nexus acknowledged
+  every heartbeat; it now does as JS8Call does, and the log says when a heartbeat goes
+  unacknowledged for this. Each station is counted by its call as heard, as JS8Call counts it, so
+  W1AW/P and W1AW are now each answered on @ALLCALL (Nexus used to count them as one).
+  NEEDS-BENCH against JS8Call 3.0.3.
+- **JS8 keeps a station as it was heard, /P included, as JS8Call does.** W1AW and W1AW/P are two
+  rows in Stations, each with its own report, and a message to you from W1AW/P comes from W1AW/P
+  in the Inbox. So a QUERY CALL about W1AW/P is answered when W1AW/P was heard (before, it went
+  unanswered), and a HEARING? from W1AW/P names W1AW when you heard it too. NEEDS-BENCH against
+  JS8Call 3.0.3.
+- **JS8 on 160 m is now 1.8435 MHz, and 60 m (5.363 MHz) is in the JS8 band picker**, as in
+  JS8Call 3. Opening JS8 on 160 m tunes 1.8435 instead of 1.842, and on 60 m it now tunes 5.363
+  (60 m is channelised and differs by country: check your own band plan).
+- **JS8: the Activity pane is now JS8Call's RX pane, and ★ is JS8Call's "hearing you".** The
+  running list of every frame is gone from it; every frame is in Band activity. A station is
+  pinned to the top from its row's ⋯ now. The call list sorts by callsign and shows JS8Call's
+  columns, as JS8Call ships them; grid, distance, azimuth, speed and time delta are a tick away in
+  its ⋯ ▸ Show columns, and Band activity's time delta and speed in its own.
+- **JS8: CQ, HB and the one-click buttons wait while a message is going out.** CQ, HB, REPLY,
+  SNR, INFO, STATUS and Saved are greyed out while a message is waiting to go or going out, an
+  automatic reply or a heartbeat included, as JS8Call's are, so nothing they send queues behind it.
+  Needs a bench check.
+- **The manual's drive advice covers the Yaesus that turn their power down with the ALC.** On an
+  FT-991A below full power the ALC reads above zero however clean the drive, so "set it so your
+  rig's ALC reads zero" could not be met there. Rig and Audio Setup, Getting Started and the
+  settings reference now say to set the drive at full power on those radios.
+- **ALL.TXT names each JS8 frame's speed, as JS8Call does.** With Write ALL.TXT decode log on,
+  each JS8 line, heard or sent, carries JS8Call's letter for its speed after the audio offset,
+  before the message: A Normal, B Fast, C JS8 40, E Slow, I JS8 60. A program that reads the JS8
+  lines in Nexus's ALL.TXT finds the letter there. NEEDS-BENCH: a line beside JS8Call's for the
+  same frame.
+- **PSK Reporter gets the spots WSJT-X sends, and no others.** A decode is spotted when it is a
+  CQ or carries the sender's grid; a report, a roger, a 73 or free text no longer is, and neither
+  is a low-confidence (`?`) decode or your own signal heard on another radio. Below 49 MHz a
+  station is spotted once every five minutes however often you hear it; on 6 m and up every decode
+  is, as in WSJT-X 3.0.2. JS8 keeps JS8Call's own rules. NEEDS-BENCH: after an hour on a busy band,
+  compare your spots on pskreporter.info with a WSJT-X station's.
 
 ### Fixed
+
+- **FT8, FT4 and FT2 send the signal report when your own call has a prefix.** With a call such
+  as `OE/PD1SCO`, the report went out as `<PA0A> OE/PD1SCO` and the roger as a bare `RRR`, so no
+  report reached the other station and neither log got one. Nexus now sends what WSJT-X sends:
+  your call in brackets in the report and the roger, `PA0A <OE/PD1SCO> -01` and
+  `PA0A <OE/PD1SCO> R-01`, so the number fits, and your call in full in your first call, RR73 and
+  73, which is how the other station learns it. This applies to any call FT8 cannot carry whole
+  (a prefix, or a suffix other than /P and /R) working an ordinary call; when the other call has a
+  slash too, /P and /R included, FT8 still has no room for a report. NEEDS-BENCH: on the air, with
+  a second receiver running WSJT-X. (#410)
+- **A roger Nexus sends again after your CQ run has moved on keeps your whole call.** When a station
+  that missed your RR73 asks again, or a caller your run gave up on comes back with RR73, Nexus
+  answers once. With a call such as `OE/PD1SCO` that answer went out as `PA0A OE/PD1SCO RR73`,
+  which FT8 sends without the prefix, as `PA0A PD1SCO RR73`. It now goes out as the rest of the
+  contact did, `<PA0A> OE/PD1SCO RR73`. NEEDS-BENCH: needs a partner on the air.
+- **The Logbook opens on a computer whose graphics have no WebGL2.** On such a computer (reported
+  on Linux Mint) the Logbook showed only "Logbook hit an error" and "Error creating WebGL context":
+  the 3-D globe above the table needs WebGL2, and when it could not draw it took the whole Logbook
+  down. The band above the table now says the globe needs WebGL2 and that your log is not
+  affected, and the table, search, editing and import work as always. Conditions now greys out 3D
+  on such a computer, as it does where the graphics are too weak, and a stored 3D pick shows Globe
+  instead. If a 3-D globe stops working once it is drawn, only the globe gives way to a note: the
+  Logbook or Conditions around it carries on. NEEDS-BENCH: a Linux PC without WebGL2 (or a
+  virtual machine), and Windows as the control.
+- **The 3-D globe on Conditions starts spinning from rest (#407).** The globe rests a few seconds
+  after nothing on it moves. Pressing ▶ Spin on a resting globe crashed it with "Maximum call stack
+  size exceeded"; on a second computer showing Conditions over the network that took the whole page
+  down until a reload. The globe turning to your grid square while it rested did the same. Both now
+  just set the globe moving. NEEDS-BENCH: on a second computer at the network address, and on the
+  app's own Conditions, pick 3D, leave the globe still for a few seconds, press ▶ Spin, then drag
+  and fling it hard for 30 s.
+- **AD1C's country file now carries its license notice.** Nexus finds a call's DXCC entity and
+  zones in the cty.dat country file by Jim Reisert AD1C, which is MIT-licensed. That license asks
+  for its notice to travel with every copy, and NOTICE named the license without reproducing it.
+  NOTICE, which every installer carries, now has the notice in full; the copyright file kept with
+  the data is now the one AD1C ships in the same release, not a copy of a web page; and the README
+  credits AD1C.
+- **The ATU button now starts the FT-710's tuner.** On a Yaesu FT-710 the ATU button sent the
+  command that starts a tune-up on other Yaesu radios, which the FT-710 does not use: the radio
+  accepted it and nothing tuned, and in the digital modes Nexus still turned transmit off for the
+  tune-up. Nexus now sends the FT-710 its own tuning-start command; every other radio gets the
+  same command as before. NEEDS-BENCH: an FT-710 into a dummy load.
+- **DXCC, WAS and WAZ now count each contact by the country LoTW or your log records for it.**
+  They used to read every contact's country from its call alone, so a DXpedition on a US-style
+  call counted as the United States: K1N (Navassa Island, 2015), K1B (Baker & Howland Islands,
+  2002), K3J (Johnston Island, 2001) and others like them. A contact now counts by the DXCC
+  number its record carries, from an ADIF import or a LoTW download, and by LoTW's when LoTW
+  confirmed it under a different one. Your log's own country is never changed, and the Awards
+  view lists every contact where LoTW and your log disagree. A contact with no number counts by
+  its call, as before. The DXCC card shows the current count beside the total with the deleted
+  entities (such as East Germany); Sicily and the other WAE areas count as the DXCC entity they
+  belong to (Sicily as Italy); a LoTW download or an ADIF import keeps the DXCC number and CQ
+  zone it brings for a contact already in your log; WAS counts a state by the contact's DXCC (a
+  KP4 call signing from Florida counts Florida); and WAZ counts the CQ zone the contact's record
+  carries. The numbers come from AD1C's cty.csv and, for the deleted entities, the ARRL's
+  TrustedQSL (see NOTICE). The Needed board, the Statistics page, Worked All Provinces and the
+  "First DX" achievement now count each contact the same way. The Needed board no longer calls an
+  entity needed that the Awards view counts (Navassa Island after a K1N contact), and its new-zone
+  and new-state chips go by the CQ zone and DXCC number the contact's record carries; the
+  statistics count Navassa rather than the United States. An operator in Sicily is at home in
+  Italy for "First DX". A station on the air has no record, so the board still places it by its
+  call.
+- **A contest log that cannot be saved to disk now says so.** When the contest journal could not
+  be written (a full disk, or a file held by another program), the contacts since the last good
+  save were in memory only and nothing on screen said so; a power cut would have lost them. The
+  Contest screen and the contest log strip now show a red line saying contacts are not being
+  saved, since when, and to export a Cabrillo file now. It goes away as soon as a save works
+  again, and that save carries every contact the failed ones missed.
 
 - **One band is one band, whatever its letter case.** Contacts imported from another logger kept
   that logger's spelling of the band, so a log with `20M` from an import and `20m` from Nexus
@@ -220,13 +708,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Settings ▸ Radio shows the same note under PTT Method for these radios, and still warns when you
   save one of them with PTT on CAT. Nothing you saved before changes until you pick, and a saved
   Serial RTS or Serial DTR counts as the answer. The Malachite DSP SDR is a receiver, so it is not
-  asked.
+  asked. NEEDS-BENCH: one of these radios, keyed by VOX and by a serial line.
 - **F5, Ctrl+F5 and Ctrl+R no longer reload Nexus on Windows.** One of them pressed by mistake
   reloaded the whole window, in a contest in the middle of a contact. WebView2's own browser
   shortcuts are now off in every Nexus window, as they already were in the Remote stations window:
   the main window, the splash and every pop-out, the Contest screen and the Contest logger among
   them. With them, Ctrl+P no longer prints the window and Ctrl+F no longer opens a find bar. Copy,
-  paste, cut, undo and select all work as before, and so do Nexus's own F-keys. Not yet tried on
+  paste, cut, undo and select all work as before, and so do Nexus's own F-keys. NEEDS-BENCH:
   Windows.
 - **The Contest screen's Export ADIF and Club ADIF files have the report you sent.** They had the
   report you received on each contact but not the one you sent, so a program reading them found no
@@ -337,6 +825,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call was changed while it was joined, stays in that laptop's own log and is not sent; the club
   block says how many, and the club chip still reaches Synced. Nothing already in the club's log
   changes, and at ARRL Field Day the GOTA station still sends its contacts under its own call.
+  Each laptop holds back its own contacts, so a laptop on an earlier version still sends a contact
+  logged on another call to the club's log: put every laptop on this version before the contest.
 - **A contact in a mode the contest does not allow now scores nothing.** FT8 and FT4 at the Illinois
   QSO Party, and the WSJT modes at Winter Field Day, were scored like any other contact although the
   chip beside the mode said no credit: their points, their county or section, and a bonus station's
@@ -393,6 +883,242 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tuned a channel the radio refuses. When your only radio cannot receive 145.800 MHz, Nexus now
   tells you once per session, with where to turn the auto-arm off (Settings ▸ Digital ▸ SSTV), and
   then leaves the radio and the screen alone.
+- **The log entry keeps what you typed when you switch pages.** A call typed into the Phone or CW
+  cockpit's log entry, with its reports, name, QTH, comment, notes and park, was gone when you
+  came back from another page such as Conditions, and had to be typed again. Each cockpit now
+  keeps its own contact until you log it or clear it, and the Satellites section's log entry does
+  the same. In CW the call is back in His Call too, so the F-keys send the call on screen. The
+  band, frequency and mode are still read from the radio when you log. Nothing is kept across a
+  restart, in a contest's entry, or while "Log a contact from another radio" is open. The RTTY,
+  PSK and JS8 cockpits already kept their entries.
+- **With two radios, each one keeps its own serial port, baud, sound card and drive.** Four things
+  in Settings ▸ Radio could put one radio's settings on the other. **+ Add radio** left the radio you
+  had been editing in the form, so the first Save gave the new radio that radio's port, baud and
+  audio devices. A radio you opened again with **Edit** after saving it showed what it had before
+  the save, and saving it put those values back; saving one radio could also put back the other
+  radio's last-saved changes. Removing the radio you were editing left its settings in the form, so
+  the next Save put them on the radio you operate. And while you edited a radio that is not the one
+  in use, its **Tx Power** and **RX Gain** sliders changed the radio in use as you moved them, and a
+  change to the drive of the radio in use (its cockpit **Pwr** slider) showed up in the form, so
+  Save gave the radio you were editing that drive. The form now loads the radio it is editing every
+  time and reads both radios again after each save, and + Add radio asks before it drops unsaved
+  edits, as Edit does. While you edit a radio that is not in use, the two sliders now set only that
+  radio's saved levels, which it takes up when it becomes the radio in use; on the radio in use they
+  work as before. If your radios ended up sharing a baud, a port, a sound card or a drive level, set
+  each one again under Settings ▸ Radio. NEEDS-BENCH: two Yaesus (an FT-710 and an FT-991A) on a
+  Mac.
+- **A Save in Settings keeps the drive and RX gain you set last.** After you moved the cockpit
+  **Pwr** slider or changed RX Gain, Settings showed the level from before the change, and the next
+  Save of anything in Settings set the radio in use back to it. With two radios, saving the radio
+  you were editing did the same, and so did every Save in that window after it. The level you set
+  last, in the cockpit or in Settings, is now the one Settings shows and keeps and the one the radio
+  in use gets. While you edit a radio that is not in use, the hint under **Tx Power** and **RX
+  Gain** now says that Save stores them for that radio and that the radio in use does not change.
+  NEEDS-BENCH: an FT-710 into a dummy load.
+- **An FT over is never keyed with no transmit audio.** Nexus opened the sound card's transmit
+  output inside the first FT8 or FT4 over of a session, after it had keyed the radio, so that over
+  went out late by however long the open took. If the output would not open (another program
+  holding the device, or the device unplugged), every over after that keyed the radio with no
+  audio for the rest of the session, and nothing on screen said why. The output now opens when you
+  turn TX on in the digital section (TX On, Call CQ, a double-click), so the first over no longer
+  waits for it. If it will not open, the radio is not keyed, TX turns off, and the status line says
+  so in the sound card's own words; once the device is free, turn TX on again and the next over
+  keys normally. A station that only listens still opens no transmit output at all, and Phone, CW
+  and the keyboard modes open theirs as before. This covers FT8, FT4, JS8 and the other timed-slot
+  modes. NEEDS-BENCH: an FT8 and an FT4 over on a dummy load beside WSJT-X, and one with the
+  output device held by another program.
+- **A QRZ button opens the station's own page for a call with a word after it.** `W1AW/PORTABLE`
+  opened the QRZ page for PORTABLE and `K1A/QRP` the one for QRP, because the longest part of the
+  call was taken as the callsign. The part with a digit in it is the callsign now, so they open
+  W1AW and K1A, on the desktop, on the Remote page and from the DXpedition list alike.
+- **Searching the Logbook by country finds the country it shows.** The Country column shows the
+  DXCC entity, but the search still looked only at the country text stored with the contact, so a
+  contact stored as `Germany` from a QRZ lookup was not found by "Fed. Rep. of Germany", the name
+  on its row. The search now looks in both, on the desktop and on the Remote page.
+- **JS8: a MSG whose text starts with "MSG" reaches your Inbox.** A message to you reading, for
+  example, "MSG 5" was taken for QUERY MSG 5, a request for held message 5: it never reached your
+  Inbox and was never acknowledged, and if you held message 5 for the sender, Nexus sent it to
+  them. 1.18.0 did this too. It is now filed and acknowledged like any other message, as JS8Call
+  does; only QUERY MSG 5 asks for message 5, and a QUERY reading "MSGS 5" asks for nothing, as in
+  JS8Call. NEEDS-BENCH.
+- **JS8: a long message you hold is handed over with its "FROM".** A held message near the 512
+  character limit, handed over at Fast or faster, lost the end of "FROM W1AW" from the reply. The
+  end of the message is cut instead now, so the reply always says who it is from, and a NEXT MSG ID
+  that would not fit whole is left off (that message is offered at the next QUERY MSGS).
+  NEEDS-BENCH.
+- **JS8: a held message too long to hand over at your speed is no longer offered again and again.**
+  A message you hold for another station is handed over in one transmission, which holds at most 19
+  frames at Slow, 39 at Normal, 59 at Fast and 99 at Turbo. One that needed more was still offered
+  ("YES MSG ID 5", and in a heartbeat acknowledgement), then silently failed to go, and was offered
+  again at every query. It is now not offered, counted or handed over until you change to a speed it
+  fits, and its Inbox row says so and names that speed. A hand-over that fits only without its
+  "NEXT MSG ID" goes without it, and a reply that no longer fits when it goes (you slowed down while
+  it waited for your Yes) is not sent, and the log says why. NEEDS-BENCH.
+- **The JS8 log strip filed their SNR as the report you received.** It is the report you send
+  them, as JS8Call's log dialog has it, and it now goes in RST sent. The strip also logs the time
+  you selected the station (put their call in the To box) as the start, and the dial plus your TX
+  offset as the frequency, as JS8Call does.
+- **Check park states and Check confirmations: one key skips the list.** With thousands of lines,
+  Tab passed every checkbox before Cancel. Each dialog's first Tab stop is now a skip, shown only
+  while it has the keyboard: Enter puts the keyboard on Cancel, which changes nothing, and Tab from
+  there reaches the dialog's other button.
+- **The manual names the contest journal by its real name.** Since club sync the journal is
+  `fieldday_backup_<id>.adi`, one per computer, not `fieldday_backup.adi`. Contest Log Persistence
+  now says so, and says how to start clean after a gear test with Clear test contacts.
+- **The FT-991A's, FT-710's and FTDX10's ALC meter reads on the radio's own scale.** Nexus showed the
+  ALC of these three radios at four times the radio's own reading, and at 100 % in red from a quarter
+  of the radio's ALC bar up. A 991A run below full power, which raises its ALC reading by design,
+  looked overdriven on every over. Nexus now reads the radio's own ALC value and shows the same
+  share of the bar as the radio. Every other radio's ALC reads as before. NEEDS-BENCH: an FT-991A
+  and an FTDX10 into a dummy load, each radio's ALC bar next to Nexus's at three drive levels.
+- **FT8 and FT4: an over you change in the last seconds before your slot no longer waits for the
+  decoder.** When what Nexus is about to send changes after the early decode has started (you move
+  the TX frequency, double-click a station, call CQ or change the message, or the sequencer moves
+  on), Nexus builds the over at the start of your slot. Building it had to wait until that decode
+  finished, so on a slow computer, a Raspberry Pi or a busy band the over could key late and lose
+  its first symbols. Nexus now builds FT8 and FT4 overs without waiting for the decoder, so they
+  key on time, as WSJT-X's do (its decoder runs separately). The tones are the same ones Nexus sent
+  before, checked against WSJT-X's own encoder for every kind of message, and a compound or hashed
+  call you send is still shown in full when the reply to it comes back. NEEDS-BENCH: beside
+  WSJT-X on a slow computer, an FT8 and an FT4 over changed in the last seconds before your slot (a
+  new TX frequency, a double-click) keys on time, and a QSO with a compound call completes.
+- **Phone on 60 m now sets the radio to USB.** Nexus put every band below 10 MHz on LSB, 60 m
+  included, so picking a 60 m channel in the Phone screen set the radio to LSB and the voice went
+  out on the wrong side of the channel. US rules put the 60 m carrier 1.5 kHz below each channel
+  centre, which only works on USB, and the IARU Region 1 and Canadian band plans use USB there too.
+  The Phone screen, an SSTV image sent from it, the transmit lock and the sideband a contact is
+  logged with now all use USB on 60 m; every other band is unchanged. NEEDS-BENCH: a radio on 60 m
+  into a dummy load, checking the mode on the radio's own display.
+- **US General and Extra operators can now talk on the four 60 m channels.** The rule sets a 60 m
+  phone carrier 1.5 kHz below the channel centre (5330.5, 5346.5, 5371.5 and 5403.5 kHz), but the
+  transmit lock only accepted a carrier at least 1.4 kHz below it, so it showed TX LOCKED on the
+  very frequency the rule names. Phone now keys on that carrier, in USB, and is still refused
+  anywhere the voice would leave the 2.8 kHz channel. The lock is also stricter on 60 m in four
+  places. LSB is refused everywhere on the band, the channels and the 5351.5 to 5366.5 kHz segment
+  alike. AM and FM are refused there too: the rule holds every 60 m signal to 2.8 kHz, and both
+  send the voice on each side of the carrier, so neither fits. A signal can no longer reach across
+  the 2.1 kHz gap between the 5348.0 kHz channel and the segment. CW keys only within 5 Hz of a
+  channel centre, where the rule puts the CW carrier, so the soundcard CW keyer, whose tone sits a
+  pitch away from its dial, keys only in the segment. Data, Technician and non-US operators are
+  unchanged, and AM and FM keep every other band. NEEDS-BENCH: a radio on 60 m into a dummy load,
+  checking that Nexus keys USB on a channel carrier and CW on a channel centre, and shows TX LOCKED
+  for LSB, AM, FM and CW off the centre.
+- **On 60 m the Phone screen greys LSB, AM and FM, and the lock says why.** A US licence allows only
+  upper sideband phone on 60 m, but the mode chips still offered LSB, AM and FM, and a pick showed
+  TX LOCKED with "this frequency is outside your license privileges" on a frequency that was fine.
+  The chips now grey those three on 60 m, with "60 m allows only USB phone" when you hover one. When
+  the mode is the only reason TX is locked, push-to-talk, the band lock, the voice keyer, the radio's
+  tuner button and SSTV say that 60 m allows only USB phone and ask for USB or AUTO. A frequency
+  where USB is refused too keeps the old sentence. What keys and what is refused is unchanged.
+- **PSK Reporter now shows where the FT8 and FT4 stations you hear are.** When a decode carries
+  the sender's grid (a CQ, or a reply with a grid), its spot now sends that grid, as WSJT-X does,
+  so pskreporter.info can put the station on its map. A CQ without a grid still goes without
+  one. The NA VHF contest exchange that rogers a grid (`W9XYZ K1ABC R FN42`) is now spotted too,
+  with its grid, as in WSJT-X. NEEDS-BENCH: look yourself up on pskreporter.info after some FT8.
+- **A slow DNS server can no longer hold up a transmission.** Every five minutes Nexus sends its
+  PSK Reporter spots, and it looked the server's address up in the loop that keys and unkeys the
+  radio, so a DNS server slow to answer held that loop, and an over due to end, for as long as it
+  took. The lookup and the upload now run on their own.
+- **The APRS-IS feed asks only for the stations inside your radius.** With weather, objects or
+  messages switched on in Settings ▸ APRS (all three are, by default), the feed also asked the
+  server for every position, object, message and weather report on the network, worldwide, so the
+  map filled to its 2,000-station limit with stations far outside your radius. It now asks for
+  what is inside your radius and for your watched calls; a radius of 0 still means no distance
+  limit.
+- **The APRS internet chip says when APRS-IS is up for JS8.** With the APRS-IS feed switched off
+  and JS8's @APRSIS gateway or its relay using APRS-IS, the chip said the feed was switched off
+  while Nexus was logged in to APRS-IS. It now reads *Internet for JS8* and says what the
+  connection is for. After the feed is switched off, its status no longer stays at connected.
+- **Tune: a radio slow to answer a meter reading can no longer stall the tune carrier.** While
+  Tune is keyed, Nexus reads the SWR, ALC, power and compression meters and gives each reading
+  120 ms, so that a slow radio costs a reading and never a gap in the carrier. The limit was only
+  checked after each wait for the radio, and one wait lasted up to half a second, longer than the
+  carrier Nexus keeps queued. Each wait now ends at the limit. Tune keys and unkeys exactly as
+  before; a radio that takes longer than 120 ms to answer a meter now shows no reading for it
+  during Tune. NEEDS-BENCH: watch SWR during Tune on each radio.
+- **On the FT-991A, FT-710 and FTDX10 the ALC bar's colours follow the radio's own ALC zone.**
+  Nexus shows these radios' ALC on the radio's own scale, where the ALC zone ends at half scale,
+  but the bar turned amber and red only near full scale, so a reading past the radio's zone showed
+  green. It now turns amber at 40 % and red at 48 % on these radios, the same place in the zone
+  as on every other radio, whose bar is unchanged. Display only. NEEDS-BENCH: the ALC steps on
+  the FT-991A and the FTDX10.
+- **PSK's Answer key sends the call in the log's Call box (#406).** In PSK, a call typed into the
+  Call box of the log never reached the macro keys: Answer, and every other key that sends their
+  call, sent nothing and said to enter their call first. The log's Call box and the box beside the
+  keys are now one field, as they are in RTTY: a call typed in either shows in both and is the one
+  the keys send, and logging the contact empties both. With no call in either, a key that sends
+  their call still sends nothing and says so. NEEDS-BENCH: in PSK, type a decoded station's call
+  into the log's Call box and press Answer, then empty it and press Answer again.
+- **No more PSK Reporter spots of a station called FN42.** A WSPR decode such as `K1ABC FN42 37`
+  went to PSK Reporter as a station named after its grid, FN42, and an FST4W one the same way.
+  WSPR is no longer sent to PSK Reporter (WSJT-X sends it to WSPRnet), and an FST4W beacon is
+  spotted under its own call, with its grid, as WSJT-X spots it. No mode can send a grid as a
+  callsign now. NEEDS-BENCH: look yourself up on pskreporter.info after some FST4W.
+- **A busy band's PSK Reporter spots are no longer lost.** Every five minutes Nexus sent all its
+  spots in one packet; on a busy band (an FT4 contest, a 6 m opening) that packet was too big to
+  send, and the whole five minutes of spots never arrived. They now go in packets of at most 952
+  bytes, the size WSJT-X sends.
+- **FST4W beacons, and WSPR's from a compound call, show as WSJT-X shows them (#408).** Heard on
+  FST4W, `TI4JWC EK70 30` showed in the decode list and the roster as a station called EK70, in
+  Armenia; it now shows TI4JWC, in Costa Rica, at grid EK70. A beacon from a compound call such as
+  `KI4TWB/0 23`, which carries no grid, showed its power, 23, as a grid and flagged it new; it now
+  shows the call with no grid. A beacon line is no longer read as Tempo chat text either, where it
+  could put a grid in the roster as a station.
+- **An FT8 or FT4 over no longer goes out in the other station's period when the radio is slow to
+  key.** With Split operation set to Rig, Nexus sends the radio three commands before each key, and
+  on a slow CAT link each can take up to 2.5 s; the key itself can take 0.7 s more. A key that came
+  that late, after your period had ended, sent the rest of the over in the other station's period,
+  on their slot's timing, with the transmitter held up to 13.84 s into it (FT8) or 6.24 s (FT4).
+  Nexus now unkeys at once when the radio comes on after your period has ended and sends nothing, as
+  WSJT-X sends nothing once its window has closed, and, as WSJT-X does, TX stays on: only that over
+  is dropped, and your next over goes out in your next period. The status line says the over was
+  dropped and how late the radio was. However many are dropped in a row, TX stays on, as in WSJT-X:
+  the TX watchdog is what ends a run that never gets an over out. And the end of an FT8 or FT4 over
+  is now the first thing each pass of the radio loop checks, so something else holding the loop up
+  (a double-click or a logger's Reply while a decode finishes on a slow computer) no longer keeps
+  the transmitter on past 13.84 s or 6.24 s for as long as it lasts. NEEDS-BENCH: with Split
+  operation set to Rig on a radio with a slow serial CAT link (an FT-710 at 4800 baud, a Xiegu),
+  Call CQ about 11 s into your FT8 slot several times: the radio must never stay keyed past the end
+  of your slot; when it keys after it, it unkeys at once, the status line says the over was dropped,
+  TX stays on and your next over goes out whole, however many drop in a row until the TX watchdog.
+  An over that keys in time goes out as before.
+- **FT8, FT4, FT2 and JS8: the licence lock now counts the whole signal, not just its lowest
+  tone.** It judged only your dial plus the TX offset, so a signal whose top crossed the edge of
+  your privileges still went out: a US General on 5.363 MHz, where the 60 m segment ends at 5366.5
+  kHz, could transmit at any TX offset below 3500 Hz. Now the signal's full width counts: FT8 50
+  Hz, FT4 83 Hz, FT2 167 Hz, and JS8 25 Hz at Slow, 50 at Normal, 80 at Fast, 160 at JS8 40 and
+  250 at JS8 60. On 5.363 MHz an FT8 or JS8 Normal signal keys at a TX offset up to 3449 Hz, and
+  from 3450 Hz the screen shows TX LOCKED; FT2 keys up to 3333 Hz and locks from 3334 Hz. Away from
+  an edge nothing changes, and neither do the other digital modes or an operator with no US licence
+  class. NEEDS-BENCH: a radio on 60 m into a dummy load, as a US General.
+- **JS8: a heartbeat is judged where it is sent.** A heartbeat or heartbeat acknowledgement goes out
+  on its own free spot in 500–1000 Hz, but the licence lock judged your TX offset, so on a dial just
+  below the bottom of a segment, with your TX offset inside it, a heartbeat could go out below the
+  segment. It is now judged on its own spot: one that would fall outside your privileges is not
+  sent, and the screen says why. NEEDS-BENCH: a heartbeat on a dial a few hundred hertz below
+  5351.5 kHz, as a US General, into a dummy load.
+- **The serial port you choose is the one Nexus opens.** Once CAT had worked on a USB radio's port
+  (COM3, say), Nexus remembered that radio so it could follow it to a new COM number after a
+  replug. Until Nexus was restarted, it also followed it when you changed the port yourself: choose
+  a port Windows does not list, as a virtual port from a port-sharing program such as VSPE may be,
+  and Nexus went back to the radio's old port instead of the one you chose. The remembered radio
+  now belongs to the port it was found on. A port you change to is opened as you typed it, and if
+  it will not open, the radio line says so. A radio that is replugged and comes back under a new
+  COM number, with the port setting unchanged, is still followed. NEEDS-BENCH: checked with
+  simulated port lists only; bench on a USB radio with no transmitting (type COM99 and Save, then
+  set the real port back).
+- **CQ WW CW and SSB and CQ WPX CW and SSB logs claim their score.** The Cabrillo file now carries
+  `CLAIMED-SCORE`, the score the Contest screen shows, as the CQ WW RTTY file already did. A
+  single-band entry (Band category set to one band) whose log also holds a contact on another band
+  writes no claimed score, in these four and in CQ WW RTTY: CQ scores only the declared band, and
+  the screen's score counts them all. The guide's note on logging the Scandinavian Activity Contest
+  as CQ WPX again says to delete the claimed score before sending the log.
+
+### Security
+
+- **The TLS library behind Nexus's downloads is on its security release.** Nexus uses rustls for
+  HTTPS (propagation data, maps and the other downloads); 0.23.46 fixes the four issues published
+  on 14 October 2026 (RUSTSEC-2026-0346, 0347, 0348 and 0349). Nothing to do on your side.
 
 ## [1.18.0] — 2026-10-12
 

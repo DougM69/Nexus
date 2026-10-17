@@ -51,6 +51,27 @@ export function patchSettings(edit: (current: Settings) => Partial<Settings>): P
   return write
 }
 
+/** A list the backend adds to while a form that edits it is open — the JS8 55-minute rule puts
+ *  the stations it stops on "Never acknowledge heartbeats from these callsigns", as JS8Call's
+ *  `addToHbBlacklist` does. The form's own edit of the list — calls it took out since `baseline`,
+ *  calls it put in — made against the list as `live` holds it now, never the form's copy, so a call
+ *  added since the form loaded is kept. Calls compare upper-cased and trimmed, as the lists hold
+ *  them; the live order is kept and the form's new calls follow it. */
+export function mergeListEdit(baseline: readonly string[], form: readonly string[], live: readonly string[]): string[] {
+  const key = (c: string) => c.trim().toUpperCase()
+  const was = new Set(baseline.map(key))
+  const now = new Set(form.map(key))
+  const out = live.filter((c) => !(was.has(key(c)) && !now.has(key(c))))
+  const have = new Set(out.map(key))
+  for (const c of form) {
+    if (!was.has(key(c)) && !have.has(key(c))) {
+      out.push(c)
+      have.add(key(c))
+    }
+  }
+  return out
+}
+
 /** Fields that describe ONE thing: a form that changed any of them saves all of them. The tune is
  *  the one another writer moves constantly (the rig's knob), and a dial typed in Settings saved
  *  beside the band the knob has since moved to would put that dial on the wrong band. */

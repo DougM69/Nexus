@@ -3,9 +3,10 @@
 // Settings ▸ Digital ▸ JS8 — the section exists, sits where the registry says (the Digital
 // tab, its own <fieldset id="settings-js8"> between PSK and SSTV), and its controls edit the
 // fields interfaces.md §3.2 names. Defaults are asserted the JS8Call way (spec G3): auto-reply
-// ON, relay ON, HB-ack OFF, all four speeds decoded. The four speed switches write ONE number
-// (js8RxSpeeds, a bitmask: slow 1 · normal 2 · fast 4 · turbo 8) so a hand-edited or stale
-// settings.json degrades to "all four" rather than to nothing. HB on/off is deliberately NOT
+// ON, relay ON, HB-ack OFF, all five speeds decoded (JS8Call 3.0's every-speed decode). The five
+// speed switches write ONE number (js8RxSpeeds, a bitmask: slow 1 · normal 2 · fast 4 · turbo 8
+// · ultra 16) so a hand-edited or stale settings.json degrades to "every speed" rather than to
+// nothing. HB on/off is deliberately NOT
 // a setting (session-only, spec G3) and this file asserts its absence.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, within, waitFor } from '@testing-library/react'
@@ -72,7 +73,7 @@ function renderPanel() {
 /** The JS8Call defaults (G3), as the Rust side serialises them. */
 const js8Defaults = {
   js8Speed: 1,
-  js8RxSpeeds: 15,
+  js8RxSpeeds: 31,
   js8HbIntervalMin: 0,
   js8HbAck: false,
   js8Autoreply: true,
@@ -142,13 +143,13 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     expect(ids.indexOf('settings-sstv')).toBe(ids.indexOf('settings-js8') + 1)
   })
 
-  it('reads the JS8Call defaults: auto-reply on, relay on, HB-ack off, four speeds decoded', async () => {
+  it('reads the JS8Call defaults: auto-reply on, relay on, HB-ack off, five speeds decoded', async () => {
     const fs = await openJs8()
     const sw = (label: string) => control(fs, label)
     expect(sw('Auto-reply to queries').getAttribute('aria-checked')).toBe('true')
     expect(sw('Relay for other stations').getAttribute('aria-checked')).toBe('true')
     expect(sw('Answer heartbeats').getAttribute('aria-checked')).toBe('false')
-    for (const s of ['Slow', 'Normal', 'Fast', 'Turbo']) {
+    for (const s of ['Slow', 'Normal', 'Fast', 'JS8 40', 'JS8 60']) {
       expect(sw(s).getAttribute('aria-checked'), `${s} should decode by default`).toBe('true')
     }
     expect((control(fs, 'Transmit speed') as HTMLSelectElement).value).toBe('1')
@@ -192,15 +193,42 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     )
   })
 
-  it('the four speed switches edit one bitmask, independently', async () => {
+  it('the five speed switches edit one bitmask, independently', async () => {
     const fs = await openJs8()
     const sw = (label: string) => control(fs, label)
-    fireEvent.click(sw('Turbo'))
-    expect(sw('Turbo').getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(sw('JS8 40'))
+    expect(sw('JS8 40').getAttribute('aria-checked')).toBe('false')
     expect(sw('Slow').getAttribute('aria-checked')).toBe('true')
     expect(sw('Normal').getAttribute('aria-checked')).toBe('true')
-    fireEvent.click(sw('Turbo'))
-    expect(sw('Turbo').getAttribute('aria-checked')).toBe('true')
+    expect(sw('JS8 60').getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(sw('JS8 40'))
+    expect(sw('JS8 40').getAttribute('aria-checked')).toBe('true')
+  })
+
+  // A mask saved before JS8 60 existed (15, the 2.3-era four) is shown as it is — JS8 60 off —
+  // and its switch adds bit 16, so the save carries 31.
+  it('a stored four-speed mask shows JS8 60 off, and its switch saves 31', async () => {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({ ...defaultSettings, ...js8Defaults, js8RxSpeeds: 15, mycall: 'KD9TAW', mygrid: 'EN52' } as never),
+    )
+    const fs = await openJs8()
+    const sw = (label: string) => control(fs, label)
+    expect(sw('JS8 60').getAttribute('aria-checked')).toBe('false')
+    expect(sw('JS8 40').getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(sw('JS8 60'))
+    await clickSave()
+    await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalledWith(expect.objectContaining({ js8RxSpeeds: 31 })))
+  })
+
+  it('offers JS8 60 as a transmit speed, index 4, with JS8 40 at 3', async () => {
+    const fs = await openJs8()
+    const sel = control(fs, 'Transmit speed') as HTMLSelectElement
+    expect(Array.from(sel.options).map((o) => [o.value, o.textContent, o.title])).toEqual([
+      ['0', 'Slow', ''], ['1', 'Normal', ''], ['2', 'Fast', ''], ['3', 'JS8 40', 'Turbo'], ['4', 'JS8 60', 'Ultra'],
+    ])
+    fireEvent.change(sel, { target: { value: '4' } })
+    await clickSave()
+    await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalledWith(expect.objectContaining({ js8Speed: 4 })))
   })
 
   it('the minute fields take whole non-negative numbers and ignore junk', async () => {
@@ -329,6 +357,32 @@ describe('Settings ▸ Digital ▸ JS8', () => {
     expect(sent?.macros.activeCwProfile, "a cockpit's own write still saves").toBe(2)
     expect(sent?.js8Groups, 'and keeps the group as it is').toEqual(['@APRSIS'])
   })
+
+  // JS8Call's SPOT block: "Enable spotting @APRSIS messages to the APRS-IS network" (off in
+  // Nexus, where JS8Call ships its `SpotToAPRS` on), 3.0's inbound relay (off, `APRSISRelay`: it
+  // keys unattended, and its hint says so) and "Never spot these callsigns" (`SpotBlacklist`, read
+  // upper-cased).
+  it('the @APRSIS switch reads off, the APRS-IS relay off, the never-spot list empty, and each saves', async () => {
+    const fs = await openJs8()
+    const aprs = control(fs, 'Spot @APRSIS messages to APRS-IS')
+    const relay = control(fs, 'Relay APRS-IS messages to heard stations')
+    const never = control(fs, 'Never spot these callsigns') as HTMLInputElement
+    expect(aprs.getAttribute('aria-checked'), 'off by default, an absent key included').toBe('false')
+    expect(relay.getAttribute('aria-checked'), 'off by default').toBe('false')
+    expect(never.value, 'empty by default').toBe('')
+    expect(within(fs).getByText(/This transmits with nobody at the radio/), 'the relay says it keys unattended').toBeTruthy()
+    fireEvent.click(aprs)
+    fireEvent.click(relay)
+    fireEvent.change(never, { target: { value: 'w1aw, k1abc/p ,' } })
+    expect(aprs.getAttribute('aria-checked')).toBe('true')
+    expect(relay.getAttribute('aria-checked')).toBe('true')
+    await clickSave()
+    await waitFor(() =>
+      expect(api.get('setSettings')).toHaveBeenCalledWith(
+        expect.objectContaining({ js8SpotAprs: true, js8AprsRelay: true, js8SpotNever: ['W1AW', 'K1ABC/P'] }),
+      ),
+    )
+  })
 })
 
 /** The footer Save (`type="submit"`); other sections carry their own "Save …" buttons. */
@@ -338,3 +392,75 @@ async function clickSave() {
   )!
   fireEvent.click(save)
 }
+
+// JS8Call's two send options, off as it ships them: "Hold PTT between frames while there are more to
+// be transmitted" (HoldPTT, Configuration.cpp:2404) and "Allow Tx frequency changes while
+// transmitting" (TxQSYAllowed, :2305), its TX-offset half. A settings file from before them carries
+// neither key, and reads off.
+describe('Settings ▸ Digital ▸ JS8 ▸ Sending', () => {
+  it('Hold PTT between frames and Allow TX offset changes while sending read off, and save on', async () => {
+    const fs = await openJs8()
+    for (const label of ['Hold PTT between frames', 'Allow TX offset changes while sending']) {
+      const sw = control(fs, label)
+      expect(sw.getAttribute('aria-checked'), `${label}: off by default`).toBe('false')
+      fireEvent.click(sw)
+      expect(sw.getAttribute('aria-checked'), `${label}: on after a click`).toBe('true')
+    }
+    await clickSave()
+    await waitFor(() =>
+      expect(api.get('setSettings')).toHaveBeenCalledWith(
+        expect.objectContaining({ js8HoldPtt: true, js8TxOffsetWhileSending: true }),
+      ),
+    )
+  })
+
+  // JS8Call's Tx delay (TxDelay, Configuration.cpp:2275): 0.2 s by default, 0.1 to 0.5 s on its
+  // spin box (Configuration.ui sbTxDelay). Stored in ms; a file from before it reads 0.2 s.
+  it('TX delay reads 0.2 s with no key in the file, offers 0.1 to 0.5 s, and saves the pick in ms', async () => {
+    const fs = await openJs8()
+    const sel = control(fs, 'TX delay') as HTMLSelectElement
+    expect(sel.tagName).toBe('SELECT')
+    expect(sel.value, "JS8Call's default").toBe('200')
+    expect([...sel.options].map((o) => [o.value, o.textContent])).toEqual([
+      ['100', '0.1 s'],
+      ['200', '0.2 s'],
+      ['300', '0.3 s'],
+      ['400', '0.4 s'],
+      ['500', '0.5 s'],
+    ])
+    fireEvent.change(sel, { target: { value: '400' } })
+    await clickSave()
+    await waitFor(() =>
+      expect(api.get('setSettings')).toHaveBeenCalledWith(expect.objectContaining({ js8TxDelayMs: 400 })),
+    )
+  })
+})
+
+// The 55-minute rule puts the stations it stops on "Never acknowledge heartbeats from these
+// callsigns" from the station itself, as JS8Call's addToHbBlacklist does (Configuration.cpp:
+// 1226-1231), while this form may be open. The form's Save carries only what the operator changed,
+// over the settings the backend holds at the Save, and its edit of that list is made against the
+// list as it is then: a station the rule added after Settings opened is never written away.
+describe('Settings ▸ Digital ▸ JS8: the never-acknowledge list the 55-minute rule adds to', () => {
+  it('keeps a station the rule added while Settings was open, the list edited or not', async () => {
+    const loaded = { ...defaultSettings, ...js8Defaults, mycall: 'KD9TAW', mygrid: 'EN52', js8HbAckDeny: ['N0XYZ', 'K9ZZZ'] }
+    api.get('getSettings').mockImplementation(() => Promise.resolve(loaded as never))
+    const fs = await openJs8()
+    const list = control(fs, 'Never acknowledge heartbeats from these callsigns') as HTMLInputElement
+    expect(list.value, 'the form shows the list it loaded').toBe('N0XYZ, K9ZZZ')
+    // The rule adds W1AW in the backend; the open form still holds what it loaded.
+    const live = { ...loaded, js8HbAckDeny: ['N0XYZ', 'K9ZZZ', 'W1AW'] }
+    api.get('getSettings').mockImplementation(() => Promise.resolve(live as never))
+    const sent = () => (api.get('setSettings').mock.lastCall?.[0] as Settings | undefined)?.js8HbAckDeny
+    // Another field saved: the list is the backend's, W1AW in it.
+    fireEvent.change(control(fs, 'Idle watchdog (minutes)'), { target: { value: '30' } })
+    await clickSave()
+    await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalledTimes(1))
+    expect(sent(), 'another field saved').toEqual(['N0XYZ', 'K9ZZZ', 'W1AW'])
+    // The list itself edited, K9ZZZ out and K1ABC in: the edit goes over the list as it is now.
+    fireEvent.change(list, { target: { value: 'N0XYZ, K1ABC' } })
+    await clickSave()
+    await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalledTimes(2))
+    expect(sent(), 'the list edited').toEqual(['N0XYZ', 'W1AW', 'K1ABC'])
+  })
+})

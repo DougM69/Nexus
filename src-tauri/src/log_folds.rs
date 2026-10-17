@@ -2,10 +2,11 @@
 //!
 //! Every pass the command layer makes over the log — the needs model the Needed board,
 //! propagation, satellite passes and the pounce thread share; the award summary; the Journey;
-//! the log statistics; today's hunted parks; a station's last logged grid; the upload health the
-//! Settings panel polls; the oldest LoTW upload awaiting its echo; the catch-up sweep's pick; the
-//! compound calls the launch seeds the decoder with — reads the store here, through ONE door
-//! ([`LogRows`]), and runs the fold it always ran over what it reads.
+//! the log statistics and the Statistics view's timeline; today's hunted parks; a station's last
+//! logged grid; the upload health the Settings panel polls; the oldest LoTW upload awaiting its
+//! echo; the catch-up sweep's pick; the compound calls the launch seeds the decoder with — reads
+//! the store here, through ONE door ([`LogRows`]), and runs the fold it always ran over what it
+//! reads.
 //!
 //! # Four rules each of them keeps
 //!
@@ -45,15 +46,17 @@
 //! that is what the upload health is kept against; the diagnosis is not kept at all, as before.
 //!
 //! Today's hunted parks are not kept either: they are read through the `qso_recent` index for
-//! today's contacts alone, which is the whole of their cost.
+//! today's contacts alone, which is the whole of their cost. Nor is the Statistics view's
+//! timeline, for the same reason: its window's contacts alone, through the same index.
 
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 
 use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::logstore::{Freshness, LogRows};
+use tempo_core::logbook::query::{LogFold, LogTimeline, TimelineCounter, TimelineRange};
 use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Order, Scope};
-use tempo_core::logbook::QsoRecord;
+use tempo_core::logbook::{QsoRecord, AWARD_EXTRAS};
 
 use crate::{qso_is_sat, LogTallies, Tally};
 
@@ -62,7 +65,8 @@ use crate::{qso_is_sat, LogTallies, Tally};
 // The four confirmation channels ride with any pass that reads `award_confirmed` or
 // `confirmed`: the decoder derives both from them, exactly as it does for a whole record.
 
-/// `LogNeeds::add_qso`'s inputs.
+/// `LogNeeds::add_qso`'s inputs — with the passthrough fields [`AWARD_EXTRAS`] names, read beside
+/// them: the needs count each contact as the awards do ([`award_fields`]).
 const NEEDS: Narrow = Narrow {
     columns: &[
         "call",
@@ -75,11 +79,12 @@ const NEEDS: Narrow = Narrow {
         "eqsl_rcvd_raw",
         "qrz_status_raw",
         "prop_mode",
+        "dxcc",
     ],
     uploads: false,
 };
 
-/// [`award_add`]'s inputs.
+/// [`award_add`]'s inputs — with the passthrough fields [`AWARD_EXTRAS`] names, read beside them.
 const AWARDS: Narrow = Narrow {
     columns: &[
         "call",
@@ -94,6 +99,8 @@ const AWARDS: Narrow = Narrow {
         "grid",
         "ota_iota",
         "prop_mode",
+        "dxcc",
+        "when_unix",
     ],
     uploads: false,
 };
@@ -118,15 +125,28 @@ const JOURNEY: Narrow = Narrow {
     uploads: false,
 };
 
-/// A callsign, and nothing else: the statistics, and the compound calls the launch seeds.
+/// A callsign, and nothing else: the compound calls the launch seeds.
 const CALLS: Narrow = Narrow {
     columns: &["call"],
+    uploads: false,
+};
+
+/// The log statistics' geography: a callsign and the record's DXCC number — with the passthrough
+/// fields [`AWARD_EXTRAS`] names (its CQ zone, and LoTW's DXCC), read beside them.
+const GEOGRAPHY: Narrow = Narrow {
+    columns: &["call", "dxcc"],
     uploads: false,
 };
 
 /// [`hunted_today`]'s inputs.
 const HUNTED: Narrow = Narrow {
     columns: &["call", "when_unix", "ota_their_ref"],
+    uploads: false,
+};
+
+/// [`log_timeline`]'s inputs.
+const TIMELINE: Narrow = Narrow {
+    columns: &["mode", "when_unix"],
     uploads: false,
 };
 
@@ -216,7 +236,7 @@ pub(crate) fn needs_finish(
     tempo_core::logbook::io_fence::whole_log_off_engine_lock("the needs model's fold");
     let mut needs = propagation::LogNeeds::new();
     let fresh = rows
-        .each(NEEDS, Scope::All, Order::Log, &mut |q| {
+        .each_with(NEEDS, AWARD_EXTRAS, Scope::All, Order::Log, &mut |q| {
             // A "needs confirmation" must be award-grade (LoTW/paper), not eQSL.
             needs.add_qso(
                 &q.call,
@@ -226,6 +246,7 @@ pub(crate) fn needs_finish(
                 q.state.as_deref(),
                 q.award_confirmed,
                 qso_is_sat(q.prop_mode.as_deref()),
+                award_fields(q),
             );
             ControlFlow::Continue(())
         })
@@ -247,7 +268,16 @@ pub(crate) fn needs_kept(
     Ok((needs_finish(capture, &tallies.needs)?, log))
 }
 
-// ── the award summary ───────────────────────────────────────────────────────
+// ── the award summary, and the Stats pane's index ────────────────────────────
+
+/// What the award fold keeps: the summary `get_awards` serves, and the Stats pane's index of the
+/// same contacts, filled by the same fold at the points it credits each award
+/// ([`propagation::CallStatsIndex`]). One pass makes both, so the pane's grids can never count a
+/// contact differently from the Awards view.
+pub(crate) struct AwardsKept {
+    pub(crate) summary: Arc<propagation::AwardSummary>,
+    pub(crate) call_stats: Arc<propagation::CallStatsIndex>,
+}
 
 /// `get_awards`'s summary, folded again only when the log's content or the operator's call (the
 /// home entity "First DX" is judged against) has moved. The main window polls it twice a minute.
@@ -255,6 +285,39 @@ pub(crate) fn awards_kept(
     engine: &Mutex<Engine>,
     tallies: &LogTallies,
 ) -> Result<Arc<propagation::AwardSummary>, String> {
+    Ok(awards_fold_kept(engine, tallies)?.summary.clone())
+}
+
+/// The Stats pane's index ([`get_call_stats`](crate::get_call_stats)), kept with the summary it
+/// is folded beside: asking it of an unchanged log costs no read of the log.
+pub(crate) fn call_stats_kept(
+    engine: &Mutex<Engine>,
+    tallies: &LogTallies,
+) -> Result<Arc<propagation::CallStatsIndex>, String> {
+    Ok(awards_fold_kept(engine, tallies)?.call_stats.clone())
+}
+
+/// The Stats pane's answer for `call` typed on `band` in `mode`, from the kept index
+/// ([`call_stats_kept`]). The station has no record, so where it is comes from `state_of` — the
+/// licence index in the app ([`crate::us_state_hint`]), as for a station heard.
+pub(crate) fn call_stats_for(
+    engine: &Mutex<Engine>,
+    tallies: &LogTallies,
+    call: &str,
+    band: &str,
+    mode: &str,
+    state_of: impl Fn(&str) -> Option<String>,
+) -> Result<propagation::CallStats, String> {
+    let index = call_stats_kept(engine, tallies)?;
+    let call = call.trim().to_ascii_uppercase();
+    Ok(index.stats_for(&call, band, mode, state_of(&call).as_deref()))
+}
+
+/// The award fold, kept against the log's content and the operator's call.
+fn awards_fold_kept(
+    engine: &Mutex<Engine>,
+    tallies: &LogTallies,
+) -> Result<Arc<AwardsKept>, String> {
     let eng = engine_lock(engine);
     let (mark, my_call) = (eng.log_index_rev(), eng.settings().mycall.clone());
     if let Some(kept) = tallies.awards.get(mark, &my_call) {
@@ -263,16 +326,20 @@ pub(crate) fn awards_kept(
     let rows = eng.log_rows();
     drop(eng);
     tempo_core::logbook::io_fence::whole_log_off_engine_lock("the awards fold");
-    let mut awards = propagation::Awards::new();
+    let mut awards = propagation::Awards::with_call_stats();
     // Tell the accumulator our own entity so "First DX" counts only foreign ones.
     awards.set_home_call(&my_call);
     let fresh = rows
-        .each(AWARDS, Scope::All, Order::Log, &mut |q| {
+        .each_with(AWARDS, AWARD_EXTRAS, Scope::All, Order::Log, &mut |q| {
             award_add(&mut awards, q);
             ControlFlow::Continue(())
         })
         .map_err(unreadable)?;
-    keep(&tallies.awards, mark, my_call, awards.summary(), fresh)
+    let kept = AwardsKept {
+        call_stats: Arc::new(awards.take_call_stats().unwrap_or_default()),
+        summary: Arc::new(awards.summary()),
+    };
+    keep(&tallies.awards, mark, my_call, kept, fresh)
 }
 
 /// The native award fold over records in hand — the reference Remote's read is held to in its
@@ -289,6 +356,26 @@ pub(crate) fn awards_for_records<R: std::borrow::Borrow<QsoRecord>>(
         award_add(&mut awards, std::borrow::Borrow::borrow(q));
     }
     awards.summary()
+}
+
+/// What a contact's record carries for the awards beyond its call: its DXCC number, LoTW's where
+/// that differs, its CQ zone, when it was made, and which channels confirmed it (eQSL's
+/// Authenticity-Guaranteed mark among them). The one reading [`award_add`], the needs model, the
+/// log statistics and Remote's folds of them all take, so each counts a contact as the awards do.
+pub(crate) fn award_fields(q: &QsoRecord) -> propagation::RecordFields {
+    propagation::RecordFields {
+        dxcc: q.dxcc,
+        lotw_dxcc: tempo_core::logbook::record_lotw_dxcc(q),
+        cqz: tempo_core::logbook::record_cq_zone(q),
+        when_unix: q.when_unix,
+        qsl: propagation::QslChannels {
+            card: q.qsl_rcvd.card,
+            lotw: q.qsl_rcvd.lotw,
+            eqsl: q.qsl_rcvd.eqsl,
+            eqsl_ag: tempo_core::logbook::record_eqsl_ag(q),
+            qrz: q.qsl_rcvd.qrz,
+        },
+    }
 }
 
 /// One contact into the award fold — the one step [`awards_kept`] and [`awards_for_records`]
@@ -311,6 +398,7 @@ fn award_add(awards: &mut propagation::Awards, q: &QsoRecord) {
         q.grid.as_deref(),
         q.ota.iota.as_deref(),
         qso_is_sat(q.prop_mode.as_deref()),
+        award_fields(q),
     );
 }
 
@@ -331,11 +419,11 @@ pub(crate) fn log_stats(
     let rows = eng.log_rows();
     drop(eng);
     tempo_core::logbook::io_fence::whole_log_off_engine_lock("the log statistics");
-    // `compute_log_stats`' own accumulator, a call at a time.
+    // `compute_log_stats`' own accumulator, a contact at a time, with what its record carries.
     let mut stats = propagation::stats::LogStatsAccumulator::new(&my_call);
     let fresh = rows
-        .each(CALLS, Scope::All, Order::Log, &mut |q| {
-            stats.add(&q.call);
+        .each_with(GEOGRAPHY, AWARD_EXTRAS, Scope::All, Order::Log, &mut |q| {
+            stats.add(&q.call, award_fields(q));
             ControlFlow::Continue(())
         })
         .map_err(unreadable)?;
@@ -473,6 +561,37 @@ pub(crate) fn hunted_today(
     .map_err(unreadable)?
     .or_refuse()?;
     Ok(propagation::HuntedActivations::from_log(worked))
+}
+
+// ── the Statistics view's timeline ──────────────────────────────────────────
+
+/// `get_log_timeline`'s answer at `now`: contacts per mode over the past day, 30 days or year,
+/// in UTC as the log is ([`TimelineCounter`] holds the window rule). Only the window's contacts
+/// are read — through the `qso_recent` index, whatever the log's size — and the counter still
+/// tests every row it is handed. Not kept: the window moves with the clock, and its read is the
+/// whole of its cost.
+///
+/// ⚠️ It reads the store: never under the Engine lock. Take `rows` ([`Engine::log_rows`]) under
+/// it.
+pub(crate) fn log_timeline(
+    rows: &LogRows,
+    range: TimelineRange,
+    now: i64,
+) -> Result<LogTimeline, String> {
+    // A clock before 1970 is asked about 1970.
+    let mut timeline = TimelineCounter::new(range, u64::try_from(now).unwrap_or(0));
+    rows.each(
+        TIMELINE,
+        Scope::Since(timeline.since()),
+        Order::Log,
+        &mut |q| {
+            timeline.add(q);
+            ControlFlow::Continue(())
+        },
+    )
+    .map_err(unreadable)?
+    .or_refuse()?;
+    Ok(timeline.finish())
 }
 
 // ── a station's last logged grid ────────────────────────────────────────────
@@ -853,9 +972,22 @@ mod tests {
                 q.state.as_deref(),
                 q.award_confirmed,
                 qso_is_sat(q.prop_mode.as_deref()),
+                // Since the needs count by the record's own numbers, the oracle reads them off
+                // the whole record — the store's narrow read must carry them to match it.
+                award_fields(q),
             );
         }
         needs
+    }
+
+    /// `log_stats`' fold over the log in memory: `compute_log_stats`' accumulator, each contact
+    /// with what its whole record carries — which the store's narrow read must hand over.
+    fn log_stats_old(records: &[Arc<QsoRecord>], my_call: &str) -> propagation::LogStats {
+        let mut stats = propagation::stats::LogStatsAccumulator::new(my_call);
+        for q in records {
+            stats.add(&q.call, award_fields(q));
+        }
+        stats.summary()
     }
 
     /// `awards_for_records` as it was.
@@ -885,6 +1017,9 @@ mod tests {
                 q.grid.as_deref(),
                 q.ota.iota.as_deref(),
                 qso_is_sat(q.prop_mode.as_deref()),
+                // Since the awards count by the record's own numbers, the oracle reads them off
+                // the whole record — the store's narrow read must carry them to match it.
+                award_fields(q),
             );
         }
         awards.summary()
@@ -1053,6 +1188,22 @@ mod tests {
         format!("{report:?}")
     }
 
+    /// The timeline's three windows.
+    const RANGES: [TimelineRange; 3] = [
+        TimelineRange::PastDay,
+        TimelineRange::Past30Days,
+        TimelineRange::PastYear,
+    ];
+
+    /// The timeline over the whole log in memory: every contact handed to the counter, which
+    /// decides the window itself — where the store reads only the window's, off its index.
+    fn timeline_old(records: &[Arc<QsoRecord>], range: TimelineRange) -> LogTimeline {
+        tempo_core::logbook::query::reference::fold(
+            records,
+            TimelineCounter::new(range, NOW as u64),
+        )
+    }
+
     // ── one answer per fold, from the store and from the oracle ─────────────
 
     /// One fold's two answers: whether they are equal (by the type's own equality where it has
@@ -1123,10 +1274,7 @@ mod tests {
             answer(
                 "statistics",
                 log_stats(e, tallies).expect("reads").as_ref().clone(),
-                propagation::compute_log_stats(
-                    &held.iter().map(|q| q.call.as_str()).collect::<Vec<_>>(),
-                    MY_CALL,
-                ),
+                log_stats_old(&held, MY_CALL),
             ),
             answer(
                 "journey",
@@ -1137,6 +1285,11 @@ mod tests {
                 "hunted",
                 hunted_today(&rows, NOW).expect("reads"),
                 hunted_old(&held, NOW),
+            ),
+            answer(
+                "timeline",
+                RANGES.map(|range| log_timeline(&rows, range, NOW).expect("reads")),
+                RANGES.map(|range| timeline_old(&held, range)),
             ),
             answer(
                 "grid",
@@ -1213,6 +1366,12 @@ mod tests {
             !seed_old(&held).is_empty(),
             "premise: compound calls are logged"
         );
+        for range in RANGES {
+            assert!(
+                !timeline_old(&held, range).modes.is_empty(),
+                "premise: contacts in the {range:?} window"
+            );
+        }
         for a in answers {
             assert!(
                 a.equal,
@@ -1398,6 +1557,308 @@ mod tests {
         r
     }
 
+    /// Contacts whose records carry what the awards count by beyond the call — LoTW-confirmed,
+    /// 20 m CW. The numbers are cty.csv's and TrustedQSL's.
+    fn by_record_log() -> String {
+        let row = |call: &str, date: &str, fields: &str| {
+            format!(
+                "<CALL:{}>{call}<QSO_DATE:8>{date}<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+                 <LOTW_QSL_RCVD:1>Y{fields}<EOR>\n",
+                call.len()
+            )
+        };
+        [
+            // Navassa on a US 1×1 call, its zone with it.
+            row("K1N", "20150210", "<DXCC:3>182<CQZ:1>8"),
+            // A logger that wrote the call's US number; LoTW's Baker & Howland kept beside it.
+            row("K1B", "20021201", "<DXCC:3>291<APP_NEXUS_LOTW_DXCC:2>20"),
+            row("K3J", "20010101", "<DXCC:3>123"),
+            // The German Democratic Republic, deleted in 1990.
+            row("Y24UK", "19890101", "<DXCC:3>229"),
+            // A W1 licensee in California (zone 3), and a KP4 licensee in Florida.
+            row("K1ABC", "20200101", "<CQZ:1>3<STATE:2>CA"),
+            row("KP4ABC", "20200102", "<DXCC:3>291<STATE:2>FL"),
+        ]
+        .concat()
+    }
+
+    /// ★ The award fold reads what each record carries beyond its call — its DXCC number, CQ zone
+    /// and LoTW's DXCC — from the store as the whole record holds it, and counts by them: the
+    /// answer the fold over whole records gives, and each count by value. (The golden runs above
+    /// are blind to this: their synthetic contacts carry none of the three.)
+    #[test]
+    fn the_awards_read_from_the_store_count_by_each_records_own_numbers() {
+        let d = Dir::new("by-record");
+        std::fs::write(
+            d.log(),
+            format!("{}{}", tempo_core::logbook::adif_header(), by_record_log()),
+        )
+        .unwrap();
+        let e = launch(&d);
+        let tallies = LogTallies::default();
+        let held = records(&e);
+        assert_eq!(held.len(), 6, "premise: every contact converted");
+        let kept = awards_kept(&e, &tallies).unwrap();
+        assert_eq!(
+            *kept,
+            awards_for_records(&held, MY_CALL),
+            "the store's narrow read must carry what the whole record does"
+        );
+        // Navassa, Baker & Howland (LoTW's), Johnston, the United States; and the GDR in total.
+        assert_eq!((kept.dxcc_confirmed, kept.dxcc_confirmed_total), (4, 5));
+        // Zones 8 (K1N's record), 5 (K1B, K3J), 14 (Y2), 3 (K1ABC's record) and 8 (KP4).
+        assert_eq!(kept.waz_confirmed, 4);
+        // CA, and FL by the KP4 contact's DXCC 291.
+        assert_eq!(kept.was.confirmed, 2);
+        assert_eq!(
+            kept.dxcc_disagreements
+                .iter()
+                .map(|x| (x.call.as_str(), x.logged_dxcc, x.lotw_dxcc))
+                .collect::<Vec<_>>(),
+            [("K1B", 291, 20)]
+        );
+    }
+
+    /// ★ The Stats pane reads the store as the Awards view does: its index is the award fold's own,
+    /// kept beside the summary, and equals the index the fold over whole records builds. What a
+    /// record carries beyond its call reaches it — the DXCC number (Navassa for K1N's 2015 contact),
+    /// and eQSL's Authenticity-Guaranteed mark, a passthrough the store keeps apart from the row,
+    /// which confirms a WAZ slot and no DXCC one. Where the station is comes from the app's
+    /// licence index; asked again of an unchanged log, the kept index answers without a read.
+    #[test]
+    fn the_stats_pane_reads_the_store_as_the_awards_do() {
+        let d = Dir::new("stats-pane");
+        std::fs::write(
+            d.log(),
+            format!(
+                "{}{}{}{}",
+                tempo_core::logbook::adif_header(),
+                by_record_log(),
+                "<CALL:6>JA1XYZ<QSO_DATE:8>20200105<TIME_ON:6>123400<BAND:3>20m<MODE:3>FT8\
+                 <EQSL_QSL_RCVD:1>Y<APP_EQSL_AG:1>Y<EOR>\n",
+                "<CALL:6>VK2ABC<QSO_DATE:8>20200106<TIME_ON:6>123400<BAND:3>20m<MODE:3>FT8\
+                 <EQSL_QSL_RCVD:1>Y<EOR>\n",
+            ),
+        )
+        .unwrap();
+        let e = launch(&d);
+        let tallies = LogTallies::default();
+        let held = records(&e);
+        assert_eq!(held.len(), 8, "premise: every contact converted");
+        assert_eq!(
+            *awards_kept(&e, &tallies).unwrap(),
+            awards_for_records(&held, MY_CALL),
+            "the summary from the store is the whole records' (the needs per band among it)"
+        );
+        let whole = {
+            let mut awards = propagation::Awards::with_call_stats();
+            for q in &held {
+                award_add(&mut awards, q);
+            }
+            awards.take_call_stats().unwrap()
+        };
+        let from_store = call_stats_kept(&e, &tallies).unwrap();
+        let state_of = |c: &str| (c == "W6XYZ").then(|| "CA".to_string());
+        for call in [
+            "KP1AA", "K1N", "KH1AA", "W6XYZ", "W4XYZ", "JA1ABC", "VK2XYZ", "DL1ABC",
+        ] {
+            assert_eq!(
+                from_store.stats_for(call, "20m", "FT8", state_of(call).as_deref()),
+                whole.stats_for(call, "20m", "FT8", state_of(call).as_deref()),
+                "{call}"
+            );
+        }
+        let ask = |call: &str| call_stats_for(&e, &tallies, call, "20m", "CW", state_of).unwrap();
+        use propagation::callstats::Slot;
+        let (navassa, japan, australia, w6) =
+            (ask("KP1AA"), ask("JA1ABC"), ask("VK2XYZ"), ask(" w6xyz "));
+        let dxcc = navassa.dxcc.as_ref().unwrap();
+        assert_eq!(
+            (dxcc.label.as_str(), dxcc.rows[0][5], navassa.new_one),
+            ("Navassa Island", Slot::Confirmed, false)
+        );
+        // K1N's contact came back from LoTW: the country's row and the call's say so.
+        assert_eq!(
+            (navassa.country_qsl.unwrap().lotw, ask("K1N").call_qsl.lotw),
+            (true, true)
+        );
+        // 20 m (column 5), FT8 (the Digital row): the AG card confirms the zone and not the entity.
+        assert_eq!(
+            (
+                japan.dxcc.as_ref().unwrap().rows[2][5],
+                japan.waz.as_ref().unwrap().label.as_str(),
+                japan.waz.as_ref().unwrap().rows[2][5],
+                japan.country_qsl.unwrap().eqsl_ag,
+            ),
+            (Slot::Worked, "25", Slot::Confirmed, true)
+        );
+        assert_eq!(
+            (
+                australia.waz.as_ref().unwrap().rows[2][5],
+                australia.country_qsl.unwrap().eqsl_ag
+            ),
+            (Slot::Worked, false)
+        );
+        // K1ABC, logged in California (CQZ 3), fills California's WAS slot; the state is the
+        // licence index's for the call typed.
+        let ca = w6
+            .was
+            .as_ref()
+            .expect("the licence index places W6XYZ in California");
+        assert_eq!(
+            (w6.call.as_str(), ca.label.as_str(), ca.rows[0][5]),
+            ("W6XYZ", "CA", Slot::Confirmed)
+        );
+        assert!(ask("W4XYZ").was.is_none() && ask("W4XYZ").was_family);
+        assert!(
+            Arc::ptr_eq(&from_store, &call_stats_kept(&e, &tallies).unwrap()),
+            "an unchanged log is not folded again"
+        );
+    }
+
+    /// [`by_record_log`] and two contacts whose records carry no number, which count by their
+    /// calls: a Sicilian call (Italy, as the ARRL credits Sicily) and a Connecticut one.
+    fn by_record_log_and_calls() -> String {
+        format!(
+            "{}{}{}",
+            by_record_log(),
+            "<CALL:6>IT9ABC<QSO_DATE:8>20200103<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+             <LOTW_QSL_RCVD:1>Y<EOR>\n",
+            "<CALL:4>W1AW<QSO_DATE:8>20200104<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+             <LOTW_QSL_RCVD:1>Y<STATE:2>CT<EOR>\n",
+        )
+    }
+
+    /// ★ The Needed board judges what the log holds by the entity, zone and state the awards
+    /// count each contact toward — its record's DXCC number (LoTW's first) and CQ zone, else its
+    /// call — read from the store as the whole record holds them. Each station below is heard on
+    /// 20 m CW, where every contact in the log was made and confirmed by LoTW. A spot has no
+    /// record, so it is placed by its call alone.
+    #[test]
+    fn the_needed_board_counts_each_contact_as_the_awards_do() {
+        let d = Dir::new("needs-by-record");
+        std::fs::write(
+            d.log(),
+            format!(
+                "{}{}",
+                tempo_core::logbook::adif_header(),
+                by_record_log_and_calls()
+            ),
+        )
+        .unwrap();
+        let e = launch(&d);
+        let tallies = LogTallies::default();
+        let held = records(&e);
+        assert_eq!(held.len(), 8, "premise: every contact converted");
+        let (needs, _) = needs_kept(&e, &tallies).unwrap();
+        assert_eq!(
+            observed(&needs),
+            observed(&needs_old(&held)),
+            "the store's narrow read must carry what the whole record does"
+        );
+        for (call, entity) in [
+            ("KP1AA", "Navassa Island"),
+            ("KH1AA", "Baker & Howland Islands"),
+            ("I1ABC", "Italy"),
+            ("DL1ABC", "Fed. Rep. of Germany"),
+            ("K1N", "United States"),
+        ] {
+            assert_eq!(
+                propagation::dxcc::resolve(call).map(|i| i.entity),
+                Some(entity),
+                "premise: cty.dat places {call}"
+            );
+        }
+        let heard = |call: &str, state: Option<&str>| propagation::Heard {
+            call: call.into(),
+            band: "20m".into(),
+            mode: "CW".into(),
+            freq_mhz: None,
+            admitted_at: None,
+            evidence: None,
+            grid: None,
+            us_state: state.map(|s| (s.to_string(), propagation::StateSource::License)),
+        };
+        let spots = [
+            // Navassa: K1N's record, zone 8 with it.
+            heard("KP1AA", None),
+            // Baker & Howland: LoTW's number on K1B, over the 291 the log holds. The zone is
+            // the call's (K1B's record carries none), as WAZ counts it: 5, so 31 is new.
+            heard("KH1AA", None),
+            // Italy: the Sicilian contact, by its call.
+            heard("I1ABC", None),
+            // Germany: Y24UK was the German Democratic Republic, deleted — no current entity.
+            heard("DL1ABC", None),
+            // Florida: KP4ABC's record says the United States.
+            heard("K4ABC", Some("FL")),
+            // Today's K1N, placed by its call: the United States, never Navassa.
+            heard("K1N", None),
+            // Control: Connecticut, by W1AW's call, which carries no number.
+            heard("W1XYZ", Some("CT")),
+        ];
+        let mut board: Vec<(String, String, Vec<propagation::NeedTag>)> =
+            propagation::rank_needs(&spots, &*needs, &needs.slots())
+                .into_iter()
+                .map(|a| (a.call, a.entity, a.tags))
+                .collect();
+        board.sort_by(|a, b| a.0.cmp(&b.0));
+        use propagation::NeedTag::{NewEntity, NewZone};
+        assert_eq!(
+            board,
+            [
+                (
+                    "DL1ABC".into(),
+                    "Fed. Rep. of Germany".into(),
+                    vec![NewEntity]
+                ),
+                (
+                    "KH1AA".into(),
+                    "Baker & Howland Islands".into(),
+                    vec![NewZone]
+                ),
+            ]
+        );
+        assert!(
+            !needs
+                .worked_entity_names()
+                .contains("GERMAN DEMOCRATIC REPUBLIC"),
+            "a deleted entity is never a need"
+        );
+    }
+
+    /// ★ The log statistics' geography counts each contact by the entity and zone the awards
+    /// count it toward, read from the store: DX or domestic against the operator's own entity
+    /// (the United States), each continent's entities, the zones.
+    #[test]
+    fn the_log_statistics_count_each_contact_as_the_awards_do() {
+        let d = Dir::new("stats-by-record");
+        std::fs::write(
+            d.log(),
+            format!(
+                "{}{}",
+                tempo_core::logbook::adif_header(),
+                by_record_log_and_calls()
+            ),
+        )
+        .unwrap();
+        let e = launch(&d);
+        let tallies = LogTallies::default();
+        let stats = log_stats(&e, &tallies).unwrap();
+        assert_eq!((stats.total, stats.resolved), (8, 8));
+        // Domestic: K1ABC, KP4ABC (its record's 291) and W1AW. DX: Navassa, Baker & Howland,
+        // Johnston, the German Democratic Republic, Italy.
+        assert_eq!((stats.domestic, stats.dx), (3, 5));
+        let continents: Vec<(&str, usize, usize)> = stats
+            .by_continent
+            .iter()
+            .map(|c| (c.continent.as_str(), c.qsos, c.entities))
+            .collect();
+        assert_eq!(continents, [("NA", 6, 4), ("EU", 2, 2)]);
+        let zones: Vec<(u8, usize)> = stats.by_zone.iter().map(|z| (z.zone, z.qsos)).collect();
+        // K1N's record says 8 and K1ABC's 3; the rest are their calls' zones.
+        assert_eq!(zones, [(3, 1), (5, 3), (8, 2), (14, 1), (15, 1)]);
+    }
+
     /// One ADIF record, parsed as the log parses it, with no id.
     fn parse_one(text: &str) -> QsoRecord {
         let mut log = tempo_core::logbook::Logbook::new();
@@ -1456,6 +1917,24 @@ mod tests {
         assert!(
             !hunted.needed("US-9999", "K9PRK", NOW),
             "today's park is hunted"
+        );
+
+        let ft8_this_hour = |t: &LogTimeline| {
+            t.modes
+                .iter()
+                .find(|m| m.label == "FT8")
+                .map_or(0, |m| m.counts[23])
+        };
+        let rows = e.lock().unwrap().log_rows();
+        let before = ft8_this_hour(&log_timeline(&rows, RANGES[0], NOW).unwrap());
+        let timeline = asked_straight_after(&d, &e, contact("K9TML", NOW as u64), || {
+            let rows = e.lock().unwrap().log_rows();
+            log_timeline(&rows, RANGES[0], NOW)
+        });
+        assert_eq!(
+            ft8_this_hour(&timeline),
+            before + 1,
+            "the timeline counts it"
         );
 
         let grid = asked_straight_after(&d, &e, contact("K9GRD", NOW as u64), || {
@@ -1558,6 +2037,13 @@ mod tests {
                 (
                     "today's parks",
                     s.spawn(|| hunted_today(&rows(), NOW).map(|_| "today's parks".to_string())),
+                ),
+                (
+                    "the timeline",
+                    s.spawn(|| {
+                        log_timeline(&rows(), TimelineRange::PastDay, NOW)
+                            .map(|t| format!("{} modes", t.modes.len()))
+                    }),
                 ),
                 (
                     "a grid",
@@ -1694,5 +2180,57 @@ mod tests {
         let eng = engine_lock(&e);
         let rows = eng.log_rows();
         let _ = hunted_today(&rows, NOW);
+    }
+
+    /// The Statistics timeline timed on a 100,000-contact log in the store —
+    /// `cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio --release --
+    /// --ignored --nocapture timeline_bench` (`TIMELINE_BENCH_ROWS` sets the size). The contacts
+    /// are spread evenly over the year before [`NOW`], so the year's window reads every one of
+    /// them — the most any window can read — the 30 days about one in twelve, the day one in 365.
+    #[test]
+    #[ignore = "a release-build bench, run by hand"]
+    fn timeline_bench() {
+        let n: usize = std::env::var("TIMELINE_BENCH_ROWS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100_000);
+        let modes = [
+            "FT8", "FT8", "FT8", "CW", "SSB", "FT4", "RTTY", "USB", "FM", "PSK31",
+        ];
+        let mut adif = tempo_core::logbook::adif_header();
+        for i in 0..n {
+            let when = NOW as u64 - i as u64 * 365 * 86_400 / n as u64;
+            let (y, m, day, hh, mm, ss) = tempo_core::logbook::datetime_utc(when);
+            let call = format!("K{}AB{}", i % 10, i % 1000);
+            let mode = modes[i % modes.len()];
+            adif.push_str(&format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:{}>{mode}<QSO_DATE:8>{y:04}{m:02}{day:02}\
+                 <TIME_ON:6>{hh:02}{mm:02}{ss:02}<EOR>\n",
+                call.len(),
+                mode.len()
+            ));
+        }
+        let d = Dir::new("timeline-bench");
+        std::fs::write(d.log(), adif).unwrap();
+        let e = launch(&d);
+        settle(&e);
+        let rows = e.lock().unwrap().log_rows();
+        for range in RANGES {
+            let mut took = Vec::new();
+            let mut counted = 0;
+            for _ in 0..7 {
+                let t = std::time::Instant::now();
+                let timeline = log_timeline(&rows, range, NOW).expect("reads");
+                took.push(t.elapsed().as_secs_f64() * 1000.0);
+                counted = timeline.modes.iter().flat_map(|m| &m.counts).sum::<usize>();
+            }
+            let first = took[0];
+            took.sort_by(f64::total_cmp);
+            println!(
+                "TIMELINE_BENCH rows={n} {range:?}: {counted} contacts in the window, first {first:.1} \
+                 ms, median of 7 {:.1} ms",
+                took[3]
+            );
+        }
     }
 }

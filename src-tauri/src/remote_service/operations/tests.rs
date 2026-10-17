@@ -2,6 +2,8 @@
 mod audio;
 #[path = "export_tests.rs"]
 mod export;
+#[path = "js8_api_tests.rs"]
+mod js8_api;
 #[path = "lan_lease_tests.rs"]
 mod lan_lease;
 #[cfg(feature = "radio")]

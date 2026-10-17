@@ -4,11 +4,11 @@
 // "Contacts with/by stations at the border of 2/3/4 counties count as 2/3/4 counties and 2/3/4
 // QSOs."
 //
-// The station on the line sends its counties joined by `/` (`COOK/DUPG`), and that is how N1MM
-// Logger+ takes them in its exchange box, so the entry strip takes them the same way and logs
-// one row per county (`contestLogManualRows`): each an ordinary contact with its own county,
-// all at one time, band and mode. N3FJP's loggers take the line joined by `+` (`COOK+DUPG`), so
-// an operator coming from one types that, and the strip reads it as the same line.
+// The station on the line sends its counties joined by `/` (`COOK/DUPG`), so the entry strip
+// takes them that way and logs one row per county (`contestLogManualRows`): each an ordinary
+// contact with its own county, all at one time, band and mode. Some loggers take the line
+// joined by `+` (`COOK+DUPG`), so an operator used to one types that, and the strip reads it as
+// the same line.
 //
 // ⚠️ EVERY PART IS JUDGED AS A SINGLE COUNTY BOX JUDGES ONE, and against the county list alone.
 // A part is a county code or a county's full name (`resolveDomainValue`), never a prefix of

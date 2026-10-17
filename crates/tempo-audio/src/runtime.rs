@@ -59,12 +59,18 @@ impl<B: AudioBackend> Transceiver<B> {
     ///
     /// A key the radio refuses plays nothing, unkeys and halts TX, as the radio loop's slot overs
     /// do and as WSJT-X does on a rig failure ([`crate::slot::slot_key_failure`]); it returns
-    /// `None` too. PTT still asserted from an over not yet ended is this loop's hold.
+    /// `None` too. PTT still asserted from an over not yet ended is this loop's hold. An over whose
+    /// transmit audio will not open is not keyed at all, and halts TX the same way
+    /// ([`crate::slot::key_slot_transmitter`]).
     ///
     /// [`end_tx`]: Transceiver::end_tx
     pub fn try_transmit(&mut self, slot: u64) -> Option<f32> {
         let waves = self.engine.poll_tx(slot);
         if waves.is_empty() {
+            return None;
+        }
+        if let Err(why) = self.backend.prepare_tx() {
+            self.engine.halt_tx_for_tx_audio(&why);
             return None;
         }
         let held = self.rig.keyed;
@@ -170,6 +176,35 @@ mod tests {
         assert!(
             trx.snapshot().radio.slot_key_refused.is_some(),
             "nothing says why"
+        );
+    }
+
+    #[test]
+    fn an_over_whose_audio_output_will_not_open_never_keys_and_halts_tx() {
+        // As the radio loop's slot overs (`crate::slot::key_slot_transmitter`): a radio keyed
+        // with no audio puts a dead carrier on the air, so nothing is keyed or played, TX halts,
+        // and the reason is kept.
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tx_enabled(true);
+        eng.set_beacon(true);
+        let mut backend = MockBackend::new();
+        backend.tx_open_error = Some("playback stream: no such device".to_string());
+        let mut trx = Transceiver::new(eng, backend, Rig::vox());
+
+        assert_eq!(
+            trx.try_transmit(0),
+            None,
+            "an over with no audio was reported"
+        );
+        assert!(!trx.is_keyed(), "PTT asserted with no audio to send");
+        assert!(trx.backend.played.is_empty(), "the over was played");
+        assert!(!trx.engine.tx_enabled(), "TX is still on");
+        assert!(
+            trx.snapshot()
+                .radio
+                .slot_key_refused
+                .is_some_and(|r| r.tx_audio_failed),
+            "nothing says the transmit audio would not open"
         );
     }
 

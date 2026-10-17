@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { setTitleBarTheme } from './api'
 
 /** The theme the page PAINTS: what `data-theme` carries and what every component renders
  *  against. Always light or dark, so no selector and no theme-keyed cache ever sees 'system'. */
@@ -70,6 +71,17 @@ export function useTheme(): [Theme, (t: ThemeChoice) => void, ThemeChoice] {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
+
+  // The native title bar follows the pick in the desktop app on Windows, where it otherwise
+  // follows the computer whatever was picked: Light or Dark, or the computer's own setting for
+  // System (and for nothing stored, which is System there). Never on Linux, the Raspberry Pi or
+  // macOS: Tauri's "follow the computer" forces GTK light on Linux whatever the desktop says, and
+  // macOS follows the system by itself. A title bar that cannot be set is cosmetic, so a failure
+  // is dropped.
+  useEffect(() => {
+    if (!isWindowsDesktop()) return
+    setTitleBarTheme(choice === 'system' ? null : choice).catch(() => {})
+  }, [choice])
 
   // The CHOICE is stored, never the resolved theme — or System would become a fixed theme the
   // next time the app starts — and only by a pick, never by the mount, so "never chose" stays

@@ -185,7 +185,7 @@ describe('drops that need several arrows, by hand', () => {
     const CLASSIC = OPERATE_ARRANGE.classic
     const order: PaneColumn[] = ['log', 'a', 'b']
     const got = dropArranged(CLASSIC, {}, 'bandActivity', { area: 'log', before: 'stations' }, all, false, order)!
-    expect(placedColumns(CLASSIC, got.place).log.slice(0, 3)).toEqual(['recall', 'bandActivity', 'stations'])
+    expect(placedColumns(CLASSIC, got.place).log.slice(0, 4)).toEqual(['recall', 'stats', 'bandActivity', 'stations'])
   })
   it('Phone: Needed from column 2 onto the left side is ◀ (to column 1) then ◀ (to the side)', () => {
     const got = dropArranged(PHONE, {}, 'needed', { area: 'side', before: null }, all, true)!

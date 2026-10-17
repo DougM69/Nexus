@@ -12,6 +12,24 @@ describe('the sideband convention', () => {
     expect(sidebandForMhz(10.0)).toBe('USB') // the boundary itself is USB
     expect(sidebandForMhz(50.125)).toBe('USB')
   })
+
+  // 47 CFR 97.303(h): on 60 m the J3E carrier sits 1.5 kHz BELOW the channel centre, which only
+  // upper sideband fits; IARU Region 1 and RAC plan USB there too.
+  it('is USB on 60 m, the one band below 10 MHz that is not LSB', () => {
+    expect(sidebandForMhz(3.8)).toBe('LSB')
+    expect(sidebandForMhz(7.2)).toBe('LSB')
+    expect(sidebandForMhz(14.2)).toBe('USB')
+    for (const mhz of [5.3305, 5.3465, 5.357, 5.3715, 5.4035]) {
+      expect(sidebandForMhz(mhz), `${mhz} MHz`).toBe('USB')
+    }
+  })
+
+  it('corrects a QSY between 60 m and 40 m', () => {
+    expect(sidebandForQsy(5.357, 7.2, 'LSB')).toBe('USB')
+    expect(sidebandForQsy(7.2, 5.357, 'USB')).toBe('LSB')
+    // 20 m to 60 m stays on USB.
+    expect(sidebandForQsy(5.3305, 14.2, 'USB')).toBe('USB')
+  })
 })
 
 describe('choosing a sideband for a QSY', () => {

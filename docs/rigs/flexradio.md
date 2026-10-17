@@ -121,8 +121,11 @@ The other keyer choices work on a Flex too, and are worth knowing about:
 mutes and unmutes the native DAX receive stream cleanly during a long macro, and
 whether Stop TX cuts the *one* word already inside the radio or lets it finish.
 
-**On the Flex native client (Beta)** Nexus does not send CW yet, and the CW screen says so. For CW,
-turn the client off (SmartSDR CAT sends it as above), or use the WinKeyer or Soundcard keyer.
+**On the Flex native client (Beta)** Nexus does not send CW by default, and the CW screen says so. For
+CW, turn the client off (SmartSDR CAT sends it as above), or use the WinKeyer or Soundcard keyer.
+Sending CW through the radio's own keyer is built, and stays off until a tester has checked it on a
+radio; a Beta switch turns it on for one radio before then (see *CW, Tune and the ATU through the
+client* below).
 
 ---
 
@@ -202,18 +205,33 @@ Two limits worth knowing before you switch one on:
 
 **Tune on the Flex native client (Beta)** keys the radio and plays Nexus's tone, as on any CAT
 link. Tuning with the radio's own carrier, at the tune power you set in SmartSDR, is built and
-stays off until a tester has checked it on a radio. Once it is on, Nexus shows the radio's tune
-power and its transmit timeout beside Tune, and says so when the radio has no transmit timeout:
-then nothing would end the carrier if Nexus or the network failed during a tune, so set one in
-SmartSDR.
+stays off until a tester has checked it on a radio, unless you turn on the Beta switch below. Once
+it is on, Nexus shows the radio's tune power and its transmit timeout beside Tune, and says so when
+the radio has no transmit timeout: then nothing would end the carrier if Nexus or the network
+failed during a tune, so set one in SmartSDR.
 
-**The Flex native client (Beta) offers no ATU button**: use the ATU in SmartSDR or on the radio.
-Running the radio's own tuner from Nexus is built and stays off until a tester has checked it on
-a radio. Once it is on, the ATU button shows when the radio reports a tuner fitted,
-and each press runs one cycle. Beside it Nexus shows the same tune power and transmit timeout as
-beside Tune, and the cycle's result in the radio's own word, or why a press started no cycle.
+**The Flex native client (Beta) offers no ATU button** by default: use the ATU in SmartSDR or on
+the radio. Running the radio's own tuner from Nexus is built and stays off until a tester has
+checked it on a radio, unless you turn on the Beta switch below. Once it is on, the ATU button
+shows when the radio reports a tuner fitted, and each press runs one cycle. Beside it Nexus shows
+the same tune power and transmit timeout as beside Tune, and the cycle's result in the radio's own
+word, or why a press started no cycle.
 FlexRadio documents no command that stops a cycle part way, so Stop TX during a cycle sends the
 radio both its unkey and its tune-off.
+
+**CW, Tune and the ATU through the client (Beta, not yet bench-tested).** **Settings ▸ Radio ▸
+Rig & CAT ▸ Advanced ▸ Let Nexus send CW, Tune and ATU through the native Flex client (not yet
+bench-tested)** turns all three on for that radio before a tester has checked them: CW goes to the
+radio's keyer a word at a time, Tune is the radio's own carrier, and the ATU button runs the
+radio's tuner, as described above. The switch shows only while the Flex native client serves the
+radio (the client on, the radio's IP set). It is off by default, it is per radio, and it changes
+only at the shack, never through the Remote stream. It lifts only the "not checked yet" refusal:
+every other check still applies. Nothing keys unless TX is on, the frequency is inside your licence
+privileges and the TX watchdog allows it, and only while Nexus's slice is the radio's transmit
+slice and nothing else is keying the radio. CW also needs XIT off, break-in on and Sync CWX off;
+Tune and the ATU need XIT off; the ATU needs a tuner fitted. Nobody has run these against a real
+Flex yet, so try them into a dummy load first, and turn the switch off if anything misbehaves.
+Saving a change reconnects Nexus to the radio.
 
 ---
 

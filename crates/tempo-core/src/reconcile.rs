@@ -163,6 +163,10 @@ fn same_contact(a: &QsoRecord, b: &QsoRecord) -> bool {
         r.upload = Default::default();
         r.state = None;
         r.country = None;
+        r.dxcc = None;
+        r.extra.retain(|(k, _)| {
+            k != "CQZ" && k != crate::logbook::LOTW_DXCC_FIELD && k != crate::logbook::EQSL_AG_FIELD
+        });
         // ...plus the two that do not survive our own round-trip intact.
         r.mode.clear();
         r.time_known = false;
@@ -451,6 +455,34 @@ pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut Reconc
             rec.country = Some(c.clone());
         }
     }
+    // The same for the contact's DXCC number and CQ zone: a LoTW QSL's detail and another
+    // logger's export both carry them, and the awards count by them. Monotonic too — a
+    // number the log holds is never replaced here (LoTW's own, where it differs, is kept beside
+    // it by `reconcile_lotw`).
+    if rec.dxcc.is_none() {
+        rec.dxcc = inc.dxcc;
+    }
+    if crate::logbook::record_cq_zone(rec).is_none() {
+        if let Some(z) = crate::logbook::record_cq_zone(inc) {
+            crate::logbook::set_extra(rec, "CQZ", Some(z.to_string()));
+        }
+    }
+    // And LoTW's DXCC, kept beside the log's by a LoTW merge, where the row is a copy of a record
+    // of ours that carries it (another instance's write of a shared log, a Nexus export
+    // re-imported): what a LoTW merge learned is not lost on the way.
+    if crate::logbook::record_lotw_dxcc(rec).is_none() {
+        if let Some(lotw) = crate::logbook::record_lotw_dxcc(inc) {
+            crate::logbook::set_extra(rec, crate::logbook::LOTW_DXCC_FIELD, Some(lotw.to_string()));
+        }
+    }
+    // And an eQSL card's Authenticity-Guaranteed mark, with the confirmation it came on: CQ's WAZ
+    // credits such a card. Monotonic too — a mark the log holds is never taken away here.
+    if inc.qsl_rcvd.eqsl
+        && crate::logbook::record_eqsl_ag(inc)
+        && !crate::logbook::record_eqsl_ag(rec)
+    {
+        crate::logbook::set_extra(rec, crate::logbook::EQSL_AG_FIELD, Some("Y".into()));
+    }
     // Outbound state — merged so a two-instance shared log doesn't lose an upload stamp or a
     // QSL-sent mark one instance wrote when the other rewrites the whole file. (A LoTW report
     // carries neither, so this is inert for the report path; it matters for recover-from-disk.)
@@ -467,7 +499,7 @@ pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut Reconc
 /// surface, not a contact to fabricate.
 pub fn reconcile<R: StoredRecord>(local: &mut [R], incoming: &[QsoRecord]) -> ReconcileSummary {
     let pairs = pair_report(local, incoming);
-    merge_pairs(local, incoming, pairs, |_| true)
+    merge_pairs(local, incoming, pairs, |_| true, |_, _| {})
 }
 
 /// LoTW's [`reconcile`]: a row lands only on a contact made under the call it names
@@ -484,23 +516,50 @@ pub fn reconcile_lotw<R: StoredRecord>(
     settings_call: Option<&str>,
 ) -> ReconcileSummary {
     let pairs = pair_lotw(local, incoming, settings_call);
-    merge_pairs(local, incoming, pairs, |row| {
-        of_settings_call(row, settings_call)
-    })
+    merge_pairs(
+        local,
+        incoming,
+        pairs,
+        |row| of_settings_call(row, settings_call),
+        keep_lotw_dxcc,
+    )
+}
+
+/// LoTW's DXCC for a contact it confirmed. Where the log holds none, [`apply_match`] has just
+/// filled it from the row. Where the log holds another, LoTW's is kept beside it
+/// ([`LOTW_DXCC_FIELD`](crate::logbook::LOTW_DXCC_FIELD)): ARRL credits LoTW's, so the awards
+/// count by it, while the log's value stays as entered and the Awards view lists the two. A row
+/// that agrees with the log clears one kept before.
+fn keep_lotw_dxcc(rec: &mut QsoRecord, inc: &QsoRecord) {
+    let Some(lotw) = inc.dxcc else {
+        return;
+    };
+    let differs = rec.dxcc.is_some_and(|logged| logged != lotw);
+    crate::logbook::set_extra(
+        rec,
+        crate::logbook::LOTW_DXCC_FIELD,
+        differs.then(|| lotw.to_string()),
+    );
 }
 
 /// The body of [`reconcile`] and [`reconcile_lotw`]: each row upgrades the contact `pairs` gives
-/// it, and a confirming row given none is an orphan where `orphan` admits it.
+/// it (and `on_pair` takes what that service's rows are evidence of beyond it), and a confirming
+/// row given none is an orphan where `orphan` admits it.
 fn merge_pairs<R: StoredRecord>(
     local: &mut [R],
     incoming: &[QsoRecord],
     pairs: Vec<Option<usize>>,
     orphan: impl Fn(&QsoRecord) -> bool,
+    on_pair: impl Fn(&mut QsoRecord, &QsoRecord),
 ) -> ReconcileSummary {
     let mut sum = ReconcileSummary::default();
     for (inc, pair) in incoming.iter().zip(pairs) {
         match pair {
-            Some(i) => apply_match(local[i].write(), inc, &mut sum),
+            Some(i) => {
+                let held = local[i].write();
+                apply_match(held, inc, &mut sum);
+                on_pair(held, inc);
+            }
             // Only a row that actually carries a confirmation/credit is a
             // meaningful "missing" diagnostic; a plain unconfirmed QSO row is not.
             None if (inc.confirmed
@@ -1671,6 +1730,63 @@ mod tests {
             mem[0].upload.clublog.is_some(),
             "our own upload stamp is not clobbered"
         );
+    }
+
+    /// What a merge fills in — a DXCC number, a CQ zone, LoTW's DXCC beside the log's — is the
+    /// merge's, like a confirmation: a copy of one of our records that another instance's merge
+    /// filled is still that record, never a contact we lack, even among date-only twins where
+    /// content is all that tells them apart. And what it filled comes across.
+    #[test]
+    fn merge_own_disk_pairs_a_copy_a_merge_filled_its_dxcc_and_zone_into() {
+        let day = 20_000;
+        let a = date_only("K1N", "20m", "CW", day, Some("599"));
+        let b = date_only("K1N", "20m", "CW", day, Some("339"));
+        let mut filled = a.clone();
+        filled.dxcc = Some(291);
+        crate::logbook::set_extra(&mut filled, "CQZ", Some("8".into()));
+        crate::logbook::set_extra(
+            &mut filled,
+            crate::logbook::LOTW_DXCC_FIELD,
+            Some("182".into()),
+        );
+
+        let mut mem = vec![a, b];
+        let (added, sum) = merge_own_disk(&mut mem, vec![filled]);
+        assert!(
+            added.is_empty(),
+            "a copy of our own 599 contact, not a new one"
+        );
+        assert_eq!((mem.len(), sum.matched), (2, 1));
+        let ours = &mem[0];
+        assert_eq!(ours.rst_sent.as_deref(), Some("599"));
+        assert_eq!(ours.dxcc, Some(291));
+        assert_eq!(crate::logbook::record_cq_zone(ours), Some(8));
+        assert_eq!(crate::logbook::record_lotw_dxcc(ours), Some(182));
+        assert_eq!(mem[1].dxcc, None, "and nothing landed on its twin");
+    }
+
+    /// An eQSL card's Authenticity-Guaranteed mark is the merge's too: a copy of one of our records
+    /// that another instance's eQSL merge marked is still that record, and the mark comes across.
+    #[test]
+    fn merge_own_disk_pairs_a_copy_a_merge_marked_authenticity_guaranteed() {
+        let day = 20_000;
+        let a = date_only("JA1XYZ", "20m", "FT8", day, Some("-05"));
+        let b = date_only("JA1XYZ", "20m", "FT8", day, Some("-12"));
+        let mut marked = a.clone();
+        marked.qsl_rcvd.eqsl = true;
+        marked.confirmed = true;
+        crate::logbook::set_extra(&mut marked, "APP_EQSL_AG", Some("Y".into()));
+
+        let mut mem = vec![a, b];
+        let (added, sum) = merge_own_disk(&mut mem, vec![marked]);
+        assert!(
+            added.is_empty(),
+            "a copy of our own -05 contact, not a new one"
+        );
+        assert_eq!((mem.len(), sum.matched), (2, 1));
+        let ag = |r: &QsoRecord| r.extra.iter().any(|(k, v)| k == "APP_EQSL_AG" && v == "Y");
+        assert_eq!((ag(&mem[0]), mem[0].qsl_rcvd.eqsl), (true, true));
+        assert!(!ag(&mem[1]), "and nothing landed on its twin");
     }
 
     #[test]

@@ -403,6 +403,42 @@ fn the_row_key_matches_the_browser_vector_and_the_log_page_row() {
     }
 }
 
+/// A browser's log page shows a contact under the entity its record's DXCC number names (the
+/// 2015 K1N operation, logged as Navassa: cty.dat alone places K1N in the United States), and the
+/// key a change finds that row by is built from the same row, so a change to it is not refused
+/// as stale.
+#[test]
+fn a_page_row_shows_the_entity_its_records_number_names_and_keys_alike() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().import_adif(
+        "<CALL:3>K1N<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20150210<TIME_ON:6>123400<DXCC:3>182<EOR>\n\
+         <CALL:4>W1AW<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20150211<TIME_ON:6>123400<EOR>\n",
+    );
+    let stored: Vec<(String, String)> = f
+        .engine
+        .lock()
+        .unwrap()
+        .stored_log()
+        .iter()
+        .map(|r| (r.call.clone(), super::super::logging::row_key(r)))
+        .collect();
+    assert_eq!(stored.len(), 2, "premise: both imported");
+    let page = page_rows(&f);
+    let entity = |call: &str| {
+        page.iter()
+            .find(|r| r["call"] == call)
+            .map(|r| r["entity"].clone())
+    };
+    assert_eq!(
+        (entity("K1N"), entity("W1AW")),
+        (Some(json!("Navassa Island")), Some(json!("United States")))
+    );
+    for (call, key) in stored {
+        let row = page.iter().find(|r| r["call"] == call.as_str()).unwrap();
+        assert_eq!(key, super::super::logging::value_key(row), "{call}");
+    }
+}
+
 #[test]
 fn an_edit_is_found_by_its_key_synced_and_replayed_without_a_second_write() {
     let f = Fixture::new();

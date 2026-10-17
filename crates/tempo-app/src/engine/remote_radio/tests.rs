@@ -24,6 +24,7 @@ mod band_selection;
 mod digital_spot;
 mod dsp;
 mod filter;
+mod freshness;
 mod level;
 mod memory;
 mod phone_mode;
@@ -64,6 +65,11 @@ impl Station {
         let mut engine = Engine::with_settings(settings);
         engine.set_tx_enabled(false);
         engine.configure_remote_settings_store(path.clone());
+        // The readings' clock held still, for `unexpired_deadline`'s reason: a stall between a
+        // sample and the check that reads it ages nothing here, so no case fails on a slow
+        // machine for a rule it is not about. The one-second rule is asserted where it is the
+        // subject, in `freshness`.
+        engine.remote_readings.still = Some(Instant::now());
         let connection = engine.remote_open_radio().unwrap();
         let mut station = Self {
             engine,
@@ -77,9 +83,10 @@ impl Station {
         station
     }
     fn sample(&mut self, hz: u64, mode: &str) {
+        let now = self.engine.remote_readings.now();
         let read = self
             .engine
-            .remote_radio_read(&self.connection, Instant::now())
+            .remote_radio_read(&self.connection, now)
             .unwrap();
         self.engine.remote_observe_cat(Some(&read), Some(true));
         self.engine.remote_observe_dial(Some(&read), Some(hz));

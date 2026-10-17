@@ -23,6 +23,10 @@ The mode chips — **AUTO / USB / LSB / FM** — set what the cockpit commands, 
 AUTO shows the sideband it settled on (`AUTO·USB`, `AUTO·FM`). If the rig's own
 mode knob disagrees, a **rig:** badge appears beside them naming what the radio
 is actually on; logging and TX follow the commanded mode until you match it up.
+On 60 m a US licence class may talk only upper sideband, so LSB, AM and FM are
+greyed out there, and hovering one says why. If TX is locked on 60 m only
+because the mode is not USB, 🔒 TX LOCKED says "60 m allows only USB phone"
+instead of blaming the frequency.
 
 **The bandscope** is a fast (~30 Hz) colored display split into a panadapter
 trace and a scrolling waterfall, with per-frame AGC so signals stay visible as
@@ -71,7 +75,9 @@ the box, or a consequence to unticking it — the entry says so in a line under 
 - **TX Meters** (SWR / ALC / PO / COMP) read on transmit, and the last over's
   readings stay on screen after you unkey, dimmed, so you can look at what your
   drive actually did instead of trying to read a needle while you talk. Until
-  your first over the panel says when it reads.
+  your first over the panel says when it reads. On an FT-991A, FT-710 or FTDX10
+  the ALC bar is the radio's own, and its colours follow the radio's ALC zone,
+  which ends at half scale: amber from 40 %, red from 48 %.
 - **Voice Keyer** puts the F-key message pane away if you work with a mic and
   never use it. Unticking it stops a message that is playing and throws away a
   recording you are part-way through making; the entry says both before you tick

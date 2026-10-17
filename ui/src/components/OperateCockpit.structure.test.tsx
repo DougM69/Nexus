@@ -58,6 +58,8 @@ vi.mock('../api', () => {
     resolveEntity: vi.fn(async () => 'United States'),
     qrzLookup: vi.fn(nothing),
     askLog: vi.fn(nothing),
+    // The Stats pane, under the card when every id is docked.
+    getCallStats: vi.fn(nothing),
   }
 })
 // A box's body is a Conditions box (DashRail.test.tsx sweeps every one for a transmit control); its

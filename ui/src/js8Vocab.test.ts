@@ -3,7 +3,7 @@
 // the air in a directed frame — is caught by a test, not by a station that never answers.
 import { describe, expect, it } from 'vitest'
 import {
-  JS8_COMMANDS, JS8_CQS, JS8_SPEEDS, JS8_SPEED_LIST, JS8_QUICK_QUERIES,
+  JS8_ALL_SPEEDS_MASK, JS8_COMMANDS, JS8_CQS, JS8_SPEEDS, JS8_SPEED_LIST, JS8_QUICK_QUERIES,
   ageLabel, bandActivityByOffset, countBits, dtLabel, estimateFrames, fmtSnr, js8ListedStations, js8UnreadFirst,
   js8ShownOffsetRows, js8UnreadFrom, utcClock,
 } from './js8Vocab'
@@ -33,8 +33,17 @@ describe('CQ variants and speeds', () => {
   it('speeds carry Speed::ALL index, ALL.TXT letter, period and the §97.119 frame cap', () => {
     expect(JS8_SPEED_LIST.map((s) => [s.key, s.idx, s.letter, s.periodS, s.maxFrames])).toEqual([
       ['slow', 0, 'E', 30, 19], ['normal', 1, 'A', 15, 39], ['fast', 2, 'B', 10, 59], ['turbo', 3, 'C', 6, 99],
+      ['ultra', 4, 'I', 4, 149],
     ])
     expect(JS8_SPEEDS.normal.label).toBe('Normal')
+  })
+  // JS8Call 3.0 shows Turbo as "JS8 40" and its fifth speed as "JS8 60" (JS8Submode.cpp:132, :147;
+  // the Mode menu "JS8 &40", "JS8 &60"); the old and internal names ride the tooltip.
+  it('names the speeds as JS8Call 3.0 does, with Turbo and Ultra as the aliases', () => {
+    expect(JS8_SPEED_LIST.map((s) => [s.label, s.alias])).toEqual([
+      ['Slow', null], ['Normal', null], ['Fast', null], ['JS8 40', 'Turbo'], ['JS8 60', 'Ultra'],
+    ])
+    expect(JS8_ALL_SPEEDS_MASK).toBe(31)
   })
 })
 
@@ -53,6 +62,7 @@ describe('formatters are invariant (no locale, no comma)', () => {
     expect(utcClock(Date.UTC(2026, 8, 5, 13, 4, 9))).toBe('13:04:09')
   })
   it('countBits counts the rx-speed mask', () => {
+    expect(countBits(31)).toBe(5)
     expect(countBits(15)).toBe(4)
     expect(countBits(2)).toBe(1)
     expect(countBits(0)).toBe(0)
@@ -119,9 +129,9 @@ describe('bandActivityByOffset — JS8Call’s offset-bucketed band-activity tab
 
   // JS8Call joins a decode to a bucket within the rxThreshold of the NEW decode's submode
   // (mainwindow.cpp:3971): 10 Hz at Slow and Normal, the default (JS8Submode.cpp:62), 16 at Fast
-  // and 32 at Turbo (:122-123).
-  it('joins within the new decode\'s own speed tolerance: 10 Hz Slow/Normal, 16 Fast, 32 Turbo', () => {
-    for (const [speed, tol] of [['slow', 10], ['normal', 10], ['fast', 16], ['turbo', 32]] as const) {
+  // and 32 at Turbo (:122-123), 50 at JS8 60 (3.0.3 JS8Submode.cpp:153).
+  it('joins within the new decode\'s own speed tolerance: 10 Hz Slow/Normal, 16 Fast, 32 JS8 40, 50 JS8 60', () => {
+    for (const [speed, tol] of [['slow', 10], ['normal', 10], ['fast', 16], ['turbo', 32], ['ultra', 50]] as const) {
       const join = bandActivityByOffset([row(1_000, 1500, 'A', { speed }), row(2_000, 1500 + tol, 'B', { speed })])
       expect(join.map((r) => r.offsetHz), `${speed}: ${tol} Hz joins`).toEqual([1500 + tol])
       const apart = bandActivityByOffset([row(1_000, 1500, 'A', { speed }), row(2_000, 1501 + tol, 'B', { speed })])

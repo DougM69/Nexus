@@ -1300,6 +1300,22 @@ button.nb-chip:hover {
   stroke-width: 1;
   stroke-dasharray: 3 3;
 }
+/* The station's bearing (line 2's call; RotorPane's header): told from the needle and the dashed target
+   needle by its shape, dotted with a bug on the rim, and by its colour, the amber role in either theme.
+   Drawn under both needles, and never a click's target, so a click on it slews as the rose does.
+   RotorPane.contrast.test.tsx measures its colour in every mode and skin. */
+.rotor-bearing {
+  pointer-events: none;
+}
+.rotor-bearing-line {
+  stroke: var(--alert-warning);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-dasharray: 0 4;
+}
+.rotor-bearing-bug {
+  fill: var(--alert-warning);
+}
 .rotor-hub {
   fill: var(--accent);
 }
@@ -1375,6 +1391,10 @@ button.nb-chip:hover {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+/* "20° off" beside the bearing: the number never wraps away from its word. */
+.rotor-aim-off {
+  white-space: nowrap;
+}
 .rotor-aim-why {
   color: var(--text-dim);
 }
@@ -1406,7 +1426,9 @@ button.nb-chip:hover {
      its scrollbar the moment line 2 arrives, and a rose sized by it moved STOP 2.5 px sideways. The drawing
      scales (the pane's viewBox); its lines keep their widths and its letters are set larger in its own units.
    · LINE 2 AND WHAT FOLLOWS IT RUN UNDER THE ROSE at the box's full width (`.rotor-side` lends its lines to
-     the row's grid), where "→ EC1DD 227° (951 mi)" and Point fit one line in the 300 px rail.
+     the row's grid), where "→ EC1DD 227° (951 mi)" and Point fit one line in the 300 px rail. With the
+     antenna's "104° off" beside them the words take two lines there (32 px against 25 in Chrome, 2026-10-14),
+     and the fit holds that room, so its rose is 57 px rather than 63 in the stock rail's 139 px box.
    · TIGHTER LINES: the bearing at 1.25em, the elevation at the body size, the bearing and elevation boxes
      STOP's height (not the 44 px touch floor) and narrower (three digits still show), and Point beside line
      2's words, which wrap, wherever that leaves them 6em, so a distance such as "(15310 km)" never splits;
@@ -1414,7 +1436,7 @@ button.nb-chip:hover {
    What still needs a scroll, measured: line 2 at 1366×768 and 1600×900 in the 200 px rail (113 px of body:
    every box's head takes two lines there), and with an elevation axis in the 225 and 250 px rails at
    1366×768 (its boxes and STOP take two lines below ~265 px); and with an elevation axis and a call, the
-   box's last few px (the hint) at 1366×768 and 1600×900 in the 300 px rail.
+   hint's second line at 1366×768 and 1600×900 in the 300 px rail (13 px with "N° off" on line 2, 6 before).
    Everywhere else (Connect, a box in a cockpit's columns) the pane is laid out as above.
    RotorPane.rail.test.tsx computes both. */
 .dash-boxes .pane-body .rotor-row {
@@ -1435,7 +1457,8 @@ button.nb-chip:hover {
 }
 .dash-boxes .pane-body .rotor-ring,
 .dash-boxes .pane-body .rotor-tick,
-.dash-boxes .pane-body .rotor-needle {
+.dash-boxes .pane-body .rotor-needle,
+.dash-boxes .pane-body .rotor-bearing-line {
   vector-effect: non-scaling-stroke;
 }
 .dash-boxes .pane-body .rotor-cardinal {
@@ -1506,6 +1529,11 @@ button.nb-chip:hover {
 }
 .dash-boxes .pane-body .rotor-pane[data-fit] .rotor-needle.target {
   stroke-width: max(1px, calc(var(--rotor-rose, 0px) * 0.007));
+}
+/* The station's dots grow apart with them, or a big rose's would run together into a solid line. */
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-bearing-line {
+  stroke-width: max(1.5px, calc(var(--rotor-rose, 0px) * 0.01));
+  stroke-dasharray: 0 max(4px, calc(var(--rotor-rose, 0px) * 0.027));
 }
 .dash-boxes .pane-body .rotor-pane[data-fit] .rotor-az,
 .dash-boxes .pane-body .rotor-pane[data-fit] .rotor-el,
@@ -2028,8 +2056,10 @@ button.nb-chip:hover {
   min-height: 0;
   position: relative;
 }
-.globe3d-fallback {
-  flex: 1;
+/* A 3-D globe's note where the globe would be (components/GlobeGuard.tsx): this computer cannot make the
+   WebGL 2 context the globe needs, or the globe failed once drawn. It fills the Logbook's band (a box of the
+   operator's height), and in Connect's map cell, a column, what is left under the picker's bar. */
+.globe-note {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2037,6 +2067,13 @@ button.nb-chip:hover {
   text-align: center;
   color: var(--text-dim);
   font-size: 0.9rem;
+}
+.log-globe-band > .globe-note {
+  height: 100%;
+}
+.connect-map > .globe-note {
+  flex: 1;
+  min-height: 0;
 }
 /* "3D view paused" and its Reload, over a 3-D globe (Connect's or the Logbook's) whose WebGL context
    was lost and has not come back (components/globeWebgl.tsx). A card in the middle of the blank
@@ -8693,6 +8730,30 @@ select optgroup {
   font-size: calc(13px * var(--text-scale));
   color: var(--text-dim);
 }
+/* The first Tab stop of a review dialog, skipping its list to Cancel (ParkStateReview,
+   ConfirmationReview): shown only while it has the keyboard, as a skip link is. */
+.park-review-skip {
+  display: block;
+  margin: 0 0 var(--space-3);
+  padding: 6px var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: calc(13px * var(--text-scale));
+}
+.park-review-skip:not(:focus) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .park-review-list {
   list-style: none;
   margin: 0;
@@ -9874,8 +9935,8 @@ input.cw-pitch::-webkit-inner-spin-button {
   border-color: var(--accent, #4ea1ff);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #4ea1ff) 45%, transparent);
 }
-/* ENTER SENDS MESSAGE: the key or keys the next Enter in the contest strip sends glow, as N1MM
-   lights them — the CW and RTTY F-keys, and the voice keyer's slots. */
+/* ENTER SENDS MESSAGE: the key or keys the next Enter in the contest strip sends glow — the CW
+   and RTTY F-keys, and the voice keyer's slots. */
 .cw-macro.esm-lit,
 .vk-play.esm-lit {
   border-color: var(--accent);
@@ -15324,7 +15385,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--border);
   margin: 0 2px;
 }
-/* The vertical N1MM-style band map (its own torn-off window via open_panel_window) — flex-fills
+/* The vertical band map (its own torn-off window via open_panel_window) — flex-fills
  * the detached window (flex, not a height:100% chain, per the .app.detached note above). */
 .bandmap {
   flex: 1;
@@ -15678,6 +15739,168 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .stats-cap {
   margin-top: var(--space-2);
   font-size: calc(11px * var(--text-scale));
+  color: var(--text-faint);
+}
+/* The Timeline card (StatsTimeline.tsx): the whole width of the grid, a line chart drawn by hand
+   in SVG. A line takes its slot's colour AND dash pattern AND marker shape (the marker is the
+   slot's <use> in the component), so two lines stay apart without colour. The colours are the
+   identity palette (--dxc-*), which both themes define, hues ~36° apart with no meaning of their
+   own; "Other" is the faint ink, the line that is no one mode. */
+.stats-tl {
+  grid-column: 1 / -1;
+}
+.stats-tl [data-slot='0'] {
+  --tl-ink: var(--dxc-0);
+  --tl-dash: none;
+}
+.stats-tl [data-slot='1'] {
+  --tl-ink: var(--dxc-5);
+  --tl-dash: 7 4;
+}
+.stats-tl [data-slot='2'] {
+  --tl-ink: var(--dxc-8);
+  --tl-dash: 0 5;
+}
+.stats-tl [data-slot='3'] {
+  --tl-ink: var(--dxc-2);
+  --tl-dash: 9 3 2 3;
+}
+.stats-tl [data-slot='4'] {
+  --tl-ink: var(--dxc-4);
+  --tl-dash: 14 4;
+}
+.stats-tl [data-slot='5'] {
+  --tl-ink: var(--dxc-6);
+  --tl-dash: 3 3;
+}
+.stats-tl [data-other] {
+  --tl-ink: var(--text-faint);
+}
+.stats-tl-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.stats-tl-head h3 {
+  margin: 0;
+}
+.stats-tl-ranges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.stats-tl-chart {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: calc(150px * var(--text-scale)) auto;
+  /* Room for the plot's focus ring, which sits outside it. */
+  column-gap: var(--space-2);
+}
+.stats-tl-y {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  font-size: calc(10px * var(--text-scale));
+  color: var(--text-faint);
+}
+.stats-tl-plot {
+  position: relative;
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  cursor: crosshair;
+}
+.stats-tl-plot:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.stats-tl-lines,
+.stats-tl-marks {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.stats-tl-line {
+  fill: none;
+  stroke: var(--tl-ink);
+  stroke-width: 2;
+  stroke-dasharray: var(--tl-dash);
+  stroke-linejoin: round;
+}
+/* Slot 2's zero-length dashes are its dots: round caps draw them. */
+.stats-tl [data-slot='2'] .stats-tl-line,
+.stats-tl .stats-tl-line[data-slot='2'] {
+  stroke-linecap: round;
+}
+.stats-tl-mark {
+  fill: var(--tl-ink);
+  stroke: var(--tl-ink);
+  stroke-width: 1.5;
+}
+.stats-tl-guide {
+  stroke: var(--text-faint);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+.stats-tl-x {
+  grid-column: 2;
+  position: relative;
+  height: calc(14px * var(--text-scale) + 6px);
+}
+.stats-tl-tick {
+  position: absolute;
+  /* Below the plot's focus ring (2px, 2px out). */
+  top: 5px;
+  transform: translateX(-50%);
+  font-size: calc(10px * var(--text-scale));
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.stats-tl-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-label);
+}
+.stats-tl-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.stats-tl-key {
+  width: 24px;
+  height: 10px;
+  overflow: visible;
+}
+.stats-tl-total {
+  color: var(--text-dim);
+}
+.stats-tl-read {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-2) 0 0;
+  min-height: 1.45em;
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-dim);
+}
+.stats-tl-at {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+.stats-tl-at .stats-tl-name {
+  color: var(--text);
+  font-weight: 600;
+}
+.stats-tl-hint {
   color: var(--text-faint);
 }
 /* Gain/Zero contrast knobs next to the palette (double-click to recenter = auto). */
@@ -16728,6 +16951,50 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-dim);
+}
+/* On the station the country is a button that opens the picker (LogCountryPicker). It ellipsizes
+   inside its own box, as the call's button does: a cell's text-overflow cannot reach into a button
+   (#215). */
+.log-country-pick {
+  font: inherit;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: top;
+}
+.log-country-pick:hover,
+.log-country-pick[data-state='open'] {
+  color: var(--accent);
+  text-decoration: underline;
+}
+/* The picker itself: portaled, in .country-menu's box. */
+.log-country-menu {
+  max-width: 24rem;
+}
+/* The note's rule separates it from a list above it; the picker's first note has none. */
+.log-country-menu .country-menu-note:first-child {
+  margin-top: 0;
+  border-top: none;
+}
+/* The search box stays in view while the list under it scrolls, so it needs a background of its
+   own. */
+.log-country-search {
+  position: sticky;
+  /* Over the menu's own top padding too, so no scrolled row shows above the box. */
+  top: calc(-1 * var(--space-1));
+  z-index: 1;
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-elev-2);
+}
+.log-country-search .settings-input {
+  width: 16rem;
+  max-width: 100%;
 }
 .logbook-row.editing {
   outline: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
@@ -19244,7 +19511,7 @@ button.cq-skiptx1.on {
   min-width: 0;
 }
 
-/* ── Needed panel (the N1MM-style "what's needed now" board) ────────────────── */
+/* ── Needed panel (the "what's needed now" board) ───────────────────────────── */
 .layout.single.needed-panel {
   display: flex;
   flex-direction: column;
@@ -25029,6 +25296,12 @@ button.sat-chip:disabled {
   font-weight: 600;
   color: var(--alert-warning);
 }
+/* The contest journal's writes are failing (Contest screen and log strip): red, not amber —
+   contacts are in memory only. */
+.fd-unsaved {
+  font-weight: 600;
+  color: var(--state-bad);
+}
 
 /* ── Repeaters (the radio-programming workbench; the code still calls it Program): SOURCE pane
    (query + results) left, CHANNEL LIST (the artifact) right. After a fetch the results are a map
@@ -26776,6 +27049,59 @@ button.sat-chip:disabled {
   min-height: min(8em, calc(0.28 * var(--vh-eff, 100vh)));
   max-height: calc(0.45 * var(--vh-eff, 100vh));
 }
+/* JS8's waterfall controls (Js8WaterfallControls): the header pill that names the decode filter
+   and opens them. A button drawn as the header's pills are. */
+.js8-filter-pill {
+  background: transparent;
+  cursor: pointer;
+}
+.js8-filter-pill.on {
+  color: var(--text);
+}
+.ui-dialog.js8-wf-dialog {
+  width: min(480px, calc(100vw - 2 * var(--space-4)));
+}
+/* Settings ▸ Digital ▸ JS8 ▸ Frequencies (Js8FrequencySettings): a frequency row (dial,
+   description, ✕) and a schedule row (dial, from, until, description, ✕). */
+.js8-freq-row,
+.js8-hop-row {
+  display: grid;
+  gap: var(--space-2);
+  align-items: center;
+  max-width: 560px;
+  margin-bottom: var(--space-1);
+}
+.js8-freq-row {
+  grid-template-columns: minmax(90px, 130px) minmax(0, 1fr) auto;
+}
+.js8-hop-row {
+  grid-template-columns: minmax(90px, 130px) 6em 6em minmax(0, 1fr) auto;
+}
+.js8-hop-add {
+  display: grid;
+  grid-template-columns: minmax(90px, 130px) auto;
+  justify-content: start;
+  gap: var(--space-2);
+  align-items: center;
+}
+/* The waterfall controls' dialog stacks its groups' rows with room between them (the Settings
+   panel's groups get theirs from the panel); a button keeps its own width. */
+.ui-dialog.js8-wf-dialog .settings-featgroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.ui-dialog.js8-wf-dialog .settings-featgroup > button {
+  align-self: flex-start;
+}
+/* Two fields side by side (centre and width), or a field and its button (the passband centre
+   and QSY to centre). */
+.js8-wf-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: end;
+}
 /* Muted dashed placeholder pill (band slot etc.) — reads as "not wired yet". */
 .cockpit-ph-pill {
   font-size: var(--fs-label);
@@ -27161,12 +27487,121 @@ button.sat-chip:disabled {
 .js8-to {
   flex: 0 1 14em;
 }
+/* THE COMPOSE BOX (Js8ComposeBox): the input over a BACKDROP that repeats its text, transparent,
+   and paints JS8Call 3.0's pills and the word-suggestion underline behind the input's own letters.
+   The wrapper takes the field's place in the row and its fill; the input is see-through so the
+   backdrop shows, and stacks above it so the caret, the selection and the pointer are the input's.
+   The backdrop's font, padding and border widths are copied from the input at run time
+   (Js8ComposeBox `follow`), and its track follows the input's horizontal scroll. */
+.js8-compose-wrap {
+  flex: 1 1 12em;
+  position: relative;
+  display: flex;
+  min-width: 0;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+}
 .js8-compose {
   flex: 1 1 12em;
 }
-.js8-cq-select {
-  flex: 0 0 auto;
-  width: auto;
+/* Typeahead, as JS8Call's: what has gone of the message going out, beside the box that holds the
+   rest. The end of it only (`sentTail`), in the estimate's face. */
+.js8-typeahead-sent {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.js8-compose-wrap > .js8-compose {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-width: 0;
+  background: transparent;
+}
+.js8-compose-backdrop {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 0 solid transparent;
+  white-space: pre;
+  color: transparent;
+}
+.js8-compose-track {
+  display: inline-block;
+  white-space: pre;
+}
+/* A pill's fill hugs its letters (no padding, which would move them off the input's own); the
+   ring of the same tint around it reads as the padding. */
+.js8-pill {
+  --pill: var(--accent);
+  background: color-mix(in srgb, var(--pill) 28%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pill) 28%, transparent);
+}
+.js8-pill.first {
+  border-top-left-radius: var(--radius-sm);
+  border-bottom-left-radius: var(--radius-sm);
+}
+.js8-pill.last {
+  border-top-right-radius: var(--radius-sm);
+  border-bottom-right-radius: var(--radius-sm);
+}
+.js8-pill.relay {
+  --pill: var(--alert-info);
+}
+.js8-pill.group {
+  --pill: var(--status-new-mode);
+}
+.js8-pill.command {
+  --pill: var(--status-confirmed);
+}
+.js8-pill.sender {
+  --pill: var(--text-faint);
+}
+.js8-word-flag {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-color: var(--snr-weak);
+  text-decoration-skip-ink: none;
+}
+/* Settings ▸ JS8 ▸ Composing: the saved messages, one row each, and the row that adds one. */
+.js8-saved-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.js8-saved-row,
+.js8-saved-add {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.js8-saved-row .settings-input,
+.js8-saved-add .settings-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.js8-macro-list code {
+  font-family: var(--font-mono);
+  word-break: break-word;
+}
+/* REPLY · SNR · INFO · STATUS · Saved (Js8ComposeActions), leading the CQ row as one group that
+   wraps as a group when the row runs out of width. */
+.js8-quick-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
 }
 /* Three faces for a second-act chip: off · on-but-not-armed (the switch is on but something
    else it needs is not: the session TX latch, a clear idle watchdog, HB or AUTOREPLY — nothing
@@ -27179,6 +27614,38 @@ button.sat-chip:disabled {
 .js8-arm.armed {
   border-color: var(--state-ok);
   color: var(--state-ok);
+}
+/* THE HB MENU (components/Js8Heartbeat): JS8Call's HB context menu, opened by a right-click on HB
+   or by the ▾ beside it. Out of flow on the dock's top edge over the HB button, as the keyboard
+   docks' macro editor is (.rtty-macro-editor): its containing block is the dock itself (the
+   control is not positioned) and `left` is the control's offset in it, clamped by the component,
+   so opening it moves no control and covers none of the dock. The dock is lifted over the panes'
+   dividers while it stands (.cockpit-txdock-editing). Opaque, because it sits over the panes. */
+.js8-hb-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.js8-hb-menu-btn {
+  padding: 0 var(--space-1);
+}
+.js8-hb-menu {
+  position: absolute;
+  bottom: calc(100% + var(--space-1));
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: max-content;
+  padding: var(--space-2);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.js8-hb-menu-item {
+  text-align: left;
+  white-space: nowrap;
 }
 /* Feeds: readable minimum on the CONTENT wrapper (never on the frame). */
 .js8-activity,
@@ -27240,18 +27707,7 @@ button.sat-chip:disabled {
 .js8-offset-row.low {
   color: var(--text-dim);
 }
-/* ★ the operator pin: a text button, dim until it holds a row. */
-.js8-pin {
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  color: var(--text-dim);
-  line-height: 1;
-}
-.js8-pin.on {
-  color: var(--accent);
-}
+/* A row the operator pinned to the top (its menu's "Pin to the top"). */
 .js8-station.pinned {
   background: var(--bg-elev-2);
 }
@@ -27314,6 +27770,14 @@ button.sat-chip:disabled {
 .js8-inbox-row.state-unread {
   font-weight: 700;
 }
+/* The Inbox's notes of what a cap took out (Js8InboxDropped.tsx), above the rows. */
+.js8-inbox-dropped {
+  color: var(--state-weak);
+}
+/* "Store message…" (Js8StoreMessage.tsx): the message takes the dialog's width. */
+.js8-store-input {
+  width: 100%;
+}
 .js8-path {
   color: var(--text-dim);
 }
@@ -27368,6 +27832,152 @@ button.sat-chip:disabled {
 }
 .js8-rx-speeds .settings-toggle {
   flex: 0 0 auto;
+}
+/* THE JS8 LISTS AS JS8Call 3.0.3 DRAWS THEM (components/Js8RxPane, Js8BandActivity, Js8CallList,
+   Js8InboxPanel). Content styling only: each sits inside its pane's body, which scrolls.
+   The RX pane's line: time · offset · the message as far as it has come. The font is monospaced,
+   so `ch` columns hold HH:MM:SS and a four-digit offset exactly; an em column wrapped the clock. */
+.js8-rx-line {
+  grid-template-columns: 8ch 4ch minmax(0, 1fr);
+}
+.js8-rx-line .js8-time,
+.js8-rx-line .js8-freq {
+  white-space: nowrap;
+}
+/* Band activity, the call list and the inbox are tables: a column is as wide as what it holds, as
+   JS8Call's resize-to-contents makes it, and the message column takes the rest and wraps. The rows
+   keep the class names the panes always had; a table row is a table row whatever else they say. */
+.js8-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.js8-table tr {
+  display: table-row;
+}
+.js8-table th,
+.js8-table td {
+  padding: 1px var(--space-1);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.js8-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+.js8-table td.js8-text {
+  width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.js8-table tr.selected > td:first-child,
+.js8-table tr.directed > td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.js8-table tr.selected {
+  background: var(--bg-elev-2);
+}
+/* JS8Call's row colours, from the theme: a CQ green, the two highlight lists amber and blue (the
+   primary wins: it is the later rule). */
+.js8-table tr.cq {
+  background: color-mix(in srgb, var(--snr-strong) 16%, transparent);
+}
+.js8-table tr.hl-secondary {
+  background: color-mix(in srgb, var(--alert-info) 22%, transparent);
+}
+.js8-table tr.hl-primary {
+  background: color-mix(in srgb, var(--snr-marginal) 26%, transparent);
+}
+.js8-table tr.low {
+  color: var(--text-dim);
+}
+.js8-call-table tr.unread {
+  font-weight: 700;
+}
+.js8-mark {
+  text-align: center;
+}
+.js8-mark-blocked {
+  color: var(--snr-weak);
+  border-color: var(--snr-weak);
+}
+.js8-group .js8-station-call {
+  color: var(--text);
+}
+.js8-row-acts {
+  text-align: right;
+}
+.js8-row-menu {
+  background: none;
+  border: none;
+  padding: 0 var(--space-1);
+  cursor: pointer;
+  color: var(--text-dim);
+  line-height: 1;
+}
+.js8-row-menu:hover,
+.js8-row-menu[data-state='open'] {
+  color: var(--text);
+}
+/* The one-click asks wrap inside their cell, as they wrapped in the row before, so a narrow pane
+   is not pushed wider than its column by them. */
+.js8-table td.js8-acts-cell {
+  white-space: normal;
+}
+.js8-call-table .js8-station-acts {
+  margin-left: 0;
+  flex-wrap: wrap;
+}
+.js8-inbox-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1);
+}
+.js8-inbox-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+/* A pane toolbar's filter, sized as Operate's sort select (`.od-sort select`), not as a Settings
+   field: the touch-height field took a third of the pane's minimum height. */
+.js8-inbox-filter select {
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font: inherit;
+}
+.js8-sort {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.js8-inbox-table tr {
+  cursor: pointer;
+}
+/* A held message's note that it is too long to hand over at this speed (Js8InboxTooLong.tsx): its
+   own line under the message, as it wrapped in the row before. */
+.js8-inbox-table td.js8-text > .js8-path {
+  display: block;
+}
+.js8-sound {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.js8-mark-input {
+  max-width: 6em;
 }
 /* Stop button in the macro row — live (red-tinted) only while sending. */
 .rtty-stop:not(:disabled) {
@@ -30693,5 +31303,226 @@ tr.sel .aprs-sym {
   color: var(--text-dim);
 }
 .street-maps-folder {
+  overflow-wrap: anywhere;
+}
+
+/* THE STATS PANE (components/CallStatsPane) — what the log holds for the call in the log entry.
+   Content only: it sits in a pane body, which scrolls, and takes no size of its own. A slot's
+   state is a SHAPE as well as an ink, so it reads in greyscale: an outline (not worked), a hollow
+   ring in the warning ink (worked), solid in the good ink (confirmed), a dash (no DXCC credit on
+   the band). The flags take the need palette the Needed board and the decode badges use. */
+.cstats {
+  display: flex;
+  flex-direction: column;
+  /* Each part its own width: a stretched grid spread thirteen slots across a 3000 px pane. */
+  align-items: flex-start;
+  gap: var(--space-1);
+  font-size: var(--fs-label);
+}
+/* ONE LINE, THE PANE'S WIDTH (CallStatsPane, ONE HEIGHT): the entity, or what the pane says in its
+   place, is cut short rather than wrapped, and the flags keep their room while there is nothing to
+   flag. */
+.cstats-top {
+  display: flex;
+  align-self: stretch;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.cstats-who {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--text);
+}
+.cstats-who.cstats-empty {
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.cstats-flags {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cstats-flags[data-idle] {
+  visibility: hidden;
+}
+.cstats-flag {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.cstats-flag[data-on='true'] {
+  border-color: transparent;
+  color: var(--need-ink);
+}
+.cstats-flag[data-on='true'][data-kind='one'] {
+  background: var(--need-entity);
+}
+.cstats-flag[data-on='true'][data-kind='band'] {
+  background: var(--need-band);
+}
+.cstats-flag[data-on='true'][data-kind='mode'] {
+  background: var(--need-mode);
+}
+.cstats-src,
+.cstats-grid {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.cstats-src th,
+.cstats-src td {
+  padding: 0 6px;
+  text-align: center;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.cstats-src th[scope='row'] {
+  padding-left: 0;
+  text-align: left;
+}
+.cstats-dot {
+  display: inline-block;
+  width: 0.75em;
+  height: 0.75em;
+  box-sizing: border-box;
+  border: 1px solid var(--text-dim);
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.cstats-src-cell[data-held='true'] .cstats-dot {
+  border-color: var(--state-good);
+  background: var(--state-good);
+}
+.cstats-src-cell[data-held='none'] .cstats-dot {
+  visibility: hidden;
+}
+.cstats-grid th,
+.cstats-grid td {
+  padding: 0;
+  text-align: center;
+}
+.cstats-grid thead th {
+  padding: 0 1px;
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.cstats-grid thead th[data-here] {
+  font-weight: 700;
+  color: var(--text);
+}
+.cstats-award-head {
+  padding-right: var(--space-1);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  text-align: left;
+  vertical-align: middle;
+  color: var(--text);
+}
+.cstats-award-of {
+  display: block;
+  max-width: 5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.cstats-award + .cstats-award > tr:first-child > * {
+  border-top: 1px solid var(--border);
+}
+.cstats-mode {
+  padding-right: var(--space-1);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  text-align: left;
+  color: var(--text-dim);
+}
+.cstats-slot {
+  min-width: 1.2em;
+}
+.cstats-slot[data-here] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.cstats-mark {
+  display: block;
+  width: 0.8em;
+  height: 0.8em;
+  margin: 1px auto;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+.cstats-slot[data-slot='worked'] .cstats-mark {
+  border: 2px solid var(--state-warn);
+}
+.cstats-slot[data-slot='confirmed'] .cstats-mark {
+  border-color: var(--state-good);
+  background: var(--state-good);
+}
+.cstats-slot[data-slot='none'] .cstats-mark {
+  visibility: hidden;
+}
+/* The dash centred in the box every other mark takes (0.8em, 1px above and below), so a line with a
+   no-credit slot is no taller than one without (CallStatsPane, ONE HEIGHT). */
+.cstats-slot[data-slot='noCredit'] .cstats-mark {
+  height: 2px;
+  margin: 0.4em auto;
+  border: 0;
+  background: var(--text-dim);
+}
+
+/* NEEDED BY BAND (AwardsView): per band, never worked and worked-not-confirmed, each count a
+   button that opens its list under the row. */
+.aw-bn-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.aw-bn-table th,
+.aw-bn-table td {
+  padding: 2px var(--space-2);
+  text-align: left;
+}
+.aw-bn-table thead th {
+  font-size: var(--fs-label);
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.aw-bn-count {
+  min-width: 3em;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.aw-bn-count[aria-expanded='true'] {
+  border-color: var(--accent);
+}
+.aw-bn-count:disabled {
+  border-color: transparent;
+  color: var(--text-dim);
+  cursor: default;
+}
+.aw-bn-list {
+  margin: 0;
+  padding: 0 0 var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
   overflow-wrap: anywhere;
 }

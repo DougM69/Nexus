@@ -11,6 +11,8 @@
 //! - [`pskreporter`] — the IPFIX-like UDP spot upload to
 //!   `report.pskreporter.info:4739`, the same one WSJT-X uses to report heard
 //!   stations.
+//! - [`js8net`] — JS8Call's spotting network: JSON datagrams over UDP to
+//!   `spot.js8call.com:50000`, the stations and group commands heard on JS8.
 //! - [`qds`] — the shared Qt `QDataStream` (big-endian) byte codec the WSJT-X
 //!   protocol is framed with.
 //! - [`cluster`] / [`aprsis`] — long-lived telnet sessions against public ham
@@ -48,6 +50,7 @@ pub mod flexcat;
 pub mod flexdisc;
 pub mod flexvita;
 pub mod icom;
+pub mod js8net;
 pub mod mqtt;
 pub mod n1mm;
 pub mod n3fjp;

@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::advisor::PropAdvisory;
+use crate::awards::{counted_entity, counted_zone, RecordFields};
 use crate::dxcc;
 use crate::geo::{bearing_deg, compass_octant, haversine_km, maidenhead_to_latlon};
 use crate::likelihood::{BandOutlook, PathModel, Workability};
@@ -188,13 +189,13 @@ impl LogNeeds {
         Self::default()
     }
 
-    /// Fold one logged contact in. Resolves the entity via [`crate::dxcc`]
-    /// (cty.dat) so it matches the DXpedition side; unresolved calls are skipped
-    /// (rare with the full country file). `band` is an ADIF band label ("20m"),
-    /// `mode` the contact's stored mode: the ADIF reader has already let a SUBMODE that names
-    /// the real mode win (FT4, JS8, Q65 and the rest under MFSK). Terrestrial only — a caller
-    /// folding real log records uses [`add_qso`](Self::add_qso), which also takes the satellite
-    /// flag.
+    /// Fold one logged contact in, by its call alone: the entity, zone and state gate it counts
+    /// toward are the ones [`add_qso`](Self::add_qso) gives a record that carries no DXCC number
+    /// or CQ zone. `band` is an ADIF band label ("20m"), `mode` the contact's stored mode: the
+    /// ADIF reader has already let a SUBMODE that names the real mode win (FT4, JS8, Q65 and the
+    /// rest under MFSK). Terrestrial only — a caller folding real log records uses
+    /// [`add_qso`](Self::add_qso), which also takes the satellite flag and what the record
+    /// carries.
     pub fn add(
         &mut self,
         call: &str,
@@ -204,16 +205,34 @@ impl LogNeeds {
         state: Option<&str>,
         confirmed: bool,
     ) {
-        self.add_qso(call, band, mode, grid, state, confirmed, false)
+        self.add_qso(
+            call,
+            band,
+            mode,
+            grid,
+            state,
+            confirmed,
+            false,
+            RecordFields::default(),
+        )
     }
 
     /// The full fold: [`add`](Self::add) plus `sat` — whether the contact was
-    /// made through a satellite (`PROP_MODE=SAT`). Production log folds go
-    /// through here so satellite credit is stated, not defaulted. A satellite
-    /// contact's grid credits the satellite sets only (see the field docs); the
-    /// entity/zone/state slots are folded as today — the per-award satellite
-    /// exclusions beyond grids (satellite DXCC, WAZ's satellite ban) are a
-    /// deliberate non-goal here.
+    /// made through a satellite (`PROP_MODE=SAT`) — and what the contact's record
+    /// carries beyond its call ([`RecordFields`]). Production log folds go
+    /// through here so satellite credit and the record's numbers are stated, not
+    /// defaulted. A satellite contact's grid credits the satellite sets only (see
+    /// the field docs); the entity/zone/state slots are folded as today — the
+    /// per-award satellite exclusions beyond grids (satellite DXCC, WAZ's satellite
+    /// ban) are a deliberate non-goal here.
+    ///
+    /// The entity, the CQ zone and the US-state gate are the ones the awards count the contact
+    /// toward ([`counted_entity`], [`counted_zone`]): its record's DXCC number (LoTW's first) and
+    /// CQ zone, else its call through cty.dat, a WAE area as the entity it belongs to (Sicily as
+    /// Italy). So the board never calls an entity needed that the Awards view counts: a 2015 K1N
+    /// contact carrying Navassa's 182 is Navassa here too, not the United States its call reads
+    /// as today. A contact the record puts in no entity (DXCC 0) or in a deleted one earns no
+    /// entity slot — a deleted entity is never a need.
     // Eight positional facts of one QSO. A params struct would rename, not reduce,
     // them — every caller is a log fold that already holds all eight by name.
     #[allow(clippy::too_many_arguments)]
@@ -226,6 +245,7 @@ impl LogNeeds {
         state: Option<&str>,
         confirmed: bool,
         sat: bool,
+        rec: RecordFields,
     ) {
         // The band this contact credits. EVERY need below is a per-band slot, so a
         // contact whose band label doesn't resolve credits none of them — the same
@@ -249,15 +269,14 @@ impl LogNeeds {
                 }
             }
         }
-        let Some(info) = dxcc::resolve(call) else {
-            return;
-        };
+        let resolved = dxcc::resolve(call);
+        let counted = counted_entity(resolved.as_ref(), &rec);
         // A worked US state (WAS) — from the log's ADIF STATE, but GATED on a
         // US-family DXCC entity, exactly like the awards engine. Without the gate,
         // a non-US subdivision code that collides with a US postal code (Australian
         // "WA" = Western Australia, Brazilian "SC"/"PA"/etc.) would poison the
         // worked set and wrongly SUPPRESS a genuinely-needed US state.
-        if matches!(info.entity, "United States" | "Alaska" | "Hawaii") {
+        if counted.is_some_and(|c| c.is_us_state()) {
             if let (Some(s), Some(b)) = (state.and_then(crate::awards::valid_state), worked_on) {
                 self.worked_states.insert((s.to_string(), b));
                 if confirmed {
@@ -266,22 +285,21 @@ impl LogNeeds {
             }
         }
         // WAZ zone is valid even on a WAE/CQ-only entity, so track it BEFORE the
-        // DXCC gate (need-aware spotting flags a new CQ zone independently).
-        if (1..=40).contains(&info.cq_zone) {
-            if let Some(b) = worked_on {
-                self.worked_zones.insert((info.cq_zone, b));
-                if confirmed {
-                    self.confirmed_zones.insert((info.cq_zone, b));
-                }
+        // DXCC gate (need-aware spotting flags a new CQ zone independently). Confirmed as WAZ
+        // credits it, an Authenticity-Guaranteed eQSL included, so the board asks for no
+        // confirmation the Awards view already counts.
+        if let (Some(zone), Some(b)) = (counted_zone(resolved.as_ref(), &rec), worked_on) {
+            self.worked_zones.insert((zone, b));
+            if confirmed || rec.qsl.eqsl_ag_confirmed() {
+                self.confirmed_zones.insert((zone, b));
             }
         }
-        // The needs model is DXCC-oriented (a "new one" = a new DXCC entity), and
-        // DXpeditions are never to WAE/CQ-only entities — skip them so this bucket
-        // stays consistent with the awards engine.
-        if !info.is_dxcc {
+        // The needs model is DXCC-oriented (a "new one" = a new current DXCC entity):
+        // a contact in no entity, or in a deleted one, fills no entity slot.
+        let Some(counted) = counted.filter(|c| !c.deleted) else {
             return;
-        }
-        let entity = info.entity.to_string();
+        };
+        let entity = counted.name.to_string();
         self.worked_entity.insert(entity.clone());
         self.worked_mode.insert((entity.clone(), mode_key(mode)));
         self.worked_class
@@ -545,12 +563,15 @@ impl DxpeditionTracker {
             // Active now → workable cards per needed band. Match needs on the
             // *resolver* entity (cty.dat canonical) so it lines up with the
             // log-derived needs, not NG3K's free-text name, and judge the modes
-            // the operation announced.
+            // the operation announced. An operation on the air has no record, so its
+            // entity comes from its call alone; a logged contact's comes from its record
+            // first (`LogNeeds::add_qso`).
             let resolved = dxcc::resolve(&p.call);
             // A call resolving to a WAE/CQ-only entity (e.g. an IG9/IT9 IOTA op)
-            // is not a DXCC "new one", and `LogNeeds` never tracks such entities —
-            // so it could never be satisfied and would stick as a permanent ATNO.
-            // Skip it, mirroring the `is_dxcc` gate in `LogNeeds::add`.
+            // is not a DXCC "new one" under the area's own name, and `LogNeeds`
+            // never holds that name (it counts such a contact as the entity it
+            // belongs to, Italy) — so it could never be satisfied and would stick as
+            // a permanent ATNO. Skip it, as the Needed board's scorer does.
             if matches!(&resolved, Some(i) if !i.is_dxcc) {
                 continue;
             }
@@ -860,8 +881,26 @@ mod tests {
         // VUCC only, so a sat QSO must not suppress a genuine terrestrial
         // per-band NewGrid need. Band-independent: the 70cm one (no Band
         // variant) still counts.
-        n.add_qso("K1ABC", "2m", "FM", Some("FN31"), None, true, true);
-        n.add_qso("W2DEF", "70cm", "SSB", Some("FN20"), None, false, true);
+        n.add_qso(
+            "K1ABC",
+            "2m",
+            "FM",
+            Some("FN31"),
+            None,
+            true,
+            true,
+            RecordFields::default(),
+        );
+        n.add_qso(
+            "W2DEF",
+            "70cm",
+            "SSB",
+            Some("FN20"),
+            None,
+            false,
+            true,
+            RecordFields::default(),
+        );
         assert!(n.worked_grids_sat().contains("FN31"));
         assert!(n.worked_grids_sat().contains("FN20"));
         assert!(n.confirmed_grids_sat().contains("FN31"));
@@ -872,10 +911,28 @@ mod tests {
         );
         // The entity is still WORKED (ATNO is any-means): satellite Japan is
         // not a new one anymore.
-        n.add_qso("JA1ABC", "2m", "FM", Some("PM95"), None, false, true);
+        n.add_qso(
+            "JA1ABC",
+            "2m",
+            "FM",
+            Some("PM95"),
+            None,
+            false,
+            true,
+            RecordFields::default(),
+        );
         assert!(n.worked_entity_names().contains("Japan"));
         // A terrestrial QSO keeps today's behavior untouched.
-        n.add_qso("W3GHI", "2m", "FT8", Some("FN42"), None, false, false);
+        n.add_qso(
+            "W3GHI",
+            "2m",
+            "FT8",
+            Some("FN42"),
+            None,
+            false,
+            false,
+            RecordFields::default(),
+        );
         assert!(n.worked_grids().contains(&("FN42".to_string(), Band::B2)));
         assert!(!n.worked_grids_sat().contains("FN42"));
     }

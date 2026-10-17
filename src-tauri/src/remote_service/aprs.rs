@@ -20,8 +20,14 @@ pub(super) fn live(e: &tempo_app::engine::Engine) -> Result<Value, &'static str>
     if health.radio_name.len() > 256 || inet.last_reject.as_ref().is_some_and(|s| s.len() > 1024) {
         return Err("applicationTooLarge");
     }
+    // The hosted page takes `isStatus` with exactly these nine keys and refuses the whole sample
+    // otherwise (`ui/src/remote-web/aprs.ts`), so the desktop's own additions stay off it.
+    let is_status = json!({"enabled": inet.enabled, "connected": inet.connected,
+        "verified": inet.verified, "packets": inet.packets, "lastPacketUnix": inet.last_packet_unix,
+        "uplinkEnabled": inet.uplink_enabled, "uploaded": inet.uploaded,
+        "gateRejected": inet.gate_rejected, "lastReject": inet.last_reject});
     Ok(
-        json!({"health": health, "isStatus": inet, "capturedAtMs": super::now_ms(),
+        json!({"health": health, "isStatus": is_status, "capturedAtMs": super::now_ms(),
         "settings": {"mygrid":s.mygrid,"aprsChannelMhz":s.aprs_channel_mhz,
             "aprsComment":s.aprs_comment,"aprsPath":s.aprs_path,
             "aprsSymbolTable":s.aprs_symbol_table,"aprsSymbolCode":s.aprs_symbol_code,
@@ -127,16 +133,47 @@ mod tests {
             health["health"],
             serde_json::to_value(e.aprs_health()).unwrap()
         );
-        assert_eq!(
-            health["isStatus"],
-            serde_json::to_value(e.aprs_is_status()).unwrap()
-        );
+        let mut desktop = serde_json::to_value(e.aprs_is_status()).unwrap();
+        let fields = desktop.as_object_mut().unwrap();
+        fields.remove("forJs8");
+        fields.remove("forJs8Relay");
+        assert_eq!(health["isStatus"], desktop);
         assert_eq!(
             serde_json::to_value(e.settings()).unwrap(),
             expected_settings
         );
         assert!(!e.snapshot().radio.tx_enabled);
         assert_eq!(capture(&shared).unwrap_err(), "applicationBusy");
+    }
+    /// The hosted page's validator takes `isStatus` with exactly these nine keys and refuses the
+    /// whole APRS sample otherwise (`ui/src/remote-web/aprs.ts`), so what the desktop's status
+    /// adds (what the session is for) stays off the Remote's sample.
+    #[test]
+    fn the_remote_aprs_is_status_keeps_the_nine_keys_its_page_takes() {
+        let mut e = Engine::with_settings(Default::default());
+        e.set_aprs_is_for_js8(true, true);
+        let value = live(&e).unwrap();
+        let mut keys: Vec<&str> = value["isStatus"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "connected",
+                "enabled",
+                "gateRejected",
+                "lastPacketUnix",
+                "lastReject",
+                "packets",
+                "uplinkEnabled",
+                "uploaded",
+                "verified"
+            ]
+        );
     }
     #[test]
     fn display_budget_and_setting_projection_refuse_unbounded_or_private_data() {

@@ -264,7 +264,7 @@ describe('every rig in the catalog can actually be loaded by the Hamlib we ship'
     // default. A fixture cannot vouch for its own completeness; only the catalog can.
     const here = (rel: string) => fileURLToPath(new URL(rel, import.meta.url))
     const catalog = readFileSync(here('../../../crates/tempo-audio/src/rigmodels.rs'), 'utf8')
-    const inCatalog = [...catalog.matchAll(/^\s*\(\s*(\d+)\s*,/gm)].map((m) => Number(m[1]))
+    const inCatalog = [...catalog.matchAll(/^\s*\(\s*(\d+)\s*,\s*"/gm)].map((m) => Number(m[1]))
     // The parse is this test's own positive control: a pattern that silently matched nothing
     // would leave `unaccounted` empty and the assertion below would pass on no evidence at all.
     expect(inCatalog.length).toBeGreaterThan(100)

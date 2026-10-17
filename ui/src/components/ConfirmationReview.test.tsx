@@ -443,4 +443,24 @@ describe('Check confirmations', () => {
     expect(cancel).not.toHaveBeenCalled()
     expect(rows(dialog).length).toBe(LINES.length)
   })
+
+  // With thousands of lines, Tab otherwise passes every checkbox before Cancel. The dialog's first
+  // Tab stop skips the lists to its buttons, and is named by them: Check before a check, Change after.
+  it('first Tab stop skips the lists: it puts the keyboard on Cancel and changes nothing', async () => {
+    const unchecked = await opened()
+    expect(within(unchecked.dialog).getByRole('button', { name: 'Skip to Cancel and Check' })).toBeTruthy()
+    cleanup()
+    const { dialog, onClose } = await checked()
+    const stops = [...dialog.querySelectorAll<HTMLElement>('button, input')].filter((e) => e.tabIndex >= 0)
+    const skip = within(dialog).getByRole('button', { name: 'Skip to Cancel and Change' })
+    expect(stops[0], 'the skip comes before every line').toBe(skip)
+    expect(stops.slice(1).every((e) => e.compareDocumentPosition(skip) & Node.DOCUMENT_POSITION_PRECEDING)).toBe(true)
+    const ticked = boxes(dialog).map((b) => b.checked)
+    fireEvent.click(skip)
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(onClose).not.toHaveBeenCalled()
+    expect(apply).not.toHaveBeenCalled()
+    expect(cancel).not.toHaveBeenCalled()
+    expect(boxes(dialog).map((b) => b.checked)).toEqual(ticked)
+  })
 })

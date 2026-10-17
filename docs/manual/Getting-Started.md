@@ -83,7 +83,7 @@ Default is **VOX** (no hardware keying command). Change to **CAT** (rigctld `T` 
 
 ### Audio levels
 
-Set **Tx Level** conservatively — the default is `0.9` (90% drive). Trim it down until your rig's ALC reads zero. For RX, watch the level meter while receiving and aim for the green zone; red means clipping.
+Set **Tx Level** conservatively — the default is `0.9` (90% drive). Trim it down until your rig's ALC reads zero; on a Yaesu that turns its power down with the ALC, such as the FT-991A, do this at full power, because below it the ALC reads above zero however clean the drive. For RX, watch the level meter while receiving and aim for the green zone; red means clipping.
 
 Full rig and audio walkthrough: [Rig and Audio Setup](Rig-and-Audio-Setup.md).
 

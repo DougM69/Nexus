@@ -53,30 +53,13 @@ import { EN, type MessageKey } from './index'
  * proven on a real shipped sentence rather than on a fixture.
  */
 const MIGRATED = [
-  'remote-web/ModeEntry.tsx',
-  'remote-web/operations.tsx',
   'remote-web/collections.tsx',
-  'remote-web/RemoteRecall.tsx',
-  'remote-web/RemoteInsights.tsx',
-  'remote-web/RemoteResponsiveness.tsx',
   'remote-web/responsiveness.ts',
-  'remote-web/RemoteDxpeditions.tsx',
-  'remote-web/RemoteMemories.tsx',
-  'remote-web/RemoteOta.tsx',
-  'remote-web/RemoteFieldDay.tsx',
-  'remote-web/BrowserApplication.tsx',
   'remote-web/AudioListen.tsx',
-  'remote-web/SessionStatus.tsx',
-  'remote-web/FeedWatch.tsx',
-  'remote-web/useNeedAlerts.ts',
-  'remote-web/useRareDxAlerts.ts',
-  'remote-web/usePotaAlerts.ts',
-  'remote-web/presentation.tsx',
   'remote-web/RemoteApp.tsx',
   'remote-web/StreamView.tsx',
   'remote-web/stream-capture.ts',
   'remote-web/stream-link.ts',
-  'remote-web/control-failure.ts',
   'remote-native/RemoteStation.tsx',
   'remote-native/stream-input.ts',
   // One clean way into streaming (2026-10-02) — born migrated: the beta line, the name a browser
@@ -162,6 +145,8 @@ const MIGRATED = [
   'features/exportLacks.ts',
   // The QSO detail view (#313) — born migrated: every string in it is a catalog key.
   'components/QsoDetail.tsx',
+  // The Logbook's country picker — born migrated: the entity names and numbers it lists are data.
+  'components/LogCountryPicker.tsx',
   'components/LogEntry.tsx',
   // Removing the newest contest contact: the strip's and the contest screen's sentences.
   'features/contestRemoval.ts',
@@ -188,10 +173,12 @@ const MIGRATED = [
   // directly; their words resolve through getters, so the record shape is unchanged and the
   // lookup happens when the string is read rather than when the module loads.
   'components/AwardsView.tsx',
+  'components/CallStatsPane.tsx',
   'components/AwardsJourney.tsx',
   'components/JourneyView.tsx',
   'components/NeededPanel.tsx',
   'components/StatsView.tsx',
+  'components/StatsTimeline.tsx',
   'features/needVisuals.ts',
   'statusMeta.ts',
   'useJourneyUnlocks.ts',
@@ -210,6 +197,7 @@ const MIGRATED = [
   'components/Globe3D.tsx',
   'components/QsoGlobe.tsx',
   'components/globeWebgl.tsx',
+  'components/GlobeGuard.tsx',
   'components/StreetMap.tsx',
   'components/StreetDownloadSheet.tsx',
   'components/SettingsStreetMaps.tsx',
@@ -312,6 +300,7 @@ const MIGRATED = [
   // log table read one table of catalog keys; a slot id it has no caption for is a token.
   'features/contestSlots.ts',
   'features/contestLocation.ts',
+  'features/contestUnsaved.ts',
   // The warn-only FD advisories (2026-08-29): born migrated — its two banner/header
   // chips are catalog keys from birth; the mode names, event names and assistance-source
   // labels it interpolates are invariant tokens.
@@ -592,6 +581,13 @@ const MIGRATED = [
   // reading) plus the ◀/▶ glyphs, which are direction and not prose: both carry a translated
   // aria-label, because an arrow names nothing to a screen reader and this one moves a kilowatt.
   'components/AmpStrip.tsx',
+  // JS8's compose box as JS8Call 3.0.3 has it (the pills and word suggestions in the box, the
+  // REPLY/SNR/INFO/STATUS buttons and the Saved menu, and their Settings) — migrated from birth. The
+  // command words, REPLY, the CQ forms and the macros are the mode's tokens. None of it stops a
+  // transmission: the buttons are senders, like Send.
+  'components/Js8ComposeBox.tsx',
+  'components/Js8ComposeActions.tsx',
+  'components/Js8ComposeSettings.tsx',
   // Parsec presence mode's words (the Settings readout, the status-lane stop report) — migrated
   // from birth. The station sends tokens; every sentence is here, from the catalog.
   'features/parsecPresence.ts',
@@ -609,6 +605,9 @@ const MIGRATED = [
   // …and of a slot over the station ended when its audio stopped reaching the radio — migrated
   // from birth.
   'features/slotAudioLost.ts',
+  // …and of an FT8/FT4 over the station dropped because the radio keyed it after its period had
+  // ended — migrated from birth. How late passes through as data.
+  'features/slotOverDropped.ts',
   // …and of a PTT press the station kept off the air for the radio's DAX — migrated from birth.
   'features/pttRefused.ts',
   // …and of a voice-keyer message the station dropped before the radio took DAX — migrated from
@@ -636,6 +635,34 @@ const MIGRATED = [
   // What the radio reports beside Tune while Tune is the Flex radio's own carrier — migrated from
   // birth.
   'components/RadioTuneNote.tsx',
+  // JS8's heartbeat controls (HB NET, HB and its menu, what holds an HB ACK back) and their
+  // Settings switches — migrated from birth; HB and HB NET are the mode's tokens. Neither stops a
+  // transmission: HB off cancels a schedule, and "Send heartbeat now" is a sender.
+  'components/Js8Heartbeat.tsx',
+  'components/Js8HeartbeatSettings.tsx',
+  // JS8's "Store message…" box and the Inbox's notes of what a cap removed — migrated from birth.
+  'components/Js8StoreMessage.tsx',
+  'components/Js8InboxDropped.tsx',
+  // …and the note on a held message's Inbox row that it is too long to hand over at this speed —
+  // migrated from birth; the speed's name is the mode's token.
+  'components/Js8InboxTooLong.tsx',
+  // JS8's frequencies and band schedule (Settings) and its waterfall controls (the decode filter,
+  // QSY to centre) — migrated from birth.
+  'components/Js8FrequencySettings.tsx',
+  'components/Js8WaterfallControls.tsx',
+  // The JS8 lists as JS8Call 3.0.3 draws them — the RX pane, Band activity, the call list, the Inbox,
+  // their menus, the add-a-station dialog and their Settings — migrated from birth. Calls, offsets,
+  // reports, the received text and the marks (✕ ⚑ ★ ☎ ⚟ ♢) are data or glyphs.
+  'components/Js8RxPane.tsx',
+  'components/Js8BandActivity.tsx',
+  'components/Js8CallList.tsx',
+  'components/Js8InboxPanel.tsx',
+  'components/Js8AddStation.tsx',
+  'components/Js8ListMenu.tsx',
+  'components/js8ListMenus.ts',
+  'components/Js8ListsSettings.tsx',
+  // Settings ▸ Digital ▸ JS8's JS8Call API switches and ports — migrated from birth.
+  'components/Js8ApiSettings.tsx',
 ]
 
 /**

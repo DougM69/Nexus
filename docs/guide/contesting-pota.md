@@ -9,7 +9,10 @@ top of the **Contest** screen (the tent in the left bar) or in
 [Contesting ▸ Contest](settings-reference.md#contest), under the picker, because it
 reshapes the app for a weekend most operators are not having. It is one switch for
 whichever contest is picked in [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest),
-Field Day or any other, and it names that contest wherever it is shown.
+Field Day or any other, and it names that contest wherever it is shown: with the
+mode on, the badge with the blue dot at the foot of the left rail reads its short
+name (**ILQP**, **NYQP**, **WFD**, **CQ WW CW**, **JAN VHF**, and **FIELD DAY** for
+ARRL Field Day).
 
 ---
 
@@ -56,7 +59,8 @@ checking** — one laptop covers the whole operation.
 *A Field Day **test event** in Nexus 1.10.3 — a fixture, not a submitted entry. The banner
 names the event and the rules year it is scoring against; the counters and the arithmetic line
 show the whole sum (**QSO pts 903 × power ×2 = 1806 + bonuses 400 = 2206**), and the sections
-board marks what has been worked out of 83. The per-contact exchange — class and section — is
+board marks what has been worked out of the 83 sections this 1.10.3 build carried (the board
+lists all 85 ARRL/RAC sections from 1.12.0 on). The per-contact exchange — class and section — is
 typed in the cockpit log strips and lists under this panel.*
 
 **The score at a glance**, in every contest. While a contest runs, the CW, Phone, RTTY and PSK
@@ -309,7 +313,7 @@ a club sync worked.*
 - Every position gets a **club dupe warning while typing** — if another tent
   already worked that call on this band and mode (and, at a QSO party, from
   the county you have typed), you're told before you call. It's a warning, not
-  a lock (N3FJP semantics); your own log's dupes still refuse.
+  a lock; your own log's dupes still refuse.
 - Every laptop's **county or sections board** shows what the whole club has
   worked, so everyone sees what the club still needs: a county, state or
   section another position logs turns green with a ✓ on the host's board and
@@ -501,8 +505,8 @@ reaches the contact.
   Scandinavian Activity Contest (RS plus a serial number, each station once per
   band) logs as CQ WPX: pick it in Settings ▸ Contesting ▸ Contest, then switch on
   Contest mode. Before you send the log, change the Cabrillo file's `CONTEST:`
-  line to `SAC-SSB` (or `SAC-CW`). The score Nexus shows is WPX's; the sponsor
-  works out its own.
+  line to `SAC-SSB` (or `SAC-CW`) and delete its `CLAIMED-SCORE:` line: the score
+  Nexus shows is WPX's, and the sponsor works out its own.
 - **You can't tell the Field Day log which band a contact was on** — it records
   a band per contact, but always the one the radio is on at the moment you type
   the entry; nothing lets you name a different one. Log as you work, not

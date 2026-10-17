@@ -19,7 +19,7 @@ describe('waterfall tune gestures', () => {
 
   // Operator ask 2026-07-26: JTDX's right-click-to-set-TX. Additive — stock WSJT-X binds no
   // right-button action at all, so this costs a WSJT-X operator nothing.
-  it('right click moves TX (JTDX)', () => {
+  it('right click moves TX', () => {
     expect(t(RIGHT)).toBe('tx')
   })
 

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 //
 // THE VOICE KEYER'S F-KEYS: each slot's own, F1–F6 and F8. F8 is AGN, the slot Enter Sends
-// Message plays for AGN in a contest, from the key AGN is on in the CW and RTTY contest sets and
-// in N1MM's default message sets (the operator, 2026-10-10). A key with no slot, F7 among them,
+// Message plays for AGN in a contest, from the key AGN is on in the CW and RTTY contest sets
+// (the operator, 2026-10-10). A key with no slot, F7 among them,
 // plays nothing; the line over the slots names no range. F1–F12 are all held, with a slot or
 // without, and before the slot list is there or when it cannot be read, so none reaches the
 // webview, where F5 reloads the app on Windows; with Alt, Ctrl or Cmd held a key is the system's

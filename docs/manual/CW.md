@@ -19,7 +19,7 @@ The rig generates the actual Morse. Nexus sends the character string to Hamlib v
 ### Serial keyline
 
 Nexus toggles **DTR or RTS** on a serial port into the rig's KEY jack; the rig is in CW and shapes
-the signal itself. This is the N1MM/fldigi method, and it is the clean answer for a rig that has no
+the signal itself. This is the clean answer for a rig that has no
 CAT CW keying. Set the keyline port and which line to use in **Settings ▸ CW**. The service holds
 the port open for the session (`crates/tempo-audio/src/service.rs:1515-1518`).
 
@@ -122,11 +122,11 @@ on state**, resolved in this order (`ui/src/components/CwCockpit.tsx:832`):
 
 **`F3` sends the report and `F4` ends the contact.**
 
-The contest sets and the Field Day set are laid out the way N1MM lays its keys out, one key per
+The contest sets and the Field Day set use the standard contest F-key layout, one key per
 step of a contact, and they are what [Enter Sends Message](Field-Day.md#enter-sends-message-esm)
 sends from: `F1` calls CQ, `F2` sends his call and your exchange, `F3` is TU, `F4` your call,
 `F5` his call alone, `F6` your exchange when you answer someone else's CQ, `F7` tells a dupe
-QSO B4 and `F8` asks for a repeat, the key N1MM's default message sets put AGN on. Your exchange goes once, and your call goes out on `F1`, `F3` and
+QSO B4 and `F8` asks for a repeat. Your exchange goes once, and your call goes out on `F1`, `F3` and
 `F4`.
 
 ### The Field Day set
@@ -331,7 +331,6 @@ If the rig has a split TX frequency set (`splitTxMhz` in the radio snapshot), a 
 - **Not a full-band skimmer:** the decode follows the audio passband, not every signal on
   the band at once; the WPM readout is estimated by the classic decoder underneath.
 - **Macros not user-editable:** the 8 slots and their text are compiled in; no UI for custom macro text in this version.
-- **No contest exchange:** RST is hardcoded to 599, no serial-number field exists. This cockpit is casual/ragchew only.
 - **CAT abort reliability:** `\stop_morse` varies by Hamlib version and rig manufacturer; older builds and some rigs may not halt mid-element.
 - **Soundcard PTT tail:** 250 ms, fixed; not configurable.
 - **Desktop-only:** Tauri v2; no web or mobile build.

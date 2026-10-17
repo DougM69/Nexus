@@ -3,7 +3,7 @@
 // frequency); these gate them by the operator's enabled modes and resolve a click into
 // a concrete QSY + cockpit target.
 
-import type { BandChannel, GridRarity, NeedAlert, NeedTag } from '../types'
+import type { BandChannel, GridRarity, NeedAlert, NeedTag, SpotRow } from '../types'
 // ONE definition of what 'vhf' means (≥ 50 MHz), shared with the sound/toast path. The
 // alert module owns it; a second copy here is exactly how the icons and the alerts drifted
 // apart in the first place. (alerts.ts touches WebAudio only inside its functions, so this
@@ -493,7 +493,7 @@ function retag(a: NeedAlert, tags: NeedTag[]): NeedAlert {
   return tags[0] === a.tags[0] ? { ...a, tags } : { ...a, tags, priority: NEED_TIER[tags[0]] }
 }
 
-/** Resolve ANY need (CW / Phone / Digital) into a work target — N1MM-style: a single click
+/** Resolve ANY need (CW / Phone / Digital) into a work target: a single click
  * changes the band, mode, AND frequency to exactly the spot's. Uses the spot's exact
  * frequency when the cluster/RBN carried one, else the band's default channel. Returns null
  * only when no frequency can be resolved at all (a band-level need with no band-plan entry). */
@@ -594,4 +594,20 @@ export function workTarget(alert: NeedAlert, bandPlan: BandChannel[], own?: OwnS
     null
   if (freqMhz == null) return null
   return { call: alert.call, view, freqMhz, band: alert.band }
+}
+
+/** A Spots row in the Needed-board shape the Work path takes. FT8/FT4 keep their submode so the
+ * tier travels with the spot. */
+export function spotNeed(s: SpotRow): NeedAlert {
+  return {
+    call: s.call,
+    entity: s.entity,
+    band: s.band,
+    zone: s.zone,
+    tags: [],
+    priority: 0,
+    headline: '',
+    mode: s.submode === 'FT4' || s.submode === 'FT8' ? s.submode : s.mode,
+    freqMhz: s.freqMhz,
+  }
 }

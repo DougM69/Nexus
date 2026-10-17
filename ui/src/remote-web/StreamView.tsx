@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
 import { t } from '../i18n'
 import { useViewport, useViewportSize } from '../useViewport'
@@ -14,7 +14,7 @@ import { transmitEpoch } from './operation-protocol'
 import { IdReminder } from './id-reminder'
 import { MIC_LEVEL_DB, MIC_METER_FLOOR_DB, MIC_METER_TOP_DB, meterDb } from './mic-level'
 import { ClickCount, HeldInput, PictureZoom, keyMessage, keyPress, pointerMessage, textMessage, typedChange, wheelMessage, type PictureBox, type Stage } from './stream-capture'
-import { streamLayout, type StreamLayout } from './stream-layout'
+import { railShowsMore, streamLayout, type StreamLayout } from './stream-layout'
 import { exactSize, observeDeviceSize, type StopTarget, type StreamLink, type StreamView as LinkView } from './stream-link'
 import type { AudioView } from './audio-listen'
 import { shortFingerprint, type StreamKey, type StreamPointer } from './stream-protocol'
@@ -176,9 +176,10 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
   // THE PHONE LAYOUT (the operator's pick, 2026-10-03), from the window this page has (streamLayout): the header row,
   // a rail beside the picture on its side, bars above and below it upright. Every control keeps its place in the tree
   // in all three, so turning the phone moves controls and never remounts one: a held PTT and Listen's sound carry on.
+  // A short or zoomed window takes the rail too, where its header leaves the shack's picture small (useLayout).
   const [typingOpen, setTypingOpen] = useState(false)
   const [typingFocus, setTypingFocus] = useState(false)
-  const layout = useLayout(typingOpen && typingFocus)
+  const layout = useLayout(typingOpen && typingFocus, video)
   const phone = layout !== 'header', rail = layout === 'rail', bars = layout === 'bars'
   const more = useMore(phone)
   // Keyboard and its typing box: in both phone layouts, and in the header row on a touch screen, a tablet's (the
@@ -328,14 +329,51 @@ export function StreamView({ connection, station, disconnect, signOut, autostart
 /** The layout for the window this page has (streamLayout), held while the operator types in the typing box: the
  *  phone's keyboard takes height and never width, and a layout that followed it could turn the page under the
  *  operator's fingers and take the field away, and the keyboard with it. Turning the phone changes the width, and
- *  the layout follows that at once. */
-function useLayout(typing: boolean): StreamLayout {
+ *  the layout follows that at once.
+ *
+ *  A window streamLayout gives the header row takes the rail instead where the row leaves the shack's picture small
+ *  and the rail shows it larger (railShowsMore; the operator's pick, 2026-10-16: on a short or zoomed window the row
+ *  wraps and takes a third of the height). That is measured, not guessed, since the row's height is its wrapping:
+ *  for each window size and shack shape the page is laid out with the header row once, its stage measured, and the
+ *  answer taken in the same frame, before anything is painted. */
+function useLayout(typing: boolean, video: RefObject<HTMLVideoElement | null>): StreamLayout {
   const size = useViewportSize()
-  const free = size ? streamLayout(size.width, size.height) : 'header'
+  const shape = usePictureShape(video)
+  const base = size ? streamLayout(size.width, size.height) : 'header'
+  const key = base === 'header' && size && shape ? `${size.width} ${size.height} ${shape}` : null
+  const [measured, setMeasured] = useState<{ key: string; rail: boolean } | null>(null)
+  const measuring = !typing && key !== null && measured?.key !== key
+  useLayoutEffect(() => {
+    const stage = video.current?.parentElement, page = stage?.parentElement
+    if (!measuring || !key || !shape || !stage || !page) return
+    const p = page.getBoundingClientRect(), st = stage.getBoundingClientRect()
+    setMeasured({ key, rail: railShowsMore({ width: p.width, height: p.height }, { width: st.width, height: st.height }, shape) })
+  }, [measuring, key, shape, video])
+  const free = base === 'header' && !measuring && measured?.key === key && measured.rail ? 'rail' : base
   const [held, setHeld] = useState<{ layout: StreamLayout; width: number } | null>(null)
   const width = size?.width ?? null
   useEffect(() => { if (!typing) setHeld(width === null ? null : { layout: free, width }) }, [typing, free, width])
   return typing && held && held.width === width ? held.layout : free
+}
+
+/** The shack's screen, width over height, from the frames the station sends: it scales its picture to the page's
+ *  stage and keeps the shape, to within its cut to even sides. Null before the first frame. A change of under 2 % is
+ *  that cut and not another screen, and is not taken: the layout is chosen from this, and a cut that moved it as the
+ *  stage changed could turn the page back and forth between the header and the rail. */
+function usePictureShape(video: RefObject<HTMLVideoElement | null>): number | null {
+  const [shape, setShape] = useState<number | null>(null)
+  useEffect(() => {
+    const element = video.current
+    if (!element) return
+    const read = () => {
+      const next = element.videoWidth > 0 && element.videoHeight > 0 ? element.videoWidth / element.videoHeight : null
+      setShape(now => next === null || now === null || Math.abs(next / now - 1) > 0.02 ? next : now)
+    }
+    read()
+    element.addEventListener('resize', read)
+    return () => element.removeEventListener('resize', read)
+  }, [video])
+  return shape
 }
 
 /** A phone's More: End, Disconnect, Sign out and what else its bars have no room for. Open, it closes on a choice

@@ -302,7 +302,6 @@ function DashRailBody(p: DashRailProps) {
     onPoint: p.onPoint,
     focusBand,
     toggleFocusBand,
-    remote: null,
     spotsFeed,
     otaBoard: p.otaBoard,
     neededBoard,

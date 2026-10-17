@@ -145,6 +145,37 @@ fn an_activation_file_is_the_desktop_export_byte_for_byte_and_nothing_else_from_
     }
 }
 
+/// A contact whose COUNTRY its DXCC number contradicts — K1N imported as 182 and "United States" —
+/// is Navassa Island in a Remote browser's activation file as in the desktop's, which it still is
+/// byte for byte, on a station wired as the launch wires it. The record is not rewritten.
+#[test]
+fn an_activation_files_country_follows_the_dxcc_number_as_the_desktops_does() {
+    for f in [Fixture::new(), Fixture::with_store()] {
+        crate::wire_country_resolvers(&mut f.engine.lock().unwrap());
+        let text = contact("K1N", "20260909", "010000", Some("US-1234"), "")
+            .replace("<EOR>", "<DXCC:3>182<COUNTRY:13>United States<EOR>");
+        f.engine.lock().unwrap().import_adif(&text);
+        let state = lease(&f);
+        let (bytes, _) = download(&f, &state, &selection("US-1234", DAY));
+        let desktop = desktop_file(&f, "US-1234", DAY, Some("W9XYZ"));
+        assert_eq!(bytes, desktop.as_bytes(), "the desktop's file");
+        assert_eq!(
+            tempo_core::logbook::parse_adif(&desktop)
+                .iter()
+                .map(|r| (r.dxcc, r.country.as_deref()))
+                .collect::<Vec<_>>(),
+            [(Some(182), Some("Navassa Island"))]
+        );
+        let held = f.engine.lock().unwrap().stored_log();
+        assert_eq!(
+            held[0].country.as_deref(),
+            Some("United States"),
+            "the record as imported"
+        );
+        settle(&f);
+    }
+}
+
 fn the_file_is_the_desktops_and_nothing_else(f: &Fixture) {
     seed(f);
     let state = lease(f);

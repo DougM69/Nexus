@@ -25,6 +25,22 @@ describe('JS8 observation values', () => {
     expect(state.armed).toEqual(current.state.armed)
     expect(current).toEqual(fixture)
   })
+  // JS8 60, JS8Call 3.0's fifth speed: a station transmitting at it, or decoding every speed (31),
+  // or showing a frame heard at it, is a valid sample; a mask past the five speeds is not.
+  it('takes JS8 60 — the speed, a row heard at it, the every-speed mask — and refuses a bit past it', () => {
+    const value = structuredClone(fixture)
+    Object.assign(value.state, { speed: 'ultra', rxSpeeds: 31 })
+    value.state.activity[0].speed = 'ultra'
+    const state = parseJs8Sample(value,0)
+    expect([state.speed, state.rxSpeeds, state.activity[0].speed]).toEqual(['ultra', 31, 'ultra'])
+    for (const change of [
+      (s: typeof fixture.state) => { s.rxSpeeds = 32 },
+      (s: typeof fixture.state) => { s.speed = 'sixty' },
+    ]) {
+      const bad = structuredClone(value);change(bad.state)
+      expect(() => parseJs8Sample(bad,0)).toThrow()
+    }
+  })
   it('rejects expired, malformed, oversized and contradictory armed state', () => {
     expect(() => parseJs8Sample(fixture,3000)).toThrow()
     for (const change of [
@@ -45,6 +61,14 @@ describe('JS8 observation values', () => {
       expect(() => parseJs8Sample(value,0)).toThrow()
     }
     expect(() => parseJs8Sample({...fixture,unreviewed:true},0)).toThrow()
+  })
+  it('takes a queued APRS-IS relay, and still refuses an origin it does not know', () => {
+    const relay = structuredClone(fixture)
+    relay.state.queue[0].origin = 'aprsRelay'
+    expect(parseJs8Sample(relay,0,relay.capturedAtMs).queue[0].origin).toBe('aprsRelay')
+    const unknown = structuredClone(fixture)
+    unknown.state.queue[0].origin = 'aprsGateway'
+    expect(() => parseJs8Sample(unknown,0,unknown.capturedAtMs), 'control').toThrow()
   })
   it('takes a switch that is on but not armed, with the station\'s reason, and no armed one with a reason', () => {
     const value = structuredClone(fixture)

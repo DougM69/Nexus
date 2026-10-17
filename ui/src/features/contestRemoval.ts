@@ -10,12 +10,16 @@
 //
 // Nothing here keys, unkeys or stops a transmission, and nothing here moves focus.
 
-import type { ContestRemovalAnswer } from '../api'
+import type { ContestClearAnswer, ContestRemovalAnswer } from '../api'
 import type { FieldDayQso } from '../types'
 import { t } from '../i18n'
 
 /** The press-twice window: a second Ctrl+D or click within it removes the contact named. */
 export const REMOVE_CONFIRM_MS = 5000
+
+/** How long the contest screen's toast for Clear test contacts stays: long enough to read where
+ *  the contacts had already gone. */
+export const CLEAR_TOAST_MS = 12_000
 
 /** The services a merged copy can be uploaded to, by the engine's ids — product names, never
  *  translated, spelled as the app names each service elsewhere. The removal text names the
@@ -45,6 +49,12 @@ export function newestContact(log: readonly FieldDayQso[] | undefined): NewestCo
   let first = log.length - 1
   while (first > 0 && log[first - 1].call === last.call && log[first - 1].whenUnix === last.whenUnix) first--
   return { call: last.call, whenUnix: last.whenUnix ?? 0, rows: log.slice(first) }
+}
+
+/** How many contacts a contest log holds: the runs of rows sharing one call and one time, so a
+ *  county line, one row per county, is one — the engine's own rule, as `newestContact` reads it. */
+export function contactCount(log: readonly FieldDayQso[]): number {
+  return log.filter((q, i) => i === 0 || q.call !== log[i - 1].call || q.whenUnix !== log[i - 1].whenUnix).length
 }
 
 /** HH:MM, UTC — a contest log's own clock. */
@@ -83,7 +93,7 @@ export function contactLabel(rows: readonly FieldDayQso[]): string {
     : t('logEntry.remove.contactBare', values)
 }
 
-/** Ctrl+D, as N1MM binds it: Ctrl alone — never with Alt, Shift or Cmd. A held key's auto-repeat
+/** Ctrl+D: Ctrl alone — never with Alt, Shift or Cmd. A held key's auto-repeat
  *  is the caller's to ignore. */
 export function isRemoveKey(e: KeyboardEvent): boolean {
   return e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && e.key.toLowerCase() === 'd'
@@ -144,4 +154,37 @@ export function restoreText(answer: ContestRemovalAnswer, call: string): string 
     default:
       return t('fieldDay.removed.notRemoved')
   }
+}
+
+/** What the contest screen says after Clear test contacts: how many left the log, that the serials
+ *  start again at 001 in a contest that sends one (`sendsSerial`), at a club when every laptop drops
+ *  them, and every place any of them had already gone — Nexus takes them back from none — or that
+ *  the log changed, so nothing was cleared (an emptied log included: the button is not offered on an
+ *  empty one). */
+export function clearText(answer: ContestClearAnswer, sendsSerial: boolean): string {
+  if (answer.outcome === 'refused') return t('contest.clear.changed')
+  const parts = [
+    sendsSerial
+      ? t('contest.clear.done.serial', { count: answer.contacts })
+      : t('contest.clear.done', { count: answer.contacts }),
+  ]
+  if (answer.club) {
+    parts.push(answer.club === 'away' ? t('contest.clear.clubAway') : t('contest.clear.club'))
+  }
+  const s = answer.sentTo
+  const places = [
+    s.n3fjp ? t('logEntry.remove.sent.n3fjp', { host: s.n3fjp }) : '',
+    s.n1mm ? t('logEntry.remove.sent.n1mm') : '',
+    s.wsjtx ? t('logEntry.remove.sent.wsjtx') : '',
+  ].filter((p) => p)
+  if (places.length > 0) parts.push(t('contest.clear.sentTo', { places: places.join(', ') }))
+  if (s.logbook) {
+    const services = s.uploaded.map((id) => SERVICE_NAMES[id] ?? id)
+    parts.push(
+      services.length > 0
+        ? t('contest.clear.logbookUploaded', { services: services.join(', ') })
+        : t('contest.clear.logbook'),
+    )
+  }
+  return parts.join(' ')
 }

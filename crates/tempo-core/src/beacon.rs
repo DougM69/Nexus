@@ -12,12 +12,19 @@
 //!
 //! Both schedulers here are ports of WSJT-X 3.0.2, cited inline. They are pure
 //! functions of their own state so they can be tested without a clock or a radio.
+//!
+//! # Reading a heard beacon
+//! [`parse_report`] reads a WSPR or FST4W decode's line for everything that names its sender: the
+//! decode list, the roster and PSK Reporter. [`is_beacon_mode`] says which decodes are beacons.
 
 /// The beacon message format, `"CALL GRID DBM"`.
 ///
 /// Re-exported from the `wspr` crate so callers reach one definition: WSPR and
 /// FST4W carry the SAME payload shape, differing only in the code that carries it.
 pub use wspr::message;
+
+use crate::message::is_valid_grid;
+use modes::ModeKind;
 
 /// WSJT-X's transmit-percentage scheduler, from `WSPR/WSPRBandHopping.cpp:255`:
 ///
@@ -155,9 +162,88 @@ pub fn fst4w_round_robin_is_tx(utc_secs_of_day: u32, period_s: u16, slot: u8, sl
     j == u32::from(slot)
 }
 
+/// A heard WSPR or FST4W beacon, read as WSJT-X shows it: the call and, when the message carries
+/// one, the locator. FST4W carries WSPR's three message types:
+/// - Type 1, `CALL GRID DBM`: a plain call and a four-character locator (`K1ABC FN42 37`);
+/// - Type 2, `CALL DBM`: a compound call (`PJ4/K1ABC 37`, `KI4TWB/0 23`), which leaves no room
+///   for a locator;
+/// - Type 3, `<CALL> GRID DBM`: a hashed call and a six-character locator (`<K1ABC> FN42AB 37`,
+///   `<...> FN42AB 37` when the hash is not known).
+///
+/// ⚠️ Never through `Msg::parse`, the FT8 grammar: it reads `TI4JWC EK70 30` as a signal report
+/// of 30 dB sent by a station called EK70 (#55, #408), and a Type 2's power as anything but a grid
+/// is luck.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Report<'a> {
+    /// The call as the decoder printed it: a hashed one keeps its brackets.
+    pub call: &'a str,
+    /// The locator, four or six characters; `None` for a Type 2 beacon.
+    pub grid: Option<&'a str>,
+}
+
+/// WSPR and FST4W, whose decodes are beacon lines ([`parse_report`]), never QSO messages.
+pub fn is_beacon_mode(mode: Option<ModeKind>) -> bool {
+    matches!(
+        mode,
+        Some(ModeKind::Wspr | ModeKind::Fst4 { wspr: true, .. })
+    )
+}
+
+/// Read a WSPR or FST4W decode's line ([`Report`]): `CALL GRID DBM` or `CALL DBM`. `None` for a
+/// line of neither shape.
+pub fn parse_report(line: &str) -> Option<Report<'_>> {
+    let is_dbm = |w: &str| w.parse::<i32>().is_ok();
+    match line.split_whitespace().collect::<Vec<_>>().as_slice() {
+        [call, grid, dbm] if is_valid_grid(grid) && is_dbm(dbm) => Some(Report {
+            call,
+            grid: Some(*grid),
+        }),
+        [call, dbm] if is_dbm(dbm) => Some(Report { call, grid: None }),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The three message types, and lines of neither shape.
+    #[test]
+    fn a_beacon_line_reads_as_wsjtx_shows_it() {
+        let read = |line| parse_report(line).map(|r| (r.call, r.grid));
+        assert_eq!(read("K1ABC FN42 37"), Some(("K1ABC", Some("FN42"))));
+        assert_eq!(read("TI4JWC EK70 30"), Some(("TI4JWC", Some("EK70"))));
+        assert_eq!(read("KI4TWB/0 23"), Some(("KI4TWB/0", None)));
+        assert_eq!(read("PJ4/K1ABC 37"), Some(("PJ4/K1ABC", None)));
+        assert_eq!(read("<K1ABC> FN42AB 37"), Some(("<K1ABC>", Some("FN42AB"))));
+        assert_eq!(read("<...> FN42AB 37"), Some(("<...>", Some("FN42AB"))));
+        // Neither shape: no power, a non-locator in the grid's place, a QSO message.
+        for line in [
+            "K1ABC FN42",
+            "K1ABC 37 FN42",
+            "K1ABC W9XYZ -12",
+            "CQ K1ABC FN42",
+            "",
+        ] {
+            assert_eq!(read(line), None, "{line:?}");
+        }
+    }
+
+    /// WSPR and FST4W are beacon modes; FST4, its QSO mode, and FT8 are not.
+    #[test]
+    fn wspr_and_fst4w_are_the_beacon_modes() {
+        let fst4 = |wspr| {
+            Some(ModeKind::Fst4 {
+                period_s: 120,
+                wspr,
+            })
+        };
+        assert!(is_beacon_mode(Some(ModeKind::Wspr)));
+        assert!(is_beacon_mode(fst4(true)));
+        assert!(!is_beacon_mode(fst4(false)));
+        assert!(!is_beacon_mode(Some(ModeKind::Ft8)));
+        assert!(!is_beacon_mode(None));
+    }
 
     #[test]
     fn a_hundred_percent_always_transmits_and_zero_never_does() {

@@ -10,7 +10,7 @@
 //!
 //! ⭐ **Every other contest logs it too, since the operator's ruling of 2026-10-11:** a dupe
 //! typed into the strip, answered with a double-click or a logger's Reply, or calling the run
-//! is "logged marked as a dupe for 0 points, as N1MM does". The other station logs the
+//! is "logged marked as a dupe for 0 points". The other station logs the
 //! contact either way. ARRL Field Day checks no logs at all (*"Complete station logs are NOT
 //! required for submission, and ARRL does not use the logs."*), and its deliverable is a dupe
 //! sheet plus **raw non-dupe** QSO counts, which still leave the dupe out. No shipped
@@ -706,7 +706,7 @@ fn typed_contact(log: &mut FieldDayLog, event: &str, mode: &str, min: u64) -> bo
 
 /// ⭐ **A dupe typed into the CW or Phone strip is logged, marked and worth nothing** in every
 /// contest that refused one until now (the operator's ruling, 2026-10-11: "Enter on a dupe logs
-/// it marked as a dupe for 0 points, as N1MM does"): written, with the count, the score and the
+/// it marked as a dupe for 0 points"): written, with the count, the score and the
 /// multipliers as they were, and a Cabrillo file that is the one before with its QSO line added.
 #[test]
 fn a_typed_dupe_is_logged_marked_and_moves_no_number() {

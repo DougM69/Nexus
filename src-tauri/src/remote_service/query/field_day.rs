@@ -41,7 +41,9 @@ struct Capture {
 /// that reason alone: no published page lists it yet, and emptied it is not serialised. The page
 /// reads `composing_text`, as it always did. So do the Cabrillo lines the export would leave out
 /// (`FieldDayStatus::cabrillo_missing`): no page lists them, and the export they are about runs
-/// only at the station. And so do the values the CLUB has worked on each multiplier board
+/// only at the station. And so does whether the contest sends a serial
+/// (`FieldDayStatus::sends_serial`): no page lists it, and the Clear test contacts it words is
+/// offered only at the station. And so do the values the CLUB has worked on each multiplier board
 /// (`FdBoardDto::club`): Remote is sent nothing new for the club-wide board, and its board stays
 /// this station's own, as it always was. And the host's warnings about positions sending another
 /// county than the club (`FdClubDto::other_location`): no page lists them, and the laptop they are
@@ -52,6 +54,8 @@ pub(in crate::remote_service) fn leave_out_the_hosts_own(
     if let Some(f) = field_day.as_mut() {
         f.composing_text_phone.clear();
         f.cabrillo_missing.clear();
+        f.sends_serial = false;
+        f.unsaved = None;
         for b in &mut f.boards {
             b.club.clear();
         }

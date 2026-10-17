@@ -308,6 +308,7 @@ impl AppState {
                 smeter_db: None, // engine fills from CAT STRENGTH read-back
                 tx_swr: None,    // engine fills from the keyed-only TX-meter poll
                 tx_alc: None,
+                tx_alc_zone: None,
                 tx_po_w: None,
                 tx_comp_db: None,
                 swr_scale_verified: false,
@@ -336,11 +337,14 @@ impl AppState {
                 tx_allowed: true,
                 tx_refusal: None,
                 tx_emission_mhz: None,
+                phone_usb_only: false,
+                phone_mode_refused: false,
                 tuning: false,
                 tx_watchdog: false,
                 slot_key_refused: None,
                 slot_unkey_failed: None,
                 slot_audio_lost: None,
+                slot_over_dropped: None,
                 ptt_refused: None,
                 voice_dropped: None,
                 decode_depth: 3,

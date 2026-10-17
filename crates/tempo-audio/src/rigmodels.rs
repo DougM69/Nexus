@@ -341,6 +341,32 @@ pub fn hamlib_atu_start_tune_reaches(model: u32) -> bool {
     !matches!(model / 1000, ICOM_BACKEND | KENWOOD_BACKEND)
 }
 
+/// The `U TUNER <n>` value that STARTS this radio's tune-up: [`crate::rig::ATU_START_TUNE`]
+/// for every model but the Yaesu FT-710, whose start is 3.
+///
+/// Yaesu's FT-710 CAT manual (Japanese edition, page 8, `AC` ANTENNA TUNER CONTROL), P3 with
+/// the internal or external tuner selected (P2 = 0): `0` tuner OFF, `1` tuner ON, `2`
+/// (unused), `3` tuning start. So the 2 that starts the other Yaesus' tune-up is a command the
+/// FT-710 does not use: an FT-710 took `U TUNER 2`, Hamlib answered `RPRT 0`, nothing tuned.
+///
+/// Hamlib 4.7.1 knows it, in `rigs/yaesu/newcat.c`:
+///  * `newcat_vfo_op`, `RIG_OP_TUNE` (`newcat.c:7494`): `is_ft710` sends `AC003`, every other
+///    rig `AC002` — the only model its tune-start special-cases;
+///  * `newcat_set_func`, `RIG_FUNC_TUNER` (`newcat.c:6325`), which is what `U TUNER` reaches:
+///    `"AC00%d"` with the status passed straight through, so the value chosen here is the
+///    digit the radio receives.
+pub fn hamlib_atu_start_tune_value(model: u32) -> u8 {
+    /// `RIG_MODEL_FT710`, `RIG_MAKE_MODEL(RIG_YAESU, 49)` in `include/hamlib/riglist.h`.
+    const FT710: u32 = 1049;
+    /// The FT-710's `AC` P3 "tuning start".
+    const FT710_START_TUNE: u8 = 3;
+    if model == FT710 {
+        FT710_START_TUNE
+    } else {
+        crate::rig::ATU_START_TUNE
+    }
+}
+
 /// Does Hamlib WRITE this radio's power to answer a READ of it (`get_level RFPOWER`)? (#381)
 ///
 /// ⚠️ A READ THAT WRITES. `rigs/kenwood/kenwood.c`, `kenwood_get_level`: the `RIG_LEVEL_RFPOWER`
@@ -721,6 +747,65 @@ pub(crate) fn raw_mode_query(model: u32) -> Option<&'static str> {
     // `MD0C;` = DATA-U), which is the ground truth `m` cannot give — Hamlib's `m` can return
     // the mode it BELIEVES it set, from cache, on a rig that never moved.
     .then_some("MD0;")
+}
+
+/// The raw query that reads this radio's ALC meter on the radio's OWN scale: Yaesu's `RM4;`
+/// (READ METER, ALC) for the FT-991/991A (1035), the FT-710 (1049) and the FTDX10 (1042), sent
+/// through rigctld's `w`. `None` for every other model, which keeps Hamlib's `l ALC` unchanged.
+///
+/// The radio is asked nothing new: Hamlib 4.7.1 answers `l ALC` by sending the same `RM4;`
+/// (`rigs/yaesu/newcat.c:5285-5299`, `newcat_get_level`). What differs is the scale. None of
+/// `ft991.c`, `ft710.c` and `ftdx10.c` gives an `alc_cal`, so newcat falls back to
+/// `yaesu_default_alc_cal`, raw 0 = 0.0 and raw 64 = 1.0 (`newcat.c:373-381`, marked "TODO: Provide
+/// sane defaults"), and `rig_raw2val_float` clamps past its last point (`src/cal.c`). Yaesu's own CAT
+/// manuals give the three radios' ALC as 0 to 255:
+///  * FT-991A, `RM` READ METER (printed page 15): read `RM P1;`, answer `RM P1 P2 P2 P2;`, P1 `4`
+///    ALC, P2 `0 - 255`;
+///  * FT-710 (Japanese edition), `RM` READ METER (printed page 20): answer
+///    `RM P1 P2 P2 P2 P3 P3 P3;`, P1 `4` ALC, P2 the meter value 0 to 255, P3 `000` (fixed);
+///  * FTDX10, `RM` READ METER: the FT-710's answer, P2 0 to 255 then P3 `000`.
+///
+/// So the meter showed four times the radio's own reading, and full scale, red, from a quarter
+/// of the radio's bar up, with everything above that clamped away before it reached Nexus.
+/// [`alc_bar_from_rm4`] puts the answer on the radio's own bar. NEEDS-BENCH: that each radio
+/// draws its bar evenly over 0 to 255 is the manuals' range, not a measurement.
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
+pub(crate) fn raw_alc_query(model: u32) -> Option<&'static str> {
+    /// `RIG_MODEL_FT991`, `RIG_MODEL_FT710` and `RIG_MODEL_FTDX10` in Hamlib's
+    /// `include/hamlib/riglist.h`.
+    const FT991: u32 = 1035;
+    const FT710: u32 = 1049;
+    const FTDX10: u32 = 1042;
+    matches!(model, FT991 | FT710 | FTDX10).then_some("RM4;")
+}
+
+/// Where the radio's own ALC zone ends on [`alc_bar_from_rm4`]'s bar, for a radio whose ALC
+/// [`raw_alc_query`] reads: half scale. The FT-991A's Operating Manual (p. 61) keeps the ALC meter
+/// "within the ALC zone of the meter (up to half scale deflection)", and the FT-710's (p. 40) sets
+/// the mic gain so the needle "does not exceed the ALC zone"; the FTDX10 is read the same way
+/// (NEEDS-BENCH: its meter's zone, by eye). `None` for every other radio, whose reading's 1.0 is
+/// the top of its zone. Display only: the bar's colours follow it, never the bar.
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
+pub(crate) fn alc_zone_top(model: u32) -> Option<f32> {
+    raw_alc_query(model).map(|_| 0.5)
+}
+
+/// The ALC bar position, 0.0 (empty) to 1.0 (full), from the radio's answer to
+/// [`raw_alc_query`]'s `RM4;`: `RM4` and P2, the meter's 0 to 255 reading in three digits. The
+/// FT-710 follows P2 with P3, a fixed `000`, which is not read (Hamlib truncates it the same
+/// way). Anything else, `?;` or a number of another length or past 255, is `None`: a missed read,
+/// never a guess.
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
+pub(crate) fn alc_bar_from_rm4(reply: &str) -> Option<f32> {
+    let digits = reply.strip_prefix("RM4")?.strip_suffix(';')?;
+    if !matches!(digits.len(), 3 | 6) || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let p2: u16 = digits[..3].parse().ok()?;
+    if p2 > 255 {
+        return None;
+    }
+    Some(f32::from(p2) / 255.0)
 }
 
 /// A **serial** CAT link that needs the LONG (2.5 s) command deadline: a known slow-backend
@@ -1685,6 +1770,56 @@ mod tests {
                 known_backends.contains(&backend),
                 "model {m} ({name}) decodes to unexpected backend {backend}"
             );
+        }
+    }
+
+    /// Only the FT-991/991A, the FT-710 and the FTDX10 read their ALC with Yaesu's own `RM4;`.
+    /// Every other model keeps Hamlib's `l ALC`: the FTDX101D, which has a table of its own, the
+    /// FTX-1, an Icom, a Kenwood, and models nobody names.
+    #[test]
+    fn only_the_ft991a_the_ft710_and_the_ftdx10_read_their_alc_raw() {
+        assert_eq!(raw_alc_query(1035), Some("RM4;"), "FT-991/991A");
+        assert_eq!(raw_alc_query(1049), Some("RM4;"), "FT-710");
+        assert_eq!(raw_alc_query(1042), Some("RM4;"), "FTDX10");
+        for model in [1040, 1051, 3073, 2031, 0, 999_999] {
+            assert_eq!(raw_alc_query(model), None, "model {model} keeps l ALC");
+        }
+    }
+
+    /// Both radios' answers land on the radio's own bar, raw / 255: the FT-991A's `RM4` + three
+    /// digits and the FT-710's three more `000`. Anything that is not that answer is no reading.
+    #[test]
+    fn an_rm4_answer_is_the_radios_own_bar_position() {
+        for (raw, bar) in [
+            (0u16, 0.0),
+            (64, 64.0 / 255.0),
+            (128, 128.0 / 255.0),
+            (255, 1.0),
+        ] {
+            assert_eq!(
+                alc_bar_from_rm4(&format!("RM4{raw:03};")),
+                Some(bar),
+                "FT-991A {raw}"
+            );
+            assert_eq!(
+                alc_bar_from_rm4(&format!("RM4{raw:03}000;")),
+                Some(bar),
+                "FT-710 {raw}"
+            );
+        }
+        for junk in [
+            "?;",
+            "",
+            "RM4;",
+            "RM412;",
+            "RM41280;",
+            "RM4256;",
+            "RM4999000;",
+            "RM5128;",
+            "RM4 64;",
+            "RM4064",
+        ] {
+            assert_eq!(alc_bar_from_rm4(junk), None, "{junk:?}");
         }
     }
 }

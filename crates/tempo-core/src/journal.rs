@@ -36,7 +36,15 @@
 //!
 //! The radio loop never waits: an FT Field Day contact's journal lands a moment later. Until then
 //! the contact is in the contest log in memory, and every later write of the journal carries it.
+//!
+//! # A write that fails
+//!
+//! It is reported on the console, as it always was, and KEPT per journal
+//! ([`JournalWriter::trouble`]): how many writes have failed since the last good one, and when
+//! that one landed. A later good write clears it — each write carries the whole journal, so it
+//! heals every failure before it. The caller reads it to tell the operator; nothing is retried.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
@@ -62,13 +70,43 @@ struct Counts {
     completed: u64,
 }
 
+/// The writes to one journal that failed since its last good one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JournalTrouble {
+    /// Writes that failed in a row, the newest included.
+    pub failed: u32,
+    /// When the last good write landed (Unix UTC seconds), or `None` when none has this run.
+    pub last_good_unix: Option<u64>,
+}
+
 #[derive(Default)]
 struct Shared {
     counts: Mutex<Counts>,
     done: Condvar,
+    /// Each journal's last outcome: `failed` 0 after a good write.
+    outcomes: Mutex<HashMap<PathBuf, JournalTrouble>>,
 }
 
 impl Shared {
+    /// Run `op` and keep how it went.
+    fn run(&self, op: Op) {
+        let (path, ok) = apply(op);
+        let mut all = lock(&self.outcomes);
+        let o = all.entry(path).or_insert(JournalTrouble {
+            failed: 0,
+            last_good_unix: None,
+        });
+        if ok {
+            o.failed = 0;
+            o.last_good_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs());
+        } else {
+            o.failed = o.failed.saturating_add(1);
+        }
+    }
+
     /// Wait until the write numbered `upto` — and so every write before it — is done.
     fn wait_for(&self, upto: u64) {
         let mut c = lock(&self.counts);
@@ -102,7 +140,7 @@ impl Lane {
                         // A write that panicked must not take the writes behind it with it, nor
                         // leave a waiter waiting for a count that will never move.
                         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            apply(op);
+                            shared.run(op);
                         }));
                         lock(&shared.counts).completed += 1;
                         shared.done.notify_all();
@@ -155,7 +193,7 @@ impl JournalWriter {
     fn submit(&self, op: Op) {
         let lane = self.lane.get_or_init(Lane::start);
         let Some(tx) = &lane.tx else {
-            apply(op);
+            lane.shared.run(op);
             return;
         };
         let mut c = lock(&lane.shared.counts);
@@ -164,7 +202,7 @@ impl JournalWriter {
             // The thread is gone: write here rather than lose it.
             c.submitted -= 1;
             drop(c);
-            apply(returned.0);
+            lane.shared.run(returned.0);
         }
     }
 
@@ -172,6 +210,14 @@ impl JournalWriter {
     /// back. Returns at once when there is nothing on its way.
     pub fn settle(&self) {
         self.mark().wait_for_it();
+    }
+
+    /// The writes to the journal at `path` that failed since its last good one — `None` when its
+    /// last write was good, or none has been made. Writes still on their way are not counted.
+    pub fn trouble(&self, path: &Path) -> Option<JournalTrouble> {
+        let lane = self.lane.get()?;
+        let all = lock(&lane.shared.outcomes);
+        all.get(path).copied().filter(|o| o.failed > 0)
     }
 
     /// The writes handed over so far: [`JournalMark::wait`] returns once they are all done.
@@ -214,8 +260,9 @@ impl JournalMark {
     }
 }
 
-/// One write, exactly as the journal's caller made it inline before this thread existed.
-fn apply(op: Op) {
+/// One write, exactly as the journal's caller made it inline before this thread existed. Returns
+/// the journal and whether the write was made.
+fn apply(op: Op) -> (PathBuf, bool) {
     match op {
         Op::Replace {
             path,
@@ -232,12 +279,18 @@ fn apply(op: Op) {
                     f.sync_all() // on disk BEFORE the rename publishes it
                 })
                 .and_then(|()| std::fs::rename(&tmp, &path));
-            if let Err(e) = res {
+            if let Err(e) = &res {
                 eprintln!("{failure}: {e}");
             }
+            (path, res.is_ok())
         }
         Op::Remove { path } => {
-            let _ = std::fs::remove_file(&path);
+            let res = std::fs::remove_file(&path);
+            let gone = match &res {
+                Ok(()) => true,
+                Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+            };
+            (path, gone)
         }
     }
 }
@@ -359,6 +412,66 @@ mod tests {
         write(&w, &d.0.join("j.json"), "x");
         let _held = crate::logbook::io_fence::EngineHeld::acquired();
         w.mark().wait();
+    }
+
+    /// ★ A FAILED WRITE IS KEPT UNTIL A GOOD ONE: how many failed in a row and when the last good
+    /// one landed, per journal. The write is made to fail by a folder where its temporary file goes.
+    #[test]
+    fn a_failed_write_is_kept_until_a_good_one_clears_it() {
+        let d = Dir::new("trouble");
+        let path = d.0.join("fieldday.adi");
+        let tmp = path.with_extension("adi.tmp");
+        let w = JournalWriter::default();
+        let put = |text: &str| {
+            w.replace(&path, tmp.clone(), text.as_bytes().to_vec(), "test journal");
+            w.settle();
+        };
+        let now = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        };
+
+        std::fs::create_dir(&tmp).unwrap();
+        put("one");
+        assert!(!path.exists(), "control: the first write really failed");
+        assert_eq!(
+            w.trouble(&path),
+            Some(JournalTrouble {
+                failed: 1,
+                last_good_unix: None
+            }),
+            "a failed write with no good one before it this run"
+        );
+        std::fs::remove_dir(&tmp).unwrap();
+        let before = now();
+        put("two");
+        let after = now();
+        assert_eq!(w.trouble(&path), None, "a good write clears it");
+
+        std::fs::create_dir(&tmp).unwrap();
+        put("three");
+        put("four");
+        let t = w.trouble(&path).expect("the failures are kept");
+        assert_eq!(t.failed, 2, "two in a row");
+        let good = t
+            .last_good_unix
+            .expect("the good write before them is kept");
+        assert!(
+            (before..=after).contains(&good),
+            "when the good write landed: {good} in {before}..={after}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "two",
+            "control: the journal is the last good write's"
+        );
+        assert_eq!(w.trouble(&d.0.join("other.json")), None, "kept per journal");
+        std::fs::remove_dir(&tmp).unwrap();
+        put("five");
+        assert_eq!(w.trouble(&path), None, "and the next good write clears it");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "five");
     }
 
     /// The write itself is the one the callers used to make: the same temporary file, left

@@ -81,6 +81,9 @@ pub mod headset;
 /// rides the `device` feature like the Flex client.
 #[cfg(feature = "device")]
 pub mod icomlan;
+/// A JS8 frame keyed as JS8Call keys one: its TX delay before its period, its wave on the slot
+/// clock, nothing once its last tone has gone.
+mod js8_slot;
 pub mod monitor;
 /// OmniRig (VE3NEA's Windows COM rig-control server) as a CAT backend — a local
 /// rigctld-protocol shim over COM, so `Rig` and every CAT verb are unchanged.

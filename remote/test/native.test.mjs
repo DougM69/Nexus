@@ -831,8 +831,10 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.deepEqual(contest.fieldDay.log.map(q=>[q.call,q.dupe===true]),[['K9XYZ',false],['K9XYZ',true]])
     fd.close()
     const js8Fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/js8.json',import.meta.url),'utf8'))
-    const nativeJs8=await probe.send({type:'seedJs8',journal:{inbox:js8Fixture.state.inbox,heard:js8Fixture.state.stations,allcallReplied:[],nextInboxId:2}})
-    assert.equal(nativeJs8.state.inbox.length,1)
+    // The fixture's stations carry ★ and ☎, and its inbox holds a message for K2ABC too long to hand
+    // over at Normal, so the desktop's state carries the marks and the Inbox's note.
+    const nativeJs8=await probe.send({type:'seedJs8',journal:{inbox:js8Fixture.state.inbox,heard:js8Fixture.state.stations,allcallReplied:[],nextInboxId:3}})
+    assert.equal(nativeJs8.state.inbox.length,2)
     assert.ok(nativeJs8.state.queue.length>1)
     const {value:js8Ticket}=await browser.post(`stations/${stationId}/ticket`)
     const js8=await browser.open(stationId,js8Ticket.ticket)
@@ -846,8 +848,18 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     const js8Frame=await frameSamples(js8,js8Request,['get_js8_state'])
     const js8Sample=js8Frame.samples.get('get_js8_state')
     assert.equal(js8Sample.type,'applicationResult',`the JS8 sample: ${js8Sample.error}`)
-    assert.deepEqual(js8Sample.data.state,nativeJs8.state,'the station read is the unchanged native JS8 DTO')
+    // The station read is the native JS8 state whole: the desktop's `presence` (heartbeat networking, the QSO pause),
+    // `controls` (the waterfall controls and the band schedule's notice), `inboxTooLong`, and each station's `ackMs` and
+    // `cqMs` (★ and ☎) ride in it, and the page's parser takes them. The controls: the desktop's state carries each.
+    assert.ok(Object.hasOwn(nativeJs8.state,'presence'),'control: the desktop state carries presence')
+    assert.ok(Object.hasOwn(nativeJs8.state,'controls'),'control: the desktop state carries controls')
+    assert.ok(nativeJs8.state.stations.some(h=>Object.hasOwn(h,'ackMs'))&&nativeJs8.state.stations.some(h=>Object.hasOwn(h,'cqMs')),'control: the desktop state carries the stations’ marks')
+    // The fixture's note is the one the station makes of that message, so the page's fixture says what a station says.
+    assert.deepEqual(nativeJs8.state.inboxTooLong,js8Fixture.state.inboxTooLong,'control: the desktop state carries the Inbox’s too-long note')
+    assert.deepEqual(js8Sample.data.state,nativeJs8.state,'the station read is the native JS8 DTO, every key of it')
     assert.deepEqual(statsReference.parseJs8Sample(js8Sample.data,0,js8Sample.data.capturedAtMs),nativeJs8.state)
+    // The page's fixture has the keys a station's state has.
+    assert.deepEqual(Object.keys(js8Sample.data.state).sort(),Object.keys(js8Fixture.state).sort())
     js8.send({type:'applicationFrameAck',requestId:js8Frame.requestId,nextRequestId:crypto.randomUUID()})
     js8.send({type:'applicationSubscribe',topics:[],requestId:null})
     const js8Page=await queryPage(js8,{collection:'js8Context',cursor:null,search:'',unconfirmed:false,after:null})
@@ -1358,11 +1370,12 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
          if(change.kind==='monitor'){assert.equal(after.qso.dxcall,null);assert.equal(after.qso.cqRunning,false)}
          assert.deepEqual(await probe.send({type:'loggingEvidence'}),{...evidence,txEnabled:true})
        }
-       // N0CALL is nonstandard: native hashed_form drops its grid/report and
-       // turns the R-report into RRR. Preserve those on-air forms in readback.
+       // N0CALL is nonstandard: native hashed_form drops its grid, and beside a plain
+       // call hashes its OWN call so the report and R-report ride (WSJT-X's t0b).
+       // Preserve those on-air forms in readback.
        for(const [text,expectedText] of [
-         ['K2ABC N0CALL AA00','<K2ABC> N0CALL'],['K2ABC N0CALL -12','<K2ABC> N0CALL'],
-         ['K2ABC N0CALL R-12','<K2ABC> N0CALL RRR'],['K2ABC N0CALL RR73','<K2ABC> N0CALL RR73'],['TNX 73','TNX 73']]){
+         ['K2ABC N0CALL AA00','<K2ABC> N0CALL'],['K2ABC N0CALL -12','K2ABC <N0CALL> -12'],
+         ['K2ABC N0CALL R-12','K2ABC <N0CALL> R-12'],['K2ABC N0CALL RR73','<K2ABC> N0CALL RR73'],['TNX 73','TNX 73']]){
          const before=(await probe.send({type:'ftCallEvidence'})).qso
          ft=await ftState();assert.ok(ft.controls.capabilities.includes('ftMessages'))
          const expectedQso={dxcall:before.dxcall,state:before.state,txNow:before.txNow,cqRunning:before.cqRunning}

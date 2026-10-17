@@ -4,6 +4,20 @@
     "confirmedQsos": 1001,
     "dxccWorked": 3,
     "dxccConfirmed": 2,
+    "dxccWorkedTotal": 4,
+    "dxccConfirmedTotal": 3,
+    "dxccDisagreements": [
+      {
+        "call": "K1N",
+        "whenUnix": 1423571640,
+        "band": "20m",
+        "mode": "CW",
+        "loggedDxcc": 291,
+        "loggedEntity": "United States",
+        "lotwDxcc": 182,
+        "lotwEntity": "Navassa Island"
+      }
+    ],
     "dxccCredited": 1,
     "readyToSubmit": 1,
     "slotsWorked": 5,
@@ -83,7 +97,55 @@
       "confirmed": 0,
       "cardConfirmed": 0
     },
-    "bandTargets": []
+    "bandTargets": [],
+    "bandNeeds": {
+      "dxcc": [
+        {
+          "band": "20m",
+          "unworked": [
+            "Albania",
+            "Bouvet",
+            "Crozet Island"
+          ],
+          "unconfirmed": [
+            "Japan"
+          ]
+        },
+        {
+          "band": "40m",
+          "unworked": [
+            "Albania",
+            "Japan"
+          ],
+          "unconfirmed": []
+        }
+      ],
+      "was": [
+        {
+          "band": "20m",
+          "unworked": [
+            "AK",
+            "HI"
+          ],
+          "unconfirmed": [
+            "WA"
+          ]
+        }
+      ],
+      "waz": [
+        {
+          "band": "20m",
+          "unworked": [
+            "1",
+            "2",
+            "23"
+          ],
+          "unconfirmed": [
+            "25"
+          ]
+        }
+      ]
+    }
   },
   "statistics": {
     "total": 2301,

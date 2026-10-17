@@ -13,8 +13,8 @@
 //
 // Measured, not asserted by name: the button is rendered in the Connect pane's host chain, its
 // face, ink and border are the cascade winners (cssCascade) under every base mode and every
-// built-in skin in each of its base's modes, on the desktop sheet and on the Remote page's, and the
-// surface under it is composited from every ancestor's own background.
+// built-in skin in each of its base's modes, on the desktop sheet, and the surface under it is
+// composited from every ancestor's own background.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -23,6 +23,8 @@ import { RotorPane } from './RotorPane'
 import { SKINS } from '../../features/skins'
 import {
   BASE_MODES,
+  MODES as CASCADE_MODES,
+  SKIN_MODES,
   baseOf,
   chainOf,
   contrast,
@@ -38,7 +40,8 @@ import {
   type Rgb,
   type Rule,
 } from '../../cssCascade'
-import type { RotatorState } from '../../types'
+import { isLockedToken } from '../../features/paletteRoles'
+import type { CallBearing, RotatorState } from '../../types'
 
 const api = vi.hoisted(() => ({
   readRotator: vi.fn((): Promise<number | null> => Promise.resolve(123)),
@@ -53,6 +56,10 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn(() => Promise.resolve({ rotatorModel: 603, rotatorHost: '' } as never)),
   getSatTrackStatus: vi.fn(() => Promise.resolve(null)),
   stopSatTrack: vi.fn(() => Promise.resolve()),
+  rotatorBearingToCall: vi.fn(
+    (): Promise<CallBearing> =>
+      Promise.resolve({ pointed: { bearing: 227.4, to: 'grid', grid: 'IN52TK', country: null }, km: 1530.6 }),
+  ),
 }))
 vi.mock('../../api', () => api)
 vi.mock('../../toast', () => ({ pushToast: vi.fn() }))
@@ -64,9 +71,6 @@ const sheet = (name: string) =>
 const withHover = (rules: Rule[]) =>
   rules.map((r) => (r.selector.includes(':hover') ? { ...r, selector: r.selector.replace(/:hover/g, '[data-hover]') } : r))
 const DESKTOP = withHover(parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css')))
-const REMOTE = withHover(
-  parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css') + '\n' + sheet('remote-web/application.css')),
-)
 
 const TEXT_MIN = 4.5
 const CONTROL_MIN = 3
@@ -79,6 +83,10 @@ const MODES: Mode[] = [
 afterEach(cleanup)
 
 let stop: El[] = []
+/** The station's line and its bug (line 2's bearing, so a call in the entry), and the antenna's needle. */
+let bearing: El[] = []
+let bug: El[] = []
+let needle: El[] = []
 beforeAll(async () => {
   // The Connect pane's host chain: the app, the pane frame and its body, then the pane itself.
   const r = render(
@@ -96,6 +104,24 @@ beforeAll(async () => {
     return b
   })
   stop = chainOf(button)
+  cleanup()
+  const withCall = render(
+    <div className="app">
+      <div className="pane-frame" data-pane="rotor">
+        <div className="pane-body">
+          <RotorPane entryCall="EC1DD" />
+        </div>
+      </div>
+    </div>,
+  )
+  const drawn = await waitFor(() => {
+    const l = withCall.container.querySelector('.rotor-bearing-line')
+    if (!l) throw new Error('the Rotor pane drew no station line for the call in the entry')
+    return l
+  })
+  bearing = chainOf(drawn)
+  bug = chainOf(withCall.container.querySelector('.rotor-bearing-bug')!)
+  needle = chainOf(withCall.container.querySelector('.rotor-needle:not(.target)')!)
   cleanup()
 })
 
@@ -215,8 +241,8 @@ describe("the Rotor pane's STOP reads in every built-in theme", () => {
     expect(MODES.filter((m) => m.startsWith('light')).length).toBeGreaterThan(4)
   })
 
-  it('letters at 4.5:1 on its own face, idle and hovered, and keeps a 3:1 outline, on the desktop and on Remote', () => {
-    expect(failures([['desktop', DESKTOP], ['Remote', REMOTE]])).toEqual([])
+  it('letters at 4.5:1 on its own face, idle and hovered, and keeps a 3:1 outline, on the desktop', () => {
+    expect(failures([['desktop', DESKTOP]])).toEqual([])
   }, 20_000)
 
   it('FIRES: the STOP as it shipped, #f87171 on transparent and #111 on #f87171 hovered, is caught in the light theme', () => {
@@ -231,4 +257,80 @@ describe("the Rotor pane's STOP reads in every built-in theme", () => {
     expect(found.some((m) => m.startsWith('shipped light idle: STOP #f87171')), found.join('\n')).toBe(true)
     expect(found.some((m) => m.startsWith("shipped light: STOP's border #f87171")), found.join('\n')).toBe(true)
   }, 20_000)
+})
+
+// THE STATION'S LINE (line 2's bearing on the rose) IS DRAWN IN ONE THEME COLOUR, the amber role: a
+// variable both themes define, never a raw colour and never a locked one (features/paletteRoles), and so
+// whatever the operator picks for Amber. A line a reading depends on keeps the 3:1 a graphical object needs
+// (WCAG 1.4.11) on the surface under the rose, and it is never the antenna needle's own colour — though its
+// shape, dotted with a bug on the rim, is what tells the two apart, never the colour alone.
+const GRAPHIC_MIN = 3
+/** Every base mode under every colour-role set, and every skin in each of its base modes, bare and under
+ *  every set: the Amber role drives the line, so each of its presets is drawn. */
+const LINE_MODES: Mode[] = [...new Set<Mode>([...CASCADE_MODES, ...SKIN_MODES])]
+
+/** Every mode in which the station's line or its bug is not drawn as the rule above says. */
+function lineFailures(rules: Rule[], modes: readonly Mode[] = LINE_MODES): string[] {
+  const out: string[] = []
+  for (const mode of modes) {
+    const under = surfaceUnder(rules, mode, bearing)
+    const n = win(rules, mode, needle, 'stroke')
+    const needleInk = n ? colour(tokensFor(rules, mode, needle), n.value, under) : null
+    for (const [what, chain, prop] of [['line', bearing, 'stroke'], ['bug', bug, 'fill']] as const) {
+      const w = win(rules, mode, chain, prop)
+      const token = w?.value.match(/^var\((--[\w-]+)\)$/)?.[1]
+      if (!w || !token) {
+        out.push(`${mode}: the ${what} is drawn in ${w?.value ?? 'nothing'}, not one theme colour`)
+        continue
+      }
+      if (isLockedToken(token)) {
+        out.push(`${mode}: the ${what} is drawn in the locked ${token}`)
+        continue
+      }
+      const tokens = tokensFor(rules, mode, chain)
+      if (!tokens.has(token)) {
+        out.push(`${mode}: the ${what}'s ${token} is not defined`)
+        continue
+      }
+      const ink = colour(tokens, w.value, under)
+      const c = contrast(ink, under)
+      if (c < GRAPHIC_MIN) out.push(`${mode}: the ${what} ${hex(ink)} on ${hex(under)} = ${c.toFixed(2)}:1`)
+      if (needleInk && hex(needleInk) === hex(ink)) out.push(`${mode}: the ${what} is the needle's own ${hex(ink)}`)
+    }
+  }
+  return out
+}
+
+/** The sheet with the station line's stroke written as `stroke`. */
+const lineStroked = (stroke: string) =>
+  DESKTOP.map((r) =>
+    r.selector.trim() === '.rotor-bearing-line'
+      ? { ...r, decls: r.decls.map((d) => (d.prop === 'stroke' ? { ...d, value: stroke } : d)) }
+      : r,
+  )
+
+describe("the station's line on the rose is drawn in a theme colour of its own, in every built-in theme", () => {
+  it('measures the real line, its bug and the needle, in both themes, every skin and every Amber preset', () => {
+    expect(bearing[bearing.length - 1]?.classes).toContain('rotor-bearing-line')
+    expect(bug[bug.length - 1]?.classes).toContain('rotor-bearing-bug')
+    expect(needle[needle.length - 1]?.classes).toEqual(['rotor-needle'])
+    expect(LINE_MODES.filter((m) => m.startsWith('light')).length).toBeGreaterThan(4)
+    expect(LINE_MODES.filter((m) => m.includes('amber=')).length).toBeGreaterThan(0)
+  })
+
+  it('is one unlocked theme variable defined in every mode, keeps 3:1 on the rose, and is not the needle', () => {
+    expect(lineFailures(DESKTOP)).toEqual([])
+  }, 20_000)
+
+  it('FIRES: a raw colour, the needle\'s own accent, a locked colour and an undefined one are each caught', () => {
+    // Over the base modes only: each rule has to be seen to fire once, not swept again.
+    const raw = lineFailures(lineStroked('#ffb000'), BASE_MODES)
+    expect(raw.some((m) => m.endsWith('the line is drawn in #ffb000, not one theme colour')), raw[0]).toBe(true)
+    const accent = lineFailures(lineStroked('var(--accent)'), BASE_MODES)
+    expect(accent.some((m) => m.startsWith("dark: the line is the needle's own")), accent[0]).toBe(true)
+    const locked = lineFailures(lineStroked('var(--tx)'), BASE_MODES)
+    expect(locked.some((m) => m.endsWith('the line is drawn in the locked --tx')), locked[0]).toBe(true)
+    const missing = lineFailures(lineStroked('var(--rotor-bearing-ink)'), BASE_MODES)
+    expect(missing.some((m) => m.endsWith("the line's --rotor-bearing-ink is not defined")), missing[0]).toBe(true)
+  })
 })

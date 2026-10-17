@@ -315,18 +315,25 @@ fn export_on(case: &Case, dial: impl Fn(&str) -> u32) -> String {
 
 /// ⭐ What a CQ World-Wide or WPX file carries over its golden since the sponsors' CATEGORY lines
 /// are written from the entry's declarations (cqww.com/cabrillo.htm, cqwpx.com/cabrillo.htm): the
-/// declared assistance, the contest's own mode and the declared power, in file order. Empty for
-/// every other contest.
+/// declared assistance, the contest's own mode and the declared power, in file order, then the
+/// claimed score both pages list. Empty for every other contest.
+///
+/// The claimed score of the three rows (K1ABC and DL1ABC on 20 m, JA1ABC on 40 m, from Illinois):
+/// CQ WW 0 + 3 + 3 points × (zones 2 + 1, countries 2 + 1) = 36; CQ WPX 1 + 3 + 6 points ×
+/// prefixes K1, DL1 and JA1 = 30.
 fn cq_lines(event: &str) -> Vec<String> {
-    let mode = match event {
-        "cqww_cw" | "cqwpx_cw" => "CW",
-        "cqww_ssb" | "cqwpx_ssb" => "SSB",
+    let (mode, claimed) = match event {
+        "cqww_cw" => ("CW", 36),
+        "cqww_ssb" => ("SSB", 36),
+        "cqwpx_cw" => ("CW", 30),
+        "cqwpx_ssb" => ("SSB", 30),
         _ => return Vec::new(),
     };
     vec![
         "CATEGORY-ASSISTED: NON-ASSISTED".to_string(),
         format!("CATEGORY-MODE: {mode}"),
         "CATEGORY-POWER: LOW".to_string(),
+        format!("CLAIMED-SCORE: {claimed}"),
     ]
 }
 

@@ -28,8 +28,8 @@
 # ratio on every run. A green here is not a green `remote-browser` job; CI is still the gate.
 #
 # ⚠️ WHAT IT CANNOT PROVE, and this is not theoretical. One scenario runs in a fresh process.
-# CI's shards run NINE in series in ONE process, so anything needing accumulated state, load or
-# elapsed time to show up is invisible to a single-scenario run. Found the day this was written:
+# CI's shards ran NINE in series in ONE process, so anything needing accumulated state, load or
+# elapsed time to show up was invisible to a single-scenario run. Found the day this was written:
 # CI's shard 0 went red on a Tempo reachability assertion at v10, and that same scenario passed
 # here twice — on the same tree, and on origin/main. **When CI's browser job is red and this is
 # green, reproduce CI's SHARD, not the scenario.** That is what `--shard N` is for.
@@ -48,39 +48,42 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
+       scripts/browser-probe --desktop rotor
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
-                        --test-name-pattern). Default 'v4'. The names are built in
-                        the test() title in remote/test/browser.test.mjs, next to
-                        the SCENARIOS table: 'v4'..'v18' for the application
-                        versions, and 'operations', 'FT operating', 'quick layout',
-                        'session layout', 'contact continuity', 'DX work',
-                        'radio selection', 'routed decoder', 'routed workspace',
-                        'stream' (Remote as a stream, end to end in real Chrome).
-                        Match by NAME, never by shard index — inserting an
-                        application version renumbers every scenario after it.
-  --shard <n>           run CI's shard <n> of 3 entire — all nine of its scenarios
-                        in one process, exactly as the remote-browser job does
-                        (~15-20 min). The ONLY local run that can reproduce a
-                        failure caused by state or timing accumulating ACROSS
-                        scenarios; a single --scenario run cannot see one.
+                        --test-name-pattern). Default 'stream'. The names are built
+                        in the test() title in remote/test/browser.test.mjs, next
+                        to the SCENARIOS table: 'stream' (Remote as a stream, end
+                        to end in real Chrome) and 'phone' (the same at a phone's
+                        size). Match by NAME, never by shard index.
+  --shard <n>           run CI's shard <n> of 2 entire, in one process, exactly as
+                        the remote-browser job does.
   --no-build            reuse the existing bundles — ONLY valid if nothing has
                         changed under ui/ or remote/ since the last build, because
                         the sweep loads the BUILT worker, never the source
+  --desktop rotor       a desktop box the hosted page never shows, in real Chrome:
+                        the Rotor box beside a cockpit with a call in its log entry,
+                        in the stock dashboard rail, asserting its line 1 and both
+                        lines of its line 2 ("→ EC1DD 227° …", "27° off", Point) are
+                        on screen, with a control that must come back clipped
+                        (ui/probe/desktop-probe.mjs; it builds nothing)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE
 }
 
-SCENARIO='v4'
+SCENARIO='stream'
 SHARD=''
 BUILD=1
+DESKTOP=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --scenario) [ $# -ge 2 ] || { usage; exit 2; }; SCENARIO="$2"; shift 2 ;;
     --shard)    [ $# -ge 2 ] || { usage; exit 2; }; SHARD="$2"; shift 2
-                case "$SHARD" in 0|1|2) ;; *) echo "browser-probe: --shard takes 0, 1 or 2 (CI runs three)" >&2; exit 2 ;; esac ;;
+                case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
+    --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
+                case "$DESKTOP" in rotor) ;; *) echo "browser-probe: --desktop takes rotor" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -95,6 +98,11 @@ SUITE="$ROOT/remote/test/browser.test.mjs"
 command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1 || {
   echo "browser-probe: no google-chrome on PATH — this probe drives a REAL browser" >&2; exit 2; }
 
+# A desktop box: the app's own source, served by its own Vite config, so there is nothing to build.
+if [ -n "$DESKTOP" ]; then
+  exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
+fi
+
 if [ "$BUILD" = 1 ]; then
   # Two builds, in this order, and both are load-bearing. The sweep loads `remote/dist/index.js`
   # (runtime.mjs), never remote/src, and that worker serves the hosted UI bundle that
@@ -108,7 +116,7 @@ fi
 
 LOG="$(mktemp -t browser-probe.XXXXXX.log)"
 if [ -n "$SHARD" ]; then
-  echo "browser-probe: running CI SHARD $SHARD of 3 entire against $(google-chrome --version 2>/dev/null || echo Chrome)"
+  echo "browser-probe: running CI SHARD $SHARD of 2 entire against $(google-chrome --version 2>/dev/null || echo Chrome)"
 else
   echo "browser-probe: running scenario pattern '$SCENARIO' against $(google-chrome --version 2>/dev/null || echo Chrome)"
 fi
@@ -120,10 +128,10 @@ fi
 # AFTER the real code is captured, and only to tell "0 tests ran" from "1 test passed".)
 cd "$ROOT/remote" || exit 2
 if [ -n "$SHARD" ]; then
-  # Exactly what the remote-browser job runs, env and all — no name pattern, nine scenarios in
-  # this one process. Mirroring CI's command surface is the point; a paraphrase of it is not
+  # Exactly what the remote-browser job runs, env and all — no name pattern, the shard's scenarios
+  # in this one process. Mirroring CI's command surface is the point; a paraphrase of it is not
   # evidence about CI.
-  NEXUS_BROWSER_SHARDS=3 NEXUS_BROWSER_SHARD="$SHARD" \
+  NEXUS_BROWSER_SHARDS=2 NEXUS_BROWSER_SHARD="$SHARD" \
     node --test "$SUITE" 2>&1 | tee "$LOG"
 else
   NEXUS_BROWSER_SHARDS=1 NEXUS_BROWSER_SHARD=0 \
@@ -161,11 +169,9 @@ TOTAL=$(sed -n 's/.*browser shard [0-9]* of [0-9]*: running [0-9]* of \([0-9]*\)
 if [ "$RC" = 0 ]; then
   echo "browser-probe: PASS — ${PASSED} of ${TOTAL:-?} scenarios, in a real browser."
   if [ -n "$SHARD" ]; then
-    echo "browser-probe: NOT COVERED — CI's other two shards, and everything outside remote/."
+    echo "browser-probe: NOT COVERED — CI's other shard, and everything outside remote/."
   else
-    echo "browser-probe: NOT COVERED — every other scenario, every other application version, and"
-    echo "browser-probe: everything outside remote/. A failure that needs state or timing to build"
-    echo "browser-probe: up ACROSS scenarios cannot appear here; use --shard N for that."
+    echo "browser-probe: NOT COVERED — the other scenario, and everything outside remote/."
   fi
 else
   echo "browser-probe: FAIL (exit $RC) — ${FAILED:-?} scenario(s) red. Full log: $LOG" >&2

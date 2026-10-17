@@ -482,13 +482,14 @@ impl Station {
 
     /// True when a NUMERIC report can ride this pair's overs in at least one direction.
     ///
-    /// A plain Type 1/2 pair always can. Once the pair falls to the hashed forms, only
-    /// a plain c28 call standing opposite the hash may still carry one
-    /// ([`crate::message::packs_beside_hash`] — `packjt77.f90:1183-1184` refuses Type
-    /// 1/2 to any slashed call beside a hashed token), and it is the SENDER of each
-    /// over that decides. So `KD9TAW × PJ4/K1ABC` still exchanges one number (mine);
-    /// `KD9TAW/P × F4CYH/R`, `KD9TAW/P × PJ4/K1ABC` and `YW18FIFA × PJ4/K1ABC`
-    /// exchange none at all, in either direction, for the whole QSO.
+    /// A plain Type 1/2 pair always can. Once the pair falls to the hashed forms, a
+    /// number rides only beside a plain c28 call ([`crate::message::packs_beside_hash`]
+    /// — `packjt77.f90:1183-1184` refuses Type 1/2 to any slashed call beside a hashed
+    /// token): from that call, opposite the hash, or from a nonstandard partner that
+    /// hashes its own call beside it ([`Self::hashed_form`]). So `KD9TAW × PJ4/K1ABC`
+    /// exchanges a number each way; `KD9TAW/P × F4CYH/R`, `KD9TAW/P × PJ4/K1ABC` and
+    /// `YW18FIFA × PJ4/K1ABC` exchange none at all, in either direction, for the whole
+    /// QSO.
     fn report_can_ride(&self) -> bool {
         if !self.needs_hashed_form() {
             return true;
@@ -531,19 +532,23 @@ impl Station {
     }
 
     /// Rewrite a message into its modem-faithful hashed form when the pair cannot ride
-    /// Type 1/2 ([`Self::needs_hashed_form`]): wrap the ADDRESSEE in `<...>` (the modem
-    /// hashes it) while the sender stays in full, so **both callsigns come back off the
-    /// air exactly as queued**. A no-op for a pair the plain forms can carry — which
-    /// includes every `/P` and `/R` station working a standard or same-suffixed
-    /// partner, so their overs are left exactly as the sequencer built them.
+    /// Type 1/2 ([`Self::needs_hashed_form`]): one call in `<...>` (the modem hashes it)
+    /// and the other in full, so **both callsigns come back off the air exactly as
+    /// queued**. The ADDRESSEE is the one hashed, except in the report and the roger of
+    /// a nonstandard sender opposite a plain c28 call, where the SENDER is — WSJT-X's
+    /// own form, which keeps the number (see the arms). A no-op for a pair the plain
+    /// forms can carry — which includes every `/P` and `/R` station working a standard
+    /// or same-suffixed partner, so their overs are left exactly as the sequencer built
+    /// them.
     ///
-    /// **What the hashed form costs, stated here so it is not rediscovered:** the
-    /// sender keeps a grid or a numeric report only while it is a plain c28 call
-    /// ([`crate::message::packs_beside_hash`]). A slashed sender opposite a hash is
-    /// refused Type 1/2 by `packjt77.f90:1183-1184` and drops to i3=4, whose only
-    /// payloads are blank / `RRR` / `RR73` / `73`. So a `/P` operator working a hashed
-    /// DX — and either operator of a `/P` × `/R` pair — sends no grid and no number,
-    /// and the roger becomes `RRR`. That is deliberate: **correct-but-degraded beats
+    /// **What the hashed form costs, stated here so it is not rediscovered:** a grid or
+    /// a numeric report rides only beside a plain c28 call
+    /// ([`crate::message::packs_beside_hash`]). A slashed call opposite a hash is
+    /// refused Type 1/2 by `packjt77.f90:1183-1184` and the frame drops to i3=4, whose
+    /// only payloads are blank / `RRR` / `RR73` / `73`. So a `/P` operator working a
+    /// hashed DX, either operator of a `/P` × `/R` pair, and a nonstandard operator
+    /// working a slashed or nonstandard partner send no grid and no number, and the
+    /// roger becomes `RRR`. That is deliberate: **correct-but-degraded beats
     /// wrong-but-rich.** A missing report costs a retry; a wrong callsign costs the
     /// other operator a confirmation they will never get and cannot diagnose.
     fn hashed_form(&self, msg: Msg) -> Msg {
@@ -555,6 +560,12 @@ impl Station {
                 "<{}>",
                 to.trim().trim_start_matches('<').trim_end_matches('>')
             )
+        };
+        // A nonstandard sender opposite a plain c28 call: the case where WSJT-X hashes
+        // the SENDER (`genStdMsgs` builds `t0b`, `hisCall <my_callsign>`, whenever only
+        // MY call fails `stdCall`).
+        let hashes_sender = |de: &str, to: &str| {
+            !crate::message::is_std_call(de) && crate::message::packs_beside_hash(to)
         };
         match msg {
             // A CQ has no addressee to hash, and a hashed CQ is unusable anyway:
@@ -590,14 +601,31 @@ impl Station {
                     grid,
                 }
             }
-            // Likewise a numeric report: it survives only while the SENDER is the plain
-            // c28 call carrying it opposite the hash. When it is not — a nonstandard
-            // call, or a `/P`//`R` call, which the packer refuses beside a hash — i3=4
-            // has no report field at all (only RRR/RR73/73), so ROGER instead. That
-            // keeps Tx3 distinguishable from Tx1/Tx2, which is what lets the partner's
-            // sequencer advance; three overs with identical bytes strand it. The QSO
-            // still completes, and the numeric exchange rides the other side's overs
-            // whenever that side can carry it.
+            // A numeric report rides only beside a plain c28 call. A nonstandard sender
+            // opposite one therefore hashes ITS OWN call, as WSJT-X does, and the frame
+            // is an ordinary Type 1 again: `PA0A <OE/PD1SCO> -01`, `PA0A <OE/PD1SCO>
+            // R-01`. The partner reads the full call back from its hash table, which our
+            // CQ or Tx1 filled — both carry the call in full, and `start` never skips Tx1
+            // for a nonstandard call. Beside a SLASHED partner WSJT-X's form does not
+            // pack (`packjt77.f90:1183-1184`), and beside another nonstandard call there
+            // is no c28 call to stand opposite, so those pairs keep the arms below.
+            Msg::Report { to, de, snr } if hashes_sender(&de, &to) => Msg::Report {
+                to,
+                de: brk(&de),
+                snr,
+            },
+            Msg::RReport { to, de, snr } if hashes_sender(&de, &to) => Msg::RReport {
+                to,
+                de: brk(&de),
+                snr,
+            },
+            // Any other sender that is not a plain c28 call — a `/P`//`R` call, which the
+            // packer refuses beside a hash, or a nonstandard call opposite a slashed or
+            // nonstandard partner — has no report field at all (i3=4: only
+            // RRR/RR73/73), so ROGER instead. That keeps Tx3 distinguishable from
+            // Tx1/Tx2, which is what lets the partner's sequencer advance; three overs
+            // with identical bytes strand it. The QSO still completes, and the numeric
+            // exchange rides the other side's overs whenever that side can carry it.
             Msg::RReport { to, de, .. } if !crate::message::packs_beside_hash(&de) => {
                 Msg::Rrr { to: brk(&to), de }
             }
@@ -625,8 +653,9 @@ impl Station {
 
     /// The state a just-queued ROGER (`pending` = an R-report, Tx3) really leaves us in.
     ///
-    /// [`Self::hashed_form`] renders an R-report as a bare `RRR` whenever our own call
-    /// cannot carry a number beside a hash ([`crate::message::packs_beside_hash`]) — and
+    /// [`Self::hashed_form`] renders an R-report as a bare `RRR` whenever no number can
+    /// ride our roger — our call slashed opposite a hash or a conflicting suffix, or
+    /// nonstandard opposite anything but a plain c28 call — and
     /// a bare `RRR` is not Tx3 on the air, it is the CLOSING roger: the partner's
     /// `(AwaitRoger, Rrr)` arm takes it as one, logs the contact and signs 73. Staying in
     /// [`State::AwaitRr73`] after sending it parks us in the RESPONDER'S seat, waiting for
@@ -644,6 +673,15 @@ impl Station {
             Some(Msg::Rrr { .. }) => State::Confirming,
             _ => State::AwaitRr73,
         }
+    }
+
+    /// `msg` as the sequencer puts it on the air when `mycall` works `dxcall` — the
+    /// [`Self::hashed_form`] rewrite every queued over gets — for an over built outside a
+    /// running station, such as a roger re-sent after a CQ run has moved on. Built bare,
+    /// such an over names a nonstandard call in a field that cannot hold it, and the
+    /// packer sends the base call instead.
+    pub fn on_air_form(mycall: &str, dxcall: &str, msg: Msg) -> Msg {
+        Self::answering(mycall, "", dxcall).hashed_form(msg)
     }
 
     /// The message to transmit on my next TX slot, if any (RV-agnostic).
@@ -1029,10 +1067,13 @@ impl Station {
                         crate::message::fmt_report(rpt)
                     ));
                 }
-                // --- Compound QSO completion: a compound party can't send a numeric
-                // report through i3=4, so the report exchange inverts — the STANDARD
-                // station reports and the compound station rogers. These arms advance on
-                // the grid-less i3=4 forms the partner actually delivers. ---
+                // --- Compound QSO completion: where a party can't send a numeric report
+                // (a slashed call opposite a hash, a nonstandard call opposite anything
+                // but a plain c28 call, or a partner running an earlier Nexus, which sent
+                // no number from a nonstandard call at all), the report exchange inverts —
+                // the station that can carry a number reports and the other rogers. These
+                // arms advance on the grid-less i3=4 forms the partner actually
+                // delivers. ---
                 // A GRID addressed to me while I'm awaiting a report → I send MY report
                 // and await their roger. Upstream answers a grid addressed to it with a
                 // report REGARDLESS of state (`processMessage`), and so does this arm: it
@@ -1464,10 +1505,11 @@ mod start_context_tests {
     #[test]
     fn nonstandard_me_running_cq_completes_against_a_standard_caller() {
         // I run CQ as a genuinely nonstandard station (PJ4/K1ABC). A standard caller
-        // answers + reports me (a standard sender CAN carry a number); I roger (i3=4
-        // can't carry MY number) and the QSO completes — never emitting a phantom number
-        // the modem would drop. This is the protocol's constraint, and it applies HERE
-        // and not to `/P` (see `portable_*` in tests/portable_suffix_air.rs).
+        // answers + reports me (a standard sender CAN carry a number); I roger with MY
+        // number, my own call hashed beside the caller's plain c28 call — WSJT-X's form,
+        // an ordinary Type 1 frame — and the QSO completes. Hashing either call is the
+        // protocol's constraint, and it applies HERE and not to `/P` (see `portable_*` in
+        // tests/portable_suffix_air.rs).
         let mut s = Station::calling_cq("PJ4/K1ABC", MY_GRID);
         assert_eq!(
             s.pending_text().as_deref(),
@@ -1482,8 +1524,13 @@ mod start_context_tests {
             Some(-9),
             "captured the standard caller's report"
         );
-        // My roger degrades to RRR (nonstandard sender → no numeric); QSO advances.
-        assert_eq!(s.pending_text().as_deref(), Some("<W9XYZ> PJ4/K1ABC RRR"));
+        // My roger carries my number beside the plain caller; QSO advances.
+        assert_eq!(s.pending_text().as_deref(), Some("W9XYZ <PJ4/K1ABC> R-08"));
+        assert_eq!(
+            s.state,
+            State::AwaitRr73,
+            "an ordinary Tx3, not the closing RRR"
+        );
         // The caller closes → I'm done.
         s.observe(&[dec("<PJ4/K1ABC> W9XYZ RR73", -8)]);
         assert_eq!(s.state, State::Done);
@@ -1995,22 +2042,22 @@ mod start_context_tests {
         assert_eq!(p.state, State::AwaitRr73, "a numeric roger is still Tx3");
     }
 
-    /// The `(AwaitRoger, Report)` arm, pinned. It is NOT dead — deleting it leaves the
-    /// class-pair sweep passing (the exchange finds a longer route and the sweep's over
-    /// budget is exactly the longer route's length), but the two quadrants whose CQ
-    /// runner is nonstandard go from six overs to eight. What it does: we and the DX
-    /// both sent Tx2, because once a pair falls to i3=4 a call and a report pack to the
-    /// same bytes and they read ours as a call. Theirs is the number that got through —
-    /// capture it and roger it rather than trading reports.
+    /// The `(AwaitRoger, Report)` arm, pinned. What it does: we and the DX both sent
+    /// Tx2 — they read our report as a call, which is what it looks like where a pair's
+    /// Tx1 and Tx2 pack to the same bytes (a partner on an earlier Nexus sent a
+    /// nonstandard call's report that way). Theirs is the number that got through —
+    /// capture it and roger it rather than trading reports. Only this test pins it:
+    /// deleting the arm leaves every quadrant of the class-pair sweep at six overs, now
+    /// that a nonstandard CQ runner's report carries its number.
     #[test]
     fn a_report_while_awaiting_a_roger_is_captured_and_rogered() {
         let mut s = Station::calling_cq("PJ4/K1ABC", MY_GRID);
         s.observe(&[dec("<PJ4/K1ABC> KD9TAW EN52", -7)]); // they answered with their grid
         assert_eq!(s.state, State::AwaitRoger);
-        assert_eq!(s.pending_text().as_deref(), Some("<KD9TAW> PJ4/K1ABC"));
+        assert_eq!(s.pending_text().as_deref(), Some("KD9TAW <PJ4/K1ABC> -07"));
 
-        // They answer our (blank) report with a REPORT of their own — a standard c28
-        // sender can still carry a number beside our hash.
+        // They answer our report with a REPORT of their own — a standard c28 sender can
+        // still carry a number beside our hash.
         s.observe(&[dec("<PJ4/K1ABC> KD9TAW -09", -7)]);
         assert_eq!(
             s.rx_report,
@@ -2019,8 +2066,8 @@ mod start_context_tests {
         );
         assert_eq!(
             s.pending_text().as_deref(),
-            Some("<KD9TAW> PJ4/K1ABC RRR"),
-            "roger it — do not send a third identical blank"
+            Some("KD9TAW <PJ4/K1ABC> R-07"),
+            "roger it — do not send our report again"
         );
         // Without this arm we would still be at AwaitRoger re-sending the same over.
         assert_ne!(s.state, State::AwaitRoger);

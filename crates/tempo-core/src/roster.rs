@@ -72,13 +72,16 @@ impl Roster {
         // slot, so "TI4JWC EK70 30" filed a roster station called "EK70". The
         // recent-decodes feed has carried this special-case since #55; this ingest
         // was still guessing. WSPR rows parse by the WSPR field order, and a
-        // beacon addresses nobody.
-        let (sender, grid, calling, cq_dir) = if d.mode == Some(ModeKind::Wspr) {
-            let mut t = d.message.split_whitespace();
-            let Some(call) = t.next() else { return };
+        // beacon addresses nobody. #408: FST4W carries the same lines, and a Type 2
+        // beacon (`KI4TWB/0 23`, a compound call) has no grid, where the second word
+        // used to be filed as one.
+        let (sender, grid, calling, cq_dir) = if crate::beacon::is_beacon_mode(d.mode) {
+            let Some(beacon) = crate::beacon::parse_report(&d.message) else {
+                return;
+            };
             (
-                call.to_string(),
-                t.next().filter(|g| !g.is_empty()).map(str::to_string),
+                beacon.call.to_string(),
+                beacon.grid.map(str::to_string),
                 None,
                 None, // a beacon addresses nobody and directs at nobody
             )
