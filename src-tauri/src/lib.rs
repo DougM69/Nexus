@@ -12285,13 +12285,43 @@ impl SatDopplerConsent {
 /// (±3 min tolerance — the schedule row the operator clicked); omitted =
 /// the current/next one. `None` = no grid, unknown bird, or no matching
 /// pass in the next 48 h — the UI says so plainly.
+///
+/// `afar`: written by the command lane for a computer driving this station, `None` from the shack's
+/// own screen. From afar the track is bound to that computer's presence and ends, dial handback and
+/// all, when it lapses ([`sat_track_standing`]).
 #[tauri::command]
 async fn start_sat_track(
     state: State<'_, SharedEngine>,
     name: String,
     aos_unix: Option<i64>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<Option<SatTrackDto>, String> {
-    arm_sat_track(&state, name, aos_unix, None)
+    let standing = sat_track_standing(
+        &engine_lock(&state),
+        afar.as_ref(),
+        std::time::Instant::now(),
+    )?;
+    arm_sat_track(&state, name, aos_unix, standing)
+}
+
+/// ⛔ What a track started from afar is bound to: the presence of the computer that started it, as
+/// live now. A track steers the dial and the mast for a whole pass on its own, so one a computer
+/// started must not outlive that computer's being there; it ends the way that computer's
+/// transmissions are cut when its presence lapses. With no presence live it does not start. A Stop
+/// leaves it running: a Stop ends a transmission, not the session. `None` from the shack's own
+/// screen, whose track nothing here touches.
+fn sat_track_standing(
+    engine: &tempo_app::engine::Engine,
+    afar: Option<&command_dispatch::Afar>,
+    now: std::time::Instant,
+) -> Result<Option<tempo_app::remote_control::Standing>, String> {
+    match afar {
+        None => Ok(None),
+        Some(_) => engine
+            .remote_presence_standing(now)
+            .map(Some)
+            .ok_or_else(|| command_dispatch::NO_PRESENCE.to_string()),
+    }
 }
 
 /// The arm itself, with no Tauri in it, so an arm made from afar can reach exactly this code
@@ -17427,8 +17457,8 @@ fn js8_call_cq(
 /// The two-act arm's SECOND act. Autoreply / relay / HB-ack are persisted (JS8Call keeps them
 /// across sessions too); HB is session-only by design and is never written to disk. Neither
 /// arms TX — the TX latch is the first act and only the operator's TX button supplies it.
-/// `afar`: as [`set_tx_enabled`]'s, on the on half; the off half always runs. From afar only the
-/// automatic replies turn on (`tempo_client::dispatch::argument_refusal`).
+/// `afar`: as [`set_tx_enabled`]'s, on the on half; the off half always runs. From afar every
+/// switch turns on as here.
 #[tauri::command(async)]
 fn js8_arm(
     state: State<'_, SharedEngine>,
@@ -44274,6 +44304,130 @@ mod tests {
         assert!(!local.is_empty(), "a local arm flies whatever Remote did");
     }
 
+    /// ⛔ A PASS A COMPUTER DRIVING THIS STATION ARMED ENDS WHEN THAT COMPUTER'S PRESENCE LAPSES,
+    /// as its transmissions are cut; one armed at the shack is untouched. Through the standing the
+    /// track handler arms with and the shipped loop: armed from afar under live presence, the pass
+    /// flies (CONTROL); once the presence lapses on the radio loop's tick, not one tick runs and the
+    /// dial goes back. So does another computer's presence taking its place. With no presence live,
+    /// from afar the track does not start. A Stop, which ends a transmission and not the session,
+    /// leaves it flying. The same lapse leaves a pass armed at the shack flying.
+    #[test]
+    fn a_pass_armed_from_afar_ends_when_that_computers_presence_lapses() {
+        use crate::command_dispatch::{Afar, NO_PRESENCE};
+        use crate::sat_track_standing;
+        use std::time::{Duration, Instant};
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        let cfg = tempo_core::rotator::RotatorConfig::default();
+        let t0 = Instant::now();
+        let mut station = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
+        let presence = TransmitAuthority::default();
+        let afar = Afar {
+            stand_down: station.remote_transmit_stand_down_generation(),
+        };
+        let flies = |standing: Option<tempo_app::remote_control::Standing>| {
+            let eng = sat_station();
+            engine_lock(&eng).set_sat_pass_engaged(true);
+            let badges = run_simulated_pass_as(&eng, None, cfg, standing);
+            // An ended pass hands the dial back, as at LOS; so does one flown to LOS.
+            let handed_back = engine_lock(&eng).sat_transponder_held().is_none();
+            (!badges.is_empty(), handed_back)
+        };
+
+        // No presence live: from afar it does not start; from the shack it does.
+        assert_eq!(
+            sat_track_standing(&station, Some(&afar), t0)
+                .err()
+                .as_deref(),
+            Some(NO_PRESENCE),
+            "from afar with no presence"
+        );
+        assert!(matches!(sat_track_standing(&station, None, t0), Ok(None)));
+
+        assert!(
+            station.hold_remote_presence(presence.permit(t0 + Duration::from_secs(5)).unwrap(), t0)
+        );
+        let from_afar = sat_track_standing(&station, Some(&afar), t0)
+            .expect("armed from afar under live presence")
+            .expect("bound to that presence");
+        let at_the_shack = sat_track_standing(&station, None, t0).expect("armed at the shack");
+        assert!(
+            at_the_shack.is_none(),
+            "the shack's own track is bound to nothing"
+        );
+        assert!(flies(Some(from_afar.clone())).0, "CONTROL: it flies");
+
+        // A Stop at the station, or from either road, ends the over, not the session.
+        station.halt_tx();
+        assert!(flies(Some(from_afar.clone())).0, "a Stop leaves it flying");
+
+        // The heartbeats stop: the radio loop's tick carries out the lapse.
+        assert!(station.poll_remote_transmit(t0 + Duration::from_secs(6)));
+        assert_eq!(
+            flies(Some(from_afar)),
+            (false, true),
+            "ended by the lapse, the dial handed back"
+        );
+        assert!(flies(at_the_shack).0, "the shack's own flies on");
+
+        // Another computer's presence takes the place of the one a track was armed under.
+        let t1 = t0 + Duration::from_secs(10);
+        assert!(
+            station.hold_remote_presence(presence.permit(t1 + Duration::from_secs(5)).unwrap(), t1)
+        );
+        let first = sat_track_standing(&station, Some(&afar), t1)
+            .unwrap()
+            .unwrap();
+        let renewed = presence.permit(t1 + Duration::from_secs(6)).unwrap();
+        assert!(station.hold_remote_presence(renewed, t1));
+        assert!(first.held(), "its own heartbeat keeps it");
+        // One of its own heartbeats arriving late, with an earlier deadline, is still its own.
+        let late = presence.permit(t1 + Duration::from_secs(4)).unwrap();
+        assert!(station.hold_remote_presence(late, t1));
+        assert!(first.held(), "its own late heartbeat keeps it");
+        let other = TransmitAuthority::default();
+        assert!(
+            station.hold_remote_presence(other.permit(t1 + Duration::from_secs(5)).unwrap(), t1)
+        );
+        assert_eq!(
+            flies(Some(first)),
+            (false, true),
+            "ended when another's presence took its place"
+        );
+    }
+
+    /// The track handler, as the command lane runs it: from afar with no presence live it is
+    /// refused before anything is armed or read, by its own words.
+    #[test]
+    fn the_track_handler_from_afar_with_no_presence_starts_nothing() {
+        use crate::command_dispatch::{tauri_runner, Runner, NO_PRESENCE};
+        use crate::start_sat_track;
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![start_sat_track])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let stand_down = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let (answer, answered) = std::sync::mpsc::channel();
+        runner(
+            "start_sat_track".to_string(),
+            serde_json::json!({"name": "ISS", "afar": {"standDown": stand_down}}),
+            Box::new(move |result| {
+                let _ = answer.send(result);
+            }),
+        );
+        let said = answered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the handler answered");
+        assert_eq!(said, Err(NO_PRESENCE.to_string()));
+    }
+
     /// ⭐ THE 2026-10-13 REPORT'S STATION THROUGH THE SHIPPED LOOP: one radio, an FT-710 (HF +
     /// 6 m, its coverage probed), working FT8 on 20 m and holding SO-50, a bird it cannot hear,
     /// when a real pass comes up. The loop flies the whole pass and never steers that radio: the FT8
@@ -49870,6 +50024,92 @@ mod tests {
             .build()
             .expect("a main window");
         (app, main)
+    }
+
+    /// ⛔ Every JS8 switch turns on from afar, through the shack's own `js8_arm`, and only under
+    /// the stand-down the command lane read it under. For the automatic replies, the heartbeat,
+    /// relay, heartbeat acks and heartbeat networking, each off at the shack: named with a
+    /// stand-down a halt has moved since, it is refused `STOPPED_SINCE` and stays off; named with
+    /// the stand-down as it stands, it turns on (CONTROL). A `which` naming no switch is refused by
+    /// the handler, as from the shack's own screen, and turns nothing on.
+    #[test]
+    fn a_js8_switch_from_afar_turns_on_only_under_the_stand_down_it_was_read_under() {
+        use crate::command_dispatch::{tauri_runner, Runner, STOPPED_SINCE};
+        use serde_json::{json, Value};
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let (app, _main) = shack_app_for_starts_from_afar(engine.clone());
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                "js8_arm".to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        // Each switch as the shack holds it, by value.
+        let switches = || {
+            let e = engine_lock(&engine);
+            let s = e.settings();
+            [
+                ("autoreply", s.js8_autoreply),
+                ("hb", e.js8_state().hb_on),
+                ("relay", s.js8_relay),
+                ("hback", s.js8_hb_ack),
+                ("hbnet", s.js8_hb_networking),
+            ]
+        };
+        let is_on = |which: &str| switches().iter().any(|(name, on)| *name == which && *on);
+        // The shack's own screen leaves `which` off, and the persisted others on.
+        let set_up = |which: &str| {
+            let mut e = engine_lock(&engine);
+            let mut settings = e.settings().clone();
+            settings.js8_autoreply = which != "autoreply";
+            settings.js8_relay = which != "relay";
+            settings.js8_hb_ack = which != "hback";
+            settings.js8_hb_networking = which != "hbnet";
+            e.apply_settings(settings);
+            e.js8_enter();
+            e.halt_tx();
+            let stale = e.remote_transmit_stand_down_generation();
+            e.halt_tx();
+            stale
+        };
+        for which in ["autoreply", "hb", "relay", "hback", "hbnet"] {
+            let stale = set_up(which);
+            let off = switches();
+            assert!(!is_on(which), "premise: {which} off at the shack: {off:?}");
+            let voided = ask(json!({"which": which, "on": true, "afar": {"standDown": stale}}));
+            assert_eq!(voided, Err(STOPPED_SINCE.to_string()), "{which}");
+            assert_eq!(switches(), off, "{which}: nothing turned on after a Stop");
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let ran = ask(json!({"which": which, "on": true, "afar": {"standDown": now}}));
+            assert!(ran.is_ok(), "{which}: {ran:?}");
+            assert!(
+                is_on(which),
+                "CONTROL: {which} on from afar: {:?}",
+                switches()
+            );
+        }
+        let stand_down = set_up("autoreply");
+        let off = switches();
+        for which in [
+            json!("AUTOREPLY"),
+            json!("heartbeat"),
+            json!(null),
+            json!(1),
+        ] {
+            let ran = ask(json!({"which": which, "on": true, "afar": {"standDown": stand_down}}));
+            assert!(ran.is_err(), "{which}: {ran:?}");
+            assert_eq!(switches(), off, "{which}: nothing turned on");
+        }
     }
 
     /// ★ The Operate strip's Call CQ and contest S&P, the JS8 starts (the sends, the typeahead,

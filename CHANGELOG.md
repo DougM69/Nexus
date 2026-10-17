@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at the shack. Stop works from the second PC on its own road, and the shack unkeys within about 5 s if the network or
   the second PC drops. Passwords and remote-access settings stay at the shack, both PCs must run the same version, and
   there is no paddle from afar. NEEDS-BENCH: two Windows PCs on one network, the radio into a dummy load.
+- **Nexus Remote from a second PC: every JS8 switch, and satellite tracks that end when the second PC goes.** HB, Relay,
+  HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
+  every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
+  seconds of that PC dropping, as a transmission does; a track started at the shack runs on. NEEDS-BENCH.
 
 ### Fixed
 - **Nexus Remote: the shack's screen fits the browser window.** Ctrl (⌘ on a Mac) with +, − or 0, Ctrl with the

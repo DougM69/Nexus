@@ -325,10 +325,13 @@ fn every_command_goes_where_its_class_says() {
         way("js8_typeahead", &json!({ "sentSeen": 0, "unsent": "MORE" })),
         Way::Start
     );
-    assert_eq!(
-        way("js8_arm", &json!({ "which": "hb", "on": true })),
-        Way::Refused(Refusal::TransmitNotYet)
-    );
+    for which in ["hb", "relay", "hback", "hbnet"] {
+        assert_eq!(
+            way("js8_arm", &json!({ "which": which, "on": true })),
+            Way::Start,
+            "{which}"
+        );
+    }
     assert_eq!(
         way("js8_arm", &json!({ "which": "hb", "on": false })),
         Way::Shack { stop: true }

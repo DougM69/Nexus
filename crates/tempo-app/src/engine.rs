@@ -3280,6 +3280,10 @@ pub struct Engine {
     remote_transmit: Option<crate::remote_control::transmit::TransmitPermit>,
     /// A streamed session's transmit presence, and its held PTT: see `engine/remote_stream.rs`.
     remote_presence: Option<crate::remote_control::transmit::TransmitPermit>,
+    /// Moved each time a session's presence ends, by lapsing or by another session's taking its
+    /// place: what work a computer started at the station for as long as it is there is bound to
+    /// (`remote_presence_standing`).
+    remote_presence_ended: crate::remote_control::Revocation,
     remote_ptt_hold: Option<crate::remote_control::ptt_hold::PttHold>,
     /// The streamed operator's microphone over, and what it needs: see `engine/remote_mic.rs`.
     mic: crate::mic::MicLatch,
@@ -5784,6 +5788,7 @@ impl Engine {
             remote_selection_host_ready: false,
             remote_transmit: None,
             remote_presence: None,
+            remote_presence_ended: Default::default(),
             remote_ptt_hold: None,
             mic: crate::mic::MicLatch::default(),
             mic_feed: None,

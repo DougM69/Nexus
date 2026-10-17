@@ -1,4 +1,4 @@
-//! The Operate strip's Call CQ, a JS8 message, the JS8 repeating CQ and automatic replies, and a
+//! The Operate strip's Call CQ, a JS8 message, the JS8 repeating CQ and every JS8 switch, and a
 //! CW macro, pressed on a computer driving the station, on the roadside the road tests use: the shack's real channel, command lane, Stop road
 //! and engine over loopback, and the app's own handlers reached as the main window reaches them
 //! (`command_dispatch::tauri_runner`). The shack runs each with only the arguments the screen sent
@@ -12,15 +12,32 @@ const LONG: &str = "A MESSAGE FROM AFAR LONG ENOUGH TO NEED SEVERAL FRAMES AT NO
 
 /// The overs: the Operate strip's Call CQ (a CQ run), a JS8 message once its first frame is
 /// keyed, the JS8 repeating CQ switched on, the automatic replies switched on with a reply asking,
-/// a yes to a reply, and a CW macro on the keyer.
-const OVERS: [&str; 6] = [
+/// the heartbeat, relay, heartbeat acks and heartbeat networking switched on, a yes to a reply,
+/// and a CW macro on the keyer.
+const OVERS: [&str; 10] = [
     "cq-run",
     "js8",
     "js8-cq-repeat",
     "js8-autoreply",
+    "js8-hb",
+    "js8-relay",
+    "js8-hback",
+    "js8-hbnet",
     "js8-reply",
     "cw-macro",
 ];
+
+/// The `js8_arm` switch an over turns on from afar, by its name on the wire.
+fn switch(over: &str) -> Option<&'static str> {
+    match over {
+        "js8-autoreply" => Some("autoreply"),
+        "js8-hb" => Some("hb"),
+        "js8-relay" => Some("relay"),
+        "js8-hback" => Some("hback"),
+        "js8-hbnet" => Some("hbnet"),
+        _ => None,
+    }
+}
 
 /// The ways an over ends: the link's Stop alone (the road's datagrams never sent), the road's Stop
 /// alone (the link no longer read), and presence lapsing while the link keeps the lease.
@@ -39,9 +56,9 @@ fn presses(over: &str) -> Vec<(&'static str, Value)> {
             ("set_tx_enabled", json!({"enabled": true})),
             ("js8_cq_repeat", json!({"on": true})),
         ],
-        "js8-autoreply" => vec![
+        "js8-autoreply" | "js8-hb" | "js8-relay" | "js8-hback" | "js8-hbnet" => vec![
             ("set_tx_enabled", json!({"enabled": true})),
-            ("js8_arm", json!({"which": "autoreply", "on": true})),
+            ("js8_arm", json!({"which": switch(over), "on": true})),
         ],
         // The reply is named as the shack shows it, once it asks (filled in by the test).
         "js8-reply" => vec![
@@ -81,9 +98,11 @@ fn the_apps_handlers(r: &mut Roadside) -> (crate::tests::ShackApp, Got) {
 fn set_up_at_the_shack(e: &mut tempo_app::engine::Engine, over: &str) {
     if over.starts_with("js8") {
         let mut settings = e.settings().clone();
-        settings.js8_hb_networking = true;
         // Off at the shack, so turning them on from afar is seen.
+        settings.js8_hb_networking = over != "js8-hbnet";
         settings.js8_autoreply = over != "js8-autoreply";
+        settings.js8_relay = over != "js8-relay";
+        settings.js8_hb_ack = over != "js8-hback";
         e.apply_settings(settings);
         e.js8_enter();
     } else {
@@ -95,8 +114,8 @@ fn set_up_at_the_shack(e: &mut tempo_app::engine::Engine, over: &str) {
 
 /// Whether the over is on the air as the shack keys it: the run armed and calling; the message's
 /// first frame keyed by the JS8 sender at its period with more still queued; the repeating CQ
-/// armed to key at its period; the automatic replies armed, with a reply asking; the
-/// reply queued; the macro holding the transmitter on the keyer.
+/// armed to key at its period; the automatic replies armed, with a reply asking; the heartbeat,
+/// relay and heartbeat acks armed, and heartbeat networking on; the reply queued; the macro holding the transmitter on the keyer.
 fn on_the_air(e: &mut tempo_app::engine::Engine, over: &str) -> bool {
     match over {
         "cq-run" => e.tx_enabled(),
@@ -110,6 +129,11 @@ fn on_the_air(e: &mut tempo_app::engine::Engine, over: &str) -> bool {
             let js8 = e.js8_state();
             js8.armed.autoreply && js8.pending_reply.is_some()
         }
+        "js8-hb" => e.js8_state().armed.hb,
+        "js8-relay" => e.js8_state().armed.relay,
+        "js8-hback" => e.js8_state().armed.hb_ack,
+        // Heartbeat networking keys nothing by itself: on, it is what the switch turned.
+        "js8-hbnet" => e.settings().js8_hb_networking,
         "js8-reply" => !e.js8_state().queue.is_empty(),
         "cw-macro" => e.tx_owner().is_some(),
         _ => unreachable!(),
@@ -143,7 +167,7 @@ fn assert_over(e: &mut tempo_app::engine::Engine, over: &str, end: &str) {
 }
 
 /// ⛔ An over started from afar ends by each road alone and by presence. For the Operate strip's
-/// Call CQ, a JS8 message, the JS8 repeating CQ and automatic replies switched on, a yes to a JS8
+/// Call CQ, a JS8 message, the JS8 repeating CQ and every JS8 switch turned on, a yes to a JS8
 /// reply, and a CW macro: the computer presses it, the shack's own handler runs it
 /// and the station keys it; then the link's Stop alone, the road's Stop alone, or presence lapsing
 /// (the heartbeats stop, the lease still kept) ends it, as the shack's own Stop TX would. The shack

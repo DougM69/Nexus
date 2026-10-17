@@ -58,7 +58,15 @@ impl Engine {
             .as_mut()
             .is_some_and(|current| current.renew(permit.clone(), now));
         if !renewed {
-            // None, or a different session's: this one is the live authority now.
+            // None, or a different session's: this one is the live authority now. A different
+            // session's presence it replaces has ended.
+            if self
+                .remote_presence
+                .as_ref()
+                .is_some_and(|current| !current.same_session(&permit))
+            {
+                self.remote_presence_ended.revoke();
+            }
             self.remote_presence = Some(permit);
         }
         true
@@ -67,6 +75,18 @@ impl Engine {
     /// Whether a streamed session holds live presence.
     pub fn remote_presence_live(&self, now: Instant) -> bool {
         self.remote_presence.as_ref().is_some_and(|p| p.valid(now))
+    }
+
+    /// The live session's presence as a [`Standing`](crate::remote_control::Standing), for work
+    /// that computer starts at the station and that must end when it is no longer there: held
+    /// until that presence lapses or another session's takes its place. `None` with no live
+    /// presence. A Stop does not end it: a Stop ends a transmission, not the session.
+    pub fn remote_presence_standing(
+        &self,
+        now: Instant,
+    ) -> Option<crate::remote_control::Standing> {
+        self.remote_presence_live(now)
+            .then(|| self.remote_presence_ended.standing())
     }
 
     /// Share the stream's held-PTT state with the engine. Installed once, when Remote is built.
@@ -80,6 +100,7 @@ impl Engine {
             return false;
         }
         self.remote_presence = None;
+        self.remote_presence_ended.revoke();
         tempo_core::applog::warn(
             "tx",
             "remote stream presence lapsed: stopping every transmission at the station",

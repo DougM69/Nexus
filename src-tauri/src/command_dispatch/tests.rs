@@ -133,7 +133,7 @@ fn of_class(class: Class) -> Vec<&'static str> {
 
 /// Arguments that read as the on half of `cmd`, when it is a transmit switch; `{}` otherwise.
 fn on_args(cmd: &str) -> Value {
-    // The one switch of `js8_arm` that turns on from afar.
+    // `js8_arm` names its switch.
     if cmd == "js8_arm" {
         return json!({ "which": "autoreply", "on": true });
     }
@@ -251,9 +251,9 @@ const FT_STARTS: [&str; 9] = [
 ];
 
 /// The JS8 cockpit's starts, allowed from afar as at the shack: a message, a directed command, CQ,
-/// a heartbeat now, more text for the message going out, the automatic replies switched on (the
-/// one switch of `js8_arm` that turns on from afar), the repeating CQ, and the yes to an automatic
-/// reply. Written here, as [`FT_STARTS`] is.
+/// a heartbeat now, more text for the message going out, a `js8_arm` switch turned on (the
+/// automatic replies, the heartbeat, relay, heartbeat acks, heartbeat networking), the repeating
+/// CQ, and the yes to an automatic reply. Written here, as [`FT_STARTS`] is.
 const JS8_STARTS: [&str; 8] = [
     "js8_answer_reply",
     "js8_arm",
@@ -363,50 +363,26 @@ fn the_ft_buttons_are_admitted_and_every_other_start_is_refused_by_name() {
     }
 }
 
-/// ⛔ From afar `js8_arm` turns on the automatic replies and nothing else. Its on half, read at
-/// both ends off its own `which`: the automatic replies run at the shack; the heartbeat, relay,
-/// heartbeat acks and heartbeat networking, and a `which` that is missing or no switch, are each
-/// refused `transmitNotYet` on the other computer and again at the shack, and never reach it. Its
-/// off half, every switch, goes as a Stop. CONTROL: the same refused switches are what the shack's
-/// own screen turns on (`js8_arm` keeps one class).
+/// ⛔ From afar `js8_arm` turns on every switch the shack's own screen does: the automatic
+/// replies, the heartbeat, relay, heartbeat acks and heartbeat networking each pass the other
+/// computer's routing and the shack's admission, and run at the shack. Their off halves, every
+/// switch, go as a Stop. A `which` that names no switch is the shack handler's own to refuse, as
+/// from its own screen (`a_js8_switch_from_afar_turns_on_only_under_the_stand_down_it_was_read_under`).
+/// CONTROL: `js8_arm` is still a start, and a start's own refusals still hold
+/// (`a_wired_start_needs_the_lease_and_its_roads`).
 #[test]
-fn js8_arm_from_afar_turns_on_only_the_automatic_replies() {
+fn js8_arm_from_afar_turns_on_every_switch_the_shack_does() {
     let shack = shack();
     let mut id = 0;
     let mut admit = |args: Value| {
         id += 1;
         kind(&shack.admit(&controller(), call(id, "js8_arm", args)))
     };
-    let on = |which: Value| json!({ "which": which, "on": true });
-    assert_eq!(admit(on(json!("autoreply"))), "run");
-    assert_eq!(route("js8_arm", &on(json!("autoreply"))), Route::Shack);
-    for which in [
-        json!("hb"),
-        json!("relay"),
-        json!("hback"),
-        json!("hbnet"),
-        json!("AUTOREPLY"),
-        json!(null),
-        json!(1),
-    ] {
-        let refused_here = Route::Refused(Refusal::TransmitNotYet);
-        assert_eq!(
-            route("js8_arm", &on(which.clone())),
-            refused_here,
-            "{which}"
-        );
-        assert_eq!(
-            admit(on(which.clone())),
-            refused(Refusal::TransmitNotYet),
-            "{which}"
-        );
-    }
-    assert_eq!(
-        admit(json!({ "on": true })),
-        refused(Refusal::TransmitNotYet),
-        "no which"
-    );
     for which in ["autoreply", "hb", "relay", "hback", "hbnet"] {
+        let on = json!({ "which": which, "on": true });
+        assert_eq!(route("js8_arm", &on), Route::Shack, "{which} on");
+        assert!(!is_stop("js8_arm", &on), "{which} on");
+        assert_eq!(admit(on), "run", "{which} on");
         let off = json!({ "which": which, "on": false });
         assert_eq!(route("js8_arm", &off), Route::Shack, "{which} off");
         assert!(is_stop("js8_arm", &off), "{which} off");

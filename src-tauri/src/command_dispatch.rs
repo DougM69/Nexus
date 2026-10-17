@@ -153,14 +153,21 @@ pub(crate) const AFAR: &str = "afar";
 /// client's) would be live with no presence behind them.
 pub(crate) const ENTRIES: [&str; 3] = ["set_operating_mode", "sstv_tune", "work_spot"];
 
+/// ⛔ The work started from afar that runs on at the station by itself, and so ends when the
+/// computer that started it is no longer there: a satellite track, which steers the dial and the
+/// mast for a whole pass. From afar it is bound to that computer's presence, as its transmissions
+/// are; from the shack's own screen it runs as it always has.
+pub(crate) const PRESENCE_BOUND: [&str; 1] = ["start_sat_track"];
+
 /// Whether the command lane writes [`Afar`] into an admitted call of `cmd`: each wired start but
-/// the held press, which never runs as a command, and each section entry ([`ENTRIES`]). A test
-/// holds this to the handlers that take it.
+/// the held press, which never runs as a command, each section entry ([`ENTRIES`]) and the work
+/// bound to presence ([`PRESENCE_BOUND`]). A test holds this to the handlers that take it.
 pub(crate) fn takes_afar(cmd: &str) -> bool {
     matches!(
         transmit_from_afar(cmd),
         Ok(Wired::Ft | Wired::VoiceKeyer | Wired::Js8 | Wired::Cw)
     ) || ENTRIES.contains(&cmd)
+        || PRESENCE_BOUND.contains(&cmd)
 }
 
 /// ⛔ STOP WINS OVER A START THAT WAS IN FLIGHT. A start from afar runs only while the transmit
@@ -187,6 +194,10 @@ pub(crate) fn still_bound(
 /// as [`Refusal::Stopped`].
 pub(crate) const STOPPED_SINCE: &str =
     "Transmit was stopped after this was pressed, so it did not run.";
+
+/// The error of work bound to presence ([`PRESENCE_BOUND`]) asked from afar with no presence live.
+pub(crate) const NO_PRESENCE: &str =
+    "This computer's presence at the station has lapsed, so this did not start.";
 
 // --- Stop's rules --------------------------------------------------------------------------------
 
