@@ -1365,6 +1365,54 @@ fn s1m1_the_operation_lane_takes_only_what_the_pinned_device_key_signed() {
     });
 }
 
+/// A computer (LAN-paired, or approved for the room's tunnel) reads only over its own pinned TLS
+/// link. The relay's lane is unsigned for `state`, so the station answers it no read in a
+/// computer's name, while a browser's `state` and a Stop in a computer's name are answered as before.
+#[test]
+fn the_relay_lane_answers_no_read_in_a_computers_name() {
+    let _alone = alone();
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    const LAN_COMPUTER: &str = "40000000-0000-4000-8000-0000000000c1";
+    const TUNNEL_COMPUTER: &str = "40000000-0000-4000-8000-0000000000c2";
+    let key = LaneKey::new();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let (station_io, relay_io) = tokio::io::duplex(65536);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let status = lane_station(&key);
+        {
+            let control = status.control.lock().unwrap();
+            control.operations.hold_lan_devices(Box::new(|| vec![LAN_COMPUTER.into()]));
+            control.operations.hold_tunnel_devices(Box::new(|| vec![TUNNEL_COMPUTER.into()]));
+        }
+        let (cancel, cancellation) = watch::channel(false);
+        let relay = tokio::spawn(async move {
+            let mut socket = tokio_tungstenite::accept_async(relay_io).await.unwrap();
+            let id = |n: u32| format!("00000000-0000-4000-8000-0000000002{n:02x}");
+            let state = |n| json!({"type":"state","requestId":id(n)});
+            // CONTROL: the browser's unsigned state is answered, as the page needs.
+            let browser = lane_exchange(&mut socket, lane_operation(&state(1), LANE_DEVICE, None)).await;
+            assert_eq!(browser["value"]["allowed"], true, "{browser}");
+            let boot = browser["value"]["stationBootId"].as_str().unwrap().to_owned();
+            for (n, computer) in [(2, LAN_COMPUTER), (3, TUNNEL_COMPUTER)] {
+                let read = lane_exchange(&mut socket, lane_operation(&state(n), computer, None)).await;
+                assert_eq!(read, json!({"type":"operationResponse","sessionId":LANE_SESSION,"requestId":id(n),"error":"stationUnsupported"}), "{computer}");
+            }
+            // Stop still needs nothing: in a computer's name it is answered, not refused.
+            let stop = lane_exchange(&mut socket, lane_operation(&json!({"type":"stopTransmit","requestId":id(4),"stationBootId":boot,"leaseId":id(5),"transmitEpoch":"0000000000000000"}), LAN_COMPUTER, None)).await;
+            assert_eq!(stop["requestId"], id(4), "{stop}");
+            assert_ne!(stop["error"], "stationUnsupported", "{stop}");
+            stop_remote(&mut socket, &cancel).await;
+        });
+        let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
+        let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), #[cfg(feature = "radio")] audio: None, stream: Default::default() };
+        let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
+        relay.await.unwrap();
+        assert_eq!(served, Ok(()), "the session ended because Remote stopped");
+    });
+}
+
 #[test]
 #[cfg(feature = "radio")]
 fn s1m1_listen_takes_only_what_the_pinned_device_key_signed() {

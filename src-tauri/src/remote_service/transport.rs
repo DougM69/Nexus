@@ -605,8 +605,11 @@ where
                         ServerMessage::OperationRequest{session_id,device_id,operation_version,request,proof}=>{
                             if !identifier(&session_id)||!identifier(&device_id)||!identifier(request.id()){return Err("invalidResponse")}
                             // S1-M1: everything but Stop and `state` is taken only on this browser's own
-                            // proof, over the request exactly as the relay handed it on (`lanes`).
+                            // proof, over the request exactly as the relay handed it on (`lanes`). A
+                            // computer reads only over its own pinned link, so this unsigned lane
+                            // answers no `state` in its name; Stop is still taken from anyone.
                             let refused = match request.as_ref() {
+                                super::operations::Request::State { .. } if operation_connection.authority.is_computer(&device_id) => Some(super::lanes::Refused::Unsigned),
                                 super::operations::Request::StopTransmit { .. } | super::operations::Request::State { .. } => None,
                                 _ => {
                                     let raw: RawRequest = serde_json::from_str(&text).map_err(|_| "invalidResponse")?;
