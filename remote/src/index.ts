@@ -543,10 +543,15 @@ async function revokeStation(env: RemoteEnv, stationId: string, now: number): Pr
 // station's account, and each of its verbs is signed by its key as any other. So Nexus keeps no
 // account credential on the computer, and signs in only to register a device. Registering, the
 // account's stations and a challenge without a station all still need the token.
+//
+// Until its signature is checked a reopening request is anyone's who knows a device id, so it is held
+// in buckets of its own (`reopener`) and charged to its account's only once its key has signed it
+// (`signer`): charged first, a flood of unsigned ones spent the account's whole minute and locked out
+// its signed-in computer and every device of it. Its challenges are its device's alone, four at most.
 async function client(request: Request, env: RemoteEnv, path: string, match: RegExpExecArray | null, now: number): Promise<Response> {
   const reopening = !request.headers.has('authorization')
   const caller = reopening ? await reopener(request, env, match, now) : await nativeAccount(request, env, now)
-  await rate(env, `client:${caller.accountId}`, now, 120)
+  if (!reopening) await rate(env, `client:${caller.accountId}`, now, 120)
   const entitlement = await trial(env, caller.accountId, now)
   if (path === 'client/challenge') {
     requireValue(request.method === 'POST', 'methodNotAllowed', 405)
@@ -575,10 +580,15 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
     // Only for reopening: a signed-in computer asks `client/challenge`.
     requireValue(reopening && request.method === 'POST', 'notFound', 404)
     await body(request, [])
-    const challenge = secret(), expiresAt = now + CHALLENGE_MS
+    const challenge = secret(), expiresAt = now + CHALLENGE_MS, deviceId = id(request.headers.get('x-nexus-device-id'))
+    // The newest four a device are kept and any older one given up, so asking is never refused for
+    // the challenges somebody else asked in this device's name.
     await env.DB.batch([
       env.DB.prepare('DELETE FROM challenges WHERE expires_at<=?').bind(now),
-      env.DB.prepare('INSERT INTO challenges(digest,account_id,expires_at) VALUES(?,?,?)').bind(await digest(challenge), caller.accountId, expiresAt),
+      env.DB.prepare('INSERT INTO challenges(digest,account_id,device_id,expires_at) VALUES(?,?,?,?)')
+        .bind(await digest(challenge), caller.accountId, deviceId, expiresAt),
+      env.DB.prepare(`DELETE FROM challenges WHERE device_id=? AND rowid NOT IN
+        (SELECT rowid FROM challenges WHERE device_id=? ORDER BY rowid DESC LIMIT 4)`).bind(deviceId, deviceId),
     ])
     return json({ challenge, expiresAt })
   }
@@ -587,7 +597,8 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
   const signer = async (bytes: Uint8Array): Promise<DeviceRow> => {
     const current = await nativeDevice(request, env, row.id, caller.accountId, now)
     requireValue(current?.public_key, 'deviceNotApproved')
-    await signedBy(request, env, caller.accountId, current.public_key, bytes, now)
+    await signedBy(request, env, caller.accountId, reopening ? current.id : null, current.public_key, bytes, now)
+    if (reopening) await rate(env, `client:${caller.accountId}`, now, 120)
     return current
   }
   const identity = (current: DeviceRow) => ({ accountId: caller.accountId, deviceId: current.id,
@@ -623,7 +634,7 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
     const input = fieldsOf(bytes, ['name', 'kind', 'platform', 'publicKey'])
     const name = label(input.name), key = await publicKey(input.publicKey), { kind, platform } = nativeKind(input.kind, input.platform)
     // Signed by the key it registers, so whoever sends it holds that key.
-    await signedBy(request, env, caller.accountId, key, bytes, now)
+    await signedBy(request, env, caller.accountId, null, key, bytes, now)
     const current = await env.DB.prepare(`SELECT id,name,generation,approved,approved_at,expires_at,public_key FROM devices
       WHERE station_id=? AND account_id=? AND public_key=? AND kind IS NOT NULL AND expires_at>? ORDER BY expires_at DESC LIMIT 1`)
       .bind(row.id, caller.accountId, key, now).first<DeviceRow>()
@@ -663,13 +674,21 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
 // at most an hour, as a token would. What it may do is still each verb's own, signed by the device's
 // key. No Origin and no cookie, as for any native caller. Refused alike, and before anything is read,
 // for a path with no station or a device that is not one approved there: no token, no reopening.
+//
+// Its buckets, per caller FIRST as `enroll`'s are, so a caller over its own limit never spends the next:
+// thirty a minute an IPv4 address or IPv6 /64, sixty an IPv6 /48, then a hundred and twenty for the
+// device. One network can so spend at most half of a device's minute; taking all of it needs two /48s
+// or four IPv4 addresses at once, which is a distributed attacker and a job for an edge rule.
 async function reopener(request: Request, env: RemoteEnv, match: RegExpExecArray | null, now: number): Promise<Identity & { subject: string; verified: boolean }> {
   requireValue(!request.headers.has('origin') && !request.headers.has('cookie'), 'originDenied')
   requireValue(nativeClientId(env), 'serviceNotConfigured', 503)
   requireValue(match, 'signInRequired', 401)
   const deviceId = request.headers.get('x-nexus-device-id') ?? ''
   requireValue(/^[0-9a-f-]{36}$/.test(deviceId), 'signInRequired', 401)
-  await rate(env, `reopen:${match[1]}:${deviceId}`, now, 60)
+  const { caller: from, network } = caller(request.headers.get('cf-connecting-ip'))
+  await rate(env, `reopen-caller:${from}`, now, 30)
+  if (network) await rate(env, `reopen-network:${network}`, now, 60)
+  await rate(env, `reopen:${match[1]}:${deviceId}`, now, 120)
   const row = await station(env, match[1]).catch(() => null)
   requireValue(row, 'signInRequired', 401)
   const current = await nativeDevice(request, env, row.id, row.account_id, now)

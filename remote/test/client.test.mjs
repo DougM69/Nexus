@@ -661,6 +661,99 @@ test('reopening opens nothing else: no new device, no stations, no waiting or re
   assert.equal((await reopened(c, 'turn', {}, 403)).value.error, 'trialRequired')
 })
 
+/** A request with no token, sent as anyone who knows a device id may send one: its status alone. */
+async function unproven(path, device, address, headers = {}) {
+  const response = await app.mf.dispatchFetch(`${app.origin}/api/remote/${path}`, { method: 'POST', body: '{}',
+    headers: { 'content-type': 'application/json', 'cf-connecting-ip': address, 'x-nexus-device-id': device, ...headers } })
+  await response.arrayBuffer()
+  return response.status
+}
+/** Room for a few hundred requests before the minute's buckets roll over under a test. */
+async function freshMinute() {
+  if (Date.now() % 60000 > 40000) await delay(60000 - Date.now() % 60000 + 50)
+}
+// Each its own /48, never the one the per-network test below spends.
+const elsewhere = n => `2001:db8:${n.toString(16)}::1`
+
+test('a flood of unproven reopening is never charged to the account: its signed-in and proven requests still pass', async () => {
+  await freshMinute()
+  const pair = await app.paired(), path = `stations/${pair.stationId}/client`
+  const named = [await computer(pair), await computer(pair)], proven = await computer(pair)
+  // Seventy for each id it knows, each from a network of its own, half of them asking a challenge and
+  // half signed by nobody: none proves the device, so none may spend what the account's own requests need.
+  let n = 0
+  for (const c of named) {
+    for (let i = 0; i < 70; i++) {
+      await unproven(`${path}/${i % 2 ? 'renew' : 'challenge'}`, c.deviceId, elsewhere(++n),
+        i % 2 ? { 'x-nexus-challenge': '0'.repeat(64), 'x-nexus-signature': '0'.repeat(128) } : {})
+    }
+  }
+  // The account signed in, a device of it proving its key, and a device the flood named, all still pass.
+  assert.equal((await (await nativeCaller(pair)).post('client/session')).value.stations[0].id, pair.stationId)
+  assert.equal((await reopened(proven, 'renew', {}, 404)).value.error, 'pipeClosed')
+  assert.equal((await reopened(named[0], 'renew', {}, 404)).value.error, 'pipeClosed')
+})
+
+test('unproven reopening is held per address, per network and per device, each before the next is spent', async () => {
+  await freshMinute()
+  const pair = await app.paired(), path = `stations/${pair.stationId}/client/challenge`
+  const c = await computer(pair), other = await computer(pair)
+  const statuses = async (count, device, address) => {
+    const seen = []
+    for (let i = 0; i < count; i++) seen.push(await unproven(path, device, typeof address === 'function' ? address(i) : address))
+    return seen
+  }
+  const tally = seen => ({ ok: seen.filter(s => s === 200).length, held: seen.filter(s => s === 429).length })
+  // One address: thirty a minute, then held, and the ones held never reach the device's own bucket.
+  assert.deepEqual(tally(await statuses(100, c.deviceId, '192.0.2.7')), { ok: 30, held: 70 })
+  // One /64 is one caller, whatever address in it is used.
+  assert.deepEqual(tally(await statuses(40, other.deviceId, i => `2001:db8:fffe:1::${(i + 1).toString(16)}`)), { ok: 30, held: 10 })
+  // One /48 is sixty, across its /64s: thirty already spent above, thirty more from another /64.
+  assert.deepEqual(tally(await statuses(40, other.deviceId, i => `2001:db8:fffe:2::${(i + 1).toString(16)}`)), { ok: 30, held: 10 })
+  // ...and a third /64 of that /48 has nothing left, though its own bucket is untouched.
+  assert.deepEqual(tally(await statuses(5, other.deviceId, i => `2001:db8:fffe:3::${(i + 1).toString(16)}`)), { ok: 0, held: 5 })
+  // The device: a hundred and twenty a minute from everywhere together. Thirty spent from the one
+  // address (not a hundred), so ninety more from networks of their own pass, and the next is held.
+  assert.deepEqual(tally(await statuses(91, c.deviceId, i => elsewhere(0x1000 + i))), { ok: 90, held: 1 })
+  // Another device is its own, and the address held for c is held for it too.
+  assert.equal(await unproven(path, other.deviceId, elsewhere(0x2000)), 200)
+  assert.equal(await unproven(path, other.deviceId, '192.0.2.7'), 429)
+})
+
+test('a reopening proven by its key is charged to its account, as a signed-in request is', async () => {
+  await freshMinute()
+  const pair = await app.paired(), devices = [await computer(pair), await computer(pair), await computer(pair)]
+  // Registering the three spent six of the account's minute (a challenge and the device, each signed
+  // in), so 114 proven renewals fill it.
+  for (let i = 0; i < 114; i++) assert.equal((await reopened(devices[i % 3], 'renew', {}, 404)).value.error, 'pipeClosed', `renewal ${i}`)
+  assert.equal((await reopened(devices[0], 'renew', {}, 429)).value.error, 'tryLater')
+  assert.equal((await (await nativeCaller(pair)).post('client/session', {}, 429)).value.error, 'tryLater')
+})
+
+test('a reopening challenge is its device\'s alone, a few at a time, and never a signed-in request\'s', async () => {
+  const pair = await app.paired(), path = `stations/${pair.stationId}/client`, bare = app.client(null, '', null)
+  const a = await computer(pair), b = await computer(pair)
+  const ask = async device => (await bare.post(`${path}/challenge`, {}, 200, { 'x-nexus-device-id': device })).value.challenge
+  const renew = async (c, challenge, expected) => bare.post(`${path}/renew`, {}, expected, { 'x-nexus-device-id': c.deviceId,
+    'x-nexus-challenge': challenge, 'x-nexus-signature': await sign(c.key, challenge, 'POST', `/api/remote/${path}/renew`, '{}') })
+  // b, signing for itself over a challenge a was given: refused, and a's challenge is still a's.
+  const forA = await ask(a.deviceId)
+  assert.equal((await renew(b, forA, 401)).value.error, 'invalidChallenge')
+  assert.equal((await renew(a, forA, 404)).value.error, 'pipeClosed', 'CONTROL: the challenge, used by its own device')
+  // A signed-in computer's challenge is no reopening's, and a reopening's is no signed-in request's.
+  const signedIn = (await a.native.post('client/challenge')).value.challenge
+  assert.equal((await renew(a, signedIn, 401)).value.error, 'invalidChallenge')
+  const reopening = await ask(a.deviceId), key = await deviceKey(), value = { name: 'New', kind: 'computer', platform: 'linux', publicKey: key.publicKey }
+  assert.equal((await a.native.post(`${path}/device`, value, 401, { 'x-nexus-challenge': reopening,
+    'x-nexus-signature': await sign(key, reopening, 'POST', `/api/remote/${path}/device`, JSON.stringify(value)) })).value.error, 'invalidChallenge')
+  // Four outstanding a device: asking a fifth gives up the oldest, so whoever asks can never hold more.
+  const asked = []
+  for (let i = 0; i < 6; i++) asked.push(await ask(a.deviceId))
+  assert.equal((await renew(a, asked[0], 401)).value.error, 'invalidChallenge', 'the oldest was given up')
+  assert.equal((await renew(a, asked[1], 401)).value.error, 'invalidChallenge', 'so was the next')
+  for (const challenge of asked.slice(2)) assert.equal((await renew(a, challenge, 404)).value.error, 'pipeClosed')
+})
+
 test('the service names its Native application for Nexus to sign in to, and never the page\'s', async () => {
   const config = async service => (await service.mf.dispatchFetch(`${service.origin}/api/remote/config`)).json()
   assert.equal((await config(app)).nativeClientId, NATIVE)

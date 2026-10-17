@@ -469,12 +469,14 @@ const fromHex = (hex: string) => new Uint8Array(hex.length / 2).map((_, i) => pa
  *  The challenge is one this service gave the same account within the last minute, and it is DELETED
  *  as it is read, before any signature is tried. So a request is taken once: a replay finds nothing,
  *  and a challenge another account was given, or one past its minute, is refused the same way.
- *  DELETE ... RETURNING is what makes that hold across concurrent Worker instances, as for tickets. */
-export async function signedBy(request: Request, env: RemoteEnv, accountId: string, key: string, bytes: Uint8Array, now: number): Promise<void> {
+ *  DELETE ... RETURNING is what makes that hold across concurrent Worker instances, as for tickets.
+ *  `deviceId` is the reopening device the challenge was given to, or null for a signed-in caller's:
+ *  each takes only its own. */
+export async function signedBy(request: Request, env: RemoteEnv, accountId: string, deviceId: string | null, key: string, bytes: Uint8Array, now: number): Promise<void> {
   const challenge = request.headers.get('x-nexus-challenge') ?? '', signature = request.headers.get('x-nexus-signature') ?? ''
   requireValue(/^[0-9a-f]{64}$/.test(challenge) && /^[0-9a-f]{128}$/.test(signature), 'invalidRequest', 400)
-  const taken = await env.DB.prepare('DELETE FROM challenges WHERE digest=? AND account_id=? AND expires_at>? RETURNING digest')
-    .bind(await digest(challenge), accountId, now).first()
+  const taken = await env.DB.prepare('DELETE FROM challenges WHERE digest=? AND account_id=? AND device_id IS ? AND expires_at>? RETURNING digest')
+    .bind(await digest(challenge), accountId, deviceId, now).first()
   requireValue(taken, 'invalidChallenge', 401)
   const sent = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('')
   const signed = new TextEncoder().encode([NATIVE_REQUEST, challenge, request.method, new URL(request.url).pathname, sent].join('\n'))
