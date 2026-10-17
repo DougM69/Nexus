@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { LanApp, type PageSocket } from './LanApp'
-import { CLOSED_REASONS, CONNECT_REASONS, PAIR_REASONS } from './protocol'
+import { CLOSED_REASONS, CONNECT_REASONS, INTERNET_REASONS, PAIR_REASONS } from './protocol'
 import { EN } from '../i18n/en'
 import { harness, last } from '../remote-web/stream-link.testkit'
 
@@ -315,3 +315,41 @@ describe('Operate from this computer', () => {
     expect((screen.getByRole('button', { name: EN['lanWindow.operate'] }) as HTMLButtonElement).disabled).toBe(false)
   })
 })
+
+describe('The internet road', () => {
+  const told = () => socket.tell({ type: 'stations', computer: 'DEN-PC', internet: [],
+    stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }] })
+
+  it('is added by naming the station to the page’s socket; the sign-in waits in the browser, and the station shows it once added', () => {
+    page()
+    told()
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.add'] }))
+    expect(socket.sent).toContainEqual({ type: 'addInternet', stationId: STATION })
+    expect((screen.getByRole('button', { name: EN['lanWindow.operate'] }) as HTMLButtonElement).disabled, 'one thing at a time').toBe(true)
+    socket.tell({ type: 'signingIn' })
+    expect(screen.getByText(EN['lanWindow.internet.signingIn'])).toBeTruthy()
+    socket.tell({ type: 'internetAdded', stationId: STATION, waiting: true })
+    expect(screen.getByText(EN['lanWindow.internet.waiting'])).toBeTruthy()
+    expect(socket.sent.filter(m => m.type === 'stations').length).toBe(2)
+    socket.tell({ type: 'stations', computer: 'DEN-PC', internet: [STATION],
+      stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }] })
+    expect(screen.getByText(EN['lanWindow.internet.added'])).toBeTruthy()
+    expect(screen.queryByRole('button', { name: EN['lanWindow.internet.add'] })).toBeNull()
+  })
+
+  it('says why it was not added, and every reason this computer’s Nexus gives is a sentence', () => {
+    page()
+    told()
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.add'] }))
+    socket.tell({ type: 'internetRefused', reason: 'internetNotIncluded' })
+    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.internet.reason.internetNotIncluded'])
+    expect((screen.getByRole('button', { name: EN['lanWindow.internet.add'] }) as HTMLButtonElement).disabled).toBe(false)
+    for (const reason of INTERNET_REASONS) {
+      socket.tell({ type: 'internetRefused', reason })
+      const said = screen.getByRole('alert').textContent ?? ''
+      expect(said.length, reason).toBeGreaterThan(10)
+      expect(said, reason).not.toContain('lanWindow.')
+    }
+  })
+})
+

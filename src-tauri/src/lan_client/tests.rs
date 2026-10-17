@@ -78,6 +78,26 @@ impl StationVault for StationStore {
             .remove(&format!("lan-station-{id}"));
         Ok(())
     }
+    fn internet_road(&self, id: &str) -> Result<Option<InternetRoad>, &'static str> {
+        self.get(&format!("lan-internet-{id}"))
+    }
+    fn save_internet_road(&self, id: &str, road: &InternetRoad) -> Result<(), &'static str> {
+        self.put(
+            format!("lan-internet-{id}"),
+            serde_json::to_string(road).unwrap(),
+        )
+    }
+    fn remove_internet_road(&self, id: &str) -> Result<(), &'static str> {
+        if self.locked.load(Ordering::SeqCst) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        self.entries
+            .lock()
+            .unwrap()
+            .remove(&format!("lan-internet-{id}"));
+        Ok(())
+    }
 }
 
 fn id(n: u8) -> String {
@@ -496,6 +516,7 @@ fn reach(store: StationStore) -> Reach {
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
         operate: Arc::new(|_| {}),
+        add_internet: Arc::new(|_| Box::pin(async { Err("internetNotReady") })),
     }
 }
 

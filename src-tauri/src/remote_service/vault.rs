@@ -60,6 +60,8 @@ const LAN_DEVICES: &str = "lan-devices";
 const PAIRED_STATIONS: &str = "lan-stations";
 /// One paired station's entry: this, then its LAN station id.
 const PAIRED_STATION: &str = "lan-station-";
+/// One paired station's internet road: this, then its LAN station id.
+const INTERNET_ROAD: &str = "lan-internet-";
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -172,6 +174,20 @@ pub struct PairedStations {
     pub stations: Vec<String>,
 }
 
+/// The internet road to a station this computer is paired with over its network (N3: a key of its
+/// own for each road): the station as the Remote service knows it, the device id the service gave
+/// this computer, the station key the service listed (pinned from then on), and this computer's
+/// own key for that road, PKCS#8 as lowercase hex. Kept under the LAN station's id, in an entry of
+/// its own beside that station's. No `Debug` and no `Clone`: it holds a private key.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InternetRoad {
+    pub station_id: String,
+    pub device_id: String,
+    pub station_key: String,
+    pub pkcs8: String,
+}
+
 /// The computer's side of Remote over this network: its entries, kept apart from the shack's and
 /// from [`Vault`]'s, so no test of either reaches them, nor they it.
 pub trait StationVault: Send + Sync {
@@ -180,6 +196,10 @@ pub trait StationVault: Send + Sync {
     fn paired_station(&self, id: &str) -> Result<Option<PairedStation>, &'static str>;
     fn save_paired_station(&self, station: &PairedStation) -> Result<(), &'static str>;
     fn remove_paired_station(&self, id: &str) -> Result<(), &'static str>;
+    /// The internet road kept for the station paired here as `id`, if any.
+    fn internet_road(&self, id: &str) -> Result<Option<InternetRoad>, &'static str>;
+    fn save_internet_road(&self, id: &str, road: &InternetRoad) -> Result<(), &'static str>;
+    fn remove_internet_road(&self, id: &str) -> Result<(), &'static str>;
 }
 
 /// Remote over this network's two entries, kept apart from [`Vault`]'s: a test of the hosted
@@ -420,4 +440,31 @@ impl StationVault for SystemVault {
             Err(_) => Err("credentialStoreUnavailable"),
         }
     }
+    fn internet_road(&self, id: &str) -> Result<Option<InternetRoad>, &'static str> {
+        match internet_entry(id)?.get_password() {
+            // Unreadable is no road: the operator adds it again.
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_internet_road(&self, id: &str, road: &InternetRoad) -> Result<(), &'static str> {
+        let value = serde_json::to_string(road).map_err(|_| "credentialStoreUnavailable")?;
+        internet_entry(id)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
+    }
+    fn remove_internet_road(&self, id: &str) -> Result<(), &'static str> {
+        match internet_entry(id)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+}
+
+fn internet_entry(id: &str) -> Result<keyring::Entry, &'static str> {
+    if !tempo_stream::protocol::identifier(id) {
+        return Err("credentialStoreUnavailable");
+    }
+    entry(&format!("{INTERNET_ROAD}{id}"))
 }

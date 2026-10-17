@@ -16,6 +16,12 @@
 // is held. The short tone that goes with an end is played by Nexus itself, in this computer's
 // headset.
 //
+// Over the internet road (Beta) it says so, and keeps the two things that road adds: "Still
+// there?" after a quarter of an hour with no click, key or wheel here (each of which it reports,
+// at most every few seconds, while the link is on the internet), with a button that answers it,
+// and Reconnect once nobody did; and, when this network lets no datagram road through, that
+// transmitting from here is off.
+//
 // In a test build it carries the road switch too (`src-tauri/src/bench_road_switch.rs`): Normal,
 // Block the command link, Block the Stop road, one click each, and a mark while a road is blocked.
 // Only a test build's status names the switch, so a shipped build draws none of it.
@@ -24,6 +30,7 @@ import { useEffect, useState } from 'react'
 import {
   benchRoadSwitch,
   clientStatus,
+  clientStillHere,
   isTauri,
   leaveClientMode,
   type BenchPosition,
@@ -35,6 +42,8 @@ import { lanReachLine } from '../remote-native/lanReach'
 
 /** How often the banner asks after the link while this computer drives a station. */
 export const CLIENT_STATUS_EVERY_MS = 500
+/** The operator's input is reported at most this often while the link is on the internet. */
+export const STILL_HERE_EVERY_MS = 5_000
 
 /** Why the station did not take this computer, in a sentence. Literal calls, so the catalog
  *  guard can see each key; a reason this build cannot name is said as such. */
@@ -54,6 +63,16 @@ function reasonLine(reason: string | null): string {
     case 'unknownStation': return t('lanWindow.reason.unknownStation')
     case 'otherBuild': return t('client.reason.otherBuild')
     case 'localPermissionRequired': return t('client.reason.localPermissionRequired')
+    case 'idle': return t('client.reason.idle')
+    case 'internetNotIncluded': return t('client.reason.internetNotIncluded')
+    case 'notApprovedThere': return t('client.reason.notApprovedThere')
+    case 'waitingApproval': return t('client.reason.waitingApproval')
+    case 'internetNotReady': return t('client.reason.internetNotReady')
+    case 'stationUnavailable': return t('client.reason.stationUnavailable')
+    case 'serviceUnavailable': return t('client.reason.serviceUnavailable')
+    case 'tryLater': return t('client.reason.tryLater')
+    case 'accessDenied': return t('client.reason.accessDenied')
+    case 'pipeClosed': return t('client.reason.pipeClosed')
     default: return t('client.reason.unknown')
   }
 }
@@ -88,6 +107,14 @@ export function overLine(over: ClientOver | null | undefined): string | null {
 
 function line(status: ClientStatus): string {
   const station = status.station
+  if (status.internet) {
+    switch (status.phase) {
+      case 'live': return t('client.banner.internet.live')
+      case 'notLive': return t('client.banner.internet.notLive')
+      case 'busy': return t('client.banner.internet.busy')
+      default: break
+    }
+  }
   switch (status.phase) {
     case 'connecting': return t('client.banner.connecting', { station })
     case 'live': return t('client.banner.live', { station })
@@ -167,8 +194,28 @@ export function ClientBanner() {
     }
   }, [])
 
+  // On the internet road, the operator's own input here answers "Still there?" before it is asked:
+  // a click, a key or the wheel anywhere in this window, reported at most every few seconds.
+  const internet = status?.internet === true
+  useEffect(() => {
+    if (!internet) return
+    let last = -Infinity
+    const input = () => {
+      const now = Date.now()
+      if (now - last < STILL_HERE_EVERY_MS) return
+      last = now
+      void clientStillHere().catch(() => undefined)
+    }
+    const kinds = ['pointerdown', 'keydown', 'wheel'] as const
+    for (const kind of kinds) window.addEventListener(kind, input, { capture: true, passive: true })
+    return () => {
+      for (const kind of kinds) window.removeEventListener(kind, input, { capture: true })
+    }
+  }, [internet])
+
   if (!status) return null
   const over = overLine(status.over)
+  const idleEnded = status.phase === 'refused' && status.reason === 'idle'
   const leave = () => {
     setLeaving(true)
     void leaveClientMode().catch(() => setLeaving(false))
@@ -187,6 +234,13 @@ export function ClientBanner() {
         <span className="client-banner-over" data-over={status.over?.phase}>
           {over}
         </span>
+      )}
+      {status.udpBlocked && <span className="client-banner-over">{t('client.banner.udpBlocked')}</span>}
+      {status.stillThere && <span className="client-banner-over">{t('client.banner.stillThere')}</span>}
+      {(status.stillThere || idleEnded) && (
+        <button type="button" className="client-banner-leave" onClick={() => void clientStillHere().catch(() => undefined)}>
+          {idleEnded ? t('client.banner.connectAgain') : t('client.banner.stillHere')}
+        </button>
       )}
       {bench && (
         <RoadSwitch

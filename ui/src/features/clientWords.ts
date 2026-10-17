@@ -32,6 +32,7 @@ export function clientWords(code: string): string {
     case 'tooLarge': return t('client.refused.tooLarge')
     case 'gone': return t('client.refused.gone')
     case 'notLive': return t('client.refused.notLive')
+    case 'udpBlocked': return t('client.refused.udpBlocked')
     default: return t('client.refused.unknown')
   }
 }

@@ -103,6 +103,9 @@ pub(crate) struct Reach {
     /// Operate from this computer: Nexus quits as itself and starts again driving the paired
     /// station this id names (`client_mode`).
     pub operate: Arc<dyn Fn(String) + Send + Sync>,
+    /// Add the internet road to the paired station this id names (`internet::add`): the sign-in
+    /// in the system browser, and this computer registered with the Remote service.
+    pub add_internet: super::internet::AddInternet,
 }
 
 /// One request's head, read whole before anything is answered. Header names in lowercase.
@@ -493,6 +496,10 @@ enum FromPage {
         #[serde(rename = "stationId")]
         station_id: String,
     },
+    AddInternet {
+        #[serde(rename = "stationId")]
+        station_id: String,
+    },
     OperationRequest {
         #[serde(rename = "operationVersion", default)]
         operation_version: Option<u8>,
@@ -522,11 +529,22 @@ async fn store<T: Send + 'static>(
         .unwrap_or(Err("storeUnavailable"))
 }
 
-/// The stations, as the page shows them.
+/// The stations, as the page shows them, and which of them have the internet road.
 async fn stations(reach: &Reach) -> String {
     let kept = reach.stations.clone();
-    match store(move || kept.list()).await {
-        Ok(list) => json!({"type":"stations","stations":list,"computer":reach.name}),
+    let listed = store(move || {
+        let list = kept.list()?;
+        let internet: Vec<String> = list
+            .iter()
+            .filter(|station| matches!(kept.internet(&station.id), Ok(Some(_))))
+            .map(|station| station.id.clone())
+            .collect();
+        Ok((list, internet))
+    });
+    match listed.await {
+        Ok((list, internet)) => {
+            json!({"type":"stations","stations":list,"internet":internet,"computer":reach.name})
+        }
         Err(reason) => {
             json!({"type":"stations","stations":[],"computer":reach.name,"error":reason})
         }
@@ -585,6 +603,8 @@ async fn page(
     let mut road: Option<Road> = None;
     // A look by name under way, on a thread that may wait: a second `find` has its answer.
     let mut finding: Option<tokio::task::JoinHandle<Result<Vec<Found>, Unavailable>>> = None;
+    // The internet road being added, while the sign-in waits for the browser: one at a time.
+    let mut adding: Option<tokio::task::JoinHandle<(String, Result<bool, &'static str>)>> = None;
     loop {
         let told = tokio::select! {
             biased;
@@ -607,6 +627,17 @@ async fn page(
             looked = async { finding.as_mut().expect("guarded look").await }, if finding.is_some() => {
                 finding = None;
                 found(looked.unwrap_or(Err(Unavailable)))
+            }
+            added = async { adding.as_mut().expect("guarded add").await }, if adding.is_some() => {
+                adding = None;
+                match added {
+                    Ok((id, Ok(waiting))) => {
+                        json!({"type":"internetAdded","stationId":id,"waiting":waiting})
+                    }
+                    Ok((_, Err(reason))) => json!({"type":"internetRefused","reason":reason}),
+                    Err(_) => json!({"type":"internetRefused","reason":"signInFailed"}),
+                }
+                .to_string()
             }
             message = from_page.next() => {
                 let text = match message {
@@ -662,6 +693,18 @@ async fn page(
                             Err(reason) => json!({"type":"connectRefused","reason":reason}).to_string(),
                         }
                     }
+                    FromPage::AddInternet { station_id } => {
+                        if adding.is_some() {
+                            json!({"type":"internetRefused","reason":"signInUnderWay"}).to_string()
+                        } else {
+                            let add = reach.add_internet.clone();
+                            adding = Some(tokio::spawn(async move {
+                                let added = add(station_id.clone()).await;
+                                (station_id, added)
+                            }));
+                            json!({"type":"signingIn"}).to_string()
+                        }
+                    }
                     FromPage::OperationRequest { operation_version, request } => {
                         let Some(open) = road.as_mut() else { continue };
                         match open.operation(operation_version, &request).await {
@@ -688,6 +731,9 @@ async fn page(
     }
     if let Some(open) = road.take() {
         open.close().await;
+    }
+    if let Some(add) = adding.take() {
+        add.abort();
     }
 }
 

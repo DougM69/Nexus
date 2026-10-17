@@ -10,7 +10,7 @@ import { useViewport } from '../useViewport'
 import { StreamView } from '../remote-web/StreamView'
 import type { StreamEnvironment } from '../remote-web/stream-link'
 import { LanConnection, lanStream } from './connection'
-import { codeShaped, groupedKey, readTold, socketUrl, type ClosedReason, type ConnectReason, type LanFound, type LanStation, type PairReason } from './protocol'
+import { codeShaped, groupedKey, readTold, socketUrl, type ClosedReason, type ConnectReason, type InternetReason, type LanFound, type LanStation, type PairReason } from './protocol'
 import { lanFindLine, lanReachLine, lanUnreached } from '../remote-native/lanReach'
 import '../remote-monitor/monitor.css'
 import '../remote-web/remote.css'
@@ -70,6 +70,38 @@ function sentence(reason: PairReason | ConnectReason | ClosedReason): string {
   }
 }
 
+/** Why the internet road was not added, in a sentence. Literal calls, so the catalog guard can
+ *  see each key. */
+function internetSentence(reason: InternetReason): string {
+  switch (reason) {
+    case 'internetNotIncluded': return t('lanWindow.internet.reason.internetNotIncluded')
+    case 'internetNotReady': return t('lanWindow.internet.reason.internetNotReady')
+    case 'signInPortBusy': return t('lanWindow.internet.reason.signInPortBusy')
+    case 'signInTimedOut': return t('lanWindow.internet.reason.signInTimedOut')
+    case 'signInRefused': return t('lanWindow.internet.reason.signInRefused')
+    case 'signInUnderWay': return t('lanWindow.internet.reason.signInUnderWay')
+    case 'whichStation': return t('lanWindow.internet.reason.whichStation')
+    case 'deviceLimit': return t('lanWindow.internet.reason.deviceLimit')
+    case 'stationUnavailable': return t('lanWindow.internet.reason.stationUnavailable')
+    case 'updateStation': return t('lanWindow.internet.reason.updateStation')
+    case 'serviceUnavailable':
+    case 'relayUnavailable':
+    case 'pipeClosed': return t('lanWindow.internet.reason.serviceUnavailable')
+    case 'tryLater': return t('lanWindow.internet.reason.tryLater')
+    case 'accessDenied':
+    case 'notApprovedThere':
+    case 'waitingApproval': return t('lanWindow.internet.reason.accessDenied')
+    case 'storeUnavailable': return t('lanWindow.reason.storeUnavailable')
+    case 'unknownStation': return t('lanWindow.reason.unknownStation')
+    case 'stationsFull':
+    case 'notStation':
+    case 'signInFailed':
+    case 'invalidResponse':
+    case 'invalidRequest':
+    case 'originDenied': return t('lanWindow.internet.reason.signInFailed')
+  }
+}
+
 function openSocket(url: string): PageSocket {
   return new WebSocket(url) as unknown as PageSocket
 }
@@ -88,6 +120,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const socket = useRef<PageSocket | null>(null)
   const [phase, setPhase] = useState<'opening' | 'open' | 'lost'>('opening')
   const [stations, setStations] = useState<LanStation[]>([])
+  const [internet, setInternet] = useState<string[]>([])
   const [computer, setComputer] = useState('')
   const [storeFailed, setStoreFailed] = useState(false)
   const [pairing, setPairing] = useState(false)
@@ -128,6 +161,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
       switch (told.type) {
         case 'stations':
           setStations(told.stations)
+          setInternet(told.internet)
           setComputer(told.computer)
           setStoreFailed(told.error !== null)
           return
@@ -167,6 +201,18 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           return
         case 'operating':
           setSaid({ text: t('lanWindow.operating'), alert: false })
+          return
+        case 'signingIn':
+          setSaid({ text: t('lanWindow.internet.signingIn'), alert: false })
+          return
+        case 'internetAdded':
+          setBusy(null)
+          setSaid({ text: told.waiting ? t('lanWindow.internet.waiting') : t('lanWindow.internet.ready'), alert: false })
+          say({ type: 'stations' })
+          return
+        case 'internetRefused':
+          setBusy(null)
+          setSaid({ text: internetSentence(told.reason), alert: true })
           return
         case 'station':
           current.current?.connection.receive(told.message, new TextEncoder().encode(event.data).length)
@@ -266,6 +312,13 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
             <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'} onClick={() => setOperating(station.id)}>{t('lanWindow.operate')}</button>
             <button type="button" className="remote-button remote-button--quiet" disabled={!!busy} onClick={() => setForgetting(station.id)}>{t('lanWindow.forget')}</button>
           </div>}
+          {internet.includes(station.id)
+            ? <p className="remote-site-status">{t('lanWindow.internet.added')}</p>
+            : forgetting !== station.id && operating !== station.id && <div className="remote-actions">
+              <button type="button" className="remote-button remote-button--quiet" disabled={!!busy || phase !== 'open'} title={t('lanWindow.internet.hint')}
+                onClick={() => { setBusy(`internet:${station.id}`); setSaid(null); say({ type: 'addInternet', stationId: station.id }) }}>
+                {busy === `internet:${station.id}` ? t('lanWindow.internet.adding') : t('lanWindow.internet.add')}</button>
+            </div>}
           {another?.id === station.id && <form onSubmit={event => { event.preventDefault(); if (another.address.trim()) connect(station.id, another.address.trim()) }}>
             <label>{t('lanWindow.otherAddress')}<input autoComplete="off" spellCheck={false} value={another.address} maxLength={21}
               onChange={event => setAnother({ id: station.id, address: event.target.value })} /></label>

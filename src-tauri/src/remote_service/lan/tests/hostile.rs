@@ -266,6 +266,7 @@ async fn plain_http_to_the_tls_port_is_answered_with_no_http_and_reaches_nothing
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
         operate: Arc::new(|_| {}),
+        add_internet: Arc::new(|_| Box::pin(async { Err("internetNotReady") })),
     })
     .unwrap();
     let mut tcp = TcpStream::connect((Ipv4Addr::LOCALHOST, origin.port()))
@@ -565,6 +566,7 @@ async fn a_forged_discovery_reply_costs_one_handshake_and_learns_nothing() {
         },
         name: "Den PC".into(),
         operate: Arc::new(|_| {}),
+        add_internet: Arc::new(|_| Box::pin(async { Err("internetNotReady") })),
     })
     .unwrap();
     let mut page = page_socket(&origin).await;
@@ -1151,6 +1153,7 @@ async fn an_answer_signed_by_another_key_never_reaches_the_page() {
             find: Arc::new(|_| Ok(Vec::new())),
             name: "Den PC".into(),
             operate: Arc::new(|_| {}),
+            add_internet: Arc::new(|_| Box::pin(async { Err("internetNotReady") })),
         })
         .unwrap();
         let mut page = page_socket(&origin).await;

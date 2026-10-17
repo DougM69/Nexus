@@ -8,7 +8,11 @@ const STATION = { id: '60000000-0000-4000-8000-000000000001', addresses: ['192.1
 const KEY = `3059301306072a8648ce3d020106082a8648ce3d03010703420004${'cd'.repeat(64)}`
 
 it('reads every message this computer’s Nexus sends, and passes the station’s own through', () => {
-  expect(readTold({ type: 'stations', stations: [STATION], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [STATION], computer: 'DEN-PC', error: null })
+  expect(readTold({ type: 'stations', stations: [STATION], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [STATION], internet: [], computer: 'DEN-PC', error: null })
+  expect(readTold({ type: 'stations', stations: [STATION], internet: [STATION.id], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [STATION], internet: [STATION.id], computer: 'DEN-PC', error: null })
+  expect(readTold({ type: 'signingIn' })).toEqual({ type: 'signingIn' })
+  expect(readTold({ type: 'internetAdded', stationId: STATION.id, waiting: true })).toEqual({ type: 'internetAdded', stationId: STATION.id, waiting: true })
+  expect(readTold({ type: 'internetRefused', reason: 'internetNotIncluded' })).toEqual({ type: 'internetRefused', reason: 'internetNotIncluded' })
   expect(readTold({ type: 'stations', stations: [], computer: '', error: 'storeUnavailable' })).toMatchObject({ error: 'storeUnavailable' })
   expect(readTold({ type: 'paired', station: STATION })).toEqual({ type: 'paired', station: STATION })
   expect(readTold({ type: 'pairRefused', reason: 'wrongCode' })).toEqual({ type: 'pairRefused', reason: 'wrongCode' })
@@ -33,6 +37,12 @@ it('refuses anything else: another word, a field too many or too few, a reason n
     { type: 'connectRefused', reason: 'wrongCode' },
     { type: 'closed', reason: 'notController' },
     { type: 'answerRefused', reason: 'stationBusy' },
+    { type: 'stations', stations: [STATION], internet: ['not-an-id'], computer: 'X' },
+    { type: 'stations', stations: [STATION], internet: 'all', computer: 'X' },
+    { type: 'internetAdded', stationId: STATION.id },
+    { type: 'internetAdded', stationId: STATION.id, waiting: 'yes' },
+    { type: 'internetRefused', reason: 'wrongCode' },
+    { type: 'signingIn', token: 'x' },
     { type: 'connected', stationId: STATION.id, deviceId: 'x', sessionId: STATION.id, stationKey: KEY, address: '192.168.1.20:42075' },
     { type: 'connected', stationId: STATION.id, deviceId: STATION.id, sessionId: STATION.id, stationKey: 'ab'.repeat(91), address: '192.168.1.20:42075' },
     null, 'stations', [],

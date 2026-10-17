@@ -9,10 +9,10 @@ use std::collections::BTreeMap;
 
 /// The device id the service gave the computer when it registered: a hosted device's, never the
 /// LAN's, which is made from the key.
-const APPROVED: &str = "10000000-0000-4000-8000-00000000000d";
+pub(super) const APPROVED: &str = "10000000-0000-4000-8000-00000000000d";
 
 /// Who the tunnel takes: `computer`, approved under [`APPROVED`] with no end in sight, or nobody.
-fn approved_for(computer: Option<&Computer>) -> BTreeMap<[u8; 32], (String, u64)> {
+pub(super) fn approved_for(computer: Option<&Computer>) -> BTreeMap<[u8; 32], (String, u64)> {
     approved_until(computer, u64::MAX)
 }
 
@@ -25,7 +25,7 @@ fn approved_until(computer: Option<&Computer>, until: u64) -> BTreeMap<[u8; 32],
 }
 
 /// `s`'s tunnel, held to `roster`, its internet roads on loopback.
-fn tunnel_of(s: &Shack, roster: Roster, approved: &Arc<Approved>) -> Tunnel {
+pub(super) fn tunnel_of(s: &Shack, roster: Roster, approved: &Arc<Approved>) -> Tunnel {
     let deps = TunnelDeps {
         authority: s.shared.authority.clone(),
         engine: s.shared.engine.clone(),
@@ -47,7 +47,7 @@ fn tunnel_of(s: &Shack, roster: Roster, approved: &Arc<Approved>) -> Tunnel {
 
 /// A pipe through an in-memory room, the station's end served by `tunnel` until `stop`: the
 /// computer's end, as the byte stream its TLS runs over.
-async fn piped(tunnel: &Tunnel, stop: watch::Receiver<bool>) -> tokio::io::DuplexStream {
+pub(super) async fn piped(tunnel: &Tunnel, stop: watch::Receiver<bool>) -> tokio::io::DuplexStream {
     let (station_side, room_side) = tokio::io::duplex(256 * 1024);
     let room = tokio::spawn(async move { tokio_tungstenite::accept_async(room_side).await });
     let (station_end, _) = tokio_tungstenite::client_async("ws://room/pipe", station_side)
@@ -431,7 +431,10 @@ async fn a_session_through_the_room_ends_with_its_approval() {
 /// What the computer's own end keeps for a station it reaches through the room: the service's
 /// station id and the device id it gave this computer, the station key pinned at first sight
 /// (`station`), and this computer's device key for that station.
-fn through_record(s: &Shack, station: &str) -> crate::remote_service::vault::PairedStation {
+pub(super) fn through_record(
+    s: &Shack,
+    station: &str,
+) -> crate::remote_service::vault::PairedStation {
     crate::remote_service::vault::PairedStation {
         station_id: STATION.into(),
         device_id: APPROVED.into(),

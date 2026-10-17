@@ -41,11 +41,19 @@ export type ClosedReason = (typeof CLOSED_REASONS)[number]
 /** The station's answer did not hold here, and the page was never handed it (S3-M1). */
 export const ANSWER_REFUSALS = ['stationKeyMismatch', 'stationNotSigned'] as const
 
+/** Why the internet road was not added (`lan_client::internet`). */
+export const INTERNET_REASONS = ['internetNotIncluded', 'internetNotReady', 'signInPortBusy', 'signInTimedOut',
+  'signInRefused', 'signInFailed', 'signInUnderWay', 'whichStation', 'deviceLimit', 'stationUnavailable', 'updateStation',
+  'serviceUnavailable', 'tryLater', 'accessDenied', 'invalidResponse', 'originDenied', 'storeUnavailable', 'unknownStation',
+  'stationsFull', 'notStation', 'notApprovedThere', 'waitingApproval', 'relayUnavailable', 'pipeClosed', 'invalidRequest'] as const
+export type InternetReason = (typeof INTERNET_REASONS)[number]
+
 /** The station's own messages, passed through on an open road. */
 const STATION_MESSAGES = ['operationResponse', 'streamSignal', 'streamState', 'status'] as const
 
 export type Told =
-  | { type: 'stations'; stations: LanStation[]; computer: string; error: string | null }
+  /** `internet`: the stations the internet road has been added to. */
+  | { type: 'stations'; stations: LanStation[]; internet: string[]; computer: string; error: string | null }
   | { type: 'found'; shacks: LanFound[]; available: boolean }
   | { type: 'paired'; station: LanStation }
   | { type: 'pairRefused'; reason: PairReason }
@@ -55,6 +63,11 @@ export type Told =
   | { type: 'answerRefused'; reason: (typeof ANSWER_REFUSALS)[number] }
   /** Operate from this computer was taken: Nexus is closing, to start again driving the station. */
   | { type: 'operating' }
+  /** Adding the internet road: the sign-in waits in the system browser. */
+  | { type: 'signingIn' }
+  /** The internet road was added to a station; `waiting` while the station has not approved it. */
+  | { type: 'internetAdded'; stationId: string; waiting: boolean }
+  | { type: 'internetRefused'; reason: InternetReason }
   | { type: 'station'; message: Record<string, unknown> }
 
 type Fields = Record<string, unknown>
@@ -96,9 +109,13 @@ export function readTold(raw: unknown): Told {
   if ((STATION_MESSAGES as readonly unknown[]).includes(type)) return { type: 'station', message: raw as Fields }
   switch (type) {
     case 'stations': {
-      const value = (raw as Fields).error === undefined ? fields(raw, ['type', 'stations', 'computer']) : fields(raw, ['type', 'stations', 'computer', 'error'])
+      const keys = ['type', 'stations', 'computer', ...((raw as Fields).internet === undefined ? [] : ['internet'])]
+      const value = fields(raw, (raw as Fields).error === undefined ? keys : [...keys, 'error'])
       if (!Array.isArray(value.stations) || value.stations.length > 8) throw Error('invalidLanMessage')
-      return { type, stations: value.stations.map(station), computer: text(value.computer, undefined, 64), error: value.error === undefined ? null : text(value.error) }
+      const internet = value.internet === undefined ? [] : value.internet
+      if (!Array.isArray(internet) || internet.length > 8) throw Error('invalidLanMessage')
+      return { type, stations: value.stations.map(station), internet: internet.map(id => text(id, UUID)),
+        computer: text(value.computer, undefined, 64), error: value.error === undefined ? null : text(value.error) }
     }
     case 'found': {
       const value = fields(raw, ['type', 'shacks', 'available'])
@@ -116,6 +133,13 @@ export function readTold(raw: unknown): Told {
     case 'closed': return { type, reason: oneOf(CLOSED_REASONS, fields(raw, ['type', 'reason']).reason) }
     case 'answerRefused': return { type, reason: oneOf(ANSWER_REFUSALS, fields(raw, ['type', 'reason']).reason) }
     case 'operating': fields(raw, ['type']); return { type }
+    case 'signingIn': fields(raw, ['type']); return { type }
+    case 'internetAdded': {
+      const value = fields(raw, ['type', 'stationId', 'waiting'])
+      if (typeof value.waiting !== 'boolean') throw Error('invalidLanMessage')
+      return { type, stationId: text(value.stationId, UUID), waiting: value.waiting }
+    }
+    case 'internetRefused': return { type, reason: oneOf(INTERNET_REASONS, fields(raw, ['type', 'reason']).reason) }
     default: throw Error('invalidLanMessage')
   }
 }
