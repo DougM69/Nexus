@@ -192,6 +192,18 @@ pub enum Wired {
     /// One of the PSK cockpit's starts: a send, and continuous TX switched on and typed into, under
     /// the same per-tick gates as RTTY's.
     Psk,
+    /// APRS: a beacon or a message, which the shack renders and keys behind its own APRS gates, or
+    /// Monitor armed by hand, which lets the shack's automatic ack key. That ack ends when the
+    /// computer that armed it is no longer there (src-tauri's `command_dispatch::PRESENCE_BOUND`).
+    Aprs,
+    /// An SSTV picture, sent as its pixels. The shack burns its ID in, encodes it and keys it
+    /// behind its own SSTV gates.
+    Sstv,
+    /// Chat, Nexus to Nexus: a message, a broadcast, a message sent again, the CQ run turned on or
+    /// resumed, and the presence beacon turned on. The shack's slots decide when each keys. The CQ
+    /// run and the beacon end when the computer that turned them on is no longer there
+    /// (`command_dispatch::PRESENCE_BOUND`).
+    Chat,
 }
 
 /// ⛔ THE TRANSMISSION STARTS WIRED FOR ANOTHER COMPUTER, and how each goes; every other start is
@@ -204,8 +216,14 @@ pub enum Wired {
 /// are the two keyboard cockpits' sends, continuous TX switched on and typed into, and RTTY's auto
 /// CQ and answer. Continuous TX and an auto run go on transmitting after the press, so each ends
 /// with the rest when the computer's presence lapses (the shack's halt ends the latch and the run).
+/// The APRS, SSTV and chat rows are each cockpit's sends and what it turns on that transmits by
+/// itself, which ends with the presence of the computer that turned it on.
 pub const WIRED: &[(&str, Wired)] = &[
+    ("aprs_arm", Wired::Aprs),
+    ("aprs_send_beacon", Wired::Aprs),
+    ("aprs_send_message", Wired::Aprs),
     ("atu_tune", Wired::Tune),
+    ("broadcast", Wired::Chat),
     ("call_cq", Wired::Ft),
     ("call_station", Wired::Ft),
     ("js8_answer_reply", Wired::Js8),
@@ -223,6 +241,8 @@ pub const WIRED: &[(&str, Wired)] = &[
     ("psk_type", Wired::Psk),
     ("qso_freetext", Wired::Ft),
     ("qso_resend", Wired::Ft),
+    ("resend_chat", Wired::Chat),
+    ("resume_chat_cq", Wired::Chat),
     ("rtty_auto_answer", Wired::Rtty),
     ("rtty_auto_cq", Wired::Rtty),
     ("rtty_send", Wired::Rtty),
@@ -230,9 +250,14 @@ pub const WIRED: &[(&str, Wired)] = &[
     ("rtty_type", Wired::Rtty),
     ("send_cw", Wired::Cw),
     ("send_cw_armed", Wired::Cw),
+    ("send_message", Wired::Chat),
+    ("set_beacon", Wired::Chat),
+    ("set_chat_cq", Wired::Chat),
+    ("set_mode", Wired::Ft),
     ("set_ptt", Wired::HeldPress),
     ("set_tune", Wired::Tune),
     ("set_tx_enabled", Wired::Ft),
+    ("sstv_send", Wired::Sstv),
     ("start_cq", Wired::Ft),
     ("start_running", Wired::Ft),
     ("start_search_and_pounce", Wired::Ft),

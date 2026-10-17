@@ -301,10 +301,10 @@ async fn a_session_that_never_opened_the_lane_runs_nothing() {
 }
 
 /// ★ Deny by default at the shack: a command with no class, one given only at the shack, one that
-/// runs on the computer, three that start a transmission (one not wired from afar, one wired but on
-/// a connection with no Stop road, and PTT's on half, which from afar is only ever a held press), a
-/// typed Winlink password and arguments that are no object are each refused with the dispatcher's
-/// code, and none runs. CONTROL: a classed read runs, and answers with its store's revision.
+/// runs on the computer, two that start a transmission (one on a connection with no Stop road, and
+/// PTT's on half, which from afar is only ever a held press), a typed Winlink password and
+/// arguments that are no object are each refused with the dispatcher's code, and none runs.
+/// CONTROL: a classed read runs, and answers with its store's revision.
 #[tokio::test]
 async fn an_unclassed_or_refused_command_is_refused_with_its_code_and_never_runs() {
     let app = App::new();
@@ -320,7 +320,6 @@ async fn an_unclassed_or_refused_command_is_refused_with_its_code_and_never_runs
         (3, "check_for_update", json!({}), "runsHere"),
         (4, "call_cq", json!({}), "noStopRoad"),
         (5, "set_ptt", json!({"on":true}), "heldPress"),
-        (9, "set_mode", json!({"mode":"qso-run"}), "transmitNotYet"),
         (
             6,
             "winlink_connect",

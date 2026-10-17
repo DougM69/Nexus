@@ -106,12 +106,12 @@ fn kind(over: &str) -> &'static str {
 }
 
 /// Each call the shack's handlers got, with its arguments, in order.
-type Got = Arc<Mutex<Vec<(String, Value)>>>;
+pub(super) type Got = Arc<Mutex<Vec<(String, Value)>>>;
 
 /// The shack's handlers for these commands, the app's own, on the roadside's engine, reached as
 /// the main window reaches them. Every call the lane hands over is recorded with its arguments as
 /// the handler got them; the snapshot feed's polls are answered here, as the other road tests do.
-fn the_apps_handlers(r: &mut Roadside) -> (crate::tests::ShackApp, Got) {
+pub(super) fn the_apps_handlers(r: &mut Roadside) -> (crate::tests::ShackApp, Got) {
     let (app, main) = crate::tests::shack_app_for_starts_from_afar(r.s.shared.engine.clone());
     let runner: Runner = tauri_runner(app.handle().clone());
     let got = Arc::new(Mutex::new(Vec::new()));
@@ -132,13 +132,16 @@ fn the_apps_handlers(r: &mut Roadside) -> (crate::tests::ShackApp, Got) {
 /// JS8 tier, or the RTTY or PSK cockpit (RTTY's Auto on for its run); TX off.
 fn set_up_at_the_shack(e: &mut tempo_app::engine::Engine, over: &str) {
     if over.starts_with("js8") {
+        use tempo_app::engine::js8::Js8Switch;
         let mut settings = e.settings().clone();
-        // Off at the shack, so turning them on from afar is seen.
+        // Off at the shack, so turning them on from afar is seen; the three that transmit by
+        // themselves move only by their own switch.
         settings.js8_hb_networking = over != "js8-hbnet";
-        settings.js8_autoreply = over != "js8-autoreply";
-        settings.js8_relay = over != "js8-relay";
-        settings.js8_hb_ack = over != "js8-hback";
         e.apply_settings(settings);
+        e.js8_arm(Js8Switch::Autoreply, over != "js8-autoreply")
+            .unwrap();
+        e.js8_arm(Js8Switch::Relay, over != "js8-relay").unwrap();
+        e.js8_arm(Js8Switch::HbAck, over != "js8-hback").unwrap();
         e.js8_enter();
     } else if over.starts_with("rtty") {
         e.set_operating_mode("rtty", false);

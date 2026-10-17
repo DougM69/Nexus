@@ -38,7 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
   seconds of that PC dropping, as a transmission does; a track started at the shack runs on. NEEDS-BENCH.
-
+- **Nexus Remote from a second PC: APRS, SSTV and Chat transmit too.** From the second PC you can now send an APRS
+  beacon or message, arm APRS Monitor (which lets automatic acks go out), send an SSTV picture, and in Chat send a
+  message or broadcast, resend one, run CQ and turn on the presence beacon, and a CQ run started from the Operate mode
+  menu works as well. Stop on either PC ends each, and if the second PC drops the shack unkeys within about 5 s.
+  Automatic APRS acks, the presence beacon and the Chat CQ run started from the second PC switch off on Stop, when it
+  drops, or when its permission to transmit is withdrawn, and a Chat message it queued is dropped (shown as not sent,
+  ready to resend), so nothing it left keys later; APRS keeps receiving. A settings save from the second PC cannot turn
+  on the presence beacon, JS8's automatic replies, relay, heartbeat acks or APRS-IS relay, or a WSPR beacon, and a
+  stale Settings save at the shack no longer turns the beacon or those JS8 switches back. NEEDS-BENCH: two PCs, the
+  radio into a dummy load.
 - **Nexus Remote: Tune, ATU, RTTY and PSK now work from the second PC (Beta, test builds).** Tune, the radio's own
   tuner (ATU), RTTY and PSK sends, continuous TX with typing, and RTTY Auto's CQ and answer now work from the second PC
   as at the shack. Every transmit check at the shack still applies, including the tune carrier's time limit and

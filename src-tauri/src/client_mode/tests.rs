@@ -273,7 +273,10 @@ fn expected(cmd: &str, args: &Value) -> Way {
                 | Wired::Cw
                 | Wired::Tune
                 | Wired::Rtty
-                | Wired::Psk,
+                | Wired::Psk
+                | Wired::Aprs
+                | Wired::Sstv
+                | Wired::Chat,
             ) => Way::Start,
         },
         Class::RunsAtShack => match cmd {
@@ -357,10 +360,32 @@ fn every_command_goes_where_its_class_says() {
     );
     assert_eq!(way("rtty_auto_cq", &json!({})), Way::Start);
     assert_eq!(way("psk_type", &json!({ "text": "HI" })), Way::Start);
-    assert_eq!(
-        way("set_mode", &json!({ "mode": "qso-run" })),
-        Way::Refused(Refusal::TransmitNotYet)
-    );
+    for (cmd, args) in [
+        ("aprs_arm", json!({ "on": true })),
+        ("aprs_send_beacon", json!({ "comment": "HI" })),
+        (
+            "aprs_send_message",
+            json!({ "addressee": "W1AW", "text": "HI" }),
+        ),
+        ("sstv_send", json!({ "mode": "robot36" })),
+        ("broadcast", json!({ "text": "HI" })),
+        ("send_message", json!({ "peer": "W1AW", "text": "HI" })),
+        ("resend_chat", json!({ "peer": "W1AW" })),
+        ("set_chat_cq", json!({ "on": true })),
+        ("resume_chat_cq", json!({})),
+        ("set_beacon", json!({ "on": true })),
+        ("set_mode", json!({ "mode": "qso-run" })),
+    ] {
+        assert_eq!(way(cmd, &args), Way::Start, "{cmd} {args}");
+    }
+    for (cmd, args) in [
+        ("aprs_arm", json!({ "on": false })),
+        ("set_chat_cq", json!({ "on": false })),
+        ("set_beacon", json!({ "on": false })),
+        ("set_mode", json!({ "mode": "qso-monitor" })),
+    ] {
+        assert_eq!(way(cmd, &args), Way::Shack { stop: true }, "{cmd} {args}");
+    }
     assert_eq!(
         way("set_ptt", &json!({ "on": false })),
         Way::Shack { stop: true }
@@ -375,9 +400,9 @@ fn every_command_goes_where_its_class_says() {
 }
 
 /// ★ Deny by default at this end, through the IPC every window uses: a command with no class, one
-/// only the shack's own screen may give, a start not wired for this road, a wired start with no
-/// Stop road, and a password typed here are refused here with their codes, and nothing reaches the
-/// shack or this computer's own handler. CONTROL: a station command reaches the shack, a command of
+/// only the shack's own screen may give, a wired start with no Stop road, and a password typed
+/// here are refused here with their codes, and nothing reaches the shack or this computer's own
+/// handler. CONTROL: a station command reaches the shack, a command of
 /// this computer's runs here, and a Stop and the off half of a switch reach the shack.
 #[test]
 fn a_command_refused_here_fails_closed_and_nothing_is_sent() {
@@ -389,7 +414,6 @@ fn a_command_refused_here_fails_closed_and_nothing_is_sent() {
         ("no_such_command", json!({}), "unclassed"),
         ("repair_clock", json!({}), "shackOnly"),
         ("clear_lotw_password", json!({}), "shackOnly"),
-        ("set_mode", json!({ "mode": "qso-run" }), "transmitNotYet"),
         ("send_cw", json!({ "text": "CQ" }), "noStopRoad"),
         ("set_tune", json!({ "on": true }), "noStopRoad"),
         ("rtty_send", json!({ "text": "CQ" }), "noStopRoad"),

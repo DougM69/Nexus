@@ -284,7 +284,10 @@ pub(crate) fn way(cmd: &str, args: &Value) -> Way {
                         | Wired::Cw
                         | Wired::Tune
                         | Wired::Rtty
-                        | Wired::Psk,
+                        | Wired::Psk
+                        | Wired::Aprs
+                        | Wired::Sstv
+                        | Wired::Chat,
                     ) => Way::Start,
                 };
             }
