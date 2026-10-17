@@ -622,4 +622,61 @@ mod tests {
         assert!(crate::audio_road::wire::contract_text()
             .starts_with("audio road 1 EXPORTER-nexus-audio-road format 1 max 512 "));
     }
+
+    /// ★ A waterfall row crosses the link lossless, on this network and through the room alike
+    /// (the same feed on both): a quiet band's row, its neighbouring values one f32 step apart, is
+    /// read here bit for bit as the shack made it, and what the screens here are handed is the same
+    /// text the shack's own screens read. No 8-bit row, so the waterfall's AGC never bands a quiet
+    /// band. CONTROL: a row rounded to 8 bits, as a byte row would carry it, loses the steps.
+    #[test]
+    fn a_waterfall_row_crosses_the_link_bit_for_bit() {
+        #[derive(serde::Serialize)]
+        struct Row {
+            row: Vec<f32>,
+        }
+        let mut level = -121.37_f32;
+        let row: Vec<f32> = (0..2048)
+            .map(|i| {
+                level = if i % 7 == 0 {
+                    f32::from_bits(level.to_bits() - 1)
+                } else {
+                    f32::from_bits(level.to_bits() + 1)
+                };
+                level
+            })
+            .collect();
+        let shack = serde_json::to_vec(&Row { row: row.clone() }).unwrap();
+        let deflated = Deflate::default().value(&shack).unwrap();
+        let frame = feed_frame("spectrumRow/1", 9, &deflated);
+        let (name, number, carried) = read_feed(&frame).unwrap();
+        assert_eq!((name, number), ("spectrumRow/1", 9));
+        let here: serde_json::Value =
+            serde_json::from_slice(&Inflate::default().value(carried).unwrap()).unwrap();
+        let read: Vec<u32> = here["row"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| (v.as_f64().unwrap() as f32).to_bits())
+            .collect();
+        assert_eq!(read, row.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+        assert_eq!(serde_json::to_vec(&here).unwrap(), shack);
+        let distinct = |values: &[f32]| {
+            let mut bits: Vec<u32> = values.iter().map(|v| v.to_bits()).collect();
+            bits.sort_unstable();
+            bits.dedup();
+            bits.len()
+        };
+        let bytes: Vec<f32> = row
+            .iter()
+            .map(|v| {
+                f32::from((((v + 160.0) / 160.0) * 255.0).round() as u8) / 255.0 * 160.0 - 160.0
+            })
+            .collect();
+        assert!(distinct(&row) > 4, "premise: the row has its steps");
+        assert_eq!(
+            distinct(&bytes),
+            1,
+            "control: a byte row keeps none of them"
+        );
+    }
 }
