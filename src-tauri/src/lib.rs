@@ -13802,6 +13802,7 @@ fn save_and_publish(
             if eng.settings().lotw_username.trim() != settings.lotw_username.trim() {
                 settings.lotw_last_qsl.clear();
             }
+            keep_lotw_place_for_its_account(eng.settings(), &mut settings);
             // Same for eQSL — its cursor is account-bound (see download_eqsl_report).
             keep_eqsl_cursor_for_its_account(eng.settings(), &mut settings);
             // A ClubLog credential change re-arms auto-push (clears the 403 suspend).
@@ -25583,6 +25584,20 @@ fn keep_eqsl_cursor_for_its_account(held: &Settings, form: &mut Settings) {
     }
 }
 
+/// A save's place in a year-by-year LoTW download ([`save_and_publish`], [`lotw_history_by_year`]):
+/// the download's own, never the form's, so the held one is kept — a form loaded before a year
+/// came in would put an older place back, and Download everything again empties it before its
+/// form is saved — and emptied when the save names another username, as the cursor is.
+fn keep_lotw_place_for_its_account(held: &Settings, form: &mut Settings) {
+    if held.lotw_username.trim() == form.lotw_username.trim() {
+        form.lotw_sweep_year = held.lotw_sweep_year;
+        form.lotw_sweep_since = held.lotw_sweep_since.clone();
+    } else {
+        form.lotw_sweep_year = 0;
+        form.lotw_sweep_since.clear();
+    }
+}
+
 /// Whether a finished eQSL InBox sync may move the cursor: only when its download is complete
 /// (a cut-off one must not skip the cards it never received), and only while Settings still name
 /// the account it read. The fetch runs without the engine lock, and a save meanwhile that names
@@ -25681,102 +25696,78 @@ async fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSync
 }
 
 fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, String> {
-    // Read username + cursor (non-secret) under a brief lock; the network fetch
-    // below must NOT hold the engine lock (a full pull can run for minutes). Both pulls ask for
-    // every call on the account, and the cursor is one a download of every call made
-    // (`Settings::lotw_sync_cursor`), so the first download after the update is a full one.
-    let (username, since) = {
-        let eng = engine_lock(state);
-        let s = eng.settings();
-        (
-            s.lotw_username.trim().to_string(),
-            s.lotw_sync_cursor().to_string(),
-        )
-    };
+    let username = engine_lock(state)
+        .settings()
+        .lotw_username
+        .trim()
+        .to_string();
     if username.is_empty() {
         return Err("Set your LoTW username in Settings first.".to_string());
     }
     let password = lotw_keychain()?
         .get_password()
         .map_err(|_| "No LoTW password stored — set it in Settings.".to_string())?;
-    let used_username = username.clone(); // for the post-fetch cursor-binding guard
-    let used_since = since.clone(); // and the cursor it started from (`lotw_cursor_may_advance`)
+    download_lotw_report_on(
+        state,
+        &username,
+        &password,
+        u64::try_from(now_unix()).unwrap_or(0),
+        &|url| propagation::live::lotw::fetch_report(url),
+        &|updated| {
+            persist_settings(updated, |e| {
+                conn_log(
+                    "LoTW",
+                    "error",
+                    format!("failed to persist the sync cursor: {e}"),
+                )
+            });
+        },
+    )
+}
 
-    // --- Pull 1: confirmations (qso_qsl=yes, incremental via the cursor). ---
-    // The password stays in scope for the second (own-echo) pull below; never log it.
-    let body = {
-        let query = tempo_core::lotw::LotwQuery {
-            username: username.clone(),
-            password: password.clone(),
-            qsl_since: Some(since).filter(|c| !c.is_empty()),
-        };
-        let url = tempo_core::lotw::build_report_url(&query);
-        propagation::live::lotw::fetch_report(&url)?
-    }; // `query` + `url` (both hold the password) dropped here
+/// What `fetch` brings back that is not LoTW's report file.
+///
+/// ⚠️ DO NOT BLAME THE CREDENTIALS HERE — the exact sibling of the eQSL guard, and the same
+/// reasoning. `fetch_report` has already returned a body, so the login worked; a wrong password
+/// fails earlier with its own message. eQSL demonstrated the failure mode on 2026-08-28: it
+/// changed the wording its download opens with, the structural check started rejecting good
+/// files, and operators were told to re-enter passwords that were provably correct because their
+/// UPLOADS were still landing. LoTW can change its wording the same way, and it is the one that
+/// carries award credit, so it should not be the place we find this out again.
+fn lotw_not_a_report() -> String {
+    "LoTW answered, but the download was not the report file it should have been. Your \
+     username and password are fine — this is not a login problem. LoTW may be \
+     returning an error page, or may be down for maintenance. Try again shortly, and \
+     if it keeps happening please report it."
+        .to_string()
+}
 
-    if !tempo_core::lotw::is_lotw_adif(&body) {
-        // ⚠️ DO NOT BLAME THE CREDENTIALS HERE — the exact sibling of the eQSL guard below,
-        // and the same reasoning. `fetch_report` has already returned a body, so the login
-        // worked; a wrong password fails earlier with its own message. eQSL demonstrated the
-        // failure mode on 2026-08-28: it changed the wording its download opens with, the
-        // structural check started rejecting good files, and operators were told to re-enter
-        // passwords that were provably correct because their UPLOADS were still landing.
-        // LoTW can change its wording the same way, and it is the one that carries award
-        // credit, so it should not be the place we find this out again.
-        return Err(
-            "LoTW answered, but the download was not the report file it should have been. Your \
-             username and password are fine — this is not a login problem. LoTW may be \
-             returning an error page, or may be down for maintenance. Try again shortly, and \
-             if it keeps happening please report it."
-                .to_string(),
-        );
-    }
-
-    // Merge via the shared reconcile path, then advance the cursor only on a real
-    // high-water (re-lock: the fetch ran without the engine lock held). Take the log's rows in
-    // the same lock, then release: the own-echo lower bound (the oldest in-flight upload) is
-    // read from the store once the merge is on disk.
-    //
-    // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
-    // cursor is advanced once it is made.
-    // Made again when the store turns it back: another window changed a contact it read first.
-    let (summary, merged) =
-        tempo_app::logwrite::until_written(|| tempo_app::logwrite::merge_lotw_report(state, &body));
-    let mut result: LotwSyncResult = summary?.into();
-    let rows = {
-        let mut eng = engine_lock(state);
-        if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
-            // Advance the cursor ONLY if (a) the download is structurally complete —
-            // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
-            // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
-            // advancing would make the next `qso_qslsince` pull skip them forever (the
-            // merge above already ran, so keeping the old cursor just re-fetches the
-            // tail — reconcile is idempotent) — AND (b) the username is still the one
-            // this download used. If `set_settings` changed it during the (lock-free)
-            // fetch, it already reset the cursor to a full pull for the new identity —
-            // this high-water belongs to the old query, so binding it would risk
-            // skipping records on the next incremental pull — AND (c) the cursor is still
-            // the one this download started from: Download everything again empties it
-            // while a fetch may be running, and this high-water must not undo that. Persist
-            // via a narrow setter so the sync never disturbs live operation (no mode reset /
-            // TX-queue clear).
-            if lotw_cursor_may_advance(eng.settings(), &body, &used_username, &used_since) {
-                let updated = eng.set_lotw_cursor(high_water);
-                persist_settings(updated, |e| {
-                    conn_log(
-                        "LoTW",
-                        "error",
-                        format!("failed to persist the sync cursor: {e}"),
-                    )
-                });
-            }
-        }
-        eng.log_rows()
-    }; // engine lock released before the second network fetch
-       // The confirmations are on disk before the sync says so (off the lock, on the blocking pool).
-    merged
-        .wait(tempo_app::logstore::DURABLE_WAIT)
-        .map_err(durability_failed)?;
+/// [`download_lotw_report_impl`] with the account, the clock, LoTW (`fetch`) and the settings
+/// file (`persist`, handed each change to save, under the Engine lock) supplied.
+///
+/// With a cursor it is one download of what LoTW matched since ([`lotw_since_cursor`]). Without
+/// one — a first download, a changed username, Download everything again, a purged log — it is
+/// the whole history, a year of contacts at a time ([`lotw_history_by_year`]).
+fn download_lotw_report_on(
+    state: &SharedEngine,
+    username: &str,
+    password: &str,
+    now: u64,
+    fetch: &dyn Fn(&str) -> Result<String, String>,
+    persist: &dyn Fn(Settings),
+) -> Result<LotwSyncResult, String> {
+    // Both pulls ask for every call on the account, and the cursor is one a download of every
+    // call made (`Settings::lotw_sync_cursor`), so the first download after the update is a full
+    // one.
+    let since = engine_lock(state).settings().lotw_sync_cursor().to_string();
+    let mut result = if since.is_empty() {
+        lotw_history_by_year(state, username, password, now, fetch, persist)?
+    } else {
+        lotw_since_cursor(state, username, password, &since, fetch, persist)?
+    };
+    // The own-echo lower bound (the oldest in-flight upload) is read from the store once the
+    // merge is on disk.
+    let rows = engine_lock(state).log_rows();
     // Best-effort like the pull it bounds: a log that cannot be read skips the own-echo step and
     // says so, and never fails the confirmations already merged.
     let own_start = log_folds::oldest_pending_lotw_date(&rows).unwrap_or_else(|e| {
@@ -25794,12 +25785,12 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     if let Some(start) = own_start {
         let own_body = {
             let query = tempo_core::lotw::LotwQuery {
-                username,
-                password,
+                username: username.to_string(),
+                password: password.to_string(),
                 qsl_since: None,
             };
             let url = tempo_core::lotw::build_own_report_url(&query, Some(&start));
-            propagation::live::lotw::fetch_report(&url)
+            fetch(&url)
         };
         match own_body {
             Ok(b) if tempo_core::lotw::is_lotw_adif(&b) => {
@@ -25836,6 +25827,209 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     }
 
     Ok(result)
+}
+
+/// Pull 1 with a cursor: the confirmations LoTW matched since `since` (qso_qsl=yes), merged, and
+/// the cursor advanced to the download's high-water.
+fn lotw_since_cursor(
+    state: &SharedEngine,
+    username: &str,
+    password: &str,
+    since: &str,
+    fetch: &dyn Fn(&str) -> Result<String, String>,
+    persist: &dyn Fn(Settings),
+) -> Result<LotwSyncResult, String> {
+    // The network fetch below must NOT hold the engine lock (a pull can run for minutes).
+    let used_username = username.to_string(); // for the post-fetch cursor-binding guard
+    let used_since = since.to_string(); // and the cursor it started from (`lotw_cursor_may_advance`)
+    let body = {
+        let query = tempo_core::lotw::LotwQuery {
+            username: username.to_string(),
+            password: password.to_string(),
+            qsl_since: Some(since.to_string()),
+        };
+        let url = tempo_core::lotw::build_report_url(&query);
+        fetch(&url)?
+    }; // `query` + `url` (both hold the password) dropped here
+
+    if !tempo_core::lotw::is_lotw_adif(&body) {
+        return Err(lotw_not_a_report());
+    }
+
+    // Merge via the shared reconcile path, then advance the cursor only on a real
+    // high-water (re-lock: the fetch ran without the engine lock held).
+    //
+    // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
+    // cursor is advanced once it is made.
+    // Made again when the store turns it back: another window changed a contact it read first.
+    let (summary, merged) =
+        tempo_app::logwrite::until_written(|| tempo_app::logwrite::merge_lotw_report(state, &body));
+    let result: LotwSyncResult = summary?.into();
+    {
+        let mut eng = engine_lock(state);
+        if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
+            // Advance the cursor ONLY if (a) the download is structurally complete —
+            // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
+            // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
+            // advancing would make the next `qso_qslsince` pull skip them forever (the
+            // merge above already ran, so keeping the old cursor just re-fetches the
+            // tail — reconcile is idempotent) — AND (b) the username is still the one
+            // this download used. If `set_settings` changed it during the (lock-free)
+            // fetch, it already reset the cursor to a full pull for the new identity —
+            // this high-water belongs to the old query, so binding it would risk
+            // skipping records on the next incremental pull — AND (c) the cursor is still
+            // the one this download started from: Download everything again empties it
+            // while a fetch may be running, and this high-water must not undo that. Persist
+            // via a narrow setter so the sync never disturbs live operation (no mode reset /
+            // TX-queue clear).
+            if lotw_cursor_may_advance(eng.settings(), &body, &used_username, &used_since) {
+                persist(eng.set_lotw_cursor(high_water));
+            }
+        }
+    } // engine lock released before the wait and the second network fetch
+      // The confirmations are on disk before the sync says so (off the lock, on the blocking pool).
+    merged
+        .wait(tempo_app::logstore::DURABLE_WAIT)
+        .map_err(durability_failed)?;
+    Ok(result)
+}
+
+/// Pull 1 without a cursor: every confirmation the account holds, asked for a year of contacts
+/// at a time, newest first ([`tempo_core::lotw::build_year_report_url`]), each year merged and on
+/// disk before the place is saved (`Settings::lotw_sweep_year`).
+///
+/// One request for the whole history is what a large account cannot get: LoTW answers HTTP 503
+/// before the report is made, no high-water comes back, and every retry was the same request, so
+/// such an operator could never download a confirmation. A year is a fraction of it, and a year
+/// LoTW does not answer stops the download there and says so; the next one goes on from that
+/// year, not from the newest again.
+///
+/// The cursor it leaves when the oldest year is in is the newest year's `APP_LoTW_LASTQSL`
+/// (`Settings::lotw_sweep_since`): no later than the moment that year was asked for, so every
+/// confirmation a later year's request missed (matched after it was asked) is matched after the
+/// cursor and comes with the next download. A newest year with no confirmation has no
+/// high-water, and the day before it was asked, by this computer's clock, stands in.
+fn lotw_history_by_year(
+    state: &SharedEngine,
+    username: &str,
+    password: &str,
+    now: u64,
+    fetch: &dyn Fn(&str) -> Result<String, String>,
+    persist: &dyn Fn(Settings),
+) -> Result<LotwSyncResult, String> {
+    let year_of = |unix: u64| -> i32 {
+        tempo_core::logbook::lotw_pull_date(unix)[..4]
+            .parse()
+            .unwrap_or(1970)
+    };
+    let newest = year_of(now);
+    let (rows, mut held_year, mut held_since) = {
+        let eng = engine_lock(state);
+        let s = eng.settings();
+        (
+            eng.log_rows(),
+            s.lotw_sweep_year,
+            s.lotw_sweep_since.clone(),
+        )
+    };
+    let oldest = log_folds::oldest_contact_unix(&rows)?
+        .map(year_of)
+        .unwrap_or(newest)
+        .min(newest);
+    let pieces = newest - oldest + 1;
+    let query = tempo_core::lotw::LotwQuery {
+        username: username.to_string(),
+        password: password.to_string(),
+        qsl_since: None,
+    };
+    let mut result: LotwSyncResult = tempo_core::reconcile::ReconcileSummary::default().into();
+    let mut year = if held_year != 0 { held_year } else { newest };
+    loop {
+        let piece = (newest - year + 1).clamp(1, pieces);
+        conn_log(
+            "LoTW",
+            "info",
+            format!(
+                "downloading piece {piece} of {pieces}: the confirmations of {year}'s contacts"
+            ),
+        );
+        let stopped = |why: String, result: &LotwSyncResult| {
+            format!(
+                "LoTW did not send the confirmations of your {year} contacts (piece {piece} of \
+                 {pieces}: {why}). Nexus saved {} newly confirmed contacts and everything newer \
+                 than {year}, and the next Fetch LoTW continues from {year}.",
+                result.newly_confirmed
+            )
+        };
+        let body = match fetch(&tempo_core::lotw::build_year_report_url(
+            &query, year, newest, oldest,
+        )) {
+            Ok(b) if !tempo_core::lotw::is_lotw_adif(&b) => {
+                return Err(stopped(lotw_not_a_report(), &result))
+            }
+            // A year cut off before its end marker is not in: what it holds would be merged, and
+            // the place moved past what it lost.
+            Ok(b) if !is_complete_lotw_body(&b) => {
+                return Err(stopped(
+                    "the download stopped before its end".into(),
+                    &result,
+                ))
+            }
+            Ok(b) => b,
+            Err(e) => return Err(stopped(e, &result)),
+        };
+        let (summary, merged) = tempo_app::logwrite::until_written(|| {
+            tempo_app::logwrite::merge_lotw_report(state, &body)
+        });
+        add_lotw_piece(&mut result, summary?.into());
+        // The year is on disk before the place moves past it.
+        merged
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
+        let mut eng = engine_lock(state);
+        if !lotw_sweep_may_advance(eng.settings(), username, held_year, &held_since) {
+            // The username changed, or Download everything again started over, while this year
+            // was downloading: the place this download holds is no longer the account's.
+            return Ok(result);
+        }
+        if held_since.is_empty() {
+            held_since = tempo_core::lotw::extract_last_qsl(&body)
+                .unwrap_or_else(|| tempo_core::logbook::lotw_pull_date(now.saturating_sub(86_400)));
+        }
+        if year <= oldest {
+            persist(eng.set_lotw_cursor(held_since));
+            return Ok(result);
+        }
+        held_year = year - 1;
+        persist(eng.set_lotw_sweep(held_year, held_since.clone()));
+        year = held_year;
+    }
+}
+
+/// Whether a year of [`lotw_history_by_year`] may move its saved place: only while the username,
+/// the empty cursor and the place are still the ones the year was asked with. A username change
+/// or Download everything again during the (lock-free) fetch empties the place, and this year
+/// must not put an old one back.
+fn lotw_sweep_may_advance(
+    s: &Settings,
+    used_username: &str,
+    used_year: i32,
+    used_since: &str,
+) -> bool {
+    s.lotw_username.trim() == used_username.trim()
+        && s.lotw_sync_cursor().is_empty()
+        && s.lotw_sweep_year == used_year
+        && s.lotw_sweep_since == used_since
+}
+
+/// Add one year's merge to the download's total.
+fn add_lotw_piece(total: &mut LotwSyncResult, piece: LotwSyncResult) {
+    total.matched += piece.matched;
+    total.newly_confirmed += piece.newly_confirmed;
+    total.newly_confirmed_any += piece.newly_confirmed_any;
+    total.newly_credited += piece.newly_credited;
+    total.newly_submitted += piece.newly_submitted;
+    total.orphans.extend(piece.orphans);
 }
 
 /// Locate the `tqsl` binary: a non-empty Settings override that exists, else the
@@ -50386,6 +50580,390 @@ mod tests {
             }
         }
         assert!(armed.is_empty(), "Enable TX armed from afar by {armed:?}");
+    }
+
+    // ── a first LoTW download of a large account, a year at a time ─────────────────────────
+
+    /// 2026-10-17 12:00 UTC: "now" for the year-by-year downloads below.
+    const SWEEP_NOW: u64 = 1_792_238_400;
+
+    /// A contact (or LoTW's row for it) with `call` on 20m FT8 at noon on `yyyymmdd`.
+    fn dated_row(call: &str, yyyymmdd: &str, more: &str) -> String {
+        format!(
+            "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>{yyyymmdd}<TIME_ON:6>120000{more}<EOR>\n",
+            call.len()
+        )
+    }
+
+    /// LoTW's answer for one year: the banner, its high-water when it holds a row, the rows, and
+    /// the end marker.
+    fn year_answer(last_qsl: &str, rows: &[String]) -> String {
+        let high_water = if rows.is_empty() {
+            String::new()
+        } else {
+            format!("<APP_LoTW_LASTQSL:{}>{last_qsl}\n", last_qsl.len())
+        };
+        format!(
+            "ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW\n{high_water}<eoh>\n{}\
+             <APP_LoTW_EOF>\n",
+            rows.concat()
+        )
+    }
+
+    /// A large account as LoTW answers it: HTTP 503 for the whole history at once (no QSO date
+    /// bound), each year on its own, and `fail_years` 503 too while it holds them. Every request
+    /// it is asked is kept, in order.
+    struct LargeLotw {
+        years: std::collections::BTreeMap<i32, String>,
+        since_answer: String,
+        fail_years: std::cell::RefCell<Vec<i32>>,
+        asked: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl LargeLotw {
+        fn scene() -> Self {
+            let years = [
+                (
+                    2026,
+                    year_answer(
+                        "2026-10-15 08:00:00",
+                        &[dated_row("W1AW", "20260301", "<QSL_RCVD:1>Y")],
+                    ),
+                ),
+                (
+                    2025,
+                    year_answer(
+                        "2026-09-01 07:00:00",
+                        &[dated_row("K1ABC", "20250601", "<QSL_RCVD:1>Y")],
+                    ),
+                ),
+                (
+                    2024,
+                    year_answer(
+                        "2026-10-16 09:00:00",
+                        &[dated_row("N0SUP", "20240115", "<QSL_RCVD:1>Y")],
+                    ),
+                ),
+            ];
+            LargeLotw {
+                years: years.into_iter().collect(),
+                since_answer: year_answer("2026-10-17 10:00:00", &[]),
+                fail_years: std::cell::RefCell::new(Vec::new()),
+                asked: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+
+        fn fetch(&self, url: &str) -> Result<String, String> {
+            self.asked.borrow_mut().push(url.to_string());
+            if url.contains("&qso_qsl=no") {
+                return Ok(year_answer("", &[]));
+            }
+            let start = url.split("&qso_startdate=").nth(1).map(|s| &s[..4]);
+            let end = url.split("&qso_enddate=").nth(1).map(|s| &s[..4]);
+            if !url.contains("&qso_qslsince=1900-01-01") {
+                return Ok(self.since_answer.clone());
+            }
+            let year: i32 = match (start, end) {
+                (None, None) => return Err("LoTW: server returned HTTP 503".into()),
+                (Some(y), _) | (None, Some(y)) => y.parse().unwrap(),
+            };
+            if self.fail_years.borrow().contains(&year) {
+                return Err("LoTW: server returned HTTP 503".into());
+            }
+            Ok(self
+                .years
+                .get(&year)
+                .cloned()
+                .unwrap_or_else(|| year_answer("", &[])))
+        }
+
+        /// The QSO-date bounds of each confirmation request asked, in order.
+        fn bounds_asked(&self) -> Vec<(Option<String>, Option<String>, String)> {
+            self.asked
+                .borrow()
+                .iter()
+                .filter(|u| u.contains("&qso_qsl=yes"))
+                .map(|u| {
+                    let param = |name: &str| {
+                        u.split(&format!("&{name}="))
+                            .nth(1)
+                            .map(|s| s.split('&').next().unwrap().to_string())
+                    };
+                    (
+                        param("qso_startdate"),
+                        param("qso_enddate"),
+                        param("qso_qslsince").unwrap(),
+                    )
+                })
+                .collect()
+        }
+    }
+
+    /// A log holding a contact in each of 2024, 2025 and 2026, on a store, with the LoTW
+    /// username set and no cursor.
+    fn sweep_scene(tag: &str) -> (std::path::PathBuf, SharedEngine) {
+        let log = tempo_core::logbook::parse_adif(
+            &[
+                dated_row("N0SUP", "20240115", ""),
+                dated_row("K1ABC", "20250601", ""),
+                dated_row("W1AW", "20260301", ""),
+            ]
+            .concat(),
+        );
+        let (dir, engine) = store_holding(tag, &log);
+        {
+            let mut eng = engine.lock().unwrap();
+            let s = crate::Settings {
+                lotw_username: "k2def-test".into(),
+                ..eng.settings().clone()
+            };
+            eng.apply_settings(s);
+        }
+        (dir, engine)
+    }
+
+    /// One Fetch LoTW against `lotw`, with every settings change it saves kept in `saved`.
+    fn fetch_lotw(
+        engine: &SharedEngine,
+        lotw: &LargeLotw,
+        saved: &std::cell::RefCell<Vec<crate::Settings>>,
+    ) -> Result<crate::LotwSyncResult, String> {
+        crate::download_lotw_report_on(
+            engine,
+            "k2def-test",
+            "not-a-password",
+            SWEEP_NOW,
+            &|url| lotw.fetch(url),
+            &|s| saved.borrow_mut().push(s),
+        )
+    }
+
+    fn cursor_and_place(engine: &SharedEngine) -> (String, bool, i32, String) {
+        let eng = engine.lock().unwrap();
+        let s = eng.settings();
+        (
+            s.lotw_last_qsl.clone(),
+            s.lotw_cursor_every_call,
+            s.lotw_sweep_year,
+            s.lotw_sweep_since.clone(),
+        )
+    }
+
+    fn confirmed(engine: &SharedEngine) -> Vec<String> {
+        let mut calls: Vec<String> = engine
+            .stored_records()
+            .into_iter()
+            .filter(|r| r.qsl_rcvd.lotw)
+            .map(|r| r.call)
+            .collect();
+        calls.sort();
+        calls
+    }
+
+    fn y(s: &str) -> Option<String> {
+        Some(s.to_string())
+    }
+
+    /// ★ A first Fetch LoTW on an account too large for one request completes. LoTW answers the
+    /// whole history at once with HTTP 503; asked a year of contacts at a time, newest first, it
+    /// answers each, and every confirmation lands. The cursor left is the newest year's
+    /// high-water (not the oldest year's, which is later here and would skip what came in
+    /// between), saved, and the next Fetch LoTW is one incremental request from it.
+    #[test]
+    fn a_first_lotw_download_too_large_for_one_request_completes_a_year_at_a_time() {
+        let (dir, engine) = sweep_scene("lotw-sweep-whole");
+        let lotw = LargeLotw::scene();
+        let saved = std::cell::RefCell::new(Vec::new());
+
+        let r = fetch_lotw(&engine, &lotw, &saved).expect("the download completes");
+        assert_eq!(r.newly_confirmed, 3, "a confirmation from each year");
+        assert_eq!(confirmed(&engine), ["K1ABC", "N0SUP", "W1AW"]);
+        let from_1900 = "1900-01-01".to_string();
+        assert_eq!(
+            lotw.bounds_asked(),
+            [
+                (y("2026-01-01"), None, from_1900.clone()),
+                (y("2025-01-01"), y("2025-12-31"), from_1900.clone()),
+                (None, y("2024-12-31"), from_1900.clone()),
+            ],
+            "the newest year first, open at the top; the log's oldest year open at the bottom"
+        );
+        let done = ("2026-10-15 08:00:00".to_string(), true, 0, String::new());
+        assert_eq!(cursor_and_place(&engine), done);
+        let last = saved.borrow().last().cloned().expect("saved");
+        assert_eq!(
+            (
+                last.lotw_last_qsl.clone(),
+                last.lotw_cursor_every_call,
+                last.lotw_sweep_year,
+                last.lotw_sweep_since.clone()
+            ),
+            done,
+            "the cursor reaches the settings file"
+        );
+
+        lotw.asked.borrow_mut().clear();
+        fetch_lotw(&engine, &lotw, &saved).expect("the next download");
+        assert_eq!(
+            lotw.bounds_asked(),
+            [(None, None, "2026-10-15%2008%3A00%3A00".to_string())],
+            "an existing cursor makes one incremental request, unbounded by QSO date"
+        );
+        assert_eq!(
+            cursor_and_place(&engine).0,
+            "2026-10-15 08:00:00",
+            "an answer with nothing new keeps the cursor"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A year LoTW does not answer stops the download there and says so. The years before it
+    /// are merged and the place saved, so the next Fetch LoTW goes on from that year (it does not
+    /// ask for the newest again) and finishes with the newest year's high-water.
+    #[test]
+    fn a_year_lotw_does_not_answer_is_where_the_next_download_goes_on() {
+        let (dir, engine) = sweep_scene("lotw-sweep-resume");
+        let lotw = LargeLotw::scene();
+        lotw.fail_years.borrow_mut().push(2025);
+        let saved = std::cell::RefCell::new(Vec::new());
+
+        let e = fetch_lotw(&engine, &lotw, &saved).expect_err("2025 is not answered");
+        assert!(
+            e.contains("your 2025 contacts (piece 2 of 3: LoTW: server returned HTTP 503)")
+                && e.contains("the next Fetch LoTW continues from 2025"),
+            "{e}"
+        );
+        assert_eq!(confirmed(&engine), ["W1AW"], "2026 is in");
+        let place = (
+            String::new(),
+            false,
+            2025,
+            "2026-10-15 08:00:00".to_string(),
+        );
+        assert_eq!(cursor_and_place(&engine), place);
+        let last = saved.borrow().last().cloned().expect("saved");
+        assert_eq!(
+            (last.lotw_sweep_year, last.lotw_sweep_since.clone()),
+            (2025, "2026-10-15 08:00:00".to_string()),
+            "the place reaches the settings file"
+        );
+
+        lotw.fail_years.borrow_mut().clear();
+        lotw.asked.borrow_mut().clear();
+        let r = fetch_lotw(&engine, &lotw, &saved).expect("the rest");
+        assert_eq!(r.newly_confirmed, 2);
+        assert_eq!(confirmed(&engine), ["K1ABC", "N0SUP", "W1AW"]);
+        let from_1900 = "1900-01-01".to_string();
+        assert_eq!(
+            lotw.bounds_asked(),
+            [
+                (y("2025-01-01"), y("2025-12-31"), from_1900.clone()),
+                (None, y("2024-12-31"), from_1900),
+            ],
+            "it goes on from 2025"
+        );
+        assert_eq!(
+            cursor_and_place(&engine),
+            ("2026-10-15 08:00:00".to_string(), true, 0, String::new()),
+            "the newest year's high-water, not the last year's"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A year whose download stops before LoTW's end marker is not in: its place is not passed.
+    #[test]
+    fn a_year_cut_short_is_not_passed() {
+        let (dir, engine) = sweep_scene("lotw-sweep-cut");
+        let mut lotw = LargeLotw::scene();
+        let cut = lotw.years[&2025].replace("<APP_LoTW_EOF>\n", "");
+        lotw.years.insert(2025, cut);
+        let saved = std::cell::RefCell::new(Vec::new());
+        let e = fetch_lotw(&engine, &lotw, &saved).expect_err("2025 is cut short");
+        assert!(e.contains("stopped before its end"), "{e}");
+        assert_eq!(
+            cursor_and_place(&engine),
+            (
+                String::new(),
+                false,
+                2025,
+                "2026-10-15 08:00:00".to_string()
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A newest year with no confirmation has no high-water: the day before it was asked stands
+    /// in as the cursor.
+    #[test]
+    fn a_newest_year_with_no_confirmation_leaves_the_day_before_as_the_cursor() {
+        let (dir, engine) = sweep_scene("lotw-sweep-empty-newest");
+        let mut lotw = LargeLotw::scene();
+        lotw.years.insert(2026, year_answer("", &[]));
+        let saved = std::cell::RefCell::new(Vec::new());
+        fetch_lotw(&engine, &lotw, &saved).expect("completes");
+        assert_eq!(
+            cursor_and_place(&engine),
+            ("2026-10-16".to_string(), true, 0, String::new())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Download everything again while a year is downloading starts over: the year that was
+    /// running does not put its place back.
+    #[test]
+    fn download_everything_again_during_a_year_keeps_the_place_empty() {
+        let (dir, engine) = sweep_scene("lotw-sweep-reset");
+        let lotw = LargeLotw::scene();
+        let saved = std::cell::RefCell::new(Vec::new());
+        let reset_during_2025 = |url: &str| {
+            if url.contains("&qso_startdate=2025-01-01") {
+                engine.lock().unwrap().reset_lotw_cursor();
+            }
+            lotw.fetch(url)
+        };
+        crate::download_lotw_report_on(
+            &engine,
+            "k2def-test",
+            "not-a-password",
+            SWEEP_NOW,
+            &reset_during_2025,
+            &|s| saved.borrow_mut().push(s),
+        )
+        .expect("stops quietly");
+        assert_eq!(
+            cursor_and_place(&engine),
+            (String::new(), false, 0, String::new())
+        );
+        assert_eq!(lotw.bounds_asked().len(), 2, "2024 is not asked");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The place is the download's own: a Settings save from a form loaded before it moved keeps
+    /// it, and a changed username empties it.
+    #[test]
+    fn a_settings_save_keeps_the_downloads_place() {
+        let (dir, engine) = sweep_scene("lotw-sweep-form");
+        let form = engine.lock().unwrap().settings().clone();
+        let held = engine
+            .lock()
+            .unwrap()
+            .set_lotw_sweep(2019, "2026-10-15 08:00:00".into());
+        let mut stale = form.clone();
+        crate::keep_lotw_place_for_its_account(&held, &mut stale);
+        assert_eq!(
+            (stale.lotw_sweep_year, stale.lotw_sweep_since.as_str()),
+            (2019, "2026-10-15 08:00:00")
+        );
+        let mut other = crate::Settings {
+            lotw_username: "n0sup-test".into(),
+            ..held.clone()
+        };
+        crate::keep_lotw_place_for_its_account(&held, &mut other);
+        assert_eq!(
+            (other.lotw_sweep_year, other.lotw_sweep_since.as_str()),
+            (0, "")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

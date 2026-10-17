@@ -104,6 +104,32 @@ pub fn build_report_url(q: &LotwQuery) -> String {
     url
 }
 
+/// Build one piece of a full confirmation download made a year of contacts at a time: the
+/// whole confirmation history ([`build_report_url`] with no cursor) of the contacts dated in
+/// `year`, newest year first.
+///
+/// One request for everything an account holds can outlast LoTW: on a large account it answers
+/// HTTP 503 before the report is made, no high-water comes back, and the next try is the same
+/// request. LoTW's developer page documents `qso_startdate` ("Returns only records with a QSO
+/// date on or after the specified value") and `qso_enddate` ("... on or before the specified
+/// value"), both `YYYY-MM-DD`, so the history is asked for a year at a time. The piece for
+/// `newest` has no end date and the piece for `oldest` (or any year before it) no start date, so
+/// the pieces together cover every QSO date: a contact dated after the clock's year, or before
+/// the log's first, is still asked for. The returned URL carries the password — never log it.
+pub fn build_year_report_url(q: &LotwQuery, year: i32, newest: i32, oldest: i32) -> String {
+    let mut url = build_report_url(&LotwQuery {
+        qsl_since: None,
+        ..q.clone()
+    });
+    if year > oldest {
+        url.push_str(&format!("&qso_startdate={year:04}-01-01"));
+    }
+    if year < newest {
+        url.push_str(&format!("&qso_enddate={year:04}-12-31"));
+    }
+    url
+}
+
 /// Build the LoTW **own-QSO** download URL (`qso_qsl=no`): the records LoTW holds
 /// from your uploads, matched or not. Used to promote an in-flight
 /// upload from "Pending" to "Accepted" — proof your side is on file, so the QSO is
@@ -224,6 +250,32 @@ mod tests {
         // Every call on the account, never one; no cursor asks for the whole history.
         assert!(!url.contains("qso_owncall"));
         assert!(url.contains("qso_qslsince=1900-01-01"));
+    }
+
+    /// A year piece asks for the whole history of that year's contacts; the newest piece has no
+    /// end date and the oldest no start date, so the pieces leave no QSO date out.
+    #[test]
+    fn a_year_piece_asks_for_its_years_contacts_whole() {
+        let cursor = LotwQuery {
+            qsl_since: Some("2026-01-02".into()),
+            ..q()
+        };
+        let mid = build_year_report_url(&cursor, 2019, 2026, 1998);
+        assert!(mid.contains("&qso_qslsince=1900-01-01"), "{mid}");
+        assert!(mid.contains("&qso_startdate=2019-01-01"), "{mid}");
+        assert!(mid.contains("&qso_enddate=2019-12-31"), "{mid}");
+        assert!(mid.contains("qso_qsl=yes") && mid.contains("qso_withown=yes"));
+
+        let newest = build_year_report_url(&cursor, 2026, 2026, 1998);
+        assert!(newest.contains("&qso_startdate=2026-01-01"), "{newest}");
+        assert!(!newest.contains("qso_enddate"), "{newest}");
+
+        let oldest = build_year_report_url(&cursor, 1998, 2026, 1998);
+        assert!(oldest.contains("&qso_enddate=1998-12-31"), "{oldest}");
+        assert!(!oldest.contains("qso_startdate"), "{oldest}");
+
+        let only = build_year_report_url(&cursor, 2026, 2026, 2026);
+        assert!(!only.contains("qso_startdate") && !only.contains("qso_enddate"));
     }
 
     #[test]

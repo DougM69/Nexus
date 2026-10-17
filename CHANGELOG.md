@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seconds of that PC dropping, as a transmission does; a track started at the shack runs on. NEEDS-BENCH.
 
 ### Fixed
+- **Fetch LoTW works on a large account the first time.** The first download (and the one after Download
+  everything again) asked LoTW for every confirmation at once, which LoTW could not finish on a big account: it
+  answered "503", and every retry asked for everything again. Nexus now asks a year of contacts at a time, newest
+  first, and keeps each year as it arrives; the Connections log shows "piece n of m". If LoTW stops answering, Nexus
+  says which year it reached and the next Fetch LoTW continues from there. Later downloads still ask only for what
+  is new.
 - **Nexus Remote: the shack's screen fits the browser window.** Ctrl (⌘ on a Mac) with +, − or 0, Ctrl with the
   scroll wheel and a trackpad pinch now zoom the browser page instead of going to the shack, and on a short or zoomed
   window the controls move to the side rail when that shows the shack's screen larger. Stop TX stays in view at every
