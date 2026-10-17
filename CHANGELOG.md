@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers. Receive audio waits 120 ms before playing over the internet (60 ms on your own network) to ride out the
   internet's jitter. NEEDS-BENCH: the shack on one network and the second PC on another (a phone hotspot), the radio
   into a dummy load.
+- **Nexus Remote: the shack's recordings, ALL.TXT and SSTV pictures reach the second PC.** The SSTV gallery and its
+  picture viewer now show the shack's pictures on the second PC (they were blank), and **Save a copy** saves the
+  shack's picture there. Where the shack shows **Reveal in folder** for ALL.TXT, the QSO recordings and the SSTV
+  gallery, the second PC shows **Save to this computer**, which copies the shack's file into its Downloads folder. Only
+  those three folders can be read from afar. NEEDS-BENCH: two PCs, a received picture and a recording at the shack.
 
 ### Fixed
 - **Nexus Remote: the shack's screen fits the browser window.** Ctrl (⌘ on a Mac) with +, − or 0, Ctrl with the

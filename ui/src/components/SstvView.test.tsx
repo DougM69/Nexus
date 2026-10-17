@@ -7,6 +7,7 @@ import * as api from '../api'
 import { EN } from '../i18n'
 import type { AppSnapshot, SstvHealth, SstvState } from '../types'
 import { SSTV_VIEWER_PANEL, SSTV_VIEWER_PATH_KEY } from './SstvViewer'
+import { setRemoteStation } from '../features/durableStore'
 
 // The idle band view mounts the real Waterfall, which needs `window.matchMedia`
 // and a working canvas 2D context — jsdom provides neither. These tests are about
@@ -31,6 +32,8 @@ vi.mock('../api', () => ({
   setRfPower: vi.fn(async () => {}),
   // #130: the gallery's Reveal-in-folder.
   revealSstvGallery: vi.fn(async () => {}),
+  // From afar: the station's pictures, listed to save here.
+  shackFileList: vi.fn(async () => []),
   // #202: the manual receive start.
   sstvManualRx: vi.fn(),
   // The picture viewer's own window.
@@ -738,6 +741,26 @@ describe('#130 SSTV gallery Reveal in folder', () => {
     expect(btn).not.toBeNull()
     fireEvent.click(byName)
     await waitFor(() => expect(reveal).toHaveBeenCalledTimes(1))
+  })
+
+  it('from afar the pane head saves the station’s pictures here instead, and never reveals', async () => {
+    const reveal = api.revealSstvGallery as unknown as ReturnType<typeof vi.fn>
+    const list = api.shackFileList as unknown as ReturnType<typeof vi.fn>
+    reveal.mockClear()
+    setRemoteStation(true)
+    try {
+      render(<SstvView snap={snap} />)
+      const gallery = await screen.findByRole('region', { name: 'Gallery' })
+      expect(screen.queryByRole('button', { name: EN['sstv.gallery.reveal.label'] })).toBeNull()
+      const save = screen.getByRole('button', { name: EN['remote.stationFiles.list.label'] })
+      expect(save.closest('.pane-head')).not.toBeNull()
+      expect(gallery.contains(save)).toBe(true)
+      fireEvent.click(save)
+      await waitFor(() => expect(list).toHaveBeenCalledWith('sstv'))
+      expect(reveal).not.toHaveBeenCalled()
+    } finally {
+      setRemoteStation(false)
+    }
   })
 })
 

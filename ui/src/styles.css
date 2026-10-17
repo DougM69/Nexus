@@ -17427,6 +17427,23 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .wizard-go:disabled {
   opacity: 0.5;
 }
+.shack-files-list {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+}
+.shack-files-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--border);
+}
+.shack-files-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .settings-linkbtn {
   border: none;
   background: transparent;
