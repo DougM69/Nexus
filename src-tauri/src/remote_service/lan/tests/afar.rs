@@ -514,13 +514,18 @@ fn a_renewal_refused_for_good_ends_the_internet_link() {
 /// "At once", for a link the shack has ended: the end itself ends the press, not a lapse.
 const AT_ONCE: Duration = Duration::from_secs(1);
 
+/// Each tick of the shack's loop, and whether the microphone over was armed at it.
+type Ticks = Vec<(Instant, bool)>;
+/// What the screen was answered at each re-assertion of its press.
+type Said = Vec<Result<Value, Value>>;
+
 /// The shack's radio loop at its own tick, on a thread of its own as in Nexus: each tick polls the
 /// press's hold on the transmitter and the streamed microphone as `tempo_audio::service` does, and
 /// notes whether the microphone over is armed, until `done`.
 fn shack_loop(
     engine: crate::SharedEngine,
     done: Arc<AtomicBool>,
-) -> std::thread::JoinHandle<Vec<(Instant, bool)>> {
+) -> std::thread::JoinHandle<Ticks> {
     std::thread::spawn(move || {
         let mut ticks = Vec::new();
         while !done.load(Ordering::SeqCst) {
@@ -555,8 +560,8 @@ fn off_after(ticks: &[(Instant, bool)], since: Instant) -> Option<Instant> {
 /// keeps reading the shack's state (presence wants it fresh); and the shack's loop.
 struct Held {
     done: Arc<AtomicBool>,
-    screen: std::thread::JoinHandle<Vec<Result<Value, Value>>>,
-    shack: std::thread::JoinHandle<Vec<(Instant, bool)>>,
+    screen: std::thread::JoinHandle<Said>,
+    shack: std::thread::JoinHandle<Ticks>,
 }
 
 impl Held {
@@ -596,7 +601,7 @@ impl Held {
         }
     }
 
-    fn end(self) -> (Vec<Result<Value, Value>>, Vec<(Instant, bool)>) {
+    fn end(self) -> (Said, Ticks) {
         self.done.store(true, Ordering::SeqCst);
         (self.screen.join().unwrap(), self.shack.join().unwrap())
     }
