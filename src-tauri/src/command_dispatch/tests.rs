@@ -133,6 +133,10 @@ fn of_class(class: Class) -> Vec<&'static str> {
 
 /// Arguments that read as the on half of `cmd`, when it is a transmit switch; `{}` otherwise.
 fn on_args(cmd: &str) -> Value {
+    // The one switch of `js8_arm` that turns on from afar.
+    if cmd == "js8_arm" {
+        return json!({ "which": "autoreply", "on": true });
+    }
     match OFF_HALVES.iter().find(|(name, ..)| *name == cmd) {
         Some((_, arg, Off::False)) => json!({ *arg: true }),
         Some((_, arg, Off::OneOf(_))) => json!({ *arg: "qso-run" }),
@@ -247,9 +251,10 @@ const FT_STARTS: [&str; 9] = [
 ];
 
 /// The JS8 cockpit's starts, allowed from afar as at the shack: a message, a directed command, CQ,
-/// a heartbeat now, the switches for the heartbeat, the automatic replies and the repeating CQ,
-/// and the yes to an automatic reply. Written here, as [`FT_STARTS`] is.
-const JS8_STARTS: [&str; 7] = [
+/// a heartbeat now, more text for the message going out, the automatic replies switched on (the
+/// one switch of `js8_arm` that turns on from afar), the repeating CQ, and the yes to an automatic
+/// reply. Written here, as [`FT_STARTS`] is.
+const JS8_STARTS: [&str; 8] = [
     "js8_answer_reply",
     "js8_arm",
     "js8_call_cq",
@@ -257,6 +262,7 @@ const JS8_STARTS: [&str; 7] = [
     "js8_heartbeat_now",
     "js8_send",
     "js8_send_command",
+    "js8_typeahead",
 ];
 
 /// Keyboard CW and the CW macros (an F-key, or Enter Sends Message), which the shack's keyer
@@ -346,8 +352,6 @@ fn the_ft_buttons_are_admitted_and_every_other_start_is_refused_by_name() {
             "{name}"
         );
     }
-    // The typeahead adds text to a message already going out; the send was the start.
-    assert_eq!(class_of("js8_typeahead"), Some(Class::RunsAtShack));
     for (id, name) in FT_KEYING_NOTHING.into_iter().enumerate() {
         let expected = match class_of(name) {
             Some(Class::RunsAtShack) => "run",
@@ -357,6 +361,58 @@ fn the_ft_buttons_are_admitted_and_every_other_start_is_refused_by_name() {
         let admission = shack.admit(&controller(), call(id as u64 + 500, name, json!({})));
         assert_eq!(kind(&admission), expected, "{name}");
     }
+}
+
+/// ⛔ From afar `js8_arm` turns on the automatic replies and nothing else. Its on half, read at
+/// both ends off its own `which`: the automatic replies run at the shack; the heartbeat, relay,
+/// heartbeat acks and heartbeat networking, and a `which` that is missing or no switch, are each
+/// refused `transmitNotYet` on the other computer and again at the shack, and never reach it. Its
+/// off half, every switch, goes as a Stop. CONTROL: the same refused switches are what the shack's
+/// own screen turns on (`js8_arm` keeps one class).
+#[test]
+fn js8_arm_from_afar_turns_on_only_the_automatic_replies() {
+    let shack = shack();
+    let mut id = 0;
+    let mut admit = |args: Value| {
+        id += 1;
+        kind(&shack.admit(&controller(), call(id, "js8_arm", args)))
+    };
+    let on = |which: Value| json!({ "which": which, "on": true });
+    assert_eq!(admit(on(json!("autoreply"))), "run");
+    assert_eq!(route("js8_arm", &on(json!("autoreply"))), Route::Shack);
+    for which in [
+        json!("hb"),
+        json!("relay"),
+        json!("hback"),
+        json!("hbnet"),
+        json!("AUTOREPLY"),
+        json!(null),
+        json!(1),
+    ] {
+        let refused_here = Route::Refused(Refusal::TransmitNotYet);
+        assert_eq!(
+            route("js8_arm", &on(which.clone())),
+            refused_here,
+            "{which}"
+        );
+        assert_eq!(
+            admit(on(which.clone())),
+            refused(Refusal::TransmitNotYet),
+            "{which}"
+        );
+    }
+    assert_eq!(
+        admit(json!({ "on": true })),
+        refused(Refusal::TransmitNotYet),
+        "no which"
+    );
+    for which in ["autoreply", "hb", "relay", "hback", "hbnet"] {
+        let off = json!({ "which": which, "on": false });
+        assert_eq!(route("js8_arm", &off), Route::Shack, "{which} off");
+        assert!(is_stop("js8_arm", &off), "{which} off");
+        assert_eq!(admit(off), "stop", "{which} off");
+    }
+    assert_eq!(class_of("js8_arm"), Some(Class::StartsTx), "CONTROL");
 }
 
 /// ★ A wired start needs the lease on its connection and then its computer's roads: the second

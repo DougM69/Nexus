@@ -17469,7 +17469,8 @@ fn js8_call_cq(
 /// The two-act arm's SECOND act. Autoreply / relay / HB-ack are persisted (JS8Call keeps them
 /// across sessions too); HB is session-only by design and is never written to disk. Neither
 /// arms TX — the TX latch is the first act and only the operator's TX button supplies it.
-/// `afar`: as [`set_tx_enabled`]'s, on the on half; the off half always runs.
+/// `afar`: as [`set_tx_enabled`]'s, on the on half; the off half always runs. From afar only the
+/// automatic replies turn on (`tempo_client::dispatch::argument_refusal`).
 #[tauri::command(async)]
 fn js8_arm(
     state: State<'_, SharedEngine>,
@@ -17586,14 +17587,16 @@ async fn js8_select_call(
 /// The native cockpit's compose box while its message goes out (JS8Call's typeahead): what is still
 /// to go, `sent_seen` the characters of it the box had seen go. Taken just before the next frame,
 /// which goes out through every JS8 gate; answered with what the box shows, or none once nothing of
-/// the box's is going out.
+/// the box's is going out. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn js8_typeahead(
     state: State<'_, SharedEngine>,
     sent_seen: usize,
     unsent: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<Option<tempo_app::dto::Js8Typeahead>, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.js8_typeahead(sent_seen, unsent)?;
     Ok(eng.js8_typeahead_state())
 }
@@ -49938,8 +49941,8 @@ mod tests {
     pub(crate) fn shack_app_for_starts_from_afar(engine: crate::SharedEngine) -> ShackApp {
         use crate::{
             halt_tx, js8_answer_reply, js8_arm, js8_call_cq, js8_cq_repeat, js8_heartbeat_now,
-            js8_send, js8_send_command, send_cw, send_cw_armed, set_tx_enabled, start_running,
-            start_search_and_pounce, stop_cw,
+            js8_send, js8_send_command, js8_typeahead, send_cw, send_cw_armed, set_tx_enabled,
+            start_running, start_search_and_pounce, stop_cw,
         };
         let app = tauri::test::mock_builder()
             .manage(engine)
@@ -49952,6 +49955,7 @@ mod tests {
                 js8_heartbeat_now,
                 js8_send,
                 js8_send_command,
+                js8_typeahead,
                 send_cw,
                 send_cw_armed,
                 set_tx_enabled,
@@ -49967,17 +49971,18 @@ mod tests {
         (app, main)
     }
 
-    /// ★ The Operate strip's Call CQ and contest S&P, the JS8 starts (the sends, the heartbeat and
-    /// repeating CQ switches, the yes to an automatic reply) and keyboard CW with its macros run
+    /// ★ The Operate strip's Call CQ and contest S&P, the JS8 starts (the sends, the typeahead,
+    /// the automatic replies and the repeating CQ switched on, the yes to an automatic reply) and keyboard CW with its macros run
     /// from afar only under the stand-down the command lane read them under, as the FT buttons do.
     /// Called through the shack's own runner, as the lane calls them, each one whose `afar` names a
     /// stand-down a halt has moved since is refused, `STOPPED_SINCE`, and leaves the station as it
     /// was: TX as the shack left it, nothing queued or scheduled for JS8, the reply still asking,
     /// the CW keyer idle. Named with the stand-down as it stands now, and with no `afar` (the
     /// shack's own screen), each is not refused that way. Every command is asked; the ones that ran
-    /// after a Stop are named together. CONTROL: under the stand-down as it stands, a CQ run arms
-    /// TX, a JS8 message and a yes to a reply are queued, the heartbeat and the repeating CQ are
-    /// scheduled, and a CW macro holds the transmitter.
+    /// after a Stop are named together. A yes naming a reply by a time the shack never gave it is
+    /// refused and keys nothing. CONTROL: under the stand-down as it stands, a CQ run arms TX, a
+    /// JS8 message and a yes to a reply are queued, the automatic replies are on, the CQ repeats,
+    /// and a CW macro holds the transmitter.
     #[test]
     fn a_contest_js8_or_cw_start_from_afar_runs_only_under_the_stand_down_it_was_read_under() {
         use crate::command_dispatch::{tauri_runner, Runner, STOPPED_SINCE};
@@ -50007,7 +50012,8 @@ mod tests {
             args
         };
         // What a start leaves at the station: TX armed, JS8 frames queued, the CW keyer holding
-        // the transmitter, the JS8 heartbeat and repeating CQ scheduled, a reply still asking.
+        // the transmitter, the JS8 heartbeat and repeating CQ scheduled and the automatic replies
+        // on, a reply still asking.
         let left = || {
             let e = engine_lock(&engine);
             let js8 = e.js8_state();
@@ -50015,7 +50021,7 @@ mod tests {
                 e.tx_enabled(),
                 !js8.queue.is_empty(),
                 e.tx_owner().is_some(),
-                (js8.hb_on, js8.cq_on),
+                (js8.hb_on, js8.cq_on, js8.autoreply),
                 js8.pending_reply.is_some(),
             )
         };
@@ -50031,7 +50037,8 @@ mod tests {
                 "js8_send_command",
                 json!({"to": "W1AW", "cmd": 0, "arg": ""}),
             ),
-            ("js8_arm", json!({"which": "hb", "on": true})),
+            ("js8_arm", json!({"which": "autoreply", "on": true})),
+            ("js8_typeahead", json!({"sentSeen": 0, "unsent": "MORE"})),
             ("js8_cq_repeat", json!({"on": true})),
             ("js8_answer_reply", json!({"yes": true})),
             ("send_cw", json!({"text": "CQ {MYCALL}"})),
@@ -50043,6 +50050,8 @@ mod tests {
                 e.halt_tx();
                 let mut settings = e.settings().clone();
                 settings.js8_hb_networking = true;
+                // Off at the shack, so turning them on from afar is seen.
+                settings.js8_autoreply = cmd != "js8_arm";
                 e.apply_settings(settings);
                 if cmd.starts_with("js8_") {
                     e.js8_enter();
@@ -50055,8 +50064,11 @@ mod tests {
                 let stale = e.remote_transmit_stand_down_generation();
                 e.halt_tx();
                 // These two key only with TX on: on at the shack, which moves no stand-down.
-                if matches!(cmd, "send_cw_armed" | "js8_answer_reply") {
+                if matches!(cmd, "send_cw_armed" | "js8_answer_reply" | "js8_typeahead") {
                     e.set_tx_enabled(true);
+                }
+                if cmd == "js8_typeahead" {
+                    e.js8_send(None, "A MESSAGE GOING OUT".into()).unwrap();
                 }
                 // A query heard at the shack, whose automatic reply asks the operator first; the
                 // yes names it as the screen was shown it.
@@ -50073,8 +50085,8 @@ mod tests {
             let after = left();
             if voided != stopped || after != before {
                 ran_after_a_stop.push(format!(
-                    "{cmd}: {voided:?}, (TX armed, JS8 queued, keyer busy, (HB, CQ) on, reply \
-                     asking) {before:?} -> {after:?}"
+                    "{cmd}: {voided:?}, (TX armed, JS8 queued, keyer busy, (HB, CQ, AUTO) on, \
+                     reply asking) {before:?} -> {after:?}"
                 ));
             }
             let now = engine_lock(&engine).remote_transmit_stand_down_generation();
@@ -50084,7 +50096,7 @@ mod tests {
                 "start_running" => assert!(left().0, "CONTROL: the CQ run arms TX: {ran:?}"),
                 "js8_send" => assert!(left().1, "CONTROL: the message is queued: {ran:?}"),
                 "send_cw" => assert!(left().2, "CONTROL: the keyer holds TX: {ran:?}"),
-                "js8_arm" => assert!(left().3 .0, "CONTROL: the heartbeat is on: {ran:?}"),
+                "js8_arm" => assert!(left().3 .2, "CONTROL: the replies are on: {ran:?}"),
                 "js8_cq_repeat" => assert!(left().3 .1, "CONTROL: the CQ repeats: {ran:?}"),
                 "js8_answer_reply" => {
                     assert!(
@@ -50101,6 +50113,48 @@ mod tests {
         assert!(
             ran_after_a_stop.is_empty(),
             "ran from afar after a Stop: {ran_after_a_stop:#?}"
+        );
+        // ⛔ A yes naming the reply by a time the shack never gave it: refused, the reply still
+        // asking, nothing queued or keyed.
+        let (now, reply) = {
+            let mut e = engine_lock(&engine);
+            e.halt_tx();
+            e.js8_enter();
+            e.set_tx_enabled(true);
+            e.js8_api_hear_snr_query("W1AW");
+            let reply = e.js8_state().pending_reply.expect("premise: a reply asks");
+            (e.remote_transmit_stand_down_generation(), reply)
+        };
+        for made_up in [reply.fires_at_ms + 1, reply.fires_at_ms - 1, 0, u64::MAX] {
+            let said = ask(
+                "js8_answer_reply",
+                with(
+                    json!({"yes": true, "display": reply.display, "firesAtMs": made_up}),
+                    Some(now),
+                ),
+            );
+            let e = engine_lock(&engine);
+            let js8 = e.js8_state();
+            assert!(
+                said.is_err()
+                    && js8.queue.is_empty()
+                    && js8.pending_reply.is_some()
+                    && e.tx_owner().is_none(),
+                "a made-up {made_up}: {said:?}, queued {}, asking {}",
+                js8.queue.len(),
+                js8.pending_reply.is_some()
+            );
+        }
+        let said = ask(
+            "js8_answer_reply",
+            with(
+                json!({"yes": true, "display": reply.display, "firesAtMs": reply.fires_at_ms}),
+                Some(now),
+            ),
+        );
+        assert!(
+            said.is_ok() && !engine_lock(&engine).js8_state().queue.is_empty(),
+            "CONTROL: the shack's own name for it: {said:?}"
         );
     }
 

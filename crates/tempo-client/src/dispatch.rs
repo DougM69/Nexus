@@ -146,16 +146,27 @@ pub fn route(cmd: &str, args: &Value) -> Route {
 }
 
 /// A refusal read off a command's arguments, made at both ends so that what it refuses never
-/// leaves the other computer. One today: `winlink_connect` with a password typed on the other
-/// computer (the operator's ruling of 2026-10-07, "Shack's stored password"). An empty password is
-/// the command's own "use the one in the keychain", so the session still runs at the shack with the
-/// password stored there; anything else is refused. The value is only tested for being empty:
-/// never kept, logged, compared or echoed, and the refusal carries none of it.
+/// leaves the other computer. Two today:
+///
+/// - `winlink_connect` with a password typed on the other computer (the operator's ruling of
+///   2026-10-07, "Shack's stored password"). An empty password is the command's own "use the one
+///   in the keychain", so the session still runs at the shack with the password stored there;
+///   anything else is refused. The value is only tested for being empty: never kept, logged,
+///   compared or echoed, and the refusal carries none of it.
+/// - ⛔ `js8_arm` switched on: from afar only the automatic replies (`which` "autoreply") turn on.
+///   The heartbeat, relay, heartbeat acks and heartbeat networking stay refused, as a start not
+///   wired ([`Refusal::TransmitNotYet`]). Its off half, any switch, is a Stop and never reaches
+///   this ([`OFF_HALVES`]).
 pub fn argument_refusal(cmd: &str, args: &Value) -> Option<Refusal> {
     match cmd {
         "winlink_connect" => match args.get("password") {
             Some(Value::String(typed)) if typed.is_empty() => None,
             _ => Some(Refusal::TypedPassword),
+        },
+        "js8_arm" => match (args.get("on"), args.get("which")) {
+            (Some(Value::Bool(false)), _) => None,
+            (_, Some(Value::String(which))) if which == "autoreply" => None,
+            _ => Some(Refusal::TransmitNotYet),
         },
         _ => None,
     }
@@ -174,10 +185,10 @@ pub enum Wired {
     /// source: a held press on Stop's road, re-asserted by that computer's screen, that arms its
     /// microphone over; its voice keys it.
     HeldPress,
-    /// One of the JS8 cockpit's starts: a message, a command, a CQ or a heartbeat now; the
-    /// switches for the heartbeat, the automatic replies and the repeating CQ; and the yes to an
-    /// automatic reply. None carries a time the shack keys by: its JS8 periods, its queue and every
-    /// JS8 gate there decide when, and none of them turns transmit on.
+    /// One of the JS8 cockpit's starts: a message, a command, a CQ or a heartbeat now; more text for
+    /// the message going out; the automatic replies or the repeating CQ switched on; and the yes to
+    /// an automatic reply. None carries a time the shack keys by: its JS8 periods, its queue and
+    /// every JS8 gate there decide when, and none of them turns transmit on.
     Js8,
     /// Keyboard CW or a CW macro, as text. The shack's keyer times every element; there is no
     /// paddle from afar.
@@ -187,10 +198,12 @@ pub enum Wired {
 /// ⛔ THE TRANSMISSION STARTS WIRED FOR ANOTHER COMPUTER, and how each goes; every other start is
 /// refused, by name, at both ends. In name order. The FT rows are exactly the desktop's FT buttons
 /// that start a transmission, the Operate strip's Call CQ and contest S&P among them; its other FT
-/// buttons key nothing and run at the shack by their class. The JS8 rows are every JS8 start the
-/// cockpit has, as at the shack: the sends, the switches that let the station transmit later
-/// (`js8_arm`, `js8_cq_repeat`, each on its on half) and the yes to an automatic reply. The CW
-/// rows are keyboard CW and the macros, sent as text for the shack's keyer.
+/// buttons key nothing and run at the shack by their class. The JS8 rows are the cockpit's sends,
+/// more text for the message going out, the automatic replies and the repeating CQ switched on,
+/// and the yes to an automatic reply; `js8_arm` turns on only the automatic replies from afar
+/// ([`argument_refusal`]), its other switches (the heartbeat, relay, heartbeat acks and heartbeat
+/// networking) refused. The CW rows are keyboard CW and the macros, sent as text for the shack's
+/// keyer.
 pub const WIRED: &[(&str, Wired)] = &[
     ("call_cq", Wired::Ft),
     ("call_station", Wired::Ft),
@@ -201,6 +214,7 @@ pub const WIRED: &[(&str, Wired)] = &[
     ("js8_heartbeat_now", Wired::Js8),
     ("js8_send", Wired::Js8),
     ("js8_send_command", Wired::Js8),
+    ("js8_typeahead", Wired::Js8),
     ("override_next_tx", Wired::Ft),
     ("play_voice_message", Wired::VoiceKeyer),
     ("qso_freetext", Wired::Ft),

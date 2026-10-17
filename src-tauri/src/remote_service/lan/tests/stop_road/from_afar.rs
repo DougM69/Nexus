@@ -1,5 +1,5 @@
-//! The Operate strip's Call CQ, a JS8 message, the JS8 heartbeat, repeating CQ and automatic
-//! replies, and a CW macro, pressed on a computer driving the station, on the roadside the road tests use: the shack's real channel, command lane, Stop road
+//! The Operate strip's Call CQ, a JS8 message, the JS8 repeating CQ and automatic replies, and a
+//! CW macro, pressed on a computer driving the station, on the roadside the road tests use: the shack's real channel, command lane, Stop road
 //! and engine over loopback, and the app's own handlers reached as the main window reaches them
 //! (`command_dispatch::tauri_runner`). The shack runs each with only the arguments the screen sent
 //! and the stand-down the lane wrote, and each is ended by the link's Stop alone, by the road's
@@ -11,12 +11,11 @@ use crate::command_dispatch::{tauri_runner, Runner};
 const LONG: &str = "A MESSAGE FROM AFAR LONG ENOUGH TO NEED SEVERAL FRAMES AT NORMAL SPEED";
 
 /// The overs: the Operate strip's Call CQ (a CQ run), a JS8 message once its first frame is
-/// keyed, the JS8 heartbeat and repeating CQ switched on, the automatic replies switched on with a
-/// reply asking, a yes to a reply, and a CW macro on the keyer.
-const OVERS: [&str; 7] = [
+/// keyed, the JS8 repeating CQ switched on, the automatic replies switched on with a reply asking,
+/// a yes to a reply, and a CW macro on the keyer.
+const OVERS: [&str; 6] = [
     "cq-run",
     "js8",
-    "js8-hb",
     "js8-cq-repeat",
     "js8-autoreply",
     "js8-reply",
@@ -35,10 +34,6 @@ fn presses(over: &str) -> Vec<(&'static str, Value)> {
         "js8" => vec![
             ("set_tx_enabled", json!({"enabled": true})),
             ("js8_send", json!({"to": null, "text": LONG})),
-        ],
-        "js8-hb" => vec![
-            ("set_tx_enabled", json!({"enabled": true})),
-            ("js8_arm", json!({"which": "hb", "on": true})),
         ],
         "js8-cq-repeat" => vec![
             ("set_tx_enabled", json!({"enabled": true})),
@@ -87,6 +82,8 @@ fn set_up_at_the_shack(e: &mut tempo_app::engine::Engine, over: &str) {
     if over.starts_with("js8") {
         let mut settings = e.settings().clone();
         settings.js8_hb_networking = true;
+        // Off at the shack, so turning them on from afar is seen.
+        settings.js8_autoreply = over != "js8-autoreply";
         e.apply_settings(settings);
         e.js8_enter();
     } else {
@@ -97,8 +94,8 @@ fn set_up_at_the_shack(e: &mut tempo_app::engine::Engine, over: &str) {
 }
 
 /// Whether the over is on the air as the shack keys it: the run armed and calling; the message's
-/// first frame keyed by the JS8 sender at its period with more still queued; the heartbeat or the
-/// repeating CQ armed to key at its period; the automatic replies armed, with a reply asking; the
+/// first frame keyed by the JS8 sender at its period with more still queued; the repeating CQ
+/// armed to key at its period; the automatic replies armed, with a reply asking; the
 /// reply queued; the macro holding the transmitter on the keyer.
 fn on_the_air(e: &mut tempo_app::engine::Engine, over: &str) -> bool {
     match over {
@@ -108,7 +105,6 @@ fn on_the_air(e: &mut tempo_app::engine::Engine, over: &str) -> bool {
             let keyed = (now..now + 3).any(|slot| !e.poll_tx(slot).is_empty());
             keyed && !e.js8_state().queue.is_empty()
         }
-        "js8-hb" => e.js8_state().armed.hb,
         "js8-cq-repeat" => e.js8_state().armed.cq,
         "js8-autoreply" => {
             let js8 = e.js8_state();
@@ -147,8 +143,8 @@ fn assert_over(e: &mut tempo_app::engine::Engine, over: &str, end: &str) {
 }
 
 /// ⛔ An over started from afar ends by each road alone and by presence. For the Operate strip's
-/// Call CQ, a JS8 message, the JS8 heartbeat, repeating CQ and automatic replies switched on, a
-/// yes to a JS8 reply, and a CW macro: the computer presses it, the shack's own handler runs it
+/// Call CQ, a JS8 message, the JS8 repeating CQ and automatic replies switched on, a yes to a JS8
+/// reply, and a CW macro: the computer presses it, the shack's own handler runs it
 /// and the station keys it; then the link's Stop alone, the road's Stop alone, or presence lapsing
 /// (the heartbeats stop, the lease still kept) ends it, as the shack's own Stop TX would. The shack
 /// got only what the screen sent, and `afar` with the stand-down alone: no time crossed. CONTROL:

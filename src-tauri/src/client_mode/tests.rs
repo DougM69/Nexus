@@ -260,6 +260,9 @@ fn expected(cmd: &str, args: &Value) -> Way {
         },
         Class::StopsTx => Way::Shack { stop: true },
         Class::StartsTx if stop => Way::Shack { stop: true },
+        Class::StartsTx if tempo_client::dispatch::argument_refusal(cmd, args).is_some() => {
+            Way::Refused(Refusal::TransmitNotYet)
+        }
         Class::StartsTx => match transmit_from_afar(cmd) {
             Err(refusal) => Way::Refused(refusal),
             Ok(Wired::HeldPress) => Way::Press,
@@ -320,7 +323,15 @@ fn every_command_goes_where_its_class_says() {
     );
     assert_eq!(
         way("js8_typeahead", &json!({ "sentSeen": 0, "unsent": "MORE" })),
-        Way::Shack { stop: false }
+        Way::Start
+    );
+    assert_eq!(
+        way("js8_arm", &json!({ "which": "hb", "on": true })),
+        Way::Refused(Refusal::TransmitNotYet)
+    );
+    assert_eq!(
+        way("js8_arm", &json!({ "which": "hb", "on": false })),
+        Way::Shack { stop: true }
     );
     assert_eq!(
         way("set_tune", &json!({ "on": true })),
