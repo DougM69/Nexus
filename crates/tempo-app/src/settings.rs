@@ -7993,7 +7993,10 @@ mod tests {
             icom_native_cat: true,
             ..Settings::default()
         };
-        assert!(usb.swr_scale_is_verified(), "control: USB IC-7300, native CI-V");
+        assert!(
+            usb.swr_scale_is_verified(),
+            "control: USB IC-7300, native CI-V"
+        );
         assert!(
             lan(3094, "192.0.2.7").swr_scale_is_verified(),
             "IC-7300MK2 on the Icom network connection"
@@ -8006,7 +8009,10 @@ mod tests {
         }
         // No usable address: the daemon never starts, so nothing reads the curve.
         assert!(!lan(3094, "").swr_scale_is_verified(), "no address");
-        assert!(!lan(3094, "radio.local").swr_scale_is_verified(), "not IPv4");
+        assert!(
+            !lan(3094, "radio.local").swr_scale_is_verified(),
+            "not IPv4"
+        );
         // An IC-7300 has no network server; a Xiegu is not served by the network client.
         assert!(!lan(3073, "192.0.2.7").swr_scale_is_verified(), "IC-7300");
         assert!(!lan(3088, "192.0.2.7").swr_scale_is_verified(), "Xiegu G90");
