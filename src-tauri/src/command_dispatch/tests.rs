@@ -232,9 +232,9 @@ fn a_shack_only_command_is_refused_at_both_ends() {
 
 /// The desktop's FT buttons that start a transmission, as the operator signed them for a computer
 /// driving the shack: Enable TX, CQ and directed CQ, a reply to a decode, Tx5 and the next-message
-/// choice, and resend. Written here, not read from the table, so a change to the table cannot
-/// move them.
-const FT_STARTS: [&str; 7] = [
+/// choice, resend, and the Operate strip's Call CQ and contest S&P. Written here, not read from the
+/// table, so a change to the table cannot move them.
+const FT_STARTS: [&str; 9] = [
     "call_cq",
     "call_station",
     "override_next_tx",
@@ -242,7 +242,39 @@ const FT_STARTS: [&str; 7] = [
     "qso_resend",
     "set_tx_enabled",
     "start_cq",
+    "start_running",
+    "start_search_and_pounce",
 ];
+
+/// The JS8 cockpit's sends, allowed from afar as at the shack: a message, a directed command, CQ,
+/// a heartbeat now, and more text for the message going out. Written here, as [`FT_STARTS`] is.
+const JS8_STARTS: [&str; 5] = [
+    "js8_call_cq",
+    "js8_heartbeat_now",
+    "js8_send",
+    "js8_send_command",
+    "js8_typeahead",
+];
+
+/// Keyboard CW and the CW macros (an F-key, or Enter Sends Message), which the shack's keyer
+/// times. Written here, as [`FT_STARTS`] is.
+const CW_STARTS: [&str; 2] = ["send_cw", "send_cw_armed"];
+
+/// The JS8 starts that stay refused from afar: the switches that let the station transmit later
+/// with no further press (the unattended paths and the repeating CQ), and the yes to an automatic
+/// reply, which names its moment.
+const JS8_REFUSED: [&str; 3] = ["js8_answer_reply", "js8_arm", "js8_cq_repeat"];
+
+/// Every start that runs as a command from afar: [`FT_STARTS`], [`JS8_STARTS`], [`CW_STARTS`] and
+/// the voice keyer's play.
+fn starts_run_from_afar() -> Vec<&'static str> {
+    FT_STARTS
+        .into_iter()
+        .chain(JS8_STARTS)
+        .chain(CW_STARTS)
+        .chain(["play_voice_message"])
+        .collect()
+}
 
 /// The rest of those FT buttons: Halt, working a spot, Log QSO and the prompt-to-log answer, and
 /// the operator's settings (the TX and RX offsets, Hold TX freq, even or odd, skip Tx1, auto cycle,
@@ -264,14 +296,16 @@ const FT_KEYING_NOTHING: [&str; 14] = [
     "work_spot",
 ];
 
-/// ★ The starts wired from afar are exactly the FT buttons' starts, the voice keyer's play, and the
-/// PTT as a held press; the table says so by value. CONTROL: the table holds no row that is not a
-/// start.
+/// ★ The starts wired from afar are exactly the FT buttons' starts, the JS8 sends, keyboard CW and
+/// its macros, the voice keyer's play, and the PTT as a held press; the table says so by value.
+/// CONTROL: the table holds no row that is not a start.
 #[test]
 fn the_starts_wired_from_afar_are_the_ft_buttons_the_voice_keyer_and_the_held_press() {
     let mut wired: Vec<(&str, Wired)> = WIRED.to_vec();
     wired.sort_unstable_by_key(|(name, _)| *name);
     let mut expected: Vec<(&str, Wired)> = FT_STARTS.iter().map(|n| (*n, Wired::Ft)).collect();
+    expected.extend(JS8_STARTS.iter().map(|n| (*n, Wired::Js8)));
+    expected.extend(CW_STARTS.iter().map(|n| (*n, Wired::Cw)));
     expected.push(("play_voice_message", Wired::VoiceKeyer));
     expected.push(("set_ptt", Wired::HeldPress));
     expected.sort_unstable_by_key(|(name, _)| *name);
@@ -303,7 +337,7 @@ fn the_ft_buttons_are_admitted_and_every_other_start_is_refused_by_name() {
         assert_eq!(route(name, &on_args(name)), Route::Shack, "{name}");
         let admission = shack.admit(&controller(), call(id as u64 + 1, name, on_args(name)));
         let expected = match name {
-            _ if FT_STARTS.contains(&name) || name == "play_voice_message" => "run".to_string(),
+            _ if starts_run_from_afar().contains(&name) => "run".to_string(),
             "set_ptt" => refused(Refusal::HeldPress),
             _ => refused(Refusal::TransmitNotYet),
         };
@@ -311,6 +345,14 @@ fn the_ft_buttons_are_admitted_and_every_other_start_is_refused_by_name() {
         assert_eq!(
             transmit_from_afar(name).err(),
             (expected == refused(Refusal::TransmitNotYet)).then_some(Refusal::TransmitNotYet),
+            "{name}"
+        );
+    }
+    for name in JS8_REFUSED {
+        assert_eq!(class_of(name), Some(Class::StartsTx), "{name}");
+        assert_eq!(
+            transmit_from_afar(name),
+            Err(Refusal::TransmitNotYet),
             "{name}"
         );
     }
@@ -334,7 +376,7 @@ fn the_ft_buttons_are_admitted_and_every_other_start_is_refused_by_name() {
 fn a_wired_start_needs_the_lease_and_its_roads() {
     let shack = shack();
     let mut id = 0;
-    for name in FT_STARTS.into_iter().chain(["play_voice_message"]) {
+    for name in starts_run_from_afar() {
         let mut admit = |who: &Caller| {
             id += 1;
             kind(&shack.admit(who, call(id, name, on_args(name))))
@@ -428,9 +470,10 @@ fn time_like(name: &str, ty: &str) -> bool {
     words.iter().any(|w| WORDS.contains(&w.as_str())) || TYPES.iter().any(|t| ty.contains(t))
 }
 
-/// ★ No FT command from afar carries a time: every parameter of every FT button's command, read
-/// off its own signature in `lib.rs`, names no time and has no time type, so slot timing, the clock
-/// and the sequencer's timeouts stay at the shack. The prompt-to-log answer's record is the contact as the
+/// ★ No FT command from afar carries a time, nor any other start run from afar (the JS8 sends,
+/// keyboard CW and its macros): every parameter of each one's command, read
+/// off its own signature in `lib.rs`, names no time and has no time type, so slot timing, JS8's
+/// periods, the keyer's timing, the clock and the sequencer's timeouts stay at the shack. The prompt-to-log answer's record is the contact as the
 /// station proposed it, its logged times among its fields: what is written in the log, deciding
 /// nothing about when anything transmits, so it is the one parameter allowed, by name and by type.
 /// A new parameter that reads as a time fails this. CONTROL: the reader finds the times it must
@@ -457,7 +500,14 @@ fn no_ft_command_from_afar_carries_a_time() {
     for (name, ty) in [("call", "String"), ("enabled", "bool"), ("hz", "f32")] {
         assert!(!time_like(name, ty), "{name}: {ty}");
     }
-    for cmd in FT_STARTS.into_iter().chain(FT_KEYING_NOTHING) {
+    // The voice keyer's play names its message by `slot`, a keyer slot, not a time: it plays as
+    // soon as the shack takes it.
+    for cmd in FT_STARTS
+        .into_iter()
+        .chain(JS8_STARTS)
+        .chain(CW_STARTS)
+        .chain(FT_KEYING_NOTHING)
+    {
         for (name, ty) in parameters(cmd) {
             if cmd == "confirm_pending_log" && name == "record" {
                 assert_eq!(ty, "LoggedQso", "the record is the logged contact");

@@ -20,9 +20,10 @@
 //! operator signed them for this road: the computer holds the lease on the connection the call came
 //! by, its Stop road holds live presence, and the newest heartbeat on that road named shack state
 //! its screen fetched under two seconds before, by the shack's own clock ([`Caller::roads`]). The FT
-//! starts are the desktop's own FT buttons, none of which carries a time; the PTT is never this
-//! command from afar but a held press on Stop's road ([`Wired::HeldPress`]). Every other start is
-//! refused by name.
+//! starts are the desktop's own FT buttons, the JS8 starts the cockpit's sends, and the CW starts
+//! keyboard CW and its macros as text; none of them carries a time, so the shack's slots, JS8
+//! periods and keyer time each one. The PTT is never this command from afar but a held press on
+//! Stop's road ([`Wired::HeldPress`]). Every other start is refused by name.
 //!
 //! Stop wins over a start that was in flight. The command link binds each start to the transmit
 //! stand-down generation as it reads it ([`Afar`]), and its handler checks that generation under the
@@ -156,7 +157,10 @@ pub(crate) const ENTRIES: [&str; 3] = ["set_operating_mode", "sstv_tune", "work_
 /// the held press, which never runs as a command, and each section entry ([`ENTRIES`]). A test
 /// holds this to the handlers that take it.
 pub(crate) fn takes_afar(cmd: &str) -> bool {
-    matches!(transmit_from_afar(cmd), Ok(Wired::Ft | Wired::VoiceKeyer)) || ENTRIES.contains(&cmd)
+    matches!(
+        transmit_from_afar(cmd),
+        Ok(Wired::Ft | Wired::VoiceKeyer | Wired::Js8 | Wired::Cw)
+    ) || ENTRIES.contains(&cmd)
 }
 
 /// ⛔ STOP WINS OVER A START THAT WAS IN FLIGHT. A start from afar runs only while the transmit
@@ -651,9 +655,11 @@ fn class_refusal(
         Some(Class::StartsTx) => match transmit_from_afar(cmd) {
             Err(refusal) => Some(refusal),
             Ok(Wired::HeldPress) => Some(Refusal::HeldPress),
-            Ok(Wired::Ft | Wired::VoiceKeyer) => argument_refusal(cmd, args)
-                .or_else(|| (!caller.holds_lease).then_some(Refusal::NotController))
-                .or_else(|| caller.roads.err()),
+            Ok(Wired::Ft | Wired::VoiceKeyer | Wired::Js8 | Wired::Cw) => {
+                argument_refusal(cmd, args)
+                    .or_else(|| (!caller.holds_lease).then_some(Refusal::NotController))
+                    .or_else(|| caller.roads.err())
+            }
         },
         // Admitted before the journal, under Stop's rules.
         Some(Class::StopsTx) => None,

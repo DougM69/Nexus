@@ -48,6 +48,8 @@ mod bench;
 mod ends;
 /// A section change from afar arms nothing.
 mod entry;
+/// A CQ run, a JS8 message and a CW macro started from afar, ended by each road and by presence.
+mod from_afar;
 /// Stop's road over the internet: ICE, through a TURN relay.
 mod internet;
 /// Stop's second road through a relay, as the internet stands between the two computers.

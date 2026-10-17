@@ -274,7 +274,7 @@ pub(crate) fn way(cmd: &str, args: &Value) -> Way {
                 return match transmit_from_afar(cmd) {
                     Err(refusal) => Way::Refused(refusal),
                     Ok(Wired::HeldPress) => Way::Press,
-                    Ok(Wired::Ft | Wired::VoiceKeyer) => Way::Start,
+                    Ok(Wired::Ft | Wired::VoiceKeyer | Wired::Js8 | Wired::Cw) => Way::Start,
                 };
             }
             match cmd {

@@ -174,22 +174,41 @@ pub enum Wired {
     /// source: a held press on Stop's road, re-asserted by that computer's screen, that arms its
     /// microphone over; its voice keys it.
     HeldPress,
+    /// One of the JS8 cockpit's sends: a message, a command, a CQ, a heartbeat now, or more text
+    /// for the message going out. None carries a time: the shack's JS8 periods, its queue and every
+    /// JS8 gate there decide when, and none of them turns transmit on.
+    Js8,
+    /// Keyboard CW or a CW macro, as text. The shack's keyer times every element; there is no
+    /// paddle from afar.
+    Cw,
 }
 
 /// ⛔ THE TRANSMISSION STARTS WIRED FOR ANOTHER COMPUTER, and how each goes; every other start is
 /// refused, by name, at both ends. In name order. The FT rows are exactly the desktop's FT buttons
-/// that start a transmission; its other FT buttons key nothing and run at the shack by their
-/// class.
+/// that start a transmission, the Operate strip's Call CQ and contest S&P among them; its other FT
+/// buttons key nothing and run at the shack by their class. The JS8 rows are the cockpit's sends;
+/// the switches that let the station transmit later with no further press (`js8_arm`,
+/// `js8_cq_repeat`) and the yes to an automatic reply stay refused. The CW rows are keyboard CW
+/// and the macros, sent as text for the shack's keyer.
 pub const WIRED: &[(&str, Wired)] = &[
     ("call_cq", Wired::Ft),
     ("call_station", Wired::Ft),
+    ("js8_call_cq", Wired::Js8),
+    ("js8_heartbeat_now", Wired::Js8),
+    ("js8_send", Wired::Js8),
+    ("js8_send_command", Wired::Js8),
+    ("js8_typeahead", Wired::Js8),
     ("override_next_tx", Wired::Ft),
     ("play_voice_message", Wired::VoiceKeyer),
     ("qso_freetext", Wired::Ft),
     ("qso_resend", Wired::Ft),
+    ("send_cw", Wired::Cw),
+    ("send_cw_armed", Wired::Cw),
     ("set_ptt", Wired::HeldPress),
     ("set_tx_enabled", Wired::Ft),
     ("start_cq", Wired::Ft),
+    ("start_running", Wired::Ft),
+    ("start_search_and_pounce", Wired::Ft),
 ];
 
 /// ⛔ THE ONE SWITCH FOR A TRANSMISSION STARTED FROM ANOTHER COMPUTER: how the start `cmd` goes

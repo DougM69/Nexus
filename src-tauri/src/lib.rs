@@ -17422,35 +17422,46 @@ fn js8_hop_answer(
 }
 
 /// Queue a message (`to` = a callsign, `@GROUP`, or null for @ALLCALL). REFUSED in this
-/// receive-only build; the operator-gated TX batch supplies the body behind it.
+/// receive-only build; the operator-gated TX batch supplies the body behind it. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn js8_send(
     state: State<'_, SharedEngine>,
     to: Option<String>,
     text: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.js8_send(to, text)?;
     Ok(eng.js8_state())
 }
 
 /// Queue a directed command (`cmd` = the 32-entry table id) with its argument. Refused here.
+/// `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn js8_send_command(
     state: State<'_, SharedEngine>,
     to: String,
     cmd: u8,
     arg: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.js8_send_command(to, cmd, arg)?;
     Ok(eng.js8_state())
 }
 
-/// Call CQ with the CQ message from Settings (JS8Call's `CQMessage`). Refused here.
+/// Call CQ with the CQ message from Settings (JS8Call's `CQMessage`). Refused here. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn js8_call_cq(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+fn js8_call_cq(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.js8_call_cq()?;
     Ok(eng.js8_state())
 }
@@ -17533,10 +17544,15 @@ async fn js8_composer(
 
 /// "Send Heartbeat Now", from the HB button's menu: one heartbeat in the next period, the repeat
 /// left as it is. Refused where JS8Call has no HB button (heartbeat networking off, a speed with
-/// no heartbeats). Keys only through the JS8 TX route, so only with TX on.
+/// no heartbeats). Keys only through the JS8 TX route, so only with TX on. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn js8_heartbeat_now(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+fn js8_heartbeat_now(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.js8_heartbeat_now()?;
     Ok(eng.js8_state())
 }
@@ -17554,14 +17570,16 @@ async fn js8_select_call(
 /// The native cockpit's compose box while its message goes out (JS8Call's typeahead): what is still
 /// to go, `sent_seen` the characters of it the box had seen go. Taken just before the next frame,
 /// which goes out through every JS8 gate; answered with what the box shows, or none once nothing of
-/// the box's is going out.
+/// the box's is going out. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn js8_typeahead(
     state: State<'_, SharedEngine>,
     sent_seen: usize,
     unsent: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<Option<tempo_app::dto::Js8Typeahead>, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.js8_typeahead(sent_seen, unsent)?;
     Ok(eng.js8_typeahead_state())
 }
@@ -19223,20 +19241,32 @@ fn work_spot_split_offset(
 
 /// Queue CW to transmit (CAT keyer path). `text` is an F-key macro template or literal
 /// type-ahead; the engine expands it (mycall/name/grid + the worked call + a 599 report)
-/// and the radio loop keys it via the rig. Operator-initiated; respects Monitor.
+/// and the radio loop keys it via the rig. Operator-initiated; respects Monitor. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn send_cw(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
+fn send_cw(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.send_cw(&text);
     Ok(eng.snapshot())
 }
 
 /// Queue CW for Enter Sends Message: `Engine::send_cw_armed`, which never turns TX on and asks
 /// every gate before it takes anything. `Err` is why nothing was taken, and the contest strip
-/// then logs nothing. No Remote operation reaches it: ESM is the station's own window's.
+/// then logs nothing. No operation of the Remote page reaches it; a computer driving the station
+/// does, with `afar` as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn send_cw_armed(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
+fn send_cw_armed(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.send_cw_armed(&text)?;
     Ok(eng.snapshot())
 }
@@ -19953,39 +19983,59 @@ fn start_cq(
 /// row's while a contest runs. `dir` is the direction of the CQ typed in the Tx6 row, which the
 /// contest's Running calls where WSJT-X has no activity for the contest; `None` for a plain CQ,
 /// and from a caller that sends none. Outside a contest the row keeps `start_cq`, which sends the
-/// CQ it shows.
+/// CQ it shows. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn start_running(
     state: State<'_, SharedEngine>,
     dir: Option<String>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
-    start_running_on(&state, dir)
+    start_running_on(&state, dir, afar.as_ref())
 }
 
 /// [`start_running`]'s body, over a plain handle. Call CQ can enter the contest's Running from
-/// another mode, so it opens the session as the `set_mode` command does, with its rows.
-fn start_running_on(engine: &SharedEngine, dir: Option<String>) -> Result<AppSnapshot, String> {
+/// another mode, so it opens the session as the `set_mode` command does, with its rows. A start
+/// from afar is checked against its stand-down first, in the hold the run starts in.
+fn start_running_on(
+    engine: &SharedEngine,
+    dir: Option<String>,
+    afar: Option<&command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     tempo_app::engine::act_opening_session(
         engine,
         |eng| eng.start_running_opens_session(),
-        |eng| eng.start_running_with_cq(dir.as_deref()),
+        |eng| {
+            command_dispatch::still_bound(eng, afar)?;
+            eng.start_running_with_cq(dir.as_deref())
+        },
         |eng| eng.snapshot(),
     )
 }
 
-/// The Operate strip's S&P ([`tempo_app::engine::Engine::start_search_and_pounce`]).
+/// The Operate strip's S&P ([`tempo_app::engine::Engine::start_search_and_pounce`]). `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn start_search_and_pounce(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    start_search_and_pounce_on(&state)
+fn start_search_and_pounce(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
+    start_search_and_pounce_on(&state, afar.as_ref())
 }
 
 /// [`start_search_and_pounce`]'s body, over a plain handle, opening a contest session as the
-/// `set_mode` command does, with its rows.
-fn start_search_and_pounce_on(engine: &SharedEngine) -> Result<AppSnapshot, String> {
+/// `set_mode` command does, with its rows. A start from afar is checked against its stand-down
+/// first, in the hold S&P is entered in.
+fn start_search_and_pounce_on(
+    engine: &SharedEngine,
+    afar: Option<&command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     tempo_app::engine::act_opening_session(
         engine,
         |eng| eng.start_search_and_pounce_opens_session(),
-        |eng| eng.start_search_and_pounce(),
+        |eng| {
+            command_dispatch::still_bound(eng, afar)?;
+            eng.start_search_and_pounce()
+        },
         |eng| eng.snapshot(),
     )
 }
@@ -49860,6 +49910,162 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A mock app and its main window.
+    pub(crate) type ShackApp = (
+        tauri::App<tauri::test::MockRuntime>,
+        tauri::WebviewWindow<tauri::test::MockRuntime>,
+    );
+
+    /// A mock of the shack's app over `engine`, with a main window, holding the app's own handlers
+    /// for the Operate strip's Call CQ and contest S&P, the JS8 sends, keyboard CW and its macros,
+    /// Enable TX and the stops a cockpit sends: what the starts from afar are run through, as the
+    /// command lane runs them (`command_dispatch::tauri_runner`). Here because a handler's command
+    /// macro is reachable only from the module that defines it.
+    pub(crate) fn shack_app_for_starts_from_afar(engine: crate::SharedEngine) -> ShackApp {
+        use crate::{
+            halt_tx, js8_call_cq, js8_heartbeat_now, js8_send, js8_send_command, js8_typeahead,
+            send_cw, send_cw_armed, set_tx_enabled, start_running, start_search_and_pounce,
+            stop_cw,
+        };
+        let app = tauri::test::mock_builder()
+            .manage(engine)
+            .invoke_handler(tauri::generate_handler![
+                halt_tx,
+                js8_call_cq,
+                js8_heartbeat_now,
+                js8_send,
+                js8_send_command,
+                js8_typeahead,
+                send_cw,
+                send_cw_armed,
+                set_tx_enabled,
+                start_running,
+                start_search_and_pounce,
+                stop_cw
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        (app, main)
+    }
+
+    /// ★ The Operate strip's Call CQ and contest S&P, the JS8 sends and keyboard CW with its macros
+    /// run from afar only under the stand-down the command lane read them under, as the FT
+    /// buttons do. Called through the shack's own runner, as the lane calls them, each one whose
+    /// `afar` names a stand-down a halt has moved since is refused, `STOPPED_SINCE`, and leaves
+    /// the station as it was: TX off (or as the shack left it), nothing queued for JS8, the CW
+    /// keyer idle. Named with the stand-down as it stands now, and with no `afar` (the shack's own
+    /// screen), each is not refused that way. Every command is asked; the ones that ran after a
+    /// Stop are named together. CONTROL: under the stand-down as it stands, a CQ run arms TX, a JS8
+    /// message is queued and a CW macro holds the transmitter.
+    #[test]
+    fn a_contest_js8_or_cw_start_from_afar_runs_only_under_the_stand_down_it_was_read_under() {
+        use crate::command_dispatch::{tauri_runner, Runner, STOPPED_SINCE};
+        use serde_json::{json, Value};
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let (app, _main) = shack_app_for_starts_from_afar(engine.clone());
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        let with = |mut args: Value, stand_down: Option<u64>| {
+            if let Some(stand_down) = stand_down {
+                args["afar"] = json!({ "standDown": stand_down });
+            }
+            args
+        };
+        // What a start leaves at the station: TX armed, JS8 frames queued, the CW keyer holding
+        // the transmitter.
+        let left = || {
+            let e = engine_lock(&engine);
+            (
+                e.tx_enabled(),
+                !e.js8_state().queue.is_empty(),
+                e.tx_owner().is_some(),
+            )
+        };
+        let stopped = Err(STOPPED_SINCE.to_string());
+        let mut ran_after_a_stop = Vec::new();
+        for (cmd, args) in [
+            ("start_running", json!({})),
+            ("start_search_and_pounce", json!({})),
+            ("js8_call_cq", json!({})),
+            ("js8_heartbeat_now", json!({})),
+            ("js8_send", json!({"to": null, "text": "HELLO FROM AFAR"})),
+            (
+                "js8_send_command",
+                json!({"to": "W1AW", "cmd": 0, "arg": ""}),
+            ),
+            ("js8_typeahead", json!({"sentSeen": 0, "unsent": "MORE"})),
+            ("send_cw", json!({"text": "CQ {MYCALL}"})),
+            ("send_cw_armed", json!({"text": "TU {MYCALL}"})),
+        ] {
+            let stale = {
+                let mut e = engine_lock(&engine);
+                e.halt_tx();
+                let mut settings = e.settings().clone();
+                settings.js8_hb_networking = true;
+                e.apply_settings(settings);
+                if cmd.starts_with("js8_") {
+                    e.js8_enter();
+                } else {
+                    e.set_tier(tempo_app::dto::Tier::Ft8);
+                }
+                if cmd.starts_with("send_cw") {
+                    e.set_operating_mode("cw", false);
+                }
+                let stale = e.remote_transmit_stand_down_generation();
+                e.halt_tx();
+                // These two key only with TX on: on at the shack, which moves no stand-down.
+                if matches!(cmd, "send_cw_armed" | "js8_typeahead") {
+                    e.set_tx_enabled(true);
+                }
+                if cmd == "js8_typeahead" {
+                    e.js8_send(None, "A MESSAGE GOING OUT".into()).unwrap();
+                }
+                stale
+            };
+            let before = left();
+            let voided = ask(cmd, with(args.clone(), Some(stale)));
+            let after = left();
+            if voided != stopped || after != before {
+                ran_after_a_stop.push(format!(
+                    "{cmd}: {voided:?}, (TX armed, JS8 queued, keyer busy) {before:?} -> {after:?}"
+                ));
+            }
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let ran = ask(cmd, with(args.clone(), Some(now)));
+            assert_ne!(ran, stopped, "{cmd} under the stand-down as it stands");
+            match cmd {
+                "start_running" => assert!(left().0, "CONTROL: the CQ run arms TX: {ran:?}"),
+                "js8_send" => assert!(left().1, "CONTROL: the message is queued: {ran:?}"),
+                "send_cw" => assert!(left().2, "CONTROL: the keyer holds TX: {ran:?}"),
+                _ => {}
+            }
+            engine_lock(&engine).halt_tx();
+            let ran = ask(cmd, args);
+            assert_ne!(ran, stopped, "CONTROL {cmd}, from the shack's own screen");
+        }
+        assert!(
+            ran_after_a_stop.is_empty(),
+            "ran from afar after a Stop: {ran_after_a_stop:#?}"
+        );
+    }
+
     /// ⛔ From afar a section entry arms nothing. Called through the shack's own runner, as the
     /// command lane calls them, with `afar` as the lane writes it: a section change into Phone, a
     /// Phone spot worked and an SSTV channel picked each put the station in Phone and leave Enable
@@ -50046,7 +50252,7 @@ mod contest_entry_command_tests {
     #[test]
     fn call_cq_enters_the_contest_with_its_rows() {
         let (dir, engine) = back_in_ft8_qso_mode("contest-entry-cq");
-        let snap = crate::start_running_on(&engine, None).expect("the run starts");
+        let snap = crate::start_running_on(&engine, None, None).expect("the run starts");
         let fd = snap.field_day.as_ref().expect("in the contest");
         assert!(fd.running, "the contest's Running");
         assert!(k9new_worked(&snap), "the session's sweep holds K9NEW");
@@ -50058,7 +50264,7 @@ mod contest_entry_command_tests {
     #[test]
     fn the_strips_sp_enters_the_contest_with_its_rows() {
         let (dir, engine) = back_in_ft8_qso_mode("contest-entry-sp");
-        let snap = crate::start_search_and_pounce_on(&engine).expect("S&P is taken");
+        let snap = crate::start_search_and_pounce_on(&engine, None).expect("S&P is taken");
         assert_eq!(
             snap.field_day.as_ref().map(|fd| fd.running),
             Some(false),
