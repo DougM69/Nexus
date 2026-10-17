@@ -582,6 +582,49 @@ fn no_ft_command_from_afar_carries_a_time() {
     }
 }
 
+/// ⛔ A settings save from afar turns on nothing that transmits by itself and only the settings
+/// form writes: JS8's APRS-IS relay and the WSPR/FST4W beacon's share of intervals keep the
+/// shack's values, both ways. CONTROL: the same save from the shack's own screen takes them, and a
+/// field beside them is taken from afar too.
+#[test]
+fn a_settings_save_from_afar_keeps_the_shacks_transmit_settings() {
+    let shack = tempo_app::settings::Settings::default();
+    assert!(
+        !shack.js8_aprs_relay && shack.beacon_tx_percent == 0,
+        "premise: off"
+    );
+    let mut asked = shack.clone();
+    asked.js8_aprs_relay = true;
+    asked.beacon_tx_percent = 20;
+    asked.cq_max_calls = Some(7);
+    let afar = Afar { stand_down: 3 };
+    let mut save = asked.clone();
+    keep_the_shacks_transmit_settings(&shack, &mut save, Some(&afar));
+    assert!(
+        !save.js8_aprs_relay,
+        "from afar, the APRS-IS relay turned on"
+    );
+    assert_eq!(save.beacon_tx_percent, 0, "from afar, the beacon turned on");
+    assert_eq!(save.cq_max_calls, Some(7), "CONTROL: the rest of the save");
+    // …and off: a save from afar does not turn the shack's own off either.
+    let mut save = shack.clone();
+    keep_the_shacks_transmit_settings(&asked, &mut save, Some(&afar));
+    assert!(
+        save.js8_aprs_relay && save.beacon_tx_percent == 20,
+        "turned off from afar"
+    );
+    let mut save = asked.clone();
+    keep_the_shacks_transmit_settings(&shack, &mut save, None);
+    assert!(
+        save.js8_aprs_relay && save.beacon_tx_percent == 20,
+        "CONTROL: the shack's own form"
+    );
+    assert!(
+        takes_afar("set_settings"),
+        "the lane says where it came from"
+    );
+}
+
 /// ★ The command lane writes `afar` into exactly the calls whose handler takes it: every command
 /// the app registers takes `afar` in its signature in `lib.rs` exactly when `takes_afar` says the
 /// lane writes it. A handler that took it unwritten would never hear a Stop came after its start; a

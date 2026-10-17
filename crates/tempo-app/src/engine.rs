@@ -3287,6 +3287,9 @@ pub struct Engine {
     /// What a computer driving the station turned on there that transmits by itself, each with the
     /// presence it was turned on under: see `engine/remote_stream.rs`.
     presence_bound: Vec<(remote_stream::OnItsOwn, crate::remote_control::Standing)>,
+    /// The transmit stand-down a start from afar last ran under, until a halt: see
+    /// `engine/remote_stream.rs`.
+    afar_started: Option<u64>,
     remote_ptt_hold: Option<crate::remote_control::ptt_hold::PttHold>,
     /// The streamed operator's microphone over, and what it needs: see `engine/remote_mic.rs`.
     mic: crate::mic::MicLatch,
@@ -5793,6 +5796,7 @@ impl Engine {
             remote_presence: None,
             remote_presence_ended: Default::default(),
             presence_bound: Vec::new(),
+            afar_started: None,
             remote_ptt_hold: None,
             mic: crate::mic::MicLatch::default(),
             mic_feed: None,
@@ -6285,6 +6289,17 @@ impl Engine {
         // way no other setting's is: the operator is quietly moved back to the stable channel,
         // the betas stop arriving, and there is no error, no toast and no log line to notice.
         let live_beta_updates = self.settings.beta_updates;
+        // ⛔ The switches that let the station transmit by itself have ONE writer each, the switch
+        // the operator presses: the presence beacon (`set_beacon`) and JS8's automatic replies,
+        // relay and heartbeat acks (`js8_arm`). From a computer driving the station those run only
+        // under a start's rules, so a settings save, from there or from a stale form here, must
+        // not move them either way.
+        let live_transmit_switches = (
+            self.settings.beacon,
+            self.settings.js8_autoreply,
+            self.settings.js8_relay,
+            self.settings.js8_hb_ack,
+        );
         // The RTTY macro sets: the same ONE-WRITER shape (`save_rtty_macros`, from the cockpit's
         // editor). The Settings panel holds a whole-struct snapshot from whenever it loaded, so
         // without this an unrelated Save reverts a macro the operator edited in the cockpit since.
@@ -6411,6 +6426,12 @@ impl Engine {
         // as it does with every other setting it promises to clear.
         if keep_live_roster {
             self.settings.beta_updates = live_beta_updates;
+            (
+                self.settings.beacon,
+                self.settings.js8_autoreply,
+                self.settings.js8_relay,
+                self.settings.js8_hb_ack,
+            ) = live_transmit_switches;
             self.settings.wanted_calls = live_wanted_calls;
             (
                 self.settings.js8_filter,
@@ -16052,26 +16073,27 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// One-click resend of a terminal (no-ack / abandoned) chat bubble — same policy
     /// side-effects as a fresh send (parity, CQ-run pause, journal), fresh cycle budget.
-    pub fn resend_message(&mut self, peer: &str, ack_id: Option<char>) -> bool {
-        if !self.app.resend_message(peer, ack_id) {
-            return false;
-        }
+    /// Its id in the queue, or `None` with no such bubble.
+    pub fn resend_message(&mut self, peer: &str, ack_id: Option<char>) -> Option<char> {
+        let id = self.app.resend_message(peer, ack_id)?;
         self.reset_tx_watchdog();
         if self.chat_cq {
             self.chat_cq_paused = true;
         }
         self.persist_pending_msgs(); // the re-queued entry must survive a restart
                                      // (Conversations are persisted by the shell's periodic exporter.)
-        true
+        Some(id)
     }
 
-    pub fn send_message(&mut self, peer: &str, text: &str) {
+    /// Queue a directed message to `peer`: its id in the store-and-forward queue, or `None` on a
+    /// receive-only tier, which queues nothing.
+    pub fn send_message(&mut self, peer: &str, text: &str) -> Option<char> {
         // Same reasoning as `broadcast`: the entry point must refuse, not the wave
         // builder. Chat should not be reachable on these tiers at all now that
         // `set_mode("chat")` snaps off any non-chat tier, but this path is also
         // driven by companion datagrams, so it carries its own check.
         if self.tier_is_rx_only(self.app.tier()) {
-            return;
+            return None;
         }
         self.reset_tx_watchdog();
         // Smart cycle (FT8-style): when auto and not in a CQ run, answer a heard station
@@ -16089,7 +16111,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.chat_cq {
             self.chat_cq_paused = true;
         }
-        self.app.send_message(peer, text);
+        let id = self.app.send_message(peer, text);
         self.persist_pending_msgs(); // held message survives a crash from this instant
                                      // Sending a directed reply IS an explicit "put this on the air" action, exactly like
                                      // broadcast() — so arm TX, or the queued message never transmits without a separate
@@ -16102,6 +16124,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // RELEASED on the air (poll_tx, via due_frames' first-release body) — not here at
         // compose time, which showed a phantom row for a store-and-forward message held for
         // an absent peer. The outbound conversation bubble still appears immediately.
+        Some(id)
     }
 
     /// Queue an open broadcast (FT8-style "to all") of `text`. Unlike directed
@@ -16784,6 +16807,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // invariant 7). `slot_tx_abort` above cuts a JS8 frame in flight exactly as it
         // cuts an FT8 over.
         self.js8_halt_clear();
+        // …and what a computer driving the station left to key later: the chat CQ run, the
+        // presence beacon, APRS's automatic ack and its chat messages still queued.
+        self.end_all_from_afar();
+        self.afar_started = None;
         // …and an RTTY Auto run, the same way (the operator, 2026-10-11: "Like JS8's schedule: a
         // halt is total. The run must be restarted on purpose."). Left running, it called CQ again
         // at the end of its listen window, and that CQ keyed the moment TX was back on, with no

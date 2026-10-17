@@ -254,6 +254,15 @@ impl StoreForward {
         before - self.queue.len()
     }
 
+    /// Drop the message `id` to `to` while it is still to be sent or acknowledged; returns whether
+    /// it was. One delivered, or given up on (`no_acked`), stays for a late ACK to match.
+    pub fn drop_one(&mut self, to: &str, id: char) -> bool {
+        let before = self.queue.len();
+        self.queue
+            .retain(|p| p.to != to || p.id != id || p.delivered || p.no_acked);
+        before != self.queue.len()
+    }
+
     /// The undelivered queue, cloned — the engine journals this to disk so queued
     /// messages survive a restart (they used to die with the process and the bubbles
     /// were marked "abandoned"). Delivered entries are history, not work — excluded.

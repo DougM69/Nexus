@@ -125,10 +125,9 @@ fn on_the_air(e: &mut tempo_app::engine::Engine, over: &str) -> bool {
 }
 
 /// What every end leaves, as the shack's own Stop TX leaves it: the transmitter free, TX off, an
-/// over in flight cut, an SSTV picture aborted, and what APRS and chat had queued dropped. A
-/// presence lapse also turns off what transmits by itself, so once TX is armed again nothing keys:
-/// no ack, no CQ, no beacon. A Stop leaves those as the shack's own Stop does, on and held behind
-/// TX off.
+/// over in flight cut, an SSTV picture aborted, and what APRS and chat had queued dropped. What
+/// transmits by itself is turned off too, so once TX is armed again nothing keys: no ack, no CQ,
+/// no beacon, no message.
 fn assert_over(e: &mut tempo_app::engine::Engine, over: &str, end: &str) {
     let what = format!("{over}, ended by the {end}");
     assert_stopped(e, if over == "sstv" { "sstv" } else { "ft" });
@@ -140,14 +139,7 @@ fn assert_over(e: &mut tempo_app::engine::Engine, over: &str, end: &str) {
             e.beacon_enabled(),
             e.chat_cq_state() != "off",
         ];
-        if end == "presence" {
-            assert_eq!(on, [false; 3], "{what}: each turned off");
-        } else {
-            assert!(on.contains(&true), "{what}: a Stop leaves it on, held");
-        }
-    }
-    if end != "presence" && on_its_own(over) {
-        return;
+        assert_eq!(on, [false; 3], "{what}: each turned off");
     }
     e.set_tx_enabled(true);
     if over.starts_with("aprs") {
@@ -163,8 +155,8 @@ fn assert_over(e: &mut tempo_app::engine::Engine, over: &str, end: &str) {
 /// ⛔ APRS, an SSTV picture, chat and a CQ run entered as a mode, started from afar, end by each
 /// road alone and by presence. The computer presses it, the shack's own handler runs it and the
 /// station keys it; then the link's Stop alone, the road's Stop alone, or presence lapsing (the
-/// heartbeats stop, the lease still kept) ends it, as the shack's own Stop TX would, and the lapse
-/// also turns off what transmits by itself. The shack got only what the screen sent, and `afar`
+/// heartbeats stop, the lease still kept) ends it, as the shack's own Stop TX would, and each turns
+/// off what transmits by itself. The shack got only what the screen sent, and `afar`
 /// with the stand-down alone: no time crossed. CONTROL: each over is on the air before it ends, and
 /// each press was answered with no refusal.
 #[test]

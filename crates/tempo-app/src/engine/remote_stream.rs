@@ -115,10 +115,27 @@ impl Engine {
             .into_iter()
             .partition::<Vec<_>, _>(|(_, standing)| !standing.held());
         self.presence_bound = kept;
-        for (what, _) in ended {
+        self.end_from_afar(ended.into_iter().map(|(what, _)| what).collect());
+    }
+
+    /// ⛔ A Stop ends everything a computer driving the station left to key later, whoever is
+    /// there: [`Engine::halt_tx`] calls it, so every Stop, a presence lapse and a context change
+    /// end each [`OnItsOwn`], and nothing it left keys once TX is armed again. What the shack's
+    /// own screen turned on is bound to nothing and is left as a Stop has always left it.
+    pub(super) fn end_all_from_afar(&mut self) {
+        let ended = std::mem::take(&mut self.presence_bound)
+            .into_iter()
+            .map(|(what, _)| what)
+            .collect();
+        self.end_from_afar(ended);
+    }
+
+    /// Turn off, or drop, each of `ended`. Only ever stops.
+    fn end_from_afar(&mut self, ended: Vec<OnItsOwn>) {
+        for what in ended {
             tempo_core::applog::warn(
                 "tx",
-                &format!("remote presence ended: {what:?} turned on from afar is turned off"),
+                &format!("{what:?} left by a computer driving the station is ended"),
             );
             match what {
                 // The decoder keeps listening, receive only, as a view's own arm leaves it.
@@ -133,8 +150,21 @@ impl Engine {
                     // Turning the run off cannot fail.
                     let _ = self.set_chat_cq(false);
                 }
+                // Dropped from the store-and-forward queue, its bubble marked abandoned so the
+                // operator can send it again; one already delivered is left as it is.
+                OnItsOwn::ChatMessage { peer, id } => {
+                    if self.app.abandon_queued(&peer, id) {
+                        self.persist_pending_msgs();
+                    }
+                }
             }
         }
+    }
+
+    /// A start from afar ran under the transmit stand-down `under`: until a halt, a revocation of
+    /// it with no halt ends what was started as a Stop does ([`Self::poll_remote_transmit`]).
+    pub fn note_started_from_afar(&mut self, under: u64) {
+        self.afar_started = Some(under);
     }
 
     /// Share the stream's held-PTT state with the engine. Installed once, when Remote is built.
@@ -164,7 +194,19 @@ impl Engine {
     /// Presence first, so a lapse has already stopped the over before the held PTT is decided.
     /// The press's "key" is the microphone over's ARM (M1); it stays up while the over does.
     pub(super) fn poll_remote_stream(&mut self, now: Instant) -> bool {
-        let halted = self.poll_remote_presence(now);
+        let mut halted = self.poll_remote_presence(now);
+        // ⛔ The transmit stand-down revoked with no halt (the driving computer's permission to
+        // transmit withdrawn, its lease gone) after a start from afar ran under it: what it
+        // started, queued or turned on ends as a Stop ends it.
+        let stand_down = self.remote_transmit_stand_down.generation();
+        if self.afar_started.is_some_and(|under| under != stand_down) {
+            tempo_core::applog::warn(
+                "tx",
+                "remote transmit stand-down revoked: stopping every transmission at the station",
+            );
+            self.halt_tx();
+            halted = true;
+        }
         self.end_what_presence_left();
         if let Some(hold) = self.remote_ptt_hold.clone() {
             let may_key = self.remote_presence_live(now)
@@ -189,11 +231,10 @@ impl Engine {
     }
 }
 
-/// What a computer driving the station can turn on there that then transmits by itself, with no
-/// further press: so each ends when that computer is no longer there ([`Engine::bind_to_presence`]),
-/// as its transmissions are cut. A Stop leaves each as the shack's own Stop does: TX off and held,
-/// so none keys until an operator arms TX again.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What a computer driving the station can turn on or leave queued there that then transmits by
+/// itself, with no further press: so each ends when that computer is no longer there
+/// ([`Engine::bind_to_presence`]), as its transmissions are cut, and with any Stop.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OnItsOwn {
     /// APRS Monitor armed by hand, which lets the automatic ack key. Ended, the decoder listens on,
     /// receive only.
@@ -202,6 +243,9 @@ pub enum OnItsOwn {
     Beacon,
     /// Chat's CQ run.
     ChatCq,
+    /// A chat message in the store-and-forward queue, which keys when its peer is heard and
+    /// again until acknowledged: its peer and its id there.
+    ChatMessage { peer: String, id: char },
 }
 
 #[cfg(test)]
@@ -601,18 +645,16 @@ mod tests {
     /// ⛔ What a computer driving the station turned on that transmits by itself (APRS's automatic
     /// ack, the presence beacon, the chat CQ run) ends when that computer's presence lapses, on the
     /// radio loop's tick, and when another session's presence takes its place. The decoder listens
-    /// on, receive only. A Stop leaves each as the shack's own Stop does, and so does the session's
-    /// own renewed heartbeat. CONTROL: the same three turned on at the shack outlive the lapse, and
-    /// once ended none keys with TX armed again.
+    /// on, receive only. The session's own renewed heartbeat keeps each. CONTROL: the same three
+    /// turned on at the shack outlive the lapse, and once ended none keys with TX armed again.
     #[test]
     fn what_transmits_by_itself_ends_with_the_presence_it_was_turned_on_under() {
         let (mut e, _transmit, presence, t0) = attached();
         let standing = e.remote_presence_standing(t0);
         assert!(standing.is_some(), "premise: presence is live");
         turn_on(&mut e, standing);
-        e.halt_tx();
         assert!(!e.poll_remote_transmit(t0 + Duration::from_secs(1)));
-        assert_eq!(on_its_own(&e), [true; 3], "a Stop leaves each on");
+        assert_eq!(on_its_own(&e), [true; 3], "a tick leaves each on");
         let renewed = t0 + Duration::from_secs(4);
         assert!(e.hold_remote_presence(presence.permit(renewed + PRESENCE).unwrap(), renewed));
         assert!(!e.poll_remote_transmit(renewed + Duration::from_secs(1)));
@@ -643,5 +685,167 @@ mod tests {
         turn_on(&mut e, None);
         assert!(e.poll_remote_transmit(t1 + PRESENCE));
         assert_eq!(on_its_own(&e), [true; 3], "the shack's own stay on");
+    }
+
+    /// The ways what a computer driving the station queued or turned on ends.
+    const ENDS: [&str; 3] = ["stop", "lapse", "revoked"];
+
+    /// What a computer driving the station can leave waiting to key, or turned on to key by
+    /// itself: an APRS beacon and message queued, an SSTV picture waiting for the loop, a chat
+    /// message and a broadcast queued, the chat CQ run, the presence beacon, and APRS Monitor armed
+    /// by hand (the automatic ack).
+    const WAITING: [&str; 8] = [
+        "aprs-beacon",
+        "aprs-message",
+        "sstv",
+        "chat-message",
+        "broadcast",
+        "chat-cq",
+        "beacon",
+        "aprs-ack",
+    ];
+
+    /// Queue or turn on `what` as its handler does from afar, under `standing`, with TX on and
+    /// nothing keyed yet.
+    fn leave_waiting(e: &mut Engine, what: &str, standing: Option<Standing>) {
+        if what == "sstv" {
+            e.set_operating_mode("phone", false);
+        } else if what != "aprs-beacon" && what != "aprs-message" && what != "aprs-ack" {
+            e.set_tier(Tier::TempoFast);
+            e.set_mode("chat").unwrap();
+            e.hear_for_test("CQ W1AW FN31", -5, 99);
+        }
+        e.set_tx_enabled(true);
+        let under = e.remote_transmit_stand_down_generation();
+        e.note_started_from_afar(under);
+        match what {
+            "aprs-beacon" => e
+                .aprs_beacon(41.9, -87.6, '/', '>', "FROM AFAR", &[])
+                .unwrap(),
+            "aprs-message" => e.aprs_send_message("W1AW", "HELLO FROM AFAR").unwrap(),
+            "sstv" => e.sstv_send(vec![0.1; 1200], "Robot 36".into()).unwrap(),
+            "chat-message" => {
+                let id = e.send_message("W1AW", "HELLO FROM AFAR").unwrap();
+                let peer = "W1AW".to_string();
+                e.bind_to_presence(OnItsOwn::ChatMessage { peer, id }, standing);
+            }
+            "broadcast" => e.broadcast("HELLO FROM AFAR"),
+            "chat-cq" => {
+                e.set_chat_cq(true).unwrap();
+                e.bind_to_presence(OnItsOwn::ChatCq, standing);
+            }
+            "beacon" => {
+                e.set_beacon(true);
+                e.bind_to_presence(OnItsOwn::Beacon, standing);
+            }
+            "aprs-ack" => {
+                e.set_aprs_arm(AprsArm::Explicit);
+                e.bind_to_presence(OnItsOwn::AprsAck, standing);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// What keys once TX is armed again, the radio loop asked as it asks: an APRS frame (an ack
+    /// asked for first), an SSTV picture holding the transmitter, a chat frame in any of 40 slots.
+    fn keys_again(e: &mut Engine) -> Vec<&'static str> {
+        let mut keyed = Vec::new();
+        e.set_tx_enabled(true);
+        e.aprs_auto_ack("N0CALL-7", "W9XYZ", "042");
+        if e.poll_aprs_tx().is_some() {
+            keyed.push("aprs");
+        }
+        if e.tx_owner() == Some(crate::engine::TxOwner::Sstv) {
+            keyed.push("sstv");
+        }
+        e.set_operating_mode("digital", false);
+        e.set_tx_enabled(true);
+        if (100..140).any(|slot| !e.poll_tx(slot).is_empty()) {
+            keyed.push("chat");
+        }
+        keyed
+    }
+
+    /// ⛔ NOTHING A COMPUTER DRIVING THE STATION LEFT WAITING KEYS AFTER IT IS STOPPED. For each
+    /// thing queued or turned on from afar (an APRS beacon or message, an SSTV picture, a chat
+    /// message or broadcast, the chat CQ run, the presence beacon, the APRS automatic ack), before
+    /// it keys: a Stop (`halt_tx`, every Stop's verb), that computer's presence lapsing, or the
+    /// transmit stand-down revoked with no halt (its permission withdrawn) each drop it, and once
+    /// TX is armed again nothing keys. CONTROL: with no end, each keys (or is still on).
+    #[test]
+    fn nothing_left_waiting_from_afar_keys_after_a_stop_a_lapse_or_a_revoked_stand_down() {
+        let mut keyed_after = Vec::new();
+        for what in WAITING {
+            // CONTROL: left alone, it keys.
+            let (mut e, _transmit, _presence, t0) = attached();
+            let standing = e.remote_presence_standing(t0);
+            leave_waiting(&mut e, what, standing);
+            assert!(!e.poll_remote_transmit(t0 + Duration::from_millis(10)));
+            assert!(
+                !keys_again(&mut e).is_empty(),
+                "CONTROL {what}: left alone, it keys"
+            );
+            for end in ENDS {
+                let (mut e, transmit, _presence, t0) = attached();
+                let standing = e.remote_presence_standing(t0);
+                leave_waiting(&mut e, what, standing);
+                let now = match end {
+                    "stop" => {
+                        e.halt_tx();
+                        t0 + Duration::from_millis(10)
+                    }
+                    "lapse" => t0 + PRESENCE,
+                    _ => {
+                        transmit.revoke();
+                        t0 + Duration::from_millis(10)
+                    }
+                };
+                e.poll_remote_transmit(now);
+                let keyed = keys_again(&mut e);
+                if !keyed.is_empty() || on_its_own(&e).contains(&true) {
+                    keyed_after.push(format!(
+                        "{what}, ended by {end}: keyed {keyed:?}, on {:?}",
+                        on_its_own(&e)
+                    ));
+                }
+            }
+        }
+        assert!(keyed_after.is_empty(), "{keyed_after:#?}");
+    }
+
+    /// ⛔ NO SETTINGS SAVE MOVES A SWITCH THAT TRANSMITS BY ITSELF. The presence beacon and JS8's
+    /// automatic replies, relay and heartbeat acks each have ONE writer, the switch the operator
+    /// presses (`set_beacon`, `js8_arm`), which from afar runs only under the start's rules. A whole
+    /// save (the settings form at the shack, or the same save from a computer driving the station)
+    /// carries each as a stale snapshot, and moves none in either direction. CONTROL: a field
+    /// beside them in the same save is taken.
+    #[test]
+    fn a_settings_save_turns_on_nothing_that_transmits_by_itself() {
+        use crate::engine::js8::Js8Switch;
+        let switches = |e: &Engine| {
+            let s = e.settings();
+            [s.beacon, s.js8_autoreply, s.js8_relay, s.js8_hb_ack]
+        };
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        for on in [false, true] {
+            e.set_beacon(on);
+            for which in [Js8Switch::Autoreply, Js8Switch::Relay, Js8Switch::HbAck] {
+                e.js8_arm(which, on).unwrap();
+            }
+            assert_eq!(switches(&e), [on; 4], "premise");
+            let mut save = e.settings().clone();
+            save.beacon = !on;
+            save.js8_autoreply = !on;
+            save.js8_relay = !on;
+            save.js8_hb_ack = !on;
+            save.cq_max_calls = Some(if on { 7 } else { 9 });
+            e.apply_settings(save);
+            assert_eq!(switches(&e), [on; 4], "a save moved one, from {on}");
+            assert_eq!(
+                e.settings().cq_max_calls,
+                Some(if on { 7 } else { 9 }),
+                "CONTROL: the save was taken"
+            );
+        }
     }
 }

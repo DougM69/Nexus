@@ -97,13 +97,16 @@ pub(super) fn the_apps_handlers(r: &mut Roadside) -> (crate::tests::ShackApp, Go
 /// the JS8 tier; TX off.
 fn set_up_at_the_shack(e: &mut tempo_app::engine::Engine, over: &str) {
     if over.starts_with("js8") {
+        use tempo_app::engine::js8::Js8Switch;
         let mut settings = e.settings().clone();
-        // Off at the shack, so turning them on from afar is seen.
+        // Off at the shack, so turning them on from afar is seen; the three that transmit by
+        // themselves move only by their own switch.
         settings.js8_hb_networking = over != "js8-hbnet";
-        settings.js8_autoreply = over != "js8-autoreply";
-        settings.js8_relay = over != "js8-relay";
-        settings.js8_hb_ack = over != "js8-hback";
         e.apply_settings(settings);
+        e.js8_arm(Js8Switch::Autoreply, over != "js8-autoreply")
+            .unwrap();
+        e.js8_arm(Js8Switch::Relay, over != "js8-relay").unwrap();
+        e.js8_arm(Js8Switch::HbAck, over != "js8-hback").unwrap();
         e.js8_enter();
     } else {
         e.set_tier(tempo_app::dto::Tier::Ft8);

@@ -6961,7 +6961,12 @@ fn send_message(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
-    eng.send_message(&peer, &text);
+    // Sent from afar, it waits in the queue bound to that computer, as a switch it turns on is.
+    let standing = presence_standing(&eng, afar.as_ref(), std::time::Instant::now())?;
+    if let Some(id) = eng.send_message(&peer, &text) {
+        eng.bind_to_presence(OnItsOwn::ChatMessage { peer, id }, standing);
+    }
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -6977,9 +6982,14 @@ fn resend_chat(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
-    if !eng.resend_message(&peer, ack_id) {
+    let standing = presence_standing(&eng, afar.as_ref(), std::time::Instant::now())?;
+    let Some(id) = eng.resend_message(&peer, ack_id) else {
         return Err(format!("no resendable message for {peer}"));
-    }
+    };
+    // The queue holds a resent message under its peer's call in capitals.
+    let peer = peer.to_uppercase();
+    eng.bind_to_presence(OnItsOwn::ChatMessage { peer, id }, standing);
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -13569,7 +13579,9 @@ fn set_mode(
             // every structured TX tier, not just FT8/FT4). Calling CQ sends a grid (CQ/Tx1); a
             // Field Day run sends an exchange with no grid (callsign only). qso-monitor /
             // fieldday-sp are passive on entry (the backstop covers TX).
-            if !tempo_client::dispatch::is_stop("set_mode", &serde_json::json!({ "mode": mode })) {
+            let start =
+                !tempo_client::dispatch::is_stop("set_mode", &serde_json::json!({ "mode": mode }));
+            if start {
                 command_dispatch::still_bound(eng, afar.as_ref())?;
             }
             match mode.as_str() {
@@ -13578,6 +13590,9 @@ fn set_mode(
                 _ => {}
             }
             eng.set_mode(&mode)?;
+            if start {
+                command_dispatch::started_from_afar(eng, afar.as_ref());
+            }
             if let Some(rows) = rows {
                 eng.open_session_from(rows);
             }
@@ -13656,6 +13671,9 @@ fn reset_settings(
 /// cluster/RBN and PSK Reporter MQTT daemons start immediately — no app restart.
 /// The `start_*_feed` latches make this a no-op once a feed is running (so an
 /// already-running feed keeps its original callsign until the next restart).
+/// `afar`: from a computer driving the station, its save keeps the shack's own transmit-by-itself
+/// settings (`command_dispatch::keep_the_shacks_transmit_settings`).
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn set_settings(
     state: State<'_, SharedEngine>,
@@ -13664,8 +13682,15 @@ fn set_settings(
     region_paths: State<'_, SharedRegionPaths>,
     health: State<'_, SharedHealth>,
     cache: State<'_, PropCache>,
-    settings: Settings,
+    mut settings: Settings,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
+    // From a computer driving the station, the shack's own transmit-by-itself settings stay.
+    command_dispatch::keep_the_shacks_transmit_settings(
+        engine_lock(&state).settings(),
+        &mut settings,
+        afar.as_ref(),
+    );
     // A form save: the ENGINE's roster wins, so a stale panel cannot revert a rig just added.
     apply_and_persist(
         state,
@@ -14761,6 +14786,7 @@ fn broadcast(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.broadcast(&text);
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -16985,6 +17011,9 @@ fn aprs_arm(
         tempo_app::engine::AprsArm::Off
     });
     eng.bind_to_presence(OnItsOwn::AprsAck, standing);
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(eng.aprs_heard())
 }
 
@@ -17067,7 +17096,9 @@ fn aprs_send_beacon(
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     let table = symbol_table.chars().next().unwrap_or('/');
     let code = symbol_code.chars().next().unwrap_or('>');
-    eng.aprs_beacon(lat, lon, table, code, &comment, &path)
+    eng.aprs_beacon(lat, lon, table, code, &comment, &path)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    Ok(())
 }
 
 /// Queue an APRS text message to `addressee` — an explicit operator send. The engine validates the
@@ -17082,7 +17113,9 @@ fn aprs_send_message(
 ) -> Result<(), String> {
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
-    eng.aprs_send_message(&addressee, &text)
+    eng.aprs_send_message(&addressee, &text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    Ok(())
 }
 
 /// Tune the rig for APRS: QSY to `dial_mhz` on 2 m FM simplex, auto-routing to the 2 m-capable radio
@@ -18099,6 +18132,7 @@ fn sstv_send(
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.sstv_send(samples, spec.name.to_string())?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(sstv_state_dto(&eng))
 }
 
@@ -19979,6 +20013,9 @@ fn set_beacon(
     };
     eng.set_beacon(on);
     eng.bind_to_presence(OnItsOwn::Beacon, standing);
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist heartbeat setting: {e}")
     });
@@ -20113,6 +20150,9 @@ fn set_chat_cq(
     };
     eng.set_chat_cq(on)?;
     eng.bind_to_presence(OnItsOwn::ChatCq, standing);
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(eng.snapshot())
 }
 
@@ -20128,6 +20168,7 @@ fn resume_chat_cq(
     let standing = presence_standing(&eng, afar.as_ref(), std::time::Instant::now())?;
     eng.resume_chat_cq()?;
     eng.bind_to_presence(OnItsOwn::ChatCq, standing);
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -50161,10 +50202,13 @@ mod tests {
         // The shack's own screen leaves `which` off, and the persisted others on.
         let set_up = |which: &str| {
             let mut e = engine_lock(&engine);
+            // The three that transmit by themselves move only by their own switch.
+            use tempo_app::engine::js8::Js8Switch;
+            e.js8_arm(Js8Switch::Autoreply, which != "autoreply")
+                .unwrap();
+            e.js8_arm(Js8Switch::Relay, which != "relay").unwrap();
+            e.js8_arm(Js8Switch::HbAck, which != "hback").unwrap();
             let mut settings = e.settings().clone();
-            settings.js8_autoreply = which != "autoreply";
-            settings.js8_relay = which != "relay";
-            settings.js8_hb_ack = which != "hback";
             settings.js8_hb_networking = which != "hbnet";
             e.apply_settings(settings);
             e.js8_enter();
@@ -50282,9 +50326,13 @@ mod tests {
                 e.halt_tx();
                 let mut settings = e.settings().clone();
                 settings.js8_hb_networking = true;
-                // Off at the shack, so turning them on from afar is seen.
-                settings.js8_autoreply = cmd != "js8_arm";
                 e.apply_settings(settings);
+                // Off at the shack, so turning them on from afar is seen.
+                e.js8_arm(
+                    tempo_app::engine::js8::Js8Switch::Autoreply,
+                    cmd != "js8_arm",
+                )
+                .unwrap();
                 if cmd.starts_with("js8_") {
                     e.js8_enter();
                 } else {
@@ -50421,6 +50469,9 @@ mod tests {
         let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
             tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
         ));
+        // The stand-down is the transmit authority's, as production wires it.
+        let transmit = TransmitAuthority::default();
+        engine_lock(&engine).set_remote_transmit_revocation(transmit.revocation());
         let (app, _main) = shack_app_for_starts_from_afar(engine.clone());
         let runner: Runner = tauri_runner(app.handle().clone());
         let ask = |cmd: &str, args: Value| -> Result<Value, String> {
@@ -50514,9 +50565,21 @@ mod tests {
                 _ => unreachable!("{cmd}"),
             }
         };
+        // The chat messages still to go or to be acknowledged: their bubbles.
+        let live_messages = |e: &tempo_app::engine::Engine| {
+            e.snapshot()
+                .conversations
+                .iter()
+                .flat_map(|c| c.messages.iter())
+                .filter(|m| {
+                    m.outbound && m.ack_id.is_some() && !(m.abandoned || m.delivered || m.no_ack)
+                })
+                .count()
+        };
         let presence = TransmitAuthority::default();
         let stopped = Err(STOPPED_SINCE.to_string());
         let mut ran_after_a_stop = Vec::new();
+        let mut kept_after_a_revocation = Vec::new();
         for (cmd, args) in [
             ("aprs_arm", json!({"on": true})),
             (
@@ -50557,6 +50620,7 @@ mod tests {
             }
             set_up(&mut engine_lock(&engine), cmd);
             let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let messages_before = live_messages(&engine_lock(&engine));
             let ran = ask(cmd, with(args.clone(), Some(now)));
             assert_ne!(ran, stopped, "{cmd} under the stand-down as it stands");
             if cmd == "resend_chat" {
@@ -50571,6 +50635,27 @@ mod tests {
                     "CONTROL {cmd}: it started: {ran:?}"
                 );
             }
+            // ⛔ Its stand-down revoked with no halt (the computer's permission to transmit
+            // withdrawn): the radio loop's tick stops the station and ends what it left on or
+            // queued.
+            if ran.is_ok() {
+                transmit.revoke();
+                let halted = engine_lock(&engine).poll_remote_transmit(Instant::now());
+                let e = engine_lock(&engine);
+                let message_left = live_messages(&e) != messages_before;
+                let left = (
+                    e.tx_enabled(),
+                    e.aprs_arm_source() == AprsArm::Explicit,
+                    e.beacon_enabled(),
+                    e.chat_cq_state() != "off",
+                    matches!(cmd, "send_message" | "resend_chat") && message_left,
+                );
+                if !halted || left != (false, false, false, false, false) {
+                    kept_after_a_revocation.push(format!(
+                        "{cmd}: halted {halted}, (TX, ack, beacon, CQ run, message) {left:?}"
+                    ));
+                }
+            }
             set_up(&mut engine_lock(&engine), cmd);
             let ran = ask(cmd, args.clone());
             assert_ne!(ran, stopped, "CONTROL {cmd}, from the shack's own screen");
@@ -50584,6 +50669,10 @@ mod tests {
         assert!(
             ran_after_a_stop.is_empty(),
             "ran from afar after a Stop: {ran_after_a_stop:#?}"
+        );
+        assert!(
+            kept_after_a_revocation.is_empty(),
+            "kept after its stand-down was revoked: {kept_after_a_revocation:#?}"
         );
         // ⛔ The off half of each switch is a Stop: named with a stand-down a halt has moved since,
         // it still runs, and turns the switch off. Leaving a run mode for a passive one too.
@@ -50625,12 +50714,31 @@ mod tests {
             ("set_beacon", json!({"on": true})),
             ("set_chat_cq", json!({"on": true})),
             ("resume_chat_cq", json!({})),
+            (
+                "send_message",
+                json!({"peer": "W1AW", "text": "HELLO FROM AFAR"}),
+            ),
+            ("resend_chat", json!({"peer": "W1AW"})),
         ] {
             set_up(&mut engine_lock(&engine), cmd);
             let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let bubbles = || {
+                engine_lock(&engine)
+                    .snapshot()
+                    .conversations
+                    .iter()
+                    .find(|c| c.peer == "W1AW")
+                    .map_or(0, |c| c.messages.len())
+            };
+            let before = bubbles();
             let said = ask(cmd, with(args, Some(now)));
             assert_eq!(said, Err(NO_PRESENCE.to_string()), "{cmd}");
-            assert!(!started(&mut engine_lock(&engine), cmd), "{cmd} started");
+            if cmd == "send_message" || cmd == "resend_chat" {
+                // A message the shack's own screen sent earlier may still be queued here.
+                assert_eq!(bubbles(), before, "{cmd} queued a message");
+            } else {
+                assert!(!started(&mut engine_lock(&engine), cmd), "{cmd} started");
+            }
         }
     }
 

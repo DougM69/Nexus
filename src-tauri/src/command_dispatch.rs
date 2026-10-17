@@ -156,20 +156,46 @@ pub(crate) const ENTRIES: [&str; 3] = ["set_operating_mode", "sstv_tune", "work_
 /// ⛔ The work started from afar that runs on at the station by itself, and so ends when the
 /// computer that started it is no longer there: a satellite track, which steers the dial and the
 /// mast for a whole pass, and what transmits with no further press (APRS Monitor armed by hand,
-/// which lets the automatic ack key; chat's presence beacon; chat's CQ run, turned on or resumed).
-/// From afar each is bound to that computer's presence, as its transmissions are; from the shack's
-/// own screen each runs as it always has.
-pub(crate) const PRESENCE_BOUND: [&str; 5] = [
+/// which lets the automatic ack key; chat's presence beacon; chat's CQ run, turned on or resumed;
+/// a chat message, sent or sent again, waiting in the store-and-forward queue). From afar each is
+/// bound to that computer's presence, as its transmissions are, and what transmits ends with any
+/// Stop too; from the shack's own screen each runs as it always has.
+pub(crate) const PRESENCE_BOUND: [&str; 7] = [
     "aprs_arm",
+    "resend_chat",
     "resume_chat_cq",
+    "send_message",
     "set_beacon",
     "set_chat_cq",
     "start_sat_track",
 ];
 
+/// ⛔ The settings save, from afar. It carries every field, among them switches that let the
+/// station transmit by itself and that only the settings form writes at the shack: JS8's APRS-IS
+/// relay and the WSPR/FST4W beacon's share of intervals. From afar a save keeps the shack's own
+/// value of each ([`keep_the_shacks_transmit_settings`]), so none turns on from there without a
+/// start's rules. (The presence beacon and JS8's automatic replies, relay and heartbeat acks each
+/// have one writer, their own switch, and no save moves them at all: `Engine::apply_settings`.)
+pub(crate) const SETTINGS_FROM_AFAR: [&str; 1] = ["set_settings"];
+
+/// What a settings save from afar may not change: the shack's own transmit-by-itself settings
+/// ([`SETTINGS_FROM_AFAR`]) are put back into `save`. From the shack's own screen (`None`) the
+/// save is taken as it came.
+pub(crate) fn keep_the_shacks_transmit_settings(
+    shack: &tempo_app::settings::Settings,
+    save: &mut tempo_app::settings::Settings,
+    afar: Option<&Afar>,
+) {
+    if afar.is_some() {
+        save.js8_aprs_relay = shack.js8_aprs_relay;
+        save.beacon_tx_percent = shack.beacon_tx_percent;
+    }
+}
+
 /// Whether the command lane writes [`Afar`] into an admitted call of `cmd`: each wired start but
-/// the held press, which never runs as a command, each section entry ([`ENTRIES`]) and the work
-/// bound to presence ([`PRESENCE_BOUND`]). A test holds this to the handlers that take it.
+/// the held press, which never runs as a command, each section entry ([`ENTRIES`]), the work
+/// bound to presence ([`PRESENCE_BOUND`]) and the settings save ([`SETTINGS_FROM_AFAR`]). A test
+/// holds this to the handlers that take it.
 pub(crate) fn takes_afar(cmd: &str) -> bool {
     matches!(
         transmit_from_afar(cmd),
@@ -182,6 +208,7 @@ pub(crate) fn takes_afar(cmd: &str) -> bool {
             | Wired::Chat)
     ) || ENTRIES.contains(&cmd)
         || PRESENCE_BOUND.contains(&cmd)
+        || SETTINGS_FROM_AFAR.contains(&cmd)
 }
 
 /// ⛔ STOP WINS OVER A START THAT WAS IN FLIGHT. A start from afar runs only while the transmit
@@ -201,6 +228,16 @@ pub(crate) fn still_bound(
             Err(STOPPED_SINCE.to_string())
         }
         _ => Ok(()),
+    }
+}
+
+/// ⛔ Note at the station that a start from afar ran under its stand-down, so a revocation of that
+/// stand-down with no halt (the computer's permission to transmit withdrawn) still ends what it
+/// started, queued or turned on, on the radio loop's next tick. `None`, the shack's own screen,
+/// notes nothing. Called after the start's work, in the same hold as [`still_bound`].
+pub(crate) fn started_from_afar(engine: &mut tempo_app::engine::Engine, afar: Option<&Afar>) {
+    if let Some(afar) = afar {
+        engine.note_started_from_afar(afar.stand_down);
     }
 }
 
