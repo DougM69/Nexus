@@ -772,7 +772,8 @@ commands the amplifier except Follow the radio's band".
   Nexus warns in the status lane if you do it.
   There is no baud setting, deliberately. The SPE adapts itself to whatever speed
   it is spoken to, and the KPA remembers its own rate, so Nexus finds it by asking
-  at each of the four rates Elecraft documents.
+  at each of the rates Elecraft documents: the KPA500's four (4800 to 38400), then
+  the KPA1500's three faster ones (57600, 115200 and 230400).
 
 - **Follow the radio's band** — step the amplifier to whatever band you tune to,
   without being asked. **Off unless you turn it on**, and appears only once a model

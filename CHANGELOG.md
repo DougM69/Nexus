@@ -78,6 +78,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   then shrank as ALC, power and compression arrived. From the moment the radio keys, SWR, ALC, PO and COMP now each
   have their own place at a fixed width, empty until their reading comes in. A meter the radio does not report is
   marked unavailable once the over ends, not a fraction of a second after it starts.
+- **Elecraft KPA1500 set to 57600, 115200 or 230400 baud now connects.** Nexus tried only the KPA500's four speeds
+  (4800 to 38400), so a KPA1500 set to one of its three faster ones showed "Not answering" even when it was cabled
+  correctly. All seven speeds Elecraft documents are now tried. A KPA500 is asked at its four speeds first, in the
+  same order as before. NEEDS-BENCH: a KPA1500 set to 230400, then 57600, on its USB port.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to

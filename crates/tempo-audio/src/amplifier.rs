@@ -573,8 +573,9 @@ pub fn kpa_band_label(index: u8) -> Option<&'static str> {
 /// Elecraft documents this as the way to confirm the PC is talking to the amplifier, and it is
 /// the only probe here that asks for nothing and changes nothing. That makes it the honest
 /// presence check, and the one safe way to sweep for the port's data rate: the KPA's speed is
-/// operator-selectable (`^BRP`: 4800 / 9600 / 19200 / 38400) and is remembered in the amplifier,
-/// so Nexus cannot assume one — but it can send a semicolon at each and see which answers.
+/// operator-selectable (`^BRP`: 4800 to 38400 on a KPA500, up to 230400 on a KPA1500) and is
+/// remembered in the amplifier, so Nexus cannot assume one — but it can send a semicolon at
+/// each and see which answers.
 pub fn kpa_ping() -> &'static str {
     ";"
 }
@@ -600,11 +601,16 @@ pub fn kpa_payload<'a>(reply: &'a str, verb: &str) -> Option<&'a str> {
     Some(rest)
 }
 
-/// The four data rates a KPA can be set to (`^BRP`), fastest first.
+/// The data rates a KPA can be set to (`^BRP`), in the order the sweep tries them.
 ///
 /// The amplifier remembers its rate, so Nexus cannot assume one — it sweeps them with
 /// [`kpa_ping`], which is the only probe that asks for nothing and changes nothing.
-pub const KPA_BAUDS: [u32; 4] = [38_400, 19_200, 9_600, 4_800];
+///
+/// The KPA500's four (Programmer's Reference rA2, `^BRP` 0-3) come first, fastest first and in
+/// the order they always had, so a KPA500 sees exactly the probes it saw before the one that
+/// answers. The KPA1500 adds 57600, 115200 and 230400 (Programming Reference V3, p. 19, `^BRP`
+/// 4-6); they are tried after, and cost a KPA500 time only when nothing answers at all.
+pub const KPA_BAUDS: [u32; 7] = [38_400, 19_200, 9_600, 4_800, 230_400, 115_200, 57_600];
 
 /// Decode a `^VI` payload — `"480 325"` is 48.0 V and 32.5 A.
 ///
@@ -828,7 +834,7 @@ mod imp {
 
     /// Per-verb reply budget. The KPA answers immediately; this bounds a link that went quiet.
     const KPA_TIMEOUT: Duration = Duration::from_millis(400);
-    /// A shorter budget while sweeping rates, so four wrong guesses do not cost two seconds.
+    /// A shorter budget while sweeping rates, so six wrong guesses do not cost 2.4 seconds.
     const KPA_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
     /// How many replies to skip while looking for the one matching the verb we asked. The KPA
     /// sends unsolicited status, so the next line is not necessarily our answer.
@@ -883,7 +889,7 @@ mod imp {
             Err(last.unwrap_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    "no KPA answered on any of its four data rates — check the port, and that \
+                    "no KPA answered on any of its seven data rates — check the port, and that \
                      the amplifier is powered on",
                 )
             }))
@@ -1726,6 +1732,25 @@ mod tests {
         assert!(!kpa_ping_ok(""), "silence is not an answer");
         assert!(!kpa_ping_ok("^OS1;"), "some other reply is not the echo");
         assert!(!kpa_ping_ok(";;"), "two is not one");
+    }
+
+    #[test]
+    fn kpa_bauds_cover_every_rate_either_amplifier_can_be_set_to() {
+        // Elecraft KPA1500 Programming Reference V3, p. 19 (`^BRP` 0-6), and the Overview on
+        // p. 6: 4800, 9600, 19200, 38400, 57600, 115200 or 230400. A KPA1500 left at one of the
+        // top three never answered the sweep and was reported as "not answering".
+        let mut rates = KPA_BAUDS.to_vec();
+        rates.sort_unstable();
+        assert_eq!(
+            rates,
+            [4_800, 9_600, 19_200, 38_400, 57_600, 115_200, 230_400],
+            "every documented ^BRP rate, once each"
+        );
+        // The KPA500 Programmer's Reference (rA2, `^BRP` 0-3) stops at 38400. Its four are
+        // probed first and in their old order, so a KPA500 sees exactly the probes it always
+        // did before the one that answers; the KPA1500-only rates cost it time only when
+        // nothing answers at all.
+        assert_eq!(KPA_BAUDS[..4], [38_400, 19_200, 9_600, 4_800]);
     }
 
     #[test]
