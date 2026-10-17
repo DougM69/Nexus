@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   size.
 - **Nexus Remote: a stream that "Still there?" ended no longer keeps the page connected.** The page now sleeps as a
   hidden tab does, after Stop has finished with this browser, and Start reconnects it.
+- **Phone screen: a refused ATT, PRE or monitor-level change says what failed.** When the radio does not take one of
+  these, the message now reads "Nexus could not set ATT.", "Nexus could not set PRE." or "Nexus could not set the
+  monitor level." instead of a Remote sentence about station control permission.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to

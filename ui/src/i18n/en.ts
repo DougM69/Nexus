@@ -10958,6 +10958,8 @@ export const EN = {
   'phone.sub.unconfirmed': 'Not confirmed for the sub receiver: {{plates}}',
   'phone.sub.setNotRead': 'Set from Nexus — the radio does not report the sub receiver’s levels back.',
   'phone.sub.failed': 'Nexus could not set the sub receiver’s {{plate}}.',
+  'phone.chain.failed': 'Nexus could not set {{plate}}.',
+  'phone.monitor.failed': 'Nexus could not set the monitor level.',
   'phone.chain.receiver.aria': 'Receiver chain — what you are hearing',
   'phone.chain.transmitter.aria': 'Transmitter chain — how your voice goes out',
   // ── THE FRONT-END PADS AND THE TX MONITOR (2026-09-22) ──────────────────────────────

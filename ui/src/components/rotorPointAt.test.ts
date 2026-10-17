@@ -71,3 +71,16 @@ describe('the point-at-call toast names what it aimed at', () => {
     ])
   })
 })
+
+describe('a failed point-at-call keeps each path’s own words', () => {
+  it('Remote names station control; the desktop names the rotator and its error', async () => {
+    mockedPoint.mockRejectedValue(new Error('no rotator'))
+    rotorPointAt(false)('EC1DD')
+    rotorPointAt(true)('EC1DD')
+    await vi.waitFor(() => expect(mockedToast).toHaveBeenCalledTimes(2))
+    expect(mockedToast.mock.calls.map((call) => call[0]).sort()).toEqual([
+      'Rotator: no rotator',
+      'The command was not confirmed. Check station control permission and the current readings.',
+    ])
+  })
+})
