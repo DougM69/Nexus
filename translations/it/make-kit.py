@@ -234,7 +234,7 @@ def adapt_note(note, english):
                r'keys \(e\.g\. [^)]*\)|also a colour choice \([^)]*\)) — each can take a different '
                r'Portuguese word(?:, so choose the one that fits THIS screen)?\.\s*', '', note)
     s = re.sub(r'Plural form "[a-z]+" — this key has one row per form \(::one = exactly 1, '
-               r'::other = every other count\)\.\s*', '', s)
+               r'::other = every other count(?:, 0 included)?\)\.\s*', '', s)
     s = re.sub(r'Fill both rows separately; never merge them into one sentence\.\s*', '', s)
     for old, new in LANGUAGE_WORDS:
         s = s.replace(old, new)
