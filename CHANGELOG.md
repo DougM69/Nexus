@@ -138,6 +138,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   slot reads empty and "Deleted F1 (CQ)" offers Undo for about 8 seconds; Undo brings back the same recording under the
   same name, and only after that does the recording really go. Play, the F-keys and ■ Stop work as before.
 
+### Added
+- **Every save of the contest log now keeps backup copies beside it.** The contest log
+  (`fieldday_backup_<n>.adi`) is the only copy of a contest's contacts until you merge them into the Logbook. Each
+  time it is saved, Nexus also writes a copy to a `fieldday_history` folder next to it: `%APPDATA%\tempo\fieldday_history\`
+  on Windows, `~/.config/tempo/fieldday_history/` on Linux and Mac, and `tempo-r<n>` in place of `tempo` for a second
+  radio's window. It keeps the last 10 saves (`….save-000123.adi`, the highest number is the newest) and one copy per
+  hour (`….hour-20261017-21.adi`, the hour in UTC) for the last 48 hours. A big contest log is well under 1 MB, so the
+  folder stays a few MB at most. Nexus never reads these copies back on its own, and a copy that can't be written
+  never stops a contact from being logged. To use one: quit Nexus, copy the backup you want over
+  `fieldday_backup_<n>.adi` (keep the damaged file somewhere first), rename it to that name, and start Nexus again. You
+  can also import a copy into the Logbook like any ADIF file.
+
 ### Fixed
 - **Remote: the addresses Nexus sends your logging-service keys to can only be changed at the station.** A settings
   save from a computer driving the station no longer changes the Cloudlog/Wavelog URL, the club host a Field Day

@@ -58,6 +58,8 @@ enum Op {
         bytes: Vec<u8>,
         /// The words a failure is reported with, before the error itself.
         failure: &'static str,
+        /// Where to keep rolling copies once the journal is saved ([`keep_copies`]), if anywhere.
+        copies: Option<PathBuf>,
     },
     /// Remove `path` — an empty journal.
     Remove { path: PathBuf },
@@ -180,6 +182,27 @@ impl JournalWriter {
             tmp,
             bytes,
             failure,
+            copies: None,
+        });
+    }
+
+    /// [`Self::replace`], and once the journal is saved, a copy of it kept in the folder `copies`
+    /// ([`keep_copies`]). A copy that fails is reported in the diagnostic log and changes
+    /// nothing else: the journal's own outcome is its save's alone.
+    pub fn replace_keeping_copies(
+        &self,
+        path: &Path,
+        tmp: PathBuf,
+        bytes: Vec<u8>,
+        failure: &'static str,
+        copies: PathBuf,
+    ) {
+        self.submit(Op::Replace {
+            path: path.to_path_buf(),
+            tmp,
+            bytes,
+            failure,
+            copies: Some(copies),
         });
     }
 
@@ -269,6 +292,7 @@ fn apply(op: Op) -> (PathBuf, bool) {
             tmp,
             bytes,
             failure,
+            copies,
         } => {
             if let Some(dir) = path.parent() {
                 let _ = std::fs::create_dir_all(dir);
@@ -282,6 +306,19 @@ fn apply(op: Op) -> (PathBuf, bool) {
             if let Err(e) = &res {
                 eprintln!("{failure}: {e}");
             }
+            // Only a saved journal is copied, and the copy's outcome is not the journal's.
+            if let (Ok(()), Some(dir)) = (&res, &copies) {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                if let Err(e) = keep_copies(dir, &path, &bytes, now) {
+                    eprintln!("tempo: journal copy failed: {e}");
+                    crate::applog::warn(
+                        "journal_copy_failed",
+                        &format!("{} -> {}: {e}", path.display(), dir.display()),
+                    );
+                }
+            }
             (path, res.is_ok())
         }
         Op::Remove { path } => {
@@ -293,6 +330,85 @@ fn apply(op: Op) -> (PathBuf, bool) {
             (path, gone)
         }
     }
+}
+
+/// How many of a journal's latest saves [`keep_copies`] keeps.
+pub const SAVES_KEPT: usize = 10;
+/// How many of a journal's hourly copies [`keep_copies`] keeps: at most one per clock hour, so
+/// at least the last 48 hours the journal was saved in.
+pub const HOURS_KEPT: usize = 48;
+
+/// Keep copies of the journal `journal`, just saved as `bytes`, in the folder `dir`, each
+/// written to a temporary file, fsynced and renamed into place:
+/// - `<stem>.save-NNNNNN.<ext>`, numbered on from the highest there, the newest
+///   [`SAVES_KEPT`] kept;
+/// - `<stem>.hour-YYYYMMDD-HH.<ext>` (UTC hour of `now_unix`), made by the hour's first save and
+///   replaced by its later ones, the newest [`HOURS_KEPT`] kept.
+///
+/// Only this journal's own copies are counted or removed; the journal itself is never touched,
+/// and nothing reads a copy back. Restoring from one is the operator's act.
+pub fn keep_copies(dir: &Path, journal: &Path, bytes: &[u8], now_unix: u64) -> std::io::Result<()> {
+    let stem = journal
+        .file_stem()
+        .ok_or_else(|| std::io::Error::other("a journal with no file name"))?
+        .to_string_lossy();
+    let ext = journal
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    std::fs::create_dir_all(dir)?;
+    let save = format!("{stem}.save-");
+    let hour = format!("{stem}.hour-");
+    let mut saves: Vec<(u64, PathBuf)> = named(dir, &save, &ext)?
+        .into_iter()
+        .filter_map(|(mid, p)| Some((mid.parse().ok()?, p)))
+        .collect();
+    let next = saves.iter().map(|(n, _)| n + 1).max().unwrap_or(1);
+    let (y, mo, d, h, _, _) = crate::logbook::datetime_utc(now_unix);
+    let tmp = dir.join(format!("{stem}.copy.tmp"));
+    let newest = dir.join(format!("{save}{next:06}{ext}"));
+    publish(&tmp, &newest, bytes)?;
+    saves.push((next, newest));
+    publish(
+        &tmp,
+        &dir.join(format!("{hour}{y:04}{mo:02}{d:02}-{h:02}{ext}")),
+        bytes,
+    )?;
+    saves.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
+    for (_, old) in saves.iter().skip(SAVES_KEPT) {
+        std::fs::remove_file(old)?;
+    }
+    let mut hours = named(dir, &hour, &ext)?;
+    hours.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, old) in hours.iter().skip(HOURS_KEPT) {
+        std::fs::remove_file(old)?;
+    }
+    Ok(())
+}
+
+/// The files in `dir` named `<prefix><middle><suffix>`, with their middles.
+fn named(dir: &Path, prefix: &str, suffix: &str) -> std::io::Result<Vec<(String, PathBuf)>> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(mid) = name
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_suffix(suffix))
+        {
+            found.push((mid.to_string(), entry.path()));
+        }
+    }
+    Ok(found)
+}
+
+/// Write `bytes` to `tmp`, fsync it, and rename it over `to`.
+fn publish(tmp: &Path, to: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut f = std::fs::File::create(tmp)?;
+    std::io::Write::write_all(&mut f, bytes)?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(tmp, to)
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -511,5 +627,204 @@ mod tests {
             "after",
             "a failed write does not stop the ones behind it"
         );
+    }
+
+    /// The copies of `journal` in `dir`: (file name, contents), sorted by name.
+    fn copies(dir: &Path) -> Vec<(String, String)> {
+        let mut all: Vec<(String, String)> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| {
+                let p = e.unwrap().path();
+                (
+                    p.file_name().unwrap().to_string_lossy().into_owned(),
+                    std::fs::read_to_string(&p).unwrap(),
+                )
+            })
+            .collect();
+        all.sort();
+        all
+    }
+
+    /// 2026-10-17 21:30:00 UTC.
+    const SAT_2130Z: u64 = 1_792_272_600;
+
+    /// A saved journal leaves its copies beside it: the newest save and the hour's copy hold
+    /// exactly what the journal holds.
+    #[test]
+    fn a_saved_journal_is_copied_to_its_history_folder() {
+        let d = Dir::new("copies-saved");
+        let path = d.0.join("fieldday_backup_7.adi");
+        let history = d.0.join("fieldday_history");
+        let w = JournalWriter::default();
+        for text in ["<CALL:4>K1AB<EOR>", "<CALL:4>K1AB<EOR><CALL:4>W9XY<EOR>"] {
+            w.replace_keeping_copies(
+                &path,
+                path.with_extension("adi.tmp"),
+                text.as_bytes().to_vec(),
+                "test journal",
+                history.clone(),
+            );
+        }
+        w.settle();
+        let journal = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(journal, "<CALL:4>K1AB<EOR><CALL:4>W9XY<EOR>");
+        let names: Vec<String> = copies(&history).into_iter().map(|(n, _)| n).collect();
+        let hour = names
+            .iter()
+            .find(|n| n.starts_with("fieldday_backup_7.hour-"))
+            .expect("the hour's copy");
+        assert_eq!(
+            std::fs::read_to_string(history.join(hour)).unwrap(),
+            journal
+        );
+        assert_eq!(
+            std::fs::read_to_string(history.join("fieldday_backup_7.save-000002.adi")).unwrap(),
+            journal,
+            "the newest save is the journal"
+        );
+        assert_eq!(
+            std::fs::read_to_string(history.join("fieldday_backup_7.save-000001.adi")).unwrap(),
+            "<CALL:4>K1AB<EOR>",
+            "the one before is the save before"
+        );
+        assert_eq!(names.len(), 3, "two saves and one hour: {names:?}");
+    }
+
+    /// The rotation keeps exactly the newest [`SAVES_KEPT`] saves, and never touches another
+    /// journal's copies.
+    #[test]
+    fn the_rotation_keeps_exactly_the_newest_ten_saves() {
+        let d = Dir::new("copies-rotation");
+        let journal = d.0.join("fieldday_backup_7.adi");
+        let history = d.0.join("fieldday_history");
+        std::fs::create_dir_all(&history).unwrap();
+        let other = history.join("fieldday_backup_71.save-000001.adi");
+        std::fs::write(&other, "another position").unwrap();
+        for n in 1..=13 {
+            keep_copies(
+                &history,
+                &journal,
+                format!("save {n}").as_bytes(),
+                SAT_2130Z,
+            )
+            .unwrap();
+        }
+        let saves: Vec<(String, String)> = copies(&history)
+            .into_iter()
+            .filter(|(n, _)| n.starts_with("fieldday_backup_7.save-"))
+            .collect();
+        let want: Vec<(String, String)> = (4..=13)
+            .map(|n| {
+                (
+                    format!("fieldday_backup_7.save-{n:06}.adi"),
+                    format!("save {n}"),
+                )
+            })
+            .collect();
+        assert_eq!(saves, want);
+        assert_eq!(saves.len(), SAVES_KEPT);
+        assert_eq!(
+            std::fs::read_to_string(&other).unwrap(),
+            "another position",
+            "another journal's copy is untouched"
+        );
+    }
+
+    /// The hour's first save makes its copy and later saves in that hour replace it; a new hour
+    /// makes a new one; the newest [`HOURS_KEPT`] are kept.
+    #[test]
+    fn one_copy_per_hour_kept_for_the_last_48() {
+        let d = Dir::new("copies-hourly");
+        let journal = d.0.join("fieldday_backup_7.adi");
+        let history = d.0.join("fieldday_history");
+        let hours = |h: &Path| -> Vec<(String, String)> {
+            copies(h)
+                .into_iter()
+                .filter(|(n, _)| n.starts_with("fieldday_backup_7.hour-"))
+                .collect()
+        };
+        keep_copies(&history, &journal, b"first", SAT_2130Z).unwrap();
+        keep_copies(&history, &journal, b"second", SAT_2130Z + 1700).unwrap();
+        assert_eq!(
+            hours(&history),
+            [(
+                "fieldday_backup_7.hour-20261017-21.adi".to_string(),
+                "second".to_string()
+            )],
+            "one copy for the hour, holding its latest save"
+        );
+        keep_copies(&history, &journal, b"third", SAT_2130Z + 1800).unwrap();
+        assert_eq!(
+            hours(&history),
+            [
+                (
+                    "fieldday_backup_7.hour-20261017-21.adi".to_string(),
+                    "second".to_string()
+                ),
+                (
+                    "fieldday_backup_7.hour-20261017-22.adi".to_string(),
+                    "third".to_string()
+                ),
+            ]
+        );
+        for h in 2..=50u64 {
+            keep_copies(&history, &journal, b"later", SAT_2130Z + h * 3600).unwrap();
+        }
+        let kept = hours(&history);
+        assert_eq!(kept.len(), HOURS_KEPT);
+        assert_eq!(
+            kept.first().unwrap().0,
+            "fieldday_backup_7.hour-20261018-00.adi",
+            "the oldest kept is 47 hours before the newest"
+        );
+        assert_eq!(
+            kept.last().unwrap().0,
+            "fieldday_backup_7.hour-20261019-23.adi"
+        );
+    }
+
+    /// A history folder that cannot be made fails the copy and nothing else: the journal is
+    /// saved, and its outcome is a good write.
+    #[test]
+    fn a_copy_that_fails_leaves_the_journal_saved() {
+        let d = Dir::new("copies-fail");
+        let path = d.0.join("fieldday_backup_7.adi");
+        let history = d.0.join("fieldday_history");
+        std::fs::write(&history, "a file where the folder goes").unwrap();
+        let w = JournalWriter::default();
+        w.replace_keeping_copies(
+            &path,
+            path.with_extension("adi.tmp"),
+            b"<CALL:4>K1AB<EOR>".to_vec(),
+            "test journal",
+            history.clone(),
+        );
+        w.settle();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "<CALL:4>K1AB<EOR>");
+        assert_eq!(w.trouble(&path), None, "the journal's save is good");
+        assert!(
+            keep_copies(&history, &path, b"x", SAT_2130Z).is_err(),
+            "premise: the copy itself fails"
+        );
+    }
+
+    /// A journal whose save fails is not copied: a copy is only ever of a saved journal.
+    #[test]
+    fn a_journal_that_was_not_saved_is_not_copied() {
+        let d = Dir::new("copies-unsaved");
+        let path = d.0.join("fieldday_backup_7.adi");
+        std::fs::create_dir_all(&path).unwrap(); // a folder where the journal goes
+        let history = d.0.join("fieldday_history");
+        let w = JournalWriter::default();
+        w.replace_keeping_copies(
+            &path,
+            path.with_extension("adi.tmp"),
+            b"<CALL:4>K1AB<EOR>".to_vec(),
+            "test journal",
+            history.clone(),
+        );
+        w.settle();
+        assert!(w.trouble(&path).is_some(), "premise: the save failed");
+        assert!(!history.exists(), "nothing was copied");
     }
 }

@@ -48,6 +48,10 @@ mod contest_entry_tests;
 /// Each contest's own FT8/FT4 messages, Running and S&P, against a WSJT-X partner.
 #[cfg(test)]
 mod contest_ft_messages_tests;
+/// Every save of the contest journal keeps rolling copies beside it, and a copy that fails
+/// never fails the Log press.
+#[cfg(test)]
+mod contest_journal_copies_tests;
 /// A contest log merged into the Logbook twice, across a move and a restart, through the engine.
 #[cfg(test)]
 mod contest_merge_tests;
@@ -12189,11 +12193,14 @@ impl Engine {
         let Some(text) = self.field_day_log_adif() else {
             return;
         };
-        self.station.journals.replace(
+        // Rolling copies beside it (`fieldday_history`), a fallback for a journal lost or
+        // damaged later; made only after the journal itself is saved, and never fail it.
+        self.station.journals.replace_keeping_copies(
             path,
             path.with_extension("adi.tmp"),
             text.into_bytes(),
             "tempo: field day log save failed",
+            path.with_file_name("fieldday_history"),
         );
     }
 
