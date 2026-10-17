@@ -161,6 +161,43 @@ async fn the_link_refuses_a_station_of_another_build() {
         .is_ok());
 }
 
+/// ★ The station's version, heard: a link refused for another build still hears the build the
+/// station welcomed this computer with, so the banner can name both versions. CONTROL: a link of
+/// this build opens, and hears this build.
+#[tokio::test]
+async fn a_link_refused_for_another_build_hears_the_stations_version() {
+    let app = App::new();
+    for (build, said) in [
+        (("999.0.0", wire::contract()), "updateComputer"),
+        (("0.0.1", wire::contract()), "updateStation"),
+        ((wire::APP, ANOTHER), "otherBuild"),
+    ] {
+        let mut s = running(&app);
+        s.shared.build = build;
+        let (_listening, stop) = watch::channel(false);
+        let at = behind_a_port(&s, stop).await;
+        let (refused, heard) = crate::lan_client::link::hearing_build(Link::connect(
+            &paired_record(&s, at),
+            Some(at),
+            41,
+            None,
+        ))
+        .await;
+        assert_eq!(refused.err(), Some(said), "{build:?}");
+        assert_eq!(heard.as_deref(), Some(build.0), "{build:?}");
+    }
+    let (s, at, _listening) = shack_on(&app).await;
+    let (opened, heard) = crate::lan_client::link::hearing_build(Link::connect(
+        &paired_record(&s, at),
+        Some(at),
+        41,
+        None,
+    ))
+    .await;
+    assert!(opened.is_ok());
+    assert_eq!(heard.as_deref(), Some(wire::APP));
+}
+
 /// ★ Stop ahead, at this end: a Stop asked for while a 12 MB call is still going out in pieces goes
 /// before the rest of them, so the shack runs it first. CONTROL: the big call then runs, whole.
 #[tokio::test]

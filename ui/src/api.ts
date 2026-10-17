@@ -4404,6 +4404,10 @@ export interface ClientStatus {
   udpBlocked?: boolean
   /** A test build's road switch: where it is. A shipped build's status never names it. */
   bench?: BenchPosition
+  /** This computer's Nexus version. */
+  computerBuild?: string
+  /** The station's Nexus version, as its last welcome said it: null until one has. */
+  stationBuild?: string | null
 }
 
 /** The test build's road switch: both roads as they are, or one of them blocked. */

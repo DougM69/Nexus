@@ -29337,6 +29337,8 @@ tr.sel .aprs-sym {
   cursor: pointer; font-size: 0.95rem; line-height: 1; padding: var(--space-1);
 }
 .update-close:hover { opacity: 1; }
+/* The warning's checkbox while this computer drives a station: it enables "Install anyway". */
+.update-confirm { display: inline-flex; align-items: center; gap: var(--space-1); }
 
 /* The one-line compact recall (0.18.0's height-crush mitigation) lived here until 2026-07-31:
    the pane grid made the cockpit log pane's .pane-body the scroller, the full card came back,

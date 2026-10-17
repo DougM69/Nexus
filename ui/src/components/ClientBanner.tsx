@@ -47,13 +47,26 @@ export const CLIENT_STATUS_EVERY_MS = 500
 export const STILL_HERE_EVERY_MS = 5_000
 
 /** Why the station did not take this computer, in a sentence. Literal calls, so the catalog
- *  guard can see each key; a reason this build cannot name is said as such. */
-function reasonLine(reason: string | null): string {
-  switch (reason) {
+ *  guard can see each key; a reason this build cannot name is said as such. A refusal for another
+ *  build names both versions once the station's welcome has said its own. */
+function reasonLine(status: ClientStatus): string {
+  const builds =
+    status.stationBuild != null && status.computerBuild != null
+      ? { computer: status.computerBuild, station: status.stationBuild }
+      : null
+  if (builds) {
+    switch (status.reason) {
+      case 'updateStation': return t('client.reason.builds.updateStation', builds)
+      case 'updateComputer': return t('client.reason.builds.updateComputer', builds)
+      case 'otherBuild': return t('client.reason.builds.otherBuild', builds)
+      default: break
+    }
+  }
+  switch (status.reason) {
     case 'unreachable': return t('lanWindow.reason.unreachable')
     case 'otherNetwork':
     case 'refused':
-    case 'noAnswer': return lanReachLine(reason)
+    case 'noAnswer': return lanReachLine(status.reason)
     case 'keyChanged': return t('lanWindow.reason.keyChanged')
     case 'notThisStation': return t('lanWindow.reason.notThisStation')
     case 'notPaired': return t('lanWindow.reason.notPaired')
@@ -122,7 +135,7 @@ function line(status: ClientStatus): string {
     case 'notLive': return t('client.banner.notLive', { station })
     case 'busy': return t('client.banner.busy', { station })
     case 'refused':
-      return t('client.banner.refused', { station, reason: reasonLine(status.reason) })
+      return t('client.banner.refused', { station, reason: reasonLine(status) })
   }
 }
 

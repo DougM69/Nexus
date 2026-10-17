@@ -15,16 +15,25 @@
 // it decides when the old notice in features/updateCheck.ts speaks: only when this hook has
 // nothing to show, on a .deb, on a page with no updater, or after a check or download that
 // failed quietly. Settings' "Check for updates" reaches it through `installSelfUpdate`.
+//
+// WHILE THIS COMPUTER DRIVES A STATION (client mode) the press is HELD. The link takes only the
+// same build at both ends, and the shack never updates itself, so installing here would leave this
+// computer refused until someone at the shack installs the same version. Install then does
+// nothing but say so (`held`); only `installAnyway`, the banner's warning confirmed, goes ahead.
+// After Leave this computer runs its own Nexus again and nothing is held. A station already on
+// the offered version holds nothing: installing it is what brings the two together.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   checkBetaUpdate,
+  clientStatus,
   installBetaUpdate,
   openDownloadPage,
   prepareUpdateInstall,
   restartApp,
   updateInstallBlock,
   updateRoute,
+  type ClientStatus,
   type UpdateRoute,
 } from './api'
 import {
@@ -47,8 +56,14 @@ export interface SelfUpdate {
   /** Bytes downloaded so far / total, for the progress readout. */
   progress: { done: number; total: number } | null
   error: string | null
-  /** Install and restart. No-op unless phase is 'ready' and nothing blocks. */
+  /** Install and restart. No-op unless phase is 'ready' and nothing blocks, and held (nothing
+   *  installed) while this computer drives a station. */
   install: () => void
+  /** Install and restart while this computer drives a station: the banner's warning confirmed. */
+  installAnyway: () => void
+  /** While this computer drives a station that does not run the offered version: the station's
+   *  version, null until its welcome has said it. Null when nothing is held. */
+  held: { stationBuild: string | null } | null
   /** Hide the prompt for this session (the update stays downloaded). */
   dismiss: () => void
   /** The way out of a failed update: open the download page, then put this version away for
@@ -77,12 +92,22 @@ function updaterApi(): { check: () => Promise<UpdaterHandle | null> } | null {
  * to speak. `cancelled`: the channel changed under it, and the next run answers instead. */
 type Ending = 'answered' | 'quiet' | 'cancelled'
 
+/** What an install of `version` waits on while this computer drives a station (`client`, from
+ *  `client_status`; null on a computer running its own): the station's version, or null for
+ *  nothing held. */
+function holdFor(client: ClientStatus | null | undefined, version: string | null): SelfUpdate['held'] {
+  if (!client) return null
+  const stationBuild = client.stationBuild ?? null
+  return stationBuild != null && stationBuild === version ? null : { stationBuild }
+}
+
 export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
   const [phase, setPhase] = useState<Phase>('idle')
   const [version, setVersion] = useState<string | null>(null)
   const [blockReason, setBlockReason] = useState<string | null>(null)
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [held, setHeld] = useState<SelfUpdate['held']>(null)
   const handle = useRef<UpdaterHandle | null>(null)
   // Which channel produced the pending update — so `install` uses the matching install path. The
   // beta path (Rust `check_beta_update`/`install_beta_update`) points the updater at a
@@ -261,14 +286,31 @@ export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
     )
   }, [phase])
 
-  const install = useCallback(() => {
+  // Whether this computer drives a station, for the banner's warning. Asked again while the
+  // update waits, because the station's version arrives with its welcome. A computer whose
+  // `client_status` cannot answer is treated as running its own station: it updates as before.
+  useEffect(() => {
+    if (phase !== 'ready') return
+    return pollSingleFlight('update client', 2000, (owns) =>
+      clientStatus()
+        .then((client) => owns() && setHeld(holdFor(client, version)))
+        .catch(() => {}),
+    )
+  }, [phase, version])
+
+  const go = useCallback((confirmed: boolean) => {
     if (phase !== 'ready') return
     // Re-ask at the instant of the press. The polled value is for DISPLAY; this is the decision,
     // because the radio can go busy between the last poll and the click.
-    void updateInstallBlock()
-      .then(async (why) => {
+    void Promise.all([updateInstallBlock(), confirmed ? null : clientStatus().catch(() => null)])
+      .then(async ([why, client]) => {
         if (why) {
           setBlockReason(why)
+          return
+        }
+        const hold = holdFor(client, version)
+        if (hold) {
+          setHeld(hold)
           return
         }
         setPhase('installing')
@@ -310,7 +352,9 @@ export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
         setError(String(e))
         setPhase('error')
       })
-  }, [phase])
+  }, [phase, version])
+  const install = useCallback(() => go(false), [go])
+  const installAnyway = useCallback(() => go(true), [go])
 
   const dismiss = useCallback(() => {
     dismissed.current = version
@@ -348,5 +392,5 @@ export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
   }, [phase, routeOnce, version])
   useEffect(() => installSelfUpdate(checkNow), [checkNow])
 
-  return { phase, version, blockReason, progress, error, install, dismiss, downloadInstead }
+  return { phase, version, blockReason, progress, error, install, installAnyway, held, dismiss, downloadInstead }
 }

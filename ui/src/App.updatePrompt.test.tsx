@@ -77,6 +77,8 @@ vi.mock('./api', async (importOriginal) => {
     setOperatingMode: vi.fn(async () => state.snap),
     setArea: vi.fn(async () => state.snap),
     appVersion: vi.fn(async () => '1.15.0'),
+    // This computer runs its own station (not client mode), so nothing holds the install.
+    clientStatus: vi.fn(async () => null),
     openPanelWindow: vi.fn(async () => {}),
     // The two update checks.
     checkForUpdate: vi.fn(async () => INFO),

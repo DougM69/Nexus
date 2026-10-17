@@ -114,6 +114,34 @@ describe('on a computer driving a station', () => {
     }
   })
 
+  // The lockout after an update here: the station refuses the newer build. The banner must say
+  // which two versions disagree and which side to update, not only "the other one".
+  it('a refusal for another build names both versions and what to do', async () => {
+    for (const [reason, key, computer, station] of [
+      ['updateStation', 'client.reason.builds.updateStation', '1.20.0', '1.19.0'],
+      ['updateComputer', 'client.reason.builds.updateComputer', '1.19.0', '1.20.0'],
+      ['otherBuild', 'client.reason.builds.otherBuild', '1.20.0-test1', '1.20.0-test2'],
+    ] as const) {
+      mockStatus.mockResolvedValue({
+        station: AT,
+        phase: 'refused',
+        reason,
+        computerBuild: computer,
+        stationBuild: station,
+      })
+      await shown()
+      const text = screen.getByRole('status').textContent ?? ''
+      expect(text).toContain(fill(EN[key], { computer, station }))
+      expect(text).toContain(computer)
+      expect(text).toContain(station)
+      cleanup()
+    }
+    // CONTROL: the station's version not heard (a refusal before its welcome): the plain sentence.
+    mockStatus.mockResolvedValue({ station: AT, phase: 'refused', reason: 'updateStation', computerBuild: '1.20.0' })
+    await shown()
+    expect(screen.getByRole('status').textContent).toContain(EN['lanWindow.reason.updateStation'])
+  })
+
   it('Leave starts this computer’s Nexus again as itself, once', async () => {
     mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null })
     await shown()

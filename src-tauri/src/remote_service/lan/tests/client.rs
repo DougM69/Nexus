@@ -172,6 +172,63 @@ fn a_station_that_names_itself_another_is_refused() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// ★ The lockout after an update here: a station still on an older build refuses this computer,
+/// and the status the banner reads names both versions, so it can say which side to update and to
+/// what. CONTROL: before any welcome the station's version is not known; this computer's always is.
+#[test]
+fn a_station_of_an_older_build_is_refused_naming_both_versions() {
+    let app = App::new();
+    let (s, at, _listening) = tauri::async_runtime::block_on(async {
+        let mut s = running(&app);
+        s.shared.build = ("0.0.1", wire::contract());
+        s.shared.authority.permit_station(&s.device, true).unwrap();
+        let (stopper, stop) = watch::channel(false);
+        let at = behind_a_port(&s, stop).await;
+        (s, at, stopper)
+    });
+    let record = paired_record(&s, at);
+    let dir = scratch("older-build");
+    let this = ThisComputer::read(dir.join("settings.json"), dir.join("ui-state.json"));
+    let client = Arc::new(Client::new(STATION.to_string(), this));
+    let before = client.status();
+    assert_eq!(
+        (before.computer_build, before.station_build),
+        (wire::APP, None)
+    );
+    let screens = screens(&client);
+    let (device, key, pkcs8) = (
+        record.device_id.clone(),
+        record.station_key.clone(),
+        record.pkcs8.clone(),
+    );
+    let find: Find = Arc::new(move |_| {
+        Ok(Some(PairedStation {
+            station_id: STATION.into(),
+            device_id: device.clone(),
+            station_key: key.clone(),
+            pkcs8: pkcs8.clone(),
+            addresses: vec![at.to_string()],
+        }))
+    });
+    let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
+        screens.main.app_handle().clone(),
+        find,
+        Arc::new(|_| Ok(Vec::new())),
+        Some(at),
+    ));
+    eventually("refused", || {
+        client.status().reason.as_deref() == Some("updateStation")
+    });
+    let status = client.status();
+    assert_eq!(status.phase, Phase::Refused);
+    let said = serde_json::to_value(&status).unwrap();
+    assert_eq!(said["computerBuild"], json!(wire::APP));
+    assert_eq!(said["stationBuild"], json!("0.0.1"));
+    driving.abort();
+    assert!(sent_here(&app).is_empty(), "{:?}", app.ran());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// ★ A station not where it was is found by name. With its one remembered address dead (a new
 /// lease from the router, say) and no address typed, client mode looks for the station by name,
 /// past another station's advert at a port of this one, and drives it where its own advert says

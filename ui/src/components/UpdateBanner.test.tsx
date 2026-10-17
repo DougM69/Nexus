@@ -13,6 +13,8 @@ function upd(over: Partial<SelfUpdate> = {}): SelfUpdate {
     progress: null,
     error: null,
     install: vi.fn(),
+    installAnyway: vi.fn(),
+    held: null,
     dismiss: vi.fn(),
     downloadInstead: vi.fn(),
     ...over,
@@ -100,6 +102,45 @@ describe('UpdateBanner', () => {
     expect(btn.getAttribute('title')).toBe(t('update.downloadInstead.title'))
     fireEvent.click(btn)
     expect(downloadInstead).toHaveBeenCalledTimes(1)
+  })
+
+  // A computer driving a station: installing here would leave it a build the station refuses. The
+  // banner says so, naming both versions, and installs only after that warning is confirmed.
+  it('while this computer drives a station, warns and installs only once the warning is confirmed', () => {
+    const install = vi.fn()
+    const installAnyway = vi.fn()
+    render(<UpdateBanner update={upd({ install, installAnyway, held: { stationBuild: '1.19.0' } })} />)
+    const banner = screen.getByRole('status')
+    expect(banner.textContent).toContain(t('update.held', { version: '0.17.17', station: '1.19.0' }))
+    expect(screen.queryByRole('button', { name: /install and restart/i })).toBeNull()
+    const anyway = screen.getByRole('button', { name: t('update.held.anyway.label') }) as HTMLButtonElement
+    expect(anyway.disabled).toBe(true)
+    fireEvent.click(anyway)
+    expect(installAnyway).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('checkbox', { name: t('update.held.confirm') }))
+    expect(anyway.disabled).toBe(false)
+    fireEvent.click(anyway)
+    expect(installAnyway).toHaveBeenCalledTimes(1)
+    expect(install).not.toHaveBeenCalled()
+  })
+
+  it('names only the offered version when the station’s is not known yet', () => {
+    render(<UpdateBanner update={upd({ held: { stationBuild: null } })} />)
+    expect(screen.getByRole('status').textContent).toContain(t('update.held.unknown', { version: '0.17.17' }))
+  })
+
+  it('a busy radio still refuses the install anyway, and says why', () => {
+    const installAnyway = vi.fn()
+    render(
+      <UpdateBanner
+        update={upd({ installAnyway, held: { stationBuild: '1.19.0' }, blockReason: 'Transmitting' })}
+      />,
+    )
+    fireEvent.click(screen.getByRole('checkbox', { name: t('update.held.confirm') }))
+    const btn = screen.getByRole('button', { name: 'Transmitting' }) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    fireEvent.click(btn)
+    expect(installAnyway).not.toHaveBeenCalled()
   })
 
   it('offers the download page only once installing has failed', () => {

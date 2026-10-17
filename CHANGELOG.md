@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into a dummy load.
 
 ### Fixed
+- **Nexus Remote: updating the second PC no longer locks you out of the shack without warning.** While the PC is
+  operating a shack, its update notice no longer offers a plain Install. It says which version is waiting and which
+  version the shack runs, and that installing here now ends remote operation until the shack runs the same version.
+  Update the shack first, or both together. **Install anyway** works only once you tick the warning, and after
+  **Leave** the update installs as usual. When the shack does refuse a different version, the banner now names both
+  versions and says which side to update. NEEDS-BENCH: two PCs, one of them a version behind.
 - **Nexus Remote: the shack's screen fits the browser window.** Ctrl (⌘ on a Mac) with +, − or 0, Ctrl with the
   scroll wheel and a trackpad pinch now zoom the browser page instead of going to the shack, and on a short or zoomed
   window the controls move to the side rail when that shows the shack's screen larger. Stop TX stays in view at every

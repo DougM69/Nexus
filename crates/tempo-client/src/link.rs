@@ -120,6 +120,22 @@ pub fn run_id() -> u64 {
     })
 }
 
+tokio::task_local! {
+    /// Where [`hearing_build`] keeps the build a station welcomed this computer with.
+    static HEARD: Arc<Mutex<Option<String>>>;
+}
+
+/// `reaching` (a link being opened, on any road), and the build the station last welcomed this
+/// computer with while it ran, whether the link then opened or not: the station's version, which a
+/// refusal for another build (`updateStation`, `updateComputer`, `otherBuild`) names beside this
+/// computer's. `None` when no station welcomed it.
+pub async fn hearing_build<F: std::future::Future>(reaching: F) -> (F::Output, Option<String>) {
+    let heard = Arc::new(Mutex::new(None));
+    let out = HEARD.scope(Arc::clone(&heard), reaching).await;
+    let build = lock(&heard).take();
+    (out, build)
+}
+
 /// The next call id of this run: rising across every link it opens.
 fn next_id() -> u64 {
     static LAST: AtomicU64 = AtomicU64::new(0);
@@ -310,6 +326,7 @@ impl Link {
         };
         let on_air = Arc::new(OnAir::default());
         let ours = (wire::APP, wire::contract());
+        let _ = HEARD.try_with(|heard| *lock(heard) = Some(app.clone()));
         if let Some(reason) = wire::refusal(End::Computer, ours, (&app, &contract)) {
             let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(None)).await;
             return Err(reason);
