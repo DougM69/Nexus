@@ -3703,6 +3703,9 @@ pub struct Engine {
     /// The rig keyed by something that is NOT Nexus (mic PTT / straight key), read back
     /// over CAT — see [`Self::observe_rig_ptt`]. Also vetoes amplifier changes.
     rig_keyed: bool,
+    /// The radio loop has handed a CW word to a keyer and the rig is still sending it, on any
+    /// keyer backend — see [`Self::observe_cw_keying`].
+    cw_keying: bool,
     rig_tx_swr: Option<f32>,
     /// Consecutive keyed SWR readings above [`Settings::swr_stop_ratio`]. The cutoff fires at
     /// TWO, never one — see [`Self::observe_rig_tx_meters`]. Zeroed by a reading at or below
@@ -5916,6 +5919,7 @@ impl Engine {
             rig_refused_agc: None,
             rig_smeter_db: None,
             rig_keyed: false,
+            cw_keying: false,
             rig_tx_swr: None,
             swr_over_count: 0,
             rig_tx_alc: None,
@@ -11050,6 +11054,15 @@ impl Engine {
         self.rig_keyed = on;
     }
 
+    /// The radio loop's word that the rig is sending, or has finished, the CW word it last
+    /// handed to a keyer (any backend). The CW queue alone says so only while words are still
+    /// waiting, so the LAST word of every send (and the whole of a one-word send) was off the
+    /// air as far as the meter strip and the high-SWR cutoff could tell. Display and cutoff
+    /// only: it is not part of [`Self::tx_owner`], so no transmit gate moves on it.
+    pub fn observe_cw_keying(&mut self, on: bool) {
+        self.cw_keying = on;
+    }
+
     pub fn observe_rig_tx_meters(
         &mut self,
         swr: Option<f32>,
@@ -11092,7 +11105,8 @@ impl Engine {
     ///   the transmitter of every operator it happens to.
     /// * **Actually keyed** — the same composite the meter poll itself uses: a transmission
     ///   Nexus owns ([`Self::tx_owner`], which is the tree's own enumeration of every keying
-    ///   source), or the rig keyed by its own mic (`rig_keyed`). Unkeyed, a stale reading in
+    ///   source), the rig keyed by its own mic (`rig_keyed`), or a CW word the rig is still
+    ///   sending after the CW queue emptied (`cw_keying`). Unkeyed, a stale reading in
     ///   the window before [`Self::clear_rig_tx_meters`] must never trip anything.
     /// * **TWO CONSECUTIVE READINGS**, never one. The meters are polled round-robin over four,
     ///   so SWR refreshes about every 600 ms and two readings is roughly 1.2 s — long enough
@@ -11108,7 +11122,7 @@ impl Engine {
             self.swr_over_count = 0;
             return;
         };
-        if self.tx_owner().is_none() && !self.rig_keyed {
+        if self.tx_owner().is_none() && !self.rig_keyed && !self.cw_keying {
             self.swr_over_count = 0;
             return;
         }
@@ -24358,7 +24372,12 @@ contact yourself."
         s.radio.phone_mode_refused = self.phone_mode_refused();
         s.radio.tuning = self.tuning;
         // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
-        s.radio.tx_busy_reason = self.tx_owner().map(TxOwner::busy_reason);
+        // …and a CW word still on the rig's keyer after the queue emptied, so the strip shows
+        // the whole over (display only: `tx_owner` itself is unchanged).
+        s.radio.tx_busy_reason = self
+            .tx_owner()
+            .or(self.cw_keying.then_some(TxOwner::Cw))
+            .map(TxOwner::busy_reason);
         // What the Phone cockpit's PTT and the header's ON AIR sign show of a streamed microphone
         // over; display only. `Armed` only while that over owns the transmitter: anything the
         // arbiter names before it (an FT over, the tune carrier, a key at the shack) is on the air.
@@ -64454,6 +64473,56 @@ mod tests {
         assert!(
             split.tx_enabled(),
             "two readings from either side of an unkey are not consecutive"
+        );
+    }
+
+    /// A CW word the rig is still sending after the CW queue has emptied (the rig's own keyer,
+    /// a WinKeyer, the serial keyline or the soundcard tone) is a keyed transmitter: the last
+    /// word of every send, and the whole of a one-word send. The strip shows it as on the air
+    /// and the cutoff reads it, while no transmit gate moves on it.
+    #[test]
+    fn the_last_cw_word_on_the_rigs_keyer_is_on_the_air_for_the_strip_and_the_cutoff() {
+        let mut e = swr_engine(2.5);
+        e.app.set_transmitting(false);
+        assert!(
+            e.tx_owner().is_none(),
+            "precondition: nothing Nexus queues is keying"
+        );
+        assert_eq!(
+            e.snapshot().radio.tx_busy_reason,
+            None,
+            "control: idle reads idle"
+        );
+
+        e.observe_cw_keying(true);
+        assert_eq!(
+            e.snapshot().radio.tx_busy_reason.as_deref(),
+            Some("CW is sending — stop it first"),
+            "the rig is sending the word, so the strip must show the over as on the air"
+        );
+        assert!(
+            e.tx_owner().is_none(),
+            "display and cutoff only: the arbiter every transmit gate asks is unchanged"
+        );
+        swr_reading(&mut e, 9.0);
+        assert!(e.tx_enabled(), "one reading still never halts");
+        swr_reading(&mut e, 9.0);
+        assert!(
+            !e.tx_enabled(),
+            "two high readings while the rig's keyer sends must halt, as on any other over"
+        );
+
+        // The word ends: off the air again, and a reading after it can never count.
+        let mut done = swr_engine(2.5);
+        done.app.set_transmitting(false);
+        done.observe_cw_keying(true);
+        done.observe_cw_keying(false);
+        assert_eq!(done.snapshot().radio.tx_busy_reason, None);
+        swr_reading(&mut done, 9.0);
+        swr_reading(&mut done, 9.0);
+        assert!(
+            done.tx_enabled(),
+            "a reading after the word ended may never halt"
         );
     }
 

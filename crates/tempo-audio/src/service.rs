@@ -3521,6 +3521,13 @@ struct RadioLoop {
     /// held until then, so at most one word sits in the rig's keyer buffer (Stop TX drops
     /// the rest). 0.0 = idle / ready to send now.
     cw_busy_until: f64,
+    /// Unix-ms until which the rig is sending the CW word Nexus last handed to a keyer, on any
+    /// backend. The rig's own keyer over CAT, a WinKeyer and the serial keyline key the radio
+    /// without Nexus's PTT, so nothing else in this loop sees their over; the transmit meters
+    /// are read and the engine shows the over as on the air until then. 0.0 = none.
+    cw_keying_until: f64,
+    /// What the engine was last told of [`Self::cw_keying_until`], so it hears only the edges.
+    cw_keying_told: bool,
     /// Last FM repeater config (shift, offset Hz, CTCSS Hz) the RIG ACCEPTED — so the
     /// shift/offset/CTCSS commands only fire on change, not every loop. `None` when not
     /// in FM. ⚠️ It is set from the rig's answer, never from the fact that the commands
@@ -4229,6 +4236,8 @@ impl RadioLoop {
             #[cfg(feature = "serial")]
             last_winkeyer_wpm: 0, // 0 = unset → the open pushes the speed
             cw_busy_until: 0.0,
+            cw_keying_until: 0.0,
+            cw_keying_told: false,
             last_fm: None,
             fm_push_misses: 0,
             remote_retune_uncertain: false,
@@ -6306,6 +6315,7 @@ impl RadioLoop {
             self.last_winkeyer_wpm = 0;
         }
         self.cw_busy_until = 0.0;
+        self.cw_keying_until = 0.0;
         self.rtty_busy_until = 0.0;
         // The latched stream belongs to the radio it was keying. `halt_tx_for_context_change`
         // drops the engine's latch across a handoff; this drops the generator with it, so a
@@ -9717,6 +9727,7 @@ impl RadioLoop {
             };
             if paddle {
                 self.cw_busy_until = 0.0; // the operator's next send keys as usual
+                self.cw_keying_until = 0.0;
             }
             // ARM THE ZERO-BEAT MEASUREMENT at the operator's pitch while the CW section is
             // up, and disarm it everywhere else. The rx-dsp thread does the measuring (see
@@ -9766,6 +9777,7 @@ impl RadioLoop {
                     self.tx_until_ms = None;
                 }
                 self.cw_busy_until = 0.0; // a fresh macro after Stop keys immediately
+                self.cw_keying_until = 0.0;
             }
             // ISSUE #135 (swinn, on 1.6.1) — "CW slider does not change speed". The speed
             // used to reach the WinKeyer ONLY from inside the `if let Some(text) = word`
@@ -9863,7 +9875,9 @@ impl RadioLoop {
                         if wpm != self.last_winkeyer_wpm && wk.set_wpm(wpm).is_ok() {
                             self.last_winkeyer_wpm = wpm;
                         }
-                        let _ = wk.send(&text);
+                        if wk.send(&text).is_ok() {
+                            self.cw_keying_until = self.cw_busy_until;
+                        }
                     }
                     {
                         let mut eng = engine_lock(engine);
@@ -9906,6 +9920,7 @@ impl RadioLoop {
                         }
                         if let Some((_, _, sk)) = self.serial_keyer.as_ref() {
                             sk.send(&text, wpm);
+                            self.cw_keying_until = self.cw_busy_until;
                         }
                         {
                             let mut eng = engine_lock(engine);
@@ -9938,6 +9953,7 @@ impl RadioLoop {
                                 let until = self.cw_busy_until + crate::slot::TX_TAIL_MS;
                                 self.tx_until_ms =
                                     Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                                self.cw_keying_until = until;
                             } else {
                                 // Nothing keyed, so nothing to wait out: a new send keys at once.
                                 self.cw_busy_until = 0.0;
@@ -9986,6 +10002,9 @@ impl RadioLoop {
                                                     // own error verbatim since the FTX-1 report, for exactly this reason.
                         let asked = Instant::now();
                         let cw_err = rig.send_morse(&text).err();
+                        if cw_err.is_none() {
+                            self.cw_keying_until = self.cw_busy_until;
+                        }
                         // Nexus's own Flex client says why it sent nothing (the slice not in CW,
                         // break-in off, ...), in place of the Hamlib advice, which would be wrong
                         // there. Its refusal drops the rest of the message, as a refused key does,
@@ -11734,8 +11753,19 @@ impl RadioLoop {
         // cycle (round-robin) so at most one blocking read lands per tick — four back-to-back
         // reads could stall a chunked tune/voice carrier if the rig answers slowly.
         {
-            let keyed_now =
-                self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_applied;
+            // A CW word on the rig's own keyer, a WinKeyer or the serial keyline keys the radio
+            // without Nexus's PTT, so none of the three flags before it sees that over. The
+            // operator watches Po, ALC and SWR in CW exactly as in SSB. The engine hears it on
+            // every backend: its CW queue is empty while the last word of a send goes out.
+            let cw_keying = now < self.cw_keying_until;
+            if cw_keying != self.cw_keying_told {
+                self.cw_keying_told = cw_keying;
+                engine_lock(engine).observe_cw_keying(cw_keying);
+            }
+            let keyed_now = self.tx_until_ms.is_some()
+                || self.tuning_keyed
+                || self.manual_ptt_applied
+                || cw_keying;
             // ⚠️ THE METERS RUN DURING A TUNE-UP TOO — BOUNDED, NOT STOOD DOWN. From 2026-08-28
             // to 1.10.1 the poll stood down for a tune as a starvation fix: a tune carrier is fed
             // one chunk per tick from a lead of [`TUNE_LEAD_MS`], and ONE slow blocking read (a
@@ -31660,6 +31690,15 @@ mod tests {
     /// which is exactly a miss. A keyed-at-the-rig scene rather than a tune-up because a tune
     /// has its own wall-clock ceiling and its own lead gate; this one just stays keyed.
     fn mock_rigctld_keyed(dial_hz: u64, meters_answer: bool) -> (String, Arc<Mutex<Vec<String>>>) {
+        mock_rigctld_ptt(dial_hz, meters_answer, "1\n") // the operator is holding the mic key
+    }
+
+    /// [`mock_rigctld_keyed`] with the answer to `t` (the radio's own PTT read) given.
+    fn mock_rigctld_ptt(
+        dial_hz: u64,
+        meters_answer: bool,
+        ptt: &'static str,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -31685,7 +31724,7 @@ mod tests {
                     let reply = if l == "f" {
                         dial.as_str()
                     } else if l == "t" {
-                        "1\n" // the operator is holding the mic key
+                        ptt
                     } else if meters_answer && l.starts_with("l ") {
                         "1.5\n"
                     } else {
@@ -31819,6 +31858,310 @@ mod tests {
                  {n} times. reads={reads:?}"
             );
         }
+    }
+
+    /// What one CW word showed, read off the engine the UI renders and off the radio's wire.
+    struct CwOver {
+        /// Transmit-meter reads while the word was going out.
+        reads: Vec<String>,
+        /// The snapshot near the end of the word: (SWR, ALC, Po, COMP, busy reason).
+        during: (
+            Option<f32>,
+            Option<f32>,
+            Option<f32>,
+            Option<f32>,
+            Option<String>,
+        ),
+        /// The snapshot well after the word: (SWR, busy reason).
+        after: (Option<f32>, Option<String>),
+        /// Transmit-meter reads in the last second, long after the word.
+        late_reads: Vec<String>,
+    }
+
+    /// One word, "TEST" at 20 WPM (1.26 s of keying and a 0.42 s word space), sent from the
+    /// CW screen on `rig` with the keyer `engine` is set to, the loop stepped every 50 ms.
+    /// The radio's `t` should answer 0, as a rig that does not report its keyer's TX does:
+    /// then the only thing that can make this loop read the meters is the CW over itself.
+    fn cw_word_over(
+        engine: &Arc<Mutex<Engine>>,
+        rig: &mut Rig,
+        log: &Arc<Mutex<Vec<String>>>,
+    ) -> CwOver {
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+            e.set_cw_wpm(20);
+            e.send_cw("TEST");
+        }
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 50.0;
+        let mut run_to = |state: &mut RadioLoop, rig: &mut Rig, end: f64| {
+            while t < end {
+                t += 50.0;
+                state
+                    .step(
+                        engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        t,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        run_to(&mut state, rig, 1_600.0);
+        let reads = tx_meter_reads(log);
+        let s = engine.lock().unwrap().snapshot().radio;
+        let during = (
+            s.tx_swr,
+            s.tx_alc,
+            s.tx_po_w,
+            s.tx_comp_db,
+            s.tx_busy_reason,
+        );
+        run_to(&mut state, rig, 3_000.0);
+        let mark = tx_meter_reads(log).len();
+        run_to(&mut state, rig, 4_000.0);
+        let late_reads = tx_meter_reads(log).split_off(mark);
+        let s = engine.lock().unwrap().snapshot().radio;
+        CwOver {
+            reads,
+            during,
+            after: (s.tx_swr, s.tx_busy_reason),
+            late_reads,
+        }
+    }
+
+    /// Every meter read during the word, the readings and an on-the-air over in the snapshot,
+    /// then blank and silent after it: the SSB behaviour, asserted for a CW over.
+    fn assert_cw_over_reads_its_meters(keyer: &str, o: &CwOver) {
+        for m in TX_METERS {
+            assert!(
+                o.reads.iter().any(|r| r == &format!("l {m}")),
+                "{keyer}: the radio is sending CW, so {m} must be read — reads={:?}",
+                o.reads
+            );
+        }
+        assert_eq!(
+            o.during,
+            (
+                Some(1.5),
+                Some(1.5),
+                Some(1.5),
+                Some(1.5),
+                Some("CW is sending — stop it first".to_string())
+            ),
+            "{keyer}: the strip must show every reading as a live over while the word goes out"
+        );
+        assert_eq!(
+            o.after,
+            (None, None),
+            "{keyer}: after the word the bars blank and the over ends, as after an SSB over"
+        );
+        assert!(
+            o.late_reads.is_empty(),
+            "{keyer}: nothing is keyed, so nothing is read — {:?}",
+            o.late_reads
+        );
+    }
+
+    /// "In CW the power, ALC and SWR do not track, but in SSB they do" (a contest tester on
+    /// 1.19). The meter poll keyed off the loop's own PTT state (an over's hold, the tune
+    /// carrier, manual PTT), and the rig's own keyer keys the radio with none of those. So a
+    /// CAT-keyed over was read only if the radio's `t` happened to answer 1 at the once-a-second
+    /// radio-side poll; on a radio that does not, never. And the snapshot showed the over as on
+    /// the air only while words were still queued, never during the last one. The soundcard
+    /// keyer holds PTT like an SSB over and is the control: it read its meters before.
+    #[test]
+    fn a_cw_word_on_the_rigs_keyer_reads_and_shows_the_transmit_meters() {
+        for keyer in ["cat", "soundcard"] {
+            let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+            engine.lock().unwrap().set_cw_keyer(keyer, 600.0);
+            let (addr, log) = mock_rigctld_ptt(7_030_000, true, "0\n");
+            let mut rig = Rig::rigctld(&addr);
+            let o = cw_word_over(&engine, &mut rig, &log);
+            assert!(
+                log.lock().unwrap().iter().any(|l| l.starts_with("b TEST")) || keyer == "soundcard",
+                "control: the CAT keyer must have sent the word — {:?}",
+                log.lock().unwrap()
+            );
+            assert_cw_over_reads_its_meters(keyer, &o);
+        }
+    }
+
+    /// Stop TX mid-word cuts the rig's keyer (`stop_morse`), and the over it was keying ends
+    /// with it: the meters stop being read and the strip leaves the air at once, not when the
+    /// word would have finished.
+    #[test]
+    fn stop_tx_mid_word_ends_the_cw_overs_meters_at_once() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_cw_keyer("cat", 600.0);
+            e.set_license_class("extra");
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+            e.set_cw_wpm(20);
+            e.send_cw("TEST");
+        }
+        let (addr, log) = mock_rigctld_ptt(7_030_000, true, "0\n");
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 50.0;
+        let mut run_to = |state: &mut RadioLoop, rig: &mut Rig, end: f64| {
+            while t < end {
+                t += 50.0;
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        t,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        run_to(&mut state, &mut rig, 600.0);
+        assert!(
+            engine
+                .lock()
+                .unwrap()
+                .snapshot()
+                .radio
+                .tx_busy_reason
+                .is_some(),
+            "control: the word is on the air before the stop"
+        );
+        engine.lock().unwrap().stop_cw();
+        run_to(&mut state, &mut rig, 650.0);
+        assert!(
+            log.lock().unwrap().iter().any(|l| l == "\\stop_morse"),
+            "control: the stop reached the rig's keyer — {:?}",
+            log.lock().unwrap()
+        );
+        let mark = tx_meter_reads(&log).len();
+        run_to(&mut state, &mut rig, 1_600.0);
+        let s = engine.lock().unwrap().snapshot().radio;
+        assert_eq!(
+            (s.tx_swr, s.tx_busy_reason),
+            (None, None),
+            "the stopped over must be off the air at once"
+        );
+        let late = tx_meter_reads(&log).split_off(mark);
+        assert!(
+            late.is_empty(),
+            "nothing is keyed after the stop, so nothing is read — {late:?}"
+        );
+    }
+
+    /// The same over on a WinKeyer: the keyer keys the radio through its KEY jack, and no PTT
+    /// of Nexus's is involved. A pty stands in for the keyer, as in the speed tests above
+    /// (Linux only, for the same reason).
+    #[cfg(target_os = "linux")]
+    #[cfg(all(unix, feature = "serial"))]
+    #[test]
+    fn a_cw_word_on_a_winkeyer_reads_and_shows_the_transmit_meters() {
+        use serialport::SerialPort;
+        use std::io::{Read, Write};
+
+        let (keyer, slave) = serialport::TTYPort::pair().expect("a pty pair");
+        let port = slave.name().expect("the pts side has a path");
+        let mut responder = keyer.try_clone().expect("clone the pty master");
+        responder
+            .set_timeout(Duration::from_millis(3000))
+            .expect("bound the answering read");
+        let got = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let got2 = Arc::clone(&got);
+        std::thread::spawn(move || {
+            let mut host_open = [0u8; 2];
+            if responder.read_exact(&mut host_open).is_ok() {
+                let _ = responder.write_all(&[0x17]); // WK2, revision 23
+                let _ = responder.flush();
+            }
+            let mut buf = [0u8; 64];
+            while let Ok(n) = responder.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                got2.lock().unwrap().extend_from_slice(&buf[..n]);
+            }
+        });
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.winkeyer_port = port.clone();
+            e.apply_settings(s);
+            e.set_cw_keyer("winkeyer", 600.0);
+        }
+        let (addr, log) = mock_rigctld_ptt(7_030_000, true, "0\n");
+        let mut rig = Rig::rigctld(&addr);
+        let o = cw_word_over(&engine, &mut rig, &log);
+        assert_eq!(
+            engine.lock().unwrap().cw_keyer_error(),
+            None,
+            "control: the stand-in keyer must open cleanly"
+        );
+        assert!(
+            got.lock().unwrap().windows(4).any(|w| w == b"TEST"),
+            "control: the word must have reached the WinKeyer — {:?}",
+            got.lock().unwrap()
+        );
+        assert!(
+            !log.lock().unwrap().iter().any(|l| l.starts_with("b ")),
+            "control: the WinKeyer, not the rig's keyer, sent it"
+        );
+        drop(slave);
+        assert_cw_over_reads_its_meters("winkeyer", &o);
+    }
+
+    /// The same over on the serial keyline (DTR into the rig's KEY jack). A pty stands in for
+    /// the port; its control lines are what the keyer thread toggles.
+    #[cfg(target_os = "linux")]
+    #[cfg(all(unix, feature = "serial"))]
+    #[test]
+    fn a_cw_word_on_the_serial_keyline_reads_and_shows_the_transmit_meters() {
+        use serialport::SerialPort;
+
+        let (_line, slave) = serialport::TTYPort::pair().expect("a pty pair");
+        let port = slave.name().expect("the pts side has a path");
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.cw_key_port = port.clone();
+            e.apply_settings(s);
+            e.set_cw_keyer("serial", 600.0);
+        }
+        let (addr, log) = mock_rigctld_ptt(7_030_000, true, "0\n");
+        let mut rig = Rig::rigctld(&addr);
+        let o = cw_word_over(&engine, &mut rig, &log);
+        assert_eq!(
+            engine.lock().unwrap().cw_keyer_error(),
+            None,
+            "control: the stand-in keyline must open cleanly"
+        );
+        assert!(
+            !log.lock().unwrap().iter().any(|l| l.starts_with("b ")),
+            "control: the keyline, not the rig's keyer, sent it"
+        );
+        drop(slave);
+        assert_cw_over_reads_its_meters("serial", &o);
     }
 
     /// The SECOND starvation source at the same site, and it is not a meter: the RF-power

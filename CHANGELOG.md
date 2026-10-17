@@ -76,6 +76,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep the report fixed, as WSJT-X does. NEEDS-BENCH on the air.
 
 ### Fixed
+- **CW: the power, ALC and SWR meters now track while the radio sends CW, as they do in SSB.** When the radio's own
+  keyer, a WinKeyer or the serial keyline sent the CW, Nexus did not read the transmit meters at all (unless the
+  radio happened to report itself keyed), and the meter strip showed the last word of every send, and any one-word
+  send, as off the air. The meters are now read for every word Nexus sends, on every keyer, and blank when it
+  ends or Stop TX cuts it. The high-SWR cutoff, if switched on, now also sees the last word. The 150 ms meter
+  cadence is unchanged. NEEDS-BENCH: send CW with the radio's own keyer and with a WinKeyer and watch Po, ALC and
+  SWR move.
 - **IC-7300, IC-705, IC-905 and IC-7300MK2: scope span, reference level and Center/Fixed now work.** With Native Icom
   CI-V on, these radios refused every scope span button ("SCOPE SPAN REFUSED … did not answer when asked whether its
   scope is in Center mode"), and the reference level and Center/Fixed controls did nothing, whatever the scope was set
