@@ -106,6 +106,11 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
         (1037, "Yaesu FTDX3000"),
         (1032, "Yaesu FTDX5000"),
         (1024, "Yaesu FT-1000MP"),
+        // FT-1000 and FT-1000D — their own backend (`ft1000d.c`; bundled `rigctl -l`: 1002
+        // `FT-1000` Beta, 1003 `FT-1000D` Stable), not the MP's. Without these rows an owner
+        // picked the MP above, whose backend misreads their status record.
+        (1002, "Yaesu FT-1000"),
+        (1003, "Yaesu FT-1000D"),
         // Kenwood
         (2031, "Kenwood TS-590S"),
         (2037, "Kenwood TS-590SG"),
@@ -1354,6 +1359,26 @@ mod tests {
         for (m, _) in models {
             assert!(seen.insert(m), "duplicate model number {m}");
         }
+    }
+
+    /// An FT-1000 or FT-1000D owner found neither in the picker, chose the FT-1000MP beside
+    /// them, and got CAT that "worked 80%" and would not follow a clicked spot. The MP's
+    /// backend is not theirs: it writes the dial with the same 0x0A opcode both radios take, but
+    /// it decodes the status record as the MP's four-byte 0.625 Hz count, and the FT-1000D's
+    /// record carries a three-byte 10 Hz count there (Hamlib 4.7.1 `ft1000mp.c` and
+    /// `ft1000d.c`). Every read-back is garbage, and the loop adopts it as a knob turn. The
+    /// rows sit in the DEFAULT tier, beside the MP, because "Show all models" starts off and a
+    /// row the operator cannot see sends them to the wrong one. Numbers and names as the
+    /// bundled `rigctl -l` lists them: 1002 `FT-1000` (Beta), 1003 `FT-1000D` (Stable).
+    #[test]
+    fn the_ft1000_and_ft1000d_are_in_the_default_list_under_their_own_backends() {
+        let verified = rig_models();
+        assert!(verified.contains(&(1002, "Yaesu FT-1000")), "{verified:?}");
+        assert!(verified.contains(&(1003, "Yaesu FT-1000D")), "{verified:?}");
+        assert_eq!(rig_model_name(1002), Some("Yaesu FT-1000"));
+        assert_eq!(rig_model_name(1003), Some("Yaesu FT-1000D"));
+        // The neighbour they were driven with is still itself.
+        assert_eq!(rig_model_name(1024), Some("Yaesu FT-1000MP"));
     }
 
     #[test]

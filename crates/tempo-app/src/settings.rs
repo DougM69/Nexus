@@ -349,9 +349,9 @@ pub fn swr_scale_verified(
 /// Mirror of `tempo_audio::civ::commands::has_delta_tx` for the native CI-V models, pinned
 /// against it by that crate's `the_no_xit_rigs_are_the_civ_models_without_delta_tx` — the crate
 /// arrow points the other way, so this cannot call it.
-pub const NO_XIT_RIGS: [u32; 57] = [
+pub const NO_XIT_RIGS: [u32; 58] = [
     4, 5, // the FLRig and TRX-Manager bridges
-    1001, 1010, 1015, 1020, 1021, 1022, 1023, 1027, 1041, 1043, 1046, // Yaesu
+    1001, 1002, 1010, 1015, 1020, 1021, 1022, 1023, 1027, 1041, 1043, 1046, // Yaesu
     2007, 2025, 2034, 2035, // Kenwood
     2048, 2049, 2054, 2056, 2057, // PowerSDR, Malachite, Thetis, SDR Console, the QMX
     3009, 3010, 3011, 3013, 3014, 3015, 3016, 3017, 3019, 3023, 3026, 3027, 3044, 3046, 3047, 3055,
