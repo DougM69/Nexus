@@ -148,7 +148,8 @@ fn restore(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
 /// one (whose `inner_size` is the maximised box, not the restore rect) — are decided in
 /// [`geom::capture`], with the previous record read back here as its fallback.
 fn capture(window: &tauri::WebviewWindow) {
-    let Some(cur) = live_geometry(window) else {
+    // A window in a streamed page's shape records the box it will go back to, not that shape.
+    let Some(cur) = followed_from().or_else(|| live_geometry(window)) else {
         return;
     };
     let path = geometry_path();
@@ -195,6 +196,124 @@ pub fn install(app: &tauri::AppHandle) {
 pub fn capture_now(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         capture(&window);
+    }
+}
+
+// ---- The main window in a streamed page's shape --------------------------------------------
+
+/// What the main window was before it took a streamed page's shape, to go back to.
+struct Before {
+    /// The box [`capture`] records while the window is in the page's shape.
+    geometry: Option<WindowGeometry>,
+    fullscreen: bool,
+    maximized: bool,
+    /// The restored box, once out of full screen and maximised: physical px.
+    position: tauri::PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+    /// The monitor it was on, which it never leaves, and its frame (outer size less inner).
+    work: WorkArea,
+    frame: (f64, f64),
+}
+
+/// Set from the first shape a stream gives the window until it goes back. Process-wide, because
+/// the close path's [`capture`] reads it as well as the stream's thread.
+static FOLLOWED: std::sync::Mutex<Option<Before>> = std::sync::Mutex::new(None);
+
+fn followed() -> std::sync::MutexGuard<'static, Option<Before>> {
+    FOLLOWED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn followed_from() -> Option<WindowGeometry> {
+    followed().as_ref().and_then(|before| before.geometry)
+}
+
+/// The main window taking a streamed page's shape ([`geom::follow`]) and going back. Its calls
+/// come from the stream's own thread; each window call is carried to the event loop in order.
+pub(crate) struct MainShape(pub tauri::AppHandle);
+
+impl crate::remote_service::stream::ShapeWindow for MainShape {
+    fn follow(&self, view: (u32, u32)) {
+        let Some(window) = self.0.get_webview_window("main") else {
+            return;
+        };
+        // A minimized window shows the page nothing; it is left where the operator put it.
+        if window.is_minimized().unwrap_or(false) {
+            return;
+        }
+        let mut before = followed();
+        if before.is_none() {
+            let Some(monitor) = window.current_monitor().ok().flatten() else {
+                return;
+            };
+            let geometry = live_geometry(&window);
+            let fullscreen = window.is_fullscreen().unwrap_or(false);
+            if fullscreen {
+                let _ = window.set_fullscreen(false);
+            }
+            let maximized = window.is_maximized().unwrap_or(false);
+            if maximized {
+                let _ = window.unmaximize();
+            }
+            let (Ok(position), Ok(size), Ok(outer)) = (
+                window.outer_position(),
+                window.inner_size(),
+                window.outer_size(),
+            ) else {
+                if maximized {
+                    let _ = window.maximize();
+                }
+                if fullscreen {
+                    let _ = window.set_fullscreen(true);
+                }
+                return;
+            };
+            *before = Some(Before {
+                geometry,
+                fullscreen,
+                maximized,
+                position,
+                size,
+                work: work_area_of(&monitor),
+                frame: (
+                    f64::from(outer.width.saturating_sub(size.width)),
+                    f64::from(outer.height.saturating_sub(size.height)),
+                ),
+            });
+        }
+        let Some(before) = before.as_ref() else {
+            return;
+        };
+        if let Some(to) = geom::follow(view, &before.work, before.frame, geom::MIN_INNER) {
+            let _ = window.set_size(tauri::PhysicalSize::new(to.w, to.h));
+            let _ = window.set_position(tauri::PhysicalPosition::new(to.x, to.y));
+        }
+    }
+
+    fn restore(&self) {
+        let Some(before) = followed().take() else {
+            return;
+        };
+        let Some(window) = self.0.get_webview_window("main") else {
+            return;
+        };
+        // Minimized since: put back behind the minimize, so restoring it later gives its own box.
+        let minimized = window.is_minimized().unwrap_or(false);
+        if minimized {
+            let _ = window.unminimize();
+        }
+        let _ = window.set_size(before.size);
+        let _ = window.set_position(before.position);
+        if before.maximized {
+            let _ = window.maximize();
+        }
+        if before.fullscreen {
+            let _ = window.set_fullscreen(true);
+        }
+        if minimized {
+            let _ = window.minimize();
+        }
     }
 }
 
