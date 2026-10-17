@@ -14,12 +14,14 @@ const mockStatus = vi.fn<() => Promise<ClientStatus | null>>()
 const mockLeave = vi.fn<() => Promise<void>>()
 const mockSwitch = vi.fn<(to: BenchPosition) => Promise<BenchPosition>>()
 const mockStillHere = vi.fn<() => Promise<void>>()
+const mockTake = vi.fn<() => Promise<void>>()
 vi.mock('../api', () => ({
   isTauri: () => desktop,
   clientStatus: () => mockStatus(),
   leaveClientMode: () => mockLeave(),
   benchRoadSwitch: (to: BenchPosition) => mockSwitch(to),
   clientStillHere: () => mockStillHere(),
+  clientTakeControl: () => mockTake(),
 }))
 import { ClientBanner, ClientInput, CLIENT_STATUS_EVERY_MS, STILL_HERE_EVERY_MS } from './ClientBanner'
 
@@ -34,6 +36,7 @@ beforeEach(() => {
   mockLeave.mockReset().mockResolvedValue(undefined)
   mockSwitch.mockReset()
   mockStillHere.mockReset().mockResolvedValue(undefined)
+  mockTake.mockReset().mockResolvedValue(undefined)
 })
 afterEach(() => {
   cleanup()
@@ -366,3 +369,61 @@ describe('over the internet road', () => {
   })
 })
 
+
+describe('Take control, while another device holds the station', () => {
+  const take = () => screen.queryByRole('button', { name: EN['client.banner.takeControl'] })
+
+  it('is asked inline first, and only the confirmed answer takes control', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'busy', reason: null })
+    await shown()
+    expect(screen.getByRole('status').textContent).toContain(fill(EN['client.banner.busy'], { station: AT }))
+    fireEvent.click(take()!)
+    const question = screen.getByRole('group', { name: EN['client.banner.takeControl'] })
+    expect(question.textContent).toContain(EN['client.banner.takeControl.confirm'])
+    expect(mockTake).not.toHaveBeenCalled()
+    fireEvent.click(within(question).getByRole('button', { name: EN['client.banner.takeControl.cancel'] }))
+    expect(screen.queryByRole('group', { name: EN['client.banner.takeControl'] })).toBeNull()
+    expect(mockTake).not.toHaveBeenCalled()
+    fireEvent.click(take()!)
+    fireEvent.click(
+      within(screen.getByRole('group', { name: EN['client.banner.takeControl'] })).getByRole('button', {
+        name: EN['client.banner.takeControl'],
+      }),
+    )
+    expect(mockTake).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('group', { name: EN['client.banner.takeControl'] })).toBeNull()
+  })
+
+  it('says another computer took control from this one, and offers to take it back', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'busy', reason: 'takenOver' })
+    await shown()
+    const said = screen.getByRole('status').textContent
+    expect(said).toContain(EN['client.banner.takenOver'])
+    expect(said).not.toContain(fill(EN['client.banner.busy'], { station: AT }))
+    expect(take()).not.toBeNull()
+  })
+
+  it('is offered only while another device holds the station, and a question asked goes with it', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null })
+    await shown()
+    expect(take()).toBeNull()
+    mockStatus.mockResolvedValue({ station: AT, phase: 'busy', reason: null })
+    await act(async () => {
+      vi.advanceTimersByTime(CLIENT_STATUS_EVERY_MS)
+    })
+    fireEvent.click(take()!)
+    expect(screen.getByRole('group', { name: EN['client.banner.takeControl'] })).not.toBeNull()
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null })
+    await act(async () => {
+      vi.advanceTimersByTime(CLIENT_STATUS_EVERY_MS)
+    })
+    expect(screen.queryByRole('group', { name: EN['client.banner.takeControl'] })).toBeNull()
+    expect(take()).toBeNull()
+    mockStatus.mockResolvedValue({ station: AT, phase: 'busy', reason: null })
+    await act(async () => {
+      vi.advanceTimersByTime(CLIENT_STATUS_EVERY_MS)
+    })
+    expect(screen.queryByRole('group', { name: EN['client.banner.takeControl'] })).toBeNull()
+    expect(mockTake).not.toHaveBeenCalled()
+  })
+})

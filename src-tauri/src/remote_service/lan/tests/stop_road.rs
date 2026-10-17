@@ -3058,3 +3058,103 @@ async fn a_press_from_a_connection_whose_presence_went_is_refused_under_anothers
     assert!(held, "CONTROL: the new holder's own press arms");
     assert_eq!(ran(&record), ["set_tx_enabled"]);
 }
+
+/// ★ Take control from a second computer, end to end. The first computer holds the station in
+/// Phone with TX on and its press keeping its over on the air; a second, kept out, takes control
+/// on its own connection. At once the over ends with nothing keyed, TX is off for the computer that
+/// took it, and the first computer's next presses are refused by its road. CONTROL: the press was
+/// on the air before, and the new holder's own press arms once it turns TX on itself. Then the
+/// first takes it back the same way.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_computer_takes_control_and_the_first_ones_over_ends() {
+    let _alone = alone();
+    let app = App::new();
+    let mut r = roadside(&app);
+    let record = on_the_engine(&mut r, gate(false));
+    r.s.shared
+        .engine
+        .lock()
+        .unwrap()
+        .set_operating_mode("phone", false);
+    let mut first = seated(&r).await;
+    let mut second = seated_with(&r, false).await;
+    first.renewed().await;
+    let said = first
+        .call(1, "set_tx_enabled", json!({"enabled": true}))
+        .await;
+    assert_eq!(said["value"]["ran"], "set_tx_enabled", "{said}");
+    let done = Arc::new(AtomicBool::new(false));
+    let radio = radio_loop(
+        r.s.shared.engine.clone(),
+        Over::Voice,
+        done.clone(),
+        Instant::now() + 2 * PRESENCE,
+    );
+    let mut on_air = false;
+    for _ in 0..20 {
+        first.road.say(&Up::Hold { press: 1, stops: 0 }).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        on_air |= r.s.shared.engine.lock().unwrap().mic_armed();
+    }
+    assert!(on_air, "premise: the first computer's over is on the air");
+
+    let state = second.ask(json!({"type":"state"})).await;
+    assert_eq!(state["value"]["phase"], "occupied", "{state}");
+    let taken = second
+        .ask(json!({"type":"takeControl","stationBootId":state["value"]["stationBootId"]}))
+        .await;
+    assert_eq!(taken["value"]["phase"], "controlling", "{taken}");
+    second.state = taken["value"].clone();
+    {
+        let e = r.s.shared.engine.lock().unwrap();
+        assert_eq!(
+            (e.mic_armed(), r.ptt.keyed(), e.tx_enabled()),
+            (false, false, false),
+            "(over armed, keyed, TX on) the moment the second computer took control"
+        );
+    }
+    let mut armed = false;
+    for _ in 0..3 {
+        first.road.say(&Up::Hold { press: 1, stops: 0 }).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        armed |= r.s.shared.engine.lock().unwrap().mic_armed();
+    }
+    assert!(
+        !armed && !r.ptt.keyed(),
+        "the first computer keyed again after control was taken"
+    );
+    let beat = first
+        .ask(json!({"type":"heartbeat","leaseId":first.lease()}))
+        .await;
+    assert_eq!(beat["error"], "notController", "{beat}");
+
+    // CONTROL: the new holder's own press arms, once it turns TX on itself. (Both seats are one
+    // paired computer's runs here, so its call takes a number of its own.)
+    second.renewed().await;
+    let said = second
+        .call(2, "set_tx_enabled", json!({"enabled": true}))
+        .await;
+    assert_eq!(said["value"]["ran"], "set_tx_enabled", "{said}");
+    let mut held = false;
+    for _ in 0..20 {
+        second.road.say(&Up::Hold { press: 1, stops: 0 }).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        held |= r.s.shared.engine.lock().unwrap().mic_armed();
+    }
+    second.road.say(&Up::Release { press: 1 }).await;
+    assert!(held, "CONTROL: the new holder's own press arms");
+
+    // The first takes it back the same way.
+    let state = first.ask(json!({"type":"state"})).await;
+    let back = first
+        .ask(json!({"type":"takeControl","stationBootId":state["value"]["stationBootId"]}))
+        .await;
+    assert_eq!(back["value"]["phase"], "controlling", "{back}");
+    let beat = second
+        .ask(json!({"type":"heartbeat","leaseId":second.lease()}))
+        .await;
+    assert_eq!(beat["error"], "notController", "{beat}");
+    done.store(true, Ordering::SeqCst);
+    drop(tokio::task::spawn_blocking(move || radio.join().unwrap()).await);
+    assert_eq!(ran(&record), ["set_tx_enabled", "set_tx_enabled"]);
+}

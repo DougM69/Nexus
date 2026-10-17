@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
   seconds of that PC dropping, as a transmission does; a track started at the shack runs on. NEEDS-BENCH.
+- **Nexus Remote: take control from a second PC.** When another PC is operating the shack, the banner now offers **Take
+  control**. Confirm it and anything the other PC is transmitting stops at once, a satellite track ends, and this PC
+  starts with TX off; the other PC's banner says it lost control and offers to take it back the same way. The shack's
+  own screen and every Stop still work as before. NEEDS-BENCH: two client PCs and the shack, the radio into a dummy load.
 
 ### Fixed
 - **Nexus Remote: the shack's screen fits the browser window.** Ctrl (⌘ on a Mac) with +, − or 0, Ctrl with the

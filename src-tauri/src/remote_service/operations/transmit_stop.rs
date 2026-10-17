@@ -310,7 +310,7 @@ pub(super) fn stop_station(engine: &crate::SharedEngine) {
 /// Every stop verb under the one guard, returning the mast halt the caller runs once the guard is
 /// gone. The satellite disarm goes first so `halt_tx` stays last, as it is in every combined local
 /// stop.
-fn stop(e: &mut tempo_app::engine::Engine) -> Option<String> {
+pub(super) fn stop(e: &mut tempo_app::engine::Engine) -> Option<String> {
     tempo_core::applog::info(
         "tx",
         "remote Stop TX: stopping every transmission at the station",
@@ -344,7 +344,7 @@ fn halt_mast(addr: String) {
 /// A blocking socket write, so the thread that owes the browser its acceptance never runs it. A
 /// thread that cannot be spawned runs it here instead — a Stop that quietly declined to halt the
 /// mast is not an option.
-fn halt_off_thread(addr: Option<String>) {
+pub(super) fn halt_off_thread(addr: Option<String>) {
     #[cfg(feature = "radio")]
     if let Some(addr) = addr {
         let owned = addr.clone();

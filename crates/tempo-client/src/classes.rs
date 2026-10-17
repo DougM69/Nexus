@@ -84,6 +84,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("client_audio_test",              RunsHere,    "A test note in this computer's headset."),
     ("client_status",                  RunsHere,    "Whether this computer drives a station, and how its link stands."),
     ("client_still_here",              RunsHere,    "The operator's input here, for the internet road's \"Still there?\"."),
+    ("client_take_control",            RunsHere,    "Takes control here from the device holding the station."),
     ("close_panel_window",             RunsHere,    "A window on this computer."),
     ("cloudlog_station_info",          RefusedHere, "Spends the stored Cloudlog key on connector setup, kept at the shack."),
     ("club_firewall_press",            RefusedHere, "Opens an administrator prompt for the shack's firewall, which waits on the shack's own screen."),

@@ -4468,6 +4468,12 @@ export async function benchRoadSwitch(to: BenchPosition): Promise<BenchPosition>
   return invoke<BenchPosition>('bench_road_switch', { to })
 }
 
+/** Take control from the device holding the station, once the operator confirmed it: that
+ *  device's over ends as its Stop would, and this computer starts with TX off. */
+export async function clientTakeControl(): Promise<void> {
+  return invoke<void>('client_take_control')
+}
+
 /** Leave: this computer's Nexus starts again as itself, the station handed back first. */
 export async function leaveClientMode(): Promise<void> {
   return invoke<void>('leave_client_mode')

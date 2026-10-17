@@ -29247,6 +29247,19 @@ tr.sel .aprs-sym {
   color: inherit;
   cursor: pointer;
 }
+/* Take control, asked inline while another device holds the station: the question and its two
+   answers wrap inside it, and the banner wraps rather than squeeze its line while it is asked. */
+.client-banner[data-confirming] {
+  flex-wrap: wrap;
+}
+.client-banner-confirm {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
 /* A test build's road switch (only a test build's status names it): its three positions, the one
    it is at filled, and while a road is blocked a mark in the bad state's colour, the banner's edge
    with it. In the flow like the rest, so it covers nothing; the banner wraps rather than squeeze

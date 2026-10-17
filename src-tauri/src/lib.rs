@@ -36359,6 +36359,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         restart_app,
         client_mode::client_status,
         client_mode::client_still_here,
+        client_mode::client_take_control,
         client_mode::client_audio,
         client_mode::set_client_audio,
         client_mode::client_audio_level,

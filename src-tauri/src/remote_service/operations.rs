@@ -64,6 +64,15 @@ pub enum Request {
         #[serde(rename = "leaseId")]
         lease_id: String,
     },
+    /// A paired computer takes control from the one holding it: that computer's over ends as a
+    /// Stop ends it, its lease ends, and this one's starts, with TX off. Only on the LAN road (the
+    /// computers' own, through the station's room as well); the relay's browsers never send it.
+    TakeControl {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "stationBootId")]
+        station_boot_id: String,
+    },
     StopTransmit {
         #[serde(rename = "requestId")]
         request_id: String,
@@ -104,6 +113,7 @@ impl Request {
             | Self::Acquire { request_id, .. }
             | Self::Heartbeat { request_id, .. }
             | Self::Release { request_id, .. }
+            | Self::TakeControl { request_id, .. }
             | Self::StopTransmit { request_id, .. }
             | Self::Result { request_id, .. }
             | Self::StationControl { request_id, .. } => request_id,
@@ -1210,6 +1220,46 @@ impl Authority {
                 }
                 self.state(&mut c, session, device, now, control)
             }
+            Request::TakeControl {
+                station_boot_id, ..
+            } => {
+                if !(c.grants.contains(device) || version >= 2 && c.control_grants.contains(device))
+                {
+                    return Err("localPermissionRequired");
+                }
+                if lan_road(connection).is_none() {
+                    return Err("stationUnsupported");
+                }
+                if c.boot.as_deref() != Some(station_boot_id.as_str()) {
+                    return Err("staleStation");
+                }
+                if c.lease.as_ref().is_some_and(|l| {
+                    l.session != session || l.device != device || l.lan != lan_road(connection)
+                }) {
+                    // The other computer's over ends as its Stop would end it, everything issued
+                    // under its lease with it (its presence, so what it started ends too), and
+                    // the Stop leaves the TX-enable latch off: this computer starts with TX off.
+                    self.revoke_execution();
+                    let halt = transmit_stop::stop(&mut engine);
+                    engine.poll_remote_transmit(now);
+                    transmit_stop::halt_off_thread(halt);
+                    c.lease = None;
+                    c.windows.clear();
+                    self.advance(&mut c)?;
+                }
+                if c.lease.is_none() {
+                    c.lease = Some(Lease {
+                        id: snapshot_id()?,
+                        session: session.into(),
+                        device: device.into(),
+                        until: now + LEASE,
+                        sequence: 0,
+                        lan: lan_road(connection),
+                    });
+                    self.advance(&mut c)?;
+                }
+                self.state(&mut c, session, device, now, control)
+            }
             Request::Result { .. } => unreachable!("handled before the Engine lock"),
             Request::StationControl {
                 station_boot_id,
@@ -1393,7 +1443,7 @@ impl Authority {
 /// lease-only requests need none here; their arms keep their own rules.
 fn permitted(c: &Core, version: u8, device: &str, request: &Request) -> bool {
     match request {
-        Request::Acquire { .. } | Request::Result { .. } => {
+        Request::Acquire { .. } | Request::TakeControl { .. } | Request::Result { .. } => {
             c.grants.contains(device) || version >= 2 && c.control_grants.contains(device)
         }
         Request::StationControl { action, .. } => {

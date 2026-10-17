@@ -828,7 +828,8 @@ async fn session<S>(
                             continue;
                         }
                         let answer = if !matches!(*request, Request::State { .. } | Request::Acquire { .. }
-                            | Request::Heartbeat { .. } | Request::Release { .. }) {
+                            | Request::Heartbeat { .. } | Request::Release { .. }
+                            | Request::TakeControl { .. }) {
                             // The relay's other lanes (logging, station controls, exports) stay on
                             // the relay: on this road everything else goes through the picture.
                             Some(response(&id, Err("stationUnsupported")))
