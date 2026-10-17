@@ -273,6 +273,7 @@ fn expected(cmd: &str, args: &Value) -> Way {
             "get_snapshot" => Way::Local(Local::Snapshot),
             "get_spectrum_row" => Way::Local(Local::SpectrumRow),
             "get_meters" => Way::Local(Local::Meters),
+            "get_rtty_scope" => Way::Local(Local::RttyScope),
             "radio_launch_info" => Way::Local(Local::RadioLaunchInfo),
             _ => Way::Shack { stop },
         },
@@ -488,7 +489,13 @@ fn the_screens_polls_are_answered_here_from_the_feeds() {
         Ok(empty.clone())
     );
     shack.feeds("snapshot/1", 3, json!({ "n": 3 }));
+    assert_eq!(
+        ask(&s.main, "get_rtty_scope", json!({})),
+        refused("notLive")
+    );
     shack.feeds("meters/1", 9, json!({ "rxLevel": 0.5 }));
+    let scope = json!({ "live": true, "seq": 40, "peak": 0.4, "xy": [127, 3], "offsetHz": -12.0 });
+    shack.feeds("rttyScope/1", 4, scope.clone());
     let row = json!({ "row": [0.25, 0.5], "loHz": 0.0, "hiHz": 4000.0, "source": "" });
     shack.feeds("spectrumRow/1", 7, row.clone());
     assert_eq!(
@@ -499,6 +506,9 @@ fn the_screens_polls_are_answered_here_from_the_feeds() {
         ask(&s.main, "get_meters", json!({})),
         Ok(json!({ "rxLevel": 0.5 }))
     );
+    // The tuning scope: the newest frame to every window that asks, from the feed.
+    assert_eq!(ask(&s.main, "get_rtty_scope", json!({})), Ok(scope.clone()));
+    assert_eq!(ask(&s.popout, "get_rtty_scope", json!({})), Ok(scope));
     assert_eq!(ask(&s.main, "get_spectrum_row", json!({})), Ok(row.clone()));
     assert_eq!(
         ask(&s.main, "get_spectrum_row", json!({})),

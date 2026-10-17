@@ -93,7 +93,8 @@ pub struct Feed {
 
 /// The feeds a computer may watch. The snapshot goes every 300 ms whether or not it changed, so
 /// its number always moves while the link is live; the waterfall's row and the meters go when they
-/// change, polled a little faster than the screen polls them at the shack.
+/// change, polled a little faster than the screen polls them at the shack; the RTTY tuning scope
+/// goes when it changes, at half the row's pace.
 pub const FEEDS: &[Feed] = &[
     Feed {
         name: "snapshot/1",
@@ -110,6 +111,16 @@ pub const FEEDS: &[Feed] = &[
     Feed {
         name: "meters/1",
         command: "get_meters",
+        every: Duration::from_millis(100),
+        always: false,
+    },
+    // The RTTY tuning scope's newest frame: 256 points as i8 pairs, about 2 KB of JSON before
+    // deflate, at half the waterfall row's pace. Each frame holds about 85 ms of points, so 100 ms
+    // draws nearly all of them. It changes only while the shack's RTTY decoder is armed; disarmed,
+    // the shack's poll answers the same empty frame and nothing is pushed.
+    Feed {
+        name: "rttyScope/1",
+        command: "get_rtty_scope",
         every: Duration::from_millis(100),
         always: false,
     },
@@ -389,6 +400,26 @@ fn version(text: &str) -> Option<(u64, u64, u64, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every feed runs a read at the shack: a command classed `RunsAtShack`, never one that can
+    /// start or stop a transmission, so watching a feed can change nothing at the station. The
+    /// RTTY tuning scope is one of them, and its pace is no faster than the waterfall row's.
+    #[test]
+    fn every_feed_is_a_shack_read_and_the_tuning_scope_is_one() {
+        for f in FEEDS {
+            assert_eq!(
+                crate::classes::class_of(f.command),
+                Some(crate::classes::Class::RunsAtShack),
+                "{} runs {}",
+                f.name,
+                f.command
+            );
+        }
+        let scope = feed("rttyScope/1").expect("the tuning scope's feed");
+        assert_eq!(scope.command, "get_rtty_scope");
+        assert!(!scope.always, "pushed only when it changed");
+        assert!(scope.every >= feed("spectrumRow/1").unwrap().every);
+    }
 
     /// ★ Pieces: a message of any size goes as one frame when it fits and as pieces otherwise, each
     /// at most a frame, and comes back whole, text as text and bytes as bytes, with the pieces of

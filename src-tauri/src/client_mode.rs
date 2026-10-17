@@ -164,7 +164,7 @@ const LASTING: [&str; 7] = [
 /// How long the main window waits for the shack's state before it shows without it.
 const SHOW_BY: Duration = Duration::from_secs(10);
 /// The feeds the screens' polls are answered from.
-const FEEDS: [&str; 3] = ["snapshot/1", "spectrumRow/1", "meters/1"];
+const FEEDS: [&str; 4] = ["snapshot/1", "spectrumRow/1", "meters/1", "rttyScope/1"];
 /// The most ids one question after outcomes may carry (the shack's own bound).
 const ASK_AT_ONCE: usize = 64;
 /// How long a look for the station by name listens for answers: the stations window's own wait.
@@ -225,6 +225,9 @@ pub(crate) enum Local {
     SpectrumRow,
     /// The shack's meters, from their feed.
     Meters,
+    /// The shack's RTTY tuning scope, its newest frame from its feed (the frame's own `seq` tells
+    /// the screen a frame it has drawn).
+    RttyScope,
     /// This computer's update channel.
     BetaUpdates,
     /// Start this computer's Nexus at sign-in.
@@ -284,6 +287,7 @@ pub(crate) fn way(cmd: &str, args: &Value) -> Way {
                 "get_snapshot" => Way::Local(Local::Snapshot),
                 "get_spectrum_row" => Way::Local(Local::SpectrumRow),
                 "get_meters" => Way::Local(Local::Meters),
+                "get_rtty_scope" => Way::Local(Local::RttyScope),
                 "radio_launch_info" => Way::Local(Local::RadioLaunchInfo),
                 _ => Way::Shack { stop },
             }
@@ -1043,6 +1047,7 @@ impl Client {
         match what {
             Local::Snapshot => self.polled(window),
             Local::Meters => self.fed("meters/1"),
+            Local::RttyScope => self.fed("rttyScope/1"),
             Local::SpectrumRow => Ok(self.row(window)),
             Local::BetaUpdates | Local::LaunchAtLogin => {
                 let on = args["on"]
