@@ -266,7 +266,15 @@ fn expected(cmd: &str, args: &Value) -> Way {
         Class::StartsTx => match transmit_from_afar(cmd) {
             Err(refusal) => Way::Refused(refusal),
             Ok(Wired::HeldPress) => Way::Press,
-            Ok(Wired::Ft | Wired::VoiceKeyer | Wired::Js8 | Wired::Cw) => Way::Start,
+            Ok(
+                Wired::Ft
+                | Wired::VoiceKeyer
+                | Wired::Js8
+                | Wired::Cw
+                | Wired::Tune
+                | Wired::Rtty
+                | Wired::Psk,
+            ) => Way::Start,
         },
         Class::RunsAtShack => match cmd {
             "ui_state_load" | "ui_state_save" => Way::Split,
@@ -333,8 +341,21 @@ fn every_command_goes_where_its_class_says() {
         way("js8_arm", &json!({ "which": "hb", "on": false })),
         Way::Shack { stop: true }
     );
+    assert_eq!(way("set_tune", &json!({ "on": true })), Way::Start);
     assert_eq!(
-        way("set_tune", &json!({ "on": true })),
+        way("set_tune", &json!({ "on": false })),
+        Way::Shack { stop: true }
+    );
+    assert_eq!(way("atu_tune", &json!({})), Way::Start);
+    assert_eq!(way("rtty_set_latched", &json!({ "on": true })), Way::Start);
+    assert_eq!(
+        way("rtty_set_latched", &json!({ "on": false })),
+        Way::Shack { stop: true }
+    );
+    assert_eq!(way("rtty_auto_cq", &json!({})), Way::Start);
+    assert_eq!(way("psk_type", &json!({ "text": "HI" })), Way::Start);
+    assert_eq!(
+        way("set_mode", &json!({ "mode": "qso-run" })),
         Way::Refused(Refusal::TransmitNotYet)
     );
     assert_eq!(
@@ -365,9 +386,11 @@ fn a_command_refused_here_fails_closed_and_nothing_is_sent() {
         ("no_such_command", json!({}), "unclassed"),
         ("repair_clock", json!({}), "shackOnly"),
         ("clear_lotw_password", json!({}), "shackOnly"),
-        ("rtty_send", json!({ "text": "CQ" }), "transmitNotYet"),
+        ("set_mode", json!({ "mode": "qso-run" }), "transmitNotYet"),
         ("send_cw", json!({ "text": "CQ" }), "noStopRoad"),
-        ("set_tune", json!({ "on": true }), "transmitNotYet"),
+        ("set_tune", json!({ "on": true }), "noStopRoad"),
+        ("rtty_send", json!({ "text": "CQ" }), "noStopRoad"),
+        ("psk_set_latched", json!({ "on": true }), "noStopRoad"),
         ("call_cq", json!({}), "noStopRoad"),
         ("set_tx_enabled", json!({ "enabled": true }), "noStopRoad"),
         ("set_ptt", json!({ "on": true }), "noStopRoad"),

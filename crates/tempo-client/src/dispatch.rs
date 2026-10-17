@@ -193,6 +193,16 @@ pub enum Wired {
     /// Keyboard CW or a CW macro, as text. The shack's keyer times every element; there is no
     /// paddle from afar.
     Cw,
+    /// The tune carrier, or the rig's own tuner. The carrier keeps the shack's own ceiling, and its
+    /// off half is a Stop ([`OFF_HALVES`]).
+    Tune,
+    /// One of the RTTY cockpit's starts: a send, continuous TX switched on and typed into, and the
+    /// auto-sequencer's CQ and answer. The shack re-checks every transmit gate on each tick of
+    /// continuous TX and holds it to its own ceiling; the sequencer's timing stays there.
+    Rtty,
+    /// One of the PSK cockpit's starts: a send, and continuous TX switched on and typed into, under
+    /// the same per-tick gates as RTTY's.
+    Psk,
 }
 
 /// ⛔ THE TRANSMISSION STARTS WIRED FOR ANOTHER COMPUTER, and how each goes; every other start is
@@ -203,8 +213,12 @@ pub enum Wired {
 /// and the yes to an automatic reply; `js8_arm` turns on only the automatic replies from afar
 /// ([`argument_refusal`]), its other switches (the heartbeat, relay, heartbeat acks and heartbeat
 /// networking) refused. The CW rows are keyboard CW and the macros, sent as text for the shack's
-/// keyer.
+/// keyer. The tune rows are the tune carrier and the rig's own tuner; the RTTY and PSK rows are the
+/// two keyboard cockpits' sends, continuous TX switched on and typed into, and RTTY's auto CQ and
+/// answer. Continuous TX and an auto run go on transmitting after the press, so each ends with the
+/// rest when the computer's presence lapses (the shack's halt ends the latch and the run).
 pub const WIRED: &[(&str, Wired)] = &[
+    ("atu_tune", Wired::Tune),
     ("call_cq", Wired::Ft),
     ("call_station", Wired::Ft),
     ("js8_answer_reply", Wired::Js8),
@@ -217,11 +231,20 @@ pub const WIRED: &[(&str, Wired)] = &[
     ("js8_typeahead", Wired::Js8),
     ("override_next_tx", Wired::Ft),
     ("play_voice_message", Wired::VoiceKeyer),
+    ("psk_send", Wired::Psk),
+    ("psk_set_latched", Wired::Psk),
+    ("psk_type", Wired::Psk),
     ("qso_freetext", Wired::Ft),
     ("qso_resend", Wired::Ft),
+    ("rtty_auto_answer", Wired::Rtty),
+    ("rtty_auto_cq", Wired::Rtty),
+    ("rtty_send", Wired::Rtty),
+    ("rtty_set_latched", Wired::Rtty),
+    ("rtty_type", Wired::Rtty),
     ("send_cw", Wired::Cw),
     ("send_cw_armed", Wired::Cw),
     ("set_ptt", Wired::HeldPress),
+    ("set_tune", Wired::Tune),
     ("set_tx_enabled", Wired::Ft),
     ("start_cq", Wired::Ft),
     ("start_running", Wired::Ft),

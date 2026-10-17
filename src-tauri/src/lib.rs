@@ -17061,9 +17061,16 @@ fn repeater_tune(
 /// at the current dial, the RTTY section owning the rig, no tune carrier, no other
 /// transmission) and returns WHY a send was refused; the radio loop keys the
 /// queued text via the configured backend (soundcard AFSK / true-FSK keyline).
+///
+/// `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn rtty_send(state: State<'_, SharedEngine>, text: String) -> Result<RttyStateDto, String> {
+fn rtty_send(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.rtty_send_text(&text)?;
     Ok(rtty_state_dto(&eng))
 }
@@ -17078,19 +17085,33 @@ fn rtty_send(state: State<'_, SharedEngine>, text: String) -> Result<RttyStateDt
 /// macro and the TX-enable latch remain the instant kills, and each of them also
 /// drops this. The engine re-checks every TX gate on every radio-loop tick while
 /// it is up, and drops the latch the moment one goes down.
+///
+/// `afar`: as [`set_tx_enabled`]'s, never asked of the off half.
 #[tauri::command(async)]
-fn rtty_set_latched(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDto, String> {
+fn rtty_set_latched(
+    state: State<'_, SharedEngine>,
+    on: bool,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
+    if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+    }
     eng.set_rtty_latched(on)?;
     Ok(rtty_state_dto(&eng))
 }
 
 /// Feed typed characters into the live latched transmission (one insertion at a
 /// time from the compose field — RTTY has no un-send, so nothing sent can be
-/// edited or withdrawn). Refused unless continuous TX is latched.
+/// edited or withdrawn). Refused unless continuous TX is latched. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn rtty_type(state: State<'_, SharedEngine>, text: String) -> Result<RttyStateDto, String> {
+fn rtty_type(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.rtty_type(&text)?;
     Ok(rtty_state_dto(&eng))
 }
@@ -17189,9 +17210,15 @@ fn psk_state_dto(eng: &Engine) -> PskStateDto {
 /// tune carrier, no other transmission) and returns WHY a send was refused;
 /// the radio loop keys the queued text as shaped BPSK audio at the netted
 /// offset. While continuous TX is latched a send types into the live stream.
+/// `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn psk_send(state: State<'_, SharedEngine>, text: String) -> Result<PskStateDto, String> {
+fn psk_send(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<PskStateDto, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.psk_send_text(&text)?;
     Ok(psk_state_dto(&eng))
 }
@@ -17202,19 +17229,33 @@ fn psk_send(state: State<'_, SharedEngine>, text: String) -> Result<PskStateDto,
 /// Esc/Stop macro and the TX-enable latch cut instantly and each also drops
 /// this. The engine re-checks every TX gate on every radio-loop tick while it
 /// is up and drops the latch the moment one goes down.
+///
+/// `afar`: as [`set_tx_enabled`]'s, never asked of the off half.
 #[tauri::command(async)]
-fn psk_set_latched(state: State<'_, SharedEngine>, on: bool) -> Result<PskStateDto, String> {
+fn psk_set_latched(
+    state: State<'_, SharedEngine>,
+    on: bool,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<PskStateDto, String> {
     let mut eng = engine_lock(&state);
+    if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+    }
     eng.set_psk_latched(on)?;
     Ok(psk_state_dto(&eng))
 }
 
 /// Feed typed characters into the live latched transmission (one insertion at
 /// a time from the compose field — PSK has no un-send). Refused unless
-/// continuous TX is latched.
+/// continuous TX is latched. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn psk_type(state: State<'_, SharedEngine>, text: String) -> Result<PskStateDto, String> {
+fn psk_type(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<PskStateDto, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.psk_type(&text)?;
     Ok(psk_state_dto(&eng))
 }
@@ -17724,19 +17765,29 @@ fn rtty_set_auto(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDt
 }
 
 /// Operator starts an auto CQ run (a human-initiate gate). The engine re-checks every
-/// TX gate and returns WHY a start was refused (Auto off, TX locked, …).
+/// TX gate and returns WHY a start was refused (Auto off, TX locked, …). `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn rtty_auto_cq(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
+fn rtty_auto_cq(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.rtty_auto_cq()?;
     Ok(rtty_state_dto(&eng))
 }
 
 /// Operator answers a surfaced CQ — search & pounce (a human-initiate gate). Same
-/// gate re-check + reason on refusal.
+/// gate re-check + reason on refusal. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn rtty_auto_answer(state: State<'_, SharedEngine>, call: String) -> Result<RttyStateDto, String> {
+fn rtty_auto_answer(
+    state: State<'_, SharedEngine>,
+    call: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.rtty_auto_answer(&call)?;
     Ok(rtty_state_dto(&eng))
 }
@@ -18404,10 +18455,18 @@ fn update_radio_profile(
 
 /// Hold (`true`) or release (`false`) a steady tune carrier for ATU/amp tuning.
 /// While tuning, normal slot TX is suppressed and the radio loop plays a steady
-/// f0 sine. Returns the refreshed snapshot.
+/// f0 sine. Returns the refreshed snapshot. `afar`: as [`set_tx_enabled`]'s, never asked of the
+/// off half.
 #[tauri::command(async)]
-fn set_tune(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
+fn set_tune(
+    state: State<'_, SharedEngine>,
+    on: bool,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+    }
     eng.set_tune(on);
     Ok(eng.snapshot())
 }
@@ -18417,10 +18476,15 @@ fn set_tune(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, Str
 /// through the sound card, the rig produces its own; and unlike [`set_rig_func`], which toggles
 /// receive-side DSP, this KEYS THE TRANSMITTER — so it goes through `Engine::atu_tune_gate` (TX
 /// armed, inside the operator's privileges, transmitter idle, and the rig actually has a tuner)
-/// and comes back as `Err(reason)` when any of that is not true. Never a silent no-op.
+/// and comes back as `Err(reason)` when any of that is not true. Never a silent no-op. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn atu_tune(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+fn atu_tune(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.atu_tune()?;
     Ok(eng.snapshot())
 }
@@ -49837,18 +49901,22 @@ mod tests {
 
     /// A mock of the shack's app over `engine`, with a main window, holding the app's own handlers
     /// for the Operate strip's Call CQ and contest S&P, the JS8 sends, keyboard CW and its macros,
-    /// Enable TX and the stops a cockpit sends: what the starts from afar are run through, as the
+    /// the tune carrier and the rig's tuner, the RTTY and PSK starts, Enable TX and the stops a
+    /// cockpit sends: what the starts from afar are run through, as the
     /// command lane runs them (`command_dispatch::tauri_runner`). Here because a handler's command
     /// macro is reachable only from the module that defines it.
     pub(crate) fn shack_app_for_starts_from_afar(engine: crate::SharedEngine) -> ShackApp {
         use crate::{
-            halt_tx, js8_answer_reply, js8_arm, js8_call_cq, js8_cq_repeat, js8_heartbeat_now,
-            js8_send, js8_send_command, js8_typeahead, send_cw, send_cw_armed, set_tx_enabled,
-            start_running, start_search_and_pounce, stop_cw,
+            atu_tune, halt_tx, js8_answer_reply, js8_arm, js8_call_cq, js8_cq_repeat,
+            js8_heartbeat_now, js8_send, js8_send_command, js8_typeahead, psk_send,
+            psk_set_latched, psk_stop, psk_type, rtty_auto_answer, rtty_auto_cq, rtty_send,
+            rtty_set_latched, rtty_stop, rtty_type, send_cw, send_cw_armed, set_tune,
+            set_tx_enabled, start_running, start_search_and_pounce, stop_cw,
         };
         let app = tauri::test::mock_builder()
             .manage(engine)
             .invoke_handler(tauri::generate_handler![
+                atu_tune,
                 halt_tx,
                 js8_answer_reply,
                 js8_arm,
@@ -49858,8 +49926,19 @@ mod tests {
                 js8_send,
                 js8_send_command,
                 js8_typeahead,
+                psk_send,
+                psk_set_latched,
+                psk_stop,
+                psk_type,
+                rtty_auto_answer,
+                rtty_auto_cq,
+                rtty_send,
+                rtty_set_latched,
+                rtty_stop,
+                rtty_type,
                 send_cw,
                 send_cw_armed,
+                set_tune,
                 set_tx_enabled,
                 start_running,
                 start_search_and_pounce,
@@ -50057,6 +50136,158 @@ mod tests {
         assert!(
             said.is_ok() && !engine_lock(&engine).js8_state().queue.is_empty(),
             "CONTROL: the shack's own name for it: {said:?}"
+        );
+    }
+
+    /// ★ The tune carrier, the rig's tuner, and the RTTY and PSK starts (a send, continuous TX
+    /// switched on and typed into, the RTTY auto-sequencer's CQ and answer) run from afar only under
+    /// the stand-down the command lane read them under, as the FT buttons do. Called through the
+    /// shack's own runner, as the lane calls them, each one whose `afar` names a stand-down a halt
+    /// has moved since is refused, `STOPPED_SINCE`, and leaves the station as it was: no carrier,
+    /// nothing queued or latched, the sequencer idle, nothing typed onto the air. Named with the
+    /// stand-down as it stands now, and with no `afar` (the shack's own screen), each is not
+    /// refused that way. Every command is asked; the ones that ran after a Stop are named together.
+    /// The off half of the tune carrier and of either latch, named with that same stale stand-down,
+    /// still runs and takes it down: it is a Stop. CONTROL: under the stand-down as it stands, the
+    /// carrier is up, a send holds the transmitter, the latch is up, typed text is keyed, and the
+    /// sequencer runs. The rig's tuner is refused here by its own gate (no rig with a tuner), never
+    /// as stopped.
+    #[test]
+    fn a_tune_rtty_or_psk_start_from_afar_runs_only_under_the_stand_down_it_was_read_under() {
+        use crate::command_dispatch::{tauri_runner, Runner, STOPPED_SINCE};
+        use serde_json::{json, Value};
+        use tempo_app::engine::{PskStreamTick, RttyStreamTick};
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let (app, _main) = shack_app_for_starts_from_afar(engine.clone());
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        let with = |mut args: Value, stand_down: Option<u64>| {
+            if let Some(stand_down) = stand_down {
+                args["afar"] = json!({ "standDown": stand_down });
+            }
+            args
+        };
+        // What a start leaves at the station: the tune carrier up, the transmitter held, either
+        // latch up, the RTTY sequencer's state.
+        let left = || {
+            let e = engine_lock(&engine);
+            (
+                e.tuning(),
+                e.tx_owner().is_some(),
+                e.rtty_latched(),
+                e.psk_latched(),
+                e.rtty_state().seq_state,
+            )
+        };
+        // Whether typed text is waiting to key on the latch, as the radio loop would find it.
+        let typed = |cmd: &str| {
+            let mut e = engine_lock(&engine);
+            if cmd.starts_with("rtty") {
+                matches!(e.poll_rtty_stream(64), RttyStreamTick::Text(_))
+            } else {
+                matches!(e.poll_psk_stream(64), PskStreamTick::Text(_))
+            }
+        };
+        let stopped = Err(STOPPED_SINCE.to_string());
+        let mut ran_after_a_stop = Vec::new();
+        for (cmd, args) in [
+            ("set_tune", json!({"on": true})),
+            ("atu_tune", json!({})),
+            ("rtty_send", json!({"text": "CQ FROM AFAR"})),
+            ("rtty_set_latched", json!({"on": true})),
+            ("rtty_type", json!({"text": "TYPED FROM AFAR"})),
+            ("rtty_auto_cq", json!({})),
+            ("rtty_auto_answer", json!({"call": "W1AW"})),
+            ("psk_send", json!({"text": "CQ FROM AFAR"})),
+            ("psk_set_latched", json!({"on": true})),
+            ("psk_type", json!({"text": "TYPED FROM AFAR"})),
+        ] {
+            // The station as the shack's own screen leaves it: the cockpit's section, TX on (on
+            // at the shack, which moves no stand-down), Auto on for the sequencer, continuous TX
+            // up for the typing.
+            let set_up = || {
+                let mut e = engine_lock(&engine);
+                e.halt_tx();
+                e.take_slot_tx_abort();
+                if cmd.starts_with("rtty") {
+                    e.set_operating_mode("rtty", false);
+                } else if cmd.starts_with("psk") {
+                    e.set_operating_mode("keyboard", false);
+                }
+                e.set_tx_enabled(true);
+                if cmd.starts_with("rtty_auto") {
+                    e.set_rtty_auto(true).expect("premise: Auto on");
+                }
+                match cmd {
+                    "rtty_type" => e.set_rtty_latched(true).expect("premise: latched"),
+                    "psk_type" => e.set_psk_latched(true).expect("premise: latched"),
+                    _ => {}
+                }
+            };
+            set_up();
+            let stale = engine_lock(&engine).remote_transmit_stand_down_generation();
+            set_up();
+            let before = left();
+            let voided = ask(cmd, with(args.clone(), Some(stale)));
+            let after = left();
+            let keyed_typing = cmd.ends_with("_type") && typed(cmd);
+            if voided != stopped || after != before || keyed_typing {
+                let voided = voided.as_ref().map(|_| "ran");
+                ran_after_a_stop.push(format!(
+                    "{cmd}: {voided:?}, (tuning, TX held, RTTY latched, PSK latched, sequencer) \
+                     {before:?} -> {after:?}, typed text keyed {keyed_typing}"
+                ));
+            }
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let ran = ask(cmd, with(args.clone(), Some(now)));
+            assert_ne!(ran, stopped, "{cmd} under the stand-down as it stands");
+            match cmd {
+                "set_tune" => assert!(left().0, "CONTROL: the carrier is up: {ran:?}"),
+                "atu_tune" => assert!(ran.is_err(), "CONTROL: no tuner here: {ran:?}"),
+                "rtty_send" | "psk_send" => {
+                    assert!(left().1, "CONTROL: the send holds TX: {ran:?}")
+                }
+                "rtty_set_latched" => assert!(left().2, "CONTROL: latched: {ran:?}"),
+                "psk_set_latched" => assert!(left().3, "CONTROL: latched: {ran:?}"),
+                "rtty_type" | "psk_type" => {
+                    assert!(typed(cmd), "CONTROL: the text keys: {ran:?}")
+                }
+                _ => assert_ne!(left().4, before.4, "CONTROL: the sequencer runs: {ran:?}"),
+            }
+            // ⛔ The off half of a switch is a Stop: named with the stale stand-down, it still runs
+            // and takes down what the on half put up.
+            if args.get("on").is_some() {
+                let off = ask(cmd, with(json!({"on": false}), Some(stale)));
+                let up = left();
+                assert!(
+                    off.is_ok() && !up.0 && !up.2 && !up.3,
+                    "{cmd} off, under a stale stand-down: {:?}, (tuning, TX held, RTTY latched, \
+                     PSK latched, sequencer) {up:?}",
+                    off.map(|_| "ran")
+                );
+            }
+            set_up();
+            let ran = ask(cmd, args);
+            assert_ne!(ran, stopped, "CONTROL {cmd}, from the shack's own screen");
+        }
+        engine_lock(&engine).halt_tx();
+        assert!(
+            ran_after_a_stop.is_empty(),
+            "ran from afar after a Stop: {ran_after_a_stop:#?}"
         );
     }
 

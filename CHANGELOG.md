@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers. Receive audio waits 120 ms before playing over the internet (60 ms on your own network) to ride out the
   internet's jitter. NEEDS-BENCH: the shack on one network and the second PC on another (a phone hotspot), the radio
   into a dummy load.
+- **Nexus Remote: Tune, ATU, RTTY and PSK now work from the second PC (Beta, test builds).** Tune, the radio's own
+  tuner (ATU), RTTY and PSK sends, continuous TX with typing, and RTTY Auto's CQ and answer now work from the second PC
+  as at the shack. Every transmit check at the shack still applies, including the tune carrier's time limit and
+  continuous TX's own limit. Stop on either road ends each of them, and so does losing the second PC for about 5 s:
+  continuous TX and an RTTY Auto run end too, and nothing keys again until you start it again. NEEDS-BENCH: two PCs,
+  the radio into a dummy load.
 
 ### Fixed
 - **Nexus Remote: the shack's screen fits the browser window.** Ctrl (⌘ on a Mac) with +, − or 0, Ctrl with the

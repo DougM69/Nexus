@@ -320,7 +320,7 @@ async fn an_unclassed_or_refused_command_is_refused_with_its_code_and_never_runs
         (3, "check_for_update", json!({}), "runsHere"),
         (4, "call_cq", json!({}), "noStopRoad"),
         (5, "set_ptt", json!({"on":true}), "heldPress"),
-        (9, "rtty_send", json!({"text":"CQ"}), "transmitNotYet"),
+        (9, "set_mode", json!({"mode":"qso-run"}), "transmitNotYet"),
         (
             6,
             "winlink_connect",

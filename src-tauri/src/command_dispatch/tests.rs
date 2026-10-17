@@ -269,13 +269,33 @@ const JS8_STARTS: [&str; 8] = [
 /// times. Written here, as [`FT_STARTS`] is.
 const CW_STARTS: [&str; 2] = ["send_cw", "send_cw_armed"];
 
-/// Every start that runs as a command from afar: [`FT_STARTS`], [`JS8_STARTS`], [`CW_STARTS`] and
-/// the voice keyer's play.
+/// The tune carrier and the rig's own tuner. Written here, as [`FT_STARTS`] is.
+const TUNE_STARTS: [&str; 2] = ["atu_tune", "set_tune"];
+
+/// The RTTY cockpit's starts: a send, continuous TX switched on and typed into, and the
+/// auto-sequencer's CQ and answer. Written here, as [`FT_STARTS`] is.
+const RTTY_STARTS: [&str; 5] = [
+    "rtty_auto_answer",
+    "rtty_auto_cq",
+    "rtty_send",
+    "rtty_set_latched",
+    "rtty_type",
+];
+
+/// The PSK cockpit's starts: a send, and continuous TX switched on and typed into. Written here, as
+/// [`FT_STARTS`] is.
+const PSK_STARTS: [&str; 3] = ["psk_send", "psk_set_latched", "psk_type"];
+
+/// Every start that runs as a command from afar: [`FT_STARTS`], [`JS8_STARTS`], [`CW_STARTS`],
+/// [`TUNE_STARTS`], [`RTTY_STARTS`], [`PSK_STARTS`] and the voice keyer's play.
 fn starts_run_from_afar() -> Vec<&'static str> {
     FT_STARTS
         .into_iter()
         .chain(JS8_STARTS)
         .chain(CW_STARTS)
+        .chain(TUNE_STARTS)
+        .chain(RTTY_STARTS)
+        .chain(PSK_STARTS)
         .chain(["play_voice_message"])
         .collect()
 }
@@ -301,7 +321,8 @@ const FT_KEYING_NOTHING: [&str; 14] = [
 ];
 
 /// ★ The starts wired from afar are exactly the FT buttons' starts, the JS8 sends, keyboard CW and
-/// its macros, the voice keyer's play, and the PTT as a held press; the table says so by value.
+/// its macros, the tune carrier and the rig's tuner, the RTTY and PSK starts, the voice keyer's
+/// play, and the PTT as a held press; the table says so by value.
 /// CONTROL: the table holds no row that is not a start.
 #[test]
 fn the_starts_wired_from_afar_are_the_ft_buttons_the_voice_keyer_and_the_held_press() {
@@ -310,6 +331,9 @@ fn the_starts_wired_from_afar_are_the_ft_buttons_the_voice_keyer_and_the_held_pr
     let mut expected: Vec<(&str, Wired)> = FT_STARTS.iter().map(|n| (*n, Wired::Ft)).collect();
     expected.extend(JS8_STARTS.iter().map(|n| (*n, Wired::Js8)));
     expected.extend(CW_STARTS.iter().map(|n| (*n, Wired::Cw)));
+    expected.extend(TUNE_STARTS.iter().map(|n| (*n, Wired::Tune)));
+    expected.extend(RTTY_STARTS.iter().map(|n| (*n, Wired::Rtty)));
+    expected.extend(PSK_STARTS.iter().map(|n| (*n, Wired::Psk)));
     expected.push(("play_voice_message", Wired::VoiceKeyer));
     expected.push(("set_ptt", Wired::HeldPress));
     expected.sort_unstable_by_key(|(name, _)| *name);
@@ -519,7 +543,7 @@ fn time_like(name: &str, ty: &str) -> bool {
 }
 
 /// ★ No FT command from afar carries a time, nor any other start run from afar (the JS8 starts,
-/// keyboard CW and its macros): every parameter of each one's command, read off its own signature
+/// keyboard CW and its macros, the tune carrier and the rig's tuner, the RTTY and PSK starts): every parameter of each one's command, read off its own signature
 /// in `lib.rs`, names no time and has no time type, so slot timing, JS8's periods, the keyer's
 /// timing, the clock and the sequencer's timeouts stay at the shack. Two are allowed, by name and
 /// by type, as neither decides when anything transmits: the prompt-to-log answer's record is the
@@ -555,6 +579,9 @@ fn no_ft_command_from_afar_carries_a_time() {
         .into_iter()
         .chain(JS8_STARTS)
         .chain(CW_STARTS)
+        .chain(TUNE_STARTS)
+        .chain(RTTY_STARTS)
+        .chain(PSK_STARTS)
         .chain(FT_KEYING_NOTHING)
     {
         for (name, ty) in parameters(cmd) {
@@ -690,7 +717,10 @@ fn the_on_half_of_a_transmit_switch_is_its_class() {
     for (id, (name, ..)) in OFF_HALVES.iter().enumerate() {
         let admission = shack.admit(&controller(), call(id as u64 + 1, name, on_args(name)));
         let expected = match (class_of(name), transmit_from_afar(name)) {
-            (Some(Class::StartsTx), Ok(Wired::Ft | Wired::Js8)) => "run".to_string(),
+            (
+                Some(Class::StartsTx),
+                Ok(Wired::Ft | Wired::Js8 | Wired::Tune | Wired::Rtty | Wired::Psk),
+            ) => "run".to_string(),
             (Some(Class::StartsTx), Ok(Wired::HeldPress)) => refused(Refusal::HeldPress),
             (Some(Class::StartsTx), _) => refused(Refusal::TransmitNotYet),
             // Turning the RTTY sequencer on keys nothing, so it runs at the shack.
@@ -727,7 +757,8 @@ fn set_mode_is_a_stop_only_into_a_passive_mode() {
 #[test]
 fn an_argument_that_does_not_read_as_off_is_the_on_half() {
     // Fail-safe for a start: only the argument's real "off" is a stop, and the guard below holds
-    // each argument's name to the command's signature, so the screen's real off half reads.
+    // each argument's name to the command's signature, so the screen's real off half reads. The
+    // tune carrier is wired from afar, so each of these is admitted as its on half, a start.
     let shack = shack();
     for (id, args) in [
         json!({}),
@@ -740,7 +771,8 @@ fn an_argument_that_does_not_read_as_off_is_the_on_half() {
     .enumerate()
     {
         let admission = shack.admit(&controller(), call(id as u64 + 1, "set_tune", args.clone()));
-        assert_eq!(kind(&admission), refused(Refusal::TransmitNotYet), "{args}");
+        assert_eq!(kind(&admission), "run", "{args}");
+        assert!(!is_stop("set_tune", &args), "{args}");
     }
 }
 
