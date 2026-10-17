@@ -362,6 +362,7 @@ export const EN = {
   "remote.nativeRevoked": "This station's access was revoked from a browser, so it has stopped connecting. Nothing here is broken — pair it again below when you want it back.",
   "remote.nativeTrialEnded": "Your Remote trial has ended, so this station could not be added to the account. Your radio, your log and your settings are untouched.",
   "remote.nativeTrialDisabled": "Remote access for this account has been switched off, so this station could not be added to it. This is not the trial running out. Your radio, your log and your settings are untouched.",
+  "remote.nativeTrialActiveElsewhere": "This email address already has a Remote trial running under a different sign-in, such as Google instead of a password, so this station could not be added. In your browser, sign out, sign in the way you did the first time, then pair this station again. Your radio, your log and your settings are untouched.",
   "remote.stationName": "Station name",
   "remote.renameStation": "Rename",
   "remote.saveName": "Save name",

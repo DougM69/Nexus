@@ -126,6 +126,9 @@ impl Client {
                 Some("stationRevoked") => "stationRevoked",
                 Some("trialEnded") => "trialEnded",
                 Some("trialDisabled") => "trialDisabled",
+                // Approve refused because this mailbox already has a trial under another sign-in.
+                // As a bare 403 the shack said access was denied, not which sign-in to use.
+                Some("trialActiveElsewhere") => "trialActiveElsewhere",
                 // Approve refused because the browser has not yet agreed to attach this station.
                 // Unnamed, a 409 falls through to serviceUnavailable - which tells an operator
                 // standing at the radio that the service is down, when the fix is one click in

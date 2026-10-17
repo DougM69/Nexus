@@ -575,6 +575,15 @@ jobs:
       - name: Test UI (Vitest)
         run: npm --prefix ui test
 
+      # The translator kits pin the rows they shipped. A change that removes or rewords a catalog
+      # string without re-pinning the kit leaves a volunteer's verifier failing on a file they never
+      # touched. With no rows translated in the committed CSVs, a red here can only mean the pins and
+      # the file disagree. make-kit.py --check is deliberately NOT run (see translations/it/README.md).
+      - name: Translator kits match their pins
+        run: |
+          python3 translations/pt-BR/verify-ptbr.py translations/pt-BR/nexus-ptbr-translation.csv
+          python3 translations/it/verify-it.py translations/it/nexus-it-translation.csv
+
       # `ui/`'s build output IS the hosted browser application, and nothing audited it - while
       # remote/ has had this gate all along and Rust is covered by cargo-deny on both lockfiles.
       #

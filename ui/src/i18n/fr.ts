@@ -284,6 +284,7 @@ export const FR: PartialCatalog = {
   "remote.nativeRevoked": "L'accès de cette station a été révoqué depuis un navigateur, elle ne se connecte donc plus. Rien n'est cassé ici — réappairez-la ci-dessous quand vous la voudrez de nouveau.",
   "remote.nativeTrialEnded": "Votre essai Remote est terminé, cette station n’a donc pas pu être ajoutée au compte. Votre radio, votre journal et vos réglages sont intacts.",
   "remote.nativeTrialDisabled": "L’accès Remote de ce compte a été désactivé, cette station n’a donc pas pu être ajoutée. Ce n’est pas la même chose qu’un essai arrivé à terme. Votre radio, votre journal et vos réglages sont intacts.",
+  "remote.nativeTrialActiveElsewhere": "Cette adresse e-mail a déjà un essai Remote en cours avec une autre méthode de connexion, par exemple Google au lieu d’un mot de passe, cette station n’a donc pas pu être ajoutée. Dans votre navigateur, déconnectez-vous, connectez-vous comme la première fois, puis associez de nouveau cette station. Votre radio, votre journal et vos réglages sont intacts.",
   "remote.stationName": "Nom de la station",
   "remote.renameStation": "Renommer",
   "remote.saveName": "Enregistrer le nom",

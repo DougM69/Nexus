@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streams, the shack's Nexus window now takes the shape of the browser's picture area, as large as the shack monitor's
   work area allows, on the monitor it is already on, and goes back to its own size, place and maximized or full-screen
   state when the stream ends, however it ends.
+- **Nexus Remote: pairing a station while a trial already runs under another sign-in says so at the shack.** It
+  used to say access was denied. It now says the email address already has a trial under a different sign-in (Google
+  instead of a password, for example) and that signing in the first way, then pairing again, adds the station.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
