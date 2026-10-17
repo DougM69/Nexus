@@ -2,6 +2,7 @@ import { lazy, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { ClientInput } from './components/ClientBanner'
 import { DetachedPanel } from './DetachedPanel'
 import { redockAllStalePopouts } from './features/panelState'
 import { loadDurable, setRemoteStation } from './features/durableStore'
@@ -81,6 +82,8 @@ const tree = (
   <StrictMode>
     {panel ? (
       <ErrorBoundary label={t('crash.panelWindow', { panel })} action={reload}>
+        {/* Driving a station over the internet, input here answers "Still there?" too. */}
+        <ClientInput />
         {NativeMonitor && panel === 'remoteMonitor' ? (
           <Suspense fallback={null}><NativeMonitor /></Suspense>
         ) : <DetachedPanel panel={panel} />}

@@ -21,7 +21,7 @@ vi.mock('../api', () => ({
   benchRoadSwitch: (to: BenchPosition) => mockSwitch(to),
   clientStillHere: () => mockStillHere(),
 }))
-import { ClientBanner, CLIENT_STATUS_EVERY_MS, STILL_HERE_EVERY_MS } from './ClientBanner'
+import { ClientBanner, ClientInput, CLIENT_STATUS_EVERY_MS, STILL_HERE_EVERY_MS } from './ClientBanner'
 
 const AT = '192.168.1.20:42075'
 const fill = (text: string, values: Record<string, string>) =>
@@ -328,6 +328,30 @@ describe('over the internet road', () => {
     await shown()
     await act(async () => { vi.advanceTimersByTime(STILL_HERE_EVERY_MS) })
     fireEvent.pointerDown(window)
+    expect(mockStillHere).not.toHaveBeenCalled()
+  })
+
+  it('a pop-out reports its input as the banner does, and draws nothing', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, internet: true })
+    const { container } = render(<ClientInput />)
+    await act(async () => { await Promise.resolve() })
+    expect(container.innerHTML).toBe('')
+    fireEvent.keyDown(window, { key: 'a' })
+    expect(mockStillHere).toHaveBeenCalledTimes(1)
+    await act(async () => { vi.advanceTimersByTime(STILL_HERE_EVERY_MS) })
+    fireEvent.pointerDown(window)
+    expect(mockStillHere).toHaveBeenCalledTimes(2)
+    cleanup()
+    mockStillHere.mockClear()
+    // CONTROL: on this network, and on a station's own screen, nothing is reported.
+    for (const status of [{ station: AT, phase: 'live' as const, reason: null, internet: false }, null]) {
+      mockStatus.mockResolvedValue(status)
+      render(<ClientInput />)
+      await act(async () => { await Promise.resolve() })
+      await act(async () => { vi.advanceTimersByTime(STILL_HERE_EVERY_MS) })
+      fireEvent.pointerDown(window)
+      cleanup()
+    }
     expect(mockStillHere).not.toHaveBeenCalled()
   })
 
