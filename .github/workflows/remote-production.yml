@@ -1,0 +1,256 @@
+# Manual administration of the Remote PRODUCTION service. A thin copy of remote-staging.yml: the
+# same scripts and the same gates, aimed at the production row of remote/scripts/staging-common.mjs.
+# It does not share the staging workflow because staging may be redeployed whenever its checks are
+# green, and production may not. No release trigger, Pages deployment or installer upload.
+#
+# Inert until the operator acts: the `guard` job below refuses while the production row holds
+# placeholder values, and while the `remote-production` environment is missing or unprotected.
+# It names no environment itself; GitHub creates an unprotected environment the first time a job
+# names one that does not exist, so nothing here may reach the `production` job before it passes.
+name: Remote production
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'Inspect, provision D1, deploy the tested service, recover a verified partial upload, or import trial markers'
+        type: choice
+        required: true
+        default: inspect
+        options:
+          - inspect
+          - provision
+          - deploy
+          - recover
+          - import-trial-markers
+      recovery_revision:
+        description: 'Recover only: full source SHA from the reviewed failed deployment receipt'
+        type: string
+        default: ''
+      recovery_worker_sha256:
+        description: 'Recover only: Worker SHA-256 from that receipt'
+        type: string
+        default: ''
+      recovery_database_id:
+        description: 'Recover only: existing D1 UUID from that receipt'
+        type: string
+        default: ''
+      recovery_additional_modules:
+        description: 'Recover only: optional JSON of the three legacy text-module hashes from the same receipt'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexus-remote-production
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    if: github.repository == 'kd9taw/Nexus'
+    name: Require the reviewed production target and its protected environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # Reads the environment's protection rules; writes nothing.
+      actions: read
+    env:
+      REMOTE_TARGET: production
+    steps:
+      - name: Check out the exact dispatched source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Refuse a placeholder target or an unprotected remote-production environment
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node remote/scripts/production-guard.mjs
+
+  production:
+    needs: guard
+    if: github.repository == 'kd9taw/Nexus'
+    name: Remote production administration
+    runs-on: ubuntu-latest
+    # As staging: the deploy's gate step runs the whole remote-web job before packaging.
+    timeout-minutes: 90
+    # Never the shared `production` environment, which has no reviewer and serves releases, the site
+    # and staging. This one has a required reviewer and allows only main and v* tags.
+    environment: remote-production
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+      # The row of the environment table (remote/scripts/staging-common.mjs) every script here
+      # targets. This workflow only ever administers production.
+      REMOTE_TARGET: production
+    steps:
+      - name: Check out the exact dispatched source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Validate the selected administrator operation
+        env:
+          REMOTE_PRODUCTION_OPERATION: ${{ inputs.operation }}
+        run: |
+          case "$REMOTE_PRODUCTION_OPERATION" in
+            inspect|provision|deploy|recover|import-trial-markers) ;;
+            *) echo 'Unknown Remote production operation'; exit 1 ;;
+          esac
+
+      # No fallback to CLOUDFLARE_API_TOKEN (the site's Pages token): see remote-staging.yml.
+      - name: Require the production-scoped Cloudflare token
+        env:
+          REMOTE_CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$REMOTE_CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::REMOTE_CLOUDFLARE_API_TOKEN is not set on the remote-production environment."
+            echo "Set it to a token scoped to the production Worker, its D1 database and its custom domain."
+            exit 1
+          fi
+          echo "Using REMOTE_CLOUDFLARE_API_TOKEN (no fallback)."
+
+      - name: Inspect existing Cloudflare access and production resources
+        if: inputs.operation == 'inspect'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
+        run: node remote/scripts/cloudflare-staging.mjs inspect
+
+      - name: Create or reuse the dedicated production D1 database
+        if: inputs.operation == 'provision'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
+        run: node remote/scripts/cloudflare-staging.mjs provision
+
+      - name: Recover ownership only after matching a reviewed deployment receipt
+        if: inputs.operation == 'recover'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
+          REMOTE_AUTH0_ISSUER: ${{ vars.REMOTE_AUTH0_ISSUER }}
+          REMOTE_AUTH0_CLIENT_ID: ${{ vars.REMOTE_AUTH0_CLIENT_ID }}
+          REMOTE_RECOVERY_REVISION: ${{ inputs.recovery_revision }}
+          REMOTE_RECOVERY_WORKER_SHA256: ${{ inputs.recovery_worker_sha256 }}
+          REMOTE_RECOVERY_DATABASE_ID: ${{ inputs.recovery_database_id }}
+          REMOTE_RECOVERY_ADDITIONAL_MODULES: ${{ inputs.recovery_additional_modules }}
+        run: node remote/scripts/cloudflare-staging.mjs recover
+
+      - name: Check public identity configuration before any deployment writes
+        if: inputs.operation == 'deploy'
+        env:
+          REMOTE_AUTH0_ISSUER: ${{ vars.REMOTE_AUTH0_ISSUER }}
+          REMOTE_AUTH0_CLIENT_ID: ${{ vars.REMOTE_AUTH0_CLIENT_ID }}
+        run: node remote/scripts/staging-artifact.mjs identity
+
+      - name: Verify anonymous access to the exact corresponding source
+        if: inputs.operation == 'deploy'
+        run: node remote/scripts/staging-artifact.mjs source
+
+      # Before the gates and before any write, as staging: ownership, database, required secret
+      # binding TYPES (never a value), and one minted relay credential proving the TURN key.
+      - name: Check deploy preconditions, including required Worker secrets, before any write
+        if: inputs.operation == 'deploy'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
+          # Presence only ('true'/'false'). Its value goes to the upload step and nowhere else.
+          REMOTE_ADMIN_SUBJECT_PRESENT: ${{ secrets.REMOTE_ADMIN_SUBJECT != '' }}
+          REMOTE_TURN_KEY_ID: ${{ secrets.REMOTE_TURN_KEY_ID }}
+          REMOTE_TURN_KEY_TOKEN: ${{ secrets.REMOTE_TURN_KEY_TOKEN }}
+        run: node remote/scripts/cloudflare-staging.mjs preflight
+
+      - name: Run the canonical local Remote gates before packaging
+        if: inputs.operation == 'deploy'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/remote-gates"
+          TMPDIR="$RUNNER_TEMP/remote-gates" scripts/gates --job remote-web --allow-partial
+
+      - name: Resolve the provisioned production database
+        if: inputs.operation == 'deploy' || inputs.operation == 'import-trial-markers'
+        id: database
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
+        run: node remote/scripts/cloudflare-staging.mjs resolve
+
+      # Hashes only, counts printed: the staging markers carried into the new database before the
+      # overlap release. The script refuses this operation until its importer exists.
+      - name: Import trial markers into the production database
+        if: inputs.operation == 'import-trial-markers'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
+          REMOTE_D1_DATABASE_ID: ${{ steps.database.outputs.database_id }}
+        run: node remote/scripts/cloudflare-staging.mjs import-trial-markers
+
+      - name: Package the tested bytes and their source receipt
+        if: inputs.operation == 'deploy'
+        env:
+          REMOTE_AUTH0_ISSUER: ${{ vars.REMOTE_AUTH0_ISSUER }}
+          REMOTE_AUTH0_CLIENT_ID: ${{ vars.REMOTE_AUTH0_CLIENT_ID }}
+          REMOTE_D1_DATABASE_ID: ${{ steps.database.outputs.database_id }}
+        run: node remote/scripts/staging-artifact.mjs prepare
+
+      - name: Validate the exact upload with Wrangler without deploying
+        if: inputs.operation == 'deploy'
+        run: node remote/scripts/deploy-staging.mjs dry-run
+
+      - name: Retain the tested deployment artifact
+        if: inputs.operation == 'deploy'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-remote-production-${{ github.sha }}
+          path: remote/staging-artifact/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Apply production D1 migrations
+        if: inputs.operation == 'deploy'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
+          REMOTE_ADMIN_SUBJECT_PRESENT: ${{ secrets.REMOTE_ADMIN_SUBJECT != '' }}
+          REMOTE_TURN_KEY_ID_PRESENT: ${{ secrets.REMOTE_TURN_KEY_ID != '' }}
+          REMOTE_TURN_KEY_TOKEN_PRESENT: ${{ secrets.REMOTE_TURN_KEY_TOKEN != '' }}
+        run: node remote/scripts/deploy-staging.mjs migrate
+
+      # The only step that applies a Worker secret's value, as an encrypted secret on every upload.
+      - name: Upload the verified Worker and browser bytes
+        id: upload
+        if: inputs.operation == 'deploy'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
+          REMOTE_ADMIN_SUBJECT: ${{ secrets.REMOTE_ADMIN_SUBJECT }}
+          REMOTE_TURN_KEY_ID: ${{ secrets.REMOTE_TURN_KEY_ID }}
+          REMOTE_TURN_KEY_TOKEN: ${{ secrets.REMOTE_TURN_KEY_TOKEN }}
+        run: node remote/scripts/deploy-staging.mjs deploy
+
+      # Whenever the upload step RAN, passed or failed: once wrangler has uploaded, the Worker is live.
+      - name: Verify the live Worker, browser bytes and admission refusals
+        if: inputs.operation == 'deploy' && !cancelled() && (steps.upload.outcome == 'success' || steps.upload.outcome == 'failure')
+        run: node remote/scripts/staging-artifact.mjs verify
+
+      - name: Verify the live schema matches the artifact's migrations
+        if: inputs.operation == 'deploy' && !cancelled() && (steps.upload.outcome == 'success' || steps.upload.outcome == 'failure')
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
+        run: node remote/scripts/deploy-staging.mjs verify-schema

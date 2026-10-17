@@ -8,12 +8,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { STAGING, TARGETS, deployable, identity, stagingConfig, target, verifyIdentity, requestBytes, requestJson } from '../scripts/staging-common.mjs'
+import { STAGING, TARGETS, billingServices, deployable, identity, stagingConfig, target, verifyIdentity, requestBytes, requestJson } from '../scripts/staging-common.mjs'
 import { cloudflare, relayKeyCheck, workerDigest } from '../scripts/cloudflare-staging.mjs'
 import { createArtifact, verifyArtifact, verifyLive, verifyLiveSettled, verifyPublicSource } from '../scripts/staging-artifact.mjs'
 import { runtime } from './runtime.mjs'
 import { uploadArtifact, compareSchema, redactedDiagnostic, runWrangler, schemaQuery, settleUpload, withSecretsFile, wranglerLogLevel } from '../scripts/deploy-staging.mjs'
 import { trialGrant } from '../scripts/grant-trial.mjs'
+import { productionGuard, protectedEnvironment } from '../scripts/production-guard.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const ids = { issuer: 'https://nexus-staging-test.us.auth0.com/', clientId: 'synthetic-client-id',
@@ -288,11 +289,13 @@ test('denied/ambiguous reads and hostname collisions refuse writes without loggi
   assert.equal(p.calls.filter(call => call.method === 'POST').length, 1, 'an ambiguous write is not automatically repeated')
 })
 
-function uploadedProvider({ fault, denied = false, legacy = false, observabilityAbsent = false, tagged = false, secrets = {}, secretText = 'synthetic|someone' } = {}) {
+function uploadedProvider({ fault, denied = false, legacy = false, observabilityAbsent = false, tagged = false, billing = false, secrets = {}, secretText = 'synthetic|someone' } = {}) {
   const env = { CLOUDFLARE_ACCOUNT_ID: randomBytes(16).toString('hex'), CLOUDFLARE_API_TOKEN: randomBytes(32).toString('hex'), ...secrets }
   const writes = [], privateText = randomBytes(20).toString('hex')
   let tags = tagged ? [STAGING.tag] : null, attached = false
   const config = stagingConfig(template, ids)
+  // The artifact of a row whose billing Worker is deployed: the one binding it adds.
+  if (billing) config.services = billingServices({ billing: { ...STAGING.billing, deployed: true } })
   const settings = { compatibility_date: config.compatibility_date, observability: { enabled: false }, bindings: [
     ...Object.entries(config.vars).map(([name, text]) => ({ name, type: 'plain_text', text })),
     { name: 'DB', type: 'd1', id: ids.databaseId }, { name: 'ASSETS', type: 'assets' },
@@ -305,6 +308,8 @@ function uploadedProvider({ fault, denied = false, legacy = false, observability
     const row = settings.bindings.find(binding => binding.name === 'ADMIN_SUBJECT')
     row.type = 'plain_text'; row.text = secretText
   }
+  if (billing && fault !== 'billing-missing') settings.bindings.push({ name: 'BILLING', type: 'service',
+    service: fault === 'billing-other' ? 'another-service' : STAGING.billing.service, environment: 'production' })
   if (fault === 'secret-missing') settings.bindings = settings.bindings.filter(b => b.name !== 'ADMIN_SUBJECT')
   if (fault === 'identity') settings.bindings.find(row => row.name === 'AUTH0_ISSUER').text = 'https://other.auth0.com/'
   if (fault === 'revision') settings.bindings.find(row => row.name === 'REMOTE_BUILD_REVISION').text = '0'.repeat(40)
@@ -342,7 +347,9 @@ function uploadedProvider({ fault, denied = false, legacy = false, observability
       if (fault === 'extra-module') form.set('extra.js', new File([privateText], 'extra.js'))
       return new Response(form, { headers: { 'cf-entrypoint': 'worker.js' } })
     } else if (path === `/workers/scripts/${STAGING.name}/script-settings`) {
-      if (options.method === 'GET') return Response.json({ success: true, result: { observability: settings.observability } })
+      // The fields the relay's no-logs rule reads, as an untouched Worker reports them.
+      if (options.method === 'GET') return Response.json({ success: true, result: { observability: settings.observability,
+        logpush: fault === 'logpush', tail_consumers: fault === 'tail' ? [{ service: 'another-service' }] : null } })
       assert.equal(options.method, 'PATCH')
       const body = JSON.parse(options.body)
       assert.deepEqual(body, { tags: [STAGING.tag] })
@@ -623,6 +630,93 @@ test("the environment table: staging resolves to today's exact names, and produc
   assert.throws(() => identity({ ...ids, issuer: production.issuer.exact }), /Auth0 tenant HTTPS domain/)
   assert.throws(() => identity({ ...ids, audience: production.audience }), /staging API audience/)
   assert.equal(identity(ids).issuer, ids.issuer)
+
+  // Each row names its billing Worker, and neither binds it yet.
+  assert.deepEqual(STAGING.billing, { service: 'nexus-billing-staging', deployed: false })
+  assert.deepEqual(production.billing, { service: 'nexus-billing', deployed: false })
+  assert.ok(Object.isFrozen(STAGING.billing) && Object.isFrozen(production.billing))
+})
+
+test('the billing Worker is bound only once its row says it is deployed, and the upload check demands exactly that binding', async () => {
+  assert.equal('services' in stagingConfig(template, ids), false, 'no binding while the billing Worker does not exist')
+  assert.deepEqual(billingServices({ billing: { service: 'nexus-billing', deployed: true } }), [{ binding: 'BILLING', service: 'nexus-billing' }])
+  assert.deepEqual(billingServices({ billing: { service: 'nexus-billing', deployed: false } }), [])
+
+  const p = uploadedProvider({ billing: true })
+  assert.deepEqual(p.config.services, [{ binding: 'BILLING', service: 'nexus-billing-staging' }])
+  await p.api.recover(p.config, artifact.manifest.files['worker.js'])
+  assert.equal(p.writes.length, 1)
+  for (const fault of ['billing-missing', 'billing-other']) {
+    const bad = uploadedProvider({ billing: true, fault })
+    await assert.rejects(bad.api.recover(bad.config, artifact.manifest.files['worker.js']),
+      fault === 'billing-missing' ? /binding inventory/ : /billing binding differs/, fault)
+    assert.equal(bad.writes.length, 0, fault)
+  }
+})
+
+// What GitHub returns for remote-production once the operator has built it as the runbook says.
+const protectedProduction = () => ({
+  environment: { name: 'remote-production', can_admins_bypass: false,
+    protection_rules: [{ type: 'required_reviewers', prevent_self_review: false, reviewers: [{ type: 'User', reviewer: { login: 'kd9taw' } }] },
+      { type: 'branch_policy' }],
+    deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } },
+  policies: { total_count: 2, branch_policies: [{ name: 'main', type: 'branch' }, { name: 'v*', type: 'tag' }] },
+})
+test('the production workflow guard refuses the placeholder row before any request, and an unprotected environment', async () => {
+  let sent = 0
+  const fetcher = async () => { sent++; return Response.json({}) }
+  const env = { REMOTE_TARGET: 'production', GITHUB_REPOSITORY: 'kd9taw/Nexus', GITHUB_TOKEN: 'synthetic-token' }
+  await assert.rejects(productionGuard(env, fetcher), /placeholder/)
+  await assert.rejects(productionGuard({ ...env, REMOTE_TARGET: 'staging' }, fetcher), /must target the production row/)
+  await assert.rejects(productionGuard({ ...env, REMOTE_TARGET: undefined }, fetcher), /must target the production row/)
+  assert.equal(sent, 0)
+
+  const good = protectedProduction()
+  assert.deepEqual(protectedEnvironment(good.environment, good.policies),
+    { environment: 'remote-production', reviewer: 'kd9taw', adminBypass: false, deployFrom: ['branch:main', 'tag:v*'] })
+  const faults = {
+    'another environment': d => { d.environment.name = 'production' },
+    'admins bypass': d => { d.environment.can_admins_bypass = true },
+    'bypass unreported': d => { delete d.environment.can_admins_bypass },
+    'no reviewer': d => { d.environment.protection_rules = [{ type: 'branch_policy' }] },
+    'a team reviewer only': d => { d.environment.protection_rules[0].reviewers = [{ type: 'Team', reviewer: { slug: 'kd9taw' } }] },
+    'another reviewer': d => { d.environment.protection_rules[0].reviewers[0].reviewer.login = 'someone' },
+    'any branch': d => { d.environment.deployment_branch_policy = null },
+    'protected branches': d => { d.environment.deployment_branch_policy = { protected_branches: true, custom_branch_policies: false } },
+    'an extra branch': d => { d.policies.branch_policies.push({ name: 'dev', type: 'branch' }) },
+    'main missing': d => { d.policies.branch_policies.shift() },
+    'tag rule as a branch': d => { d.policies.branch_policies[1].type = 'branch' },
+  }
+  for (const [name, mutate] of Object.entries(faults)) {
+    const doc = protectedProduction(); mutate(doc)
+    assert.throws(() => protectedEnvironment(doc.environment, doc.policies), /remote-production/, name)
+  }
+})
+
+test('the production workflow is the staging one aimed at production, behind the guard, never the shared environment', async () => {
+  const staging = await readFile(join(root, '.github/workflows/remote-staging.yml'), 'utf8')
+  const production = await readFile(join(root, '.github/workflows/remote-production.yml'), 'utf8')
+  const job = production.slice(production.indexOf('\n  production:\n'))
+  assert.ok(job.length < production.length && production.includes('\n  guard:\n'))
+  assert.match(job, /\n    needs: guard\n/)
+  assert.match(job, /\n    environment: remote-production\n/)
+  assert.doesNotMatch(production, /environment: production\b/)
+  assert.equal(production.match(/environment:/g).length, 1, 'only the guarded job names an environment')
+  assert.match(production, /\n  group: nexus-remote-production\n/)
+  assert.equal(production.match(/REMOTE_TARGET: production/g).length, 2)
+  assert.doesNotMatch(production, /REMOTE_TARGET: staging|grant[-_]/)
+  // The guard holds no secret; it reads the environment's protection with the run's own token.
+  const guard = production.slice(production.indexOf('\n  guard:\n'), production.indexOf('\n  production:\n'))
+  assert.doesNotMatch(guard, /secrets\.|environment:/)
+  assert.match(guard, /run: node remote\/scripts\/production-guard\.mjs/)
+  const options = text => text.match(/options:\n((?:          - .+\n)+)/)[1].trim().split(/\n\s*- /).map(o => o.replace(/^- /, ''))
+  assert.deepEqual(options(production), ['inspect', 'provision', 'deploy', 'recover', 'import-trial-markers'])
+  assert.match(production, /inspect\|provision\|deploy\|recover\|import-trial-markers\) ;;/)
+  // The same scripts and gates as staging, operation for operation.
+  const runs = text => [...text.matchAll(/node remote\/scripts\/[\w.-]+\.mjs [\w-]+|scripts\/gates --job .*/g)].map(m => m[0]).sort()
+  assert.deepEqual(runs(production).filter(r => !r.includes('import-trial-markers')),
+    runs(staging).filter(r => !r.includes('grant-trial')))
+  assert.ok(runs(production).includes('node remote/scripts/cloudflare-staging.mjs import-trial-markers'))
 })
 
 
@@ -642,7 +736,7 @@ test('an untagged upload is recovered only from exact artifact bytes and binding
 })
 
 test('mismatched upload bytes, identities, resources, runtime and domains refuse recovery before any write', async () => {
-  for (const fault of ['identity', 'revision', 'database', 'namespace', 'extra-binding', 'secret-as-var', 'secret-missing', 'observability', 'logs', 'code', 'extra-module', 'domain']) {
+  for (const fault of ['identity', 'revision', 'database', 'namespace', 'extra-binding', 'secret-as-var', 'secret-missing', 'observability', 'logs', 'logpush', 'tail', 'code', 'extra-module', 'domain']) {
     const p = uploadedProvider({ fault })
     await assert.rejects(p.api.recover(p.config, artifact.manifest.files['worker.js']), error => {
       assert.ok(!error.message.includes(p.privateText)); return true
