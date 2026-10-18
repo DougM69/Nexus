@@ -19888,6 +19888,26 @@ button.cq-skiptx1.on {
 .contest-logger-step:disabled {
   opacity: 0.4;
 }
+/* THE BAR'S TOGGLES: the logger window's Entry only and Keep in front, and the main window's Pop out
+   entry. Filled while on, so the state shows on the bar (the pin's in the window's stacking too). */
+.contest-logger-toggle {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.contest-logger-toggle:hover {
+  border-color: var(--accent);
+}
+.contest-logger-toggle.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
 /* THE SATELLITE LINE (the logger window's only, while the engine holds a bird): log the pass's
    contacts on the Satellites screen. A plain line under the bar, on its measure and inset and at the
    app's own size, as the bar is; part of the entry, so it never shrinks and never scrolls either. */

@@ -32,6 +32,7 @@ import { useEffect } from 'react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DetachedPanel } from './DetachedPanel'
+import { t } from './i18n'
 import { ContestView } from './components/ContestView'
 import { setMode, setPtt } from './api'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
@@ -66,6 +67,8 @@ const ALLOWED = new Set([
   // the journal's contacts the logbook does not hold: the read, and their merge into the logbook
   'contest_unmerged', 'contest_merge_unmerged',
   'open_panel_window',
+  // the window's own pin (Keep in front): this window's stacking and its record, nothing at the radio
+  'get_window_on_top', 'set_window_on_top',
   // the log line: the contact, its serial binding, its hints, its sent exchange, its log
   'contest_entry_put', 'contest_entry_reset', 'contest_working', 'contest_zone_hint', 'contest_i_moved',
   'contest_log_manual', 'contest_log_manual_rows', 'resolve_entity', 'set_cw_peer_info', 'set_log_form_grid',
@@ -209,6 +212,10 @@ async function sweepClicks(): Promise<number> {
       return true
     })
     if (fresh.length === 0) break
+    // Entry only takes the screen out of the window, so it is pressed LAST in its round: everything it
+    // hides has been clicked by then, and the rounds after it sweep the entry-only window.
+    const hides = (el: HTMLElement) => el.textContent === t('contestLogger.layout.label')
+    fresh.sort((a, b) => Number(hides(a)) - Number(hides(b)))
     for (const el of fresh) {
       if (!el.isConnected) continue
       fireEvent.click(el)
@@ -323,7 +330,7 @@ describe('the contest logger window transmits nothing', () => {
 
   it('every command on both lists exists in src-tauri, so the lists name real commands', () => {
     const dir = resolve(__dirname, '../../src-tauri/src')
-    const src = ['lib.rs', 'contest_lists.rs'].map((f) => readFileSync(resolve(dir, f), 'utf8')).join('\n')
+    const src = ['lib.rs', 'contest_lists.rs', 'window_state.rs'].map((f) => readFileSync(resolve(dir, f), 'utf8')).join('\n')
     const missing = [...ALLOWED, ...KEYING].filter(
       (cmd) => !new RegExp(`\\n(?:pub )?(?:async )?fn ${cmd}\\(`).test(src),
     )

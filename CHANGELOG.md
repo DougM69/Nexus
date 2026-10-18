@@ -104,6 +104,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sit at your shift, passing over single carriers and signals at another shift, and nets onto it. Netting moves your
   transmit tones too, so Auto-tune is off while you transmit. NEEDS-BENCH: a real RTTY signal off the air.
 
+- **Contest logger window: drag it small and keep it in front.** The contest logger window (the contest screen's
+  **⧉ Logger window**) now drags down to 420×320, small enough to drop in a corner beside another program; its call,
+  exchange boxes, Log button, dupe warning and newest contact stay on screen, and the boxes wrap to a second row
+  instead of shrinking. **Keep in front** on its bar keeps the window in front of Nexus and your other programs,
+  even while you work in another one; press it again to let the window stack as an ordinary window. The window
+  reopens at the size and place you left it, brought back onto a monitor that is still attached, and pinned if it
+  was pinned. **⧉ Pop out entry** on the Contest screen's entry opens the same window with the entry alone (the
+  call, the exchange, the dupe warning and Log, without the last contacts or the rest of the contest screen); it
+  shares the contact with your entry, and Enter in either logs it once. **Entry only** on that window's bar switches
+  between the entry alone and the whole window. NEEDS-BENCH: Windows, the window pinned over a full-screen program and reopened after a monitor is
+  unplugged.
+
 ### Changed
 - **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each
   station: Nexus runs on this PC and the radio follows your own clicks and pop-outs. Streaming the station's screen is

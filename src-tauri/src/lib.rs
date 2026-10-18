@@ -20745,8 +20745,10 @@ fn panel_min_inner(slug: &str) -> (f64, f64) {
         // zoom floor that window could only ever show a 646 px box, and the board's
         // natural is 820. 560 raises the ceiling above it.
         "fdclub" => (560.0, 400.0),
-        // The log line's boxes and its Log button in a row, and a look at the screen above it.
-        "contestlog" => (640.0, 480.0),
+        // Small enough to drop in a corner beside another program (and pin in front): the call,
+        // the exchange boxes, Log, the dupe warning and the newest contact, the boxes wrapping to a
+        // second row, at the 65% zoom floor. Measured in Chrome (`browser-probe --desktop contestlog`).
+        "contestlog" => (420.0, 320.0),
         // The contest switch and the controls row, which wraps, and a look at the board under them.
         "contestscreen" => (640.0, 480.0),
         // The picture scales to fit, so the viewer drags smaller than most pop-outs —
@@ -20895,10 +20897,14 @@ async fn open_panel_window(
             // Opened behind, it does not take the keyboard either (see the focus note above).
             builder = builder.always_on_bottom(true).focused(false);
         }
+        if p.on_top {
+            // Pinned in front by the operator (`window_state::set_window_on_top`), and it opens so.
+            builder = builder.always_on_top(true);
+        }
     }
     // Pop-outs are ordinary windows — the operator must be able to send them behind the
-    // main UI (a tester couldn't hide the waterfall while it was pinned always-on-top). A
-    // future "pin" toggle can call `window.set_always_on_top(true)` on demand.
+    // main UI (a tester couldn't hide the waterfall while it was pinned always-on-top). Only
+    // a window the operator pins with its own Pin button opens in front, above.
     let win = builder.build().map_err(|e| e.to_string())?;
     // THE CONTEST LOGGER WINDOW shares the contest strip's contact with the main window for as
     // long as it exists: from here, once it is built, to its `Destroyed` event (the app's window
@@ -37294,6 +37300,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         dock_bandmap_window,
         window_state::get_window_behind,
         window_state::set_window_behind,
+        window_state::get_window_on_top,
+        window_state::set_window_on_top,
         remote_window::open_remote_stations_window,
         remote_window::open_lan_stations_window,
         street_map::street_map_packs,
@@ -39910,10 +39918,12 @@ mod tests {
         for name in [
             "window_state::get_window_behind",
             "window_state::set_window_behind",
+            "window_state::get_window_on_top",
+            "window_state::set_window_on_top",
         ] {
             assert!(
                 list.lines().any(|l| l.trim() == format!("{name},")),
-                "{name} is not registered — the Stay behind toggle would fail at runtime"
+                "{name} is not registered — its toggle would fail at runtime"
             );
         }
         // The body of the top-level `sig`. The leading newline is the column-zero match: this
@@ -39937,6 +39947,16 @@ mod tests {
         assert!(
             open.contains(".prevent_overflow()"),
             "a remembered box is fitted to the work area, title bar included"
+        );
+        // The contest logger's pin: a window pinned in front opens in front.
+        let pin = open
+            .find("if p.on_top {")
+            .expect("the open path reads the pin");
+        assert!(
+            open[pin..]
+                .split_once('}')
+                .is_some_and(|(arm, _)| arm.contains("builder.always_on_top(true)")),
+            "a pinned window opens always on top"
         );
         assert!(
             body("fn capture_all_window_geometry(").contains("window_state::capture_panel(&w);"),

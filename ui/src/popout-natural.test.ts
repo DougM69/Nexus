@@ -136,6 +136,14 @@ describe('pop-out natural footprints vs the windows Rust builds', () => {
     expect(bad).toEqual([])
   })
 
+  it('the contest logger drags down to 420×320 and lays out whole there, in a 640×480 box', () => {
+    // The operator's ask: small enough to drop in a corner beside another program. Measured in Chrome
+    // (`scripts/browser-probe --desktop contestlog`): the call, the exchange boxes, Log, the dupe
+    // warning and the newest contact all on screen at the floor.
+    expect(sizeFor(MIN_INNER, 'contestlog')).toEqual([420, 320])
+    expect(naturalFor('contestlog')).toEqual({ w: 640, h: 480 })
+  })
+
   it('every other pop-out opens at 100% — the behaviour the field report asked for', () => {
     const opened = Object.fromEntries(
       openableSlugs()

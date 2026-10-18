@@ -4011,6 +4011,18 @@ export const EN = {
   'contestLogger.size.label': 'Text size: {{pct}}%',
   'contestLogger.size.smaller': 'Smaller text',
   'contestLogger.size.larger': 'Larger text',
+  // The logger window's pin on its bar: keeps the window in front of every other window, and
+  // pressed again lets it stack as an ordinary window. The label stays the same both ways; the
+  // button shows pressed while it is on.
+  'contestLogger.pin.label': 'Keep in front',
+  'contestLogger.pin.title': 'Keep this window in front of Nexus and your other programs, even while you work in another one. Press again to let it stack as an ordinary window.',
+  'contestLogger.pin.failed': 'Could not change whether this window stays in front',
+  // The logger window's layout toggle (the entry alone, or the whole window), and the main window's
+  // Contest screen entry's button that opens that window with the entry alone.
+  'contestLogger.layout.label': 'Entry only',
+  'contestLogger.layout.title': 'Show only the entry in this window: the call, the exchange and the dupe warning, without the last contacts and the contest screen. Press again for the whole window.',
+  'contestScreen.entry.popOut.label': '⧉ Pop out entry',
+  'contestScreen.entry.popOut.title': 'Open this entry alone in a window of its own, without the rest of the contest screen. It shares the contact with this entry, and Enter in either logs it once.',
   'contestLogger.recent.title': 'Last contacts',
   // The logger window's one line under its bar while the engine holds a satellite's transponder: its
   // log line logs every contact the ordinary way (the radio's band, no bird), so a pass's contacts go

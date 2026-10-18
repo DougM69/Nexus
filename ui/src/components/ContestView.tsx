@@ -15,6 +15,7 @@ import type {
   ModeRequest,
   Settings,
 } from '../types'
+import { openContestLogger } from '../features/contestLoggerLayout'
 import { contestClear, contestMergeUnmerged, contestRemoveLast, contestRemoved, contestRestore, contestUnmerged, exportLog, fdClubAllowBack, fdClubExport, fdClubGivePosition, fdClubLogNewest, fdClubRemovePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type ContestUnmerged, type FdGiveAnswer, type FdRemoveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
 import { isStreamInput } from '../remote-native/stream-input'
 import { patchSettings } from '../settings/patch'
@@ -2837,7 +2838,7 @@ export function FieldDayScoreboard({
           <button
             type="button"
             style={POPOUT_BTN}
-            onClick={() => void openPanelWindow('contestlog')}
+            onClick={() => void openContestLogger('full')}
             title={t('fieldDay.logger.title')}
           >
             {t('fieldDay.logger.label')}
@@ -3768,7 +3769,7 @@ export function ContestView({
             <button
               type="button"
               className="export-btn"
-              onClick={() => void openPanelWindow('contestlog')}
+              onClick={() => void openContestLogger('full')}
               title={t('fieldDay.logger.title')}
             >
               {t('fieldDay.logger.label')}

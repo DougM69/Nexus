@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor
+       scripts/browser-probe --desktop rotor|contestlog
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -67,6 +67,11 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         lines of its line 2 ("→ EC1DD 227° …", "27° off", Point) are
                         on screen, with a control that must come back clipped
                         (ui/probe/desktop-probe.mjs; it builds nothing)
+  --desktop contestlog  the contest logger window at its 420×320 floor, at 640×480
+                        and at 2560×1440, asserting the Call box, the exchange boxes,
+                        Log, the dupe warning, the newest contact and Keep in front
+                        are on screen, with a control below the floor that must come
+                        back clipped (ui/probe/contestlog-probe.mjs; it builds nothing)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE
@@ -83,7 +88,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor) ;; *) echo "browser-probe: --desktop takes rotor" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog) ;; *) echo "browser-probe: --desktop takes rotor or contestlog" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -100,6 +105,7 @@ command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/de
 
 # A desktop box: the app's own source, served by its own Vite config, so there is nothing to build.
 if [ -n "$DESKTOP" ]; then
+  [ "$DESKTOP" = contestlog ] && exec node "$ROOT/ui/probe/contestlog-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 
