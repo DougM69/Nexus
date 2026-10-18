@@ -1139,7 +1139,6 @@ export function SettingsPanel({
 }: Props) {
   const remote = !useStationControl()
   const canSelectRadio = useStationCapability('radioSelection')
-  const locked = (_key: FieldKey) => remote
   // Restore-from-backup (#28 item 4). A hidden file input, the same shape the Logbook's ADIF
   // import uses — Tauri has no native picker wired here and this needs none.
   const backupFileRef = useRef<HTMLInputElement | null>(null)
@@ -1258,6 +1257,15 @@ export function SettingsPanel({
     if (a.logbookGlobe !== undefined) setLogbookGlobe(a.logbookGlobe)
   }
   const [form, setForm] = useState<Settings | null>(null)
+  // From a computer driving the station, the read names the settings a save from there keeps as
+  // the station has them (`stationOnlySettings`): each shows here read-only, and says so, instead
+  // of taking an edit the save would quietly put back. At the station the read names none.
+  const stationOnly = (key: FieldKey) => form?.stationOnlySettings?.includes(key) === true
+  const locked = (key: FieldKey) => remote || stationOnly(key)
+  const setAtStation = (key: FieldKey) =>
+    stationOnly(key) ? (
+      <span className="settings-hint" data-set-at-station={key}>{t('settings.stationOnly.hint')}</span>
+    ) : null
   // #289 — the data + log folder. Read once when Settings opens; a change applies at the next
   // launch, so the readout keeps saying what THIS run is using until then.
   const [dataFolder, setDataFolderInfo] = useState<DataFolderInfo | null>(null)
@@ -4865,6 +4873,8 @@ export function SettingsPanel({
           <SettingsStation
             readOnly={remote}
             unitsLocked={remote ? locked('units') : undefined}
+            locked={locked}
+            setAtStation={setAtStation}
             form={form}
             error={error}
             bandPlan={bandPlan}
@@ -4891,7 +4901,7 @@ export function SettingsPanel({
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.remoteStream.label')}</span>
-                  <button
+                  <button disabled={locked('remoteStream')} data-setting="remoteStream"
                     type="button"
                     role="switch"
                     aria-checked={form.remoteStream === true}
@@ -4901,6 +4911,7 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
+                {setAtStation('remoteStream')}
                 <span className="settings-hint">{t('settings.remoteStream.hint')}</span>
                 {/* What the capture needs from this PC, as far as the code shows it: a minimized
                     window gives no picture, and closing Nexus ends the capture. */}
@@ -5420,7 +5431,7 @@ export function SettingsPanel({
             <div className="settings-grid">
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rigControl.ptt.label')}</span>
-                <select disabled={remote}
+                <select disabled={locked('pttMethod')} data-setting="pttMethod"
                   className="settings-input"
                   value={form.pttMethod}
                   onChange={(e) => update('pttMethod', e.target.value)}
@@ -5431,6 +5442,7 @@ export function SettingsPanel({
                     </option>
                   ))}
                 </select>
+                {setAtStation('pttMethod')}
                 <span className="settings-hint">{t('settings.rigControl.ptt.hint')}</span>
                 {/* A radio Hamlib cannot key over CAT, as you look and whatever the method: the
                     setup wizard's sentence under its keying choice. Not over OmniRig (its own rig
@@ -5470,7 +5482,7 @@ export function SettingsPanel({
                   <span className="settings-label">
                     {t('settings.rigControl.pttPort.label')}
                   </span>
-                  <input disabled={remote}
+                  <input disabled={locked('pttSerialPort')} data-setting="pttSerialPort"
                     className="settings-input"
                     list="serial-port-list"
                     value={form.pttSerialPort}
@@ -5479,6 +5491,7 @@ export function SettingsPanel({
                     })}
                     onChange={(e) => update('pttSerialPort', e.target.value)}
                   />
+                  {setAtStation('pttSerialPort')}
                   <span className="settings-hint">
                     <T k="settings.rigControl.pttPort.hint" tags={{ b: <strong /> }} />
                   </span>
@@ -5488,12 +5501,13 @@ export function SettingsPanel({
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rigControl.catRts.label')}</span>
                 <span className="settings-input-row">
-                  <input disabled={remote}
+                  <input disabled={locked('catRtsKeysPtt')} data-setting="catRtsKeysPtt"
                     type="checkbox"
                     checked={form.catRtsKeysPtt ?? false}
                     onChange={(e) => updateBool('catRtsKeysPtt', e.target.checked)}
                   />
                 </span>
+                {setAtStation('catRtsKeysPtt')}
                 <span className="settings-hint">
                   <T k="settings.rigControl.catRts.hint" tags={{ b: <strong /> }} />
                 </span>
@@ -5748,7 +5762,7 @@ export function SettingsPanel({
                   </span>
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.rigControl.icomLan.host.label')}</span>
-                    <input disabled={remote}
+                    <input disabled={locked('icomLanHost')} data-setting="icomLanHost"
                       className="settings-input"
                       type="text"
                       inputMode="decimal"
@@ -5758,6 +5772,7 @@ export function SettingsPanel({
                       autoComplete="off"
                       spellCheck={false}
                     />
+                    {setAtStation('icomLanHost')}
                     <span className="settings-hint">
                       <T k="settings.rigControl.icomLan.host.hint" tags={{ b: <strong /> }} />
                     </span>
@@ -5816,7 +5831,7 @@ export function SettingsPanel({
                   </label>
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.rigControl.icomLan.port.label')}</span>
-                    <input disabled={remote}
+                    <input disabled={locked('icomLanPort')} data-setting="icomLanPort"
                       className="settings-input"
                       type="number"
                       inputMode="numeric"
@@ -5825,6 +5840,7 @@ export function SettingsPanel({
                       onChange={(e) => updateNum('icomLanPort', Number(e.target.value))}
                       autoComplete="off"
                     />
+                    {setAtStation('icomLanPort')}
                     <span className="settings-hint">{t('settings.rigControl.icomLan.port.hint')}</span>
                   </label>
                 </>
@@ -6432,7 +6448,7 @@ export function SettingsPanel({
                 <span className="settings-label">
                   {t('settings.rigControl.serialHandshake.label')}
                 </span>
-                <select disabled={remote}
+                <select disabled={locked('catSerialHandshake')} data-setting="catSerialHandshake"
                   className="settings-input"
                   value={form.catSerialHandshake ?? 'auto'}
                   onChange={(e) => update('catSerialHandshake', e.target.value)}
@@ -6446,6 +6462,7 @@ export function SettingsPanel({
                     {t('settings.rigControl.serialHandshake.xonxoff')}
                   </option>
                 </select>
+                {setAtStation('catSerialHandshake')}
                 <span className="settings-hint">
                   {t('settings.rigControl.serialHandshake.hint')}
                 </span>
@@ -6455,7 +6472,7 @@ export function SettingsPanel({
                 <span className="settings-label">
                   {t('settings.rigControl.pttLineState.label')}
                 </span>
-                <select disabled={remote}
+                <select disabled={locked('catPttLineState')} data-setting="catPttLineState"
                   className="settings-input"
                   value={form.catPttLineState ?? 'auto'}
                   onChange={(e) => update('catPttLineState', e.target.value)}
@@ -6467,6 +6484,7 @@ export function SettingsPanel({
                   <option value="low">{t('settings.rigControl.pttLineState.low')}</option>
                   <option value="high">{t('settings.rigControl.pttLineState.high')}</option>
                 </select>
+                {setAtStation('catPttLineState')}
                 <span className="settings-hint">
                   {t('settings.rigControl.pttLineState.hint')}
                 </span>
@@ -7462,7 +7480,7 @@ export function SettingsPanel({
                 ).map(([label, key]) => (
                   <label key={key} className="settings-power-cap">
                     <span>{label}</span>
-                    <input disabled={remote}
+                    <input disabled={locked(key)} data-setting={key}
                       type="number"
                       min={0}
                       max={100}
@@ -7475,6 +7493,7 @@ export function SettingsPanel({
                   </label>
                 ))}
               </div>
+              {setAtStation('maxPowerPhone')}
               <span className="settings-hint">{t('settings.transmit.powerCaps.hint')}</span>
             </div>
 
@@ -7506,7 +7525,7 @@ export function SettingsPanel({
             <div className="settings-field">
               <label className="settings-toggle">
                 <span className="settings-label">{t('settings.transmit.swrStop.label')}</span>
-                <button disabled={remote || !radio?.swrScaleVerified}
+                <button disabled={locked('swrStopEnabled') || !radio?.swrScaleVerified} data-setting="swrStopEnabled"
                   type="button"
                   role="switch"
                   aria-checked={form.swrStopEnabled === true}
@@ -7518,7 +7537,8 @@ export function SettingsPanel({
               </label>
               <label className="settings-power-cap">
                 <span>{t('settings.transmit.swrStop.threshold')}</span>
-                <input disabled={remote || !radio?.swrScaleVerified || form.swrStopEnabled !== true}
+                <input disabled={locked('swrStopThreshold') || !radio?.swrScaleVerified || form.swrStopEnabled !== true}
+                  data-setting="swrStopThreshold"
                   type="number"
                   min={1}
                   max={99}
@@ -7529,6 +7549,7 @@ export function SettingsPanel({
                 />
                 <span className="settings-power-cap-unit">:1</span>
               </label>
+              {setAtStation('swrStopEnabled')}
               {/* ⚠️ THE MODEL COMES FROM THE ACTIVE RADIO, NOT FROM `form`. `form` mirrors
                   `editingRadioId`, which is decoupled from `activeRadioId` (see :1464) — while
                   `radio` is always the ACTIVE radio's live state. Reading the two together asked
@@ -7567,7 +7588,7 @@ export function SettingsPanel({
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.transmit.parsecStop.label')}</span>
-                  <button
+                  <button disabled={locked('parsecPresenceStop')} data-setting="parsecPresenceStop"
                     type="button"
                     role="switch"
                     aria-checked={form.parsecPresenceStop === true}
@@ -7577,6 +7598,7 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
+                {setAtStation('parsecPresenceStop')}
                 <span className="settings-hint">{t('settings.transmit.parsecStop.hint')}</span>
                 {form.parsecPresenceStop === true && parsecPresence && (
                   <span className="settings-hint" role="status">
@@ -7621,7 +7643,7 @@ export function SettingsPanel({
             <div className="settings-field">
               <span className="settings-label">{t('settings.transmit.share.label')}</span>
               <div className="rig-share-row">
-                <button disabled={remote}
+                <button disabled={locked('catBroker')} data-setting="catBroker"
                   type="button"
                   role="switch"
                   aria-checked={form.catBroker}
@@ -7630,6 +7652,7 @@ export function SettingsPanel({
                 >
                   <span className="toggle-knob" />
                 </button>
+                {setAtStation('catBroker')}
                 {/* #165: WITH THE BIND REFUSED, THE ADDRESS IS NOT A FACT. The reporter runs
                     their own rigctld on 4532, so Nexus's broker asks for a port that is gone
                     — and this block printed `127.0.0.1:4532` regardless, an address to paste
@@ -7694,7 +7717,7 @@ export function SettingsPanel({
               {form.catBroker && (
                 <div className="settings-field">
                   <span className="settings-label">{t('settings.transmit.foreignPtt.label')}</span>
-                  <button disabled={remote}
+                  <button disabled={locked('catBrokerPtt')} data-setting="catBrokerPtt"
                     type="button"
                     role="switch"
                     aria-checked={form.catBrokerPtt ?? false}
@@ -7703,6 +7726,7 @@ export function SettingsPanel({
                   >
                     <span className="toggle-knob" />
                   </button>
+                  {setAtStation('catBrokerPtt')}
                   <span className="settings-hint">{t('settings.transmit.foreignPtt.hint')}</span>
                 </div>
               )}
@@ -7749,7 +7773,7 @@ export function SettingsPanel({
 
                 <label className="settings-field">
                   <span className="settings-label">Tx Watchdog (min)</span>
-                  <input disabled={remote}
+                  <input disabled={locked('txWatchdogMin')} data-setting="txWatchdogMin"
                     className="settings-input"
                     type="number"
                     inputMode="numeric"
@@ -7759,13 +7783,14 @@ export function SettingsPanel({
                     onChange={(e) => update('txWatchdogMin', e.target.value)}
                     autoComplete="off"
                   />
+                  {setAtStation('txWatchdogMin')}
                   <span className="settings-hint">Auto-halt TX after this many minutes (0 = off).</span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
                     <span className="settings-label">Disable TX after sending 73</span>
-                    <button disabled={remote}
+                    <button disabled={locked('disableTxAfter73')} data-setting="disableTxAfter73"
                       type="button"
                       role="switch"
                       aria-checked={form.disableTxAfter73 !== false}
@@ -7775,6 +7800,7 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
+                  {setAtStation('disableTxAfter73')}
                   <span className="settings-hint">
                     After your final 73 goes out, Enable TX drops — working the next station is a
                     deliberate arm (WSJT-X default). A CQ run is unaffected: it returns to CQ.
@@ -7803,7 +7829,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label>
                     <span className="settings-label">Tune timeout (s)</span>
-                    <input disabled={remote}
+                    <input disabled={locked('tuneTimeoutSecs')} data-setting="tuneTimeoutSecs"
                       className="settings-input"
                       type="number"
                       min={1}
@@ -7817,6 +7843,7 @@ export function SettingsPanel({
                         setForm((prev) => (prev ? { ...prev, tuneTimeoutSecs: n } : prev))
                       }}
                     />
+                    {setAtStation('tuneTimeoutSecs')}
                   </label>
                   <span className="settings-hint">
                     Auto-release the tune carrier after this many seconds — never leave a key-down
@@ -7874,7 +7901,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label>
                     <span className="settings-label">Stop CQ after N calls</span>
-                    <input disabled={remote}
+                    <input disabled={locked('cqMaxCalls')} data-setting="cqMaxCalls"
                       className="settings-input"
                       type="number"
                       min={1}
@@ -7883,6 +7910,7 @@ export function SettingsPanel({
                       placeholder="keep calling"
                       onChange={(e) => updateNullableNum('cqMaxCalls', e.target.value, 1)}
                     />
+                    {setAtStation('cqMaxCalls')}
                   </label>
                   <span className="settings-hint">
                     How many unanswered CQs before Nexus pauses. Default 8, then it waits and calls
@@ -7896,7 +7924,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label>
                     <span className="settings-label">Wait before calling CQ again</span>
-                    <input disabled={remote}
+                    <input disabled={locked('cqPauseSecs')} data-setting="cqPauseSecs"
                       className="settings-input"
                       type="number"
                       min={0}
@@ -7905,6 +7933,7 @@ export function SettingsPanel({
                       placeholder="180"
                       onChange={(e) => updateNullableNum('cqPauseSecs', e.target.value, 0)}
                     />
+                    {setAtStation('cqPauseSecs')}
                   </label>
                   <span className="settings-hint">
                     Seconds off the air after an unanswered run, before the next one starts.
@@ -7951,7 +7980,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label>
                     <span className="settings-label">Tempo chat: send cycles per message</span>
-                    <input disabled={remote}
+                    <input disabled={locked('chatMaxCycles')} data-setting="chatMaxCycles"
                       className="settings-input"
                       type="number"
                       min={1}
@@ -7960,6 +7989,7 @@ export function SettingsPanel({
                       placeholder="3"
                       onChange={(e) => updateNullableNum('chatMaxCycles', e.target.value, 1)}
                     />
+                    {setAtStation('chatMaxCycles')}
                   </label>
                   <span className="settings-hint">
                     A chat message transmits at most this many cycles, then shows "no ack" (tap the
@@ -8489,16 +8519,17 @@ export function SettingsPanel({
             <div className="settings-grid">
               <label className="settings-field">
                 <span className="settings-label">{t('settings.beacons.txPercent.label')}</span>
-                <input
+                <input data-setting="beaconTxPercent"
                   className="settings-input"
                   type="number"
                   min={0}
                   max={100}
-                  disabled={remote || (rrActive)}
+                  disabled={locked('beaconTxPercent') || (rrActive)}
                   title={rrActive ? t('settings.beacons.txPercent.title') : undefined}
                   value={String(form.beaconTxPercent ?? 0)}
                   onChange={(e) => updateNum('beaconTxPercent', Number(e.target.value))}
                 />
+                {setAtStation('beaconTxPercent')}
                 <span className="settings-hint">
                   {rrActive ? (
                     <T k="settings.beacons.txPercent.hint.roundRobin" tags={{ b: <strong /> }} />
@@ -9167,7 +9198,7 @@ export function SettingsPanel({
               </label>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rtty.autoRepeats.label')}</span>
-                <input disabled={remote}
+                <input disabled={locked('rttyAutoRepeats')} data-setting="rttyAutoRepeats"
                   className="settings-input"
                   type="number"
                   min={RTTY_AUTO_REPEATS_MIN}
@@ -9176,6 +9207,7 @@ export function SettingsPanel({
                   value={String(form.rttyAutoRepeats ?? RTTY_AUTO_REPEATS_DEFAULT)}
                   onChange={(e) => updateNum('rttyAutoRepeats', Number(e.target.value))}
                 />
+                {setAtStation('rttyAutoRepeats')}
                 <span className="settings-hint">
                   <T k="settings.rtty.autoRepeats.hint" tags={{ b: <strong /> }} />
                 </span>
@@ -9439,7 +9471,7 @@ export function SettingsPanel({
               </div>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.js8.idleWatchdogMin.label')}</span>
-                <input disabled={remote}
+                <input disabled={locked('js8IdleWatchdogMin')} data-setting="js8IdleWatchdogMin"
                   className="settings-input"
                   type="number"
                   inputMode="numeric"
@@ -9449,6 +9481,7 @@ export function SettingsPanel({
                   onChange={(e) => updateMinutes('js8IdleWatchdogMin', e.target.value)}
                   autoComplete="off"
                 />
+                {setAtStation('js8IdleWatchdogMin')}
                 <span className="settings-hint">{t('settings.js8.idleWatchdogMin.hint')}</span>
               </label>
             </div>
@@ -9574,7 +9607,7 @@ export function SettingsPanel({
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.js8.aprsRelay.label')}</span>
-                  <button disabled={remote}
+                  <button disabled={locked('js8AprsRelay')} data-setting="js8AprsRelay"
                     type="button"
                     role="switch"
                     aria-checked={form.js8AprsRelay === true}
@@ -9584,6 +9617,7 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
+                {setAtStation('js8AprsRelay')}
                 <span className="settings-hint">{t('settings.js8.aprsRelay.hint')}</span>
               </div>
               <label className="settings-field">
@@ -9604,7 +9638,7 @@ export function SettingsPanel({
                 sides off by default (its own file says what keeps each promise). Never on the
                 Remote page: the keys are withheld from Remote's settings projection, so the page
                 could only show a guess. */}
-            {!remote && <Js8ApiSettings form={form} onSwitch={updateBool} onPort={updateNum} />}
+            {!remote && <Js8ApiSettings form={form} onSwitch={updateBool} onPort={updateNum} locked={locked} setAtStation={setAtStation} />}
           </fieldset>
           )}
 
@@ -10679,7 +10713,7 @@ export function SettingsPanel({
                         the interface — so it is invariant and stays here, exactly as the
                         Phone/CW/Digital tab labels do. */}
                     <span className="settings-label">WSJT-X UDP API</span>
-                    <button disabled={remote}
+                    <button disabled={locked('wsjtxUdp')} data-setting="wsjtxUdp"
                       type="button"
                       role="switch"
                       aria-checked={form.wsjtxUdp}
@@ -10689,21 +10723,23 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
+                  {setAtStation('wsjtxUdp')}
                   <span className="settings-hint">{t('settings.integrations.wsjtxUdp.hint')}</span>
                 </div>
 
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.integrations.udpAddr.label')}</span>
-                  <input
+                  <input data-setting="wsjtxUdpAddr"
                     className="settings-input"
                     type="text"
                     value={form.wsjtxUdpAddr}
                     placeholder="127.0.0.1:2237"
                     onChange={(e) => update('wsjtxUdpAddr', e.target.value)}
-                    disabled={remote || (!form.wsjtxUdp)}
+                    disabled={locked('wsjtxUdpAddr') || (!form.wsjtxUdp)}
                     autoComplete="off"
                     spellCheck={false}
                   />
+                  {setAtStation('wsjtxUdpAddr')}
                   <span className="settings-hint">{t('settings.integrations.udpAddr.hint')}</span>
                 </label>
 
@@ -11695,7 +11731,7 @@ export function SettingsPanel({
                   <span className="settings-label">
                     {t('settings.confirmations.lotw.tqslPath.label')}
                   </span>
-                  <input disabled={remote}
+                  <input disabled={locked('tqslPath')} data-setting="tqslPath"
                     className="settings-input"
                     type="text"
                     value={form.tqslPath}
@@ -11704,6 +11740,7 @@ export function SettingsPanel({
                     autoComplete="off"
                     spellCheck={false}
                   />
+                  {setAtStation('tqslPath')}
                   <span className="settings-hint">
                     {t('settings.confirmations.lotw.tqslPath.hint')}
                   </span>
@@ -12174,7 +12211,8 @@ export function SettingsPanel({
                   {/* From afar the station sends no key, only whether it has one saved; and at the
                       station a stream may neither change it nor reveal it. */}
                   <div className="settings-input-row">
-                    <input disabled={remote || form.secretsSavedAtStation !== undefined}
+                    <input disabled={locked('clublogApiKey') || form.secretsSavedAtStation !== undefined}
+                      data-setting="clublogApiKey"
                       className="settings-input"
                       type={clublogKeyShown ? 'text' : 'password'}
                       value={form.clublogApiKey}
@@ -12213,6 +12251,7 @@ export function SettingsPanel({
                       </button>
                     )}
                   </div>
+                  {setAtStation('clublogApiKey')}
                   <span className="settings-hint">
                     <T k="settings.confirmations.clublog.apiKey.hint" tags={{ b: <strong /> }} />
                   </span>
@@ -12418,7 +12457,7 @@ export function SettingsPanel({
                   <span className="settings-label">
                     {t('settings.confirmations.cloudlog.url.label')}
                   </span>
-                  <input disabled={remote}
+                  <input disabled={locked('cloudlogUrl')} data-setting="cloudlogUrl"
                     className="settings-input"
                     type="text"
                     value={form.cloudlogUrl ?? ''}
@@ -12427,6 +12466,7 @@ export function SettingsPanel({
                     autoComplete="off"
                     spellCheck={false}
                   />
+                  {setAtStation('cloudlogUrl')}
                   <span className="settings-hint">
                     {t('settings.confirmations.cloudlog.url.hint')}
                   </span>
@@ -13857,13 +13897,14 @@ export function SettingsPanel({
             <div className="settings-grid">
               <div className="settings-field">
                 <span className="settings-label">{t('settings.fdClub.join.label')}</span>
-                <input
+                <input data-setting="fdJoinAddr"
                   className="settings-input mono"
                   value={form.fdJoinAddr ?? ''}
                   onChange={(e) => update('fdJoinAddr', e.target.value)}
                   placeholder="192.168.1.10:42073"
-                  disabled={remote || (!!form.fdHostEnable)}
+                  disabled={locked('fdJoinAddr') || (!!form.fdHostEnable)}
                 />
+                {setAtStation('fdJoinAddr')}
                 <span className="settings-hint">
                   {form.fdHostEnable
                     ? t('settings.fdClub.join.hostingHint')

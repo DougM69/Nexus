@@ -2898,3 +2898,148 @@ fn a_saved_profile_carries_no_stored_key_toward_afar() {
         "CONTROL: the shack's own keys"
     );
 }
+
+/// Each setting a whole save from afar keeps as the shack has it, found by trying them all: every
+/// setting the shack's file carries is changed alone in a save from afar, and it is kept when it
+/// comes back as the shack's. Also what could not be changed alone (a list or a table).
+fn what_a_save_from_afar_keeps() -> (std::collections::BTreeSet<String>, Vec<String>) {
+    use tempo_app::settings::Settings;
+    // The pending Cloudlog key is written only while it holds one.
+    let shack = Settings {
+        cloudlog_key: "FAKE-PENDING-KEY-0001".into(),
+        ..Default::default()
+    };
+    let file = serde_json::to_value(&shack).unwrap();
+    let mut kept = std::collections::BTreeSet::new();
+    let mut untried = Vec::new();
+    for (name, value) in file.as_object().unwrap() {
+        let tries: Vec<Value> = match value {
+            Value::Bool(b) => vec![json!(!b)],
+            Value::Number(n) => {
+                let n = n.as_f64().unwrap();
+                vec![json!(n + 1.0), json!(n - 1.0), json!(n * 2.0 + 3.0)]
+                    .into_iter()
+                    .chain([json!(n as u64 + 1), json!(n as u64 + 3)])
+                    .collect()
+            }
+            Value::Null => vec![
+                json!(1),
+                json!(2.5),
+                json!(true),
+                json!("probe"),
+                json!([]),
+                json!({}),
+            ],
+            Value::String(s) => {
+                // A choice of a few names says which, when it refuses another.
+                let mut asked = file.clone();
+                asked[name] = json!("probe");
+                let others = match serde_json::from_value::<Settings>(asked) {
+                    Err(e) => e
+                        .to_string()
+                        .split('`')
+                        .skip(3)
+                        .step_by(2)
+                        .filter(|v| v != s)
+                        .map(|v| json!(v))
+                        .collect(),
+                    Ok(_) => Vec::new(),
+                };
+                [json!(format!("{s}probe"))]
+                    .into_iter()
+                    .chain(others)
+                    .collect()
+            }
+            Value::Array(_) | Value::Object(_) => Vec::new(),
+        };
+        let took = tries.into_iter().find_map(|changed| {
+            let mut asked = file.clone();
+            asked[name] = changed;
+            let asked: Settings = serde_json::from_value(asked).ok()?;
+            (serde_json::to_value(&asked).unwrap()[name] != *value).then_some(asked)
+        });
+        let Some(mut save) = took else {
+            untried.push(name.clone());
+            continue;
+        };
+        keep_the_shacks_settings(&shack, &mut save, Some(&Afar { stand_down: 1 }));
+        if serde_json::to_value(&save).unwrap()[name] == *value {
+            kept.insert(name.clone());
+        }
+    }
+    (kept, untried)
+}
+
+/// ⛔ What the read from afar says is set at the station is exactly what the save from afar keeps:
+/// every setting kept is flagged, so the form never takes an edit the save quietly puts back, and
+/// nothing flagged is a setting the save takes. Only a list or a table goes untried, and none of
+/// those is flagged.
+#[test]
+fn every_setting_a_save_from_afar_keeps_is_set_at_the_station() {
+    let (kept, untried) = what_a_save_from_afar_keeps();
+    let flagged: std::collections::BTreeSet<String> =
+        station_only_settings(Some(&Afar { stand_down: 1 }))
+            .unwrap()
+            .into_iter()
+            .map(String::from)
+            .collect();
+    assert_eq!(
+        kept.difference(&flagged).collect::<Vec<_>>(),
+        Vec::<&String>::new(),
+        "kept, but not set at the station"
+    );
+    assert_eq!(
+        flagged.difference(&kept).collect::<Vec<_>>(),
+        Vec::<&String>::new(),
+        "set at the station, but the save takes it"
+    );
+    assert!(
+        kept.contains("txWatchdogMin") && kept.contains("clublogApiKey"),
+        "CONTROL: the probe finds a guard and a stored key: {kept:?}"
+    );
+    assert!(!kept.contains("mycall"), "CONTROL: the call is the save's");
+    let file = serde_json::to_value(tempo_app::settings::Settings::default()).unwrap();
+    let untried_values: Vec<(&String, &Value)> = untried
+        .iter()
+        .filter(|name| !file[name.as_str()].is_array() && !file[name.as_str()].is_object())
+        .map(|name| (name, &file[name.as_str()]))
+        .collect();
+    assert_eq!(untried_values, Vec::new(), "could not be changed alone");
+    for name in &untried {
+        assert!(!flagged.contains(name), "{name} is flagged but untried");
+    }
+    assert_eq!(
+        station_only_settings(None),
+        None,
+        "at the shack nothing is set elsewhere"
+    );
+}
+
+/// The list the UI's tests render the form with is the one the read from afar sends.
+#[test]
+fn the_ui_fixture_carries_the_station_only_list() {
+    let fixture: Vec<String> = serde_json::from_str(include_str!(
+        "../../../ui/src/components/__fixtures__/stationOnlySettings.json"
+    ))
+    .unwrap();
+    let sent: Vec<String> = station_only_settings(Some(&Afar { stand_down: 1 }))
+        .unwrap()
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert_eq!(fixture, sent);
+}
+
+/// The read's "set at the station" is no setting: a save sends it back, and it is never kept into
+/// the file, from afar or at the shack.
+#[test]
+fn a_save_never_writes_the_set_at_the_station_list() {
+    for afar in [Some(Afar { stand_down: 2 }), None] {
+        let shack = tempo_app::settings::Settings::default();
+        let mut save = shack.clone();
+        save.unknown
+            .insert(SET_AT_THE_STATION.into(), json!(["txWatchdogMin"]));
+        keep_the_shacks_settings(&shack, &mut save, afar.as_ref());
+        assert!(save.unknown.get(SET_AT_THE_STATION).is_none(), "{afar:?}");
+    }
+}

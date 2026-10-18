@@ -5081,6 +5081,10 @@ export interface Settings {
    *  has each stored key saved, the keys themselves staying there (blank in
    *  this read, and a save from afar keeps the station's own). */
   secretsSavedAtStation?: { clublogApiKey?: boolean; cloudlogKey?: boolean }
+  /** Only on a read from a computer driving the station: every setting a save
+   *  from there keeps as the station has it, so the form shows each read-only,
+   *  "Set at the station". */
+  stationOnlySettings?: string[]
   /** Auto-upload each logged QSO to ClubLog (realtime push). */
   clublogUpload: boolean
   /** Auto-upload each logged QSO to eQSL.cc (ImportADIF). eQSL username is

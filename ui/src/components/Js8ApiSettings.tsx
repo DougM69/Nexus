@@ -11,7 +11,7 @@
  * sides are bound to 127.0.0.1 whatever the port (`src-tauri/src/js8_api.rs`). None of these
  * settings reaches a Remote browser, so SettingsPanel renders this at the station only.
  */
-import { Fragment } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import { t } from '../i18n'
 import type { Settings } from '../types'
 
@@ -22,6 +22,10 @@ export interface Js8ApiSettingsProps {
   form: Settings
   onSwitch: (key: Switch, on: boolean) => void
   onPort: (key: Port, port: number) => void
+  /** From a computer driving the station: a switch the save from there keeps as the station has
+   *  it shows read-only, and `setAtStation` says so. Absent at the station. */
+  locked?: (key: Switch) => boolean
+  setAtStation?: (key: Switch) => ReactNode
 }
 
 /** A typed port, 1–65535; anything else is no port and leaves the field as it was. */
@@ -30,7 +34,7 @@ export function parsePort(raw: string): number | null {
   return raw.trim() !== '' && Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null
 }
 
-export function Js8ApiSettings({ form, onSwitch, onPort }: Js8ApiSettingsProps) {
+export function Js8ApiSettings({ form, onSwitch, onPort, locked, setAtStation }: Js8ApiSettingsProps) {
   const sides: {
     on: Switch
     port: Port
@@ -71,7 +75,7 @@ export function Js8ApiSettings({ form, onSwitch, onPort }: Js8ApiSettingsProps) 
       <div className="settings-field">
         <label className="settings-toggle">
           <span className="settings-label">{label}</span>
-          <button
+          <button disabled={locked?.(key)} data-setting={key}
             type="button"
             role="switch"
             aria-checked={on}
@@ -82,6 +86,7 @@ export function Js8ApiSettings({ form, onSwitch, onPort }: Js8ApiSettingsProps) 
             <span className="toggle-knob" />
           </button>
         </label>
+        {setAtStation?.(key)}
         <span className="settings-hint">{hint}</span>
       </div>
     )

@@ -13605,7 +13605,8 @@ fn set_mode(
 }
 
 /// A settings read: the settings, and from afar whether the shack has each stored key saved
-/// (`command_dispatch::SAVED_AT_THE_STATION`), the keys themselves blanked.
+/// (`command_dispatch::SAVED_AT_THE_STATION`), the keys themselves blanked, and which settings are
+/// set at the station only (`command_dispatch::SET_AT_THE_STATION`).
 #[derive(serde::Serialize)]
 struct SettingsRead {
     #[serde(flatten)]
@@ -13615,6 +13616,11 @@ struct SettingsRead {
         skip_serializing_if = "Option::is_none"
     )]
     saved_at_the_station: Option<std::collections::BTreeMap<&'static str, bool>>,
+    #[serde(
+        rename = "stationOnlySettings",
+        skip_serializing_if = "Option::is_none"
+    )]
+    set_at_the_station: Option<Vec<&'static str>>,
 }
 
 /// What a settings read answers with, from the Engine's settings `shack`.
@@ -13632,11 +13638,14 @@ fn settings_read(shack: &Settings, afar: Option<&command_dispatch::Afar>) -> Set
     // 8 F1), so clear it from THIS clone before it leaves the shell; the engine's own copy is
     // untouched and the migration retry still sees it.
     s.cloudlog_key.clear();
-    // The read's own name is no setting: an unknown key of that name cannot ride beside it.
+    // The read's own names are no settings: an unknown key of either name cannot ride beside it.
     s.unknown.remove(command_dispatch::SAVED_AT_THE_STATION);
+    s.unknown.remove(command_dispatch::SET_AT_THE_STATION);
     SettingsRead {
         settings: s,
         saved_at_the_station,
+        // From afar, which settings the save keeps as the shack has them, so the form says so.
+        set_at_the_station: command_dispatch::station_only_settings(afar),
     }
 }
 
@@ -52909,6 +52918,34 @@ mod secrets_toward_remote_tests {
             assert!(!leaks(&echo, &[QRZ_KEY]).is_empty(), "missed in {echo:?}");
         }
         assert_eq!(leaks("invalid api key", &[QRZ_KEY]), Vec::<String>::new());
+    }
+
+    /// From afar the read names every setting the save keeps as the shack has it, once, whatever an
+    /// unknown key of that name planted; at the shack it names none.
+    #[test]
+    fn a_settings_read_from_afar_says_what_is_set_at_the_station() {
+        let afar = command_dispatch::Afar { stand_down: 1 };
+        let mut shack = station();
+        shack.unknown.insert(
+            command_dispatch::SET_AT_THE_STATION.into(),
+            serde_json::json!(["planted"]),
+        );
+        let read = serde_json::to_value(settings_read(&shack, Some(&afar))).unwrap();
+        assert_eq!(
+            read[command_dispatch::SET_AT_THE_STATION],
+            serde_json::json!(command_dispatch::station_only_settings(Some(&afar)).unwrap())
+        );
+        assert_eq!(
+            read.to_string()
+                .matches(command_dispatch::SET_AT_THE_STATION)
+                .count(),
+            1
+        );
+        let own = serde_json::to_value(settings_read(&shack, None)).unwrap();
+        assert!(
+            own.get(command_dispatch::SET_AT_THE_STATION).is_none(),
+            "at the shack, no list and nothing planted"
+        );
     }
 
     /// ⛔ A settings read from afar carries no stored key, says by value which the station has

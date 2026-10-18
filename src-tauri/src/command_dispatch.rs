@@ -367,14 +367,15 @@ pub(crate) fn withhold_the_shacks_secret_settings(
 /// ⛔ What a settings save from afar may not change, blank or plant ([`SETTINGS_FROM_AFAR`]): each
 /// of [`SECRET_SETTINGS`], put back into `save` as the shack has it, so the read's blanks never
 /// reach the shack and a crafted save cannot write a key of its own. From the shack's own screen
-/// (`None`) the save is taken as it came. Either way the read's "saved at the station" goes: it
-/// is no setting, and kept as an unknown key it would be saved into the file.
+/// (`None`) the save is taken as it came. Either way the read's "saved at the station" and "set at the station" go:
+/// neither is a setting, and kept as an unknown key each would be saved into the file.
 pub(crate) fn keep_the_shacks_secret_settings(
     shack: &tempo_app::settings::Settings,
     save: &mut tempo_app::settings::Settings,
     afar: Option<&Afar>,
 ) {
     save.unknown.remove(SAVED_AT_THE_STATION);
+    save.unknown.remove(SET_AT_THE_STATION);
     if afar.is_none() {
         return;
     }
@@ -397,6 +398,72 @@ pub(crate) fn keep_the_shacks_settings(
     keep_the_shacks_transmit_settings(shack, save, afar);
     keep_the_shacks_credential_addresses(shack, save, afar);
     keep_the_shacks_secret_settings(shack, save, afar);
+}
+
+/// ⛔ Every setting a whole save from afar keeps as the shack has it ([`keep_the_shacks_settings`]),
+/// by its name on the wire, the stored keys ([`SECRET_SETTINGS`]) aside: the transmit settings and
+/// guards and the TQSL path ([`keep_the_shacks_transmit_settings`]), then the addresses the shack
+/// sends a stored key or password to ([`keep_the_shacks_credential_addresses`]). A test changes
+/// each setting alone in a save from afar and holds this list to exactly the ones that come back.
+pub(crate) const STATION_ONLY_SETTINGS: [&str; 40] = [
+    "js8AprsRelay",
+    "beaconTxPercent",
+    "cqPauseSecs",
+    "wsjtxUdp",
+    "wsjtxUdpAddr",
+    "catBroker",
+    "catBrokerPtt",
+    "js8ApiTcp",
+    "js8ApiUdp",
+    "js8ApiTcpAccept",
+    "js8ApiUdpAccept",
+    "remoteStream",
+    "txWatchdogMin",
+    "js8IdleWatchdogMin",
+    "tuneTimeoutSecs",
+    "parsecPresenceStop",
+    "disableTxAfter73",
+    "cqMaxCalls",
+    "directedMaxCalls",
+    "chatMaxCycles",
+    "rttyAutoRepeats",
+    "swrStopEnabled",
+    "swrStopThreshold",
+    "maxPowerPhone",
+    "maxPowerCw",
+    "maxPowerDigital",
+    "maxPowerAm",
+    "licenseClass",
+    "catRtsState",
+    "catDtrState",
+    "catRtsKeysPtt",
+    "catPttLineState",
+    "catSerialHandshake",
+    "pttMethod",
+    "pttSerialPort",
+    "tqslPath",
+    "cloudlogUrl",
+    "fdJoinAddr",
+    "icomLanHost",
+    "icomLanPort",
+];
+
+/// The name a settings read from afar carries, beside the settings, of every setting the save
+/// from afar keeps as the shack has it: the other computer shows each read-only, "Set at the
+/// station", rather than take an edit the save would quietly put back.
+pub(crate) const SET_AT_THE_STATION: &str = "stationOnlySettings";
+
+/// What a settings read from afar says is set at the station only: [`STATION_ONLY_SETTINGS`] and
+/// the stored keys ([`SECRET_SETTINGS`]), by name. From the shack's own screen (`None`) every
+/// setting is its own to set, and there is nothing to say.
+pub(crate) fn station_only_settings(afar: Option<&Afar>) -> Option<Vec<&'static str>> {
+    afar?;
+    Some(
+        STATION_ONLY_SETTINGS
+            .into_iter()
+            .chain(SECRET_SETTINGS.iter().map(|(name, _)| *name))
+            .collect(),
+    )
 }
 
 /// Whether the command lane writes [`Afar`] into an admitted call of `cmd`: each wired start but
