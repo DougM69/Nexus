@@ -159,8 +159,27 @@ describe('the RTTY contrast curve, at known dB', () => {
 })
 
 describe('the row cadence', () => {
-  it('a 50 ms row on a display a little faster than 60 Hz: 40 rows in 2 s, not one every 4 frames', async () => {
+  // Only the RTTY cockpit keeps the remainder. Every other caller keeps the cadence it had: a row on
+  // the first frame at or past `rowMs`, the overshoot dropped. These counts are that behaviour,
+  // measured on the component before the remainder was kept.
+  it('without keepRowRemainder (FT): 120 ms rows land every 8 frames, 15 rows in 2 s, not 16-17', async () => {
+    render(<Waterfall {...base} />)
+    await frames(1, 16.6)
+    vi.mocked(getSpectrumRow).mockClear()
+    await frames(120, 16.6) // 1992 ms
+    expect(vi.mocked(getSpectrumRow).mock.calls.length).toBe(15)
+  })
+
+  it('without keepRowRemainder a 50 ms row still takes 4 frames: 30 rows in 2 s, not 40', async () => {
     render(<Waterfall {...base} rowMs={50} />)
+    await frames(1, 16.6)
+    vi.mocked(getSpectrumRow).mockClear()
+    await frames(120, 16.6)
+    expect(vi.mocked(getSpectrumRow).mock.calls.length).toBe(30)
+  })
+
+  it('a 50 ms row on a display a little faster than 60 Hz: 40 rows in 2 s, not one every 4 frames', async () => {
+    render(<Waterfall {...base} rowMs={50} keepRowRemainder />)
     await frames(1, 16.6)
     vi.mocked(getSpectrumRow).mockClear()
     await frames(120, 16.6) // 1992 ms
@@ -170,7 +189,7 @@ describe('the row cadence', () => {
   })
 
   it('the speed is the row time: 200 ms rows are a quarter of 50 ms rows', async () => {
-    render(<Waterfall {...base} rowMs={200} />)
+    render(<Waterfall {...base} rowMs={200} keepRowRemainder />)
     await frames(1, 16.6)
     vi.mocked(getSpectrumRow).mockClear()
     await frames(120, 16.6)
@@ -180,7 +199,7 @@ describe('the row cadence', () => {
   it('a slow fetch does not come back as a burst of rows', async () => {
     let release: (v: unknown) => void = () => {}
     vi.mocked(getSpectrumRow).mockImplementationOnce(() => new Promise((r) => (release = r)) as never)
-    render(<Waterfall {...base} rowMs={50} />)
+    render(<Waterfall {...base} rowMs={50} keepRowRemainder />)
     await frames(4, 16.6) // the first fetch starts, and hangs
     expect(vi.mocked(getSpectrumRow).mock.calls.length).toBe(1)
     await frames(20, 16.6) // 332 ms held

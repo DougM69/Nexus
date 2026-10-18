@@ -47,8 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buttons (1k, 2k, 3k, 4k; the audio waterfall covers 0–4 kHz, so there is nothing wider to show) and speed
   buttons (Fast, Med, Slow), and both are remembered. The RTTY waterfall now draws through a contrast curve:
   the noise floor stays dark and a keying mark/space pair stands out about twice as strongly on Inferno or
-  Viridis, and somewhat more on Turbo. Every waterfall's rows now also come at an even pace: at the RTTY speed
-  they used to arrive every third or fourth frame, so the scroll stuttered.
+  Viridis, and somewhat more on Turbo. Its rows now also come at an even pace: they used to arrive every third
+  or fourth frame, so the scroll stuttered. The other waterfalls keep the row timing they had.
 - **Nexus Remote: on the shack's own network, Remote stays free.** When an account's internet use has ended, Stream
   and Listen still work from a browser already approved for the station, as long as that device is on the same
   network as the shack. The stream is held to that network at both ends and never goes through the relay. A shack

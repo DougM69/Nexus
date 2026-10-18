@@ -258,6 +258,11 @@ interface Props {
   /** A tag's click, with the tag's frequency. Omitted ⇒ the tags are labels and do nothing.
    *  Disabled while `keyed`: the host's own handler must refuse as well. */
   onTag?: (hz: number) => void
+  /** Rows at the true `rowMs` (RTTY): the part of a frame a row overshot is carried into the
+   *  next, so 50 ms rows on 60 Hz land every 3 frames, not 3 or 4. Omitted ⇒ the overshoot is
+   *  dropped, so a row lands on the first frame at or past `rowMs` after the last: 120 ms is
+   *  8 frames at 60 Hz, ~133 ms, the cadence the FT surfaces' history depth is judged at. */
+  keepRowRemainder?: boolean
 }
 
 /** One label on the picture: its text at `hz`. `opacity` 0..1 is the host's (a fading tag);
@@ -323,6 +328,7 @@ export function Waterfall({
   contrastCurve,
   tags,
   onTag,
+  keepRowRemainder = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -392,6 +398,7 @@ export function Waterfall({
   const markerWidthRef = useRef(markerWidthHz)
   const activeRef = useRef(active)
   const rowMsRef = useRef(rowMs)
+  const keepRemainderRef = useRef(keepRowRemainder)
   const gainRef = useRef(gain)
   const zeroRef = useRef(zero)
   const viewLoRef = useRef(view.lo)
@@ -443,6 +450,7 @@ export function Waterfall({
   markerWidthRef.current = markerWidthHz
   activeRef.current = active
   rowMsRef.current = rowMs
+  keepRemainderRef.current = keepRowRemainder
   gainRef.current = gain
   zeroRef.current = zero
   viewLoRef.current = view.lo
@@ -1012,11 +1020,11 @@ export function Waterfall({
       if (acc >= rowMs) {
         const myGen = latch.begin(now)
         if (myGen !== null) {
-          // Keep the remainder: zeroing it made every row late by the part of a frame it
-          // overshot, so at 50 ms rows on a 60 Hz display a row took 3 frames or 4 (measured 53 ms
-          // on average, ±6.4). Modulo, not a subtraction, so a fetch that held the latch for
-          // several periods does not come back as a burst of rows.
-          acc %= rowMs
+          // With `keepRowRemainder`, keep it: zeroing it made every row late by the part of a
+          // frame it overshot, so at 50 ms rows on a 60 Hz display a row took 3 frames or 4
+          // (measured 53 ms on average, ±6.4). Modulo, not a subtraction, so a fetch that held the
+          // latch for several periods does not come back as a burst of rows. Without it, zero.
+          acc = keepRemainderRef.current ? acc % rowMs : 0
           drawRow(myGen)
             .catch(() => {})
             .finally(() => latch.end(myGen))

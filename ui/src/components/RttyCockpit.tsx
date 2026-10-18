@@ -1123,6 +1123,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           // Live band instrument: Fast (50 ms) is the rig-scope cadence, not the FT slot default;
           // the operator may slow it down (RTTY_WATERFALL_SPEEDS).
           rowMs={RTTY_WATERFALL_SPEEDS.find((x) => x.id === wfSpeed)?.rowMs ?? 50}
+          keepRowRemainder
           spanChoices={RTTY_WATERFALL_SPANS}
           contrastCurve={traceContrast}
           tags={wfTags}
