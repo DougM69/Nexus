@@ -70,6 +70,9 @@ mod contest_upload_hold_tests;
 /// CW owns the transmitter until its word ends: every gate that asks the arbiter, and the hard end.
 #[cfg(test)]
 mod cw_keying_owner_tests;
+/// The keying paths that take no owner (Tune, manual PTT, the FT slot planner) wait for CW too.
+#[cfg(test)]
+mod cw_sending_gate_tests;
 mod field_day_display;
 /// Every contact held in one form: one band, one phone mode, whichever way it came in.
 #[cfg(test)]
@@ -10479,6 +10482,10 @@ impl Engine {
         if on && !self.manual_ptt && self.clock_repair_holds_tx() {
             return;
         }
+        // Nor onto a CW word ([`Self::cw_sending`]); the release is never refused.
+        if on && !self.manual_ptt && self.cw_sending() {
+            return;
+        }
         self.manual_ptt = on && self.tx_enabled && self.tx_allowed();
     }
 
@@ -11083,6 +11090,14 @@ impl Engine {
     /// ([`Self::observe_cw_keying`]): never past that word's hard end.
     fn cw_keying(&self) -> bool {
         self.cw_keying_until.is_some_and(|t| Instant::now() < t)
+    }
+
+    /// CW is sending: words still queued, or the word the rig is sending now ([`Self::cw_keying`],
+    /// with its hard end). What [`TxOwner::Cw`] means, asked on its own by the keying paths that
+    /// take no owner: a tune carrier, manual PTT and the FT slot planner each refuse a NEW key
+    /// while it holds, so nothing keys on top of a CW word.
+    fn cw_sending(&self) -> bool {
+        !self.cw_queue.is_empty() || self.cw_keying()
     }
 
     pub fn observe_rig_tx_meters(
@@ -19460,6 +19475,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if on && !self.tuning && self.clock_repair_holds_tx() {
             return;
         }
+        // Nor onto a CW word ([`Self::cw_sending`]); stopping a tune is never refused.
+        if on && !self.tuning && self.cw_sending() {
+            return;
+        }
         // A tune toggle invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         self.remote_actuation.revoke();
@@ -20629,7 +20648,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             Some(TxOwner::Mic)
         } else if voice {
             Some(TxOwner::Voice)
-        } else if !self.cw_queue.is_empty() || self.cw_keying() {
+        } else if self.cw_sending() {
             // The queue empties as the last word goes to the keyer: the rig sending that word
             // still owns the transmitter until it ends (`cw_keying`, with its own hard end).
             Some(TxOwner::Cw)
@@ -25222,8 +25241,15 @@ contact yourself."
         // license privileges at this dial/mode: no slot TX. The radio loop handles the
         // steady tune carrier separately (also privilege-gated at set_tune). Nor while a
         // clock repair holds transmit ([`Self::hold_tx_for_clock_repair`]): an armed run
-        // misses its overs until the repair ends, and keeps its arm for the ones after.
-        if !self.tx_enabled || self.tuning || !self.tx_allowed() || self.clock_repair_holds_tx() {
+        // misses its overs until the repair ends, and keeps its arm for the ones after. Nor
+        // while CW is sending ([`Self::cw_sending`], the CW ID after a 73): the slot is skipped
+        // as for a tune, the sequence untouched, and the next free slot keys as normal.
+        if !self.tx_enabled
+            || self.tuning
+            || self.cw_sending()
+            || !self.tx_allowed()
+            || self.clock_repair_holds_tx()
+        {
             self.app.set_transmitting(false);
             return None;
         }
