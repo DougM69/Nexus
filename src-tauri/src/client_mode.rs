@@ -134,12 +134,16 @@ use crate::lan_client::road::{self, Look};
 use crate::lan_client::stop_road::{Over, StopRoad};
 use crate::remote_service::vault::PairedStation;
 use tempo_client::still_there::{Idle, IdleWatch};
+use tempo_stream::lan::{Lookup, Typed};
 
 #[cfg(test)]
 pub(crate) mod tests;
 
 /// The argument that starts Nexus in client mode, with the paired station's id after it.
 pub(crate) const ARG: &str = "--client";
+/// The argument after [`ARG`] that gives the address the operator typed for the station, tried
+/// first ([`typed_in`]).
+const AT_ARG: &str = "--client-at";
 /// How often the lease is renewed: well inside the shack's five seconds, so a heartbeat refused
 /// once while the shack's engine is busy costs nothing.
 const HEARTBEAT: Duration = Duration::from_secs(1);
@@ -192,6 +196,33 @@ fn requested_in(mut args: impl Iterator<Item = String>) -> Option<String> {
         }
     }
     found.filter(|id| tempo_stream::protocol::identifier(id))
+}
+
+/// The arguments that start Nexus driving the station `station`, at the address or host name
+/// `typed` first when the operator typed one.
+pub(crate) fn operate_args(station: String, typed: Option<Typed>) -> Vec<String> {
+    let mut args = vec![ARG.into(), station];
+    if let Some(at) = typed {
+        args.extend([AT_ARG.into(), at.to_string()]);
+    }
+    args
+}
+
+/// The address or host name the operator typed for the station this launch drives
+/// (`--client-at <address>` or `--client-at=<address>`), or none. Only what the stations window
+/// would take is taken.
+pub(crate) fn typed_in(mut args: impl Iterator<Item = String>) -> Option<Typed> {
+    while let Some(arg) = args.next() {
+        let typed = if arg == AT_ARG {
+            args.next()
+        } else if let Some(at) = arg.strip_prefix("--client-at=") {
+            Some(at.to_string())
+        } else {
+            continue;
+        };
+        return typed.and_then(|text| Typed::read(&text));
+    }
+    None
 }
 
 // --- Where each command goes -------------------------------------------------------------------
@@ -363,6 +394,26 @@ pub(crate) type Answering = Pin<Box<dyn Future<Output = (u64, Answer)> + Send>>;
 /// app, the test's own in a test. The store can block, so it is asked off the async threads.
 pub(crate) type Find =
     Arc<dyn Fn(&str) -> Result<Option<PairedStation>, &'static str> + Send + Sync>;
+
+/// Where client mode reads, and keeps, the address or host name the operator typed for the station
+/// once Operate opened there, so the next launch tries it first: this computer's typed file in the
+/// app (`lan_client::Stations::typed`), never the credential entry that holds the station's keys.
+/// Each can block, so it is asked off the async threads.
+pub(crate) trait Keep: Send + Sync + 'static {
+    /// What is kept for the station paired here as `id`, if anything.
+    fn typed(&self, id: &str) -> Option<Typed>;
+    /// Keep `typed` for the station paired here as `id`.
+    fn keep(&self, id: &str, typed: &Typed) -> Result<(), &'static str>;
+}
+
+impl Keep for crate::lan_client::Stations {
+    fn typed(&self, id: &str) -> Option<Typed> {
+        crate::lan_client::Stations::typed(self, id)
+    }
+    fn keep(&self, id: &str, typed: &Typed) -> Result<(), &'static str> {
+        self.keep_typed(id, Some(typed))
+    }
+}
 
 /// The internet road, as client mode opens it when the station is not on this network: the Remote
 /// service's pipe through the station's room and its relay in the app (`lan_client::internet`), a
@@ -679,6 +730,11 @@ pub(crate) struct Client {
     road_switch: Arc<crate::bench_road_switch::Switch>,
     /// The internet road, when this computer may open one ([`Afar`]), and its clocks.
     afar: OnceLock<Arc<dyn Afar>>,
+    /// Where a typed host name is looked up; the system's resolver when none was given.
+    lookup: OnceLock<Lookup>,
+    /// Where an address the operator typed is kept once Operate opened there; nowhere when none
+    /// was given.
+    keep: OnceLock<Arc<dyn Keep>>,
     timing: Mutex<Timing>,
     /// The link there is now runs over the internet.
     on_internet: AtomicBool,
@@ -734,6 +790,8 @@ impl Client {
             #[cfg(feature = "bench-road-switch")]
             road_switch: Arc::default(),
             afar: OnceLock::new(),
+            lookup: OnceLock::new(),
+            keep: OnceLock::new(),
             timing: Mutex::new(Timing::default()),
             on_internet: AtomicBool::new(false),
             udp_blocked: AtomicBool::new(false),
@@ -751,6 +809,34 @@ impl Client {
     /// once, before [`Client::drive`]; without it, this network's road alone.
     pub(crate) fn reach_afar(&self, afar: Arc<dyn Afar>) {
         let _ = self.afar.set(afar);
+    }
+
+    /// Where a typed host name is looked up, for a test with names of its own. Given once, before
+    /// [`Client::drive`].
+    #[cfg(test)]
+    pub(crate) fn look_up_with(&self, lookup: Lookup) {
+        let _ = self.lookup.set(lookup);
+    }
+
+    /// Where an address the operator typed is kept once Operate opened there, and read back on
+    /// the next launch. Given once, before [`Client::drive`].
+    pub(crate) fn keep_typed_with(&self, keep: Arc<dyn Keep>) {
+        let _ = self.keep.set(keep);
+    }
+
+    /// Where `typed` is now: an address as it is, a host name looked up again, each time it is
+    /// asked. None for none, and for a name that resolves to no address on a private network.
+    async fn typed_at(&self, typed: Option<Typed>) -> Option<SocketAddrV4> {
+        let lookup = self
+            .lookup
+            .get()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(tempo_stream::lan::lookup));
+        let typed = typed?;
+        tokio::task::spawn_blocking(move || typed.resolve(&lookup))
+            .await
+            .ok()
+            .flatten()
     }
 
     /// The internet road's clocks, for a test that cannot wait for them.
@@ -1378,7 +1464,7 @@ impl Client {
         app: tauri::AppHandle<R>,
         find: Find,
         look: Look,
-        typed: Option<SocketAddrV4>,
+        typed: Option<Typed>,
     ) {
         let shown = Arc::new(AtomicBool::new(false));
         {
@@ -1419,7 +1505,22 @@ impl Client {
             if let Some(first) = record.addresses.first() {
                 self.at(first.clone());
             }
-            let connecting = self.connect(&record, typed, &look);
+            // What the operator typed for this launch, or else what was kept for the station when
+            // Operate last opened there: tried first, a host name looked up again on every try.
+            let kept = match (&typed, self.keep.get()) {
+                (None, Some(keep)) => {
+                    let (keep, id) = (Arc::clone(keep), self.station_id.clone());
+                    tokio::task::spawn_blocking(move || keep.typed(&id))
+                        .await
+                        .ok()
+                        .flatten()
+                }
+                _ => None,
+            };
+            let typing = typed.clone().or(kept);
+            let typed_at = self.typed_at(typing.clone()).await;
+            let unresolved = typing.is_some() && typed_at.is_none();
+            let connecting = self.connect(&record, typed_at, &look);
             // In a test build, what this link opens is under the road switch.
             #[cfg(feature = "bench-road-switch")]
             let connecting = self.road_switch.over(connecting);
@@ -1463,7 +1564,16 @@ impl Client {
                     if let Some(at) = at {
                         self.at(at.to_string());
                     }
-                    self.on_the_link(&app, Arc::new(link), &shown, internet, (&find, typed))
+                    // Operate opened where the operator typed: kept with the station, so the next
+                    // launch tries it first. A store that will not keep it changes nothing now.
+                    if let (Some(typed), Some(keep)) = (&typed, self.keep.get()) {
+                        if at.is_some() && at == typed_at {
+                            let (keep, id, typed) =
+                                (Arc::clone(keep), self.station_id.clone(), typed.clone());
+                            tokio::task::spawn_blocking(move || keep.keep(&id, &typed));
+                        }
+                    }
+                    self.on_the_link(&app, Arc::new(link), &shown, internet, (&find, typing))
                         .await;
                     if !self.idle_ended.load(Ordering::SeqCst) {
                         self.set(Phase::NotLive, None);
@@ -1471,6 +1581,13 @@ impl Client {
                     AGAIN
                 }
                 Err(reason) => {
+                    // Nothing answered anywhere, and the name typed for the station resolves to
+                    // nothing: the name is what to check.
+                    let reason = if unresolved && road::UNREACHED.contains(&reason) {
+                        "nameUnresolved"
+                    } else {
+                        reason
+                    };
                     let lasting =
                         LASTING.contains(&reason) || crate::lan_client::internet::lasting(reason);
                     let phase = if !lasting && self.live_once.load(Ordering::SeqCst) {
@@ -1552,7 +1669,7 @@ impl Client {
         link: Arc<Link>,
         shown: &AtomicBool,
         internet: bool,
-        lan: (&Find, Option<SocketAddrV4>),
+        lan: (&Find, Option<Typed>),
     ) {
         let timing = *lock(&self.timing);
         let opened = Instant::now();
@@ -1708,21 +1825,30 @@ impl Client {
     /// says so in `found`.
     fn try_this_network(
         &self,
-        (find, typed): (&Find, Option<SocketAddrV4>),
+        (find, typed): (&Find, Option<Typed>),
         timing: Timing,
         found: &Arc<AtomicBool>,
     ) -> tauri::async_runtime::JoinHandle<()> {
         let (find, id, found) = (find.clone(), self.station_id.clone(), Arc::clone(found));
+        let lookup = self
+            .lookup
+            .get()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(tempo_stream::lan::lookup));
         let every = timing.lan_probe * self.lan_backoff.load(Ordering::SeqCst);
         tauri::async_runtime::spawn(async move {
             loop {
                 tokio::time::sleep(every).await;
-                let asked = (find.clone(), id.clone());
-                let record = tokio::task::spawn_blocking(move || (asked.0)(&asked.1)).await;
-                let addresses: Vec<SocketAddrV4> = match record {
-                    Ok(Ok(Some(record))) => road::order(&record, typed),
+                let asked = (find.clone(), id.clone(), typed.clone(), lookup.clone());
+                // A typed host name is looked up again on every try.
+                let addresses = tokio::task::spawn_blocking(move || match (asked.0)(&asked.1) {
+                    Ok(Some(record)) => {
+                        road::order(&record, asked.2.and_then(|typed| typed.resolve(&asked.3)))
+                    }
                     _ => Vec::new(),
-                };
+                })
+                .await
+                .unwrap_or_default();
                 for at in addresses {
                     let answered =
                         tokio::time::timeout(LAN_PROBE_WAIT, tokio::net::TcpStream::connect(at))
@@ -2111,6 +2237,23 @@ pub(crate) fn leave_client_mode(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 /// This run in client mode: the app with no station of its own, driving the station `station`.
+/// Client mode's drive of the station, from this computer's store of paired stations and the
+/// launch's arguments `args`: the station's record read from the store each time, and an address
+/// or host name the operator typed (`--client-at`, [`typed_in`]) tried first, then kept with the
+/// station once Operate opens there.
+pub(crate) fn start_driving<R: Runtime>(
+    client: Arc<Client>,
+    app: tauri::AppHandle<R>,
+    stations: Arc<crate::lan_client::Stations>,
+    look: Look,
+    args: impl Iterator<Item = String>,
+) -> tauri::async_runtime::JoinHandle<()> {
+    client.keep_typed_with(Arc::clone(&stations) as Arc<dyn Keep>);
+    let find: Find = Arc::new(move |id: &str| stations.get(id));
+    let typed = typed_in(args);
+    tauri::async_runtime::spawn(client.drive(app, find, look, typed))
+}
+
 pub(crate) fn run(station: String) {
     tempo_core::applog::info(
         "startup",
@@ -2166,9 +2309,12 @@ pub(crate) fn run(station: String) {
                 crate::capture_all_window_geometry(&handle);
                 tempo_core::applog::flush();
             }));
-            let stations = Arc::new(crate::lan_client::Stations::new(Arc::new(
-                crate::remote_service::vault::SystemVault,
-            )));
+            let stations = Arc::new(
+                crate::lan_client::Stations::new(Arc::new(
+                    crate::remote_service::vault::SystemVault,
+                ))
+                .typed_in(crate::lan_client::typed_path()),
+            );
             match crate::lan_client::internet::Roads::new(Arc::clone(&stations)) {
                 Ok(roads) => driving.reach_afar(Arc::new(roads)),
                 Err(why) => tempo_core::applog::warn(
@@ -2176,9 +2322,9 @@ pub(crate) fn run(station: String) {
                     &format!("no internet road from this computer ({why})"),
                 ),
             }
-            let find: Find = Arc::new(move |id: &str| stations.get(id));
             let look: Look = Arc::new(tempo_stream::lan::dnssd::find);
-            tauri::async_runtime::spawn(driving.drive(app.handle().clone(), find, look, None));
+            let args = std::env::args().skip(1);
+            start_driving(driving, app.handle().clone(), stations, look, args);
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -74,6 +74,7 @@ function reasonLine(status: ClientStatus): string {
     case 'refused':
     case 'noAnswer': return lanReachLine(status.reason)
     case 'keyChanged': return t('lanWindow.reason.keyChanged')
+    case 'nameUnresolved': return t('lanWindow.reason.nameUnresolved')
     case 'notThisStation': return t('lanWindow.reason.notThisStation')
     case 'notPaired': return t('lanWindow.reason.notPaired')
     case 'notStation': return t('lanWindow.reason.notStation')

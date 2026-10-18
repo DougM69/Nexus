@@ -20,7 +20,9 @@
 //!
 //! **The page's words** (JSON text frames). From the page: `stations`, `find`, `pair` (`address`,
 //! `code`, `name`), `forget` (`stationId`), `connect` (`stationId`, and an `address` the operator
-//! typed, if any), `disconnect`, `operate` and `addInternet` (`stationId`), `chooseStation`
+//! typed, if any), `disconnect`, `operate` (`stationId`, and an `address` the operator typed, if any), `addInternet`
+//! (`stationId`), `keepAddress` (`stationId`, and the `address` Operate tries first, or none to
+//! clear it), `chooseStation`
 //! (`stationId`, or none to cancel), and on an open road the station's own `operationRequest` and
 //! `streamSignal`. To the page: `stations` (`stations`, `computer`, `internet`, and after a forget
 //! the service could not be told of, `forgetUnreached`), `signingIn`, `chooseStation` (`stations`:
@@ -30,6 +32,11 @@
 //! `connectionLost`), `answerRefused`, and the station's own `operationResponse`, `streamSignal`,
 //! `streamState` and `status`. Every refusal is a code the page says in a sentence. Anything else
 //! from the page ends the session.
+//!
+//! **A typed address** is a station's address as it shows it, or the name its computer goes by
+//! (`tempo_stream::lan::Typed`), looked up when it is tried: a name that resolves to no address on
+//! a private network is refused as `nameUnresolved`. Either is only where to try; the key pinned at
+//! pairing is the station.
 //!
 //! **Found by name** (`find`, as ruled on 2026-10-04: "By name, or typed"). The stations Windows'
 //! own DNS-SD finds on this computer's networks (`tempo_stream::lan::dnssd`), for the pairing
@@ -45,6 +52,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use serde::Deserialize;
 use serde_json::json;
 use tempo_stream::lan::dnssd::{Found, Unavailable};
+use tempo_stream::lan::{Lookup, Typed};
 use tempo_stream::protocol::BrowserSignal;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -102,11 +110,13 @@ pub(crate) struct Reach {
     pub assets: Assets,
     pub stations: Arc<Stations>,
     pub find: Find,
+    /// Where a typed host name is looked up (`tempo_stream::lan::lookup` in the app).
+    pub lookup: Lookup,
     /// This computer's name, offered as the one a station shows beside its key.
     pub name: String,
     /// Operate from this computer: Nexus quits as itself and starts again driving the paired
-    /// station this id names (`client_mode`).
-    pub operate: Arc<dyn Fn(String) + Send + Sync>,
+    /// station this id names (`client_mode`), at the address the operator typed first, if any.
+    pub operate: Arc<dyn Fn(String, Option<Typed>) + Send + Sync>,
     /// Add the internet road to the paired station this id names (`internet::add`): the sign-in
     /// in the system browser, and this computer registered with the Remote service.
     pub add_internet: super::internet::AddInternet,
@@ -502,10 +512,18 @@ enum FromPage {
     Operate {
         #[serde(rename = "stationId")]
         station_id: String,
+        #[serde(default)]
+        address: Option<String>,
     },
     AddInternet {
         #[serde(rename = "stationId")]
         station_id: String,
+    },
+    /// The address Operate tries first for a station, changed, or cleared with none.
+    KeepAddress {
+        #[serde(rename = "stationId")]
+        station_id: String,
+        address: Option<String>,
     },
     /// The station the operator picked while the internet road is added, or none (cancelled).
     ChooseStation {
@@ -708,6 +726,21 @@ async fn page(
                         }
                         told.to_string()
                     }
+                    FromPage::KeepAddress { station_id, address } => {
+                        let typed = match address.as_deref().map(Typed::read) {
+                            Some(None) => Err("badAddress"),
+                            typed => Ok(typed.flatten()),
+                        };
+                        let kept = reach.stations.clone();
+                        let saved = match typed {
+                            Ok(typed) => store(move || kept.keep_typed(&station_id, typed.as_ref())).await,
+                            Err(reason) => Err(reason),
+                        };
+                        match saved {
+                            Ok(()) => listed(&reach).await.to_string(),
+                            Err(reason) => json!({"type":"connectRefused","reason":reason}).to_string(),
+                        }
+                    }
                     FromPage::Connect { station_id, address: typed } => {
                         if let Some(open) = road.take() { open.close().await }
                         match connect(&reach, &station_id, typed.as_deref()).await {
@@ -719,16 +752,10 @@ async fn page(
                         if let Some(open) = road.take() { open.close().await }
                         json!({"type":"closed","reason":"disconnected"}).to_string()
                     }
-                    FromPage::Operate { station_id } => {
+                    FromPage::Operate { station_id, address } => {
                         if let Some(open) = road.take() { open.close().await }
-                        let kept = reach.stations.clone();
-                        let wanted = station_id.clone();
-                        match store(move || kept.get(&wanted)).await {
-                            Ok(Some(_)) => {
-                                (reach.operate)(station_id);
-                                json!({"type":"operating"}).to_string()
-                            }
-                            Ok(None) => json!({"type":"connectRefused","reason":"unknownStation"}).to_string(),
+                        match operate(&reach, station_id, address.as_deref()).await {
+                            Ok(()) => json!({"type":"operating"}).to_string(),
                             Err(reason) => json!({"type":"connectRefused","reason":reason}).to_string(),
                         }
                     }
@@ -792,6 +819,37 @@ async fn page(
     }
 }
 
+/// Operate from this computer: Nexus starts again driving station `id`, at the address the
+/// operator typed first, if any, read as [`connect`] reads one. The launch proves the key pinned
+/// for the station wherever it reaches it, so a typed address is never taken as the station.
+async fn operate(reach: &Reach, id: String, typed: Option<&str>) -> Result<(), &'static str> {
+    let typed = match typed {
+        Some(text) => Some(resolved(reach, text).await?.0),
+        None => None,
+    };
+    let kept = reach.stations.clone();
+    let wanted = id.clone();
+    store(move || kept.get(&wanted))
+        .await?
+        .ok_or("unknownStation")?;
+    (reach.operate)(id, typed);
+    Ok(())
+}
+
+/// What the operator typed, read (`badAddress` when it is neither an address nor a host name), and
+/// where it is now: a name looked up through [`Reach::lookup`], `nameUnresolved` when it resolves
+/// to no address on a private network.
+async fn resolved(reach: &Reach, text: &str) -> Result<(Typed, SocketAddrV4), &'static str> {
+    let typed = Typed::read(text).ok_or("badAddress")?;
+    let (asked, lookup) = (typed.clone(), reach.lookup.clone());
+    let at = tokio::task::spawn_blocking(move || asked.resolve(&lookup))
+        .await
+        .ok()
+        .flatten()
+        .ok_or("nameUnresolved")?;
+    Ok((typed, at))
+}
+
 /// The road to station `id`, opened: the road, and what the page is told of it. It is tried at the
 /// address the operator typed, then at the remembered ones, the last that worked first, and only
 /// when none of them welcomed it because nothing answered, or because another key did (another
@@ -803,7 +861,7 @@ async fn connect(
     typed: Option<&str>,
 ) -> Result<(Road, String), &'static str> {
     let typed = match typed {
-        Some(text) => Some(tempo_stream::lan::typed(text).ok_or("badAddress")?),
+        Some(text) => Some(resolved(reach, text).await?.1),
         None => None,
     };
     let kept = reach.stations.clone();

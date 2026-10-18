@@ -58,7 +58,7 @@ use std::time::Duration;
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{Manager, Url, WebviewUrl, WebviewWindowBuilder};
 
-use crate::lan_client::{computer_name, Origin, Reach, Stations};
+use crate::lan_client::{computer_name, typed_path, Origin, Reach, Stations};
 use crate::remote_service::vault::SystemVault;
 use crate::remote_service::REMOTE_ORIGIN;
 use crate::window_state;
@@ -325,7 +325,7 @@ pub struct LanOrigin(Mutex<Option<Origin>>);
 /// finds by name; and adding the internet road to one of them, through the system browser.
 fn reach(app: &tauri::AppHandle) -> Reach {
     let files = app.clone();
-    let stations = Arc::new(Stations::new(Arc::new(SystemVault)));
+    let stations = Arc::new(Stations::new(Arc::new(SystemVault)).typed_in(typed_path()));
     Reach {
         assets: Arc::new(move |path: &str| {
             let resolver = files.asset_resolver();
@@ -336,11 +336,15 @@ fn reach(app: &tauri::AppHandle) -> Reach {
         }),
         stations: Arc::clone(&stations),
         find: Arc::new(tempo_stream::lan::dnssd::find),
+        lookup: Arc::new(tempo_stream::lan::lookup),
         name: computer_name(),
         operate: {
             let app = app.clone();
-            Arc::new(move |station: String| {
-                crate::client_mode::start_again(&app, vec![crate::client_mode::ARG.into(), station])
+            Arc::new(move |station: String, typed| {
+                crate::client_mode::start_again(
+                    &app,
+                    crate::client_mode::operate_args(station, typed),
+                )
             })
         },
         add_internet: {

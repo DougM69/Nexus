@@ -159,6 +159,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **Remote: Operate from this computer now works at an address you type.** When nothing answers where a paired
+  station was, Stations on this network asks where it is now. That box offered only Stream; it now offers **Operate
+  at this address** first, with Stream still beside it. Nexus checks it is the same paired station there, as it does
+  everywhere, and keeps trying that address while you operate, so it can move back to your network on its own.
+  You can also type the station computer's name, like `shack-pc.local`. Nexus looks the name up each time it tries
+  it, so it still works after the station gets a new address, and says so plainly when no computer answers to the
+  name. Once Operate opens at what you typed, Nexus remembers it with that station and tries it first next time.
+  The station's row shows it, with **Change** and **Clear**; **Forget** removes it with the pairing.
 - **Remote: the addresses Nexus sends your logging-service keys to can only be changed at the station.** A settings
   save from a computer driving the station no longer changes the Cloudlog/Wavelog URL, the club host a Field Day
   position joins, or an Icom network radio's address and port, so it cannot send the station's stored Cloudlog key,

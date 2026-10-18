@@ -840,6 +840,8 @@ const MAY_REACH: &[&str] = &[
     // while wanted. It plays and captures, and starts nothing of a station.
     "crate::lan_client::audio_road",
     "crate::lan_client::Stations",
+    // Where the typed file is: a path beside the default profile's settings. It opens nothing.
+    "crate::lan_client::typed_path",
     // The internet road: this computer's own requests to the Remote service (a pipe, its relay, a
     // renewal) and the road's record in this computer's store. It opens a link and starts nothing
     // of a station.
@@ -1059,6 +1061,63 @@ fn the_launch_names_the_station_it_drives() {
     }
     assert_eq!(requested_in(args(&["--client"])), None);
     assert_eq!(requested_in(args(&["--profile", "r1"])), None);
+}
+
+/// ★ Operate at an address the operator typed: the launch the stations window starts names the
+/// station and the address or host name, and this launch reads both back, as typed. CONTROL: with
+/// none typed the launch is the station alone and nothing is read; what the window would not take
+/// (a loopback address, a port below 1024, a name no host could have) is never read from the
+/// launch either.
+#[test]
+fn a_typed_address_goes_with_the_launch() {
+    for typed in [
+        Typed::At("192.168.1.30:42075".parse().unwrap()),
+        Typed::Name {
+            host: "shack-pc.local".into(),
+            port: 42080,
+        },
+    ] {
+        let launch = operate_args(STATION.into(), Some(typed.clone()));
+        assert_eq!(
+            requested_in(launch.clone().into_iter()),
+            Some(STATION.into())
+        );
+        assert_eq!(typed_in(launch.into_iter()), Some(typed));
+    }
+    let launch = operate_args(STATION.into(), None);
+    assert_eq!(launch, vec![ARG.to_string(), STATION.to_string()]);
+    assert_eq!(typed_in(launch.into_iter()), None);
+    let args = |list: &[&str]| {
+        list.iter()
+            .map(|a| a.to_string())
+            .collect::<Vec<_>>()
+            .into_iter()
+    };
+    assert_eq!(
+        typed_in(args(&["--client", STATION, "--client-at=192.168.1.30"])),
+        Some(Typed::At("192.168.1.30:42075".parse().unwrap()))
+    );
+    assert_eq!(
+        typed_in(args(&["--client", STATION, "--client-at", "shack.local"])),
+        Some(Typed::Name {
+            host: "shack.local".into(),
+            port: tempo_stream::lan::PORT
+        })
+    );
+    for not_taken in [
+        "127.0.0.1:42075",
+        "192.168.1.30:80",
+        "shack.local:80",
+        "shack_pc",
+        "",
+    ] {
+        assert_eq!(
+            typed_in(args(&["--client", STATION, "--client-at", not_taken])),
+            None,
+            "{not_taken:?}"
+        );
+    }
+    assert_eq!(typed_in(args(&["--client", STATION, "--client-at"])), None);
 }
 
 // --- Stop's second road --------------------------------------------------------------------------
