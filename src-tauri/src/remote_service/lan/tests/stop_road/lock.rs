@@ -17,6 +17,8 @@ const TICK: Duration = super::super::drops::TICK;
 const CAP: Duration = Duration::from_millis(2500);
 const ASK: Duration = Duration::from_millis(1000);
 
+/// What the screen was answered at each re-assertion of its Lock, and when.
+type Said = Arc<Mutex<Vec<(Instant, Result<Value, Value>)>>>;
 /// Each tick of the shack's loop: when, and whether the microphone over was armed and keyed.
 type Ticks = Arc<Mutex<Vec<(Instant, bool, bool)>>>;
 
@@ -31,7 +33,7 @@ struct Locked {
     headset: Arc<tempo_client::audio_road::StandIn>,
     speaking: Arc<AtomicBool>,
     answer: Arc<AtomicBool>,
-    said: Arc<Mutex<Vec<(Instant, Result<Value, Value>)>>>,
+    said: Said,
     ticks: Ticks,
     _listening: watch::Sender<bool>,
 }
@@ -136,7 +138,7 @@ impl Locked {
         });
         let speaking = speak(&headset);
         let answer = Arc::new(AtomicBool::new(false));
-        let said: Arc<Mutex<Vec<(Instant, Result<Value, Value>)>>> = Arc::default();
+        let said: Said = Arc::default();
         {
             let (main, done, answer, said) = (
                 s.main.clone(),
