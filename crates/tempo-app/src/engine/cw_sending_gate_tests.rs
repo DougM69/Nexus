@@ -3,6 +3,9 @@
 //! NEW key while CW is sending (words queued, or the word the rig is sending now), and each lets
 //! go as before: stopping a tune and releasing PTT are never refused. A skipped FT slot leaves
 //! the QSO exactly where it was, and the next free slot keys the same over.
+//!
+//! The voice keyer too: a message sent while CW is sending is refused with the CW reason, one
+//! queued just before CW started is dropped instead of played, and stopping voice always works.
 
 use super::*;
 
@@ -209,4 +212,91 @@ fn with_no_cw_the_ft_slot_keys_as_before() {
         Some("W9XYZ K2DEF R-07"),
         "the first free slot keys"
     );
+}
+
+/// One second of a voice-keyer message.
+fn message() -> Vec<f32> {
+    vec![0.1; 12_000]
+}
+
+#[test]
+fn voice_is_refused_while_cw_sends_and_plays_once_it_ends() {
+    for flex in [false, true] {
+        for how in [Cw::Queued, Cw::Keying] {
+            let mut e = cw_station();
+            // The Flex client with the radio holding the mic asks the arbiter beside voice.
+            e.observe_flex_radio_has_mic(flex);
+            start_cw(&mut e, how);
+            assert_eq!(
+                e.send_voice(message()),
+                Err(CW_BUSY.to_string()),
+                "{how:?}, Flex {flex}: voice during CW is refused, with the CW reason"
+            );
+            assert!(
+                e.voice_tx.is_none(),
+                "{how:?}, Flex {flex}: nothing was queued"
+            );
+            end_cw(&mut e);
+            assert_eq!(
+                e.send_voice(message()),
+                Ok(()),
+                "{how:?}, Flex {flex}: voice is taken once CW has ended"
+            );
+            if !flex {
+                assert_eq!(e.poll_voice(), Some(message()), "{how:?}: and plays");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_message_queued_before_cw_started_is_dropped_not_played() {
+    for how in [Cw::Queued, Cw::Keying] {
+        let mut e = cw_station();
+        assert_eq!(e.send_voice(message()), Ok(()), "premise: queued");
+        // An F-key fires before the radio loop has taken the message.
+        e.send_cw("TEST");
+        if let Cw::Keying = how {
+            assert_eq!(e.poll_cw_one().as_deref(), Some("TEST"), "premise: keyed");
+            e.observe_cw_keying(Some(1_680.0));
+        }
+        assert_eq!(
+            e.poll_voice().map(|m| m.len()),
+            None,
+            "{how:?}: not played over the CW"
+        );
+        assert!(e.voice_tx.is_none(), "{how:?}: dropped, never held");
+        end_cw(&mut e);
+        assert_eq!(
+            e.poll_voice().map(|m| m.len()),
+            None,
+            "{how:?}: not played once CW ends"
+        );
+    }
+}
+
+#[test]
+fn stopping_voice_is_never_refused_while_cw_sends() {
+    for how in [Cw::Queued, Cw::Keying] {
+        let mut e = cw_station();
+        assert_eq!(e.send_voice(message()), Ok(()), "premise: queued");
+        e.send_cw("TEST");
+        if let Cw::Keying = how {
+            assert_eq!(e.poll_cw_one().as_deref(), Some("TEST"), "premise: keyed");
+            e.observe_cw_keying(Some(1_680.0));
+        }
+        e.stop_voice();
+        assert_eq!(
+            (e.voice_tx.is_some(), e.take_voice_abort()),
+            (false, true),
+            "{how:?}: Stop drops the message and flushes the loop"
+        );
+    }
+}
+
+#[test]
+fn with_no_cw_the_voice_keyer_plays_as_before() {
+    let mut e = cw_station();
+    assert_eq!(e.send_voice(message()), Ok(()), "taken");
+    assert_eq!(e.poll_voice(), Some(message()), "and plays");
 }

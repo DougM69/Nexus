@@ -89,12 +89,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RTTY, PSK, SSTV or APRS over, or a Remote start could key on top of it. Each now waits or is refused with "CW is
   sending" until the word ends. Stop TX and TX Off end it at once, and the word's own length (plus a quarter
   second) is a hard end, so a missed end can never hold the transmitter.
-- **Tune, Phone PTT and FT overs no longer key on top of CW.** These three never asked whether CW was sending, so a
-  Tune or a PTT press during a CW send, or an FT slot that came due during the CW ID after a 73, keyed over the CW
-  word. Tune and PTT now stay off while CW is sending (the status reads "CW is sending — stop it first"); stopping a
-  tune and letting go of PTT always work, and Stop TX still ends everything at once. An FT slot that starts while
-  CW is sending is skipped, as one is while tuning: the QSO stays where it was and the next free slot sends the
-  same message. NEEDS-BENCH: press Tune and PTT during a CW send on the radio's keyer and on a WinKeyer.
+- **Tune, Phone PTT, the voice keyer and FT overs no longer key on top of CW.** These never asked whether CW was
+  sending, so a Tune or a PTT press during a CW send, a voice-keyer message (on every radio but a Flex with the
+  radio holding the mic), or an FT slot that came due during the CW ID after a 73, keyed over the CW word. Tune,
+  PTT and the voice keyer now stay off while CW is sending (the status, and the keyer's message, read "CW is
+  sending — stop it first"); a voice message queued just before CW started is dropped, not played later. Stopping a
+  tune, letting go of PTT and stopping a voice message always work, and Stop TX still ends everything at once. An
+  FT slot that starts while CW is sending is skipped, as one is while tuning: the QSO stays where it was and the
+  next free slot sends the same message. NEEDS-BENCH: press Tune, PTT and a voice-keyer F-key during a CW send on
+  the radio's keyer and on a WinKeyer.
 - **IC-7300, IC-705, IC-905 and IC-7300MK2: scope span, reference level and Center/Fixed now work.** With Native Icom
   CI-V on, these radios refused every scope span button ("SCOPE SPAN REFUSED … did not answer when asked whether its
   scope is in Center mode"), and the reference level and Center/Fixed controls did nothing, whatever the scope was set

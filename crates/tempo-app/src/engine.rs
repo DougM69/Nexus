@@ -11607,6 +11607,12 @@ impl Engine {
                 return Err(FLEX_VOICE_TOO_LONG.to_string());
             }
         }
+        // Every other rig: a message never plays over a CW word (the Flex arm above asks the
+        // arbiter, whose CW answer is this one).
+        if self.cw_sending() {
+            tempo_core::applog::info("tx", "voice-keyer message refused: CW is sending");
+            return Err(TxOwner::Cw.busy_reason());
+        }
         if !samples.is_empty() {
             tempo_core::applog::info(
                 "tx",
@@ -11633,8 +11639,9 @@ impl Engine {
     ///
     /// ⛔ A message REFUSED here is DROPPED, never held (operator, 2026-09-30: the rule CW, RTTY
     /// and PSK follow): TX went off, the dial left the privileges, or the radio took the mic,
-    /// after it was queued. Held, it played the moment TX was allowed again. The log says why;
-    /// the keyer has no warning line to carry it, its toasts being the answer to the send itself.
+    /// after it was queued, or CW started sending. Held, it played the moment TX was allowed
+    /// again. The log says why; the keyer has no warning line to carry it, its toasts being the
+    /// answer to the send itself.
     /// "The radio took the mic" is for a message queued while it did not have it, which would
     /// leave over DAX with nobody switching the radio to it.
     pub fn poll_voice(&mut self) -> Option<Vec<f32>> {
@@ -11647,6 +11654,9 @@ impl Engine {
             Some(why)
         } else if !self.tx_allowed() {
             Some("the dial is outside the licence's privileges")
+        } else if self.cw_sending() {
+            // An F-key's CW (which asks no owner) queued after the message, before this tick.
+            Some("CW is sending")
         } else if self.flex_radio_has_mic && self.voice_dax.is_none() {
             Some("the radio has the mic (Flex native audio)")
         } else {
