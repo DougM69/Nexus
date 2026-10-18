@@ -3886,10 +3886,15 @@ pub struct Engine {
     /// Set by `test_cat` to ask the radio loop to re-probe the current rig and
     /// refresh `cat_status`; the loop clears it via [`Engine::take_cat_reprobe`].
     cat_reprobe: bool,
-    /// Monotone count of `set_cat_status` publishes. Lets `test_cat` wait for the probe
-    /// it REQUESTED to land instead of sleeping a fixed guess — a daemon rebuild can take
-    /// several seconds, and the fixed wait used to hand back the PREVIOUS status.
+    /// Monotone count of `set_cat_status` publishes. A dial note records it, so it can tell
+    /// whether it is still the line on screen.
     cat_probe_gen: u64,
+    /// Test CAT's answers: how many the radio loop has published, and the latest, as
+    /// `(count, ok, detail)`. Only the publish for the probe [`Engine::request_cat_reprobe`]
+    /// asked for moves it ([`Engine::answer_cat_reprobe`]), so `test_cat` waits for THAT probe
+    /// instead of sleeping a fixed guess, and a dial note or any other CAT status published
+    /// while it waits is not taken as its result.
+    cat_reprobe_answer: (u64, Option<bool>, String),
     /// While `Some(deadline)`, the radio loop must NOT own the CAT serial port: Test
     /// CAT's baud-ladder probe needs to open it at other rates itself (serial ports are
     /// exclusive-open). The deadline is a crash guard — if the prober never calls
@@ -5976,6 +5981,7 @@ impl Engine {
             contest_entry_revs: 0,
             remote_readings: Default::default(),
             cat_probe_gen: 0,
+            cat_reprobe_answer: (0, None, String::new()),
             cat_port_hold_until: None,
             cat_port_released: false,
             radio_live: std::collections::HashMap::new(),
@@ -22905,8 +22911,24 @@ contact yourself."
 
     /// Ask the radio loop to re-probe the current rig and refresh the CAT status
     /// (the "Test CAT" button). The loop consumes this via [`Self::take_cat_reprobe`].
-    pub fn request_cat_reprobe(&mut self) {
+    /// Returns the mark [`Self::cat_reprobe_answer`] reads the answer against.
+    pub fn request_cat_reprobe(&mut self) -> u64 {
         self.cat_reprobe = true;
+        self.cat_reprobe_answer.0
+    }
+
+    /// Publish the result of the probe a [`Self::request_cat_reprobe`] asked for: the CAT
+    /// status, and Test CAT's answer.
+    pub fn answer_cat_reprobe(&mut self, ok: Option<bool>, detail: String) {
+        let n = self.cat_reprobe_answer.0.wrapping_add(1);
+        self.cat_reprobe_answer = (n, ok, detail.clone());
+        self.set_cat_status(ok, detail);
+    }
+
+    /// The answer to the request that returned `asked`, once the radio loop has published it.
+    pub fn cat_reprobe_answer(&self, asked: u64) -> Option<(Option<bool>, String)> {
+        let (n, ok, detail) = &self.cat_reprobe_answer;
+        (*n != asked).then(|| (*ok, detail.clone()))
     }
 
     /// Consume a pending re-probe request (returns true once per request).
@@ -22914,8 +22936,7 @@ contact yourself."
         std::mem::take(&mut self.cat_reprobe)
     }
 
-    /// The CAT-status publish counter — `test_cat` snapshots it before requesting a
-    /// reprobe and polls until it moves, so it reports THAT probe's result.
+    /// The CAT-status publish counter: every publish moves it, a dial note among them.
     pub fn cat_probe_gen(&self) -> u64 {
         self.cat_probe_gen
     }
@@ -29736,8 +29757,7 @@ mod tests {
     }
 
     /// The Test-CAT deep-probe handshake (IC-7610 zero-bytes saga): the command holds the
-    /// CAT port, the radio loop acks the release, the command probes and releases. The gen
-    /// counter is what lets `test_cat` wait for ITS probe's publish instead of a fixed sleep.
+    /// CAT port, the radio loop acks the release, the command probes and releases.
     #[test]
     fn cat_port_hold_handshake_and_probe_generation() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);

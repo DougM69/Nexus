@@ -117,6 +117,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **PstRotatorAz: "localhost" as its address now works like 127.0.0.1.** Windows looks "localhost" up as the IPv6
   address first, so Nexus listened for PstRotatorAz's replies there while PstRotatorAz answered on IPv4, and the
   compass showed no position. Nexus now takes the IPv4 address when a name has one.
+- **Test CAT reports its own test.** A dial message that appeared while Test CAT was waiting, such as "rig set to
+  …" or a frequency read outside the radio's range, could be shown as the test's result. Test CAT now waits for its
+  own probe and reports that probe's line.
 - **Contest entry: a dupe is now plain to see.** Typing a call already in this contest's log (by the contest's own
   dupe rule) puts a red **DUPE** badge on the Call box with when and where you worked them, for example
   "DUPE 14:32 20m CW", and colours the box. Before, the only sign was a small grey line under the boxes. It shows in

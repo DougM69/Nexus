@@ -2008,7 +2008,7 @@ fn test_cat_on_a_refused_address_says_why_again() {
     let mut state = RadioLoop::new(applied, daemon, &cfg);
     state.after_the_launch_open(&rig, probe.ok);
     state.cat_reopen_at = 60_000.0; // the backoff is not due
-    engine.lock().unwrap().request_cat_reprobe();
+    let asked = engine.lock().unwrap().request_cat_reprobe();
     let mut opens = 0;
     let mut reopen_rig = |t: &Transport, coexist: bool| {
         opens += 1;
@@ -2027,6 +2027,13 @@ fn test_cat_on_a_refused_address_says_why_again() {
         )
         .unwrap();
     let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+    // The reopen answered Test CAT: its line is the test's result.
+    let answer = engine
+        .lock()
+        .unwrap()
+        .cat_reprobe_answer(asked)
+        .map(|(_, d)| d);
+    assert_eq!(answer.as_deref(), Some(said.as_str()));
     assert_eq!(
         (opens, said, heard_at(&broker)),
         (1, held_by_the_broker(broker.port(), "IC-9700"), (0, 0))

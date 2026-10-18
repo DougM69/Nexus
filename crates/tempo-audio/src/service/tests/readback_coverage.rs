@@ -297,3 +297,43 @@ fn with_unknown_coverage_remote_reports_the_read_as_before() {
     b.reads(115_200_000);
     assert_eq!(b.remote_dial_mhz(), Some(115.2));
 }
+
+/// Test CAT's result is its own probe's. A dial note published while it waits is not taken as the
+/// result, and neither is the note the probe's own tick puts up after it: the CAT status is
+/// latest-wins, so `test_cat` used to report whichever line was published first, or last.
+#[test]
+fn a_dial_note_while_test_cat_waits_is_not_its_result() {
+    let mut b = Bench::new(hf_only());
+    {
+        let mut e = engine_lock(&b.engine);
+        let mut s = e.settings().clone();
+        s.ptt_method = "cat".into();
+        s.rig_model = 2; // Hamlib's NET rigctl: the bench's rigctld is the radio
+        e.apply_settings(s);
+    }
+    b.state.applied = Transport::from_settings(engine_lock(&b.engine).settings());
+    let asked = engine_lock(&b.engine).request_cat_reprobe();
+    // A dial note, published the way the loop publishes one, before the loop runs the probe.
+    engine_lock(&b.engine).set_cat_status(Some(true), "rig set to 14.2500 MHz USB".into());
+    assert_eq!(
+        engine_lock(&b.engine).cat_reprobe_answer(asked),
+        None,
+        "the dial note is not Test CAT's result"
+    );
+    // The probe's tick: it probes, then the poll reads 115.2 MHz and puts that note up.
+    b.reads(115_200_000);
+    let shown = engine_lock(&b.engine).snapshot().radio.cat_detail.clone();
+    assert!(
+        shown.contains("115.2000"),
+        "the premise: the note is on screen: {shown:?}"
+    );
+    // The probe asked the radio before the poll did, and the radio said 115.2 MHz to both.
+    assert_eq!(
+        engine_lock(&b.engine).cat_reprobe_answer(asked),
+        Some((
+            Some(true),
+            "Connected — 115.200 MHz (via a shared external rigctld)".to_string()
+        )),
+        "Test CAT's result is the probe's own line, not the note on screen"
+    );
+}
