@@ -319,9 +319,9 @@ than off the air, in a development build after Nexus 1.19.0.*
 
 The scope is a ⊞ Panels entry, **Tuning**, shown by default; hide it there or
 with its own ✕. With the decoded text hidden it stands on its own under the TX
-strip. The square keeps its size (about 140 px, growing to about 200 px on a
-large window) and the decoded text gives way around it; on a small window the
-cockpit scrolls a little further down to reach the log strip. It goes blank while you transmit and while the decoder is
+strip. The square takes the room it needs from the decoded text, the waterfall
+and the log strip (about 200 px on a large window); on a small one it is the
+largest that fits, about 100 px at 1024×768, and nothing has to scroll. It goes blank while you transmit and while the decoder is
 not armed. On a second computer driving the station with Nexus's own Remote
 client it works the same way, fed from the station.
 

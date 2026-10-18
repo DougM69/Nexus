@@ -793,8 +793,8 @@
    text shrinking to fit (RttyTuningScope.tsx). The RX row holds the column and the transcript in
    the stream pane's body and takes the height the transcript used to (`flex: 1 1 0`, a grower
    that yields); the transcript stays its own scroller inside it.
-   The column is 140 px at the 1024 and 1280 floors and grows with the window to about 200 px, never
-   more than 45% of the row so the text keeps the larger share. It is a stack of content (the
+   The column is the window's share (140 px, growing to about 200 px) capped by the room in the row
+   (THE GUARANTEE below), never more than 45% of the row so the text keeps the larger share. It is a stack of content (the
    square, the nudges, the words) that cannot shrink, so where the pane is shorter than that stack
    the COLUMN scrolls — the second legal fate of deficit — and nothing clips. It hosts no stop
    control and sits below the stream head, so it never covers or displaces one. */
@@ -803,6 +803,7 @@
   flex: 1 1 0;
   min-height: 0;
   gap: var(--space-2);
+  container-type: size;
 }
 .rtty-tuning {
   flex: 0 0 auto;
@@ -810,6 +811,7 @@
   flex-direction: column;
   gap: var(--space-1);
   width: clamp(10em, calc(0.105 * var(--vw-eff, 1280px)), 14.5em);
+  width: min(clamp(10em, calc(0.105 * var(--vw-eff, 1280px)), 14.5em), calc(100cqh - 3.7em));
   max-width: 45%;
   min-height: 0;
   overflow-y: auto;
@@ -824,21 +826,28 @@
   aspect-ratio: 1 / 1;
   min-height: 0;
 }
-/* THE GUARANTEE (operator, 2026-10-17: "Guarantee ~140 px; RX text shrinks"). The square is the
-   column's width and does not yield: 10em (140 px) at the 1024 and 1280 floors, growing with the
-   window to 14.5em (about 200 px at 1920). The decoded-text pane is what gives way: while Tuning is
-   shown, the shell carries `.rtty-tuning-on`, which sets the stream frame's own floor knob
-   (CockpitPaneFrame `floor`, read by that frame alone) at the column's height plus the pane's head
-   and the RX head. A shortfall comes out of the yielding waterfall strip first and past that flows
-   to the RTTY shell's deficit valve, which scrolls with the TX strip and the dock sticky — never a
-   clip (measured: at 1024×768 the shell scrolls 114 px, the log strip's Call field behind the dock
-   until it does; nothing is unreachable). The floor follows the operator's divider like every fill
-   floor (CockpitPaneFrame `split`), so dragging the text pane smaller is their own choice and the
-   column then scrolls.
-   The size expression is the column's own (`.rtty-tuning` width above); cockpit-panes.test.ts
-   holds the two equal. */
+/* THE GUARANTEE (operator, 2026-10-17: "Guarantee ~140 px; RX text shrinks", amended the same day:
+   "take the room from the waterfall", and where even that is short the square takes the largest
+   that fits, so NOTHING scrolls). The square is the column's width and never yields; the column's
+   width is the window's share (10em, growing to 14.5em) capped by the room in its row
+   (`100cqh` of `.rtty-rx-row`, a size container, less the nudges and the words). While Tuning is
+   shown the shell carries `.rtty-tuning-on`, which sets three knobs, each read in one place:
+     --rtty-stream-floor  the text pane's floor (CockpitPaneFrame `floor`, that frame alone): the
+                          column plus the pane's head and the RX head, but never more than the shell
+                          has once everything else stands at its minimum (`100% - 34em`, measured in
+                          Chrome at 1024×768 and 1280×800 so the shell does not scroll);
+     --rtty-fill-min      the shell's fill floor, so the log strip floors at its Call row (6em);
+     --rtty-wf-floor      the waterfall strip's floor (styles.css), down to its 6em minimum — a
+                          header and a drawable canvas. Its divider still stops at 8em; the strip
+                          goes lower only when the shell has no other room.
+   Measured (Chrome, real cockpit): square 100 / 128 / 201 px at 1024×768 / 1280×800 / 1920×1080,
+   no shell scroll at any of them, Call, the nudges, the words and Stop TX on screen. A browser
+   without container units keeps the first `width` (the plain clamp) and the shell's valve takes
+   the rest. The size expression is the column's own; cockpit-panes.test.ts holds them equal. */
 .rtty-tuning-on {
-  --rtty-stream-floor: calc(clamp(10em, calc(0.105 * var(--vw-eff, 1280px)), 14.5em) + 8.5em);
+  --rtty-stream-floor: min(calc(100% - 34em), calc(clamp(10em, calc(0.105 * var(--vw-eff, 1280px)), 14.5em) + 8.5em));
+  --rtty-fill-min: 6em;
+  --rtty-wf-floor: 6em;
 }
 .rtty-tuning-picture {
   position: absolute;

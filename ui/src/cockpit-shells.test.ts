@@ -560,7 +560,10 @@ describe('the SSTV stamp has a real percentage base and the shell has real floor
       // frame's inline `min-height: 0`. cockpit-panes.test.ts fences who may set it.
       const v = finalDecl(shell, '--cockpit-fill-min')
       expect(v, `${shell}: --cockpit-fill-min not set — its fill frame floors at 0`).not.toBeNull()
-      expect(/^\d+(\.\d+)?em$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
+      // An em length, or RTTY's tuning-scope knob over one (`var(--rtty-fill-min, 10em)`: the RTTY
+      // shell lowers its log strip's floor to the Call row while the scope is shown; the stock em
+      // value stands wherever nothing sets the knob, as on PSK and SSTV, which share this rule).
+      expect(/^(\d+(\.\d+)?em|var\(--rtty-fill-min, \d+(\.\d+)?em\))$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
     })
   }
 })
@@ -1152,6 +1155,10 @@ function splitTop(s: string): string[] {
  *  passing on a value it could not read. */
 function lengthPx(v: string, g: Geom): number | null {
   const s = v.trim()
+  // A knob with its stock value as the fallback (`var(--rtty-wf-floor, 8em)`): the stock value is
+  // what the rule computes wherever nothing sets the knob, which is every chain computed here.
+  const knob = /^var\(\s*--[\w-]+\s*,\s*([^]*)\)$/.exec(s)
+  if (knob) return lengthPx(knob[1], g)
   for (const [fn, pick] of [
     ['min', Math.min],
     ['max', Math.max],

@@ -26968,7 +26968,7 @@ button.sat-chip:disabled {
      (`.rtty-cockpit > .pane-frame { min-height: 10em }`) shipped dead. Fenced:
      cockpit-panes.test.ts fails any other rule that sets this — inherited under a
      region's tier-2/3 `overflow: hidden` it would be the clip mechanism reborn. */
-  --cockpit-fill-min: 10em;
+  --cockpit-fill-min: var(--rtty-fill-min, 10em);
 }
 /* JS8 is a REGION cockpit (CW's shape: a .cockpit-panes grid, not bare fill frames), so it
    takes CW's shell rule and NOT the --cockpit-fill-min knob — cockpit-panes.test.ts fences
@@ -27033,7 +27033,7 @@ button.sat-chip:disabled {
      floor: the canvas needs device pixels to draw into, and a strip that shrinks to nothing
      is a decoder with no display. Its divider's lower end is exactly this floor
      (WATERFALL_SPLIT_MIN). */
-  min-height: min(8em, calc(0.28 * var(--vh-eff, 100vh)));
+  min-height: min(var(--rtty-wf-floor, 8em), calc(0.28 * var(--vh-eff, 100vh)));
   /* The scope's ceiling (WATERFALL_SPLIT_MAX): a waterfall is a glance strip, and the
      transcript and the log strip below it are what this cockpit is for. */
   max-height: calc(0.45 * var(--vh-eff, 100vh));
