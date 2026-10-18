@@ -402,6 +402,18 @@ pill shows which one is live.
 Either way the bit stream is identical — the same framed Baudot, 1 start bit,
 5 data bits, 1.5 stop bits, at true 45.45 baud never rounded to 45.
 
+### Choose the AFSK sideband
+
+AFSK runs on LSB by default, the RTTY convention MMTTY and N1MM use: mark on
+the lower audio tone, which lands higher on the air. If your station is set up
+for USB instead, set **AFSK sideband** to **USB** in
+[Settings ▸ Digital ▸ RTTY](settings-reference.md#rtty). Nexus then puts the
+rig in its upper data mode (DATA-U / USB-D / DIGU) on every band and swaps the
+tones itself, so mark still lands higher on the air and the decoder still
+copies. Leave **Reverse** off for this; Reverse is for copying a station that
+is sending upside down, and it inverts whichever sideband you picked. True FSK
+has no sideband choice: the rig's own RTTY mode sets the sense.
+
 ### Land here from the Needed board
 
 Click an RTTY row on the [Needed board](needed-dx.md) and Nexus QSYs to the

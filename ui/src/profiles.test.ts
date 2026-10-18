@@ -353,6 +353,11 @@ describe('mergeProfile — the JS8 send options travel with a profile', () => {
     expect([older.js8HoldPtt, older.js8TxOffsetWhileSending], 'a profile from before them').toEqual([true, true])
   })
 
+  it('loads the RTTY AFSK sideband from a profile, and keeps it over a profile from before it', () => {
+    expect(mergeProfile(settings({ rttyAfskSideband: 'lsb' }), settings({ rttyAfskSideband: 'usb' })).rttyAfskSideband).toBe('usb')
+    expect(mergeProfile(settings({ rttyAfskSideband: 'usb' }), settings({})).rttyAfskSideband, 'a profile from before it').toBe('usb')
+  })
+
   it('loads the TX delay from a profile, and keeps it over a profile from before it', () => {
     expect(mergeProfile(settings({ js8TxDelayMs: 200 }), settings({ js8TxDelayMs: 400 })).js8TxDelayMs).toBe(400)
     expect(mergeProfile(settings({ js8TxDelayMs: 300 }), settings({})).js8TxDelayMs, 'a profile from before it').toBe(300)

@@ -101,6 +101,8 @@ pub mod remote_transmit;
 /// `session_tests`: they read the debug build's counters.
 #[cfg(all(test, debug_assertions))]
 mod restore_session_tests;
+#[cfg(test)]
+mod rtty_sideband_tests;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
 #[cfg(all(test, debug_assertions))]
 mod session_tests;
@@ -22407,9 +22409,11 @@ contact yourself."
         self.settings.rtty_shift_hz.max(1)
     }
 
-    /// Reversed mark/space sense (TX tone pair + RX demod).
+    /// Reversed mark/space sense (TX tone pair + RX demod): the operator's Reverse XOR an
+    /// AFSK rig on USB ([`Settings::rtty_tone_swap`]). TX, the decoder and the waterfall
+    /// cursors all read this one getter, so the three cannot disagree about the sense.
     pub fn rtty_reverse(&self) -> bool {
-        self.settings.rtty_reverse
+        self.settings.rtty_tone_swap()
     }
 
     /// Stamp whether the radio loop is keying an RTTY over right now (loop-only;

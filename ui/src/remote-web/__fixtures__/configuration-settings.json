@@ -315,6 +315,7 @@
     "rttyFskLine": "dtr",
     "rttyFskPort": "",
     "rttyReverse": false,
+    "rttyAfskSideband": "lsb",
     "rttyRxAutoArm": true,
     "rttyShiftHz": 170,
     "rxGain": 1.0,

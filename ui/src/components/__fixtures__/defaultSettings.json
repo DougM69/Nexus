@@ -71,6 +71,7 @@
   "rttyBaud": 45.45,
   "rttyShiftHz": 170,
   "rttyReverse": false,
+  "rttyAfskSideband": "lsb",
   "aiCwEnabled": true,
   "unassistedMode": false,
   "rigctldPort": 4534,

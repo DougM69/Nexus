@@ -1216,6 +1216,10 @@ Comma-separated chip lists for the quick text you fire from each surface:
   zero). **True FSK** bit-bangs the rig's FSK input over a serial control line
   with the rig in RTTY mode, unlocking its narrow RTTY filters. "Software FSK
   timing is casual/Field-Day grade; AFSK is the timing-cleanest path."
+- **AFSK sideband** (AFSK only) — LSB (standard, the default) or USB. On USB,
+  Nexus puts the rig in its upper data mode (DATA-U / USB-D / DIGU) and swaps
+  the tones itself, so mark stays high on the air and the decoder still copies.
+  Leave Reverse off for this.
 - **FSK serial port** (True FSK only) — the port whose control line feeds the
   rig's FSK input. Empty = the CAT serial port.
 - **FSK data line** (True FSK only) — DTR (the common wiring, leaving RTS free
@@ -1228,10 +1232,9 @@ Comma-separated chip lists for the quick text you fire from each surface:
   RX demodulator — true 45.45, never rounded to 45.
 - **Shift (Hz)** — 170 (the HF standard), 425 or 850. The TX tone pair and the RX
   demodulator both.
-- **Reverse (swap mark/space)** — "The convention is LSB with mark on the lower
-  audio tone. Turn this on when deliberately running the opposite sideband (e.g.
-  AFSK in USB/DATA-U) so the on-air sense stays correct." Applies to TX and the
-  RX decoder.
+- **Reverse (swap mark/space)** — swaps mark and space on TX and in the RX
+  decoder, to work a station sending upside down. Not for running USB: pick the
+  AFSK sideband instead, which keeps the sense right on its own.
 
 **Auto call**
 

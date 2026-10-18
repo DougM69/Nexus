@@ -108,6 +108,7 @@ export const SETTINGS_KEYS = [
   'rttyBaud',
   'rttyShiftHz',
   'rttyReverse',
+  'rttyAfskSideband',
   'aiCwEnabled',
   'unassistedMode',
   'rigctldPort',
@@ -361,6 +362,8 @@ export const NEWER_SETTINGS = {
   js8AvoidAllcall: false,
   // …and one that predates JS8Call's TX delay keys each frame on its boundary: no delay.
   js8TxDelayMs: 0,
+  // A station that predates the RTTY AFSK sideband runs AFSK on LSB, which is that setting's default.
+  rttyAfskSideband: 'lsb',
 } as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
@@ -512,6 +515,7 @@ export const SETTINGS_SHAPES = {
   "rttyBaud": "number",
   "rttyShiftHz": "number",
   "rttyReverse": "boolean",
+  "rttyAfskSideband": "string",
   "aiCwEnabled": "boolean",
   "unassistedMode": "boolean",
   "rigctldPort": "number",

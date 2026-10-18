@@ -26296,6 +26296,61 @@ mod tests {
         }
     }
 
+    /// The RTTY AFSK sideband on the wire to rigctld: `PKTLSB` by default on 40 m and 20 m, and
+    /// `PKTUSB` on both once the operator picks USB.
+    #[test]
+    fn rtty_afsk_commands_the_data_side_the_setting_names() {
+        let probe = |side: &str, dial: f64, band: &str| {
+            let (addr, seen, _live) = band_stacking_rigctld_stub((dial * 1e6) as u64, &[]);
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                let mut s = e.settings().clone();
+                s.rtty_afsk_sideband = side.into();
+                e.apply_settings(s);
+                e.set_operating_mode("rtty", true);
+                e.set_frequency(dial, band, "LSB");
+            }
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state_for(&engine);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    0.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            let modes: Vec<String> = seen
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|l| l.starts_with("M "))
+                .cloned()
+                .collect();
+            modes
+        };
+        for (dial, band) in [(7.080, "40m"), (14.083, "20m")] {
+            assert_eq!(
+                probe("lsb", dial, band),
+                vec!["M PKTLSB 3000"],
+                "LSB on {band}"
+            );
+            assert_eq!(
+                probe("usb", dial, band),
+                vec!["M PKTUSB 3000"],
+                "USB on {band}"
+            );
+        }
+    }
+
     #[test]
     fn the_mode_is_commanded_before_the_dial_on_a_cockpit_switch() {
         // ⭐ FIELD REPORT, v1.0.0 on an FTDX10 (2026-08-05): moving CW→Phone added 650 Hz to the

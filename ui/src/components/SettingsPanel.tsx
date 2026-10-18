@@ -1071,9 +1071,11 @@ const ISS_SSTV_MHZ = 145.8
  * Tokens the panel prints beside a number or stores as a `<select>` value, where the row has
  * no prose in it at all. Named rather than written inline for the `MACRO_SET_QSO` reason: a
  * bare word in JSX text is what the i18n guard reads as un-migrated English. `RTS` is a serial
- * control line and `Hz` a unit symbol — the same category as `LINK_TOKENS` in the Now-Bar.
+ * control line, `USB` a sideband and `Hz` a unit symbol — the same category as `LINK_TOKENS` in
+ * the Now-Bar.
  */
 const SERIAL_LINE_RTS = 'RTS'
+const SIDEBAND_USB = 'USB'
 const UNIT_HZ = 'Hz'
 
 /**
@@ -8969,6 +8971,20 @@ export function SettingsPanel({
                   <T k="settings.rtty.backend.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
+              {form.rttyBackend !== 'fsk' && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.rtty.afskSideband.label')}</span>
+                  <select disabled={remote}
+                    className="settings-input"
+                    value={form.rttyAfskSideband === 'usb' ? 'usb' : 'lsb'}
+                    onChange={(e) => update('rttyAfskSideband', e.target.value)}
+                  >
+                    <option value="lsb">{t('settings.rtty.afskSideband.lsb')}</option>
+                    <option value="usb">{SIDEBAND_USB}</option>
+                  </select>
+                  <span className="settings-hint">{t('settings.rtty.afskSideband.hint')}</span>
+                </label>
+              )}
               {form.rttyBackend === 'fsk' && (
                 <>
                   <label className="settings-field">

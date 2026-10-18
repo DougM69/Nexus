@@ -7785,6 +7785,10 @@ export const EN = {
   'settings.rtty.backend.fsk': 'True FSK — serial keyline (DTR/RTS), rig in RTTY mode',
   'settings.rtty.backend.hint':
     "How Nexus transmits RTTY. <b>AFSK</b> plays the two-tone waveform through the same TX audio path as FT8 (soundcard-clocked = jitter-free; set drive so ALC reads just zero). <b>True FSK</b> bit-bangs the rig's FSK input over a serial control line with the rig in RTTY mode — unlocking its narrow RTTY filters (e.g. the FTDX10's) — with PTT on CAT or its own line. Software FSK timing is casual/Field-Day grade; AFSK is the timing-cleanest path.",
+  'settings.rtty.afskSideband.label': 'AFSK sideband',
+  'settings.rtty.afskSideband.lsb': 'LSB (standard)',
+  'settings.rtty.afskSideband.hint':
+    'The sideband the rig runs AFSK on. LSB is the RTTY convention. On USB, Nexus puts the rig in its upper data mode (DATA-U / USB-D / DIGU) and swaps the tones itself, so mark stays high on the air and the decoder still copies — leave Reverse off.',
   'settings.rtty.fskPort.label': 'FSK serial port',
   'settings.rtty.fskPort.placeholder': "{{example}} — e.g. the FTDX10's USB Enhanced COM",
   'settings.rtty.fskPort.hint':
@@ -7804,7 +7808,7 @@ export const EN = {
   'settings.rtty.shift.hint': 'Mark/space spacing — the TX tone pair and the RX demodulator both.',
   'settings.rtty.reverse.label': 'Reverse (swap mark/space)',
   'settings.rtty.reverse.hint':
-    'The convention is LSB with mark on the lower audio tone. Turn this on when deliberately running the opposite sideband (e.g. AFSK in USB/DATA-U) so the on-air sense stays correct — applies to TX and the RX decoder.',
+    'Swaps mark and space on TX and in the RX decoder, to work a station sending upside down. Not for running USB: pick the AFSK sideband instead, which keeps the sense right on its own.',
   'settings.rtty.autoCall.title': 'Auto call',
   'settings.rtty.autoListen.label': 'Listen before repeating',
   'settings.rtty.autoListen.hint':

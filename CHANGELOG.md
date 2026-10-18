@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callsign from Settings ▸ Station and one-way hashes of this computer's hardware and installation IDs; the IDs
   themselves never leave the computer. When the service refuses the approval for one of these reasons, Nexus at the
   shack says which one and what to do about it.
+- **RTTY: AFSK on USB.** Settings ▸ Digital ▸ RTTY has a new **AFSK sideband** choice: LSB (standard, the default
+  and unchanged) or USB. On USB, Nexus puts the rig in its upper data mode (DATA-U, USB-D or DIGU) and swaps the AFSK
+  tones itself, so mark stays high on the air and the decoder still copies. Reverse now only flips the sense for a
+  station sending upside down; its help text no longer tells you to use it for USB. True FSK is unchanged.
+  NEEDS-BENCH: an AFSK RTTY QSO on USB, checked on a second receiver or a skimmer for mark high on RF.
 - **Yaesu FT-1000 and FT-1000D in the rig list.** Both now appear in the default list beside the FT-1000MP and
   use their own Hamlib driver (the FT-1000 driver is marked Beta by Hamlib). NEEDS-BENCH: an FT-1000 or FT-1000D on CAT.
 - **Nexus Remote: operate the shack from a second Windows PC with Nexus on it (Beta, test builds).** On your own
