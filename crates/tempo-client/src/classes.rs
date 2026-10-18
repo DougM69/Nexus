@@ -428,7 +428,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("set_hunt_target",                RunsAtShack, "The shack's hunt target."),
     ("set_icom_lan_password",          RefusedHere, "Credentials are set at the shack only."),
     ("set_launch_at_login",            RunsHere,    "Starts Nexus when someone signs in to this computer."),
-    ("set_license_class",              RunsAtShack, "The shack's licence class; its transmit gate stays at the shack."),
+    ("set_license_class",              RefusedHere, "The shack's licence class decides where it may transmit; set at the shack only."),
     ("set_log_form_grid",              RunsAtShack, "The shack's log form."),
     ("set_lotw_password",              RefusedHere, "Credentials are set at the shack only."),
     ("set_mic_gain",                   RunsAtShack, "The shack's rig control."),

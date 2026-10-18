@@ -135,6 +135,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Nexus Remote from a second PC: a voice-keyer message now stops when that PC's permission to transmit is
   withdrawn.** Every other transmission started from the second PC already ended then; a voice message already
   playing kept going to its end. Stop TX and the second PC going away already stopped it.
+- **Remote: transmit safety settings are set at the station only.** A settings save from a computer driving the station
+  no longer changes what lets the station transmit with nobody pressing a key (the WSJT-X UDP control, the CAT
+  broker's PTT, JS8's API, the Remote stream, a CQ run's restart after its pause) or what guards a transmission (the
+  TX watchdog, JS8's idle watchdog, the tune limit, the high-SWR cutoff, the power ceilings, the CQ, reply and retry
+  limits, "Disable Tx after 73", Parsec presence stop, the licence class, and the PTT method, port and serial lines).
+  Each keeps the station's value, and the licence class can no longer be set from afar. The station's own Settings
+  window changes them as before.
 - **Contest entry: a dupe is now plain to see.** Typing a call already in this contest's log (by the contest's own
   dupe rule) puts a red **DUPE** badge on the Call box with when and where you worked them, for example
   "DUPE 14:32 20m CW", and colours the box. Before, the only sign was a small grey line under the boxes. It shows in

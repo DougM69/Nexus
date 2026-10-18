@@ -627,7 +627,7 @@ fn a_settings_save_from_afar_keeps_the_shacks_transmit_settings() {
     let mut asked = shack.clone();
     asked.js8_aprs_relay = true;
     asked.beacon_tx_percent = 20;
-    asked.cq_max_calls = Some(7);
+    asked.cw_wpm = 31;
     let afar = Afar { stand_down: 3 };
     let mut save = asked.clone();
     keep_the_shacks_transmit_settings(&shack, &mut save, Some(&afar));
@@ -636,7 +636,7 @@ fn a_settings_save_from_afar_keeps_the_shacks_transmit_settings() {
         "from afar, the APRS-IS relay turned on"
     );
     assert_eq!(save.beacon_tx_percent, 0, "from afar, the beacon turned on");
-    assert_eq!(save.cq_max_calls, Some(7), "CONTROL: the rest of the save");
+    assert_eq!(save.cw_wpm, 31, "CONTROL: the rest of the save");
     // …and off: a save from afar does not turn the shack's own off either.
     let mut save = shack.clone();
     keep_the_shacks_transmit_settings(&asked, &mut save, Some(&afar));
@@ -654,6 +654,243 @@ fn a_settings_save_from_afar_keeps_the_shacks_transmit_settings() {
         takes_afar("set_settings"),
         "the lane says where it came from"
     );
+}
+
+/// One field of the settings, set off its default: a change a save could carry.
+type Change = (&'static str, fn(&mut tempo_app::settings::Settings));
+
+/// ⛔ What lets the station transmit with no press at it: a switch that transmits by itself, or
+/// one that lets a program at the shack, or a browser, start a transmission there.
+const TRANSMITS_BY_ITSELF: &[Change] = &[
+    ("js8_aprs_relay", |s| s.js8_aprs_relay = true),
+    ("beacon_tx_percent", |s| s.beacon_tx_percent = 20),
+    ("cq_pause_secs", |s| s.cq_pause_secs = Some(5)),
+    ("wsjtx_udp", |s| s.wsjtx_udp = !s.wsjtx_udp),
+    ("wsjtx_udp_addr", |s| {
+        s.wsjtx_udp_addr = "203.0.113.9:2237".into()
+    }),
+    ("cat_broker", |s| s.cat_broker = !s.cat_broker),
+    ("cat_broker_ptt", |s| s.cat_broker_ptt = !s.cat_broker_ptt),
+    ("js8_api_tcp", |s| s.js8_api_tcp = !s.js8_api_tcp),
+    ("js8_api_udp", |s| s.js8_api_udp = !s.js8_api_udp),
+    ("js8_api_tcp_accept", |s| {
+        s.js8_api_tcp_accept = !s.js8_api_tcp_accept
+    }),
+    ("js8_api_udp_accept", |s| {
+        s.js8_api_udp_accept = !s.js8_api_udp_accept
+    }),
+    ("remote_stream", |s| s.remote_stream = !s.remote_stream),
+];
+
+/// ⛔ The guards on a transmission: what stops or caps one by itself, the licence privileges, and
+/// the line that keys the transmitter.
+const TX_GUARDS: &[Change] = &[
+    ("tx_watchdog_min", |s| s.tx_watchdog_min = 0),
+    ("js8_idle_watchdog_min", |s| s.js8_idle_watchdog_min = 0),
+    ("tune_timeout_secs", |s| s.tune_timeout_secs = 600),
+    ("parsec_presence_stop", |s| {
+        s.parsec_presence_stop = !s.parsec_presence_stop
+    }),
+    ("disable_tx_after_73", |s| {
+        s.disable_tx_after_73 = !s.disable_tx_after_73
+    }),
+    ("cq_max_calls", |s| s.cq_max_calls = None),
+    ("directed_max_calls", |s| s.directed_max_calls = None),
+    ("chat_max_cycles", |s| s.chat_max_cycles = Some(99)),
+    ("rtty_auto_repeats", |s| s.rtty_auto_repeats = 9),
+    ("swr_stop_enabled", |s| {
+        s.swr_stop_enabled = !s.swr_stop_enabled
+    }),
+    ("swr_stop_threshold", |s| s.swr_stop_threshold = 9.0),
+    ("max_power_phone", |s| s.max_power_phone = Some(0.9)),
+    ("max_power_cw", |s| s.max_power_cw = Some(0.9)),
+    ("max_power_digital", |s| s.max_power_digital = Some(0.9)),
+    ("max_power_am", |s| s.max_power_am = Some(0.9)),
+    ("license_class", |s| {
+        s.license_class = tempo_app::settings::LicenseClass::Extra
+    }),
+    ("ptt_method", |s| s.ptt_method = "rts".into()),
+    ("ptt_serial_port", |s| s.ptt_serial_port = "COM9".into()),
+    ("cat_rts_state", |s| s.cat_rts_state = "high".into()),
+    ("cat_dtr_state", |s| s.cat_dtr_state = "high".into()),
+    ("cat_rts_keys_ptt", |s| {
+        s.cat_rts_keys_ptt = !s.cat_rts_keys_ptt
+    }),
+    ("cat_ptt_line_state", |s| {
+        s.cat_ptt_line_state = "high".into()
+    }),
+    ("cat_serial_handshake", |s| {
+        s.cat_serial_handshake = "hardware".into()
+    }),
+];
+
+/// What neither starts a transmission nor guards one, among them the fields beside the guards that
+/// read most like one: a save from afar takes each.
+const NEITHER: &[Change] = &[
+    ("cw_wpm", |s| s.cw_wpm = 31),
+    ("tx_level", |s| s.tx_level = 0.25),
+    ("rated_watts", |s| s.rated_watts = 10),
+    ("serial_port", |s| s.serial_port = "COM7".into()),
+    ("cq_stall_overs", |s| s.cq_stall_overs = Some(0)),
+    ("js8_hb_interval_min", |s| s.js8_hb_interval_min = 1),
+    ("js8_hb_networking", |s| {
+        s.js8_hb_networking = !s.js8_hb_networking
+    }),
+    ("tune_power_pct", |s| s.tune_power_pct = Some(50)),
+    ("band_edge_tones", |s| {
+        s.band_edge_tones = !s.band_edge_tones
+    }),
+    ("n1mm_addr", |s| s.n1mm_addr = "127.0.0.1:12060".into()),
+];
+
+/// The settings fields, by their JSON name, whose values differ between `a` and `b`: a whole
+/// save compared by value.
+fn moved(a: &tempo_app::settings::Settings, b: &tempo_app::settings::Settings) -> Vec<String> {
+    let (a, b) = (
+        serde_json::to_value(a).unwrap(),
+        serde_json::to_value(b).unwrap(),
+    );
+    let (a, b) = (a.as_object().unwrap(), b.as_object().unwrap());
+    a.keys()
+        .chain(b.keys())
+        .filter(|k| a.get(*k) != b.get(*k))
+        .cloned()
+        .collect()
+}
+
+/// ⛔ A settings save from afar changes no setting that lets the station transmit by itself and
+/// none that guards a transmission: for each, the save from afar comes out as the shack's settings
+/// exactly, and the same save from the shack's own screen takes it.
+#[test]
+fn a_settings_save_from_afar_keeps_every_transmit_setting_at_the_shacks_value() {
+    let shack = tempo_app::settings::Settings::default();
+    let afar = Afar { stand_down: 3 };
+    for (name, change) in TRANSMITS_BY_ITSELF.iter().chain(TX_GUARDS) {
+        let mut asked = shack.clone();
+        change(&mut asked);
+        assert!(!moved(&asked, &shack).is_empty(), "premise: {name} moved");
+        let mut save = asked.clone();
+        keep_the_shacks_transmit_settings(&shack, &mut save, Some(&afar));
+        assert_eq!(
+            moved(&save, &shack),
+            Vec::<String>::new(),
+            "from afar, {name} changed"
+        );
+        let mut save = asked.clone();
+        keep_the_shacks_transmit_settings(&shack, &mut save, None);
+        assert_eq!(
+            moved(&save, &asked),
+            Vec::<String>::new(),
+            "CONTROL: at the shack, {name}"
+        );
+    }
+}
+
+/// CONTROL: a save from afar still takes what neither starts nor guards a transmission.
+#[test]
+fn a_settings_save_from_afar_takes_what_neither_transmits_nor_guards() {
+    let shack = tempo_app::settings::Settings::default();
+    let afar = Afar { stand_down: 3 };
+    for (name, change) in NEITHER {
+        let mut asked = shack.clone();
+        change(&mut asked);
+        assert!(!moved(&asked, &shack).is_empty(), "premise: {name} moved");
+        let mut save = asked.clone();
+        keep_the_shacks_transmit_settings(&shack, &mut save, Some(&afar));
+        assert_eq!(
+            moved(&save, &asked),
+            Vec::<String>::new(),
+            "from afar, {name} was kept"
+        );
+    }
+}
+
+/// A shack of two radios that key differently, the live one radio 0.
+fn two_radio_shack() -> tempo_app::settings::Settings {
+    let mut shack = tempo_app::settings::Settings {
+        radios: vec![
+            tempo_app::settings::RadioProfile {
+                id: 0,
+                ptt_method: "cat".into(),
+                ptt_serial_port: String::new(),
+                ..Default::default()
+            },
+            tempo_app::settings::RadioProfile {
+                id: 1,
+                ptt_method: "dtr".into(),
+                ptt_serial_port: "COM4".into(),
+                ..Default::default()
+            },
+        ],
+        active_radio: 0,
+        ..Default::default()
+    };
+    shack.sync_flat_from_active();
+    shack
+}
+
+/// ⛔ The PTT fields of a save describe the radio its form was editing, which a switch since may
+/// have left not the live one: from afar they come back as the shack's own for THAT radio, never
+/// the live radio's (which the save would then write into the other's profile).
+#[test]
+fn a_save_from_afar_keeps_the_ptt_of_the_radio_its_form_edited() {
+    let shack = two_radio_shack();
+    let afar = Afar { stand_down: 3 };
+    let mut save = shack.clone();
+    save.active_radio = 1;
+    save.ptt_method = "rts".into();
+    save.ptt_serial_port = "COM9".into();
+    keep_the_shacks_transmit_settings(&shack, &mut save, Some(&afar));
+    assert_eq!(
+        (save.ptt_method.as_str(), save.ptt_serial_port.as_str()),
+        ("dtr", "COM4"),
+        "from afar, radio 1's PTT"
+    );
+    // A save with no roster describes the live radio.
+    let mut save = shack.clone();
+    save.radios.clear();
+    save.active_radio = 1;
+    save.ptt_method = "rts".into();
+    keep_the_shacks_transmit_settings(&shack, &mut save, Some(&afar));
+    assert_eq!(
+        save.ptt_method, "cat",
+        "from afar, with no roster, the live radio's PTT"
+    );
+}
+
+/// ⛔ The per-radio edit from afar (`update_radio_profile`) keeps that radio's PTT method and port;
+/// the rest of its patch is taken, and the shack's own edit takes them.
+#[test]
+fn a_radio_edit_from_afar_keeps_that_radios_ptt() {
+    let shack = two_radio_shack();
+    let afar = Afar { stand_down: 3 };
+    let mut asked: tempo_app::settings::RadioProfilePatch =
+        serde_json::from_value(serde_json::to_value(&shack.radios[1]).unwrap()).unwrap();
+    asked.ptt_method = "rts".into();
+    asked.ptt_serial_port = "COM9".into();
+    asked.tx_level = 0.25;
+    let mut patch = asked.clone();
+    keep_the_shacks_radio_ptt(&shack, 1, &mut patch, Some(&afar));
+    assert_eq!(
+        (patch.ptt_method.as_str(), patch.ptt_serial_port.as_str()),
+        ("dtr", "COM4"),
+        "from afar, radio 1's PTT changed"
+    );
+    assert_eq!(patch.tx_level, 0.25, "CONTROL: the rest of the patch");
+    let mut patch = asked.clone();
+    keep_the_shacks_radio_ptt(&shack, 1, &mut patch, None);
+    assert_eq!(patch.ptt_method, "rts", "CONTROL: the shack's own edit");
+    assert!(
+        takes_afar("update_radio_profile"),
+        "the lane says where it came from"
+    );
+}
+
+/// ⛔ The licence class, which decides where the station may transmit, is set at the shack only:
+/// its own command is refused from afar, as a save from afar keeps it.
+#[test]
+fn the_licence_class_is_set_at_the_shack_only() {
+    assert_eq!(class_of("set_license_class"), Some(Class::RefusedHere));
 }
 
 /// ★ The command lane writes `afar` into exactly the calls whose handler takes it: every command

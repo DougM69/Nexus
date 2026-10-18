@@ -170,25 +170,98 @@ pub(crate) const PRESENCE_BOUND: [&str; 7] = [
     "start_sat_track",
 ];
 
-/// ⛔ The settings save, from afar. It carries every field, among them switches that let the
-/// station transmit by itself and that only the settings form writes at the shack: JS8's APRS-IS
-/// relay and the WSPR/FST4W beacon's share of intervals. From afar a save keeps the shack's own
-/// value of each ([`keep_the_shacks_transmit_settings`]), so none turns on from there without a
-/// start's rules. (The presence beacon and JS8's automatic replies, relay and heartbeat acks each
-/// have one writer, their own switch, and no save moves them at all: `Engine::apply_settings`.)
-pub(crate) const SETTINGS_FROM_AFAR: [&str; 1] = ["set_settings"];
+/// ⛔ The settings saves, from afar: the whole save and one radio's edit. They carry the settings
+/// that let the station transmit with no press at it (a switch that transmits by itself, or one that
+/// lets a program at the shack or a browser start a transmission there) and the guards on a
+/// transmission (what stops or caps one by itself, the power ceilings, the licence privileges, and
+/// the line that keys the transmitter). From afar a save keeps the shack's own value of each
+/// ([`keep_the_shacks_transmit_settings`], [`keep_the_shacks_radio_ptt`]): they are set at the
+/// shack only. (The presence beacon and JS8's automatic replies, relay and heartbeat acks each have
+/// one writer, their own switch, and no save moves them at all: `Engine::apply_settings`.)
+pub(crate) const SETTINGS_FROM_AFAR: [&str; 2] = ["set_settings", "update_radio_profile"];
 
-/// What a settings save from afar may not change: the shack's own transmit-by-itself settings
-/// ([`SETTINGS_FROM_AFAR`]) are put back into `save`. From the shack's own screen (`None`) the
-/// save is taken as it came.
+/// What a settings save from afar may not change ([`SETTINGS_FROM_AFAR`]): each is put back into
+/// `save` as the shack has it. From the shack's own screen (`None`) the save is taken as it came.
 pub(crate) fn keep_the_shacks_transmit_settings(
     shack: &tempo_app::settings::Settings,
     save: &mut tempo_app::settings::Settings,
     afar: Option<&Afar>,
 ) {
-    if afar.is_some() {
-        save.js8_aprs_relay = shack.js8_aprs_relay;
-        save.beacon_tx_percent = shack.beacon_tx_percent;
+    if afar.is_none() {
+        return;
+    }
+    // What transmits by itself: JS8's APRS-IS relay, the WSPR/FST4W beacon's share of intervals,
+    // and a CQ run calling again after its pause.
+    save.js8_aprs_relay = shack.js8_aprs_relay;
+    save.beacon_tx_percent = shack.beacon_tx_percent;
+    save.cq_pause_secs = shack.cq_pause_secs;
+    // What lets a program at the shack start a transmission: WSJT-X UDP's Reply, the CAT broker's
+    // PTT, JS8's API.
+    save.wsjtx_udp = shack.wsjtx_udp;
+    save.wsjtx_udp_addr = shack.wsjtx_udp_addr.clone();
+    save.cat_broker = shack.cat_broker;
+    save.cat_broker_ptt = shack.cat_broker_ptt;
+    save.js8_api_tcp = shack.js8_api_tcp;
+    save.js8_api_udp = shack.js8_api_udp;
+    save.js8_api_tcp_accept = shack.js8_api_tcp_accept;
+    save.js8_api_udp_accept = shack.js8_api_udp_accept;
+    // What lets a browser drive the station's own window, its transmit keys included.
+    save.remote_stream = shack.remote_stream;
+    // What stops or caps a transmission by itself.
+    save.tx_watchdog_min = shack.tx_watchdog_min;
+    save.js8_idle_watchdog_min = shack.js8_idle_watchdog_min;
+    save.tune_timeout_secs = shack.tune_timeout_secs;
+    save.parsec_presence_stop = shack.parsec_presence_stop;
+    save.disable_tx_after_73 = shack.disable_tx_after_73;
+    save.cq_max_calls = shack.cq_max_calls;
+    save.directed_max_calls = shack.directed_max_calls;
+    save.chat_max_cycles = shack.chat_max_cycles;
+    save.rtty_auto_repeats = shack.rtty_auto_repeats;
+    // The high-SWR cutoff.
+    save.swr_stop_enabled = shack.swr_stop_enabled;
+    save.swr_stop_threshold = shack.swr_stop_threshold;
+    // The power ceilings.
+    save.max_power_phone = shack.max_power_phone;
+    save.max_power_cw = shack.max_power_cw;
+    save.max_power_digital = shack.max_power_digital;
+    save.max_power_am = shack.max_power_am;
+    // The licence privileges.
+    save.license_class = shack.license_class;
+    // The line that keys the transmitter: the serial lines' states, held for the whole session.
+    save.cat_rts_state = shack.cat_rts_state.clone();
+    save.cat_dtr_state = shack.cat_dtr_state.clone();
+    save.cat_rts_keys_ptt = shack.cat_rts_keys_ptt;
+    save.cat_ptt_line_state = shack.cat_ptt_line_state.clone();
+    save.cat_serial_handshake = shack.cat_serial_handshake.clone();
+    // …and the PTT method and port, which are the radio's own. The save's describe the radio its
+    // form was editing (`Engine::apply_settings` folds them into that radio's profile), the live one
+    // when it carries no roster; so they come back as the shack has them for that radio.
+    let edited = (!save.radios.is_empty())
+        .then(|| shack.radios.iter().find(|p| p.id == save.active_radio))
+        .flatten();
+    let (method, port) = match edited {
+        Some(radio) => (&radio.ptt_method, &radio.ptt_serial_port),
+        None => (&shack.ptt_method, &shack.ptt_serial_port),
+    };
+    save.ptt_method = method.clone();
+    save.ptt_serial_port = port.clone();
+}
+
+/// What one radio's edit from afar may not change ([`SETTINGS_FROM_AFAR`]): its PTT method and
+/// port, put back into `patch` as the shack has them for radio `id`. From the shack's own screen
+/// (`None`), or for a radio the shack does not have, the patch is taken as it came.
+pub(crate) fn keep_the_shacks_radio_ptt(
+    shack: &tempo_app::settings::Settings,
+    id: u32,
+    patch: &mut tempo_app::settings::RadioProfilePatch,
+    afar: Option<&Afar>,
+) {
+    if afar.is_none() {
+        return;
+    }
+    if let Some(radio) = shack.radios.iter().find(|p| p.id == id) {
+        patch.ptt_method = radio.ptt_method.clone();
+        patch.ptt_serial_port = radio.ptt_serial_port.clone();
     }
 }
 
