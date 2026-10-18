@@ -344,6 +344,12 @@ test('an invited person signs in with their own account and is approved with the
   assert.equal(g.value.approved, true)
   const row = await deviceRow(g.deviceId)
   assert.equal(row.role, 'listen'); assert.equal(row.account_id, guest.accountId); assert.equal(row.added_by, 'account')
+  // A guest's proof must itself carry the invited address, verified, as the station will check it: one
+  // without leaves the device waiting for the station.
+  const road = await keyPair(), lan = await keyPair()
+  const unverifiedProof = await proofOf(guest, deviceNonce('computer', [road.publicKey, lan.publicKey]), { claims: { email_verified: false } })
+  assert.equal((await signed(guest.native, road, `stations/${shack.stationId}/client/device`, { name: 'Laptop', kind: 'computer',
+    platform: 'windows', publicKey: road.publicKey, lanKey: lan.publicKey, proof: unverifiedProof })).value.approved, false)
   // Not invited: the station is not theirs to see, and no device of theirs is written.
   assert.equal((await stranger.native.post('client/session')).value.stations.length, 0)
   assert.equal((await enrol(stranger, shack.stationId, { expected: 404 })).value.error, 'stationUnavailable')
@@ -424,7 +430,10 @@ test('a guest uses the internet on the owner\'s plan, and only on station busine
   // The owner's plan ends: so does the guest's internet use.
   await entitle(owner, Date.now() - DAY)
   assert.equal((await signed(guest.native, g.road, `stations/${shack.stationId}/client/turn`, {}, 403, { 'x-nexus-device-id': g.deviceId })).value.error, 'trialRequired')
-  // A guest cannot rename, revoke, or approve anything; the owner's own routes stay the owner's.
+  // A guest cannot rename, revoke, confirm the station's account, or approve anything; the owner's own
+  // routes stay the owner's.
+  assert.equal(await errorOf(guest.native.post(`stations/${shack.stationId}/client/station-proof`, { credential: random(),
+    stationKey: shack.stationKey.publicKey, lanKey: shack.lanKey.publicKey, proof: shack.body.proof }, 404)), 'stationUnavailable')
   assert.equal(await errorOf(guest.page.post(`stations/${shack.stationId}/rename`, { name: 'Mine' }, 404)), 'stationUnavailable')
   assert.equal(await errorOf(guest.page.post(`stations/${shack.stationId}/revoke`, {}, 404)), 'stationUnavailable')
   assert.equal((await stationRow(shack.stationId)).enabled, 1)
