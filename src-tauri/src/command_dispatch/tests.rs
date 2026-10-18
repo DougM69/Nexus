@@ -2235,8 +2235,10 @@ fn each_list_saves_part_is_where_the_settings_keep_it() {
 /// shack's own screen takes it, and the LoTW fields beside it are taken from afar.
 #[test]
 fn a_settings_save_from_afar_keeps_the_program_the_shack_runs() {
-    let mut shack = tempo_app::settings::Settings::default();
-    shack.tqsl_path = r"C:\Program Files (x86)\TrustedQSL\tqsl.exe".to_string();
+    let shack = tempo_app::settings::Settings {
+        tqsl_path: r"C:\Program Files (x86)\TrustedQSL\tqsl.exe".to_string(),
+        ..Default::default()
+    };
     let mut asked = shack.clone();
     asked.tqsl_path = r"C:\Users\Public\evil.exe".to_string();
     asked.lotw_station_location = "Home".to_string();
