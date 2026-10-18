@@ -114,6 +114,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep the report fixed, as WSJT-X does. NEEDS-BENCH on the air.
 
 ### Fixed
+- **PstRotatorAz: "localhost" as its address now works like 127.0.0.1.** Windows looks "localhost" up as the IPv6
+  address first, so Nexus listened for PstRotatorAz's replies there while PstRotatorAz answered on IPv4, and the
+  compass showed no position. Nexus now takes the IPv4 address when a name has one.
 - **Contest entry: a dupe is now plain to see.** Typing a call already in this contest's log (by the contest's own
   dupe rule) puts a red **DUPE** badge on the Call box with when and where you worked them, for example
   "DUPE 14:32 20m CW", and colours the box. Before, the only sign was a small grey line under the boxes. It shows in
