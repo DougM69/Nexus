@@ -49,12 +49,22 @@ function pcHash(value: unknown): string | null {
 }
 
 export type TrialClaim = { call: string | null; proven: boolean; pcHw: string | null; pcOs: string | null }
+/** What a claim keeps before its callsign is checked against the licence list: the HMACs, and whether the
+ *  call is a US one. Nothing in it is a value the shack sent. */
+export type TrialInput = { call: string | null; us: boolean; pcHw: string | null; pcOs: string | null }
 
 /** The approve body's optional `callsign` and `pc`, turned into the markers a trial would spend, or
  *  null when this approval is checked by mailbox only: no TRIAL_KEY, or a Nexus that predates the
  *  fields while they are not yet required. Refuses a malformed field whatever the configuration, so a
  *  Nexus that sends one learns of it on the first service that reads it. */
 export async function trialClaim(env: RemoteEnv, input: Record<string, unknown>, accountId: string, now: number): Promise<TrialClaim | null> {
+  const kept = await trialInput(env, input)
+  return kept === null ? null : trialProof(env, kept, accountId, now)
+}
+
+/** The first half of `trialClaim`: the fields checked for shape and turned into HMACs, as a station that
+ *  signs in keeps them until its trial starts. */
+export async function trialInput(env: RemoteEnv, input: Record<string, unknown>): Promise<TrialInput | null> {
   const base = 'callsign' in input ? baseCall(input.callsign) : null
   let hw: string | null = null, os: string | null = null
   if ('pc' in input) {
@@ -73,22 +83,29 @@ export async function trialClaim(env: RemoteEnv, input: Record<string, unknown>,
     return null
   }
   if (base === null && !('pc' in input)) return null
-  const call = base === null ? null : await hmac(key, `call:${base}`)
+  return { call: base === null ? null : await hmac(key, `call:${base}`), us: base !== null && usCall(base),
+    pcHw: hw === null ? null : await hmac(key, `pc:hw:${hw}`),
+    pcOs: os === null ? null : await hmac(key, `pc:os:${os}`) }
+}
+
+/** The second half: a US call checked against the licence list, and proven when the account's verified
+ *  mailbox is the licence's email on file. */
+export async function trialProof(env: RemoteEnv, kept: TrialInput, accountId: string, now: number): Promise<TrialClaim> {
+  const key = env.TRIAL_KEY ?? ''
+  requireValue(key, 'serviceNotConfigured', 503)
   let proven = false
-  if (call !== null && usCall(base!)) {
+  if (kept.call !== null && kept.us) {
     const synced = await env.DB.prepare('SELECT synced_at FROM uls_sync WHERE id=1').first<{ synced_at: number }>()
     requireValue(synced && synced.synced_at > now - ULS_STALE_MS, 'serviceUnavailable', 503)
     const licence = await env.DB.prepare('SELECT active, email_hmac FROM uls_calls WHERE call_hmac=?')
-      .bind(call).first<{ active: number; email_hmac: string | null }>()
+      .bind(kept.call).first<{ active: number; email_hmac: string | null }>()
     // A US call the licence list does not know is refused, not waved through: otherwise any
     // invented call would start a trial, and the rule would do nothing.
     requireValue(licence?.active === 1, 'callsignNotLicensed')
     const self = await env.DB.prepare('SELECT mailbox_hash FROM accounts WHERE id=?').bind(accountId).first<{ mailbox_hash: string | null }>()
     proven = licence.email_hmac !== null && !!self?.mailbox_hash && licence.email_hmac === await hmac(key, `mailbox:${self.mailbox_hash}`)
   }
-  return { call, proven,
-    pcHw: hw === null ? null : await hmac(key, `pc:hw:${hw}`),
-    pcOs: os === null ? null : await hmac(key, `pc:os:${os}`) }
+  return { call: kept.call, proven, pcHw: kept.pcHw, pcOs: kept.pcOs }
 }
 
 /** The SQL condition "another account already spent one of these", over `trial_markers m`, and its
