@@ -176,6 +176,19 @@ describe('the dupe warning on a county line', () => {
     expect(hints()).toEqual(['DUPG is a dupe; COOK and WILL are new'])
   })
 
+  it('puts the DUPE badge on the Call box only when every county of the line is a dupe', () => {
+    const badge = () => document.querySelector('.le-fd-field-call .le-fd-dupe')!.textContent
+    renderStrip(ilqp('K9AAA', ['COOK', 'WILL']))
+    typed('K9AAA', 'COOK/WILL')
+    // A row with no time on it (an older station) says where it was worked, not when.
+    expect(badge()).toBe('DUPE 40m CW')
+    // One new county makes the line a contact that scores: the badge goes, as the sentence does.
+    typed('K9AAA', 'COOK/DUPG')
+    expect(hints()).toEqual(['COOK is a dupe; DUPG is new'])
+    expect(badge()).toBe('')
+    expect(callBox().classList.contains('le-fd-input-dupe')).toBe(false)
+  })
+
   it('CONTROL: a line whose every county is new says nothing, as a new county does', () => {
     renderStrip(ilqp('K9AAA', ['COOK', 'WILL']))
     for (const [call, qth] of [

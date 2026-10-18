@@ -91,6 +91,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep the report fixed, as WSJT-X does. NEEDS-BENCH on the air.
 
 ### Fixed
+- **Contest entry: a dupe is now plain to see.** Typing a call already in this contest's log (by the contest's own
+  dupe rule) puts a red **DUPE** badge on the Call box with when and where you worked them, for example
+  "DUPE 14:32 20m CW", and colours the box. Before, the only sign was a small grey line under the boxes. It shows in
+  the cockpit's entry strip and in the contest logger window, and a screen reader announces it. Pressing Enter on a
+  dupe still logs it, marked as a dupe that scores nothing, as every contest Nexus scores asks; the message now says
+  "as a DUPE" instead of looking like any other contact. With Enter Sends Message on, a dupe still never gets your
+  exchange: in Run it gets QSO B4, once, and in S&P nothing is sent.
 - **IC-7300, IC-705, IC-905 and IC-7300MK2: scope span, reference level and Center/Fixed now work.** With Native Icom
   CI-V on, these radios refused every scope span button ("SCOPE SPAN REFUSED … did not answer when asked whether its
   scope is in Center mode"), and the reference level and Center/Fixed controls did nothing, whatever the scope was set

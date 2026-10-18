@@ -302,11 +302,14 @@ describe('the contest logger window puts the entry first', () => {
       'COOK',
     ])
     // …under the captions the log line gives them: the county box says it is the county box.
-    expect([...entry.querySelectorAll('.le-fd-big .le-fd-cap')].map((c) => c.textContent)).toEqual([
-      t('logEntry.fd.call.label'),
-      'RST',
-      'County / State',
-    ])
+    // The Call caption's own words, beside the DUPE badge its line carries.
+    expect(
+      [...entry.querySelectorAll('.le-fd-big .le-fd-cap')].map(
+        (c) => (c.querySelector('.le-fd-cap-text') ?? c).textContent,
+      ),
+    ).toEqual([t('logEntry.fd.call.label'), 'RST', 'County / State'])
+    // …and the badge shows in this window too: K9ABC is a dupe here, worked at 16:23 on 20 m USB.
+    expect(entry.querySelector('.le-fd-field-call .le-fd-dupe')!.textContent).toBe('DUPE 16:23 20m USB')
     // The dupe warning, as the log line computes it, right under the boxes: after them in the entry,
     // so before the last contacts.
     const dupe = within(entry).getByRole('alert')
