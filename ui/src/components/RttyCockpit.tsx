@@ -57,7 +57,18 @@ import { bandLabelForMhz } from '../band'
 import { contestDomain } from '../features/contestDomains'
 import { grabAt } from '../features/rttyGrab'
 import { findTonePair } from '../features/rttyAutoTune'
-import { isRfScopeSource } from '../waterfall'
+import {
+  RTTY_WATERFALL_SPANS,
+  RTTY_WATERFALL_SPEEDS,
+  coerceRttySpeed,
+  isRfScopeSource,
+  traceContrast,
+  type RttyWaterfallSpeed,
+} from '../waterfall'
+import type { WaterfallTag } from './Waterfall'
+import { NO_TAGS, tagOpacity, trackTags } from '../features/rttyCallTags'
+import { contestDupe } from '../features/contestDupe'
+import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { esmLitKeys, useEsmHost, type EsmMessage, type EsmSetting } from '../features/esmHost'
 import { RTTY_SET_ROLES, esmRoles } from '../features/esmRoles'
 import { EsmPlate } from './EsmPlate'
@@ -127,6 +138,8 @@ interface Props {
  *  constants they are: the mode name in the badge, the RX/TX direction plates, and the
  *  Q-code the auto-sequencer's CQ button is named for. */
 const RTTY = 'RTTY'
+/** Where the waterfall's speed is kept, per surface like its span, flow and 3D. */
+const RTTY_WF_SPEED_KEY = 'nexus.rtty.waterfall.speed'
 /** Baud · shift as the badge prints them before the decoder has answered — the HF standard
  *  pair, figures and unit both, so it is a token exactly as the live reading is. */
 const DEFAULT_TONES = '45.45 · 170 Hz'
@@ -398,6 +411,16 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       .then((s) => setRtty(s))
       .catch(() => {})
   }, [active, control])
+
+  // CALLSIGN TAGS: who was heard at which audio frequency, tracked off each read of the decoder's
+  // state. `features/rttyCallTags` states the attribution rule; nothing here guesses past it.
+  const [tagTracker, setTagTracker] = useState(NO_TAGS)
+  const mycall = snap?.mycall ?? ''
+  useEffect(() => {
+    if (observedState) setTagTracker((tr) => trackTags(tr, observedState, Date.now(), mycall))
+  }, [observedState, mycall])
+  // The waterfall's speed (ms per row), kept per surface.
+  const [wfSpeed, setWfSpeed] = useState<RttyWaterfallSpeed>(() => coerceRttySpeed(surfaceGet(RTTY_WF_SPEED_KEY)))
 
   const armed = rtty?.armed === true
   const toggleArm = () => {
@@ -674,6 +697,25 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     const now = await getRttyState()
     if (now.sending || now.latched || rttyKeyedRef.current) return
     setRtty(await rttyNet(hz))
+  }
+  // The tags as the waterfall draws them. Inside a running contest a call this log already holds
+  // (worked here, or by another club position) is dimmed: the same verdict the log strip gives.
+  const contestLog = snap?.fieldDay?.running ? snap.fieldDay : null
+  const tagNow = Date.now()
+  const wfTags: WaterfallTag[] = []
+  for (const tg of tagTracker.tags) {
+    const opacity = tagOpacity(tg.heardMs, tagNow)
+    if (opacity <= 0) continue
+    const dim = contestDupe(contestLog, tg.call, snap?.radio.band ?? '', 'DIG') !== 'none'
+    const hz = Math.round(tg.hz)
+    wfTags.push({
+      key: tg.call,
+      hz: tg.hz,
+      label: tg.call,
+      opacity,
+      dim,
+      title: dim ? t('rtty.tag.worked.title', { call: tg.call, hz }) : t('rtty.tag.title', { call: tg.call, hz }),
+    })
   }
   // AUTO-TUNE: average a few spectrum rows (a keyed RTTY signal sits on one tone at a time) and
   // net onto the nearest pair at the configured shift, from where the decoder listens now (its
@@ -1078,7 +1120,15 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           paneTitle={rttyPanelLabels().scope}
           theme={theme}
           active={active}
-          rowMs={50} // live band instrument — rig-scope cadence, not the FT slot default
+          // Live band instrument: Fast (50 ms) is the rig-scope cadence, not the FT slot default;
+          // the operator may slow it down (RTTY_WATERFALL_SPEEDS).
+          rowMs={RTTY_WATERFALL_SPEEDS.find((x) => x.id === wfSpeed)?.rowMs ?? 50}
+          keepRowRemainder
+          spanChoices={RTTY_WATERFALL_SPANS}
+          contrastCurve={traceContrast}
+          tags={wfTags}
+          // A tag nets exactly as a click on the picture does, refused while keyed.
+          onTag={receiverControl ? (hz) => void netUnlessKeyed(hz).catch(() => {}) : undefined}
           // NO `txBlanks` — deliberately, do not add it. An RTTY over has no fixed length and
           // a latched one runs to the 10-minute ceiling; the FT surfaces' dark band would
           // scroll solid black for all of it, which field reports (2026-08-17) read as a dead
@@ -1108,18 +1158,37 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               : t('remote.keyboardFollowsStation')
           }
           headerExtra={
-            receiverControl ? (
-              <button
-                type="button"
-                className="wf-popout rtty-autotune"
-                disabled={rttyKeyed || autoTuning}
-                aria-busy={autoTuning}
-                onClick={() => void autoTune()}
-                title={rttyKeyed ? t('rtty.autoTune.keyed.title') : t('rtty.autoTune.title')}
-              >
-                {t('rtty.autoTune.label')}
-              </button>
-            ) : undefined
+            <>
+              {receiverControl && (
+                <button
+                  type="button"
+                  className="wf-popout rtty-autotune"
+                  disabled={rttyKeyed || autoTuning}
+                  aria-busy={autoTuning}
+                  onClick={() => void autoTune()}
+                  title={rttyKeyed ? t('rtty.autoTune.keyed.title') : t('rtty.autoTune.title')}
+                >
+                  {t('rtty.autoTune.label')}
+                </button>
+              )}
+              <div className="wf-seg" role="group" aria-label={t('rtty.wf.speed.aria')}>
+                {RTTY_WATERFALL_SPEEDS.map((sp) => (
+                  <button
+                    key={sp.id}
+                    type="button"
+                    className={wfSpeed === sp.id ? 'on' : undefined}
+                    aria-pressed={wfSpeed === sp.id}
+                    title={t('rtty.wf.speed.title', { ms: sp.rowMs })}
+                    onClick={() => {
+                      setWfSpeed(sp.id)
+                      surfaceSet(RTTY_WF_SPEED_KEY, sp.id)
+                    }}
+                  >
+                    {sp.id === 'fast' ? t('rtty.wf.speed.fast') : sp.id === 'med' ? t('rtty.wf.speed.med') : t('rtty.wf.speed.slow')}
+                  </button>
+                ))}
+              </div>
+            </>
           }
           onTune={receiverControl ? (hz) => void netUnlessKeyed(hz).catch(() => {}) : undefined}
         />

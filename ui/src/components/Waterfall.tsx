@@ -10,7 +10,7 @@
 // is the paused chip, and it comes from the catalog.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react'
 import { getSpectrumRow } from '../api'
-import { sampleLut } from '../colormaps'
+import { sampleLut, type ColormapName } from '../colormaps'
 import {
   agcRange,
   applyGainZero,
@@ -20,6 +20,7 @@ import {
   isRfScopeSource,
   parkFloor,
   resolveColormap,
+  curveForPalette,
   RowFetchLatch,
   WATERFALL_ZOOMS,
   overlayTextScale,
@@ -243,6 +244,36 @@ interface Props {
    *  which opens its waterfall controls). Display and receive only: it hosts no stop control and
    *  no sender. Omitted ⇒ the header as before. */
   headerExtra?: ReactNode
+  /** Span BUTTONS in place of the zoom select (RTTY's `RTTY_WATERFALL_SPANS`). Each value must be
+   *  one of `WATERFALL_ZOOMS`: the buttons set and persist the same span the select does. Omitted ⇒
+   *  the select. */
+  spanChoices?: { value: number; label: string; widthHz: number }[]
+  /** A contrast curve every value is drawn through, 0..1 → 0..1 (RTTY's `traceContrast`). It is
+   *  baked into the palette, so the picture, the history it is redrawn from and the legend all
+   *  carry it. Omitted ⇒ the linear map every other surface draws. Pass a stable function. */
+  contrastCurve?: (t: number) => number
+  /** Labels at audio frequencies near the top of the picture (RTTY's callsign tags). Display
+   *  only: the waterfall decides nothing about them. Outside the view ⇒ not drawn. */
+  tags?: WaterfallTag[]
+  /** A tag's click, with the tag's frequency. Omitted ⇒ the tags are labels and do nothing.
+   *  Disabled while `keyed`: the host's own handler must refuse as well. */
+  onTag?: (hz: number) => void
+  /** Rows at the true `rowMs` (RTTY): the part of a frame a row overshot is carried into the
+   *  next, so 50 ms rows on 60 Hz land every 3 frames, not 3 or 4. Omitted ⇒ the overshoot is
+   *  dropped, so a row lands on the first frame at or past `rowMs` after the last: 120 ms is
+   *  8 frames at 60 Hz, ~133 ms, the cadence the FT surfaces' history depth is judged at. */
+  keepRowRemainder?: boolean
+}
+
+/** One label on the picture: its text at `hz`. `opacity` 0..1 is the host's (a fading tag);
+ *  `dim` marks it as already dealt with (a contest dupe) and is shown as a class. */
+export interface WaterfallTag {
+  key: string
+  hz: number
+  label: string
+  title: string
+  opacity: number
+  dim: boolean
 }
 
 // Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
@@ -253,6 +284,15 @@ const F_MAX = 4000
 
 // Display mapping over the current view window [lo, hi] (defaults = the FT8 view), so
 // the waterfall can zoom into a sub-range of the band.
+/** The host's contrast curve, fitted to the palette (`curveForPalette`). */
+function curveOn(name: ColormapName, curve?: (t: number) => number): ((t: number) => number) | undefined {
+  return curve && curveForPalette(name, curve)
+}
+/** The palette LUT the picture draws through. */
+function lutFor(name: ColormapName, curve?: (t: number) => number): Uint8ClampedArray {
+  return bakeLut(name, 256, curveOn(name, curve))
+}
+
 function freqToX(hz: number, width: number, lo = F_MIN, hi = F_MAX): number {
   const f = Math.max(lo, Math.min(hi, hz))
   return ((f - lo) / (hi - lo)) * width
@@ -284,6 +324,11 @@ export function Waterfall({
   keyed = false,
   stripRef,
   headerExtra,
+  spanChoices,
+  contrastCurve,
+  tags,
+  onTag,
+  keepRowRemainder = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -353,12 +398,13 @@ export function Waterfall({
   const markerWidthRef = useRef(markerWidthHz)
   const activeRef = useRef(active)
   const rowMsRef = useRef(rowMs)
+  const keepRemainderRef = useRef(keepRowRemainder)
   const gainRef = useRef(gain)
   const zeroRef = useRef(zero)
   const viewLoRef = useRef(view.lo)
   const viewHiRef = useRef(view.hi)
   // pre-baked colormap LUT (256×RGBA) for the render hot path; rebuilt on palette/theme/night.
-  const lutRef = useRef<Uint8ClampedArray>(bakeLut(resolveColormap(palette, theme, night, skin)))
+  const lutRef = useRef<Uint8ClampedArray>(lutFor(resolveColormap(palette, theme, night, skin), contrastCurve))
   // live legend readout (updated directly, no React re-render at 8 Hz)
   const dbLabelRef = useRef<HTMLSpanElement>(null)
   // The picture is the spectrum renderer's (ui/src/spectrum). It keeps every row as DATA, the
@@ -404,6 +450,7 @@ export function Waterfall({
   markerWidthRef.current = markerWidthHz
   activeRef.current = active
   rowMsRef.current = rowMs
+  keepRemainderRef.current = keepRowRemainder
   gainRef.current = gain
   zeroRef.current = zero
   viewLoRef.current = view.lo
@@ -413,11 +460,11 @@ export function Waterfall({
   // so it changes atomically with the legend gradient (a sync useMemo below) on
   // a theme switch — no frame where the legend and the canvas colormap disagree.
   useLayoutEffect(() => {
-    lutRef.current = bakeLut(resolveColormap(palette, theme, night, skin))
+    lutRef.current = lutFor(resolveColormap(palette, theme, night, skin), contrastCurve)
     // Recolor the ACCUMULATED history in the new palette — the old pixel-scroll canvas
     // could only affect rows painted after the switch.
     rebuildRef.current?.()
-  }, [palette, theme, night, skin])
+  }, [palette, theme, night, skin, contrastCurve])
   // …and the overlay's inks are read afresh on the next frame after a theme switch or a colour-role
   // pick, before paint for the same reason: the markers must never lag the sign they agree with.
   useLayoutEffect(() => {
@@ -440,14 +487,16 @@ export function Waterfall({
   // Legend gradient (weak→strong, bottom→top) for the active colormap.
   const legendGradient = useMemo(() => {
     const name = resolveColormap(palette, theme, night, skin)
+    const curve = curveOn(name, contrastCurve)
     const stops: string[] = []
-    const N = 8
+    // A curve bends the ramp, so the legend takes twice the stops to follow it.
+    const N = curve ? 16 : 8
     for (let i = 0; i <= N; i++) {
-      const [r, g, b] = sampleLut(name, i / N)
+      const [r, g, b] = sampleLut(name, curve ? curve(i / N) : i / N)
       stops.push(`rgb(${r},${g},${b}) ${Math.round((i / N) * 100)}%`)
     }
     return `linear-gradient(to top, ${stops.join(', ')})`
-  }, [palette, theme, night, skin])
+  }, [palette, theme, night, skin, contrastCurve])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -971,7 +1020,11 @@ export function Waterfall({
       if (acc >= rowMs) {
         const myGen = latch.begin(now)
         if (myGen !== null) {
-          acc = 0
+          // With `keepRowRemainder`, keep it: zeroing it made every row late by the part of a
+          // frame it overshot, so at 50 ms rows on a 60 Hz display a row took 3 frames or 4
+          // (measured 53 ms on average, ±6.4). Modulo, not a subtraction, so a fetch that held the
+          // latch for several periods does not come back as a burst of rows. Without it, zero.
+          acc = keepRemainderRef.current ? acc % rowMs : 0
           drawRow(myGen)
             .catch(() => {})
             .finally(() => latch.end(myGen))
@@ -1036,7 +1089,27 @@ export function Waterfall({
         <PalettePicker scope={paletteScope} />
         {/* Withdrawn under a fixed window (#101): a picker whose every choice does nothing is
             worse than none. The persisted span is untouched and returns with the picker. */}
-        {!fixedWindow && (
+        {!fixedWindow && spanChoices && (
+          <div className="wf-seg" role="group" aria-label={t('waterfall.span.aria')}>
+            {spanChoices.map((c) => (
+              <button
+                key={c.value}
+                type="button"
+                className={zoomSpan === c.value ? 'on' : undefined}
+                aria-pressed={zoomSpan === c.value}
+                title={t('waterfall.span.title', { hz: c.widthHz })}
+                onClick={() => {
+                  // The same two writes as the select below: the span is state, the window follows.
+                  setZoomSpan(c.value)
+                  surfaceSet(ZOOM_KEY, String(c.value))
+                }}
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {!fixedWindow && !spanChoices && (
           <select
             className="wf-palette wf-zoom"
             value={zoomSpan}
@@ -1239,6 +1312,26 @@ export function Waterfall({
         {/* #230: the held picture says it is held. Only where no dark band is painted — an FT
             surface already reads as "that was us transmitting". A live region, so a screen
             reader hears it when the over starts rather than only on inspection. */}
+        {tags && tags.length > 0 && (
+          <div className="wf-tags">
+            {tags.map((tag) => {
+              if (tag.hz < view.lo || tag.hz > view.hi) return null
+              return (
+                <button
+                  key={tag.key}
+                  type="button"
+                  className={tag.dim ? 'wf-tag dim' : 'wf-tag'}
+                  style={{ left: `${((tag.hz - view.lo) / (view.hi - view.lo)) * 100}%`, opacity: tag.opacity }}
+                  disabled={!onTag || keyed}
+                  title={tag.title}
+                  onClick={() => onTag?.(tag.hz)}
+                >
+                  {tag.label}
+                </button>
+              )
+            })}
+          </div>
+        )}
         {keyed && !txBlanks && (
           <div className="wf-tx-held" role="status">
             {t('waterfall.tx.held')}

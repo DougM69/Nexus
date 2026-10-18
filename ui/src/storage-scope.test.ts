@@ -115,6 +115,8 @@ export const PER_SURFACE = [
   'nexus.phonescope.rows',
   'nexus.phonescope.win',
   'nexus.roster.filters',
+  // The RTTY waterfall's speed: a look of THIS window's waterfall, like its span, flow and 3D.
+  'nexus.rtty.waterfall.speed',
   'nexus.sats.columns',
   'nexus.sats.favOnly',
   'nexus.spotlegend',

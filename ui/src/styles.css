@@ -15091,6 +15091,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* RTTY's header carries two more button rows (span, speed), and at 1024 px they wrapped the header
+   onto a second line, which took the picture from 49 px to 24. A zero basis lets the hint give way
+   first: it fills what is left and ellipsises, rather than its full width forcing the wrap. */
+.rtty-cockpit .waterfall-wrap > .panel-header .wf-hint {
+  flex: 1 1 0;
+}
 .wf-hint {
   font-size: calc(10px * var(--text-scale));
   color: var(--text-faint);
@@ -16141,6 +16147,70 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   height: 100%;
   display: block;
   pointer-events: none;
+}
+
+/* Callsign tags on the picture (RTTY): a label at its audio frequency, near the top. The layer
+   takes no pointer events, so a click between tags still lands on the canvas and tunes; only a
+   tag itself is a target. Under the held badge, which follows it in the DOM. */
+.wf-tags {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.wf-tag {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  padding: 0 var(--space-1);
+  border: 1px solid color-mix(in srgb, var(--rx) 70%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  color: var(--text);
+  font-size: calc(10px * var(--text-scale));
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.wf-tag.dim {
+  color: var(--text-faint);
+  border-color: var(--border-soft);
+  text-decoration: line-through;
+}
+.wf-tag:disabled {
+  cursor: default;
+}
+/* A row of toggle buttons in the waterfall header (RTTY's span and speed): one control, the
+   pressed one lit. */
+.wf-seg {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.wf-seg > button {
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 0 var(--space-1);
+  font-size: var(--fs-label);
+  line-height: 1.6;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wf-seg > button + button {
+  margin-left: -1px;
+}
+.wf-seg > button:first-child {
+  border-radius: 4px 0 0 4px;
+}
+.wf-seg > button:last-child {
+  border-radius: 0 4px 4px 0;
+}
+.wf-seg > button.on {
+  position: relative;
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 /* Always-on color legend: a thin LUT gradient = signal strength, with the live

@@ -46,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It is the ⊞ Panels entry **Tuning**, shown by default, and it works on a second computer driving the station with
   Nexus's own Remote client. Netting is refused while transmitting, from the waterfall too: a click mid-over
   used to move the AFSK tone of the over on the air. (idea: the Diddle project by WW2DX)
+- **RTTY waterfall: callsign tags, span and speed buttons, and a brighter picture.** A station the decoder copies
+  sending its own call (`DE W1AW`, or `CQ TEST W1AW W1AW`) gets a small tag at the top of the waterfall, on the
+  frequency the decoder heard it. Click a tag to net onto that station; like a click on the waterfall, it does
+  nothing while you transmit. Tags fade after 3 minutes without being heard and are gone after 5. A call that is
+  only named (the `K1ABC` in `K1ABC DE W2XYZ`) is not tagged, and text copied across a net or a retune is not
+  used. In a running contest, a station already in the log is struck through and dimmed. The header has span
+  buttons (1k, 2k, 3k, 4k; the audio waterfall covers 0–4 kHz, so there is nothing wider to show) and speed
+  buttons (Fast, Med, Slow), and both are remembered. The RTTY waterfall now draws through a contrast curve:
+  the noise floor stays dark and a keying mark/space pair stands out about twice as strongly on Inferno or
+  Viridis, and somewhat more on Turbo. Its rows now also come at an even pace: they used to arrive every third
+  or fourth frame, so the scroll stuttered. The other waterfalls keep the row timing they had.
 - **Nexus Remote: on the shack's own network, Remote stays free.** When an account's internet use has ended, Stream
   and Listen still work from a browser already approved for the station, as long as that device is on the same
   network as the shack. The stream is held to that network at both ends and never goes through the relay. A shack
