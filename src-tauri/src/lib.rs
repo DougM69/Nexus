@@ -20036,6 +20036,7 @@ fn play_voice_message(
         let mut eng = engine_lock(&state);
         command_dispatch::still_bound(&eng, afar.as_ref())?;
         eng.send_voice(samples)?;
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
         Ok(eng.snapshot())
     }
     #[cfg(not(feature = "radio"))]
@@ -51610,6 +51611,102 @@ mod tests {
             kept_after_a_revocation.is_empty(),
             "kept after its stand-down was revoked: {kept_after_a_revocation:#?}"
         );
+    }
+
+    /// ⛔ A voice message started from afar ends when the stand-down it ran under is revoked with
+    /// no halt, as every other start from afar does: the radio loop's next tick halts, TX goes
+    /// off and the message already playing is cut. CONTROL: the same message started at the
+    /// shack's own screen (no `afar`) plays on through a bare revocation, as it always has.
+    #[test]
+    fn a_voice_message_from_afar_ends_when_its_stand_down_is_revoked_with_no_halt() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::play_voice_message;
+        use serde_json::{json, Value};
+        use std::time::Instant;
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        let dir = std::env::temp_dir().join(format!("nexus-afar-voice-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("f1.wav");
+        let voice = crate::lan_client::audio_road::voice_message(&[0.1; 1_200]).unwrap();
+        std::fs::write(&wav, voice).unwrap();
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let transmit = TransmitAuthority::default();
+        {
+            let mut e = engine_lock(&engine);
+            e.set_remote_transmit_revocation(transmit.revocation());
+            let mut settings = e.settings().clone();
+            settings.voice_messages = vec![tempo_app::settings::VoiceMessage {
+                slot: 1,
+                label: "CQ".into(),
+                file: wav.display().to_string(),
+            }];
+            e.apply_settings(settings);
+            e.set_license_class("extra");
+            e.set_frequency(14.290, "20m", "USB");
+            e.set_operating_mode("phone", false);
+        }
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![play_voice_message])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        // Play F1 (from afar under the stand-down as it stands, or from the shack), let the audio
+        // service take it so it is playing, then revoke the stand-down with no halt and tick the
+        // radio loop: (halted, TX on, the over in flight cut).
+        let play_then_revoke = |afar: bool| -> (bool, bool, bool) {
+            {
+                let mut e = engine_lock(&engine);
+                e.halt_tx();
+                e.take_slot_tx_abort();
+                // The keyer plays only with TX on: on at the shack, which moves no stand-down.
+                e.set_tx_enabled(true);
+            }
+            let mut args = json!({"slot": 1});
+            if afar {
+                let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+                args["afar"] = json!({ "standDown": now });
+            }
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                "play_voice_message".to_string(),
+                args,
+                Box::new(move |result: Result<Value, String>| {
+                    let _ = answer.send(result);
+                }),
+            );
+            let ran = answered
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the handler answered");
+            assert!(ran.is_ok(), "CONTROL: F1 played (afar {afar}): {ran:?}");
+            let mut e = engine_lock(&engine);
+            assert!(
+                e.poll_voice().is_some(),
+                "CONTROL: the audio service took F1 (afar {afar})"
+            );
+            drop(e);
+            transmit.revoke();
+            let mut e = engine_lock(&engine);
+            let halted = e.poll_remote_transmit(Instant::now());
+            (halted, e.tx_enabled(), e.take_slot_tx_abort())
+        };
+        assert_eq!(
+            play_then_revoke(true),
+            (true, false, true),
+            "from afar: (halted, TX on, the playing message cut)"
+        );
+        assert_eq!(
+            play_then_revoke(false),
+            (false, true, false),
+            "CONTROL from the shack: (halted, TX on, the playing message cut)"
+        );
+        engine_lock(&engine).halt_tx();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ⛔ From afar a section entry arms nothing. Called through the shack's own runner, as the

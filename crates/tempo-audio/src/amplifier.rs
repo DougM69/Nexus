@@ -1352,9 +1352,10 @@ mod imp {
     /// The UDP link against a fake KPA1500 command server on loopback: one datagram in, at most
     /// one datagram back, to whoever asked — the server Elecraft documents (Programming
     /// Reference V3, Overview p. 6). ⚠️ NEEDS-BENCH: a fake shows the link keeps to that
-    /// description; only a real KPA1500 shows the description is the amplifier.
+    /// description; only a real KPA1500 shows the description is the amplifier. The fake is
+    /// shared with the amplifier poll's tests (`amppoll/native_tests.rs`).
     #[cfg(test)]
-    mod udp_tests {
+    pub(crate) mod udp_tests {
         use super::*;
         use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
         use std::sync::{Arc, Mutex};
@@ -1373,7 +1374,7 @@ mod imp {
             stop: AtomicBool,
         }
 
-        struct FakeKpa {
+        pub(crate) struct FakeKpa {
             addr: SocketAddr,
             sock: UdpSocket,
             amp: Arc<Amp>,
@@ -1381,7 +1382,7 @@ mod imp {
         }
 
         impl FakeKpa {
-            fn start() -> Self {
+            pub(crate) fn start() -> Self {
                 let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
                 sock.set_read_timeout(Some(Duration::from_millis(20)))
                     .unwrap();
@@ -1398,11 +1399,11 @@ mod imp {
                 }
             }
 
-            fn address(&self) -> String {
+            pub(crate) fn address(&self) -> String {
                 format!("127.0.0.1:{}", self.addr.port())
             }
 
-            fn heard(&self) -> Vec<String> {
+            pub(crate) fn heard(&self) -> Vec<String> {
                 let h = self.amp.heard.lock().unwrap();
                 h.iter().map(|(_, c)| c.clone()).collect()
             }
@@ -1604,6 +1605,8 @@ mod imp {
     }
 }
 
+#[cfg(all(test, feature = "serial"))]
+pub(crate) use imp::udp_tests::FakeKpa;
 #[cfg(feature = "serial")]
 pub use imp::{KpaLink, SpeLink};
 
