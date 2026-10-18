@@ -91,6 +91,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they do over USB, with the same refusals while you transmit; an amplifier that stops answering shows "Not
   answering". NEEDS-BENCH: a KPA1500 on the LAN with KPA1500 Remote connected at the same time; readings, Operate,
   Standby and a band step from Nexus; then unplug its network cable and plug it back in.
+- **RTTY screen: the waterfall shades the mark and space tones, and Auto-tune nets onto a signal.** A band now fills
+  the waterfall between mark and space where the decoder is listening, and follows the AFC. It turns red while you
+  transmit. **Auto-tune**, in the waterfall's header, finds the nearest signal near the current tones whose two tones
+  sit at your shift, passing over single carriers and signals at another shift, and nets onto it. Netting moves your
+  transmit tones too, so Auto-tune is off while you transmit. NEEDS-BENCH: a real RTTY signal off the air.
 
 ### Changed
 - **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each
@@ -176,6 +181,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (4800 to 38400), so a KPA1500 set to one of its three faster ones showed "Not answering" even when it was cabled
   correctly. All seven speeds Elecraft documents are now tried. A KPA500 is asked at its four speeds first, in the
   same order as before. NEEDS-BENCH: a KPA1500 set to 230400, then 57600, on its USB port.
+- **RTTY screen: a click on the waterfall no longer moves your transmit tones during an over.** Netting moves the
+  AFSK transmit tones as well as the decoder, so a click while transmitting slid the signal you were sending to
+  wherever you clicked. While an over is on the air or queued, continuous TX is on or Tune is keyed, a click now does
+  nothing, and the waterfall's hint says tuning is held.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to

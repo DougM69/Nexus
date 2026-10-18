@@ -165,6 +165,11 @@ interface Props {
    * FT8 path is byte-identical when this is undefined. A cursor that stands for a marker
    * passes its token (`var(--rx)`), which resolves the way the markers' own do. */
   cursors?: { hz: number; color: string; label: string }[]
+  /** A shaded band between two audio frequencies (Hz), under the cursors: RTTY's mark and space
+   *  tones and the shift between them, where the decoder is listening. Painted in `--rx`, and in
+   *  `--tx` while `keyed` — the tones we are transmitting on. PAINT ONLY, like the cursors.
+   *  Unset = no band (every surface but RTTY). */
+  toneBand?: { loHz: number; hiHz: number }
   /** The signal's WIDTH above each marker's frequency, Hz: `markerWidthHz(tier, …)`, the bracket
    * WSJT-X's Wide Graph draws for the mode. Each marker is then two lines, at its frequency and at
    * the signal's top tone, closed by a bar: TX's along the top edge and RX's along the bottom,
@@ -269,6 +274,7 @@ export function Waterfall({
   hideNote,
   paneTitle,
   cursors,
+  toneBand,
   markerWidthHz,
   hint,
   rowMs = 120,
@@ -342,6 +348,8 @@ export function Waterfall({
   const rxOffRef = useRef(rxOffsetHz)
   const txOffRef = useRef(txOffsetHz)
   const cursorsRef = useRef(cursors)
+  const toneBandRef = useRef(toneBand)
+  const keyedRef = useRef(keyed)
   const markerWidthRef = useRef(markerWidthHz)
   const activeRef = useRef(active)
   const rowMsRef = useRef(rowMs)
@@ -391,6 +399,8 @@ export function Waterfall({
   rxOffRef.current = rxOffsetHz
   txOffRef.current = txOffsetHz
   cursorsRef.current = cursors
+  toneBandRef.current = toneBand
+  keyedRef.current = keyed
   markerWidthRef.current = markerWidthHz
   activeRef.current = active
   rowMsRef.current = rowMs
@@ -838,6 +848,21 @@ export function Waterfall({
         octx.globalAlpha = 1
       }
 
+      // The tone band, under the cursors so its edges never hide them. Clipped to the view; a
+      // band wholly outside a zoom window draws nothing.
+      const band = toneBandRef.current
+      if (band) {
+        const a = Math.max(vlo, Math.min(band.loHz, band.hiHz))
+        const b = Math.min(vhi, Math.max(band.loHz, band.hiHz))
+        if (b > a) {
+          octx.globalAlpha = keyedRef.current ? 0.3 : 0.16
+          octx.fillStyle = keyedRef.current ? ink.tx : ink.rx
+          const x0 = freqToX(a, W, vlo, vhi)
+          octx.fillRect(x0, 0, freqToX(b, W, vlo, vhi) - x0, wfH)
+          octx.globalAlpha = 1
+        }
+      }
+
       // Named cursors (e.g. RTTY mark/space) REPLACE the RX/TX markers when
       // supplied; the FT8 path (cursors undefined) keeps the existing draw.
       const cursors = cursorsRef.current
@@ -915,7 +940,9 @@ export function Waterfall({
     const overlayKeyOf = () => {
       const c = cursorsRef.current
       const named = c ? c.map((k) => `${k.hz}/${k.color}/${k.label}`).join(',') : '-'
-      return `${cssW}|${cssH}|${scaleX}|${scaleY}|${textScale}|${viewLoRef.current}|${viewHiRef.current}|${txOffRef.current}|${rxOffRef.current}|${markerWidthRef.current}|${txRef.current}|${named}`
+      const band = toneBandRef.current
+      const shade = band ? `${band.loHz}/${band.hiHz}/${keyedRef.current}` : '-'
+      return `${cssW}|${cssH}|${scaleX}|${scaleY}|${textScale}|${viewLoRef.current}|${viewHiRef.current}|${txOffRef.current}|${rxOffRef.current}|${markerWidthRef.current}|${txRef.current}|${named}|${shade}`
     }
 
     const loop = (now: number) => {

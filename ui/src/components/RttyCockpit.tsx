@@ -33,6 +33,7 @@ import {
   atuTune,
   getLicensedBandPlan,
   getRttyState,
+  getSpectrumRow,
   haltTx,
   rttyAfcReset,
   rttyArm,
@@ -54,6 +55,8 @@ import {
 import { bandLabelForMhz } from '../band'
 import { contestDomain } from '../features/contestDomains'
 import { grabAt } from '../features/rttyGrab'
+import { findTonePair } from '../features/rttyAutoTune'
+import { isRfScopeSource } from '../waterfall'
 import { esmLitKeys, useEsmHost, type EsmMessage, type EsmSetting } from '../features/esmHost'
 import { RTTY_SET_ROLES, esmRoles } from '../features/esmRoles'
 import { EsmPlate } from './EsmPlate'
@@ -636,6 +639,53 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const latched = rtty?.latched === true
   const latchedRef = useRef(latched)
   latchedRef.current = latched
+
+  // --- TUNING WHILE KEYED --------------------------------------------------------
+  // A net moves the AFSK transmit tones as well as the decoder (the TX stream is built from the
+  // netted centre), so a waterfall click or Auto-tune during an over would slide the transmitter
+  // mid-over. Both are refused while we are keyed, as JS8 refuses an offset move while a message
+  // is going out. `rttyKeyed` is the waterfall's keyed state (an over on the air or queued, the
+  // latch, a tune carrier); the poll behind it can be 500 ms old, so a net re-reads the engine's
+  // state first and nets only if nothing has keyed since.
+  const rttyKeyed = sending || latched || (snap?.radio.tuning ?? false)
+  const rttyKeyedRef = useRef(rttyKeyed)
+  rttyKeyedRef.current = rttyKeyed
+  const netUnlessKeyed = async (hz: number) => {
+    if (rttyKeyedRef.current) return
+    const now = await getRttyState()
+    if (now.sending || now.latched || rttyKeyedRef.current) return
+    setRtty(await rttyNet(hz))
+  }
+  // AUTO-TUNE: average a few spectrum rows (a keyed RTTY signal sits on one tone at a time) and
+  // net onto the nearest pair at the configured shift, from where the decoder listens now (its
+  // netted centre plus the AFC). `findTonePair` is the pure half. The button is disabled while
+  // keyed, and the net at the end refuses on its own if an over keyed while it sampled.
+  const [autoTuning, setAutoTuning] = useState(false)
+  const autoTune = async () => {
+    if (!rtty) return
+    setAutoTuning(true)
+    try {
+      const rows: number[][] = []
+      let span: { lo: number; hi: number } | null = null
+      for (let i = 0; i < 6; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, 60))
+        const s = await getSpectrumRow(false)
+        // Audio rows only, and all over one span: an RF panadapter row is absolute RF Hz.
+        if (!s.row?.length || s.loHz == null || s.hiHz == null || (s.source && isRfScopeSource(s.source))) continue
+        span ??= { lo: s.loHz, hi: s.hiHz }
+        if (s.loHz !== span.lo || s.hiHz !== span.hi || (rows.length > 0 && s.row.length !== rows[0].length)) continue
+        rows.push(s.row)
+      }
+      const near = (rtty.markHz + rtty.spaceHz) / 2 + rtty.afcHz
+      const pair = span && findTonePair(rows, span.lo, span.hi, rtty.shiftHz, near)
+      if (!pair) pushToast(t('rtty.autoTune.none'), 'info')
+      else await netUnlessKeyed(pair.centerHz)
+    } catch {
+      pushToast(t('rtty.autoTune.failed'), 'error')
+    } finally {
+      setAutoTuning(false)
+    }
+  }
   const toggleLatch = () => {
     if (!control) return
     void withErrorToast(() => rttySetLatched(!latched), t('rtty.latch.failed')).then((s) => {
@@ -1020,15 +1070,38 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           // `tx_until_ms.is_some() || tuning_keyed || manual_ptt_applied` (service.rs), so a
           // tune froze this waterfall with nothing on screen saying so — the #230 symptom on
           // the #230 surface. Tune reached the keyboard cockpits after the label was written.
-          keyed={sending || latched || (snap?.radio.tuning ?? false)}
+          keyed={rttyKeyed}
           rxOffsetHz={(rtty.markHz + rtty.spaceHz) / 2}
           txOffsetHz={0}
           cursors={[
             { hz: rtty.markHz, color: 'var(--rx)', label: 'M' },
             { hz: rtty.spaceHz, color: '#ffb347', label: 'S' },
           ]}
-          hint={receiverControl ? t('rtty.waterfall.hint') : t('remote.keyboardFollowsStation')}
-          onTune={receiverControl ? (hz) => void rttyNet(hz).then(setRtty).catch(() => {}) : undefined}
+          // Where the decoder listens: the netted tones moved by the AFC (the cursors stay on
+          // the netted pair, the TX tones). Tinted while we are keyed.
+          toneBand={{ loHz: rtty.markHz + rtty.afcHz, hiHz: rtty.spaceHz + rtty.afcHz }}
+          hint={
+            receiverControl
+              ? rttyKeyed
+                ? t('rtty.waterfall.hint.keyed')
+                : t('rtty.waterfall.hint')
+              : t('remote.keyboardFollowsStation')
+          }
+          headerExtra={
+            receiverControl ? (
+              <button
+                type="button"
+                className="wf-popout rtty-autotune"
+                disabled={rttyKeyed || autoTuning}
+                aria-busy={autoTuning}
+                onClick={() => void autoTune()}
+                title={rttyKeyed ? t('rtty.autoTune.keyed.title') : t('rtty.autoTune.title')}
+              >
+                {t('rtty.autoTune.label')}
+              </button>
+            ) : undefined
+          }
+          onTune={receiverControl ? (hz) => void netUnlessKeyed(hz).catch(() => {}) : undefined}
         />
         <PaneSeam
           axis="y"
