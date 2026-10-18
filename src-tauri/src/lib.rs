@@ -13674,8 +13674,9 @@ fn reset_settings(
 /// cluster/RBN and PSK Reporter MQTT daemons start immediately — no app restart.
 /// The `start_*_feed` latches make this a no-op once a feed is running (so an
 /// already-running feed keeps its original callsign until the next restart).
-/// `afar`: from a computer driving the station, its save keeps the shack's own transmit-by-itself
-/// settings (`command_dispatch::keep_the_shacks_transmit_settings`).
+/// `afar`: from a computer driving the station, its save keeps the shack's own settings that let
+/// the station transmit by itself and those that guard a transmission
+/// (`command_dispatch::keep_the_shacks_transmit_settings`).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn set_settings(
@@ -13688,7 +13689,7 @@ fn set_settings(
     mut settings: Settings,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
-    // From a computer driving the station, the shack's own transmit-by-itself settings stay.
+    // From a computer driving the station, the shack's own transmit settings and guards stay.
     command_dispatch::keep_the_shacks_transmit_settings(
         engine_lock(&state).settings(),
         &mut settings,
@@ -18743,13 +18744,17 @@ struct RoutePreview {
 /// — the per-radio Settings page uses this to configure a radio you're NOT currently operating on
 /// (no live rig swap, no dropped carrier). Persists + returns the snapshot, or refuses an edit
 /// that would put a daemon on a NET rigctl radio's Network Address, in words naming the port.
+/// `afar`: from a computer driving the station, the edit keeps the radio's PTT method and port as
+/// the shack has them (`command_dispatch::keep_the_shacks_radio_ptt`).
 #[tauri::command(async)]
 fn update_radio_profile(
     state: State<'_, SharedEngine>,
     id: u32,
-    patch: tempo_app::settings::RadioProfilePatch,
+    mut patch: tempo_app::settings::RadioProfilePatch,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::keep_the_shacks_radio_ptt(eng.settings(), id, &mut patch, afar.as_ref());
     eng.update_radio_profile(id, patch)?;
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: update_radio_profile save failed: {e}")
