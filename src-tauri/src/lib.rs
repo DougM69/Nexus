@@ -21953,6 +21953,29 @@ struct SpotRow {
     /// default window. Decided here from unix seconds rather than by a browser, so a Remote
     /// browser in another time zone and every window at the shack agree on when the day turns.
     worked_today_utc: bool,
+    /// ⭐ While a contest runs: the multipliers working this station here would add, by the
+    /// contest's own scoring (`tempo_core::fieldday::SpotMults`). Empty, and off the wire,
+    /// outside a contest and for a station that adds none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    contest_mults: Vec<SpotMult>,
+}
+
+/// One multiplier a spotted station would add: the contest's rule id (`county`, `country`) and
+/// the value it would count.
+#[derive(serde::Serialize, Clone)]
+struct SpotMult {
+    id: &'static str,
+    value: String,
+}
+
+/// The contest scoring class (`CW` | `PH` | `DIG`) of a spot's mode class (`CW` | `Phone` |
+/// `Digital`), the classes the contest log stores.
+fn spot_contest_class(mode_label: &str) -> &'static str {
+    match mode_label {
+        "CW" => "CW",
+        "Phone" => "PH",
+        _ => "DIG",
+    }
 }
 
 /// When the operator last worked a spotted station, as [`SpotRow`] carries it: seconds ago, and
@@ -22034,7 +22057,7 @@ fn read_all_spots(
     //
     // Poison recovers (engine_lock), so the gate always sees real state; the Option
     // shape is kept for the chains below.
-    let (class, my_call, roster_grids, last_worked) = {
+    let (class, my_call, roster_grids, last_worked, contest_mults) = {
         let eng = Some(if nonblocking {
             engine_try_lock(state).map_err(|_| "applicationBusy")?
         } else {
@@ -22077,8 +22100,16 @@ fn read_all_spots(
                     .collect()
             })
             .unwrap_or_default();
-        (class, my_call, grids, last_worked)
+        // The contest's earned multipliers, built once here (one pass over the contest log)
+        // and asked about each spot below with the lock released. `None` outside a contest.
+        let contest_mults = eng.as_ref().and_then(|e| e.contest_spot_mults());
+        (class, my_call, grids, last_worked, contest_mults)
     };
+    // A station is spotted many times on one band: ask once per (call, band, mode).
+    let mut mults_memo: std::collections::HashMap<
+        (String, String, &'static str, Option<String>),
+        Vec<SpotMult>,
+    > = std::collections::HashMap::new();
     let mut rows: Vec<SpotRow> = recent
         .into_iter()
         .map(|cs| {
@@ -22118,6 +22149,23 @@ fn read_all_spots(
                 spot_voice_origins(&cs.spotter, &cs.corroborators);
             let (worked_ago_secs, worked_today_utc) =
                 spot_worked(last_worked.get(&cs.dx_call).copied(), now);
+            let contest_mults = match &contest_mults {
+                Some(probe) => {
+                    let class = spot_contest_class(mode_label);
+                    let submode = cs.skimmer_mode().map(str::to_string);
+                    mults_memo
+                        .entry((cs.dx_call.clone(), band.clone(), class, submode))
+                        .or_insert_with_key(|(call, band, class, submode)| {
+                            probe
+                                .new_mults(call, band, class, submode.as_deref())
+                                .into_iter()
+                                .map(|(id, value)| SpotMult { id, value })
+                                .collect()
+                        })
+                        .clone()
+                }
+                None => Vec::new(),
+            };
             SpotRow {
                 call: cs.dx_call.clone(),
                 entity,
@@ -22147,6 +22195,7 @@ fn read_all_spots(
                 beacon: propagation::beacons::classify(&cs.dx_call, freq),
                 worked_ago_secs,
                 worked_today_utc,
+                contest_mults,
             }
         })
         .collect();
@@ -50081,6 +50130,90 @@ mod tests {
         let k1abc = rows.iter().find(|r| r.call == "K1ABC").expect("K1ABC row");
         assert_eq!(k1abc.worked_ago_secs, None, "control: never worked");
         assert!(!k1abc.worked_today_utc);
+    }
+
+    /// ⭐ **While a contest runs, a spot carries the multipliers working it would add** — by the
+    /// contest's own scoring, the entity resolved as a logged contact's is, a received value known
+    /// only from the station's own earlier contact — and outside a contest it carries none.
+    #[test]
+    fn a_contest_spot_carries_the_multipliers_it_would_add() {
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        let _ = tempo_core::contest::install_call_resolver(crate::contest_place_call);
+        let s = tempo_app::settings::Settings {
+            mycall: "W9XYZ".into(),
+            fd_event: "cqww_cw".into(),
+            contest_cq_zone: 4,
+            contest_qth_state: "IL".into(),
+            band: "20m".into(),
+            ..Default::default()
+        };
+        let mk = |call: &str, freq_khz: f64| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: call.into(),
+            freq_khz,
+            comment: String::new(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let mut buf = SpotBuffer::new(100);
+        buf.push(mk("DL1ABC", 14_025.0));
+        buf.push(mk("DL1ABC", 7_025.0));
+        buf.push(mk("F5XYZ", 14_030.0));
+        let spots: crate::SharedSpots = std::sync::Arc::new(std::sync::Mutex::new(buf));
+        let mults = |engine: &SharedEngine, call: &str, band: &str| {
+            let rows = crate::read_all_spots(&spots, engine, false).expect("rows");
+            let r = rows
+                .iter()
+                .find(|r| r.call == call && r.band == band)
+                .unwrap_or_else(|| panic!("{call} on {band}"));
+            let got: Vec<(&str, String)> = r
+                .contest_mults
+                .iter()
+                .map(|m| (m.id, m.value.clone()))
+                .collect();
+            (got, r.entity.clone())
+        };
+        // Outside a contest nothing is marked, a station never worked included.
+        let idle: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::with_settings(s.clone()),
+        ));
+        assert_eq!(
+            mults(&idle, "F5XYZ", "20m").0,
+            vec![],
+            "no contest, no marks"
+        );
+        let mut e = tempo_app::engine::Engine::with_settings(s);
+        e.set_mode("fieldday-sp").unwrap();
+        let fields: Vec<(String, String)> = [("RST", "599"), ("ZN", "14")]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        assert!(e.contest_log_manual("DL1ABC", &fields, "CW", None).unwrap());
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(e));
+        let (got, germany) = mults(&engine, "DL1ABC", "20m");
+        assert_eq!(
+            got,
+            vec![],
+            "worked here: its zone and country are both counted on 20 m"
+        );
+        assert_eq!(
+            mults(&engine, "DL1ABC", "40m").0,
+            vec![("zone", "14".to_string()), ("country", germany)],
+            "CQ WW counts both per band; the zone is the one this station sent on 20 m"
+        );
+        let (got, france) = mults(&engine, "F5XYZ", "20m");
+        assert_eq!(
+            got,
+            vec![("country", france)],
+            "a station never worked: its country, and no guess at a zone it has not sent"
+        );
+        // The spot's mode class in the contest log's words, which a per-mode rule buckets by.
+        assert_eq!(
+            ["CW", "Phone", "Digital"].map(crate::spot_contest_class),
+            ["CW", "PH", "DIG"]
+        );
     }
 
     /// #184 (akhepcat): "just because I'm not licensed to transmit in the US, there are no

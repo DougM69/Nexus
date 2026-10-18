@@ -30,7 +30,7 @@ import { PhoneCockpit } from './PhoneCockpit'
 import { SpotsPanel } from './SpotsPanel'
 import { NeededPanel } from './NeededPanel'
 import { PHONE_PANELS, panelStorageKey, seamShares, usePanelLayout } from '../features/panelState'
-import type { AppSnapshot, BandChannel, NeedAlert, SpotRow } from '../types'
+import type { AppSnapshot, BandChannel, FieldDayStatus, NeedAlert, SpotRow } from '../types'
 
 // THE BUDGET (2026-10-09). The slowest case here, "a fresh Phone screen shows neither, and ⊞ Panels offers…", takes
 // 0.39 s and 0.35 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -78,7 +78,14 @@ vi.mock('./CockpitHeader', () => ({
   ),
 }))
 vi.mock('./PhoneScope', () => ({ PhoneScope: () => <div data-testid="scope-stub" /> }))
-vi.mock('./BandStrip', () => ({ BandStrip: () => <div data-testid="bandstrip-stub" /> }))
+/** What the cockpit hands the band strip, for the contest-marks wiring below. */
+const strip = vi.hoisted(() => ({ fieldDay: undefined as unknown }))
+vi.mock('./BandStrip', () => ({
+  BandStrip: (p: { fieldDay?: unknown }) => {
+    strip.fieldDay = p.fieldDay
+    return <div data-testid="bandstrip-stub" />
+  },
+}))
 vi.mock('./VoiceKeyer', () => ({ VoiceKeyer: () => <div data-testid="vk-stub" /> }))
 vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
 vi.mock('../remote-web/RemoteRecall', () => ({ RemoteRecallEntry: () => <div data-testid="recall-stub" /> }))
@@ -226,7 +233,15 @@ function boards() {
 }
 
 /** The cockpit with the real panel record and the board wiring App passes. */
-function Live({ band = '20m', wiring = boards() }: { band?: string; wiring?: ReturnType<typeof boards> }) {
+function Live({
+  band = '20m',
+  wiring = boards(),
+  fieldDay,
+}: {
+  band?: string
+  wiring?: ReturnType<typeof boards>
+  fieldDay?: FieldDayStatus
+}) {
   const panels = usePanelLayout(PHONE_PANELS)
   return (
     <PhoneCockpit
@@ -237,6 +252,7 @@ function Live({ band = '20m', wiring = boards() }: { band?: string; wiring?: Ret
       panels={panels}
       spotsBoard={wiring.spotsBoard}
       neededBoard={wiring.neededBoard}
+      fieldDay={fieldDay}
     />
   )
 }
@@ -611,5 +627,22 @@ describe('working a spot from the pane', () => {
     fireEvent.click(row)
     expect(wiring.neededBoard.onWork).toHaveBeenCalledWith(ALERTS[0])
     expect(api.setPtt).not.toHaveBeenCalled()
+  })
+})
+
+describe('a running contest reaches the band strip and the Spots pane', () => {
+  it('hands the contest to the strip and marks a dupe in the Spots pane', async () => {
+    const fd = { running: true, log: [{ call: 'W1AW', class: '', section: '', band: '20m', mode: 'PH' }] } as unknown as FieldDayStatus
+    render(<Live fieldDay={fd} />)
+    await act(async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve()
+    })
+    expect(strip.fieldDay, 'the strip was not handed the contest').toBe(fd)
+    if (!pane('spots')) fireEvent.click(box(/^Spots$/))
+    const row = [...pane('spots')!.querySelectorAll<HTMLElement>('.sp-row')].find((r) =>
+      r.textContent?.includes('W1AW'),
+    )
+    expect(row?.className).toContain('contest-dupe')
+    expect(within(row!).getByText('DUPE')).toBeTruthy()
   })
 })

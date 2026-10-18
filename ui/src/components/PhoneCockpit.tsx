@@ -1864,6 +1864,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
           phoneSegLo={snap.radio.phoneSegLo}
           phoneSegHi={snap.radio.phoneSegHi}
           spots={spots ?? []}
+          fieldDay={fieldDay}
           needByCall={needByCall}
           typeByCall={typeByCall}
           onWorkSpot={onWorkSpot}
@@ -1986,6 +1987,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
               {...spotsBoard}
               spots={spots ?? []}
               pane={{ scope: PHONE_SPOTS_SCOPE, modes: PHONE_SPOT_MODES, band: snap.radio.band }}
+              fieldDay={fieldDay}
             />
           ) : (
             <p className="dim" role="status">{t('remote.spotsUnavailable')}</p>

@@ -27925,6 +27925,16 @@ contact yourself."
         }
     }
 
+    /// ⭐ **What each spotted station would add to the running contest's multipliers**
+    /// ([`tempo_core::fieldday::SpotMults`]) — `None` outside a contest, which is what keeps
+    /// every spot surface unmarked there.
+    pub fn contest_spot_mults(&self) -> Option<tempo_core::fieldday::SpotMults> {
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return None;
+        };
+        Some(station.log.spot_mults())
+    }
+
     /// Serialize the in-progress Field Day contest log as ADIF for a durable
     /// flush-on-exit. Returns `None` when not in Field Day mode, or when the log
     /// is empty (nothing to persist).

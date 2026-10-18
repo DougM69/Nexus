@@ -6256,6 +6256,10 @@ export const EN = {
   'bandStrip.shade.title': 'Your licensed phone segment on this band',
   // `{{detail}}` is the spot line — call, frequency, age, badges, spotter and comment.
   'bandStrip.spot.title': '{{detail}} — click to work',
+  'contestSpot.dupe': 'dupe',
+  'contestSpot.mult': 'new mult: {{rule}} {{value}}',
+  'contestSpot.tag.dupe': 'DUPE',
+  'contestSpot.tag.mult': 'MULT',
   'bandStrip.age.secs': '{{secs}}s ago',
   'bandStrip.age.mins': '{{mins}}m ago',
   'bandStrip.age.hours': '{{hours}}h ago',

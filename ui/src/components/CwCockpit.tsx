@@ -1776,6 +1776,7 @@ export function CwCockpit({
             dialMhz={snap.radio.dialMhz}
             txAllowed={snap.radio.txAllowed}
             spots={spots ?? []}
+            fieldDay={fieldDay}
             spotMode="CW"
             needByCall={needByCall}
             typeByCall={typeByCall}
@@ -1926,6 +1927,7 @@ export function CwCockpit({
               {...spotsBoard}
               spots={spots ?? []}
               pane={{ scope: CW_SPOTS_SCOPE, modes: CW_SPOT_MODES, band: snap.radio.band }}
+              fieldDay={fieldDay}
             />
           ) : (
             <p className="dim" role="status">{t('remote.spotsUnavailable')}</p>

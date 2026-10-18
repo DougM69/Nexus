@@ -9,10 +9,11 @@ import { useStationControl, useStationCapability } from '../stationAccess'
 // The dial marker reads `txAllowed` to say the engine is blocking transmit here. It is a readout;
 // this surface has no transmit control and is on no cockpit's stop-line census.
 import { useRef, useState } from 'react'
-import type { SpotRow, NeedTag, AppSnapshot } from '../types'
+import type { SpotRow, NeedTag, AppSnapshot, FieldDayStatus } from '../types'
 import { bandRangeForLabel, cwRangeForLabel } from '../band'
 import { useWheelTune } from '../useWheelTune'
 import { NEED_CHIP } from '../features/needVisuals'
+import { spotMarkWords, useContestSpotMarker } from '../features/contestSpotMarks'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
 import { BEACON_BADGE, SpotLegend, TYPE_BADGE } from './SpotLegend'
@@ -39,6 +40,9 @@ interface Props {
   onWorkSpot: (s: SpotRow) => void
   /** When set, shows a "pop out" button that opens the full vertical band-map in its own window. */
   onPopOut?: () => void
+  /** The running contest, when one runs: a dupe flag is struck through and dimmed, a flag that
+   *  would be a new multiplier wears MULT (`features/contestSpotMarks.ts`). Absent = no marks. */
+  fieldDay?: FieldDayStatus | null
 
   // ── Tuning from the strip itself (#96) ─────────────────────────────────────────────────
   // The pop-out band map wheel-tunes (#39); the docked strip is the same frequency scale in
@@ -90,6 +94,7 @@ export function BandStrip({
   typeByCall,
   onWorkSpot,
   onPopOut,
+  fieldDay,
   sideband,
   tuneEnabled,
   stepHz,
@@ -114,6 +119,7 @@ export function BandStrip({
   // sensitivity setting are all the ones the operator already knows, never a second
   // implementation that drifts. `enabled` false makes it inert (the read-only case).
   // Called BEFORE the off-plan early return below: hooks must run on every render.
+  const marker = useContestSpotMarker(fieldDay)
   const trackEl = useRef<HTMLDivElement | null>(null)
   useWheelTune(trackEl, {
     dialMhz,
@@ -268,8 +274,12 @@ export function BandStrip({
           // POTA colour) included, keeps its own. It reads the P's own entry, so whatever takes the
           // P away takes the colour too. Not `is-need`: it labels the station, so the bar stays thin.
           const dimCls = !chip && !beacon && type === 'Pota' ? ' pota-dim' : ''
+          // A beacon is never worked in a contest, so it is never marked.
+          const mark = beacon ? null : (marker?.(s) ?? null)
+          const markWords = spotMarkWords(mark)
           const detail = [
             s.call,
+            ...markWords,
             beacon?.word,
             chip?.label,
             badge?.word,
@@ -287,9 +297,10 @@ export function BandStrip({
             <button
               key={repeat ? `${key}#${repeat}` : key}
               type="button"
-              className="bandstrip-spot"
+              className={`bandstrip-spot${mark?.dupe ? ' contest-dupe' : ''}`}
               style={{ left: `${pct(s.freqMhz)}%`, opacity }}
               title={workAllowed ? t('bandStrip.spot.title', { detail }) : detail}
+              aria-label={mark ? [s.call, ...markWords].join(' · ') : undefined}
               disabled={!workAllowed}
               onClick={() => { if (workAllowed) onWorkSpot(s) }}
             >
@@ -298,6 +309,13 @@ export function BandStrip({
               )}
               {badge && <span className={`bandstrip-type spot-type-badge ${badge.cls}`}>{badge.ch}</span>}
               <span className={`bandstrip-tick${needCls}${dimCls}`} />
+              {mark && mark.mults.length > 0 && (
+                // Leans toward the middle of the band, so a flag near either edge keeps its tag
+                // inside the track.
+                <span className={`spot-mult-tag${pct(s.freqMhz) > 50 ? ' lean-left' : ''}`}>
+                  {t('contestSpot.tag.mult')}
+                </span>
+              )}
               <span className="bandstrip-spot-call mono">{s.call}</span>
             </button>
           )
