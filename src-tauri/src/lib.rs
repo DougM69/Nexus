@@ -13676,7 +13676,8 @@ fn reset_settings(
 /// already-running feed keeps its original callsign until the next restart).
 /// `afar`: from a computer driving the station, its save keeps the shack's own settings that let
 /// the station transmit by itself, those that guard a transmission and the program it runs to sign
-/// a LoTW upload (`command_dispatch::keep_the_shacks_transmit_settings`).
+/// a LoTW upload (`command_dispatch::keep_the_shacks_transmit_settings`), and the addresses the shack
+/// sends a stored key or password to (`command_dispatch::keep_the_shacks_credential_addresses`).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn set_settings(
@@ -13692,6 +13693,12 @@ fn set_settings(
     // From a computer driving the station, the shack's own transmit settings and guards stay, and
     // so does the program the shack runs to sign a LoTW upload.
     command_dispatch::keep_the_shacks_transmit_settings(
+        engine_lock(&state).settings(),
+        &mut settings,
+        afar.as_ref(),
+    );
+    // …and where the shack sends its stored keys and passwords.
+    command_dispatch::keep_the_shacks_credential_addresses(
         engine_lock(&state).settings(),
         &mut settings,
         afar.as_ref(),
@@ -18746,7 +18753,8 @@ struct RoutePreview {
 /// (no live rig swap, no dropped carrier). Persists + returns the snapshot, or refuses an edit
 /// that would put a daemon on a NET rigctl radio's Network Address, in words naming the port.
 /// `afar`: from a computer driving the station, the edit keeps the radio's PTT method and port as
-/// the shack has them (`command_dispatch::keep_the_shacks_radio_ptt`).
+/// the shack has them (`command_dispatch::keep_the_shacks_radio_ptt`), and the Icom network address
+/// its stored password goes to (`command_dispatch::keep_the_shacks_radio_icom_address`).
 #[tauri::command(async)]
 fn update_radio_profile(
     state: State<'_, SharedEngine>,
@@ -18756,6 +18764,12 @@ fn update_radio_profile(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     command_dispatch::keep_the_shacks_radio_ptt(eng.settings(), id, &mut patch, afar.as_ref());
+    command_dispatch::keep_the_shacks_radio_icom_address(
+        eng.settings(),
+        id,
+        &mut patch,
+        afar.as_ref(),
+    );
     eng.update_radio_profile(id, patch)?;
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: update_radio_profile save failed: {e}")

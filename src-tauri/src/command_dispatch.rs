@@ -177,8 +177,10 @@ pub(crate) const PRESENCE_BOUND: [&str; 7] = [
 /// the line that keys the transmitter), and the one setting that names a program for the shack to
 /// run (the TQSL path). From afar a save keeps the shack's own value of each
 /// ([`keep_the_shacks_transmit_settings`], [`keep_the_shacks_radio_ptt`]): they are set at the
-/// shack only. (The presence beacon and JS8's automatic replies, relay and heartbeat acks each have
-/// one writer, their own switch, and no save moves them at all: `Engine::apply_settings`.)
+/// shack only. So are the addresses Nexus sends a stored key or password to
+/// ([`keep_the_shacks_credential_addresses`], [`keep_the_shacks_radio_icom_address`]). (The presence
+/// beacon and JS8's automatic replies, relay and heartbeat acks each have one writer, their own
+/// switch, and no save moves them at all: `Engine::apply_settings`.)
 pub(crate) const SETTINGS_FROM_AFAR: [&str; 2] = ["set_settings", "update_radio_profile"];
 
 /// What a settings save from afar may not change ([`SETTINGS_FROM_AFAR`]): each is put back into
@@ -268,6 +270,53 @@ pub(crate) fn keep_the_shacks_radio_ptt(
     if let Some(radio) = shack.radios.iter().find(|p| p.id == id) {
         patch.ptt_method = radio.ptt_method.clone();
         patch.ptt_serial_port = radio.ptt_serial_port.clone();
+    }
+}
+
+/// ⛔ What a settings save from afar may not point elsewhere ([`SETTINGS_FROM_AFAR`]): each address
+/// the shack sends a stored key or password to, put back into `save` as the shack has it, so a save
+/// from afar cannot send one to another server. The Cloudlog/Wavelog URL (the API key), the club
+/// host a Field Day position joins (its club key), and the Icom network radio's address (its
+/// password), the last as the shack has it for the radio the form was editing, as the PTT is kept
+/// ([`keep_the_shacks_transmit_settings`]). Every other connector sends its credential to a fixed
+/// host. From the shack's own screen (`None`) the save is taken as it came.
+pub(crate) fn keep_the_shacks_credential_addresses(
+    shack: &tempo_app::settings::Settings,
+    save: &mut tempo_app::settings::Settings,
+    afar: Option<&Afar>,
+) {
+    if afar.is_none() {
+        return;
+    }
+    save.cloudlog_url = shack.cloudlog_url.clone();
+    save.fd_join_addr = shack.fd_join_addr.clone();
+    let edited = (!save.radios.is_empty())
+        .then(|| shack.radios.iter().find(|p| p.id == save.active_radio))
+        .flatten();
+    let (host, port) = match edited {
+        Some(radio) => (&radio.icom_lan_host, radio.icom_lan_port),
+        None => (&shack.icom_lan_host, shack.icom_lan_port),
+    };
+    save.icom_lan_host = host.clone();
+    save.icom_lan_port = port;
+}
+
+/// ⛔ What one radio's edit from afar may not point elsewhere ([`SETTINGS_FROM_AFAR`]): the Icom
+/// network address its stored password is sent to, put back into `patch` as the shack has it for
+/// radio `id`. From the shack's own screen (`None`), or for a radio the shack does not have, the
+/// patch is taken as it came.
+pub(crate) fn keep_the_shacks_radio_icom_address(
+    shack: &tempo_app::settings::Settings,
+    id: u32,
+    patch: &mut tempo_app::settings::RadioProfilePatch,
+    afar: Option<&Afar>,
+) {
+    if afar.is_none() {
+        return;
+    }
+    if let Some(radio) = shack.radios.iter().find(|p| p.id == id) {
+        patch.icom_lan_host = radio.icom_lan_host.clone();
+        patch.icom_lan_port = radio.icom_lan_port;
     }
 }
 
