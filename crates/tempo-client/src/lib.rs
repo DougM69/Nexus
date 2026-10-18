@@ -67,6 +67,8 @@ pub mod datagram;
 pub mod dispatch;
 /// An internet road's way across: its socket, ICE, and the relay.
 pub mod ice;
+/// An ID token from the account's issuer, checked here: signature, issuer, audience, life, nonce.
+pub mod id_token;
 /// The command link, protocol 2, which client mode drives.
 pub mod link;
 /// The internet road's account side: signed requests and the first sign-in.
