@@ -552,6 +552,7 @@ export const EN = {
   "lanWindow.operate": "Operate from this computer",
   "lanWindow.operateConfirm": "Operate this station from here? Nexus closes and starts again driving it over this network, and this computer’s own station stays off until you press Leave.",
   "lanWindow.operateYes": "Close and operate",
+  "lanWindow.operateAt": "Operate at this address",
   "lanWindow.operateNo": "Not now",
   "lanWindow.streamInstead": "Stream the station’s screen instead",
   "lanWindow.choiceHint": "Operate runs Nexus here and works the radio from your own clicks and pop-outs. Streaming only shows a picture of the station’s screen.",

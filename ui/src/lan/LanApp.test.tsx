@@ -315,6 +315,34 @@ describe('Operate from this computer', () => {
     expect((screen.getByRole('button', { name: EN['lanWindow.operate'] }) as HTMLButtonElement).disabled).toBe(false)
   })
 
+  it('operates at the address typed after nothing answered, asked first; the stream stays its quiet fallback', () => {
+    page()
+    socket.tell({ type: 'stations', computer: 'DEN-PC',
+      stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }] })
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.streamInstead'] }))
+    socket.tell({ type: 'connectRefused', reason: 'unreachable' })
+    fireEvent.change(screen.getByLabelText(EN['lanWindow.otherAddress']), { target: { value: ' 192.168.1.44:42080 ' } })
+    const form = screen.getByLabelText(EN['lanWindow.otherAddress']).closest('form') as HTMLElement
+    const buttons = within(form).getAllByRole('button')
+    expect(buttons.map(b => b.textContent)).toEqual([EN['lanWindow.operateAt'], EN['lanWindow.stream']])
+    expect(buttons[0].classList.contains('remote-button--quiet')).toBe(false)
+    expect(buttons[1].classList.contains('remote-button--quiet')).toBe(true)
+    fireEvent.click(buttons[0])
+    expect(screen.getByText(EN['lanWindow.operateConfirm'])).toBeTruthy()
+    expect(socket.sent.some(m => m.type === 'operate'), 'asked first, nothing sent yet').toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.operateYes'] }))
+    expect(last(socket.sent)).toEqual({ type: 'operate', stationId: STATION, address: '192.168.1.44:42080' })
+    socket.tell({ type: 'connectRefused', reason: 'badAddress' })
+    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.reason.badAddress'])
+    // CONTROL: the card's own Operate takes no typed address; the typed Stream still streams there.
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.operate'] }))
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.operateYes'] }))
+    expect(last(socket.sent)).toEqual({ type: 'operate', stationId: STATION })
+    socket.tell({ type: 'connectRefused', reason: 'unknownStation' })
+    fireEvent.click(within(form).getByRole('button', { name: EN['lanWindow.stream'] }))
+    expect(last(socket.sent)).toEqual({ type: 'connect', stationId: STATION, address: '192.168.1.44:42080' })
+  })
+
   it('is each station’s main action, first and the only primary; the stream is the quiet fallback after it', () => {
     page()
     socket.tell({ type: 'stations', computer: 'DEN-PC',

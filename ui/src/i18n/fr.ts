@@ -456,6 +456,7 @@ export const FR: PartialCatalog = {
   "lanWindow.operate": "Piloter depuis cet ordinateur",
   "lanWindow.operateConfirm": "Piloter cette station d’ici ? Nexus se ferme et redémarre pour la piloter sur ce réseau, et la station propre de cet ordinateur reste éteinte jusqu’à ce que vous appuyiez sur Quitter.",
   "lanWindow.operateYes": "Fermer et piloter",
+  "lanWindow.operateAt": "Piloter à cette adresse",
   "lanWindow.operateNo": "Pas maintenant",
   "lanWindow.streamInstead": "Diffuser plutôt l’écran de la station",
   "lanWindow.choiceHint": "Piloter lance Nexus ici et commande la radio depuis vos propres clics et fenêtres détachées. Diffuser ne montre qu’une image de l’écran de la station.",

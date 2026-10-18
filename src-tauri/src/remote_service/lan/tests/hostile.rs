@@ -265,7 +265,7 @@ async fn plain_http_to_the_tls_port_is_answered_with_no_http_and_reaches_nothing
         stations: Arc::new(Stations::new(Arc::new(StationStore::default()))),
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
-        operate: Arc::new(|_| {}),
+        operate: Arc::new(|_, _| {}),
         add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
         forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     })
@@ -566,7 +566,7 @@ async fn a_forged_discovery_reply_costs_one_handshake_and_learns_nothing() {
             Arc::new(move |_| Ok(adverts.lock().unwrap().clone()))
         },
         name: "Den PC".into(),
-        operate: Arc::new(|_| {}),
+        operate: Arc::new(|_, _| {}),
         add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
         forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     })
@@ -1154,7 +1154,7 @@ async fn an_answer_signed_by_another_key_never_reaches_the_page() {
             stations: Arc::new(Stations::new(Arc::new(store.clone()))),
             find: Arc::new(|_| Ok(Vec::new())),
             name: "Den PC".into(),
-            operate: Arc::new(|_| {}),
+            operate: Arc::new(|_, _| {}),
             add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
             forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
         })

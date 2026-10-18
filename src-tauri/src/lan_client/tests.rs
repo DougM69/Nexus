@@ -515,7 +515,7 @@ fn reach(store: StationStore) -> Reach {
         stations: Arc::new(Stations::new(Arc::new(store))),
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
-        operate: Arc::new(|_| {}),
+        operate: Arc::new(|_, _| {}),
         add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
         forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     }
@@ -702,6 +702,72 @@ async fn the_pages_socket_answers_its_own_words_only() {
     );
 }
 
+/// ★ Operate at the address the operator typed: the page's `operate` carries it, read as the
+/// stations window reads a typed address, and Nexus starts again driving the station there first.
+/// The station must still be one paired here, and the key pinned for it is what the launch checks.
+/// CONTROL: with none typed the station's own addresses are used (no address goes along); an
+/// address the window would not take is refused by name and nothing starts; a station not paired
+/// here is refused though an address was typed.
+#[tokio::test]
+async fn operate_takes_the_address_the_operator_typed() {
+    let store = StationStore::default();
+    Stations::new(Arc::new(store.clone()))
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    let started = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut reach = reach(store);
+    reach.operate = {
+        let started = started.clone();
+        Arc::new(move |station, typed| started.lock().unwrap().push((station, typed)))
+    };
+    let origin = Origin::start(reach).unwrap();
+    let mut socket = page_socket(&origin).await;
+    let told = said(
+        &mut socket,
+        json!({"type":"operate","stationId":STATION,"address":" 192.168.1.30:42076 "}),
+    )
+    .await;
+    assert_eq!(told, json!({"type":"operating"}));
+    let told = said(
+        &mut socket,
+        json!({"type":"operate","stationId":STATION,"address":"192.168.1.31"}),
+    )
+    .await;
+    assert_eq!(told, json!({"type":"operating"}));
+    let told = said(&mut socket, json!({"type":"operate","stationId":STATION})).await;
+    assert_eq!(told, json!({"type":"operating"}));
+    let told = said(
+        &mut socket,
+        json!({"type":"operate","stationId":STATION,"address":"shack.local"}),
+    )
+    .await;
+    assert_eq!(told, json!({"type":"connectRefused","reason":"badAddress"}));
+    let other = "60000000-0000-4000-8000-000000000009";
+    let told = said(
+        &mut socket,
+        json!({"type":"operate","stationId":other,"address":"192.168.1.30"}),
+    )
+    .await;
+    assert_eq!(
+        told,
+        json!({"type":"connectRefused","reason":"unknownStation"})
+    );
+    assert_eq!(
+        *started.lock().unwrap(),
+        vec![
+            (
+                STATION.to_string(),
+                Some("192.168.1.30:42076".parse().unwrap())
+            ),
+            (
+                STATION.to_string(),
+                Some("192.168.1.31:42075".parse().unwrap())
+            ),
+            (STATION.to_string(), None),
+        ]
+    );
+}
+
 /// ★ Forget on this computer ends the internet road's approval at the service too, with the road
 /// it kept (signed by that road's key, `internet::Service::forget`), and then forgets here. The
 /// service out of reach is said (`forgetUnreached`) and the station is forgotten here all the same.
@@ -858,6 +924,23 @@ async fn the_page_picks_the_station_while_the_internet_road_is_added() {
             ),
         }
     }
+}
+
+/// What the page's socket answers `word` with.
+async fn said(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    word: Value,
+) -> Value {
+    socket
+        .send(Message::Text(word.to_string().into()))
+        .await
+        .unwrap();
+    let Some(Ok(Message::Text(text))) = socket.next().await else {
+        panic!("no answer to {word}")
+    };
+    serde_json::from_str(&text).unwrap()
 }
 
 /// The window's own page socket on `origin`: the secret in its path and the window's own origin.

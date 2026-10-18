@@ -139,6 +139,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same name, and only after that does the recording really go. Play, the F-keys and ■ Stop work as before.
 
 ### Fixed
+- **Remote: Operate from this computer now works at an address you type.** When nothing answers where a paired
+  station was, Stations on this network asks where it is now. That box offered only Stream; it now offers **Operate
+  at this address** first, with Stream still beside it. Nexus checks it is the same paired station there, as it does
+  everywhere, and keeps trying that address while you operate, so it can move back to your network on its own.
 - **Remote: the addresses Nexus sends your logging-service keys to can only be changed at the station.** A settings
   save from a computer driving the station no longer changes the Cloudlog/Wavelog URL, the club host a Field Day
   position joins, or an Icom network radio's address and port, so it cannot send the station's stored Cloudlog key,

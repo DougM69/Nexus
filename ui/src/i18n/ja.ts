@@ -446,6 +446,7 @@ export const JA: PartialCatalog = {
   "lanWindow.operate": "このコンピューターから運用",
   "lanWindow.operateConfirm": "この局をここから運用しますか？ Nexus がいったん閉じ、このネットワーク経由でこの局を操作する形で再起動します。「運用をやめる」を押すまで、このコンピューター自身の局はオフのままです。",
   "lanWindow.operateYes": "閉じて運用する",
+  "lanWindow.operateAt": "このアドレスで運用",
   "lanWindow.operateNo": "今はしない",
   "lanWindow.streamInstead": "代わりに局の画面をストリーミング",
   "lanWindow.choiceHint": "運用はこのコンピューターでNexusを動かし、ここでのクリックやポップアウトで無線機を操作します。ストリーミングは局の画面の映像を表示するだけです。",

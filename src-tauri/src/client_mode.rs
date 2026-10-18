@@ -140,6 +140,9 @@ pub(crate) mod tests;
 
 /// The argument that starts Nexus in client mode, with the paired station's id after it.
 pub(crate) const ARG: &str = "--client";
+/// The argument after [`ARG`] that gives the address the operator typed for the station, tried
+/// first ([`typed_in`]).
+const AT_ARG: &str = "--client-at";
 /// How often the lease is renewed: well inside the shack's five seconds, so a heartbeat refused
 /// once while the shack's engine is busy costs nothing.
 const HEARTBEAT: Duration = Duration::from_secs(1);
@@ -192,6 +195,32 @@ fn requested_in(mut args: impl Iterator<Item = String>) -> Option<String> {
         }
     }
     found.filter(|id| tempo_stream::protocol::identifier(id))
+}
+
+/// The arguments that start Nexus driving the station `station`, at the address `typed` first
+/// when the operator typed one.
+pub(crate) fn operate_args(station: String, typed: Option<SocketAddrV4>) -> Vec<String> {
+    let mut args = vec![ARG.into(), station];
+    if let Some(at) = typed {
+        args.extend([AT_ARG.into(), at.to_string()]);
+    }
+    args
+}
+
+/// The address the operator typed for the station this launch drives (`--client-at <address>` or
+/// `--client-at=<address>`), or none. Only an address the stations window would take is taken.
+pub(crate) fn typed_in(mut args: impl Iterator<Item = String>) -> Option<SocketAddrV4> {
+    while let Some(arg) = args.next() {
+        let typed = if arg == AT_ARG {
+            args.next()
+        } else if let Some(at) = arg.strip_prefix("--client-at=") {
+            Some(at.to_string())
+        } else {
+            continue;
+        };
+        return typed.and_then(|text| tempo_stream::lan::typed(&text));
+    }
+    None
 }
 
 // --- Where each command goes -------------------------------------------------------------------
@@ -2178,7 +2207,8 @@ pub(crate) fn run(station: String) {
             }
             let find: Find = Arc::new(move |id: &str| stations.get(id));
             let look: Look = Arc::new(tempo_stream::lan::dnssd::find);
-            tauri::async_runtime::spawn(driving.drive(app.handle().clone(), find, look, None));
+            let typed = typed_in(std::env::args().skip(1));
+            tauri::async_runtime::spawn(driving.drive(app.handle().clone(), find, look, typed));
             Ok(())
         })
         .on_window_event(|window, event| {

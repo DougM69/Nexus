@@ -441,6 +441,7 @@ export const DE: PartialCatalog = {
   "lanWindow.operate": "Von diesem Computer aus bedienen",
   "lanWindow.operateConfirm": "Diese Station von hier aus bedienen? Nexus schließt sich und startet neu, um sie über dieses Netzwerk zu steuern. Die eigene Station dieses Computers bleibt aus, bis du auf „Verlassen“ drückst.",
   "lanWindow.operateYes": "Schließen und bedienen",
+  "lanWindow.operateAt": "An dieser Adresse bedienen",
   "lanWindow.operateNo": "Nicht jetzt",
   "lanWindow.streamInstead": "Stattdessen den Bildschirm der Station streamen",
   "lanWindow.choiceHint": "Bedienen startet Nexus hier und steuert das Funkgerät mit deinen eigenen Klicks und Pop-outs. Streamen zeigt nur ein Bild vom Bildschirm der Station.",

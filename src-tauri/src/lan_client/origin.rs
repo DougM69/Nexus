@@ -20,7 +20,8 @@
 //!
 //! **The page's words** (JSON text frames). From the page: `stations`, `find`, `pair` (`address`,
 //! `code`, `name`), `forget` (`stationId`), `connect` (`stationId`, and an `address` the operator
-//! typed, if any), `disconnect`, `operate` and `addInternet` (`stationId`), `chooseStation`
+//! typed, if any), `disconnect`, `operate` (`stationId`, and an `address` the operator typed, if any), `addInternet`
+//! (`stationId`), `chooseStation`
 //! (`stationId`, or none to cancel), and on an open road the station's own `operationRequest` and
 //! `streamSignal`. To the page: `stations` (`stations`, `computer`, `internet`, and after a forget
 //! the service could not be told of, `forgetUnreached`), `signingIn`, `chooseStation` (`stations`:
@@ -105,8 +106,8 @@ pub(crate) struct Reach {
     /// This computer's name, offered as the one a station shows beside its key.
     pub name: String,
     /// Operate from this computer: Nexus quits as itself and starts again driving the paired
-    /// station this id names (`client_mode`).
-    pub operate: Arc<dyn Fn(String) + Send + Sync>,
+    /// station this id names (`client_mode`), at the address the operator typed first, if any.
+    pub operate: Arc<dyn Fn(String, Option<SocketAddrV4>) + Send + Sync>,
     /// Add the internet road to the paired station this id names (`internet::add`): the sign-in
     /// in the system browser, and this computer registered with the Remote service.
     pub add_internet: super::internet::AddInternet,
@@ -502,6 +503,8 @@ enum FromPage {
     Operate {
         #[serde(rename = "stationId")]
         station_id: String,
+        #[serde(default)]
+        address: Option<String>,
     },
     AddInternet {
         #[serde(rename = "stationId")]
@@ -719,16 +722,10 @@ async fn page(
                         if let Some(open) = road.take() { open.close().await }
                         json!({"type":"closed","reason":"disconnected"}).to_string()
                     }
-                    FromPage::Operate { station_id } => {
+                    FromPage::Operate { station_id, address } => {
                         if let Some(open) = road.take() { open.close().await }
-                        let kept = reach.stations.clone();
-                        let wanted = station_id.clone();
-                        match store(move || kept.get(&wanted)).await {
-                            Ok(Some(_)) => {
-                                (reach.operate)(station_id);
-                                json!({"type":"operating"}).to_string()
-                            }
-                            Ok(None) => json!({"type":"connectRefused","reason":"unknownStation"}).to_string(),
+                        match operate(&reach, station_id, address.as_deref()).await {
+                            Ok(()) => json!({"type":"operating"}).to_string(),
                             Err(reason) => json!({"type":"connectRefused","reason":reason}).to_string(),
                         }
                     }
@@ -790,6 +787,23 @@ async fn page(
     if let Some(add) = adding.take() {
         add.abort();
     }
+}
+
+/// Operate from this computer: Nexus starts again driving station `id`, at the address the
+/// operator typed first, if any, read as [`connect`] reads one. The launch proves the key pinned
+/// for the station wherever it reaches it, so a typed address is never taken as the station.
+async fn operate(reach: &Reach, id: String, typed: Option<&str>) -> Result<(), &'static str> {
+    let typed = match typed {
+        Some(text) => Some(tempo_stream::lan::typed(text).ok_or("badAddress")?),
+        None => None,
+    };
+    let kept = reach.stations.clone();
+    let wanted = id.clone();
+    store(move || kept.get(&wanted))
+        .await?
+        .ok_or("unknownStation")?;
+    (reach.operate)(id, typed);
+    Ok(())
 }
 
 /// The road to station `id`, opened: the road, and what the page is told of it. It is tried at the

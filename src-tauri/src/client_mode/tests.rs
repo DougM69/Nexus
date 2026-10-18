@@ -1061,6 +1061,42 @@ fn the_launch_names_the_station_it_drives() {
     assert_eq!(requested_in(args(&["--profile", "r1"])), None);
 }
 
+/// ★ Operate at an address the operator typed: the launch the stations window starts names the
+/// station and the address, and this launch reads both back, the address as typed. CONTROL: with
+/// none typed the launch is the station alone and no address is read; an address the window would
+/// not take (a loopback one, a name, a port below 1024) is never read from the launch either.
+#[test]
+fn a_typed_address_goes_with_the_launch() {
+    let typed: SocketAddrV4 = "192.168.1.30:42075".parse().unwrap();
+    let launch = operate_args(STATION.into(), Some(typed));
+    assert_eq!(
+        requested_in(launch.clone().into_iter()),
+        Some(STATION.into())
+    );
+    assert_eq!(typed_in(launch.into_iter()), Some(typed));
+    let launch = operate_args(STATION.into(), None);
+    assert_eq!(launch, vec![ARG.to_string(), STATION.to_string()]);
+    assert_eq!(typed_in(launch.into_iter()), None);
+    let args = |list: &[&str]| {
+        list.iter()
+            .map(|a| a.to_string())
+            .collect::<Vec<_>>()
+            .into_iter()
+    };
+    assert_eq!(
+        typed_in(args(&["--client", STATION, "--client-at=192.168.1.30"])),
+        Some("192.168.1.30:42075".parse().unwrap())
+    );
+    for not_taken in ["127.0.0.1:42075", "shack.local", "192.168.1.30:80", ""] {
+        assert_eq!(
+            typed_in(args(&["--client", STATION, "--client-at", not_taken])),
+            None,
+            "{not_taken:?}"
+        );
+    }
+    assert_eq!(typed_in(args(&["--client", STATION, "--client-at"])), None);
+}
+
 // --- Stop's second road --------------------------------------------------------------------------
 
 /// The shack's end of a Stop road, for these tests: a socket that a thread of its own reads as

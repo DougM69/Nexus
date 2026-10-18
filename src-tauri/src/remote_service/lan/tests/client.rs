@@ -474,3 +474,75 @@ fn a_second_computer_takes_control_and_the_first_can_take_it_back() {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+/// ★ Operate at an address the operator typed: with the station's one remembered address dead and
+/// nothing found by name, the launch's typed address (`operate_args`, read back by `typed_in`) is
+/// where client mode drives the station, which proves the key pinned for its pairing there. A
+/// station at the typed address that proves a different key is refused as one whose key changed,
+/// and nothing runs there: an address typed is never an identity. CONTROL: the same typed address
+/// with the key pinned for the station is driven, at that address.
+/// Skipped, saying so, on a box with no private address of its own.
+#[test]
+fn operate_at_a_typed_address_proves_the_pinned_key() {
+    use crate::client_mode::{operate_args, typed_in};
+    use crate::lan_client::tests::where_nothing_listens;
+    let Some(private) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own");
+        return;
+    };
+    let app = App::new();
+    let (s, live, _listening) = tauri::async_runtime::block_on(async {
+        let s = running(&app);
+        s.shared.authority.permit_station(&s.device, true).unwrap();
+        let (stopper, stop) = watch::channel(false);
+        let live = behind_a_port_on(&s, private, stop).await;
+        (s, live, stopper)
+    });
+    let dead = where_nothing_listens(private);
+    let typed = typed_in(operate_args(STATION.into(), Some(live)).into_iter());
+    for pinned_ours in [false, true] {
+        let mut record = paired_record(&s, live);
+        if !pinned_ours {
+            record.station_key = super::computer::another_key();
+        }
+        let dir = scratch("typed");
+        let this = ThisComputer::read(dir.join("settings.json"), dir.join("ui-state.json"));
+        let client = Arc::new(Client::new(STATION.to_string(), this));
+        let screens = screens(&client);
+        let (device, key, pkcs8) = (record.device_id, record.station_key, record.pkcs8);
+        let find: Find = Arc::new(move |_| {
+            Ok(Some(PairedStation {
+                station_id: STATION.into(),
+                device_id: device.clone(),
+                station_key: key.clone(),
+                pkcs8: pkcs8.clone(),
+                addresses: vec![dead.to_string()],
+            }))
+        });
+        let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
+            screens.main.app_handle().clone(),
+            find,
+            Arc::new(|_| Ok(Vec::new())),
+            typed,
+        ));
+        if pinned_ours {
+            eventually("control taken at the typed address", || {
+                client.status().phase == Phase::Live
+            });
+            assert_eq!(client.status().station, live.to_string());
+        } else {
+            eventually("the changed key told", || {
+                client.status().reason.as_deref() == Some("keyChanged")
+            });
+            assert_ne!(client.status().phase, Phase::Live);
+            assert_eq!(
+                ask(&screens.main, "get_band_plan", json!({})),
+                Err(json!("nexusClient:notLive"))
+            );
+            assert!(sent_here(&app).is_empty(), "{:?}", app.ran());
+        }
+        driving.abort();
+        tauri::async_runtime::block_on(client.let_go());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

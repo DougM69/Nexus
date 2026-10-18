@@ -339,8 +339,11 @@ fn reach(app: &tauri::AppHandle) -> Reach {
         name: computer_name(),
         operate: {
             let app = app.clone();
-            Arc::new(move |station: String| {
-                crate::client_mode::start_again(&app, vec![crate::client_mode::ARG.into(), station])
+            Arc::new(move |station: String, typed| {
+                crate::client_mode::start_again(
+                    &app,
+                    crate::client_mode::operate_args(station, typed),
+                )
             })
         },
         add_internet: {
