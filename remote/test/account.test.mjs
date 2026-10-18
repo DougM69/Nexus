@@ -390,6 +390,23 @@ test('removing an invite removes every device that person has at the station, an
   await shack.shack.post(`stations/${shack.stationId}/native/invite`, { email: guest.email, role: 'listen' })
   assert.equal((await app.db.prepare('SELECT COUNT(*) AS n FROM invites WHERE station_id=?').bind(shack.stationId).first()).n, 1)
   assert.equal((await enrol(guest, shack.stationId)).value.approved, true)
+  // The owner's own address invited and removed takes nothing of the owner's.
+  await shack.shack.post(`stations/${shack.stationId}/native/invite`, { email: owner.email, role: 'listen' })
+  await shack.shack.post(`stations/${shack.stationId}/native/uninvite`, { email: owner.email })
+  assert.equal((await deviceRow(mine.deviceId)).approved, 1)
+})
+
+test('a station invites at most twenty people a day, and has at most twenty invited at once', async () => {
+  const owner = await person(), shack = await bind(owner), path = `stations/${shack.stationId}/native/invite`
+  for (let i = 0; i < 20; i++) await shack.shack.post(path, { email: `p${i}@example.invalid`, role: 'listen' })
+  assert.equal(await errorOf(shack.shack.post(path, { email: 'p20@example.invalid', role: 'listen' }, 429)), 'tryLater')
+  // The day's allowance aside, the twenty already invited are the most a station holds: a twenty-first
+  // is refused, and changing one already there is not.
+  await app.db.prepare('DELETE FROM rate_limits').run()
+  assert.equal(await errorOf(shack.shack.post(path, { email: 'p20@example.invalid', role: 'listen' }, 409)), 'inviteLimit')
+  await shack.shack.post(path, { email: 'p3@example.invalid', role: 'operate' })
+  await shack.shack.post(`stations/${shack.stationId}/native/uninvite`, { email: 'p4@example.invalid' })
+  await shack.shack.post(path, { email: 'p20@example.invalid', role: 'listen' })
 })
 
 test('a guest uses the internet on the owner\'s plan, and only on station business', async () => {
