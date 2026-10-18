@@ -18,6 +18,10 @@ it('reads every message this computer’s Nexus sends, and passes the station’
   expect(readTold({ type: 'internetRefused', reason: 'internetNotIncluded' })).toEqual({ type: 'internetRefused', reason: 'internetNotIncluded' })
   expect(readTold({ type: 'stations', stations: [], computer: '', error: 'storeUnavailable' })).toMatchObject({ error: 'storeUnavailable' })
   expect(readTold({ type: 'paired', station: STATION })).toEqual({ type: 'paired', station: STATION })
+  for (const typedAddress of ['shack-pc.local:42075', '192.168.1.44:42080', `${'a'.repeat(253)}:42075`]) {
+    const kept = { ...STATION, typedAddress }
+    expect(readTold({ type: 'stations', stations: [kept], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [kept], internet: [], computer: 'DEN-PC', error: null, forgetUnreached: null })
+  }
   expect(readTold({ type: 'pairRefused', reason: 'wrongCode' })).toEqual({ type: 'pairRefused', reason: 'wrongCode' })
   const road = { stationId: STATION.id, deviceId: '1d2b7c3a-4e5f-8a6b-9c7d-0e1f2a3b4c5d', sessionId: '50000000-0000-4000-8000-000000000002', stationKey: KEY, address: '192.168.1.20:42075' }
   expect(readTold({ type: 'connected', ...road })).toEqual({ type: 'connected', road })
@@ -33,6 +37,10 @@ it('refuses anything else: another word, a field too many or too few, a reason n
   for (const told of [
     { type: 'runCommand' },
     { type: 'stations', stations: [STATION], computer: 'X', extra: 1 },
+    { type: 'stations', stations: [{ ...STATION, typedAddress: 'Shack PC:42075' }], computer: 'X' },
+    { type: 'stations', stations: [{ ...STATION, typedAddress: 'shack-pc.local' }], computer: 'X' },
+    { type: 'stations', stations: [{ ...STATION, typedAddress: `${'a'.repeat(254)}:42075` }], computer: 'X' },
+    { type: 'stations', stations: [{ ...STATION, typedAddress: null }], computer: 'X' },
     { type: 'stations', stations: [{ ...STATION, pkcs8: '00' }], computer: 'X' },
     { type: 'stations', stations: [{ ...STATION, key: 'AB'.repeat(32) }], computer: 'X' },
     { type: 'paired' },

@@ -15,12 +15,14 @@ const STATION: &str = "60000000-0000-4000-8000-000000000001";
 const DEVICE: &str = "1d2b7c3a-4e5f-8a6b-9c7d-0e1f2a3b4c5d";
 
 /// The OS credential store, in memory, as `StationVault` sees it: JSON in each entry, Windows'
-/// size limit on every write, a lock, and a count of the writes.
+/// size limit on every write, a lock, a count of the writes, and a count of the reads of the
+/// entries that hold a station's keys.
 #[derive(Clone, Default)]
 pub(crate) struct StationStore {
     pub(crate) entries: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
     pub(crate) locked: Arc<AtomicBool>,
     pub(crate) writes: Arc<AtomicUsize>,
+    pub(crate) key_reads: Arc<AtomicUsize>,
 }
 
 impl StationStore {
@@ -59,6 +61,7 @@ impl StationVault for StationStore {
         self.put("lan-stations".into(), serde_json::to_string(list).unwrap())
     }
     fn paired_station(&self, id: &str) -> Result<Option<PairedStation>, &'static str> {
+        self.key_reads.fetch_add(1, Ordering::SeqCst);
         self.get(&format!("lan-station-{id}"))
     }
     fn save_paired_station(&self, station: &PairedStation) -> Result<(), &'static str> {
@@ -79,6 +82,7 @@ impl StationVault for StationStore {
         Ok(())
     }
     fn internet_road(&self, id: &str) -> Result<Option<InternetRoad>, &'static str> {
+        self.key_reads.fetch_add(1, Ordering::SeqCst);
         self.get(&format!("lan-internet-{id}"))
     }
     fn save_internet_road(&self, id: &str, road: &InternetRoad) -> Result<(), &'static str> {
@@ -511,11 +515,12 @@ fn reach(store: StationStore) -> Reach {
         _ => None,
     });
     Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         assets,
         stations: Arc::new(Stations::new(Arc::new(store))),
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
-        operate: Arc::new(|_| {}),
+        operate: Arc::new(|_, _| {}),
         add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
         forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     }
@@ -702,6 +707,388 @@ async fn the_pages_socket_answers_its_own_words_only() {
     );
 }
 
+/// ★ Operate at the address the operator typed: the page's `operate` carries it, read as the
+/// stations window reads a typed address, and Nexus starts again driving the station there first.
+/// The station must still be one paired here, and the key pinned for it is what the launch checks.
+/// CONTROL: with none typed the station's own addresses are used (no address goes along); an
+/// address the window would not take is refused by name and nothing starts; a station not paired
+/// here is refused though an address was typed.
+#[tokio::test]
+async fn operate_takes_the_address_the_operator_typed() {
+    let store = StationStore::default();
+    Stations::new(Arc::new(store.clone()))
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    let started = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut reach = reach(store);
+    reach.operate = {
+        let started = started.clone();
+        Arc::new(move |station, typed| started.lock().unwrap().push((station, typed)))
+    };
+    reach.lookup = shack_pc_at("192.168.1.44");
+    let origin = Origin::start(reach).unwrap();
+    let mut socket = page_socket(&origin).await;
+    let told = said(
+        &mut socket,
+        json!({"type":"operate","stationId":STATION,"address":" 192.168.1.30:42076 "}),
+    )
+    .await;
+    assert_eq!(told, json!({"type":"operating"}));
+    let told = said(
+        &mut socket,
+        json!({"type":"operate","stationId":STATION,"address":"192.168.1.31"}),
+    )
+    .await;
+    assert_eq!(told, json!({"type":"operating"}));
+    let told = said(&mut socket, json!({"type":"operate","stationId":STATION})).await;
+    assert_eq!(told, json!({"type":"operating"}));
+    let told = said(
+        &mut socket,
+        json!({"type":"operate","stationId":STATION,"address":"Shack-PC.local:42080"}),
+    )
+    .await;
+    assert_eq!(told, json!({"type":"operating"}));
+    let told = said(
+        &mut socket,
+        json!({"type":"operate","stationId":STATION,"address":"nowhere.local"}),
+    )
+    .await;
+    assert_eq!(
+        told,
+        json!({"type":"connectRefused","reason":"nameUnresolved"})
+    );
+    let told = said(
+        &mut socket,
+        json!({"type":"operate","stationId":STATION,"address":"shack_pc.local"}),
+    )
+    .await;
+    assert_eq!(told, json!({"type":"connectRefused","reason":"badAddress"}));
+    let other = "60000000-0000-4000-8000-000000000009";
+    let told = said(
+        &mut socket,
+        json!({"type":"operate","stationId":other,"address":"192.168.1.30"}),
+    )
+    .await;
+    assert_eq!(
+        told,
+        json!({"type":"connectRefused","reason":"unknownStation"})
+    );
+    assert_eq!(
+        *started.lock().unwrap(),
+        vec![
+            (
+                STATION.to_string(),
+                Some(Typed::At("192.168.1.30:42076".parse().unwrap()))
+            ),
+            (
+                STATION.to_string(),
+                Some(Typed::At("192.168.1.31:42075".parse().unwrap()))
+            ),
+            (STATION.to_string(), None),
+            (
+                STATION.to_string(),
+                Some(Typed::Name {
+                    host: "shack-pc.local".into(),
+                    port: 42080
+                })
+            ),
+        ]
+    );
+    // The stream takes a name too, looked up when it is tried.
+    let told = said(
+        &mut socket,
+        json!({"type":"connect","stationId":STATION,"address":"nowhere.local"}),
+    )
+    .await;
+    assert_eq!(
+        told,
+        json!({"type":"connectRefused","reason":"nameUnresolved"})
+    );
+}
+
+/// A lookup where `shack-pc.local` is at `ip` and no other name resolves.
+pub(crate) fn shack_pc_at(ip: &str) -> tempo_stream::lan::Lookup {
+    let ip: std::net::IpAddr = ip.parse().unwrap();
+    Arc::new(move |host: &str, _| {
+        if host == "shack-pc.local" {
+            vec![ip]
+        } else {
+            Vec::new()
+        }
+    })
+}
+
+/// A file for what the operator typed for each station, in a folder of its own that is not there
+/// yet: the folder, to remove, and the file.
+pub(crate) fn typed_file(label: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "nexus-lan-typed-{label}-{}-{nanos}",
+        std::process::id()
+    ));
+    let file = dir.join("lan-typed.json");
+    (dir, file)
+}
+
+/// The typed file as JSON, or none when there is no file.
+fn typed_on_disk(file: &std::path::Path) -> Option<Value> {
+    std::fs::read_to_string(file)
+        .ok()
+        .map(|text| serde_json::from_str(&text).unwrap())
+}
+
+/// ★ The address Operate tries first is kept in a file of its own, outside the credential store,
+/// as typed, changed or cleared from the station's row, and shown there; Forget removes that
+/// station's line, so the station paired again has none. Something that is neither an address nor
+/// a name is refused and changes nothing. Throughout, the credential entries that hold the
+/// stations' keys are never written: each is byte-identical to how pairing left it, and the
+/// store's write count does not move. CONTROL: another station's line and entry are untouched by
+/// the first one's forget.
+#[tokio::test]
+async fn the_address_operate_tries_first_is_kept_changed_cleared_and_forgotten() {
+    let (dir, file) = typed_file("kept");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).typed_in(file.clone());
+    let other = "60000000-0000-4000-8000-000000000009";
+    stations
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    stations
+        .keep(&record(other, &["192.168.1.21:42075"]))
+        .unwrap();
+    let (entry, other_entry) = (
+        format!("lan-station-{STATION}"),
+        format!("lan-station-{other}"),
+    );
+    let (paired, other_paired) = (store.raw(&entry).unwrap(), store.raw(&other_entry).unwrap());
+    let writes = store.writes.load(Ordering::SeqCst);
+    let untouched = || {
+        assert_eq!(store.raw(&other_entry).as_ref(), Some(&other_paired));
+        assert_eq!(
+            store.writes.load(Ordering::SeqCst),
+            writes,
+            "a credential entry written"
+        );
+    };
+    let mut reached = reach(store.clone());
+    reached.stations = Arc::new(Stations::new(Arc::new(store.clone())).typed_in(file.clone()));
+    let origin = Origin::start(reached).unwrap();
+    let mut socket = page_socket(&origin).await;
+    let shown = |told: &Value| told["stations"][0]["typedAddress"].clone();
+    let told = said(&mut socket, json!({"type":"stations"})).await;
+    assert_eq!(shown(&told), Value::Null, "{told}");
+    assert_eq!(typed_on_disk(&file), None, "nothing typed, no file");
+    let told = said(
+        &mut socket,
+        json!({"type":"keepAddress","stationId":STATION,"address":" Shack-PC.local "}),
+    )
+    .await;
+    assert_eq!(shown(&told), json!("shack-pc.local:42075"), "{told}");
+    assert_eq!(
+        typed_on_disk(&file),
+        Some(json!({ STATION: "shack-pc.local:42075" }))
+    );
+    assert_eq!(store.raw(&entry).as_ref(), Some(&paired));
+    untouched();
+    let told = said(
+        &mut socket,
+        json!({"type":"keepAddress","stationId":other,"address":"192.168.1.44:42080"}),
+    )
+    .await;
+    assert_eq!(
+        told["stations"][1]["typedAddress"],
+        json!("192.168.1.44:42080")
+    );
+    let told = said(
+        &mut socket,
+        json!({"type":"keepAddress","stationId":STATION,"address":"shack pc"}),
+    )
+    .await;
+    assert_eq!(told, json!({"type":"connectRefused","reason":"badAddress"}));
+    let both = json!({ STATION: "shack-pc.local:42075", other: "192.168.1.44:42080" });
+    assert_eq!(typed_on_disk(&file), Some(both.clone()));
+    let told = said(
+        &mut socket,
+        json!({"type":"keepAddress","stationId":STATION,"address":null}),
+    )
+    .await;
+    assert_eq!(shown(&told), Value::Null, "{told}");
+    assert_eq!(
+        typed_on_disk(&file),
+        Some(json!({ other: "192.168.1.44:42080" }))
+    );
+    assert_eq!(store.raw(&entry).as_ref(), Some(&paired));
+    untouched();
+    let told = said(
+        &mut socket,
+        json!({"type":"keepAddress","stationId":STATION,"address":"shack-pc.local"}),
+    )
+    .await;
+    assert_eq!(shown(&told), json!("shack-pc.local:42075"), "{told}");
+    assert_eq!(typed_on_disk(&file), Some(both));
+    assert_eq!(store.raw(&entry).as_ref(), Some(&paired));
+    untouched();
+    let told = said(&mut socket, json!({"type":"forget","stationId":STATION})).await;
+    assert_eq!(told["stations"].as_array().unwrap().len(), 1, "{told}");
+    assert_eq!(
+        told["stations"][0]["typedAddress"],
+        json!("192.168.1.44:42080")
+    );
+    assert_eq!(store.raw(&entry), None);
+    assert_eq!(
+        typed_on_disk(&file),
+        Some(json!({ other: "192.168.1.44:42080" })),
+        "the forgotten station's line gone, the other's kept"
+    );
+    assert_eq!(store.raw(&other_entry).as_ref(), Some(&other_paired));
+    stations
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    assert_eq!(
+        stations.typed(STATION),
+        None,
+        "paired again, nothing typed is kept"
+    );
+    let unpaired = "60000000-0000-4000-8000-00000000000a";
+    let told = said(
+        &mut socket,
+        json!({"type":"keepAddress","stationId":unpaired,"address":"shack-pc.local"}),
+    )
+    .await;
+    assert_eq!(
+        told,
+        json!({"type":"connectRefused","reason":"unknownStation"})
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// ★ Keeping, changing and clearing what the operator typed reads no credential entry that holds
+/// a station's keys, and writes none: only the list of paired stations (ids, no keys) is asked
+/// whether the station is paired here. A Stations started again on the same file (Nexus started
+/// again) reads it back. CONTROL: reading a station's record does count, so the count can move.
+#[test]
+fn keeping_what_was_typed_reads_and_writes_no_key() {
+    let (dir, file) = typed_file("no-key");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).typed_in(file.clone());
+    stations
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    let (reads, writes) = (
+        store.key_reads.load(Ordering::SeqCst),
+        store.writes.load(Ordering::SeqCst),
+    );
+    let name = tempo_stream::lan::Typed::read("shack-pc.local").unwrap();
+    stations.keep_typed(STATION, Some(&name)).unwrap();
+    let at = tempo_stream::lan::Typed::read("192.168.1.44").unwrap();
+    stations.keep_typed(STATION, Some(&at)).unwrap();
+    assert_eq!(
+        stations.keep_typed(&id(9), Some(&at)),
+        Err("unknownStation")
+    );
+    assert_eq!(
+        store.key_reads.load(Ordering::SeqCst),
+        reads,
+        "a key entry read"
+    );
+    assert_eq!(
+        store.writes.load(Ordering::SeqCst),
+        writes,
+        "a credential entry written"
+    );
+    let again = Stations::new(Arc::new(store.clone())).typed_in(file.clone());
+    assert_eq!(again.typed(STATION), Some(at));
+    stations.keep_typed(STATION, None).unwrap();
+    assert_eq!(again.typed(STATION), None);
+    assert_eq!(
+        store.key_reads.load(Ordering::SeqCst),
+        reads,
+        "a key entry read"
+    );
+    assert_eq!(
+        store.writes.load(Ordering::SeqCst),
+        writes,
+        "a credential entry written"
+    );
+    stations.get(STATION).unwrap().unwrap();
+    assert_eq!(store.key_reads.load(Ordering::SeqCst), reads + 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// ★ A typed file that is missing, not JSON, or holds what this module would never write reads as
+/// nothing typed: the station is still listed, paired as it was, and Operate tries nothing first.
+/// Keeping a value over a broken file writes a sound one with that value alone, and a write drops
+/// lines for stations not paired here. CONTROL: a sound line beside a broken one is still read.
+#[test]
+fn a_missing_or_broken_typed_file_is_nothing_typed_and_costs_nothing_else() {
+    let (dir, file) = typed_file("broken");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).typed_in(file.clone());
+    stations
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    stations
+        .keep(&record(&id(9), &["192.168.1.21:42075"]))
+        .unwrap();
+    let listed = || stations.list().unwrap();
+    let shown = || -> Vec<Option<String>> {
+        listed()
+            .into_iter()
+            .map(|view| view.typed_address)
+            .collect()
+    };
+    assert_eq!(listed().len(), 2);
+    assert_eq!(shown(), vec![None, None], "no file");
+    assert_eq!(stations.typed(STATION), None);
+    std::fs::create_dir_all(&dir).unwrap();
+    for broken in [
+        "{ not json",
+        "[\"shack-pc.local:42075\"]",
+        "",
+        "{\"60000000-0000-4000-8000-000000000001\": 42075}",
+    ] {
+        std::fs::write(&file, broken).unwrap();
+        assert_eq!(shown(), vec![None, None], "{broken}");
+        assert_eq!(stations.typed(STATION), None, "{broken}");
+    }
+    let mixed =
+        json!({ STATION: "shack pc", id(9): "shack-pc.local:42075", "not an id": "radio-pc" });
+    std::fs::write(&file, mixed.to_string()).unwrap();
+    assert_eq!(
+        shown(),
+        vec![None, Some("shack-pc.local:42075".to_string())]
+    );
+    assert_eq!(stations.typed(STATION), None);
+    let padded = json!({ id(9): "shack-pc.local:42075", "pad": "x".repeat(17 * 1024) });
+    std::fs::write(&file, padded.to_string()).unwrap();
+    assert_eq!(
+        shown(),
+        vec![None, None],
+        "a file too big to be one this module wrote"
+    );
+    let unpaired = json!({ STATION: "radio-pc.local:42075", id(10): "shack-pc.local:42075" });
+    std::fs::write(&file, unpaired.to_string()).unwrap();
+    let ours = tempo_stream::lan::Typed::read("192.168.1.45").unwrap();
+    stations.keep_typed(&id(9), Some(&ours)).unwrap();
+    assert_eq!(
+        typed_on_disk(&file),
+        Some(json!({ STATION: "radio-pc.local:42075", id(9): "192.168.1.45:42075" })),
+        "a line for a station not paired here goes with the write"
+    );
+    std::fs::write(&file, "{ not json").unwrap();
+    let at = tempo_stream::lan::Typed::read("192.168.1.44:42080").unwrap();
+    stations.keep_typed(STATION, Some(&at)).unwrap();
+    assert_eq!(
+        typed_on_disk(&file),
+        Some(json!({ STATION: "192.168.1.44:42080" }))
+    );
+    assert_eq!(listed().len(), 2, "both stations still paired");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// ★ Forget on this computer ends the internet road's approval at the service too, with the road
 /// it kept (signed by that road's key, `internet::Service::forget`), and then forgets here. The
 /// service out of reach is said (`forgetUnreached`) and the station is forgotten here all the same.
@@ -735,6 +1122,7 @@ async fn forgetting_a_station_ends_its_internet_road_at_the_service_first() {
         let asked: Arc<Mutex<Vec<String>>> = Arc::default();
         let told = asked.clone();
         let origin = Origin::start(Reach {
+            lookup: Arc::new(tempo_stream::lan::lookup),
             forget_internet: Arc::new(move |road: InternetRoad| {
                 told.lock().unwrap().push(road.pkcs8);
                 Box::pin(async move { service })
@@ -787,6 +1175,7 @@ async fn the_page_picks_the_station_while_the_internet_road_is_added() {
         let picked: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
         let kept = picked.clone();
         let origin = Origin::start(Reach {
+            lookup: Arc::new(tempo_stream::lan::lookup),
             add_internet: Arc::new(move |_, choose| {
                 let kept = kept.clone();
                 Box::pin(async move {
@@ -860,6 +1249,23 @@ async fn the_page_picks_the_station_while_the_internet_road_is_added() {
     }
 }
 
+/// What the page's socket answers `word` with.
+async fn said(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    word: Value,
+) -> Value {
+    socket
+        .send(Message::Text(word.to_string().into()))
+        .await
+        .unwrap();
+    let Some(Ok(Message::Text(text))) = socket.next().await else {
+        panic!("no answer to {word}")
+    };
+    serde_json::from_str(&text).unwrap()
+}
+
 /// The window's own page socket on `origin`: the secret in its path and the window's own origin.
 async fn page_socket(
     origin: &Origin,
@@ -902,6 +1308,7 @@ async fn the_pages_find_offers_the_stations_found_by_name() {
     let looks = Arc::new(AtomicUsize::new(0));
     let (counted, found) = (looks.clone(), vec![long, shack.clone()]);
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         find: Arc::new(move |wait| {
             assert_eq!(wait, origin::FIND_FOR);
             counted.fetch_add(1, Ordering::SeqCst);
@@ -940,6 +1347,7 @@ async fn the_pages_find_offers_the_stations_found_by_name() {
     drop(origin);
 
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         find: Arc::new(|_| Err(Unavailable)),
         ..reach(StationStore::default())
     })

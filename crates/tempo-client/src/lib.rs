@@ -166,6 +166,10 @@ pub struct StationView {
     pub id: String,
     pub addresses: Vec<String>,
     pub key: String,
+    /// The address or host name Operate tries first, as the operator typed it, when one is kept
+    /// (beside the record, never in it: [`StationView::of`] gives none).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub typed_address: Option<String>,
 }
 
 impl StationView {
@@ -175,6 +179,7 @@ impl StationView {
             id: record.station_id.clone(),
             addresses: record.addresses.clone(),
             key: hex(digest(&SHA256, &spki).as_ref()),
+            typed_address: None,
         })
     }
 }

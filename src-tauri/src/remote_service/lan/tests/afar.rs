@@ -259,7 +259,7 @@ impl Afield {
             screens.main.app_handle().clone(),
             find,
             Arc::new(|_| Ok(Vec::new())),
-            Some(lan),
+            Some(tempo_stream::lan::Typed::At(lan)),
         ));
         Self {
             app,

@@ -146,7 +146,7 @@ fn driving(r: &Roadside, name: &str) -> Driving {
         main.app_handle().clone(),
         find,
         Arc::new(|_| Ok(Vec::new())),
-        Some(at),
+        Some(tempo_stream::lan::Typed::At(at)),
     ));
     let polling = Arc::new(AtomicBool::new(true));
     {

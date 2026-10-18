@@ -2398,7 +2398,7 @@ fn client_mode_keeps_presence_and_stops_the_station_on_the_road() {
         screens.main.app_handle().clone(),
         find,
         Arc::new(|_| Ok(Vec::new())),
-        Some(at),
+        Some(tempo_stream::lan::Typed::At(at)),
     ));
     let presence = || {
         r.s.shared

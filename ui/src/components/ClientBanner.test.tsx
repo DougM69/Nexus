@@ -104,6 +104,7 @@ describe('on a computer driving a station', () => {
     for (const [reason, sentence] of [
       ['updateStation', EN['lanWindow.reason.updateStation']],
       ['keyChanged', EN['lanWindow.reason.keyChanged']],
+      ['nameUnresolved', EN['lanWindow.reason.nameUnresolved']],
       ['otherBuild', EN['client.reason.otherBuild']],
       ['localPermissionRequired', EN['client.reason.localPermissionRequired']],
       ['somethingNew', EN['client.reason.unknown']],
