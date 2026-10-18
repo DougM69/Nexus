@@ -113,6 +113,9 @@ export function appApiAnswers(): Record<string, unknown> {
     setOperatingMode: vi.fn(async () => APP_SNAPSHOT),
     setArea: vi.fn(async () => APP_SNAPSHOT),
     appVersion: vi.fn(async () => '0.0.0-test'),
+    // A computer running its own station: the backend answers None, and the banner asks once. The
+    // catch-all's `{}` would read as driving a remote station, asked every half second.
+    clientStatus: vi.fn(async () => null),
     selectPeer: vi.fn(async () => APP_SNAPSHOT),
     getDxccEntityLocations: vi.fn(async () => []),
     // Connect's feeds, as the dashboard rail beside a cockpit reads them.

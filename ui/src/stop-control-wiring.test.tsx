@@ -287,6 +287,9 @@ function respond(cmd: string, args?: Record<string, unknown>): unknown {
   // The log's questions go unanswered, as the whole-log read (answered `{}`) did: no view here
   // needs the log, and `{}` is no answer to any of them.
   if (cmd === 'ask_log') throw new Error('no log in this test')
+  // A computer running its own station: the backend answers None, and the banner asks once. The
+  // catch-all's `{}` would read as driving a remote station, asked every half second.
+  if (cmd === 'client_status') return null
   return {}
 }
 

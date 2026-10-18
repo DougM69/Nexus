@@ -106,6 +106,9 @@ vi.mock('./api', async (importOriginal) => {
   }
   return {
     ...auto,
+    // A computer running its own station: the backend answers None, and the banner asks once. The
+    // catch-all's `{}` would read as driving a remote station, asked every half second.
+    clientStatus: vi.fn(async () => null),
     // The engine's log questions go unanswered here, as the whole-log read (answered `{}`) did.
     askLog: vi.fn(async () => {
       throw new Error('no log in this test')

@@ -37,6 +37,9 @@ vi.mock('./api', async (importOriginal) => {
   }
   return {
     ...auto,
+    // A computer running its own station: the backend answers None, and the banner asks once. The
+    // catch-all's `{}` would read as driving a remote station, asked every half second.
+    clientStatus: vi.fn(async () => null),
     getSnapshot: vi.fn(async () => state.snap),
     subscribeSnapshot: vi.fn((next: (s: unknown) => void) => {
       state.push = next
