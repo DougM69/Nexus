@@ -74,6 +74,7 @@ import { CallStatsFrame, statsHere, useStatsRoom, withStats, withStatsRoom } fro
 import { ContestScoreChip } from './ContestScoreChip'
 import {
   setPtt,
+  holdPttLock,
   armStreamMic,
   releaseStreamMic,
   setRfPower,
@@ -1086,20 +1087,43 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   // leave its over on the air. The press arms the station's microphone over for this computer's
   // headset, and its voice keys it. A press the station refused, or that ended other than by the
   // release (a Stop, the station, the link), reads Ended until the PTT is let go.
+  //
+  // LOCK FROM THERE IS THE SAME HELD PRESS, re-asserted by this timer with no finger on PTT
+  // (`hold_ptt_lock`), so every rule of a held press holds at the station: its 200 ms gaps, presence
+  // and Stop on either road. Client mode ends it at its cap (`tempo_client::phone_lock`) unless the
+  // operator answers "Still talking?", asked here shortly before; the answer rides the next hold.
   const driving = drivesAnotherStation()
   const holding = useRef<ReturnType<typeof setInterval> | null>(null)
   const [pressEnded, setPressEnded] = useState(false)
+  const [stillAsk, setStillAsk] = useState<number | null>(null)
+  const answered = useRef(false)
   const stopHolding = () => {
     if (holding.current !== null) clearInterval(holding.current)
     holding.current = null
+    answered.current = false
+    setStillAsk(null)
+  }
+  const pressEndedBy = (why: unknown) => {
+    if (holding.current === null) return
+    stopHolding()
+    setPressEnded(true)
+    pushToast(String(why), 'info', 4000)
   }
   const holdAgain = () => {
-    void setPtt(true).catch((why) => {
-      if (holding.current === null) return
-      stopHolding()
-      setPressEnded(true)
-      pushToast(String(why), 'info', 4000)
-    })
+    void setPtt(true).catch(pressEndedBy)
+  }
+  const lockAgain = () => {
+    const still = answered.current
+    answered.current = false
+    void holdPttLock(still)
+      .then((said) => {
+        if (holding.current !== null) setStillAsk(said.ask ? (said.leftMs ?? 0) : null)
+      })
+      .catch(pressEndedBy)
+  }
+  const keepTalking = () => {
+    answered.current = true
+    setStillAsk(null)
   }
   const key = (on: boolean) => {
     if (!control) return
@@ -1154,16 +1178,13 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
       return
     }
     if (on && driving) {
-      // Push-to-talk only, as over the stream.
-      if (lock) {
-        pushToast(t('phone.tx.remoteLock'), 'info', 4000)
-        return
-      }
+      // Held, or Locked: the same press, re-asserted from here until it is let go.
+      const again = lock ? lockAgain : holdAgain
       setKeyed(true)
       setPressEnded(false)
       stopHolding()
-      holding.current = setInterval(holdAgain, STREAM_PTT_REASSERT_MS)
-      holdAgain()
+      holding.current = setInterval(again, STREAM_PTT_REASSERT_MS)
+      again()
       return
     }
     if (!on) {
@@ -1259,6 +1280,21 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
       )
       .finally(() => setRecBusy(false))
   }
+
+  // "Still talking?": K answers it, unless typing in a field. Never Space or Enter, which a focused
+  // PTT takes as its unkey in Lock: an answer must never swallow a stop.
+  useEffect(() => {
+    if (stillAsk === null) return
+    const down = (e: KeyboardEvent) => {
+      const field = e.target instanceof HTMLElement && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')
+      if (e.code === 'KeyK' && !e.repeat && !field) {
+        e.preventDefault()
+        keepTalking()
+      }
+    }
+    window.addEventListener('keydown', down)
+    return () => window.removeEventListener('keydown', down)
+  }, [stillAsk])
 
   // Spacebar = push-to-talk (hold), unless typing in a field or pressing a control in the ⊞ menu.
   useEffect(() => {
@@ -3280,6 +3316,16 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
           <input disabled={!control} type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
           <span>Lock</span>
         </label>
+        {/* "STILL TALKING?" for a Lock from afar, after PTT and Lock so it never moves them under a
+            pointer. Unanswered, the Lock ends at its cap. */}
+        {driving && lock && keyed && !pressEnded && stillAsk !== null && (
+          <span className="ph-still-talking" role="alert">
+            <span>{t('phone.lock.stillTalking', { seconds: Math.ceil(stillAsk / 1000) })}</span>
+            <button type="button" onClick={keepTalking}>
+              {t('phone.lock.keepTalking')}
+            </button>
+          </span>
+        )}
         {/* ENTER SENDS MESSAGE's switch and plate, while a contest runs: AFTER PTT and Lock, and
             taking only the room left, so nothing it says can move PTT under a held pointer. */}
         {esmSetting && fieldDay && control && (

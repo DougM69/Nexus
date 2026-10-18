@@ -1388,6 +1388,11 @@ pub struct Settings {
     /// Enter asks for a repeat instead of sending it again. OFF by default.
     #[serde(default)]
     pub contest_esm_call_once: bool,
+    /// The contest entry's optional "RST sent" box (N1MM's Snt): beside the received report, it
+    /// shows the report this contact will log as sent, and a report typed there replaces it for
+    /// that contact only. OFF by default, and then the entry is exactly what it always was.
+    #[serde(default)]
+    pub contest_rst_sent_box: bool,
     /// Power multiplier tier: 5 = QRP battery/natural, 2 = <=150 W, 1 = >150 W.
     #[serde(default = "default_fd_power")]
     pub fd_power_mult: u32,
@@ -5180,6 +5185,7 @@ impl Default for Settings {
             contest_esm_rtty: false,
             contest_esm_phone: false,
             contest_esm_call_once: false,
+            contest_rst_sent_box: false,
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
             fd_bonuses_planned: Vec::new(),
@@ -12542,6 +12548,34 @@ mod tests {
         );
         // CONTROL: the scan finds only what is declared.
         assert!(!declares("contestEsm") && !declares("contestEsmCW"));
+    }
+
+    /// The contest entry's "RST sent" box: OFF on a fresh install, on its exact wire key, back from
+    /// the real file as it went in, and declared in `ui/src/types.ts`.
+    #[test]
+    fn contest_rst_sent_box_ships_off_round_trips_and_has_a_ts_mirror() {
+        assert!(!Settings::default().contest_rst_sent_box);
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains("\"contestRstSentBox\":false"), "{json}");
+        let path = scratch_dir("rst_sent_box").join("settings.json");
+        for want in [true, false] {
+            let s = Settings {
+                contest_rst_sent_box: want,
+                ..Settings::default()
+            };
+            s.save(&path).unwrap();
+            assert_eq!(Settings::load(&path).contest_rst_sent_box, want);
+        }
+        let _ = std::fs::remove_file(&path);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let start = ts.find("export interface Settings {").expect("Settings");
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("closed")];
+        assert!(
+            body.lines()
+                .any(|l| l.trim_start().starts_with("contestRstSentBox?:")),
+            "ui/src/types.ts Settings is missing `contestRstSentBox`"
+        );
     }
 
     /// Each ESM switch survives a restart: on by itself, it comes back from the real file as it

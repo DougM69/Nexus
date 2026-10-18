@@ -29,6 +29,7 @@
   "contestEsmRtty": false,
   "contestEsmPhone": false,
   "contestEsmCallOnce": false,
+  "contestRstSentBox": false,
   "fdPowerMult": 2,
   "fdBonuses": [],
   "n3fjpHost": "",

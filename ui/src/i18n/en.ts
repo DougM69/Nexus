@@ -659,6 +659,7 @@ export const EN = {
   "client.refused.noPresence": "The station has not heard this computer’s Stop link in the last 5 seconds, so it takes no transmission from here. Nothing was sent.",
   "client.refused.staleState": "What this screen shows of the station is more than 2 seconds old, so the station takes no transmission from here until it catches up. Nothing was sent.",
   "client.refused.pressEnded": "Your PTT press has ended. Let go of PTT and press again to talk.",
+  "client.refused.lockCapped": "Lock ended at its time limit: nobody answered “Still talking?”. Click PTT to let go, then again to talk.",
   "client.refused.recording": "A voice message is being recorded on this computer. Stop the recording, then press PTT.",
   "client.refused.pressHeld": "The PTT is held on this computer. Let go of PTT, then record.",
   "client.refused.typedPassword": "A password typed here is never sent: the station uses the one it has stored.",
@@ -1890,6 +1891,8 @@ export const EN = {
   'logEntry.fd.dupe.ownAnyBandOrMode':
     'Dupe: {{call}} is already in this position\'s log — this contest counts a station once, regardless of band or mode',
   'logEntry.fd.dupe.badge': 'DUPE',
+  'logEntry.fd.rstSent.label': 'RST sent',
+  'logEntry.fd.rstSent.title': 'The report this contact logs as sent: {{rst}} unless you type another here, for this contact only. Space and Tab skip this box; click it, or press Shift+Tab from the received report, to change it.',
   'logEntry.fd.dupe.workedAt': '{{time}} {{band}} {{mode}}',
   'logEntry.fd.dupe.workedOn': '{{band}} {{mode}}',
   'logEntry.fd.loggedDupe': 'Logged {{call}} {{exchange}} ({{mode}}) as a DUPE: worked before, it scores no points',
@@ -4566,6 +4569,8 @@ export const EN = {
   // section placeholder (WI) and the section list itself, which is data.
   'settings.contestCategory.legend': 'Your entry',
   'settings.contestPick.legend': 'Contest',
+  'settings.contestPick.rstSent.label': 'Show the RST sent box',
+  'settings.contestPick.rstSent.hint': 'Adds an RST sent box to the contest entry, beside the received report. It shows the report each contact logs as sent (59 on phone, 599 on CW and digital), and a report typed there is logged for that contact only. Space and Tab skip it. It shows only in contests whose exchange sends a report.',
   'settings.contestPick.contest.label': 'Contest',
   'settings.contestPick.contest.aria': 'Which contest you are entering',
   'settings.contestPick.contest.hint':
@@ -11368,6 +11373,9 @@ export const EN = {
   'phone.tx.usbOnly': 'TX locked — 60 m allows only USB phone. Pick USB or AUTO.',
   'phone.tx.turnedBackOn': 'TX was off — turned it back on. Press PTT again to talk.',
   'phone.tx.remoteLock': 'Lock (hands-free PTT) does not work over Remote. Untick Lock, then hold PTT or the Space bar to talk.',
+  // Lock from a computer driving a station: asked shortly before its time limit, and the answer.
+  'phone.lock.stillTalking': 'Still talking? Lock ends in {{seconds}} s.',
+  'phone.lock.keepTalking': 'Keep talking (K)',
   'phone.tx.clockRepair':
     'Not keyed: a clock repair is running, and nothing starts transmitting until it finishes (two minutes at most).',
 

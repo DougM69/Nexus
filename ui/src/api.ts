@@ -739,13 +739,19 @@ export async function notifyErase(window: 0 | 1 | 2): Promise<void> {
  * contest means what by position.
  *
  * ⚠️ `mode` IS THE SCORING CLASS and `submode` IS THE MODE THAT WAS ON THE AIR — see
- * `fdLogManual` below, whose two notes apply here unchanged. */
+ * `fdLogManual` below, whose two notes apply here unchanged.
+ *
+ * `sentRst` is the report typed in the entry's optional "RST sent" box, logged as sent for this
+ * contact only (2 digits on phone, 3 on CW and digital, or the engine refuses it). Omitted when
+ * nothing was typed there, and then the arguments are exactly what they always were; the same on
+ * the two commands below. */
 export async function contestLogManual(
   call: string,
   fields: [string, string][],
   mode: 'CW' | 'PH' | 'DIG',
   submode?: string,
   entry?: EntryClaim,
+  sentRst?: string,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('contest_log_manual', {
     call,
@@ -753,6 +759,7 @@ export async function contestLogManual(
     mode,
     submode: submode ?? null,
     ...(entry ? { entry } : {}),
+    ...(sentRst ? { sentRst } : {}),
   })
 }
 
@@ -795,6 +802,7 @@ export async function contestLogManualRows(
   mode: 'CW' | 'PH' | 'DIG',
   submode?: string,
   entry?: EntryClaim,
+  sentRst?: string,
 ): Promise<boolean[]> {
   return invoke<boolean[]>('contest_log_manual_rows', {
     call,
@@ -802,6 +810,7 @@ export async function contestLogManualRows(
     mode,
     submode: submode ?? null,
     ...(entry ? { entry } : {}),
+    ...(sentRst ? { sentRst } : {}),
   })
 }
 
@@ -957,6 +966,7 @@ export async function contestLogSatellite(
   mode: 'CW' | 'PH' | 'DIG',
   submode?: string,
   entry?: EntryClaim,
+  sentRst?: string,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('contest_log_satellite', {
     call,
@@ -964,6 +974,7 @@ export async function contestLogSatellite(
     mode,
     submode: submode ?? null,
     ...(entry ? { entry } : {}),
+    ...(sentRst ? { sentRst } : {}),
   })
 }
 
@@ -2488,6 +2499,14 @@ export async function setCwKeyer(
 /** Manual PTT for live phone — key (true) / unkey (false) the rig. */
 export async function setPtt(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_ptt', { on })
+}
+
+/** Phone's Lock, re-asserted from a computer driving a station: one hold of its held press on the
+ *  station's Stop road (`src-tauri/src/client_mode.rs`), `stillTalking` the operator's answer to
+ *  "Still talking?". Resolves whether that is asked, and how long is left before the Lock's cap;
+ *  fails once the press has ended (`lockCapped` at the cap). */
+export async function holdPttLock(stillTalking: boolean): Promise<{ ask: boolean; leftMs?: number }> {
+  return invoke<{ ask: boolean; leftMs?: number }>('hold_ptt_lock', { stillTalking })
 }
 
 /** A Phone PTT press made through the Remote stream's picture: ARMS the streamed operator's

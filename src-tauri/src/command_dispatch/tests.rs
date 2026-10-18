@@ -4,6 +4,7 @@
 use super::*;
 use crate::command_classes::registered;
 use serde_json::json;
+use tempo_client::classes::CLASSES;
 
 // --- Scaffolding ---------------------------------------------------------------------------------
 
@@ -363,6 +364,7 @@ fn the_starts_wired_from_afar_are_the_ft_buttons_the_voice_keyer_and_the_held_pr
     expected.extend(CHAT_STARTS.iter().map(|n| (*n, Wired::Chat)));
     expected.push(("play_voice_message", Wired::VoiceKeyer));
     expected.push(("set_ptt", Wired::HeldPress));
+    expected.push(("hold_ptt_lock", Wired::LockedPress));
     expected.sort_unstable_by_key(|(name, _)| *name);
     assert_eq!(wired, expected);
     assert!(
@@ -393,7 +395,7 @@ fn the_ft_buttons_are_admitted_and_every_other_start_is_refused_by_name() {
         let admission = shack.admit(&controller(), call(id as u64 + 1, name, on_args(name)));
         let expected = match name {
             _ if starts_run_from_afar().contains(&name) => "run".to_string(),
-            "set_ptt" => refused(Refusal::HeldPress),
+            "set_ptt" | "hold_ptt_lock" => refused(Refusal::HeldPress),
             _ => refused(Refusal::TransmitNotYet),
         };
         assert_eq!(kind(&admission), expected, "{name}");
@@ -1172,7 +1174,9 @@ fn the_on_half_of_a_transmit_switch_is_its_class() {
                     | Wired::Chat,
                 ),
             ) => "run".to_string(),
-            (Some(Class::StartsTx), Ok(Wired::HeldPress)) => refused(Refusal::HeldPress),
+            (Some(Class::StartsTx), Ok(Wired::HeldPress | Wired::LockedPress)) => {
+                refused(Refusal::HeldPress)
+            }
             (Some(Class::StartsTx), _) => refused(Refusal::TransmitNotYet),
             // Turning the RTTY sequencer on keys nothing, so it runs at the shack.
             (Some(Class::RunsAtShack), _) => "run".to_string(),
@@ -1322,10 +1326,9 @@ fn a_winlink_password_typed_here_is_refused_at_both_ends() {
 }
 
 #[test]
-fn a_radios_icom_network_password_is_set_and_asked_after_at_the_shack_only() {
-    // Credentials are set at the shack only, as for every other service: storing, clearing and
-    // asking whether there is one are each refused at both ends, the yes-or-no question included,
-    // since it reads the shack's keychain. A typed password is refused before it is sent.
+fn a_radios_icom_network_password_is_set_at_the_shack_only() {
+    // Credentials are set at the shack only, as for every other service: storing and clearing
+    // are each refused at both ends. A typed password is refused before it is sent.
     let shack = shack();
     for (id, (name, args)) in [
         (
@@ -1333,7 +1336,6 @@ fn a_radios_icom_network_password_is_set_and_asked_after_at_the_shack_only() {
             json!({ "radioId": 1, "password": "not-a-real-one" }),
         ),
         ("clear_icom_lan_password", json!({ "radioId": 1 })),
-        ("icom_lan_password_saved", json!({ "radioId": 1 })),
     ]
     .into_iter()
     .enumerate()
@@ -1346,6 +1348,57 @@ fn a_radios_icom_network_password_is_set_and_asked_after_at_the_shack_only() {
         );
         let admission = shack.admit(&controller(), call(id as u64 + 1, name, args));
         assert_eq!(kind(&admission), "refused shackOnly", "{name} at the shack");
+    }
+}
+
+/// From afar the Settings badges say whether each credential is saved, and a connector's Test
+/// runs at the shack with the key stored there: each is sent, and admitted, as a station command.
+/// What each answers carries no secret (`remote_credential_reply_tests` in `lib.rs`).
+#[test]
+fn a_credential_badge_and_a_connector_test_run_at_the_shack_from_afar() {
+    let shack = shack();
+    for (id, (name, args)) in [
+        ("get_credentials_status", json!({})),
+        ("icom_lan_password_saved", json!({ "radioId": 1 })),
+        ("qrz_test_connection", json!({})),
+        ("n3fjp_test_connection", json!({})),
+        ("cloudlog_station_info", json!({})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(class_of(name), Some(Class::RunsAtShack), "{name}");
+        assert_eq!(
+            route(name, &args),
+            Route::Shack,
+            "{name} is sent to the shack"
+        );
+        let admission = shack.admit(&controller(), call(id as u64 + 1, name, args));
+        assert_eq!(kind(&admission), "run", "{name} at the shack");
+    }
+}
+
+/// Typing or clearing a credential from afar stays refused: every command that stores or clears
+/// one is refused at both ends, whatever the badges and Tests above now do.
+#[test]
+fn no_credential_is_typed_or_cleared_from_afar() {
+    let setters: Vec<&str> = CLASSES
+        .iter()
+        .map(|(name, ..)| *name)
+        .filter(|name| name.starts_with("set_") || name.starts_with("clear_"))
+        .filter(|name| {
+            ["password", "_key", "_code", "_token"]
+                .iter()
+                .any(|word| name.ends_with(word))
+        })
+        .collect();
+    assert_eq!(
+        setters.len(),
+        23,
+        "premise: the credential setters are found by name: {setters:?}"
+    );
+    for name in setters {
+        assert_eq!(class_of(name), Some(Class::RefusedHere), "{name}");
     }
 }
 
@@ -2027,6 +2080,11 @@ fn each_off_half_reads_an_argument_its_command_takes() {
 
 /// The transmit commands with an on/off-looking argument that have no off half, and why.
 const NO_OFF_HALF: &[(&str, &str)] = &[
+    (
+        "hold_ptt_lock",
+        "Its bool is the answer to \"Still talking?\", not a switch: the Lock is let go by the PTT's \
+         own off half, as a held press is.",
+    ),
     (
         "js8_answer_reply",
         "Its No declines a reply that only a Yes would queue: nothing is on the air to stop.",

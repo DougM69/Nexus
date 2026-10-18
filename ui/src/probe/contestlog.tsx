@@ -12,6 +12,10 @@ import settings from '../components/__fixtures__/defaultSettings.json'
 import { LOGGER_LAYOUT_KEY } from '../features/contestLoggerLayout'
 
 const T0 = 1_792_342_800
+const params = new URLSearchParams(location.search)
+/** `?rstsent=1`: the entry's optional "RST sent" box turned on (Settings `contestRstSentBox`), which the
+ *  engine reports as the session's own report. */
+const rstSent = params.get('rstsent') === '1'
 /** An Illinois QSO Party with one contact, K9AAA on 20 m phone, and the same call in the entry: a dupe. */
 const fieldDay = {
   running: false,
@@ -32,6 +36,7 @@ const fieldDay = {
   composing: [],
   composingText: '',
   assistanceOn: [],
+  ...(rstSent ? { rstSentBox: '599' } : {}),
   upload: { enabled: false, destinations: [], available: ['clublog'], hint: 'hint' },
   eventStartUnix: T0 - 3600,
   eventEndUnix: T0 + 3600,
@@ -53,11 +58,11 @@ const snapshot = {
 document.documentElement.setAttribute('data-theme', 'dark')
 localStorage.clear()
 // `?layout=entry`: the window opened for the entry alone (features/contestLoggerLayout).
-if (new URLSearchParams(location.search).get('layout') === 'entry') localStorage.setItem(LOGGER_LAYOUT_KEY, 'entry')
+if (params.get('layout') === 'entry') localStorage.setItem(LOGGER_LAYOUT_KEY, 'entry')
 
 const answers: Record<string, () => unknown> = {
   get_snapshot: () => snapshot,
-  get_settings: () => ({ ...settings, fdActive: true, fdEvent: 'ilqp', fdOperator: 'KD9TAW' }),
+  get_settings: () => ({ ...settings, fdActive: true, fdEvent: 'ilqp', fdOperator: 'KD9TAW', contestRstSentBox: rstSent }),
   get_window_on_top: () => ({ supported: true, on: false }),
   contest_entry_put: () => 2,
   contest_removed: () => [],

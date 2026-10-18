@@ -318,6 +318,7 @@ fn quick() -> Timing {
         idle_prompt: Duration::from_secs(60),
         idle_end: Duration::from_secs(61),
         renew: Duration::from_millis(200),
+        ..Timing::default()
     }
 }
 

@@ -12663,6 +12663,24 @@ export function SettingsPanel({
                 </button>
                 <span className="settings-hint">{t('settings.fieldDay.mode.hint', { contest: pickedContest })}</span>
               </label>
+              {/* The entry's optional "RST sent" box (N1MM's Snt): off, the entry is what it always
+                  was. It saves with the form, and shows only in a contest that sends a report. */}
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.contestPick.rstSent.label')}</span>
+                  <button
+                    disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={!!form.contestRstSentBox}
+                    className={`toggle${form.contestRstSentBox ? ' on' : ''}`}
+                    onClick={() => updateBool('contestRstSentBox', !form.contestRstSentBox)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.contestPick.rstSent.hint')}</span>
+              </div>
               {/* Rules data currency (fd-rules.json): the parameters behind scoring, windows,
                   bonuses and sections. No cron — rules change ~yearly, so this pre-event
                   button is the refresh path; a download applies at the NEXT launch. */}

@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contest entry: an optional "RST sent" box.** Turn on "Show the RST sent box" in Settings ▸ Contesting ▸
+  Contest, and the contest entry gets an RST sent box just before the received report, as N1MM shows Snt and Rcv.
+  It holds the report the contact logs as sent: 59 on phone, 599 on CW and digital. Space and Tab skip it, so
+  a run goes Call, received report, exchange as before; click it, or press Shift+Tab from the received report,
+  to change it. A report typed there (two digits on phone, three on CW and digital) is logged as sent for that
+  contact only, and goes into the Cabrillo and ADIF files; the next contact goes back to 59 or 599. It is in
+  the cockpits' entry, the contest logger window and the entry-only pop-out, and it is shared between them like
+  the other boxes. It shows only in a contest whose exchange sends a report, so Field Day has none. Off by
+  default, and then nothing changes.
+- **Phone's Lock (hands-free PTT) now works from a computer driving your station.** Tick **Lock**, click PTT
+  once to talk and again to stop, as at the shack. It is the same press as holding PTT, so it stops the same
+  ways: Stop TX, a dropped link, your microphone going quiet for a fifth of a second, or leaving Phone. A Lock
+  from afar also has a time limit: after 3 minutes on the air it ends by itself. Twenty seconds before that,
+  Phone asks "Still talking?"; click **Keep talking** or press K for 3 more minutes. The shack's own Lock and
+  the rig's VOX are unchanged.
 - **Contest band map: dupes and new multipliers are marked.** While a contest runs, the Band activity strip,
   the pop-out band map and the Spots list in the CW and Phone cockpits mark each spotted station the way contest
   loggers do. A station you already worked on that band and mode, under the contest's own dupe rule, is struck
@@ -145,6 +160,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unplugged.
 
 ### Changed
+- **From the Remote client, Settings now shows which logbook credentials are saved at the station, and the connector
+  Test buttons work.** The saved / not saved badges (and the Icom network password's) are read at the station and come
+  back as yes or no; they no longer look empty, as if nothing were saved. QRZ Logbook, N3FJP and Cloudlog/Wavelog Test
+  run at the station with the key stored there and answer only whether it worked, with a message. No key or password
+  crosses the link: a QRZ reply that echoes the key has it masked, or is withheld. Typing or clearing a credential is
+  still done at the station itself.
 - **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each
   station: Nexus runs on this PC and the radio follows your own clicks and pop-outs. Streaming the station's screen is
   still there as a smaller button after it, for when you only want to see the shack's screen.
