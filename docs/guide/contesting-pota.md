@@ -104,6 +104,13 @@ newest contact in place, or click **Edit** on any row of the contest screen's lo
 time and serial, and the score, dupes and exports follow the edit. Not at a club yet: there, take
 it back and log it again. [Edit a Contact](../manual/Field-Day.md#edit-a-contact) has the details.
 
+The spots are marked for the contest too. In the CW and Phone cockpits, the Band activity strip,
+the pop-out band map and the Spots list strike through and dim a station you already worked on that
+band and mode (the same dupe check as the log strip's DUPE badge), and put a **MULT** tag on a
+station that would be a new multiplier; its tooltip names it, for example "new mult: county COOK".
+A country or a WPX prefix is read from the call. A county, section or zone comes from the exchange,
+so it is known only for a station you worked before, from what it sent you then.
+
 The scoreboard shows its work: QSO points (phone 1, CW/digital 2) × the legal
 power multiplier + a 16-item ARRL bonus checklist = total. **Winter Field Day
 scores by its objectives instead**: QSO points × (the objective multipliers + 1),

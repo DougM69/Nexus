@@ -1,9 +1,10 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
-import type { SpotRow, NeedTag, AppSnapshot } from '../types'
+import type { SpotRow, NeedTag, AppSnapshot, FieldDayStatus } from '../types'
 import { bandRangeForLabel } from '../band'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { NEED_CHIP } from '../features/needVisuals'
+import { spotMarkWords, useContestSpotMarker } from '../features/contestSpotMarks'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { BEACON_BADGE, SpotLegend, TYPE_BADGE } from './SpotLegend'
 import { t } from '../i18n'
@@ -48,6 +49,9 @@ interface Props {
   /** When set (detached window only), shows Dock L/R buttons that snap this window to the
    *  screen edge as a full-height strip (persisted across launches). */
   onDock?: (side: 'left' | 'right' | 'none') => void
+  /** The running contest, when one runs: a dupe is struck through and dimmed, a station that would
+   *  be a new multiplier wears MULT (`features/contestSpotMarks.ts`). Absent = no marks. */
+  fieldDay?: FieldDayStatus | null
 
   // ── Tuning from the map itself (#39, kr4fqg) ───────────────────────────────────────────
   // The map has always been a frequency SCALE — `yOf` places every tick — so a position on
@@ -105,12 +109,14 @@ export function BandMap({
   unansweredCalls,
   unansweredTitle,
   onDock,
+  fieldDay,
   sideband,
   tuneEnabled,
   stepHz,
   wheelSensitivity,
   onSnap,
 }: Props) {
+  const marker = useContestSpotMarker(fieldDay)
   // PER-SURFACE (matching BandStrip, which writes the same key): a wide second-monitor
   // board can afford the legend where the docked strip cannot.
   const [showLegend, setShowLegend] = useState(
@@ -365,8 +371,12 @@ export function BandMap({
           const badge = type ? TYPE_BADGE[type] : null
           const worked = workedCalls?.has(cu) ?? false
           const opacity = s.ageSecs < 0 ? 0.95 : Math.max(0.4, 1 - s.ageSecs / 1800)
+          // A beacon is never worked in a contest, so it is never marked.
+          const mark = beacon ? null : (marker?.(s) ?? null)
+          const markWords = spotMarkWords(mark)
           const detail = [
             s.call,
+            ...markWords,
             `${s.freqMhz.toFixed(3)} MHz`,
             ageLabel(s.ageSecs),
             beacon?.word,
@@ -387,13 +397,17 @@ export function BandMap({
               <span className={`bandmap-tick${needCls}${dimCls}`} style={{ top: `${freqY}%` }} />
               <button
                 type="button"
-                className={`bandmap-spot${needCls}${dimCls}${worked ? ' worked' : ''}`}
+                className={`bandmap-spot${needCls}${dimCls}${worked ? ' worked' : ''}${mark?.dupe ? ' contest-dupe' : ''}`}
                 style={{ top: `${labelY}%`, opacity }}
                 title={t('bandMap.spot.title', { detail })}
+                aria-label={mark ? [s.call, ...markWords].join(' · ') : undefined}
                 onClick={() => onWorkSpot(s)}
               >
                 {beacon && <span className={`spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>}
                 {badge && <span className={`spot-type-badge ${badge.cls}`}>{badge.ch}</span>}
+                {mark && mark.mults.length > 0 && (
+                  <span className="spot-mult-tag">{t('contestSpot.tag.mult')}</span>
+                )}
                 <span className="bandmap-call mono">{s.call}</span>
                 {unansweredCalls?.has(cu) && (
                   <span className="bandmap-call mono" title={unansweredTitle}>

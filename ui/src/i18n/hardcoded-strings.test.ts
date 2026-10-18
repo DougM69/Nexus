@@ -303,6 +303,7 @@ const MIGRATED = [
   'features/contestSlots.ts',
   'features/contestLocation.ts',
   'features/contestUnsaved.ts',
+  'features/contestSpotMarks.ts',
   // The warn-only FD advisories (2026-08-29): born migrated — its two banner/header
   // chips are catalog keys from birth; the mode names, event names and assistance-source
   // labels it interpolates are invariant tokens.

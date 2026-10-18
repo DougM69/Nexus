@@ -2904,6 +2904,18 @@ export interface SpotRow {
    *  Decided there rather than in the browser so every window, and a Remote browser in another
    *  time zone, agree on when the day turns. */
   workedTodayUtc?: boolean
+  /** ⭐ While a contest runs: the multipliers working this station on this spot's band and mode
+   *  would add, by the contest's own scoring (`FieldDayLog::spot_mults`) — the rule id
+   *  (`county`, `country`) and the value. Absent outside a contest, for a station that adds
+   *  none, and from an older station. */
+  contestMults?: SpotContestMult[]
+}
+
+/** One multiplier a spotted station would add (`SpotRow.contestMults`). Both are invariant
+ *  tokens: the rule id is the one the multiplier boards are headed with. */
+export interface SpotContestMult {
+  id: string
+  value: string
 }
 
 /** Kind of one-way transmission a spot's frequency identified — mirrors

@@ -464,6 +464,59 @@ pub struct OperatorStats {
     pub band_mode: Vec<(String, String, u32)>,
 }
 
+/// ⭐ **What a station not yet worked would add to the score's multipliers** — the
+/// question a contest band map asks of every spot ([`FieldDayLog::spot_mults`]).
+///
+/// Owned, so it is built once under whatever lock guards the log and then asked about each
+/// spot with that lock released. The answer is the scorer's own
+/// ([`Scoring::new_mults_of`](crate::contest::Scoring::new_mults_of)): the candidate row is
+/// built the way a logged one is, with the entity and prefix resolved from the call by the
+/// same resolvers, and the role this session logs under.
+///
+/// ⚠️ **A received value is known only from this station's own earlier contact.** A spot
+/// carries no exchange, so a multiplier read from one (a county, a section, a zone, a grid)
+/// is judged from the newest contact with this call in the log, and not at all for a station
+/// never worked. Silence over a guess: a value predicted from anywhere else is a rule this
+/// log does not have.
+#[derive(Debug, Clone)]
+pub struct SpotMults {
+    ruleset: &'static crate::fd_rules::FdRuleset,
+    worked: crate::contest::MultsWorked,
+    role: String,
+    /// The received exchange of each call's newest contact, by uppercase call.
+    rx_by_call: std::collections::HashMap<String, Vec<crate::contest::FieldValue>>,
+}
+
+impl SpotMults {
+    /// `(rule id, value)` for each multiplier working `call` on `band` in `mode_class`
+    /// (`"CW"` | `"PH"` | `"DIG"`) would add, empty for none. `submode` is the on-air mode
+    /// when a spot names one: a contact in a mode the contest bans counts nothing.
+    pub fn new_mults(
+        &self,
+        call: &str,
+        band: &str,
+        mode_class: &str,
+        submode: Option<&str>,
+    ) -> Vec<(&'static str, String)> {
+        if submode.is_some_and(|m| self.ruleset.mode_banned(m)) {
+            return Vec::new();
+        }
+        let call = call.trim().to_ascii_uppercase();
+        let placed = crate::contest::resolve_call(&call);
+        let prefix = crate::contest::wpx_prefix(&call);
+        let row = crate::contest::ScoreRow {
+            mode_class,
+            band,
+            role: &self.role,
+            rx: self.rx_by_call.get(&call).map_or(&[], Vec::as_slice),
+            entity: placed.map(|p| p.entity),
+            prefix: prefix.as_deref(),
+            relation: None,
+        };
+        self.ruleset.scoring.new_mults_of(&self.worked, &row)
+    }
+}
+
 /// What [`FieldDayLog::merge_adif`] found in a journal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AdifMerge {
@@ -2025,6 +2078,22 @@ impl FieldDayLog {
                 .then(a.operator.cmp(&b.operator))
         });
         stats
+    }
+
+    /// ⭐ **The multipliers a spotted station would add** ([`SpotMults`]): what this log has
+    /// earned, under the scorer's own keys, and each call's newest received exchange.
+    pub fn spot_mults(&self) -> SpotMults {
+        let ruleset = self.ruleset();
+        let mut rx_by_call = std::collections::HashMap::new();
+        for q in &self.qsos {
+            rx_by_call.insert(q.call.trim().to_ascii_uppercase(), q.rx.clone());
+        }
+        SpotMults {
+            ruleset,
+            worked: ruleset.scoring.mults_worked(self.score_rows()),
+            role: self.session.role().id.to_string(),
+            rx_by_call,
+        }
     }
 
     /// Export the log as ADIF records (one `<EOR>` per QSO): every live row, then every

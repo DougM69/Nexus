@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contest band map: dupes and new multipliers are marked.** While a contest runs, the Band activity strip,
+  the pop-out band map and the Spots list in the CW and Phone cockpits mark each spotted station the way contest
+  loggers do. A station you already worked on that band and mode, under the contest's own dupe rule, is struck
+  through and dimmed, with "dupe" in its tooltip (the Spots list also says DUPE). A station that would be a new
+  multiplier wears a **MULT** tag, and its tooltip names the multiplier, for example "new mult: county COOK" or
+  "new mult: country Japan". The dupe check is the same one behind the log strip's DUPE badge, and the multipliers
+  are worked out by the contest's own scoring. A multiplier that comes from the exchange (a county, a section, a
+  zone) is known only for a station you worked before, from what it sent you then; Nexus does not guess it for a
+  station it has never logged. Outside a contest nothing changes.
 - **PstRotatorAz: Nexus now talks to it directly.** The rotator picker's **PstRotatorAz / PstRotator (UDP)**
   entry no longer goes through Hamlib's PstRotator backend, which sent every bearing garbled (90° went out as
   `90.000000.2`) and could not stop the rotor. Nexus now sends PstRotatorAz the commands its own manual documents,

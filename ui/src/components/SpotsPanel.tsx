@@ -9,7 +9,7 @@ import { useStationControl } from '../stationAccess'
 // value a row prints (callsign, spotter, entity, US state, band, mode/submode, frequency,
 // comment) and the age column below — all data and measurement, invariant in every locale.
 import { useEffect, useMemo, useState } from 'react'
-import type { BandChannel, NeedAlert, SpotRow } from '../types'
+import type { BandChannel, FieldDayStatus, NeedAlert, SpotRow } from '../types'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
@@ -18,6 +18,7 @@ import { alertsByCall, alertsForSurface, isActivityTag } from '../features/needs
 import { CONTINENT_CODES } from '../features/dxccGeo'
 import { compileTerm, searchTerms } from '../searchQuery'
 import { t } from '../i18n'
+import { spotMarkWords, useContestSpotMarker } from '../features/contestSpotMarks'
 import { useWatchMatch } from '../watchlist'
 import { WatchTile } from './WatchTile'
 
@@ -108,6 +109,10 @@ export interface SpotsPanelProps {
   /** Hosted as a PANE of another screen rather than as the Spots view — see SpotsPane. The
    *  Spots view passes none and is exactly as it was. */
   pane?: SpotsPane
+  /** The running contest, passed by the CW and Phone cockpits' pane: a dupe row is struck through
+   *  and dimmed and says DUPE, a row that would be a new multiplier says MULT
+   *  (`features/contestSpotMarks.ts`). Absent = no marks. */
+  fieldDay?: FieldDayStatus | null
 }
 
 /**
@@ -172,8 +177,9 @@ function useSessionState<T>(
   return [v, setV]
 }
 
-export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, canWork, onPopOut, myGrid = '', needAlerts, pane }: SpotsPanelProps) {
+export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, canWork, onPopOut, myGrid = '', needAlerts, pane, fieldDay }: SpotsPanelProps) {
   const control = useStationControl()
+  const marker = useContestSpotMarker(fieldDay)
   // Entity centres — the only geometry the firehose carries (a spot has no grid).
   const centroids = useEntityCentroids()
   // The operator's watch list, live — the matcher the Call Roster and the Stations list ask, so
@@ -688,25 +694,26 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                 ? workedAgeLabel(s.workedAgoSecs)
                 : null
             const watch = watchOf({ call: s.call, entity: s.entity, grid: s.grid })
+            const mark = marker?.(s) ?? null
+            const markWords = spotMarkWords(mark)
+            const rowTitle = canQsy
+              ? t('spots.row.work.title', {
+                  call: s.call,
+                  mode: s.mode,
+                  freq: s.freqMhz.toFixed(3),
+                  spotter: s.spotter,
+                })
+              : t('spots.row.title', {
+                  call: s.call,
+                  freq: s.freqMhz.toFixed(3),
+                  spotter: s.spotter,
+                })
             return (
               <div
                 key={`${s.call}|${s.freqMhz}|${s.spotter}`}
                 role="row"
-                className={`np-row sp-row${s.call === selectedCall ? ' selected' : ''}`}
-                title={
-                  canQsy
-                    ? t('spots.row.work.title', {
-                        call: s.call,
-                        mode: s.mode,
-                        freq: s.freqMhz.toFixed(3),
-                        spotter: s.spotter,
-                      })
-                    : t('spots.row.title', {
-                        call: s.call,
-                        freq: s.freqMhz.toFixed(3),
-                        spotter: s.spotter,
-                      })
-                }
+                className={`np-row sp-row${s.call === selectedCall ? ' selected' : ''}${mark?.dupe ? ' contest-dupe' : ''}`}
+                title={markWords.length > 0 ? [rowTitle, ...markWords].join(' · ') : rowTitle}
                 onClick={() => {
                   onSelect(s.call)
                   if (workable) onWork(s)
@@ -757,6 +764,17 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                   {/* The WATCH tile leads the cell, ahead of the worked badge: the comment
                       ellipsizes, and first is the one place the tile cannot be cut. */}
                   {watch && <WatchTile entry={watch} />}
+                  {/* The contest marks lead too: a word on the row, not only a colour. */}
+                  {mark?.dupe && (
+                    <span className="spot-contest-tag dupe" title={markWords.join(' · ')}>
+                      {t('contestSpot.tag.dupe')}
+                    </span>
+                  )}
+                  {mark && mark.mults.length > 0 && (
+                    <span className="spot-contest-tag spot-mult-tag" title={markWords.join(' · ')}>
+                      {t('contestSpot.tag.mult')}
+                    </span>
+                  )}
                   {/* What Hide worked would drop, said on the row itself — so turning the chip
                       off answers "which of these have I worked, and when" without a tooltip.
                       In the widest column, because the age is the part worth reading. */}
@@ -768,7 +786,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                       {t('spots.row.worked', { age: workedAge })}
                     </span>
                   )}
-                  {s.comment || (workedAge || watch ? '' : '—')}
+                  {s.comment || (workedAge || watch || mark ? '' : '—')}
                 </span>
               </div>
             )

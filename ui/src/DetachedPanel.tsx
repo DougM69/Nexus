@@ -584,6 +584,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           unansweredCalls={unansweredCalls}
           unansweredTitle={workedFailed !== null ? t('logbook.readFailed', { reason: workedFailed }) : t('logbook.reading')}
           onDock={(side) => void dockBandmapWindow(side)}
+          fieldDay={snap.fieldDay ?? null}
           // Tuning from the map (#39). The map is a frequency scale, so it can act as one.
           sideband={snap.radio.sideband || 'USB'}
           tuneEnabled={

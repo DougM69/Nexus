@@ -374,6 +374,13 @@ pub struct Scoring {
     pub post: &'static [PostMultiplier],
 }
 
+/// The multiplier keys a log has earned, one set per rule of its [`Scoring`]
+/// ([`Scoring::mults_worked`]). Only that `Scoring` can read it.
+#[derive(Debug, Clone, Default)]
+pub struct MultsWorked {
+    seen: Vec<std::collections::HashSet<(String, String)>>,
+}
+
 /// The key one row counts under one multiplier rule — `(scope bucket, value)` — or `None`
 /// when the rule does not count this row. [`Scoring::mult_counts`] and
 /// [`Scoring::new_mults_by_row`] both count through it, so they cannot disagree about
@@ -459,18 +466,9 @@ impl Scoring {
     where
         I: IntoIterator<Item = ScoreRow<'a>>,
     {
-        use std::collections::HashSet;
-        let mut seen: Vec<HashSet<(String, String)>> = vec![HashSet::new(); self.multipliers.len()];
-        for row in rows {
-            for (i, m) in self.multipliers.iter().enumerate() {
-                if let Some(key) = mult_key(m, &row) {
-                    seen[i].insert(key);
-                }
-            }
-        }
         self.multipliers
             .iter()
-            .zip(seen)
+            .zip(self.mults_worked(rows).seen)
             .map(|(m, set)| {
                 // A cap is a ceiling on what may be CLAIMED, not on what may be worked
                 // ([`MultiplierRule::cap`]) — the rows above are all counted, and the
@@ -506,6 +504,45 @@ impl Scoring {
                     }
                 }
                 new
+            })
+            .collect()
+    }
+
+    /// ⭐ **Every multiplier key these rows have earned, rule by rule** — the sets
+    /// [`mult_counts`](Self::mult_counts) counts, kept so that a contact not yet worked can be
+    /// asked about ([`new_mults_of`](Self::new_mults_of)) without walking the log again.
+    pub fn mults_worked<'a, I>(&self, rows: I) -> MultsWorked
+    where
+        I: IntoIterator<Item = ScoreRow<'a>>,
+    {
+        use std::collections::HashSet;
+        let mut seen: Vec<HashSet<(String, String)>> = vec![HashSet::new(); self.multipliers.len()];
+        for row in rows {
+            for (i, m) in self.multipliers.iter().enumerate() {
+                if let Some(key) = mult_key(m, &row) {
+                    seen[i].insert(key);
+                }
+            }
+        }
+        MultsWorked { seen }
+    }
+
+    /// ⭐ **The multipliers `row` would add to a log that has earned `worked`** — `(rule id,
+    /// value)` for each rule that would count a value no counted row has, under the same key
+    /// the score counts by. A rule already at its [`cap`](MultiplierRule::cap) adds nothing,
+    /// as in [`new_mults_by_row`](Self::new_mults_by_row). Empty when the row adds none.
+    pub fn new_mults_of(
+        &self,
+        worked: &MultsWorked,
+        row: &ScoreRow<'_>,
+    ) -> Vec<(&'static str, String)> {
+        self.multipliers
+            .iter()
+            .zip(&worked.seen)
+            .filter_map(|(m, seen)| {
+                let key = mult_key(m, row)?;
+                let capped = m.cap.is_some_and(|c| seen.len() >= c as usize);
+                (!capped && !seen.contains(&key)).then_some((m.id, key.1))
             })
             .collect()
     }
