@@ -600,21 +600,26 @@ impl QrzLogbook for NoTransport {
 
 /// Replace every occurrence of the API key with a marker.
 ///
-/// **Why this is stricter than the ordinary push path.** QRZ echoes the failing request back
-/// inside `REASON`, and the request body carries `KEY=…`. The ordinary push surfaces QRZ's
-/// reason as-is to a toast that dies with the session; this action writes its outcome to the
-/// connection log as well, which is printed and kept, so the key is scrubbed before anything
-/// else happens to the text. Both the raw key and its percent-encoded form are matched, since
+/// **Why.** QRZ echoes the failing request back inside `REASON`, and the request body carries
+/// `KEY=…`. This action writes its outcome to the connection log, which is printed and kept, so
+/// the key is scrubbed before anything else happens to the text. The ordinary push, the sync and
+/// the confirmation check scrub QRZ's words the same way ([`scrub_secret`]). Both the raw key and its percent-encoded form are matched, since
 /// what comes back is an echo of a form-encoded body.
 pub fn scrub_key(text: &str, api_key: &str) -> String {
-    let key = api_key.trim();
-    if key.is_empty() {
+    scrub_secret(text, api_key, "«api key»")
+}
+
+/// Replace every occurrence of `secret`, raw or percent-encoded, with `marker`: [`scrub_key`] for
+/// any stored key or password a service may echo back from a form-encoded request.
+pub fn scrub_secret(text: &str, secret: &str, marker: &str) -> String {
+    let secret = secret.trim();
+    if secret.is_empty() {
         return text.to_string();
     }
-    let mut out = text.replace(key, "«api key»");
-    let encoded = pct_encode(key);
-    if encoded != key {
-        out = out.replace(&encoded, "«api key»");
+    let mut out = text.replace(secret, marker);
+    let encoded = pct_encode(secret);
+    if encoded != secret {
+        out = out.replace(&encoded, marker);
     }
     out
 }

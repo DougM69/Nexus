@@ -100,6 +100,10 @@ const NEVER_IMPORT: readonly string[] = [
   // profile carries the club's master-log address), and so does the WSJT-X UDP API (`wsjtxUdp`),
   // a feed other programs listen to rather than a push to one logger.
   'dxkeeperHost',
+  // What a read from a computer driving the station says about it, not a setting: a profile saved
+  // there carries them, and loaded at the station they would mark its own form "Set at the station".
+  'secretsSavedAtStation',
+  'stationOnlySettings',
 ]
 
 /** Merge a stored profile onto the CURRENT settings — the load contract.

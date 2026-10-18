@@ -363,3 +363,20 @@ describe('mergeProfile — the JS8 send options travel with a profile', () => {
     expect(mergeProfile(settings({ js8TxDelayMs: 300 }), settings({})).js8TxDelayMs, 'a profile from before it').toBe(300)
   })
 })
+
+// A profile saved on a computer driving the station holds that read's notes about the station
+// (which settings are set there, which keys are saved there). They are not settings: loaded at
+// the station, they would mark its own form "Set at the station".
+describe('a profile saved from afar loads at the station without the read’s notes', () => {
+  it('keeps the current read’s notes, whatever the profile carries', () => {
+    const saved = settings({
+      stationOnlySettings: ['txWatchdogMin'],
+      secretsSavedAtStation: { clublogApiKey: true },
+      mygrid: 'EN61',
+    })
+    const merged = mergeProfile(settings({ mygrid: 'EN52' }), saved)
+    expect(merged.stationOnlySettings).toBeUndefined()
+    expect(merged.secretsSavedAtStation).toBeUndefined()
+    expect(merged.mygrid, 'CONTROL: the rest of the profile loads').toBe('EN61')
+  })
+})

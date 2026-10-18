@@ -8682,6 +8682,11 @@ export const EN = {
   'settings.confirmations.clublog.apiKey.label': 'ClubLog API key (application-level)',
   'settings.confirmations.clublog.apiKey.placeholder':
     'blank = use the key bundled with this build (if any)',
+  'settings.confirmations.clublog.apiKey.reveal': 'Reveal',
+  'settings.confirmations.clublog.apiKey.hide': 'Hide',
+  'settings.confirmations.clublog.apiKey.savedAtStation': 'Saved at the station',
+  'settings.confirmations.clublog.apiKey.notSavedAtStation': 'None saved at the station',
+  'settings.stationOnly.hint': 'Set at the station',
   'settings.confirmations.clublog.apiKey.hint':
     "This is the <b>application</b> credential, not yours — official installer builds bundle one, and you only need email + app-password above. Building from source? Request a free key at clublog.org/requestapikey.php and paste it here (open-source can't ship one — ClubLog auto-revokes published keys).",
   'settings.confirmations.clublog.upload.label': 'Auto-upload QSOs to ClubLog',

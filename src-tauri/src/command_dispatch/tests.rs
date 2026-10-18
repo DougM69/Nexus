@@ -2717,3 +2717,387 @@ fn a_settings_save_from_afar_keeps_the_program_the_shack_runs() {
         "CONTROL: the shack's own form"
     );
 }
+
+/// ⛔ A save from afar can neither change, blank nor plant a stored key: each of
+/// `SECRET_SETTINGS` comes back as the shack has it, saved or not. CONTROL: the shack's own save is
+/// taken as it came. Either way the read's "saved at the station" is not saved into the file.
+#[test]
+fn a_settings_save_from_afar_cannot_change_blank_or_plant_a_stored_key() {
+    let afar = Afar { stand_down: 2 };
+    for (name, field) in SECRET_SETTINGS {
+        // (what the shack holds, what the save asks for)
+        for (held, asked) in [
+            ("FAKE-SHACK-KEY-0001", "FAKE-OTHER-KEY-0002"),
+            ("FAKE-SHACK-KEY-0001", ""),
+            ("", "FAKE-PLANTED-KEY-0003"),
+        ] {
+            let mut shack = tempo_app::settings::Settings::default();
+            *field(&mut shack) = held.into();
+            let mut save = shack.clone();
+            *field(&mut save) = asked.into();
+            save.unknown.insert(
+                SAVED_AT_THE_STATION.into(),
+                json!({ "clublogApiKey": true }),
+            );
+            let mut from_afar = save.clone();
+            keep_the_shacks_secret_settings(&shack, &mut from_afar, Some(&afar));
+            assert_eq!(
+                field(&mut from_afar).as_str(),
+                held,
+                "from afar, {name} asked {asked:?}"
+            );
+            assert!(
+                !from_afar.unknown.contains_key(SAVED_AT_THE_STATION),
+                "from afar, the read's flags would be saved"
+            );
+            let mut at_the_shack = save.clone();
+            keep_the_shacks_secret_settings(&shack, &mut at_the_shack, None);
+            assert_eq!(
+                field(&mut at_the_shack).as_str(),
+                asked,
+                "CONTROL: the shack's own save of {name}"
+            );
+            assert!(
+                !at_the_shack.unknown.contains_key(SAVED_AT_THE_STATION),
+                "at the shack, the read's flags would be saved"
+            );
+        }
+    }
+}
+
+/// ⛔ A read from afar blanks each of `SECRET_SETTINGS` and says, by value, whether the shack has
+/// it saved; the shack's own read blanks nothing and says nothing.
+#[test]
+fn a_settings_read_from_afar_blanks_each_stored_key_and_says_whether_it_is_saved() {
+    let afar = Afar { stand_down: 0 };
+    for (name, field) in SECRET_SETTINGS {
+        for held in ["FAKE-SHACK-KEY-0001", "", "   "] {
+            let mut shack = tempo_app::settings::Settings::default();
+            *field(&mut shack) = held.into();
+            let mut read = shack.clone();
+            let saved = withhold_the_shacks_secret_settings(&mut read, Some(&afar));
+            assert_eq!(field(&mut read).as_str(), "", "from afar, {name} blanked");
+            assert_eq!(
+                saved.as_ref().and_then(|s| s.get(name)).copied(),
+                Some(!held.trim().is_empty()),
+                "from afar, {name} held {held:?}"
+            );
+            let mut own = shack.clone();
+            assert_eq!(withhold_the_shacks_secret_settings(&mut own, None), None);
+            assert_eq!(
+                field(&mut own).as_str(),
+                held,
+                "CONTROL: the shack's own read"
+            );
+        }
+    }
+}
+
+/// ★ The one list of stored keys is the list: each name is the wire name of the field it reaches,
+/// and every setting named for a key, password, token or secret is on it or named here as none.
+/// CONTROL: the sweep finds the ClubLog key by its name.
+#[test]
+fn every_stored_key_in_a_settings_file_is_on_the_one_list() {
+    let mut probe = tempo_app::settings::Settings::default();
+    for (name, field) in SECRET_SETTINGS {
+        *field(&mut probe) = format!("probe-{name}");
+    }
+    let wire = serde_json::to_value(&probe).expect("settings serialize");
+    for (name, _) in SECRET_SETTINGS {
+        assert_eq!(
+            wire.get(name).and_then(Value::as_str),
+            Some(format!("probe-{name}").as_str()),
+            "{name} is not the wire name of the field it reaches"
+        );
+    }
+    let secret_named = |key: &str| {
+        let k = key.to_ascii_lowercase();
+        [
+            "key", "password", "passwd", "token", "secret", "passcode", "code",
+        ]
+        .iter()
+        .any(|w| k.ends_with(w))
+    };
+    // Named for one, and none: what a field holds, said by its own doc comment.
+    const NOT_SECRET: [&str; 2] = [
+        // The APRS symbol's character, which every beacon sends.
+        "aprsSymbolCode",
+        // The postal code of the contest entry's address, sent with every log submitted.
+        "contestAddressPostalcode",
+    ];
+    let found: Vec<&String> = wire
+        .as_object()
+        .expect("an object")
+        .iter()
+        .filter(|(key, value)| value.is_string() && secret_named(key))
+        .map(|(key, _)| key)
+        .collect();
+    let on_neither: Vec<&&String> = found
+        .iter()
+        .filter(|key| {
+            !SECRET_SETTINGS.iter().any(|(n, _)| *n == key.as_str())
+                && !NOT_SECRET.contains(&key.as_str())
+        })
+        .collect();
+    assert!(
+        on_neither.is_empty(),
+        "named for a secret and on neither list: {on_neither:?}"
+    );
+    assert!(
+        found.iter().any(|k| *k == "clublogApiKey"),
+        "CONTROL: the sweep sees the ClubLog key, found {found:?}"
+    );
+}
+
+/// The settings read takes `afar`, so the lane writes it there, and only the read.
+#[test]
+fn the_lane_tells_the_settings_read_it_comes_from_afar() {
+    assert!(takes_afar("get_settings"));
+    assert!(!takes_afar("get_snapshot"), "CONTROL");
+}
+
+/// ⛔ The whole save from afar goes through every keep: a transmit guard, an address a key is sent
+/// to and a stored key each come back as the shack has them. CONTROL: the shack's own save is
+/// taken as it came, and the rest of the save from afar is taken.
+#[test]
+fn a_whole_save_from_afar_goes_through_every_keep() {
+    let shack = tempo_app::settings::Settings {
+        cq_max_calls: Some(5),
+        cloudlog_url: "https://log.example.net".into(),
+        clublog_api_key: "FAKE-SHACK-KEY-0001".into(),
+        mycall: "W9OLD".into(),
+        ..Default::default()
+    };
+    let asked = tempo_app::settings::Settings {
+        cq_max_calls: Some(9),
+        cloudlog_url: "https://elsewhere.example.org".into(),
+        clublog_api_key: "FAKE-OTHER-KEY-0002".into(),
+        mycall: "W9NEW".into(),
+        ..shack.clone()
+    };
+    let shown = |s: &tempo_app::settings::Settings| {
+        (
+            s.cq_max_calls,
+            s.cloudlog_url.clone(),
+            s.clublog_api_key.clone(),
+            s.mycall.clone(),
+        )
+    };
+    let mut save = asked.clone();
+    keep_the_shacks_settings(&shack, &mut save, Some(&Afar { stand_down: 4 }));
+    assert_eq!(
+        shown(&save),
+        (
+            Some(5),
+            "https://log.example.net".into(),
+            "FAKE-SHACK-KEY-0001".into(),
+            "W9NEW".into()
+        ),
+        "from afar"
+    );
+    let mut save = asked.clone();
+    keep_the_shacks_settings(&shack, &mut save, None);
+    assert_eq!(shown(&save), shown(&asked), "CONTROL: the shack's own save");
+}
+
+/// ⛔ The saved config profiles are a whole Settings each, stored keys included: a read from afar
+/// carries none of them, and a save from afar keeps each profile's as the shack has it and cannot
+/// plant one. CONTROL: the rest of a profile, and the shack's own keys, go and come as they were.
+#[test]
+fn a_saved_profile_carries_no_stored_key_toward_afar() {
+    let shack_profiles = json!([
+        { "name": "Home", "settings": { "clublogApiKey": "FAKE-HOME-KEY-0001", "mygrid": "EN52" }, "schema": 2 },
+        { "name": "Portable", "settings": { "clublogApiKey": "", "mygrid": "EN61" } },
+    ])
+    .to_string();
+    let shack = map(&[
+        ("nexus.profiles", shack_profiles.as_str()),
+        ("nexus-ui-scale-cap", "1.25"),
+    ]);
+    let read = station_answer(serde_json::to_value(&shack).unwrap());
+    let text = read["nexus.profiles"]
+        .as_str()
+        .expect("the profiles are read");
+    assert!(!text.contains("FAKE-HOME-KEY-0001"), "from afar: {text}");
+    let profiles: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(profiles[0]["settings"]["clublogApiKey"], "");
+    assert_eq!(
+        profiles[0]["settings"]["mygrid"], "EN52",
+        "CONTROL: the rest"
+    );
+    assert_eq!(profiles[0]["schema"], 2, "CONTROL: the rest");
+
+    let sent_profiles = json!([
+        { "name": "Home", "settings": { "clublogApiKey": "", "mygrid": "EN53" } },
+        { "name": "Portable", "settings": { "clublogApiKey": "FAKE-PLANTED-0002", "mygrid": "EN61" } },
+        { "name": "New", "settings": { "clublogApiKey": "FAKE-PLANTED-0003" } },
+    ])
+    .to_string();
+    let saved = merged_save(
+        shack.clone(),
+        &json!({ "state": { "nexus.profiles": sent_profiles } }),
+    )
+    .expect("a map of strings");
+    let text = saved["state"]["nexus.profiles"]
+        .as_str()
+        .expect("the profiles are saved");
+    let profiles: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(
+        [0, 1, 2].map(|i| profiles[i]["settings"]["clublogApiKey"].clone()),
+        [json!("FAKE-HOME-KEY-0001"), json!(""), json!("")],
+        "from afar: kept, not planted, not planted"
+    );
+    assert_eq!(
+        profiles[0]["settings"]["mygrid"], "EN53",
+        "CONTROL: the rest of the save"
+    );
+    assert_eq!(
+        saved["state"]["nexus-ui-scale-cap"], "1.25",
+        "CONTROL: the shack's own keys"
+    );
+}
+
+/// Each setting a whole save from afar keeps as the shack has it, found by trying them all: every
+/// setting the shack's file carries is changed alone in a save from afar, and it is kept when it
+/// comes back as the shack's. Also what could not be changed alone (a list or a table).
+fn what_a_save_from_afar_keeps() -> (std::collections::BTreeSet<String>, Vec<String>) {
+    use tempo_app::settings::Settings;
+    // The pending Cloudlog key is written only while it holds one.
+    let shack = Settings {
+        cloudlog_key: "FAKE-PENDING-KEY-0001".into(),
+        ..Default::default()
+    };
+    let file = serde_json::to_value(&shack).unwrap();
+    let mut kept = std::collections::BTreeSet::new();
+    let mut untried = Vec::new();
+    for (name, value) in file.as_object().unwrap() {
+        let tries: Vec<Value> = match value {
+            Value::Bool(b) => vec![json!(!b)],
+            Value::Number(n) => {
+                let n = n.as_f64().unwrap();
+                vec![json!(n + 1.0), json!(n - 1.0), json!(n * 2.0 + 3.0)]
+                    .into_iter()
+                    .chain([json!(n as u64 + 1), json!(n as u64 + 3)])
+                    .collect()
+            }
+            Value::Null => vec![
+                json!(1),
+                json!(2.5),
+                json!(true),
+                json!("probe"),
+                json!([]),
+                json!({}),
+            ],
+            Value::String(s) => {
+                // A choice of a few names says which, when it refuses another.
+                let mut asked = file.clone();
+                asked[name] = json!("probe");
+                let others = match serde_json::from_value::<Settings>(asked) {
+                    Err(e) => e
+                        .to_string()
+                        .split('`')
+                        .skip(3)
+                        .step_by(2)
+                        .filter(|v| v != s)
+                        .map(|v| json!(v))
+                        .collect(),
+                    Ok(_) => Vec::new(),
+                };
+                [json!(format!("{s}probe"))]
+                    .into_iter()
+                    .chain(others)
+                    .collect()
+            }
+            Value::Array(_) | Value::Object(_) => Vec::new(),
+        };
+        let took = tries.into_iter().find_map(|changed| {
+            let mut asked = file.clone();
+            asked[name] = changed;
+            let asked: Settings = serde_json::from_value(asked).ok()?;
+            (serde_json::to_value(&asked).unwrap()[name] != *value).then_some(asked)
+        });
+        let Some(mut save) = took else {
+            untried.push(name.clone());
+            continue;
+        };
+        keep_the_shacks_settings(&shack, &mut save, Some(&Afar { stand_down: 1 }));
+        if serde_json::to_value(&save).unwrap()[name] == *value {
+            kept.insert(name.clone());
+        }
+    }
+    (kept, untried)
+}
+
+/// ⛔ What the read from afar says is set at the station is exactly what the save from afar keeps:
+/// every setting kept is flagged, so the form never takes an edit the save quietly puts back, and
+/// nothing flagged is a setting the save takes. Only a list or a table goes untried, and none of
+/// those is flagged.
+#[test]
+fn every_setting_a_save_from_afar_keeps_is_set_at_the_station() {
+    let (kept, untried) = what_a_save_from_afar_keeps();
+    let flagged: std::collections::BTreeSet<String> =
+        station_only_settings(Some(&Afar { stand_down: 1 }))
+            .unwrap()
+            .into_iter()
+            .map(String::from)
+            .collect();
+    assert_eq!(
+        kept.difference(&flagged).collect::<Vec<_>>(),
+        Vec::<&String>::new(),
+        "kept, but not set at the station"
+    );
+    assert_eq!(
+        flagged.difference(&kept).collect::<Vec<_>>(),
+        Vec::<&String>::new(),
+        "set at the station, but the save takes it"
+    );
+    assert!(
+        kept.contains("txWatchdogMin") && kept.contains("clublogApiKey"),
+        "CONTROL: the probe finds a guard and a stored key: {kept:?}"
+    );
+    assert!(!kept.contains("mycall"), "CONTROL: the call is the save's");
+    let file = serde_json::to_value(tempo_app::settings::Settings::default()).unwrap();
+    let untried_values: Vec<(&String, &Value)> = untried
+        .iter()
+        .filter(|name| !file[name.as_str()].is_array() && !file[name.as_str()].is_object())
+        .map(|name| (name, &file[name.as_str()]))
+        .collect();
+    assert_eq!(untried_values, Vec::new(), "could not be changed alone");
+    for name in &untried {
+        assert!(!flagged.contains(name), "{name} is flagged but untried");
+    }
+    assert_eq!(
+        station_only_settings(None),
+        None,
+        "at the shack nothing is set elsewhere"
+    );
+}
+
+/// The list the UI's tests render the form with is the one the read from afar sends.
+#[test]
+fn the_ui_fixture_carries_the_station_only_list() {
+    let fixture: Vec<String> = serde_json::from_str(include_str!(
+        "../../../ui/src/components/__fixtures__/stationOnlySettings.json"
+    ))
+    .unwrap();
+    let sent: Vec<String> = station_only_settings(Some(&Afar { stand_down: 1 }))
+        .unwrap()
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert_eq!(fixture, sent);
+}
+
+/// The read's "set at the station" is no setting: a save sends it back, and it is never kept into
+/// the file, from afar or at the shack.
+#[test]
+fn a_save_never_writes_the_set_at_the_station_list() {
+    for afar in [Some(Afar { stand_down: 2 }), None] {
+        let shack = tempo_app::settings::Settings::default();
+        let mut save = shack.clone();
+        save.unknown
+            .insert(SET_AT_THE_STATION.into(), json!(["txWatchdogMin"]));
+        keep_the_shacks_settings(&shack, &mut save, afar.as_ref());
+        assert!(save.unknown.get(SET_AT_THE_STATION).is_none(), "{afar:?}");
+    }
+}

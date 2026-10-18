@@ -14,6 +14,7 @@
 // code; they are the same characters in every language, and a translator who "localises" one
 // has broken an example of a wire format.
 
+import type { ReactNode } from 'react'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import type { BandChannel, Settings } from '../types'
@@ -109,9 +110,13 @@ interface Props {
   /** Units is on the Remote allow-list even though the rest of this section is not, so a
    *  browser may still change it (#248 moved it here from Digital). Undefined off Remote. */
   unitsLocked?: boolean
+  /** From a computer driving the station: a setting the save from there keeps as the station has
+   *  it shows read-only, and `setAtStation` says so. Absent at the station. */
+  locked?: (key: FieldKey) => boolean
+  setAtStation?: (key: FieldKey) => ReactNode
 }
 
-export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq, unitsLocked }: Props) {
+export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq, unitsLocked, locked, setAtStation }: Props) {
   return (
     // The SECTION is never disabled; the groups inside it are. A form control inside a disabled
     // <fieldset> is disabled whatever its own `disabled` says, and a nested fieldset cannot take
@@ -144,7 +149,7 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
         })}
         <label className="settings-field">
           <span className="settings-label">{t('settings.station.licenseClass.label')}</span>
-          <select
+          <select disabled={locked?.('licenseClass')} data-setting="licenseClass"
             className="settings-input"
             value={String(form.licenseClass ?? 'open')}
             onChange={(e) => onUpdate('licenseClass', e.target.value)}
@@ -155,6 +160,7 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
               </option>
             ))}
           </select>
+          {setAtStation?.('licenseClass')}
           <span className="settings-hint">{t('settings.station.licenseClass.hint')}</span>
         </label>
       </div>

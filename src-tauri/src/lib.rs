@@ -13604,22 +13604,61 @@ fn set_mode(
     )?
 }
 
-/// Current operator/station settings.
+/// A settings read: the settings, and from afar whether the shack has each stored key saved
+/// (`command_dispatch::SAVED_AT_THE_STATION`), the keys themselves blanked, and which settings are
+/// set at the station only (`command_dispatch::SET_AT_THE_STATION`).
+#[derive(serde::Serialize)]
+struct SettingsRead {
+    #[serde(flatten)]
+    settings: Settings,
+    #[serde(
+        rename = "secretsSavedAtStation",
+        skip_serializing_if = "Option::is_none"
+    )]
+    saved_at_the_station: Option<std::collections::BTreeMap<&'static str, bool>>,
+    #[serde(
+        rename = "stationOnlySettings",
+        skip_serializing_if = "Option::is_none"
+    )]
+    set_at_the_station: Option<Vec<&'static str>>,
+}
+
+/// What a settings read answers with, from the Engine's settings `shack`.
+fn settings_read(shack: &Settings, afar: Option<&command_dispatch::Afar>) -> SettingsRead {
+    // Defensive: re-mirror the ACTIVE radio's profile into the flat fields the UI reads
+    // (idempotent — a no-op when already in sync). Guarantees the Settings Rig/Audio form
+    // always shows the active radio's own CAT + audio device, independent of which code path
+    // last flipped the active radio.
+    let mut s = shack.clone();
+    s.sync_flat_from_active();
+    // From afar the stored keys stay at the shack: blanked, with whether each is saved.
+    let saved_at_the_station = command_dispatch::withhold_the_shacks_secret_settings(&mut s, afar);
+    // The Cloudlog key is write-only and never sent to the frontend. It now serializes while
+    // a legacy plaintext key is pending keychain migration (so a save cannot drop it — round
+    // 8 F1), so clear it from THIS clone before it leaves the shell; the engine's own copy is
+    // untouched and the migration retry still sees it.
+    s.cloudlog_key.clear();
+    // The read's own names are no settings: an unknown key of either name cannot ride beside it.
+    s.unknown.remove(command_dispatch::SAVED_AT_THE_STATION);
+    s.unknown.remove(command_dispatch::SET_AT_THE_STATION);
+    SettingsRead {
+        settings: s,
+        saved_at_the_station,
+        // From afar, which settings the save keeps as the shack has them, so the form says so.
+        set_at_the_station: command_dispatch::station_only_settings(afar),
+    }
+}
+
+/// Current operator/station settings. `afar`: from a computer driving the station, the stored
+/// keys are blanked and the read says which the shack has saved
+/// (`command_dispatch::withhold_the_shacks_secret_settings`).
 #[tauri::command]
-async fn get_settings(state: State<'_, SharedEngine>) -> Result<Settings, String> {
-    with_engine(&state, |eng| {
-        // Defensive: re-mirror the ACTIVE radio's profile into the flat fields the UI reads
-        // (idempotent — a no-op when already in sync). Guarantees the Settings Rig/Audio form
-        // always shows the active radio's own CAT + audio device, independent of which code path
-        // last flipped the active radio.
-        let mut s = eng.settings().clone();
-        s.sync_flat_from_active();
-        // The Cloudlog key is write-only and never sent to the frontend. It now serializes while
-        // a legacy plaintext key is pending keychain migration (so a save cannot drop it — round
-        // 8 F1), so clear it from THIS clone before it leaves the shell; the engine's own copy is
-        // untouched and the migration retry still sees it.
-        s.cloudlog_key.clear();
-        s
+async fn get_settings(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<SettingsRead, String> {
+    with_engine(&state, move |eng| {
+        settings_read(eng.settings(), afar.as_ref())
     })
     .await
 }
@@ -13676,8 +13715,9 @@ fn reset_settings(
 /// already-running feed keeps its original callsign until the next restart).
 /// `afar`: from a computer driving the station, its save keeps the shack's own settings that let
 /// the station transmit by itself, those that guard a transmission and the program it runs to sign
-/// a LoTW upload (`command_dispatch::keep_the_shacks_transmit_settings`), and the addresses the shack
-/// sends a stored key or password to (`command_dispatch::keep_the_shacks_credential_addresses`).
+/// a LoTW upload (`command_dispatch::keep_the_shacks_transmit_settings`), the addresses the shack
+/// sends a stored key or password to (`command_dispatch::keep_the_shacks_credential_addresses`), and
+/// the stored keys themselves (`command_dispatch::keep_the_shacks_secret_settings`).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn set_settings(
@@ -13691,14 +13731,9 @@ fn set_settings(
     afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     // From a computer driving the station, the shack's own transmit settings and guards stay, and
-    // so does the program the shack runs to sign a LoTW upload.
-    command_dispatch::keep_the_shacks_transmit_settings(
-        engine_lock(&state).settings(),
-        &mut settings,
-        afar.as_ref(),
-    );
-    // …and where the shack sends its stored keys and passwords.
-    command_dispatch::keep_the_shacks_credential_addresses(
+    // so do the program the shack runs to sign a LoTW upload, where the shack sends its stored keys
+    // and passwords, and the stored keys themselves.
+    command_dispatch::keep_the_shacks_settings(
         engine_lock(&state).settings(),
         &mut settings,
         afar.as_ref(),
@@ -14440,12 +14475,12 @@ async fn export_general_log(
 ///
 /// A restore therefore does not put it back, and the operator re-enters it. That is the correct
 /// trade: re-typing one key beats a key that stops working for reasons nobody can see.
-const BACKUP_REDACTED_FIELDS: [&str; 2] = ["clublogApiKey", "cloudlogKey"];
-
-/// Remove [`BACKUP_REDACTED_FIELDS`] from a serialised Settings object.
+///
+/// The fields are `command_dispatch::SECRET_SETTINGS`, the one list a read from afar blanks and a
+/// save from afar keeps too, so the three cannot drift apart.
 fn redact_for_backup(mut settings: serde_json::Value) -> serde_json::Value {
     if let Some(obj) = settings.as_object_mut() {
-        for f in BACKUP_REDACTED_FIELDS {
+        for (f, _) in command_dispatch::SECRET_SETTINGS {
             obj.remove(f);
         }
     }
@@ -14493,7 +14528,7 @@ fn strip_unknown_for_backup(
 /// a restore will ask for those again. Anything that changes that has to revisit this comment.
 /// That is also why `Settings::unknown` is stripped here (`strip_unknown_for_backup`): those
 /// keys come from a NEWER build, and this one cannot tell whether one of them is a credential —
-/// `BACKUP_REDACTED_FIELDS` can only name fields it knows about.
+/// `command_dispatch::SECRET_SETTINGS` can only name fields it knows about.
 ///
 /// The QSO log is NOT here. It is a separate, much larger file with its own ADIF export, and
 /// silently folding it into a "settings" backup would produce a file operators would hand around
@@ -22893,12 +22928,13 @@ fn whole_eqsl_download(body: String) -> Result<String, String> {
 /// QRZ's answer to the FETCH, whole or not at all: its book, every record QRZ says it sent. A
 /// check of part of the book would take a confirmation that was cut off for a misplaced one, so
 /// an answer that stops short checks nothing. A refusal is said in QRZ's own words, which may echo
-/// the request and its key: screen and session only, as [`sync_qrz`] treats them.
+/// the request and its key: without the key ([`qrz_words_without_key`]), and screen and session
+/// only, as [`sync_qrz`] treats them.
 ///
 /// An empty book checks nothing either, and says so. QRZ answers a FETCH that matched nothing with
 /// a FAIL ([`tempo_core::qrz::QrzFetch::nothing_matched`]), which is no refused key; and a check
 /// never reads "QRZ holds none of these" off a book that may be the wrong one.
-fn whole_qrz_book(answer: &str) -> Result<String, String> {
+fn whole_qrz_book(answer: &str, key: &str) -> Result<String, String> {
     let fetched = tempo_core::qrz::parse_fetch(answer);
     if fetched.nothing_matched {
         return Err(
@@ -22906,7 +22942,7 @@ fn whole_qrz_book(answer: &str) -> Result<String, String> {
         );
     }
     if !fetched.ok {
-        return Err(qrz_fetch_refused(fetched.reason).message.into_string());
+        return Err(qrz_fetch_refused(fetched.reason, key).message.into_string());
     }
     if !tempo_core::qrz::is_whole_fetch(&fetched) {
         return Err(
@@ -22981,7 +23017,10 @@ fn qrz_check_on(
     access: &QrzAccess,
     post: &dyn Fn(String) -> Result<String, String>,
 ) -> Result<(String, tempo_app::station::ServiceCheck), String> {
-    let book = whole_qrz_book(&post(tempo_core::qrz::build_fetch_body(&access.key))?)?;
+    let book = whole_qrz_book(
+        &post(tempo_core::qrz::build_fetch_body(&access.key))?,
+        &access.key,
+    )?;
     let plan = tempo_app::engine::log_plan(engine);
     let check =
         tempo_app::station::check_qrz_confirmations(&plan, &book, access.owncall.as_deref())?;
@@ -27153,16 +27192,84 @@ const QRZ_SYNC_REFUSED: ConnDetail = conn_detail!(
      QSL. This session's connection log has QRZ's own wording."
 );
 
-/// QRZ answered the FETCH and refused it. Extracted from [`sync_qrz_since`] — which does
-/// blocking HTTP and so cannot be driven in a test — so the one decision that matters can be:
-/// what of QRZ's answer ends up on the half that may be printed. See
-/// `no_qrz_fetch_reason_can_reach_stderr`.
-fn qrz_fetch_refused(reason: Option<String>) -> QrzSyncFailure {
+/// One stored secret a request to a logging service carried, and what stands in for it in the
+/// service's own words.
+struct Echoed<'a> {
+    secret: &'a str,
+    marker: &'a str,
+}
+
+/// ⛔ A logging service's own words, without the stored secrets the request carried. QRZ and
+/// ClubLog echo the failing request in their reply, and the request holds the API key or password;
+/// those words reach the operator's toast, the connection log and a computer driving the station.
+/// Each secret, raw or percent-encoded, is masked (`tempo_core::qrz_correct::scrub_secret`); words
+/// that still show one, in any case, with other separators, or percent-encoded, are replaced
+/// whole by `withheld`. Words with no secret in them come through as the service wrote them.
+fn service_words_without_secrets(words: &str, echoed: &[Echoed<'_>], withheld: &str) -> String {
+    let scrubbed = echoed.iter().fold(words.to_string(), |text, e| {
+        tempo_core::qrz_correct::scrub_secret(&text, e.secret, e.marker)
+    });
+    let folded = |text: &str| -> String {
+        text.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect()
+    };
+    let shown = folded(&scrubbed);
+    let still_shown = echoed.iter().any(|e| {
+        // The secret's letters and digits, and those of its percent-encoded form (a `-` as `2d`).
+        let plain = folded(e.secret);
+        let encoded: String = e
+            .secret
+            .trim()
+            .bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() {
+                    (b.to_ascii_lowercase() as char).to_string()
+                } else {
+                    format!("{b:02x}")
+                }
+            })
+            .collect();
+        [plain, encoded]
+            .iter()
+            .any(|k| !k.is_empty() && shown.contains(k.as_str()))
+    });
+    if still_shown {
+        withheld.to_string()
+    } else {
+        scrubbed
+    }
+}
+
+/// What the operator is told instead of QRZ's words when they still show the Logbook API key.
+const QRZ_WORDS_WITHHELD: &str = "QRZ refused the request, and its reply echoed the API key \
+     back, so its wording is withheld. Check the QRZ Logbook API key in Settings.";
+
+/// QRZ's own words about a request made with the Logbook API key `key`, without the key
+/// ([`service_words_without_secrets`]).
+fn qrz_words_without_key(words: &str, key: &str) -> String {
+    service_words_without_secrets(
+        words,
+        &[Echoed {
+            secret: key,
+            marker: "«api key»",
+        }],
+        QRZ_WORDS_WITHHELD,
+    )
+}
+
+/// QRZ answered the FETCH, made with `key`, and refused it. Extracted from [`sync_qrz_since`] —
+/// which does blocking HTTP and so cannot be driven in a test — so the one decision that matters
+/// can be: what of QRZ's answer ends up on the half that may be printed, and that its words reach
+/// the screen without the key. See `no_qrz_fetch_reason_can_reach_stderr`.
+fn qrz_fetch_refused(reason: Option<String>, key: &str) -> QrzSyncFailure {
     QrzSyncFailure {
         detail: QRZ_SYNC_REFUSED,
         message: ScreenReason::new(
             reason
                 .filter(|r| !r.trim().is_empty())
+                .map(|r| qrz_words_without_key(&r, key))
                 .unwrap_or_else(|| "QRZ rejected the FETCH — check your Logbook API key.".into()),
         ),
     }
@@ -27177,12 +27284,12 @@ fn qrz_fetch_refused(reason: Option<String>) -> QrzSyncFailure {
 /// rejected the FETCH — check your Logbook API key" in the connection log and left the high-water
 /// where it was, so the worker asked again every five minutes. See
 /// `a_sync_that_finds_nothing_new_is_not_refused`.
-fn qrz_sync_answer(resp: &str) -> Result<tempo_core::qrz::QrzFetch, QrzSyncFailure> {
+fn qrz_sync_answer(resp: &str, key: &str) -> Result<tempo_core::qrz::QrzFetch, QrzSyncFailure> {
     let fetched = tempo_core::qrz::parse_fetch(resp);
     if fetched.ok || fetched.nothing_matched {
         Ok(fetched)
     } else {
-        Err(qrz_fetch_refused(fetched.reason))
+        Err(qrz_fetch_refused(fetched.reason, key))
     }
 }
 
@@ -27228,7 +27335,7 @@ fn sync_qrz_since(
             },
         )?
     };
-    let fetched = qrz_sync_answer(&resp)?;
+    let fetched = qrz_sync_answer(&resp, &key)?;
     // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
     let merge = || tempo_app::logwrite::merge_qrz_report(engine, &fetched.adif);
     // The operator's sync makes it again when the store turns it back (another window changed
@@ -28060,49 +28167,8 @@ fn qrz_status_reply(resp: &str, key: &str, mycall: &str) -> Result<String, Strin
     } else {
         Err(st.reason.map_or_else(
             || "QRZ rejected the API key".into(),
-            |reason| qrz_reason_without_key(&reason, key),
+            |reason| qrz_words_without_key(&reason, key),
         ))
-    }
-}
-
-/// What the operator is told instead of QRZ's reason when it still shows the key.
-const QRZ_REASON_WITHHELD: &str = "QRZ refused the request, and its reply echoed the API key \
-     back, so its wording is withheld. Check the QRZ Logbook API key in Settings.";
-
-/// QRZ's own reason for a refused Test, without the key. QRZ echoes the failing request, which
-/// carried the key, and this answer reaches the connection log and a remote client's Test button.
-/// A verbatim or percent-encoded echo is masked (`qrz_correct::scrub_key`); a reason that still
-/// shows the key, plain or percent-encoded, in any case or with other separators, is withheld
-/// whole.
-fn qrz_reason_without_key(reason: &str, key: &str) -> String {
-    let scrubbed = tempo_core::qrz_correct::scrub_key(reason, key);
-    let folded = |text: &str| -> String {
-        text.chars()
-            .filter(char::is_ascii_alphanumeric)
-            .map(|c| c.to_ascii_lowercase())
-            .collect()
-    };
-    // The key's letters and digits, and those of its percent-encoded form (a `-` as `2d`).
-    let plain = folded(key);
-    let encoded: String = key
-        .trim()
-        .bytes()
-        .map(|b| {
-            if b.is_ascii_alphanumeric() {
-                (b.to_ascii_lowercase() as char).to_string()
-            } else {
-                format!("{b:02x}")
-            }
-        })
-        .collect();
-    let shown = folded(&scrubbed);
-    if [plain, encoded]
-        .iter()
-        .any(|k| !k.is_empty() && shown.contains(k.as_str()))
-    {
-        QRZ_REASON_WITHHELD.to_string()
-    } else {
-        scrubbed
     }
 }
 
@@ -28248,6 +28314,15 @@ mod upload_record_tests {
     }
 }
 
+/// What QRZ's answer `resp` to a push made with `key` says: its reason, which goes to the
+/// operator's toast, the connection log and a computer driving the station, without the key it
+/// may echo ([`qrz_words_without_key`]).
+fn qrz_push_answer(resp: &str, key: &str) -> tempo_core::qrz::QrzPush {
+    let mut push = tempo_core::qrz::parse_push_response(resp);
+    push.reason = push.reason.map(|r| qrz_words_without_key(&r, key));
+    push
+}
+
 fn qrz_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
@@ -28326,7 +28401,7 @@ fn qrz_push_qso_impl(
     let adif = tempo_core::logbook::adif_record(&rec);
     let body = tempo_core::qrz::build_insert_body(&key, &adif, false);
     let resp = propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)?;
-    let push = tempo_core::qrz::parse_push_response(&resp);
+    let push = qrz_push_answer(&resp, &key);
     // Record the outcome on the just-pushed QSO so diagnostics can surface R1 (never
     // pushed to QRZ) / R9 (QRZ upload bounced). QRZ outcomes are always definitive.
     //
@@ -28893,6 +28968,45 @@ async fn clublog_push_qso(
     )
 }
 
+/// What the operator is told instead of ClubLog's words when they still show a stored secret.
+const CLUBLOG_WORDS_WITHHELD: &str = "ClubLog refused the upload, and its reply echoed a stored \
+     password or key back, so its wording is withheld. Check the ClubLog settings.";
+
+/// What ClubLog's answer (`status`, `resp`) to an upload made with `password` and the application
+/// key `api_key` says: its words, which go to the operator's toast, the connection log and a
+/// computer driving the station, without the password or the key they may echo, nor the key
+/// `built_in` to the installer ([`service_words_without_secrets`]).
+fn clublog_push_answer(
+    status: u16,
+    resp: &str,
+    password: &str,
+    api_key: &str,
+    built_in: &str,
+) -> tempo_core::clublog::ClubLogPush {
+    let mut push = tempo_core::clublog::classify_response(status, resp);
+    push.message = push.message.map(|words| {
+        service_words_without_secrets(
+            &words,
+            &[
+                Echoed {
+                    secret: password,
+                    marker: "«password»",
+                },
+                Echoed {
+                    secret: api_key,
+                    marker: "«api key»",
+                },
+                Echoed {
+                    secret: built_in,
+                    marker: "«api key»",
+                },
+            ],
+            CLUBLOG_WORDS_WITHHELD,
+        )
+    });
+    push
+}
+
 fn clublog_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
@@ -28939,16 +29053,22 @@ fn clublog_push_qso_impl(
     let (status, resp) = {
         let query = tempo_core::clublog::ClubLogQuery {
             email,
-            password,
+            password: password.clone(),
             callsign,
-            api_key,
+            api_key: api_key.clone(),
             adif,
         };
         let body = tempo_core::clublog::build_realtime_body(&query);
         propagation::live::clublog::push_realtime(tempo_core::clublog::CLUBLOG_REALTIME_URL, body)?
     }; // `query` + `body` (both hold the secrets) dropped here
 
-    let push = tempo_core::clublog::classify_response(status, &resp);
+    let push = clublog_push_answer(
+        status,
+        &resp,
+        &password,
+        &api_key,
+        &effective_clublog_key(""),
+    );
     if push.result == tempo_core::clublog::ClubLogResult::AuthFail {
         // Halt further auto-pushes until a credential changes (IP-block guard).
         {
@@ -38462,7 +38582,7 @@ mod tests {
     use crate::remote_service::stored_log_tests::StoredLog;
 
     /// The settings backup's stated contract is that it CARRIES NO SECRETS, and
-    /// `BACKUP_REDACTED_FIELDS` can only name credentials this build knows about. With
+    /// `command_dispatch::SECRET_SETTINGS` can only name credentials this build knows about. With
     /// `Settings::unknown` preserving a newer build's keys through save/load, an API key that
     /// build added would otherwise be copied straight into a file the operator is told is safe
     /// to email — so the export drops every preserved key, identified from the live settings
@@ -39138,7 +39258,7 @@ mod tests {
         // Everything QRZ's parser can hand this mapping: its own words, an empty REASON,
         // and no REASON at all.
         for reason in [Some(hostile.clone()), Some(String::new()), None] {
-            let printed = super::qrz_fetch_refused(reason).detail.as_str();
+            let printed = super::qrz_fetch_refused(reason, KEY).detail.as_str();
             assert!(
                 !printed.contains(KEY),
                 "QRZ's own answer reached stderr: {printed:?}"
@@ -39158,15 +39278,15 @@ mod tests {
             hostile.contains(KEY) && hostile.contains('\u{202e}'),
             "control: the hostile REASON must actually carry the key and the override"
         );
-        // …and QRZ's words are UN-PERSISTED, not thrown away: they still reach the screen.
-        // Without this the assertions above would pass just as happily against a build that
-        // dropped the reason on the floor and told the operator nothing.
-        assert!(
-            super::qrz_fetch_refused(Some(hostile))
+        // …and QRZ's words are UN-PERSISTED, not thrown away: they still reach the screen, without
+        // the key. Without this the assertions above would pass just as happily against a build
+        // that dropped the reason on the floor and told the operator nothing.
+        assert_eq!(
+            super::qrz_fetch_refused(Some(hostile), KEY)
                 .message
-                .on_screen()
-                .contains(KEY),
-            "control: QRZ's own wording must still reach the operator's session"
+                .on_screen(),
+            "\u{202e}FETCH denied for key=«api key»\u{200b}",
+            "control: QRZ's own wording must still reach the operator's session, without the key"
         );
     }
 
@@ -39180,7 +39300,7 @@ mod tests {
             "RESULT=FAIL&COUNT=0",
             "RESULT=FAIL&REASON=no+log+entries+found&COUNT=0",
         ] {
-            let fetched = super::qrz_sync_answer(nothing).ok();
+            let fetched = super::qrz_sync_answer(nothing, "TEST-KEY").ok();
             assert!(
                 fetched.as_ref().is_some_and(|f| f.adif.is_empty()),
                 "{nothing}: nothing new is not a refusal, and there is nothing to merge"
@@ -39193,15 +39313,22 @@ mod tests {
             "RESULT=FAIL",
             "RESULT=AUTH",
         ] {
-            assert!(super::qrz_sync_answer(refused).is_err(), "{refused}");
+            assert!(
+                super::qrz_sync_answer(refused, "TEST-KEY").is_err(),
+                "{refused}"
+            );
         }
-        let refused = super::qrz_sync_answer("RESULT=FAIL&REASON=invalid+api+key").err();
+        let refused =
+            super::qrz_sync_answer("RESULT=FAIL&REASON=invalid+api+key", "TEST-KEY").err();
         assert_eq!(
             refused.as_ref().map(|f| f.message.on_screen()),
             Some("invalid api key")
         );
         // …and a book with a record in it is the record to merge.
-        let book = super::qrz_sync_answer("RESULT=OK&COUNT=1&ADIF=&lt;CALL:4&gt;W1AW&lt;eor&gt;");
+        let book = super::qrz_sync_answer(
+            "RESULT=OK&COUNT=1&ADIF=&lt;CALL:4&gt;W1AW&lt;eor&gt;",
+            "TEST-KEY",
+        );
         assert!(book.is_ok_and(|f| f.adif.contains("<CALL:4>W1AW")));
     }
     /// The JS8 station journal lives beside settings.json, exactly where pending_msgs.json
@@ -47411,7 +47538,7 @@ mod tests {
         assert!(
             raw.as_object().unwrap().contains_key("clublogApiKey"),
             "settings.json no longer carries clublogApiKey — if it moved to the keychain, say so \
-             here and drop it from BACKUP_REDACTED_FIELDS; if it was RENAMED, the redaction is \
+             here and drop it from SECRET_SETTINGS; if it was RENAMED, the redaction is \
              now silently missing a live credential"
         );
     }
@@ -53085,7 +53212,7 @@ mod remote_credential_reply_tests {
                 QRZ_BOOK_KEY,
                 "W9TST"
             ),
-            Err(QRZ_REASON_WITHHELD.to_string()),
+            Err(QRZ_WORDS_WITHHELD.to_string()),
             "an echo the mask cannot find is withheld whole"
         );
         for echo in [
@@ -53165,5 +53292,303 @@ mod remote_credential_reply_tests {
             }
         }
         serving.join().expect("the fake N3FJP served");
+    }
+}
+
+#[cfg(test)]
+mod secrets_toward_remote_tests {
+    use super::*;
+
+    const CLUBLOG_OVERRIDE: &str = "FAKEovrQz0123vX";
+    const CLUBLOG_BUILT_IN: &str = "FAKEbkJw4567tY";
+    const CLUBLOG_PASSWORD: &str = "fake app&Pw Zq7x 89";
+    const CLOUDLOG_PENDING: &str = "cl0123456789abcdef";
+    const QRZ_KEY: &str = "A1B2-C3D4-E5F6-0789";
+
+    /// Every form of each secret a text may show it in: raw, upper and lower case, percent-encoded,
+    /// with its separators gone, and any eight-character stretch of it.
+    fn leaks(text: &str, secrets: &[&str]) -> Vec<String> {
+        let folded = |t: &str| -> String {
+            t.chars()
+                .filter(char::is_ascii_alphanumeric)
+                .map(|c| c.to_ascii_lowercase())
+                .collect()
+        };
+        let shown = folded(text);
+        let mut found = Vec::new();
+        for secret in secrets {
+            let encoded: String = secret
+                .bytes()
+                .map(|b| {
+                    if b.is_ascii_alphanumeric() {
+                        (b as char).to_string()
+                    } else {
+                        format!("%{b:02X}")
+                    }
+                })
+                .collect();
+            let plain = folded(secret);
+            if text.contains(secret)
+                || text.contains(&secret.to_ascii_uppercase())
+                || text.contains(&secret.to_ascii_lowercase())
+                || text.contains(&encoded)
+                || shown.contains(&plain)
+            {
+                found.push(format!("the whole of {secret:?}"));
+            }
+            let chars: Vec<char> = plain.chars().collect();
+            if let Some(stretch) = chars
+                .windows(8)
+                .map(|w| w.iter().collect::<String>())
+                .find(|w| shown.contains(w.as_str()))
+            {
+                found.push(format!("a stretch {stretch:?} of {secret:?}"));
+            }
+        }
+        found
+    }
+
+    /// A station holding a ClubLog key override and a Cloudlog key waiting for the keychain.
+    fn station() -> Settings {
+        Settings {
+            clublog_api_key: CLUBLOG_OVERRIDE.into(),
+            cloudlog_key: CLOUDLOG_PENDING.into(),
+            ..Default::default()
+        }
+    }
+
+    /// The positive control: the leak check catches each secret in each form, in a deliberately
+    /// leaky settings read (the Engine's settings as they are) and in echoes, and passes clean text.
+    #[test]
+    fn the_leak_check_catches_a_deliberately_leaky_reply() {
+        let leaky = serde_json::to_string(&station()).unwrap();
+        let found = leaks(&leaky, &[CLUBLOG_OVERRIDE, CLOUDLOG_PENDING]);
+        assert_eq!(
+            found.len(),
+            4,
+            "both secrets, whole and stretched: {found:?}"
+        );
+        for echo in [
+            format!("bad key {QRZ_KEY}"),
+            format!("bad key {}", QRZ_KEY.to_ascii_lowercase()),
+            format!("bad key {}", QRZ_KEY.replace('-', "%2D")),
+            format!("bad key {}", QRZ_KEY.replace('-', "")),
+            format!("bad key {}", &QRZ_KEY[2..12]),
+        ] {
+            assert!(!leaks(&echo, &[QRZ_KEY]).is_empty(), "missed in {echo:?}");
+        }
+        assert_eq!(leaks("invalid api key", &[QRZ_KEY]), Vec::<String>::new());
+    }
+
+    /// From afar the read names every setting the save keeps as the shack has it, once, whatever an
+    /// unknown key of that name planted; at the shack it names none.
+    #[test]
+    fn a_settings_read_from_afar_says_what_is_set_at_the_station() {
+        let afar = command_dispatch::Afar { stand_down: 1 };
+        let mut shack = station();
+        shack.unknown.insert(
+            command_dispatch::SET_AT_THE_STATION.into(),
+            serde_json::json!(["planted"]),
+        );
+        let read = serde_json::to_value(settings_read(&shack, Some(&afar))).unwrap();
+        assert_eq!(
+            read[command_dispatch::SET_AT_THE_STATION],
+            serde_json::json!(command_dispatch::station_only_settings(Some(&afar)).unwrap())
+        );
+        assert_eq!(
+            read.to_string()
+                .matches(command_dispatch::SET_AT_THE_STATION)
+                .count(),
+            1
+        );
+        let own = serde_json::to_value(settings_read(&shack, None)).unwrap();
+        assert!(
+            own.get(command_dispatch::SET_AT_THE_STATION).is_none(),
+            "at the shack, no list and nothing planted"
+        );
+    }
+
+    /// ⛔ A settings read from afar carries no stored key, says by value which the station has
+    /// saved, and cannot carry a planted "saved" of its own. CONTROL: the station's own screen
+    /// still reads its ClubLog key, and never the Cloudlog one.
+    #[test]
+    fn a_settings_read_from_afar_carries_no_stored_key() {
+        let afar = command_dispatch::Afar { stand_down: 1 };
+        let mut shack = station();
+        shack.unknown.insert(
+            command_dispatch::SAVED_AT_THE_STATION.into(),
+            serde_json::json!("planted"),
+        );
+        let read = serde_json::to_value(settings_read(&shack, Some(&afar))).unwrap();
+        let text = read.to_string();
+        assert_eq!(
+            leaks(&text, &[CLUBLOG_OVERRIDE, CLOUDLOG_PENDING]),
+            Vec::<String>::new(),
+            "from afar: {text}"
+        );
+        assert_eq!(read["clublogApiKey"], "");
+        assert_eq!(
+            read[command_dispatch::SAVED_AT_THE_STATION],
+            serde_json::json!({ "clublogApiKey": true, "cloudlogKey": true })
+        );
+        assert_eq!(
+            text.matches(command_dispatch::SAVED_AT_THE_STATION).count(),
+            1,
+            "the flags once: {text}"
+        );
+        let none = serde_json::to_value(settings_read(&Settings::default(), Some(&afar))).unwrap();
+        assert_eq!(
+            none[command_dispatch::SAVED_AT_THE_STATION],
+            serde_json::json!({ "clublogApiKey": false, "cloudlogKey": false })
+        );
+        let own = serde_json::to_value(settings_read(&shack, None)).unwrap();
+        assert_eq!(
+            own["clublogApiKey"], CLUBLOG_OVERRIDE,
+            "CONTROL: at the shack"
+        );
+        assert!(own.get("cloudlogKey").is_none(), "CONTROL: write-only");
+        assert!(
+            own.get(command_dispatch::SAVED_AT_THE_STATION).is_none(),
+            "at the shack, no flags and nothing planted"
+        );
+    }
+
+    /// The forms a service's echo of `secret` comes back in.
+    fn echoes(secret: &str) -> Vec<String> {
+        let each = |other: &dyn Fn(char) -> String| -> String {
+            secret
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() {
+                        c.to_string()
+                    } else {
+                        other(c)
+                    }
+                })
+                .collect()
+        };
+        vec![
+            secret.to_string(),
+            each(&|c| format!("%{:02X}", c as u32)),
+            each(&|c| format!("%25{:02X}", c as u32)),
+            each(&|_| String::new()),
+            secret.to_ascii_lowercase(),
+            secret.to_ascii_uppercase(),
+        ]
+    }
+
+    /// ⛔ QRZ's push reason, the sync's and the confirmation check's refusals: an echoed Logbook
+    /// key is scrubbed from each, whoever called. CONTROL: words with no key come through as QRZ
+    /// wrote them, and a verbatim echo is masked rather than withheld.
+    #[test]
+    fn an_echoed_qrz_key_is_scrubbed_from_every_reply() {
+        let push_reason = |resp: &str| qrz_push_answer(resp, QRZ_KEY).reason.unwrap_or_default();
+        let sync_refusal = |resp: &str| {
+            qrz_sync_answer(resp, QRZ_KEY)
+                .err()
+                .map(|f| f.message.into_string())
+                .unwrap_or_default()
+        };
+        let check_refusal = |resp: &str| whole_qrz_book(resp, QRZ_KEY).err().unwrap_or_default();
+        for (path, said) in [
+            ("qrz_push_qso", &push_reason as &dyn Fn(&str) -> String),
+            ("sync_qrz", &sync_refusal),
+            ("confirmation_check", &check_refusal),
+        ] {
+            for echo in echoes(QRZ_KEY) {
+                let resp = format!("RESULT=FAIL&REASON=invalid api key KEY={echo}");
+                let words = said(&resp);
+                assert!(!words.is_empty(), "{path}: said nothing for {resp}");
+                assert_eq!(
+                    leaks(&words, &[QRZ_KEY]),
+                    Vec::<String>::new(),
+                    "{path}: {words:?}"
+                );
+            }
+            assert_eq!(
+                said(&format!("RESULT=FAIL&REASON=invalid api key KEY={QRZ_KEY}")),
+                "invalid api key KEY=«api key»",
+                "{path}: a verbatim echo is masked"
+            );
+            assert_eq!(
+                said(&format!(
+                    "RESULT=FAIL&REASON=invalid api key KEY={}",
+                    QRZ_KEY.replace('-', "%252D")
+                )),
+                QRZ_WORDS_WITHHELD,
+                "{path}: a twice-encoded echo is withheld"
+            );
+            assert_eq!(
+                said("RESULT=FAIL&REASON=invalid api key"),
+                "invalid api key",
+                "CONTROL: {path}"
+            );
+        }
+    }
+
+    /// ⛔ ClubLog's words: the app-password, the typed key and the key built into the installer are
+    /// each scrubbed, whoever called. CONTROL: words with no secret come through as ClubLog wrote
+    /// them, the outcome is still read off them, and a verbatim echo is masked.
+    #[test]
+    fn an_echoed_clublog_secret_is_scrubbed_from_every_reply() {
+        let secrets = [CLUBLOG_PASSWORD, CLUBLOG_OVERRIDE, CLUBLOG_BUILT_IN];
+        for secret in secrets {
+            for echo in echoes(secret) {
+                for status in [400, 403, 500] {
+                    let body = format!("Rejected: email=op@example.com&password=x&api={echo}");
+                    let words = clublog_push_answer(
+                        status,
+                        &body,
+                        CLUBLOG_PASSWORD,
+                        CLUBLOG_OVERRIDE,
+                        CLUBLOG_BUILT_IN,
+                    )
+                    .message
+                    .unwrap_or_default();
+                    assert!(!words.is_empty(), "{status}: said nothing for {body}");
+                    assert_eq!(
+                        leaks(&words, &secrets),
+                        Vec::<String>::new(),
+                        "{status}: {words:?}"
+                    );
+                }
+            }
+        }
+        let masked = clublog_push_answer(
+            403,
+            &format!("Invalid password {CLUBLOG_PASSWORD} for api {CLUBLOG_BUILT_IN}"),
+            CLUBLOG_PASSWORD,
+            "",
+            CLUBLOG_BUILT_IN,
+        );
+        assert_eq!(
+            masked.message.as_deref(),
+            Some("Invalid password «password» for api «api key»")
+        );
+        let encoded = clublog_push_answer(
+            403,
+            "Invalid password fake%20app%26Pw%20Zq7x%2089",
+            CLUBLOG_PASSWORD,
+            "",
+            CLUBLOG_BUILT_IN,
+        );
+        assert_eq!(
+            encoded.message.as_deref(),
+            Some("Invalid password «password»"),
+            "a percent-encoded echo is masked"
+        );
+        let plain = clublog_push_answer(
+            200,
+            "Duplicate QSO",
+            CLUBLOG_PASSWORD,
+            CLUBLOG_OVERRIDE,
+            CLUBLOG_BUILT_IN,
+        );
+        assert_eq!(plain.message.as_deref(), Some("Duplicate QSO"), "CONTROL");
+        assert_eq!(
+            plain.result,
+            tempo_core::clublog::ClubLogResult::Duplicate,
+            "CONTROL"
+        );
     }
 }

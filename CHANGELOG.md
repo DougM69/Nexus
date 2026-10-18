@@ -178,6 +178,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Delete can be undone.** They used to sit right under Play, where Delete was easy to hit by mistake. After Delete the
   slot reads empty and "Deleted F1 (CQ)" offers Undo for about 8 seconds; Undo brings back the same recording under the
   same name, and only after that does the recording really go. Play, the F-keys and ■ Stop work as before.
+- **Remote: Settings on a computer driving the station now shows which settings can only be changed at the
+  station.** The transmit limits and safety stops, the switches that let other programs or a browser transmit, the
+  PTT method, port and lines, the licence class, the TQSL path, the addresses your logging-service keys are sent to,
+  and the keys themselves are greyed out there and say "Set at the station", with the station's own value. A save
+  from that computer already left them as the station had them; before, the form let you edit them and quietly put
+  them back. At the station itself nothing changes.
 
 ### Added
 - **Every save of the contest log now keeps backup copies beside it.** The contest log
@@ -200,6 +206,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, so it still works after the station gets a new address, and says so plainly when no computer answers to the
   name. Once Operate opens at what you typed, Nexus remembers it with that station and tries it first next time.
   The station's row shows it, with **Change** and **Clear**; **Forget** removes it with the pairing.
+- **Remote: logging-service keys stay at the station.** A computer driving the station no longer receives the
+  logging-service keys kept in the station's settings: Settings there shows only whether one is saved at the
+  station, and a save from it can no longer change, clear or replace one. When a logging service refuses an upload
+  or a download and repeats the key or password it was sent, Nexus now hides it from the message, on every screen.
+  Through a browser stream of the station's window, logging-service passwords and keys can no longer be saved,
+  forgotten or edited; do that at the station itself. At the station, the logging-service key shown in Settings
+  now appears as dots until you press Reveal.
 - **Remote: the addresses Nexus sends your logging-service keys to can only be changed at the station.** A settings
   save from a computer driving the station no longer changes the Cloudlog/Wavelog URL, the club host a Field Day
   position joins, or an Icom network radio's address and port, so it cannot send the station's stored Cloudlog key,
