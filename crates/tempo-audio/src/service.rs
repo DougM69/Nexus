@@ -3526,8 +3526,9 @@ struct RadioLoop {
     /// without Nexus's PTT, so nothing else in this loop sees their over; the transmit meters
     /// are read and the engine shows the over as on the air until then. 0.0 = none.
     cw_keying_until: f64,
-    /// What the engine was last told of [`Self::cw_keying_until`], so it hears only the edges.
-    cw_keying_told: bool,
+    /// What the engine was last told of [`Self::cw_keying_until`] (0.0 = no word), so it hears
+    /// each word's window once, and its end.
+    cw_keying_told: f64,
     /// Last FM repeater config (shift, offset Hz, CTCSS Hz) the RIG ACCEPTED — so the
     /// shift/offset/CTCSS commands only fire on change, not every loop. `None` when not
     /// in FM. ⚠️ It is set from the rig's answer, never from the fact that the commands
@@ -4237,7 +4238,7 @@ impl RadioLoop {
             last_winkeyer_wpm: 0, // 0 = unset → the open pushes the speed
             cw_busy_until: 0.0,
             cw_keying_until: 0.0,
-            cw_keying_told: false,
+            cw_keying_told: 0.0,
             last_fm: None,
             fm_push_misses: 0,
             remote_retune_uncertain: false,
@@ -11757,10 +11758,14 @@ impl RadioLoop {
             // without Nexus's PTT, so none of the three flags before it sees that over. The
             // operator watches Po, ALC and SWR in CW exactly as in SSB. The engine hears it on
             // every backend: its CW queue is empty while the last word of a send goes out.
+            // Told again for every word, not only on the edges: the next word is handed over on
+            // the tick the last one ends, so the window never drops in between, and the engine's
+            // copy of it ends by itself at the word it was told of.
             let cw_keying = now < self.cw_keying_until;
-            if cw_keying != self.cw_keying_told {
-                self.cw_keying_told = cw_keying;
-                engine_lock(engine).observe_cw_keying(cw_keying);
+            let window = if cw_keying { self.cw_keying_until } else { 0.0 };
+            if window != self.cw_keying_told {
+                self.cw_keying_told = window;
+                engine_lock(engine).observe_cw_keying(cw_keying.then(|| window - now));
             }
             let keyed_now = self.tx_until_ms.is_some()
                 || self.tuning_keyed
@@ -32070,6 +32075,72 @@ mod tests {
             late.is_empty(),
             "nothing is keyed after the stop, so nothing is read — {late:?}"
         );
+    }
+
+    /// CW owns the transmitter until its LAST word ends, on the rig's own keyer, where neither the
+    /// queue (empty by then) nor any PTT of the loop's says so. The engine is told each word's
+    /// window as it goes to the keyer: told only the first, its copy of the window would end by
+    /// itself part-way through the second. The loop runs on the real clock here, because the
+    /// engine's copy does.
+    #[test]
+    fn the_rigs_keyer_owns_the_transmitter_through_the_last_word_of_a_send() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_cw_keyer("cat", 600.0);
+            e.set_license_class("extra");
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+            e.set_cw_wpm(20);
+            // "CQ" keys 2040 ms with its word space, "TEST" 1680 ms after it.
+            e.send_cw("CQ TEST");
+        }
+        let (addr, log) = mock_rigctld_ptt(7_030_000, true, "0\n");
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let start = std::time::Instant::now();
+        let mut run_to = |state: &mut RadioLoop, rig: &mut Rig, end: f64| loop {
+            let t = 50.0 + start.elapsed().as_secs_f64() * 1000.0;
+            if t >= end {
+                break;
+            }
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        run_to(&mut state, &mut rig, 3_000.0);
+        assert!(
+            log.lock().unwrap().iter().any(|l| l.starts_with("b TEST")),
+            "control: the last word is on the rig's keyer — {:?}",
+            log.lock().unwrap()
+        );
+        let owner = || {
+            let e = engine.lock().unwrap();
+            (e.tx_owner(), e.snapshot().radio.tx_busy_reason)
+        };
+        assert_eq!(
+            owner(),
+            (
+                Some(tempo_app::engine::TxOwner::Cw),
+                Some("CW is sending — stop it first".to_string())
+            ),
+            "past the first word's own end, in the last word: CW still owns the transmitter"
+        );
+        run_to(&mut state, &mut rig, 4_300.0);
+        assert_eq!(owner(), (None, None), "the last word has ended");
     }
 
     /// The same over on a WinKeyer: the keyer keys the radio through its KEY jack, and no PTT

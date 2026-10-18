@@ -83,6 +83,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ends or Stop TX cuts it. The high-SWR cutoff, if switched on, now also sees the last word. The 150 ms meter
   cadence is unchanged. NEEDS-BENCH: send CW with the radio's own keyer and with a WinKeyer and watch Po, ALC and
   SWR move.
+- **CW now owns the transmitter until its last word ends.** Nexus counted CW as transmitting only while words were
+  still waiting to go, so during the last word of every send (and all of a one-word send, such as the CW ID after
+  an FT 73) another program's PTT over the CAT broker, the radio's ATU tune-up, a voice message on a Flex, an
+  RTTY, PSK, SSTV or APRS over, or a Remote start could key on top of it. Each now waits or is refused with "CW is
+  sending" until the word ends. Stop TX and TX Off end it at once, and the word's own length (plus a quarter
+  second) is a hard end, so a missed end can never hold the transmitter.
 - **IC-7300, IC-705, IC-905 and IC-7300MK2: scope span, reference level and Center/Fixed now work.** With Native Icom
   CI-V on, these radios refused every scope span button ("SCOPE SPAN REFUSED … did not answer when asked whether its
   scope is in Center mode"), and the reference level and Center/Fixed controls did nothing, whatever the scope was set
