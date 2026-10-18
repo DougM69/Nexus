@@ -1,0 +1,23 @@
+# An N1MM Logger+ call-history file as an operator imports it. ONE file for both halves of Nexus
+# that read it: crates/tempo-app/src/call_history.rs (the parse, and the band map's predicted
+# multipliers) and ui/src/features/callHistoryFill.ts (the contest strip's fill). What each
+# should make of it is in call-history-expected.json beside it.
+!!order!!,call,NAME,loc1,State,SECT,cqzone,UserText
+
+# Illinois stations send their county, which N1MM's QSO-party files carry in Loc1.
+k9aaa,Ann,Cook,IL,IL,4,call and county in lower case
+ K9BBB , Bob , St. Clair , IL , il , 4 , padded fields
+K9CCC,Cal,cook/dupg,IL,IL,4,on the Cook and DuPage line
+K9DDD/P,Dee,LAKE,IL,IL,4,portable
+K9EEE/M,Eve,COOK,IL,IL,4,mobile
+K9FFF,Fay,DUP,IL,IL,4,a county prefix
+K9GGG,Gil,Washington,,IL,4,a county name that is also a state
+#K9HHH,Hal,COOK,IL,IL,4,commented out
+
+# Stations outside Illinois send their state or province, carried in State.
+W9III,Ivy,,WI,WI,4
+N1JJJ
+VE1KKK,Kay,,Prince Edward Island,MAR,5,a province by name and a retired section
+AA1LLL,Lou,,ma,EMA,99,a zone out of range
+,Nobody,COOK,IL,IL,4,no call
+DL1MMM,Max,,,,14

@@ -38,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   multiplier. The tooltip says where it came from, for example "predicted from call history: county LAKE"; for a
   county-line station the file lists with several counties, it marks every county that would count and names the
   line. The value is read the way the log strip's call-history fill reads it, and counted by the contest's own
-  scoring. Once you have worked the station, what it sent you counts instead of the file. No file, no entry for
+  scoring, so a province the file gives by name counts once even where the contest lists two spellings of it
+  (Prince Edward Island in the Illinois QSO Party predicts PEI). Once you have worked the station, what it sent you counts instead of the file. No file, no entry for
   the call, call history turned off (or Unassisted), or no contest: no prediction.
 - **PstRotatorAz: Nexus now talks to it directly.** The rotator picker's **PstRotatorAz / PstRotator (UDP)**
   entry no longer goes through Hamlib's PstRotator backend, which sent every bearing garbled (90° went out as

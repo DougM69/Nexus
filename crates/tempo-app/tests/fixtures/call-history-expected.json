@@ -1,0 +1,55 @@
+{
+  "_about": "What Nexus makes of call-history.txt beside this file. `fields` and `entries` are the parse (`call_history::parse`): N1MM's spelling for the columns it defines, the call upper-cased, values trimmed and otherwise as written, empty values left out. Each case is one call typed while one contest runs: `fill` is what the contest strip puts in its boxes (`historyFill`, ui/src/features/callHistoryFill.ts), `predict` the exchanges the band map predicts multipliers from (`call_history::exchanges_for`), one per possibility as slot=value. The two are the same answer unless the case says why not in `differs`. Each side has a test that walks every case.",
+  "fields": ["Call", "Name", "Loc1", "State", "Sect", "CqZone", "UserText"],
+  "entries": {
+    "AA1LLL": { "CqZone": "99", "Name": "Lou", "Sect": "EMA", "State": "ma", "UserText": "a zone out of range" },
+    "DL1MMM": { "CqZone": "14", "Name": "Max" },
+    "K9AAA": { "CqZone": "4", "Loc1": "Cook", "Name": "Ann", "Sect": "IL", "State": "IL", "UserText": "call and county in lower case" },
+    "K9BBB": { "CqZone": "4", "Loc1": "St. Clair", "Name": "Bob", "Sect": "il", "State": "IL", "UserText": "padded fields" },
+    "K9CCC": { "CqZone": "4", "Loc1": "cook/dupg", "Name": "Cal", "Sect": "IL", "State": "IL", "UserText": "on the Cook and DuPage line" },
+    "K9DDD/P": { "CqZone": "4", "Loc1": "LAKE", "Name": "Dee", "Sect": "IL", "State": "IL", "UserText": "portable" },
+    "K9EEE/M": { "CqZone": "4", "Loc1": "COOK", "Name": "Eve", "Sect": "IL", "State": "IL", "UserText": "mobile" },
+    "K9FFF": { "CqZone": "4", "Loc1": "DUP", "Name": "Fay", "Sect": "IL", "State": "IL", "UserText": "a county prefix" },
+    "K9GGG": { "CqZone": "4", "Loc1": "Washington", "Name": "Gil", "Sect": "IL", "UserText": "a county name that is also a state" },
+    "N1JJJ": {},
+    "VE1KKK": { "CqZone": "5", "Name": "Kay", "Sect": "MAR", "State": "Prince Edward Island", "UserText": "a province by name and a retired section" },
+    "W9III": { "CqZone": "4", "Name": "Ivy", "Sect": "WI", "State": "WI" }
+  },
+  "cases": [
+    { "event": "ilqp", "call": "k9aaa", "fill": { "QTH": "COOK" }, "predict": [["QTH=COOK"]] },
+    { "event": "ilqp", "call": "K9BBB", "fill": { "QTH": "SCLA" }, "predict": [["QTH=SCLA"]] },
+    {
+      "event": "ilqp", "call": "K9CCC", "fill": {}, "predict": [["QTH=COOK"], ["QTH=DUPG"]],
+      "differs": "a county line: the strip fills one value per box and leaves the line for the operator to type, the band map predicts each county it would add"
+    },
+    { "event": "ilqp", "call": "K9DDD/P", "fill": { "QTH": "LAKE" }, "predict": [["QTH=LAKE"]] },
+    { "event": "ilqp", "call": "K9EEE/M", "fill": {}, "predict": [] },
+    { "event": "ilqp", "call": "K9FFF", "fill": {}, "predict": [] },
+    { "event": "ilqp", "call": "K9GGG", "fill": {}, "predict": [] },
+    { "event": "ilqp", "call": "W9III", "fill": { "QTH": "WI" }, "predict": [["QTH=WI"]] },
+    { "event": "ilqp", "call": "N1JJJ", "fill": {}, "predict": [] },
+    { "event": "ilqp", "call": "VE1KKK", "fill": { "QTH": "PEI" }, "predict": [["QTH=PEI"]] },
+    { "event": "ilqp", "call": "AA1LLL", "fill": { "QTH": "MA" }, "predict": [["QTH=MA"]] },
+    { "event": "ilqp", "call": "DL1MMM", "fill": {}, "predict": [] },
+    { "event": "ilqp", "call": "K9ZZZ", "fill": {}, "predict": [] },
+
+    { "event": "arrlfd", "call": "k9aaa", "fill": { "SECTION": "IL" }, "predict": [["SECTION=IL"]] },
+    { "event": "arrlfd", "call": "K9BBB", "fill": { "SECTION": "IL" }, "predict": [["SECTION=IL"]] },
+    { "event": "arrlfd", "call": "K9CCC", "fill": { "SECTION": "IL" }, "predict": [["SECTION=IL"]] },
+    { "event": "arrlfd", "call": "K9DDD/P", "fill": { "SECTION": "IL" }, "predict": [["SECTION=IL"]] },
+    { "event": "arrlfd", "call": "K9EEE/M", "fill": {}, "predict": [] },
+    { "event": "arrlfd", "call": "K9GGG", "fill": { "SECTION": "IL" }, "predict": [["SECTION=IL"]] },
+    { "event": "arrlfd", "call": "W9III", "fill": { "SECTION": "WI" }, "predict": [["SECTION=WI"]] },
+    { "event": "arrlfd", "call": "N1JJJ", "fill": {}, "predict": [] },
+    { "event": "arrlfd", "call": "VE1KKK", "fill": {}, "predict": [] },
+    { "event": "arrlfd", "call": "AA1LLL", "fill": { "SECTION": "EMA" }, "predict": [["SECTION=EMA"]] },
+    { "event": "arrlfd", "call": "DL1MMM", "fill": {}, "predict": [] },
+
+    { "event": "cqww_cw", "call": "k9aaa", "fill": { "ZN": "4" }, "predict": [["ZN=4"]] },
+    { "event": "cqww_cw", "call": "K9EEE/M", "fill": {}, "predict": [] },
+    { "event": "cqww_cw", "call": "VE1KKK", "fill": { "ZN": "5" }, "predict": [["ZN=5"]] },
+    { "event": "cqww_cw", "call": "AA1LLL", "fill": {}, "predict": [] },
+    { "event": "cqww_cw", "call": "DL1MMM", "fill": { "ZN": "14" }, "predict": [["ZN=14"]] },
+    { "event": "cqww_cw", "call": "N1JJJ", "fill": {}, "predict": [] }
+  ]
+}
