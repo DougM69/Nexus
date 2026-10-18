@@ -5725,6 +5725,7 @@ export const FR: PartialCatalog = {
   "settings.confirmations.clublog.apiKey.hide": "Masquer",
   "settings.confirmations.clublog.apiKey.savedAtStation": "Enregistrée à la station",
   "settings.confirmations.clublog.apiKey.notSavedAtStation": "Aucune enregistrée à la station",
+  "settings.confirmations.clublog.apiKey.watched": "Masquée pendant qu’un flux regarde",
   "settings.stationOnly.hint": "Se règle à la station",
   "settings.confirmations.clublog.callsign.hint": "Le logbook ClubLog vers lequel envoyer (vide = votre indicatif).",
   "settings.confirmations.clublog.callsign.label": "Indicatif ClubLog",

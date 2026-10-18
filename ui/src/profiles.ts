@@ -143,13 +143,20 @@ function persist(profiles: Profile[]): Profile[] {
   return profiles
 }
 
-/** Save (upsert by name) a Settings snapshot under `name`. Empty name is a no-op. */
+/** Save (upsert by name) a Settings snapshot under `name`. Empty name is a no-op. A snapshot
+ *  read without the station's stored keys (from afar, or while a stream watches) leaves them out:
+ *  saved blank, loading the profile would blank the station's own, where left out each keeps its
+ *  current value. */
 export function saveProfile(name: string, settings: Settings): Profile[] {
   const trimmed = name.trim()
   if (!trimmed) return loadProfiles()
   const others = loadProfiles().filter((p) => p.name !== trimmed)
+  const snapshot: Partial<Settings> = { ...settings }
+  if (settings.secretsSavedAtStation) {
+    delete snapshot.clublogApiKey
+  }
   return persist(
-    [...others, { name: trimmed, settings, schema: PROFILE_SCHEMA }].sort((a, b) =>
+    [...others, { name: trimmed, settings: snapshot as Settings, schema: PROFILE_SCHEMA }].sort((a, b) =>
       a.name.localeCompare(b.name),
     ),
   )

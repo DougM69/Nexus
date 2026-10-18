@@ -380,3 +380,21 @@ describe('a profile saved from afar loads at the station without the read’s no
     expect(merged.mygrid, 'CONTROL: the rest of the profile loads').toBe('EN61')
   })
 })
+
+// A snapshot read without the station's stored keys (from afar, or while a stream watches the
+// station) holds them blank. Saved so, loading the profile would blank the station's own key.
+describe('a profile saved from a read without the stored keys keeps the station’s key on load', () => {
+  beforeEach(() => memStore.clear())
+  it('leaves the blank keys out, so the current key stays', () => {
+    saveProfile('Field', settings({ clublogApiKey: '', secretsSavedAtStation: { clublogApiKey: true }, mygrid: 'EN61' }))
+    const [saved] = loadProfiles()
+    expect('clublogApiKey' in saved.settings).toBe(false)
+    const merged = mergeProfile(settings({ clublogApiKey: 'FAKE-KEY-0001' }), saved.settings)
+    expect(merged.clublogApiKey).toBe('FAKE-KEY-0001')
+    expect(merged.mygrid, 'CONTROL: the rest of the profile loads').toBe('EN61')
+  })
+  it('CONTROL: a profile read with its key keeps that key', () => {
+    saveProfile('Home', settings({ clublogApiKey: 'FAKE-KEY-0002' }))
+    expect(loadProfiles()[0].settings.clublogApiKey).toBe('FAKE-KEY-0002')
+  })
+})

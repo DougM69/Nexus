@@ -171,7 +171,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or a download and repeats the key or password it was sent, Nexus now hides it from the message, on every screen.
   Through a browser stream of the station's window, logging-service passwords and keys can no longer be saved,
   forgotten or edited; do that at the station itself. At the station, the logging-service key shown in Settings
-  now appears as dots until you press Reveal.
+  now appears as dots until you press Reveal. While a browser stream is showing the station's window, the key is
+  hidden, even if you revealed it before the stream began, and Reveal is unavailable until the stream ends.
 - **Remote: the addresses Nexus sends your logging-service keys to can only be changed at the station.** A settings
   save from a computer driving the station no longer changes the Cloudlog/Wavelog URL, the club host a Field Day
   position joins, or an Icom network radio's address and port, so it cannot send the station's stored Cloudlog key,

@@ -5,12 +5,13 @@
 // can be neither revealed nor changed. Read from a computer driving the station it is not sent at
 // all: the field says whether the station has one saved, and takes nothing.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 import defaultSettings from './__fixtures__/defaultSettings.json'
+import { STREAM_WATCHED_EVENT } from '../remote-native/stream-watched'
 
 vi.setConfig({ testTimeout: 15_000 })
 
@@ -71,13 +72,45 @@ afterEach(() => {
   cleanup()
   vi.clearAllMocks()
   stream.on = false
+  watching.on = false
+  delete (window as { __TAURI__?: unknown }).__TAURI__
 })
 
-
-async function open(settings: Record<string, unknown>) {
+/** Whether a stream watches the station's screen, as the station answers and tells it. */
+const watching = { on: false, tell: undefined as undefined | ((e: { payload: boolean }) => void) }
+function station(settings: Record<string, unknown>) {
+  ;(window as { __TAURI__?: unknown }).__TAURI__ = {
+    event: {
+      listen: (name: string, handler: (e: { payload: boolean }) => void) => {
+        if (name === STREAM_WATCHED_EVENT) watching.tell = handler
+        return Promise.resolve(() => {})
+      },
+    },
+  }
+  api.get('getStreamWatched').mockImplementation(() => Promise.resolve(watching.on))
+  // The station's read: while a stream watches, the key blank and whether one is saved.
   api.get('getSettings').mockImplementation(() =>
-    Promise.resolve({ ...defaultSettings, mycall: 'KD9TAW', ...settings } as never),
+    Promise.resolve({
+      ...defaultSettings, mycall: 'KD9TAW', ...settings,
+      ...(watching.on ? { clublogApiKey: '', secretsSavedAtStation: { clublogApiKey: true, cloudlogKey: false } } : {}),
+    } as never),
   )
+}
+async function tell(on: boolean) {
+  watching.on = on
+  await act(async () => { watching.tell?.({ payload: on }) })
+}
+
+
+async function open(settings: Record<string, unknown>, watched?: boolean) {
+  if (watched === undefined) {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({ ...defaultSettings, mycall: 'KD9TAW', ...settings } as never),
+    )
+  } else {
+    watching.on = watched
+    station(settings)
+  }
   render(
     <SettingsPanel
       target="confirmations"
@@ -158,5 +191,62 @@ describe('the ClubLog key read from afar', () => {
     const { input } = await open({ clublogApiKey: '', secretsSavedAtStation: { clublogApiKey: false } })
     expect(input.disabled).toBe(true)
     expect(input.placeholder).toBe(t('settings.confirmations.clublog.apiKey.notSavedAtStation'))
+  })
+})
+
+describe('the ClubLog key while a stream watches the station', () => {
+  const reason = () => t('settings.confirmations.clublog.apiKey.watched')
+
+  it('hides a revealed key at once, holds none, and disables Reveal with the reason', async () => {
+    const { input, reveal } = await open({ clublogApiKey: KEY }, false)
+    fireEvent.click(reveal()!)
+    expect([input.type, input.value]).toEqual(['text', KEY])
+    // The station's read of the keys answers later: the screen hides the key before it does.
+    let answer: (s: unknown) => void = () => {}
+    api.get('getSettings').mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    await tell(true)
+    expect(input.type).toBe('password')
+    expect(input.value).toBe('')
+    expect(document.body.innerHTML).not.toContain(KEY)
+    expect(input.disabled).toBe(true)
+    expect(input.placeholder).toBe(reason())
+    expect(reveal()?.disabled).toBe(true)
+    expect(reveal()?.title).toBe(reason())
+    fireEvent.click(reveal()!)
+    expect(input.type).toBe('password')
+    expect(api.get('getSettings')).toHaveBeenCalledTimes(2)
+    await act(async () => answer({ ...defaultSettings, mycall: 'KD9TAW', clublogApiKey: '', secretsSavedAtStation: { clublogApiKey: true } }))
+    expect(input.value).toBe('')
+    expect(document.body.innerHTML).not.toContain(KEY)
+  })
+
+  it('offers Reveal again once the stream has ended, with the key read back and still masked', async () => {
+    const { input, reveal } = await open({ clublogApiKey: KEY }, false)
+    fireEvent.click(reveal()!)
+    await tell(true)
+    await waitFor(() => expect(api.get('getSettings')).toHaveBeenCalledTimes(2))
+    await tell(false)
+    await waitFor(() => expect(input.value).toBe(KEY))
+    expect(input.type, 'revealed before the stream, masked after it').toBe('password')
+    expect(input.disabled).toBe(false)
+    expect(reveal()?.disabled).toBe(false)
+    fireEvent.click(reveal()!)
+    expect(input.type).toBe('text')
+  })
+
+  it('opened while a stream already watches, shows no key and no Reveal to press', async () => {
+    const { input, reveal } = await open({ clublogApiKey: KEY }, true)
+    await waitFor(() => expect(reveal()?.disabled).toBe(true))
+    expect(input.value).toBe('')
+    expect(input.placeholder).toBe(reason())
+    expect(document.body.innerHTML).not.toContain(KEY)
+  })
+
+  it('CONTROL: unwatched, the station screen reveals as before', async () => {
+    const { input, reveal } = await open({ clublogApiKey: KEY }, false)
+    await waitFor(() => expect(api.get('getStreamWatched')).toHaveBeenCalled())
+    expect(reveal()?.disabled).toBe(false)
+    fireEvent.click(reveal()!)
+    expect([input.type, input.value]).toEqual(['text', KEY])
   })
 })

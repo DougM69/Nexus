@@ -231,6 +231,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("get_space_wx_scales",            RunsAtShack, "The shack's propagation feeds."),
     ("get_spectrum_row",               RunsAtShack, "The shack's waterfall."),
     ("get_sstv_state",                 RunsAtShack, "The shack's SSTV state."),
+    ("get_stream_watched",             RunsHere,    "Whether a stream watches this computer's own screen."),
     ("get_tle_status",                 RunsAtShack, "The shack's satellite elements."),
     ("get_voice_messages",             RunsAtShack, "The shack's voice-keyer slots."),
     ("get_window_behind",              RunsHere,    "A window on this computer."),

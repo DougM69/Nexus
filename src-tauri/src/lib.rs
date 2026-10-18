@@ -13624,7 +13624,11 @@ struct SettingsRead {
 }
 
 /// What a settings read answers with, from the Engine's settings `shack`.
-fn settings_read(shack: &Settings, afar: Option<&command_dispatch::Afar>) -> SettingsRead {
+fn settings_read(
+    shack: &Settings,
+    afar: Option<&command_dispatch::Afar>,
+    watched: bool,
+) -> SettingsRead {
     // Defensive: re-mirror the ACTIVE radio's profile into the flat fields the UI reads
     // (idempotent — a no-op when already in sync). Guarantees the Settings Rig/Audio form
     // always shows the active radio's own CAT + audio device, independent of which code path
@@ -13632,7 +13636,8 @@ fn settings_read(shack: &Settings, afar: Option<&command_dispatch::Afar>) -> Set
     let mut s = shack.clone();
     s.sync_flat_from_active();
     // From afar the stored keys stay at the shack: blanked, with whether each is saved.
-    let saved_at_the_station = command_dispatch::withhold_the_shacks_secret_settings(&mut s, afar);
+    let saved_at_the_station =
+        command_dispatch::withhold_the_shacks_secret_settings(&mut s, afar, watched);
     // The Cloudlog key is write-only and never sent to the frontend. It now serializes while
     // a legacy plaintext key is pending keychain migration (so a save cannot drop it — round
     // 8 F1), so clear it from THIS clone before it leaves the shell; the engine's own copy is
@@ -13649,16 +13654,28 @@ fn settings_read(shack: &Settings, afar: Option<&command_dispatch::Afar>) -> Set
     }
 }
 
+/// The event the main window hears whether a stream watches it, `true` or `false`, on each change.
+const STREAM_WATCHED_EVENT: &str = "remote-stream-watched";
+
+/// Whether a stream watches the main window now ([`STREAM_WATCHED_EVENT`] tells each change).
+#[tauri::command]
+fn get_stream_watched(watched: State<'_, remote_service::stream::Watched>) -> bool {
+    watched.live()
+}
+
 /// Current operator/station settings. `afar`: from a computer driving the station, the stored
 /// keys are blanked and the read says which the shack has saved
-/// (`command_dispatch::withhold_the_shacks_secret_settings`).
+/// (`command_dispatch::withhold_the_shacks_secret_settings`). So they are while a stream watches
+/// the station's own screen (`watched`): a key revealed there must not reach a silent viewer.
 #[tauri::command]
 async fn get_settings(
     state: State<'_, SharedEngine>,
+    watched: State<'_, remote_service::stream::Watched>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<SettingsRead, String> {
+    let watched = watched.live();
     with_engine(&state, move |eng| {
-        settings_read(eng.settings(), afar.as_ref())
+        settings_read(eng.settings(), afar.as_ref(), watched)
     })
     .await
 }
@@ -37278,6 +37295,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_snapshot,
         remote_monitor::get_remote_monitor_frame,
         remote_service::get_remote_station_status,
+        get_stream_watched,
         remote_service::remote_station_action,
         send_message,
         resend_chat,
@@ -37828,6 +37846,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(BetaUpdateState::default())
         .manage(log_queries::LogQueries::default())
         .manage(street_map::StreetMapState::default())
+        // Whether a stream watches the main window: settings reads ask it from the first launch
+        // on, before the Remote service that opens a stream exists.
+        .manage(remote_service::stream::Watched::default())
         .invoke_handler(app_commands())
         // `move`: the hook hands the launch's second half its own copy of the bundle (`launch`),
         // which it owns rather than borrowing a local that is about to go out of scope.
@@ -37997,6 +38018,17 @@ fn remote_service_for(
     let commands = remote_service::lan::commands::Commands::new(command_dispatch::tauri_runner(
         handle.clone(),
     ));
+    // …and while a stream watches that window, the window is told, so it hides any stored key it
+    // shows (its settings reads carry none then: `get_settings`).
+    let watched = handle
+        .state::<remote_service::stream::Watched>()
+        .inner()
+        .clone();
+    let screen = handle.clone();
+    watched.tell(Arc::new(move |live| {
+        use tauri::Emitter;
+        let _ = screen.emit_to("main", STREAM_WATCHED_EVENT, live);
+    }));
     {
         use tauri::Listener;
         for &name in command_dispatch::FORWARDED_EVENTS {
@@ -38023,6 +38055,7 @@ fn remote_service_for(
             })),
             // …and that window takes the page's shape while it is shown, then goes back.
             shape: Some(Arc::new(window_state::MainShape(handle.clone()))),
+            watched,
         },
         commands,
     )
@@ -52930,7 +52963,7 @@ mod secrets_toward_remote_tests {
             command_dispatch::SET_AT_THE_STATION.into(),
             serde_json::json!(["planted"]),
         );
-        let read = serde_json::to_value(settings_read(&shack, Some(&afar))).unwrap();
+        let read = serde_json::to_value(settings_read(&shack, Some(&afar), false)).unwrap();
         assert_eq!(
             read[command_dispatch::SET_AT_THE_STATION],
             serde_json::json!(command_dispatch::station_only_settings(Some(&afar)).unwrap())
@@ -52941,11 +52974,85 @@ mod secrets_toward_remote_tests {
                 .count(),
             1
         );
-        let own = serde_json::to_value(settings_read(&shack, None)).unwrap();
+        let own = serde_json::to_value(settings_read(&shack, None, false)).unwrap();
         assert!(
             own.get(command_dispatch::SET_AT_THE_STATION).is_none(),
             "at the shack, no list and nothing planted"
         );
+    }
+
+    /// ⛔ While a stream watches the station's screen, the settings read that screen makes (the real
+    /// `get_settings`, with no `afar`, run as the command lane runs it) carries no stored key in any
+    /// form, and says by value which the station has saved. CONTROL: before the stream opens and
+    /// after it ends, the same read carries the ClubLog key.
+    #[test]
+    fn a_settings_read_at_the_shack_while_a_stream_watches_carries_no_stored_key() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        {
+            let mut e = engine_lock(&engine);
+            let mut s = e.settings().clone();
+            s.clublog_api_key = CLUBLOG_OVERRIDE.into();
+            s.cloudlog_key = CLOUDLOG_PENDING.into();
+            e.apply_settings(s);
+        }
+        let watched = remote_service::stream::Watched::default();
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .manage(watched.clone())
+            .invoke_handler(tauri::generate_handler![get_settings])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let read = || {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                "get_settings".to_string(),
+                serde_json::json!({}),
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+                .expect("a settings read")
+        };
+        assert_eq!(
+            read()["clublogApiKey"],
+            CLUBLOG_OVERRIDE,
+            "CONTROL: no stream"
+        );
+        let stream = watched.watching();
+        let during = read();
+        let text = during.to_string();
+        assert_eq!(
+            leaks(&text, &[CLUBLOG_OVERRIDE, CLOUDLOG_PENDING]),
+            Vec::<String>::new(),
+            "while a stream watches: {text}"
+        );
+        assert_eq!(during["clublogApiKey"], "");
+        assert_eq!(
+            during[command_dispatch::SAVED_AT_THE_STATION]["clublogApiKey"],
+            true,
+            "the screen is not told the station has its key saved: {text}"
+        );
+        assert!(
+            during.get(command_dispatch::SET_AT_THE_STATION).is_none(),
+            "at the shack nothing is set at the station: {text}"
+        );
+        drop(stream);
+        let after = read();
+        assert_eq!(
+            after["clublogApiKey"], CLUBLOG_OVERRIDE,
+            "CONTROL: stream gone"
+        );
+        assert!(after.get(command_dispatch::SAVED_AT_THE_STATION).is_none());
     }
 
     /// ⛔ A settings read from afar carries no stored key, says by value which the station has
@@ -52959,7 +53066,7 @@ mod secrets_toward_remote_tests {
             command_dispatch::SAVED_AT_THE_STATION.into(),
             serde_json::json!("planted"),
         );
-        let read = serde_json::to_value(settings_read(&shack, Some(&afar))).unwrap();
+        let read = serde_json::to_value(settings_read(&shack, Some(&afar), false)).unwrap();
         let text = read.to_string();
         assert_eq!(
             leaks(&text, &[CLUBLOG_OVERRIDE, CLOUDLOG_PENDING]),
@@ -52976,12 +53083,13 @@ mod secrets_toward_remote_tests {
             1,
             "the flags once: {text}"
         );
-        let none = serde_json::to_value(settings_read(&Settings::default(), Some(&afar))).unwrap();
+        let none =
+            serde_json::to_value(settings_read(&Settings::default(), Some(&afar), false)).unwrap();
         assert_eq!(
             none[command_dispatch::SAVED_AT_THE_STATION],
             serde_json::json!({ "clublogApiKey": false, "cloudlogKey": false })
         );
-        let own = serde_json::to_value(settings_read(&shack, None)).unwrap();
+        let own = serde_json::to_value(settings_read(&shack, None, false)).unwrap();
         assert_eq!(
             own["clublogApiKey"], CLUBLOG_OVERRIDE,
             "CONTROL: at the shack"

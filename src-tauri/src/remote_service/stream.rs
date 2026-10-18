@@ -63,6 +63,9 @@
 //!   budget of the path the picture takes (`Session::path`), and at what the link to the page
 //!   carries (`Session::estimate`, 2026-10-03), which the session is told to look for up to what
 //!   the whole picture needs (`Session::want`): only its size, frame rate and bit rate change.
+//! - **The station's screen hides its stored keys while it is watched: [`Watched`].** From a
+//!   session's state on until it is gone, however it ends; the screen is told each change, and a
+//!   settings read there carries no stored key meanwhile.
 //! - **The window takes the page's shape (2026-10-17).** A full-screen 16:9 window shown in a
 //!   browser of another shape reached the page with wide bars round it. While a session shows it,
 //!   the main window takes the shape of the page's picture area ([`Host::shape`], from the same
@@ -183,6 +186,70 @@ pub struct Host {
     /// The main window taking the page's shape while a session shows it. `None` in a test or a
     /// build with no window, and then the window keeps its own.
     pub shape: Option<WindowShape>,
+    /// Whether a stream is watching the station's screen, which then shows no stored key.
+    pub watched: Watched,
+}
+
+/// Told whether a stream watches the station's screen ([`Watched::tell`]).
+pub type WatchedTeller = Arc<dyn Fn(bool) + Send + Sync>;
+
+/// ⛔ Whether a stream is watching the station's own screen: from a session's state on (after its
+/// admission, before any picture is taken) until that state is gone, however the session ends, a
+/// panic included. While it is, a settings read at the shack carries no stored key, so a key the
+/// operator revealed there cannot reach a viewer who presses nothing. Counted, not a switch: a
+/// session still ending while another starts (a fresh authority on Turn on) keeps it live.
+/// Cheap to clone; every clone is the one state.
+#[derive(Clone, Default)]
+pub struct Watched {
+    open: Arc<std::sync::Mutex<usize>>,
+    /// Told each change, in order, under the count's lock: the station's screen hears it here.
+    tell: Arc<std::sync::OnceLock<WatchedTeller>>,
+}
+
+impl Watched {
+    /// Is a stream watching now?
+    pub fn live(&self) -> bool {
+        *self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            > 0
+    }
+    /// Who hears each change. Set once; a second is ignored.
+    pub fn tell(&self, tell: WatchedTeller) {
+        let _ = self.tell.set(tell);
+    }
+    /// Watched until the returned guard is dropped.
+    pub fn watching(&self) -> Watching {
+        self.change(true);
+        Watching(self.clone())
+    }
+    fn change(&self, opened: bool) {
+        let mut open = self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let was = *open > 0;
+        *open = if opened {
+            *open + 1
+        } else {
+            open.saturating_sub(1)
+        };
+        if was != (*open > 0) {
+            if let Some(tell) = self.tell.get() {
+                tell(*open > 0);
+            }
+        }
+    }
+}
+
+/// One session watching the station's screen ([`Watched`]), until dropped.
+pub struct Watching(Watched);
+
+impl Drop for Watching {
+    fn drop(&mut self) {
+        self.0.change(false);
+    }
 }
 
 /// The device key the operator pinned for a browser when they approved it at the radio (A5), as
@@ -598,12 +665,16 @@ pub(super) struct Streaming {
     view: Option<(u32, u32)>,
     /// The main window following the page's shape, from the connection on.
     following: Option<Following>,
+    /// The station's screen watched, from this state on until it is gone ([`Watched`]).
+    _watched: Watching,
 }
 
 impl Streaming {
     pub fn new(station: Station, offer: Offer, now: Instant) -> Self {
         // Whatever the over was before this session is not this page's to hear about.
         let mic_told = station.host.mic.status();
+        // Before the session can connect, so before any picture: the screen hides its stored keys.
+        let _watched = station.host.watched.watching();
         Self {
             station,
             offer,
@@ -620,6 +691,7 @@ impl Streaming {
             awake: None,
             view: None,
             following: None,
+            _watched,
         }
     }
 

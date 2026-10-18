@@ -4,6 +4,7 @@ import { RemoteStation } from '../remote-native/RemoteStation'
 import { RemoteStationsWindow } from '../remote-native/RemoteStationsWindow'
 import { LanStation } from '../remote-native/LanStation'
 import { isStreamInput } from '../remote-native/stream-input'
+import { useStreamWatched } from '../remote-native/stream-watched'
 import { BetaNote } from '../remote-web/BetaNote'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { JS8_ALL_SPEEDS_MASK, JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
@@ -1635,6 +1636,25 @@ export function SettingsPanel({
       document.removeEventListener('keydown', hide, true)
     }
   }, [clublogKeyShown])
+  // While a stream watches this screen the key is hidden and Reveal refused, and the station sends
+  // none: each change reads the stored keys again (blank, with whether each is saved, while watched).
+  const watched = useStreamWatched()
+  const watchedSeen = useRef(watched)
+  useEffect(() => {
+    if (watched) setClublogKeyShown(false)
+    if (watchedSeen.current === watched) return
+    watchedSeen.current = watched
+    let live = true
+    void getSettings()
+      .then((s) => {
+        if (!live) return
+        const keys = { clublogApiKey: s.clublogApiKey, secretsSavedAtStation: s.secretsSavedAtStation }
+        setForm((prev) => (prev ? { ...prev, ...keys } : prev))
+        if (savedRef.current) savedRef.current = { ...savedRef.current, ...keys }
+      })
+      .catch(() => {})
+    return () => { live = false }
+  }, [watched])
   const [hrdlogCode, setHrdlogCodeField] = useState('')
   const [wrlKey, setWrlKeyField] = useState('')
   const [rbToken, setRbTokenField] = useState('')
@@ -12211,12 +12231,14 @@ export function SettingsPanel({
                   {/* From afar the station sends no key, only whether it has one saved; and at the
                       station a stream may neither change it nor reveal it. */}
                   <div className="settings-input-row">
-                    <input disabled={locked('clublogApiKey') || form.secretsSavedAtStation !== undefined}
+                    <input disabled={locked('clublogApiKey') || form.secretsSavedAtStation !== undefined || watched}
                       data-setting="clublogApiKey"
                       className="settings-input"
                       type={clublogKeyShown ? 'text' : 'password'}
-                      value={form.clublogApiKey}
-                      placeholder={form.secretsSavedAtStation === undefined
+                      value={watched ? '' : form.clublogApiKey}
+                      placeholder={watched
+                        ? t('settings.confirmations.clublog.apiKey.watched')
+                        : form.secretsSavedAtStation === undefined
                         ? t('settings.confirmations.clublog.apiKey.placeholder')
                         : form.secretsSavedAtStation.clublogApiKey
                           ? t('settings.confirmations.clublog.apiKey.savedAtStation')
@@ -12232,11 +12254,13 @@ export function SettingsPanel({
                       autoComplete="off"
                       spellCheck={false}
                     />
-                    {form.secretsSavedAtStation === undefined && (
+                    {(form.secretsSavedAtStation === undefined || watched) && (
                       <button
                         type="button"
                         className="settings-refresh"
                         aria-pressed={clublogKeyShown}
+                        disabled={watched}
+                        title={watched ? t('settings.confirmations.clublog.apiKey.watched') : undefined}
                         onClick={() => {
                           if (isStreamInput()) {
                             pushToast(t('remote.lan.atShackOnly'), 'error')

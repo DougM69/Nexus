@@ -2661,8 +2661,9 @@ fn a_settings_save_from_afar_keeps_the_program_the_shack_runs() {
 }
 
 /// ⛔ A save from afar can neither change, blank nor plant a stored key: each of
-/// `SECRET_SETTINGS` comes back as the shack has it, saved or not. CONTROL: the shack's own save is
-/// taken as it came. Either way the read's "saved at the station" is not saved into the file.
+/// `SECRET_SETTINGS` comes back as the shack has it, saved or not. CONTROL: the shack's own save, of
+/// a form read with its keys, is taken as it came. The read's "saved at the station" is not saved
+/// into the file (at the shack: `a_shack_save_of_a_form_read_without_its_keys_keeps_them`).
 #[test]
 fn a_settings_save_from_afar_cannot_change_blank_or_plant_a_stored_key() {
     let afar = Afar { stand_down: 2 };
@@ -2693,17 +2694,73 @@ fn a_settings_save_from_afar_cannot_change_blank_or_plant_a_stored_key() {
                 "from afar, the read's flags would be saved"
             );
             let mut at_the_shack = save.clone();
+            at_the_shack.unknown.remove(SAVED_AT_THE_STATION);
             keep_the_shacks_secret_settings(&shack, &mut at_the_shack, None);
             assert_eq!(
                 field(&mut at_the_shack).as_str(),
                 asked,
                 "CONTROL: the shack's own save of {name}"
             );
-            assert!(
-                !at_the_shack.unknown.contains_key(SAVED_AT_THE_STATION),
-                "at the shack, the read's flags would be saved"
-            );
         }
+    }
+}
+
+/// ⛔ A save at the shack of a form read while a stream watched (its keys blanked, the read's
+/// "saved at the station" riding back with it) keeps each stored key as the shack has it, so the
+/// blank never reaches the file. CONTROL: a save from a form read with the keys is taken as it came.
+#[test]
+fn a_shack_save_of_a_form_read_without_its_keys_keeps_them() {
+    for (name, field) in SECRET_SETTINGS {
+        let mut shack = tempo_app::settings::Settings::default();
+        *field(&mut shack) = "FAKE-SHACK-KEY-0001".into();
+        let mut save = shack.clone();
+        *field(&mut save) = String::new();
+        let mut withheld = save.clone();
+        withheld.unknown.insert(
+            SAVED_AT_THE_STATION.into(),
+            Value::Object([(name.into(), json!(true))].into_iter().collect()),
+        );
+        keep_the_shacks_secret_settings(&shack, &mut withheld, None);
+        assert_eq!(
+            field(&mut withheld).as_str(),
+            "FAKE-SHACK-KEY-0001",
+            "a form read without {name} blanked it"
+        );
+        assert!(!withheld.unknown.contains_key(SAVED_AT_THE_STATION));
+        keep_the_shacks_secret_settings(&shack, &mut save, None);
+        assert_eq!(
+            field(&mut save).as_str(),
+            "",
+            "CONTROL: {name} cleared at the shack"
+        );
+    }
+}
+
+/// ⛔ While a stream watches, the shack's own read blanks each of `SECRET_SETTINGS` and says by
+/// value whether each is saved, as a read from afar does. CONTROL: unwatched, nothing is blanked.
+#[test]
+fn a_shack_read_while_a_stream_watches_blanks_each_stored_key() {
+    for (name, field) in SECRET_SETTINGS {
+        let mut shack = tempo_app::settings::Settings::default();
+        *field(&mut shack) = "FAKE-SHACK-KEY-0001".into();
+        let mut read = shack.clone();
+        let saved = withhold_the_shacks_secret_settings(&mut read, None, true);
+        assert_eq!(
+            field(&mut read).as_str(),
+            "",
+            "{name} sent to a watched screen"
+        );
+        assert_eq!(saved.and_then(|s| s.get(name).copied()), Some(true));
+        let mut own = shack.clone();
+        assert_eq!(
+            withhold_the_shacks_secret_settings(&mut own, None, false),
+            None
+        );
+        assert_eq!(
+            field(&mut own).as_str(),
+            "FAKE-SHACK-KEY-0001",
+            "CONTROL: {name}"
+        );
     }
 }
 
@@ -2717,7 +2774,7 @@ fn a_settings_read_from_afar_blanks_each_stored_key_and_says_whether_it_is_saved
             let mut shack = tempo_app::settings::Settings::default();
             *field(&mut shack) = held.into();
             let mut read = shack.clone();
-            let saved = withhold_the_shacks_secret_settings(&mut read, Some(&afar));
+            let saved = withhold_the_shacks_secret_settings(&mut read, Some(&afar), false);
             assert_eq!(field(&mut read).as_str(), "", "from afar, {name} blanked");
             assert_eq!(
                 saved.as_ref().and_then(|s| s.get(name)).copied(),
@@ -2725,7 +2782,10 @@ fn a_settings_read_from_afar_blanks_each_stored_key_and_says_whether_it_is_saved
                 "from afar, {name} held {held:?}"
             );
             let mut own = shack.clone();
-            assert_eq!(withhold_the_shacks_secret_settings(&mut own, None), None);
+            assert_eq!(
+                withhold_the_shacks_secret_settings(&mut own, None, false),
+                None
+            );
             assert_eq!(
                 field(&mut own).as_str(),
                 held,
