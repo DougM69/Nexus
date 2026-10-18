@@ -18,7 +18,7 @@ import { alertsByCall, alertsForSurface, isActivityTag } from '../features/needs
 import { CONTINENT_CODES } from '../features/dxccGeo'
 import { compileTerm, searchTerms } from '../searchQuery'
 import { t } from '../i18n'
-import { spotMarkWords, useContestSpotMarker } from '../features/contestSpotMarks'
+import { spotMarkWords, spotMultTag, useContestSpotMarker } from '../features/contestSpotMarks'
 import { useWatchMatch } from '../watchlist'
 import { WatchTile } from './WatchTile'
 
@@ -696,6 +696,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
             const watch = watchOf({ call: s.call, entity: s.entity, grid: s.grid })
             const mark = marker?.(s) ?? null
             const markWords = spotMarkWords(mark)
+            const multTag = spotMultTag(mark)
             const rowTitle = canQsy
               ? t('spots.row.work.title', {
                   call: s.call,
@@ -770,9 +771,12 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                       {t('contestSpot.tag.dupe')}
                     </span>
                   )}
-                  {mark && mark.mults.length > 0 && (
-                    <span className="spot-contest-tag spot-mult-tag" title={markWords.join(' · ')}>
-                      {t('contestSpot.tag.mult')}
+                  {multTag && (
+                    <span
+                      className={`spot-contest-tag spot-mult-tag${multTag === 'predicted' ? ' predicted' : ''}`}
+                      title={markWords.join(' · ')}
+                    >
+                      {multTag === 'predicted' ? t('contestSpot.tag.predicted') : t('contestSpot.tag.mult')}
                     </span>
                   )}
                   {/* What Hide worked would drop, said on the row itself — so turning the chip

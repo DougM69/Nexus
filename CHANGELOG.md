@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are worked out by the contest's own scoring. A multiplier that comes from the exchange (a county, a section, a
   zone) is known only for a station you worked before, from what it sent you then; Nexus does not guess it for a
   station it has never logged. Outside a contest nothing changes.
+- **Contest band map: multipliers predicted from your call-history file.** With a call-history file imported
+  for the running contest, a station you have never worked now shows **MULT?** (an outlined tag, so it reads
+  differently from a confirmed MULT) when the county, state, section or zone the file gives it would be a new
+  multiplier. The tooltip says where it came from, for example "predicted from call history: county LAKE"; for a
+  county-line station the file lists with several counties, it marks every county that would count and names the
+  line. The value is read the way the log strip's call-history fill reads it, and counted by the contest's own
+  scoring. Once you have worked the station, what it sent you counts instead of the file. No file, no entry for
+  the call, call history turned off (or Unassisted), or no contest: no prediction.
 - **PstRotatorAz: Nexus now talks to it directly.** The rotator picker's **PstRotatorAz / PstRotator (UDP)**
   entry no longer goes through Hamlib's PstRotator backend, which sent every bearing garbled (90° went out as
   `90.000000.2`) and could not stop the rotor. Nexus now sends PstRotatorAz the commands its own manual documents,

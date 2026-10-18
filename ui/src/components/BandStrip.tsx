@@ -13,7 +13,7 @@ import type { SpotRow, NeedTag, AppSnapshot, FieldDayStatus } from '../types'
 import { bandRangeForLabel, cwRangeForLabel } from '../band'
 import { useWheelTune } from '../useWheelTune'
 import { NEED_CHIP } from '../features/needVisuals'
-import { spotMarkWords, useContestSpotMarker } from '../features/contestSpotMarks'
+import { spotMarkWords, spotMultTag, useContestSpotMarker } from '../features/contestSpotMarks'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
 import { BEACON_BADGE, SpotLegend, TYPE_BADGE } from './SpotLegend'
@@ -277,6 +277,7 @@ export function BandStrip({
           // A beacon is never worked in a contest, so it is never marked.
           const mark = beacon ? null : (marker?.(s) ?? null)
           const markWords = spotMarkWords(mark)
+          const multTag = spotMultTag(mark)
           const detail = [
             s.call,
             ...markWords,
@@ -309,11 +310,13 @@ export function BandStrip({
               )}
               {badge && <span className={`bandstrip-type spot-type-badge ${badge.cls}`}>{badge.ch}</span>}
               <span className={`bandstrip-tick${needCls}${dimCls}`} />
-              {mark && mark.mults.length > 0 && (
+              {multTag && (
                 // Leans toward the middle of the band, so a flag near either edge keeps its tag
                 // inside the track.
-                <span className={`spot-mult-tag${pct(s.freqMhz) > 50 ? ' lean-left' : ''}`}>
-                  {t('contestSpot.tag.mult')}
+                <span
+                  className={`spot-mult-tag${multTag === 'predicted' ? ' predicted' : ''}${pct(s.freqMhz) > 50 ? ' lean-left' : ''}`}
+                >
+                  {multTag === 'predicted' ? t('contestSpot.tag.predicted') : t('contestSpot.tag.mult')}
                 </span>
               )}
               <span className="bandstrip-spot-call mono">{s.call}</span>
