@@ -13531,7 +13531,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .fd-ops-box .fd-ops-table th,
 .fd-ops-box .fd-ops-table td {
-  padding: 2px 4px;
+  padding: 2px var(--space-1);
 }
 .fd-ops-table th + th,
 .fd-ops-table td {
