@@ -140,7 +140,6 @@ fn driving(r: &Roadside, name: &str) -> Driving {
             station_key: key.clone(),
             pkcs8: pkcs8.clone(),
             addresses: vec![at.to_string()],
-            typed_address: None,
         }))
     });
     let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(

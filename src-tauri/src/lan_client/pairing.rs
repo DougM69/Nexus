@@ -222,6 +222,5 @@ async fn with<'a>(
         station_key: hex(&station),
         pkcs8,
         addresses: vec![at.to_string()],
-        typed_address: None,
     }))
 }

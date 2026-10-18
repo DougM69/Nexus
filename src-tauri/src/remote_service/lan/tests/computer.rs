@@ -42,7 +42,6 @@ pub(super) fn paired_record(s: &Shack, at: SocketAddrV4) -> PairedStation {
         station_key: s.public_key.clone(),
         pkcs8: s.computer.key.clone(),
         addresses: vec![at.to_string()],
-        typed_address: None,
     }
 }
 

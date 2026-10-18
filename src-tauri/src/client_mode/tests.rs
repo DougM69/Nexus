@@ -840,6 +840,8 @@ const MAY_REACH: &[&str] = &[
     // while wanted. It plays and captures, and starts nothing of a station.
     "crate::lan_client::audio_road",
     "crate::lan_client::Stations",
+    // Where the typed file is: a path beside the default profile's settings. It opens nothing.
+    "crate::lan_client::typed_path",
     // The internet road: this computer's own requests to the Remote service (a pipe, its relay, a
     // renewal) and the road's record in this computer's store. It opens a link and starts nothing
     // of a station.

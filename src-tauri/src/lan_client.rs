@@ -14,10 +14,13 @@
 //!   holds it, and nothing that carries it has `Debug`, `Clone` or `Serialize`.
 //! - **Each station's record** ([`Stations`]): the station's key as it presented it while pairing,
 //!   pinned from then on; its LAN station id; the device id it gave this computer; and the
-//!   addresses it answered at, the last one that worked first; and, once Operate opened there, the
-//!   address or host name the operator typed for it, which Operate tries first. One credential entry for each
+//!   addresses it answered at, the last one that worked first. One credential entry for each
 //!   station, within the smallest one Windows keeps (2560 bytes of UTF-16), and the list of them
 //!   in one more.
+//! - **What the operator typed for each station** ([`Stations::typed`]): the address or host name
+//!   Operate tries first, once Operate opened there or the operator set it on the station's row.
+//!   Not a secret, so it is kept in a file of its own ([`typed_path`]), never in the credential
+//!   store: keeping, changing or clearing it reads and writes no entry that holds a key.
 //! - **No engine, no radio and no operations authority.** This computer's own station, if it has
 //!   one, is out of reach: nothing here names the engine, and the window's page reaches no Nexus
 //!   command (the loopback origin, below).
@@ -95,7 +98,9 @@ pub(crate) mod tests;
 pub(crate) use origin::PREFERRED_PORT;
 pub(crate) use origin::{Origin, Reach};
 
+use std::collections::BTreeMap;
 use std::net::SocketAddrV4;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -113,6 +118,15 @@ use crate::remote_service::vault::{InternetRoad, PairedStation, PairedStations, 
 pub(crate) const MAX_STATIONS: usize = 8;
 /// The most addresses one station's record keeps.
 pub(crate) const MAX_ADDRESSES: usize = 4;
+
+/// The most the typed file is read at: one line for each of [`MAX_STATIONS`], with room to spare.
+const TYPED_FILE_BYTES: u64 = 16 * 1024;
+
+/// Where the app keeps what the operator typed for each station: beside the default profile's
+/// settings, as the paired stations are this computer's, not one profile's.
+pub(crate) fn typed_path() -> PathBuf {
+    crate::config_dir_for(None).join("lan-typed.json")
+}
 /// The smallest OS credential blob, Windows': 2560 bytes of UTF-16.
 const CREDENTIAL_BYTES: usize = 2560;
 
@@ -184,6 +198,9 @@ fn sound_road(road: &InternetRoad) -> bool {
 /// a caller off any thread that must not wait makes these calls.
 pub(crate) struct Stations {
     vault: Arc<dyn StationVault>,
+    /// The file that keeps what the operator typed for each station ([`Stations::keep_typed`]),
+    /// none in a test that keeps nothing typed.
+    typed: Option<PathBuf>,
     /// One writer at a time, so two presses never interleave their writes to the list.
     writing: Mutex<()>,
 }
@@ -192,8 +209,15 @@ impl Stations {
     pub(crate) fn new(vault: Arc<dyn StationVault>) -> Self {
         Self {
             vault,
+            typed: None,
             writing: Mutex::new(()),
         }
+    }
+
+    /// The same stations, with what the operator typed for each kept in the file at `path`.
+    pub(crate) fn typed_in(mut self, path: PathBuf) -> Self {
+        self.typed = Some(path);
+        self
     }
 
     fn ids(&self) -> Result<Vec<String>, &'static str> {
@@ -210,7 +234,13 @@ impl Stations {
 
     /// Every paired station the store holds a sound record for, in the order they were paired.
     pub(crate) fn list(&self) -> Result<Vec<StationView>, &'static str> {
-        Ok(self.records()?.iter().filter_map(StationView::of).collect())
+        let typed = self.typed_file();
+        let mut views: Vec<StationView> =
+            self.records()?.iter().filter_map(StationView::of).collect();
+        for view in &mut views {
+            view.typed_address = typed.get(&view.id).map(Typed::to_string);
+        }
+        Ok(views)
     }
 
     /// The same stations' records, this computer's key for each included: what pairing with one of
@@ -284,20 +314,69 @@ impl Stations {
     }
 
     /// Keep `typed`, an address or a host name, as the one Operate tries first for station `id`,
-    /// or none. A record with an address it cannot read keeps its pairing and reads as none.
+    /// or none, in the typed file. Only the list of paired stations, which holds ids alone, is
+    /// asked whether `id` is paired here: no entry that holds a key is read or written. Lines for
+    /// stations no longer paired here go with the write.
     pub(crate) fn keep_typed(&self, id: &str, typed: Option<&Typed>) -> Result<(), &'static str> {
         let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
-        let Some(mut record) = self.get(id)? else {
+        let ids = self.ids()?;
+        if !ids.iter().any(|kept| kept == id) {
             return Err("unknownStation");
-        };
-        let typed = typed.map(Typed::to_string);
-        if record.typed_address == typed {
+        }
+        let mut file = self.typed_file();
+        if file.get(id) == typed {
             return Ok(());
         }
-        record.typed_address = typed;
-        self.vault
-            .save_paired_station(&record)
-            .map_err(|_| "storeUnavailable")
+        match typed {
+            Some(typed) => file.insert(id.to_string(), typed.clone()),
+            None => file.remove(id),
+        };
+        file.retain(|kept, _| ids.contains(kept));
+        self.write_typed(&file)
+    }
+
+    /// What the operator typed for station `id`, kept for Operate to try first, if any.
+    pub(crate) fn typed(&self, id: &str) -> Option<Typed> {
+        self.typed_file().remove(id)
+    }
+
+    /// The typed file, each station id with what was typed for it. A file that is missing, too
+    /// big, not JSON, or not ids to addresses or host names is nothing typed; a line that is not
+    /// one is skipped.
+    fn typed_file(&self) -> BTreeMap<String, Typed> {
+        let Some(path) = &self.typed else {
+            return BTreeMap::new();
+        };
+        let text = match std::fs::metadata(path) {
+            Ok(meta) if meta.len() <= TYPED_FILE_BYTES => std::fs::read_to_string(path).ok(),
+            _ => None,
+        };
+        let lines: BTreeMap<String, serde_json::Value> = text
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        lines
+            .into_iter()
+            .filter_map(|(id, typed)| Some((id, Typed::read(typed.as_str()?)?)))
+            .collect()
+    }
+
+    /// Write the typed file, through a temporary file the rename publishes, so a crash mid-write
+    /// leaves the old file or the new one, never half of one.
+    fn write_typed(&self, file: &BTreeMap<String, Typed>) -> Result<(), &'static str> {
+        let Some(path) = &self.typed else {
+            return Err("storeUnavailable");
+        };
+        let lines: BTreeMap<&str, String> = file
+            .iter()
+            .map(|(id, typed)| (id.as_str(), typed.to_string()))
+            .collect();
+        let text = serde_json::to_string(&lines).map_err(|_| "storeUnavailable")?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|_| "storeUnavailable")?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, text).map_err(|_| "storeUnavailable")?;
+        std::fs::rename(&tmp, path).map_err(|_| "storeUnavailable")
     }
 
     /// The internet road kept for station `id`, if the store holds a sound one.
@@ -330,8 +409,9 @@ impl Stations {
     }
 
     /// Forget station `id` on this computer: its internet road and its record, with this
-    /// computer's keys for it, first, then the list. A list that still names it after a failure
-    /// names a record that is gone, which reads as no pairing.
+    /// computer's keys for it, first, then the list, then its line in the typed file. A list that
+    /// still names it after a failure names a record that is gone, which reads as no pairing; a
+    /// line the file would not let go of goes with its next write.
     pub(crate) fn forget(&self, id: &str) -> Result<(), &'static str> {
         let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
         if !protocol::identifier(id) {
@@ -347,6 +427,12 @@ impl Stations {
         ids.retain(|kept| kept != id);
         self.vault
             .save_paired_stations(&PairedStations { stations: ids })
-            .map_err(|_| "storeUnavailable")
+            .map_err(|_| "storeUnavailable")?;
+        // Forgotten all the same when the file will not take it: the station is listed nowhere.
+        let mut file = self.typed_file();
+        if file.remove(id).is_some() {
+            let _ = self.write_typed(&file);
+        }
+        Ok(())
     }
 }

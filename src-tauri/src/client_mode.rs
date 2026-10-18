@@ -395,9 +395,25 @@ pub(crate) type Answering = Pin<Box<dyn Future<Output = (u64, Answer)> + Send>>;
 pub(crate) type Find =
     Arc<dyn Fn(&str) -> Result<Option<PairedStation>, &'static str> + Send + Sync>;
 
-/// Where client mode keeps the address or host name the operator typed for the station once
-/// Operate opened there (`lan_client::Stations::keep_typed`), so the next launch tries it first.
-pub(crate) type Keep = Arc<dyn Fn(&str, &Typed) -> Result<(), &'static str> + Send + Sync>;
+/// Where client mode reads, and keeps, the address or host name the operator typed for the station
+/// once Operate opened there, so the next launch tries it first: this computer's typed file in the
+/// app (`lan_client::Stations::typed`), never the credential entry that holds the station's keys.
+/// Each can block, so it is asked off the async threads.
+pub(crate) trait Keep: Send + Sync + 'static {
+    /// What is kept for the station paired here as `id`, if anything.
+    fn typed(&self, id: &str) -> Option<Typed>;
+    /// Keep `typed` for the station paired here as `id`.
+    fn keep(&self, id: &str, typed: &Typed) -> Result<(), &'static str>;
+}
+
+impl Keep for crate::lan_client::Stations {
+    fn typed(&self, id: &str) -> Option<Typed> {
+        crate::lan_client::Stations::typed(self, id)
+    }
+    fn keep(&self, id: &str, typed: &Typed) -> Result<(), &'static str> {
+        self.keep_typed(id, Some(typed))
+    }
+}
 
 /// The internet road, as client mode opens it when the station is not on this network: the Remote
 /// service's pipe through the station's room and its relay in the app (`lan_client::internet`), a
@@ -718,7 +734,7 @@ pub(crate) struct Client {
     lookup: OnceLock<Lookup>,
     /// Where an address the operator typed is kept once Operate opened there; nowhere when none
     /// was given.
-    keep: OnceLock<Keep>,
+    keep: OnceLock<Arc<dyn Keep>>,
     timing: Mutex<Timing>,
     /// The link there is now runs over the internet.
     on_internet: AtomicBool,
@@ -802,9 +818,9 @@ impl Client {
         let _ = self.lookup.set(lookup);
     }
 
-    /// Where an address the operator typed is kept once Operate opened there. Given once, before
-    /// [`Client::drive`].
-    pub(crate) fn keep_typed_with(&self, keep: Keep) {
+    /// Where an address the operator typed is kept once Operate opened there, and read back on
+    /// the next launch. Given once, before [`Client::drive`].
+    pub(crate) fn keep_typed_with(&self, keep: Arc<dyn Keep>) {
         let _ = self.keep.set(keep);
     }
 
@@ -1491,9 +1507,17 @@ impl Client {
             }
             // What the operator typed for this launch, or else what was kept for the station when
             // Operate last opened there: tried first, a host name looked up again on every try.
-            let typing = typed
-                .clone()
-                .or_else(|| record.typed_address.as_deref().and_then(Typed::read));
+            let kept = match (&typed, self.keep.get()) {
+                (None, Some(keep)) => {
+                    let (keep, id) = (Arc::clone(keep), self.station_id.clone());
+                    tokio::task::spawn_blocking(move || keep.typed(&id))
+                        .await
+                        .ok()
+                        .flatten()
+                }
+                _ => None,
+            };
+            let typing = typed.clone().or(kept);
             let typed_at = self.typed_at(typing.clone()).await;
             let unresolved = typing.is_some() && typed_at.is_none();
             let connecting = self.connect(&record, typed_at, &look);
@@ -1546,7 +1570,7 @@ impl Client {
                         if at.is_some() && at == typed_at {
                             let (keep, id, typed) =
                                 (Arc::clone(keep), self.station_id.clone(), typed.clone());
-                            tokio::task::spawn_blocking(move || keep(&id, &typed));
+                            tokio::task::spawn_blocking(move || keep.keep(&id, &typed));
                         }
                     }
                     self.on_the_link(&app, Arc::new(link), &shown, internet, (&find, typing))
@@ -2224,10 +2248,7 @@ pub(crate) fn start_driving<R: Runtime>(
     look: Look,
     args: impl Iterator<Item = String>,
 ) -> tauri::async_runtime::JoinHandle<()> {
-    let kept = Arc::clone(&stations);
-    client.keep_typed_with(Arc::new(move |id: &str, typed: &Typed| {
-        kept.keep_typed(id, Some(typed))
-    }));
+    client.keep_typed_with(Arc::clone(&stations) as Arc<dyn Keep>);
     let find: Find = Arc::new(move |id: &str| stations.get(id));
     let typed = typed_in(args);
     tauri::async_runtime::spawn(client.drive(app, find, look, typed))
@@ -2288,9 +2309,12 @@ pub(crate) fn run(station: String) {
                 crate::capture_all_window_geometry(&handle);
                 tempo_core::applog::flush();
             }));
-            let stations = Arc::new(crate::lan_client::Stations::new(Arc::new(
-                crate::remote_service::vault::SystemVault,
-            )));
+            let stations = Arc::new(
+                crate::lan_client::Stations::new(Arc::new(
+                    crate::remote_service::vault::SystemVault,
+                ))
+                .typed_in(crate::lan_client::typed_path()),
+            );
             match crate::lan_client::internet::Roads::new(Arc::clone(&stations)) {
                 Ok(roads) => driving.reach_afar(Arc::new(roads)),
                 Err(why) => tempo_core::applog::warn(

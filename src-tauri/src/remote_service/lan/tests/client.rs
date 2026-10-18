@@ -46,7 +46,6 @@ fn client_mode_drives_the_shack_end_to_end() {
             station_key: key.clone(),
             pkcs8: pkcs8.clone(),
             addresses: vec![at.to_string()],
-            typed_address: None,
         }))
     });
     let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
@@ -153,7 +152,6 @@ fn a_station_that_names_itself_another_is_refused() {
             station_key: key.clone(),
             pkcs8: pkcs8.clone(),
             addresses: vec![at.to_string()],
-            typed_address: None,
         }))
     });
     let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
@@ -211,7 +209,6 @@ fn a_station_of_an_older_build_is_refused_naming_both_versions() {
             station_key: key.clone(),
             pkcs8: pkcs8.clone(),
             addresses: vec![at.to_string()],
-            typed_address: None,
         }))
     });
     let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
@@ -293,7 +290,6 @@ fn client_mode_finds_a_station_by_name_when_its_remembered_address_is_dead() {
                 station_key: key.clone(),
                 pkcs8: pkcs8.clone(),
                 addresses: vec![dead.to_string()],
-                typed_address: None,
             }))
         });
         let looks = Arc::new(AtomicUsize::new(0));
@@ -367,7 +363,6 @@ fn a_lease_heartbeat_answered_busy_keeps_the_lease() {
             station_key: key.clone(),
             pkcs8: pkcs8.clone(),
             addresses: vec![at.to_string()],
-            typed_address: None,
         }))
     });
     let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
@@ -433,7 +428,6 @@ fn a_second_computer_takes_control_and_the_first_can_take_it_back() {
                 station_key: key.clone(),
                 pkcs8: pkcs8.clone(),
                 addresses: vec![at.to_string()],
-                typed_address: None,
             }))
         });
         let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
@@ -525,7 +519,6 @@ fn operate_at_a_typed_address_proves_the_pinned_key() {
                 station_key: key.clone(),
                 pkcs8: pkcs8.clone(),
                 addresses: vec![dead.to_string()],
-                typed_address: None,
             }))
         });
         let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
@@ -560,15 +553,16 @@ fn operate_at_a_typed_address_proves_the_pinned_key() {
 /// paired stations' store and the launch's arguments): the name is looked up when it is tried, and
 /// the station there still proves the key pinned for its pairing, so a name that resolves to a
 /// machine with another key is refused as one whose key changed, runs nothing, and is never kept.
-/// Where the pinned key answers, Operate opens at the name's address and the name is kept in the
-/// station's record; the next launch, from the station's own Operate with nothing typed, tries
+/// Where the pinned key answers, Operate opens at the name's address and the name is kept for the
+/// station, in the typed file outside the credential store, whose entry for the station is not
+/// written (byte-identical, and the write count unmoved); the next launch, from the station's own Operate with nothing typed, tries
 /// the kept name first and opens there. A name that resolves to nothing, with nothing answering
 /// anywhere else, is told as `nameUnresolved`. The station's one remembered address is dead and
 /// nothing is found by name throughout. Skipped, saying so, on a box with no private address.
 #[test]
 fn operate_at_a_typed_host_name_proves_the_pinned_key_and_is_tried_first_next_launch() {
     use crate::client_mode::{operate_args, start_driving};
-    use crate::lan_client::tests::{shack_pc_at, where_nothing_listens, StationStore};
+    use crate::lan_client::tests::{shack_pc_at, typed_file, where_nothing_listens, StationStore};
     use crate::lan_client::Stations;
     use tempo_stream::lan::Typed;
     let Some(private) = own_private_address() else {
@@ -589,6 +583,9 @@ fn operate_at_a_typed_host_name_proves_the_pinned_key_and_is_tried_first_next_la
         port: live.port(),
     };
     // One launch of client mode: the store's record, the lookup, and the launch's arguments.
+    let (typed_dir, file) = typed_file("operate-name");
+    let stations =
+        |store: &StationStore| Stations::new(Arc::new(store.clone())).typed_in(file.clone());
     let launch = |store: &StationStore, args: Vec<String>, label: &str| {
         let dir = scratch(label);
         let this = ThisComputer::read(dir.join("settings.json"), dir.join("ui-state.json"));
@@ -598,7 +595,7 @@ fn operate_at_a_typed_host_name_proves_the_pinned_key_and_is_tried_first_next_la
         let driving = start_driving(
             Arc::clone(&client),
             screens.main.app_handle().clone(),
-            Arc::new(Stations::new(Arc::new(store.clone()))),
+            Arc::new(stations(store)),
             Arc::new(|_| Ok(Vec::new())),
             args.into_iter().skip(1),
         );
@@ -610,23 +607,17 @@ fn operate_at_a_typed_host_name_proves_the_pinned_key_and_is_tried_first_next_la
         std::fs::remove_dir_all(dir).unwrap();
     };
     let paired = |pinned_ours: bool| {
+        let _ = std::fs::remove_file(&file);
         let store = StationStore::default();
         let mut record = paired_record(&s, dead);
         if !pinned_ours {
             record.station_key = super::computer::another_key();
         }
-        Stations::new(Arc::new(store.clone()))
-            .keep(&record)
-            .unwrap();
+        stations(&store).keep(&record).unwrap();
         store
     };
-    let kept = |store: &StationStore| {
-        Stations::new(Arc::new(store.clone()))
-            .get(STATION)
-            .unwrap()
-            .unwrap()
-            .typed_address
-    };
+    let kept = |store: &StationStore| stations(store).typed(STATION).map(|t| t.to_string());
+    let entry = format!("lan-station-{STATION}");
     let typed = operate_args(STATION.into(), Some(name("shack-pc.local")));
 
     // A machine with another key at the name: refused, nothing run there, nothing kept.
@@ -646,6 +637,7 @@ fn operate_at_a_typed_host_name_proves_the_pinned_key_and_is_tried_first_next_la
 
     // The pinned key at the name: driven there, and the name kept with the station.
     let store = paired(true);
+    let (as_paired, writes) = (store.raw(&entry), store.writes.load(Ordering::SeqCst));
     let (client, _screens, driving, dir) = launch(&store, typed, "name-ours");
     eventually("control taken at the name's address", || {
         client.status().phase == Phase::Live
@@ -654,6 +646,16 @@ fn operate_at_a_typed_host_name_proves_the_pinned_key_and_is_tried_first_next_la
     eventually("the name kept with the station", || {
         kept(&store) == Some(format!("shack-pc.local:{}", live.port()))
     });
+    assert_eq!(
+        store.raw(&entry),
+        as_paired,
+        "the credential entry rewritten"
+    );
+    assert_eq!(
+        store.writes.load(Ordering::SeqCst),
+        writes,
+        "a credential entry written"
+    );
     end(client, driving, dir);
 
     // Started again from the station's own Operate, nothing typed: the kept name first.
@@ -667,10 +669,9 @@ fn operate_at_a_typed_host_name_proves_the_pinned_key_and_is_tried_first_next_la
 
     // A name whose address does not answer, with the station at its remembered address: driven
     // there, and the name, which did not open Operate, is not kept.
+    let _ = std::fs::remove_file(&file);
     let store = StationStore::default();
-    Stations::new(Arc::new(store.clone()))
-        .keep(&paired_record(&s, live))
-        .unwrap();
+    stations(&store).keep(&paired_record(&s, live)).unwrap();
     let elsewhere = Typed::Name {
         host: "shack-pc.local".into(),
         port: dead.port(),
@@ -695,4 +696,5 @@ fn operate_at_a_typed_host_name_proves_the_pinned_key_and_is_tried_first_next_la
     assert_ne!(client.status().phase, Phase::Live);
     assert_eq!(kept(&store), None);
     end(client, driving, dir);
+    let _ = std::fs::remove_dir_all(typed_dir);
 }

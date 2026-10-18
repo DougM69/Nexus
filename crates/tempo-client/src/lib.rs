@@ -164,7 +164,8 @@ pub struct StationView {
     pub id: String,
     pub addresses: Vec<String>,
     pub key: String,
-    /// The address or host name Operate tries first, as the operator typed it, when one is kept.
+    /// The address or host name Operate tries first, as the operator typed it, when one is kept
+    /// (beside the record, never in it: [`StationView::of`] gives none).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub typed_address: Option<String>,
 }
@@ -176,7 +177,7 @@ impl StationView {
             id: record.station_id.clone(),
             addresses: record.addresses.clone(),
             key: hex(digest(&SHA256, &spki).as_ref()),
-            typed_address: record.typed_address.clone(),
+            typed_address: None,
         })
     }
 }
@@ -197,11 +198,6 @@ pub struct PairedStation {
     pub pkcs8: String,
     /// Where the station answered, `address:port`, the last that worked first.
     pub addresses: Vec<String>,
-    /// What the operator typed for the station, an address or a host name with its port
-    /// (`tempo_stream::lan::Typed`), once Operate opened there: Operate tries it first, a name
-    /// looked up each time. A record written before it was kept has none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub typed_address: Option<String>,
 }
 
 #[cfg(test)]
