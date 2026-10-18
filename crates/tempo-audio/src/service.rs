@@ -3987,6 +3987,10 @@ struct RadioLoop {
     /// Whether the range probe has been attempted for the current CAT confirmation, so an
     /// unsupported `\dump_state` costs one round-trip per rig — not one per poll.
     rx_ranges_probed: bool,
+    /// A frequency read outside [`Self::rx_ranges`] has been reported to the operator, and no read
+    /// inside them has come since ([`Self::read_outside_coverage`]), so a radio that keeps
+    /// answering garbage is named once, not on every poll.
+    outside_read_noted: bool,
     /// Lazy S-meter capability: `None` = not yet probed, `Some(true)` = rig reports
     /// STRENGTH (keep polling it), `Some(false)` = rig answered the dial but not
     /// STRENGTH (no CAT S-meter — stop polling it so we don't burn a round-trip every
@@ -4349,6 +4353,7 @@ impl RadioLoop {
             dial_note_gen: None,
             rx_ranges: None,
             rx_ranges_probed: false,
+            outside_read_noted: false,
             handoff_deferred: false,
             handed_over: None,
             switch_unhanded: false,
@@ -6102,7 +6107,10 @@ impl RadioLoop {
                          up (the radio does not appear to cover {mhz:.4} MHz)."
                     );
                 }
-                let healed = rig.read_freq().ok();
+                let healed = rig
+                    .read_freq()
+                    .ok()
+                    .filter(|&hz| !self.read_outside_coverage(hz, engine));
                 {
                     let mut eng = engine_lock(engine);
                     if let Some(hz) = healed {
@@ -6144,6 +6152,42 @@ impl RadioLoop {
         self.fake_it_restore = None;
         self.fake_it_restore_at = None;
         self.fake_it_restore_tries = 0;
+    }
+
+    /// Is this frequency read somewhere the radio cannot be: outside the RX coverage it reported in
+    /// its own `\dump_state` ([`Self::rx_ranges`])? Then it is not a knob turn and must never be
+    /// adopted as the dial, because an adopted dial is pushed back to the radio on the next mode
+    /// change. A wrong rig model produces exactly this (Hamlib's FT-1000MP driver reads an FT-1000D's
+    /// 7.074 MHz as 113.184 MHz), and so can any garbled reply. The dial keeps its last good value.
+    ///
+    /// ⚠️ FAIL OPEN, as the engine's coverage gate does (`Engine::rig_covers_mhz`): only a range
+    /// list positively parsed off THIS radio may say no. Unknown or empty coverage adopts every
+    /// read, as before. The first such read in a run goes to the app log, the CI-V diagnostic and
+    /// the CAT status line, keeping the breaker's verdict; the next read inside coverage re-arms it.
+    fn read_outside_coverage(&mut self, hz: u64, engine: &Arc<Mutex<Engine>>) -> bool {
+        if !self.outside_coverage(hz) {
+            self.outside_read_noted = false;
+            return false;
+        }
+        if !std::mem::replace(&mut self.outside_read_noted, true) {
+            let note = format!(
+                "the radio reported {:.4} MHz, outside its own receive range; kept {:.4} MHz. \
+                 Check the rig model in Settings → Radio.",
+                hz as f64 / 1e6,
+                self.last_dial as f64 / 1e6
+            );
+            tempo_core::applog::warn("cat", &note);
+            crate::civ::diag::note(&note);
+            engine_lock(engine).set_cat_status(self.cat_ok, note);
+        }
+        true
+    }
+
+    /// The check alone, with no note: is `hz` outside a range list positively parsed off this radio?
+    /// Remote readings use it too, so a Remote viewer keeps the last good dial the cockpit keeps.
+    fn outside_coverage(&self, hz: u64) -> bool {
+        matches!(&self.rx_ranges,
+            Some(r) if !r.is_empty() && !r.iter().any(|&(lo, hi)| (lo..=hi).contains(&hz)))
     }
 
     /// Is this dial read the Fake-It over's TX dial, before the radio has been read off it? Then
@@ -6359,6 +6403,7 @@ impl RadioLoop {
         // that can actually do it. Same for a dial the old radio refused; the new one may accept it.
         self.rx_ranges = None;
         self.rx_ranges_probed = false;
+        self.outside_read_noted = false;
         self.dial_giveup = None;
         self.dial_fail_count = 0;
         self.width_unanswered = None;
@@ -8195,7 +8240,9 @@ impl RadioLoop {
                         {
                             let mut eng = engine_lock(engine);
                             eng.remote_observe_cat(remote_read.as_ref(), Some(true));
-                            eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
+                            if !self.outside_coverage(hz) {
+                                eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
+                            }
                         }
                         self.freq_misses = 0; // a good read clears the breaker's miss run
                                               // A tripped breaker's re-probe answered: the link is BACK. Reset the health
@@ -8235,7 +8282,10 @@ impl RadioLoop {
                                 );
                             }
                         }
-                        if !self.fake_it_transient(hz) && hz != self.last_dial {
+                        if !self.fake_it_transient(hz)
+                            && !self.read_outside_coverage(hz, engine)
+                            && hz != self.last_dial
+                        {
                             self.last_dial = hz;
                             {
                                 let mut eng = engine_lock(engine);
@@ -9304,9 +9354,14 @@ impl RadioLoop {
                     {
                         let mut eng = engine_lock(engine);
                         eng.remote_observe_cat(remote_read.as_ref(), Some(true));
-                        eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
+                        if !self.outside_coverage(hz) {
+                            eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
+                        }
                     }
-                    if !self.fake_it_transient(hz) && hz != self.last_dial {
+                    if !self.fake_it_transient(hz)
+                        && !self.read_outside_coverage(hz, engine)
+                        && hz != self.last_dial
+                    {
                         self.last_dial = hz;
                         {
                             let mut eng = engine_lock(engine);
@@ -16422,6 +16477,7 @@ mod tests {
     mod js8_retune;
     mod js8_tx_delay;
     mod omnirig_coverage;
+    mod readback_coverage;
     mod receive_source;
     mod refused_key;
     mod remote_radio;
