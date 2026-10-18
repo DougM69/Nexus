@@ -2618,6 +2618,12 @@ pub struct FieldDayStatus {
     /// as assistance from raw toggles (it would get cluster/AI-CW gating wrong).
     #[serde(default)]
     pub assistance_on: Vec<String>,
+    /// ⭐ **The entry strip's "RST sent" box**: the report a CW or digital row of this session
+    /// sends unless the operator types another (`599`; a phone row's is `59`). Present only
+    /// while the operator has the box turned on (`Settings::contest_rst_sent_box`) AND the
+    /// contest sends a constant RST, so a snapshot without it is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rst_sent_box: Option<String>,
     pub log: Vec<FieldDayQso>,
     /// Club-sync state (the Nexus↔Nexus event sync) — `None` while neither
     /// hosting nor joined, so a solo Field Day pays nothing for the feature.

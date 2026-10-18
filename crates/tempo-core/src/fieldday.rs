@@ -1779,7 +1779,7 @@ impl FieldDayLog {
         slot: u64,
         when_unix: u64,
     ) -> bool {
-        self.log_fields_on(call, fields, mode, submode, slot, when_unix, None)
+        self.log_fields_on(call, fields, mode, submode, slot, when_unix, None, None)
     }
 
     /// ⭐ **Log a contact worked THROUGH A BIRD** — [`log_fields_at`](Self::log_fields_at)
@@ -1802,12 +1802,33 @@ impl FieldDayLog {
         sat: &SatLeg,
         when_unix: u64,
     ) -> bool {
-        self.log_fields_on(call, fields, mode, submode, 0, when_unix, Some(sat))
+        self.log_fields_on(call, fields, mode, submode, 0, when_unix, Some(sat), None)
     }
 
-    /// The shared body of the two above — the field vector resolved against the running
+    /// ⭐ **The contest ENTRY STRIP's write** — [`log_fields_at`](Self::log_fields_at), or
+    /// [`log_satellite_at`](Self::log_satellite_at) with a pass `sat`, carrying the operator's
+    /// own sent RST for this one contact when they typed one in the strip's optional "RST sent"
+    /// box (`sent_rst`, already checked with
+    /// [`ContestSession::sent_rst_ok`](crate::contest::ContestSession::sent_rst_ok)). With
+    /// `None` the row is exactly what those two write. `slot` is 0: a typed contact has no FT
+    /// slot.
+    #[allow(clippy::too_many_arguments)] // log_satellite_at's own, plus the report
+    pub fn log_entry_at(
+        &mut self,
+        call: &str,
+        fields: &[(String, String)],
+        mode: &str,
+        submode: &str,
+        when_unix: u64,
+        sat: Option<&SatLeg>,
+        sent_rst: Option<&str>,
+    ) -> bool {
+        self.log_fields_on(call, fields, mode, submode, 0, when_unix, sat, sent_rst)
+    }
+
+    /// The shared body of the three above — the field vector resolved against the running
     /// exchange, then the one write site.
-    #[allow(clippy::too_many_arguments)] // log_fields_at's own, plus the leg
+    #[allow(clippy::too_many_arguments)] // log_fields_at's own, plus the leg and the report
     fn log_fields_on(
         &mut self,
         call: &str,
@@ -1817,13 +1838,17 @@ impl FieldDayLog {
         slot: u64,
         when_unix: u64,
         sat: Option<&SatLeg>,
+        sent_rst: Option<&str>,
     ) -> bool {
         let spec = self.session.exchange;
         let rx: Vec<crate::contest::FieldValue> = fields
             .iter()
             .filter_map(|(k, v)| spec.copied(k, v))
             .collect();
-        let tx = self.session.tx_for_row(call, mode);
+        let mut tx = self.session.tx_for_row(call, mode);
+        if let Some(raw) = sent_rst {
+            self.session.override_sent_rst(&mut tx, raw);
+        }
         self.log_exchange_on(call, rx, tx, mode, submode, slot, when_unix, sat)
     }
 

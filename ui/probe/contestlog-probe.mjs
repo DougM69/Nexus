@@ -6,7 +6,8 @@
 // app's own Vite config and asserts every part the person logging needs — the Call box, the exchange
 // boxes, Log, the dupe warning, the newest contact and Keep in front — is held by each box that clips it,
 // inside the window, and the topmost thing where it stands. Then the entry-only layout at the floor and
-// large: the entry's parts on screen and nothing under it.
+// large: the entry's parts on screen and nothing under it. Then both layouts again with the optional "RST
+// sent" box turned on, one more box in the entry, at the floor and large.
 //
 // THE CONTROL, run every time: the same window 100 px shorter than the floor, where the newest contact
 // falls past the bottom of the window. It must come back NOT on screen; if it does not, the check cannot
@@ -54,6 +55,8 @@ const MEASURE = `(() => {
     // own bottom padding may sit under the scroller's edge while every word of it is in view.
     newest: [...(document.querySelector('.contest-logger-recent .fd-log-row')?.children ?? [])],
     pin: document.querySelector('.contest-logger-pin'),
+    // The optional "RST sent" box, only in the runs that turn it on (\`rstsent\`).
+    ...(new URLSearchParams(location.search).get('rstsent') === '1' ? { sent: entry.querySelector('.le-fd-field-sent input') } : {}),
   }
   const seen = {}
   for (const [k, v] of Object.entries(parts)) seen[k] = Array.isArray(v) ? v.length > 0 && v.every(onScreen) : onScreen(v)
@@ -74,12 +77,12 @@ const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
 /** One window of `w`×`h`, the logger in it, measured once its parts have stopped moving. */
-async function measure(w, h, layout = 'full') {
+async function measure(w, h, layout = 'full', rstsent = false) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
   await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
-  await call('Page.navigate', { url: `${origin}/probe/contestlog.html?panel=contestlog&layout=${layout}` })
+  await call('Page.navigate', { url: `${origin}/probe/contestlog.html?panel=contestlog&layout=${layout}${rstsent ? '&rstsent=1' : ''}` })
   let last = null
   for (let i = 0; i < 100; i++) {
     await sleep(150)
@@ -120,13 +123,33 @@ try {
       code = code || 1
     }
   }
+  // THE "RST SENT" BOX ON: one more box in the entry. At the floor and large, whole and entry-only, every
+  // part of the entry — the box among them — is still on screen, and the whole window's newest contact
+  // large. At the floor the box costs the entry a third row, so the newest contact there is one scroll
+  // down (the window scrolls, as it does to reach the contest screen); that is printed, not failed.
+  for (const layout of ['full', 'entry']) {
+    for (const { w, h } of [FLOOR, SIZES[2]]) {
+      const m = await measure(w, h, layout, true)
+      console.log(`contestlog-probe: RST sent box on, ${layout}, window ${w}×${h}: ${JSON.stringify(m)}`)
+      const { newest, ...entryParts } = m?.seen ?? {}
+      if (!m) {
+        console.error(`contestlog-probe: the window never drew its entry with the RST sent box at ${w}×${h}`)
+        code = 2
+      } else if (m.exchange < 3 || !('sent' in entryParts) || !Object.values(entryParts).every(Boolean) || (layout === 'full' && w !== FLOOR.w && !newest)) {
+        console.error(`contestlog-probe: RED with the RST sent box, ${layout} at ${w}×${h} — a part is clipped, covered or missing`)
+        code = code || 1
+      } else if (layout === 'full' && !newest) {
+        console.log(`contestlog-probe: note — with the RST sent box on at ${w}×${h} the newest contact is below the entry, one scroll down`)
+      }
+    }
+  }
   const c = await measure(FLOOR.w, FLOOR.h - 100)
   console.log(`contestlog-probe: CONTROL window ${FLOOR.w}×${FLOOR.h - 100}: ${JSON.stringify(c)}`)
   if (!c || c.seen.newest) {
     console.error('contestlog-probe: CONTROL FAILED — the newest contact under the floor came back on screen; the check cannot fail')
     code = code || 1
   }
-  if (code === 0) console.log(`contestlog-probe: PASS — the entry, the dupe warning, the newest contact and Keep in front on screen at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; the entry alone at ${FLOOR.w}×${FLOOR.h} and ${SIZES[2].w}×${SIZES[2].h}; and the control below the floor clipped`)
+  if (code === 0) console.log(`contestlog-probe: PASS — the entry, the dupe warning, the newest contact and Keep in front on screen at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; the entry alone at ${FLOOR.w}×${FLOOR.h} and ${SIZES[2].w}×${SIZES[2].h}; both again with the RST sent box on; and the control below the floor clipped`)
   process.exitCode = code
 } finally {
   await browser.stop()

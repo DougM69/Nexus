@@ -1440,6 +1440,22 @@ impl std::ops::DerefMut for EngineGuard<'_> {
     }
 }
 
+/// The contest entry's typed sent RST, refused unless it has its mode class's digit count
+/// (`ContestSession::sent_rst_ok`). `None` — no box, or nothing typed in it — passes.
+fn sent_rst_checked(sent_rst: Option<&str>, mode: &str) -> Result<(), String> {
+    match sent_rst {
+        Some(r) if !tempo_core::contest::ContestSession::sent_rst_ok(r, mode) => Err(format!(
+            "RST sent {r:?} is not a {mode} report ({} digits)",
+            if mode.eq_ignore_ascii_case("PH") {
+                2
+            } else {
+                3
+            }
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// The station's position id as the ids the log mints carry (`RecordId::Minted`): the
 /// profile's `fd_position_id`, eight hex digits, or 0 while the profile has none. Provenance
 /// only — what makes a minted id unique is the nonce and sequence beside it.
@@ -12367,7 +12383,22 @@ impl Engine {
         mode: &str,
         submode: Option<&str>,
     ) -> Result<bool, String> {
-        let logged = self.contest_log_manual_rows(call, &[fields.to_vec()], mode, submode)?;
+        self.contest_log_manual_sent(call, fields, mode, submode, None)
+    }
+
+    /// [`contest_log_manual`](Self::contest_log_manual) with the operator's own sent RST for
+    /// this contact, typed in the entry strip's optional "RST sent" box. See
+    /// [`contest_log_manual_rows_sent`](Self::contest_log_manual_rows_sent).
+    pub fn contest_log_manual_sent(
+        &mut self,
+        call: &str,
+        fields: &[(String, String)],
+        mode: &str,
+        submode: Option<&str>,
+        sent_rst: Option<&str>,
+    ) -> Result<bool, String> {
+        let logged =
+            self.contest_log_manual_rows_sent(call, &[fields.to_vec()], mode, submode, sent_rst)?;
         Ok(logged == [true])
     }
 
@@ -12397,6 +12428,27 @@ impl Engine {
         mode: &str,
         submode: Option<&str>,
     ) -> Result<Vec<bool>, String> {
+        self.contest_log_manual_rows_sent(call, rows, mode, submode, None)
+    }
+
+    /// ⭐ [`contest_log_manual_rows`](Self::contest_log_manual_rows) with the operator's own
+    /// **sent RST** for this contact (`sent_rst`), typed in the entry strip's optional "RST
+    /// sent" box (N1MM's Snt). It replaces the constant report on every row of the contact and
+    /// on no later one. `None` logs exactly what the other does.
+    ///
+    /// A report without its mode's digit count ([`ContestSession::sent_rst_ok`]) is refused
+    /// before anything is written: a submitted log cannot be corrected after the deadline.
+    ///
+    /// [`ContestSession::sent_rst_ok`]: tempo_core::contest::ContestSession::sent_rst_ok
+    pub fn contest_log_manual_rows_sent(
+        &mut self,
+        call: &str,
+        rows: &[Vec<(String, String)>],
+        mode: &str,
+        submode: Option<&str>,
+        sent_rst: Option<&str>,
+    ) -> Result<Vec<bool>, String> {
+        sent_rst_checked(sent_rst, mode)?;
         self.sync_fd_band(); // a knob-QSY between contacts must stamp the REAL band
         let now = now_unix_secs();
         // The phone mode behind a "PH" class, on the same terms as `fd_log_contact` —
@@ -12423,9 +12475,10 @@ impl Engine {
         let logged: Vec<bool> = rows
             .iter()
             .map(|fields| {
+                let sub = submode.unwrap_or_default();
                 station
                     .log
-                    .log_fields_at(call, fields, mode, submode.unwrap_or_default(), 0, now)
+                    .log_entry_at(call, fields, mode, sub, now, None, sent_rst)
             })
             .collect();
         // The row carries the number from here on, so the binding may finally be
@@ -12511,8 +12564,23 @@ impl Engine {
         mode: &str,
         submode: Option<&str>,
     ) -> Result<bool, String> {
+        self.contest_log_satellite_sent(call, fields, mode, submode, None)
+    }
+
+    /// [`contest_log_satellite`](Self::contest_log_satellite) with the operator's own sent RST
+    /// for this contact, on the terms of
+    /// [`contest_log_manual_rows_sent`](Self::contest_log_manual_rows_sent).
+    pub fn contest_log_satellite_sent(
+        &mut self,
+        call: &str,
+        fields: &[(String, String)],
+        mode: &str,
+        submode: Option<&str>,
+        sent_rst: Option<&str>,
+    ) -> Result<bool, String> {
+        sent_rst_checked(sent_rst, mode)?;
         let Some(leg) = self.sat_leg_for_log() else {
-            return self.contest_log_manual(call, fields, mode, submode);
+            return self.contest_log_manual_sent(call, fields, mode, submode, sent_rst);
         };
         // The log's own band/dial are kept in step exactly as every other path keeps
         // them — the ROW is what departs from them, not the log. Skipping this would
@@ -12529,13 +12597,14 @@ impl Engine {
         // The serial binding, on the same terms and for the same reason as
         // `contest_log_manual` — a pass contact in a serial contest copies a number too.
         station.log.session.working(call, now);
-        let logged = station.log.log_satellite_at(
+        let logged = station.log.log_entry_at(
             call,
             fields,
             mode,
             submode.unwrap_or_default(),
-            &leg,
             now,
+            Some(&leg),
+            sent_rst,
         );
         station.log.session.logged(call);
         if logged {
@@ -48754,6 +48823,75 @@ mod tests {
         e.apply_settings(s);
         e.set_mode("fieldday-sp").expect("the party runs");
         e
+    }
+
+    /// The sent RST on the newest contest row for `call`, as the snapshot shows it.
+    fn sent_rst_of(e: &Engine, call: &str) -> String {
+        let fd = e.snapshot().field_day.expect("contest mode");
+        let row = fd.log.iter().rev().find(|q| q.call == call).expect("row");
+        row.sent
+            .iter()
+            .find(|(k, _)| k == "RST")
+            .map(|(_, v)| v.clone())
+            .expect("a sent RST")
+    }
+
+    /// ⭐ **The "RST sent" box is OFF until the operator turns it on**, and then the snapshot
+    /// offers the report this contest sends — 599, the session's own — and nothing in a contest
+    /// that sends no report. Off, the snapshot carries no key at all.
+    #[test]
+    fn the_rst_sent_box_is_off_by_default_and_offers_the_sessions_report() {
+        assert!(!Settings::default().contest_rst_sent_box);
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(!old.contest_rst_sent_box, "an older file reads off");
+        let mut e = ilqp_engine("ADAM", "");
+        let fd = e.snapshot().field_day.expect("contest mode");
+        assert_eq!(fd.rst_sent_box, None);
+        let json = serde_json::to_string(&fd).unwrap();
+        assert!(!json.contains("rstSentBox"), "off adds no key: {json}");
+        let mut s = e.settings().clone();
+        s.contest_rst_sent_box = true;
+        e.apply_settings(s);
+        let fd = e.snapshot().field_day.expect("contest mode");
+        assert_eq!(fd.rst_sent_box.as_deref(), Some("599"));
+        assert!(serde_json::to_string(&fd)
+            .unwrap()
+            .contains("\"rstSentBox\":\"599\""));
+    }
+
+    /// ⭐ **A typed sent RST is that contact's and no other's**, through the engine's own entry
+    /// write: 579 logs as sent, the next contact sends 599 again, and a report without its
+    /// mode's digit count is refused with nothing written.
+    #[test]
+    fn a_typed_sent_rst_logs_once_and_a_malformed_one_is_refused() {
+        let mut e = ilqp_engine("ADAM", "");
+        let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
+        let ex = [pair("RST", "599"), pair("QTH", "KANK")];
+        assert!(e
+            .contest_log_manual_sent("K9NR", &ex, "CW", None, Some("579"))
+            .unwrap());
+        assert_eq!(sent_rst_of(&e, "K9NR"), "579");
+        assert!(e.contest_log_manual("K9ABC", &ex, "CW", None).unwrap());
+        assert_eq!(sent_rst_of(&e, "K9ABC"), "599");
+        let rows = e
+            .contest_log_manual_rows_sent("K9CL", &[ex.to_vec()], "CW", None, Some("449"))
+            .unwrap();
+        assert_eq!(rows, [true]);
+        assert_eq!(sent_rst_of(&e, "K9CL"), "449");
+        let before = e.snapshot().field_day.unwrap().log.len();
+        for bad in ["59", "5NN", "699"] {
+            let r = e.contest_log_manual_sent("K9BAD", &ex, "CW", None, Some(bad));
+            assert!(r.is_err(), "{bad} on CW must be refused");
+        }
+        assert!(e
+            .contest_log_manual_sent("K9BAD", &ex, "PH", None, Some("579"))
+            .is_err());
+        assert_eq!(e.snapshot().field_day.unwrap().log.len(), before);
+        // A satellite strip's write takes the report too (no pass held: the dial's band).
+        assert!(e
+            .contest_log_satellite_sent("K9SAT", &ex, "PH", None, Some("57"))
+            .unwrap());
+        assert_eq!(sent_rst_of(&e, "K9SAT"), "57");
     }
 
     /// ⭐ **Entering the party restores this session's rows only, says how many it kept out

@@ -77,6 +77,11 @@ impl Engine {
                 .filter(|&&(_, on)| on)
                 .map(|&(label, _)| label.to_string())
                 .collect(),
+            rst_sent_box: self
+                .settings
+                .contest_rst_sent_box
+                .then(|| log.session.sent_rst_constant().map(str::to_string))
+                .flatten(),
             log: log
                 .qsos()
                 .iter()

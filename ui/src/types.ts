@@ -3662,6 +3662,10 @@ export interface FieldDayStatus {
    *  advisory reads this list; the UI never re-derives what counts as
    *  assistance from raw toggles. */
   assistanceOn?: string[]
+  /** The entry strip's "RST sent" box: the report a CW or digital contact sends unless the
+   *  operator types another (`599`; a phone contact's is `59`). Present only while the box is
+   *  turned on in Settings (`contestRstSentBox`) and the contest sends a report. */
+  rstSentBox?: string
   /** Club-sync state (the Nexus↔Nexus event sync). Absent while neither
    *  hosting nor joined — a solo Field Day pays nothing for the feature. */
   club?: FdClubStatus | null
@@ -4803,6 +4807,9 @@ export interface Settings {
   /** ESM's "call once" in Search and Pounce: my call goes once per station, and the next Enter
    *  asks for a repeat. OFF by default. */
   contestEsmCallOnce?: boolean
+  /** The contest entry's optional "RST sent" box (N1MM's Snt), pre-filled with the report the
+   *  contact sends; a typed one replaces it for that contact only. OFF by default. */
+  contestRstSentBox?: boolean
   /** FD power multiplier tier: 5 QRP-battery, 2 <=100W, 1 >100W. */
   fdPowerMult?: number
   /** Claimed FD bonus ids (the checklist). */

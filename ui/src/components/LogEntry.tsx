@@ -6,7 +6,7 @@
 // "translated" one would have broken an example of a wire format. See the invariant-token rule in
 // `i18n/index.ts`.
 
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import {
   isOnAir,
@@ -130,6 +130,18 @@ function afterLogged(
  *  digital — the same split the engine makes for a sent RST on a phone row. */
 function defaultContestRst(fdMode: 'CW' | 'PH' | 'DIG' | undefined): string {
   return (fdMode ?? 'PH') === 'PH' ? '59' : '599'
+}
+
+/** Where the optional "RST sent" box keeps a report typed in it, beside the received slots' ids:
+ *  lower case, so no ruleset's slot id (upper case, always) can be it. It lives with the boxes, so
+ *  the shared entry, Alt+W and Clear carry it as they carry them. */
+const SENT_RST_KEY = 'sentRst'
+
+/** A typed sent RST is logged only with its mode's digit count: 2 on phone (R 1–5, S 1–9), 3 on CW
+ *  and digital (and T 1–9). The engine's own check (`ContestSession::sent_rst_ok`) refuses any
+ *  other, so the strip holds Log back rather than sending one it will refuse. */
+function sentRstOk(raw: string, fdMode: 'CW' | 'PH' | 'DIG' | undefined): boolean {
+  return ((fdMode ?? 'PH') === 'PH' ? /^[1-5][1-9]$/ : /^[1-5][1-9]{2}$/).test(raw)
 }
 
 /** The cty.dat names of the two countries whose stations send a QTH in CQ WW RTTY —
@@ -699,6 +711,18 @@ export function LogEntry({
     if (f.kind !== 'rst') return fdFields[f.key] ?? ''
     return typedMarks[f.key] ? (fdFields[f.key] ?? rstDefault) : rstDefault
   }
+  // ⭐ THE OPTIONAL "RST SENT" BOX (N1MM's Snt; Settings ▸ Contesting, off by default). The engine
+  // says it is on by sending the report this contest sends (`rstSentBox`, `599`), and only for a
+  // contest that sends one. It shows what this contact will log as sent — 59 on phone, the
+  // session's own on CW and digital, exactly what the engine stamps — and, like the received
+  // report, a value typed in it is the operator's only while it is marked typed for THIS contact:
+  // the next contact goes back to the constant. Never on the Remote, which logs no contest here.
+  const sentRstConst = fdActive && !remoteMode ? fieldDay?.rstSentBox : undefined
+  const sentRstDefault = (fdMode ?? 'PH') === 'PH' ? '59' : (sentRstConst ?? '599')
+  const sentRstTyped = sentRstConst !== undefined && !!typedMarks[SENT_RST_KEY]
+  const sentRstValue = sentRstTyped ? (fdFields[SENT_RST_KEY] ?? sentRstDefault) : sentRstDefault
+  const sentRstGood = !sentRstTyped || sentRstOk(sentRstValue, fdMode)
+  const sentRstRef = useRef<HTMLInputElement | null>(null)
 
   // Pre-fill the exchange from the last logged FD contact — but ONLY when the
   // log actually GREW. `fieldDay` is a fresh object every 300 ms snapshot poll;
@@ -1743,7 +1767,9 @@ export function LogEntry({
     const wiped = wipedRef.current
     wipedRef.current = null
     const blank =
-      logCall.trim() === '' && fdReceives.every((f) => fdValue(f) === (f.kind === 'rst' ? rstDefault : ''))
+      logCall.trim() === '' &&
+      sentRstValue === sentRstDefault &&
+      fdReceives.every((f) => fdValue(f) === (f.kind === 'rst' ? rstDefault : ''))
     if (wiped && blank) {
       setLogCall(wiped.call)
       setFdFields(wiped.fields)
@@ -1868,7 +1894,7 @@ export function LogEntry({
       // is mandatory — never log
       // a blank as the literal '?' (it would inflate the section multiplier), so bail until the
       // exchange is complete and the section is a real ARRL/RAC code.
-      if (!fdExchangeOk) return
+      if (!fdExchangeOk || !sentRstGood) return
       // ⭐ THE TRANSPORT IS THE FIELD VECTOR — `contest_log_manual(call, fields, …)`,
       // one pair per box the strip actually rendered, in the session's own receive
       // order. It replaced `fd_log_manual`'s two positional slots, which could carry
@@ -1884,6 +1910,10 @@ export function LogEntry({
       // The on-air mode behind the class, for 'DIG' alone — see `fdSubmode`. Sent only with
       // that class so a CW or phone contact can never acquire one it has no meaning for.
       const fsub = fmode === 'DIG' ? fdSubmode : undefined
+      // The report typed in the "RST sent" box, for this contact only. The two commands below carry
+      // it when one was typed, and are the commands themselves when none was, so a contact with
+      // nothing typed there makes exactly the call it always made.
+      const snt = sentRstTyped ? sentRstValue : undefined
       // ⭐ A CONTACT THIS STRIP LOGS ENDS AS ITS LOG LANDS (below): its boxes become the next
       // contact's then, as the after-log clear makes them once the snapshot shows the contact.
       // With the logger window open, what this strip puts next (the call going blank, the next call
@@ -1914,11 +1944,14 @@ export function LogEntry({
         const exchangeWith = (county: string) =>
           ex.map(([k, v]) => [k, k === lineSlot.key ? county : v] as [string, string])
         const rows = lineRead.counties.map(exchangeWith)
+        const logRows: typeof contestLogManualRows = snt
+          ? (c, r, m, s, e) => contestLogManualRows(c, r, m, s, e, snt)
+          : contestLogManualRows
         const r = await withErrorToast(
           () =>
             entry
-              ? sharedRefusal(contestLogManualRows(call, rows, fmode, fsub, entry), call)
-              : contestLogManualRows(call, rows, fmode, fsub),
+              ? sharedRefusal(logRows(call, rows, fmode, fsub, entry), call)
+              : logRows(call, rows, fmode, fsub),
           t('logEntry.fd.failed'),
         )
         if (r) {
@@ -1965,7 +1998,8 @@ export function LogEntry({
       // already the prop that says which surface this strip is on, so the routing is
       // the one fact the strip knows and the engine cannot infer: a transponder still
       // held does not make a contact typed into the Phone cockpit a satellite contact.
-      const logToContest = exchange === 'satellite' ? contestLogSatellite : contestLogManual
+      const logOne = exchange === 'satellite' ? contestLogSatellite : contestLogManual
+      const logToContest: typeof contestLogManual = snt ? (c, f, m, s, e) => logOne(c, f, m, s, e, snt) : logOne
       const r = await withErrorToast(
         () =>
           entry
@@ -2083,8 +2117,8 @@ export function LogEntry({
   /**
    * SPACE ADVANCES THE CONTEST EXCHANGE, because that is the key contest operators already
    * have in their fingers: contest loggers tab with the space bar, so there is no house style
-   * to invent. Tab keeps working exactly as it did (plain DOM order, no tabIndex anywhere in
-   * this file).
+   * to invent. Tab keeps working exactly as it did (plain DOM order), and the one tabIndex in this
+   * file is the optional "RST sent" box's, which Tab skips as Space does (N1MM's Snt).
    *
    * Scoped to the Field Day strip on purpose: a space is legitimate in a name, a park
    * reference or a comment on the ordinary strip, so this belongs to the contest exchange
@@ -2666,8 +2700,39 @@ export function LogEntry({
             const fromHistory = fillMarks[f.key]?.value === fdValue(f)
             // What the box holds for this station's role: "County / State" in Illinois.
             const caption = receivedCaption(f, fieldDay?.role)
+            // The "RST sent" box stands just before the received report, sent then received, as
+            // N1MM lays out Snt and Rcv (before the first box, for a contest that receives none).
+            const sentHere = sentRstConst !== undefined && i === Math.max(0, fdReceives.findIndex((r) => r.kind === 'rst'))
             return (
-            <label className="le-fd-field" key={f.key}>
+            <Fragment key={f.key}>
+            {sentHere && (
+              <label className="le-fd-field le-fd-field-sent">
+                <span className="le-fd-cap">{t('logEntry.fd.rstSent.label')}</span>
+                <input
+                  ref={sentRstRef}
+                  className={`settings-input mono le-fd-input le-fd-input-code${sentRstGood ? '' : ' invalid'}`}
+                  // ⭐ SPACE AND TAB SKIP IT, as N1MM's space bar skips Snt: Space walks Call to the
+                  // received boxes by their own refs, and Tab passes over a -1. A click reaches it,
+                  // and Shift-Tab from the received report (below).
+                  tabIndex={-1}
+                  value={sentRstValue}
+                  aria-invalid={!sentRstGood}
+                  onChange={(e) => {
+                    noteTyped(SENT_RST_KEY)
+                    setFdField(SENT_RST_KEY, e.target.value.replace(/\s+/g, ''))
+                  }}
+                  onKeyDown={(e) => {
+                    onExchangeSpace(e, fdBoxRefs.current[f.key] ?? null)
+                    onEnter(e)
+                  }}
+                  placeholder={sentRstDefault}
+                  autoComplete="off"
+                  spellCheck={false}
+                  title={t('logEntry.fd.rstSent.title', { rst: sentRstDefault })}
+                />
+              </label>
+            )}
+            <label className="le-fd-field">
               {fromHistory ? (
                 <span className="le-fd-cap le-fd-cap-marked">
                   <span className="le-fd-cap-text">{caption}</span>
@@ -2704,6 +2769,13 @@ export function LogEntry({
                   // SPACE leaves the box, so it is where a typed name becomes its code —
                   // before the eye moves on, and before Enter can log anything.
                   if (e.key === ' ' || e.code === 'Space' || e.key === 'Tab') commitFdField(f)
+                  // Shift-Tab from the received report reaches the "RST sent" box beside it, which
+                  // plain Tab order passes over.
+                  if (e.key === 'Tab' && e.shiftKey && sentHere && sentRstRef.current) {
+                    e.preventDefault()
+                    sentRstRef.current.focus()
+                    sentRstRef.current.select()
+                  }
                   onExchangeSpace(
                     e,
                     next ? (fdBoxRefs.current[next.key] ?? null) : callInputRef.current,
@@ -2751,6 +2823,7 @@ export function LogEntry({
                 </ul>
               )}
             </label>
+            </Fragment>
             )
           })}
           {/* No `gridBlocked` term, and that is not an omission: `asksForGrid`
@@ -2761,7 +2834,7 @@ export function LogEntry({
             type="button"
             className="le-log-btn le-fd-log-btn"
             onClick={logIt}
-            disabled={!logCall.trim() || !fdExchangeOk}
+            disabled={!logCall.trim() || !fdExchangeOk || !sentRstGood}
           >
             {fdEventIsFieldDay ? t('logEntry.fd.log') : t('logEntry.log')}
           </button>

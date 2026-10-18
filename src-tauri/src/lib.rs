@@ -30469,6 +30469,10 @@ async fn fd_log_manual(
 /// ([`EntryClaim`]): checked and logged in one hold of the lock, so Enter pressed in both windows
 /// at once logs the contact once ([`Engine::contest_log_entry`]). The same on the two commands
 /// below. Absent from every other caller, which logs exactly as before.
+///
+/// `sent_rst` is the report typed in the entry's optional "RST sent" box, for this contact only
+/// ([`Engine::contest_log_manual_rows_sent`]), and the same on the two commands below. Absent or
+/// blank, the row carries the constant report exactly as before.
 #[tauri::command]
 async fn contest_log_manual(
     state: State<'_, SharedEngine>,
@@ -30477,12 +30481,14 @@ async fn contest_log_manual(
     mode: String,
     submode: Option<String>,
     entry: Option<EntryClaim>,
+    sent_rst: Option<String>,
 ) -> Result<AppSnapshot, String> {
     journaled_command(Arc::clone(&state), move |eng| {
         let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let snt = sent_rst.as_deref().map(str::trim).filter(|s| !s.is_empty());
         let logged = eng.contest_log_entry(
             entry.as_ref(),
-            |e| e.contest_log_manual(&call, &fields, &mode, sub),
+            |e| e.contest_log_manual_sent(&call, &fields, &mode, sub, snt),
             |logged| *logged,
         )?;
         if !logged {
@@ -30510,12 +30516,14 @@ async fn contest_log_manual_rows(
     mode: String,
     submode: Option<String>,
     entry: Option<EntryClaim>,
+    sent_rst: Option<String>,
 ) -> Result<Vec<bool>, String> {
     journaled_command(Arc::clone(&state), move |eng| {
         let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let snt = sent_rst.as_deref().map(str::trim).filter(|s| !s.is_empty());
         eng.contest_log_entry(
             entry.as_ref(),
-            |e| e.contest_log_manual_rows(&call, &rows, &mode, sub),
+            |e| e.contest_log_manual_rows_sent(&call, &rows, &mode, sub, snt),
             |landed| landed.contains(&true),
         )
     })
@@ -30543,12 +30551,14 @@ async fn contest_log_satellite(
     mode: String,
     submode: Option<String>,
     entry: Option<EntryClaim>,
+    sent_rst: Option<String>,
 ) -> Result<AppSnapshot, String> {
     journaled_command(Arc::clone(&state), move |eng| {
         let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let snt = sent_rst.as_deref().map(str::trim).filter(|s| !s.is_empty());
         let logged = eng.contest_log_entry(
             entry.as_ref(),
-            |e| e.contest_log_satellite(&call, &fields, &mode, sub),
+            |e| e.contest_log_satellite_sent(&call, &fields, &mode, sub, snt),
             |logged| *logged,
         )?;
         if !logged {
@@ -39382,8 +39392,8 @@ mod tests {
             .expect("the end of the command")
             .0;
         assert!(
-            body.contains("journaled_command(") && body.contains(".contest_log_manual_rows("),
-            "contest_log_manual_rows must journal Engine::contest_log_manual_rows"
+            body.contains("journaled_command(") && body.contains(".contest_log_manual_rows_sent("),
+            "contest_log_manual_rows must journal Engine::contest_log_manual_rows_sent"
         );
         let list = src
             .split_once("tauri::generate_handler![")
@@ -39396,6 +39406,46 @@ mod tests {
             list.lines().any(|l| l.trim() == "contest_log_manual_rows,"),
             "contest_log_manual_rows is not registered — a county line would fail at runtime"
         );
+    }
+
+    /// The entry's "RST sent" box reaches the log only if each of the three contest log commands
+    /// takes the typed report (`sent_rst`) and hands it, blank as absent, to the engine's write
+    /// that carries it. Left out of one, a report typed for a county line or a pass would be
+    /// shown, accepted and then logged as the constant.
+    #[test]
+    fn the_three_contest_log_commands_hand_the_typed_sent_rst_to_the_engine() {
+        let src = include_str!("lib.rs");
+        for (command, engine) in [
+            (
+                "\nasync fn contest_log_manual(",
+                ".contest_log_manual_sent(",
+            ),
+            (
+                "\nasync fn contest_log_manual_rows(",
+                ".contest_log_manual_rows_sent(",
+            ),
+            (
+                "\nasync fn contest_log_satellite(",
+                ".contest_log_satellite_sent(",
+            ),
+        ] {
+            let rest = src.split_once(command).expect("the command").1;
+            let body = &rest[..rest.find("\n}\n").expect("the end of the command")];
+            assert!(
+                body.contains("sent_rst: Option<String>,"),
+                "{command} takes no sent_rst"
+            );
+            let call = body.split_once(engine).map(|(_, a)| a).unwrap_or_else(|| {
+                panic!(
+                    "{command} must log through Engine::{}",
+                    engine.trim_matches(['.', '('])
+                )
+            });
+            assert!(
+                call[..call.find(')').expect("the call closes")].ends_with(", snt"),
+                "{command} must pass the typed report to {engine}"
+            );
+        }
     }
 
     /// ⭐ THE CONTEST LOGGER WINDOW: its strip shares the contact in progress only if the put is
