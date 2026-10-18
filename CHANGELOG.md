@@ -74,6 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signal report, as WSJT-X 3.0 does.** Heard at +20 and then again at +27, Nexus now sends R+27 the second time
   instead of R+20, and logs +27 as the report sent. Nothing else about the sequence or its timing changes; other modes
   keep the report fixed, as WSJT-X does. NEEDS-BENCH on the air.
+- **Phone voice keyer: a slot's Record, Import and Delete buttons now sit on the left of the slot, away from Play, and
+  Delete can be undone.** They used to sit right under Play, where Delete was easy to hit by mistake. After Delete the
+  slot reads empty and "Deleted F1 (CQ)" offers Undo for about 8 seconds; Undo brings back the same recording under the
+  same name, and only after that does the recording really go. Play, the F-keys and ■ Stop work as before.
 
 ### Fixed
 - **IC-7300, IC-705, IC-905 and IC-7300MK2: scope span, reference level and Center/Fixed now work.** With Native Icom

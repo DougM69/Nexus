@@ -11416,6 +11416,10 @@ export const EN = {
   'phone.keyer.importFailed': 'Could not import the WAV',
   'phone.keyer.imported': 'Imported F{{slot}} ({{label}})',
   'phone.keyer.clearFailed': 'Could not clear the slot',
+  // A Delete waits out an Undo window before the recording is really gone.
+  'phone.keyer.deleted': 'Deleted F{{slot}} ({{label}})',
+  'phone.keyer.undo': 'Undo',
+  'phone.keyer.restored': 'Restored F{{slot}} ({{label}})',
   // What the pane says AFTER its teardown acted, for the operator who walked off the Phone
   // screen and never opened the ⊞ menu. Both are conditional on what actually happened.
   'phone.keyer.hide.stoppedOver':

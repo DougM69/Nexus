@@ -12241,14 +12241,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .vk-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  /* 250px, not 180: a slot is one row now (tools, then Play), and at 180 Play was left too
+     narrow for its own label. The floor yields to a narrower keyer rather than overflow it. */
+  grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr));
   gap: var(--space-2);
 }
+/* A slot is ONE row: ● ⤓ ✕ on the left, then Play taking the rest. They used to sit in a row
+   under Play, where ✕ was hit reaching for ▶ (a contest tester lost a recording twice). */
 .vk-slot {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: 6px;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  /* --space-1, not 6px: one row is shorter than the old two, but the wider track makes more
+     rows of slots, and the keyer as a whole must not stand taller than it did. */
+  padding: var(--space-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg);
@@ -12261,6 +12268,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   box-shadow: inset 0 0 0 1px var(--tx);
 }
 .vk-play {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -12288,6 +12297,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .vk-label {
   flex: 1;
+  /* One line: a long label is cut (the slot's tooltip carries it whole) rather than wrapping
+     and making the slot taller. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: calc(13px * var(--text-scale));
   font-weight: 700;
   /* Same fix as `.cw-macro-label`: pin the theme color so the label doesn't inherit
@@ -12303,9 +12318,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 800;
 }
 .vk-tools {
+  flex: none;
   display: flex;
   gap: var(--space-1);
-  justify-content: flex-end;
 }
 .vk-tool {
   padding: 2px var(--space-2);
