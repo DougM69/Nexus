@@ -807,22 +807,24 @@ fn a_settings_save_from_afar_takes_what_neither_transmits_nor_guards() {
 
 /// A shack of two radios that key differently, the live one radio 0.
 fn two_radio_shack() -> tempo_app::settings::Settings {
-    let mut shack = tempo_app::settings::Settings::default();
-    shack.radios = vec![
-        tempo_app::settings::RadioProfile {
-            id: 0,
-            ptt_method: "cat".into(),
-            ptt_serial_port: String::new(),
-            ..Default::default()
-        },
-        tempo_app::settings::RadioProfile {
-            id: 1,
-            ptt_method: "dtr".into(),
-            ptt_serial_port: "COM4".into(),
-            ..Default::default()
-        },
-    ];
-    shack.active_radio = 0;
+    let mut shack = tempo_app::settings::Settings {
+        radios: vec![
+            tempo_app::settings::RadioProfile {
+                id: 0,
+                ptt_method: "cat".into(),
+                ptt_serial_port: String::new(),
+                ..Default::default()
+            },
+            tempo_app::settings::RadioProfile {
+                id: 1,
+                ptt_method: "dtr".into(),
+                ptt_serial_port: "COM4".into(),
+                ..Default::default()
+            },
+        ],
+        active_radio: 0,
+        ..Default::default()
+    };
     shack.sync_flat_from_active();
     shack
 }
