@@ -4,6 +4,7 @@
 use super::*;
 use crate::command_classes::registered;
 use serde_json::json;
+use tempo_client::classes::CLASSES;
 
 // --- Scaffolding ---------------------------------------------------------------------------------
 
@@ -1322,10 +1323,9 @@ fn a_winlink_password_typed_here_is_refused_at_both_ends() {
 }
 
 #[test]
-fn a_radios_icom_network_password_is_set_and_asked_after_at_the_shack_only() {
-    // Credentials are set at the shack only, as for every other service: storing, clearing and
-    // asking whether there is one are each refused at both ends, the yes-or-no question included,
-    // since it reads the shack's keychain. A typed password is refused before it is sent.
+fn a_radios_icom_network_password_is_set_at_the_shack_only() {
+    // Credentials are set at the shack only, as for every other service: storing and clearing
+    // are each refused at both ends. A typed password is refused before it is sent.
     let shack = shack();
     for (id, (name, args)) in [
         (
@@ -1333,7 +1333,6 @@ fn a_radios_icom_network_password_is_set_and_asked_after_at_the_shack_only() {
             json!({ "radioId": 1, "password": "not-a-real-one" }),
         ),
         ("clear_icom_lan_password", json!({ "radioId": 1 })),
-        ("icom_lan_password_saved", json!({ "radioId": 1 })),
     ]
     .into_iter()
     .enumerate()
@@ -1346,6 +1345,57 @@ fn a_radios_icom_network_password_is_set_and_asked_after_at_the_shack_only() {
         );
         let admission = shack.admit(&controller(), call(id as u64 + 1, name, args));
         assert_eq!(kind(&admission), "refused shackOnly", "{name} at the shack");
+    }
+}
+
+/// From afar the Settings badges say whether each credential is saved, and a connector's Test
+/// runs at the shack with the key stored there: each is sent, and admitted, as a station command.
+/// What each answers carries no secret (`remote_credential_reply_tests` in `lib.rs`).
+#[test]
+fn a_credential_badge_and_a_connector_test_run_at_the_shack_from_afar() {
+    let shack = shack();
+    for (id, (name, args)) in [
+        ("get_credentials_status", json!({})),
+        ("icom_lan_password_saved", json!({ "radioId": 1 })),
+        ("qrz_test_connection", json!({})),
+        ("n3fjp_test_connection", json!({})),
+        ("cloudlog_station_info", json!({})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(class_of(name), Some(Class::RunsAtShack), "{name}");
+        assert_eq!(
+            route(name, &args),
+            Route::Shack,
+            "{name} is sent to the shack"
+        );
+        let admission = shack.admit(&controller(), call(id as u64 + 1, name, args));
+        assert_eq!(kind(&admission), "run", "{name} at the shack");
+    }
+}
+
+/// Typing or clearing a credential from afar stays refused: every command that stores or clears
+/// one is refused at both ends, whatever the badges and Tests above now do.
+#[test]
+fn no_credential_is_typed_or_cleared_from_afar() {
+    let setters: Vec<&str> = CLASSES
+        .iter()
+        .map(|(name, ..)| *name)
+        .filter(|name| name.starts_with("set_") || name.starts_with("clear_"))
+        .filter(|name| {
+            ["password", "_key", "_code", "_token"]
+                .iter()
+                .any(|word| name.ends_with(word))
+        })
+        .collect();
+    assert_eq!(
+        setters.len(),
+        23,
+        "premise: the credential setters are found by name: {setters:?}"
+    );
+    for name in setters {
+        assert_eq!(class_of(name), Some(Class::RefusedHere), "{name}");
     }
 }
 

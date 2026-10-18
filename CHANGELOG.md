@@ -143,6 +143,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unplugged.
 
 ### Changed
+- **From the Remote client, Settings now shows which logbook credentials are saved at the station, and the connector
+  Test buttons work.** The saved / not saved badges (and the Icom network password's) are read at the station and come
+  back as yes or no; they no longer look empty, as if nothing were saved. QRZ Logbook, N3FJP and Cloudlog/Wavelog Test
+  run at the station with the key stored there and answer only whether it worked, with a message. No key or password
+  crosses the link: a QRZ reply that echoes the key has it masked, or is withheld. Typing or clearing a credential is
+  still done at the station itself.
 - **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each
   station: Nexus runs on this PC and the radio follows your own clicks and pop-outs. Streaming the station's screen is
   still there as a smaller button after it, for when you only want to see the shack's screen.
