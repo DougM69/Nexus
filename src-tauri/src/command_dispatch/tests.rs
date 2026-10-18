@@ -886,6 +886,150 @@ fn a_radio_edit_from_afar_keeps_that_radios_ptt() {
     );
 }
 
+/// The two-radio shack, its radios on the Icom network at their own addresses, a Cloudlog server
+/// and a club host set. Fake addresses: no test here holds or sends a key.
+fn shack_that_sends_keys() -> tempo_app::settings::Settings {
+    let mut shack = two_radio_shack();
+    shack.radios[0].icom_lan_host = "192.168.1.50".into();
+    shack.radios[1].icom_lan_host = "192.168.1.51".into();
+    shack.radios[1].icom_lan_port = 50011;
+    shack.sync_flat_from_active();
+    shack.cloudlog_url = "https://log.shack.example".into();
+    shack.fd_join_addr = "192.168.1.10:42073".into();
+    shack
+}
+
+/// A save naming other servers for every address the shack sends a stored key or password to,
+/// its form editing radio `edited`.
+fn save_pointing_elsewhere(
+    shack: &tempo_app::settings::Settings,
+    edited: u32,
+) -> tempo_app::settings::Settings {
+    let mut save = shack.clone();
+    save.active_radio = edited;
+    save.cloudlog_url = "https://collector.example".into();
+    save.fd_join_addr = "203.0.113.9:42073".into();
+    save.icom_lan_host = "203.0.113.7".into();
+    save.icom_lan_port = 50099;
+    save
+}
+
+/// Where the shack's stored keys and passwords would go: the Cloudlog URL, the club host, and the
+/// Icom network address of the save's radio.
+fn key_destinations(s: &tempo_app::settings::Settings) -> (String, String, String, u16) {
+    (
+        s.cloudlog_url.clone(),
+        s.fd_join_addr.clone(),
+        s.icom_lan_host.clone(),
+        s.icom_lan_port,
+    )
+}
+
+/// ⛔ A settings save from afar cannot send the shack's stored keys and passwords anywhere new: the
+/// Cloudlog URL (the API key), the club host (the position's club key) and the Icom network
+/// address (the radio's password) come back as the shack has them, the Icom one for the radio the
+/// form edited. The same save at the shack takes them all.
+#[test]
+fn a_settings_save_from_afar_keeps_where_the_shack_sends_its_keys() {
+    let shack = shack_that_sends_keys();
+    let afar = Afar { stand_down: 3 };
+    let mut save = save_pointing_elsewhere(&shack, 1);
+    keep_the_shacks_credential_addresses(&shack, &mut save, Some(&afar));
+    assert_eq!(
+        key_destinations(&save),
+        (
+            "https://log.shack.example".to_string(),
+            "192.168.1.10:42073".to_string(),
+            "192.168.1.51".to_string(),
+            50011
+        ),
+        "from afar, where the shack sends its keys changed"
+    );
+    // A save with no roster describes the live radio.
+    let mut save = save_pointing_elsewhere(&shack, 1);
+    save.radios.clear();
+    keep_the_shacks_credential_addresses(&shack, &mut save, Some(&afar));
+    assert_eq!(
+        (save.icom_lan_host.as_str(), save.icom_lan_port),
+        ("192.168.1.50", tempo_app::settings::ICOM_LAN_DEFAULT_PORT),
+        "from afar, with no roster, the live radio's Icom address"
+    );
+    // CONTROL: the same save at the shack.
+    let mut save = save_pointing_elsewhere(&shack, 1);
+    keep_the_shacks_credential_addresses(&shack, &mut save, None);
+    assert_eq!(
+        key_destinations(&save),
+        (
+            "https://collector.example".to_string(),
+            "203.0.113.9:42073".to_string(),
+            "203.0.113.7".to_string(),
+            50099
+        ),
+        "CONTROL: at the shack, the save is taken"
+    );
+}
+
+/// CONTROL: a save from afar still takes every address and name that carries no stored secret: the
+/// user names (each connector's password goes to its own fixed host whatever the name), the
+/// Cloudlog station and switch (the key still goes only to the shack's server), and the hosts a
+/// program or a feed is reached at with no credential.
+#[test]
+fn a_settings_save_from_afar_takes_the_addresses_that_carry_no_key() {
+    let shack = shack_that_sends_keys();
+    let afar = Afar { stand_down: 3 };
+    let mut asked = shack.clone();
+    asked.cloudlog_station_id = "7".into();
+    asked.cloudlog_upload = !shack.cloudlog_upload;
+    asked.icom_lan_user = "op2".into();
+    asked.qrz_username = "N0CALL".into();
+    asked.lotw_username = "n0call".into();
+    asked.clublog_email = "op@example.com".into();
+    asked.n3fjp_host = "192.168.1.20".into();
+    asked.dxkeeper_host = "192.168.1.21".into();
+    asked.n1mm_addr = "192.168.1.22:12060".into();
+    asked.hrd_udp_addr = "192.168.1.23:2333".into();
+    asked.aprs_is_host = "noam.aprs2.net".into();
+    asked.cluster_host = "dxc.example:7300".into();
+    asked.rotator_host = "192.168.1.24:4533".into();
+    asked.flex_radio_ip = "192.168.1.25".into();
+    let mut save = asked.clone();
+    keep_the_shacks_credential_addresses(&shack, &mut save, Some(&afar));
+    assert_eq!(
+        moved(&save, &asked),
+        Vec::<String>::new(),
+        "from afar, an address with no key was kept"
+    );
+}
+
+/// ⛔ The per-radio edit from afar (`update_radio_profile`) keeps the Icom network address that
+/// radio's stored password goes to; the rest of its patch is taken, the user name among it, and the
+/// shack's own edit takes the address.
+#[test]
+fn a_radio_edit_from_afar_keeps_that_radios_icom_address() {
+    let shack = shack_that_sends_keys();
+    let afar = Afar { stand_down: 3 };
+    let mut asked: tempo_app::settings::RadioProfilePatch =
+        serde_json::from_value(serde_json::to_value(&shack.radios[1]).unwrap()).unwrap();
+    asked.icom_lan_host = "203.0.113.7".into();
+    asked.icom_lan_port = 50099;
+    asked.icom_lan_user = "op2".into();
+    let mut patch = asked.clone();
+    keep_the_shacks_radio_icom_address(&shack, 1, &mut patch, Some(&afar));
+    assert_eq!(
+        (patch.icom_lan_host.as_str(), patch.icom_lan_port),
+        ("192.168.1.51", 50011),
+        "from afar, radio 1's Icom address changed"
+    );
+    assert_eq!(patch.icom_lan_user, "op2", "CONTROL: the rest of the patch");
+    let mut patch = asked.clone();
+    keep_the_shacks_radio_icom_address(&shack, 1, &mut patch, None);
+    assert_eq!(
+        (patch.icom_lan_host.as_str(), patch.icom_lan_port),
+        ("203.0.113.7", 50099),
+        "CONTROL: the shack's own edit"
+    );
+}
+
 /// ⛔ The licence class, which decides where the station may transmit, is set at the shack only:
 /// its own command is refused from afar, as a save from afar keeps it.
 #[test]

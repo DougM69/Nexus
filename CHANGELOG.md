@@ -126,6 +126,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep the report fixed, as WSJT-X does. NEEDS-BENCH on the air.
 
 ### Fixed
+- **Remote: the addresses Nexus sends your logging-service keys to can only be changed at the station.** A settings
+  save from a computer driving the station no longer changes the Cloudlog/Wavelog URL, the club host a Field Day
+  position joins, or an Icom network radio's address and port, so it cannot send the station's stored Cloudlog key,
+  club key or radio password to another server. The rest of the save, user names included, still applies. Every
+  other service Nexus signs in to (QRZ, LoTW, eQSL, Club Log, HRDLog, HamQTH, World Radio League, Winlink,
+  RepeaterBook) already uses a fixed address.
 - **PstRotatorAz: "localhost" as its address now works like 127.0.0.1.** Windows looks "localhost" up as the IPv6
   address first, so Nexus listened for PstRotatorAz's replies there while PstRotatorAz answered on IPv4, and the
   compass showed no position. Nexus now takes the IPv4 address when a name has one.
