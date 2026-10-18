@@ -57,7 +57,27 @@ pub fn verify(
     expected: &Expected,
     now_s: u64,
 ) -> Result<Claims, &'static str> {
-    const MALFORMED: &str = "tokenMalformed";
+    let claims = signed(token, keys, expected.issuer, expected.client_id)?;
+    let expires_at = claims["exp"].as_u64().ok_or("tokenExpired")?;
+    if now_s >= expires_at.saturating_add(LEEWAY_S) {
+        return Err("tokenExpired");
+    }
+    if claims["nonce"] != expected.nonce {
+        return Err("tokenNonce");
+    }
+    claims_of(&claims)
+}
+
+const MALFORMED: &str = "tokenMalformed";
+
+/// A token's payload once its algorithm, key, signature, issuer and audience hold, in that order:
+/// the checks every use of a token shares. What else holds (its life, its nonce) is the caller's.
+pub(crate) fn signed(
+    token: &str,
+    keys: &Value,
+    issuer: &str,
+    client: &str,
+) -> Result<Value, &'static str> {
     let parts: Vec<&str> = token.split('.').collect();
     let [header, payload, signature] = parts[..] else {
         return Err(MALFORMED);
@@ -94,10 +114,9 @@ pub fn verify(
         .map_err(|_| "tokenSignature")?;
 
     let claims: Value = serde_json::from_slice(&payload).map_err(|_| MALFORMED)?;
-    if claims["iss"] != expected.issuer {
+    if claims["iss"] != issuer {
         return Err("tokenIssuer");
     }
-    let client = expected.client_id;
     let audience = match &claims["aud"] {
         Value::String(aud) => aud == client,
         Value::Array(auds) => {
@@ -108,13 +127,11 @@ pub fn verify(
     if !audience || claims.get("azp").is_some_and(|azp| azp != client) {
         return Err("tokenAudience");
     }
-    let expires_at = claims["exp"].as_u64().ok_or("tokenExpired")?;
-    if now_s >= expires_at.saturating_add(LEEWAY_S) {
-        return Err("tokenExpired");
-    }
-    if claims["nonce"] != expected.nonce {
-        return Err("tokenNonce");
-    }
+    Ok(claims)
+}
+
+/// What a payload that held says. `tokenMalformed` without a subject or a signing time.
+pub(crate) fn claims_of(claims: &Value) -> Result<Claims, &'static str> {
     Ok(Claims {
         subject: claims["sub"]
             .as_str()
@@ -124,7 +141,7 @@ pub fn verify(
         email: claims["email"].as_str().map(str::to_string),
         email_verified: claims["email_verified"] == true,
         issued_at: claims["iat"].as_u64().ok_or(MALFORMED)?,
-        expires_at,
+        expires_at: claims["exp"].as_u64().ok_or(MALFORMED)?,
         methods: claims["amr"]
             .as_array()
             .into_iter()
@@ -136,7 +153,7 @@ pub fn verify(
 
 /// base64url with no padding (RFC 4648 §5), strictly: any other byte, or a length no encoding
 /// has, is `None`.
-fn unbase64url(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn unbase64url(text: &str) -> Option<Vec<u8>> {
     if text.len() % 4 == 1 {
         return None;
     }

@@ -53,6 +53,8 @@ pub mod alert {
     /// The event every alert is raised as, on each window and on the command link.
     pub const EVENT: &str = "alert";
 }
+/// The account, as a station checks it: the built-in sign-in, proofs, the issuer's keys, devices.
+pub mod account;
 /// The audio road, beside the command link, and this computer's headset.
 pub mod audio_road;
 /// Test builds only (the `bench-road-switch` feature): the switch this computer's roads to the shack
