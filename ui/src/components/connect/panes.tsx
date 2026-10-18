@@ -59,6 +59,7 @@ import { PotaSotaView } from '../PotaSotaView'
 import { ageLabel } from '../SpotsPanel'
 import { SpotsBox } from './SpotsBox'
 import { NeededBox } from './NeededBox'
+import { OperatorsBox } from '../ContestOperators'
 import {
   NEED_CHIP,
   dxpedWorkMode,
@@ -773,6 +774,17 @@ export const PANES: PaneDef[] = [
     category: 'activity',
     basic: () => t('connect.pane.needed.basic'),
     expert: (c) => (c.neededBoard ? <NeededBox board={c.neededBoard} /> : null),
+  },
+  {
+    // THE OPERATORS BOX — who is at the key and each operator's contacts, points and last hour, off the
+    // running contest (ContestOperators). With no contest running, its one line says so.
+    id: 'operators',
+    get title() {
+      return t('connect.pane.operators.title')
+    },
+    category: 'activity',
+    basic: () => t('connect.pane.operators.basic'),
+    expert: (c) => (c.fieldDay ? <OperatorsBox fieldDay={c.fieldDay} /> : null),
   },
 ]
 

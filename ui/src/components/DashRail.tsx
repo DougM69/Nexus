@@ -42,7 +42,7 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts).
 import { Fragment, createRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, RefObject } from 'react'
-import type { AmpStatus, NeedAlert, NeedTag, PropagationSnapshot, Station } from '../types'
+import type { AmpStatus, FieldDayStatus, NeedAlert, NeedTag, PropagationSnapshot, Station } from '../types'
 import type { Theme } from '../useTheme'
 import type { MapIntent } from './MapView'
 import { t } from '../i18n'
@@ -152,6 +152,8 @@ export interface DashRailProps {
   needAlerts?: NeedAlert[]
   amp?: AmpStatus | null
   rigBand?: string | null
+  /** The running contest, for the Operators box (PaneContext `fieldDay`). */
+  fieldDay?: FieldDayStatus | null
   onWorkSpot?: PaneContext['onWorkSpot']
   onPoint?: (call: string) => void
   /** The window's Spots board and its feed, the POTA/SOTA board's hunt wiring and the Needed board, lent
@@ -305,6 +307,7 @@ function DashRailBody(p: DashRailProps) {
     spotsFeed,
     otaBoard: p.otaBoard,
     neededBoard,
+    fieldDay: p.fieldDay,
     entryCall: p.entryCall,
   })
   const frames = useMemo(

@@ -185,6 +185,29 @@ and drag the window to the logger's monitor. It opens on that monitor again next
   pass contacts there: that screen's log strip takes the band and the satellite from the pass.
   Nothing is blocked, and a contact logged in the logger window is logged as before.
 
+### Statistics per operator
+
+When more than one operator logs, each contact carries the call in the **Operator** box at the
+moment it was logged, and the Contest screen's score area gains an **Operators** section under the
+multiplier boards: one row per operator, best first.
+
+- **QSOs, Points and New mults**, each with that operator's share of the whole. Points are QSO
+  points before multipliers, power and bonuses. A multiplier counts for the operator who worked it
+  first. Dupes, contacts in a mode the contest does not allow and contacts you removed count for
+  nobody, exactly as they count nothing in the score.
+- **Last 10 min /h and Last 60 min /h**: each operator's rate, in contacts per hour.
+- **Best hour**: the UTC clock hour in which that operator logged the most contacts, and how many.
+- **A band × mode table** for each operator.
+
+Contacts logged with no operator named are a row of their own, shown as **—**. They are never
+counted under the station's call. With a single operator the section is not drawn, since its one
+row would repeat the score above it. The **Summary** export carries the same section, without the
+rates, which describe a moment rather than the contest.
+
+The **Operators** box, picked in any box's picker on Conditions, in the dashboard window or in the
+dashboard rail beside a cockpit, shows who is at the key now and the leaderboard: QSOs, points and
+the last hour's rate. A single operator is one row there. With no contest running, it says so.
+
 ### The Contest screen on another monitor
 
 **⧉ Pop out**, at the right end of the Contest screen's top line (the one with the Contest mode

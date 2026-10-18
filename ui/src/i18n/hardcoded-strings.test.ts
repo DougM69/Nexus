@@ -286,6 +286,7 @@ const MIGRATED = [
   // keys; "pota.app" and "DX cluster" in them name the services.
   'selfSpot.ts',
   'components/ContestView.tsx',
+  'components/ContestOperators.tsx',
   // The contest logger window (2026-10-10): born migrated — its one string is a catalog key; the
   // modes it logs under are ADIF mode names, tokens.
   'components/ContestLogger.tsx',

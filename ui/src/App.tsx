@@ -3033,6 +3033,7 @@ function App() {
     needAlerts: visibleAlerts,
     amp: snap.radio.amp ?? null,
     rigBand: snap.radio.band ?? null,
+    fieldDay: snap.fieldDay ?? null,
     onWorkSpot: handleWorkMapSpot,
     onPoint: (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim() ? handlePointAntenna : undefined,
     spotsFeed: { rows: allSpots, board: spotsBoard },
@@ -3438,6 +3439,7 @@ function App() {
           // no new command. Absent when none is configured, and the pane then renders nothing.
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
+          fieldDay={snap?.fieldDay ?? null}
           // The Spots, POTA/SOTA and Needed boxes are the boards themselves: the Spots view's own
           // `spotsBoard` and feed, the POTA/SOTA view's own hunt wiring and the Needed view's own
           // `neededBoard`, handed over whole so a Work or a HUNT from a box is the view's act. A

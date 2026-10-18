@@ -8,6 +8,7 @@ import type {
   AlertView,
   AmpStatus,
   DxpedWindow,
+  FieldDayStatus,
   GettingOut,
   MapSpot,
   MufStation,
@@ -128,6 +129,8 @@ export interface PaneContextInput {
   spotsFeed?: SpotsFeed
   otaBoard?: OtaBoard
   neededBoard?: NeededBoard
+  /** The running contest (PaneContext `fieldDay`), for the Operators box. */
+  fieldDay?: FieldDayStatus | null
   /** The call in the log entry of the cockpit beside the box (PaneContext `entryCall`); absent on every
    *  surface with no cockpit beside it. */
   entryCall?: string | null
@@ -173,6 +176,7 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
     spotsFeed: i.spotsFeed,
     otaBoard: i.otaBoard,
     neededBoard: i.neededBoard,
+    fieldDay: i.fieldDay,
     onSelectCall: i.onSelectCall,
     onWorkSpot: i.onWorkSpot,
     onPoint: i.onPoint,

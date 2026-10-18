@@ -438,6 +438,32 @@ fn counts_under(rs: &crate::fd_rules::FdRuleset, q: &LoggedQso) -> bool {
     !q.dupe && (rs.satellite_credit || q.sat.is_none()) && !q.banned_under(rs)
 }
 
+/// ⭐ **One operator's share of a contest log** ([`FieldDayLog::operator_stats`]): what the
+/// counting rows stamped with that operator add up to, under the contest's own scoring.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OperatorStats {
+    /// The [`LoggedQso::operator`] stamp, uppercase. `""` groups the rows that name nobody.
+    pub operator: String,
+    /// Contacts that count ([`FieldDayLog::qso_count`]'s rule: no dupe, no banned mode, no
+    /// uncredited satellite).
+    pub qsos: u32,
+    /// Their QSO points, before multipliers, power tier and bonuses: the per-row points the
+    /// log's score sums, so every operator's points add up to the log's.
+    pub points: u32,
+    /// The multipliers this operator worked FIRST ([`Scoring::new_mults_by_row`]).
+    ///
+    /// [`Scoring::new_mults_by_row`]: crate::contest::Scoring::new_mults_by_row
+    pub new_mults: u32,
+    /// Contacts in the last 10 and the last 60 minutes before `now`.
+    pub last_10_min: u32,
+    pub last_60_min: u32,
+    /// The UTC clock hour with the most contacts — its start (Unix seconds) and its count —
+    /// the earliest such hour on a tie. `(0, 0)` with no contacts.
+    pub best_hour: (u64, u32),
+    /// Contacts by band and mode class, `(band, mode, contacts)`, sorted by band then mode.
+    pub band_mode: Vec<(String, String, u32)>,
+}
+
 /// What [`FieldDayLog::merge_adif`] found in a journal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AdifMerge {
@@ -1937,6 +1963,68 @@ impl FieldDayLog {
     /// bonuses are applied at the score layer (engine), not here.
     pub fn qso_points(&self) -> u32 {
         self.counting().map(|q| qso_points_for_mode(&q.mode)).sum()
+    }
+
+    /// ⭐ **Per-operator statistics** — the contest's counting rows grouped by the operator
+    /// each was stamped with ([`LoggedQso::operator`]), best first (points, then contacts,
+    /// then call). Dupes, banned modes and uncredited satellite rows are left out exactly as
+    /// the score leaves them out ([`counting`](Self::counting)); removed contacts are not in
+    /// the live log at all. Points and new multipliers come from the ruleset's own scorer, so
+    /// the operators' figures sum to the log's QSO points and multiplier count.
+    ///
+    /// One pass over the log; `now_unix` is the caller's, so the rate windows are testable.
+    pub fn operator_stats(&self, now_unix: u64) -> Vec<OperatorStats> {
+        use std::collections::HashMap;
+        let scoring = &self.ruleset().scoring;
+        let new_mults = scoring.new_mults_by_row(self.score_rows());
+        let mut stats: Vec<OperatorStats> = Vec::new();
+        let mut index: HashMap<&str, usize> = HashMap::new();
+        let mut hours: Vec<HashMap<u64, u32>> = Vec::new();
+        let mut cells: Vec<HashMap<(&str, &str), u32>> = Vec::new();
+        for ((q, row), new) in self.counting().zip(self.score_rows()).zip(new_mults) {
+            let i = *index.entry(q.operator.as_str()).or_insert_with(|| {
+                stats.push(OperatorStats {
+                    operator: q.operator.clone(),
+                    ..OperatorStats::default()
+                });
+                hours.push(HashMap::new());
+                cells.push(HashMap::new());
+                stats.len() - 1
+            });
+            let s = &mut stats[i];
+            s.qsos += 1;
+            s.points += scoring.qso_points.points_for(&row);
+            s.new_mults += new;
+            let w = q.when_unix;
+            if w <= now_unix && w + 600 > now_unix {
+                s.last_10_min += 1;
+            }
+            if w <= now_unix && w + 3600 > now_unix {
+                s.last_60_min += 1;
+            }
+            *hours[i].entry(w - w % 3600).or_default() += 1;
+            *cells[i]
+                .entry((q.band.as_str(), q.mode.as_str()))
+                .or_default() += 1;
+        }
+        for ((s, h), c) in stats.iter_mut().zip(hours).zip(cells) {
+            s.best_hour = h
+                .into_iter()
+                .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+                .unwrap_or_default();
+            s.band_mode = c
+                .into_iter()
+                .map(|((b, m), n)| (b.to_string(), m.to_string(), n))
+                .collect();
+            s.band_mode.sort();
+        }
+        stats.sort_by(|a, b| {
+            b.points
+                .cmp(&a.points)
+                .then(b.qsos.cmp(&a.qsos))
+                .then(a.operator.cmp(&b.operator))
+        });
+        stats
     }
 
     /// Export the log as ADIF records (one `<EOR>` per QSO): every live row, then every
@@ -7513,5 +7601,161 @@ mod edit_tests {
             .edit_contact("K2DEF", T0, &edit("K2DEG", &[IL], "20M", ""))
             .is_ok());
         assert_eq!(calls(&l), ["K2DEG", "W1AW", "N0SAU"]);
+    }
+}
+
+#[cfg(test)]
+mod operator_stats_tests {
+    use super::*;
+    use crate::contest::{ContestSession, StationData};
+
+    /// ARRL Sweepstakes CW: two points a contact, the section the multiplier, a station
+    /// worked once whatever the band.
+    fn ss() -> FieldDayLog {
+        let rs = crate::fd_rules::ruleset_by_id("arrlss_cw", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        let data = StationData {
+            mycall: "W9XYZ".into(),
+            fd_section: "WI".into(),
+            contest_check: "99".into(),
+            contest_category_power: "LOW".into(),
+            contest_category_assisted: "NON-ASSISTED".into(),
+            ..Default::default()
+        };
+        let session = ContestSession::for_ruleset(rs, &data).expect("the session builds");
+        FieldDayLog::new("W9XYZ", session, "20m")
+    }
+
+    /// The top of a UTC clock hour.
+    const H: u64 = 1_759_996_800;
+
+    fn log(l: &mut FieldDayLog, op: &str, band: &str, call: &str, sec: &str, when: u64) -> bool {
+        l.operator = op.into();
+        l.band = band.into();
+        let fields: Vec<(String, String)> = [
+            ("NR", "1"),
+            ("PREC", "A"),
+            ("CALL", call),
+            ("CK", "99"),
+            ("SEC", sec),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        l.session.working(call, when);
+        let logged = l.log_fields_at(call, &fields, "CW", "", 0, when);
+        l.session.logged(call);
+        logged
+    }
+
+    /// Three operators and one unstamped contact, with one dupe.
+    fn club_log() -> FieldDayLog {
+        let mut l = ss();
+        log(&mut l, "K9AAA", "20m", "K1A", "CT", H + 60);
+        log(&mut l, "K9AAA", "20m", "K2B", "NNJ", H + 120);
+        log(&mut l, "K9AAA", "20m", "K3C", "EPA", H + 180);
+        log(&mut l, "K9AAA", "40m", "K4D", "VA", H + 3660);
+        log(&mut l, "N9BBB", "20m", "W5E", "STX", H + 3900);
+        log(&mut l, "N9BBB", "20m", "W6F", "CT", H + 4000);
+        // K1A again: a Sweepstakes dupe on any band, worth nothing to anyone.
+        log(&mut l, "N9BBB", "40m", "K1A", "CT", H + 4100);
+        log(&mut l, "W9CCC", "40m", "N7G", "OR", H + 7300);
+        log(&mut l, "", "20m", "N8H", "OH", H + 7400);
+        l
+    }
+
+    const NOW: u64 = H + 7500;
+
+    fn cells(v: &[(&str, &str, u32)]) -> Vec<(String, String, u32)> {
+        v.iter()
+            .map(|(b, m, n)| (b.to_string(), m.to_string(), *n))
+            .collect()
+    }
+
+    /// ⭐ Every figure for every operator, by value.
+    #[test]
+    fn three_operators_get_their_own_figures() {
+        let l = club_log();
+        let got = l.operator_stats(NOW);
+        let want = vec![
+            OperatorStats {
+                operator: "K9AAA".into(),
+                qsos: 4,
+                points: 8,
+                new_mults: 4,
+                last_10_min: 0,
+                last_60_min: 0,
+                best_hour: (H, 3),
+                band_mode: cells(&[("20m", "CW", 3), ("40m", "CW", 1)]),
+            },
+            OperatorStats {
+                operator: "N9BBB".into(),
+                qsos: 2,
+                points: 4,
+                // CT was K9AAA's first.
+                new_mults: 1,
+                last_10_min: 0,
+                // H + 3900 is exactly an hour before NOW, so outside the hour; H + 4000 is in.
+                last_60_min: 1,
+                best_hour: (H + 3600, 2),
+                band_mode: cells(&[("20m", "CW", 2)]),
+            },
+            // The contact that names nobody is a row of its own, under "".
+            OperatorStats {
+                operator: "".into(),
+                qsos: 1,
+                points: 2,
+                new_mults: 1,
+                last_10_min: 1,
+                last_60_min: 1,
+                best_hour: (H + 7200, 1),
+                band_mode: cells(&[("20m", "CW", 1)]),
+            },
+            OperatorStats {
+                operator: "W9CCC".into(),
+                qsos: 1,
+                points: 2,
+                new_mults: 1,
+                last_10_min: 1,
+                last_60_min: 1,
+                best_hour: (H + 7200, 1),
+                band_mode: cells(&[("40m", "CW", 1)]),
+            },
+        ];
+        assert_eq!(got, want);
+    }
+
+    /// The operators' figures add up to the log's own: contacts, QSO points and multipliers.
+    #[test]
+    fn the_operators_sum_to_the_score() {
+        let l = club_log();
+        let got = l.operator_stats(NOW);
+        let (qso_pts, _, mults, _) = l.ruleset().scoring.score(l.score_rows(), 1);
+        assert_eq!(
+            got.iter().map(|s| s.qsos as usize).sum::<usize>(),
+            l.qso_count()
+        );
+        assert_eq!(l.qso_count(), 8);
+        assert_eq!(got.iter().map(|s| s.points).sum::<u32>(), qso_pts);
+        assert_eq!(Some(got.iter().map(|s| s.new_mults).sum::<u32>()), mults);
+        assert_eq!(mults, Some(7));
+    }
+
+    /// A removed contact leaves its operator's figures with it.
+    #[test]
+    fn a_removed_contact_leaves_the_figures() {
+        let mut l = club_log();
+        let seq = l.qsos().last().expect("rows").seq;
+        assert!(l.remove_row(seq, NOW).is_some());
+        let got = l.operator_stats(NOW);
+        assert_eq!(
+            got.iter().map(|s| s.operator.as_str()).collect::<Vec<_>>(),
+            ["K9AAA", "N9BBB", "W9CCC"]
+        );
+    }
+
+    #[test]
+    fn an_empty_log_has_no_operators() {
+        assert!(ss().operator_stats(NOW).is_empty());
     }
 }

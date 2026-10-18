@@ -55,6 +55,7 @@ export const PANE_HELP: Partial<Record<PaneId, PaneHelp>> = {
   spots: GRID,
   pota: GRID,
   needed: GRID,
+  operators: { chapter: 'contesting-pota', anchor: 'statistics-per-operator' },
 }
 
 /** The manual page for a pane, or null when the manual does not describe it. */

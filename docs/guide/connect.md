@@ -302,6 +302,7 @@ The panes you can assign:
 | Spots | the [Spots](spots.md) screen's list of every spot on the air, with its search and filters; a click works the station exactly as it does there |
 | POTA / SOTA | the [POTA/SOTA](contesting-pota.md) hunter's list, with its tabs, Hide worked today, Refresh and **HUNT**; its band, mode and sort choices open on its Filter button |
 | Needed | the [Needed](needed-dx.md) board's list of the stations you still need that are on the air now, with its filters; a click works the station exactly as it does there |
+| Operators | while a contest runs, who is at the key and each operator's contacts, points and last-hour rate ([Statistics per operator](contesting-pota.md#statistics-per-operator)); with none, it says so |
 
 The **Spots**, **Needed** and **POTA / SOTA** boxes are those screens' own lists, so a click on a
 spot, a need or **HUNT** does what it does there, and nothing transmits. In Conditions' own window

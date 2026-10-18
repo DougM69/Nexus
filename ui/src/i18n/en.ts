@@ -4062,6 +4062,22 @@ export const EN = {
   'fieldDay.rate.hour.title':
     'Contacts logged in the last 60 minutes — a rolling hour, not the clock hour.',
   'fieldDay.rate.hour.aria': 'Contacts in the last 60 minutes',
+  'fieldDay.operators.heading': 'Operators',
+  'fieldDay.operators.caption': 'Contest statistics per operator',
+  'fieldDay.operators.col.operator': 'Operator',
+  'fieldDay.operators.col.qsos': 'QSOs',
+  'fieldDay.operators.col.points': 'Points',
+  'fieldDay.operators.col.mults': 'New mults',
+  'fieldDay.operators.col.rate10': 'Last 10 min /h',
+  'fieldDay.operators.col.rate60': 'Last 60 min /h',
+  'fieldDay.operators.col.rate60.short': '60 min',
+  'fieldDay.operators.col.best': 'Best hour',
+  'fieldDay.operators.col.band': 'Band',
+  'fieldDay.operators.unnamed.title': 'Contacts logged with no operator named',
+  'fieldDay.operators.note': 'Points are QSO points before multipliers and bonuses. A multiplier counts for the operator who worked it first. Rates are contacts per hour. — marks contacts logged with no operator named.',
+  'fieldDay.operators.atKey': 'At the key: <b>{{call}}</b>',
+  'fieldDay.operators.nobody': 'Nobody is named at the key.',
+  'fieldDay.operators.none': 'No contacts yet.',
   'fieldDay.state.title': 'Sequencer state',
   // The stand-in when the engine has not named a sequencer state yet; the states themselves
   // are the backend's own words, printed as they arrive.
@@ -9095,6 +9111,8 @@ export const EN = {
   'connect.pane.pota.basic': "The POTA/SOTA list isn't available on this screen.",
   'connect.pane.needed.title': 'Needed',
   'connect.pane.needed.basic': "The Needed list isn't available on this screen.",
+  'connect.pane.operators.title': 'Operators',
+  'connect.pane.operators.basic': 'No contest running.',
 
   // Where a snapshot came from. The words are the chip; the freshness is a number.
   'connect.prov.title': 'Data provenance',

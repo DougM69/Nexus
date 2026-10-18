@@ -374,6 +374,38 @@ pub struct Scoring {
     pub post: &'static [PostMultiplier],
 }
 
+/// The key one row counts under one multiplier rule — `(scope bucket, value)` — or `None`
+/// when the rule does not count this row. [`Scoring::mult_counts`] and
+/// [`Scoring::new_mults_by_row`] both count through it, so they cannot disagree about
+/// what a multiplier is.
+fn mult_key(m: &MultiplierRule, row: &ScoreRow<'_>) -> Option<(String, String)> {
+    if !(m.roles.is_empty() || m.roles.contains(&row.role)) {
+        return None;
+    }
+    let value = match m.source {
+        MultSource::Field { key, domain } => row
+            .rx
+            .iter()
+            .find(|v| v.key == key && (domain.is_none() || v.domain == domain))
+            .map(|v| canonical_mult_value(&v.raw, v.domain)),
+        MultSource::DxccEntity => row.entity.map(|e| e.to_string()),
+        MultSource::Prefix => row.prefix.map(|p| p.to_string()),
+    };
+    let value = value.filter(|v| !v.is_empty())?;
+    if m.excluding.iter().any(|e| *e == value) {
+        return None;
+    }
+    let bucket = match m.scope {
+        MultScope::PerLog => String::new(),
+        MultScope::PerBand => row.band.to_ascii_uppercase(),
+        MultScope::PerMode => row.mode_class.to_ascii_uppercase(),
+        MultScope::PerBandMode => {
+            format!("{}/{}", row.band.to_ascii_uppercase(), row.mode_class)
+        }
+    };
+    Some((bucket, value))
+}
+
 impl Scoring {
     /// `(qso_pts, powered_pts)` for these rows at the given stored power tier.
     ///
@@ -431,33 +463,9 @@ impl Scoring {
         let mut seen: Vec<HashSet<(String, String)>> = vec![HashSet::new(); self.multipliers.len()];
         for row in rows {
             for (i, m) in self.multipliers.iter().enumerate() {
-                if !(m.roles.is_empty() || m.roles.contains(&row.role)) {
-                    continue;
+                if let Some(key) = mult_key(m, &row) {
+                    seen[i].insert(key);
                 }
-                let value = match m.source {
-                    MultSource::Field { key, domain } => row
-                        .rx
-                        .iter()
-                        .find(|v| v.key == key && (domain.is_none() || v.domain == domain))
-                        .map(|v| canonical_mult_value(&v.raw, v.domain)),
-                    MultSource::DxccEntity => row.entity.map(|e| e.to_string()),
-                    MultSource::Prefix => row.prefix.map(|p| p.to_string()),
-                };
-                let Some(value) = value.filter(|v| !v.is_empty()) else {
-                    continue;
-                };
-                if m.excluding.iter().any(|e| *e == value) {
-                    continue;
-                }
-                let bucket = match m.scope {
-                    MultScope::PerLog => String::new(),
-                    MultScope::PerBand => row.band.to_ascii_uppercase(),
-                    MultScope::PerMode => row.mode_class.to_ascii_uppercase(),
-                    MultScope::PerBandMode => {
-                        format!("{}/{}", row.band.to_ascii_uppercase(), row.mode_class)
-                    }
-                };
-                seen[i].insert((bucket, value));
             }
         }
         self.multipliers
@@ -469,6 +477,35 @@ impl Scoring {
                 // sixth DX entity simply does not raise the number.
                 let n = set.len();
                 (m.id, m.cap.map_or(n, |c| n.min(c as usize)))
+            })
+            .collect()
+    }
+
+    /// ⭐ **The multipliers each row was FIRST to earn**, one entry per row, in the rows' order:
+    /// how many of the [`mult_counts`](Self::mult_counts) keys this row added that no earlier
+    /// row had, under every rule its role counts. A capped rule credits only its first `cap`
+    /// values, as the claimed count does, so the entries always sum to the multipliers
+    /// [`score`](Self::score) claims. This is what a per-operator "new multipliers" figure
+    /// reads: the multiplier belongs to whoever worked it first.
+    pub fn new_mults_by_row<'a, I>(&self, rows: I) -> Vec<u32>
+    where
+        I: IntoIterator<Item = ScoreRow<'a>>,
+    {
+        use std::collections::HashSet;
+        let mut seen: Vec<HashSet<(String, String)>> = vec![HashSet::new(); self.multipliers.len()];
+        rows.into_iter()
+            .map(|row| {
+                let mut new = 0;
+                for (i, m) in self.multipliers.iter().enumerate() {
+                    let Some(key) = mult_key(m, &row) else {
+                        continue;
+                    };
+                    let capped = m.cap.is_some_and(|c| seen[i].len() >= c as usize);
+                    if !capped && seen[i].insert(key) {
+                        new += 1;
+                    }
+                }
+                new
             })
             .collect()
     }
@@ -1101,6 +1138,69 @@ mod tests {
     /// and the operator is allowed to work them — only five may be CLAIMED. So the cap
     /// lives on the rule and is applied where the counting happens, which also keeps
     /// the board the operator reads and the score they submit the same number.
+    /// ⭐ **A multiplier is credited to the row that worked it FIRST**, once, at the rule's own
+    /// scope, and a capped rule credits only its first `cap` values: the per-row figures sum to
+    /// the claimed multiplier count, by value.
+    #[test]
+    fn new_multipliers_go_to_the_first_row_and_sum_to_the_claimed_count() {
+        static RULES: &[MultiplierRule] = &[
+            MultiplierRule {
+                id: "dxcc",
+                source: MultSource::DxccEntity,
+                scope: MultScope::PerLog,
+                excluding: &[],
+                roles: &[],
+                cap: Some(3),
+            },
+            MultiplierRule {
+                id: "band",
+                source: MultSource::DxccEntity,
+                scope: MultScope::PerBand,
+                excluding: &["Spain"],
+                roles: &[],
+                cap: None,
+            },
+        ];
+        let worked = [
+            ("Germany", "20m"),
+            ("France", "20m"),
+            ("Germany", "20m"),
+            ("Germany", "40m"),
+            ("Spain", "20m"),
+            ("Italy", "20m"),
+        ];
+        let rows: Vec<ScoreRow> = worked
+            .iter()
+            .map(|(e, b)| ScoreRow {
+                mode_class: "CW",
+                band: b,
+                role: "",
+                rx: &[],
+                entity: Some(e),
+                prefix: None,
+                relation: None,
+            })
+            .collect();
+        let scoring = Scoring {
+            qso_points: PointsRule::ByModeClass(FD_POINTS),
+            multipliers: RULES,
+            post: &[],
+        };
+        // Germany 20m: dxcc + band. France: dxcc + band. Germany again: nothing. Germany 40m:
+        // band only. Spain: dxcc (the third and last the cap allows); the band rule excludes it.
+        // Italy: the cap is full, so the band rule alone.
+        assert_eq!(
+            scoring.new_mults_by_row(rows.iter().copied()),
+            vec![2, 2, 0, 1, 1, 1]
+        );
+        let claimed: usize = scoring
+            .mult_counts(rows.iter().copied())
+            .iter()
+            .map(|(_, n)| n)
+            .sum();
+        assert_eq!(claimed, 7);
+    }
+
     #[test]
     fn a_capped_multiplier_stops_counting_at_its_cap() {
         static CAPPED: &[MultiplierRule] = &[MultiplierRule {

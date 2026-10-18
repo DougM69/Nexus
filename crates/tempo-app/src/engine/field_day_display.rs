@@ -227,6 +227,12 @@ impl Engine {
                     failed_writes: t.failed,
                     last_saved_unix: t.last_good_unix,
                 }),
+            operator_now: log.operator.clone(),
+            operators: log
+                .operator_stats(now_unix_secs())
+                .into_iter()
+                .map(crate::dto::FdOperatorDto::from)
+                .collect(),
         })
     }
 
@@ -309,6 +315,14 @@ impl Engine {
                 for v in &q.rx {
                     check(&v.raw)?;
                 }
+            }
+        }
+        // The per-operator block names each operator once, and the bands and modes they worked.
+        for o in log.operator_stats(crate::engine::now_unix_secs()) {
+            check(&o.operator)?;
+            for (band, mode, _) in &o.band_mode {
+                check(band)?;
+                check(mode)?;
             }
         }
         if self.fd_sync_enabled() {
@@ -537,6 +551,59 @@ mod tests {
                 ("bbbb0002".to_string(), None),
                 ("cccc0003".to_string(), Some("removed".to_string()))
             ]
+        );
+    }
+
+    /// ⭐ **The status names who is at the key and carries each operator's figures**, with the
+    /// rates as contacts per hour: one contact in the last ten minutes is 6 an hour.
+    #[test]
+    fn the_status_carries_each_operators_figures_and_who_is_at_the_key() {
+        let mut e = engine("arrlfd", 0);
+        let now = now_unix_secs();
+        let Mode::FieldDay { station, .. } = &mut e.mode else {
+            panic!("active")
+        };
+        station.log.operator = "K9AAA".into();
+        assert!(station
+            .log
+            .log_mode_at("K1A", "2A", "WI", "CW", 0, now - 60));
+        assert!(station
+            .log
+            .log_mode_at("K1B", "2A", "IL", "PH", 0, now - 1200));
+        station.log.operator = "N9BBB".into();
+        assert!(station
+            .log
+            .log_mode_at("K1C", "2A", "OH", "PH", 0, now - 4000));
+        let st = e.field_day_status().expect("a contest is on");
+        assert_eq!(st.operator_now, "N9BBB");
+        let ops: Vec<(String, u32, u32, u32, u32, u32)> = st
+            .operators
+            .iter()
+            .map(|o| {
+                (
+                    o.operator.clone(),
+                    o.qsos,
+                    o.points,
+                    o.new_mults,
+                    o.rate10,
+                    o.rate60,
+                )
+            })
+            .collect();
+        assert_eq!(
+            ops,
+            vec![
+                ("K9AAA".into(), 2, 3, 0, 6, 2),
+                ("N9BBB".into(), 1, 1, 0, 0, 0)
+            ]
+        );
+        assert_eq!(
+            st.operators[0]
+                .band_mode
+                .iter()
+                .map(|c| c.qsos)
+                .sum::<u32>(),
+            2
         );
     }
 

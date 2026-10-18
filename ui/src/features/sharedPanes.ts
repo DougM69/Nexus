@@ -82,6 +82,9 @@ export const SHARED_PANES: readonly SharedPane[] = [
   { id: 'pota', pane: 'pota', role: 'fill', weight: 1, remote: false },
   // The hosted page has the station's needs (its `needs` collection), as Phone's own Needed pane shows.
   { id: 'neededBoard', pane: 'needed', role: 'fill', weight: 1, remote: true },
+  // Who is at the key and one row per operator: a short table of its own height. Not offered on the
+  // hosted page until the contest status it reads is checked there.
+  { id: 'operators', pane: 'operators', role: 'content', remote: false },
 ]
 
 const BY_ID = new Map<string, SharedPane>(SHARED_PANES.map((e) => [e.id, e]))

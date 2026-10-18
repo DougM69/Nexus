@@ -2757,6 +2757,65 @@ pub struct FieldDayStatus {
     /// it does not list, so `leave_out_the_hosts_own` empties it. The remedy is at the station.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unsaved: Option<FdUnsavedDto>,
+    /// ⭐ **Who is at the key now** — the operator the next contact will be stamped with
+    /// (`FieldDayLog::operator`), `""` when nobody is named.
+    #[serde(default)]
+    pub operator_now: String,
+    /// ⭐ **Per-operator statistics** (`FieldDayLog::operator_stats`), best first: the
+    /// counting rows grouped by the operator stamped on each. Empty with no contacts, and on a
+    /// snapshot from a build older than the field.
+    #[serde(default)]
+    pub operators: Vec<FdOperatorDto>,
+}
+
+/// [`FieldDayStatus::operators`]: one operator's share of the contest log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdOperatorDto {
+    /// The operator stamp; `""` for the contacts that name nobody.
+    pub operator: String,
+    pub qsos: u32,
+    /// QSO points, before multipliers, power and bonuses.
+    pub points: u32,
+    /// The multipliers this operator worked first.
+    pub new_mults: u32,
+    /// Contacts per hour over the last 10 minutes (the count × 6) and over the last hour.
+    pub rate10: u32,
+    pub rate60: u32,
+    /// The best UTC clock hour: its start (Unix seconds) and its contacts. `0`/`0` with none.
+    pub best_hour_start_unix: u64,
+    pub best_hour_qsos: u32,
+    pub band_mode: Vec<FdBandModeDto>,
+}
+
+/// One cell of [`FdOperatorDto::band_mode`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdBandModeDto {
+    pub band: String,
+    /// The scoring class (`CW` / `PH` / `DIG`), as a contest row records it.
+    pub mode: String,
+    pub qsos: u32,
+}
+
+impl From<tempo_core::fieldday::OperatorStats> for FdOperatorDto {
+    fn from(s: tempo_core::fieldday::OperatorStats) -> Self {
+        Self {
+            operator: s.operator,
+            qsos: s.qsos,
+            points: s.points,
+            new_mults: s.new_mults,
+            rate10: s.last_10_min * 6,
+            rate60: s.last_60_min,
+            best_hour_start_unix: s.best_hour.0,
+            best_hour_qsos: s.best_hour.1,
+            band_mode: s
+                .band_mode
+                .into_iter()
+                .map(|(band, mode, qsos)| FdBandModeDto { band, mode, qsos })
+                .collect(),
+        }
+    }
 }
 
 /// [`FieldDayStatus::unsaved`]: the contest journal writes that failed since the last good one.
