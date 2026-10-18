@@ -462,6 +462,7 @@ async fn the_window_closing_mid_over_ends_it_at_once() {
             .keep(&paired_record(&r.s, at))
             .unwrap();
         let origin = Origin::start(Reach {
+            lookup: Arc::new(tempo_stream::lan::lookup),
             assets: Arc::new(|_: &str| None),
             stations: Arc::new(Stations::new(Arc::new(store.clone()))),
             find: Arc::new(|_| Ok(Vec::new())),

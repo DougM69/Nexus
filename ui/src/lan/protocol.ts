@@ -5,9 +5,9 @@
 // through as the station sent them, to the code that reads them on the hosted road too.
 
 /** A paired station as the page is shown it: its LAN station id, where it answered (the last that
- *  worked first), and its key's fingerprint (SHA-256 of the key, lowercase hex). Never this
- *  computer's key. */
-export type LanStation = { id: string; addresses: string[]; key: string }
+ *  worked first), its key's fingerprint (SHA-256 of the key, lowercase hex), and the address or host
+ *  name Operate tries first, when one is kept. Never this computer's key. */
+export type LanStation = { id: string; addresses: string[]; key: string; typedAddress?: string }
 
 /** A station found by name on this computer's networks (`tempo_stream::lan::dnssd`): the name it
  *  advertises, the address it listens at, the LAN protocol it speaks and its key tag (the first 64
@@ -33,7 +33,7 @@ export type PairReason = (typeof PAIR_REASONS)[number]
  *  computer did not pair with. */
 export const CONNECT_REASONS = ['badAddress', 'unreachable', 'keyChanged', 'notThisStation', 'notPaired',
   'updateStation', 'updateComputer', 'notStation', 'storeUnavailable', 'unknownStation', 'otherNetwork', 'refused',
-  'noAnswer'] as const
+  'noAnswer', 'nameUnresolved'] as const
 export type ConnectReason = (typeof CONNECT_REASONS)[number]
 
 /** Why an open road closed. */
@@ -99,10 +99,14 @@ function text(value: unknown, pattern?: RegExp, max = 64): string {
   if (typeof value !== 'string' || value.length > max || (pattern && !pattern.test(value))) throw Error('invalidLanMessage')
   return value
 }
+/** An address or a host name with its port, as `tempo_stream::lan::Typed` writes one. */
+const TYPED = /^[0-9a-z.-]+:[0-9]+$/
 function station(raw: unknown): LanStation {
-  const value = fields(raw, ['id', 'addresses', 'key'])
+  const typed = (raw as Fields | null)?.typedAddress !== undefined ? ['typedAddress'] : []
+  const value = fields(raw, ['id', 'addresses', 'key', ...typed])
   if (!Array.isArray(value.addresses) || value.addresses.length < 1 || value.addresses.length > 4) throw Error('invalidLanMessage')
-  return { id: text(value.id, UUID), addresses: value.addresses.map(a => text(a, /^[0-9.]+:[0-9]+$/, 21)), key: text(value.key, HEX64) }
+  const shown: LanStation = { id: text(value.id, UUID), addresses: value.addresses.map(a => text(a, /^[0-9.]+:[0-9]+$/, 21)), key: text(value.key, HEX64) }
+  return typed.length ? { ...shown, typedAddress: text(value.typedAddress, TYPED, 259) } : shown
 }
 function choice(raw: unknown): LanChoice {
   const value = fields(raw, ['id', 'name'])

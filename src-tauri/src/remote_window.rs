@@ -336,6 +336,7 @@ fn reach(app: &tauri::AppHandle) -> Reach {
         }),
         stations: Arc::clone(&stations),
         find: Arc::new(tempo_stream::lan::dnssd::find),
+        lookup: Arc::new(tempo_stream::lan::lookup),
         name: computer_name(),
         operate: {
             let app = app.clone();

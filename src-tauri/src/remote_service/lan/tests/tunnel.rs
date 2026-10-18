@@ -441,6 +441,7 @@ pub(super) fn through_record(
         station_key: station.into(),
         pkcs8: s.computer.key.clone(),
         addresses: Vec::new(),
+        typed_address: None,
     }
 }
 
@@ -574,6 +575,7 @@ async fn a_welcome_through_the_room_naming_this_networks_roads_leaves_them() {
         station_key: identity.public_key().to_string(),
         pkcs8: Computer::new().key,
         addresses: Vec::new(),
+        typed_address: None,
     };
     let config = tls::server(&identity, Arc::new(|_: &[u8; 32]| None), Arc::new(|| true)).unwrap();
     let internet = Internet {

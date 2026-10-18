@@ -14,7 +14,8 @@
 //!   holds it, and nothing that carries it has `Debug`, `Clone` or `Serialize`.
 //! - **Each station's record** ([`Stations`]): the station's key as it presented it while pairing,
 //!   pinned from then on; its LAN station id; the device id it gave this computer; and the
-//!   addresses it answered at, the last one that worked first. One credential entry for each
+//!   addresses it answered at, the last one that worked first; and, once Operate opened there, the
+//!   address or host name the operator typed for it, which Operate tries first. One credential entry for each
 //!   station, within the smallest one Windows keeps (2560 bytes of UTF-16), and the list of them
 //!   in one more.
 //! - **No engine, no radio and no operations authority.** This computer's own station, if it has
@@ -102,6 +103,7 @@ use tempo_client::hex;
 /// This computer's key for a station, and a paired station as the page shows it (the client
 /// core's).
 pub(crate) use tempo_client::{ComputerKey, StationView};
+use tempo_stream::lan::Typed;
 use tempo_stream::protocol;
 
 use crate::remote_service::lan::{valid_name, NAME_CHARS};
@@ -276,6 +278,23 @@ impl Stations {
         record.addresses.retain(|a| *a != at);
         record.addresses.insert(0, at);
         record.addresses.truncate(MAX_ADDRESSES);
+        self.vault
+            .save_paired_station(&record)
+            .map_err(|_| "storeUnavailable")
+    }
+
+    /// Keep `typed`, an address or a host name, as the one Operate tries first for station `id`,
+    /// or none. A record with an address it cannot read keeps its pairing and reads as none.
+    pub(crate) fn keep_typed(&self, id: &str, typed: Option<&Typed>) -> Result<(), &'static str> {
+        let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
+        let Some(mut record) = self.get(id)? else {
+            return Err("unknownStation");
+        };
+        let typed = typed.map(Typed::to_string);
+        if record.typed_address == typed {
+            return Ok(());
+        }
+        record.typed_address = typed;
         self.vault
             .save_paired_station(&record)
             .map_err(|_| "storeUnavailable")

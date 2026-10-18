@@ -42,6 +42,7 @@ pub(super) fn paired_record(s: &Shack, at: SocketAddrV4) -> PairedStation {
         station_key: s.public_key.clone(),
         pkcs8: s.computer.key.clone(),
         addresses: vec![at.to_string()],
+        typed_address: None,
     }
 }
 
@@ -1125,6 +1126,7 @@ fn pairing_then_control_then_stop_from_the_page_end_to_end() {
 
         let store = StationStore::default();
         let origin = Origin::start(Reach {
+            lookup: Arc::new(tempo_stream::lan::lookup),
             assets: Arc::new(|_: &str| None),
             stations: Arc::new(Stations::new(Arc::new(store.clone()))),
             find: Arc::new(|_| Ok(Vec::new())),
@@ -1260,6 +1262,7 @@ async fn a_station_not_where_it_was_is_tried_where_it_is_found_by_name() {
     let store = StationStore::default();
     let stations = Stations::new(Arc::new(store.clone()));
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         assets: Arc::new(|_: &str| None),
         stations: Arc::new(Stations::new(Arc::new(store.clone()))),
         find: {
@@ -1358,6 +1361,7 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
     let store = StationStore::default();
     let stations = Stations::new(Arc::new(store.clone()));
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         assets: Arc::new(|_: &str| None),
         stations: Arc::new(Stations::new(Arc::new(store.clone()))),
         find: {
@@ -1448,6 +1452,7 @@ async fn another_stations_refusals_that_end_late_still_tell_the_key() {
     let store = StationStore::default();
     let stations = Stations::new(Arc::new(store.clone()));
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         assets: Arc::new(|_: &str| None),
         stations: Arc::new(Stations::new(Arc::new(store.clone()))),
         find: Arc::new(|_| Ok(Vec::new())),
@@ -1492,6 +1497,7 @@ async fn pairing_again_with_a_known_station_keeps_this_computers_key() {
     let store = StationStore::default();
     let stations = Arc::new(Stations::new(Arc::new(store.clone())));
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         assets: Arc::new(|_: &str| None),
         stations: stations.clone(),
         find: Arc::new(|_| Ok(Vec::new())),

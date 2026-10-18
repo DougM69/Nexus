@@ -46,13 +46,14 @@ fn client_mode_drives_the_shack_end_to_end() {
             station_key: key.clone(),
             pkcs8: pkcs8.clone(),
             addresses: vec![at.to_string()],
+            typed_address: None,
         }))
     });
     let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
         screens.main.app_handle().clone(),
         find,
         Arc::new(|_| Ok(Vec::new())),
-        Some(at),
+        Some(tempo_stream::lan::Typed::At(at)),
     ));
     eventually("control taken", || client.status().phase == Phase::Live);
     assert_eq!(client.status().station, at.to_string());
@@ -152,13 +153,14 @@ fn a_station_that_names_itself_another_is_refused() {
             station_key: key.clone(),
             pkcs8: pkcs8.clone(),
             addresses: vec![at.to_string()],
+            typed_address: None,
         }))
     });
     let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
         screens.main.app_handle().clone(),
         find,
         Arc::new(|_| Ok(Vec::new())),
-        Some(at),
+        Some(tempo_stream::lan::Typed::At(at)),
     ));
     eventually("refused", || {
         client.status().reason.as_deref() == Some("notThisStation")
@@ -209,13 +211,14 @@ fn a_station_of_an_older_build_is_refused_naming_both_versions() {
             station_key: key.clone(),
             pkcs8: pkcs8.clone(),
             addresses: vec![at.to_string()],
+            typed_address: None,
         }))
     });
     let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
         screens.main.app_handle().clone(),
         find,
         Arc::new(|_| Ok(Vec::new())),
-        Some(at),
+        Some(tempo_stream::lan::Typed::At(at)),
     ));
     eventually("refused", || {
         client.status().reason.as_deref() == Some("updateStation")
@@ -290,6 +293,7 @@ fn client_mode_finds_a_station_by_name_when_its_remembered_address_is_dead() {
                 station_key: key.clone(),
                 pkcs8: pkcs8.clone(),
                 addresses: vec![dead.to_string()],
+                typed_address: None,
             }))
         });
         let looks = Arc::new(AtomicUsize::new(0));
@@ -363,13 +367,14 @@ fn a_lease_heartbeat_answered_busy_keeps_the_lease() {
             station_key: key.clone(),
             pkcs8: pkcs8.clone(),
             addresses: vec![at.to_string()],
+            typed_address: None,
         }))
     });
     let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
         screens.main.app_handle().clone(),
         find,
         Arc::new(|_| Ok(Vec::new())),
-        Some(at),
+        Some(tempo_stream::lan::Typed::At(at)),
     ));
     eventually("control taken", || client.lease_held().is_some());
     let before = client.lease_held();
@@ -428,13 +433,14 @@ fn a_second_computer_takes_control_and_the_first_can_take_it_back() {
                 station_key: key.clone(),
                 pkcs8: pkcs8.clone(),
                 addresses: vec![at.to_string()],
+                typed_address: None,
             }))
         });
         let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
             screens.main.app_handle().clone(),
             find,
             Arc::new(|_| Ok(Vec::new())),
-            Some(at),
+            Some(tempo_stream::lan::Typed::At(at)),
         ));
         (client, driving, dir, screens)
     };
@@ -499,7 +505,9 @@ fn operate_at_a_typed_address_proves_the_pinned_key() {
         (s, live, stopper)
     });
     let dead = where_nothing_listens(private);
-    let typed = typed_in(operate_args(STATION.into(), Some(live)).into_iter());
+    let typed = typed_in(
+        operate_args(STATION.into(), Some(tempo_stream::lan::Typed::At(live))).into_iter(),
+    );
     for pinned_ours in [false, true] {
         let mut record = paired_record(&s, live);
         if !pinned_ours {
@@ -517,13 +525,14 @@ fn operate_at_a_typed_address_proves_the_pinned_key() {
                 station_key: key.clone(),
                 pkcs8: pkcs8.clone(),
                 addresses: vec![dead.to_string()],
+                typed_address: None,
             }))
         });
         let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
             screens.main.app_handle().clone(),
             find,
             Arc::new(|_| Ok(Vec::new())),
-            typed,
+            typed.clone(),
         ));
         if pinned_ours {
             eventually("control taken at the typed address", || {
@@ -545,4 +554,145 @@ fn operate_at_a_typed_address_proves_the_pinned_key() {
         tauri::async_runtime::block_on(client.let_go());
         std::fs::remove_dir_all(&dir).unwrap();
     }
+}
+
+/// ★ Operate at a host name, through the launch as the app starts it (`start_driving`, from the
+/// paired stations' store and the launch's arguments): the name is looked up when it is tried, and
+/// the station there still proves the key pinned for its pairing, so a name that resolves to a
+/// machine with another key is refused as one whose key changed, runs nothing, and is never kept.
+/// Where the pinned key answers, Operate opens at the name's address and the name is kept in the
+/// station's record; the next launch, from the station's own Operate with nothing typed, tries
+/// the kept name first and opens there. A name that resolves to nothing, with nothing answering
+/// anywhere else, is told as `nameUnresolved`. The station's one remembered address is dead and
+/// nothing is found by name throughout. Skipped, saying so, on a box with no private address.
+#[test]
+fn operate_at_a_typed_host_name_proves_the_pinned_key_and_is_tried_first_next_launch() {
+    use crate::client_mode::{operate_args, start_driving};
+    use crate::lan_client::tests::{shack_pc_at, where_nothing_listens, StationStore};
+    use crate::lan_client::Stations;
+    use tempo_stream::lan::Typed;
+    let Some(private) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own");
+        return;
+    };
+    let app = App::new();
+    let (s, live, _listening) = tauri::async_runtime::block_on(async {
+        let s = running(&app);
+        s.shared.authority.permit_station(&s.device, true).unwrap();
+        let (stopper, stop) = watch::channel(false);
+        let live = behind_a_port_on(&s, private, stop).await;
+        (s, live, stopper)
+    });
+    let dead = where_nothing_listens(private);
+    let name = |host: &str| Typed::Name {
+        host: host.into(),
+        port: live.port(),
+    };
+    // One launch of client mode: the store's record, the lookup, and the launch's arguments.
+    let launch = |store: &StationStore, args: Vec<String>, label: &str| {
+        let dir = scratch(label);
+        let this = ThisComputer::read(dir.join("settings.json"), dir.join("ui-state.json"));
+        let client = Arc::new(Client::new(STATION.to_string(), this));
+        let screens = screens(&client);
+        client.look_up_with(shack_pc_at(&private.to_string()));
+        let driving = start_driving(
+            Arc::clone(&client),
+            screens.main.app_handle().clone(),
+            Arc::new(Stations::new(Arc::new(store.clone()))),
+            Arc::new(|_| Ok(Vec::new())),
+            args.into_iter().skip(1),
+        );
+        (client, screens, driving, dir)
+    };
+    let end = |client: Arc<Client>, driving: tauri::async_runtime::JoinHandle<()>, dir| {
+        driving.abort();
+        tauri::async_runtime::block_on(client.let_go());
+        std::fs::remove_dir_all(dir).unwrap();
+    };
+    let paired = |pinned_ours: bool| {
+        let store = StationStore::default();
+        let mut record = paired_record(&s, dead);
+        if !pinned_ours {
+            record.station_key = super::computer::another_key();
+        }
+        Stations::new(Arc::new(store.clone()))
+            .keep(&record)
+            .unwrap();
+        store
+    };
+    let kept = |store: &StationStore| {
+        Stations::new(Arc::new(store.clone()))
+            .get(STATION)
+            .unwrap()
+            .unwrap()
+            .typed_address
+    };
+    let typed = operate_args(STATION.into(), Some(name("shack-pc.local")));
+
+    // A machine with another key at the name: refused, nothing run there, nothing kept.
+    let store = paired(false);
+    let (client, screens, driving, dir) = launch(&store, typed.clone(), "name-other-key");
+    eventually("the changed key told", || {
+        client.status().reason.as_deref() == Some("keyChanged")
+    });
+    assert_ne!(client.status().phase, Phase::Live);
+    assert_eq!(
+        ask(&screens.main, "get_band_plan", json!({})),
+        Err(json!("nexusClient:notLive"))
+    );
+    assert!(sent_here(&app).is_empty(), "{:?}", app.ran());
+    assert_eq!(kept(&store), None);
+    end(client, driving, dir);
+
+    // The pinned key at the name: driven there, and the name kept with the station.
+    let store = paired(true);
+    let (client, _screens, driving, dir) = launch(&store, typed, "name-ours");
+    eventually("control taken at the name's address", || {
+        client.status().phase == Phase::Live
+    });
+    assert_eq!(client.status().station, live.to_string());
+    eventually("the name kept with the station", || {
+        kept(&store) == Some(format!("shack-pc.local:{}", live.port()))
+    });
+    end(client, driving, dir);
+
+    // Started again from the station's own Operate, nothing typed: the kept name first.
+    let (client, _screens, driving, dir) =
+        launch(&store, operate_args(STATION.into(), None), "name-kept");
+    eventually("control taken at the kept name", || {
+        client.status().phase == Phase::Live
+    });
+    assert_eq!(client.status().station, live.to_string());
+    end(client, driving, dir);
+
+    // A name whose address does not answer, with the station at its remembered address: driven
+    // there, and the name, which did not open Operate, is not kept.
+    let store = StationStore::default();
+    Stations::new(Arc::new(store.clone()))
+        .keep(&paired_record(&s, live))
+        .unwrap();
+    let elsewhere = Typed::Name {
+        host: "shack-pc.local".into(),
+        port: dead.port(),
+    };
+    let args = operate_args(STATION.into(), Some(elsewhere));
+    let (client, _screens, driving, dir) = launch(&store, args, "name-not-there");
+    eventually("control taken at the remembered address", || {
+        client.status().phase == Phase::Live
+    });
+    assert_eq!(client.status().station, live.to_string());
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_eq!(kept(&store), None);
+    end(client, driving, dir);
+
+    // A name that resolves to nothing, and nothing answering anywhere else: the name is told.
+    let store = paired(true);
+    let nowhere = operate_args(STATION.into(), Some(name("nowhere.local")));
+    let (client, _screens, driving, dir) = launch(&store, nowhere, "name-unresolved");
+    eventually("the unresolved name told", || {
+        client.status().reason.as_deref() == Some("nameUnresolved")
+    });
+    assert_ne!(client.status().phase, Phase::Live);
+    assert_eq!(kept(&store), None);
+    end(client, driving, dir);
 }

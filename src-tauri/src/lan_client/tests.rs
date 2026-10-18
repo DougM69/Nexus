@@ -114,6 +114,7 @@ pub(crate) fn record(station: &str, addresses: &[&str]) -> PairedStation {
         station_key: station_key.public_key().to_string(),
         pkcs8,
         addresses: addresses.iter().map(|a| a.to_string()).collect(),
+        typed_address: None,
     }
 }
 
@@ -511,6 +512,7 @@ fn reach(store: StationStore) -> Reach {
         _ => None,
     });
     Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         assets,
         stations: Arc::new(Stations::new(Arc::new(store))),
         find: Arc::new(|_| Ok(Vec::new())),
@@ -720,6 +722,7 @@ async fn operate_takes_the_address_the_operator_typed() {
         let started = started.clone();
         Arc::new(move |station, typed| started.lock().unwrap().push((station, typed)))
     };
+    reach.lookup = shack_pc_at("192.168.1.44");
     let origin = Origin::start(reach).unwrap();
     let mut socket = page_socket(&origin).await;
     let told = said(
@@ -738,7 +741,22 @@ async fn operate_takes_the_address_the_operator_typed() {
     assert_eq!(told, json!({"type":"operating"}));
     let told = said(
         &mut socket,
-        json!({"type":"operate","stationId":STATION,"address":"shack.local"}),
+        json!({"type":"operate","stationId":STATION,"address":"Shack-PC.local:42080"}),
+    )
+    .await;
+    assert_eq!(told, json!({"type":"operating"}));
+    let told = said(
+        &mut socket,
+        json!({"type":"operate","stationId":STATION,"address":"nowhere.local"}),
+    )
+    .await;
+    assert_eq!(
+        told,
+        json!({"type":"connectRefused","reason":"nameUnresolved"})
+    );
+    let told = said(
+        &mut socket,
+        json!({"type":"operate","stationId":STATION,"address":"shack_pc.local"}),
     )
     .await;
     assert_eq!(told, json!({"type":"connectRefused","reason":"badAddress"}));
@@ -757,14 +775,115 @@ async fn operate_takes_the_address_the_operator_typed() {
         vec![
             (
                 STATION.to_string(),
-                Some("192.168.1.30:42076".parse().unwrap())
+                Some(Typed::At("192.168.1.30:42076".parse().unwrap()))
             ),
             (
                 STATION.to_string(),
-                Some("192.168.1.31:42075".parse().unwrap())
+                Some(Typed::At("192.168.1.31:42075".parse().unwrap()))
             ),
             (STATION.to_string(), None),
+            (
+                STATION.to_string(),
+                Some(Typed::Name {
+                    host: "shack-pc.local".into(),
+                    port: 42080
+                })
+            ),
         ]
+    );
+    // The stream takes a name too, looked up when it is tried.
+    let told = said(
+        &mut socket,
+        json!({"type":"connect","stationId":STATION,"address":"nowhere.local"}),
+    )
+    .await;
+    assert_eq!(
+        told,
+        json!({"type":"connectRefused","reason":"nameUnresolved"})
+    );
+}
+
+/// A lookup where `shack-pc.local` is at `ip` and no other name resolves.
+pub(crate) fn shack_pc_at(ip: &str) -> tempo_stream::lan::Lookup {
+    let ip: std::net::IpAddr = ip.parse().unwrap();
+    Arc::new(move |host: &str, _| {
+        if host == "shack-pc.local" {
+            vec![ip]
+        } else {
+            Vec::new()
+        }
+    })
+}
+
+/// ★ The address Operate tries first is kept in the station's own record, as typed, changed or
+/// cleared from the station's row, and shown there; Forget removes it with the record, so the
+/// station paired again has none. Something that is neither an address nor a name is refused and
+/// changes nothing. CONTROL: a record written before it was kept loads, and shows none.
+#[tokio::test]
+async fn the_address_operate_tries_first_is_kept_changed_cleared_and_forgotten() {
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    stations
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    let entry = format!("lan-station-{STATION}");
+    let old = store.raw(&entry).unwrap();
+    assert!(!old.contains("typedAddress"), "{old}");
+    let origin = Origin::start(reach(store.clone())).unwrap();
+    let mut socket = page_socket(&origin).await;
+    let shown = |told: &Value| told["stations"][0]["typedAddress"].clone();
+    let told = said(&mut socket, json!({"type":"stations"})).await;
+    assert_eq!(shown(&told), Value::Null, "{told}");
+    let told = said(
+        &mut socket,
+        json!({"type":"keepAddress","stationId":STATION,"address":" Shack-PC.local "}),
+    )
+    .await;
+    assert_eq!(shown(&told), json!("shack-pc.local:42075"), "{told}");
+    let kept = || stations.get(STATION).unwrap().unwrap().typed_address;
+    assert_eq!(kept(), Some("shack-pc.local:42075".into()));
+    let told = said(
+        &mut socket,
+        json!({"type":"keepAddress","stationId":STATION,"address":"192.168.1.44:42080"}),
+    )
+    .await;
+    assert_eq!(shown(&told), json!("192.168.1.44:42080"), "{told}");
+    let told = said(
+        &mut socket,
+        json!({"type":"keepAddress","stationId":STATION,"address":"shack pc"}),
+    )
+    .await;
+    assert_eq!(told, json!({"type":"connectRefused","reason":"badAddress"}));
+    assert_eq!(kept(), Some("192.168.1.44:42080".into()));
+    let told = said(
+        &mut socket,
+        json!({"type":"keepAddress","stationId":STATION,"address":null}),
+    )
+    .await;
+    assert_eq!(shown(&told), Value::Null, "{told}");
+    assert_eq!(kept(), None);
+    let told = said(
+        &mut socket,
+        json!({"type":"keepAddress","stationId":STATION,"address":"shack-pc.local"}),
+    )
+    .await;
+    assert_eq!(shown(&told), json!("shack-pc.local:42075"), "{told}");
+    let told = said(&mut socket, json!({"type":"forget","stationId":STATION})).await;
+    assert_eq!(told["stations"], json!([]), "{told}");
+    assert_eq!(store.raw(&entry), None);
+    stations
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    assert_eq!(kept(), None, "paired again, nothing typed is kept");
+    let other = "60000000-0000-4000-8000-000000000009";
+    let told = said(
+        &mut socket,
+        json!({"type":"keepAddress","stationId":other,"address":"shack-pc.local"}),
+    )
+    .await;
+    assert_eq!(
+        told,
+        json!({"type":"connectRefused","reason":"unknownStation"})
     );
 }
 
@@ -801,6 +920,7 @@ async fn forgetting_a_station_ends_its_internet_road_at_the_service_first() {
         let asked: Arc<Mutex<Vec<String>>> = Arc::default();
         let told = asked.clone();
         let origin = Origin::start(Reach {
+            lookup: Arc::new(tempo_stream::lan::lookup),
             forget_internet: Arc::new(move |road: InternetRoad| {
                 told.lock().unwrap().push(road.pkcs8);
                 Box::pin(async move { service })
@@ -853,6 +973,7 @@ async fn the_page_picks_the_station_while_the_internet_road_is_added() {
         let picked: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
         let kept = picked.clone();
         let origin = Origin::start(Reach {
+            lookup: Arc::new(tempo_stream::lan::lookup),
             add_internet: Arc::new(move |_, choose| {
                 let kept = kept.clone();
                 Box::pin(async move {
@@ -985,6 +1106,7 @@ async fn the_pages_find_offers_the_stations_found_by_name() {
     let looks = Arc::new(AtomicUsize::new(0));
     let (counted, found) = (looks.clone(), vec![long, shack.clone()]);
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         find: Arc::new(move |wait| {
             assert_eq!(wait, origin::FIND_FOR);
             counted.fetch_add(1, Ordering::SeqCst);
@@ -1023,6 +1145,7 @@ async fn the_pages_find_offers_the_stations_found_by_name() {
     drop(origin);
 
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         find: Arc::new(|_| Err(Unavailable)),
         ..reach(StationStore::default())
     })

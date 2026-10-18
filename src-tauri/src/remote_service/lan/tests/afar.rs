@@ -153,6 +153,7 @@ impl Afar for Service {
         let room = Arc::clone(&self.room);
         let record = PairedStation {
             addresses: Vec::new(),
+            typed_address: None,
             station_id: STATION.into(),
             device_id: APPROVED.into(),
             station_key: self.station_key.clone(),
@@ -252,6 +253,7 @@ impl Afield {
                     station_key: key.clone(),
                     pkcs8: pkcs8.clone(),
                     addresses: vec![lan.to_string()],
+                    typed_address: None,
                 }))
             })
         };
@@ -259,7 +261,7 @@ impl Afield {
             screens.main.app_handle().clone(),
             find,
             Arc::new(|_| Ok(Vec::new())),
-            Some(lan),
+            Some(tempo_stream::lan::Typed::At(lan)),
         ));
         Self {
             app,

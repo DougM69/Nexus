@@ -1062,18 +1062,26 @@ fn the_launch_names_the_station_it_drives() {
 }
 
 /// ★ Operate at an address the operator typed: the launch the stations window starts names the
-/// station and the address, and this launch reads both back, the address as typed. CONTROL: with
-/// none typed the launch is the station alone and no address is read; an address the window would
-/// not take (a loopback one, a name, a port below 1024) is never read from the launch either.
+/// station and the address or host name, and this launch reads both back, as typed. CONTROL: with
+/// none typed the launch is the station alone and nothing is read; what the window would not take
+/// (a loopback address, a port below 1024, a name no host could have) is never read from the
+/// launch either.
 #[test]
 fn a_typed_address_goes_with_the_launch() {
-    let typed: SocketAddrV4 = "192.168.1.30:42075".parse().unwrap();
-    let launch = operate_args(STATION.into(), Some(typed));
-    assert_eq!(
-        requested_in(launch.clone().into_iter()),
-        Some(STATION.into())
-    );
-    assert_eq!(typed_in(launch.into_iter()), Some(typed));
+    for typed in [
+        Typed::At("192.168.1.30:42075".parse().unwrap()),
+        Typed::Name {
+            host: "shack-pc.local".into(),
+            port: 42080,
+        },
+    ] {
+        let launch = operate_args(STATION.into(), Some(typed.clone()));
+        assert_eq!(
+            requested_in(launch.clone().into_iter()),
+            Some(STATION.into())
+        );
+        assert_eq!(typed_in(launch.into_iter()), Some(typed));
+    }
     let launch = operate_args(STATION.into(), None);
     assert_eq!(launch, vec![ARG.to_string(), STATION.to_string()]);
     assert_eq!(typed_in(launch.into_iter()), None);
@@ -1085,9 +1093,22 @@ fn a_typed_address_goes_with_the_launch() {
     };
     assert_eq!(
         typed_in(args(&["--client", STATION, "--client-at=192.168.1.30"])),
-        Some("192.168.1.30:42075".parse().unwrap())
+        Some(Typed::At("192.168.1.30:42075".parse().unwrap()))
     );
-    for not_taken in ["127.0.0.1:42075", "shack.local", "192.168.1.30:80", ""] {
+    assert_eq!(
+        typed_in(args(&["--client", STATION, "--client-at", "shack.local"])),
+        Some(Typed::Name {
+            host: "shack.local".into(),
+            port: tempo_stream::lan::PORT
+        })
+    );
+    for not_taken in [
+        "127.0.0.1:42075",
+        "192.168.1.30:80",
+        "shack.local:80",
+        "shack_pc",
+        "",
+    ] {
         assert_eq!(
             typed_in(args(&["--client", STATION, "--client-at", not_taken])),
             None,

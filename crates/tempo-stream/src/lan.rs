@@ -443,6 +443,84 @@ pub fn typed(text: &str) -> Option<SocketAddrV4> {
     (listenable(*address.ip()) && address.port() >= 1024).then_some(address)
 }
 
+/// What an operator typed for a shack: its address ([`typed`]), or the name its computer goes by
+/// (`shack-pc.local`, a DNS name), with a port or with [`PORT`]. A name is looked up each time it
+/// is tried ([`Typed::resolve`]), so it follows the computer to a new address. Neither is ever the
+/// station: the key pinned at pairing is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Typed {
+    At(SocketAddrV4),
+    Name { host: String, port: u16 },
+}
+
+/// Where a host name is looked up: the system's resolver in the app ([`lookup`]), a stand-in in a
+/// test. It can block, so it is only called on a thread that may wait.
+pub type Lookup = std::sync::Arc<dyn Fn(&str, u16) -> Vec<IpAddr> + Send + Sync>;
+
+/// The system's resolver: every address `host` resolves to now, or none.
+pub fn lookup(host: &str, port: u16) -> Vec<IpAddr> {
+    use std::net::ToSocketAddrs;
+    (host, port)
+        .to_socket_addrs()
+        .map(|found| found.map(|at| at.ip()).collect())
+        .unwrap_or_default()
+}
+
+impl Typed {
+    /// What `text` names, read as [`typed`] reads an address; otherwise a host name: letters,
+    /// digits and hyphens in dot-separated labels of at most 63, at most 253 in all, its last label
+    /// not all digits (so a mistyped address is never taken for a name), with a port of 1024 or
+    /// more. `None` for anything else.
+    pub fn read(text: &str) -> Option<Self> {
+        let text = text.trim();
+        if let Some(at) = typed(text) {
+            return Some(Self::At(at));
+        }
+        let (host, port) = match text.rsplit_once(':') {
+            Some((host, port)) => (host, port.parse::<u16>().ok()?),
+            None => (text, PORT),
+        };
+        let label = |label: &str| {
+            (1..=63).contains(&label.len())
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+        };
+        let last = host.rsplit('.').next().unwrap_or_default();
+        (host.len() <= 253
+            && host.split('.').all(label)
+            && !last.bytes().all(|b| b.is_ascii_digit())
+            && port >= 1024)
+            .then(|| Self::Name {
+                host: host.to_ascii_lowercase(),
+                port,
+            })
+    }
+
+    /// Where to try it now: the address itself, or the first private IPv4 address ([`listenable`])
+    /// the name resolves to through `lookup`. `None` when the name resolves to none.
+    pub fn resolve(&self, lookup: &Lookup) -> Option<SocketAddrV4> {
+        match self {
+            Self::At(at) => Some(*at),
+            Self::Name { host, port } => lookup(host, *port).into_iter().find_map(|ip| match ip {
+                IpAddr::V4(ip) if listenable(ip) => Some(SocketAddrV4::new(ip, *port)),
+                _ => None,
+            }),
+        }
+    }
+}
+
+impl std::fmt::Display for Typed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::At(at) => write!(f, "{at}"),
+            Self::Name { host, port } => write!(f, "{host}:{port}"),
+        }
+    }
+}
+
 /// Is `ip` on one of this computer's own networks ([`choices`])? Taken to be where that cannot be
 /// read (off Windows), so nothing is blamed on the network that the network did not do.
 pub fn here(ip: Ipv4Addr) -> bool {
@@ -1208,6 +1286,98 @@ mod tests {
         ] {
             assert_eq!(typed(text), None, "{text}");
         }
+    }
+
+    /// A typed host name is a name, kept as typed (lowercased), with its port or the shack's; an
+    /// address is still the address, and nothing a name could not be is taken for one: a
+    /// mistyped address, a system port, a bad label, IPv6. CONTROL: the address cases above.
+    #[test]
+    fn a_typed_name_is_a_host_name_and_a_port() {
+        let name = |host: &str, port| Typed::Name {
+            host: host.into(),
+            port,
+        };
+        for (text, want) in [
+            ("shack-pc.local", name("shack-pc.local", PORT)),
+            (" Shack-PC.local:50000 ", name("shack-pc.local", 50000)),
+            ("shack", name("shack", PORT)),
+            ("radio.example.org:1024", name("radio.example.org", 1024)),
+            (
+                "192.168.1.20:42080",
+                Typed::At("192.168.1.20:42080".parse().unwrap()),
+            ),
+        ] {
+            assert_eq!(Typed::read(text), Some(want.clone()), "{text}");
+            assert_eq!(Typed::read(&want.to_string()), Some(want), "{text}");
+        }
+        for text in [
+            "",
+            "192.168.1",
+            "192.168.1.300",
+            "203.0.113.5",
+            "127.0.0.1:42075",
+            "shack.local:80",
+            "shack.local:",
+            "shack.local:99999",
+            "-shack.local",
+            "shack_pc.local",
+            "shack..local",
+            "fe80::1",
+            "[fd00::1]:42075",
+            "shack pc",
+            &format!("{}.local", "a".repeat(64)),
+            &format!("{}.local", "a.".repeat(125)),
+        ] {
+            assert_eq!(Typed::read(text), None, "{text}");
+        }
+    }
+
+    /// A name is looked up each time it is resolved, and only a private IPv4 address it resolves
+    /// to is taken, with the typed port; one that resolves to none, or only to loopback, public or
+    /// IPv6 addresses, gives none. CONTROL: the lookup is asked again and its new answer taken.
+    #[test]
+    fn a_typed_name_resolves_each_time_to_a_private_address() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let asked = std::sync::Arc::new(AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&asked);
+        let lookup: Lookup = std::sync::Arc::new(move |host: &str, _| {
+            let n = counted.fetch_add(1, Ordering::SeqCst);
+            match host {
+                "shack.local" if n == 0 => vec![
+                    "fe80::1".parse().unwrap(),
+                    "127.0.0.1".parse().unwrap(),
+                    "192.168.1.30".parse().unwrap(),
+                ],
+                "shack.local" => vec!["192.168.1.31".parse().unwrap()],
+                "public.example" => vec!["203.0.113.5".parse().unwrap()],
+                _ => Vec::new(),
+            }
+        });
+        let shack = Typed::read("shack.local:42080").unwrap();
+        assert_eq!(
+            shack.resolve(&lookup),
+            Some("192.168.1.30:42080".parse().unwrap())
+        );
+        assert_eq!(
+            shack.resolve(&lookup),
+            Some("192.168.1.31:42080".parse().unwrap())
+        );
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            Typed::read("public.example").unwrap().resolve(&lookup),
+            None
+        );
+        assert_eq!(Typed::read("nowhere.local").unwrap().resolve(&lookup), None);
+        let at = Typed::read("192.168.1.20").unwrap();
+        assert_eq!(
+            at.resolve(&lookup),
+            Some("192.168.1.20:42075".parse().unwrap())
+        );
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            4,
+            "an address is never looked up"
+        );
     }
 
     /// Why a computer could not reach the shack, from the error its connection got: another

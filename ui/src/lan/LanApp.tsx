@@ -20,6 +20,10 @@ import nexusMark from '../remote-web/nexus-mark.svg'
 // Invariant tokens: the product name, and an address as a station shows one.
 const BRAND = 'Nexus'
 const EXAMPLE_ADDRESS = '192.168.1.20:42075'
+/** A station computer's name, for the hint where an address or a name is typed. */
+const EXAMPLE_NAME = 'shack-pc.local'
+/** The longest address or host name with its port (`tempo_stream::lan::Typed`). */
+const TYPED_CHARS = 259
 // After control was taken back by the station (a decision about the hosted road there), the page
 // acquires again once; not again within this long, so a station that keeps refusing is never asked
 // in a loop.
@@ -60,6 +64,7 @@ function sentence(reason: PairReason | ConnectReason | ClosedReason): string {
     case 'notThisStation': return t('lanWindow.reason.notThisStation')
     case 'notPaired': return t('lanWindow.reason.notPaired')
     case 'unknownStation': return t('lanWindow.reason.unknownStation')
+    case 'nameUnresolved': return t('lanWindow.reason.nameUnresolved')
     case 'stationLeft': return t('lanWindow.reason.stationLeft')
     case 'connectionLost': return t('lanWindow.reason.connectionLost')
     case 'disconnected': return t('lanWindow.disconnected')
@@ -140,6 +145,8 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const [operating, setOperating] = useState<string | null>(null)
   // The address typed for the station after nothing answered, when Operate was asked from there.
   const [operateAt, setOperateAt] = useState<string | null>(null)
+  // The address or name Operate tries first for a station, being changed on its row.
+  const [changing, setChanging] = useState<{ id: string; address: string } | null>(null)
   const [another, setAnother] = useState<{ id: string; address: string } | null>(null)
   const [resume, setResume] = useState(0)
   const connecting = useRef<string | null>(null)
@@ -346,14 +353,37 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
                 onClick={() => { setBusy(`internet:${station.id}`); setSaid(null); say({ type: 'addInternet', stationId: station.id }) }}>
                 {busy === `internet:${station.id}` ? t('lanWindow.internet.adding') : t('lanWindow.internet.add')}</button>
             </div>}
+          {/* Kept once Operate opened there, and tried first by Operate from then on: changed or cleared here. */}
+          {station.typedAddress !== undefined && forgetting !== station.id && operating !== station.id && (changing?.id === station.id
+            ? <form onSubmit={event => {
+              event.preventDefault()
+              if (changing.address.trim()) { setChanging(null); setSaid(null); say({ type: 'keepAddress', stationId: station.id, address: changing.address.trim() }) }
+            }}>
+              <label>{t('lanWindow.typedLabel')}<input autoComplete="off" spellCheck={false} value={changing.address} maxLength={TYPED_CHARS}
+                onChange={event => setChanging({ id: station.id, address: event.target.value })} /></label>
+              <span className="settings-hint">{t('lanWindow.otherAddressHint', { example: EXAMPLE_ADDRESS, name: EXAMPLE_NAME })}</span>
+              <div className="remote-actions">
+                <button className="remote-button" disabled={!!busy || phase !== 'open' || !changing.address.trim()}>{t('lanWindow.typedSave')}</button>
+                <button type="button" className="remote-button remote-button--quiet" onClick={() => setChanging(null)}>{t('lanWindow.cancel')}</button>
+              </div>
+            </form>
+            : <>
+              <p className="remote-site-status">{t('lanWindow.typedFirst', { address: station.typedAddress })}</p>
+              <div className="remote-actions">
+                <button type="button" className="remote-button remote-button--quiet" disabled={!!busy || phase !== 'open'}
+                  onClick={() => setChanging({ id: station.id, address: station.typedAddress ?? '' })}>{t('lanWindow.typedChange')}</button>
+                <button type="button" className="remote-button remote-button--quiet" disabled={!!busy || phase !== 'open'}
+                  onClick={() => { setSaid(null); say({ type: 'keepAddress', stationId: station.id, address: null }) }}>{t('lanWindow.typedClear')}</button>
+              </div>
+            </>)}
           {/* Typed where the station is now: Operate there, as from the card, or the stream there instead. */}
           {another?.id === station.id && <form onSubmit={event => {
             event.preventDefault()
             if (another.address.trim()) { setOperateAt(another.address.trim()); setOperating(station.id) }
           }}>
-            <label>{t('lanWindow.otherAddress')}<input autoComplete="off" spellCheck={false} value={another.address} maxLength={21}
+            <label>{t('lanWindow.otherAddress')}<input autoComplete="off" spellCheck={false} value={another.address} maxLength={TYPED_CHARS}
               onChange={event => setAnother({ id: station.id, address: event.target.value })} /></label>
-            <span className="settings-hint">{t('lanWindow.addressHint', { example: EXAMPLE_ADDRESS })}</span>
+            <span className="settings-hint">{t('lanWindow.otherAddressHint', { example: EXAMPLE_ADDRESS, name: EXAMPLE_NAME })}</span>
             <div className="remote-actions">
               <button className="remote-button" disabled={!!busy || phase !== 'open' || !another.address.trim()}>{t('lanWindow.operateAt')}</button>
               <button type="button" className="remote-button remote-button--quiet" disabled={!!busy || !another.address.trim()}

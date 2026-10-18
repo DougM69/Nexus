@@ -343,6 +343,52 @@ describe('Operate from this computer', () => {
     expect(last(socket.sent)).toEqual({ type: 'connect', stationId: STATION, address: '192.168.1.44:42080' })
   })
 
+  it('shows the address kept for Operate on the station’s row, changed or cleared there, after the main actions', () => {
+    page()
+    socket.tell({ type: 'stations', computer: 'DEN-PC',
+      stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4), typedAddress: 'shack-pc.local:42075' }] })
+    const card = screen.getByText(EN['lanWindow.stationAt'].replace('{{address}}', '192.168.1.20:42075')).closest('.lan-station') as HTMLElement
+    expect(within(card).getByText(EN['lanWindow.typedFirst'].replace('{{address}}', 'shack-pc.local:42075'))).toBeTruthy()
+    const buttons = within(card).getAllByRole('button').map(b => b.textContent)
+    expect(buttons.slice(0, 2)).toEqual([EN['lanWindow.operate'], EN['lanWindow.streamInstead']])
+    expect(buttons.slice(-2)).toEqual([EN['lanWindow.typedChange'], EN['lanWindow.typedClear']])
+    fireEvent.click(within(card).getByRole('button', { name: EN['lanWindow.typedChange'] }))
+    const field = within(card).getByLabelText(EN['lanWindow.typedLabel']) as HTMLInputElement
+    expect(field.value).toBe('shack-pc.local:42075')
+    fireEvent.change(field, { target: { value: ' radio-pc.local ' } })
+    fireEvent.click(within(card).getByRole('button', { name: EN['lanWindow.typedSave'] }))
+    expect(last(socket.sent)).toEqual({ type: 'keepAddress', stationId: STATION, address: 'radio-pc.local' })
+    socket.tell({ type: 'stations', computer: 'DEN-PC',
+      stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4), typedAddress: 'radio-pc.local:42075' }] })
+    expect(within(card).getByText(EN['lanWindow.typedFirst'].replace('{{address}}', 'radio-pc.local:42075'))).toBeTruthy()
+    fireEvent.click(within(card).getByRole('button', { name: EN['lanWindow.typedClear'] }))
+    expect(last(socket.sent)).toEqual({ type: 'keepAddress', stationId: STATION, address: null })
+    socket.tell({ type: 'stations', computer: 'DEN-PC',
+      stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }] })
+    // CONTROL: with none kept, the row shows none and offers neither.
+    expect(within(card).queryByText(/shack-pc|radio-pc/)).toBeNull()
+    expect(within(card).queryByRole('button', { name: EN['lanWindow.typedChange'] })).toBeNull()
+    expect(within(card).queryByRole('button', { name: EN['lanWindow.typedClear'] })).toBeNull()
+  })
+
+  it('takes a host name where the station is now, and says when the name finds no computer', () => {
+    page()
+    socket.tell({ type: 'stations', computer: 'DEN-PC',
+      stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }] })
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.streamInstead'] }))
+    socket.tell({ type: 'connectRefused', reason: 'noAnswer' })
+    const field = screen.getByLabelText(EN['lanWindow.otherAddress']) as HTMLInputElement
+    const name = `${'a'.repeat(240)}.local:42080`
+    expect(field.maxLength).toBeGreaterThanOrEqual(name.length)
+    expect(screen.getByText(EN['lanWindow.otherAddressHint'].replace('{{example}}', '192.168.1.20:42075').replace('{{name}}', 'shack-pc.local'))).toBeTruthy()
+    fireEvent.change(field, { target: { value: name } })
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.operateAt'] }))
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.operateYes'] }))
+    expect(last(socket.sent)).toEqual({ type: 'operate', stationId: STATION, address: name })
+    socket.tell({ type: 'connectRefused', reason: 'nameUnresolved' })
+    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.reason.nameUnresolved'])
+  })
+
   it('is each station’s main action, first and the only primary; the stream is the quiet fallback after it', () => {
     page()
     socket.tell({ type: 'stations', computer: 'DEN-PC',

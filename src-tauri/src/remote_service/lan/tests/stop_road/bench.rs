@@ -140,13 +140,14 @@ fn driving(r: &Roadside, name: &str) -> Driving {
             station_key: key.clone(),
             pkcs8: pkcs8.clone(),
             addresses: vec![at.to_string()],
+            typed_address: None,
         }))
     });
     let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
         main.app_handle().clone(),
         find,
         Arc::new(|_| Ok(Vec::new())),
-        Some(at),
+        Some(tempo_stream::lan::Typed::At(at)),
     ));
     let polling = Arc::new(AtomicBool::new(true));
     {

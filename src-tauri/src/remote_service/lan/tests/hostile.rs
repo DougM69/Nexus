@@ -261,6 +261,7 @@ async fn plain_http_to_the_tls_port_is_answered_with_no_http_and_reaches_nothing
     );
     controller.renewed(&r.s).await;
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         assets: Arc::new(|_: &str| None),
         stations: Arc::new(Stations::new(Arc::new(StationStore::default()))),
         find: Arc::new(|_| Ok(Vec::new())),
@@ -559,6 +560,7 @@ async fn a_forged_discovery_reply_costs_one_handshake_and_learns_nothing() {
     kept.addresses = vec![dead.to_string()];
     stations.keep(&kept).unwrap();
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         assets: Arc::new(|_: &str| None),
         stations: Arc::new(Stations::new(Arc::new(store.clone()))),
         find: {
@@ -1150,6 +1152,7 @@ async fn an_answer_signed_by_another_key_never_reaches_the_page() {
         let store = StationStore::default();
         Stations::new(Arc::new(store.clone())).keep(&kept).unwrap();
         let origin = Origin::start(Reach {
+            lookup: Arc::new(tempo_stream::lan::lookup),
             assets: Arc::new(|_: &str| None),
             stations: Arc::new(Stations::new(Arc::new(store.clone()))),
             find: Arc::new(|_| Ok(Vec::new())),

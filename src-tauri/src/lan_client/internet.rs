@@ -687,6 +687,7 @@ pub(crate) async fn open(
         station_key: road.station_key.clone(),
         pkcs8: road.pkcs8.clone(),
         addresses: Vec::new(),
+        typed_address: None,
     };
     let internet = tempo_client::link::Internet {
         bind: Ipv4Addr::UNSPECIFIED.into(),
