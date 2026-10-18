@@ -1000,3 +1000,22 @@ describe('the chip in the screen’s banner and the FT screen’s header: its lo
     expect(fires.find((f) => f.startsWith('light: ')), 'FIRES: the amber on the light face').toBeDefined()
   })
 })
+
+describe('the entry pops out on its own', () => {
+  it('Pop out entry opens the logger window in its entry-only layout; Logger window opens the whole window', async () => {
+    const host = await contestScreen()
+    const entry = host.querySelector('.contest-logger-entry') as HTMLElement
+    const from = mark()
+    fireEvent.click(within(entry).getByRole('button', { name: t('contestScreen.entry.popOut.label') }))
+    await settle()
+    expect(bridgeCalls.slice(from).filter((c) => c.cmd === 'open_panel_window')).toEqual([{ cmd: 'open_panel_window', args: { panel: 'contestlog' } }])
+    expect(localStorage.getItem('nexus.contestLogger.layout')).toBe('entry')
+    expect(keyingSince(from)).toEqual([])
+    // The screen's own Logger window button asks for the whole window.
+    const again = mark()
+    fireEvent.click(within(host.querySelector('main.layout.single') as HTMLElement).getByRole('button', { name: t('fieldDay.logger.label') }))
+    await settle()
+    expect(bridgeCalls.slice(again).filter((c) => c.cmd === 'open_panel_window')).toEqual([{ cmd: 'open_panel_window', args: { panel: 'contestlog' } }])
+    expect(localStorage.getItem('nexus.contestLogger.layout')).toBe('full')
+  })
+})

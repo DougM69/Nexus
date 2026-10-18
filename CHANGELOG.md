@@ -72,7 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of shrinking. **Keep in front** on its bar keeps the window in front of Nexus and your other programs,
   even while you work in another one; press it again to let the window stack as an ordinary window. The window
   reopens at the size and place you left it, brought back onto a monitor that is still attached, and pinned if it
-  was pinned. NEEDS-BENCH: Windows, the window pinned over a full-screen program and reopened after a monitor is
+  was pinned. **⧉ Pop out entry** on the Contest screen's entry opens the same window with the entry alone (the
+  call, the exchange, the dupe warning and Log, without the last contacts or the rest of the contest screen); it
+  shares the contact with your entry, and Enter in either logs it once. **Entry only** on that window's bar switches
+  between the entry alone and the whole window. NEEDS-BENCH: Windows, the window pinned over a full-screen program and reopened after a monitor is
   unplugged.
 
 ### Changed

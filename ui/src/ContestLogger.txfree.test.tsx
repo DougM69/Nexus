@@ -32,6 +32,7 @@ import { useEffect } from 'react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DetachedPanel } from './DetachedPanel'
+import { t } from './i18n'
 import { ContestView } from './components/ContestView'
 import { setMode, setPtt } from './api'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
@@ -211,6 +212,10 @@ async function sweepClicks(): Promise<number> {
       return true
     })
     if (fresh.length === 0) break
+    // Entry only takes the screen out of the window, so it is pressed LAST in its round: everything it
+    // hides has been clicked by then, and the rounds after it sweep the entry-only window.
+    const hides = (el: HTMLElement) => el.textContent === t('contestLogger.layout.label')
+    fresh.sort((a, b) => Number(hides(a)) - Number(hides(b)))
     for (const el of fresh) {
       if (!el.isConnected) continue
       fireEvent.click(el)

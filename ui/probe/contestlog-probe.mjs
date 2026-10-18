@@ -5,7 +5,8 @@
 // probe serves src/probe/contestlog.tsx (the real `?panel=contestlog` window, a dupe in its entry) with the
 // app's own Vite config and asserts every part the person logging needs — the Call box, the exchange
 // boxes, Log, the dupe warning, the newest contact and Keep in front — is held by each box that clips it,
-// inside the window, and the topmost thing where it stands.
+// inside the window, and the topmost thing where it stands. Then the entry-only layout at the floor and
+// large: the entry's parts on screen and nothing under it.
 //
 // THE CONTROL, run every time: the same window 100 px shorter than the floor, where the newest contact
 // falls past the bottom of the window. It must come back NOT on screen; if it does not, the check cannot
@@ -56,7 +57,8 @@ const MEASURE = `(() => {
   }
   const seen = {}
   for (const [k, v] of Object.entries(parts)) seen[k] = Array.isArray(v) ? v.length > 0 && v.every(onScreen) : onScreen(v)
-  return { zoom: getComputedStyle(document.querySelector('.app')).zoom, viewport: document.documentElement.dataset.viewport, exchange: parts.exchange.length, seen }
+  const below = document.querySelector('.contest-logger-recent') != null || document.querySelector('.contest-logger > main.layout.single') != null
+  return { zoom: getComputedStyle(document.querySelector('.app')).zoom, viewport: document.documentElement.dataset.viewport, exchange: parts.exchange.length, below, seen }
 })()`
 
 const cacheDir = await mkdtemp(join(tmpdir(), 'nexus-contestlog-probe-'))
@@ -72,12 +74,12 @@ const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
 /** One window of `w`×`h`, the logger in it, measured once its parts have stopped moving. */
-async function measure(w, h) {
+async function measure(w, h, layout = 'full') {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
   await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
-  await call('Page.navigate', { url: `${origin}/probe/contestlog.html?panel=contestlog` })
+  await call('Page.navigate', { url: `${origin}/probe/contestlog.html?panel=contestlog&layout=${layout}` })
   let last = null
   for (let i = 0; i < 100; i++) {
     await sleep(150)
@@ -104,13 +106,27 @@ try {
       code = code || 1
     }
   }
+  // THE ENTRY ALONE: the same window in its entry-only layout, at the floor and large. Every part of the
+  // entry on screen, and nothing under it — no last contacts, no contest screen.
+  for (const { w, h } of [FLOOR, SIZES[2]]) {
+    const m = await measure(w, h, 'entry')
+    console.log(`contestlog-probe: entry only, window ${w}×${h}: ${JSON.stringify(m)}`)
+    const { newest, ...entryParts } = m?.seen ?? {}
+    if (!m) {
+      console.error(`contestlog-probe: the entry-only window never drew its entry at ${w}×${h}`)
+      code = 2
+    } else if (m.below || newest || m.exchange < 2 || !Object.values(entryParts).every(Boolean)) {
+      console.error(`contestlog-probe: RED entry only at ${w}×${h} — a part is off screen, or the screen is still under it`)
+      code = code || 1
+    }
+  }
   const c = await measure(FLOOR.w, FLOOR.h - 100)
   console.log(`contestlog-probe: CONTROL window ${FLOOR.w}×${FLOOR.h - 100}: ${JSON.stringify(c)}`)
   if (!c || c.seen.newest) {
     console.error('contestlog-probe: CONTROL FAILED — the newest contact under the floor came back on screen; the check cannot fail')
     code = code || 1
   }
-  if (code === 0) console.log(`contestlog-probe: PASS — the entry, the dupe warning, the newest contact and Keep in front on screen at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}, and the control below the floor clipped`)
+  if (code === 0) console.log(`contestlog-probe: PASS — the entry, the dupe warning, the newest contact and Keep in front on screen at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; the entry alone at ${FLOOR.w}×${FLOOR.h} and ${SIZES[2].w}×${SIZES[2].h}; and the control below the floor clipped`)
   process.exitCode = code
 } finally {
   await browser.stop()

@@ -1,7 +1,7 @@
 // THE CONTEST LOGGER WINDOW IN A REAL BROWSER, for `scripts/browser-probe --desktop contestlog`
 // (ui/probe/desktop-probe.mjs drives it). jsdom never lays out, so nothing else can see whether the
 // window's entry — the call, the exchange boxes, Log, the dupe warning — and its last contacts are on
-// screen at the window's smallest size. This is the real `?panel=contestlog` window (`DetachedPanel`) on
+// screen at the window's smallest size, in the whole window and in its entry-only layout. This is the real `?panel=contestlog` window (`DetachedPanel`) on
 // the app's stylesheets; the station's answers are given at the IPC bridge, and a command not answered
 // here is refused.
 import '../styles.css'
@@ -9,6 +9,7 @@ import '../cockpit-panes.css'
 import { createRoot } from 'react-dom/client'
 import { DetachedPanel } from '../DetachedPanel'
 import settings from '../components/__fixtures__/defaultSettings.json'
+import { LOGGER_LAYOUT_KEY } from '../features/contestLoggerLayout'
 
 const T0 = 1_792_342_800
 /** An Illinois QSO Party with one contact, K9AAA on 20 m phone, and the same call in the entry: a dupe. */
@@ -51,6 +52,8 @@ const snapshot = {
 
 document.documentElement.setAttribute('data-theme', 'dark')
 localStorage.clear()
+// `?layout=entry`: the window opened for the entry alone (features/contestLoggerLayout).
+if (new URLSearchParams(location.search).get('layout') === 'entry') localStorage.setItem(LOGGER_LAYOUT_KEY, 'entry')
 
 const answers: Record<string, () => unknown> = {
   get_snapshot: () => snapshot,

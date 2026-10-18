@@ -199,6 +199,7 @@ import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
 import { ContestView } from './components/ContestView'
 import { ContestLargeEntry } from './components/ContestLogger'
+import { openContestLogger } from './features/contestLoggerLayout'
 import { ContestScreenAway, useContestScreenWindow } from './components/ContestScreenWindow'
 import { useContestSwitch } from './contestSwitch'
 import { useOperatorBoxAsk } from './features/contestKeys'
@@ -3246,6 +3247,19 @@ function App() {
               onSaveOperator={handleSetOperator}
               operatorAsk={operatorAsk}
               onOperatorFocused={() => setOperatorAsk(0)}
+              barEnd={
+                // ⭐ THE ENTRY ALONE IN A WINDOW (the operator: the screen is cluttered): the contest
+                // logger window in its entry-only layout, sharing this entry as that window always does.
+                <button
+                  type="button"
+                  className="contest-logger-toggle"
+                  title={t('contestScreen.entry.popOut.title')}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => void openContestLogger('entry')}
+                >
+                  {t('contestScreen.entry.popOut.label')}
+                </button>
+              }
             />
           )}
           <main className="layout single">
