@@ -25147,13 +25147,16 @@ async fn get_credentials_status(
     // The keychain reads and the read of the upload stamps from the logbook store are blocking
     // I/O: on the blocking pool, never a runtime worker.
     let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
-    log_folds::off_the_runtime(move || credentials_status(&engine, &tallies)).await
+    log_folds::off_the_runtime(move || credentials_status(&engine, &tallies, &keychain_has)).await
 }
 
-/// [`get_credentials_status`]' rows.
+/// [`get_credentials_status`]' rows, each credential's `stored` read by `has`, which answers yes or
+/// no for the keychain user a credential is kept under ([`keychain_has`]). It says nothing else: a
+/// remote client shows these rows, so no secret is ever in reach of them.
 fn credentials_status(
     engine: &Mutex<Engine>,
     tallies: &LogTallies,
+    has: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<CredStatus>, String> {
     // ONE lock, taken once and released before the eight keychain reads below (keychain
     // I/O is the slow part, and the radio thread contends for this lock). The upload health is
@@ -25207,19 +25210,14 @@ fn credentials_status(
         ),
         conn_health_of("qrz-logbook"),
     );
-    let has = |entry: Result<keyring::Entry, String>| {
-        entry
-            .and_then(|e| e.get_password().map_err(|er| er.to_string()))
-            .is_ok()
-    };
     // LoTW, QRZ Logbook, eQSL and ClubLog read their history off the persisted per-QSO
     // stamps, so it survives a restart. The lookup-only rows carry `uploads: false`, and since
     // #245 that no longer means they carry no history: the QRZ callbook stamps every completed
     // lookup through `conn_health_of("qrz-xml")` and those survive a restart too. RepeaterBook
     // is the one row still without a history of any kind.
-    let stored_lotw = has(lotw_keychain());
-    let stored_qrz = has(qrz_keychain());
-    let stored_rb = has(repeaterbook_keychain());
+    let stored_lotw = has(LOTW_KEYCHAIN_USER);
+    let stored_qrz = has(QRZ_KEYCHAIN_USER);
+    let stored_rb = has(REPEATERBOOK_KEYCHAIN_USER);
     Ok(vec![
         CredStatus {
             id: "lotw".into(),
@@ -25257,7 +25255,7 @@ fn credentials_status(
         CredStatus {
             id: "qrz-logbook".into(),
             connector: "QRZ Logbook".into(),
-            stored: has(qrz_logbook_keychain()),
+            stored: has(QRZ_LOGBOOK_KEYCHAIN_USER),
             identity: qrz_user,
             uploads: true,
             enabled: qrz_book_on,
@@ -25269,7 +25267,7 @@ fn credentials_status(
         CredStatus {
             id: "eqsl".into(),
             connector: "eQSL".into(),
-            stored: has(eqsl_keychain()),
+            stored: has(EQSL_KEYCHAIN_USER),
             identity: eqsl_user,
             uploads: true,
             enabled: eqsl_on,
@@ -25281,7 +25279,7 @@ fn credentials_status(
         CredStatus {
             id: "clublog".into(),
             connector: "ClubLog".into(),
-            stored: has(clublog_keychain()) && clublog_key,
+            stored: has(CLUBLOG_KEYCHAIN_USER) && clublog_key,
             identity: clublog_email,
             uploads: true,
             enabled: clublog_on,
@@ -25301,7 +25299,7 @@ fn credentials_status(
             // only secret); show mycall so a save is visibly attributed.
             id: "hrdlog".into(),
             connector: "HRDLog.net".into(),
-            stored: has(hrdlog_keychain()),
+            stored: has(HRDLOG_KEYCHAIN_USER),
             identity: mycall.clone(),
             uploads: true,
             enabled: hrdlog_on,
@@ -25315,7 +25313,7 @@ fn credentials_status(
         CredStatus {
             id: "wrl".into(),
             connector: "World Radio League".into(),
-            stored: has(wrl_keychain()),
+            stored: has(WRL_KEYCHAIN_USER),
             // The key covers the whole WRL account; nothing account-identifying is
             // stored client-side, so no identity string to show.
             identity: String::new(),
@@ -25331,7 +25329,7 @@ fn credentials_status(
         CredStatus {
             id: "cloudlog".into(),
             connector: "Cloudlog".into(),
-            stored: has(cloudlog_keychain()),
+            stored: has(CLOUDLOG_KEYCHAIN_USER),
             identity: cloudlog_url,
             uploads: true,
             enabled: cloudlog_on,
@@ -25360,13 +25358,13 @@ fn credentials_status(
             // challenge. The identity is the callsign — Winlink accounts ARE callsigns.
             id: "winlink".into(),
             connector: "Winlink".into(),
-            stored: has(winlink_keychain()),
+            stored: has(WINLINK_KEYCHAIN_USER),
             identity: mycall.clone(),
             // Winlink carries MAIL, not QSO uploads, so "never uploaded anything" is not a fault
             // and must not be rendered as one — the same reason the two lookup-only rows above
             // carry `uploads: false`.
             uploads: false,
-            enabled: has(winlink_keychain()),
+            enabled: has(WINLINK_KEYCHAIN_USER),
             // ⚠️ Session outcomes are NOT wired to this panel: a failed CMS connect appears in
             // the connection log and in the session status chip, not here. Flagged rather than
             // pretended away, exactly as the QRZ callbook row flags its own gap.
@@ -25391,6 +25389,14 @@ fn effective_clublog_key(settings_key: &str) -> String {
         .unwrap_or("")
         .trim()
         .to_string()
+}
+
+/// Whether the OS keychain holds a connector's secret under `user` (service `"tempo"`). Says only
+/// yes or no: the secret is read and dropped here, and a keychain that cannot be read is a no.
+fn keychain_has(user: &str) -> bool {
+    keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, user)
+        .and_then(|entry| entry.get_password())
+        .is_ok()
 }
 
 fn lotw_keychain() -> Result<keyring::Entry, String> {
@@ -25539,7 +25545,12 @@ fn clear_icom_lan_password(radio_id: u32) -> Result<(), String> {
 /// Whether a radio profile has an Icom network password saved. Says only yes or no.
 #[tauri::command]
 fn icom_lan_password_saved(radio_id: u32) -> Result<bool, String> {
-    Ok(OsKeychain.get(radio_id)?.is_some())
+    icom_lan_saved(&OsKeychain, radio_id)
+}
+
+/// [`icom_lan_password_saved`]'s answer from `vault`: yes or no, never the password.
+fn icom_lan_saved(vault: &dyn IcomLanVault, radio_id: u32) -> Result<bool, String> {
+    Ok(vault.get(radio_id)?.is_some())
 }
 
 #[cfg(test)]
@@ -27935,7 +27946,12 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
     })
     .await
     .map_err(|e| e.to_string())??;
-    let st = tempo_core::qrz::parse_status_response(&resp);
+    qrz_status_reply(&resp, &key, mycall)
+}
+
+/// What a QRZ Logbook Test answers, from QRZ's STATUS reply `resp` to a request made with `key`.
+fn qrz_status_reply(resp: &str, key: &str, mycall: &str) -> Result<String, String> {
+    let st = tempo_core::qrz::parse_status_response(resp);
     if st.ok {
         let owner_raw = st.owner.clone().unwrap_or_default();
         // #291: the upload path reuses this owner instead of spending its own STATUS call.
@@ -27951,9 +27967,51 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
             st.count
         ))
     } else {
-        Err(st
-            .reason
-            .unwrap_or_else(|| "QRZ rejected the API key".into()))
+        Err(st.reason.map_or_else(
+            || "QRZ rejected the API key".into(),
+            |reason| qrz_reason_without_key(&reason, key),
+        ))
+    }
+}
+
+/// What the operator is told instead of QRZ's reason when it still shows the key.
+const QRZ_REASON_WITHHELD: &str = "QRZ refused the request, and its reply echoed the API key \
+     back, so its wording is withheld. Check the QRZ Logbook API key in Settings.";
+
+/// QRZ's own reason for a refused Test, without the key. QRZ echoes the failing request, which
+/// carried the key, and this answer reaches the connection log and a remote client's Test button.
+/// A verbatim or percent-encoded echo is masked (`qrz_correct::scrub_key`); a reason that still
+/// shows the key, plain or percent-encoded, in any case or with other separators, is withheld
+/// whole.
+fn qrz_reason_without_key(reason: &str, key: &str) -> String {
+    let scrubbed = tempo_core::qrz_correct::scrub_key(reason, key);
+    let folded = |text: &str| -> String {
+        text.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect()
+    };
+    // The key's letters and digits, and those of its percent-encoded form (a `-` as `2d`).
+    let plain = folded(key);
+    let encoded: String = key
+        .trim()
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                (b.to_ascii_lowercase() as char).to_string()
+            } else {
+                format!("{b:02x}")
+            }
+        })
+        .collect();
+    let shown = folded(&scrubbed);
+    if [plain, encoded]
+        .iter()
+        .any(|k| !k.is_empty() && shown.contains(k.as_str()))
+    {
+        QRZ_REASON_WITHHELD.to_string()
+    } else {
+        scrubbed
     }
 }
 
@@ -52452,5 +52510,390 @@ mod contest_entry_command_tests {
         );
         assert!(k9new_worked(&snap), "the session's sweep holds K9NEW");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod remote_credential_reply_tests {
+    //! What a remote client is answered when its Settings badges ask which credentials are saved
+    //! and when its connector Tests run at the shack with the keys stored there: yes or no, ok or
+    //! an error, and never a byte of a secret. Made-up values only: nothing here reads the OS
+    //! keychain or reaches a service. (At the end of this file so that the handler list a test
+    //! builds is not the first `generate_handler!` here: `command_classes` reads that one.)
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// A QRZ Logbook key, made up, in the shape QRZ issues.
+    const QRZ_BOOK_KEY: &str = "A1B2-C3D4-E5F6-0789";
+    /// A Cloudlog/Wavelog key, made up, in the shape Cloudlog issues (`cl` and 13 hex digits).
+    const CLOUDLOG_KEY: &str = "cl5f3a9b2c7d1e4";
+    /// An Icom network password, made up.
+    const ICOM_PASSWORD: &str = "Vq7Rm2Xz9Lp4";
+    /// A ClubLog application key typed into Settings, made up.
+    const CLUBLOG_APP_KEY: &str = "Jw4Nc8Tb1Hy6";
+
+    /// A made-up secret for every keychain user the badges read.
+    fn stored_secrets() -> BTreeMap<&'static str, &'static str> {
+        BTreeMap::from([
+            (LOTW_KEYCHAIN_USER, "Zx81qPv3Lm0K"),
+            (QRZ_KEYCHAIN_USER, "Kd7wYt42Gh5S"),
+            (QRZ_LOGBOOK_KEYCHAIN_USER, QRZ_BOOK_KEY),
+            (EQSL_KEYCHAIN_USER, "Mn5bVr90Pz3T"),
+            (CLUBLOG_KEYCHAIN_USER, "Hg3fDs18Ux7W"),
+            (HRDLOG_KEYCHAIN_USER, "Qw2eRt56Bn8Y"),
+            (WRL_KEYCHAIN_USER, "Lk9jHg07Cv4E"),
+            (CLOUDLOG_KEYCHAIN_USER, CLOUDLOG_KEY),
+            (REPEATERBOOK_KEYCHAIN_USER, "rbuapp_Pq8oIu65Fd2A"),
+            (WINLINK_KEYCHAIN_USER, "Yt6rEw34Sx1Q"),
+        ])
+    }
+
+    /// Every secret the shack holds in these tests.
+    fn every_secret() -> Vec<&'static str> {
+        let mut all: Vec<&str> = stored_secrets().into_values().collect();
+        all.extend([ICOM_PASSWORD, CLUBLOG_APP_KEY]);
+        all
+    }
+
+    fn folded(text: &str) -> String {
+        text.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect()
+    }
+
+    fn hex4(bytes: &[u8]) -> bool {
+        bytes.len() == 4 && bytes.iter().all(u8::is_ascii_hexdigit)
+    }
+
+    /// A token shaped as a QRZ Logbook key (four groups of four hex digits) or a Cloudlog/Wavelog
+    /// key (`cl` or `wl` and 13 hex digits), whatever its value.
+    fn key_shaped(reply: &str) -> Option<String> {
+        let b = reply.as_bytes();
+        for at in 0..b.len() {
+            if b.len() - at >= 19
+                && (0..4).all(|g| hex4(&b[at + g * 5..at + g * 5 + 4]))
+                && [4, 9, 14].iter().all(|&dash| b[at + dash] == b'-')
+            {
+                return Some(reply[at..at + 19].to_string());
+            }
+            let starts = at == 0 || !b[at - 1].is_ascii_alphanumeric();
+            if starts
+                && b.len() - at >= 15
+                && (b[at..at + 2].eq_ignore_ascii_case(b"cl")
+                    || b[at..at + 2].eq_ignore_ascii_case(b"wl"))
+                && b[at + 2..at + 15].iter().all(u8::is_ascii_hexdigit)
+                && b.get(at + 15).is_none_or(|c| !c.is_ascii_alphanumeric())
+            {
+                return Some(reply[at..at + 15].to_string());
+            }
+        }
+        None
+    }
+
+    /// Where `reply` gives away a secret: any eight letters and digits of one in a row, in any
+    /// case and whatever separates them (so the whole secret, verbatim or reformatted, and any
+    /// stretch of it), or one percent-encoded, or a key-shaped token whatever its value.
+    fn leaks(reply: &str, secrets: &[&str]) -> Vec<String> {
+        let reply_folded = folded(reply);
+        let mut found = Vec::new();
+        for secret in secrets {
+            let s = folded(secret);
+            let window = s.len().min(8);
+            if (0..=s.len() - window).any(|at| reply_folded.contains(&s[at..at + window])) {
+                found.push(format!("a stretch of {secret:?}"));
+            }
+            let encoded: String = secret
+                .bytes()
+                .map(|b| match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' => (b as char).to_string(),
+                    _ => format!("%{b:02X}"),
+                })
+                .collect();
+            if reply.contains(&encoded) {
+                found.push(format!("{secret:?} percent-encoded"));
+            }
+        }
+        if let Some(token) = key_shaped(reply) {
+            found.push(format!("the key-shaped {token:?}"));
+        }
+        found
+    }
+
+    /// The shack's settings, with an identity for every connector that shows one.
+    fn station() -> tempo_app::settings::Settings {
+        tempo_app::settings::Settings {
+            mycall: "W9TST".into(),
+            lotw_username: "w9tst-lotw".into(),
+            eqsl_username: "W9TST".into(),
+            qrz_username: "W9TST".into(),
+            clublog_email: "w9tst@example.invalid".into(),
+            clublog_api_key: CLUBLOG_APP_KEY.into(),
+            cloudlog_url: "https://log.example.invalid".into(),
+            ..Default::default()
+        }
+    }
+
+    fn badges(saved: &[&str]) -> (Vec<CredStatus>, String) {
+        let engine = Mutex::new(Engine::with_settings(station()));
+        let rows = credentials_status(&engine, &LogTallies::default(), &|user| {
+            saved.contains(&user) && stored_secrets().contains_key(user)
+        })
+        .expect("the badges read");
+        let reply = serde_json::to_string(&rows).expect("the rows serialize");
+        (rows, reply)
+    }
+
+    fn stored_by_id(rows: &[CredStatus]) -> BTreeMap<String, bool> {
+        rows.iter()
+            .map(|row| (row.id.clone(), row.stored))
+            .collect()
+    }
+
+    /// ⭐ The control: the check below finds a secret in a reply that carries one, however it is
+    /// carried, and passes a reply that carries none. Without this, a clean result could mean a
+    /// check that sees nothing.
+    #[test]
+    fn the_leak_check_catches_a_deliberately_leaky_reply() {
+        let secrets = every_secret();
+        for secret in &secrets {
+            let upper = secret.to_ascii_uppercase();
+            let stretch = &folded(secret)[1..9];
+            for leaky in [
+                format!("{{\"value\":\"{secret}\"}}"),
+                format!("invalid api key {upper}"),
+                format!("KEY={}", secret.replace('-', "%2D").replace('_', "%5F")),
+                format!("reason: …{stretch}…"),
+            ] {
+                assert!(
+                    !leaks(&leaky, &secrets).is_empty(),
+                    "missed {secret:?} in {leaky:?}"
+                );
+            }
+        }
+        for shaped in ["FFFF-0000-ABCD-1234", "key wl0123456789abc."] {
+            assert!(
+                !leaks(shaped, &secrets).is_empty(),
+                "missed the key-shaped {shaped:?}"
+            );
+        }
+        // A badge row that carried a secret where an identity goes, as a leaky reply would.
+        let (mut rows, _) = badges(&[CLOUDLOG_KEYCHAIN_USER]);
+        rows[0].identity = stored_secrets()[LOTW_KEYCHAIN_USER].to_string();
+        let leaky = serde_json::to_string(&rows).unwrap();
+        assert!(
+            !leaks(&leaky, &secrets).is_empty(),
+            "missed a secret in a badge row"
+        );
+        // And a reply with none passes.
+        for clean in [
+            "{\"id\":\"qrz-logbook\",\"connector\":\"QRZ Logbook\",\"stored\":true}",
+            "W9TST (Main) — 12 QSOs in the online logbook",
+            "connect failed: connection refused",
+        ] {
+            assert_eq!(leaks(clean, &secrets), Vec::<String>::new(), "{clean:?}");
+        }
+    }
+
+    /// ⭐ From afar the badges say saved or not saved, by value for every connector, both ways
+    /// round, and the reply carries no byte of any secret the shack holds.
+    #[test]
+    fn the_badges_say_saved_or_not_by_value_and_carry_no_secret() {
+        let first = [
+            LOTW_KEYCHAIN_USER,
+            QRZ_LOGBOOK_KEYCHAIN_USER,
+            CLUBLOG_KEYCHAIN_USER,
+            WRL_KEYCHAIN_USER,
+            REPEATERBOOK_KEYCHAIN_USER,
+        ];
+        let second = [
+            QRZ_KEYCHAIN_USER,
+            EQSL_KEYCHAIN_USER,
+            HRDLOG_KEYCHAIN_USER,
+            CLOUDLOG_KEYCHAIN_USER,
+            WINLINK_KEYCHAIN_USER,
+        ];
+        let expect = |saved_first: bool| -> BTreeMap<String, bool> {
+            [
+                ("lotw", saved_first),
+                ("qrz-xml", !saved_first),
+                ("qrz-logbook", saved_first),
+                ("eqsl", !saved_first),
+                ("clublog", saved_first),
+                ("hrdlog", !saved_first),
+                ("wrl", saved_first),
+                ("cloudlog", !saved_first),
+                ("repeaterbook", saved_first),
+                ("winlink", !saved_first),
+            ]
+            .into_iter()
+            .map(|(id, stored)| (id.to_string(), stored))
+            .collect()
+        };
+        for (saved, saved_first) in [(&first, true), (&second, false)] {
+            let (rows, reply) = badges(saved);
+            assert_eq!(stored_by_id(&rows), expect(saved_first));
+            assert_eq!(
+                leaks(&reply, &every_secret()),
+                Vec::<String>::new(),
+                "{reply}"
+            );
+        }
+        let (rows, reply) = badges(&[]);
+        assert!(
+            rows.iter().all(|row| !row.stored),
+            "nothing saved reads not saved"
+        );
+        assert_eq!(
+            leaks(&reply, &every_secret()),
+            Vec::<String>::new(),
+            "{reply}"
+        );
+    }
+
+    struct OneRadio;
+
+    impl IcomLanVault for OneRadio {
+        fn get(&self, radio_id: u32) -> Result<Option<String>, String> {
+            Ok((radio_id == 1).then(|| ICOM_PASSWORD.to_string()))
+        }
+        fn set(&self, _: u32, _: &str) -> Result<(), String> {
+            unreachable!("a badge never stores")
+        }
+        fn clear(&self, _: u32) -> Result<(), String> {
+            unreachable!("a badge never clears")
+        }
+    }
+
+    /// From afar the Icom badge says saved or not saved, and never the password.
+    #[test]
+    fn the_icom_badge_says_saved_or_not_and_never_the_password() {
+        for (radio, saved) in [(1, true), (2, false)] {
+            let answer = icom_lan_saved(&OneRadio, radio);
+            assert_eq!(answer, Ok(saved), "radio {radio}");
+            let reply = serde_json::to_string(&answer.unwrap()).unwrap();
+            assert_eq!(
+                leaks(&reply, &every_secret()),
+                Vec::<String>::new(),
+                "{reply}"
+            );
+        }
+    }
+
+    /// ⭐ A QRZ Logbook Test answers ok or an error, and an error never carries the key, however
+    /// QRZ echoes the request that carried it. QRZ's own words still come through when they hold
+    /// no key.
+    #[test]
+    fn a_qrz_test_answers_ok_or_an_error_and_never_the_key() {
+        let secrets = every_secret();
+        let ok = qrz_status_reply(
+            "RESULT=OK&OWNER=W9TST&BOOK_NAME=Main&COUNT=12",
+            QRZ_BOOK_KEY,
+            "W9TST",
+        );
+        assert_eq!(
+            ok,
+            Ok("W9TST (Main) — 12 QSOs in the online logbook".to_string())
+        );
+        assert_eq!(
+            qrz_status_reply("RESULT=AUTH&REASON=invalid api key", QRZ_BOOK_KEY, "W9TST"),
+            Err("invalid api key".to_string()),
+            "a reason with no key in it reaches the operator as QRZ wrote it"
+        );
+        assert_eq!(
+            qrz_status_reply(
+                "RESULT=FAIL&REASON=invalid api key A1B2-C3D4-E5F6-0789",
+                QRZ_BOOK_KEY,
+                "W9TST"
+            ),
+            Err("invalid api key «api key»".to_string()),
+            "a verbatim echo keeps QRZ's words, with the key masked"
+        );
+        assert_eq!(
+            qrz_status_reply(
+                "RESULT=AUTH&REASON=bad key a1b2-c3d4-e5f6-0789",
+                QRZ_BOOK_KEY,
+                "W9TST"
+            ),
+            Err(QRZ_REASON_WITHHELD.to_string()),
+            "an echo the mask cannot find is withheld whole"
+        );
+        for echo in [
+            "RESULT=FAIL&REASON=invalid api key A1B2-C3D4-E5F6-0789",
+            "RESULT=FAIL&REASON=KEY%3DA1B2-C3D4-E5F6-0789%26ACTION%3DSTATUS",
+            "RESULT=FAIL&REASON=KEY%3DA1B2%252DC3D4%252DE5F6%252D0789",
+            "RESULT=AUTH&REASON=bad key a1b2-c3d4-e5f6-0789",
+            "RESULT=AUTH&REASON=bad key A1B2C3D4E5F60789",
+        ] {
+            let answer = qrz_status_reply(echo, QRZ_BOOK_KEY, "W9TST");
+            let error = answer.expect_err("a refused key is an error");
+            assert!(!error.is_empty(), "{echo}");
+            assert_eq!(
+                leaks(&error, &secrets),
+                Vec::<String>::new(),
+                "{echo} -> {error}"
+            );
+        }
+    }
+
+    /// An N3FJP Test, run as the command lane runs it for a remote client, answers ok with what
+    /// is listening, or the error. N3FJP takes no credential at all.
+    #[test]
+    fn an_n3fjp_test_from_afar_answers_ok_or_an_error() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let port = listener.local_addr().unwrap().port();
+        let serving = std::thread::spawn(move || {
+            let (mut peer, _) = listener.accept().expect("the Test connects");
+            let mut asked = [0u8; 64];
+            let n = peer.read(&mut asked).unwrap();
+            assert_eq!(&asked[..n], b"<CMD><PROGRAM></CMD>\r\n");
+            peer.write_all(
+                b"<CMD><PROGRAMRESPONSE><PGM>N3FJP's Test Log</PGM><VER>6.6</VER></CMD>",
+            )
+            .unwrap();
+        });
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .map(|a| a.port())
+            .expect("a port no one listens on");
+        for (to, expected) in [(port, Some("N3FJP's Test Log v6.6")), (closed, None)] {
+            let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(
+                tempo_app::settings::Settings {
+                    n3fjp_host: "127.0.0.1".into(),
+                    n3fjp_port: to,
+                    ..Default::default()
+                },
+            )));
+            let app = tauri::test::mock_builder()
+                .manage(engine)
+                .invoke_handler(tauri::generate_handler![n3fjp_test_connection])
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .expect("a mock app");
+            let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+                .build()
+                .expect("a main window");
+            let runner: Runner = tauri_runner(app.handle().clone());
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                "n3fjp_test_connection".to_string(),
+                serde_json::json!({}),
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            let said = answered
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the handler answered");
+            match expected {
+                Some(listening) => assert_eq!(said, Ok(serde_json::json!(listening))),
+                None => {
+                    let error = said.expect_err("nothing listening is an error");
+                    assert!(error.starts_with("connect failed"), "{error}");
+                }
+            }
+        }
+        serving.join().expect("the fake N3FJP served");
     }
 }
