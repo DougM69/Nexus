@@ -211,6 +211,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("get_remote_station_status",      RefusedHere, "Remote-access admin stays at the shack."),
     ("get_rf_frame",                   RunsAtShack, "The shack's panadapter."),
     ("get_rig_models",                 RunsAtShack, "The rig catalog, for the shack's rig setup."),
+    ("get_rtty_scope",                 RunsAtShack, "The shack's RTTY tuning scope."),
     ("get_rtty_state",                 RunsAtShack, "The shack's RTTY state."),
     ("get_sat_detail",                 RunsAtShack, "The shack's satellite picture."),
     ("get_sat_pass_needs",             RunsAtShack, "From the shack's location and logbook."),

@@ -493,7 +493,7 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
       'scope', 'rigscope', 'txmeters', 'receiver', 'transmitter', 'bandActivity', 'voiceKeyer',
       'spots', 'needed', 'stats', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
     ])
-    expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'stream', 'stats'])
+    expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'tuning', 'stream', 'stats'])
     expect([...CW_PANELS.panelIds]).toEqual([
       'scope', 'scopeCtl', 'dsp', 'txmeters', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
       'spots', 'needed', 'stats', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',

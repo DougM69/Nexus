@@ -29,6 +29,7 @@ import { RTTY_PANEL_IDS, RTTY_PANELS, type RttyPanelId, type PanelLayoutApi } fr
 import { FrequencyControl } from './FrequencyControl'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
+import { RttyTuningScope } from './RttyTuningScope'
 import {
   atuTune,
   getLicensedBandPlan,
@@ -151,6 +152,7 @@ const rttyPanelLabels = (): Record<RttyPanelId, string> => ({
   // is the same ENTRY in every cockpit; only the label is local.
   scope: t('rtty.panel.waterfall'),
   rfScope: t('rfScope.title'),
+  tuning: t('rtty.tuning.title'),
   stream: t('rtty.panel.stream'),
   stats: t('callStats.pane.title'),
 })
@@ -637,6 +639,23 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // re-checks every TX gate on every radio-loop tick while it is up, and drops
   // the latch the moment one goes down. This component only asks.
   const latched = rtty?.latched === true
+  // The tuning scope (⊞ `tuning`). `keyed` is the waterfall's own: our over, a latched stream or a
+  // tune. Its nudges net through `rtty_net`, which moves the AFSK transmit tone as well as the
+  // decoder, so they are off while keyed (RttyTuningScope.tsx) and here without decoder control.
+  const tuningScope = (close?: { onRemove?: () => void; hideNote?: string }) => (
+    <RttyTuningScope
+      active={active}
+      armed={armed}
+      keyed={sending || latched || (snap?.radio.tuning ?? false)}
+      control={receiverControl}
+      markHz={rtty?.markHz ?? 0}
+      spaceHz={rtty?.spaceHz ?? 0}
+      onNet={(hz) => {
+        if (receiverControl) void rttyNet(hz).then(setRtty).catch(() => {})
+      }}
+      closeProps={close}
+    />
+  )
   const latchedRef = useRef(latched)
   latchedRef.current = latched
 
@@ -945,7 +964,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const streamPin = usePinnedScroll<HTMLDivElement>()
 
   return (
-    <main className="layout single rtty-cockpit">
+    <main className={`layout single rtty-cockpit${shown('tuning') ? ' rtty-tuning-on' : ''}`}>
       {snap && (
         <CockpitHeader
           snap={snap}
@@ -1046,8 +1065,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           dividers' kind; hiding the strip takes the divider with it and hands the height to the
           pane frames below, the shell's growers, and the stored height stays for its return.
 
-          It hosts no stop control — the cursors and click-to-net are the decoder's tuning aid,
-          and net() moves the DECODER, not the rig's key. Stop TX and the TX-enable latch are in
+          It hosts no stop control — the cursors and click-to-net are the tuning aid. A net moves
+          the decoder AND the AFSK transmit tone (the transmitter follows the netted centre since
+          1.9.0), but never the rig's key. Stop TX and the TX-enable latch are in
           the TX strip below it, the Esc/Stop macro and the sequencer's Abort in the dock (THE STOP LINE).
           With this and `stream` both unticked the cockpit still holds all four. */}
       {rtty && shown('scope') && (
@@ -1181,9 +1201,21 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           no ⊞ note, and it is not a sender: Arm RX is RX-only and Auto ON never keys by
           itself. Do NOT add the Auto toggle to stop-line.test.tsx's RTTY stopControls; that
           would demand this cockpit's only ⊞ entry be unhideable. */}
+      {/* THE TUNING SCOPE WITHOUT THE TEXT: its home is the column left of the decoded text (inside
+          `stream`, below), so with `stream` hidden it stands in its own content-height frame at the
+          same place rather than vanishing with a pane the operator did not hide. */}
+      {!shown('stream') && shown('tuning') && (
+        <CockpitPaneFrame title={t('rtty.tuning.title')} paneId="tuning" fit="content" {...closeProps('tuning')}>
+          {tuningScope()}
+        </CockpitPaneFrame>
+      )}
+
       {shown('stream') && (
       <CockpitPaneFrame
         title={t('rtty.pane.stream.title')}
+        // THE GUARANTEE (cockpit-panes.css): while Tuning is shown the shell sets this floor at the
+        // tuning column's height, so the text pane gives way, never the scope.
+        floor="--rtty-stream-floor"
         paneId="stream"
         split={streamLogPair ? STREAM_LOG_SPLIT : undefined}
         share={streamShare != null ? streamShare * STREAM_LOG_SPLIT : undefined}
@@ -1267,6 +1299,10 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         {!control && (!rtty || !armed) && <p className="cw-decode-idle" role="status">
           {rtty ? t('remote.keyboardStopped') : t('remote.keyboardUnavailable')}
         </p>}
+        {/* THE RX ROW: the tuning scope's square column, then the text, which shrinks to fit. The row is
+            always there, so ticking `tuning` never remounts the transcript or loses its scroll pin. */}
+        <div className="rtty-rx-row">
+        {shown('tuning') && tuningScope(closeProps('tuning'))}
         <div
           className="cw-decode-text"
           ref={streamPin.ref}
@@ -1293,6 +1329,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               {armed ? t('rtty.stream.listening') : control ? t('rtty.stream.idle') : null}
             </span>
           )}
+        </div>
         </div>
       </div>
       </CockpitPaneFrame>

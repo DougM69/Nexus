@@ -281,6 +281,50 @@ sequencers can never key together.
 signal. The faint run is the decoder's own per-character confidence — those are
 the characters to ask **AGN** about rather than the ones to write in the log.*
 
+### Tune with the tuning scope
+
+The square left of the decoded text is a **tuning scope**: the crossed-ellipse
+picture of a classic terminal unit. Two narrow filters sit on the mark and space
+tones the decoder is listening to, after the AFC's correction; the mark filter
+moves the trace left and right, the space filter up and down.
+
+- **A tuned signal draws a square "+"**: a flat ellipse along the M axis for the
+  mark tone and an upright one along the S axis for the space tone.
+- **A mistuned signal turns the cross.** It turns clockwise when the signal sits
+  higher than the decoder's tones and counter-clockwise when it sits lower, and
+  the arms get fatter as it moves further off.
+- **Noise draws a round blob** that fills the middle, with no arms.
+
+The line under the square says the same in words, for anyone who cannot use the
+picture: **Tuned**, **Signal 20 Hz high**, **Signal 20 Hz low**, or **No signal**.
+It changes at most once a second while only the number moves.
+
+To tune, click the signal on the waterfall first (step 3 above), then use
+**◀** and **▶** under the square to move the decoder 5 Hz at a time; hold one
+down to keep stepping. Move towards the words: **Signal 20 Hz high** wants ▶.
+The figure between the buttons is the mark tone in hertz.
+
+⚠️ **The nudges move your transmit tone as well.** In AFSK the transmitter
+follows the decoder's centre, exactly as a waterfall click does, so a nudge is
+also a change to where your own signal lands. That is why both buttons are
+greyed out while you transmit (an over, continuous TX or Tune): a held button
+cannot slide your tone in the middle of an over. Nexus also refuses any net while
+RTTY is transmitting, so a click on the waterfall mid-over does not move your
+tone either; net between overs.
+
+![The tuning scope beside the decoded text, showing a crossed-ellipse "+" with ◀ M 2125 ▶ and the words "Signal 18 Hz low" under it.](../img/manual/rtty-tuning-scope.webp)
+
+*The tuning scope in the Decoded Text pane, drawn from a test pattern rather
+than off the air, in a development build after Nexus 1.19.0.*
+
+The scope is a ⊞ Panels entry, **Tuning**, shown by default; hide it there or
+with its own ✕. With the decoded text hidden it stands on its own under the TX
+strip. The square takes the room it needs from the decoded text, the waterfall
+and the log strip (about 200 px on a large window); on a small one it is the
+largest that fits, about 100 px at 1024×768, and nothing has to scroll. It goes blank while you transmit and while the decoder is
+not armed. On a second computer driving the station with Nexus's own Remote
+client it works the same way, fed from the station.
+
 ### Send an over by hand
 
 1. Arm transmit with the header's **TX Off** latch, so it reads **TX On**.

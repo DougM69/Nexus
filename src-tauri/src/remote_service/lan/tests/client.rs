@@ -116,7 +116,8 @@ fn client_mode_drives_the_shack_end_to_end() {
 fn sent_here(app: &App) -> Vec<String> {
     app.ran()
         .into_iter()
-        .filter(|cmd| cmd != "get_meters" && cmd != "get_spectrum_row")
+        // The feeds' own reads at the shack, which run on their own pace whatever the screens do.
+        .filter(|cmd| cmd != "get_meters" && cmd != "get_spectrum_row" && cmd != "get_rtty_scope")
         .collect()
 }
 

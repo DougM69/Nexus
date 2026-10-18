@@ -1768,6 +1768,21 @@ export interface SkimHit {
   wpm: number
 }
 
+/** The RTTY tuning scope's newest frame (`get_rtty_scope`): the crossed-ellipse picture from a
+ * mark/space resonator pair on the decoder's AFC-corrected tones. */
+export interface RttyScope {
+  /** Armed and receiving; false while disarmed and while we transmit. */
+  live: boolean
+  /** Counts every point kept: a frame with the number last drawn is not new. */
+  seq: number
+  /** The frame's largest |x| or |y| in audio units — the drawing's auto-scale follows it. */
+  peak: number
+  /** Interleaved x (mark), y (space) pairs scaled so `peak` is ±127. */
+  xy: number[]
+  /** How far the signal sits from the decoder's tones (Hz, positive = higher); null with no signal. */
+  offsetHz: number | null
+}
+
 /** Live RTTY RX decoder state (poll get_rtty_state while the RTTY cockpit is
  * visible). RX decode only — arming never touches any TX path. */
 export interface RttyState {

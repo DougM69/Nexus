@@ -16,9 +16,13 @@
 //! [`seq`] is the auto-sequencer — a pure text-pattern QSO state machine over
 //! the free-running decoded stream (RTTY has no slot clock), with table-driven
 //! exchange schemas and a human-initiate gate.
+//!
+//! [`scope`] is the crossed-ellipse tuning display: a mark/space resonator pair on the decoder's
+//! AFC-corrected tones, whose XY trace tilts the way the signal is mistuned.
 
 pub mod baudot;
 pub mod demod;
+pub mod scope;
 pub mod seq;
 
 pub use baudot::{code_bits, encodable, BaudotDecoder, BaudotEncoder};
