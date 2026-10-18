@@ -462,11 +462,26 @@ describe('THE RTTY TUNING SCOPE (2026-10-17): a yielding row, a column that scro
     expect(classWinner('rtty-tuning', blockDecl('width'))?.value).toMatch(/^clamp\(\S+em, calc\(\S+ \* var\(--vw-eff[^)]*\)\), \S+em\)$/)
   })
 
-  it('the square is the column wide, yields height to a short pane, and its canvas is out of flow', () => {
+  it('THE GUARANTEE: the square never yields, and the text pane is floored at the column instead', () => {
+    // Operator, 2026-10-17: "Guarantee ~140 px; RX text shrinks". The square is the column's width
+    // and does not shrink; the stream frame's floor (the slot's knob) is the same size plus the
+    // heads, so the deficit lands on the text pane and past it on the shell's valve.
+    expect(classWinner('rtty-tuning-box', blockDecl('flex'))?.value, 'the square must not shrink').toBe('0 0 auto')
+    const size = classWinner('rtty-tuning', blockDecl('width'))!.value
+    expect(size).toMatch(/^clamp\(10em,/)
+    const floor = classWinner('rtty-tuning-on', blockVar('--rtty-stream-floor'))?.value
+    expect(floor, 'the shell floors the text pane at the column it holds').toBe(`calc(${size} + 8.5em)`)
+    // The knob is set by that one shell modifier and nothing else.
+    const setters = [...RULES, ...STYLES_RULES].filter((r) => /--rtty-stream-floor\s*:/.test(r.body)).map((r) => r.selector)
+    expect(setters).toEqual(['.rtty-tuning-on'])
+    // The floor is legal only with a valve behind it: the RTTY shell's own scroller.
+    const valve = STYLES_RULES.find((r) => r.selector.split(/\s*,\s*/).includes('.layout.single.rtty-cockpit') && /overflow-y\s*:/.test(r.body))
+    expect(valve && SCROLLS(blockOverflowY(valve.body) ?? ''), 'no deficit valve behind the floor').toBe(true)
+  })
+
+  it('the square is the column wide and its canvas is out of flow', () => {
     expect(classWinner('rtty-tuning-box', blockDecl('aspect-ratio'))?.value).toBe('1 / 1')
     expect(classWinner('rtty-tuning-box', blockDecl('position'))?.value).toBe('relative')
-    // Shrinks before the nudges and the words do (they are content-height and come after it).
-    expect(classWinner('rtty-tuning-box', blockDecl('flex'))?.value).toBe('1 1 auto')
     expect(classWinner('rtty-tuning-box', blockDecl('min-height'))?.value, 'an aspect-ratio box will not shrink without it').toBe('0')
     expect(classWinner('rtty-tuning-picture', blockDecl('position'))?.value).toBe('absolute')
     expect(classWinner('rtty-tuning-canvas', blockDecl('position'))?.value).toBe('absolute')

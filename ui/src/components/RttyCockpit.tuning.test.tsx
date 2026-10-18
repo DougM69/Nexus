@@ -111,6 +111,20 @@ describe('the RTTY tuning scope in its cockpit', () => {
     expect(container.querySelector('.rtty-rx-row')).toBeNull()
   })
 
+  it('floors the text pane at the scope (the guarantee), and only while the scope is shown', async () => {
+    const { container } = await show([])
+    const shell = container.querySelector('main.rtty-cockpit') as HTMLElement
+    const stream = container.querySelector('[data-pane="stream"]') as HTMLElement
+    expect(shell.classList.contains('rtty-tuning-on')).toBe(true)
+    expect(stream.style.minHeight).toContain('var(--rtty-stream-floor, 0px)')
+    // The log strip does not read the knob: the text pane is what gives way.
+    const log = [...container.querySelectorAll('.pane-frame')].find((f) => f.getAttribute('aria-label') === 'Log') as HTMLElement
+    expect(log.style.minHeight).not.toContain('--rtty-stream-floor')
+    cleanup()
+    const hidden = await show(['tuning'])
+    expect(hidden.container.querySelector('main.rtty-cockpit')!.classList.contains('rtty-tuning-on')).toBe(false)
+  })
+
   it('hidden itself, leaves the transcript where it was', async () => {
     const { container } = await show(['tuning'])
     expect(container.querySelector('.rtty-tuning')).toBeNull()

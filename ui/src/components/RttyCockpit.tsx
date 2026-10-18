@@ -914,7 +914,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const streamPin = usePinnedScroll<HTMLDivElement>()
 
   return (
-    <main className="layout single rtty-cockpit">
+    <main className={`layout single rtty-cockpit${shown('tuning') ? ' rtty-tuning-on' : ''}`}>
       {snap && (
         <CockpitHeader
           snap={snap}
@@ -1140,6 +1140,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       {shown('stream') && (
       <CockpitPaneFrame
         title={t('rtty.pane.stream.title')}
+        // THE GUARANTEE (cockpit-panes.css): while Tuning is shown the shell sets this floor at the
+        // tuning column's height, so the text pane gives way, never the scope.
+        floor="--rtty-stream-floor"
         paneId="stream"
         split={streamLogPair ? STREAM_LOG_SPLIT : undefined}
         share={streamShare != null ? streamShare * STREAM_LOG_SPLIT : undefined}

@@ -793,7 +793,7 @@
    text shrinking to fit (RttyTuningScope.tsx). The RX row holds the column and the transcript in
    the stream pane's body and takes the height the transcript used to (`flex: 1 1 0`, a grower
    that yields); the transcript stays its own scroller inside it.
-   The column is about 150 px at the 1024 floor and grows with the window to about 210 px, never
+   The column is 140 px at the 1024 and 1280 floors and grows with the window to about 200 px, never
    more than 45% of the row so the text keeps the larger share. It is a stack of content (the
    square, the nudges, the words) that cannot shrink, so where the pane is shorter than that stack
    the COLUMN scrolls — the second legal fate of deficit — and nothing clips. It hosts no stop
@@ -809,24 +809,36 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  width: clamp(9.5em, calc(0.11 * var(--vw-eff, 1280px)), 13em);
+  width: clamp(10em, calc(0.105 * var(--vw-eff, 1280px)), 14.5em);
   max-width: 45%;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
-/* The square: the column's width tall, and it YIELDS. On a pane shorter than the column (RTTY's stock
-   split leaves the text about 140 px at 1280×800, measured in Chrome) it gives up height first, so
-   the nudges and the words under it stay on screen; the picture is drawn as the largest square the
-   box holds. No floor (this sheet's rule: `min-height: 0` everywhere but the region), so the words
-   carry the reading when the pane leaves the picture no room; the column still scrolls past that. The picture and its canvas are out of flow (the
+/* The square: the column's width tall. The picture and its canvas are out of flow (the
    measured-box pattern), so the bitmap never sizes it; the ✕ sits in its top corner. */
 .rtty-tuning-box {
   position: relative;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   width: 100%;
   aspect-ratio: 1 / 1;
   min-height: 0;
+}
+/* THE GUARANTEE (operator, 2026-10-17: "Guarantee ~140 px; RX text shrinks"). The square is the
+   column's width and does not yield: 10em (140 px) at the 1024 and 1280 floors, growing with the
+   window to 14.5em (about 200 px at 1920). The decoded-text pane is what gives way: while Tuning is
+   shown, the shell carries `.rtty-tuning-on`, which sets the stream frame's own floor knob
+   (CockpitPaneFrame `floor`, read by that frame alone) at the column's height plus the pane's head
+   and the RX head. A shortfall comes out of the yielding waterfall strip first and past that flows
+   to the RTTY shell's deficit valve, which scrolls with the TX strip and the dock sticky — never a
+   clip (measured: at 1024×768 the shell scrolls 114 px, the log strip's Call field behind the dock
+   until it does; nothing is unreachable). The floor follows the operator's divider like every fill
+   floor (CockpitPaneFrame `split`), so dragging the text pane smaller is their own choice and the
+   column then scrolls.
+   The size expression is the column's own (`.rtty-tuning` width above); cockpit-panes.test.ts
+   holds the two equal. */
+.rtty-tuning-on {
+  --rtty-stream-floor: calc(clamp(10em, calc(0.105 * var(--vw-eff, 1280px)), 14.5em) + 8.5em);
 }
 .rtty-tuning-picture {
   position: absolute;
