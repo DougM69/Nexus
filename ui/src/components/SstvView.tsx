@@ -1884,6 +1884,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               theme={theme}
               active={active}
               rowMs={50} // live band instrument — rig-scope cadence, not the FT slot default
+              keepRowRemainder // even 50 ms rows, as RTTY's: 3 or 4 frames in turn, never always 4
               // NO `txBlanks` — deliberately, do not add it. Scottie DX is ~4.5 minutes of
               // continuous keying; the FT surfaces' dark band would scroll solid black for the
               // whole transmission, which is exactly what field reports (2026-08-17) called
