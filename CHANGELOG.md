@@ -114,6 +114,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep the report fixed, as WSJT-X does. NEEDS-BENCH on the air.
 
 ### Fixed
+- **Nexus Remote from a second PC: a voice-keyer message now stops when that PC's permission to transmit is
+  withdrawn.** Every other transmission started from the second PC already ended then; a voice message already
+  playing kept going to its end. Stop TX and the second PC going away already stopped it.
 - **Contest entry: a dupe is now plain to see.** Typing a call already in this contest's log (by the contest's own
   dupe rule) puts a red **DUPE** badge on the Call box with when and where you worked them, for example
   "DUPE 14:32 20m CW", and colours the box. Before, the only sign was a small grey line under the boxes. It shows in
