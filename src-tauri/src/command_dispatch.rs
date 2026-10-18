@@ -214,6 +214,21 @@ pub(crate) fn takes_afar(cmd: &str) -> bool {
         || SETTINGS_FROM_AFAR.contains(&cmd)
 }
 
+/// ⛔ A settings save from afar names no program for the shack to run. `tqsl_path` is the one
+/// setting that does: the shack runs it to sign a LoTW upload, from the Upload button (which runs
+/// from afar too) or the automatic batch, with nobody at the shack to see what it was. From afar a
+/// save keeps the shack's own value; from the shack's own screen (`None`) it is taken as it came.
+/// Every other path a save carries is data: a voice-keyer slot's WAV, the rig and port names.
+pub(crate) fn keep_the_shacks_program_paths(
+    shack: &tempo_app::settings::Settings,
+    save: &mut tempo_app::settings::Settings,
+    afar: Option<&Afar>,
+) {
+    if afar.is_some() {
+        save.tqsl_path.clone_from(&shack.tqsl_path);
+    }
+}
+
 /// ⛔ STOP WINS OVER A START THAT WAS IN FLIGHT. A start from afar runs only while the transmit
 /// stand-down generation is the one the command lane read it under ([`Afar`]). Asked by the
 /// start's own handler, first, under the Engine lock the start then runs in: a Stop on either road,

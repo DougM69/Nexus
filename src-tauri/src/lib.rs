@@ -13694,6 +13694,12 @@ fn set_settings(
         &mut settings,
         afar.as_ref(),
     );
+    // …and so does the program the shack runs to sign a LoTW upload.
+    command_dispatch::keep_the_shacks_program_paths(
+        engine_lock(&state).settings(),
+        &mut settings,
+        afar.as_ref(),
+    );
     // A form save: the ENGINE's roster wins, so a stale panel cannot revert a rig just added.
     apply_and_persist(
         state,
