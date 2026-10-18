@@ -10027,6 +10027,13 @@ export const EN = {
   'rtty.autoTune.keyed.title': 'Auto-tune is off while transmitting: it would move the transmit tones mid-over',
   'rtty.autoTune.none': 'Auto-tune: no RTTY signal at this shift near the current tones',
   'rtty.autoTune.failed': 'Auto-tune could not read the spectrum',
+  'rtty.tag.title': 'Net onto {{call}} at {{hz}} Hz. This moves the transmit tones too.',
+  'rtty.tag.worked.title': '{{call}} at {{hz}} Hz is already in the contest log. Click to net onto it.',
+  'rtty.wf.speed.aria': 'Waterfall speed',
+  'rtty.wf.speed.title': 'A new row every {{ms}} ms',
+  'rtty.wf.speed.fast': 'Fast',
+  'rtty.wf.speed.med': 'Med',
+  'rtty.wf.speed.slow': 'Slow',
   'rtty.tuning.title': 'Tuning',
   'rtty.tuning.scope.aria': 'Tuning scope: {{state}}',
   'rtty.tuning.tuned': 'Tuned',
@@ -12145,6 +12152,8 @@ export const EN = {
   'waterfall.zoom.aria': 'Waterfall zoom span',
   'waterfall.zoom.title':
     'Waterfall view — Std (0–3 kHz, WSJT-X-like), Full (0–4 kHz), or zoom in around the RX marker',
+  'waterfall.span.aria': 'Waterfall span',
+  'waterfall.span.title': 'Show {{hz}} Hz of the passband',
   'waterfall.gain.title': 'Gain — contrast (how punchy strong signals look). Center = auto.',
   'waterfall.gain.aria': 'Waterfall gain (contrast)',
   'waterfall.zero.title':

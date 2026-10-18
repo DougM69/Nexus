@@ -62,7 +62,7 @@ export function tokenAt(text: string, offset: number): string {
 
 /** A token as the sequencer's tokenizer sees it: uppercased, control characters dropped (a
  *  FIGS-S garble prints BEL), edge punctuation stripped. */
-function clean(raw: string): string {
+export function clean(raw: string): string {
   let t = Array.from(raw.toUpperCase())
     .filter((c) => c >= '!' && c <= '~')
     .join('')
@@ -93,7 +93,7 @@ const GRID = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/
  *  or a designator (`7`, `P`, `MM`, `QRP`), and a US call worked outside its area ends `/7`. */
 const BASE_CALL = /^[A-Z0-9]*[A-Z][A-Z0-9]*[0-9][A-Z0-9]*[A-Z]$/
 
-function isCall(t: string): boolean {
+export function isCall(t: string): boolean {
   if (t.length < 3 || t.length > 14 || !/^[A-Z0-9]+(\/[A-Z0-9]+)*$/.test(t)) return false
   if (GRID.test(t)) return false
   const parts = t.split('/')
