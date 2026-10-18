@@ -573,8 +573,9 @@ pub fn kpa_band_label(index: u8) -> Option<&'static str> {
 /// Elecraft documents this as the way to confirm the PC is talking to the amplifier, and it is
 /// the only probe here that asks for nothing and changes nothing. That makes it the honest
 /// presence check, and the one safe way to sweep for the port's data rate: the KPA's speed is
-/// operator-selectable (`^BRP`: 4800 / 9600 / 19200 / 38400) and is remembered in the amplifier,
-/// so Nexus cannot assume one — but it can send a semicolon at each and see which answers.
+/// operator-selectable (`^BRP`: 4800 to 38400 on a KPA500, up to 230400 on a KPA1500) and is
+/// remembered in the amplifier, so Nexus cannot assume one — but it can send a semicolon at
+/// each and see which answers.
 pub fn kpa_ping() -> &'static str {
     ";"
 }
@@ -600,11 +601,48 @@ pub fn kpa_payload<'a>(reply: &'a str, verb: &str) -> Option<&'a str> {
     Some(rest)
 }
 
-/// The four data rates a KPA can be set to (`^BRP`), fastest first.
+/// The data rates a KPA can be set to (`^BRP`), in the order the sweep tries them.
 ///
 /// The amplifier remembers its rate, so Nexus cannot assume one — it sweeps them with
 /// [`kpa_ping`], which is the only probe that asks for nothing and changes nothing.
-pub const KPA_BAUDS: [u32; 4] = [38_400, 19_200, 9_600, 4_800];
+///
+/// The KPA500's four (Programmer's Reference rA2, `^BRP` 0-3) come first, fastest first and in
+/// the order they always had, so a KPA500 sees exactly the probes it saw before the one that
+/// answers. The KPA1500 adds 57600, 115200 and 230400 (Programming Reference V3, p. 19, `^BRP`
+/// 4-6); they are tried after, and cost a KPA500 time only when nothing answers at all.
+pub const KPA_BAUDS: [u32; 7] = [38_400, 19_200, 9_600, 4_800, 230_400, 115_200, 57_600];
+
+/// The KPA1500's command server port, the same number for TCP and UDP (Programming Reference
+/// V3, Overview p. 6, and `^CP` p. 22). Operator-changeable, so it is a default, not a constant
+/// of the protocol.
+pub const KPA_NET_PORT: u16 = 1500;
+
+/// Read an amplifier address as the KPA1500's network command server, `host:port`, or `None`
+/// for a serial device.
+///
+/// A serial device is never `host:port`: Windows names have no colon (`COM8`, `\\.\COM10`) and
+/// Unix ones are paths, so anything holding a `/` or `\` is a device. A trailing colon with no
+/// number (`COM3:`, which some operators type) is a device too. An IPv6 host is written in
+/// brackets, `[fe80::1]:1500`, and comes back without them. The host may be empty, which the
+/// link reports as an address it cannot reach rather than guessing.
+///
+/// `ui/src/settings/ampAddress.ts` `ampPortIsNetwork` applies the same rule.
+pub fn kpa_network_target(amp_port: &str) -> Option<(&str, u16)> {
+    let s = amp_port.trim();
+    if s.contains(['/', '\\']) {
+        return None;
+    }
+    let (host, port) = s.rsplit_once(':')?;
+    if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let port = port.parse::<u16>().ok().filter(|&p| p != 0)?;
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    Some((host, port))
+}
 
 /// Decode a `^VI` payload — `"480 325"` is 48.0 V and 32.5 A.
 ///
@@ -674,13 +712,14 @@ impl KpaStatus {
 #[cfg(feature = "serial")]
 mod imp {
     use super::{
-        kpa_parse_vi, kpa_parse_ws, kpa_payload, kpa_ping, kpa_ping_ok, kpa_query, kpa_set,
-        parse_spe_status, spe_command, spe_looks_like_1k_fa, spe_status_reply_len,
-        spe_status_request, AmpIntent, KpaStatus, SpeCommand, SpeStatus, KPA_BAUDS, KPA_TOP_BAND,
-        SPE_HEADER_LEN,
+        kpa_network_target, kpa_parse_vi, kpa_parse_ws, kpa_payload, kpa_ping, kpa_ping_ok,
+        kpa_query, kpa_set, parse_spe_status, spe_command, spe_looks_like_1k_fa,
+        spe_status_reply_len, spe_status_request, AmpIntent, KpaStatus, SpeCommand, SpeStatus,
+        KPA_BAUDS, KPA_TOP_BAND, SPE_HEADER_LEN,
     };
     use serialport::SerialPort;
     use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
     use std::time::{Duration, Instant};
 
     /// 115200 8N1, per §1 — and the amplifier adapts downward by itself, so this is the only
@@ -828,18 +867,40 @@ mod imp {
 
     /// Per-verb reply budget. The KPA answers immediately; this bounds a link that went quiet.
     const KPA_TIMEOUT: Duration = Duration::from_millis(400);
-    /// A shorter budget while sweeping rates, so four wrong guesses do not cost two seconds.
+    /// A shorter budget while sweeping rates, so six wrong guesses do not cost 2.4 seconds.
     const KPA_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
     /// How many replies to skip while looking for the one matching the verb we asked. The KPA
     /// sends unsolicited status, so the next line is not necessarily our answer.
     const KPA_MAX_SKIPPED: usize = 8;
     /// A reply is `^XXdddd;` — a few dozen bytes. This bounds a port emitting noise.
     const KPA_MAX_REPLY: usize = 64;
+    /// Sends of one GET over UDP before it counts as unanswered. Elecraft warns that "UDP packets
+    /// may be discarded if network congestion occurs" (Programming Reference V3, Overview p. 6),
+    /// and a GET asks without changing anything, so asking again is harmless. A SET is never
+    /// repeated: it is sent once and the next poll reads where the amplifier actually is.
+    const KPA_UDP_TRIES: usize = 2;
+    /// Most stale datagrams cleared before a GET. Bounds a sender flooding the socket.
+    const KPA_UDP_MAX_DRAIN: usize = 64;
+
+    /// How the link reaches the amplifier.
+    enum KpaWire {
+        /// The USB "Host PC" port (either amplifier) or XCVR SERIAL HOST.
+        Serial(Box<dyn SerialPort>),
+        /// The KPA1500's UDP command server. UDP rather than TCP because the KPA1500 takes "a
+        /// single TCP client and any number of UDP clients" (Overview p. 6), and the operator's
+        /// own KPA1500 Remote program is likely to hold the one TCP slot. The socket is
+        /// `connect`ed, so only datagrams from the amplifier's own address are read.
+        Udp(UdpSocket),
+    }
 
     /// An open Elecraft KPA500 or KPA1500. One type for both: the KPA500's verbs are a strict
     /// subset of the KPA1500's, so every command this issues works on either amplifier.
+    ///
+    /// The transport is the only thing that differs between serial and the network: the same
+    /// verbs are asked, the same replies are matched, and [`KpaLink::send_intent`] makes the
+    /// same decisions and refusals whichever wire carries them.
     pub struct KpaLink {
-        port: Box<dyn SerialPort>,
+        wire: KpaWire,
     }
 
     impl KpaLink {
@@ -852,7 +913,13 @@ mod imp {
         /// which is what makes sweeping with it safe.
         ///
         /// Returns the link and the rate that answered.
+        ///
+        /// A `host:port` address ([`kpa_network_target`]) opens the KPA1500's UDP command server
+        /// instead, and the rate returned is 0: there is no data rate on a network.
         pub fn open(port: &str) -> std::io::Result<(Self, u32)> {
+            if let Some((host, net_port)) = kpa_network_target(port) {
+                return Self::open_udp(host, net_port).map(|l| (l, 0));
+            }
             let mut last: Option<std::io::Error> = None;
             for baud in KPA_BAUDS {
                 let mut sp = match serialport::new(port, baud)
@@ -875,7 +942,12 @@ mod imp {
                 }
                 if matches!(read_framed(&mut *sp, KPA_PROBE_TIMEOUT), Ok(r) if kpa_ping_ok(&r)) {
                     let _ = sp.set_timeout(KPA_TIMEOUT);
-                    return Ok((Self { port: sp }, baud));
+                    return Ok((
+                        Self {
+                            wire: KpaWire::Serial(sp),
+                        },
+                        baud,
+                    ));
                 }
             }
             // Every open SUCCEEDED and nothing answered: the port is fine and the amplifier
@@ -883,10 +955,45 @@ mod imp {
             Err(last.unwrap_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    "no KPA answered on any of its four data rates — check the port, and that \
+                    "no KPA answered on any of its seven data rates — check the port, and that \
                      the amplifier is powered on",
                 )
             }))
+        }
+
+        /// Open the KPA1500's UDP command server at `host:port`.
+        ///
+        /// There is no connection to make, so the open asks `^OS` — a GET the poll asks anyway,
+        /// which changes nothing — and only an answer makes a link. Without that, an address
+        /// with nothing behind it would read as a connected amplifier until the first poll.
+        /// The serial probe's bare `;` is documented as echoed on USB; whether the UDP server
+        /// echoes it is not stated, so it is not relied on here.
+        fn open_udp(host: &str, port: u16) -> std::io::Result<Self> {
+            if host.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "no KPA1500 network address — type the amplifier's IP address",
+                ));
+            }
+            // A host name is looked up here, on the amplifier's own thread, never the radio loop.
+            let addr = (host, port).to_socket_addrs()?.next().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("{host} did not resolve to an address"),
+                )
+            })?;
+            let local: SocketAddr = if addr.is_ipv4() {
+                (Ipv4Addr::UNSPECIFIED, 0).into()
+            } else {
+                (Ipv6Addr::UNSPECIFIED, 0).into()
+            };
+            let sock = UdpSocket::bind(local)?;
+            sock.connect(addr)?;
+            let mut link = Self {
+                wire: KpaWire::Udp(sock),
+            };
+            link.ask("OS")?;
+            Ok(link)
         }
 
         /// Read one full status set.
@@ -923,8 +1030,15 @@ mod imp {
                 }
             }
             .ok_or_else(|| malformed("a command this build cannot frame"))?;
-            self.port.write_all(cmd.as_bytes())?;
-            self.port.flush()
+            match &mut self.wire {
+                KpaWire::Serial(port) => {
+                    port.write_all(cmd.as_bytes())?;
+                    port.flush()
+                }
+                // Sent once, like the serial write. A lost datagram is not retried: the next
+                // poll reads the amplifier's real state, which is what confirms a command.
+                KpaWire::Udp(sock) => udp_send(sock, &cmd),
+            }
         }
 
         pub fn poll(&mut self) -> std::io::Result<KpaStatus> {
@@ -957,11 +1071,116 @@ mod imp {
         /// is bounded, so a chattering amplifier ends as an error rather than a stall.
         fn ask(&mut self, verb: &str) -> std::io::Result<String> {
             let q = kpa_query(verb).ok_or_else(|| malformed("an unknown verb"))?;
-            self.port.write_all(q.as_bytes())?;
-            self.port.flush()?;
-
-            read_matching(&mut *self.port, verb, KPA_TIMEOUT)
+            match &mut self.wire {
+                KpaWire::Serial(port) => {
+                    port.write_all(q.as_bytes())?;
+                    port.flush()?;
+                    read_matching(&mut **port, verb, KPA_TIMEOUT)
+                }
+                KpaWire::Udp(sock) => udp_ask(sock, &q, verb, KPA_TIMEOUT),
+            }
         }
+    }
+
+    /// Send one command as one datagram. "Send only one command and expect at most one
+    /// response" (Overview p. 6), so a datagram never carries two.
+    fn udp_send(sock: &UdpSocket, cmd: &str) -> std::io::Result<()> {
+        let sent = sock.send(cmd.as_bytes())?;
+        if sent != cmd.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "the command did not fit in one datagram",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Ask one GET over UDP and return the payload of the answer **to that verb**.
+    ///
+    /// ⭐ Each step is there for a failure UDP has and a serial port does not:
+    /// - anything already waiting is cleared first, so a reply that arrived after an earlier
+    ///   ask gave up is never read as this one's answer;
+    /// - a reply for another verb is skipped exactly as on serial ([`read_matching`]);
+    /// - silence gets one more ask ([`KPA_UDP_TRIES`]), then a `TimedOut`, which the poller
+    ///   shows as "not answering". The whole ask is bounded by tries × `budget`, and it runs on
+    ///   the amplifier's own thread, never the radio loop.
+    fn udp_ask(
+        sock: &UdpSocket,
+        query: &str,
+        verb: &str,
+        budget: Duration,
+    ) -> std::io::Result<String> {
+        udp_drain(sock)?;
+        for _ in 0..KPA_UDP_TRIES {
+            udp_send(sock, query)?;
+            match udp_read_matching(sock, verb, budget) {
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
+                other => return other,
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("the amplifier did not answer ^{verb} over the network"),
+        ))
+    }
+
+    /// Clear every datagram already waiting on the socket.
+    fn udp_drain(sock: &UdpSocket) -> std::io::Result<()> {
+        sock.set_nonblocking(true)?;
+        let mut buf = [0u8; 512];
+        let mut result = Ok(());
+        for _ in 0..KPA_UDP_MAX_DRAIN {
+            match sock.recv(&mut buf) {
+                Ok(_) => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                // A refusal from an earlier send (nothing listening at that address) lands here.
+                // It is the honest answer, so it is reported rather than swallowed.
+                Err(e) => {
+                    result = Err(e);
+                    break;
+                }
+            }
+        }
+        sock.set_nonblocking(false)?;
+        result
+    }
+
+    /// Wait up to `budget` for a datagram answering `verb`, skipping others (bounded).
+    fn udp_read_matching(
+        sock: &UdpSocket,
+        verb: &str,
+        budget: Duration,
+    ) -> std::io::Result<String> {
+        let deadline = Instant::now() + budget;
+        // Larger than any reply, so a long one is read whole rather than failing the receive.
+        let mut buf = [0u8; 512];
+        for _ in 0..KPA_MAX_SKIPPED {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            sock.set_read_timeout(Some(left))?;
+            let n = match sock.recv(&mut buf) {
+                Ok(n) => n,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
+            let reply = std::str::from_utf8(&buf[..n]).unwrap_or("");
+            if let Some(payload) = kpa_payload(reply, verb) {
+                return Ok(payload.to_string());
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("no answer to ^{verb} from the amplifier"),
+        ))
     }
 
     /// Read replies until one is the answer to `verb`, skipping the rest.
@@ -1127,6 +1346,260 @@ mod imp {
             ok.push_str("^WS250 015;");
             let mut r = Cursor::new(ok.into_bytes());
             assert_eq!(read_matching(&mut r, "WS", T).unwrap(), "250 015");
+        }
+    }
+
+    /// The UDP link against a fake KPA1500 command server on loopback: one datagram in, at most
+    /// one datagram back, to whoever asked — the server Elecraft documents (Programming
+    /// Reference V3, Overview p. 6). ⚠️ NEEDS-BENCH: a fake shows the link keeps to that
+    /// description; only a real KPA1500 shows the description is the amplifier.
+    #[cfg(test)]
+    mod udp_tests {
+        use super::*;
+        use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Default)]
+        struct Amp {
+            operate: AtomicBool,
+            band: AtomicU8,
+            /// Replies still to lose, one per answered GET.
+            drop_replies: AtomicUsize,
+            /// Hear everything, answer nothing.
+            mute: AtomicBool,
+            /// Send a reply for another verb ahead of every answer, as unsolicited status would.
+            chatter: AtomicBool,
+            heard: Mutex<Vec<(SocketAddr, String)>>,
+            stop: AtomicBool,
+        }
+
+        struct FakeKpa {
+            addr: SocketAddr,
+            sock: UdpSocket,
+            amp: Arc<Amp>,
+            thread: Option<std::thread::JoinHandle<()>>,
+        }
+
+        impl FakeKpa {
+            fn start() -> Self {
+                let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+                sock.set_read_timeout(Some(Duration::from_millis(20)))
+                    .unwrap();
+                let addr = sock.local_addr().unwrap();
+                let amp = Arc::new(Amp::default());
+                amp.band.store(5, Ordering::SeqCst);
+                let (s2, a2) = (sock.try_clone().unwrap(), amp.clone());
+                let thread = Some(std::thread::spawn(move || serve(&s2, &a2)));
+                Self {
+                    addr,
+                    sock,
+                    amp,
+                    thread,
+                }
+            }
+
+            fn address(&self) -> String {
+                format!("127.0.0.1:{}", self.addr.port())
+            }
+
+            fn heard(&self) -> Vec<String> {
+                let h = self.amp.heard.lock().unwrap();
+                h.iter().map(|(_, c)| c.clone()).collect()
+            }
+
+            fn senders(&self) -> Vec<SocketAddr> {
+                let mut v: Vec<SocketAddr> = self
+                    .amp
+                    .heard
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(a, _)| *a)
+                    .collect();
+                v.sort();
+                v.dedup();
+                v
+            }
+        }
+
+        impl Drop for FakeKpa {
+            fn drop(&mut self) {
+                self.amp.stop.store(true, Ordering::SeqCst);
+                if let Some(t) = self.thread.take() {
+                    let _ = t.join();
+                }
+            }
+        }
+
+        fn serve(sock: &UdpSocket, amp: &Amp) {
+            let mut buf = [0u8; 512];
+            while !amp.stop.load(Ordering::SeqCst) {
+                let Ok((n, from)) = sock.recv_from(&mut buf) else {
+                    continue;
+                };
+                let cmd = String::from_utf8_lossy(&buf[..n]).to_string();
+                amp.heard.lock().unwrap().push((from, cmd.clone()));
+                let reply = match cmd.as_str() {
+                    "^OS;" => format!("^OS{};", u8::from(amp.operate.load(Ordering::SeqCst))),
+                    "^BN;" => format!("^BN{:02};", amp.band.load(Ordering::SeqCst)),
+                    "^TM;" => "^TM042;".into(),
+                    "^VI;" => "^VI480 325;".into(),
+                    "^WS;" => "^WS250 015;".into(),
+                    "^FL;" => "^FL00;".into(),
+                    // SETs change state and, as documented, answer nothing.
+                    "^OS0;" | "^OS1;" => {
+                        amp.operate.store(cmd == "^OS1;", Ordering::SeqCst);
+                        continue;
+                    }
+                    c if c.len() == 6 && c.starts_with("^BN") => {
+                        if let Ok(b) = c[3..5].parse() {
+                            amp.band.store(b, Ordering::SeqCst);
+                        }
+                        continue;
+                    }
+                    _ => continue,
+                };
+                if amp.mute.load(Ordering::SeqCst) {
+                    continue;
+                }
+                if amp
+                    .drop_replies
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |d| d.checked_sub(1))
+                    .is_ok()
+                {
+                    continue;
+                }
+                if amp.chatter.load(Ordering::SeqCst) {
+                    let foreign = if cmd == "^TM;" { "^FL77;" } else { "^TM077;" };
+                    let _ = sock.send_to(foreign.as_bytes(), from);
+                }
+                let _ = sock.send_to(reply.as_bytes(), from);
+            }
+        }
+
+        fn open(fake: &FakeKpa) -> KpaLink {
+            KpaLink::open(&fake.address()).expect("the fake answers").0
+        }
+
+        /// The fake's resting state, as `KpaLink::poll` must decode it.
+        fn assert_resting(s: &KpaStatus) {
+            assert!(!s.operate, "standby");
+            assert_eq!(s.band_index, 5, "20 m");
+            assert_eq!(s.temp_c, 42);
+            assert_eq!((s.volts, s.amps), (48.0, 32.5));
+            assert_eq!((s.output_watts, s.swr), (250, Some(1.5)));
+            assert_eq!(s.fault, 0);
+        }
+
+        #[test]
+        fn readings_arrive_over_udp() {
+            let fake = FakeKpa::start();
+            let (mut link, rate) = KpaLink::open(&fake.address()).unwrap();
+            assert_eq!(rate, 0, "no data rate on a network");
+            assert_resting(&link.poll().unwrap());
+            // One datagram per GET, the six the serial poll asks, after the open's one ^OS.
+            assert_eq!(
+                fake.heard(),
+                ["^OS;", "^OS;", "^BN;", "^TM;", "^VI;", "^WS;", "^FL;"]
+            );
+
+            // A reply for another verb ahead of every answer is skipped, never read as it.
+            fake.amp.chatter.store(true, Ordering::SeqCst);
+            assert_resting(&link.poll().unwrap());
+        }
+
+        #[test]
+        fn a_command_round_trips_and_is_sent_once() {
+            let fake = FakeKpa::start();
+            let mut link = open(&fake);
+            let now = link.poll().unwrap();
+            let before = fake.heard().len();
+            link.send_intent(AmpIntent::ToggleOperate, &now).unwrap();
+            let now = link.poll().unwrap();
+            assert!(now.operate, "the amplifier went to Operate");
+            let sets: Vec<String> = fake.heard()[before..]
+                .iter()
+                .filter(|c| c.as_str() == "^OS1;")
+                .cloned()
+                .collect();
+            assert_eq!(sets, ["^OS1;"], "one SET, never repeated");
+
+            link.send_intent(AmpIntent::BandUp, &now).unwrap();
+            let now = link.poll().unwrap();
+            assert_eq!(now.band_index, 6, "17 m");
+
+            // At the top of the ladder nothing is sent, over the network as on serial.
+            fake.amp.band.store(KPA_TOP_BAND, Ordering::SeqCst);
+            let now = link.poll().unwrap();
+            let before = fake.heard().len();
+            link.send_intent(AmpIntent::BandUp, &now).unwrap();
+            assert!(
+                !fake.heard()[before..]
+                    .iter()
+                    .any(|c| c.len() == 6 && c.starts_with("^BN")),
+                "no ^BN past 6 m"
+            );
+        }
+
+        #[test]
+        fn a_lost_reply_is_asked_again_and_silence_times_out() {
+            let fake = FakeKpa::start();
+            let mut link = open(&fake);
+            // One lost reply costs one more ask, not the reading.
+            fake.amp.drop_replies.store(1, Ordering::SeqCst);
+            assert_resting(&link.poll().unwrap());
+
+            // An amplifier that stops answering is "not answering", in bounded time.
+            fake.amp.mute.store(true, Ordering::SeqCst);
+            let t0 = Instant::now();
+            let e = link
+                .poll()
+                .expect_err("a silent amplifier is not a reading");
+            let took = t0.elapsed();
+            assert_eq!(e.kind(), std::io::ErrorKind::TimedOut);
+            assert_eq!(crate::amppoll::reason_for(&e), "noAnswer");
+            assert!(
+                took >= KPA_TIMEOUT * KPA_UDP_TRIES as u32,
+                "asked {KPA_UDP_TRIES} times before giving up, took {took:?}"
+            );
+            assert!(took < Duration::from_millis(1500), "bounded, took {took:?}");
+
+            // And an amplifier that never answered makes no link at all.
+            let e = KpaLink::open(&fake.address()).err().expect("no link");
+            assert_eq!(crate::amppoll::reason_for(&e), "noAnswer");
+            let e = KpaLink::open(":1500").err().expect("no address, no link");
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        }
+
+        #[test]
+        fn a_late_reply_is_not_read_as_the_next_answer() {
+            let fake = FakeKpa::start();
+            let mut link = open(&fake);
+            let me = fake.senders()[0];
+            // A reply that arrives after its ask gave up, still in the socket at the next poll.
+            fake.sock.send_to(b"^OS1;", me).unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            assert!(
+                !link.poll().unwrap().operate,
+                "read the amplifier, not the leftover"
+            );
+        }
+
+        #[test]
+        fn two_clients_share_the_amplifier() {
+            let fake = FakeKpa::start();
+            let mut a = open(&fake);
+            let mut b = open(&fake);
+            assert_eq!(fake.senders().len(), 2, "two clients, two addresses");
+            for _ in 0..3 {
+                assert_resting(&a.poll().unwrap());
+                assert_resting(&b.poll().unwrap());
+            }
+            // Each reads the one amplifier: a change made by one is what the other sees.
+            let now = a.poll().unwrap();
+            a.send_intent(AmpIntent::ToggleOperate, &now).unwrap();
+            assert!(b.poll().unwrap().operate);
+            assert!(a.poll().unwrap().operate);
         }
     }
 }
@@ -1726,6 +2199,60 @@ mod tests {
         assert!(!kpa_ping_ok(""), "silence is not an answer");
         assert!(!kpa_ping_ok("^OS1;"), "some other reply is not the echo");
         assert!(!kpa_ping_ok(";;"), "two is not one");
+    }
+
+    #[test]
+    fn kpa_bauds_cover_every_rate_either_amplifier_can_be_set_to() {
+        // Elecraft KPA1500 Programming Reference V3, p. 19 (`^BRP` 0-6), and the Overview on
+        // p. 6: 4800, 9600, 19200, 38400, 57600, 115200 or 230400. A KPA1500 left at one of the
+        // top three never answered the sweep and was reported as "not answering".
+        let mut rates = KPA_BAUDS.to_vec();
+        rates.sort_unstable();
+        assert_eq!(
+            rates,
+            [4_800, 9_600, 19_200, 38_400, 57_600, 115_200, 230_400],
+            "every documented ^BRP rate, once each"
+        );
+        // The KPA500 Programmer's Reference (rA2, `^BRP` 0-3) stops at 38400. Its four are
+        // probed first and in their old order, so a KPA500 sees exactly the probes it always
+        // did before the one that answers; the KPA1500-only rates cost it time only when
+        // nothing answers at all.
+        assert_eq!(KPA_BAUDS[..4], [38_400, 19_200, 9_600, 4_800]);
+    }
+
+    #[test]
+    fn a_kpa1500_network_address_is_told_apart_from_a_serial_device() {
+        assert_eq!(
+            kpa_network_target("192.168.1.50:1500"),
+            Some(("192.168.1.50", 1500))
+        );
+        assert_eq!(
+            kpa_network_target(" kpa.lan:1501 "),
+            Some(("kpa.lan", 1501))
+        );
+        assert_eq!(
+            kpa_network_target("[fe80::1]:1500"),
+            Some(("fe80::1", 1500))
+        );
+        // Network chosen, address not typed yet: still the network, with nothing to reach.
+        assert_eq!(kpa_network_target(":1500"), Some(("", 1500)));
+
+        // Every serial spelling stays serial.
+        for dev in [
+            "COM8",
+            "COM3:",
+            "\\\\.\\COM10",
+            "/dev/ttyUSB2",
+            "/dev/cu.usbserial-1410",
+            "/dev/serial/by-id/usb-FTDI_FT231X-if00:1",
+            "",
+        ] {
+            assert_eq!(kpa_network_target(dev), None, "{dev:?} is a serial device");
+        }
+        // Not a port number: no network address either.
+        assert_eq!(kpa_network_target("kpa.lan:0"), None);
+        assert_eq!(kpa_network_target("kpa.lan:65536"), None);
+        assert_eq!(kpa_network_target("kpa.lan:15x0"), None);
     }
 
     #[test]

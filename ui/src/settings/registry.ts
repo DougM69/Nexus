@@ -242,7 +242,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // already contain — 'amp' alone is a substring of 'amplifier' and the registry guard
     // rejects a section whose every keyword is.
     keywords: ['linear', 'spe', 'expert', '1.3k-fa', '1.5k-fa', '2k-fa', 'elecraft',
-      'kpa500', 'kpa1500', 'swr', 'pa temp', 'watts out'],
+      'kpa500', 'kpa1500', 'swr', 'pa temp', 'watts out', 'network', 'ip address', 'udp'],
   },
   {
     id: 'transmit-limits',

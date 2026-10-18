@@ -65,6 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shack's picture there. Where the shack shows **Reveal in folder** for ALL.TXT, the QSO recordings and the SSTV
   gallery, the second PC shows **Save to this computer**, which copies the shack's file into its Downloads folder. Only
   those three folders can be read from afar. NEEDS-BENCH: two PCs, a received picture and a recording at the shack.
+- **Elecraft KPA1500 over the network.** In Settings ▸ Radio ▸ Amplifier, a KPA1500 can now be reached by its IP
+  address instead of a USB cable: pick **Network (KPA1500)** under Connection and type the address from the
+  amplifier's NET IP ADDRESS menu (port 1500). Nexus uses the amplifier's UDP server, which any number of programs can
+  share, so Elecraft's KPA1500 Remote keeps working alongside. Readings, Operate/Standby and the band buttons work as
+  they do over USB, with the same refusals while you transmit; an amplifier that stops answering shows "Not
+  answering". NEEDS-BENCH: a KPA1500 on the LAN with KPA1500 Remote connected at the same time; readings, Operate,
+  Standby and a band step from Nexus; then unplug its network cable and plug it back in.
 
 ### Changed
 - **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each
@@ -139,6 +146,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   radio's own receive range is ignored, the dial stays where it was (Remote shows the same dial), and the CAT
   status says once what the radio reported and suggests checking the rig model in Settings → Radio. A radio whose
   range Nexus cannot read is followed exactly as before.
+- **Elecraft KPA1500 set to 57600, 115200 or 230400 baud now connects.** Nexus tried only the KPA500's four speeds
+  (4800 to 38400), so a KPA1500 set to one of its three faster ones showed "Not answering" even when it was cabled
+  correctly. All seven speeds Elecraft documents are now tried. A KPA500 is asked at its four speeds first, in the
+  same order as before. NEEDS-BENCH: a KPA1500 set to 230400, then 57600, on its USB port.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
