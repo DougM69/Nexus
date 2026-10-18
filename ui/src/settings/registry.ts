@@ -337,7 +337,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'RTTY',
     tab: 'digital',
     keywords: ['rtty', 'baudot', 'fsk', 'afsk', 'shift', 'baud', '45.45', '170', 'reverse',
-      'mark', 'space', 'auto arm', 'start receiving', 'not decoding', 'macro',
+      'mark', 'space', 'sideband', 'usb', 'lsb', 'upside down', 'auto arm', 'start receiving', 'not decoding', 'macro',
       // #304 asked for a "timer" and neither the control nor this section is called one.
       // The rest are what the cadence is called out loud — the reporter wrote "cq, 15s rx,
       // cq", not "listen window".

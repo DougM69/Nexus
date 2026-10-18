@@ -1836,11 +1836,20 @@ pub struct Settings {
     /// (AFSK space = 2125 + shift) AND the RX demodulator.
     #[serde(default = "default_rtty_shift_hz")]
     pub rtty_shift_hz: u32,
-    /// Reverse the mark/space sense (TX tones + RX demod). The standard convention
-    /// is LSB with mark on the lower audio tone; set this when running the rig on
-    /// the opposite sideband (e.g. AFSK in USB/DATA-U) so the RF sense stays correct.
+    /// Reverse the mark/space sense (TX tones + RX demod): the "work an upside-down
+    /// station" control. The sideband is NOT this field's job — that is
+    /// [`Settings::rtty_afsk_sideband`], which swaps the tones itself, so a rig on USB keeps
+    /// mark high on RF without this switch. Read the effective sense through
+    /// [`Settings::rtty_tone_swap`], never this field alone.
     #[serde(default)]
     pub rtty_reverse: bool,
+    /// The sideband AFSK RTTY runs on: "lsb" (the convention, and the default) or "usb".
+    /// "usb" commands the DATA submode on the upper side (PKTUSB → DATA-U / USB-D / DIGU)
+    /// and swaps the AFSK tones, so mark stays HIGH on RF and the decoder still copies.
+    /// Anything other than "usb" is LSB. True FSK ignores it: the rig's own RTTY mode sets
+    /// the sense there.
+    #[serde(default = "default_rtty_afsk_sideband")]
+    pub rtty_afsk_sideband: String,
     /// AI CW decoder (DeepCW model): the PRIMARY CW decode — dramatically better
     /// low-SNR copy than the classic Goertzel decoder (which still supplies the WPM
     /// estimate underneath). On by default; the model ships with the app.
@@ -3405,6 +3414,10 @@ fn default_rtty_backend() -> String {
 
 fn default_rtty_fsk_line() -> String {
     "dtr".to_string()
+}
+
+fn default_rtty_afsk_sideband() -> String {
+    "lsb".to_string()
 }
 
 fn default_rtty_baud() -> f64 {
@@ -5248,6 +5261,7 @@ impl Default for Settings {
             rtty_baud: default_rtty_baud(), // true 45.45, never 45
             rtty_shift_hz: default_rtty_shift_hz(), // 170 Hz — the HF standard
             rtty_reverse: false,
+            rtty_afsk_sideband: default_rtty_afsk_sideband(), // "lsb" — the RTTY convention
             ai_cw_enabled: true,
             // Assistance is a normal, legal way to operate; only the operator's explicit
             // toggle declares an unassisted entry. Never auto-enabled, never date-driven.
@@ -6875,6 +6889,21 @@ impl Settings {
         am.min(self.rf_power_ceiling())
     }
 
+    /// Is AFSK RTTY running on the UPPER sideband? Only the soundcard keyer has a choice:
+    /// FSK commands the rig's own RTTY mode, whose sense the rig sets.
+    pub fn rtty_afsk_usb(&self) -> bool {
+        !self.rtty_backend.eq_ignore_ascii_case("fsk")
+            && self.rtty_afsk_sideband.trim().eq_ignore_ascii_case("usb")
+    }
+
+    /// The mark/space swap TX and RX both apply: the operator's Reverse, XOR the upper
+    /// sideband. On LSB the mark is the lower audio tone, which lands HIGHER on RF; on USB
+    /// the audio maps to RF the other way up, so the tones swap to keep mark high on RF.
+    /// Reverse then inverts whichever sense that is, for an upside-down station.
+    pub fn rtty_tone_swap(&self) -> bool {
+        self.rtty_reverse ^ self.rtty_afsk_usb()
+    }
+
     /// ⭐ **The RTTY auto-sequencer's timing, as the sequencer takes it — the ONE place the
     /// operator's two numbers become [`tempo_core::rtty::SeqConfig`]** (#304).
     ///
@@ -7041,9 +7070,11 @@ impl Settings {
             // (PKTLSB → Yaesu DATA-L / Icom LSB-D / Kenwood DATA, rig-agnostically via Hamlib)
             // to route the USB codec to the modulator: plain LSB takes TX audio from the MIC
             // on the common Icom / default-Yaesu setup and radiates ZERO RF ("red light, no
-            // signal"). LSB-side keeps the RTTY convention (mark = lower audio = higher RF);
-            // `rtty_reverse` flips the TONES, not the sideband. A rig with no DATA submode is
-            // handled by the loop's bounded set_mode retry (tries, is rejected, gives up).
+            // signal"). LSB-side is the RTTY convention (mark = lower audio = higher RF) and the
+            // default; `rtty_afsk_sideband` = "usb" takes the upper side, and `rtty_tone_swap`
+            // swaps the tones to match so mark stays high on RF. `rtty_reverse` flips the TONES,
+            // never the sideband. A rig with no DATA submode is handled by the loop's bounded
+            // set_mode retry (tries, is rejected, gives up).
             // FSK is deliberately NOT run through `plain_ssb_if_configured`: it commands the
             // rig's own RTTY mode, which is what unlocks the narrow RTTY filters and keys the
             // shift. "Plain SSB" has no meaning there — only the AFSK (soundcard) path, which
@@ -7051,6 +7082,8 @@ impl Settings {
             OperatingMode::Rtty => {
                 if self.rtty_backend.eq_ignore_ascii_case("fsk") {
                     "RTTY".to_string()
+                } else if self.rtty_afsk_usb() {
+                    self.plain_ssb_if_configured("PKTUSB")
                 } else {
                     self.plain_ssb_if_configured("PKTLSB")
                 }
@@ -8408,6 +8441,67 @@ mod tests {
         // True FSK: the rig's RTTY mode (unlocks its narrow RTTY filters).
         s.rtty_backend = "fsk".to_string();
         assert_eq!(s.rig_mode(), "RTTY");
+    }
+
+    /// The AFSK sideband setting. LSB, the default, is unchanged; USB commands the DATA submode
+    /// on the upper side on every band; FSK ignores it. The tone swap is `reverse XOR usb`.
+    #[test]
+    fn rtty_afsk_sideband_picks_the_data_side_and_swaps_the_tones() {
+        let mut s = Settings::default();
+        s.operating_mode = OperatingMode::Rtty;
+        assert_eq!(s.rtty_afsk_sideband, "lsb");
+        for (mhz, side, want) in [
+            (7.080, "lsb", "PKTLSB"),
+            (14.083, "lsb", "PKTLSB"),
+            (7.080, "usb", "PKTUSB"),
+            (14.083, "usb", "PKTUSB"),
+            (3.580, "USB", "PKTUSB"),
+            (28.080, "usb", "PKTUSB"),
+        ] {
+            s.dial_mhz = mhz;
+            s.rtty_afsk_sideband = side.into();
+            assert_eq!(s.rig_mode(), want, "AFSK {side} at {mhz} MHz");
+        }
+        // The mic-jack opt-out keeps the side: plain USB, not plain LSB.
+        s.data_modes_plain_ssb = true;
+        assert_eq!(s.rig_mode(), "USB");
+        s.data_modes_plain_ssb = false;
+        // True FSK: the rig's own RTTY mode, and no swap from the AFSK side.
+        s.rtty_backend = "fsk".into();
+        assert_eq!(s.rig_mode(), "RTTY");
+        assert!(!s.rtty_afsk_usb());
+        assert!(!s.rtty_tone_swap());
+        s.rtty_reverse = true;
+        assert!(s.rtty_tone_swap(), "FSK keeps the operator's own Reverse");
+        s.rtty_backend = "afsk".into();
+        // (side, reverse) → swap: LSB+reverse == USB, USB+reverse == LSB.
+        for (side, reverse, swap) in [
+            ("lsb", false, false),
+            ("lsb", true, true),
+            ("usb", false, true),
+            ("usb", true, false),
+        ] {
+            s.rtty_afsk_sideband = side.into();
+            s.rtty_reverse = reverse;
+            assert_eq!(s.rtty_tone_swap(), swap, "{side} reverse={reverse}");
+        }
+    }
+
+    /// A settings file from before the AFSK sideband loads on LSB, and a USB pick round-trips
+    /// under its camelCase wire key.
+    #[test]
+    fn rtty_afsk_sideband_defaults_to_lsb_and_round_trips() {
+        let mut v = serde_json::to_value(Settings::default()).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .remove("rttyAfskSideband")
+            .expect("the wire key");
+        let old: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(old.rtty_afsk_sideband, "lsb");
+        let mut s = Settings::default();
+        s.rtty_afsk_sideband = "usb".into();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.rtty_afsk_sideband, "usb");
     }
 
     /// FM is a VHF/UHF (and 10 m) mode. Selecting it must NOT follow the operator down to an

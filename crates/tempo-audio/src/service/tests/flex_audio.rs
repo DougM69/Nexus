@@ -4013,3 +4013,21 @@ fn a_refused_atu_start_ends_quietly_with_its_reason_beside_the_atu() {
     );
     assert_eq!(atu_wire(&s), ["atu start", "atu start"]);
 }
+
+/// The RTTY AFSK sideband reaches a Flex slice as DIGL, then DIGU once the operator picks USB.
+#[test]
+fn rtty_afsk_follows_the_sideband_setting_on_a_flex_slice() {
+    let mut s = FlexScene::with_faults(false, reports(&["DIGL", "DIGU"]), Vec::new(), unbenched());
+    for (side, want) in [("lsb", "PKTLSB"), ("usb", "PKTUSB")] {
+        {
+            let mut e = s.engine.lock().unwrap();
+            let mut st = e.settings().clone();
+            st.rtty_afsk_sideband = side.into();
+            e.apply_settings(st);
+            e.set_operating_mode("rtty", false);
+        }
+        run_until(&mut s, &format!("the slice on the {side} data side"), |s| {
+            slice_mode(s).as_deref() == Some(want)
+        });
+    }
+}

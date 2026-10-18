@@ -47,16 +47,7 @@ fn run(engine: Arc<Mutex<Engine>>) {
         std::thread::sleep(POLL);
         let (armed, cfg, reset) = {
             let mut e = engine_lock(&engine);
-            (
-                e.rtty_armed(),
-                (
-                    e.rtty_baud(),
-                    e.rtty_shift_hz(),
-                    e.rtty_reverse(),
-                    e.rtty_center_hz(),
-                ),
-                e.take_rtty_afc_reset(),
-            )
+            (e.rtty_armed(), rx_config(&e), e.take_rtty_afc_reset())
         };
         if !armed {
             demod = None;
@@ -70,19 +61,94 @@ fn run(engine: Arc<Mutex<Engine>>) {
         if audio.is_empty() {
             continue;
         }
-        let d = demod.get_or_insert_with(|| {
-            let (baud, shift, reverse, center) = applied;
-            let (mark, space) = tone_pair(center, shift as f32, reverse);
-            RttyDemodulator::new(RttyConfig {
-                mark_hz: mark,
-                space_hz: space,
-                baud: baud as f32,
-                ..RttyConfig::default()
-            })
-        });
+        let d = demod.get_or_insert_with(|| demod_for(applied));
         // The heavy part — mixers, FFT filters, ATC, clock recovery — off-lock.
         let chars = d.feed(&audio);
         let (afc_hz, afc_locked) = (d.afc_offset_hz(), d.afc_locked());
         engine_lock(&engine).push_rtty_decode(&chars, afc_hz, afc_locked);
+    }
+}
+
+/// The (baud, shift, reverse, center) the demodulator is built for, as the engine reports them.
+/// `reverse` is the effective sense: the operator's Reverse XOR an AFSK rig on USB.
+fn rx_config(e: &Engine) -> (f64, u32, bool, f32) {
+    (
+        e.rtty_baud(),
+        e.rtty_shift_hz(),
+        e.rtty_reverse(),
+        e.rtty_center_hz(),
+    )
+}
+
+/// A fresh demodulator for one [`rx_config`].
+fn demod_for((baud, shift, reverse, center): (f64, u32, bool, f32)) -> RttyDemodulator {
+    let (mark, space) = tone_pair(center, shift as f32, reverse);
+    RttyDemodulator::new(RttyConfig {
+        mark_hz: mark,
+        space_hz: space,
+        baud: baud as f32,
+        ..RttyConfig::default()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rtty_afsk::{afsk_char_samples, AfskConfig};
+    use tempo_core::rtty::{baudot::LTRS, code_bits, BaudotEncoder};
+
+    const MSG: &str = "CQ CQ DE K1ABC";
+
+    fn engine(side: &str) -> Engine {
+        let mut e = Engine::new("K1ABC", "EN50", 0);
+        let mut s = e.settings().clone();
+        s.rtty_afsk_sideband = side.into();
+        e.apply_settings(s);
+        e.set_operating_mode("rtty", false);
+        e
+    }
+
+    /// A station with the standard sense (mark HIGH on RF, 170 Hz shift) heard on a rig on USB,
+    /// netted to the 2210 Hz default centre. USB puts audio = RF − dial, so the mark is the
+    /// HIGHER audio tone: 2295 Hz, with space at 2125 Hz.
+    fn heard_on_usb() -> Vec<f32> {
+        let mut codes = vec![LTRS; 4];
+        codes.extend(BaudotEncoder::new(true).encode(MSG));
+        codes.extend([LTRS, LTRS]);
+        let cfg = AfskConfig {
+            mark_hz: 2295.0,
+            space_hz: 2125.0,
+            ..AfskConfig::default()
+        };
+        let mut audio = vec![0.0f32; 1200];
+        audio.extend(afsk_char_samples(&code_bits(&codes), &cfg));
+        audio.extend(vec![0.0f32; 2400]);
+        audio
+    }
+
+    fn copy(e: &Engine, audio: &[f32]) -> String {
+        let mut d = demod_for(rx_config(e));
+        let mut text = String::new();
+        for chunk in audio.chunks(479) {
+            text.extend(d.feed(chunk).iter().map(|c| c.ch));
+        }
+        text
+    }
+
+    /// The AFSK sideband set to USB, the decoder copies a USB-sense signal. The control: the same
+    /// audio through the LSB default does not copy, so the setting is what made the difference.
+    #[test]
+    fn the_decoder_copies_a_usb_sense_signal_when_set_to_usb() {
+        let audio = heard_on_usb();
+        let usb = engine("usb");
+        assert_eq!(rx_config(&usb), (45.45, 170, true, 2210.0));
+        let text = copy(&usb, &audio);
+        assert!(text.contains(MSG), "USB copy: {text:?}");
+        let lsb = engine("lsb");
+        let text = copy(&lsb, &audio);
+        assert!(
+            !text.contains(MSG),
+            "CONTROL: LSB must not copy USB sense: {text:?}"
+        );
     }
 }

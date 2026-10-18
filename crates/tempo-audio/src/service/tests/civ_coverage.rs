@@ -844,3 +844,26 @@ fn a_split_the_radio_does_not_answer_is_not_called_rejected() {
         )
     );
 }
+
+/// The RTTY AFSK sideband reaches an Icom as LSB-D, then USB-D once the operator picks USB: the
+/// DATA flag on both times, the side as set.
+#[test]
+fn rtty_afsk_follows_the_sideband_setting_on_an_icom() {
+    use crate::civ::commands::Mode;
+    let mut s = Scene::new(IcomModel::Ic7300, 3073, (14.083, "20m"), &[]);
+    for (side, want) in [("lsb", Mode::Lsb.to_byte()), ("usb", Mode::Usb.to_byte())] {
+        {
+            let mut e = s.engine.lock().unwrap();
+            let mut st = e.settings().clone();
+            st.rtty_afsk_sideband = side.into();
+            e.apply_settings(st);
+            e.set_operating_mode("rtty", false);
+        }
+        s.settle(|s| {
+            let r = s.regs.lock().unwrap();
+            r.main_mode == want && r.data_mode
+        });
+        let r = s.regs.lock().unwrap();
+        assert_eq!((r.main_mode, r.data_mode), (want, true), "AFSK on {side}");
+    }
+}

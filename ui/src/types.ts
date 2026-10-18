@@ -4178,9 +4178,13 @@ export interface Settings {
   rttyBaud?: number
   /** RTTY mark/space shift in Hz (170 = the HF standard). TX + RX demod both. */
   rttyShiftHz?: number
-  /** Reverse the mark/space sense (TX tones + RX demod) — for running the
-   * opposite sideband (e.g. AFSK in USB/DATA-U). */
+  /** Reverse the mark/space sense (TX tones + RX demod) — for copying an
+   * upside-down station. The sideband is `rttyAfskSideband`'s job. */
   rttyReverse?: boolean
+  /** The sideband AFSK RTTY runs on: 'lsb' (the convention, default) or 'usb'.
+   * USB commands the upper DATA submode and swaps the tones itself, so mark
+   * stays high on RF. FSK ignores it. */
+  rttyAfskSideband?: string
   band: string
   dialMhz: number
   sideband: string
