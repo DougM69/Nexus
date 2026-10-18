@@ -50,6 +50,9 @@ vi.mock('./api', async (importOriginal) => {
   for (const k of Object.keys(actual)) auto[k] = typeof actual[k] === 'function' ? vi.fn(async () => ({})) : actual[k]
   return {
     ...auto,
+    // A computer running its own station: the backend answers None, and the banner asks once. The
+    // catch-all's `{}` would read as driving a remote station, asked every half second.
+    clientStatus: vi.fn(async () => null),
     askLog: vi.fn(async () => {
       throw new Error('no log in this test')
     }),
