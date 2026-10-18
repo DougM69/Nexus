@@ -58,6 +58,8 @@ Hold `Space` to key PTT, release to unkey. The spacebar is suppressed while the 
 
 Toggle **Lock** for hands-free transmit (e.g., foot switch already handling PTT at the rig while you use the app for logging). Lock stays active until toggled off.
 
+From a computer driving your station, Lock works the same way, with your headset microphone, and it also stops when your microphone goes quiet or the link drops. It has a time limit there: after 3 minutes on the air it ends by itself. Twenty seconds before, Phone asks "Still talking?"; click **Keep talking** or press K for 3 more minutes.
+
 ### Unmount safety
 
 When you navigate away from the Phone cockpit, Nexus unconditionally sends PTT-off to prevent a stuck transmitter. Any voice keyer message playing at that moment is also aborted. You cannot strand the rig in TX by changing sections.

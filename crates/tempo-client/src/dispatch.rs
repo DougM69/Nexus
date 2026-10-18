@@ -31,8 +31,8 @@ pub enum Refusal {
     ShackOnly,
     /// The command starts a transmission that is not wired for another computer ([`WIRED`]).
     TransmitNotYet,
-    /// `set_ptt` sent from another computer: its PTT is a held press on Stop's road, never the
-    /// command, which keys the shack's own audio source.
+    /// `set_ptt` or `hold_ptt_lock` sent from another computer: its PTT, and its Lock, is a held
+    /// press on Stop's road, never the command, which keys the shack's own audio source.
     HeldPress,
     /// A start from a connection with no Stop road: Stop would have one road only.
     NoStopRoad,
@@ -174,6 +174,11 @@ pub enum Wired {
     /// source: a held press on Stop's road, re-asserted by that computer's screen, that arms its
     /// microphone over; its voice keys it.
     HeldPress,
+    /// Phone's Lock (hands-free PTT): the same held press, re-asserted by that computer's screen
+    /// with no finger on it, and ended there at a cap unless the operator answers "Still talking?"
+    /// (`crate::phone_lock`). On Stop's road it is a held press and nothing else, so every rule of
+    /// one holds at the shack.
+    LockedPress,
     /// One of the JS8 cockpit's starts: a message, a command, a CQ or a heartbeat now; more text for
     /// the message going out; a switch (the automatic replies, the heartbeat, relay, heartbeat acks,
     /// heartbeat networking) or the repeating CQ turned on; and the yes to an automatic reply. None carries a time the shack keys by: its JS8 periods, its queue and
@@ -217,7 +222,8 @@ pub enum Wired {
 /// CQ and answer. Continuous TX and an auto run go on transmitting after the press, so each ends
 /// with the rest when the computer's presence lapses (the shack's halt ends the latch and the run).
 /// The APRS, SSTV and chat rows are each cockpit's sends and what it turns on that transmits by
-/// itself, which ends with the presence of the computer that turned it on.
+/// itself, which ends with the presence of the computer that turned it on. Phone's PTT and its Lock
+/// are each a held press on Stop's road, never a command at the shack.
 pub const WIRED: &[(&str, Wired)] = &[
     ("aprs_arm", Wired::Aprs),
     ("aprs_send_beacon", Wired::Aprs),
@@ -226,6 +232,7 @@ pub const WIRED: &[(&str, Wired)] = &[
     ("broadcast", Wired::Chat),
     ("call_cq", Wired::Ft),
     ("call_station", Wired::Ft),
+    ("hold_ptt_lock", Wired::LockedPress),
     ("js8_answer_reply", Wired::Js8),
     ("js8_arm", Wired::Js8),
     ("js8_call_cq", Wired::Js8),

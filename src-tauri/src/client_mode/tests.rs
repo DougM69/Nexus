@@ -9,6 +9,8 @@ use crate::command_dispatch::off_args;
 use std::path::Path;
 use tauri::test::MockRuntime;
 
+/// Phone's Lock: the held press, bounded by its cap.
+mod lock;
 /// The held press against presence as heard here.
 mod reassert;
 /// The recorder and the held press.
@@ -266,6 +268,7 @@ fn expected(cmd: &str, args: &Value) -> Way {
         Class::StartsTx => match transmit_from_afar(cmd) {
             Err(refusal) => Way::Refused(refusal),
             Ok(Wired::HeldPress) => Way::Press,
+            Ok(Wired::LockedPress) => Way::Lock,
             Ok(
                 Wired::Ft
                 | Wired::VoiceKeyer

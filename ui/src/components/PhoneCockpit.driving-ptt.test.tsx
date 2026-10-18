@@ -4,16 +4,20 @@
 // screen is one hold of a held press on the station's Stop road (client mode), so while the PTT is
 // down the screen's own timer sends one every 100 ms, as the stream page's does, and the release
 // stops it: the station ends the press 200 ms after the last, so a hung screen cannot leave its
-// over on the air. Lock is refused, as over the stream. A press the station refused or ended
-// reads Over ended until it is let go. CONTROL: at the shack's own screen one press is one call.
+// over on the air. Lock is the same press, re-asserted with no finger on PTT (`hold_ptt_lock`)
+// until PTT is clicked again; "Still talking?" shows when the hold's answer asks it, and K or its
+// button answers on the next hold. A press the station refused or ended (the Lock's cap among
+// them) reads Over ended until it is let go. CONTROL: at the shack's own screen one press is one
+// call, and the shack's Lock keys with `set_ptt` as it always has.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, cleanup, fireEvent, act } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
 import { EN } from '../i18n/en'
 
-const { setPtt, pushToast, driving } = vi.hoisted(() => ({
+const { setPtt, holdPttLock, pushToast, driving } = vi.hoisted(() => ({
   setPtt: vi.fn(async (_on: boolean) => ({})),
+  holdPttLock: vi.fn(async (_stillTalking: boolean): Promise<{ ask: boolean; leftMs?: number }> => ({ ask: false })),
   pushToast: vi.fn(),
   driving: { value: true },
 }))
@@ -21,6 +25,7 @@ const { setPtt, pushToast, driving } = vi.hoisted(() => ({
 vi.mock('../api', () => ({
   getSettings: vi.fn(async () => ({})),
   setPtt,
+  holdPttLock,
   setTxEnabled: vi.fn(async () => ({})),
   setRfPower: vi.fn(async () => {}),
   setMicGain: vi.fn(async () => {}),
@@ -67,6 +72,8 @@ afterEach(() => {
   vi.useRealTimers()
   setPtt.mockReset()
   setPtt.mockImplementation(async () => ({}))
+  holdPttLock.mockReset()
+  holdPttLock.mockImplementation(async () => ({ ask: false }))
   pushToast.mockClear()
 })
 
@@ -161,17 +168,107 @@ describe('the Phone PTT on a computer driving a station', () => {
     expect(ptt().textContent).toMatch(/ON AIR|Armed/)
   })
 
-  it('Lock is refused, as over the stream', async () => {
-    renderPhone()
+  const lockOn = async () => {
     await act(async () => {
       fireEvent.click(document.querySelector('.ph-lock input') as HTMLInputElement)
     })
+  }
+  const click = async () => {
     await act(async () => {
       fireEvent.pointerDown(ptt())
+      fireEvent.pointerUp(ptt())
     })
-    await step(300)
-    expect(holds()).toBe(0)
-    expect(pushToast).toHaveBeenCalledWith(EN['phone.tx.remoteLock'], 'info', 4000)
+  }
+  const lockHolds = () => holdPttLock.mock.calls.length
+
+  it('Lock is the same held press, re-asserted every 100 ms with no finger, until PTT is clicked again', async () => {
+    renderPhone()
+    await lockOn()
+    await click()
+    expect(lockHolds(), 'the first hold goes at the click').toBe(1)
+    await step(350)
+    expect(lockHolds(), 'held with no finger on PTT').toBe(4)
+    expect(holdPttLock.mock.calls.every(([still]) => still === false)).toBe(true)
+    expect(holds(), 'never the PTT command').toBe(0)
+    expect(ptt().textContent).toMatch(/ON AIR|Armed/)
+    expect(pushToast).not.toHaveBeenCalledWith(EN['phone.tx.remoteLock'], 'info', 4000)
+    await click()
+    expect(setPtt).toHaveBeenLastCalledWith(false)
+    await step(500)
+    expect(lockHolds(), 'a hold after the Lock was let go').toBe(4)
+    expect(ptt().textContent).toMatch(/PUSH TO TALK/)
+  })
+
+  it('asks "Still talking?" when the hold says so, and K answers on the next hold', async () => {
+    holdPttLock.mockImplementation(async () => ({ ask: true, leftMs: 14_200 }))
+    renderPhone()
+    await lockOn()
+    await click()
+    await step(10)
+    const plate = () => document.querySelector('.ph-still-talking')
+    expect(plate()?.textContent).toContain(EN['phone.lock.stillTalking'].replace('{{seconds}}', '15'))
+    holdPttLock.mockImplementation(async () => ({ ask: false }))
+    await act(async () => {
+      fireEvent.keyDown(window, { code: 'KeyK', key: 'k' })
+    })
+    expect(plate(), 'answered').toBeNull()
+    await step(100)
+    expect(holdPttLock).toHaveBeenLastCalledWith(true)
+    await step(100)
+    expect(holdPttLock, 'one answer, one hold').toHaveBeenLastCalledWith(false)
+  })
+
+  it('the button answers too, and Space or Enter on PTT still unkeys while asked', async () => {
+    holdPttLock.mockImplementation(async () => ({ ask: true, leftMs: 5_000 }))
+    renderPhone()
+    await lockOn()
+    await click()
+    await step(10)
+    await act(async () => {
+      fireEvent.click(document.querySelector('.ph-still-talking button') as HTMLButtonElement)
+    })
+    await step(100)
+    expect(holdPttLock).toHaveBeenLastCalledWith(true)
+    await step(10)
+    expect(document.querySelector('.ph-still-talking'), 'asked again by the hold').not.toBeNull()
+    await act(async () => {
+      fireEvent.keyDown(ptt(), { key: 'Enter', code: 'Enter' })
+    })
+    expect(setPtt).toHaveBeenLastCalledWith(false)
+    const after = lockHolds()
+    await step(500)
+    expect(lockHolds(), 'let go').toBe(after)
+    expect(document.querySelector('.ph-still-talking')).toBeNull()
+  })
+
+  it('a Lock ended at its cap stops re-asserting, says why, and reads Over ended until clicked', async () => {
+    const words = EN['client.refused.lockCapped']
+    holdPttLock.mockImplementation(async () => {
+      throw words
+    })
+    renderPhone()
+    await lockOn()
+    await click()
+    await step(10)
+    expect(pushToast).toHaveBeenCalledWith(words, 'info', 4000)
+    expect(ptt().textContent).toMatch(/Over ended — release PTT/)
+    await step(500)
+    expect(lockHolds(), 'it kept re-asserting a Lock that ended').toBe(1)
+    await click()
+    expect(setPtt).toHaveBeenLastCalledWith(false)
+    expect(ptt().textContent).toMatch(/PUSH TO TALK/)
+  })
+
+  it('control: the shack’s own Lock keys with set_ptt as it always has', async () => {
+    driving.value = false
+    renderPhone()
+    await lockOn()
+    await click()
+    await step(350)
+    expect(holds()).toBe(1)
+    expect(lockHolds()).toBe(0)
+    await click()
+    expect(setPtt).toHaveBeenLastCalledWith(false)
   })
 
   it('control: at the shack’s own screen one press is one call', async () => {

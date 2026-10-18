@@ -133,6 +133,7 @@ use crate::lan_client::link::{run_id, Answer, Link};
 use crate::lan_client::road::{self, Look};
 use crate::lan_client::stop_road::{Over, StopRoad};
 use crate::remote_service::vault::PairedStation;
+use tempo_client::phone_lock::{self, Locked};
 use tempo_client::still_there::{Idle, IdleWatch};
 
 #[cfg(test)]
@@ -210,6 +211,9 @@ pub(crate) enum Way {
     Start,
     /// The PTT held: one hold of a held press on Stop's road, never the shack's `set_ptt`.
     Press,
+    /// Phone's Lock: one hold of the same held press, bounded here by its cap
+    /// (`tempo_client::phone_lock`).
+    Lock,
     /// The ui-state pair: the station's keys at the shack, every other key here.
     Split,
     /// Refused here, and nothing is sent.
@@ -280,6 +284,7 @@ pub(crate) fn way(cmd: &str, args: &Value) -> Way {
                 return match transmit_from_afar(cmd) {
                     Err(refusal) => Way::Refused(refusal),
                     Ok(Wired::HeldPress) => Way::Press,
+                    Ok(Wired::LockedPress) => Way::Lock,
                     Ok(
                         Wired::Ft
                         | Wired::VoiceKeyer
@@ -393,6 +398,9 @@ pub(crate) struct Timing {
     /// "Still there?" and the end after it, by the operator's input (N5).
     pub(crate) idle_prompt: Duration,
     pub(crate) idle_end: Duration,
+    /// Phone's Lock: its cap, and how long before it "Still talking?" is asked.
+    pub(crate) lock_cap: Duration,
+    pub(crate) lock_ask: Duration,
     /// How often the pipe is renewed.
     pub(crate) renew: Duration,
 }
@@ -404,6 +412,8 @@ impl Default for Timing {
             lan_probe: LAN_PROBE,
             idle_prompt: tempo_client::still_there::PROMPT,
             idle_end: tempo_client::still_there::END,
+            lock_cap: tempo_client::phone_lock::CAP,
+            lock_ask: tempo_client::phone_lock::ASK_BEFORE,
             renew: crate::lan_client::internet::RENEW_EVERY,
         }
     }
@@ -617,8 +627,14 @@ pub(crate) struct Status {
 enum Press {
     /// Not pressed.
     Up,
-    /// Pressed: a held press numbered `press`, on the Stop road of the link it was made on.
-    Held { press: u64, road: Arc<StopRoad> },
+    /// Pressed: a held press numbered `press`, on the Stop road of the link it was made on. Held by
+    /// Phone's Lock, `locked` is when its cap's count began: the press, or the operator's last
+    /// answer to "Still talking?".
+    Held {
+        press: u64,
+        road: Arc<StopRoad>,
+        locked: Option<Instant>,
+    },
     /// Ended other than by the screen letting go: a Stop, the station's word, or a new link. It
     /// never keys again; the screen must let go and press again.
     Ended,
@@ -665,6 +681,9 @@ pub(crate) struct Client {
     /// This computer's headset, for the shack's audio and the microphone: given once, as the app
     /// starts, and never in a test that has no use for one.
     headset: OnceLock<Arc<ThisHeadset>>,
+    /// A test's stand-in for it on the links, opening no device.
+    #[cfg(test)]
+    stand_in: OnceLock<Arc<dyn Headset>>,
     /// The PTT, and the number the next press takes: rising for this run, so no two presses on
     /// one road are ever one press at the station.
     press: Mutex<Press>,
@@ -727,6 +746,8 @@ impl Client {
             fetched: Mutex::new(HashMap::new()),
             before_install: OnceLock::new(),
             headset: OnceLock::new(),
+            #[cfg(test)]
+            stand_in: OnceLock::new(),
             press: Mutex::new(Press::Up),
             next_press: AtomicU64::new(1),
             mic: OnceLock::new(),
@@ -818,6 +839,23 @@ impl Client {
         let _ = self.headset.set(headset);
     }
 
+    /// A stand-in headset for a test's links: the station's audio and the microphone over.
+    #[cfg(test)]
+    pub(crate) fn hear_in_a_test(&self, headset: Arc<dyn Headset>) {
+        let _ = self.stand_in.set(headset);
+    }
+
+    /// The headset a link opens with, if this computer has one.
+    fn link_headset(&self) -> Option<Arc<dyn Headset>> {
+        #[cfg(test)]
+        if let Some(stand_in) = self.stand_in.get() {
+            return Some(Arc::clone(stand_in));
+        }
+        self.headset
+            .get()
+            .map(|headset| Arc::clone(headset) as Arc<dyn Headset>)
+    }
+
     /// The microphone the voice keyer records from, for a test with no headset.
     #[cfg(test)]
     pub(crate) fn record_from(&self, mic: Arc<dyn Headset>) {
@@ -845,7 +883,7 @@ impl Client {
     pub(crate) fn install(&self, shack: Option<Arc<dyn Shack>>) {
         {
             let mut held = lock(&self.press);
-            if let Press::Held { press, road } = &*held {
+            if let Press::Held { press, road, .. } = &*held {
                 road.release(*press);
                 *held = Press::Ended;
             }
@@ -894,31 +932,54 @@ impl Client {
         Ok(road)
     }
 
-    /// The screen re-asserted its PTT (`set_ptt` on). The first starts a held press on Stop's
-    /// road, once a start may leave this computer; each one after it holds that press again, one
-    /// hold each, never on a timer of this computer's own, on the same link and while presence is
-    /// live as its road last heard it. A press whose presence lapsed here is let go on its road and
-    /// ends. A press that ended other than by the screen letting go is refused until the screen
-    /// lets go: it never keys again.
-    fn press(&self) -> Result<Value, String> {
+    /// The screen re-asserted its PTT (`set_ptt` on), or its Lock (`hold_ptt_lock`, `locking` the
+    /// operator's answer to "Still talking?"). The first starts a held press on Stop's road, once a
+    /// start may leave this computer; each one after it holds that press again, one hold each, never
+    /// on a timer of this computer's own, on the same link and while presence is live as its road
+    /// last heard it. A press whose presence lapsed here is let go on its road and ends. A press that
+    /// ended other than by the screen letting go is refused until the screen lets go: it never keys
+    /// again.
+    ///
+    /// ⛔ A LOCK ENDS AT ITS CAP. Held by the Lock, a press is let go on its road and ends once its
+    /// cap has passed since it began or since the operator last answered "Still talking?", whatever
+    /// re-asserts it after: no finger bounds it, so the cap does. An answer moves the count on only
+    /// while the cap has not passed.
+    fn press(&self, locking: Option<bool>) -> Result<Value, String> {
+        let now = Instant::now();
         // A held PTT is the operator at work, for as long as the screen re-asserts it.
-        lock(&self.idle).active(Instant::now());
+        lock(&self.idle).active(now);
+        let timing = *lock(&self.timing);
         let mut held = lock(&self.press);
-        match &*held {
-            Press::Held { press, road } => {
+        match &mut *held {
+            Press::Held {
+                press,
+                road,
+                locked,
+            } => {
                 let on_this_link = self
                     .shack()
                     .and_then(|shack| shack.stop_road())
                     .is_some_and(|now| Arc::ptr_eq(&now, road));
-                if on_this_link && !road.presence_live(Instant::now()) {
+                let capped = locked.is_some_and(|since| {
+                    phone_lock::locked(since, timing.lock_cap, timing.lock_ask, now)
+                        == Locked::Capped
+                });
+                if (on_this_link && !road.presence_live(now)) || capped {
                     // Presence as this computer last heard it has lapsed (its Stop road gone quiet,
-                    // say): the press ends here, its microphone stops, and the station is told.
+                    // say), or the Lock's cap has passed: the press ends here, its microphone
+                    // stops, and the station is told.
                     road.release(*press);
                 } else if on_this_link && road.hold(*press) {
-                    return Ok(self.fed("snapshot/1").unwrap_or_else(|_| json!({})));
+                    if let Some(answered) = locking {
+                        let since = locked.get_or_insert(now);
+                        if answered {
+                            *since = now;
+                        }
+                    }
+                    return Ok(self.held_answer(locking, *locked, timing, now));
                 }
                 *held = Press::Ended;
-                Err(word("pressEnded"))
+                Err(word(if capped { "lockCapped" } else { "pressEnded" }))
             }
             Press::Ended => Err(word("pressEnded")),
             Press::Up => {
@@ -926,14 +987,41 @@ impl Client {
                 if lock(&self.recording).is_some() {
                     return Err(word("recording"));
                 }
-                let road = self.ready_to_start(Instant::now()).map_err(word)?;
+                let road = self.ready_to_start(now).map_err(word)?;
                 let press = self.next_press.fetch_add(1, Ordering::SeqCst);
                 // Begun under the Stops pressed so far: a Stop pressed after it that reaches the
                 // shack first keeps it from ever keying there.
                 road.press(press, self.stops.load(Ordering::SeqCst));
-                *held = Press::Held { press, road };
-                Ok(self.fed("snapshot/1").unwrap_or_else(|_| json!({})))
+                let locked = locking.map(|_| now);
+                *held = Press::Held {
+                    press,
+                    road,
+                    locked,
+                };
+                Ok(self.held_answer(locking, locked, timing, now))
             }
+        }
+    }
+
+    /// What a hold is answered: the PTT's, the station's snapshot; the Lock's, whether "Still
+    /// talking?" is asked and how long is left before its cap.
+    fn held_answer(
+        &self,
+        locking: Option<bool>,
+        locked: Option<Instant>,
+        timing: Timing,
+        now: Instant,
+    ) -> Value {
+        match (locking, locked) {
+            (Some(_), Some(since)) => {
+                match phone_lock::locked(since, timing.lock_cap, timing.lock_ask, now) {
+                    Locked::Ask { left } => {
+                        json!({ "ask": true, "leftMs": left.as_millis() as u64 })
+                    }
+                    _ => json!({ "ask": false }),
+                }
+            }
+            _ => self.fed("snapshot/1").unwrap_or_else(|_| json!({})),
         }
     }
 
@@ -941,7 +1029,7 @@ impl Client {
     /// press is a new one.
     fn let_go_the_press(&self) {
         let mut held = lock(&self.press);
-        if let Press::Held { press, road } = &*held {
+        if let Press::Held { press, road, .. } = &*held {
             road.release(*press);
         }
         *held = Press::Up;
@@ -1041,7 +1129,14 @@ impl Client {
                 true
             }
             Way::Press => {
-                let answer = self.press();
+                let answer = self.press(None);
+                invoke
+                    .resolver
+                    .respond_async(async move { answer.map_err(InvokeError::from) });
+                true
+            }
+            Way::Lock => {
+                let answer = self.press(Some(args["stillTalking"].as_bool() == Some(true)));
                 invoke
                     .resolver
                     .respond_async(async move { answer.map_err(InvokeError::from) });
@@ -1500,10 +1595,7 @@ impl Client {
         typed: Option<SocketAddrV4>,
         look: &Look,
     ) -> Result<(Link, SocketAddrV4), &'static str> {
-        let headset = self
-            .headset
-            .get()
-            .map(|headset| Arc::clone(headset) as Arc<dyn Headset>);
+        let headset = self.link_headset();
         match Link::connect(record, typed, run_id(), headset.clone()).await {
             Err(why) if road::look_further(why) => {
                 let look = Arc::clone(look);
@@ -1534,10 +1626,7 @@ impl Client {
         if !kept {
             return Err(why);
         }
-        let headset = self
-            .headset
-            .get()
-            .map(|headset| Arc::clone(headset) as Arc<dyn Headset>);
+        let headset = self.link_headset();
         afar.open(self.station_id.clone(), headset).await
     }
 

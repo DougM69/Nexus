@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phone's Lock (hands-free PTT) now works from a computer driving your station.** Tick **Lock**, click PTT
+  once to talk and again to stop, as at the shack. It is the same press as holding PTT, so it stops the same
+  ways: Stop TX, a dropped link, your microphone going quiet for a fifth of a second, or leaving Phone. A Lock
+  from afar also has a time limit: after 3 minutes on the air it ends by itself. Twenty seconds before that,
+  Phone asks "Still talking?"; click **Keep talking** or press K for 3 more minutes. The shack's own Lock and
+  the rig's VOX are unchanged.
 - **Contest band map: dupes and new multipliers are marked.** While a contest runs, the Band activity strip,
   the pop-out band map and the Spots list in the CW and Phone cockpits mark each spotted station the way contest
   loggers do. A station you already worked on that band and mode, under the contest's own dupe rule, is struck
