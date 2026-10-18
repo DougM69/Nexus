@@ -1040,8 +1040,11 @@ mod tests {
         // A line not handed over within five minutes is dropped, as JS8Call drops it.
         let mut late = links_engine();
         late.js8_ingest(&rows, 1);
+        // The line is stamped with the clock at ingest, not with `now` above: on a loaded runner the
+        // earlier cases can take a second, so "past its lifetime" is measured from after the ingest.
+        let ingested = now_unix_secs();
         assert!(late
-            .take_js8_aprs_uplink(now + APRS_LINE_TTL_SECS + 1)
+            .take_js8_aprs_uplink(ingested + APRS_LINE_TTL_SECS + 1)
             .is_empty());
         // Leaving JS8 disarms the gateway and drops what waits.
         let mut left = links_engine();
