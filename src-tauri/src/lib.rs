@@ -18875,27 +18875,23 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
     #[cfg(feature = "radio")]
     {
         use std::time::{Duration, Instant};
-        let gen0 = {
-            let mut eng = engine_lock(&state);
-            let g = eng.cat_probe_gen();
-            eng.request_cat_reprobe();
-            g
-        };
+        // Our probe's own result, never a dial note or other status published meanwhile.
+        let asked = engine_lock(&state).request_cat_reprobe();
         // Wait for the requested probe to publish. 20 s, not a token pause: a Save-triggered
         // rebuild the request may queue behind costs 700 ms daemon bind + a coexist probe +
         // three slow-transport commands at 2.5 s each, plus the probe itself — and the loop's
         // own heavy poll can precede it. On timeout, say the truth (below) instead of handing
         // back a stale status as if it were the test's answer.
         let deadline = Instant::now() + Duration::from_secs(20);
-        let mut fresh = false;
+        let mut answer = None;
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(100));
-            if engine_lock(&state).cat_probe_gen() != gen0 {
-                fresh = true;
+            answer = engine_lock(&state).cat_reprobe_answer(asked);
+            if answer.is_some() {
                 break;
             }
         }
-        if !fresh {
+        let Some((ok, mut detail)) = answer else {
             // The loop never published our probe. Either it is wedged/slow (stale status
             // exists) or it never ran at all this session (status empty — the radio engine
             // died before its first probe, classically because the audio open failed at
@@ -18910,10 +18906,9 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                 (r.cat_detail, r.audio_error)
             };
             return Ok(cat_test_timeout(detail, audio_error));
-        }
-        let (ok, mut detail, ladder) = {
+        };
+        let ladder = {
             let eng = engine_lock(&state);
-            let r = eng.snapshot().radio;
             let s = eng.settings();
             // The Icom network connection has no serial port to sweep: its Test CAT reports
             // through the live session, so it is never handed to the ladder.
@@ -18945,7 +18940,7 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                     s.icom_native_cat,
                 )
             });
-            (r.cat_ok, r.cat_detail, ladder)
+            ladder
         };
         if ok == Some(false) {
             if let Some((port, baud, rig_model, gate, model_name, native)) = ladder {

@@ -7137,7 +7137,11 @@ impl RadioLoop {
                 self.cat_ok = ok;
                 {
                     let mut eng = engine_lock(engine);
-                    eng.set_cat_status(ok, detail);
+                    if reprobe_req {
+                        eng.answer_cat_reprobe(ok, detail);
+                    } else {
+                        eng.set_cat_status(ok, detail);
+                    }
                 }
             } else if reprobe_req {
                 let (ok, mut detail) = reprobe(rig, &want);
@@ -7163,10 +7167,7 @@ impl RadioLoop {
                     }
                 }
                 self.cat_ok = ok;
-                {
-                    let mut eng = engine_lock(engine);
-                    eng.set_cat_status(ok, detail);
-                }
+                engine_lock(engine).answer_cat_reprobe(ok, detail);
             }
             let mut audio_rebuilt = false;
             // A stream the OS KILLED can only re-enter the loop here. Nothing in `want` changed

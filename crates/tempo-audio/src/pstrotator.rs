@@ -108,10 +108,22 @@ fn resolve(target: &str) -> std::io::Result<SocketAddr> {
             ),
         )
     };
-    t.to_socket_addrs()
-        .map_err(|e| bad(e.to_string()))?
-        .next()
-        .ok_or_else(|| bad("it resolved to nothing".into()))
+    let addrs = t.to_socket_addrs().map_err(|e| bad(e.to_string()))?;
+    prefer_ipv4(addrs).ok_or_else(|| bad("it resolved to nothing".into()))
+}
+
+/// The first IPv4 address, else the first of any family. PstRotatorAz listens on IPv4, and
+/// Windows resolves "localhost" to ::1 before 127.0.0.1: taking the first would bind the reply
+/// socket on [::1], where an IPv4 PstRotatorAz's answers never arrive.
+fn prefer_ipv4(addrs: impl Iterator<Item = SocketAddr>) -> Option<SocketAddr> {
+    let mut first = None;
+    for a in addrs {
+        if a.is_ipv4() {
+            return Some(a);
+        }
+        first = first.or(Some(a));
+    }
+    first
 }
 
 /// The UDP socket PstRotatorAz's replies arrive on, at its control port + 1. Commands are sent
@@ -671,6 +683,43 @@ mod tests {
             "{words}"
         );
         drop(held);
+    }
+
+    #[test]
+    fn localhost_prefers_the_ipv4_loopback_when_it_resolves_to_both() {
+        let v4: SocketAddr = "127.0.0.1:12000".parse().unwrap();
+        let v6: SocketAddr = "[::1]:12000".parse().unwrap();
+        // Windows' order for "localhost": ::1 first.
+        assert_eq!(prefer_ipv4([v6, v4].into_iter()), Some(v4));
+        assert_eq!(prefer_ipv4([v4, v6].into_iter()), Some(v4));
+        // An IPv6-only name still resolves.
+        assert_eq!(prefer_ipv4([v6].into_iter()), Some(v6));
+        assert_eq!(prefer_ipv4(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn a_localhost_target_talks_to_an_ipv4_only_pstrotatoraz() {
+        // The fake listens and answers on 127.0.0.1 only.
+        for _ in 0..50 {
+            let sock = UdpSocket::bind("127.0.0.1:0").expect("a loopback UDP port");
+            let port = sock.local_addr().expect("its port").port();
+            let Ok(link) = PstRotatorLink::start(&format!("localhost:{port}"), 0) else {
+                continue;
+            };
+            let e = UdpSocket::bind(("127.0.0.1", port + 1)).expect_err("the link holds it");
+            assert_eq!(e.kind(), std::io::ErrorKind::AddrInUse);
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 512];
+                while let Ok((n, _)) = sock.recv_from(&mut buf) {
+                    if &buf[..n] == AZ_QUERY.as_bytes() {
+                        let _ = sock.send_to(b"AZ:123\r", ("127.0.0.1", port + 1));
+                    }
+                }
+            });
+            assert_eq!(rotator::read_azimuth(&addr(&link)), Some(123.0));
+            return;
+        }
+        panic!("no loopback port pair free");
     }
 
     #[test]
