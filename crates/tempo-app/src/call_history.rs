@@ -548,4 +548,59 @@ mod tests {
             Vec::<Vec<String>>::new()
         );
     }
+
+    /// ⭐ ONE FILE, TWO READERS. The strip's fill (`ui/src/features/callHistoryFill.ts`) and the
+    /// band map's prediction read the same file to the same answer, so both are held to one table
+    /// that lives beside the file (`tests/fixtures/call-history-expected.json`) and is read from
+    /// there by this test and by `callHistoryFill.agreement.test.ts`. Where the two answers differ
+    /// on purpose, the case says why.
+    #[test]
+    fn the_shared_call_history_file_reads_as_its_table_says() {
+        let text = include_str!("../tests/fixtures/call-history.txt");
+        let table: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/call-history-expected.json"))
+                .unwrap();
+        let h = parse(text).expect("the fixture is a call history");
+        let fields: Vec<String> = serde_json::from_value(table["fields"].clone()).unwrap();
+        assert_eq!(h.fields, fields, "the columns");
+        let entries: BTreeMap<String, BTreeMap<String, String>> =
+            serde_json::from_value(table["entries"].clone()).unwrap();
+        assert_eq!(h.entries, entries, "the entries");
+        let cases = table["cases"].as_array().unwrap();
+        let mut wrong = Vec::new();
+        for c in cases {
+            let (event, call) = (c["event"].as_str().unwrap(), c["call"].as_str().unwrap());
+            let predict: Vec<Vec<String>> = serde_json::from_value(c["predict"].clone()).unwrap();
+            let got = said(&exchanges_for(&h, call, &receives(event)));
+            if got != predict {
+                wrong.push(format!(
+                    "{event} {call}: {got:?}, the table says {predict:?}"
+                ));
+            }
+            // Same answer as the strip's fill, unless the case says why not.
+            let fill: BTreeMap<String, String> = serde_json::from_value(c["fill"].clone()).unwrap();
+            let as_fill: Vec<Vec<String>> = if fill.is_empty() {
+                Vec::new()
+            } else {
+                vec![fill.iter().map(|(k, v)| format!("{k}={v}")).collect()]
+            };
+            assert_eq!(
+                c.get("differs").is_some(),
+                as_fill != predict,
+                "{event} {call}: fill and prediction differ exactly when the case says why"
+            );
+        }
+        assert_eq!(wrong, Vec::<String>::new());
+        // Both answers occur in every contest, and the intended difference is there.
+        for event in ["ilqp", "arrlfd", "cqww_cw"] {
+            for some in [true, false] {
+                assert!(
+                    cases.iter().any(|c| c["event"] == event
+                        && c["predict"].as_array().unwrap().is_empty() != some),
+                    "{event}: a case that predicts {some}"
+                );
+            }
+        }
+        assert!(cases.iter().any(|c| c.get("differs").is_some()));
+    }
 }
