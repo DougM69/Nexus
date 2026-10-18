@@ -223,11 +223,10 @@ impl PointsRule {
 /// researched contest has one. The province fold touches only the domain it names.
 fn canonical_mult_value(raw: &str, domain: Option<&str>) -> String {
     let v = raw.trim().to_ascii_uppercase();
-    if let Some((_, _, sponsors)) = SAME_PROVINCE
-        .iter()
-        .find(|(d, spelling, _)| domain == Some(*d) && v == *spelling)
-    {
-        return sponsors.to_string();
+    if let Some(d) = domain {
+        if let Some(sponsors) = same_province_as(d, &v) {
+            return sponsors.to_string();
+        }
     }
     if v.len() > 1 && v.bytes().all(|b| b.is_ascii_digit()) {
         let stripped = v.trim_start_matches('0');
@@ -254,6 +253,15 @@ fn canonical_mult_value(raw: &str, domain: Option<&str>) -> String {
 /// The multiplier board folds its cells by the same table (`ui/src/features/contestDomains.ts`),
 /// held to this one by a test below.
 const SAME_PROVINCE: &[(&str, &str, &str)] = &[("il_mults", "NL", "NF"), ("il_mults", "PE", "PEI")];
+
+/// The spelling a code of `domain` counts as when [`SAME_PROVINCE`] names it another one, so a
+/// reader outside the scorer (the band map's call-history prediction) folds the same pairs.
+pub fn same_province_as(domain: &str, code: &str) -> Option<&'static str> {
+    SAME_PROVINCE
+        .iter()
+        .find(|(d, spelling, _)| *d == domain && *spelling == code)
+        .map(|(_, _, sponsors)| *sponsors)
+}
 
 /// The points a table gives one relation on one band: a row naming the band wins over a
 /// row naming every band, so a `bands: []` arm can be a floor under band-specific ones.

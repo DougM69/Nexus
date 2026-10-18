@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use tempo_core::contest::{Domain, FieldKind, FieldSpec, FieldValue};
+use tempo_core::contest::{same_province_as, Domain, FieldKind, FieldSpec, FieldValue};
 
 /// N1MM's column order for a file with no `!!Order!!` line.
 pub const DEFAULT_ORDER: [&str; 15] = [
@@ -291,7 +291,10 @@ fn name_key(s: &str) -> String {
         .collect()
 }
 
-/// `raw` as a code of one of `lists`: the code itself, or the one value whose name it is.
+/// `raw` as a code of one of `lists`: the code itself, or the one value whose name it is. Several
+/// values sharing the name are one answer only when they count as one multiplier — one list's two
+/// spellings of a province (the scorer's pairs) — and that answer is the spelling it counts as, as
+/// the strip's `resolveDomainValue` reads it.
 fn resolve(lists: &[&'static Domain], raw: &str) -> Option<String> {
     let v = raw.trim().to_ascii_uppercase();
     if v.is_empty() {
@@ -301,13 +304,27 @@ fn resolve(lists: &[&'static Domain], raw: &str) -> Option<String> {
         return Some(v);
     }
     let key = name_key(&v);
-    let mut named = lists
+    let named: Vec<(&'static str, &'static str)> = lists
         .iter()
-        .flat_map(|d| d.values.iter())
-        .filter(|(_, name)| name_key(name) == key)
-        .map(|(code, _)| *code);
-    let first = named.next()?;
-    named.all(|c| c == first).then(|| first.to_string())
+        .flat_map(|d| {
+            d.values
+                .iter()
+                .map(move |(code, name)| (d.id, *code, *name))
+        })
+        .filter(|(_, _, name)| name_key(name) == key)
+        .map(|(id, code, _)| (id, code))
+        .collect();
+    let (&(id, code), rest) = named.split_first()?;
+    if rest.iter().all(|&(_, c)| c == code) {
+        return Some(code.to_string());
+    }
+    // The spelling each counts as, in its own list.
+    let counts =
+        |(id, code): (&'static str, &'static str)| (id, same_province_as(id, code).unwrap_or(code));
+    let first = counts((id, code));
+    rest.iter()
+        .all(|&n| counts(n) == first)
+        .then(|| first.1.to_string())
 }
 
 /// The county lists whose sponsor counts a county-line contact once per county, and the most
@@ -546,6 +563,54 @@ mod tests {
         assert_eq!(
             said(&exchanges_for(&h, "DL2AAA", &zn)),
             Vec::<Vec<String>>::new()
+        );
+    }
+
+    /// A name two values share is one answer only when the scorer counts them as one multiplier.
+    #[test]
+    fn a_shared_name_resolves_only_through_the_scorers_pairs() {
+        use tempo_core::contest::AdifTags;
+        const NOWHERE: AdifTags = AdifTags {
+            rcvd: None,
+            sent: None,
+        };
+        static PAIR: Domain = Domain {
+            id: "il_mults",
+            adif: NOWHERE,
+            values: &[
+                ("PE", "Prince Edward Island"),
+                ("PEI", "Prince Edward Island"),
+            ],
+        };
+        static TWO: Domain = Domain {
+            id: "il_mults",
+            adif: NOWHERE,
+            values: &[
+                ("PE", "Prince Edward Island"),
+                ("PX", "Prince Edward Island"),
+            ],
+        };
+        static ELSEWHERE: Domain = Domain {
+            id: "other_mults",
+            adif: NOWHERE,
+            values: &[
+                ("PE", "Prince Edward Island"),
+                ("PEI", "Prince Edward Island"),
+            ],
+        };
+        assert_eq!(
+            resolve(&[&PAIR], "Prince Edward Island").as_deref(),
+            Some("PEI")
+        );
+        assert_eq!(
+            resolve(&[&TWO], "Prince Edward Island"),
+            None,
+            "two multipliers"
+        );
+        assert_eq!(
+            resolve(&[&ELSEWHERE], "Prince Edward Island"),
+            None,
+            "the pair is the il_mults list's only"
         );
     }
 

@@ -28,10 +28,7 @@
     { "event": "ilqp", "call": "K9GGG", "fill": {}, "predict": [] },
     { "event": "ilqp", "call": "W9III", "fill": { "QTH": "WI" }, "predict": [["QTH=WI"]] },
     { "event": "ilqp", "call": "N1JJJ", "fill": {}, "predict": [] },
-    {
-      "event": "ilqp", "call": "VE1KKK", "fill": { "QTH": "PEI" }, "predict": [],
-      "differs": "NOT INTENDED, recorded as found: the list holds PE and PEI under one name, and the sponsor counts them as one multiplier. The strip reads the name as the spelling it counts as (PEI); the band map refuses a name two codes share, so it predicts nothing for it"
-    },
+    { "event": "ilqp", "call": "VE1KKK", "fill": { "QTH": "PEI" }, "predict": [["QTH=PEI"]] },
     { "event": "ilqp", "call": "AA1LLL", "fill": { "QTH": "MA" }, "predict": [["QTH=MA"]] },
     { "event": "ilqp", "call": "DL1MMM", "fill": {}, "predict": [] },
     { "event": "ilqp", "call": "K9ZZZ", "fill": {}, "predict": [] },
