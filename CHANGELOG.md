@@ -66,6 +66,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gallery, the second PC shows **Save to this computer**, which copies the shack's file into its Downloads folder. Only
   those three folders can be read from afar. NEEDS-BENCH: two PCs, a received picture and a recording at the shack.
 
+- **Contest logger window: drag it small and keep it in front.** The contest logger window (the contest screen's
+  **⧉ Logger window**) now drags down to 420×320, small enough to drop in a corner beside another program; its call,
+  exchange boxes, Log button, dupe warning and newest contact stay on screen, and the boxes wrap to a second row
+  instead of shrinking. **Keep in front** on its bar keeps the window in front of Nexus and your other programs,
+  even while you work in another one; press it again to let the window stack as an ordinary window. The window
+  reopens at the size and place you left it, brought back onto a monitor that is still attached, and pinned if it
+  was pinned. NEEDS-BENCH: Windows, the window pinned over a full-screen program and reopened after a monitor is
+  unplugged.
+
 ### Changed
 - **Stations on this network now leads with Operate from this computer.** It is the first and main button beside each
   station: Nexus runs on this PC and the radio follows your own clicks and pop-outs. Streaming the station's screen is

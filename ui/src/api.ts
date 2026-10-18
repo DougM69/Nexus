@@ -1293,6 +1293,23 @@ export async function setWindowBehind(on: boolean): Promise<WindowBehind> {
   return invoke<WindowBehind>('set_window_behind', { on })
 }
 
+/** Whether the CALLING window offers the pin (the contest logger window), and whether it is
+ *  pinned in front of other windows. */
+export interface WindowOnTop {
+  supported: boolean
+  on: boolean
+}
+
+export async function getWindowOnTop(): Promise<WindowOnTop> {
+  return invoke<WindowOnTop>('get_window_on_top')
+}
+
+/** Pin the calling window in front of other windows (or unpin it): applied now and remembered
+ *  for its next open. Rejects where the window cannot. */
+export async function setWindowOnTop(on: boolean): Promise<WindowOnTop> {
+  return invoke<WindowOnTop>('set_window_on_top', { on })
+}
+
 /** Switch the Operate mode: 'dx' (FT8/FT4) or 'msg' (Tempo two-way calling).
  * Atomically sets the mode's tier + mode. Returns the fresh snapshot. */
 export async function setArea(area: 'dx' | 'msg'): Promise<AppSnapshot> {

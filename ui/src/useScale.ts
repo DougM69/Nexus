@@ -118,11 +118,12 @@ export const PANEL_NATURAL = new Map<string, Natural>([
   // without the position and operator cells collapsing; `panel_min_inner` gained
   // an `fdclub` arm (560×400) to keep it under the 65%-floor ceiling.
   ['fdclub', { w: 820, h: 420 }],
-  // The contest logger: the contest screen's header strip (class/section, Running / S&P and its
-  // buttons, which wrap) and the log line's boxes in a row with Log beside them. The screen above
-  // the line scrolls inside its own panel, so height is elastic down to the line plus a look at
-  // the screen. Measured in Chrome at the sizes the ui-layout skill lists.
-  ['contestlog', { w: 900, h: 560 }],
+  // The contest logger: the entry (the call, the exchange boxes and Log, which wrap to a second
+  // row rather than shrink), the dupe warning and the newest contact; the screen below scrolls
+  // inside its own panel, so height is elastic. A box this size is what the window's 420×320
+  // floor shows at the 65% zoom floor, so a window dragged that small still holds the entry whole,
+  // and anything from 640×480 up lays out at 100% and reflows (`browser-probe --desktop contestlog`).
+  ['contestlog', { w: 640, h: 480 }],
   // The contest screen window: the same screen without the log line over it, so the logger's width
   // for the header strip, and its height less the line: the banner, the controls and a look at the
   // board, the rest scrolling inside the screen's own panel.
