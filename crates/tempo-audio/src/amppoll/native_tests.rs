@@ -397,3 +397,98 @@ fn native_amp_ptt_revocation_uses_current_transitions_without_repeated_revision_
         "steady PTT polling is not a new station edit"
     );
 }
+
+/// ⛔ A KPA1500 over the network hears nothing from Nexus while the station transmits, exactly as
+/// over serial: the not-transmitting checks run before any write, whatever the wire. Against the
+/// fake KPA1500 UDP server, through the real `KpaLink`: while the radio is keyed a band-follow
+/// step, an Operate/Standby press and a band press each reach nothing, and PTT arriving mid-batch
+/// stops the rest of the batch. CONTROL: once unkeyed, the same press and the follow step arrive.
+#[cfg(feature = "serial")]
+#[test]
+fn a_kpa1500_over_udp_hears_nothing_from_nexus_while_the_station_transmits() {
+    use crate::amplifier::{FakeKpa, KpaLink};
+    use std::time::Duration;
+    let _guard = QueueGuard::new();
+    let fake = FakeKpa::start();
+    let (mut link, _) = KpaLink::open(&fake.address()).expect("the fake answers");
+    // The amplifier's own state, which `send_intent` steps from: standby, band 5 (20 m).
+    let now = link.poll().unwrap();
+    let (e, dto, read) = station(FAMILY_KPA, true);
+    let key = |on: bool| {
+        let mut native = e.lock().unwrap();
+        native.observe_rig_ptt(on);
+        let radio = native.remote_open_radio().unwrap();
+        let read = native.remote_radio_read(&radio, Instant::now()).unwrap();
+        native.remote_observe_cat(Some(&read), Some(true));
+        native.remote_observe_ptt(Some(&read), Some(on));
+    };
+    // What the fake hears after `from`, once nothing more is in flight (UDP is not instant):
+    // up to `want` commands, or whatever arrived within the wait.
+    let heard_after = |from: usize, want: usize| -> Vec<String> {
+        let deadline = Instant::now() + Duration::from_millis(if want == 0 { 300 } else { 2_000 });
+        while fake.heard().len() < from + want.max(1) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        fake.heard()[from..].to_vec()
+    };
+
+    key(true);
+    let base = fake.heard().len();
+    let mut writes = Vec::new();
+    // The follow step (the amplifier on 80 m, the radio on 20 m), then each press on its own.
+    for press in [
+        None,
+        Some(AmpIntent::ToggleOperate),
+        Some(AmpIntent::BandUp),
+        Some(AmpIntent::BandDown),
+    ] {
+        if let Some(press) = press {
+            assert!(queue_amp_command(press), "the press queued");
+        }
+        assert!(!dispatch_native(&e, &dto, Some(&read), false, |intent| {
+            writes.push(intent);
+            link.send_intent(intent, &now)
+        }));
+    }
+    assert_eq!(
+        heard_after(base, 0),
+        Vec::<String>::new(),
+        "the KPA1500 heard nothing while keyed"
+    );
+    assert_eq!(writes, [], "nothing handed to the wire while keyed");
+
+    // PTT arrives after the first write of a batch: the rest never reaches the amplifier.
+    key(false);
+    let read = fresh_amp(&e, &dto);
+    assert!(queue_amp_command(AmpIntent::ToggleOperate));
+    assert!(queue_amp_command(AmpIntent::BandUp));
+    let base = fake.heard().len();
+    assert!(!dispatch_native(&e, &dto, Some(&read), false, |intent| {
+        let sent = link.send_intent(intent, &now);
+        key(true);
+        sent
+    }));
+    assert_eq!(
+        heard_after(base, 1),
+        ["^OS1;"],
+        "only the write before PTT arrived"
+    );
+
+    // CONTROL: unkeyed, the press and then the follow step arrive, by value.
+    key(false);
+    let read = fresh_amp(&e, &dto);
+    assert!(queue_amp_command(AmpIntent::ToggleOperate));
+    let base = fake.heard().len();
+    assert!(!dispatch_native(&e, &dto, Some(&read), false, |intent| {
+        link.send_intent(intent, &now)
+    }));
+    assert!(!dispatch_native(&e, &dto, Some(&read), false, |intent| {
+        link.send_intent(intent, &now)
+    }));
+    assert_eq!(
+        heard_after(base, 2),
+        ["^OS1;", "^BN06;"],
+        "CONTROL: unkeyed, Operate and the follow step reach the KPA1500"
+    );
+}
