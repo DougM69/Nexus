@@ -332,7 +332,7 @@ test('the station key over the signed-in API: the account\'s own stations, each 
   await pair.browser.post(`stations/${pair.stationId}/revoke`)
   assert.deepEqual(await station(), [])
   const { value } = await native.post('client/session')
-  assert.deepEqual(Object.keys(value).sort(), ['accountId', 'entitlement', 'identityVerified', 'serverNow', 'stations'])
+  assert.deepEqual(Object.keys(value).sort(), ['accountId', 'entitlement', 'identityVerified', 'lanProofMaxAgeMs', 'serverNow', 'stations'])
   assert.equal(value.entitlement.state, 'active')
 })
 

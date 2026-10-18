@@ -116,16 +116,25 @@ test('the shack signs in and its station is bound to the account, with its keys 
     lanKey: shack.lanKey.publicKey, proof: shack.body.proof, role: 'owner' }])
 })
 
+test('a device is told its own proof admits it on a LAN with no internet for thirty days', async () => {
+  // Thirty days from the proof's signing, by value: the shack enforces its own copy, and a device signs
+  // in again before then. Pinned here so neither side moves alone.
+  const owner = await person()
+  assert.equal((await owner.native.post('client/session')).value.lanProofMaxAgeMs, 30 * DAY)
+})
+
 test('a station proof is checked: its signature, issuer, application, subject, nonce and age, each by itself', async () => {
   const now = seconds(Date.now()), { privateKey } = await generateKeyPair('RS256')
   // Each case is a person of its own, so no case spends another's binding allowance.
-  const attempt = async (expected, make) => {
+  // Each case names itself in its failure, status included, so a red says which check moved.
+  const attempt = async (expected, make, why) => {
     const who = await person(), stationKey = await keyPair(), lanKey = await keyPair()
     const proof = await make(who, stationNonce(stationKey.publicKey, lanKey.publicKey), stationKey.publicKey, lanKey.publicKey)
     const body = { name: 'Shack', credential: random(), stationKey: stationKey.publicKey, lanKey: lanKey.publicKey, proof }
-    return (await who.native.post('client/station', body, expected)).value
+    const { value } = await who.native.post('client/station', body, expected).catch(error => { throw new Error(`${why}: ${error.message}`) })
+    return value
   }
-  const refused = async (why, make) => assert.equal((await attempt(403, make)).error, 'proofInvalid', why)
+  const refused = async (why, make) => assert.equal((await attempt(403, make, why)).error, 'proofInvalid', why)
   await refused('another key', (who, nonce) => proofOf(who, nonce, { key: privateKey }))
   await refused('another issuer', (who, nonce) => proofOf(who, nonce, { iss: 'https://elsewhere.invalid/' }))
   await refused('the page\'s application', (who, nonce) => proofOf(who, nonce, { audience: SPA }))
@@ -203,7 +212,10 @@ test('a station paired by code confirms its account at the station, and only wit
   await owner.native.post(path, confirmed)
   assert.equal((await stationRow(pair.stationId)).proof, confirmed.proof)
   assert.equal((await stationRow(pair.stationId)).lan_key, lanKey.publicKey)
-  assert.equal((await enrol(owner, pair.stationId)).value.approved, true)
+  const approved = await enrol(owner, pair.stationId)
+  assert.equal(approved.value.approved, true)
+  // A device reopening by its key alone never reaches it: confirming takes the owner's own sign-in.
+  assert.equal(await errorOf(app.client(null, '').post(path, await body(), 404, { 'x-nexus-device-id': approved.deviceId })), 'stationUnavailable')
   // Signing in again replaces the proof (a new LAN key after a reset, or a key the provider retired).
   const lan2 = await keyPair()
   const again = await body({ lanKey: lan2.publicKey, proof: await proofOf(owner, stationNonce(stationKey.publicKey, lan2.publicKey)) })
