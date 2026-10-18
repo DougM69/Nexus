@@ -3052,13 +3052,13 @@ pub struct Settings {
     #[serde(default)]
     pub qrz_last_sync_unix: u64,
     /// ClubLog account email (NOT a callsign). The app-password lives in the OS
-    /// keychain; the api key + email are non-secret and live here.
+    /// keychain; the email (non-secret) and the api key live here.
     pub clublog_email: String,
     /// ClubLog logbook callsign to upload into (empty → use `mycall`).
     pub clublog_callsign: String,
-    /// ClubLog developer/app API key. Non-secret per ClubLog, but NEVER committed
-    /// (GPLv3 public repo → auto-revoked); empty → fall back to a build-time
-    /// `option_env!("CLUBLOG_API_KEY")` default.
+    /// ClubLog developer/app API key. NEVER committed (GPLv3 public repo → auto-revoked),
+    /// and kept as a secret: out of a backup, and at the station when another computer
+    /// drives it. Empty → fall back to a build-time `option_env!("CLUBLOG_API_KEY")` default.
     pub clublog_api_key: String,
     /// Auto-upload each logged QSO to ClubLog (realtime push). Off by default.
     pub clublog_upload: bool,

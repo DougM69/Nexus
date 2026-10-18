@@ -8,6 +8,7 @@ import type { RemoteStationAction, RemoteStationStatus } from './remote-native/t
 import { remoteApplicationTransport } from './applicationTransport'
 import { pollSingleFlight } from './singleFlight'
 import { t } from './i18n'
+import { isStreamInput } from './remote-native/stream-input'
 import { clientWords } from './features/clientWords'
 import type { SelfSpotReport } from './selfSpot'
 import type {
@@ -166,6 +167,13 @@ function mutatesCredentials(cmd: string): boolean {
   return /^set_[a-z0-9_]+_(password|key|token|code)$/.test(cmd) || /^clear_[a-z0-9_]+$/.test(cmd)
 }
 
+/** Commands that save or forget one stored password, key, token or code: each at the station's
+ *  own screen only, never through a stream of it ([`invoke`]). Matched by SHAPE, as
+ *  `mutatesCredentials` is, so a new connector's is refused the day it is added. */
+function storesACredential(cmd: string): boolean {
+  return /^(set|clear)_[a-z0-9_]+_(password|key|token|code)$/.test(cmd)
+}
+
 /** The TV entry sets this to its RPC base ('/connect/rpc') before anything invokes.
  *  ⚠️ Deliberately NOT consulted by `bridge()`/`isTauri()`: isTauri() answers "is the
  *  desktop shell here", and desktop-only behaviour (DPI seeding, the external-link
@@ -198,6 +206,9 @@ function worded(error: unknown): never {
 /** Invoke a backend command. The desktop IPC bridge when present; the TV page's LAN
  *  RPC when its entry declared one; otherwise a hard error — never fabricated data. */
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  // Only at the station itself: a credential saved or forgotten through a stream is refused, in
+  // words its caller shows. Read before anything awaits, while the stream's dispatch is running.
+  if (storesACredential(cmd) && isStreamInput()) throw t('remote.lan.atShackOnly')
   const tv = typeof window !== 'undefined' ? window.__NEXUS_TV_RPC__ : undefined
   const remote = remoteApplicationTransport()
   const out = isTauri() ? ((await bridge()(cmd, args).catch(worded)) as T)

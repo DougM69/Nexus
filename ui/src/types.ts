@@ -5073,9 +5073,14 @@ export interface Settings {
   clublogEmail: string
   /** ClubLog logbook callsign to upload into (empty → your callsign). */
   clublogCallsign: string
-  /** ClubLog developer/app API key (non-secret; never committed). Empty → a
-   *  build-time default if the installer baked one in. */
+  /** ClubLog developer/app API key (never committed). Empty → a
+   *  build-time default if the installer baked one in. Read from afar it is
+   *  blank, and `secretsSavedAtStation` says whether the station has one. */
   clublogApiKey: string
+  /** Only on a read from a computer driving the station: whether the station
+   *  has each stored key saved, the keys themselves staying there (blank in
+   *  this read, and a save from afar keeps the station's own). */
+  secretsSavedAtStation?: { clublogApiKey?: boolean; cloudlogKey?: boolean }
   /** Auto-upload each logged QSO to ClubLog (realtime push). */
   clublogUpload: boolean
   /** Auto-upload each logged QSO to eQSL.cc (ImportADIF). eQSL username is

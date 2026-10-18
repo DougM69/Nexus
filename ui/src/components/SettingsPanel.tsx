@@ -1614,6 +1614,19 @@ export function SettingsPanel({
   const [qrzSyncing, setQrzSyncing] = useState(false)
   const [hamqthPw, setHamqthPw] = useState('')
   const [clublogPw, setClublogPw] = useState('')
+  // The ClubLog key shows as •••• until Reveal at the station's own screen; any press or key that
+  // comes through a stream masks it again.
+  const [clublogKeyShown, setClublogKeyShown] = useState(false)
+  useEffect(() => {
+    if (!clublogKeyShown) return
+    const hide = () => { if (isStreamInput()) setClublogKeyShown(false) }
+    document.addEventListener('pointerdown', hide, true)
+    document.addEventListener('keydown', hide, true)
+    return () => {
+      document.removeEventListener('pointerdown', hide, true)
+      document.removeEventListener('keydown', hide, true)
+    }
+  }, [clublogKeyShown])
   const [hrdlogCode, setHrdlogCodeField] = useState('')
   const [wrlKey, setWrlKeyField] = useState('')
   const [rbToken, setRbTokenField] = useState('')
@@ -12158,15 +12171,48 @@ export function SettingsPanel({
                   <span className="settings-label">
                     {t('settings.confirmations.clublog.apiKey.label')}
                   </span>
-                  <input disabled={remote}
-                    className="settings-input"
-                    type="text"
-                    value={form.clublogApiKey}
-                    placeholder={t('settings.confirmations.clublog.apiKey.placeholder')}
-                    onChange={(e) => update('clublogApiKey', e.target.value)}
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
+                  {/* From afar the station sends no key, only whether it has one saved; and at the
+                      station a stream may neither change it nor reveal it. */}
+                  <div className="settings-input-row">
+                    <input disabled={remote || form.secretsSavedAtStation !== undefined}
+                      className="settings-input"
+                      type={clublogKeyShown ? 'text' : 'password'}
+                      value={form.clublogApiKey}
+                      placeholder={form.secretsSavedAtStation === undefined
+                        ? t('settings.confirmations.clublog.apiKey.placeholder')
+                        : form.secretsSavedAtStation.clublogApiKey
+                          ? t('settings.confirmations.clublog.apiKey.savedAtStation')
+                          : t('settings.confirmations.clublog.apiKey.notSavedAtStation')}
+                      onChange={(e) => {
+                        // Read before anything else, while the stream's dispatch is still running.
+                        if (isStreamInput()) {
+                          pushToast(t('remote.lan.atShackOnly'), 'error')
+                          return
+                        }
+                        update('clublogApiKey', e.target.value)
+                      }}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    {form.secretsSavedAtStation === undefined && (
+                      <button
+                        type="button"
+                        className="settings-refresh"
+                        aria-pressed={clublogKeyShown}
+                        onClick={() => {
+                          if (isStreamInput()) {
+                            pushToast(t('remote.lan.atShackOnly'), 'error')
+                            return
+                          }
+                          setClublogKeyShown((shown) => !shown)
+                        }}
+                      >
+                        {clublogKeyShown
+                          ? t('settings.confirmations.clublog.apiKey.hide')
+                          : t('settings.confirmations.clublog.apiKey.reveal')}
+                      </button>
+                    )}
+                  </div>
                   <span className="settings-hint">
                     <T k="settings.confirmations.clublog.apiKey.hint" tags={{ b: <strong /> }} />
                   </span>

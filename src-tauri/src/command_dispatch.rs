@@ -320,10 +320,89 @@ pub(crate) fn keep_the_shacks_radio_icom_address(
     }
 }
 
+/// One stored key a Settings carries in its own file: the field it is, reached by name.
+pub(crate) type SecretField = fn(&mut tempo_app::settings::Settings) -> &mut String;
+
+/// ⛔ The stored keys a Settings carries in its own file, by their names on the wire: the ClubLog
+/// API key typed over the one built into the installer, and a Cloudlog/Wavelog key waiting to move
+/// to the keychain. Every other key and password lives in the keychain and is in no Settings. One
+/// list for each place they must not go: a backup leaves them out (`redact_for_backup`), a read
+/// from afar blanks them ([`withhold_the_shacks_secret_settings`]) and a save from afar keeps the
+/// shack's own ([`keep_the_shacks_secret_settings`]). A test holds every key-, password- or
+/// token-named setting to this list.
+pub(crate) const SECRET_SETTINGS: [(&str, SecretField); 2] = [
+    ("clublogApiKey", |s| &mut s.clublog_api_key),
+    ("cloudlogKey", |s| &mut s.cloudlog_key),
+];
+
+/// The settings read from afar: it blanks [`SECRET_SETTINGS`] and says which the shack has saved
+/// ([`withhold_the_shacks_secret_settings`]).
+pub(crate) const SECRETS_WITHHELD_FROM_AFAR: [&str; 1] = ["get_settings"];
+
+/// The name a settings read from afar carries, beside the settings, of whether the shack has each
+/// of [`SECRET_SETTINGS`] saved: the other computer shows "saved at the station" from it.
+pub(crate) const SAVED_AT_THE_STATION: &str = "secretsSavedAtStation";
+
+/// ⛔ What a settings read from afar shows of [`SECRET_SETTINGS`]: each blanked in `read`, and
+/// whether the shack has one saved, by name. From the shack's own screen (`None`) nothing is
+/// blanked and there is nothing to say.
+pub(crate) fn withhold_the_shacks_secret_settings(
+    read: &mut tempo_app::settings::Settings,
+    afar: Option<&Afar>,
+) -> Option<BTreeMap<&'static str, bool>> {
+    afar?;
+    Some(
+        SECRET_SETTINGS
+            .iter()
+            .map(|(name, field)| {
+                let secret = field(read);
+                let saved = !secret.trim().is_empty();
+                secret.clear();
+                (*name, saved)
+            })
+            .collect(),
+    )
+}
+
+/// ⛔ What a settings save from afar may not change, blank or plant ([`SETTINGS_FROM_AFAR`]): each
+/// of [`SECRET_SETTINGS`], put back into `save` as the shack has it, so the read's blanks never
+/// reach the shack and a crafted save cannot write a key of its own. From the shack's own screen
+/// (`None`) the save is taken as it came. Either way the read's "saved at the station" goes: it
+/// is no setting, and kept as an unknown key it would be saved into the file.
+pub(crate) fn keep_the_shacks_secret_settings(
+    shack: &tempo_app::settings::Settings,
+    save: &mut tempo_app::settings::Settings,
+    afar: Option<&Afar>,
+) {
+    save.unknown.remove(SAVED_AT_THE_STATION);
+    if afar.is_none() {
+        return;
+    }
+    let mut shack = shack.clone();
+    for (_, field) in SECRET_SETTINGS {
+        field(save).clone_from(field(&mut shack));
+    }
+}
+
+/// Every keep a whole settings save from afar goes through ([`SETTINGS_FROM_AFAR`]): the transmit
+/// settings and guards ([`keep_the_shacks_transmit_settings`]), the addresses the shack sends a
+/// stored key or password to ([`keep_the_shacks_credential_addresses`]) and the stored keys
+/// themselves ([`keep_the_shacks_secret_settings`]). From the shack's own screen (`None`) the save
+/// is taken as it came.
+pub(crate) fn keep_the_shacks_settings(
+    shack: &tempo_app::settings::Settings,
+    save: &mut tempo_app::settings::Settings,
+    afar: Option<&Afar>,
+) {
+    keep_the_shacks_transmit_settings(shack, save, afar);
+    keep_the_shacks_credential_addresses(shack, save, afar);
+    keep_the_shacks_secret_settings(shack, save, afar);
+}
+
 /// Whether the command lane writes [`Afar`] into an admitted call of `cmd`: each wired start but
 /// the held press, which never runs as a command, each section entry ([`ENTRIES`]), the work
-/// bound to presence ([`PRESENCE_BOUND`]) and the settings save ([`SETTINGS_FROM_AFAR`]). A test
-/// holds this to the handlers that take it.
+/// bound to presence ([`PRESENCE_BOUND`]), the settings save ([`SETTINGS_FROM_AFAR`]) and the
+/// settings read ([`SECRETS_WITHHELD_FROM_AFAR`]). A test holds this to the handlers that take it.
 pub(crate) fn takes_afar(cmd: &str) -> bool {
     matches!(
         transmit_from_afar(cmd),
@@ -340,6 +419,7 @@ pub(crate) fn takes_afar(cmd: &str) -> bool {
     ) || ENTRIES.contains(&cmd)
         || PRESENCE_BOUND.contains(&cmd)
         || SETTINGS_FROM_AFAR.contains(&cmd)
+        || SECRETS_WITHHELD_FROM_AFAR.contains(&cmd)
 }
 
 /// ⛔ STOP WINS OVER A START THAT WAS IN FLIGHT. A start from afar runs only while the transmit
@@ -558,19 +638,83 @@ impl Stores for ShackStores {
 
 // --- The one mixed store -------------------------------------------------------------------------
 
+/// ⛔ The saved config profiles, one of the station's keys: each a whole Settings, its stored keys
+/// ([`SECRET_SETTINGS`]) included. A read from afar blanks them ([`station_answer`]) and a save
+/// from afar keeps the shack's own ([`merged_save`]), as the settings themselves do.
+const PROFILES: &str = "nexus.profiles";
+
+/// The saved profiles `text` with each stored key a profile carries put to `kept(profile, key)`.
+/// `None` when `text` is no list, which goes as it came: the screen cannot load it either.
+fn profiles_with_secrets(text: &str, kept: impl Fn(&str, &str) -> String) -> Option<String> {
+    let mut profiles: Vec<Value> = serde_json::from_str(text).ok()?;
+    for profile in &mut profiles {
+        let name = profile
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if let Some(settings) = profile.get_mut("settings").and_then(Value::as_object_mut) {
+            for (key, _) in SECRET_SETTINGS {
+                if settings.contains_key(key) {
+                    settings.insert(key.into(), Value::String(kept(&name, key)));
+                }
+            }
+        }
+    }
+    serde_json::to_string(&profiles).ok()
+}
+
+/// Each stored key the shack's saved profiles hold, by profile name and key name.
+fn profile_secrets(text: Option<&String>) -> BTreeMap<(String, String), String> {
+    let profiles: Vec<Value> = text
+        .and_then(|t| serde_json::from_str(t).ok())
+        .unwrap_or_default();
+    let mut held = BTreeMap::new();
+    for profile in &profiles {
+        let name = profile
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        for (key, _) in SECRET_SETTINGS {
+            if let Some(secret) = profile["settings"].get(key).and_then(Value::as_str) {
+                held.insert((name.to_string(), key.to_string()), secret.to_string());
+            }
+        }
+    }
+    held
+}
+
 /// The station's part of a `ui_state_load` answer, which is all the shack sends; a malformed answer
-/// sends nothing.
+/// sends nothing. The saved profiles go without their stored keys.
 fn station_answer(value: Value) -> Value {
     let map: BTreeMap<String, String> = serde_json::from_value(value).unwrap_or_default();
-    serde_json::to_value(split_ui_state(map).0)
-        .unwrap_or_else(|_| Value::Object(Default::default()))
+    let mut station = split_ui_state(map).0;
+    if let Some(text) = station.get_mut(PROFILES) {
+        if let Some(blanked) = profiles_with_secrets(text, |_, _| String::new()) {
+            *text = blanked;
+        }
+    }
+    serde_json::to_value(station).unwrap_or_else(|_| Value::Object(Default::default()))
 }
 
 /// What a `ui_state_save` from afar writes at the shack: the shack's own keys as they are, and the
-/// station's keys as the other computer sent them, so a key it removed is removed. `None` when the
+/// station's keys as the other computer sent them, so a key it removed is removed. A saved profile's
+/// stored keys stay the shack's: never changed, blanked or planted from afar. `None` when the
 /// arguments carry no map of strings.
 fn merged_save(shack: BTreeMap<String, String>, args: &Value) -> Option<Value> {
-    let sent: BTreeMap<String, String> = serde_json::from_value(args.get("state")?.clone()).ok()?;
+    let mut sent: BTreeMap<String, String> =
+        serde_json::from_value(args.get("state")?.clone()).ok()?;
+    let held = profile_secrets(shack.get(PROFILES));
+    if let Some(text) = sent.get_mut(PROFILES) {
+        let kept = |profile: &str, key: &str| {
+            held.get(&(profile.to_string(), key.to_string()))
+                .cloned()
+                .unwrap_or_default()
+        };
+        if let Some(restored) = profiles_with_secrets(text, kept) {
+            *text = restored;
+        }
+    }
     Some(serde_json::json!({ "state": join_ui_state(sent, shack) }))
 }
 
