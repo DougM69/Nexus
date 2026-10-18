@@ -31,7 +31,11 @@ fn start_cw(e: &mut Engine, how: Cw) {
         assert!(e.cw_queue.is_empty(), "premise: nothing is left queued");
         e.observe_cw_keying(Some(1_680.0)); // "TEST" at 20 WPM with its word space
     }
-    assert_eq!(e.tx_owner(), Some(TxOwner::Cw), "premise: {how:?}: CW is sending");
+    assert_eq!(
+        e.tx_owner(),
+        Some(TxOwner::Cw),
+        "premise: {how:?}: CW is sending"
+    );
 }
 
 /// The CW word is over: nothing queued, and the loop said the word ended.
@@ -43,7 +47,11 @@ fn end_cw(e: &mut Engine) {
 
 /// (tuning, manual PTT, the busy reason the operator sees)
 fn keys(e: &Engine) -> (bool, bool, Option<String>) {
-    (e.tuning(), e.manual_ptt(), e.snapshot().radio.tx_busy_reason)
+    (
+        e.tuning(),
+        e.manual_ptt(),
+        e.snapshot().radio.tx_busy_reason,
+    )
 }
 
 #[test]
@@ -174,8 +182,15 @@ fn an_ft_slot_that_starts_during_cw_is_skipped_and_the_next_one_keys_the_same_ov
             "premise: the R-report is owed"
         );
         start_cw(&mut e, how);
-        assert_eq!(key_slot(&mut e, 2), None, "{how:?}: the slot during CW does not key");
-        assert!(!e.app.radio.transmitting, "{how:?}: and nothing reads as on the air");
+        assert_eq!(
+            key_slot(&mut e, 2),
+            None,
+            "{how:?}: the slot during CW does not key"
+        );
+        assert!(
+            !e.app.radio.transmitting,
+            "{how:?}: and nothing reads as on the air"
+        );
         assert_eq!(qso(&e), before, "{how:?}: the QSO is untouched by the skip");
         end_cw(&mut e);
         assert_eq!(
