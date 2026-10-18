@@ -126,6 +126,9 @@ fn after_the_word_every_gate_is_open_again() {
     assert_eq!(e.snapshot().radio.tx_busy_reason, None);
 }
 
+/// A stop, by its name on screen.
+type Stop = (&'static str, fn(&mut Engine));
+
 #[test]
 fn stop_mid_word_ends_the_window_at_once_and_the_next_tx_keys() {
     // Stop TX: the universal halt.
@@ -146,7 +149,7 @@ fn stop_mid_word_ends_the_window_at_once_and_the_next_tx_keys() {
     );
 
     // The CW screen's own stop, and TX off.
-    let stops: [(&str, fn(&mut Engine)); 2] = [
+    let stops: [Stop; 2] = [
         ("the CW screen's Stop", Engine::stop_cw),
         ("TX off", |e| e.set_tx_enabled(false)),
     ];

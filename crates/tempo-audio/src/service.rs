@@ -11765,7 +11765,7 @@ impl RadioLoop {
             let window = if cw_keying { self.cw_keying_until } else { 0.0 };
             if window != self.cw_keying_told {
                 self.cw_keying_told = window;
-                engine_lock(engine).observe_cw_keying(cw_keying.then(|| window - now));
+                engine_lock(engine).observe_cw_keying(cw_keying.then_some(window - now));
             }
             let keyed_now = self.tx_until_ms.is_some()
                 || self.tuning_keyed
