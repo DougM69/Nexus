@@ -174,7 +174,8 @@ pub(crate) const PRESENCE_BOUND: [&str; 7] = [
 /// that let the station transmit with no press at it (a switch that transmits by itself, or one that
 /// lets a program at the shack or a browser start a transmission there) and the guards on a
 /// transmission (what stops or caps one by itself, the power ceilings, the licence privileges, and
-/// the line that keys the transmitter). From afar a save keeps the shack's own value of each
+/// the line that keys the transmitter), and the one setting that names a program for the shack to
+/// run (the TQSL path). From afar a save keeps the shack's own value of each
 /// ([`keep_the_shacks_transmit_settings`], [`keep_the_shacks_radio_ptt`]): they are set at the
 /// shack only. (The presence beacon and JS8's automatic replies, relay and heartbeat acks each have
 /// one writer, their own switch, and no save moves them at all: `Engine::apply_settings`.)
@@ -245,6 +246,11 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     };
     save.ptt_method = method.clone();
     save.ptt_serial_port = port.clone();
+    // ⛔ The one setting that names a program for the shack to run: TQSL, which signs a LoTW upload
+    // from the Upload button (which runs from afar too) or the automatic batch, with nobody at the
+    // shack to see what it was. Every other path a save carries is data: a voice-keyer slot's WAV,
+    // the rig and port names.
+    save.tqsl_path.clone_from(&shack.tqsl_path);
 }
 
 /// What one radio's edit from afar may not change ([`SETTINGS_FROM_AFAR`]): its PTT method and

@@ -155,6 +155,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limits, "Disable Tx after 73", Parsec presence stop, the licence class, and the PTT method, port and serial lines).
   Each keeps the station's value, and the licence class can no longer be set from afar. The station's own Settings
   window changes them as before.
+- **Security: settings that name a program Nexus runs can only be changed at the station.** The TQSL path, the
+  program the station runs to sign a LoTW upload, could be changed by a settings save from a computer driving the
+  station from afar, so that computer could point it at any program on the station. A save from afar now keeps the
+  station's own TQSL path; it is set in Settings at the station. It is the only setting that names a program.
 - **Contest entry: a dupe is now plain to see.** Typing a call already in this contest's log (by the contest's own
   dupe rule) puts a red **DUPE** badge on the Call box with when and where you worked them, for example
   "DUPE 14:32 20m CW", and colours the box. Before, the only sign was a small grey line under the boxes. It shows in

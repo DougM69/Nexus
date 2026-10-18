@@ -13675,8 +13675,8 @@ fn reset_settings(
 /// The `start_*_feed` latches make this a no-op once a feed is running (so an
 /// already-running feed keeps its original callsign until the next restart).
 /// `afar`: from a computer driving the station, its save keeps the shack's own settings that let
-/// the station transmit by itself and those that guard a transmission
-/// (`command_dispatch::keep_the_shacks_transmit_settings`).
+/// the station transmit by itself, those that guard a transmission and the program it runs to sign
+/// a LoTW upload (`command_dispatch::keep_the_shacks_transmit_settings`).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn set_settings(
@@ -13689,7 +13689,8 @@ fn set_settings(
     mut settings: Settings,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
-    // From a computer driving the station, the shack's own transmit settings and guards stay.
+    // From a computer driving the station, the shack's own transmit settings and guards stay, and
+    // so does the program the shack runs to sign a LoTW upload.
     command_dispatch::keep_the_shacks_transmit_settings(
         engine_lock(&state).settings(),
         &mut settings,

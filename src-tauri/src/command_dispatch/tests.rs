@@ -724,6 +724,11 @@ const TX_GUARDS: &[Change] = &[
     }),
 ];
 
+/// ⛔ The one setting that names a program for the shack to run.
+const RUNS_A_PROGRAM: &[Change] = &[("tqsl_path", |s| {
+    s.tqsl_path = r"C:\Users\Public\evil.exe".into()
+})];
+
 /// What neither starts a transmission nor guards one, among them the fields beside the guards that
 /// read most like one: a save from afar takes each.
 const NEITHER: &[Change] = &[
@@ -758,14 +763,19 @@ fn moved(a: &tempo_app::settings::Settings, b: &tempo_app::settings::Settings) -
         .collect()
 }
 
-/// ⛔ A settings save from afar changes no setting that lets the station transmit by itself and
-/// none that guards a transmission: for each, the save from afar comes out as the shack's settings
-/// exactly, and the same save from the shack's own screen takes it.
+/// ⛔ A settings save from afar changes no setting that lets the station transmit by itself, none
+/// that guards a transmission and not the program the shack runs: for each, the save from afar
+/// comes out as the shack's settings exactly, and the same save from the shack's own screen takes
+/// it.
 #[test]
 fn a_settings_save_from_afar_keeps_every_transmit_setting_at_the_shacks_value() {
     let shack = tempo_app::settings::Settings::default();
     let afar = Afar { stand_down: 3 };
-    for (name, change) in TRANSMITS_BY_ITSELF.iter().chain(TX_GUARDS) {
+    for (name, change) in TRANSMITS_BY_ITSELF
+        .iter()
+        .chain(TX_GUARDS)
+        .chain(RUNS_A_PROGRAM)
+    {
         let mut asked = shack.clone();
         change(&mut asked);
         assert!(!moved(&asked, &shack).is_empty(), "premise: {name} moved");
@@ -2464,5 +2474,44 @@ fn each_list_saves_part_is_where_the_settings_keep_it() {
         parts("set_radio_bands", &json!({"bands": []})),
         None,
         "no radio named"
+    );
+}
+
+/// ⛔ A settings save from afar cannot change the program the shack runs to sign a LoTW upload:
+/// `tqsl_path` keeps the shack's value, set or empty, both ways. CONTROL: the same save from the
+/// shack's own screen takes it, and the LoTW fields beside it are taken from afar.
+#[test]
+fn a_settings_save_from_afar_keeps_the_program_the_shack_runs() {
+    let shack = tempo_app::settings::Settings {
+        tqsl_path: r"C:\Program Files (x86)\TrustedQSL\tqsl.exe".to_string(),
+        ..Default::default()
+    };
+    let mut asked = shack.clone();
+    asked.tqsl_path = r"C:\Users\Public\evil.exe".to_string();
+    asked.lotw_station_location = "Home".to_string();
+    let afar = Afar { stand_down: 3 };
+
+    let mut save = asked.clone();
+    keep_the_shacks_transmit_settings(&shack, &mut save, Some(&afar));
+    assert_eq!(
+        save.tqsl_path, shack.tqsl_path,
+        "from afar, the program the shack runs changed"
+    );
+    assert_eq!(
+        save.lotw_station_location, "Home",
+        "CONTROL: the rest of the save"
+    );
+
+    // An empty path (the default: TQSL found where it installs) is not filled from afar either.
+    let unset = tempo_app::settings::Settings::default();
+    let mut save = asked.clone();
+    keep_the_shacks_transmit_settings(&unset, &mut save, Some(&afar));
+    assert_eq!(save.tqsl_path, "", "from afar, a program was named");
+
+    let mut save = asked.clone();
+    keep_the_shacks_transmit_settings(&shack, &mut save, None);
+    assert_eq!(
+        save.tqsl_path, asked.tqsl_path,
+        "CONTROL: the shack's own form"
     );
 }
