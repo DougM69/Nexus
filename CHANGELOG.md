@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contest entry: an optional "RST sent" box.** Turn on "Show the RST sent box" in Settings ▸ Contesting ▸
+  Contest, and the contest entry gets an RST sent box just before the received report, as N1MM shows Snt and Rcv.
+  It holds the report the contact logs as sent: 59 on phone, 599 on CW and digital. Space and Tab skip it, so
+  a run goes Call, received report, exchange as before; click it, or press Shift+Tab from the received report,
+  to change it. A report typed there (two digits on phone, three on CW and digital) is logged as sent for that
+  contact only, and goes into the Cabrillo and ADIF files; the next contact goes back to 59 or 599. It is in
+  the cockpits' entry, the contest logger window and the entry-only pop-out, and it is shared between them like
+  the other boxes. It shows only in a contest whose exchange sends a report, so Field Day has none. Off by
+  default, and then nothing changes.
 - **Contest band map: dupes and new multipliers are marked.** While a contest runs, the Band activity strip,
   the pop-out band map and the Spots list in the CW and Phone cockpits mark each spotted station the way contest
   loggers do. A station you already worked on that band and mode, under the contest's own dupe rule, is struck

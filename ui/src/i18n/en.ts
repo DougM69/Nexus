@@ -1890,6 +1890,8 @@ export const EN = {
   'logEntry.fd.dupe.ownAnyBandOrMode':
     'Dupe: {{call}} is already in this position\'s log — this contest counts a station once, regardless of band or mode',
   'logEntry.fd.dupe.badge': 'DUPE',
+  'logEntry.fd.rstSent.label': 'RST sent',
+  'logEntry.fd.rstSent.title': 'The report this contact logs as sent: {{rst}} unless you type another here, for this contact only. Space and Tab skip this box; click it, or press Shift+Tab from the received report, to change it.',
   'logEntry.fd.dupe.workedAt': '{{time}} {{band}} {{mode}}',
   'logEntry.fd.dupe.workedOn': '{{band}} {{mode}}',
   'logEntry.fd.loggedDupe': 'Logged {{call}} {{exchange}} ({{mode}}) as a DUPE: worked before, it scores no points',
@@ -4566,6 +4568,8 @@ export const EN = {
   // section placeholder (WI) and the section list itself, which is data.
   'settings.contestCategory.legend': 'Your entry',
   'settings.contestPick.legend': 'Contest',
+  'settings.contestPick.rstSent.label': 'Show the RST sent box',
+  'settings.contestPick.rstSent.hint': 'Adds an RST sent box to the contest entry, beside the received report. It shows the report each contact logs as sent (59 on phone, 599 on CW and digital), and a report typed there is logged for that contact only. Space and Tab skip it. It shows only in contests whose exchange sends a report.',
   'settings.contestPick.contest.label': 'Contest',
   'settings.contestPick.contest.aria': 'Which contest you are entering',
   'settings.contestPick.contest.hint':

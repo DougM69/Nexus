@@ -524,7 +524,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     neededInHourOne: true,
     keywords: ['contest', 'field day', 'winter field day', 'arrl', 'wfd', 'event',
       'which contest', 'role', 'in state', 'out of state', 'contest mode', 'field day mode',
-      'start the contest', 'switch', 'rules', 'rules year', 'rules update', 'rules data'],
+      'start the contest', 'switch', 'rules', 'rules year', 'rules update', 'rules data',
+      'rst sent', 'snt', 'sent report'],
   },
   // The station data a SENT exchange needs (spec §3.4). It sits under the contest
   // picker because WHICH of these fields goes on the air is the contest's business —
