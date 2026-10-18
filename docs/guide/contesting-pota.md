@@ -109,7 +109,10 @@ the pop-out band map and the Spots list strike through and dim a station you alr
 band and mode (the same dupe check as the log strip's DUPE badge), and put a **MULT** tag on a
 station that would be a new multiplier; its tooltip names it, for example "new mult: county COOK".
 A country or a WPX prefix is read from the call. A county, section or zone comes from the exchange,
-so it is known only for a station you worked before, from what it sent you then.
+so it is known only for a station you worked before, from what it sent you then. If you imported a
+call-history file for the contest, a station you have never worked also gets an outlined **MULT?**
+when the county, state, section or zone the file gives it would be new ("predicted from call history:
+county LAKE"); a county-line station is marked for every county that would count.
 
 The scoreboard shows its work: QSO points (phone 1, CW/digital 2) × the legal
 power multiplier + a 16-item ARRL bonus checklist = total. **Winter Field Day

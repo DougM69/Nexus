@@ -476,13 +476,16 @@ pub struct OperatorStats {
 /// ⚠️ **A received value is known only from this station's own earlier contact.** A spot
 /// carries no exchange, so a multiplier read from one (a county, a section, a zone, a grid)
 /// is judged from the newest contact with this call in the log, and not at all for a station
-/// never worked. Silence over a guess: a value predicted from anywhere else is a rule this
-/// log does not have.
+/// never worked. Silence over a guess: a value from anywhere else is not a CONFIRMED multiplier.
+/// What the operator's call-history file says such a station sends is asked separately, and
+/// answered as a PREDICTION ([`predicted_mults`](Self::predicted_mults)).
 #[derive(Debug, Clone)]
 pub struct SpotMults {
     ruleset: &'static crate::fd_rules::FdRuleset,
     worked: crate::contest::MultsWorked,
     role: String,
+    /// The slots this session's role receives: the only ones a prediction may fill.
+    receives: Vec<&'static crate::contest::FieldSpec>,
     /// The received exchange of each call's newest contact, by uppercase call.
     rx_by_call: std::collections::HashMap<String, Vec<crate::contest::FieldValue>>,
 }
@@ -514,6 +517,63 @@ impl SpotMults {
             relation: None,
         };
         self.ruleset.scoring.new_mults_of(&self.worked, &row)
+    }
+
+    /// The contest this log runs, as its rules-file event id (`ilqp`): what a call-history file
+    /// is bound to.
+    pub fn event(&self) -> &'static str {
+        self.ruleset.event
+    }
+
+    /// The slots this session's role receives, in its receive order.
+    pub fn receives(&self) -> &[&'static crate::contest::FieldSpec] {
+        &self.receives
+    }
+
+    /// ⭐ **The multipliers a station never worked here is PREDICTED to add**, `(rule id,
+    /// value)`, from what another source says it sends: `exchanges` is one received exchange per
+    /// possibility (a county-line station gives one per county), each counted by the scorer's
+    /// own keys exactly as [`new_mults`](Self::new_mults) counts a logged one. A multiplier any of
+    /// them would add is listed once.
+    ///
+    /// Empty for a station this log has worked: its own earlier exchange is the answer, and
+    /// [`new_mults`](Self::new_mults) gives it. A multiplier the call alone already gives (an
+    /// entity, a prefix) is [`new_mults`](Self::new_mults)'s too, so it is never listed here.
+    pub fn predicted_mults(
+        &self,
+        call: &str,
+        band: &str,
+        mode_class: &str,
+        submode: Option<&str>,
+        exchanges: &[Vec<crate::contest::FieldValue>],
+    ) -> Vec<(&'static str, String)> {
+        let call = call.trim().to_ascii_uppercase();
+        if self.rx_by_call.contains_key(&call)
+            || submode.is_some_and(|m| self.ruleset.mode_banned(m))
+        {
+            return Vec::new();
+        }
+        let confirmed = self.new_mults(&call, band, mode_class, submode);
+        let placed = crate::contest::resolve_call(&call);
+        let prefix = crate::contest::wpx_prefix(&call);
+        let mut out: Vec<(&'static str, String)> = Vec::new();
+        for rx in exchanges {
+            let row = crate::contest::ScoreRow {
+                mode_class,
+                band,
+                role: &self.role,
+                rx,
+                entity: placed.map(|p| p.entity),
+                prefix: prefix.as_deref(),
+                relation: None,
+            };
+            for m in self.ruleset.scoring.new_mults_of(&self.worked, &row) {
+                if !confirmed.contains(&m) && !out.contains(&m) {
+                    out.push(m);
+                }
+            }
+        }
+        out
     }
 }
 
@@ -2088,10 +2148,17 @@ impl FieldDayLog {
         for q in &self.qsos {
             rx_by_call.insert(q.call.trim().to_ascii_uppercase(), q.rx.clone());
         }
+        let role = self.session.role();
+        let exchange = self.session.exchange;
         SpotMults {
             ruleset,
             worked: ruleset.scoring.mults_worked(self.score_rows()),
-            role: self.session.role().id.to_string(),
+            role: role.id.to_string(),
+            receives: role
+                .receives
+                .iter()
+                .filter_map(|k| exchange.field(k))
+                .collect(),
             rx_by_call,
         }
     }

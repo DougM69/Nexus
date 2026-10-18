@@ -2909,6 +2909,17 @@ export interface SpotRow {
    *  (`county`, `country`) and the value. Absent outside a contest, for a station that adds
    *  none, and from an older station. */
   contestMults?: SpotContestMult[]
+  /** While a contest runs, for a station this log has never worked: the multipliers the
+   *  operator's call-history file PREDICTS it would add (the county the file says it sends,
+   *  counted by the same scoring). Never one `contestMults` lists. Absent with no file, no entry,
+   *  call history off, outside a contest, and from an older station. */
+  contestPredicted?: SpotPredictedMult[]
+}
+
+/** One multiplier the call history predicts for a spotted station (`SpotRow.contestPredicted`). */
+export interface SpotPredictedMult extends SpotContestMult {
+  /** Every county of a county-line entry, when the prediction came from one. */
+  countyLine?: string[]
 }
 
 /** One multiplier a spotted station would add (`SpotRow.contestMults`). Both are invariant

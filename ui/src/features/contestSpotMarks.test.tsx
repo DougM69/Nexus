@@ -4,7 +4,7 @@
 // station's, riding the row (`contestMults`). Every assertion is by value.
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, within } from '@testing-library/react'
-import { contestSpotMarker, spotContestClass, spotMarkWords } from './contestSpotMarks'
+import { contestSpotMarker, spotContestClass, spotMarkWords, spotMultTag } from './contestSpotMarks'
 import { BandStrip } from '../components/BandStrip'
 import { BandMap } from '../components/BandMap'
 import { SpotsPanel } from '../components/SpotsPanel'
@@ -57,11 +57,14 @@ const spot = (call: string, over: Partial<SpotRow> = {}): SpotRow =>
   }) as SpotRow
 
 const cook = [{ id: 'county', value: 'COOK' }]
+/** What the station predicts from the call history for a station never worked. */
+const lake = [{ id: 'county', value: 'LAKE' }]
+const line = [{ id: 'county', value: 'DUPG', countyLine: ['COOK', 'DUPG'] }]
 
 describe('contestSpotMarker', () => {
   it('marks a station worked on this band and mode a dupe, and gives it no multiplier', () => {
     const mark = contestSpotMarker(contest())!
-    expect(mark(spot('W1AW', { contestMults: cook }))).toEqual({ dupe: true, mults: [] })
+    expect(mark(spot('W1AW', { contestMults: cook }))).toEqual({ dupe: true, mults: [], predicted: [] })
   })
 
   it('does not mark a station worked on ANOTHER band under a per-band rule', () => {
@@ -81,8 +84,28 @@ describe('contestSpotMarker', () => {
 
   it('carries the multipliers the station computed for a station that is not a dupe', () => {
     const mark = contestSpotMarker(contest())!
-    expect(mark(spot('K9AAA', { contestMults: cook }))).toEqual({ dupe: false, mults: cook })
+    expect(mark(spot('K9AAA', { contestMults: cook }))).toEqual({ dupe: false, mults: cook, predicted: [] })
     expect(spotMarkWords(mark(spot('K9AAA', { contestMults: cook })))).toEqual(['new mult: county COOK'])
+  })
+
+  it('carries a call-history prediction as its own, weaker mark, worded as a prediction', () => {
+    const mark = contestSpotMarker(contest())!
+    const m = mark(spot('K9NEW', { contestPredicted: lake }))
+    expect(m).toEqual({ dupe: false, mults: [], predicted: lake })
+    expect(spotMultTag(m)).toBe('predicted')
+    expect(spotMarkWords(m)).toEqual(['predicted from call history: county LAKE'])
+    // A county line says so, and names the whole line.
+    expect(spotMarkWords(mark(spot('K9LIN', { contestPredicted: line })))).toEqual([
+      'predicted from call history (county line COOK/DUPG): county DUPG',
+    ])
+    // A confirmed multiplier wins the tag; the words keep both.
+    const both = mark(spot('DL1AAA', { contestMults: [{ id: 'dxcc', value: 'Germany' }], contestPredicted: lake }))
+    expect(spotMultTag(both)).toBe('mult')
+    expect(spotMarkWords(both)).toEqual(['new mult: dxcc Germany', 'predicted from call history: county LAKE'])
+    // Nothing predicted, nothing marked; and a dupe counts nothing, predicted or not.
+    expect(mark(spot('K9NON'))).toBe(null)
+    expect(spotMultTag(null)).toBe(null)
+    expect(mark(spot('W1AW', { contestPredicted: lake }))).toEqual({ dupe: true, mults: [], predicted: [] })
   })
 
   it('marks nothing outside a contest', () => {
@@ -116,11 +139,27 @@ describe('the band strip', () => {
         dialMhz={14.03}
         txAllowed
         spotMode="CW"
-        spots={[spot('W1AW', { freqMhz: 14.02 }), spot('K9AAA', { freqMhz: 14.04, contestMults: cook })]}
+        spots={[
+          spot('W1AW', { freqMhz: 14.02 }),
+          spot('K9AAA', { freqMhz: 14.04, contestMults: cook }),
+          spot('K9NEW', { freqMhz: 14.03, contestPredicted: lake }),
+        ]}
         onWorkSpot={() => {}}
         fieldDay={fieldDay}
       />,
     )
+
+  it('tags a predicted multiplier MULT?, outlined, with the prediction in its words', () => {
+    strip(contest())
+    const p = screen.getByRole('button', { name: 'K9NEW · predicted from call history: county LAKE' })
+    expect(p.getAttribute('title')).toContain('predicted from call history: county LAKE')
+    const tag = within(p).getByText('MULT?')
+    expect(tag.className).toBe('spot-mult-tag predicted')
+    expect(within(p).queryByText('MULT')).toBe(null)
+    expect(within(screen.getByRole('button', { name: /^K9AAA/ })).getByText('MULT').className).toBe(
+      'spot-mult-tag lean-left',
+    )
+  })
 
   it('strikes a dupe and tags a new multiplier, in the tooltip and the accessible name', () => {
     strip(contest())
@@ -137,6 +176,7 @@ describe('the band strip', () => {
   it('marks nothing outside a contest', () => {
     strip(null)
     expect(screen.queryByText('MULT')).toBe(null)
+    expect(screen.queryByText('MULT?')).toBe(null)
     expect(document.querySelector('.contest-dupe')).toBe(null)
     expect(screen.queryByRole('button', { name: /dupe|new mult/ })).toBe(null)
   })
@@ -151,18 +191,25 @@ describe('the band map', () => {
           dialMhz={14.03}
           txAllowed
           spotMode="CW"
-          spots={[spot('W1AW', { freqMhz: 14.02 }), spot('K9AAA', { freqMhz: 14.04, contestMults: cook })]}
+          spots={[
+            spot('W1AW', { freqMhz: 14.02 }),
+            spot('K9AAA', { freqMhz: 14.04, contestMults: cook }),
+            spot('K9NEW', { freqMhz: 14.03, contestPredicted: lake }),
+          ]}
           onWorkSpot={() => {}}
           fieldDay={fieldDay}
         />,
       )
     map(contest())
+    const p = screen.getByRole('button', { name: 'K9NEW · predicted from call history: county LAKE' })
+    expect(within(p).getByText('MULT?').className).toBe('spot-mult-tag predicted')
     expect(screen.getByRole('button', { name: 'W1AW · dupe' }).className).toContain('contest-dupe')
     const mult = screen.getByRole('button', { name: 'K9AAA · new mult: county COOK' })
     expect(within(mult).getByText('MULT')).toBeTruthy()
     cleanup()
     map(undefined)
     expect(screen.queryByText('MULT')).toBe(null)
+    expect(screen.queryByText('MULT?')).toBe(null)
     expect(document.querySelector('.contest-dupe')).toBe(null)
   })
 })
@@ -171,7 +218,11 @@ describe('the spots list', () => {
   const list = (fieldDay?: FieldDayStatus | null) =>
     render(
       <SpotsPanel
-        spots={[spot('W1AW'), spot('K9AAA', { freqMhz: 14.04, contestMults: cook })]}
+        spots={[
+          spot('W1AW'),
+          spot('K9AAA', { freqMhz: 14.04, contestMults: cook }),
+          spot('K9LIN', { freqMhz: 14.045, contestPredicted: line }),
+        ]}
         bandPlan={[]}
         selectedCall={null}
         onSelect={() => {}}
@@ -191,12 +242,18 @@ describe('the spots list', () => {
     expect(within(k9aaa).getByText('MULT').getAttribute('title')).toBe('new mult: county COOK')
     expect(k9aaa.getAttribute('title')).toMatch(/· new mult: county COOK$/)
     expect(within(k9aaa).queryByText('DUPE')).toBe(null)
+    const k9lin = rows.find((r) => r.textContent?.includes('K9LIN'))!
+    const tag = within(k9lin).getByText('MULT?')
+    expect(tag.className).toBe('spot-contest-tag spot-mult-tag predicted')
+    expect(tag.getAttribute('title')).toBe('predicted from call history (county line COOK/DUPG): county DUPG')
+    expect(within(k9lin).queryByText('MULT')).toBe(null)
   })
 
   it('marks nothing outside a contest', () => {
     list(null)
     expect(screen.queryByText('DUPE')).toBe(null)
     expect(screen.queryByText('MULT')).toBe(null)
+    expect(screen.queryByText('MULT?')).toBe(null)
     expect(document.querySelector('.contest-dupe')).toBe(null)
   })
 })

@@ -21973,6 +21973,24 @@ struct SpotRow {
     /// outside a contest and for a station that adds none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     contest_mults: Vec<SpotMult>,
+    /// ⭐ While a contest runs, for a station this log has never worked: the multipliers the
+    /// operator's call-history file PREDICTS it would add — the value the file says it sends,
+    /// counted by the same scoring (`SpotMults::predicted_mults`). Never one `contest_mults`
+    /// already lists. Empty, and off the wire, with no file, no entry, or call history off.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    contest_predicted: Vec<SpotPredictedMult>,
+}
+
+/// One multiplier the call history predicts for a spotted station (`SpotRow.contest_predicted`).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SpotPredictedMult {
+    id: &'static str,
+    value: String,
+    /// The counties of a county-line entry, every one of them, when the prediction came from
+    /// one; empty (and off the wire) otherwise.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    county_line: Vec<String>,
 }
 
 /// One multiplier a spotted station would add: the contest's rule id (`county`, `country`) and
@@ -22039,6 +22057,17 @@ fn read_all_spots(
     state: &SharedEngine,
     nonblocking: bool,
 ) -> Result<Vec<SpotRow>, String> {
+    read_spots_with(spots, state, nonblocking, &contest_lists::loaded_history)
+}
+
+/// [`read_all_spots`] with the call-history file read through `history` — the imported file
+/// with the contest it is bound to — so a test can hand it one without the shared data folder.
+fn read_spots_with(
+    spots: &SharedSpots,
+    state: &SharedEngine,
+    nonblocking: bool,
+    history: &dyn Fn() -> Option<(String, std::sync::Arc<tempo_app::call_history::CallHistory>)>,
+) -> Result<Vec<SpotRow>, String> {
     use tempo_app::settings::{LicenseClass, OperatingMode};
     // UNASSISTED mode: no spot may be DISPLAYED either. Ingestion is already gated at the
     // feed callbacks, so the buffer should be empty — this is the belt-and-braces read gate,
@@ -22072,7 +22101,7 @@ fn read_all_spots(
     //
     // Poison recovers (engine_lock), so the gate always sees real state; the Option
     // shape is kept for the chains below.
-    let (class, my_call, roster_grids, last_worked, contest_mults) = {
+    let (class, my_call, roster_grids, last_worked, contest_mults, history_on) = {
         let eng = Some(if nonblocking {
             engine_try_lock(state).map_err(|_| "applicationBusy")?
         } else {
@@ -22118,12 +22147,38 @@ fn read_all_spots(
         // The contest's earned multipliers, built once here (one pass over the contest log)
         // and asked about each spot below with the lock released. `None` outside a contest.
         let contest_mults = eng.as_ref().and_then(|e| e.contest_spot_mults());
-        (class, my_call, grids, last_worked, contest_mults)
+        // Call history is on where the strip's fill is: the operator's switch, and never in
+        // Unassisted mode.
+        let history_on = eng
+            .as_ref()
+            .is_some_and(|e| e.settings().call_history_active());
+        (
+            class,
+            my_call,
+            grids,
+            last_worked,
+            contest_mults,
+            history_on,
+        )
     };
+    // The call-history file, when one is imported for THIS contest. Parsed once per import
+    // (`contest_lists::loaded_history`), so a big file is not read again for every refresh.
+    let history = match &contest_mults {
+        Some(probe) if history_on => {
+            history().and_then(|(contest, h)| (contest == probe.event()).then_some(h))
+        }
+        _ => None,
+    };
+    // What the file says each call sends, read once per call.
+    let mut sends_memo: std::collections::HashMap<
+        String,
+        Vec<Vec<tempo_core::contest::FieldValue>>,
+    > = std::collections::HashMap::new();
     // A station is spotted many times on one band: ask once per (call, band, mode).
+    #[allow(clippy::type_complexity)]
     let mut mults_memo: std::collections::HashMap<
         (String, String, &'static str, Option<String>),
-        Vec<SpotMult>,
+        (Vec<SpotMult>, Vec<SpotPredictedMult>),
     > = std::collections::HashMap::new();
     let mut rows: Vec<SpotRow> = recent
         .into_iter()
@@ -22164,22 +22219,47 @@ fn read_all_spots(
                 spot_voice_origins(&cs.spotter, &cs.corroborators);
             let (worked_ago_secs, worked_today_utc) =
                 spot_worked(last_worked.get(&cs.dx_call).copied(), now);
-            let contest_mults = match &contest_mults {
+            let (contest_mults, contest_predicted) = match &contest_mults {
                 Some(probe) => {
                     let class = spot_contest_class(mode_label);
                     let submode = cs.skimmer_mode().map(str::to_string);
                     mults_memo
                         .entry((cs.dx_call.clone(), band.clone(), class, submode))
                         .or_insert_with_key(|(call, band, class, submode)| {
-                            probe
+                            let confirmed = probe
                                 .new_mults(call, band, class, submode.as_deref())
                                 .into_iter()
                                 .map(|(id, value)| SpotMult { id, value })
-                                .collect()
+                                .collect();
+                            let Some(h) = &history else {
+                                return (confirmed, Vec::new());
+                            };
+                            let sends = sends_memo.entry(call.clone()).or_insert_with(|| {
+                                tempo_app::call_history::exchanges_for(h, call, probe.receives())
+                            });
+                            // A county line is every county the file names for it.
+                            let line: Vec<String> = sends
+                                .first()
+                                .and_then(|first| {
+                                    (0..first.len())
+                                        .find(|&i| sends.iter().any(|rx| rx[i].raw != first[i].raw))
+                                })
+                                .map(|i| sends.iter().map(|rx| rx[i].raw.clone()).collect())
+                                .unwrap_or_default();
+                            let predicted = probe
+                                .predicted_mults(call, band, class, submode.as_deref(), sends)
+                                .into_iter()
+                                .map(|(id, value)| SpotPredictedMult {
+                                    id,
+                                    value,
+                                    county_line: line.clone(),
+                                })
+                                .collect();
+                            (confirmed, predicted)
                         })
                         .clone()
                 }
-                None => Vec::new(),
+                None => (Vec::new(), Vec::new()),
             };
             SpotRow {
                 call: cs.dx_call.clone(),
@@ -22211,6 +22291,7 @@ fn read_all_spots(
                 worked_ago_secs,
                 worked_today_utc,
                 contest_mults,
+                contest_predicted,
             }
         })
         .collect();
@@ -50135,7 +50216,7 @@ mod tests {
         buf.push(mk("W6A"));
         buf.push(mk("K1ABC"));
         let spots: crate::SharedSpots = std::sync::Arc::new(std::sync::Mutex::new(buf));
-        let rows = crate::read_all_spots(&spots, &engine, false).expect("rows");
+        let rows = crate::read_spots_with(&spots, &engine, false, &|| None).expect("rows");
         let w6a = rows.iter().find(|r| r.call == "W6A").expect("W6A row");
         let ago = w6a.worked_ago_secs.expect("W6A was worked");
         assert!(
@@ -50178,7 +50259,7 @@ mod tests {
         buf.push(mk("F5XYZ", 14_030.0));
         let spots: crate::SharedSpots = std::sync::Arc::new(std::sync::Mutex::new(buf));
         let mults = |engine: &SharedEngine, call: &str, band: &str| {
-            let rows = crate::read_all_spots(&spots, engine, false).expect("rows");
+            let rows = crate::read_spots_with(&spots, engine, false, &|| None).expect("rows");
             let r = rows
                 .iter()
                 .find(|r| r.call == call && r.band == band)
@@ -50228,6 +50309,134 @@ mod tests {
         assert_eq!(
             ["CW", "Phone", "Digital"].map(crate::spot_contest_class),
             ["CW", "PH", "DIG"]
+        );
+    }
+
+    /// ⭐ **A band map predicts a never-worked station's county from the call-history file**, by
+    /// the contest's own scoring, as N1MM does: the file's county for a station never worked, if
+    /// that county is not worked yet. The station's own earlier exchange beats the file; no
+    /// file, no entry, a file for another contest, call history off, or no contest: nothing.
+    #[test]
+    fn a_spot_predicts_the_multiplier_its_call_history_gives() {
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        let s = tempo_app::settings::Settings {
+            mycall: "W9XYZ".into(),
+            fd_event: "ilqp".into(),
+            fd_active: true,
+            contest_qth_state: "WI".into(),
+            band: "20m".into(),
+            ..Default::default()
+        };
+        let mk = |call: &str| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: call.into(),
+            freq_khz: 14_035.0,
+            comment: String::new(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let mut buf = SpotBuffer::new(100);
+        for call in ["K9NEW", "K9OLD", "K9WRK", "K9LIN", "K9NON"] {
+            buf.push(mk(call));
+        }
+        let spots: crate::SharedSpots = std::sync::Arc::new(std::sync::Mutex::new(buf));
+        let file = |contest: &str| {
+            let row = |v: &str| [("Loc1".to_string(), v.to_string())].into_iter().collect();
+            let h = tempo_app::call_history::CallHistory {
+                fields: Vec::new(),
+                entries: [
+                    ("K9NEW", "LAKE"),
+                    ("K9OLD", "COOK"),
+                    ("K9WRK", "LAKE"),
+                    ("K9LIN", "COOK/DUPG"),
+                ]
+                .into_iter()
+                .map(|(c, v)| (c.to_string(), row(v)))
+                .collect(),
+            };
+            Some((contest.to_string(), std::sync::Arc::new(h)))
+        };
+        type Predicted = Vec<(&'static str, String, Vec<String>)>;
+        let predicted = |engine: &SharedEngine,
+                         history: &dyn Fn() -> Option<(
+            String,
+            std::sync::Arc<tempo_app::call_history::CallHistory>,
+        )>,
+                         call: &str|
+         -> Predicted {
+            let rows = crate::read_spots_with(&spots, engine, false, history).expect("rows");
+            rows.iter()
+                .find(|r| r.call == call)
+                .unwrap_or_else(|| panic!("{call}"))
+                .contest_predicted
+                .iter()
+                .map(|m| (m.id, m.value.clone(), m.county_line.clone()))
+                .collect()
+        };
+        let ilqp = || file("ilqp");
+        // No contest: nothing, whatever the file says.
+        let idle: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::with_settings(s.clone()),
+        ));
+        assert_eq!(
+            predicted(&idle, &ilqp, "K9NEW"),
+            vec![],
+            "outside a contest"
+        );
+        let mut e = tempo_app::engine::Engine::with_settings(s.clone());
+        e.set_mode("fieldday-sp").unwrap();
+        // The id a file is bound to at import is the snapshot's `fieldDay.event`.
+        assert_eq!(e.snapshot().field_day.expect("a contest").event, "ilqp");
+        let fields = |qth: &str| -> Vec<(String, String)> {
+            vec![("RST".into(), "599".into()), ("QTH".into(), qth.into())]
+        };
+        assert!(e
+            .contest_log_manual("K9AAA", &fields("COOK"), "CW", None)
+            .unwrap());
+        assert!(e
+            .contest_log_manual("K9WRK", &fields("PEOR"), "CW", None)
+            .unwrap());
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(e));
+        assert_eq!(
+            predicted(&engine, &ilqp, "K9NEW"),
+            vec![("county", "LAKE".to_string(), vec![])],
+            "never worked, LAKE not worked: predicted"
+        );
+        assert_eq!(predicted(&engine, &ilqp, "K9OLD"), vec![], "COOK is worked");
+        assert_eq!(
+            predicted(&engine, &ilqp, "K9WRK"),
+            vec![],
+            "worked from PEOR: its own exchange beats the file's LAKE"
+        );
+        assert_eq!(
+            predicted(&engine, &ilqp, "K9LIN"),
+            vec![(
+                "county",
+                "DUPG".to_string(),
+                vec!["COOK".to_string(), "DUPG".to_string()]
+            )],
+            "a county line: the county it would add, and the whole line"
+        );
+        assert_eq!(predicted(&engine, &ilqp, "K9NON"), vec![], "no entry");
+        assert_eq!(predicted(&engine, &|| None, "K9NEW"), vec![], "no file");
+        assert_eq!(
+            predicted(&engine, &|| file("ohqp"), "K9NEW"),
+            vec![],
+            "a file bound to another contest"
+        );
+        // Call history off (Unassisted turns it off with every assistance source).
+        {
+            let mut eng = engine.lock().unwrap();
+            let mut off = eng.settings().clone();
+            off.call_history_enabled = false;
+            eng.apply_settings(off);
+        }
+        assert_eq!(
+            predicted(&engine, &ilqp, "K9NEW"),
+            vec![],
+            "call history off"
         );
     }
 

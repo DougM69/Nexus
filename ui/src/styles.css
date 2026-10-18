@@ -20363,6 +20363,14 @@ button.cq-skiptx1.on {
   color: var(--accent-ink);
   background: var(--accent);
 }
+/* MULT?: a multiplier only the call history predicts. The accent outlined, not filled, so it reads
+   as weaker than a confirmed MULT; the inset ring keeps the box the filled tag's size, and the
+   opaque fill keeps it legible over the strip's ticks. */
+.spot-mult-tag.predicted {
+  color: var(--accent);
+  background: var(--bg-elev);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
 .spot-contest-tag {
   margin-right: 6px;
 }

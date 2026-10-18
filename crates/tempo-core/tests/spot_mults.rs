@@ -209,3 +209,92 @@ fn a_wpx_spot_adds_its_prefix_until_it_is_worked() {
         "ZS6 is worked, once per log"
     );
 }
+
+/// An IL county as the call history would give it.
+fn county(code: &'static str) -> Vec<tempo_core::contest::FieldValue> {
+    vec![tempo_core::contest::FieldValue {
+        key: "QTH",
+        raw: code.to_string(),
+        domain: Some("il_counties"),
+    }]
+}
+
+/// ⭐ **A prediction is the scorer's answer to what another source says the station sends.** Out
+/// of state, ILQP's multiplier is the county: a station never worked whose county is not yet
+/// worked predicts that county; one whose county is worked predicts nothing.
+#[test]
+fn a_never_worked_station_predicts_the_county_it_would_send() {
+    let mut log = ilqp("WI");
+    work(&mut log, "K9AAA", "COOK", 100);
+    let probe = log.spot_mults();
+    assert_eq!(
+        probe.predicted_mults("K9NEW", "20m", "CW", None, &[county("LAKE")]),
+        vec![("county", "LAKE".to_string())],
+        "LAKE is not worked"
+    );
+    assert_eq!(
+        probe.predicted_mults("K9NEW", "20m", "CW", None, &[county("COOK")]),
+        vec![],
+        "COOK is worked"
+    );
+    assert_eq!(
+        probe.predicted_mults("K9NEW", "20m", "CW", None, &[]),
+        vec![],
+        "nothing said, nothing predicted"
+    );
+    assert_eq!(
+        probe.predicted_mults("K9NEW", "20m", "DIG", Some("FT8"), &[county("LAKE")]),
+        vec![],
+        "a banned mode counts nothing"
+    );
+}
+
+/// The station's own earlier exchange in this contest beats any other source: a station logged
+/// from COOK predicts nothing, whatever the history says.
+#[test]
+fn an_earlier_exchange_beats_the_prediction() {
+    let mut log = ilqp("WI");
+    work(&mut log, "K9AAA", "COOK", 100);
+    let probe = log.spot_mults();
+    assert_eq!(
+        probe.predicted_mults("K9AAA", "40m", "CW", None, &[county("LAKE")]),
+        vec![]
+    );
+}
+
+/// A county line: every county any of its exchanges would add, each once, and never a
+/// multiplier the call alone already gives (that is `new_mults`', confirmed).
+#[test]
+fn a_county_line_predicts_each_county_it_would_add() {
+    let mut log = ilqp("WI");
+    work(&mut log, "K9AAA", "COOK", 100);
+    let probe = log.spot_mults();
+    assert_eq!(
+        probe.predicted_mults(
+            "K9NEW",
+            "20m",
+            "CW",
+            None,
+            &[
+                county("COOK"),
+                county("DUPG"),
+                county("LAKE"),
+                county("DUPG")
+            ]
+        ),
+        vec![
+            ("county", "DUPG".to_string()),
+            ("county", "LAKE".to_string())
+        ]
+    );
+    let probe = ilqp("IL").spot_mults();
+    assert_eq!(
+        probe.new_mults("DL1AAA", "20m", "CW", None),
+        vec![("dxcc", "Germany".to_string())]
+    );
+    assert_eq!(
+        probe.predicted_mults("DL1AAA", "20m", "CW", None, &[county("LAKE")]),
+        vec![("county", "LAKE".to_string())],
+        "the entity is confirmed already, so only the county is predicted"
+    );
+}

@@ -4,7 +4,7 @@ import { bandRangeForLabel } from '../band'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { NEED_CHIP } from '../features/needVisuals'
-import { spotMarkWords, useContestSpotMarker } from '../features/contestSpotMarks'
+import { spotMarkWords, spotMultTag, useContestSpotMarker } from '../features/contestSpotMarks'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { BEACON_BADGE, SpotLegend, TYPE_BADGE } from './SpotLegend'
 import { t } from '../i18n'
@@ -374,6 +374,7 @@ export function BandMap({
           // A beacon is never worked in a contest, so it is never marked.
           const mark = beacon ? null : (marker?.(s) ?? null)
           const markWords = spotMarkWords(mark)
+          const multTag = spotMultTag(mark)
           const detail = [
             s.call,
             ...markWords,
@@ -405,8 +406,10 @@ export function BandMap({
               >
                 {beacon && <span className={`spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>}
                 {badge && <span className={`spot-type-badge ${badge.cls}`}>{badge.ch}</span>}
-                {mark && mark.mults.length > 0 && (
-                  <span className="spot-mult-tag">{t('contestSpot.tag.mult')}</span>
+                {multTag && (
+                  <span className={`spot-mult-tag${multTag === 'predicted' ? ' predicted' : ''}`}>
+                    {multTag === 'predicted' ? t('contestSpot.tag.predicted') : t('contestSpot.tag.mult')}
+                  </span>
                 )}
                 <span className="bandmap-call mono">{s.call}</span>
                 {unansweredCalls?.has(cu) && (

@@ -176,6 +176,31 @@ pub async fn get_call_history(
     .map_err(|e| e.to_string())
 }
 
+/// The imported call history and the contest it is bound to, for the band map's predicted
+/// multipliers (`read_all_spots`). The spots refresh every few seconds and a file can hold tens
+/// of thousands of calls, so it is parsed once per import: the small record beside it is read
+/// each time, and only a new import (or a Clear) parses again.
+pub fn loaded_history() -> Option<(String, std::sync::Arc<call_history::CallHistory>)> {
+    loaded_history_in(&dir())
+}
+
+/// [`loaded_history`] from `dir`.
+fn loaded_history_in(dir: &Path) -> Option<(String, std::sync::Arc<call_history::CallHistory>)> {
+    type Held = Option<(HistoryMeta, std::sync::Arc<call_history::CallHistory>)>;
+    static HELD: std::sync::Mutex<Held> = std::sync::Mutex::new(None);
+    let meta = call_history::status(dir)?;
+    let mut held = HELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((m, h)) = held.as_ref().filter(|(m, _)| *m == meta) {
+        return Some((m.contest.clone(), h.clone()));
+    }
+    let (meta, h) = call_history::load(dir)?;
+    let h = std::sync::Arc::new(h);
+    *held = Some((meta.clone(), h.clone()));
+    Some((meta.contest, h))
+}
+
 /// Forget the imported call history: the operator's Clear.
 #[tauri::command(async)]
 pub fn clear_call_history() -> Result<(), String> {
@@ -290,5 +315,30 @@ mod tests {
             Some("public, max-age=172800")
         );
         assert_eq!(reply.body, b"K9AAA\r\n");
+    }
+
+    /// The band map's copy of the call history is parsed once per import: the same file is
+    /// handed back without a parse, a new import replaces it, and a Clear forgets it.
+    #[test]
+    fn the_loaded_history_is_parsed_once_per_import() {
+        let d = std::env::temp_dir().join(format!("nexus-rx-history-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(loaded_history_in(&d).is_none(), "nothing imported");
+        call_history::import(&d, "K9AAA,,COOK\n", "a.txt", "ilqp", 100).unwrap();
+        let (contest, first) = loaded_history_in(&d).expect("imported");
+        assert_eq!(contest, "ilqp");
+        let (_, again) = loaded_history_in(&d).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first, &again), "not parsed again");
+        call_history::import(&d, "K9BBB,,LAKE\n", "b.txt", "ohqp", 200).unwrap();
+        let (contest, next) = loaded_history_in(&d).unwrap();
+        assert_eq!(contest, "ohqp");
+        assert_eq!(
+            next.entries.keys().collect::<Vec<_>>(),
+            ["K9BBB"],
+            "the new import"
+        );
+        call_history::clear(&d).unwrap();
+        assert!(loaded_history_in(&d).is_none(), "cleared");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
