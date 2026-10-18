@@ -55,9 +55,11 @@ FT surfaces use, so a signal drifting across the passband moves smoothly instead
 of in steps. Two named cursors replace the usual RX/TX markers — a green **M** at
 the mark tone and an orange **S** at the space tone, drawn from exactly the tone
 pair the demodulator built its filters from, so what you see and what you decode
-can never disagree. The hint above the canvas reads **click nets the decoder**:
-any click moves the decode centre to that audio frequency (clamped 300–3700 Hz)
-and drops the demodulator for a clean re-acquire. Palette, view span, the G/Z
+can never disagree. The hint above the canvas reads **click nets the decoder and
+your transmit tones**: any click moves the decode centre, and the AFSK tones you
+transmit, to that audio frequency (clamped 300–3700 Hz) and drops the demodulator
+for a clean re-acquire. While you transmit the click does nothing and the hint
+reads **tuning held while transmitting**. Palette, view span, the G/Z
 contrast knobs, the 3D stacked-spectrum toggle and pause-with-scrollback all work
 as they do elsewhere.
 
