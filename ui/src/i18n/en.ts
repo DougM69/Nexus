@@ -659,6 +659,7 @@ export const EN = {
   "client.refused.noPresence": "The station has not heard this computer’s Stop link in the last 5 seconds, so it takes no transmission from here. Nothing was sent.",
   "client.refused.staleState": "What this screen shows of the station is more than 2 seconds old, so the station takes no transmission from here until it catches up. Nothing was sent.",
   "client.refused.pressEnded": "Your PTT press has ended. Let go of PTT and press again to talk.",
+  "client.refused.lockCapped": "Lock ended at its time limit: nobody answered “Still talking?”. Click PTT to let go, then again to talk.",
   "client.refused.recording": "A voice message is being recorded on this computer. Stop the recording, then press PTT.",
   "client.refused.pressHeld": "The PTT is held on this computer. Let go of PTT, then record.",
   "client.refused.typedPassword": "A password typed here is never sent: the station uses the one it has stored.",
@@ -11365,6 +11366,9 @@ export const EN = {
   'phone.tx.usbOnly': 'TX locked — 60 m allows only USB phone. Pick USB or AUTO.',
   'phone.tx.turnedBackOn': 'TX was off — turned it back on. Press PTT again to talk.',
   'phone.tx.remoteLock': 'Lock (hands-free PTT) does not work over Remote. Untick Lock, then hold PTT or the Space bar to talk.',
+  // Lock from a computer driving a station: asked shortly before its time limit, and the answer.
+  'phone.lock.stillTalking': 'Still talking? Lock ends in {{seconds}} s.',
+  'phone.lock.keepTalking': 'Keep talking (K)',
   'phone.tx.clockRepair':
     'Not keyed: a clock repair is running, and nothing starts transmitting until it finishes (two minutes at most).',
 

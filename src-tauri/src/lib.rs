@@ -19682,6 +19682,16 @@ fn set_ptt(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, Stri
     Ok(eng.snapshot())
 }
 
+/// Phone's Lock held from a computer driving this station. Client mode answers it there, as one
+/// hold of a held press on Stop's road (`client_mode`), and the shack refuses it from afar by its
+/// class (`command_dispatch`): it is never a command at the shack. The shack's own Lock keys with
+/// `set_ptt`, unchanged.
+#[tauri::command(async)]
+fn hold_ptt_lock(still_talking: bool) -> Result<serde_json::Value, String> {
+    let _ = still_talking;
+    Err("Lock from afar is held by the computer driving this station.".into())
+}
+
 /// A press on the Phone cockpit's PTT made through the Remote stream's picture (Space over it, or
 /// its PTT button): it ARMS the streamed operator's microphone over, and only their voice keys it
 /// (the audio design's M1; the operator's ruling "Arms your mic"). The shack's own microphone is
@@ -37391,6 +37401,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         stop_cw,
         set_cw_keyer,
         set_ptt,
+        hold_ptt_lock,
         arm_stream_mic,
         release_stream_mic,
         set_rf_power,

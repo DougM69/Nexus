@@ -364,6 +364,7 @@ fn the_starts_wired_from_afar_are_the_ft_buttons_the_voice_keyer_and_the_held_pr
     expected.extend(CHAT_STARTS.iter().map(|n| (*n, Wired::Chat)));
     expected.push(("play_voice_message", Wired::VoiceKeyer));
     expected.push(("set_ptt", Wired::HeldPress));
+    expected.push(("hold_ptt_lock", Wired::LockedPress));
     expected.sort_unstable_by_key(|(name, _)| *name);
     assert_eq!(wired, expected);
     assert!(
@@ -394,7 +395,7 @@ fn the_ft_buttons_are_admitted_and_every_other_start_is_refused_by_name() {
         let admission = shack.admit(&controller(), call(id as u64 + 1, name, on_args(name)));
         let expected = match name {
             _ if starts_run_from_afar().contains(&name) => "run".to_string(),
-            "set_ptt" => refused(Refusal::HeldPress),
+            "set_ptt" | "hold_ptt_lock" => refused(Refusal::HeldPress),
             _ => refused(Refusal::TransmitNotYet),
         };
         assert_eq!(kind(&admission), expected, "{name}");
@@ -1173,7 +1174,9 @@ fn the_on_half_of_a_transmit_switch_is_its_class() {
                     | Wired::Chat,
                 ),
             ) => "run".to_string(),
-            (Some(Class::StartsTx), Ok(Wired::HeldPress)) => refused(Refusal::HeldPress),
+            (Some(Class::StartsTx), Ok(Wired::HeldPress | Wired::LockedPress)) => {
+                refused(Refusal::HeldPress)
+            }
             (Some(Class::StartsTx), _) => refused(Refusal::TransmitNotYet),
             // Turning the RTTY sequencer on keys nothing, so it runs at the shack.
             (Some(Class::RunsAtShack), _) => "run".to_string(),
@@ -2077,6 +2080,11 @@ fn each_off_half_reads_an_argument_its_command_takes() {
 
 /// The transmit commands with an on/off-looking argument that have no off half, and why.
 const NO_OFF_HALF: &[(&str, &str)] = &[
+    (
+        "hold_ptt_lock",
+        "Its bool is the answer to \"Still talking?\", not a switch: the Lock is let go by the PTT's \
+         own off half, as a held press is.",
+    ),
     (
         "js8_answer_reply",
         "Its No declines a reply that only a Yes would queue: nothing is on the air to stop.",

@@ -2501,6 +2501,14 @@ export async function setPtt(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_ptt', { on })
 }
 
+/** Phone's Lock, re-asserted from a computer driving a station: one hold of its held press on the
+ *  station's Stop road (`src-tauri/src/client_mode.rs`), `stillTalking` the operator's answer to
+ *  "Still talking?". Resolves whether that is asked, and how long is left before the Lock's cap;
+ *  fails once the press has ended (`lockCapped` at the cap). */
+export async function holdPttLock(stillTalking: boolean): Promise<{ ask: boolean; leftMs?: number }> {
+  return invoke<{ ask: boolean; leftMs?: number }>('hold_ptt_lock', { stillTalking })
+}
+
 /** A Phone PTT press made through the Remote stream's picture: ARMS the streamed operator's
  *  microphone over, which only their audio keys. Resolves whether an over is armed. */
 export async function armStreamMic(): Promise<boolean> {

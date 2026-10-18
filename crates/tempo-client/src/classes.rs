@@ -237,6 +237,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("get_window_on_top",              RunsHere,    "A window on this computer."),
     ("get_xray_now",                   RunsAtShack, "The shack's propagation feeds."),
     ("halt_tx",                        StopsTx,     "Stops transmitting now and drops what is queued."),
+    ("hold_ptt_lock",                  StartsTx,    "Phone's Lock from another computer: a held press, re-asserted by its screen and capped."),
     ("hrdlog_push_qso",                RunsAtShack, "An upload from the shack, with its stored credential."),
     ("hunted_parks_count",             RunsAtShack, "The shack's hunted parks."),
     ("icom_lan_password_saved",        RunsAtShack, "Whether the shack holds a radio's Icom network password, yes or no, never the password."),

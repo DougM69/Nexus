@@ -19,6 +19,7 @@ export function clientWords(code: string): string {
     case 'noPresence': return t('client.refused.noPresence')
     case 'staleState': return t('client.refused.staleState')
     case 'pressEnded': return t('client.refused.pressEnded')
+    case 'lockCapped': return t('client.refused.lockCapped')
     case 'recording': return t('client.refused.recording')
     case 'pressHeld': return t('client.refused.pressHeld')
     case 'typedPassword': return t('client.refused.typedPassword')

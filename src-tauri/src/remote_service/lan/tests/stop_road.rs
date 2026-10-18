@@ -54,6 +54,8 @@ mod from_afar;
 mod from_afar_aprs_sstv_chat;
 /// Stop's road over the internet: ICE, through a TURN relay.
 mod internet;
+/// Phone's Lock from afar, from this computer's screen and microphone to the shack's loop.
+mod lock;
 /// Stop's second road through a relay, as the internet stands between the two computers.
 mod relayed;
 /// Stop wins over a start that was in flight.

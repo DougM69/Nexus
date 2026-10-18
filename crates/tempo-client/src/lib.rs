@@ -73,6 +73,8 @@ pub mod link;
 pub mod native;
 /// One connection's writer, at either end of the command link.
 pub mod outbox;
+/// Phone's Lock from afar: its cap and "Still talking?".
+pub mod phone_lock;
 /// The road to a paired station, for the window's page and the command link.
 pub mod road;
 /// "Still there?" on the internet road: the operator's input, measured.

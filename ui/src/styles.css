@@ -12143,6 +12143,28 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: var(--fs-label);
   color: var(--text-dim);
 }
+/* "Still talking?" for a Lock from afar: last in the PTT row and taking only the room left
+   (a zero basis never wraps the row), so its coming and going never moves PTT or Lock. */
+.ph-still-talking {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--accent);
+}
+.ph-still-talking > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ph-still-talking > button {
+  flex: 0 0 auto;
+}
 /* Field Day exchange prompt — what the operator reads aloud when they key up. */
 .ph-fd-give {
   display: inline-flex;
