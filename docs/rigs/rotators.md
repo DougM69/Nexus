@@ -113,17 +113,24 @@ Selectable in the dropdown; `rotctl -l` lists every model your Hamlib knows, and
 > An **ARS-USB** speaks GS-232, so use **GS-232 (generic)** with the ARS's own
 > COM port.
 
-> **PstRotatorAz users:** pick **PstRotatorAz / PstRotator (UDP)**, Hamlib model
-> 3. PstRotatorAz takes its commands over UDP, so the port is its address, not a
-> serial port: `127.0.0.1:12000` when it runs on the same PC. The baud does not
-> matter. Turn on **UDP Control** in PstRotatorAz's Setup and keep it on its
-> default port 12000, because Hamlib listens for its position reply on 12001
-> only. Leave **External rotctld (advanced)** empty: that box is for a
-> `rotctld`, which PstRotatorAz is not. One caveat: Hamlib's PstRotator backend,
-> including the one Nexus ships, writes the bearing it sends with a formatting
-> bug, so 123.4° goes out as `123.400002.2`. Nobody has tried that against a
-> real PstRotatorAz yet, so if the antenna does not turn to where you point it,
-> that is the likely reason: please report it.
+> **PstRotatorAz users:** pick **PstRotatorAz / PstRotator (UDP)** (model 3).
+> Nexus talks to PstRotatorAz itself, over the UDP control its manual documents;
+> it no longer goes through Hamlib's PstRotator backend, which garbled the bearing
+> and could not stop the rotor. The port is PstRotatorAz's address, not a serial
+> port: `127.0.0.1:12000` when it runs on the same PC, or that PC's address on
+> your network. The baud does not matter. In PstRotatorAz, tick **Setup ▸ UDP
+> Control**; its **Communication ▸ UDP Control Port…** must match the port you
+> enter. PstRotatorAz sends its replies to that port + 1 (12001 by default), and
+> Nexus listens there, so no other program may hold it. If one does, the
+> Connections log says so: close that program, or move PstRotatorAz to another
+> UDP Control Port (say 12002) and enter the same number here; its replies then
+> come on 12003. Pointing, STOP and the compass all work; STOP is sent twice,
+> because UDP has no acknowledgement. Every command is checked with PstRotatorAz's
+> position query, so when it does not answer the compass shows "—" and the
+> command reports that nothing confirmed it. Leave **External rotctld
+> (advanced)** empty: that box is for a `rotctld`, which PstRotatorAz is not.
+> Nobody has tried this against a real PstRotatorAz yet: please report how it
+> goes.
 
 There's also an **External rotctld (advanced)** field: enter a `host:port` to
 point Nexus at a `rotctld` you run yourself (or one on another machine). It

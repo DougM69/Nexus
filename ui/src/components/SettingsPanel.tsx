@@ -609,14 +609,14 @@ export const baudForRotator = (modelNum: number, currentBaud: number): number | 
 }
 
 /**
- * PstRotatorAz (YO3DMU), which takes its commands over UDP rather than a serial line: Hamlib's
- * PstRotator backend is model 3, and the port box takes the program's address, 12000 on this
- * machine by default ("UDP Control" in its Setup). The backend writes a bearing with `%f.2`, a
- * typo for `%.2f` that is in the bundled Hamlib 4.7.1's own format string and still on Hamlib's
- * master: 123.4° goes out as `123.400002.2`. Whether PstRotatorAz reads that as 123.4 takes a
- * real one to tell, so the hint says what is sent. Not prose, like `ROTATOR_EXAMPLES`.
+ * PstRotatorAz (YO3DMU), which takes its commands over UDP rather than a serial line. The entry
+ * keeps Hamlib's number for it, model 3, but Nexus talks to PstRotatorAz itself
+ * (`tempo_audio::pstrotator`), because Hamlib's backend garbles the bearing and has no stop. The
+ * port box takes the program's address, 12000 on this machine by default ("UDP Control" in its
+ * Setup), and its replies come back on that port + 1, which Nexus must be able to listen on.
+ * Not prose, like `ROTATOR_EXAMPLES`.
  */
-const PSTROTATOR = { model: 3, address: '127.0.0.1:12000', bearing: '123.4', sent: '123.400002.2' } as const
+const PSTROTATOR = { model: 3, address: '127.0.0.1:12000', reply: '12001' } as const
 
 /**
  * The curated rotator list. Model numbers and the `(az)` / `(az/el)` suffixes are checked
@@ -7068,14 +7068,13 @@ export function SettingsPanel({
                       when the saved value cannot work. */}
                   {(() => {
                     // PstRotatorAz has no line rate to match: its hint says where it listens,
-                    // and what Hamlib's backend for it sends as a bearing.
+                    // and where Nexus listens for its replies.
                     if ((form.rotatorModel ?? 0) === PSTROTATOR.model) {
                       return (
                         <span className="settings-hint">
                           {t('settings.rotator.port.hint.pstRotator', {
                             address: PSTROTATOR.address,
-                            sent: PSTROTATOR.sent,
-                            bearing: PSTROTATOR.bearing,
+                            reply: PSTROTATOR.reply,
                           })}
                         </span>
                       )

@@ -95,6 +95,8 @@ pub mod proc_util;
 /// RX side of PSK31 (TX runs in the radio loop — `service.rs`).
 #[cfg(feature = "device")]
 pub mod pskrx;
+/// PstRotatorAz over its own UDP control, served to Nexus as a rotctld on loopback.
+pub mod pstrotator;
 pub mod rig;
 pub mod rigctld_proc;
 pub mod rigctld_server;
