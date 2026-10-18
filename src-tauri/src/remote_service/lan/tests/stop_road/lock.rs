@@ -94,7 +94,7 @@ impl Locked {
             s.main.app_handle().clone(),
             find,
             Arc::new(|_| Ok(Vec::new())),
-            Some(at),
+            Some(tempo_stream::lan::Typed::At(at)),
         ));
         eventually("control taken", || client.status().phase == Phase::Live);
         let done = Arc::new(AtomicBool::new(false));
