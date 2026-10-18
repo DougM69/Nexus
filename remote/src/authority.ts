@@ -233,11 +233,6 @@ async function signedIn(request: Request, env: RemoteEnv, now: number, clientId:
  *  sign-in that made it. */
 export const PROOF_FRESH_MS = 10 * 60000
 export const PROOF_SKEW_MS = 60000
-/** How long a device's own proof admits it, from its signing (`iat`), at a shack it has never met on a
- *  LAN with no internet: thirty days, the operator's choice; after that the device signs in again. The
- *  shack enforces its own built-in copy and never takes this one; the service lists it to devices
- *  (`client/session`) only so they know when to sign in again ahead of it. */
-export const LAN_PROOF_MAX_AGE_MS = 30 * 86400000
 
 /** What a sign-in vouches for: SHA-256, in base64url, of a label naming what is vouched for, a zero byte,
  *  for a device its kind and a zero byte, then each key's SPKI DER in order. DER is self-delimiting and

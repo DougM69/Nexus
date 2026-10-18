@@ -116,13 +116,6 @@ test('the shack signs in and its station is bound to the account, with its keys 
     lanKey: shack.lanKey.publicKey, proof: shack.body.proof, role: 'owner' }])
 })
 
-test('a device is told its own proof admits it on a LAN with no internet for thirty days', async () => {
-  // Thirty days from the proof's signing, by value: the shack enforces its own copy, and a device signs
-  // in again before then. Pinned here so neither side moves alone.
-  const owner = await person()
-  assert.equal((await owner.native.post('client/session')).value.lanProofMaxAgeMs, 30 * DAY)
-})
-
 test('a station proof is checked: its signature, issuer, application, subject, nonce and age, each by itself', async () => {
   const now = seconds(Date.now()), { privateKey } = await generateKeyPair('RS256')
   // Each case is a person of its own, so no case spends another's binding allowance.

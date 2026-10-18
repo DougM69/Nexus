@@ -1,6 +1,6 @@
 // Same-origin browser API, the native client's API, and outbound station admission. No radio command router.
 import { account, access, body, bodyBytes, browserOrigin, caller, caller as callerKey, CHALLENGE_MS, cookie, device, deviceCookie, deviceKeys, deviceNonce, digest,
-  deviceKinds, fieldsOf, id, keepApprovals, label, LAN_PROOF_MAX_AGE_MS, lifetime, mailbox, mailboxHash, memberRole, native, nativeAccount, nativeDevice, nativeKind, proof, publicKey, rate, readEntitlement, Refusal, requireAdmin,
+  deviceKinds, fieldsOf, id, keepApprovals, label, lifetime, mailbox, mailboxHash, memberRole, native, nativeAccount, nativeDevice, nativeKind, proof, publicKey, rate, readEntitlement, Refusal, requireAdmin,
   lanEntitlement, requireMayPair, requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, stationNonce, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid, verifyProof } from './authority'
 import type { AccountEntitlement, DeviceRow, RemoteEnv, Role, StationRow } from './authority'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
@@ -822,7 +822,7 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
       JOIN stations s ON s.id=i.station_id JOIN accounts a ON a.mailbox_hash=i.mailbox_hash
       WHERE a.id=? AND i.removed_at IS NULL AND s.enabled=1 AND s.account_id<>a.id ORDER BY s.id LIMIT 16`).bind(caller.accountId).all<Listed>()
     return json({ accountId: caller.accountId, entitlement, identityVerified: caller.verified, serverNow: now,
-      lanProofMaxAgeMs: LAN_PROOF_MAX_AGE_MS, stations: [...owned.results, ...invited.results].map(row => ({ id: row.id, name: row.name, stationKey: row.public_key,
+      stations: [...owned.results, ...invited.results].map(row => ({ id: row.id, name: row.name, stationKey: row.public_key,
         lanKey: row.lan_key, proof: row.proof, role: row.role })) })
   }
   // THE SHACK SIGNING IN. Its keys made first, their hash its sign-in's nonce (`stationNonce`), so the
