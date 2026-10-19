@@ -405,11 +405,13 @@ pub(crate) fn no_pick() -> Choose {
     Arc::new(|_| Box::pin(async { None }))
 }
 
+/// Each question the operator was asked while signing in: the station's name, and why the last
+/// address did not take this computer.
+pub(crate) type Asked = Arc<Mutex<Vec<(String, Option<&'static str>)>>>;
+
 /// The operator asked where the station is: each answer in turn, then none; every question kept.
-pub(crate) fn answering(
-    answers: Vec<String>,
-) -> (Ask, Arc<Mutex<Vec<(String, Option<&'static str>)>>>) {
-    let asked: Arc<Mutex<Vec<(String, Option<&'static str>)>>> = Arc::default();
+pub(crate) fn answering(answers: Vec<String>) -> (Ask, Asked) {
+    let asked: Asked = Arc::default();
     let (kept, answers) = (asked.clone(), Arc::new(Mutex::new(answers)));
     let ask: Ask = Arc::new(move |name, why| {
         kept.lock().unwrap().push((name, why));

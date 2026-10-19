@@ -403,6 +403,8 @@ fn without_the_feature_there_is_no_switch() {
             "over",
             "phase",
             "reason",
+            "signInBy",
+            "signingAgain",
             "station",
             "stationBuild",
             "stillThere",

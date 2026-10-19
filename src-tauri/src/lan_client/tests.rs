@@ -1299,8 +1299,9 @@ async fn the_page_picks_the_station_and_says_where_it_is_while_signing_in() {
     use super::internet::Choice;
     const CLUB: &str = "20000000-0000-4000-8000-0000000000c1";
     for pick in [Some(STATION), None] {
-        let told: Arc<Mutex<Vec<(Option<String>, Option<String>, Option<String>)>>> =
-            Arc::default();
+        // What each sign-in was asked for, and what the operator picked and typed.
+        type Told = Arc<Mutex<Vec<(Option<String>, Option<String>, Option<String>)>>>;
+        let told: Told = Arc::default();
         let kept = told.clone();
         let origin = Origin::start(Reach {
             lookup: Arc::new(tempo_stream::lan::lookup),

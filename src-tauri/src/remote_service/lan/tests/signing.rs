@@ -315,10 +315,7 @@ async fn the_station_is_found_where_the_operator_says_it_is() {
     assert_eq!(asked.len(), 2, "{asked:?}");
     assert_eq!(asked[0], ("Shack".to_string(), None));
     assert_eq!(asked[1].0, "Shack");
-    assert!(
-        asked[1].1.is_some_and(|why| road_unreached(why)),
-        "{asked:?}"
-    );
+    assert!(asked[1].1.is_some_and(road_unreached), "{asked:?}");
     assert_eq!(
         kept.get(LAN_STATION).unwrap().unwrap().addresses,
         vec![station.at.to_string()]

@@ -845,6 +845,13 @@ const MAY_REACH: &[&str] = &[
     "crate::lan_client::Stations",
     // Where the typed file is: a path beside the default profile's settings. It opens nothing.
     "crate::lan_client::typed_path",
+    // Where the sign-in times are, beside it; and this computer's name. They open nothing.
+    "crate::lan_client::signed_path",
+    "crate::lan_client::computer_name",
+    // Signing in again for the station this launch drives: the system browser, this computer's
+    // own requests to the Remote service and its issuer, and its enrolment on a connection of
+    // its own to the station, which keeps it. It keys nothing and starts nothing of a station.
+    "crate::lan_client::account",
     // The internet road: this computer's own requests to the Remote service (a pipe, its relay, a
     // renewal) and the road's record in this computer's store. It opens a link and starts nothing
     // of a station.
