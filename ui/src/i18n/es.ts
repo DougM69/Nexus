@@ -2921,6 +2921,7 @@ export const ES: PartialCatalog = {
   "logbook.form.open": "Anotar QSO",
   "logbook.form.save": "Guardar",
   "logbook.form.saveFailed": "No se pudo guardar la edición",
+  "logbook.form.editGone": "No se pudo abrir el contacto {{call}} para editarlo: el registro ya no lo contiene tal como estaba. Búsquelo en la lista.",
   "logbook.form.updated": "Actualizado {{call}}",
   "logbook.globe.band.all": "Todas las bandas",
   "logbook.globe.band.title": "Los locators son un logro por banda (VUCC) — mira los de una sola banda",

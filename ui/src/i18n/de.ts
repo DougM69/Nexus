@@ -2455,6 +2455,7 @@ export const DE: PartialCatalog = {
   "logbook.form.save": "Speichern",
   "logbook.form.log": "Loggen",
   "logbook.form.saveFailed": "Die Änderung konnte nicht gespeichert werden",
+  "logbook.form.editGone": "Der Kontakt {{call}} konnte nicht zum Bearbeiten geöffnet werden: Das Log enthält ihn nicht mehr so, wie er war. Suchen Sie ihn in der Liste.",
   "logbook.form.updated": "{{call}} aktualisiert",
   "logbook.form.logFailed": "QSO konnte nicht geloggt werden",
   "logbook.globe.loading": "Globus wird geladen…",

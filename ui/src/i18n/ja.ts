@@ -1062,6 +1062,7 @@ export const JA: PartialCatalog = {
   "logbook.form.save": "保存",
   "logbook.form.log": "記録",
   "logbook.form.saveFailed": "編集を保存できませんでした",
+  "logbook.form.editGone": "{{call}} の交信を編集用に開けませんでした。ログには以前の状態のまま残っていません。一覧から探してください。",
   "logbook.form.updated": "{{call}}を更新しました",
   "logbook.form.logFailed": "QSOを記録できませんでした",
   "logbook.globe.loading": "地球儀を読み込み中…",

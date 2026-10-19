@@ -60,10 +60,11 @@ interface Props {
    *  says nothing is a log strip, unchanged. */
   hasLookup?: boolean
   /** Open the Logbook filtered to this callsign (#192, kr4fqg: "click a previous contact and
-   *  land in the log"). When passed, the prior-contact rows become clickable and
-   *  keyboard-reachable; when absent they stay inert, which is what a build with the Logbook
-   *  section disabled gets — a row that navigates nowhere must not advertise that it can. */
-  onOpenLog?: (call: string) => void
+   *  land in the log") and, given the contact's id, with its editor open on that contact. When
+   *  passed, the prior-contact rows become clickable and keyboard-reachable; when absent they stay
+   *  inert, which is what a build with the Logbook section disabled gets — a row that navigates
+   *  nowhere must not advertise that it can. */
+  onOpenLog?: (call: string, id?: string | null) => void
   /** A bounded station result may carry a complete count and an older latest note. */
   latestNote?: string | null
   historyNotice?: ReactNode
@@ -181,7 +182,10 @@ export function RecallPanel({ call, band, name, qth, state, grid, country, image
   // container keeps `role="list"` / `role="listitem"` rather than becoming a listbox: these rows
   // are not a selection, and the pane's tests pin the listitem count.
   const openLog = onOpenLog
-  const roving = useRovingList(prior.length, () => openLog?.(cu))
+  // A row names its contact by id (every contact a 1.14+ station serves has one): the Logbook opens
+  // with its editor on that contact. A row without one only searches, as every row did before.
+  const openRow = (q: LoggedQso | undefined) => (q?.id ? openLog?.(cu, q.id) : openLog?.(cu))
+  const roving = useRovingList(prior.length, (i) => openRow(prior[i]))
   // #162: which prior-contact comments are open, keyed like the row itself. Same state shape
   // and same idiom as the Logbook's Comment column (1.13.0) — a `LoggedQso` has no stable id,
   // so the key is the instant plus the position, and a re-sorted list cannot carry an open
@@ -428,17 +432,14 @@ export function RecallPanel({ call, band, name, qth, state, grid, country, image
               // it here too would duplicate the newest QSO's note).
               const cmt = (q.comment ?? '').trim()
               const rp = roving.rowProps(i)
-              // SEARCH, not "open this exact QSO". A `LoggedQso` has no stable id — the
-              // edit/delete API addresses rows by INDEX — so an index carried across a view
-              // switch is stale the moment anything is logged or imported. Every row here is
-              // the same callsign anyway, so the honest handoff is the call, and the Logbook's
-              // own matcher already covers it.
+              // THIS contact, by its id (`openRow`): the Logbook searches the call and opens its
+              // editor on the row. An id follows the contact wherever the list moves it.
               return (
                 <div
                   className={`recall-log-row${openLog ? ' clickable' : ''}`}
                   role="listitem"
                   key={`${q.whenUnix}-${i}`}
-                  title={openLog ? t('recall.log.row.title', { call: cu }) : undefined}
+                  title={openLog ? (q.id ? t('logbook.row.edit', { call: cu }) : t('recall.log.row.title', { call: cu })) : undefined}
                   tabIndex={openLog ? rp.tabIndex : undefined}
                   ref={openLog ? (rp.ref as (el: HTMLDivElement | null) => void) : undefined}
                   onFocus={openLog ? rp.onFocus : undefined}
@@ -446,7 +447,7 @@ export function RecallPanel({ call, band, name, qth, state, grid, country, image
                     openLog
                       ? () => {
                           rp.onClick()
-                          openLog(cu)
+                          openRow(q)
                         }
                       : undefined
                   }

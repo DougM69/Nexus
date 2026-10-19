@@ -69,7 +69,7 @@ import {
 interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
-  onOpenLogbook?: (call: string) => void
+  onOpenLogbook?: (call: string, id?: string | null) => void
   /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
   onEntryCall?: (call: string) => void
   /** Live snapshot — may be absent while the app is still connecting; the stream

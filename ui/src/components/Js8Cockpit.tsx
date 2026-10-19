@@ -134,7 +134,7 @@ import { patchSettings } from '../settings/patch'
 
 interface Props {
   /** Open the Logbook filtered to a callsign — handed to the log strip's recall card. */
-  onOpenLogbook?: (call: string) => void
+  onOpenLogbook?: (call: string, id?: string | null) => void
   /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
   onEntryCall?: (call: string) => void
   /** Live snapshot — may be absent while the app is still connecting. */

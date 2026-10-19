@@ -23,10 +23,13 @@ type Tab = 'journey' | 'official'
 export function AwardsJourney({
   showGamification,
   onOpenSettings,
+  onOpenLogbook,
   observation,
   diagnostics,
 }: {
   showGamification: boolean
+  /** Open a contact in the Logbook's editor — passed straight through to the official tracker. */
+  onOpenLogbook?: (call: string, id?: string | null) => void
   observation?: AwardSummary
   /** The station's confirmation diagnostics beside an observed summary (read only). */
   diagnostics?: DiagnosticsReport
@@ -47,7 +50,7 @@ export function AwardsJourney({
     return (
       <main className="awards-journey">
         <div className="aj-scroll">
-          <AwardsView showGamification={false} onOpenSettings={onOpenSettings} observation={observation} diagnostics={diagnostics} />
+          <AwardsView showGamification={false} onOpenSettings={onOpenSettings} onOpenLogbook={onOpenLogbook} observation={observation} diagnostics={diagnostics} />
         </div>
       </main>
     )
@@ -81,7 +84,7 @@ export function AwardsJourney({
         {tab === 'journey' ? (
           <JourneyView />
         ) : (
-          <AwardsView showGamification onOpenSettings={onOpenSettings} observation={observation} diagnostics={diagnostics} />
+          <AwardsView showGamification onOpenSettings={onOpenSettings} onOpenLogbook={onOpenLogbook} observation={observation} diagnostics={diagnostics} />
         )}
       </div>
     </main>

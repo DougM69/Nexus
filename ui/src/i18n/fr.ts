@@ -2921,6 +2921,7 @@ export const FR: PartialCatalog = {
   "logbook.form.open": "Enregistrer QSO",
   "logbook.form.save": "Enregistrer",
   "logbook.form.saveFailed": "Impossible d'enregistrer la modification",
+  "logbook.form.editGone": "Impossible d’ouvrir le contact {{call}} pour le modifier : le journal ne le contient plus tel qu’il était. Cherchez-le dans la liste.",
   "logbook.form.updated": "{{call}} mis à jour",
   "logbook.globe.band.all": "Toutes bandes",
   "logbook.globe.band.title": "Les locators se comptent par bande (VUCC) — voir les locators d'une seule bande",

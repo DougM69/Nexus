@@ -141,3 +141,18 @@ it('FIX: a contact the report does not name by id offers no button — never an 
   expect(screen.getByText(t('awards.conf.push', { service: 'QRZ' })).tagName).toBe('SPAN')
   expect(view.container.querySelector('.conf-btn'), 'a button acting on a position').toBeNull()
 })
+
+it('a diagnosed contact\'s ✎ opens the Logbook editor on the contact its diagnosis names', async () => {
+  const onOpenLogbook = vi.fn()
+  render(<AwardsView showGamification={false} onOpenLogbook={onOpenLogbook} />)
+  fireEvent.click(await screen.findByRole('button', { name: t('logbook.row.edit', { call: 'JA1QRZ' }) }))
+  expect(onOpenLogbook.mock.calls).toEqual([['JA1QRZ', 'id-Q']])
+  fireEvent.click(screen.getByRole('button', { name: t('logbook.row.edit', { call: 'N2XYZ' }) }))
+  expect(onOpenLogbook).toHaveBeenLastCalledWith('N2XYZ', 'id-X')
+})
+
+it('a station report read from a browser offers no ✎ (nothing there edits)', async () => {
+  render(<AwardsView showGamification={false} onOpenLogbook={vi.fn()} observation={fixture.awards as never} diagnostics={report} />)
+  await screen.findByText(lotwReason.explanation)
+  expect(screen.queryByRole('button', { name: t('logbook.row.edit', { call: 'N2XYZ' }) })).toBeNull()
+})

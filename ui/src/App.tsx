@@ -424,7 +424,7 @@ function App() {
   // is the reason: the operator can type over the Logbook's search box, go back to the cockpit
   // and click the same call again, and a bare `string | null` would not refire for that. Cleared
   // once the Logbook has consumed it, so a later trip through the nav opens unfiltered.
-  const [logFocus, setLogFocus] = useState<{ call: string; ts: number } | null>(null)
+  const [logFocus, setLogFocus] = useState<{ call: string; ts: number; editId?: string | null } | null>(null)
   // Bumped when the wizard closes: remounts SettingsPanel so a stale full-struct
   // form under the modal can't Save over what the wizard just persisted.
   const [wizardGen, setWizardGen] = useState(0)
@@ -2686,10 +2686,12 @@ function App() {
   // Recall card → Logbook, filtered to the call (#192, kr4fqg: "click a previous contact and
   // land in the log"). Same shape as the `onOpenMemories` handoffs below — `undefined` when the
   // section is switched off in this build, which is what keeps the row from advertising a
-  // navigation that would go nowhere. Every cockpit that mounts a recall card gets it.
+  // navigation that would go nowhere. Every cockpit that mounts a recall card gets it. Given a
+  // contact's id (a recall row, a recent contact, an Awards row) the Logbook also opens its editor on
+  // that contact: the one editor, and the one write path.
   const openLogbookFor = isViewEnabled('logbook')
-    ? (call: string) => {
-        setLogFocus({ call, ts: Date.now() })
+    ? (call: string, id?: string | null) => {
+        setLogFocus({ call, ts: Date.now(), editId: id ?? null })
         setView('logbook')
       }
     : undefined
@@ -3339,6 +3341,7 @@ function App() {
         <AwardsJourney
           showGamification={features.isOn('gamification')}
           onOpenSettings={openSettingsAt}
+          onOpenLogbook={openLogbookFor}
         />
       )
       break

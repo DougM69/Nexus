@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Click a contact to edit it.** A previous contact in a cockpit's lookup card now opens the Logbook with its
+  editor already on that contact, the same form the Logbook's ✎ opens, and Save there saves it exactly as an
+  edit made from the Logbook does. In Awards, each contact in the confirmation checklist
+  has a ✎ that does the same. A contact changed or deleted elsewhere since it was listed is not overwritten:
+  Nexus says so and leaves you in the Logbook to find it.
 - **Contest entry: an optional "RST sent" box.** Turn on "Show the RST sent box" in Settings ▸ Contesting ▸
   Contest, and the contest entry gets an RST sent box just before the received report, as N1MM shows Snt and Rcv.
   It holds the report the contact logs as sent: 59 on phone, 599 on CW and digital. Space and Tab skip it, so

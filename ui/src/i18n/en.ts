@@ -1562,6 +1562,7 @@ export const EN = {
   'logbook.form.save': 'Save',
   'logbook.form.log': 'Log',
   'logbook.form.saveFailed': 'Could not save the edit',
+  'logbook.form.editGone': 'Could not open the {{call}} contact for editing: the log no longer holds it as it was. Find it in the list.',
   'logbook.form.updated': 'Updated {{call}}',
   'logbook.form.logFailed': 'Could not log QSO',
 

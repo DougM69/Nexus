@@ -238,7 +238,7 @@ interface Props {
   onOpenSettings?: (target: string) => void
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
-  onOpenLogbook?: (call: string) => void
+  onOpenLogbook?: (call: string, id?: string | null) => void
   /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
   onEntryCall?: (call: string) => void
   /** The Spots board exactly as App wires the Spots VIEW (#345) — its handlers, not a copy of
