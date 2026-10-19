@@ -553,7 +553,12 @@ impl Engine {
                     dt_s: 0.0,
                     from: m.from.clone(),
                     text: m.text.clone(),
-                    directed_to_me: m.to.as_ref().is_some_and(|to| self.js8_addressed_to_me(to)),
+                    // `to` holds no custom group or compound call; its text does.
+                    directed_to_me: m
+                        .to
+                        .clone()
+                        .or_else(|| CallRef::parse_destination(&m.to_text))
+                        .is_some_and(|to| self.js8_addressed_to_me(&to)),
                     mine: false,
                     complete: m.complete,
                     low_conf: false,
@@ -601,9 +606,11 @@ impl Engine {
     /// One decoded frame → its activity row (JS8Call's display line, byte-exact).
     fn js8_row_for_frame(&self, rx: &RxFrame, low_conf: bool) -> Js8ActivityRow {
         let (from, directed_to_me) = match &rx.frame {
-            Frame::Heartbeat { call, .. }
-            | Frame::Compound { call, .. }
-            | Frame::CompoundDirected { call, .. } => (call.clone(), false),
+            Frame::Heartbeat { call, .. } | Frame::Compound { call, .. } => (call.clone(), false),
+            Frame::CompoundDirected { call, .. } => (
+                call.clone(),
+                CallRef::parse_destination(call).is_some_and(|to| self.js8_addressed_to_me(&to)),
+            ),
             Frame::Directed { from, to, .. } => (from.render(), self.js8_addressed_to_me(to)),
             Frame::Data { .. } => (String::new(), false),
         };
@@ -627,22 +634,25 @@ impl Engine {
         }
     }
 
-    /// My base call, @ALLCALL, or a group I have joined (JS8Call's addressed-to-me rule). Not
+    /// My call, @ALLCALL, or a group I have joined, built in or my own (JS8Call's addressed-to-me
+    /// rule; `isGroupCallIncluded`, mainwindow.cpp:8153-8155, takes any group in `my_groups`). Not
     /// @ALLCALL while I take no part in it, as JS8Call then shows none of it as mine
     /// (processCommandActivity.cpp:181-185).
     fn js8_addressed_to_me(&self, to: &CallRef) -> bool {
-        let (my_base, _) = split_portable(self.settings.mycall.trim());
+        let mycall = self.settings.mycall.trim();
+        let (my_base, _) = split_portable(mycall);
+        let joined = |g: &str| {
+            self.js8_station
+                .config()
+                .groups
+                .iter()
+                .any(|x| x.eq_ignore_ascii_case(g))
+        };
         match to {
             CallRef::Base(c) => c.eq_ignore_ascii_case(my_base),
             CallRef::AllCall => !self.settings.js8_avoid_allcall,
-            CallRef::Group(_) => {
-                let g = to.render();
-                self.js8_station
-                    .config()
-                    .groups
-                    .iter()
-                    .any(|x| x.eq_ignore_ascii_case(&g))
-            }
+            CallRef::Group(_) => joined(&to.render()),
+            CallRef::Compound(c) => c.eq_ignore_ascii_case(mycall) || joined(c),
             CallRef::Placeholder | CallRef::Js8Net => false,
         }
     }
@@ -1017,6 +1027,18 @@ impl Engine {
         Ok(())
     }
 
+    /// The operator's To field as a destination JS8Call can address (`isValidCallsign`): a call,
+    /// a compound call, a built-in group by its short code or a group of the operator's own by
+    /// name. Anything else is refused, saying what a group may be.
+    fn js8_destination(to: &str) -> Result<CallRef, String> {
+        CallRef::parse_destination(to).ok_or_else(|| {
+            format!(
+                "{to} is not a callsign or @group JS8 can address. A group is @ and up to 8 \
+                 letters or digits (a / may separate them)."
+            )
+        })
+    }
+
     /// Operator send: `to` is a callsign or @group (None = plain text, which compose
     /// prefixes with "MYCALL: " — identity on the wire, spec invariant 10). An operator
     /// verb: on success it restarts the wall-clock watchdog. Never arms TX.
@@ -1024,10 +1046,7 @@ impl Engine {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
         self.js8_restart_idle_clock(now_ms);
         let to_ref = match to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-            Some(s) => Some(
-                ::js8::proto::callsign::CallRef::parse(s)
-                    .ok_or_else(|| format!("{s} is not a callsign or @group JS8 can address"))?,
-            ),
+            Some(s) => Some(Self::js8_destination(s)?),
             None => None,
         };
         let r = self.js8_identity_set().and_then(|()| {
@@ -1048,8 +1067,7 @@ impl Engine {
     pub fn js8_send_command(&mut self, to: String, cmd: u8, arg: String) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
         self.js8_restart_idle_clock(now_ms);
-        let to_ref = ::js8::proto::callsign::CallRef::parse(to.trim())
-            .ok_or_else(|| format!("{to} is not a callsign or @group JS8 can address"))?;
+        let to_ref = Self::js8_destination(to.trim())?;
         let command =
             ::js8::Command::from_id(cmd).ok_or_else(|| format!("unknown JS8 command {cmd}"))?;
         let r = self.js8_identity_set().and_then(|()| {
@@ -4349,6 +4367,195 @@ mod tests {
             let overs = run_js8_loop(&mut e, 2 * 60);
             assert!(!overs.is_empty(), "{to}: and it keys");
         }
+    }
+
+    // ===== a custom @group: addressed the way JS8Call addresses it =====
+
+    /// What the engine keys over the next `n` periods, frame by frame as it reads on the air.
+    fn keyed_frames(e: &mut Engine, n: u64) -> Vec<(Frame, I3)> {
+        let period_ms = u64::from(e.js8_tx_speed().period_s()) * 1000;
+        let first = now_unix_secs() * 1000 / period_ms + 1;
+        let mut out = Vec::new();
+        for slot in first..first + n {
+            e.js8_tick(slot * period_ms);
+            let Some(plan) = e.plan_tx(slot) else {
+                continue;
+            };
+            let TxWaveform::Js8 { speed, word, .. } = plan.waveform else {
+                panic!("a JS8 plan carries the typed waveform");
+            };
+            out.push(::js8::proto::decode_word(&word, speed).expect("decodes"));
+            let wave = plan.waveform.build();
+            e.commit_tx(&plan, wave, slot);
+        }
+        out
+    }
+
+    /// "@MAGNET hello" from KD9TAW in EN52 goes out as JS8Call frames it, worked by hand from
+    /// varicode.cpp. `isValidCallsign("@MAGNET")` (:1266-1290) finds no `basecalls` entry and no
+    /// base-call shape, and `isValidCompoundCallsign` takes an `@` name (:1248-1250), so the
+    /// destination is valid and COMPOUND. `packDirectedMessage` (:1542-1600) reads the freetext
+    /// command " " after it, and `buildMessageFrames` CASE 2 (:2100-2135) sends "`KD9TAW EN52" as
+    /// a compound frame, then "`@MAGNET " as a compound directed frame, then the rest, "HELLO",
+    /// as data: three frames, the first flagged first and the last flagged last.
+    #[test]
+    fn a_js8_message_to_a_custom_group_keys_the_frames_js8call_keys() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        assert_eq!(e.js8_send(Some("@MAGNET".into()), "hello".into()), Ok(()));
+        let keyed = keyed_frames(&mut e, 8);
+        let frames: Vec<&Frame> = keyed.iter().map(|(f, _)| f).collect();
+        assert_eq!(
+            frames[..2],
+            [
+                &Frame::Compound {
+                    call: "KD9TAW".into(),
+                    grid: Some("EN52".into()),
+                },
+                &Frame::CompoundDirected {
+                    call: "@MAGNET".into(),
+                    cmd: Command::Freetext,
+                    num: None,
+                },
+            ]
+        );
+        assert!(
+            matches!(&frames[2], Frame::Data { text, .. } if text == "HELLO"),
+            "{frames:?}"
+        );
+        assert_eq!(frames.len(), 3, "{frames:?}");
+        let flags: Vec<(bool, bool)> = keyed.iter().map(|(_, i)| (i.first, i.last)).collect();
+        assert_eq!(flags, [(true, false), (false, false), (false, true)]);
+        // The same message with the group typed in the text and no call selected: one framing.
+        let mut typed = hb_engine("EN52", 0, 1500.0);
+        typed
+            .js8_send(None, "@MAGNET hello".into())
+            .expect("queues");
+        assert_eq!(keyed_frames(&mut typed, 8), keyed);
+    }
+
+    /// A directed command to a custom group goes out as JS8Call's CASE 2 too: "`@MAGNET SNR?".
+    #[test]
+    fn a_js8_command_to_a_custom_group_is_a_compound_directed_frame() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_send_command("@magnet".into(), Command::SnrQuery.id(), String::new())
+            .expect("queues");
+        let frames: Vec<Frame> = keyed_frames(&mut e, 8)
+            .into_iter()
+            .map(|(f, _)| f)
+            .collect();
+        assert_eq!(
+            frames,
+            [
+                Frame::Compound {
+                    call: "KD9TAW".into(),
+                    grid: Some("EN52".into()),
+                },
+                Frame::CompoundDirected {
+                    call: "@MAGNET".into(),
+                    cmd: Command::SnrQuery,
+                    num: None,
+                },
+            ]
+        );
+    }
+
+    /// A built-in group keeps its short code in a standard directed frame.
+    #[test]
+    fn a_js8_command_to_a_built_in_group_keeps_its_short_code() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_send_command("@QRP".into(), Command::SnrQuery.id(), String::new())
+            .expect("queues");
+        let frames: Vec<Frame> = keyed_frames(&mut e, 8)
+            .into_iter()
+            .map(|(f, _)| f)
+            .collect();
+        assert_eq!(
+            frames,
+            [Frame::Directed {
+                from: CallRef::Base("KD9TAW".into()),
+                to: CallRef::parse("@QRP").expect("a built-in group"),
+                cmd: Command::SnrQuery,
+                num: None,
+                portable_from: false,
+                portable_to: false,
+            }]
+        );
+    }
+
+    /// A name JS8Call would not take as a group is refused, and the refusal says what a group is:
+    /// over 9 characters without the slashes (`isValidCompoundCallsign`, varicode.cpp:1233-1236),
+    /// a bare "@", or one ending in "/" (`compound_callsign_pattern` ends in `\b`, :42). Nothing
+    /// is queued.
+    #[test]
+    fn a_js8_send_to_a_group_js8call_would_refuse_is_refused_with_what_is_allowed() {
+        for to in ["@MAGNETICS", "@", "@MAG/", "@MAG NET"] {
+            let mut e = hb_engine("EN52", 0, 1500.0);
+            let want = Err(format!(
+                "{to} is not a callsign or @group JS8 can address. A group is @ and up to 8 \
+                 letters or digits (a / may separate them)."
+            ));
+            assert_eq!(e.js8_send(Some(to.into()), "hello".into()), want, "{to}");
+            assert_eq!(
+                e.js8_send_command(to.into(), Command::SnrQuery.id(), String::new()),
+                want,
+                "{to}"
+            );
+            assert!(e.js8_state().queue.is_empty(), "{to}: nothing queued");
+        }
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        assert_eq!(
+            e.js8_send(Some("@MAGNETIC".into()), "hello".into()),
+            Ok(()),
+            "control: nine characters is JS8Call's longest group"
+        );
+    }
+
+    /// A message to a group in the operator's Groups is shown as addressed to them, as JS8Call's
+    /// `isGroupCallIncluded` (mainwindow.cpp:8153-8155) takes any group in `my_groups`.
+    #[test]
+    fn a_js8_message_to_a_custom_group_i_joined_is_shown_as_mine() {
+        let ingest = |e: &mut Engine| {
+            let seq = ::js8::proto::compose::frames_with_grid(
+                "W1AW",
+                "FN31",
+                None,
+                "@MAGNET HELLO",
+                Js8Speed::Normal,
+            )
+            .expect("composes");
+            assert!(matches!(&seq[1].0, Frame::CompoundDirected { call, .. } if call == "@MAGNET"));
+            for (i, (f, i3)) in seq.iter().enumerate() {
+                e.js8_ingest(&[row(f, *i3, Js8Speed::Normal, 1750.0)], 10 + i as u64);
+            }
+            let rows = e.js8_state().activity;
+            let msg = rows
+                .iter()
+                .find(|r| r.flags.as_ref().is_some_and(|f| f.assembled))
+                .cloned()
+                .expect("the reassembled row");
+            let directed = rows
+                .iter()
+                .find(|r| r.from == "@MAGNET")
+                .cloned()
+                .expect("the compound directed frame's row");
+            (msg, directed)
+        };
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.js8_set_groups(vec!["@MAGNET".into()]).expect("joins");
+        let (msg, directed) = ingest(&mut e);
+        assert_eq!(
+            (msg.from.as_str(), msg.text.as_str(), msg.directed_to_me),
+            ("W1AW", "HELLO", true)
+        );
+        assert!(directed.directed_to_me, "its directed frame too");
+        let mut other = Engine::new("KD9TAW", "EN52", 0);
+        other.js8_enter();
+        let (msg, directed) = ingest(&mut other);
+        assert!(
+            !msg.directed_to_me && !directed.directed_to_me,
+            "control: not mine without the group joined"
+        );
     }
 
     // ===== <MYGRID4> / <MYGRID12> =====

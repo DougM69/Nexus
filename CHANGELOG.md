@@ -261,6 +261,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **JS8 sends to your own groups.** A group you added in Settings, such as @MAGNET, was refused as "not a callsign or
+  @group JS8 can address". It now goes out the way JS8Call sends it, a message or a command alike, and a message to a
+  group you joined is marked as yours. Compound calls such as KD4JRX/WFD can be put in the To box too. A name JS8Call
+  cannot send to is still refused, and the message now says a group is @ and up to 8 letters or digits.
 - **The Log button stays on screen in the Phone, CW, JS8, RTTY and PSK screens.** At 1280×800 the log form was taller
   than its pane, so Log and Spot sat below the fold. The "logs to … as" line and the Log/Spot buttons now stay together
   at the bottom of the log pane while the fields above them scroll. The callsign card below them is never covered.
