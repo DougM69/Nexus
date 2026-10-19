@@ -4560,6 +4560,8 @@ body.resizing-row {
   --text: #e7edf6;
   --text-dim: #9aa8bd;
   --text-faint: #7c8ca3;
+  /* The contest entry's sample text (LogEntry): semi-dark, under every other hint, over the floor. */
+  --text-sample: color-mix(in srgb, var(--text-faint) 92%, var(--bg));
   --accent: #4cc9f0;
   --accent-ink: #06222c;
   --bubble-mine: #1f5d73;
@@ -4673,6 +4675,8 @@ body.resizing-row {
   --text: #1b1f24;
   --text-dim: #4a525c;
   --text-faint: #5b636d;
+  /* Light's hint already sits near the 4.5:1 floor, so the contest entry's sample is that ink. */
+  --text-sample: var(--text-faint);
   /* Silver's steel blue. It reads 6.6:1 as lettering on --bg-elev-2 and white reads 7.2:1 on it;
      the light Night accent (#325171) is darker again, because Night must dim it
      (styles-night-contrast.test.ts). */
@@ -5953,6 +5957,13 @@ input::placeholder,
 textarea::placeholder {
   color: var(--text-faint);
   opacity: 1;
+}
+/* THE CONTEST ENTRY'S SAMPLE TEXT ("W1AW", "599", a county) — semi-dark, and never bold: in these
+   boxes a typed value is bold, and a bold hint read as data typed in (the operator, from a
+   contest). (0,1,1), so it wins over the bare rule above. Guard: styles-placeholder.test.tsx. */
+.le-fd-input::placeholder {
+  color: var(--text-sample);
+  font-weight: 400;
 }
 
 h2 {
@@ -13520,6 +13531,18 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-color: var(--state-bad);
   background: color-mix(in srgb, var(--state-bad) 14%, var(--bg));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--state-bad) 35%, transparent);
+}
+/* THE EARLY "WORKED" WARNING (LogEntry `fdWorkedLine`): the same slot and the same box treatment
+   as the DUPE badge, in the warning colour and with no filled word, because it is not a dupe yet:
+   the county decides that. */
+.le-fd-dupe.le-fd-dupe-maybe {
+  color: var(--state-warn);
+}
+.settings-input.le-fd-input-maybe,
+.settings-input.le-fd-input-maybe:focus {
+  border-color: var(--state-warn);
+  background: color-mix(in srgb, var(--state-warn) 12%, var(--bg));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--state-warn) 30%, transparent);
 }
 
 /* THE CLUB BOARD'S BAND × MODE GRID (ContestView.tsx `ClubBandModeGrid`): who is on which band and

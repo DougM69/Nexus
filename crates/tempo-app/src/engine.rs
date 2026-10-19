@@ -14069,6 +14069,26 @@ impl Engine {
         self.fd_link_gen == gen
     }
 
+    /// The `CONTEST_ID`s the running contest stamps on its rows (a contest split by mode has one
+    /// per mode class), empty outside the contest mode: what tells this contest's rows in the
+    /// logbook, any year's, from another contest's, whose received slots name another sponsor's
+    /// counties under the same slot ids.
+    pub fn fd_session_contest_ids(&self) -> Vec<String> {
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return Vec::new();
+        };
+        let session = &station.log.session;
+        let mut ids = vec![session.contest_id.clone()];
+        for class in ["CW", "PH", "DIG"] {
+            if let Ok(id) = session.contest_id_for(&[class]) {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        ids
+    }
+
     /// ⭐ **The contest this position's ROWS belong to** — the JOIN's `contest`.
     ///
     /// The live session's when Field Day is running, because that is what the rows were

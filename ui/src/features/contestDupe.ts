@@ -207,3 +207,51 @@ function judge(
   )
   return club ? { verdict: 'club' } : none
 }
+
+/**
+ * ⭐ **THE EARLY WARNING: rows the contact being typed may turn out to duplicate.** A rule that
+ * keys on a received slot (every QSO party: once per band and mode FROM EACH COUNTY) cannot call
+ * a contact a dupe until its county is in, and judging it early would refuse a rover who has
+ * moved. But the operator still wants to know, the moment the call is complete, that this
+ * station is already in the log here, and from where.
+ *
+ * So this is the same key as [`contestDupe`] judges, with each received slot the rule names
+ * read as "what is typed so far": a row of this position's own log is returned when its `dkey`
+ * agrees on the call, band and mode class (as the rule names them) and on every SENT slot, and
+ * each received slot it logged begins with what is typed in that box (an empty box agrees with
+ * everything). Once a box holds a whole value that matches, `contestDupe` already says 'own';
+ * once it holds one that does not, no row is returned and the rover is simply a new contact.
+ *
+ * A rule that names no received slot has no such early state, since its verdict is exact as
+ * soon as the call is typed: this returns nothing for it.
+ */
+export function contestWorkedRows(
+  fieldDay: FieldDayStatus | null | undefined,
+  call: string,
+  band: string,
+  modeClass: string,
+  exchange: TypedExchange,
+): FieldDayQso[] {
+  const typed = call.trim().toUpperCase()
+  if (fieldDay == null || typed === '') return []
+  const rule = fieldDay.dupeRule ?? LEGACY_TRIPLE
+  if (rule.byFields.length === 0) return []
+  const key = dupeKey(rule, typed, band, modeClass, exchange)
+  const lead = [rule.byCall, rule.byBand, rule.byModeClass].filter(Boolean).length
+  const rxEnd = lead + rule.byFields.length
+  return (fieldDay.log ?? []).filter(
+    (q) =>
+      q.dkey !== undefined &&
+      q.dkey.length === key.length &&
+      key.every((k, i) => (i >= lead && i < rxEnd ? q.dkey![i].startsWith(k) : q.dkey![i] === k)),
+  )
+}
+
+/** What each of `rows` received in the slots the rule keys on, as its `dkey` holds them ("COOK",
+ *  or "COOK/IL" for a rule naming two), each once, in log order: the "Worked:" list. */
+export function workedValues(fieldDay: FieldDayStatus | null | undefined, rows: readonly FieldDayQso[]): string[] {
+  const rule = fieldDay?.dupeRule ?? LEGACY_TRIPLE
+  const lead = [rule.byCall, rule.byBand, rule.byModeClass].filter(Boolean).length
+  const values = rows.map((q) => (q.dkey ?? []).slice(lead, lead + rule.byFields.length).join('/'))
+  return [...new Set(values.filter((v) => v !== ''))]
+}

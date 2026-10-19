@@ -62,9 +62,10 @@ export interface EsmStrip {
   /** Every exchange box passes the check the log itself uses, judged after Enter commits the box
    *  it was pressed in, the way Space does — so a county typed by name counts as its code. */
   exchangeComplete: boolean
-  /** A box still shows what call history filled in for this call, nobody having typed over it.
-   *  A fill counts as copied (rule 10), so a complete exchange with one is complete only because
-   *  of it: the file filled it as the call was typed, not the station. */
+  /** A box still shows what a fill put in for this call (call history, this contest's last
+   *  contact with the station, or the log's), nobody having typed over it. A fill counts as copied
+   *  (rule 10), so a complete exchange with one is complete only because of it: the fill came as
+   *  the call was typed, not from the station. */
   fromHistory: boolean
   /** `contestDupe`'s verdict on the call. Only `own` stops ESM: a club dupe is a warning. */
   dupe: ContestDupeVerdict

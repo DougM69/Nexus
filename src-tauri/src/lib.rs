@@ -21886,6 +21886,39 @@ async fn get_call_stats(
     .await
 }
 
+/// What the log last said of a station's county or state ([`log_folds::newest_logged_qth`]).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoggedQth {
+    value: String,
+    when_unix: u64,
+}
+
+/// The contest entry's last pre-fill source for the box receiving `slot`: the newest contact
+/// with `call` anywhere in the log that says where the station was — this contest's received
+/// `slot` on a row of this contest (any year), else a row's `STATE`. Read from the logbook
+/// store through the per-call index, on the blocking pool, so a lifetime log costs one
+/// station's rows; the strip asks once per call, never by scanning a log it holds.
+#[tauri::command]
+async fn contest_logged_qth(
+    state: State<'_, SharedEngine>,
+    call: String,
+    slot: String,
+) -> Result<Option<LoggedQth>, String> {
+    let engine = state.inner().clone();
+    log_folds::off_the_runtime(move || {
+        let (ids, rows) = {
+            let eng = engine_lock(&engine);
+            (eng.fd_session_contest_ids(), eng.log_rows())
+        };
+        Ok(
+            log_folds::newest_logged_qth(&rows, call.trim(), &ids, &slot)?
+                .map(|(value, when_unix)| LoggedQth { value, when_unix }),
+        )
+    })
+    .await
+}
+
 /// The geographic slice of the logbook — QSOs by WAC continent, by CQ zone, and a DX-vs-domestic
 /// split — the dimensions the frontend `StatsView` can't derive on its own (the stored record has
 /// no continent; each contact is placed where the awards count it, by the DXCC number and CQ zone
@@ -37747,6 +37780,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_qso,
         resolve_entity,
         contest_zone_hint,
+        contest_logged_qth,
         edit_qso,
         mark_qsl_sent,
         mark_qsl_card,

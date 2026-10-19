@@ -68,6 +68,9 @@ const INKS = ['--text', '--text-dim', '--text-faint'] as const
 const NIGHT_TOKENS: ReadonlySet<string> = new Set([
   ...SURFACES,
   ...INKS,
+  // The contest entry's sample ink, made from --text-faint and --bg, so it is night-tuned with them
+  // (styles-placeholder.test.tsx holds it to the text floor in every mode, night included).
+  '--text-sample',
   '--accent',
   '--accent-ink',
   '--focus-ring',

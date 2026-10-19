@@ -1525,6 +1525,15 @@ export async function contestZoneHint(call: string): Promise<number | null> {
   return invoke<number | null>('contest_zone_hint', { call })
 }
 
+/** What the log last said of `call`'s county or state, for the contest entry's box receiving
+ *  `slot`: this contest's received value on a row of this contest (any year), else a row's
+ *  STATE, with that contact's time; null when no contact with the call says. Raw as logged: the
+ *  strip fills it only if it is one of the box's own codes. Read through the log's per-call
+ *  index in the station, so a big log costs one station's rows. */
+export async function contestLoggedQth(call: string, slot: string): Promise<{ value: string; whenUnix: number } | null> {
+  return invoke<{ value: string; whenUnix: number } | null>('contest_logged_qth', { call, slot })
+}
+
 /** Empty the RETIRED wanted list — its one writer — once its entries are safely on the watch list
  *  (`features/watchlistFold`). A whole-struct settings save cannot change the list. */
 export async function retireWantedCalls(): Promise<void> {

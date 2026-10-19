@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contest entry: Shift+Space goes back a box.** Space already moves to the next box, as in N1MM; Shift+Space
+  now moves back the other way (from Call it goes to the last box), so a wrong entry is fixed without the mouse.
+  Shift+Tab still works, and Alt+W still wipes the line and returns to the Call box.
+- **Contest entry: the county/state box fills itself from your own log.** When you type a call, the box takes
+  the county or state from your last contact with that station in this contest, else from your call-history
+  file, else from your most recent contact with them anywhere in your log (looked up by call, so a big log costs
+  nothing). A small word over the box says where it came from: "this contest", "call history" or "log 2025".
+  Space or Tab into the box selects it, so typing replaces it, and nothing you typed is ever written over. A
+  station already in the log on this band and mode is not filled from this contest or the log: what it sends now
+  decides dupe or new county, and the amber line shows where you worked it from. Mobiles and rovers (/M, /R) are
+  never filled.
+- **Contest entry: an early "Worked" warning at QSO parties.** As soon as the call is in, a station you
+  already logged on this band and mode turns the Call box amber and lists the counties or states you worked
+  it from ("Worked: COOK, DUPA"), before you type the county. It turns red (DUPE) only when the county you type
+  is one already logged, and a rover in a new county clears it, since that contact still counts. The list
+  narrows as you type the county. In the cockpits' contest entry, the contest logger window and the Contest
+  screen's entry.
 - **Logbook: export just the contacts you pick.** Ctrl-click (⌘-click on a Mac) rows in the Logbook to pick
   them, Shift-click to pick a run, or press Space on the focused row; Esc clears. **Export selected** saves
   those contacts as an ADIF file in your Downloads folder, each written exactly as the whole-log export writes
@@ -179,6 +196,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unplugged.
 
 ### Changed
+- **Contest entry: the sample text in empty boxes is quieter.** The grey examples ("W1AW", "599", a county) are now
+  in normal weight instead of bold, and a shade darker in the dark themes, so they no longer read like something
+  typed in. They stay readable in every theme.
 - **From the Remote client, Settings now shows which logbook credentials are saved at the station, and the connector
   Test buttons work.** The saved / not saved badges (and the Icom network password's) are read at the station and come
   back as yes or no; they no longer look empty, as if nothing were saved. QRZ Logbook, N3FJP and Cloudlog/Wavelog Test

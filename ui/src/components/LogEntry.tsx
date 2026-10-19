@@ -18,7 +18,7 @@ import {
   type LoggedQso,
 } from '../types'
 import { t } from '../i18n'
-import { clearHuntTarget, contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestRemoveLast, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
+import { clearHuntTarget, contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestRemoveLast, contestLoggedQth, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
 import { bandKey, modeKey } from '../features/callHistory'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
@@ -39,11 +39,11 @@ import { composingSlot } from '../features/contestExchange'
 import { readLogDraft, writeLogDraft } from '../features/logDraft'
 import { CALL_HISTORY_SOURCE, SCP_SOURCE, useCallHistory, useScpList } from '../features/contestLists'
 import { scpLine } from '../features/scp'
-import { applyFill, EMPTY_FILL, historyFill, typedIn, type FillState } from '../features/callHistoryFill'
+import { applyFill, contestLogFill, EMPTY_FILL, historyFill, loggedQthFill, offerFill, typedIn, type FillSource, type FillState } from '../features/callHistoryFill'
 import { fdFieldOk, fdSlotValue, fdVerdict, receivedCaption, slotCaption, slotExample, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
 import { contestUnsavedText } from '../features/contestUnsaved'
-import { contestDupe, contestDupeRow, type ContestDupeVerdict } from '../features/contestDupe'
+import { contestDupe, contestDupeRow, contestWorkedRows, workedValues, type ContestDupeVerdict } from '../features/contestDupe'
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
 import { askForOperatorBox, isOperatorBoxKey, isWipeKey } from '../features/contestKeys'
 import { isEditKey } from '../features/contestEdit'
@@ -90,6 +90,20 @@ const FD_RECEIVES_FALLBACK: ContestFieldSpec[] = [
  *  INVARIANT TOKEN; its caption is PROSE. A RECEIVED box is captioned by what it holds for this
  *  station's role (`receivedCaption`), as the contest log table and the edit caption it. */
 const fdFieldLabel = slotCaption
+
+/** The word on a filled box's caption: where the fill came from (a fill with no source is the
+ *  call-history file's, the only source there once was). */
+function fillMark(source: FillSource | undefined): string {
+  if (source === 'contest') return t('logEntry.fill.contest')
+  if (source?.startsWith('log:')) return t('logEntry.fill.log', { year: source.slice(4) })
+  return t('logEntry.history.mark')
+}
+/** …and its title, which says the same at length. */
+function fillTitle(source: FillSource | undefined, file: string): string {
+  if (source === 'contest') return t('logEntry.fill.contest.title')
+  if (source?.startsWith('log:')) return t('logEntry.fill.log.title', { year: source.slice(4) })
+  return t('logEntry.history.title', { file })
+}
 
 /** A row's UTC time as HH:MM, the DUPE badge's "when". Digits only: an invariant token. */
 function utcHhMm(whenUnix: number): string {
@@ -983,21 +997,71 @@ export function LogEntry({
     }
     setFill(EMPTY_FILL)
   }
+  // ⭐ THE WHOLE LOG'S ANSWER for the call typed (the third source below): asked of the station,
+  // which reads that one call's contacts through the log's per-call index, a moment after the
+  // call stops changing. Never a scan of a log this strip holds, and never on the Remote.
+  const [loggedQth, setLoggedQth] = useState<{ call: string; value: string; whenUnix: number } | null>(null)
+  const hasQthBox = fdReceives.some((f) => f.key === 'QTH')
+  useEffect(() => {
+    const c = logCall.trim().toUpperCase()
+    if (!fdActive || remoteMode || !hasQthBox || c.length < 3) return
+    let live = true
+    const timer = window.setTimeout(() => {
+      // Through a promise from the start, so a station that cannot answer (an older one, or none)
+      // is the same quiet "nothing" as a call the log does not hold.
+      Promise.resolve()
+        .then(() => contestLoggedQth(c, 'QTH'))
+        .then((r) => {
+          if (live) setLoggedQth(r && typeof r.value === 'string' ? { call: c, value: r.value, whenUnix: r.whenUnix } : null)
+        })
+        .catch(() => {})
+    }, 200)
+    return () => {
+      live = false
+      window.clearTimeout(timer)
+    }
+  }, [fdActive, remoteMode, hasQthBox, logCall])
+
   // ⭐ THE FILL, AS THE CALL IS TYPED (operator, 2026-10-08). Every change of the call (typed, a
-  // click on the SCP line, the decoder's or the host's) brings the boxes in line with what the
-  // file holds for exactly that call: `features/callHistoryFill` decides what may go in, and
-  // takes a fill back out when the call stops being the one it was for.
+  // click on the SCP line, the decoder's or the host's) brings the boxes in line with what is
+  // known of exactly that call, from three sources in the operator's order (2026-10-18): this
+  // contest's last contact with the station, then the call-history file, then the most recent
+  // contact anywhere in the log. `features/callHistoryFill` decides what may go in, never over a
+  // box the operator typed in, and takes a fill back out when the call stops being the one it
+  // was for. A box that has the caret when its fill lands is selected, so typing replaces it, as
+  // Space and Tab select a box they move to.
   const fdReceivesKey = fdReceives.map((f) => f.key).join(' ')
   useEffect(() => {
     if (!fdActive) return
-    const offered = historyFill(logCall, fdReceives, historyFile, fieldDay?.event)
+    // ⚠️ A STATION ALREADY WORKED ON THIS BAND AND MODE takes no fill from this contest or the
+    // log: what it sends NOW decides whether this is a dupe or a rover's new county, so the box
+    // waits for the operator, with the counties already logged on the amber line above it. Filled
+    // with the county logged last, it would turn the contact into a dupe nobody copied.
+    const modeClass = fdMode ?? 'PH'
+    const composing = (slot: string) => composingSlot(fieldDay?.composing, slot)
+    const workedHere =
+      contestDupe(fieldDay, logCall, snap.radio.band, modeClass) === 'own' ||
+      contestWorkedRows(fieldDay, logCall, snap.radio.band, modeClass, { rx: () => '', tx: composing }).length > 0
+    const { offered, sources } = offerFill(
+      workedHere ? {} : contestLogFill(logCall, fdReceives, fieldDay?.log ?? []),
+      historyFill(logCall, fdReceives, historyFile, fieldDay?.event),
+      workedHere ? {} : loggedQthFill(logCall, fdReceives, loggedQth),
+      loggedQth ? new Date(loggedQth.whenUnix * 1000).getUTCFullYear() : 0,
+    )
     const values = Object.fromEntries(fdReceives.map((f) => [f.key, fdValue(f)]))
-    const r = applyFill(fillRef.current, logCall, offered, values)
+    const r = applyFill(fillRef.current, logCall, offered, values, sources)
     if (r.state === fillRef.current) return
     setFill(r.state)
-    if (Object.keys(r.writes).length > 0) setFdFields((prev) => ({ ...prev, ...r.writes }))
+    if (Object.keys(r.writes).length === 0) return
+    setFdFields((prev) => ({ ...prev, ...r.writes }))
+    requestAnimationFrame(() => {
+      for (const key of Object.keys(r.writes)) {
+        const box = fdBoxRefs.current[key]
+        if (box && box === document.activeElement && r.state.filled[key]) box.select()
+      }
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fdActive, logCall, historyFile, fieldDay?.event, fdReceivesKey])
+  }, [fdActive, logCall, historyFile, fieldDay?.event, fdReceivesKey, fdLogLen, loggedQth, snap.radio.band, fdMode])
 
   // "I moved" (§4.1): the read-only sent exchange becomes editable, one box per
   // composing slot, and takes effect on the NEXT contact.
@@ -2131,11 +2195,14 @@ export function LogEntry({
    * have no space-stripping of their own, so without it a reflexive space would quietly log
    * a class of "3A " or a section of " WI".
    */
-  const onExchangeSpace = (e: React.KeyboardEvent, next: HTMLInputElement | null) => {
+  const onExchangeSpace = (e: React.KeyboardEvent, next: HTMLInputElement | null, prev: HTMLInputElement | null) => {
     if (e.key !== ' ' && e.code !== 'Space') return
     e.preventDefault()
-    next?.focus()
-    next?.select()
+    // SHIFT+SPACE WALKS BACK, the reverse of the same loop (Call ← field₁ ← … ← Call), as Shift+Tab
+    // does in DOM order: a wrong box is corrected without the mouse.
+    const to = e.shiftKey ? prev : next
+    to?.focus()
+    to?.select()
   }
 
   // ⭐ THE SENT SIDE: what the session is composing right now, as a VECTOR. Never a
@@ -2307,6 +2374,22 @@ export function LogEntry({
             band: fdDupeRow.band,
             mode: fdDupeRow.submode || fdDupeRow.mode || '',
           })
+  // ⭐ THE EARLY "WORKED" WARNING (`contestWorkedRows`): under a rule that keys on a county, the
+  // moment the call is in, a station this position already logged on this band and mode turns the
+  // Call box amber with the counties it was worked from. It is never the DUPE: the county decides
+  // that, and a rover in a new county still scores. A county line is judged county by county above,
+  // so it takes no early warning of its own.
+  const fdWorkedQths =
+    fdDupeRow === undefined && fdLineDupes === undefined
+      ? workedValues(
+          fieldDay,
+          contestWorkedRows(fieldDay, fdTypedCall, snap.radio.band, fdModeClass, {
+            rx: fdRx,
+            tx: (slot) => composingSlot(fieldDay?.composing, slot),
+          }),
+        )
+      : []
+  const fdWorkedLine = fdWorkedQths.length > 0 ? t('logEntry.fd.worked', { qths: fdWorkedQths.join(', ') }) : ''
   // ⭐ WHICH COMPONENTS THE OWN-DUPE SENTENCE MAY NAME — the same two flags `contestDupe` just
   // applied. It has always keyed on exactly what the rule names; the sentence did not, and
   // naming the rig's CURRENT band and mode under a rule that ignores them points the operator
@@ -2372,7 +2455,9 @@ export function LogEntry({
 
   /** A box as ESM reads it: complete only with what the operator gave for THIS contact — typed,
    *  picked or grabbed since the strip last cleared, an untouched default report, a blank
-   *  optional box, or a call-history fill, which counts as copied (rule 10). A value the strip
+   *  optional box, or a fill (call history's, this contest's last contact's, or the log's), which
+   *  counts as copied (rule 10): a station already worked on this band and mode gets no fill but
+   *  the file's, so no fill can make a dupe nobody copied. A value the strip
    *  carried over from the last contact is not one: Field Day's class and section stay in their
    *  boxes after a contact is logged, and read as complete they would make the first Enter on a
    *  new call in S&P send the exchange and log the last station's. */
@@ -2661,18 +2746,23 @@ export function LogEntry({
                 new call, so a screen reader hears it fill. */}
             <span className="le-fd-cap le-fd-cap-marked">
               <span className="le-fd-cap-text">{t('logEntry.fd.call.label')}</span>
-              <span className="le-fd-dupe" aria-live="polite" title={fdDupeWorked || undefined}>
+              <span
+                className={`le-fd-dupe${fdWorkedLine ? ' le-fd-dupe-maybe' : ''}`}
+                aria-live="polite"
+                title={fdDupeWorked || fdWorkedLine || undefined}
+              >
                 {fdDupeRow !== undefined && (
                   <>
                     <span className="le-fd-dupe-word">{t('logEntry.fd.dupe.badge')}</span>{' '}
                     {fdDupeWorked}
                   </>
                 )}
+                {fdWorkedLine}
               </span>
             </span>
             <input
               ref={callInputRef}
-              className={`settings-input mono le-fd-input le-fd-input-call${fdDupeRow !== undefined ? ' le-fd-input-dupe' : ''}`}
+              className={`settings-input mono le-fd-input le-fd-input-call${fdDupeRow !== undefined ? ' le-fd-input-dupe' : fdWorkedLine ? ' le-fd-input-maybe' : ''}`}
               value={logCall}
               // SPACES ARE DROPPED, not kept: no callsign contains one, and the space bar is
               // the phone position's push-to-talk. An operator who reaches for it out of habit
@@ -2682,8 +2772,12 @@ export function LogEntry({
               onChange={(e) => setLogCall(e.target.value.replace(/\s+/g, '').toUpperCase())}
               onBlur={onCallBlur}
               onKeyDown={(e) => {
-                // SPACE walks Call → field₁, whatever field₁ is.
-                onExchangeSpace(e, fdBoxRefs.current[fdReceives[0]?.key ?? ''] ?? null)
+                // SPACE walks Call → field₁, whatever field₁ is; Shift+Space back to the last.
+                onExchangeSpace(
+                  e,
+                  fdBoxRefs.current[fdReceives[0]?.key ?? ''] ?? null,
+                  fdBoxRefs.current[fdReceives[fdReceives.length - 1]?.key ?? ''] ?? null,
+                )
                 onEnter(e)
               }}
               placeholder={LOG_EXAMPLES.call}
@@ -2695,14 +2789,18 @@ export function LogEntry({
               and the last one back to Call, which is the loop the shipped strip has:
               Call → Class → Section → Call. */}
           {fdReceives.map((f, i) => {
-            // ⭐ MARKED AS FROM CALL HISTORY for exactly as long as the box shows the file's
-            // value: typing over it, or the strip clearing, takes the mark away.
+            // ⭐ MARKED WITH WHERE THE FILL CAME FROM for exactly as long as the box shows the
+            // filled value: typing over it, or the strip clearing, takes the mark away.
             const fromHistory = fillMarks[f.key]?.value === fdValue(f)
+            const fillSource = fillMarks[f.key]?.source
             // What the box holds for this station's role: "County / State" in Illinois.
             const caption = receivedCaption(f, fieldDay?.role)
             // The "RST sent" box stands just before the received report, sent then received, as
             // N1MM lays out Snt and Rcv (before the first box, for a contest that receives none).
             const sentHere = sentRstConst !== undefined && i === Math.max(0, fdReceives.findIndex((r) => r.kind === 'rst'))
+            // Where Shift+Space goes from this box (and from the "RST sent" box before it): the box
+            // before it, or Call from the first. Read at the key press, as the refs are.
+            const prevBox = () => (i > 0 ? (fdBoxRefs.current[fdReceives[i - 1].key] ?? null) : callInputRef.current)
             return (
             <Fragment key={f.key}>
             {sentHere && (
@@ -2722,7 +2820,7 @@ export function LogEntry({
                     setFdField(SENT_RST_KEY, e.target.value.replace(/\s+/g, ''))
                   }}
                   onKeyDown={(e) => {
-                    onExchangeSpace(e, fdBoxRefs.current[f.key] ?? null)
+                    onExchangeSpace(e, fdBoxRefs.current[f.key] ?? null, prevBox())
                     onEnter(e)
                   }}
                   placeholder={sentRstDefault}
@@ -2736,7 +2834,7 @@ export function LogEntry({
               {fromHistory ? (
                 <span className="le-fd-cap le-fd-cap-marked">
                   <span className="le-fd-cap-text">{caption}</span>
-                  <span className="le-fd-from-history">{t('logEntry.history.mark')}</span>
+                  <span className="le-fd-from-history">{fillMark(fillSource)}</span>
                 </span>
               ) : (
                 <span className="le-fd-cap">{caption}</span>
@@ -2779,6 +2877,7 @@ export function LogEntry({
                   onExchangeSpace(
                     e,
                     next ? (fdBoxRefs.current[next.key] ?? null) : callInputRef.current,
+                    prevBox(),
                   )
                   onEnter(e)
                 }}
@@ -2793,7 +2892,7 @@ export function LogEntry({
                 spellCheck={false}
                 title={
                   fromHistory
-                    ? t('logEntry.history.title', { file: historyFile?.fileName ?? '' })
+                    ? fillTitle(fillSource, historyFile?.fileName ?? '')
                     : slotTitle(f.key)
                 }
               />

@@ -1905,6 +1905,9 @@ export const EN = {
   'logEntry.fd.dupe.ownAnyBandOrMode':
     'Dupe: {{call}} is already in this position\'s log — this contest counts a station once, regardless of band or mode',
   'logEntry.fd.dupe.badge': 'DUPE',
+  // The early warning at a QSO party: this station is already in the log on this band and mode, from
+  // these counties/states (codes, invariant tokens). Not a dupe until the county typed is one of them.
+  'logEntry.fd.worked': 'Worked: {{qths}}',
   'logEntry.fd.rstSent.label': 'RST sent',
   'logEntry.fd.rstSent.title': 'The report this contact logs as sent: {{rst}} unless you type another here, for this contact only. Space and Tab skip this box; click it, or press Shift+Tab from the received report, to change it.',
   'logEntry.fd.dupe.workedAt': '{{time}} {{band}} {{mode}}',
@@ -1953,7 +1956,14 @@ export const EN = {
   'logEntry.scp.worked.title': 'Already in this log',
   'logEntry.scp.near.title': 'One character different from what you typed',
   'logEntry.scp.none': 'Super Check Partial has no list yet. Settings › Contesting says why.',
-  'logEntry.history.mark': 'history',
+  'logEntry.history.mark': 'call history',
+  // The other two sources of a contest box's pre-fill: the station's last contact in this contest,
+  // and the most recent one anywhere in the log ({{year}} is that contact's year, digits).
+  'logEntry.fill.contest': 'this contest',
+  'logEntry.fill.contest.title': 'From your last contact with them in this contest. Type over it if they sent something else.',
+  'logEntry.fill.log': 'log {{year}}',
+  'logEntry.fill.log.title':
+    'From your most recent contact with them in the log ({{year}}). Type over it if they sent something else.',
   'logEntry.history.title':
     'From call history ({{file}}). Type over it if they sent something else.',
   // A COUNTY LINE: a station on the border of two to four counties, typed as the counties

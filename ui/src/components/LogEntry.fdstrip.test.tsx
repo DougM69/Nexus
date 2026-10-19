@@ -134,6 +134,20 @@ describe('LogEntry — space walks the contest exchange, box to box', () => {
     expect(document.activeElement).toBe(call())
   })
 
+  it('Shift+Space walks back: Section → Class → Call → Section, and never types a space', () => {
+    // N1MM's way back is Shift+Tab, which is plain DOM order and still works; a strip that walks
+    // forward on Space walks back on Shift+Space, so a wrong box is corrected without the mouse.
+    renderFd()
+    sect().focus()
+    const back = (el: HTMLElement) => fireEvent.keyDown(el, { key: ' ', code: 'Space', shiftKey: true })
+    expect(back(sect()), 'the space is swallowed').toBe(false)
+    expect(document.activeElement).toBe(cls())
+    back(cls())
+    expect(document.activeElement).toBe(call())
+    back(call())
+    expect(document.activeElement).toBe(sect())
+  })
+
   it('the space never reaches the value — Class and Section have no stripping of their own', () => {
     // Call drops spaces on change; these two do not, so without preventDefault a reflexive
     // press would log a class of "3A " or a section of " WI".
