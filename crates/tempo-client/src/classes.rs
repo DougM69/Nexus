@@ -136,6 +136,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("export_log",                     RunsAtShack, "The shack's contest log as text; this computer saves it."),
     ("export_log_for_activation",      RunsAtShack, "One activation's log as text; this computer saves it."),
     ("export_log_for_operator",        RunsAtShack, "One operator's log as text; this computer saves it."),
+    ("export_selected_log",            RunsAtShack, "The contacts selected in the shack's logbook as text; this computer saves it."),
     ("export_settings_bundle",         RunsAtShack, "The shack's settings as text, with no secrets; this computer saves it."),
     ("fd_club_allow_back",             RefusedHere, "Lets a removed position back into the club event; a club change is made at the shack only."),
     ("fd_club_export",                 RunsAtShack, "The club log as text; this computer saves it."),

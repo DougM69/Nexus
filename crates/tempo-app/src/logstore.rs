@@ -3655,6 +3655,125 @@ pub(crate) mod tests {
         assert_eq!((saved.saving, saved.held), (0, 0), "and lacks nothing");
     }
 
+    /// The records of an ADIF export, each as its own bytes: everything after the header, cut
+    /// after each `<EOR>`.
+    fn adif_records(text: &str) -> Vec<&str> {
+        let body = &text[text.find("<EOH>\n").expect("an ADIF header") + "<EOH>\n".len()..];
+        body.split_inclusive("<EOR>\n").collect()
+    }
+
+    /// ★ A DATE RANGE AND A SELECTION EXPORT EXACTLY THEIR CONTACTS, EACH AS THE WHOLE-LOG EXPORT
+    /// WRITES IT. The range is the two date boxes as typed, both inclusive: a contact at 23:59:59
+    /// UTC on the end date is in, one at 00:00:00 the day after is out (and the same at the start
+    /// date's edge). The selection is exactly the ids picked, in log order. Each file is the
+    /// header and the whole log's own record bytes for the contacts it holds.
+    #[test]
+    fn a_range_and_a_selection_export_exactly_their_contacts_as_the_whole_log_writes_them() {
+        let d = Dir::new("export-range-rows");
+        std::fs::write(d.log(), legacy_log(3)).unwrap();
+        let e = launch_with_resolvers(&d);
+        let (start, end) = tempo_core::logbook::day_bounds_utc("2026-09-10").unwrap();
+        {
+            let mut eng = e.lock().unwrap();
+            // A private note on two of them: the operator's own copy of a record carries it.
+            let noted = |call: &str, when: u64| {
+                let mut r = qso(call, when);
+                r.notes = Some(format!("{call} private"));
+                r
+            };
+            eng.log_qso(qso("W1EVE", start - 1)); // 2026-09-09 23:59:59Z
+            eng.log_qso(qso("W2DAWN", start)); // 2026-09-10 00:00:00Z
+            eng.log_qso(noted("W3DUSK", end)); // 2026-09-10 23:59:59Z
+            eng.log_qso(noted("W4MORN", end + 1)); // 2026-09-11 00:00:00Z
+        }
+        flush(&e.lock().unwrap());
+        let (source, held) = {
+            let eng = e.lock().unwrap();
+            (crate::logexport::Source::of(&eng), eng.stored_records())
+        };
+        let id_of = |call: &str| {
+            held.iter()
+                .find(|r| r.call == call)
+                .and_then(|r| r.id)
+                .unwrap_or_else(|| panic!("{call} is in the log, with an id"))
+        };
+        let whole = crate::logexport::export_logbook(&source, "adif", None, None).unwrap();
+        let record_of = |call: &str| -> String {
+            let tag = format!("<CALL:{}>{call}<", call.len());
+            let found: Vec<&str> = adif_records(&whole.text)
+                .into_iter()
+                .filter(|r| r.contains(&tag))
+                .collect();
+            assert_eq!(found.len(), 1, "{call} is one record of the whole log");
+            found[0].to_string()
+        };
+        let file_of = |calls: &[&str]| -> String {
+            let mut file = adif_header();
+            for call in calls {
+                file.push_str(&record_of(call));
+            }
+            file
+        };
+        assert_eq!(adif_records(&whole.text).len(), 7, "premise: the whole log");
+        assert!(
+            record_of("W4MORN").contains("W4MORN private"),
+            "premise: the whole log writes the private note"
+        );
+
+        let (from, to) = crate::logexport::day_range(Some("2026-09-10"), Some(" 2026-09-10 "))
+            .expect("the boxes' dates parse");
+        let range = crate::logexport::export_logbook(&source, "adif", from, to).unwrap();
+        assert_eq!(
+            range.text,
+            file_of(&["W2DAWN", "W3DUSK"]),
+            "the range holds the day's first and last second, not the seconds either side"
+        );
+
+        let picked = [id_of("W4MORN"), id_of("W1EVE"), id_of("K1ABC")].map(|id| id.to_string());
+        let rows = crate::logexport::export_selected(&source, &picked).unwrap();
+        assert_eq!(
+            rows.text,
+            file_of(&["K1ABC", "W1EVE", "W4MORN"]),
+            "the selection holds exactly the picked contacts, in log order"
+        );
+        assert_eq!((rows.saving, rows.held), (0, 0), "and lacks nothing");
+
+        // Nothing to write: a selection of none, and a range with no contact in it, are the
+        // header alone — the Logbook says so and writes no file.
+        let none = crate::logexport::export_selected(&source, &[]).unwrap();
+        assert_eq!(none.text, adif_header());
+        // An id that is not one refuses the export: dropping it would write a file short of a
+        // contact the operator picked.
+        let bad = [picked[0].clone(), "#3".to_string()];
+        assert_eq!(
+            crate::logexport::export_selected(&source, &bad).map(|x| x.text),
+            Err("bad contact id \"#3\"".to_string())
+        );
+        let (from, to) = crate::logexport::day_range(Some("2026-09-12"), None).unwrap();
+        let empty = crate::logexport::export_logbook(&source, "adif", from, to).unwrap();
+        assert_eq!(empty.text, adif_header());
+    }
+
+    /// A date the boxes hold that is not a date refuses the export, either side: dropping the
+    /// bound would export more than the operator asked for.
+    #[test]
+    fn an_export_range_refuses_a_date_that_is_not_one() {
+        assert_eq!(
+            crate::logexport::day_range(None, Some("")),
+            Ok((None, None))
+        );
+        for bad in ["2026-13-01", "next week"] {
+            assert!(
+                crate::logexport::day_range(Some(bad), None).is_err(),
+                "{bad:?}"
+            );
+            assert!(
+                crate::logexport::day_range(None, Some(bad)).is_err(),
+                "{bad:?}"
+            );
+        }
+    }
+
     // ── the mirror, read from the store (SPEC-2 v3 C15) ──────────────────────
 
     /// ★ THE MIRROR IS STAGE 1'S, BYTE FOR BYTE — after the conversion of an operator's

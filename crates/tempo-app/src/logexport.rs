@@ -45,12 +45,13 @@
 //! ⚠️ Every function here reads the store: never call one under the Engine lock (a debug build
 //! panics). Take the [`Source`] under it, release it, then call.
 
+use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tempo_core::logbook::{
-    Activations, Export, ExportKind, LoggedActivation, Operators, QsoRecord,
+    Activations, Export, ExportKind, LoggedActivation, Operators, QsoRecord, RecordId,
 };
 
 use crate::logstore::{LogRows, Standing, Unsaved, READ_WAIT};
@@ -128,6 +129,25 @@ pub fn export_logbook(
     export_waiting(from, kind, EXPORT_WAIT)
 }
 
+/// The export range the Logbook's two date boxes give: `from` and `to` are `"YYYY-MM-DD"` UTC
+/// dates, `from` the start of its day and `to` the end of its own (both inclusive). Absent or
+/// empty = unbounded on that side. A malformed date is an ERROR, never silently ignored: dropping
+/// a bound would ship a full log the operator believes is filtered.
+pub fn day_range(
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<(Option<u64>, Option<u64>), String> {
+    let parse = |d: Option<&str>| -> Result<Option<(u64, u64)>, String> {
+        match d.map(str::trim) {
+            None | Some("") => Ok(None),
+            Some(s) => tempo_core::logbook::day_bounds_utc(s)
+                .map(Some)
+                .ok_or_else(|| format!("bad export date {s:?} (expected YYYY-MM-DD)")),
+        }
+    };
+    Ok((parse(from)?.map(|b| b.0), parse(to)?.map(|b| b.1)))
+}
+
 /// ADIF of `operator`'s contacts (`Logbook::adif_for_operator`).
 pub fn export_for_operator(from: &Source, operator: &str) -> Result<Exported, String> {
     export_waiting(
@@ -154,6 +174,21 @@ pub fn export_for_activation(
         },
         EXPORT_WAIT,
     )
+}
+
+/// ADIF of exactly the contacts whose ids are `ids` — the rows the operator selected in the
+/// Logbook, as the ids the Logbook holds (`LoggedQso.id`) — in log order, each record as the
+/// whole-log export writes it. An id that does not parse is an ERROR, never silently dropped: a
+/// file short of a contact the operator picked is a wrong file.
+pub fn export_selected(from: &Source, ids: &[String]) -> Result<Exported, String> {
+    let ids = ids
+        .iter()
+        .map(|id| {
+            id.parse::<RecordId>()
+                .map_err(|()| format!("bad contact id {id:?}"))
+        })
+        .collect::<Result<HashSet<_>, String>>()?;
+    export_waiting(from, ExportKind::Selected(ids), EXPORT_WAIT)
 }
 
 /// Every distinct operator in the log, uppercased and sorted (`Logbook::operators`) — the store

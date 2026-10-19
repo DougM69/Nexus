@@ -2015,6 +2015,12 @@ export async function exportGeneralLog(
   return invoke<LogExport>('export_general_log', { format, from: from || null, to: to || null })
 }
 
+/** Export the contacts selected in the Logbook as ADIF, by their ids (`LoggedQso.id`), each record
+ *  as the whole-log export writes it. */
+export async function exportSelectedLog(ids: string[]): Promise<LogExport> {
+  return invoke<LogExport>('export_selected_log', { ids })
+}
+
 /** The absolute path where the ALL.TXT decode log is written (to show in Settings). */
 export async function allTxtLocation(): Promise<string> {
   return invoke<string>('all_txt_location')

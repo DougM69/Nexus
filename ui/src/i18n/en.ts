@@ -1334,6 +1334,11 @@ export const EN = {
   'logbook.export.csv.title': 'Save the whole logbook as a CSV spreadsheet in your Downloads folder',
   'logbook.export.csv.titleRange':
     'Save the selected date range as a CSV spreadsheet in your Downloads folder',
+  'logbook.export.selected.label': 'Export selected ({{count}})',
+  'logbook.export.selected.title':
+    'Save the contacts you picked as an ADIF file in your Downloads folder. Ctrl-click (⌘-click on a Mac) a row to pick it, Shift-click to pick a run of rows, Space picks the focused row, Esc clears.',
+  'logbook.export.selected.notLoaded': 'Some of those rows are still loading. Try the Shift-click again in a moment.',
+  'logbook.export.nothing': 'No contacts to export, so no file was written.',
   'logbook.export.failed': 'Export failed',
   // `{{path}}` is a file path — data, never translated, never re-punctuated.
   'logbook.export.done': {

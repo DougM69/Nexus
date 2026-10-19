@@ -37,6 +37,7 @@ import {
   deleteQsoById,
   editQsoById,
   exportGeneralLog,
+  exportSelectedLog,
   exportLogForOperator,
   exportLogForActivation,
   logOperators,
@@ -414,6 +415,15 @@ export function Logbook({
   // Filter to contacts still lacking an award-eligible confirmation (the DX
   // chaser's "who do I still need a card/LoTW from" view).
   const [needsConfirmOnly, setNeedsConfirmOnly] = useState(false)
+  // The rows picked for "Export selected", by contact id, and the row a Shift-click's run starts
+  // from. A new search or filter clears them: a picked row the list no longer shows would be
+  // exported unseen.
+  const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set())
+  const pickAnchor = useRef<number | null>(null)
+  useEffect(() => {
+    pickAnchor.current = null
+    setPicked((was) => (was.size ? new Set() : was))
+  }, [deferredSearch, needsConfirmOnly])
   // #239: the wide table, off unless this viewer turned it on.
   const [moreColumns, setMoreColumns] = useState(loadMoreColumns)
   // "Check park states": the operator-run review of hunted contacts whose park names another
@@ -1213,6 +1223,35 @@ export function Logbook({
       : undefined
   }
 
+  /** Pick rows for "Export selected": one row toggles; a run (Shift) adds every row from the last
+   *  one picked. A run is picked only once all of it has loaded — part of it would export less
+   *  than the operator meant. */
+  const pickRows = (index: number, run: boolean) => {
+    if (!control) return
+    const anchor = pickAnchor.current
+    if (run && anchor !== null) {
+      const ids: string[] = []
+      for (let i = Math.min(anchor, index); i <= Math.max(anchor, index); i++) {
+        const id = rowAt(i)?.q.id
+        if (!id) {
+          pushToast(t('logbook.export.selected.notLoaded'), 'info')
+          return
+        }
+        ids.push(id)
+      }
+      setPicked((was) => new Set([...was, ...ids]))
+      return
+    }
+    const id = rowAt(index)?.q.id
+    if (!id) return
+    pickAnchor.current = index
+    setPicked((was) => {
+      const next = new Set(was)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+  }
+
   /** The height closed rows are drawn at: the one most of the rows drawn now have. */
   const closedHeight = () => {
     const seen = new Map<number, number>()
@@ -1305,9 +1344,16 @@ export function Logbook({
       return
     }
     const row = rowAt(index)
-    if (e.key === 'Escape' && showForm) {
+    if (e.key === ' ') {
+      e.preventDefault()
+      pickRows(index, e.shiftKey)
+    } else if (e.key === 'Escape' && showForm) {
       e.preventDefault()
       cancelForm()
+    } else if (e.key === 'Escape' && picked.size) {
+      e.preventDefault()
+      pickAnchor.current = null
+      setPicked(new Set())
     } else if (row && control && (e.key === 'Enter' || e.key === 'Delete')) {
       e.preventDefault()
       if (e.key === 'Delete') {
@@ -1853,6 +1899,11 @@ export function Logbook({
                 const text = exported.text
                 // Count what the file actually holds — with a date range the log length lies.
                 const n = (text.match(/<eor>/gi) ?? []).length
+                if (n === 0) {
+                  pushToast(t('logbook.export.nothing'), 'info')
+                  sayExportLacks([exported])
+                  return
+                }
                 const stamp = new Date().toISOString().slice(0, 10)
                 const path = await saveTextToDownloads(`nexus-log-${stamp}.adi`, text)
                 pushToast(t('logbook.export.done', { count: n, path }), 'success')
@@ -1868,6 +1919,32 @@ export function Logbook({
             }
           >
             {t('logbook.export.adif.label')}
+          </button>
+          {/* The rows picked in the list — Ctrl/⌘-click, Shift-click, Space — written as the
+              whole-log export writes each one. Beside the date range, not bounded by it. */}
+          <button
+            type="button"
+            className="export-btn"
+            disabled={picked.size === 0}
+            onClick={() =>
+              withErrorToast(async () => {
+                const exported = await exportSelectedLog([...picked])
+                const text = exported.text
+                const n = (text.match(/<eor>/gi) ?? []).length
+                if (n === 0) {
+                  pushToast(t('logbook.export.nothing'), 'info')
+                  sayExportLacks([exported])
+                  return
+                }
+                const stamp = new Date().toISOString().slice(0, 10)
+                const path = await saveTextToDownloads(`nexus-log-selected-${stamp}.adi`, text)
+                pushToast(t('logbook.export.done', { count: n, path }), 'success')
+                sayExportLacks([exported])
+              }, t('logbook.export.failed'))
+            }
+            title={t('logbook.export.selected.title')}
+          >
+            {t('logbook.export.selected.label', { count: picked.size })}
           </button>
           {/* Per-activation export — the file POTA actually asks for. The date range above
               cannot produce it: an activator who worked a park in the afternoon and ragchewed
@@ -1978,6 +2055,11 @@ export function Logbook({
                 const text = exported.text
                 // Rows minus the header — with a date range the log length lies.
                 const n = Math.max(0, text.trim().split('\n').length - 1)
+                if (n === 0) {
+                  pushToast(t('logbook.export.nothing'), 'info')
+                  sayExportLacks([exported])
+                  return
+                }
                 const stamp = new Date().toISOString().slice(0, 10)
                 const path = await saveTextToDownloads(`nexus-log-${stamp}.csv`, text)
                 pushToast(t('logbook.export.done', { count: n, path }), 'success')
@@ -2287,6 +2369,7 @@ export function Logbook({
       <div
         className={`log-table logbook-table${moreColumns ? ' wide' : ''}`}
         role="grid"
+        aria-multiselectable={control || undefined}
         aria-rowcount={listTotal + 1}
         aria-describedby={keysId}
       >
@@ -2458,6 +2541,7 @@ export function Logbook({
                     </div>
                   )
                 const { q, key, ref } = row
+                const isPicked = !!q.id && picked.has(q.id)
                 return (
                   <div
                     className={`log-row logbook-row${editingKey === key ? ' editing' : ''}`}
@@ -2471,8 +2555,17 @@ export function Logbook({
                     // already uses in the decoded text (#262). The row title carries it,
                     // because the affordance is otherwise invisible.
                     onDoubleClick={() => setViewing(q)}
+                    // Ctrl/⌘-click picks the row for "Export selected", Shift-click a run — on the
+                    // row itself, never through one of its controls.
+                    onClick={(e) => {
+                      if (!(e.ctrlKey || e.metaKey || e.shiftKey)) return
+                      if ((e.target as HTMLElement).closest('button, a, input, select, textarea, label')) return
+                      e.preventDefault()
+                      pickRows(vrow.index, e.shiftKey)
+                    }}
                     title={t('logbook.row.view.title', { call: q.call })}
                     role="row"
+                    aria-selected={control ? isPicked : undefined}
                     // The row's key is its id: unique per record — collision-proof even for two
                     // identical QSOs (double-clicked Log in the same second) — and it FOLLOWS the
                     // row when the list moves, so an open comment or the edit mark stays on it.
@@ -2486,7 +2579,11 @@ export function Logbook({
                       ...placed,
                       // Stripe by REAL index (inline beats the nth-child rule, which would otherwise
                       // stripe by render order and appear to "move" as the virtual window scrolls).
-                      background: vrow.index % 2 ? 'color-mix(in srgb, var(--bg-elev) 50%, transparent)' : 'transparent',
+                      background: isPicked
+                        ? 'color-mix(in srgb, var(--accent) 22%, transparent)'
+                        : vrow.index % 2
+                          ? 'color-mix(in srgb, var(--bg-elev) 50%, transparent)'
+                          : 'transparent',
                     }}
                   >
                 <span className="log-cell mono">
