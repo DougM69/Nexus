@@ -131,7 +131,7 @@ pub struct Station {
     pub keyed_on_air: bool,
     /// True when the partner's bare 73 closed the QSO while we were `Confirming` (we had sent
     /// our roger). WSJT-X answers that 73 at ROGERS with Tx6, its CQ
-    /// (`widgets/mainwindow.cpp:9214-9227`); the engine reads this to do the same with the rest
+    /// (`widgets/mainwindow.cpp:9216-9231`); the engine reads this to do the same with the rest
     /// of an over still on the air. Nothing is queued for a later over.
     pub signed_off_with_73: bool,
     /// Human-readable event log.
@@ -1469,7 +1469,7 @@ mod start_context_tests {
         }
     }
 
-    /// Only the partner's bare 73 to our roger is WSJT-X's sign-off at ROGERS (`:9214-9227`);
+    /// Only the partner's bare 73 to our roger is WSJT-X's sign-off at ROGERS (`:9216-9231`);
     /// its RR73 or RRR there closes the QSO too, but is not that sign-off.
     #[test]
     fn the_partners_73_to_our_roger_is_recorded_as_its_sign_off() {

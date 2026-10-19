@@ -509,7 +509,7 @@ fn rogering_with_rrr() -> Engine {
 
 /// ⭐ WSJT-X's Tx6 AFTER THE PARTNER's 73. We sent RRR (WSJT-X's ROGERS; RRR is not a 73, so
 /// sequencing goes on); W1AW's 73 folds during the over. WSJT-X sets `m_ntx=6`
-/// (`widgets/mainwindow.cpp:9214-9227`), regenerates the over (:9446) and turns Enable Tx off
+/// (`widgets/mainwindow.cpp:9216-9231`), regenerates the over (:9446) and turns Enable Tx off
 /// (`cease_auto_Tx_after_QSO`, :10518): the rest of this over is the CQ, and nothing goes after it.
 #[test]
 fn the_partners_73_during_our_rrr_switches_the_rest_to_the_cq_and_tx_goes_off() {

@@ -23,7 +23,7 @@
 //!   off (:8105-8139, `auto_tx_mode (false)`), so no decode switches the rest of that over. A
 //!   Tx-slot click still does: the buttons do not ask for `m_auto`.
 //! - **Tx6 after the partner's 73 to our roger.** At ROGERS (we sent RRR: an RR73 is a 73 and
-//!   ends sequencing at its key) the partner's 73 sets `m_ntx=6`, the CQ (:9214-9227), and the
+//!   ends sequencing at its key) the partner's 73 sets `m_ntx=6`, the CQ (:9216-9231), and the
 //!   rest of the over is that CQ; Enable Tx then goes off (`cease_auto_Tx_after_QSO`, :10518).
 //!
 //! Nexus switches when the message the sequencer would send next differs from the one on the
