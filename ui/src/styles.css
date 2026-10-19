@@ -20121,6 +20121,11 @@ button.cq-skiptx1.on {
   max-height: var(--contest-recent-h);
   min-height: 0;
 }
+/* The sm tier keeps the contest windows' column as it is (1024×768, the supported floor, lands there),
+   so it keeps their two dividers; xs hides them with every other divider. */
+[data-viewport='sm'] .pane-splitter.contest-seam {
+  display: block;
+}
 .contest-logger > .layout.single {
   min-height: min(9em, 30%);
   border-top: 1px solid var(--border-soft);

@@ -4223,6 +4223,7 @@ export function ContestView({
         maxShare={CONTEST_LOG_MAX_SHARE}
         defaultPct={null}
         label={t('fieldDay.log.splitter.label')}
+        className="contest-seam"
       />
       {/* LOG TABLE */}
       <div className="fd-log" ref={logBox}>

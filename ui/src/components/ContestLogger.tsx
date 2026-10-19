@@ -333,6 +333,7 @@ export function ContestLargeEntry({
             max={CONTEST_RECENT_SPLIT_MAX}
             defaultPct={null}
             label={t('contestLogger.recent.splitter.label')}
+            className="contest-seam"
           />
         </>
       )}
