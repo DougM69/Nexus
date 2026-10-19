@@ -2447,6 +2447,13 @@ pub struct FieldDayQso {
     /// key it does not know, so a row that serialised this would blank its Field Day view.
     #[serde(skip)]
     pub seq: u64,
+    /// ⭐ **This contact's QSO number** — 1, 2, 3… in every contest, the number the log table
+    /// shows and the submitted ADIF writes as `STX` (`FieldDayLog::qso_numbers`): in a serial
+    /// contest the serial the contact was sent, in every other contest its place in the run. A
+    /// removed contact's number stays spent. `None` (skipped) for a row with no number, and on a
+    /// station older than the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nr: Option<u32>,
 }
 
 /// `skip_serializing_if` for a flag that is false on almost every row. serde needs a path

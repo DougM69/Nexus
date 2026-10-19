@@ -3559,6 +3559,10 @@ export interface FieldDayQso {
    *  so `qsoCount` leaves it out. The engine's answer from the row, never re-derived here.
    *  **Absent means false**, as for `dupe`, and on a station older than the mark. */
   banned?: boolean
+  /** ⭐ This contact's QSO number: 1, 2, 3… in every contest, the serial it was sent in a contest
+   *  that sends one, its place in the run otherwise. A removed contact's number stays spent, so
+   *  the numbers can have gaps. Absent on a station older than the field. */
+  nr?: number
 }
 
 /** ⭐ The running ruleset's DUPE RULE — what makes a contact count again.

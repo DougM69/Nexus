@@ -78,8 +78,9 @@ const ALLOWED = new Set([
   'contest_entry_put', 'contest_entry_reset', 'contest_working', 'contest_zone_hint', 'contest_i_moved',
   'contest_log_manual', 'contest_log_manual_rows', 'resolve_entity', 'set_cw_peer_info', 'set_log_form_grid',
   'scp_ensure', 'get_scp_calls', 'get_call_history',
-  // the box's pre-fill from the log: a read of one station's rows through the per-call index
-  // (contest_logged_qth), which keys, tunes, holds and writes nothing
+  // the county/state box's pre-fill from the whole log: a read of the logbook's rows for one call,
+  // which keys, tunes and holds nothing. Asked a moment after the call is typed, so whether it lands
+  // inside the sweep's window is timing, and the list must admit it either way.
   'contest_logged_qth',
 ])
 
