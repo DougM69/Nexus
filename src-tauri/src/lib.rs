@@ -30,6 +30,9 @@
 //! Windows: WebView2; macOS: WKWebView): `cargo tauri dev` /
 //! `cargo tauri build --features radio`.
 
+/// Signing in to the Remote service's account through the system browser: the shack binding itself
+/// to its owner, and a computer adding its internet road.
+mod account_sign_in;
 /// One alert, made in Rust where it is raised, with its id and a versioned shape: what every window
 /// and a computer driving the station hear.
 mod alert;
@@ -38312,6 +38315,17 @@ fn remote_service_for(
             watched,
         },
         commands,
+        // Signing in to Nexus Remote at the shack opens the system browser, as the internet road's
+        // sign-in does on the operator's computer.
+        {
+            let app = handle.clone();
+            Arc::new(move |url: &str| {
+                use tauri_plugin_opener::OpenerExt;
+                app.opener()
+                    .open_url(url, None::<&str>)
+                    .map_err(|e| e.to_string())
+            })
+        },
     )
 }
 

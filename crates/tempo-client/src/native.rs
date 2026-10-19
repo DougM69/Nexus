@@ -174,8 +174,10 @@ impl SignIn {
 }
 
 /// The address the system browser opens for the first sign-in: the issuer's authorize endpoint,
-/// with the code returned to `redirect` (this computer's loopback listener) under `pkce`.
-pub fn authorize_url(sign_in: &SignIn, redirect: &str, pkce: &Pkce) -> String {
+/// with the code returned to `redirect` (this computer's loopback listener) under `pkce`. With a
+/// `nonce` (what the sign-in vouches for, `crate::account`), the ID token the issuer gives back
+/// carries it; without one the address is exactly what it always was.
+pub fn authorize_url(sign_in: &SignIn, redirect: &str, pkce: &Pkce, nonce: Option<&str>) -> String {
     let query = [
         ("response_type", "code"),
         ("client_id", &sign_in.client_id),
@@ -186,7 +188,8 @@ pub fn authorize_url(sign_in: &SignIn, redirect: &str, pkce: &Pkce) -> String {
         ("code_challenge_method", "S256"),
         ("state", &pkce.state),
     ]
-    .iter()
+    .into_iter()
+    .chain(nonce.map(|nonce| ("nonce", nonce)))
     .map(|(name, value)| format!("{name}={}", encoded(value)))
     .collect::<Vec<_>>()
     .join("&");
@@ -256,6 +259,22 @@ pub fn token(answer: &serde_json::Value) -> Option<(String, u64)> {
             .all(|b| b.is_ascii_alphanumeric() || b"-_.~+/=".contains(&b));
     let lasts = answer.get("expires_in")?.as_u64()?.min(3600);
     (shaped && lasts > 0).then(|| (token.to_string(), lasts))
+}
+
+/// The ID token the issuer's answer carries (the sign-in asks for `openid`), or `None` when it has
+/// none or one that is not three base64url parts of a token's size. Taken as it came: whoever keeps
+/// it checks it (`crate::account::verify_proof`).
+pub fn id_token(answer: &serde_json::Value) -> Option<String> {
+    let token = answer.get("id_token")?.as_str()?;
+    let shaped = token.len() <= 4096
+        && token.split('.').count() == 3
+        && token.split('.').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        });
+    shaped.then(|| token.to_string())
 }
 
 /// One TURN server the service's `turn` route named: the host and port of a plain `turn:` URL over
@@ -466,7 +485,7 @@ mod tests {
         }))
         .unwrap();
         let pkce = Pkce::of("verifier-verifier-verifier-verifier-verifi", "st".into());
-        let url = authorize_url(&sign_in, "http://127.0.0.1:5123/callback", &pkce);
+        let url = authorize_url(&sign_in, "http://127.0.0.1:5123/callback", &pkce, None);
         assert!(url.starts_with(
             "https://login.example/authorize?response_type=code&client_id=native-id&"
         ));
@@ -524,6 +543,52 @@ mod tests {
         assert_eq!(answer("", "Bearer", 60), None);
         assert_eq!(answer("a b", "Bearer", 60), None);
         assert_eq!(answer("a.b.c", "Bearer", 0), None);
+    }
+
+    /// The authorize address carries a nonce only when the sign-in has one, and is otherwise exactly
+    /// what it was before nonces existed.
+    #[test]
+    fn the_authorize_address_carries_the_nonce_it_is_given() {
+        let sign = SignIn {
+            issuer: "https://login.example/".into(),
+            client_id: "native".into(),
+            audience: "https://api.example/".into(),
+        };
+        let pkce = Pkce::of("verifier", "state-1".into());
+        let plain = authorize_url(&sign, "http://127.0.0.1:42078/callback", &pkce, None);
+        assert_eq!(
+            plain,
+            format!(
+                "https://login.example/authorize?response_type=code&client_id=native&redirect_uri=\
+                 http%3A%2F%2F127.0.0.1%3A42078%2Fcallback&scope=openid%20profile%20email&audience=\
+                 https%3A%2F%2Fapi.example%2F&code_challenge={}&code_challenge_method=S256&\
+                 state=state-1",
+                pkce.challenge
+            )
+        );
+        let with = authorize_url(
+            &sign,
+            "http://127.0.0.1:42078/callback",
+            &pkce,
+            Some("n-1_x"),
+        );
+        assert_eq!(with, format!("{plain}&nonce=n-1_x"));
+    }
+
+    /// The ID token is taken only in a token's shape; nothing about it is trusted here.
+    #[test]
+    fn the_id_token_is_kept_in_a_tokens_shape() {
+        let of = |v: serde_json::Value| id_token(&v);
+        assert_eq!(
+            of(serde_json::json!({"id_token": "aA0-_.bB.c"})),
+            Some("aA0-_.bB.c".into())
+        );
+        assert_eq!(of(serde_json::json!({"access_token": "a.b.c"})), None);
+        assert_eq!(of(serde_json::json!({"id_token": "a.b"})), None);
+        assert_eq!(of(serde_json::json!({"id_token": "a..c"})), None);
+        assert_eq!(of(serde_json::json!({"id_token": "a.b=.c"})), None);
+        let long = format!("a.{}.c", "b".repeat(4096));
+        assert_eq!(of(serde_json::json!({ "id_token": long })), None);
     }
 
     /// ★ The `turn` route's answer read as the TURN servers this computer's client can use: plain

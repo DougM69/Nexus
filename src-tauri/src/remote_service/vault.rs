@@ -40,6 +40,19 @@
 //! ([`lan_entry`]): no key is made over it and the list is never written over or deleted on its
 //! own; the station has no key, or admits nobody, until the operator resets its network identity.
 //!
+//! Four more belong to the station's account (`remote_service::account`), and are each their own
+//! entry so no older Nexus ever reads them: who owns the station (the service's id for it, the
+//! issuer and the owner's subject, and the key id and signing time of its proof: no token), the
+//! issuer's key set, the devices kept for the LAN (each the SHA-256 of its key, its role and two
+//! times), and the people invited (each an address as the service matches it, and a role). A fifth
+//! holds the removals made at the shack that the service has not heard yet (device ids), so a
+//! device removed offline is never granted again on its proof before the service hears of it; a
+//! sixth, the invitations taken back at the shack that the service has not heard yet (each address
+//! as it was typed), so the service still removes that person's devices once it is reached. None
+//! holds a secret: a key set is public, and a pin is a hash. Like the LAN entries they read past a
+//! field they do not know, and one that does not read at all is never taken for none: the station
+//! then admits no device on a proof until it signs in again.
+//!
 //! The rest belong to the other end of Remote over this network, the computer an operator works
 //! from (`crate::lan_client`). One entry for each station it is paired with: its own key for that
 //! station (the design's second key, approved on 2026-10-04 and handled as the station key is:
@@ -62,6 +75,12 @@ const PAIRED_STATIONS: &str = "lan-stations";
 const PAIRED_STATION: &str = "lan-station-";
 /// One paired station's internet road: this, then its LAN station id.
 const INTERNET_ROAD: &str = "lan-internet-";
+const ACCOUNT_OWNER: &str = "account-owner";
+const ACCOUNT_KEYS: &str = "account-keys";
+const ACCOUNT_DEVICES: &str = "account-devices";
+const ACCOUNT_PEOPLE: &str = "account-people";
+const ACCOUNT_REVOKES: &str = "account-revokes";
+const ACCOUNT_UNINVITES: &str = "account-uninvites";
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -210,6 +229,60 @@ pub trait LanVault: Send + Sync {
     fn lan_devices(&self) -> Result<Option<LanDevices>, &'static str>;
     fn save_lan_devices(&self, devices: &LanDevices) -> Result<(), &'static str>;
     fn remove_lan_devices(&self) -> Result<(), &'static str>;
+}
+
+/// The issuer's key set as the station keeps it, for the issuer it was fetched from: a set kept for
+/// another issuer checks nothing.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountKeys {
+    pub issuer: String,
+    pub keys: tempo_client::account::KeySet,
+}
+
+/// The people invited to the station the service knows as `station_id`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct People {
+    pub station_id: String,
+    pub invites: Vec<tempo_client::account::Invite>,
+}
+
+/// The removals made at the station that the service known as `station_id` has not heard yet: the
+/// ids it lists those devices under.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Revokes {
+    pub station_id: String,
+    pub devices: Vec<String>,
+}
+
+/// The invitations taken back at the station that the service known as `station_id` has not heard
+/// yet: each address as it was typed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Uninvites {
+    pub station_id: String,
+    pub people: Vec<String>,
+}
+
+/// The station's account entries (see the header), kept apart from [`Vault`]'s and the LAN's.
+pub trait AccountVault: Send + Sync {
+    fn owner(&self) -> Result<Option<tempo_client::account::Owner>, &'static str>;
+    fn save_owner(&self, owner: &tempo_client::account::Owner) -> Result<(), &'static str>;
+    fn account_keys(&self) -> Result<Option<AccountKeys>, &'static str>;
+    fn save_account_keys(&self, keys: &AccountKeys) -> Result<(), &'static str>;
+    fn device_cache(&self) -> Result<Option<tempo_client::account::DeviceCache>, &'static str>;
+    fn save_device_cache(
+        &self,
+        cache: &tempo_client::account::DeviceCache,
+    ) -> Result<(), &'static str>;
+    fn people(&self) -> Result<Option<People>, &'static str>;
+    fn save_people(&self, people: &People) -> Result<(), &'static str>;
+    fn revokes(&self) -> Result<Option<Revokes>, &'static str>;
+    fn save_revokes(&self, revokes: &Revokes) -> Result<(), &'static str>;
+    fn uninvites(&self) -> Result<Option<Uninvites>, &'static str>;
+    fn save_uninvites(&self, uninvites: &Uninvites) -> Result<(), &'static str>;
 }
 
 pub trait Vault: Send + Sync {
@@ -459,6 +532,62 @@ impl StationVault for SystemVault {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err("credentialStoreUnavailable"),
         }
+    }
+}
+
+/// One of the account's entries, as the store gave it: read as the LAN's are ([`lan_entry`]).
+fn account_entry<T: serde::de::DeserializeOwned>(name: &str) -> Result<Option<T>, &'static str> {
+    match entry(name)?.get_password() {
+        Ok(value) => lan_entry(&value),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Err("credentialStoreUnavailable"),
+    }
+}
+fn save_account_entry<T: Serialize>(name: &str, value: &T) -> Result<(), &'static str> {
+    let value = serde_json::to_string(value).map_err(|_| "credentialStoreUnavailable")?;
+    entry(name)?
+        .set_password(&value)
+        .map_err(|_| "credentialStoreUnavailable")
+}
+impl AccountVault for SystemVault {
+    fn owner(&self) -> Result<Option<tempo_client::account::Owner>, &'static str> {
+        account_entry(ACCOUNT_OWNER)
+    }
+    fn save_owner(&self, owner: &tempo_client::account::Owner) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_OWNER, owner)
+    }
+    fn account_keys(&self) -> Result<Option<AccountKeys>, &'static str> {
+        account_entry(ACCOUNT_KEYS)
+    }
+    fn save_account_keys(&self, keys: &AccountKeys) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_KEYS, keys)
+    }
+    fn device_cache(&self) -> Result<Option<tempo_client::account::DeviceCache>, &'static str> {
+        account_entry(ACCOUNT_DEVICES)
+    }
+    fn save_device_cache(
+        &self,
+        cache: &tempo_client::account::DeviceCache,
+    ) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_DEVICES, cache)
+    }
+    fn people(&self) -> Result<Option<People>, &'static str> {
+        account_entry(ACCOUNT_PEOPLE)
+    }
+    fn save_people(&self, people: &People) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_PEOPLE, people)
+    }
+    fn revokes(&self) -> Result<Option<Revokes>, &'static str> {
+        account_entry(ACCOUNT_REVOKES)
+    }
+    fn save_revokes(&self, revokes: &Revokes) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_REVOKES, revokes)
+    }
+    fn uninvites(&self) -> Result<Option<Uninvites>, &'static str> {
+        account_entry(ACCOUNT_UNINVITES)
+    }
+    fn save_uninvites(&self, uninvites: &Uninvites) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_UNINVITES, uninvites)
     }
 }
 

@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tempo_app::{dto::AmpStatusDto, engine::Engine, settings::Settings};
 
+/// Signing in at the shack binds the station; a device the service approved on its own proof is
+/// granted only once the station has checked that proof itself.
+mod account_grants;
 /// Remote over this network beside the hosted mode: a paired computer's grant through hosted
 /// decisions.
 mod lan_grants;
@@ -17,9 +20,80 @@ mod lan_grants;
 mod tunnel_grants;
 
 #[derive(Clone, Default)]
-struct MemoryVault {
+pub(super) struct MemoryVault {
     values: Arc<Mutex<HashMap<String, String>>>,
     fail: Arc<AtomicBool>,
+}
+impl MemoryVault {
+    fn account_entry<T: serde::de::DeserializeOwned>(
+        &self,
+        name: &str,
+    ) -> Result<Option<T>, &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.values
+            .lock()
+            .unwrap()
+            .get(name)
+            .map(|v| serde_json::from_str(v).map_err(|_| "unreadable"))
+            .transpose()
+    }
+    fn save_account_entry<T: serde::Serialize>(
+        &self,
+        name: &str,
+        value: &T,
+    ) -> Result<(), &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.values
+            .lock()
+            .unwrap()
+            .insert(name.into(), serde_json::to_string(value).unwrap());
+        Ok(())
+    }
+}
+impl vault::AccountVault for MemoryVault {
+    fn owner(&self) -> Result<Option<tempo_client::account::Owner>, &'static str> {
+        self.account_entry("account-owner")
+    }
+    fn save_owner(&self, owner: &tempo_client::account::Owner) -> Result<(), &'static str> {
+        self.save_account_entry("account-owner", owner)
+    }
+    fn account_keys(&self) -> Result<Option<vault::AccountKeys>, &'static str> {
+        self.account_entry("account-keys")
+    }
+    fn save_account_keys(&self, keys: &vault::AccountKeys) -> Result<(), &'static str> {
+        self.save_account_entry("account-keys", keys)
+    }
+    fn device_cache(&self) -> Result<Option<tempo_client::account::DeviceCache>, &'static str> {
+        self.account_entry("account-devices")
+    }
+    fn save_device_cache(
+        &self,
+        cache: &tempo_client::account::DeviceCache,
+    ) -> Result<(), &'static str> {
+        self.save_account_entry("account-devices", cache)
+    }
+    fn people(&self) -> Result<Option<vault::People>, &'static str> {
+        self.account_entry("account-people")
+    }
+    fn save_people(&self, people: &vault::People) -> Result<(), &'static str> {
+        self.save_account_entry("account-people", people)
+    }
+    fn revokes(&self) -> Result<Option<vault::Revokes>, &'static str> {
+        self.account_entry("account-revokes")
+    }
+    fn save_revokes(&self, revokes: &vault::Revokes) -> Result<(), &'static str> {
+        self.save_account_entry("account-revokes", revokes)
+    }
+    fn uninvites(&self) -> Result<Option<vault::Uninvites>, &'static str> {
+        self.account_entry("account-uninvites")
+    }
+    fn save_uninvites(&self, uninvites: &vault::Uninvites) -> Result<(), &'static str> {
+        self.save_account_entry("account-uninvites", uninvites)
+    }
 }
 impl Vault for MemoryVault {
     fn binding(&self) -> Result<Option<Binding>, &'static str> {
@@ -312,6 +386,7 @@ fn cloud_runtime_probe() {
             audio: None,
             stream: Default::default(),
         },
+        Accounts::not_ready(),
     );
     let runtime = tokio::runtime::Runtime::new().unwrap();
     println!("REMOTE_TEST:{{\"ready\":true}}");
@@ -527,6 +602,7 @@ fn cloud_runtime_probe() {
                         audio: None,
                         stream: Default::default(),
                     },
+                    Accounts::not_ready(),
                 );
                 std::thread::sleep(Duration::from_millis(100));
                 service.status()
@@ -1490,6 +1566,10 @@ struct FakeCloud {
     refusing: Arc<AtomicBool>,
     /// Every `enroll/approve` body, as sent.
     approvals: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// While set, a removal alone is not answered (a 503), while the list still is.
+    refusing_removals: Arc<AtomicBool>,
+    /// Every invitation and its removal, as sent: the route's last word and the body.
+    invites: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
 }
 fn device_list(approved: u8, expires_at: u64) -> String {
     json!({"devices":[{"id":BROWSER,"name":"Test browser","approved":approved,"expiresAt":expires_at}]})
@@ -1516,12 +1596,18 @@ async fn fake_cloud() -> FakeCloud {
     let down = refusing.clone();
     let approvals = Arc::new(Mutex::new(Vec::new()));
     let approved_bodies = approvals.clone();
+    let refusing_removals = Arc::new(AtomicBool::new(false));
+    let removals_down = refusing_removals.clone();
+    let invites = Arc::new(Mutex::new(Vec::new()));
+    let invited = invites.clone();
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
             let served = served.clone();
             let held = held.clone();
             let down = down.clone();
             let approved_bodies = approved_bodies.clone();
+            let removals_down = removals_down.clone();
+            let invited = invited.clone();
             tokio::spawn(async move {
                 let mut request = Vec::new();
                 let mut chunk = [0u8; 4096];
@@ -1619,6 +1705,16 @@ async fn fake_cloud() -> FakeCloud {
                             device.remove("untilRemoved");
                         }
                     }
+                    if !head.contains("\r\nx-nexus-device-proof: 1\r\n") {
+                        // Each device's role, how it was added, its proof and a computer's LAN
+                        // key, only to a Nexus that checks proofs itself.
+                        for device in listed["devices"].as_array_mut().unwrap() {
+                            let device = device.as_object_mut().unwrap();
+                            for field in ["role", "addedBy", "proof", "lanKey"] {
+                                device.remove(field);
+                            }
+                        }
+                    }
                     ("200 OK", listed.to_string())
                 } else if head.contains("/native/approve-device ")
                     && serde_json::from_str::<serde_json::Value>(&served.lock().unwrap())
@@ -1662,7 +1758,9 @@ async fn fake_cloud() -> FakeCloud {
                     }
                     *served.lock().unwrap() = approved.to_string();
                     ("200 OK", r#"{"ok":true}"#.to_string())
-                } else if head.contains("/native/revoke-device ") && down.load(Ordering::SeqCst) {
+                } else if head.contains("/native/revoke-device ")
+                    && (down.load(Ordering::SeqCst) || removals_down.load(Ordering::SeqCst))
+                {
                     ("503 Service Unavailable", "{}".to_string())
                 } else if head.contains("/native/revoke-device ")
                     && serde_json::from_str::<serde_json::Value>(&served.lock().unwrap())
@@ -1683,6 +1781,20 @@ async fn fake_cloud() -> FakeCloud {
                 } else if head.contains("/native/revoke-device ") {
                     // A revoked browser's expiry becomes "now", so the service stops listing it.
                     *served.lock().unwrap() = json!({"devices":[]}).to_string();
+                    ("200 OK", r#"{"ok":true}"#.to_string())
+                } else if (head.contains("/native/invite ") || head.contains("/native/uninvite "))
+                    && down.load(Ordering::SeqCst)
+                {
+                    ("503 Service Unavailable", "{}".to_string())
+                } else if head.contains("/native/invite ") || head.contains("/native/uninvite ") {
+                    let verb = if head.contains("/native/invite ") {
+                        "invite"
+                    } else {
+                        "uninvite"
+                    };
+                    if let Ok(sent) = serde_json::from_slice(&request[head_end..]) {
+                        invited.lock().unwrap().push((verb.to_string(), sent));
+                    }
                     ("200 OK", r#"{"ok":true}"#.to_string())
                 } else if head.contains("/native/revoke ") {
                     ("200 OK", r#"{"ok":true}"#.to_string())
@@ -1728,6 +1840,8 @@ async fn fake_cloud() -> FakeCloud {
         station_key,
         refusing,
         approvals,
+        refusing_removals,
+        invites,
     }
 }
 fn paired_vault(origin: &str) -> MemoryVault {
@@ -2258,7 +2372,11 @@ async fn a_removal_the_service_never_heard_still_stands_at_the_shack() {
                     kind: None,
                 })
                 .await;
-            assert!(refused.is_err(), "premise: the service never heard it");
+            assert_eq!(
+                refused.map(|s| s.account.removals),
+                Ok(vec![BROWSER.to_string()]),
+                "premise: the service never heard it, and it waits to be told"
+            );
             let status = service.status().unwrap();
             assert!(
                 status.station_permissions.is_empty()
@@ -2266,6 +2384,9 @@ async fn a_removal_the_service_never_heard_still_stands_at_the_shack() {
                     && status.transmit_permissions.is_empty(),
                 "the removal did not stand at once"
             );
+            // The service answers again, but still never hears the removal: it lists the approval as
+            // it was.
+            cloud.refusing_removals.store(true, Ordering::SeqCst);
             cloud.refusing.store(false, Ordering::SeqCst);
         }
         service.action(Action::Disable {}).await.unwrap();
@@ -2830,6 +2951,10 @@ async fn local_transmit_grant_requires_approved_enabled_station_control_and_clea
         kind: Kind::Browser,
         platform: None,
         until_removed: 0,
+        role: None,
+        added_by: None,
+        proof: None,
+        lan_key: None,
     });
     assert!(matches!(
         service.action(grant()).await,
@@ -2978,6 +3103,8 @@ async fn a_closed_service_is_named_on_http_and_on_the_station_socket() {
         station_key: Default::default(),
         refusing: Default::default(),
         approvals: Default::default(),
+        refusing_removals: Default::default(),
+        invites: Default::default(),
     };
     let vault = paired_vault(&refused.origin);
     let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));

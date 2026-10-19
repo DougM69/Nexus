@@ -152,10 +152,12 @@ pub fn hex32(text: &str) -> Option<[u8; 32]> {
     tempo_stream::protocol::hex_bytes(text)?.try_into().ok()
 }
 
-/// All a pairing-only connection can reach: the book with its window, and the shack's own key.
+/// All a pairing-only or enrol-only connection can reach: the book with its window, the shack's own
+/// key, and what an enrolment is checked against.
 #[derive(Clone)]
 pub(super) struct Desk {
     pub book: Arc<Book>,
+    pub enrolment: Arc<super::enrol::Enrolment>,
     /// The shack's key, SPKI, exactly as its TLS presents it.
     pub station: Arc<[u8]>,
     /// The LAN station id, which the computer keeps beside the shack's key.
@@ -164,9 +166,14 @@ pub(super) struct Desk {
 
 impl Desk {
     /// The desk for a listener presenting `identity`.
-    pub(super) fn new(book: Arc<Book>, identity: &tls::Identity) -> Option<Self> {
+    pub(super) fn new(
+        book: Arc<Book>,
+        identity: &tls::Identity,
+        enrolment: Arc<super::enrol::Enrolment>,
+    ) -> Option<Self> {
         Some(Self {
             book,
+            enrolment,
             station: tempo_stream::protocol::hex_bytes(identity.public_key())?.into(),
             station_id: identity.station_id.clone(),
         })
@@ -239,7 +246,7 @@ where
     outcome
 }
 
-async fn say<S>(socket: &mut Socket<S>, value: serde_json::Value) -> bool
+pub(super) async fn say<S>(socket: &mut Socket<S>, value: serde_json::Value) -> bool
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
@@ -249,7 +256,7 @@ where
         .is_ok()
 }
 
-async fn refuse<S>(socket: &mut Socket<S>, reason: &str, outcome: Outcome) -> Outcome
+pub(super) async fn refuse<S>(socket: &mut Socket<S>, reason: &str, outcome: Outcome) -> Outcome
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {

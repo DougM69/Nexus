@@ -5,6 +5,8 @@ use super::*;
 use futures_util::{SinkExt, StreamExt};
 use ring::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_FIXED};
 use std::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -484,42 +486,6 @@ fn clone_road(road: &InternetRoad) -> InternetRoad {
         station_key: road.station_key.clone(),
         pkcs8: road.pkcs8.clone(),
     }
-}
-
-/// ★ The sign-in's loopback listener takes only the redirect it is waiting for: a favicon and a
-/// redirect with another state are answered and the wait goes on; the code with this state is
-/// taken. CONTROL: the issuer's refusal with this state ends the wait (`signInRefused`).
-#[tokio::test]
-async fn the_loopback_listener_takes_only_this_sign_ins_redirect() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let at = listener.local_addr().unwrap();
-    let ask = |target: &'static str| async move {
-        let mut stream = TcpStream::connect(at).await.unwrap();
-        stream
-            .write_all(format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").as_bytes())
-            .await
-            .unwrap();
-        let mut page = String::new();
-        let _ = stream.read_to_string(&mut page).await;
-        page
-    };
-    let waiting = tokio::spawn(async move {
-        let code = redirected(&listener, "state-1").await;
-        (code, listener)
-    });
-    assert!(ask("/favicon.ico").await.contains("not the sign-in"));
-    assert!(ask("/callback?code=stolen&state=other")
-        .await
-        .contains("not the sign-in"));
-    assert!(ask("/callback?code=the-code&state=state-1")
-        .await
-        .contains("signed in"));
-    let (code, listener) = waiting.await.unwrap();
-    assert_eq!(code, Ok("the-code".to_string()));
-
-    let refused = tokio::spawn(async move { redirected(&listener, "state-2").await });
-    let _ = ask("/callback?error=access_denied&state=state-2").await;
-    assert_eq!(refused.await.unwrap(), Err("signInRefused"));
 }
 
 /// The service's refusals as this computer names them: only those it knows, the rest by status.

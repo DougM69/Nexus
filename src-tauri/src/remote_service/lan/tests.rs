@@ -18,6 +18,8 @@ mod client;
 mod commands;
 mod computer;
 mod drops;
+/// A computer enrolling by its own sign-in to the station's account.
+mod enrol;
 mod hostile;
 mod link;
 mod stop_road;
@@ -227,7 +229,7 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
         },
         tls: tls::server(&identity, paired, pairing).unwrap(),
         roster: channel::Roster::lan(&book),
-        desk: Some(super::pairing::Desk::new(book, &identity).unwrap()),
+        desk: Some(super::pairing::Desk::new(book, &identity, Arc::default()).unwrap()),
         identity: Arc::new(identity),
         network: Some(network),
         port: DEFAULT_PORT,
@@ -1358,6 +1360,7 @@ fn switch_with(
             engine: s.shared.engine.clone(),
             feeds: s.shared.feeds.clone(),
             book,
+            enrolment: Arc::default(),
             resolve,
             advertise,
             firewall,
