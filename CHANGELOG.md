@@ -16,8 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A Recent contacts box under the log entry.** Phone, CW, JS8, RTTY and PSK can show your last five contacts,
   newest first, right under the log form; click one to open it in the Logbook's editor and fix a busted call
   or a wrong report. Five reaches back past the contact you just logged without crowding the form. Turn it on
-  in ⊞ Panels ("Recent contacts"); it starts hidden, so your screen does not change until you do. On a short
-  window the log column scrolls to it, and the stop and transmit controls stay where they are.
+  in ⊞ Panels ("Recent contacts"); it starts hidden, so your screen does not change until you do. It sits
+  inside the log pane under the form and uses only the room the form leaves, so the form and its Log button
+  stay where they were; on a short window the log pane scrolls to it, and the stop and transmit controls stay
+  where they are.
 - **Contest entry: an optional "RST sent" box.** Turn on "Show the RST sent box" in Settings ▸ Contesting ▸
   Contest, and the contest entry gets an RST sent box just before the received report, as N1MM shows Snt and Rcv.
   It holds the report the contact logs as sent: 59 on phone, 599 on CW and digital. Space and Tab skip it, so

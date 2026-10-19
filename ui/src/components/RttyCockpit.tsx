@@ -1498,14 +1498,13 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             esm={esm.host}
           />
           )}
+          {/* THE RECENT CONTACTS PANE (RecentQsosPane), inside the log strip's frame under the form: the
+              last few contacts, a row a click into the Logbook's editor. It takes only the room the form
+              leaves. No stop control, nothing sent. */}
+          {shown('recent') && statsHere() && (
+            <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
+          )}
         </CockpitPaneFrame>
-      )}
-
-      {/* THE RECENT CONTACTS PANE (RecentQsosPane), under the log strip and above the Stats pane: the
-          last few contacts, a row a click into the Logbook's editor. Content-height, shipped hidden like
-          the Stats pane, for the same shortage of room. No stop control, nothing sent. */}
-      {snap && shown('recent') && statsHere() && (
-        <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
       )}
 
       {/* THE STATS PANE (CallStatsPane), under the log strip: what the log holds for the call typed

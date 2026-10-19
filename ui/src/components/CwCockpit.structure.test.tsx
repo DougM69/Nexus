@@ -847,7 +847,7 @@ describe('the Stats pane beside the log form', () => {
   it('stands under the log form in the log column, its own height, and follows the strip’s call', async () => {
     const { getCallStats } = await import('../api')
     vi.mocked(getCallStats).mockClear()
-    await renderCockpit({ panels: fakePanels(['recent']) /* the Recent contacts pane, which stands between them, unticked */ })
+    await renderCockpit({ panels: fakePanels() })
     const stats = document.querySelector('[data-pane="stats"]')!
     expect(stats, 'the Stats pane is not on a stock CW screen').not.toBeNull()
     expect(stats.getAttribute('data-fit')).toBe('content')
@@ -865,20 +865,26 @@ describe('the Stats pane beside the log form', () => {
   })
 })
 
-// THE RECENT CONTACTS PANE (2026-10-18): directly under the log form, above the Stats pane, its own height; a row
+// THE RECENT CONTACTS PANE (2026-10-18): inside the log pane under the form, above the Stats pane, its own height; a row
 // click opens that contact in the Logbook's editor (the cockpit's `onOpenLogbook`, with the contact's id).
 describe('the Recent contacts pane under the log form', () => {
   afterEach(resetRecentLog)
 
-  it('ticked, stands directly under the log form, its own height, and a row opens THAT contact', async () => {
+  it('ticked, stands inside the log pane under the form, its own height, and a row opens THAT contact', async () => {
     installRecentLog()
     const onOpenLogbook = vi.fn()
     await renderCockpit({ panels: fakePanels(), onOpenLogbook })
     const recent = document.querySelector('[data-pane="recent"]')
     expect(recent, 'ticked, the Recent contacts pane is not on screen').not.toBeNull()
     expect(recent!.getAttribute('data-fit')).toBe('content')
-    expect(recent!.previousElementSibling?.getAttribute('data-pane'), 'not directly under the log form').toBe('log')
-    expect(recent!.nextElementSibling?.getAttribute('data-pane'), 'the Stats pane is not under it').toBe('stats')
+    // INSIDE THE LOG PANE, under the form, in the pane's own scrolling body: all it can take is what the
+    // form leaves, so showing it never moves the form or its Log button (measured in Chrome).
+    const logPane = recent!.closest('[data-pane="log"]')
+    expect(logPane, 'not inside the log pane').not.toBeNull()
+    expect(recent!.parentElement, 'not in the log pane’s scrolling body').toBe(logPane!.querySelector(':scope > .pane-body'))
+    expect(recent!.previousElementSibling?.getAttribute('data-testid'), 'not directly under the log form').toBe('log-stub')
+    expect(recent!.nextElementSibling, 'something stands under it inside the log pane').toBeNull()
+    expect(logPane!.nextElementSibling?.getAttribute('data-pane'), 'the Stats pane is not under the log pane').toBe('stats')
     await act(async () => {
       for (let i = 0; i < 4; i++) await Promise.resolve()
     })

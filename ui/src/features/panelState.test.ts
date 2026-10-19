@@ -820,10 +820,9 @@ describe('the Stats pane (2026-10-14): one id in every cockpit with a log entry,
   })
 
   it('stands under the log entry: in Phone’s and CW’s log column (the form heads it), under JS8’s log pane, under FT’s callsign card', () => {
-    // The Recent contacts pane (2026-10-18) stands between the form and it.
-    expect(PHONE_PANELS.arrange!.columns.log).toEqual(['recent', 'stats'])
-    expect(CW_PANELS.arrange!.columns.log).toEqual(['recent', 'stats'])
-    expect(panelState.JS8_PANELS.arrange!.columns.log).toEqual(['log', 'recent', 'stats'])
+    expect(PHONE_PANELS.arrange!.columns.log).toEqual(['stats'])
+    expect(CW_PANELS.arrange!.columns.log).toEqual(['stats'])
+    expect(panelState.JS8_PANELS.arrange!.columns.log).toEqual(['log', 'stats'])
     expect(panelState.OPERATE_ARRANGE.classic.columns.log.slice(0, 3)).toEqual(['recall', 'stats', 'stations'])
     expect(panelState.OPERATE_ARRANGE.roster.columns.log.slice(0, 2)).toEqual(['recall', 'stats'])
     // Movable as any pane is: nothing pins it.
@@ -846,11 +845,10 @@ describe('the Recent contacts pane (2026-10-18): one id in every cockpit with a 
     for (const v of WITH_FORM) expect(panelStateIn(v, { ...empty, state: { recent: 'docked' } }, 'recent'), v.view).toBe('docked')
   })
 
-  it('stands directly under the log form, above the Stats pane, and nothing pins it', () => {
+  it('rides inside the log pane under the form, so ⊞ Arrange gives it no place of its own', () => {
     for (const v of [PHONE_PANELS, CW_PANELS, panelState.JS8_PANELS]) {
-      const log = v.arrange!.columns.log as readonly string[]
-      expect(log.indexOf('recent'), v.view).toBe(log.indexOf('stats') - 1)
-      expect(v.arrange!.pinned, v.view).not.toContain('recent')
+      const { a, b, log } = v.arrange!.columns
+      expect([...a, ...b, ...log], v.view).not.toContain('recent')
     }
   })
 })

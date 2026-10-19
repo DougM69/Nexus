@@ -1546,7 +1546,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
   // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
   const hasStatsPane = host != null && shown('stats') && statsHere()
-  // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): under the log form, above the Stats pane.
+  // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): inside the log pane, under the form.
   const hasRecentPane = host != null && shown('recent') && statsHere()
   // Everything the LEADING column can hold below the 3-col tier. The keyer used to make
   // this unconditionally true; now that it has a ⊞ entry, a rig with no DSP and no native
@@ -1578,7 +1578,6 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
           rigscope: hasRigScopePane,
           receiver: hasReceiverPane,
           transmitter: hasTransmitterPane,
-          recent: hasRecentPane,
           stats: hasStatsPane,
         })[id as string] ?? false)
   // ── THE LEFT SIDE (operator's pick, 2026-10-03: ⊞ Arrange's "Left side") ───────────────────────
@@ -2568,6 +2567,8 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         // App unmounts this cockpit on a page switch; the contact in its strip waits for it.
         draft="phone"
       /> : null}
+      {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
+      {hasRecentPane && recentPane}
     </CockpitPaneFrame>
   )
 
@@ -2582,7 +2583,6 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
     rigscope: rigscopePane,
     receiver: receiverPane,
     transmitter: transmitterPane,
-    recent: recentPane,
     stats: statsPane,
   }
   // THE BOXES (2026-10-07): each one on screen, in the cockpit's frame with its entry's role. What is on

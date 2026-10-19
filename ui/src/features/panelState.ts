@@ -1060,9 +1060,10 @@ const STATS_PANEL_ID = 'stats'
 /**
  * THE RECENT CONTACTS PANE (components/RecentQsosPane): the last few contacts in the log, newest
  * first, each a click into the Logbook's editor. One id across every cockpit with a log entry form,
- * directly under that form, above the Stats pane: Phone's and CW's log column, JS8's under its log
- * pane, RTTY's and PSK's foot under their log strip. FT has no log entry form (it logs through its
- * confirm dialog), so it has no entry.
+ * directly under that form INSIDE the log pane (Phone's, CW's and JS8's log pane, RTTY's and PSK's
+ * log strip), so it takes only the room the form leaves; the Stats pane stands under the log pane. It
+ * is no column member, so no ⊞ Arrange column lists it: it goes where the log pane goes. FT has no log
+ * entry form (it logs through its confirm dialog), so it has no entry.
  *
  * Every vocabulary ships it hidden (`defaultRemoved`), as the Stats pane does where it is short of
  * room, so nobody's screen changes; one tick in ⊞ Panels shows it. Under THE STOP LINE it is a plain
@@ -1321,8 +1322,8 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
     columns: {
       a: ['bandActivity', 'voiceKeyer', 'spots', ...BOX_IDS],
       b: ['rigscope', 'receiver', 'transmitter', 'needed'],
-      // The Recent contacts and Stats panes: under the log form, which heads this column (PhoneCockpit).
-      log: [RECENT_PANEL_ID, STATS_PANEL_ID],
+      // The Stats pane: under the log form, which heads this column (PhoneCockpit).
+      log: [STATS_PANEL_ID],
     },
     pinned: ['voiceKeyer'],
     stockMerged: ['bandActivity', 'voiceKeyer', 'rigscope', 'receiver', 'transmitter', 'spots', 'needed'],
@@ -1386,8 +1387,8 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
     columns: {
       a: ['decode', 'sent', 'spots', ...BOX_IDS],
       b: ['bandActivity', 'copilot', 'needed'],
-      // Phone's: the Recent contacts and Stats panes under the log form, which heads this column.
-      log: [RECENT_PANEL_ID, STATS_PANEL_ID],
+      // Phone's: the Stats pane under the log form, which heads this column.
+      log: [STATS_PANEL_ID],
     },
     pinned: [],
     stockMerged: ['decode', 'sent', 'bandActivity', 'copilot', 'spots', 'needed'],
@@ -1499,7 +1500,7 @@ export const JS8_PANELS: PanelVocabulary<Js8PanelId> = {
       a: [RF_SCOPE_PANEL_ID, 'activity', 'offsets', ...BOX_IDS],
       b: ['stations', 'inbox'],
       // The Stats pane under the log pane, as under Phone's and CW's log form.
-      log: ['log', RECENT_PANEL_ID, STATS_PANEL_ID],
+      log: ['log', STATS_PANEL_ID],
     },
     pinned: ['log'],
     boxes: BOX_IDS,

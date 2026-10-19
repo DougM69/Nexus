@@ -182,10 +182,10 @@ async function mount() {
  *  (Phone's rule, `stockMerged`). */
 function expected(tracks: number) {
   const place = api!.layout.place
-  // The boxes (2026-10-07), the Stats pane (2026-10-14) and the Recent contacts pane (2026-10-18) ship hidden
-  // and none is added here: the columns without them. The log form heads its column (2026-10-14): a pane placed there stands under it.
+  // The boxes (2026-10-07) and the Stats pane (2026-10-14) ship hidden and none is added here: the columns
+  // without them. The log form heads its column (2026-10-14): a pane placed there stands under it.
   const all = placedColumns(CW_PANELS.arrange!, place)
-  const own = (ids: readonly CwPanelId[]) => ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id) && id !== 'stats' && id !== 'recent')
+  const own = (ids: readonly CwPanelId[]) => ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id) && id !== 'stats')
   const c = { a: own(all.a), b: own(all.b), log: own(all.log) }
   const mid = ['rigctl', ...c.b]
   if (tracks === 3) return [[...c.a], mid, ['log', ...c.log]]

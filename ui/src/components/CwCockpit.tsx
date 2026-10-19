@@ -1381,7 +1381,7 @@ export function CwCockpit({
   // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
   // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
   const hasStatsPane = host != null && shown('stats') && statsHere()
-  // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): under the log form, above the Stats pane.
+  // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): inside the log pane, under the form.
   const hasRecentPane = host != null && shown('recent') && statsHere()
   // The three rig-control groups share ONE frame (see rigCtlPane), so the frame renders when
   // ANY of them can — each group is still gated on its own ⊞ id inside it.
@@ -1410,7 +1410,6 @@ export function CwCockpit({
           copilot: hasCopilotPane,
           spots: hasSpotsPane,
           needed: hasNeededPane,
-          recent: hasRecentPane,
           stats: hasStatsPane,
         })[id as string] ?? false)
   const placed3 = regionGroups(CW_PANELS.arrange!, place, 3, paneShown)
@@ -1890,6 +1889,8 @@ export function CwCockpit({
         // it puts back reaches His Call through `onCallChange`, as a typed one does.
         draft="cw"
       /> : null}
+      {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
+      {hasRecentPane && recentPane}
     </CockpitPaneFrame>
   )
 
@@ -1984,7 +1985,6 @@ export function CwCockpit({
     copilot: copilotPane,
     spots: spotsPane,
     needed: neededPane,
-    recent: recentPane,
     stats: statsPane,
   }
   // THE BOXES (2026-10-07), as Phone's: each one on screen, its picker marking what is on screen

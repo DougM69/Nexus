@@ -838,8 +838,7 @@ export function Js8Cockpit({
   const place = panels?.layout.place
   // The Stats pane follows the log pane's call, so it stands only while the log pane does (with its
   // snapshot), and only in the station's own window: with the log hidden it would have nothing to follow.
-  // The Recent contacts pane stands under the log pane the same way: with the log hidden there is no form
-  // for it to stand under, and the log track stays empty rather than holding a list alone.
+  // The Recent contacts pane stands inside the log pane, under the form, so it goes with it.
   const paneShown = (id: Js8PanelId): boolean =>
     isBoxId(id)
       ? entries[id] != null
@@ -1488,8 +1487,8 @@ export function Js8Cockpit({
     </CockpitPaneFrame>
   )
 
-  // THE RECENT CONTACTS PANE under the log pane: the last few contacts, a row a click into the Logbook's
-  // editor (App's handoff).
+  // THE RECENT CONTACTS PANE inside the log pane, under the form: the last few contacts, a row a click into
+  // the Logbook's editor (App's handoff).
   const recentPane = snap && paneShown('recent') && (
     <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
   )
@@ -1535,6 +1534,8 @@ export function Js8Cockpit({
         fdMode="DIG"
         fdSubmode={JS8}
       />}
+      {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
+      {recentPane}
     </CockpitPaneFrame>
   )
 
@@ -1596,7 +1597,8 @@ export function Js8Cockpit({
     stations: stationsPane,
     inbox: inboxPane,
     log: logPane,
-    recent: recentPane,
+    // Inside the log pane (above), never a column member of its own.
+    recent: null,
     stats: statsPane,
     ...boxEls,
   }

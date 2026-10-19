@@ -5,8 +5,17 @@
 //
 // HOW MANY: `RECENT_QSOS`, five. Enough to reach back past the contact just logged to the run around
 // it — a wrong call is noticed a contact or two later — and few enough that the pane stays a short
-// strip under the form: five rows of one line each, which is what a log column at the supported
-// floor can give without squeezing the form above it. Anything older is the Logbook's.
+// strip under the form: five rows of one line each. Anything older is the Logbook's.
+//
+// WHERE IT STANDS: inside the log pane's own frame, directly under the form, in the pane's scrolling
+// body — never beside the log pane in its column or shell. So it can only ever have the room the form
+// leaves: where the pane is taller than the form it shows in that surplus, and where it is not it is
+// the first thing the pane's scrollbar hides, while the form and its Log button stand exactly where
+// they stand with the pane hidden. As its own frame beside the log pane, at exactly its content height,
+// it took its whole height out of the log pane instead, and JS8's and RTTY's Log button needed a
+// scroll at 1920x1080 (measured in Chrome). A role cannot say "after the form, before the rest": a
+// fill sibling splits the column by weight whatever the form needs, and a content-first log pane grows
+// past its hidden height and takes it from RTTY's and PSK's receive text (measured too).
 //
 // READ AS THE LOGBOOK READS ITS LIST: the first page of the order it opens on (newest first by QSO
 // time), through the window's log source, following the snapshot's log tick. Nothing here counts the
@@ -37,8 +46,8 @@ export function withRecent<P extends string>(menu: readonly P[]): readonly P[] {
   return statsHere() ? menu : menu.filter((id) => id !== 'recent')
 }
 
-/** The pane as every cockpit draws it under its `recent` id: a content-height frame, its ✕ the
- *  cockpit's own ⊞ tick. */
+/** The pane as every cockpit draws it under its `recent` id, inside the log pane under the form (WHERE IT
+ *  STANDS, above): a content-height frame, its ✕ the cockpit's own ⊞ tick. */
 export function RecentQsosFrame({
   close,
   ...pane

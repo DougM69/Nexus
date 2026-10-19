@@ -623,15 +623,15 @@ describe('PhoneCockpit Spots and Needed feeds', () => {
       expect(framesIn(lead).slice(0, 2), `tier ${cols}: band + keyer no longer lead`).toEqual(['bandActivity', 'voiceKeyer'])
       expect(framesIn(lead).slice(-2), `tier ${cols}: the feeds left the leading column`).toEqual(['spots', 'needed'])
       const log = region.querySelector(':scope > .cockpit-col:last-child')!
-      // The log form, and (this fixture docks every id) the Recent contacts and Stats panes under it.
-      expect(framesIn(log), `tier ${cols}: the log column holds more than the log`).toEqual(['log', 'recent', 'stats'])
+      // The log form, and (this fixture docks every id) the Stats pane under it.
+      expect(framesIn(log), `tier ${cols}: the log column holds more than the log`).toEqual(['log', 'stats'])
     }
     await tier(region, 1800)
     expect(region.getAttribute('data-cols')).toBe('3')
     const cols3 = region.querySelectorAll(':scope > .cockpit-col')
     expect(framesIn(cols3[0])).toEqual(['bandActivity', 'voiceKeyer', 'spots'])
     expect(framesIn(cols3[1])).toEqual(['receiver', 'transmitter', 'needed'])
-    expect(framesIn(cols3[2])).toEqual(['log', 'recent', 'stats'])
+    expect(framesIn(cols3[2])).toEqual(['log', 'stats'])
     for (const id of ['spots', 'needed']) {
       const f = document.querySelector(`[data-pane="${id}"]`) as HTMLElement
       expect(f.dataset.fit, `${id} is a content strip — a list must be able to use the surplus`).toBe('fill')
@@ -685,19 +685,19 @@ describe('PhoneCockpit Spots and Needed feeds', () => {
     await tier(region, 1800)
     expect(region.getAttribute('data-cols')).toBe('3')
     let cols = region.querySelectorAll(':scope > .cockpit-col')
-    expect([...cols].map(framesIn)).toEqual([['spots'], ['needed'], ['log', 'recent', 'stats']])
+    expect([...cols].map(framesIn)).toEqual([['spots'], ['needed'], ['log', 'stats']])
     // Spots alone as well: nothing for a middle track, so an ultrawide stays at two.
     r.rerender(withFeeds(fakePanels(['bandActivity', 'voiceKeyer', 'receiver', 'transmitter', 'needed'])))
     await frame()
     expect(region.getAttribute('data-cols')).toBe('2')
     cols = region.querySelectorAll(':scope > .cockpit-col')
-    expect([...cols].map(framesIn)).toEqual([['spots'], ['log', 'recent', 'stats']])
+    expect([...cols].map(framesIn)).toEqual([['spots'], ['log', 'stats']])
     // …and Needed alone, with nothing in the leading track at tier 3: two, Needed leading.
     r.rerender(withFeeds(fakePanels(['bandActivity', 'voiceKeyer', 'receiver', 'transmitter', 'spots'])))
     await frame()
     expect(region.getAttribute('data-cols')).toBe('2')
     cols = region.querySelectorAll(':scope > .cockpit-col')
-    expect([...cols].map(framesIn)).toEqual([['needed'], ['log', 'recent', 'stats']])
+    expect([...cols].map(framesIn)).toEqual([['needed'], ['log', 'stats']])
   })
 
   it('without the board wiring (no host to feed them) neither pane renders, ticked or not', () => {
@@ -975,7 +975,7 @@ describe('the Stats pane beside the log form', () => {
   it('stands under the log form in the log column, its own height, and follows the strip’s call', async () => {
     const { getCallStats } = await import('../api')
     vi.mocked(getCallStats).mockClear()
-    renderCockpit({ panels: fakePanels(['recent']) /* the Recent contacts pane, which stands between them, unticked */ })
+    renderCockpit({ panels: fakePanels() })
     const stats = document.querySelector('[data-pane="stats"]')!
     expect(stats, 'the Stats pane is not on a stock Phone screen').not.toBeNull()
     expect(stats.getAttribute('data-fit')).toBe('content')
@@ -1078,20 +1078,26 @@ describe('the Stats pane, on where there is room', () => {
   })
 })
 
-// THE RECENT CONTACTS PANE (2026-10-18): directly under the log form, above the Stats pane, its own height; a row
+// THE RECENT CONTACTS PANE (2026-10-18): inside the log pane under the form, above the Stats pane, its own height; a row
 // click opens that contact in the Logbook's editor (the cockpit's `onOpenLogbook`, with the contact's id).
 describe('the Recent contacts pane under the log form', () => {
   afterEach(resetRecentLog)
 
-  it('ticked, stands directly under the log form, its own height, and a row opens THAT contact', async () => {
+  it('ticked, stands inside the log pane under the form, its own height, and a row opens THAT contact', async () => {
     installRecentLog()
     const onOpenLogbook = vi.fn()
     renderCockpit({ panels: fakePanels(), onOpenLogbook })
     const recent = document.querySelector('[data-pane="recent"]')
     expect(recent, 'ticked, the Recent contacts pane is not on screen').not.toBeNull()
     expect(recent!.getAttribute('data-fit')).toBe('content')
-    expect(recent!.previousElementSibling?.getAttribute('data-pane'), 'not directly under the log form').toBe('log')
-    expect(recent!.nextElementSibling?.getAttribute('data-pane'), 'the Stats pane is not under it').toBe('stats')
+    // INSIDE THE LOG PANE, under the form, in the pane's own scrolling body: all it can take is what the
+    // form leaves, so showing it never moves the form or its Log button (measured in Chrome).
+    const logPane = recent!.closest('[data-pane="log"]')
+    expect(logPane, 'not inside the log pane').not.toBeNull()
+    expect(recent!.parentElement, 'not in the log pane’s scrolling body').toBe(logPane!.querySelector(':scope > .pane-body'))
+    expect(recent!.previousElementSibling?.getAttribute('data-testid'), 'not directly under the log form').toBe('log-stub')
+    expect(recent!.nextElementSibling, 'something stands under it inside the log pane').toBeNull()
+    expect(logPane!.nextElementSibling?.getAttribute('data-pane'), 'the Stats pane is not under the log pane').toBe('stats')
     await act(async () => {
       for (let i = 0; i < 4; i++) await Promise.resolve()
     })
