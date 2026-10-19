@@ -230,6 +230,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of your RR73 or report could become the CQ. If you close with RRR and your partner's 73 arrives while the RRR is
   on the air, the rest of that over is your CQ (WSJT-X's Tx6) and TX turns off after it with "Disable Tx after
   sending 73"; nothing is sent after it. NEEDS-BENCH: FT8 and FT4, Call CQ and a station you work by double-click.
+- **Contest FT8/FT4: a late reply changes the over on the air inside a contact.** In the Contest screen's Running
+  and S&P, a reply decoded after your over has started now switches the rest of that over to your next message, as
+  WSJT-X does: your exchange becomes the RR73 when the runner's rogered exchange arrives, and the rogered exchange
+  becomes the 73 when the caller's RR73 arrives. It never starts a contact: a CQ on the air is never switched to an
+  answer, and an over to one station never becomes a call to another. NEEDS-BENCH: FT8 and FT4, a second station in
+  the same contest.
 - **Contest entry: the sample text in empty boxes is quieter.** The grey examples ("W1AW", "599", a county) are now
   in normal weight instead of bold, and a shade darker in the dark themes, so they no longer read like something
   typed in. They stay readable in every theme.

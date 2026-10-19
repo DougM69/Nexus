@@ -3328,7 +3328,7 @@ pub struct Engine {
     ft_on_air: Option<ft_midover::FtOnAir>,
     /// WSJT-X's `m_restart` from a Tx-slot click ([`Engine::take_ft_restart`]).
     ft_restart: bool,
-    /// The last fold moved the QSO sequencer on a message (its next message or its
+    /// The last fold moved the QSO or contest sequencer on a message (its next message or its
     /// state changed), or owed an over to a partner the run left: WSJT-X's `processMessage`
     /// reacting to a decode, the only decode that may switch an over on the air
     /// ([`Engine::ft_midover_switch`]). Run bookkeeping after it (back to CQ, a silent caller
@@ -27733,8 +27733,10 @@ contact yourself."
                 // contests do) writes a marked row that the count leaves out, and that row
                 // must reach the journal like any other.
                 let rows_before = station.log.qsos().len();
+                let next_before = station.outgoing();
                 station.observe(decodes, slot);
                 sequence_advanced = station.state != state_before;
+                self.ft_seq_moved = sequence_advanced || station.outgoing() != next_before;
                 // S&P (the role that listens) going from listening to awaiting the runner's
                 // exchange has just answered a CQ in these decodes.
                 fd_answered_cq = state_before == tempo_core::fieldday::FdState::Listening

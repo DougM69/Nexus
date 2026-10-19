@@ -31,6 +31,10 @@
 //! on a message in that fold (`Engine::ft_seq_moved`): a CQ run that returns to its CQ, or gives
 //! up on a silent caller, is the run's own bookkeeping, not `processMessage`, and leaves the over
 //! on the air as it is.
+//!
+//! The contest (`Mode::FieldDay`) sequencer switches the same way, inside a contact only: the over
+//! on the air and the new message are both addressed to the same station. A contact is never
+//! started mid-over, nor a CQ switched (contest rules: the operator starts every QSO).
 
 use super::{Engine, Mode, Msg, QsoState, QsoStation, Tier, TxGateStamp, TxPlan, TxWaveform};
 
@@ -53,6 +57,13 @@ pub(crate) struct FtOnAir {
 /// words is `73` or `RR73`.
 fn is_73(text: &str) -> bool {
     text.split_whitespace().any(|w| w == "73" || w == "RR73")
+}
+
+/// The station an over is addressed to: its first word, unhashed; none for a CQ.
+fn addressee(text: &str) -> Option<&str> {
+    let first = text.split_whitespace().next()?;
+    let call = first.trim_start_matches('<').trim_end_matches('>');
+    (!matches!(call, "CQ" | "QRZ" | "DE")).then_some(call)
 }
 
 /// What [`Engine::ft_midover_switch`] did.
@@ -100,8 +111,10 @@ impl Engine {
     /// logged the contact is already calling its CQ). Changes nothing. `None` with nothing to
     /// send.
     pub fn ft_next_over(&self, slot: u64) -> Option<String> {
-        let Mode::Qso { station, .. } = &self.mode else {
-            return None;
+        let station = match &self.mode {
+            Mode::Qso { station, .. } => station,
+            Mode::FieldDay { station, .. } => return Some(station.outgoing()?.to_text()),
+            _ => return None,
         };
         match self
             .recent_partner
@@ -149,7 +162,7 @@ impl Engine {
     ///
     /// `clicked`: a Tx-slot click asked. Otherwise a decode did, and it switches only when the
     /// sequencer moved on a message in that fold and the over carries no 73 yet (WSJT-X's
-    /// `auto_sequence`).
+    /// `auto_sequence`); in a contest, only within the contact the over is addressed to.
     pub fn ft_midover_switch(
         &mut self,
         slot: u64,
@@ -184,6 +197,13 @@ impl Engine {
         }
         let to = self.ft_next_over(slot)?;
         if to == on.text {
+            return None;
+        }
+        if matches!(self.mode, Mode::FieldDay { .. })
+            && !addressee(&on.text)
+                .zip(addressee(&to))
+                .is_some_and(|(a, b)| tempo_core::message::same_call(a, b))
+        {
             return None;
         }
         let from = on.text.clone();
@@ -285,18 +305,28 @@ impl Engine {
             self.cq_pause_until = None;
             return;
         }
-        let Mode::Qso { station, .. } = &mut self.mode else {
-            return;
-        };
-        self.cq_pause_until = None;
-        if station.tx_count == 0 {
-            station.after_tx();
-            if station.state == QsoState::Done
-                && !self.cq_running
-                && self.settings.disable_tx_after_73
-            {
-                self.pending_tx_disable = true;
+        match &mut self.mode {
+            Mode::Qso { station, .. } => {
+                self.cq_pause_until = None;
+                if station.tx_count == 0 {
+                    station.after_tx();
+                    if station.state == QsoState::Done
+                        && !self.cq_running
+                        && self.settings.disable_tx_after_73
+                    {
+                        self.pending_tx_disable = true;
+                    }
+                }
             }
+            // As `plan_tx`'s contest arm at a key: the station clears a closing message once it
+            // goes, and "Disable Tx after sending 73" follows a contact the operator picked.
+            Mode::FieldDay { station, .. } => {
+                station.after_tx();
+                if station.done() && station.picked() && self.settings.disable_tx_after_73 {
+                    self.pending_tx_disable = true;
+                }
+            }
+            _ => {}
         }
     }
 }

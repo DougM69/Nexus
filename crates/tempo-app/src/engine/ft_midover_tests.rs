@@ -631,3 +631,162 @@ fn giving_up_on_a_silent_caller_leaves_the_over_on_the_air() {
     let mut route = Route::new(80_000);
     assert_eq!(route.switch(&mut e, slot, at(slot, 1_000.0)), None);
 }
+
+/// K1ABC (2B EMA) in `event`, on 20 m FT8 at 1500 Hz, TX on the even slots: the contest screen's
+/// settings, as the contest message tests fill them.
+fn contest(event: &str) -> Engine {
+    let mut e = Engine::new("K1ABC", "FN42", 0);
+    let mut s = e.settings().clone();
+    s.fd_event = event.into();
+    s.fd_class = if event == "wfd" { "1H" } else { "2B" }.into();
+    s.fd_section = "EMA".into();
+    s.contest_qth_state = "MA".into();
+    s.tx_even = true;
+    s.fd_active = true;
+    s.write_all_txt = true;
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    e.set_frequency(14.074, "20m", "USB");
+    e.set_tx_offset(1500.0);
+    e
+}
+
+/// The contest sequencer switches the same way inside a contact (WSJT-X's `processMessage` runs
+/// in its Field Day activity too): running ARRL Field Day, our rogered exchange is on the air when
+/// the caller's RR73 folds, and the rest is the 73 WSJT-X's runner answers it with (:9210-9214).
+#[test]
+fn a_field_day_run_switches_its_exchange_to_73_when_the_callers_rr73_folds() {
+    let mut e = contest("arrlfd");
+    e.set_mode("fieldday-run").expect("the run starts");
+    let cq = key(&mut e, 0).expect("premise: the CQ");
+    hear(&mut e, "K1ABC W9XYZ 1D WI", -12, 2);
+    let exch = key(&mut e, 2).expect("premise: the rogered exchange");
+    assert_eq!(exch, "W9XYZ K1ABC R 2B EMA");
+    assert_eq!(key(&mut e, 4).as_deref(), Some(exch.as_str()), "again");
+    e.take_all_txt_pending();
+    hear(&mut e, "K1ABC W9XYZ RR73", -12, 4);
+    let mut route = Route::new(80_000);
+    assert_eq!(
+        route.switch(&mut e, 4, at(4, 2_000.0)),
+        switched(&exch, "W9XYZ K1ABC 73")
+    );
+    let bye = wave_of("W9XYZ K1ABC 73");
+    assert_eq!(route.handed.as_deref(), Some(&bye[bye.len() - 80_000..]));
+    assert_eq!(
+        tx_rows(&e.take_all_txt_pending()).len(),
+        1,
+        "a second Tx row"
+    );
+    let Mode::FieldDay { station, .. } = &e.mode else {
+        panic!("premise: the contest");
+    };
+    assert_eq!(station.log.qsos().len(), 1, "logged");
+    assert!(!e.take_pending_tx_disable(), "a run keeps TX on");
+    hear(&mut e, "CQ K2DEF FN31", -5, 6);
+    assert_eq!(
+        key(&mut e, 6).as_deref(),
+        Some(cq.as_str()),
+        "the run calls CQ"
+    );
+}
+
+/// S&P in the contest: our exchange is on the air when the runner's rogered exchange folds; the
+/// rest is our RR73 (WSJT-X's Tx4). Then S&P is listening again and picks the next CQ by itself,
+/// but that is a new contact: it never replaces the RR73 on the air.
+#[test]
+fn contest_sp_switches_to_rr73_and_never_starts_the_next_contact_mid_over() {
+    let mut e = contest("arrlfd");
+    e.set_mode("fieldday-sp").expect("S&P starts");
+    e.set_tx_enabled(true);
+    hear(&mut e, "CQ FD W9XYZ EN37", -12, 2);
+    let exch = key(&mut e, 2).expect("premise: our exchange");
+    assert_eq!(exch, "W9XYZ K1ABC 2B EMA");
+    assert_eq!(key(&mut e, 4).as_deref(), Some(exch.as_str()), "again");
+    hear(&mut e, "K1ABC W9XYZ R 1D WI", -12, 4);
+    let mut route = Route::new(80_000);
+    assert_eq!(
+        route.switch(&mut e, 4, at(4, 1_500.0)),
+        switched(&exch, "W9XYZ K1ABC RR73")
+    );
+    // The next CQ heard in the same over: S&P returns to listening and answers it.
+    hear(&mut e, "CQ FD K2DEF FN31", -9, 4);
+    hear(&mut e, "CQ FD K2DEF FN31", -9, 4);
+    assert_eq!(
+        e.ft_next_over(4).as_deref(),
+        Some("K2DEF K1ABC 2B EMA"),
+        "premise: S&P picked the next CQ"
+    );
+    assert_eq!(route.switch(&mut e, 4, at(4, 3_000.0)), None);
+}
+
+/// ⛔ THE OPERATOR STARTS EVERY CONTEST QSO: a CQ on the air is never switched to an answer, and
+/// a contact the run closes without a 73 (Winter Field Day) never becomes a CQ mid-over.
+#[test]
+fn a_contest_never_switches_a_cq_or_switches_to_one() {
+    let mut e = contest("arrlfd");
+    e.set_mode("fieldday-run").expect("the run starts");
+    key(&mut e, 0).expect("premise: the CQ");
+    hear(&mut e, "K1ABC W9XYZ 1D WI", -12, 0);
+    assert_eq!(
+        e.ft_next_over(0).as_deref(),
+        Some("W9XYZ K1ABC R 2B EMA"),
+        "premise: the caller is answered next"
+    );
+    let mut route = Route::new(80_000);
+    assert_eq!(
+        route.switch(&mut e, 0, at(0, 1_000.0)),
+        None,
+        "the CQ stays"
+    );
+
+    let mut e = contest("wfd");
+    e.set_mode("fieldday-run").expect("the run starts");
+    let cq_wfd = key(&mut e, 0).expect("premise: the CQ");
+    hear(&mut e, "K1ABC W9XYZ 1H WI", -12, 2);
+    let exch = key(&mut e, 2).expect("premise: the rogered exchange");
+    hear(&mut e, "K1ABC W9XYZ RR73", -12, 2);
+    assert_eq!(
+        e.ft_next_over(2),
+        Some(cq_wfd.clone()),
+        "premise: back to CQ"
+    );
+    assert_eq!(
+        route.switch(&mut e, 2, at(2, 1_000.0)),
+        None,
+        "{exch} stays"
+    );
+    assert_eq!(key(&mut e, 4), Some(cq_wfd), "the CQ at the next over");
+}
+
+/// A contest contact the operator picked (a double-click on the CQ) and closed by the switch: the
+/// RR73 that leaves mid-over arms "Disable Tx after sending 73" as at a key; S&P's own pounce
+/// does not.
+#[test]
+fn a_picked_contest_contact_closed_mid_over_turns_tx_off_once() {
+    for picked in [true, false] {
+        let mut e = contest("arrlfd");
+        e.set_mode("fieldday-sp").expect("S&P starts");
+        e.set_tx_enabled(true);
+        hear(&mut e, "CQ FD W9XYZ EN37", -12, 2);
+        if picked {
+            e.work_station(
+                "W9XYZ",
+                Some("EN37"),
+                Some("CQ FD W9XYZ EN37"),
+                Some(-12),
+                None,
+            )
+            .expect("premise: the double-click");
+        }
+        let exch = key(&mut e, 2).expect("premise: our exchange");
+        hear(&mut e, "K1ABC W9XYZ R 1D WI", -12, 2);
+        let mut route = Route::new(80_000);
+        assert_eq!(
+            route.switch(&mut e, 2, at(2, 1_500.0)),
+            switched(&exch, "W9XYZ K1ABC RR73"),
+            "picked {picked}"
+        );
+        assert_eq!(e.take_pending_tx_disable(), picked, "picked {picked}");
+        assert!(!e.take_pending_tx_disable(), "picked {picked}: once");
+    }
+}
