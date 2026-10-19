@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: 'Inspect, provision D1, deploy the tested service, recover a verified partial upload, or import trial markers'
+        description: 'Inspect, provision D1, deploy the tested service, or recover a verified partial upload'
         type: choice
         required: true
         default: inspect
@@ -22,7 +22,6 @@ on:
           - provision
           - deploy
           - recover
-          - import-trial-markers
       recovery_revision:
         description: 'Recover only: full source SHA from the reviewed failed deployment receipt'
         type: string
@@ -108,7 +107,7 @@ jobs:
           REMOTE_PRODUCTION_OPERATION: ${{ inputs.operation }}
         run: |
           case "$REMOTE_PRODUCTION_OPERATION" in
-            inspect|provision|deploy|recover|import-trial-markers) ;;
+            inspect|provision|deploy|recover) ;;
             *) echo 'Unknown Remote production operation'; exit 1 ;;
           esac
 
@@ -183,22 +182,12 @@ jobs:
           TMPDIR="$RUNNER_TEMP/remote-gates" scripts/gates --job remote-web --allow-partial
 
       - name: Resolve the provisioned production database
-        if: inputs.operation == 'deploy' || inputs.operation == 'import-trial-markers'
+        if: inputs.operation == 'deploy'
         id: database
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
         run: node remote/scripts/cloudflare-staging.mjs resolve
-
-      # Hashes only, counts printed: the staging markers carried into the new database before the
-      # overlap release. The script refuses this operation until its importer exists.
-      - name: Import trial markers into the production database
-        if: inputs.operation == 'import-trial-markers'
-        env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
-          REMOTE_D1_DATABASE_ID: ${{ steps.database.outputs.database_id }}
-        run: node remote/scripts/cloudflare-staging.mjs import-trial-markers
 
       - name: Package the tested bytes and their source receipt
         if: inputs.operation == 'deploy'
