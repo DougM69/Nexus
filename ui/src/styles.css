@@ -13521,6 +13521,18 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: color-mix(in srgb, var(--state-bad) 14%, var(--bg));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--state-bad) 35%, transparent);
 }
+/* THE EARLY "WORKED" WARNING (LogEntry `fdWorkedLine`): the same slot and the same box treatment
+   as the DUPE badge, in the warning colour and with no filled word, because it is not a dupe yet:
+   the county decides that. */
+.le-fd-dupe.le-fd-dupe-maybe {
+  color: var(--state-warn);
+}
+.settings-input.le-fd-input-maybe,
+.settings-input.le-fd-input-maybe:focus {
+  border-color: var(--state-warn);
+  background: color-mix(in srgb, var(--state-warn) 12%, var(--bg));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--state-warn) 30%, transparent);
+}
 
 /* THE CLUB BOARD'S BAND × MODE GRID (ContestView.tsx `ClubBandModeGrid`): who is on which band and
    mode, above the board's table. The contest's bands across, its mode classes down, each position's

@@ -1333,6 +1333,7 @@ export const JA: PartialCatalog = {
   "logEntry.scp.none": "Super Check Partial のリストはまだありません。理由は 設定 › コンテスト に表示されます。",
   "logEntry.history.mark": "履歴",
   "logEntry.history.title": "コール履歴（{{file}}）からの値です。相手が別の内容を送ってきたら上書きしてください。",
+  "logEntry.fd.worked": "交信済み: {{qths}}",
   "logEntry.countyLine.logged": "{{call}} {{exchange}}（{{mode}}）を{{count}}件の交信として記録しました（郡ごとに1件）",
   "logEntry.countyLine.dupe": "{{call}}（{{counties}}）はこのバンド/モードで重複のため、再記録しませんでした",
   "logEntry.countyLine.dupeFor": "（{{counties}}）",

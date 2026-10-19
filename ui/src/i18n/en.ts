@@ -1904,6 +1904,9 @@ export const EN = {
   'logEntry.fd.dupe.ownAnyBandOrMode':
     'Dupe: {{call}} is already in this position\'s log — this contest counts a station once, regardless of band or mode',
   'logEntry.fd.dupe.badge': 'DUPE',
+  // The early warning at a QSO party: this station is already in the log on this band and mode, from
+  // these counties/states (codes, invariant tokens). Not a dupe until the county typed is one of them.
+  'logEntry.fd.worked': 'Worked: {{qths}}',
   'logEntry.fd.rstSent.label': 'RST sent',
   'logEntry.fd.rstSent.title': 'The report this contact logs as sent: {{rst}} unless you type another here, for this contact only. Space and Tab skip this box; click it, or press Shift+Tab from the received report, to change it.',
   'logEntry.fd.dupe.workedAt': '{{time}} {{band}} {{mode}}',

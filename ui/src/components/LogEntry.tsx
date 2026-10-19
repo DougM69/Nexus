@@ -43,7 +43,7 @@ import { applyFill, EMPTY_FILL, historyFill, typedIn, type FillState } from '../
 import { fdFieldOk, fdSlotValue, fdVerdict, receivedCaption, slotCaption, slotExample, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
 import { contestUnsavedText } from '../features/contestUnsaved'
-import { contestDupe, contestDupeRow, type ContestDupeVerdict } from '../features/contestDupe'
+import { contestDupe, contestDupeRow, contestWorkedRows, workedValues, type ContestDupeVerdict } from '../features/contestDupe'
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
 import { askForOperatorBox, isOperatorBoxKey, isWipeKey } from '../features/contestKeys'
 import { isEditKey } from '../features/contestEdit'
@@ -2307,6 +2307,22 @@ export function LogEntry({
             band: fdDupeRow.band,
             mode: fdDupeRow.submode || fdDupeRow.mode || '',
           })
+  // ⭐ THE EARLY "WORKED" WARNING (`contestWorkedRows`): under a rule that keys on a county, the
+  // moment the call is in, a station this position already logged on this band and mode turns the
+  // Call box amber with the counties it was worked from. It is never the DUPE: the county decides
+  // that, and a rover in a new county still scores. A county line is judged county by county above,
+  // so it takes no early warning of its own.
+  const fdWorkedQths =
+    fdDupeRow === undefined && fdLineDupes === undefined
+      ? workedValues(
+          fieldDay,
+          contestWorkedRows(fieldDay, fdTypedCall, snap.radio.band, fdModeClass, {
+            rx: fdRx,
+            tx: (slot) => composingSlot(fieldDay?.composing, slot),
+          }),
+        )
+      : []
+  const fdWorkedLine = fdWorkedQths.length > 0 ? t('logEntry.fd.worked', { qths: fdWorkedQths.join(', ') }) : ''
   // ⭐ WHICH COMPONENTS THE OWN-DUPE SENTENCE MAY NAME — the same two flags `contestDupe` just
   // applied. It has always keyed on exactly what the rule names; the sentence did not, and
   // naming the rig's CURRENT band and mode under a rule that ignores them points the operator
@@ -2661,18 +2677,23 @@ export function LogEntry({
                 new call, so a screen reader hears it fill. */}
             <span className="le-fd-cap le-fd-cap-marked">
               <span className="le-fd-cap-text">{t('logEntry.fd.call.label')}</span>
-              <span className="le-fd-dupe" aria-live="polite" title={fdDupeWorked || undefined}>
+              <span
+                className={`le-fd-dupe${fdWorkedLine ? ' le-fd-dupe-maybe' : ''}`}
+                aria-live="polite"
+                title={fdDupeWorked || fdWorkedLine || undefined}
+              >
                 {fdDupeRow !== undefined && (
                   <>
                     <span className="le-fd-dupe-word">{t('logEntry.fd.dupe.badge')}</span>{' '}
                     {fdDupeWorked}
                   </>
                 )}
+                {fdWorkedLine}
               </span>
             </span>
             <input
               ref={callInputRef}
-              className={`settings-input mono le-fd-input le-fd-input-call${fdDupeRow !== undefined ? ' le-fd-input-dupe' : ''}`}
+              className={`settings-input mono le-fd-input le-fd-input-call${fdDupeRow !== undefined ? ' le-fd-input-dupe' : fdWorkedLine ? ' le-fd-input-maybe' : ''}`}
               value={logCall}
               // SPACES ARE DROPPED, not kept: no callsign contains one, and the space bar is
               // the phone position's push-to-talk. An operator who reaches for it out of habit

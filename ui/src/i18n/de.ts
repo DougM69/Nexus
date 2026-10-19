@@ -2727,6 +2727,7 @@ export const DE: PartialCatalog = {
   "logEntry.scp.none": "Super Check Partial hat noch keine Liste. Den Grund nennt Einstellungen › Contest.",
   "logEntry.history.mark": "Historie",
   "logEntry.history.title": "Aus der Call-History ({{file}}). Überschreib den Wert, wenn etwas anderes gesendet wurde.",
+  "logEntry.fd.worked": "Gearbeitet: {{qths}}",
   "logEntry.countyLine.logged": { "one": "{{call}} {{exchange}} ({{mode}}) geloggt", "other": "{{call}} {{exchange}} ({{mode}}) geloggt: {{count}} QSOs, eines je County" },
   "logEntry.countyLine.dupe": { "one": "{{call}} in {{counties}} ist ein Dupe auf diesem Band/Modus, nicht erneut geloggt", "other": "{{call}} in {{counties}} sind Dupes auf diesem Band/Modus, nicht erneut geloggt" },
   "logEntry.countyLine.dupeFor": " für {{counties}}",

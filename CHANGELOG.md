@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contest entry: an early "Worked" warning at QSO parties.** As soon as the call is in, a station you
+  already logged on this band and mode turns the Call box amber and lists the counties or states you worked
+  it from ("Worked: COOK, DUPA"), before you type the county. It turns red (DUPE) only when the county you type
+  is one already logged, and a rover in a new county clears it, since that contact still counts. The list
+  narrows as you type the county. In the cockpits' contest entry, the contest logger window and the Contest
+  screen's entry.
 - **Logbook: export just the contacts you pick.** Ctrl-click (⌘-click on a Mac) rows in the Logbook to pick
   them, Shift-click to pick a run, or press Space on the focused row; Esc clears. **Export selected** saves
   those contacts as an ADIF file in your Downloads folder, each written exactly as the whole-log export writes

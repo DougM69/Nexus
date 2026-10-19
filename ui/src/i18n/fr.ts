@@ -2665,6 +2665,7 @@ export const FR: PartialCatalog = {
   "logEntry.scp.none": "Super Check Partial n’a pas encore de liste. Paramètres › Concours explique pourquoi.",
   "logEntry.history.mark": "historique",
   "logEntry.history.title": "Depuis l’historique des indicatifs ({{file}}). Tape par-dessus s’il a envoyé autre chose.",
+  "logEntry.fd.worked": "Contacté : {{qths}}",
   "logEntry.countyLine.logged": { "one": "{{call}} {{exchange}} enregistré ({{mode}})", "other": "{{call}} {{exchange}} enregistré ({{mode}}) : {{count}} contacts, un par comté" },
   "logEntry.countyLine.dupe": { "one": "{{call}} dans {{counties}} est un doublon sur cette bande/ce mode, non enregistré à nouveau", "other": "{{call}} dans {{counties}} sont des doublons sur cette bande/ce mode, non enregistrés à nouveau" },
   "logEntry.countyLine.dupeFor": " pour {{counties}}",

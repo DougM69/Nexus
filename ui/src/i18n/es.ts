@@ -2665,6 +2665,7 @@ export const ES: PartialCatalog = {
   "logEntry.scp.none": "Super Check Partial aún no tiene lista. Ajustes › Concursos explica por qué.",
   "logEntry.history.mark": "historial",
   "logEntry.history.title": "Del historial de indicativos ({{file}}). Escribe encima si te enviaron otra cosa.",
+  "logEntry.fd.worked": "Trabajado: {{qths}}",
   "logEntry.countyLine.logged": { "one": "Anotado {{call}} {{exchange}} ({{mode}})", "other": "Anotado {{call}} {{exchange}} ({{mode}}): {{count}} contactos, uno por condado" },
   "logEntry.countyLine.dupe": { "one": "{{call}} en {{counties}} es un duplicado en esta banda/modo, no se anota de nuevo", "other": "{{call}} en {{counties}} son duplicados en esta banda/modo, no se anotan de nuevo" },
   "logEntry.countyLine.dupeFor": " para {{counties}}",
