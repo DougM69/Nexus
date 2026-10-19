@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { LanApp, type PageSocket } from './LanApp'
-import { CLOSED_REASONS, CONNECT_REASONS, INTERNET_REASONS, PAIR_REASONS } from './protocol'
+import { CLOSED_REASONS, CONNECT_REASONS, PAIR_REASONS, SIGN_IN_REASONS, WHERE_REASONS } from './protocol'
 import { EN } from '../i18n/en'
 import { harness, last } from '../remote-web/stream-link.testkit'
 
@@ -405,43 +405,105 @@ describe('Operate from this computer', () => {
   })
 })
 
-describe('The internet road', () => {
-  const told = () => socket.tell({ type: 'stations', computer: 'DEN-PC', internet: [],
-    stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }] })
+describe('Signing in', () => {
+  const told = (account: { stationId: string; until: number; renew: boolean }[] = [], internet: string[] = []) =>
+    socket.tell({ type: 'stations', computer: 'DEN-PC', internet, account,
+      stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }] })
+  const card = () => screen.getByText(EN['lanWindow.stationAt'].replace('{{address}}', '192.168.1.20:42075')).closest('.lan-station') as HTMLElement
+  /** The window's own Sign in, beside the stations: the one that adds a station. */
+  const addButton = () => screen.getAllByRole('button', { name: EN['lanWindow.signIn'] })
+    .find(button => !button.closest('.lan-station')) as HTMLButtonElement
 
-  it('is added by naming the station to the page’s socket; the sign-in waits in the browser, and the station shows it once added', () => {
+  it('is how a station is added: one press, the sign-in waits in the browser, and the station is said added', () => {
     page()
-    told()
-    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.add'] }))
-    expect(socket.sent).toContainEqual({ type: 'addInternet', stationId: STATION })
-    expect((screen.getByRole('button', { name: EN['lanWindow.operate'] }) as HTMLButtonElement).disabled, 'one thing at a time').toBe(true)
+    socket.tell({ type: 'stations', computer: 'DEN-PC', internet: [], stations: [] })
+    const add = addButton()
+    expect(add.classList.contains('remote-button--primary')).toBe(true)
+    expect(screen.getByText(EN['lanWindow.signInHint'])).toBeTruthy()
+    fireEvent.click(add)
+    expect(last(socket.sent)).toEqual({ type: 'signIn', stationId: null })
+    expect(add.disabled, 'one thing at a time').toBe(true)
+    expect(add.textContent).toBe(EN['lanWindow.internet.adding'])
     socket.tell({ type: 'signingIn' })
     expect(screen.getByText(EN['lanWindow.internet.signingIn'])).toBeTruthy()
-    socket.tell({ type: 'internetAdded', stationId: STATION, waiting: true })
-    expect(screen.getByText(EN['lanWindow.internet.waiting'])).toBeTruthy()
+    socket.tell({ type: 'signedIn', stationId: STATION, waiting: false })
+    expect(screen.getByText(EN['lanWindow.signIn.done'])).toBeTruthy()
     expect(socket.sent.filter(m => m.type === 'stations').length).toBe(2)
-    socket.tell({ type: 'stations', computer: 'DEN-PC', internet: [STATION],
-      stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }] })
-    expect(screen.getByText(EN['lanWindow.internet.added'])).toBeTruthy()
-    expect(screen.queryByRole('button', { name: EN['lanWindow.internet.add'] })).toBeNull()
+    expect(addButton().disabled).toBe(false)
   })
 
-  it('asks which station, when the account has more than one, and sends the one picked; Cancel sends none', () => {
+  it('keeps pairing with a code beside it, as the quiet second way, for a station whose owner has not signed in', () => {
+    page()
+    told()
+    const pair = screen.getByRole('button', { name: EN['lanWindow.pair'] })
+    expect(pair.classList.contains('remote-button--quiet')).toBe(true)
+    expect(screen.getByText(EN['lanWindow.pairCodeHint'])).toBeTruthy()
+    fireEvent.click(pair)
+    expect(screen.getByRole('region', { name: EN['lanWindow.pairTitle'] })).toBeTruthy()
+  })
+
+  it('asks which station and where it is, and sends what the operator picks and types; Cancel sends none', () => {
     const club = { id: '20000000-0000-4000-8000-0000000000c1', name: 'Club station' }
-    for (const pick of ['Shack', EN['lanWindow.cancel']]) {
-      page()
-      told()
-      fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.add'] }))
-      socket.tell({ type: 'signingIn' })
-      socket.tell({ type: 'chooseStation', stations: [club, { id: STATION, name: 'Shack' }] })
-      const asking = screen.getByRole('region', { name: EN['lanWindow.internet.chooseTitle'] })
-      expect(within(asking).getByText(EN['lanWindow.internet.choose'])).toBeTruthy()
-      expect(within(asking).getByRole('button', { name: 'Club station' })).toBeTruthy()
-      fireEvent.click(within(asking).getByRole('button', { name: pick }))
-      expect(last(socket.sent)).toEqual({ type: 'chooseStation', stationId: pick === 'Shack' ? STATION : null })
-      expect(screen.queryByRole('region', { name: EN['lanWindow.internet.chooseTitle'] })).toBeNull()
-      cleanup()
-    }
+    page()
+    told()
+    fireEvent.click(addButton())
+    socket.tell({ type: 'signingIn' })
+    socket.tell({ type: 'chooseStation', stations: [club, { id: STATION, name: 'Shack' }] })
+    const asking = screen.getByRole('region', { name: EN['lanWindow.internet.chooseTitle'] })
+    expect(within(asking).getByText(EN['lanWindow.signIn.choose'])).toBeTruthy()
+    fireEvent.click(within(asking).getByRole('button', { name: 'Shack' }))
+    expect(last(socket.sent)).toEqual({ type: 'chooseStation', stationId: STATION })
+    expect(screen.queryByRole('region', { name: EN['lanWindow.internet.chooseTitle'] })).toBeNull()
+
+    socket.tell({ type: 'stationAddress', name: 'Shack', reason: 'keyChanged' })
+    let where = screen.getByRole('region', { name: EN['lanWindow.signIn.whereTitle'] })
+    expect(within(where).getByRole('alert').textContent).toBe(EN['lanWindow.signIn.reason.keyChanged'])
+    const tryIt = () => within(screen.getByRole('region', { name: EN['lanWindow.signIn.whereTitle'] }))
+      .getByRole('button', { name: EN['lanWindow.signIn.tryAddress'] }) as HTMLButtonElement
+    expect(tryIt().disabled, 'nothing typed yet').toBe(true)
+    fireEvent.change(within(where).getByLabelText(EN['lanWindow.address']), { target: { value: ' 192.168.1.20 ' } })
+    fireEvent.click(tryIt())
+    expect(last(socket.sent)).toEqual({ type: 'stationAddress', address: '192.168.1.20' })
+    expect(screen.queryByRole('region', { name: EN['lanWindow.signIn.whereTitle'] })).toBeNull()
+
+    socket.tell({ type: 'stationAddress', name: 'Shack' })
+    where = screen.getByRole('region', { name: EN['lanWindow.signIn.whereTitle'] })
+    expect(within(where).queryByRole('alert'), 'asked first: no reason yet').toBeNull()
+    fireEvent.click(within(where).getByRole('button', { name: EN['lanWindow.cancel'] }))
+    expect(last(socket.sent)).toEqual({ type: 'stationAddress', address: null })
+    socket.tell({ type: 'signInRefused', reason: 'notOnThisNetwork' })
+    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.signIn.reason.notOnThisNetwork'])
+  })
+
+  it('links a station paired with a code from its own row, and says when its internet road waits for Approve', () => {
+    page()
+    told([], [STATION])
+    expect(within(card()).getByText(EN['lanWindow.internet.added'])).toBeTruthy()
+    const link = within(card()).getByRole('button', { name: EN['lanWindow.signIn'] })
+    expect(link.classList.contains('remote-button--quiet')).toBe(true)
+    fireEvent.click(link)
+    expect(last(socket.sent)).toEqual({ type: 'signIn', stationId: STATION })
+    socket.tell({ type: 'chooseStation', stations: [{ id: '20000000-0000-4000-8000-0000000000c1', name: 'Club' }, { id: STATION, name: 'Shack' }] })
+    expect(screen.getByText(EN['lanWindow.internet.choose'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Shack' }))
+    socket.tell({ type: 'signedIn', stationId: STATION, waiting: true })
+    expect(screen.getByText(EN['lanWindow.internet.waiting'])).toBeTruthy()
+  })
+
+  it('shows until when a station added with the account takes this computer, and in its last week asks to sign in again', () => {
+    page()
+    // 1 802 592 000 s is 2027-02-14 UTC.
+    told([{ stationId: STATION, until: 1_802_592_000, renew: false }], [STATION])
+    expect(within(card()).getByText(EN['lanWindow.signIn.until'].replace('{{date}}', '2027-02-14'))).toBeTruthy()
+    expect(within(card()).queryByRole('button', { name: EN['lanWindow.signIn'] }), 'signed in: nothing to link').toBeNull()
+    expect(within(card()).queryByRole('button', { name: EN['remote.account.signInAgain'] }), 'not yet').toBeNull()
+    told([{ stationId: STATION, until: 1_802_592_000, renew: true }], [STATION])
+    expect(within(card()).getByText(EN['lanWindow.signIn.renew'].replace('{{date}}', '2027-02-14'))).toBeTruthy()
+    fireEvent.click(within(card()).getByRole('button', { name: EN['remote.account.signInAgain'] }))
+    expect(last(socket.sent)).toEqual({ type: 'signIn', stationId: STATION })
+    socket.tell({ type: 'signingIn' })
+    socket.tell({ type: 'signedIn', stationId: STATION, waiting: false })
+    expect(screen.getByText(EN['lanWindow.signIn.renewed'])).toBeTruthy()
   })
 
   it('says, after a forget, that Nexus Remote could not be told, and where to remove this computer', () => {
@@ -455,19 +517,24 @@ describe('The internet road', () => {
     expect(screen.queryByRole('alert'), 'CONTROL: a forget the service heard says nothing').toBeNull()
   })
 
-  it('says why it was not added, and every reason this computer’s Nexus gives is a sentence', () => {
+  it('says why a sign-in added nothing, and why an address did not take this computer: every reason is a sentence', () => {
     page()
     told()
-    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.add'] }))
-    socket.tell({ type: 'internetRefused', reason: 'internetNotIncluded' })
-    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.internet.reason.internetNotIncluded'])
-    expect((screen.getByRole('button', { name: EN['lanWindow.internet.add'] }) as HTMLButtonElement).disabled).toBe(false)
-    for (const reason of INTERNET_REASONS) {
-      socket.tell({ type: 'internetRefused', reason })
+    fireEvent.click(addButton())
+    socket.tell({ type: 'signInRefused', reason: 'stationNotProven' })
+    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.signIn.reason.stationNotProven'])
+    expect(addButton().disabled).toBe(false)
+    for (const reason of SIGN_IN_REASONS) {
+      socket.tell({ type: 'signInRefused', reason })
       const said = screen.getByRole('alert').textContent ?? ''
+      expect(said.length, reason).toBeGreaterThan(10)
+      expect(said, reason).not.toContain('lanWindow.')
+    }
+    for (const reason of WHERE_REASONS) {
+      socket.tell({ type: 'stationAddress', name: '', reason })
+      const said = within(screen.getByRole('region', { name: EN['lanWindow.signIn.whereTitle'] })).getByRole('alert').textContent ?? ''
       expect(said.length, reason).toBeGreaterThan(10)
       expect(said, reason).not.toContain('lanWindow.')
     }
   })
 })
-

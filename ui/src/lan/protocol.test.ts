@@ -8,19 +8,25 @@ const STATION = { id: '60000000-0000-4000-8000-000000000001', addresses: ['192.1
 const KEY = `3059301306072a8648ce3d020106082a8648ce3d03010703420004${'cd'.repeat(64)}`
 
 it('reads every message this computer’s Nexus sends, and passes the station’s own through', () => {
-  expect(readTold({ type: 'stations', stations: [STATION], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [STATION], internet: [], computer: 'DEN-PC', error: null, forgetUnreached: null })
-  expect(readTold({ type: 'stations', stations: [STATION], internet: [STATION.id], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [STATION], internet: [STATION.id], computer: 'DEN-PC', error: null, forgetUnreached: null })
+  expect(readTold({ type: 'stations', stations: [STATION], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [STATION], internet: [], account: [], computer: 'DEN-PC', error: null, forgetUnreached: null })
+  expect(readTold({ type: 'stations', stations: [STATION], internet: [STATION.id], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [STATION], internet: [STATION.id], account: [], computer: 'DEN-PC', error: null, forgetUnreached: null })
   expect(readTold({ type: 'stations', stations: [], internet: [], computer: 'DEN-PC', forgetUnreached: 'serviceUnavailable' })).toMatchObject({ forgetUnreached: 'serviceUnavailable' })
   const club = { id: '20000000-0000-4000-8000-0000000000c1', name: 'Club station' }
   expect(readTold({ type: 'chooseStation', stations: [club, { id: STATION.id, name: '' }] })).toEqual({ type: 'chooseStation', stations: [club, { id: STATION.id, name: '' }] })
   expect(readTold({ type: 'signingIn' })).toEqual({ type: 'signingIn' })
-  expect(readTold({ type: 'internetAdded', stationId: STATION.id, waiting: true })).toEqual({ type: 'internetAdded', stationId: STATION.id, waiting: true })
-  expect(readTold({ type: 'internetRefused', reason: 'internetNotIncluded' })).toEqual({ type: 'internetRefused', reason: 'internetNotIncluded' })
+  expect(readTold({ type: 'signedIn', stationId: STATION.id, waiting: true })).toEqual({ type: 'signedIn', stationId: STATION.id, waiting: true })
+  expect(readTold({ type: 'signInRefused', reason: 'stationNotProven' })).toEqual({ type: 'signInRefused', reason: 'stationNotProven' })
+  // A reason this page does not know still ends the sign-in, said as one that did not finish.
+  expect(readTold({ type: 'signInRefused', reason: 'somethingNew' })).toEqual({ type: 'signInRefused', reason: 'signInFailed' })
+  expect(readTold({ type: 'stationAddress', name: 'Shack' })).toEqual({ type: 'stationAddress', name: 'Shack', reason: null })
+  expect(readTold({ type: 'stationAddress', name: '', reason: 'keyChanged' })).toEqual({ type: 'stationAddress', name: '', reason: 'keyChanged' })
+  const account = [{ stationId: STATION.id, until: 1_802_592_000, renew: true }]
+  expect(readTold({ type: 'stations', stations: [STATION], internet: [STATION.id], account, computer: 'DEN-PC' })).toMatchObject({ account })
   expect(readTold({ type: 'stations', stations: [], computer: '', error: 'storeUnavailable' })).toMatchObject({ error: 'storeUnavailable' })
   expect(readTold({ type: 'paired', station: STATION })).toEqual({ type: 'paired', station: STATION })
   for (const typedAddress of ['shack-pc.local:42075', '192.168.1.44:42080', `${'a'.repeat(253)}:42075`]) {
     const kept = { ...STATION, typedAddress }
-    expect(readTold({ type: 'stations', stations: [kept], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [kept], internet: [], computer: 'DEN-PC', error: null, forgetUnreached: null })
+    expect(readTold({ type: 'stations', stations: [kept], computer: 'DEN-PC' })).toEqual({ type: 'stations', stations: [kept], internet: [], account: [], computer: 'DEN-PC', error: null, forgetUnreached: null })
   }
   expect(readTold({ type: 'pairRefused', reason: 'wrongCode' })).toEqual({ type: 'pairRefused', reason: 'wrongCode' })
   const road = { stationId: STATION.id, deviceId: '1d2b7c3a-4e5f-8a6b-9c7d-0e1f2a3b4c5d', sessionId: '50000000-0000-4000-8000-000000000002', stationKey: KEY, address: '192.168.1.20:42075' }
@@ -50,9 +56,19 @@ it('refuses anything else: another word, a field too many or too few, a reason n
     { type: 'answerRefused', reason: 'stationBusy' },
     { type: 'stations', stations: [STATION], internet: ['not-an-id'], computer: 'X' },
     { type: 'stations', stations: [STATION], internet: 'all', computer: 'X' },
-    { type: 'internetAdded', stationId: STATION.id },
-    { type: 'internetAdded', stationId: STATION.id, waiting: 'yes' },
-    { type: 'internetRefused', reason: 'wrongCode' },
+    { type: 'internetAdded', stationId: STATION.id, waiting: true },
+    { type: 'internetRefused', reason: 'internetNotIncluded' },
+    { type: 'signedIn', stationId: STATION.id },
+    { type: 'signedIn', stationId: STATION.id, waiting: 'yes' },
+    { type: 'signInRefused', reason: 7 },
+    { type: 'signInRefused', reason: 'x'.repeat(65) },
+    { type: 'stationAddress', name: 'Shack', reason: 'wrongCode' },
+    { type: 'stationAddress', name: 'Shack', reason: null },
+    { type: 'stationAddress', reason: 'keyChanged' },
+    { type: 'stations', stations: [STATION], account: [{ stationId: 'not-an-id', until: 1, renew: true }], computer: 'X' },
+    { type: 'stations', stations: [STATION], account: [{ stationId: STATION.id, until: 1.5, renew: true }], computer: 'X' },
+    { type: 'stations', stations: [STATION], account: [{ stationId: STATION.id, until: 1, renew: 'yes' }], computer: 'X' },
+    { type: 'stations', stations: [STATION], account: [{ stationId: STATION.id, until: 1, renew: true, proof: 'x' }], computer: 'X' },
     { type: 'signingIn', token: 'x' },
     { type: 'stations', stations: [], computer: 'X', forgetUnreached: 7 },
     { type: 'chooseStation', stations: [{ id: STATION.id, name: 'Shack' }] },

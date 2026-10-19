@@ -285,6 +285,12 @@ export function ClientBanner() {
         </span>
       )}
       {status.udpBlocked && <span className="client-banner-over">{t('client.banner.udpBlocked')}</span>}
+      {/* Signing in again before the station stops taking this computer on its network. The day is
+          written YYYY-MM-DD, in UTC, never in a locale's format. */}
+      {status.signingAgain
+        ? <span className="client-banner-over">{t('client.banner.signingAgain')}</span>
+        : status.signInBy != null && <span className="client-banner-over">
+          {t('client.banner.signInBy', { date: new Date(status.signInBy * 1000).toISOString().slice(0, 10) })}</span>}
       {status.stillThere && <span className="client-banner-over">{t('client.banner.stillThere')}</span>}
       {(status.stillThere || idleEnded) && (
         <button type="button" className="client-banner-leave" onClick={() => void clientStillHere().catch(() => undefined)}>

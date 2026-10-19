@@ -4571,6 +4571,11 @@ export interface ClientStatus {
   computerBuild?: string
   /** The station's Nexus version, as its last welcome said it: null until one has. */
   stationBuild?: string | null
+  /** The day the station stops taking this computer on its network (seconds since 1970), while that
+   *  is within a week and this computer has not signed in again. */
+  signInBy?: number | null
+  /** Operate's launch is signing in again for the station: the sign-in waits in the browser. */
+  signingAgain?: boolean
 }
 
 /** The test build's road switch: both roads as they are, or one of them blocked. */

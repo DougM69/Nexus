@@ -14,8 +14,12 @@ export type LanStation = { id: string; addresses: string[]; key: string; typedAd
  *  bits of its key's fingerprint). A hint for the address field, never an identity: the road takes
  *  only the key pinned at pairing. */
 export type LanFound = { name: string; address: string; protocol: number; key: string }
-/** One of the Remote account's stations, offered while the internet road is added. */
+/** One of the Remote account's stations, offered while signing in. */
 export type LanChoice = { id: string; name: string }
+
+/** A station added with the account: until when it takes this computer on its network (seconds
+ *  since 1970), and whether to sign in again for it now (`lan_client::account`). */
+export type LanSigned = { stationId: string; until: number; renew: boolean }
 
 /** The road, open: the ids the station stamped and the key this computer pinned for it. */
 export type LanRoad = { stationId: string; deviceId: string; sessionId: string; stationKey: string; address: string }
@@ -43,20 +47,31 @@ export type ClosedReason = (typeof CLOSED_REASONS)[number]
 /** The station's answer did not hold here, and the page was never handed it (S3-M1). */
 export const ANSWER_REFUSALS = ['stationKeyMismatch', 'stationNotSigned'] as const
 
-/** Why the internet road was not added (`lan_client::internet`). */
-export const INTERNET_REASONS = ['internetNotIncluded', 'internetNotReady', 'signInPortBusy', 'signInTimedOut',
-  'signInRefused', 'signInFailed', 'signInUnderWay', 'stationNotChosen', 'deviceLimit', 'stationUnavailable', 'updateStation',
-  'serviceUnavailable', 'tryLater', 'accessDenied', 'invalidResponse', 'originDenied', 'storeUnavailable', 'unknownStation',
-  'stationsFull', 'notStation', 'notApprovedThere', 'waitingApproval', 'relayUnavailable', 'pipeClosed', 'invalidRequest'] as const
-export type InternetReason = (typeof INTERNET_REASONS)[number]
+/** Why a sign-in added nothing (`lan_client::account`). A reason this page does not know reads as
+ *  `signInFailed`: a sign-in that ended is always said to have ended. */
+export const SIGN_IN_REASONS = ['signInPortBusy', 'signInTimedOut', 'signInRefused', 'signInFailed', 'signInUnderWay',
+  'accountNotReady', 'internetNotReady', 'internetNotIncluded', 'serviceUnavailable', 'issuerUnavailable', 'tryLater',
+  'rateLimited', 'accessDenied', 'notApprovedThere', 'waitingApproval', 'trialDisabled', 'deviceLimit',
+  'stationUnavailable', 'stationKeyMissing', 'stationNotChosen', 'stationsFull', 'storeUnavailable', 'unknownStation',
+  'alreadyHere', 'listenOnly', 'stationNotProven', 'stationProofFailed', 'notOnThisNetwork', 'notThisStation',
+  'stationNotSignedIn', 'proofNotYours', 'proofRefused', 'pairingFull', 'stationCouldNotKeep', 'updateStation',
+  'updateComputer', 'keyChanged', 'notStation'] as const
+export type SignInReason = (typeof SIGN_IN_REASONS)[number]
+
+/** Why the station did not take this computer at the address last tried, while a sign-in asks where
+ *  it is: nothing answered, another key did, or what was typed is no address or no name found. */
+export const WHERE_REASONS = ['unreachable', 'otherNetwork', 'refused', 'noAnswer', 'keyChanged', 'badAddress',
+  'nameUnresolved'] as const
+export type WhereReason = (typeof WHERE_REASONS)[number]
 
 /** The station's own messages, passed through on an open road. */
 const STATION_MESSAGES = ['operationResponse', 'streamSignal', 'streamState', 'status'] as const
 
 export type Told =
-  /** `internet`: the stations the internet road has been added to. `forgetUnreached`: after a
-   *  forget, why Nexus Remote could not be told to end this computer's approval there. */
-  | { type: 'stations'; stations: LanStation[]; internet: string[]; computer: string; error: string | null; forgetUnreached: string | null }
+  /** `internet`: the stations the internet road has been added to. `account`: the stations added
+   *  with the account. `forgetUnreached`: after a forget, why Nexus Remote could not be told to end
+   *  this computer's approval there. */
+  | { type: 'stations'; stations: LanStation[]; internet: string[]; account: LanSigned[]; computer: string; error: string | null; forgetUnreached: string | null }
   | { type: 'found'; shacks: LanFound[]; available: boolean }
   | { type: 'paired'; station: LanStation }
   | { type: 'pairRefused'; reason: PairReason }
@@ -66,13 +81,17 @@ export type Told =
   | { type: 'answerRefused'; reason: (typeof ANSWER_REFUSALS)[number] }
   /** Operate from this computer was taken: Nexus is closing, to start again driving the station. */
   | { type: 'operating' }
-  /** Adding the internet road: the sign-in waits in the system browser. */
+  /** Signing in: the sign-in waits in the system browser. */
   | { type: 'signingIn' }
-  /** The internet road was added to a station; `waiting` while the station has not approved it. */
-  | { type: 'internetAdded'; stationId: string; waiting: boolean }
-  | { type: 'internetRefused'; reason: InternetReason }
-  /** Adding the internet road: the account has more than one station, and the operator picks this one. */
+  /** Signed in for a station; `waiting` while its internet road waits for Approve at the station. */
+  | { type: 'signedIn'; stationId: string; waiting: boolean }
+  | { type: 'signInRefused'; reason: SignInReason }
+  /** Signing in: the account has more than one station, and the operator picks one. */
   | { type: 'chooseStation'; stations: LanChoice[] }
+  /** Signing in: the station was found nowhere on this network, and the operator says where it is;
+   *  `name` as the account lists it (empty for one on this computer), and why the last address
+   *  tried did not take this computer, if one was. */
+  | { type: 'stationAddress'; name: string; reason: WhereReason | null }
   | { type: 'station'; message: Record<string, unknown> }
 
 type Fields = Record<string, unknown>
@@ -108,6 +127,11 @@ function station(raw: unknown): LanStation {
   const shown: LanStation = { id: text(value.id, UUID), addresses: value.addresses.map(a => text(a, /^[0-9.]+:[0-9]+$/, 21)), key: text(value.key, HEX64) }
   return typed.length ? { ...shown, typedAddress: text(value.typedAddress, TYPED, 259) } : shown
 }
+function signed(raw: unknown): LanSigned {
+  const value = fields(raw, ['stationId', 'until', 'renew'])
+  if (typeof value.until !== 'number' || !Number.isInteger(value.until) || value.until < 0 || typeof value.renew !== 'boolean') throw Error('invalidLanMessage')
+  return { stationId: text(value.stationId, UUID), until: value.until, renew: value.renew }
+}
 function choice(raw: unknown): LanChoice {
   const value = fields(raw, ['id', 'name'])
   return { id: text(value.id, UUID), name: text(value.name, undefined, 96) }
@@ -124,13 +148,16 @@ export function readTold(raw: unknown): Told {
   if ((STATION_MESSAGES as readonly unknown[]).includes(type)) return { type: 'station', message: raw as Fields }
   switch (type) {
     case 'stations': {
-      const optional = ['internet', 'error', 'forgetUnreached'].filter(key => (raw as Fields)[key] !== undefined)
+      const optional = ['internet', 'account', 'error', 'forgetUnreached'].filter(key => (raw as Fields)[key] !== undefined)
       const value = fields(raw, ['type', 'stations', 'computer', ...optional])
       if (!Array.isArray(value.stations) || value.stations.length > 8) throw Error('invalidLanMessage')
       const internet = value.internet === undefined ? [] : value.internet
       if (!Array.isArray(internet) || internet.length > 8) throw Error('invalidLanMessage')
+      const account = value.account === undefined ? [] : value.account
+      if (!Array.isArray(account) || account.length > 8) throw Error('invalidLanMessage')
       return { type, stations: value.stations.map(station), internet: internet.map(id => text(id, UUID)),
-        computer: text(value.computer, undefined, 64), error: value.error === undefined ? null : text(value.error),
+        account: account.map(signed), computer: text(value.computer, undefined, 64),
+        error: value.error === undefined ? null : text(value.error),
         forgetUnreached: value.forgetUnreached === undefined ? null : text(value.forgetUnreached) }
     }
     case 'found': {
@@ -150,12 +177,20 @@ export function readTold(raw: unknown): Told {
     case 'answerRefused': return { type, reason: oneOf(ANSWER_REFUSALS, fields(raw, ['type', 'reason']).reason) }
     case 'operating': fields(raw, ['type']); return { type }
     case 'signingIn': fields(raw, ['type']); return { type }
-    case 'internetAdded': {
+    case 'signedIn': {
       const value = fields(raw, ['type', 'stationId', 'waiting'])
       if (typeof value.waiting !== 'boolean') throw Error('invalidLanMessage')
       return { type, stationId: text(value.stationId, UUID), waiting: value.waiting }
     }
-    case 'internetRefused': return { type, reason: oneOf(INTERNET_REASONS, fields(raw, ['type', 'reason']).reason) }
+    case 'signInRefused': {
+      const reason = text(fields(raw, ['type', 'reason']).reason)
+      return { type, reason: (SIGN_IN_REASONS as readonly string[]).includes(reason) ? reason as SignInReason : 'signInFailed' }
+    }
+    case 'stationAddress': {
+      const optional = (raw as Fields).reason !== undefined ? ['reason'] : []
+      const value = fields(raw, ['type', 'name', ...optional])
+      return { type, name: text(value.name, undefined, 96), reason: optional.length ? oneOf(WHERE_REASONS, value.reason) : null }
+    }
     case 'chooseStation': {
       const value = fields(raw, ['type', 'stations'])
       if (!Array.isArray(value.stations) || value.stations.length < 2 || value.stations.length > MOST_CHOICES) throw Error('invalidLanMessage')
