@@ -19803,11 +19803,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// Append newly-stitched AI-CW transcript text (already deduplicated by the decode
     /// thread's absolute-time cursor) from a pass over generation `epoch`. Bounded; oldest
-    /// text drains off the front. A pass over an older generation is dropped.
+    /// text drains off the front. A pass over an older generation is dropped, and so is
+    /// whitespace with nothing before it; a word space between two batches is kept.
     pub fn push_ai_cw_text(&mut self, epoch: u64, text: &str) {
         if epoch != self.ai_cw_epoch {
             return;
         }
+        let text = if self.ai_cw_text.is_empty() {
+            text.trim_start()
+        } else {
+            text
+        };
         self.ai_cw_text.push_str(text);
         const CAP: usize = 1500;
         if self.ai_cw_text.len() > CAP {
@@ -34916,6 +34922,23 @@ mod tests {
             w[AI_CW_WINDOW - 12_000..].iter().all(|&x| x == 0.5),
             "…and the new station's second is the window's end"
         );
+    }
+
+    /// Passes come back to back, so a batch is often a single character, and the space
+    /// between two words is often a batch on its own. It used to be dropped (a batch was
+    /// pushed only when it held something other than whitespace), running words together.
+    #[test]
+    fn a_word_space_arriving_alone_still_separates_the_words() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.ai_cw_enabled = true;
+        e.feed_rx_audio(&vec![0.25; 12_000]);
+        let (_, _, g) = e.ai_cw_window().unwrap();
+        e.push_ai_cw_text(g, " ");
+        assert_eq!(e.ai_cw_text, "", "no leading space on an empty copy");
+        e.push_ai_cw_text(g, "CQ");
+        e.push_ai_cw_text(g, " ");
+        e.push_ai_cw_text(g, "TEST");
+        assert_eq!(e.ai_cw_text, "CQ TEST");
     }
 
     /// The decode thread copies a window, then decodes it off-lock for a few hundred ms. A QSY

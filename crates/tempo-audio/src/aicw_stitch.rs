@@ -2,9 +2,26 @@
 //! absolute stream time. Pure (std only) so it is unit-tested without the model or a device,
 //! and so a replay bench can run the exact rule the app runs.
 
-/// Don't emit characters from the last second of a window: the model has no right
-/// context there yet; the next (overlapping) window decodes that region reliably.
-pub const TAIL_GUARD_SECS: f64 = 1.0;
+use std::time::Duration;
+
+/// Don't emit characters from the last half second of a window: the model has no right
+/// context there yet; the next (overlapping) window decodes that region reliably. Measured
+/// on synthetic contest CW at 20–30 WPM, clean and at 0 dB: 0.5 s copies as cleanly as the
+/// 1.0 s it replaced, 0.3 s starts to miss characters, and no guard at all prints garbage.
+pub const TAIL_GUARD_SECS: f64 = 0.5;
+
+/// The least rest between two passes, however fast the PC.
+pub const MIN_PASS_GAP: Duration = Duration::from_millis(250);
+
+/// The rest after a pass before the next one starts. Passes run back to back rather than on a
+/// fixed cadence, so the copy trails the key-up by about the guard plus one pass. The rest is
+/// half the pass, never under [`MIN_PASS_GAP`]: the decode thread then holds at most two
+/// thirds of one core however slow the PC, and the radio and audio threads always get the CPU
+/// back between passes. There is no queue to fall behind on: each pass decodes the newest
+/// window, so a pass slower than the audio it covers only makes the next batch larger.
+pub fn pass_gap(last_pass: Duration) -> Duration {
+    MIN_PASS_GAP.max(last_pass / 2)
+}
 
 /// One pass's new text.
 #[derive(Debug, Default, PartialEq)]
@@ -97,10 +114,35 @@ mod tests {
     fn a_new_stream_never_inherits_the_old_streams_cursor() {
         let mut s = Stitcher::default();
         let _ = s.pass(1, 4.0, WIN, &chars(&[]));
-        // The old stream's cursor is now 3.0 (4.0 − guard). A QSY restarts the clock; the
+        // The old stream's cursor is now 3.5 (4.0 − guard). A QSY restarts the clock; the
         // new stream's first pass ends at 5.0 and has characters at 1.5 and 2.5.
         let p = s.pass(2, 5.0, WIN, &chars(&[(11.5, "C"), (12.5, "Q")]));
         assert_eq!(p.confirmed, "CQ");
+    }
+
+    /// Back to back on a fast PC, and never more than two thirds of a core on a slow one.
+    #[test]
+    fn the_rest_between_passes_bounds_the_cpu_share() {
+        assert_eq!(pass_gap(Duration::from_millis(300)), MIN_PASS_GAP);
+        assert_eq!(pass_gap(Duration::from_secs(1)), Duration::from_millis(500));
+        for ms in [50, 300, 500, 1000, 3000] {
+            let pass = Duration::from_millis(ms);
+            let share = pass.as_secs_f64() / (pass + pass_gap(pass)).as_secs_f64();
+            assert!(
+                share <= 2.0 / 3.0 + 1e-9,
+                "{ms} ms pass holds {share:.2} of a core"
+            );
+        }
+    }
+
+    /// A character half a second clear of the window's end is copied on this pass; one
+    /// inside the last half second waits for the next.
+    #[test]
+    fn the_tail_guard_holds_back_only_the_last_half_second() {
+        let mut s = Stitcher::default();
+        // Window ends at 20.0: K at 19.4 (0.6 s clear), T at 19.6 (0.4 s clear).
+        let p = s.pass(1, 20.0, WIN, &chars(&[(14.4, "K"), (14.6, "T")]));
+        assert_eq!(p.confirmed, "K");
     }
 
     /// The same stream across passes: the overlap is emitted once.
@@ -108,7 +150,7 @@ mod tests {
     fn the_overlap_of_two_passes_is_emitted_once() {
         let mut s = Stitcher::default();
         let a = s.pass(1, 20.0, WIN, &chars(&[(10.0, "C"), (13.0, "Q")]));
-        // C at 15.0, Q at 18.0: both confirmed (cutoff 19.0).
+        // C at 15.0, Q at 18.0: both confirmed (cutoff 19.5).
         assert_eq!(a.confirmed, "CQ");
         // Next window ends at 22.0: the same C and Q again (shifted 2 s), plus D at 20.5.
         let b = s.pass(
@@ -126,7 +168,7 @@ mod tests {
     fn a_long_gap_skips_ahead_instead_of_queueing() {
         let mut s = Stitcher::default();
         let _ = s.pass(1, 20.0, WIN, &chars(&[]));
-        // 40 s later (the cursor, 19.0, is now before this window's start, 45.0).
+        // 40 s later (the cursor, 19.5, is now before this window's start, 45.0).
         let p = s.pass(1, 60.0, WIN, &chars(&[(1.0, "A"), (12.0, "B")]));
         assert_eq!(
             p.confirmed, "AB",
@@ -136,7 +178,7 @@ mod tests {
             1,
             61.0,
             WIN,
-            &chars(&[(0.0, "A"), (11.0, "B"), (13.5, "C")]),
+            &chars(&[(0.0, "A"), (11.0, "B"), (13.8, "C")]),
         );
         assert_eq!(q.confirmed, "C", "and the cursor follows the newest window");
     }

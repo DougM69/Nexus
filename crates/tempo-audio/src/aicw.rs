@@ -18,18 +18,16 @@ use std::time::{Duration, Instant};
 use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::settings::OperatingMode;
 
-use crate::aicw_stitch::Stitcher;
+use crate::aicw_stitch::{pass_gap, Stitcher};
 use crate::service::SHUTDOWN;
 
-/// Decode cadence: a fresh 15 s window every ~2 s (13 s overlap). The stitch emits only
-/// characters that are new since the previous pass, so a shorter cadence means SMALLER,
-/// more frequent text batches — the transcript flows instead of landing in 6 s blocks —
-/// without changing a single decoded character. CPU self-throttles below: a machine
-/// where one pass is slow automatically spaces passes to ≤~50% of one core.
-const CADENCE: Duration = Duration::from_secs(2);
-/// How often the loop re-checks the enable/mode gates while idle (also the cadence
-/// granularity — keep it well under CADENCE).
+/// How often the loop re-checks the enable/mode gates while idle. While decoding, passes
+/// run back to back with [`pass_gap`]'s rest between them: the stitch emits only characters
+/// that are new since the previous pass, so frequent passes mean small batches that trail
+/// the key-up by about the tail guard plus one pass, without changing a decoded character.
 const IDLE_POLL: Duration = Duration::from_millis(250);
+/// A pass this slow is logged every time (the first pass's time is always logged).
+const SLOW_PASS: Duration = Duration::from_secs(2);
 /// Re-attempt a failed model load this often (the operator may install it mid-session).
 const MODEL_RETRY: Duration = Duration::from_secs(30);
 
@@ -42,14 +40,24 @@ pub fn spawn_ai_cw(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
         .expect("spawn ai-cw");
 }
 
+/// Drop the calling thread below normal priority: the radio loop and the audio callbacks
+/// run at normal or above, and an inference pass must never delay them.
+#[cfg(windows)]
+fn lower_priority() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    };
+    // SAFETY: the pseudo-handle of the calling thread; failure leaves the priority as it was.
+    let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) };
+}
+
 fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
+    #[cfg(windows)]
+    lower_priority();
     let mut model: Option<deepcw::DeepCw> = None;
     let mut last_model_try: Option<Instant> = None;
-    let mut last_decode: Option<Instant> = None;
-    // Adaptive throttle: the measured duration of the last inference pass. The next
-    // pass waits max(CADENCE, 2×last_pass) so a slow machine never spends more than
-    // ~half a core on AI CW, while a fast one enjoys the full 2 s cadence.
-    let mut last_pass: Duration = Duration::ZERO;
+    // The rest before the next loop turn: the idle poll, or `pass_gap` after a pass.
+    let mut pause = IDLE_POLL;
     let mut logged_pass_time = false;
     // The transcript cursor (see `aicw_stitch`).
     let mut stitch = Stitcher::default();
@@ -57,7 +65,8 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
-        std::thread::sleep(IDLE_POLL);
+        std::thread::sleep(pause);
+        pause = IDLE_POLL;
         // Gates: feature EFFECTIVELY on (`ai_cw_active` folds in Unassisted mode, so an
         // unassisted contest entry runs no inference at all) + CW cockpit active (brief lock).
         let on = {
@@ -87,11 +96,6 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
                 }
             }
         }
-        let wait = CADENCE.max(last_pass * 2);
-        let due = last_decode.is_none_or(|t| t.elapsed() >= wait);
-        if !due {
-            continue;
-        }
         // A 15 s window (zero-padded while the ring is still filling) + the absolute stream
         // position of its end + the stream's generation, copied under a brief lock; decode
         // runs off-lock.
@@ -103,17 +107,17 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
             set_status(&engine, "listening…");
             continue;
         };
-        last_decode = Some(Instant::now());
         let win_secs = window.len() as f64 / 12_000.0;
         let end_abs = fed as f64 / 12_000.0;
         let ai = model.as_ref().unwrap();
         let audio_3200 = deepcw::resample_linear(&window, 12_000, ai.meta.sample_rate);
         let pass_t0 = Instant::now();
         let decoded = ai.decode_timed(&audio_3200);
-        last_pass = pass_t0.elapsed();
+        let last_pass = pass_t0.elapsed();
+        pause = pass_gap(last_pass);
         // One log line for the record (the pass time was never measured before), plus
-        // any pass slow enough to defeat the cadence — silence otherwise.
-        if !logged_pass_time || last_pass > CADENCE {
+        // any very slow pass — silence otherwise.
+        if !logged_pass_time || last_pass > SLOW_PASS {
             eprintln!("ai-cw: inference pass took {:.2}s", last_pass.as_secs_f64());
             logged_pass_time = true;
         }
@@ -122,10 +126,10 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
                 let pass = stitch.pass(epoch, end_abs, win_secs, &chars);
                 let mut e = engine_lock(&engine);
                 e.set_ai_cw_status("");
-                if !pass.confirmed.trim().is_empty() {
-                    // Dropped by the engine if a QSY started a new stream during the pass.
-                    e.push_ai_cw_text(epoch, &pass.confirmed);
-                }
+                // Every batch, a lone word space included: small batches carry the spaces
+                // between words on their own. Dropped by the engine if a QSY started a new
+                // stream during the pass.
+                e.push_ai_cw_text(epoch, &pass.confirmed);
             }
             Err(e) => {
                 eprintln!("ai-cw: decode failed: {e}");
