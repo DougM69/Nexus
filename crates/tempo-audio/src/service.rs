@@ -12755,7 +12755,9 @@ impl RadioLoop {
                     WsjtxInbound::FreeText { text, send, .. } => {
                         let t = text.trim();
                         if send && !t.is_empty() {
-                            eng.broadcast(t);
+                            if let Err(reason) = eng.udp_free_text(t) {
+                                crate::civ::diag::note(&format!("UDP FreeText refused: {reason}"));
+                            }
                         }
                     }
                     WsjtxInbound::Reply {
@@ -12787,17 +12789,7 @@ impl RadioLoop {
                                         |eng| {
                                             eng.work_station_opens_session(&sender, Some(&message))
                                         },
-                                        |eng| {
-                                            eng.work_station(
-                                                &sender,
-                                                None,
-                                                Some(&message),
-                                                Some(snr),
-                                                dx_freq,
-                                            )?;
-                                            eng.set_tx_enabled(true);
-                                            Ok(())
-                                        },
+                                        |eng| eng.answer_udp_reply(&sender, &message, snr, dx_freq),
                                         |_| (),
                                     );
                                     if let Err(reason) = worked {
@@ -12809,23 +12801,18 @@ impl RadioLoop {
                                 continue;
                             }
                             // A refusal (no derivable parity — the context was just flushed
-                            // by a QSY/tier switch) must NOT fall through to the arm below:
-                            // arming TX for a QSO that was never started is exactly the
-                            // unattended-keying shape the refusal exists to prevent. The
-                            // companion sent a message, so the reason goes to the diag log
-                            // rather than vanishing.
+                            // by a QSY/tier switch — or a stop the operator has not answered)
+                            // arms nothing: arming TX for a QSO that was never started is
+                            // exactly the unattended-keying shape the refusal exists to
+                            // prevent. The companion sent a message, so the reason goes to the
+                            // diag log rather than vanishing.
                             if let Err(reason) =
-                                eng.work_station(sender, None, Some(&message), Some(snr), dx_freq)
+                                eng.answer_udp_reply(sender, &message, snr, dx_freq)
                             {
                                 crate::civ::diag::note(&format!(
                                     "UDP Reply for {sender} refused: {reason}"
                                 ));
-                                continue;
                             }
-                            // Stock parity: "double-click sets Tx enable" governs
-                            // only OUR OWN UI clicks — an inbound UDP Reply
-                            // (JTAlert/GridTracker) always arms TX in WSJT-X.
-                            eng.set_tx_enabled(true);
                         }
                     }
                     // Companion mode: WSJT-X logged a QSO. It emits BOTH LoggedAdif
@@ -16613,6 +16600,7 @@ mod tests {
     mod remote_radio;
     mod rf_pane;
     mod split_overs;
+    mod udp_requests;
     mod wfview;
     mod yaesu_alc;
     use super::should_command_rf_power;

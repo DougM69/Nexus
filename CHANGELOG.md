@@ -281,6 +281,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **A logger can no longer turn TX back on after you stop it.** With the WSJT-X UDP feed on, a Reply from GridTracker or
+  JTAlert used to arm TX even after Stop TX, Esc or a TX watchdog trip, and cleared the trip. Now that Reply is ignored
+  until you turn TX on yourself, and the watchdog trip stays until you do. A logger's free text with "send" no longer
+  turns TX on either: as in WSJT-X, it goes out only if TX is already on. A logger's Halt TX still stops at once.
 - **JS8 sends to your own groups.** A group you added in Settings, such as @MAGNET, was refused as "not a callsign or
   @group JS8 can address". It now goes out the way JS8Call sends it, a message or a command alike, and a message to a
   group you joined is marked as yours. Compound calls such as KD4JRX/WFD can be put in the To box too. A name JS8Call

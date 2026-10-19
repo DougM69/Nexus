@@ -320,20 +320,13 @@ fn every_operator_arm_ends_the_hold() {
         e.set_operating_mode("phone", false);
         assert!(e.tx_enabled(), "{name}: the hold outlived the act");
     }
-    let ft: [(&str, Act); 4] = [
+    // A logger's UDP Reply is not on this list: another program never ends a stop (below).
+    let ft: [(&str, Act); 3] = [
         ("Enable TX", |e| e.set_tx_enabled_by_operator(true)),
         ("Call CQ", |e| e.set_mode("qso-run").expect("Call CQ")),
         ("a double-click", |e| {
             e.call_station_ctx("K2ABC", Some("FN42"), None, None, None)
                 .expect("the double-click works the station")
-        }),
-        ("a UDP Reply", |e| {
-            // The radio loop's Reply handler: the call, then its own arm, whatever the
-            // double-click setting says (stock parity).
-            e.settings.double_click_sets_tx = false;
-            e.call_station_ctx("K2ABC", Some("FN42"), None, None, None)
-                .expect("the Reply works the station");
-            e.set_tx_enabled(true);
         }),
     ];
     for (name, act) in ft {
@@ -477,4 +470,136 @@ fn a_band_change_neither_holds_nor_releases_tx() {
     e.set_frequency(7.200, "40m", "LSB");
     e.set_operating_mode("phone", false);
     assert!(!e.tx_enabled(), "a band change let go of Stop TX's hold");
+}
+
+/// FT8 with K2ABC's CQ decoded, "double-click sets Tx" off: a logger's Reply arms TX whatever it
+/// says.
+fn ft8_with_a_cq(e: &mut Engine) {
+    e.settings.double_click_sets_tx = false;
+    e.set_operating_mode("digital", true);
+    e.ingest_decodes_for_test(&[super::tests::dec_snr("CQ K2ABC FN42", -10)], 5);
+}
+
+/// A logger's WSJT-X UDP Reply to that CQ, as the radio loop hands it over.
+fn udp_reply(e: &mut Engine) -> Result<(), String> {
+    e.answer_udp_reply("K2ABC", "CQ K2ABC FN42", -10, Some(1500.0))
+}
+
+/// Control: with nothing stopped, a logger's Reply works the station and arms TX, as before.
+#[test]
+fn a_udp_reply_with_nothing_stopped_works_the_station_and_arms() {
+    let mut e = station();
+    ft8_with_a_cq(&mut e);
+    assert!(
+        !e.tx_enabled(),
+        "premise: TX is off, and nothing stopped it"
+    );
+    let r = udp_reply(&mut e);
+    assert_eq!(
+        (r, e.qso_dxcall().map(str::to_string), e.tx_enabled()),
+        (Ok(()), Some("K2ABC".to_string()), true),
+        "(answer, station worked, TX armed)"
+    );
+}
+
+/// ⛔ After Stop TX, a logger's Reply arms nothing and the stop still holds: TX stays off through
+/// a screen round trip, until the operator's own act.
+#[test]
+fn a_udp_reply_after_stop_tx_arms_nothing_and_the_stop_still_holds() {
+    let mut e = station();
+    ft8_with_a_cq(&mut e);
+    e.set_tx_enabled_by_operator(true);
+    e.halt_tx(); // the FT8 Halt
+    let r = udp_reply(&mut e);
+    let armed = e.tx_enabled();
+    e.set_operating_mode("phone", false); // entry arms only where nothing holds
+    assert_eq!(
+        (r.is_err(), armed, e.qso_dxcall(), e.tx_enabled()),
+        (true, false, None, false),
+        "(refused, armed by the Reply, station worked, armed at Phone entry)"
+    );
+}
+
+/// ⛔ After a watchdog trip, a logger's Reply arms nothing and leaves the trip standing.
+#[test]
+fn a_udp_reply_after_a_watchdog_trip_arms_nothing_and_leaves_the_trip() {
+    let mut e = Engine::new("K1ABC", "EN61", 0);
+    e.set_license_class("general");
+    rtty_watchdog_tripped(&mut e);
+    ft8_with_a_cq(&mut e);
+    let radio = e.snapshot().radio;
+    assert_eq!(
+        (radio.tx_watchdog, radio.tx_enabled, e.tx_stop_hold),
+        (true, false, false),
+        "scene guard: the trip stands on FT8 by its own flag, with no stop's hold"
+    );
+    let r = udp_reply(&mut e);
+    let radio = e.snapshot().radio;
+    assert_eq!(
+        (
+            r.is_err(),
+            radio.tx_watchdog,
+            radio.tx_enabled,
+            e.qso_dxcall()
+        ),
+        (true, true, false, None),
+        "(refused, watchdog tripped, TX armed, station worked)"
+    );
+}
+
+/// ⛔ A logger's FreeText with "send" never arms TX, never restarts the watchdog clock and never
+/// clears a stop or a trip. It is queued only while the operator has TX armed (WSJT-X's Tx5 goes
+/// out only with Enable Tx on).
+#[test]
+fn a_udp_free_text_never_arms_and_goes_out_only_while_armed() {
+    let free_text = |e: &mut Engine| {
+        let r = e.udp_free_text("TNX 73");
+        (r.is_ok(), e.tx_enabled(), !e.broadcast_queue.is_empty())
+    };
+    // TX off, nothing stopped.
+    let mut off = station();
+    off.set_operating_mode("digital", true);
+    assert_eq!(
+        free_text(&mut off),
+        (false, false, false),
+        "TX off: (sent, armed, queued)"
+    );
+    // After Stop TX: refused, and the stop still holds at Phone entry.
+    let mut stopped = station();
+    stopped.set_operating_mode("digital", true);
+    stopped.set_tx_enabled_by_operator(true);
+    stopped.halt_tx();
+    let after_stop = free_text(&mut stopped);
+    stopped.set_operating_mode("phone", false);
+    assert_eq!(
+        (after_stop, stopped.tx_enabled()),
+        ((false, false, false), false),
+        "after Stop TX: ((sent, armed, queued), armed at Phone entry)"
+    );
+    // After a watchdog trip: refused, and the trip stands.
+    let mut tripped = Engine::new("K1ABC", "EN61", 0);
+    tripped.set_license_class("general");
+    rtty_watchdog_tripped(&mut tripped);
+    tripped.set_operating_mode("digital", false);
+    let after_trip = free_text(&mut tripped);
+    assert_eq!(
+        (after_trip, tripped.snapshot().radio.tx_watchdog),
+        ((false, false, false), true),
+        "after a watchdog trip: ((sent, armed, queued), watchdog tripped)"
+    );
+    // Control: armed by the operator, the text is queued and the watchdog clock keeps running.
+    let mut armed = station();
+    armed.set_operating_mode("digital", true);
+    armed.set_tx_enabled_by_operator(true);
+    armed.tx_watchdog_start = Some(1_000);
+    assert_eq!(
+        free_text(&mut armed),
+        (true, true, true),
+        "armed: (sent, armed, queued)"
+    );
+    assert_eq!(
+        armed.tx_watchdog_start,
+        Some(1_000),
+        "the free text restarted the watchdog clock"
+    );
 }
