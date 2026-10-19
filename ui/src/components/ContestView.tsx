@@ -3797,10 +3797,10 @@ export function ContestView({
                 key={view}
                 type="button"
                 className="export-btn"
-                title={t(view === 'cw' ? 'fieldDay.workIn.cw.title' : 'fieldDay.workIn.phone.title')}
+                title={view === 'cw' ? t('fieldDay.workIn.cw.title') : t('fieldDay.workIn.phone.title')}
                 onClick={() => (onWorkIn ?? askMainToWorkIn)(view)}
               >
-                {t(view === 'cw' ? 'fieldDay.workIn.cw' : 'fieldDay.workIn.phone')}
+                {view === 'cw' ? t('fieldDay.workIn.cw') : t('fieldDay.workIn.phone')}
               </button>
             ))}
           </div>

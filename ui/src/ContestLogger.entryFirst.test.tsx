@@ -292,7 +292,7 @@ describe('the contest logger window puts the entry first', () => {
       'section.contest-logger-entry',
       'section.contest-logger-recent',
       // The divider that sizes the last contacts against the screen under them.
-      'div.pane-splitter.horizontal',
+      'div.pane-splitter.horizontal.contest-seam',
       'main.layout.single',
     ])
     const [entry, recent, , contestScreen] = parts as HTMLElement[]

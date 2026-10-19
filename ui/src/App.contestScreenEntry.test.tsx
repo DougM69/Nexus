@@ -274,7 +274,7 @@ describe('the main window’s Contest screen takes contacts', () => {
       'section.contest-logger-entry',
       'section.contest-logger-recent',
       // The divider that sizes the last contacts against the screen under them.
-      'div.pane-splitter.horizontal',
+      'div.pane-splitter.horizontal.contest-seam',
       'main.layout.single',
     ])
     const [entry, recent, , screen] = [...host.children] as HTMLElement[]
@@ -605,7 +605,7 @@ describe('the Logger window is unchanged: one entry, its own', () => {
       'section.contest-logger-entry',
       'section.contest-logger-recent',
       // The divider that sizes the last contacts against the screen under them.
-      'div.pane-splitter.horizontal',
+      'div.pane-splitter.horizontal.contest-seam',
       'main.layout.single',
     ])
     expect(document.querySelectorAll('.contest-logger-entry')).toHaveLength(1)

@@ -10209,7 +10209,7 @@ input.cw-pitch::-webkit-inner-spin-button {
   align-items: center;
   gap: var(--space-2);
   margin: 0 0 var(--space-2);
-  padding: 4px var(--space-2);
+  padding: var(--space-1) var(--space-2);
   font-size: calc(12px * var(--text-scale));
   color: var(--text);
   background: color-mix(in srgb, var(--alert-warning) 14%, var(--bg-elev));
