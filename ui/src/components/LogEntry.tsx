@@ -3524,6 +3524,10 @@ export function LogEntry({
         )}
       </div>
 
+      {/* THE COMMIT BLOCK: the "logs to … as" line and the Log/Spot row below it, as one block. In a
+          cockpit's log pane it sticks to the bottom of the pane's own scroller (`.le-commit`,
+          styles.css), so Log stays on screen while the form overflows. See the commit row below. */}
+      <div className="le-commit">
       <span className="le-hint">
         {overrideBlocked ? (
           <span className="le-ov-warn">
@@ -3565,19 +3569,23 @@ export function LogEntry({
           the pane width and a mid-QSO glance reaching for the lookup could commit a contact
           instead (operator: several logged by accident, 2026-08-02). Here it is a deliberate
           reach, directly under the line that states what will be written, and Spot stays beside
-          it — that adjacency is why spotting happens at all. Plain in-flow row: the pane body is
-          the scroller, this adds no sticky/fixed positioning and no second scroll owner.
+          it — that adjacency is why spotting happens at all. The pane body is the scroller; this
+          row owns no scrolling of its own.
 
-          `position: sticky; bottom: 0` WAS PROPOSED FOR THIS ROW (2026-08-04 density review) and
-          refused — and NOT for the scroll-owner reason above, which does not apply: sticky inside
-          an existing `overflow: auto` box adds no second scroller. It is refused because this row
-          is not the last block in the strip. RecallPanel follows it, so an opaque sticky commit
-          row parks Log over the recall card — its QRZ link included — for the whole scroll, and a
-          reach for something underneath commits a contact instead. That is the 2026-08-02 accident
-          again, from a fixed screen band rather than a wrapping row. It would also cut Log loose
-          from the "logs to the shared logbook as …" line above it, which is the placement's whole
-          point. The fold problem it was aimed at was answered by deleting chrome instead: the
-          heading and the card-in-card padding, 43px of it above this row (LogEntry.density.test). */}
+          A sticky Log row WAS PROPOSED (2026-08-04 density review) and refused: an opaque sticky
+          row would park Log over the recall card that follows it — its QRZ link included — and
+          cut Log loose from the "logs to …" line above it. Deleting chrome (the heading and the
+          card-in-card padding, 43px, LogEntry.density.test) answered the fold then. It did not
+          answer it at 1280×800: in all five cockpits the form still needs more height than the
+          log pane gets, and no legal sizing lever closes the gap (measured 2026-10-19).
+          So the operator ruled (2026-10-19) for the bottom-sticky COMMIT BLOCK, which answers
+          both reasons: `.le-commit` wraps the line AND this row, so they never part; and
+          `bottom: 0` only ever moves the block UP from its natural place, while the recall card
+          sits BELOW that place — when the card scrolls into view the block is back in flow above
+          it, so the card is never covered. What scrolls under the block is the form above it
+          (notes, the override), and only while it is scrolled out past the pane's bottom edge.
+          Sticky inside the pane body's existing `overflow: auto` adds no second scroller, and
+          its parent `.log-entry` bounds it, so it never rides over Recent below the form. */}
       <div className="le-row le-actions">
         <button
           type="button"
@@ -3607,6 +3615,7 @@ export function LogEntry({
             {t('logEntry.spot.label')}
           </button>
         )}
+      </div>
       </div>
 
       {remote ? remote.recall(logCall, { band: effBand, freqMhz: effFreqMhz, mode: effMode }) : <RecallPanel

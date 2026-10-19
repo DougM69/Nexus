@@ -10597,6 +10597,30 @@ input.cw-pitch::-webkit-inner-spin-button {
   margin-top: var(--space-2);
   gap: var(--space-3);
 }
+/* THE COMMIT BLOCK STICKS TO THE BOTTOM OF THE LOG PANE (operator, 2026-10-19). At 1280×800 the form
+   needs more height than the log pane gets in all five cockpits (Phone, CW, JS8, RTTY, PSK), so Log sat
+   below the fold. `.le-commit` is the "logs to … as" line plus the Log/Spot row; here it sticks to the
+   bottom edge of the pane body, the scroller that is already there (no second scroll owner, no pane
+   changes height). `bottom` only moves it UP from its natural place, and the recall card is below that
+   place, so the card is never covered: the 2026-08-04 refusal of a sticky row (LogEntry.tsx, the
+   commit row) was about a row parked over that card. Opaque in the theme's own page colour (every theme
+   and Night redefine `--bg`), because the fields scrolled under it must not read through. No padding or
+   border: the rows' margins still collapse through the block, so in flow it adds no height at all.
+   Keyed on the cockpits' log pane (`data-pane="log"`, exactly the five): SatellitesView and the
+   contest logger window render this form outside a log pane and keep it in flow. */
+[data-pane='log'] .le-commit {
+  position: sticky;
+  bottom: calc(-1 * var(--space-2)); /* cancel the pane-body padding so it parks flush: rows showed in that gap */
+  z-index: 1;
+  background: var(--bg);
+}
+/* …and the field the keyboard lands on is never parked under it. Chrome scrolls a focused box only
+   until it touches the scroller's bottom edge, which is exactly where the block sits: Tab into Comment,
+   the POTA box or the override at 1280×800 and the field was behind Log (measured). The scroll padding
+   is the block's height (53–54 px measured in the five cockpits) plus room for its line to wrap once. */
+[data-pane='log'] > .pane-body {
+  scroll-padding-bottom: 6em;
+}
 .le-notes {
   width: 100%;
   resize: vertical;
