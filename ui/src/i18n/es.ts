@@ -8170,4 +8170,6 @@ export const ES: PartialCatalog = {
   "spotMe.refused.notAllowed": "Sin spot: las reglas de este concurso no permiten spots.",
   "spotMe.refused.rfOnly": "Sin spot: este concurso solo permite spots por radio de aficionado mientras dura.",
   "spotMe.refused.failed": "Sin spot: el clúster DX no aceptó el spot.",
+  "fieldDay.log.splitter.label": "altura del registro del concurso",
+  "contestLogger.recent.splitter.label": "altura de los últimos contactos",
 }

@@ -4062,6 +4062,8 @@ export const EN = {
   'contestScreen.entry.popOut.label': '⧉ Pop out entry',
   'contestScreen.entry.popOut.title': 'Open this entry alone in a window of its own, without the rest of the contest screen. It shares the contact with this entry, and Enter in either logs it once.',
   'contestLogger.recent.title': 'Last contacts',
+  // The divider under the last contacts (ContestLargeEntry): its accessible name, as every divider's.
+  'contestLogger.recent.splitter.label': 'last contacts height',
   // The logger window's one line under its bar while the engine holds a satellite's transponder: its
   // log line logs every contact the ordinary way (the radio's band, no bird), so a pass's contacts go
   // on the Satellites screen. `{{bird}}` is the satellite's own name (AO-91, ISS), never translated.
@@ -4290,6 +4292,8 @@ export const EN = {
   'fieldDay.log.column.band': 'Band',
   'fieldDay.log.column.mode': 'Mode',
   'fieldDay.log.empty': 'No contacts logged yet.',
+  // The divider above the Contest screen's log (ContestView): its accessible name, as every divider's.
+  'fieldDay.log.splitter.label': 'contest log height',
   'fieldDay.log.remove': 'Remove',
   'fieldDay.log.remove.ask': 'Remove {{contact}}? Click Remove again.',
   'fieldDay.log.remove.title': 'Take this contact out of the contest log. It is kept under Removed and can be restored. Click twice: the first click asks.',

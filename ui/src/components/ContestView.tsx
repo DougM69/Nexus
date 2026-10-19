@@ -60,6 +60,8 @@ import { bandColor } from '../bandColors'
 const SCORE_NOTES: { noteKey: MessageKey }[] = [{ noteKey: 'settings.contestScore.incomplete' }]
 const SCORE_NOTE_KEYS: ReadonlySet<string> = new Set(SCORE_NOTES.map((n) => n.noteKey))
 import { modeClassOf } from '../features/needs'
+import { CONTEST_LOG_MAX_SHARE, CONTEST_LOG_SPLIT_MAX, CONTEST_LOG_SPLIT_MIN } from '../features/paneSeam'
+import { PaneSeam } from './PaneSeam'
 
 /**
  * ⚠️ INVARIANT — the FD mode codes an entry is scored by, printed as they are logged and
@@ -2993,6 +2995,8 @@ export function ContestView({
   // contacts up) the moment the next contact landed. Pinned follows the run;
   // scrolled-up checking is never yanked.
   const logPin = usePinnedScroll<HTMLDivElement>()
+  // The log's box, for the divider above it that sizes it.
+  const logBox = useRef<HTMLDivElement>(null)
   const running = fieldDay?.running ?? false
   const log = fieldDay?.log ?? []
   const [exportError, setExportError] = useState<string | null>(null)
@@ -4143,8 +4147,26 @@ export function ContestView({
       </div>
       )}
 
+      {/* THE LOG'S DIVIDER (the Illinois QSO Party, 2026-10-18: "splitters to resize sub-windows (county
+          list etc.)"). It sizes the log, and the multiplier board above takes what is left, down to its
+          floor, past which the screen scrolls. It paints NOTHING until moved: the log's stock height is
+          the sheet's 190 px cap (`.fd-log[data-sized]`, styles.css). Moved, the size is stored per window
+          and fitted into the screen on every load and resize; Backspace or a double-click gives the stock
+          log back. It stops nothing and sends nothing. */}
+      <PaneSeam
+        axis="y"
+        varName="--fd-log-h"
+        strip={logBox}
+        after
+        storageKey="nexus.split.contest.log"
+        min={CONTEST_LOG_SPLIT_MIN}
+        max={CONTEST_LOG_SPLIT_MAX}
+        maxShare={CONTEST_LOG_MAX_SHARE}
+        defaultPct={null}
+        label={t('fieldDay.log.splitter.label')}
+      />
       {/* LOG TABLE */}
-      <div className="fd-log">
+      <div className="fd-log" ref={logBox}>
         <ContestLogHead fieldDayColumns={fdEventIsFieldDay} isWfd={isWfd} slotColumns={slotColumns} role={fieldDay?.role} />
         <div className="fd-log-scroll" ref={logPin.ref} onScroll={logPin.onScroll}>
           {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}

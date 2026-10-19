@@ -8153,4 +8153,6 @@ export const JA: PartialCatalog = {
   "spotMe.refused.notAllowed": "スポットしていません: このコンテストの規則はスポットを認めていません。",
   "spotMe.refused.rfOnly": "スポットしていません: このコンテストは開催中、アマチュア無線経由のスポットのみ認めています。",
   "spotMe.refused.failed": "スポットしていません: DX クラスターがスポットを受け付けませんでした。",
+  "fieldDay.log.splitter.label": "コンテストログの高さ",
+  "contestLogger.recent.splitter.label": "最近の交信の高さ",
 }

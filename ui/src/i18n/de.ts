@@ -8160,4 +8160,6 @@ export const DE: PartialCatalog = {
   "spotMe.refused.notAllowed": "Nicht gespottet: Die Regeln dieses Contests erlauben kein Spotten.",
   "spotMe.refused.rfOnly": "Nicht gespottet: Dieser Contest erlaubt Spots während seiner Laufzeit nur über Amateurfunk.",
   "spotMe.refused.failed": "Nicht gespottet: Der DX-Cluster hat den Spot nicht angenommen.",
+  "fieldDay.log.splitter.label": "Höhe des Contest-Logs",
+  "contestLogger.recent.splitter.label": "Höhe der letzten Kontakte",
 }

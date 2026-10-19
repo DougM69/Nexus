@@ -8170,4 +8170,6 @@ export const FR: PartialCatalog = {
   "spotMe.refused.notAllowed": "Pas de spot : le règlement de ce concours ne permet aucun spot.",
   "spotMe.refused.rfOnly": "Pas de spot : ce concours n'accepte les spots que par radio amateur pendant qu'il se déroule.",
   "spotMe.refused.failed": "Pas de spot : le cluster DX n'a pas pris le spot.",
+  "fieldDay.log.splitter.label": "hauteur du journal du concours",
+  "contestLogger.recent.splitter.label": "hauteur des derniers contacts",
 }
