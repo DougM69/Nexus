@@ -198,37 +198,73 @@ fn markers_path() -> PathBuf {
         .join("freq_markers.json")
 }
 
-/// The loaded markers, kept between calls (read from the file at the first call of a session).
-static LOADED: Mutex<Option<(PathBuf, Markers)>> = Mutex::new(None);
+/// The loaded markers, kept between calls (read from the file at the first call of a session), and
+/// how many changes they have had: the number each [`Unwritten`] carries.
+static LOADED: Mutex<Option<(PathBuf, Markers, u64)>> = Mutex::new(None);
 
-/// Run `change` on the session's markers, pruned against the contest log first, and write the file
-/// when anything changed. `Err(NO_CONTEST)` with Contest mode off.
+/// The change last written to each file: one write at a time, and never an older one over a newer.
+/// Taken without `LOADED` or the Engine's lock held.
+static WRITTEN: Mutex<Vec<(PathBuf, u64)>> = Mutex::new(Vec::new());
+
+/// A change to the markers, to be written to the file once the caller has let the Engine go: a disk
+/// write under the Engine's lock holds the radio loop.
+#[derive(Debug)]
+#[must_use = "write it once the Engine's lock is let go"]
+pub struct Unwritten(Option<(PathBuf, u64, Markers)>);
+
+impl Unwritten {
+    /// Write the file (beside it and renamed over it), unless a later change already was.
+    pub fn write(self) {
+        let Some((path, change, markers)) = self.0 else {
+            return;
+        };
+        let mut written = WRITTEN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if written
+            .iter()
+            .any(|(p, last)| *p == path && *last >= change)
+        {
+            return;
+        }
+        if let Err(e) = markers.save(&path) {
+            eprintln!("tempo: frequency markers not saved: {e}");
+        }
+        written.retain(|(p, _)| *p != path);
+        written.push((path, change));
+    }
+}
+
+/// Run `change` on the session's markers, pruned against the contest log first, and hand back the
+/// file's write when anything changed, for the caller to make after letting the Engine go.
+/// `Err(NO_CONTEST)` with Contest mode off.
 pub fn with_markers<T>(
     engine: &Engine,
     path: &Path,
     now_unix: u64,
     change: impl FnOnce(&mut Markers, &Engine) -> Result<(T, bool), String>,
-) -> Result<(T, Vec<Marker>), String> {
+) -> Result<(T, Vec<Marker>, Unwritten), String> {
     let session = session_of(engine, now_unix).ok_or_else(|| NO_CONTEST.to_string())?;
     let mut loaded = LOADED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut markers = match loaded.take() {
-        Some((p, m)) if p == path && m.session == session => m,
-        _ => Markers::load(path, &session),
+    let (mut markers, mut changes) = match loaded.take() {
+        Some((p, m, n)) if p == path && m.session == session => (m, n),
+        Some((_, _, n)) => (Markers::load(path, &session), n),
+        None => (Markers::load(path, &session), 0),
     };
     let pruned = markers.prune_logged(&engine.contest_logged_call_bands());
     let result = change(&mut markers, engine);
+    let mut unwritten = Unwritten(None);
     if let Ok((_, changed)) = &result {
         if pruned || *changed {
-            if let Err(e) = markers.save(path) {
-                eprintln!("tempo: frequency markers not saved: {e}");
-            }
+            changes += 1;
+            unwritten = Unwritten(Some((path.to_path_buf(), changes, markers.clone())));
         }
     }
     let list = markers.markers.clone();
-    *loaded = Some((path.to_path_buf(), markers));
-    result.map(|(t, _)| (t, list))
+    *loaded = Some((path.to_path_buf(), markers, changes));
+    result.map(|(t, _)| (t, list, unwritten))
 }
 
 fn now() -> u64 {
@@ -238,10 +274,17 @@ fn now() -> u64 {
 /// This contest session's markers. Empty with Contest mode off.
 #[tauri::command(async)]
 pub fn get_freq_markers(state: State<'_, SharedEngine>) -> Vec<Marker> {
-    let eng = crate::engine_lock(&state);
-    with_markers(&eng, &markers_path(), now(), |_, _| Ok(((), false)))
-        .map(|(_, list)| list)
-        .unwrap_or_default()
+    let done = with_markers(
+        &crate::engine_lock(&state),
+        &markers_path(),
+        now(),
+        |_, _| Ok(((), false)),
+    );
+    done.map(|(_, list, unwritten)| {
+        unwritten.write();
+        list
+    })
+    .unwrap_or_default()
 }
 
 /// Mark the station's dial now, with `call` (the contest entry's call, or empty).
@@ -250,11 +293,16 @@ pub fn add_freq_marker(
     state: State<'_, SharedEngine>,
     call: String,
 ) -> Result<Vec<Marker>, String> {
-    let eng = crate::engine_lock(&state);
-    with_markers(&eng, &markers_path(), now(), |m, e| {
-        add_at_dial(m, e, &call)
+    let done = with_markers(
+        &crate::engine_lock(&state),
+        &markers_path(),
+        now(),
+        |m, e| add_at_dial(m, e, &call),
+    );
+    done.map(|(_, list, unwritten)| {
+        unwritten.write();
+        list
     })
-    .map(|(_, list)| list)
 }
 
 /// [`add_freq_marker`]'s change: the station's own dial and band.
@@ -270,8 +318,16 @@ pub fn add_at_dial(m: &mut Markers, engine: &Engine, call: &str) -> Result<(u64,
 /// Delete a marker.
 #[tauri::command(async)]
 pub fn remove_freq_marker(state: State<'_, SharedEngine>, id: u64) -> Result<Vec<Marker>, String> {
-    let eng = crate::engine_lock(&state);
-    with_markers(&eng, &markers_path(), now(), |m, _| Ok(((), m.remove(id)))).map(|(_, list)| list)
+    let done = with_markers(
+        &crate::engine_lock(&state),
+        &markers_path(),
+        now(),
+        |m, _| Ok(((), m.remove(id))),
+    );
+    done.map(|(_, list, unwritten)| {
+        unwritten.write();
+        list
+    })
 }
 
 /// The marker to jump back to, or why not: refused while anything transmits.
@@ -292,7 +348,7 @@ pub fn qsy_target(engine: &Engine, markers: &Markers, id: u64) -> Result<Marker,
 #[tauri::command(async)]
 pub fn freq_marker_qsy(state: State<'_, SharedEngine>, id: u64) -> Result<AppSnapshot, String> {
     let mut eng = crate::engine_lock(&state);
-    let (target, _) = with_markers(&eng, &markers_path(), now(), |m, e| {
+    let (target, _, unwritten) = with_markers(&eng, &markers_path(), now(), |m, e| {
         Ok((qsy_target(e, m, id)?, false))
     })?;
     let mode = eng.settings().sideband.clone();
@@ -303,7 +359,10 @@ pub fn freq_marker_qsy(state: State<'_, SharedEngine>, id: u64) -> Result<AppSna
     crate::persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist frequency: {e}")
     });
-    Ok(eng.snapshot())
+    let snapshot = eng.snapshot();
+    drop(eng);
+    unwritten.write();
+    Ok(snapshot)
 }
 
 #[cfg(test)]
@@ -461,7 +520,9 @@ mod tests {
         );
         let mut e = contest_engine();
         e.set_frequency(14.0255, "20m", "CW");
-        let (_, list) = with_markers(&e, &path, 1_000, |m, e| add_at_dial(m, e, "w1aw")).unwrap();
+        let (_, list, unwritten) =
+            with_markers(&e, &path, 1_000, |m, e| add_at_dial(m, e, "w1aw")).unwrap();
+        unwritten.write();
         assert_eq!(list.len(), 1);
         assert_eq!(
             (list[0].dial_hz, list[0].call.as_str()),
@@ -477,7 +538,10 @@ mod tests {
         let path = scratch("logged");
         let mut e = contest_engine();
         e.set_frequency(14.0255, "20m", "CW");
-        with_markers(&e, &path, 1_000, |m, e| add_at_dial(m, e, "W1AW")).unwrap();
+        with_markers(&e, &path, 1_000, |m, e| add_at_dial(m, e, "W1AW"))
+            .unwrap()
+            .2
+            .write();
         let logged = e
             .contest_log_manual(
                 "W1AW",
@@ -490,7 +554,8 @@ mod tests {
             )
             .unwrap();
         assert!(logged, "premise: the contact is logged");
-        let (_, list) = with_markers(&e, &path, 1_000, |_, _| Ok(((), false))).unwrap();
+        let (_, list, unwritten) = with_markers(&e, &path, 1_000, |_, _| Ok(((), false))).unwrap();
+        unwritten.write();
         assert_eq!(list, vec![]);
         let session = session_of(&e, 1_000).unwrap();
         assert_eq!(
@@ -498,6 +563,32 @@ mod tests {
             vec![],
             "and on disk"
         );
+    }
+
+    #[test]
+    fn nothing_is_written_until_the_caller_writes_and_never_an_older_change_over_a_newer() {
+        let path = scratch("unwritten");
+        let mut e = contest_engine();
+        e.set_frequency(14.0255, "20m", "CW");
+        let session = session_of(&e, 1_000).unwrap();
+        let (_, list, unwritten) =
+            with_markers(&e, &path, 1_000, |m, e| add_at_dial(m, e, "W1AW")).unwrap();
+        assert!(!path.exists(), "not written under the caller's lock");
+        unwritten.write();
+        assert_eq!(Markers::load(&path, &session).markers, list);
+        // Two changes written out of order: the older is not written over the newer.
+        let mut older = Markers::empty(&session);
+        older.add(14_000_000, "20m", "K1ABC");
+        let mut newer = older.clone();
+        newer.add(14_010_000, "20m", "N0XYZ");
+        Unwritten(Some((path.clone(), u64::MAX - 1, newer))).write();
+        Unwritten(Some((path.clone(), u64::MAX - 2, older))).write();
+        let calls: Vec<String> = Markers::load(&path, &session)
+            .markers
+            .into_iter()
+            .map(|m| m.call)
+            .collect();
+        assert_eq!(calls, ["K1ABC", "N0XYZ"], "the newer change stays");
     }
 
     #[test]
