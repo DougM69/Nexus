@@ -423,7 +423,7 @@ export const DE: PartialCatalog = {
   "lanWindow.stream": "Streamen",
   "lanWindow.connecting": "Verbindung wird hergestellt…",
   "lanWindow.forget": "Vergessen",
-  "lanWindow.forgetConfirm": "Diese Station vergessen? Der Schlüssel dieses Computers für sie wird gelöscht, und für eine neue Kopplung brauchst du einen neuen Code von der Station. Entferne diesen Computer auch an der Station.",
+  "lanWindow.forgetConfirm": "Diese Station vergessen? Die Schlüssel dieses Computers für sie werden gelöscht, und um sie von hier aus wieder zu nutzen, ist eine neue Anmeldung nötig (oder ein neuer Code, bei einer mit Code gekoppelten Station). Wenn die Station diesen Computer noch aufführt, entferne ihn auch dort.",
   "lanWindow.forgetYes": "Ja, vergessen",
   "lanWindow.keep": "Behalten",
   "lanWindow.otherAddress": "Aktuelle Adresse der Station",

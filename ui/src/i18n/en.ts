@@ -536,7 +536,7 @@ export const EN = {
   "lanWindow.stream": "Stream",
   "lanWindow.connecting": "Connecting…",
   "lanWindow.forget": "Forget",
-  "lanWindow.forgetConfirm": "Forget this station? This computer’s key for it is deleted, and pairing again needs a new code from the station. Remove this computer at the station too.",
+  "lanWindow.forgetConfirm": "Forget this station? This computer’s keys for it are deleted, and using it from here again needs a new sign-in (or a new code, for a station paired with one). If the station still lists this computer, remove it there too.",
   "lanWindow.forgetYes": "Forget it",
   "lanWindow.keep": "Keep it",
   "lanWindow.otherAddress": "The station’s address now",

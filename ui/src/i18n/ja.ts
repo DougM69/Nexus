@@ -428,7 +428,7 @@ export const JA: PartialCatalog = {
   "lanWindow.stream": "ストリーミング",
   "lanWindow.connecting": "接続しています…",
   "lanWindow.forget": "削除",
-  "lanWindow.forgetConfirm": "この局を削除しますか？ この局用のこのコンピューターのキーが削除され、もう一度ペアリングするには局で新しいコードが必要になります。局側でもこのコンピューターを削除してください。",
+  "lanWindow.forgetConfirm": "この局を削除しますか？この局用のこのコンピューターの鍵が削除され、ここからもう一度使うには再度のサインイン（コードでペアリングした局の場合は新しいコード）が必要になります。局にまだこのコンピューターが表示されている場合は、局でも削除してください。",
   "lanWindow.forgetYes": "削除する",
   "lanWindow.keep": "残す",
   "lanWindow.otherAddress": "局の現在のアドレス",

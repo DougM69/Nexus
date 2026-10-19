@@ -438,7 +438,7 @@ export const FR: PartialCatalog = {
   "lanWindow.stream": "Diffuser",
   "lanWindow.connecting": "Connexion…",
   "lanWindow.forget": "Oublier",
-  "lanWindow.forgetConfirm": "Oublier cette station ? La clé de cet ordinateur pour elle est supprimée, et une nouvelle association demandera un nouveau code de la station. Retirez aussi cet ordinateur à la station.",
+  "lanWindow.forgetConfirm": "Oublier cette station ? Les clés de cet ordinateur pour elle sont supprimées, et l’utiliser de nouveau d’ici demande une nouvelle connexion (ou un nouveau code, pour une station associée avec un code). Si la station affiche encore cet ordinateur, retirez-le aussi là-bas.",
   "lanWindow.forgetYes": "Oui, l’oublier",
   "lanWindow.keep": "La garder",
   "lanWindow.otherAddress": "Adresse actuelle de la station",
