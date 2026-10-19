@@ -3881,6 +3881,10 @@ pub struct Engine {
     /// The AI CW decoder's rolling transcript (window decodes stitched by absolute
     /// stream time — no re-emitted overlap). Bounded; oldest text drains off the front.
     ai_cw_text: String,
+    /// The AI decoder's PROVISIONAL tail: what its latest pass heard inside the tail guard,
+    /// replaced by every pass. For display only — every reader of the copy as DATA (the
+    /// copilot's calls, report and name, the snapshot) reads `ai_cw_text`, never this.
+    ai_cw_pending: String,
     /// Total samples ever fed to the AI-CW ring — the absolute stream clock the decode
     /// thread stitches windows with. Resets when the feature turns off.
     ai_cw_fed: u64,
@@ -6009,6 +6013,7 @@ impl Engine {
             cw_audio: Vec::new(),
             ai_cw_audio: Vec::new(),
             ai_cw_text: String::new(),
+            ai_cw_pending: String::new(),
             ai_cw_fed: 0,
             ai_cw_epoch: 0,
             ai_cw_status: String::new(),
@@ -16079,6 +16084,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// CW copy is stale (operator report: the CW decode area lingered across a QSY).
     fn clear_cw_decode(&mut self) {
         self.ai_cw_text.clear();
+        self.ai_cw_pending.clear();
         // ⚠️ NOT the status: that describes the DECODER'S HEALTH, not the
         // transcript. Clearing it on a QSY erased a live fault ("model not
         // installed") and the cockpit then rendered its idle placeholder —
@@ -19801,14 +19807,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
         Some((window, self.ai_cw_fed, self.ai_cw_epoch))
     }
 
-    /// Append newly-stitched AI-CW transcript text (already deduplicated by the decode
-    /// thread's absolute-time cursor) from a pass over generation `epoch`. Bounded; oldest
-    /// text drains off the front. A pass over an older generation is dropped, and so is
-    /// whitespace with nothing before it; a word space between two batches is kept.
-    pub fn push_ai_cw_text(&mut self, epoch: u64, text: &str) {
+    /// One AI-CW pass over generation `epoch`: append its newly CONFIRMED text (already
+    /// deduplicated by the decode thread's absolute-time cursor) and replace the provisional
+    /// tail with its `pending`. Confirmed text is only ever appended, never revised. Bounded;
+    /// oldest text drains off the front. A pass over an older generation is dropped, and so
+    /// is whitespace with nothing before it; a word space between two batches is kept.
+    pub fn push_ai_cw_pass(&mut self, epoch: u64, text: &str, pending: &str) {
         if epoch != self.ai_cw_epoch {
             return;
         }
+        self.ai_cw_pending = pending.to_string();
         let text = if self.ai_cw_text.is_empty() {
             text.trim_start()
         } else {
@@ -19826,6 +19834,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
+    /// The AI decoder's provisional tail, for DISPLAY beside [`Self::cw_decode`]'s text: empty
+    /// unless the AI copy is what the cockpit shows and the decoder is healthy (a fault leaves
+    /// no stale tail on screen). Never read it as data; [`Self::cw_decode`] is the copy.
+    pub fn cw_decode_pending(&self) -> String {
+        if self.settings.ai_cw_active() && self.ai_cw_status.is_empty() {
+            self.ai_cw_pending.clone()
+        } else {
+            String::new()
+        }
+    }
+
     /// AI CW decoder status line for the cockpit ("listening…", "model not installed"…).
     pub fn set_ai_cw_status(&mut self, s: &str) {
         self.ai_cw_status = s.to_string();
@@ -19836,6 +19855,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.settings.ai_cw_enabled = on;
         if !on {
             self.ai_cw_text.clear();
+            self.ai_cw_pending.clear();
             self.ai_cw_status.clear();
             self.restart_ai_cw_stream();
         }
@@ -19857,6 +19877,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.note_contest_before(was, self.settings.fd_active);
         if on {
             self.ai_cw_text.clear();
+            self.ai_cw_pending.clear();
             self.ai_cw_status.clear();
             self.restart_ai_cw_stream();
         }
@@ -19868,6 +19889,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.cw_stream.clear();
         self.cw_sent.clear();
         self.ai_cw_text.clear();
+        self.ai_cw_pending.clear();
     }
 
     /// Wideband CW skim of the recent receive audio: every distinct keyed signal across
@@ -34933,12 +34955,70 @@ mod tests {
         e.settings.ai_cw_enabled = true;
         e.feed_rx_audio(&vec![0.25; 12_000]);
         let (_, _, g) = e.ai_cw_window().unwrap();
-        e.push_ai_cw_text(g, " ");
+        e.push_ai_cw_pass(g, " ", "");
         assert_eq!(e.ai_cw_text, "", "no leading space on an empty copy");
-        e.push_ai_cw_text(g, "CQ");
-        e.push_ai_cw_text(g, " ");
-        e.push_ai_cw_text(g, "TEST");
+        e.push_ai_cw_pass(g, "CQ", "");
+        e.push_ai_cw_pass(g, " ", "");
+        e.push_ai_cw_pass(g, "TEST", "");
         assert_eq!(e.ai_cw_text, "CQ TEST");
+    }
+
+    /// The provisional tail is for the eye only: every reader of the AI copy as data sees the
+    /// confirmed text, and the confirmed text only ever grows.
+    #[test]
+    fn provisional_ai_cw_letters_never_reach_a_reader_of_the_copy() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.ai_cw_enabled = true;
+        e.feed_rx_audio(&vec![0.25; 12_000]);
+        let (_, _, g) = e.ai_cw_window().unwrap();
+        e.push_ai_cw_pass(g, "CQ ", "K9A");
+        assert_eq!(e.cw_decode().text, "CQ ", "the copy is the confirmed text");
+        assert_eq!(
+            e.snapshot().ai_cw.text,
+            "CQ ",
+            "…in the snapshot (and Remote) too"
+        );
+        assert_eq!(
+            e.cw_decode_pending(),
+            "K9A",
+            "control: the tail is there to be drawn"
+        );
+        e.push_ai_cw_pass(g, "K9ABC ", "5N");
+        assert_eq!(
+            e.cw_decode().text,
+            "CQ K9ABC ",
+            "confirmed text is appended, never revised"
+        );
+        assert_eq!(
+            e.cw_decode_pending(),
+            "5N",
+            "the tail is replaced by each pass"
+        );
+        e.set_ai_cw_status("decode error (see log)");
+        assert_eq!(
+            e.cw_decode_pending(),
+            "",
+            "a faulted decoder leaves no stale tail"
+        );
+        e.set_ai_cw_status("");
+        e.cw_clear();
+        assert_eq!(
+            e.cw_decode_pending(),
+            "",
+            "Clear wipes the tail with the copy"
+        );
+        e.push_ai_cw_pass(g, "", "TU");
+        e.work_spot("CW", 14.025, "20m");
+        assert_eq!(
+            e.cw_decode_pending(),
+            "",
+            "a QSY wipes the tail with the copy"
+        );
+        e.feed_rx_audio(&vec![0.25; 12_000]);
+        let (_, _, g) = e.ai_cw_window().unwrap();
+        e.push_ai_cw_pass(g, "", "TU");
+        e.set_ai_cw_enabled(false);
+        assert_eq!(e.cw_decode_pending(), "", "switching the AI off wipes it");
     }
 
     /// The decode thread copies a window, then decodes it off-lock for a few hundred ms. A QSY
@@ -34949,23 +35029,23 @@ mod tests {
         e.settings.ai_cw_enabled = true;
         e.feed_rx_audio(&vec![0.25; 24_000]);
         let (_, _, before) = e.ai_cw_window().unwrap();
-        e.push_ai_cw_text(before, "CQ ");
+        e.push_ai_cw_pass(before, "CQ ", "");
         assert_eq!(e.ai_cw_text, "CQ ", "control: a current pass lands");
         e.work_spot("CW", 14.025, "20m"); // the spot click, mid-pass
         e.feed_rx_audio(&vec![0.25; 2_400]);
-        e.push_ai_cw_text(before, "K1ABC");
+        e.push_ai_cw_pass(before, "K1ABC", "");
         assert_eq!(
             e.ai_cw_text, "",
             "the old station's text never reaches the new station"
         );
         let (_, _, after) = e.ai_cw_window().unwrap();
-        e.push_ai_cw_text(after, "W1AW");
+        e.push_ai_cw_pass(after, "W1AW", "");
         assert_eq!(e.ai_cw_text, "W1AW", "the new station's own pass lands");
         // A toggle is a restart too.
         e.set_ai_cw_enabled(false);
         e.set_ai_cw_enabled(true);
         e.feed_rx_audio(&vec![0.25; 2_400]);
-        e.push_ai_cw_text(after, "DE");
+        e.push_ai_cw_pass(after, "DE", "");
         assert_eq!(e.ai_cw_text, "", "a pass from before the toggle is dropped");
     }
 

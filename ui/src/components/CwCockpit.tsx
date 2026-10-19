@@ -646,7 +646,10 @@ export function CwCockpit({
   }
   // Live single-signal CW decode of the receive audio at the marker pitch — poll the
   // engine ~1.4 Hz (the decode reads a multi-second ring, so faster adds no detail).
-  const [decoded, setDecoded] = useState<{ text: string; wpm: number }>({ text: '', wpm: 0 })
+  // `pending` is the AI decoder's UNCONFIRMED tail: drawn dimmed after the confirmed copy and
+  // replaced by the next pass. For the eye only — the chips, the report and name the log takes
+  // and the screen reader's log all come from the confirmed `text`.
+  const [decoded, setDecoded] = useState<{ text: string; pending: string; wpm: number }>({ text: '', pending: '', wpm: 0 })
   const [decodeAvailable, setDecodeAvailable] = useState(control)
   // Decode transcript: bottom-pinned via the shared discipline. The old
   // unconditional `scrollTop = scrollHeight` on every reveal tick (the 50 ms
@@ -662,27 +665,9 @@ export function CwCockpit({
       return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.5
     })(),
   )
-  // Typewriter reveal: the AI decoder emits each inference pass's text as one batch
-  // (window-batch inference — several characters land at once). Reveal appended text
-  // character-by-character so the copy FLOWS like a live operator's; the drain rate
-  // scales with backlog so a big batch clears in ~2 s and never falls behind. A
-  // non-append change (transcript reset/trim) snaps to the full text instantly.
-  const [revealLen, setRevealLen] = useState(0)
-  const prevTextRef = useRef('')
-  useEffect(() => {
-    const text = decoded.text
-    if (!text.startsWith(prevTextRef.current)) setRevealLen(text.length)
-    prevTextRef.current = text
-  }, [decoded.text])
-  useEffect(() => {
-    const backlog = decoded.text.length - revealLen
-    if (!active || backlog <= 0) return
-    const id = window.setInterval(() => {
-      setRevealLen((n) => Math.min(decoded.text.length, n + Math.max(1, Math.ceil((decoded.text.length - n) / 40))))
-    }, 50)
-    return () => window.clearInterval(id)
-  }, [active, decoded.text, revealLen])
-  const revealedText = decoded.text.slice(0, revealLen)
+  // No typewriter: it smoothed the 2 s batches of a decoder that now passes back to back and
+  // shows its unconfirmed tail at once, and holding confirmed letters back behind it would
+  // blank a letter the unconfirmed tail had already drawn.
   // TX echo — what we've actually transmitted (macros expanded), polled alongside the decode.
   // Same pin discipline: during an F-key macro run the operator must be able to
   // scroll back and verify what was actually keyed (the whole point of the echo).
@@ -858,7 +843,7 @@ export function CwCockpit({
         .then((d) => {
           if (owns()) {
             setDecodeAvailable(true)
-            setDecoded({ text: d.text, wpm: d.wpm })
+            setDecoded({ text: d.text, pending: d.pending ?? '', wpm: d.wpm })
             setSent(d.sent)
             setKeyerError(d.keyerError)
             setPaddleTookOver(d.paddleTookOver === true)
@@ -876,7 +861,7 @@ export function CwCockpit({
         })
         .catch(() => {
           if (owns() && !control) {
-            setDecodeAvailable(false); setDecoded({ text: '', wpm: 0 }); setSent([]); setCand([]); setKeyerError(null)
+            setDecodeAvailable(false); setDecoded({ text: '', pending: '', wpm: 0 }); setSent([]); setCand([]); setKeyerError(null)
             setGuide({ state: 'listening', headline: '', prompt: '', recommended: null, workedCall: null, rst: null, name: null })
           }
         })
@@ -1525,7 +1510,7 @@ export function CwCockpit({
           }
           if (control) {
             void cwClear()
-            setDecoded({ text: '', wpm: 0 })
+            setDecoded({ text: '', pending: '', wpm: 0 })
             setSent([])
             repin()
           } else {
@@ -1549,8 +1534,11 @@ export function CwCockpit({
             hidden role=log mirror below receives whole batches instead (a log
             region announces only ADDITIONS). */}
         <div className="cw-decode-text" ref={decodePin.ref} onScroll={decodePin.onScroll} aria-hidden="true">
-          {revealedText ? (
-            revealedText
+          {decoded.text || decoded.pending ? (
+            <>
+              {decoded.text}
+              {decoded.pending && <span className="cw-decode-unconfirmed">{decoded.pending}</span>}
+            </>
           ) : (
             <span className="cw-decode-idle">
               {!decodeAvailable ? t('remote.cwUnavailable') : (snap.aiCw?.enabled && snap.aiCw.status) || t('cw.decode.listening')}

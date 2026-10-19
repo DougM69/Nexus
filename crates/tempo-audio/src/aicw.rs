@@ -127,9 +127,9 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
                 let mut e = engine_lock(&engine);
                 e.set_ai_cw_status("");
                 // Every batch, a lone word space included: small batches carry the spaces
-                // between words on their own. Dropped by the engine if a QSY started a new
-                // stream during the pass.
-                e.push_ai_cw_text(epoch, &pass.confirmed);
+                // between words on their own. The provisional tail replaces the last one.
+                // Dropped by the engine if a QSY started a new stream during the pass.
+                e.push_ai_cw_pass(epoch, &pass.confirmed, &pass.pending);
             }
             Err(e) => {
                 eprintln!("ai-cw: decode failed: {e}");

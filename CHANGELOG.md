@@ -162,6 +162,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unplugged.
 
 ### Changed
+- **The AI CW decoder keeps up with the signal.** Clicking a spot, changing band or typing a frequency no longer
+  leaves the decode pane blank for about 13 seconds while the decoder refills: copy of the new station starts about
+  a second after it does. Letters now land about a second after they are sent instead of two to three seconds, in
+  small steps instead of bursts. The last few letters, the ones the decoder is still unsure of, show at once in a
+  dimmer colour and turn normal when it confirms them; it may still correct a dim letter. Only confirmed letters are
+  used for anything: the callsign chips, the report and name the log picks up, and the copy seen from a Remote client.
+  The decoder works harder for this: about half of one CPU core where it used a sixth, never more than two thirds of
+  a core on a slow computer, and on Windows it runs at a lower priority than the radio and audio.
 - **From the Remote client, Settings now shows which logbook credentials are saved at the station, and the connector
   Test buttons work.** The saved / not saved badges (and the Icom network password's) are read at the station and come
   back as yes or no; they no longer look empty, as if nothing were saved. QRZ Logbook, N3FJP and Cloudlog/Wavelog Test

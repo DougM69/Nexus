@@ -26,8 +26,12 @@ pub fn pass_gap(last_pass: Duration) -> Duration {
 /// One pass's new text.
 #[derive(Debug, Default, PartialEq)]
 pub struct Pass {
-    /// Characters newer than everything emitted before and older than the tail guard.
+    /// Characters newer than everything emitted before and older than the tail guard. Final:
+    /// never re-emitted or revised by a later pass.
     pub confirmed: String,
+    /// The characters inside the tail guard: PROVISIONAL, for display only. The next pass
+    /// confirms them or replaces them.
+    pub pending: String,
 }
 
 /// The transcript cursor across passes.
@@ -72,8 +76,12 @@ impl Stitcher {
         let mut out = Pass::default();
         for (t_rel, ch) in chars {
             let t_abs = start_abs + *t_rel as f64;
-            if t_abs > self.emitted_until && t_abs <= cutoff {
-                out.confirmed.push_str(ch);
+            if t_abs > self.emitted_until {
+                if t_abs <= cutoff {
+                    out.confirmed.push_str(ch);
+                } else {
+                    out.pending.push_str(ch);
+                }
             }
         }
         self.emitted_until = cutoff.max(self.emitted_until);
@@ -143,6 +151,55 @@ mod tests {
         // Window ends at 20.0: K at 19.4 (0.6 s clear), T at 19.6 (0.4 s clear).
         let p = s.pass(1, 20.0, WIN, &chars(&[(14.4, "K"), (14.6, "T")]));
         assert_eq!(p.confirmed, "K");
+    }
+
+    /// The guarded tail is shown at once as provisional; the next pass confirms what it still
+    /// hears there and may replace the rest.
+    #[test]
+    fn the_guarded_tail_is_provisional_until_a_later_pass_confirms_it() {
+        let mut s = Stitcher::default();
+        // Window ends at 20.0: C at 15.0 (confirmed), K at 19.7 and Q at 19.9 (inside the guard).
+        let a = s.pass(
+            1,
+            20.0,
+            WIN,
+            &chars(&[(10.0, "C"), (14.7, "K"), (14.9, "Q")]),
+        );
+        assert_eq!((a.confirmed.as_str(), a.pending.as_str()), ("C", "KQ"));
+        // 0.6 s later the model hears the K again, but the Q was really a G, and an E follows.
+        let b = s.pass(
+            1,
+            20.6,
+            WIN,
+            &chars(&[(9.4, "C"), (14.1, "K"), (14.3, "G"), (15.0, "E")]),
+        );
+        assert_eq!(
+            b.confirmed, "KG",
+            "the next pass's own reading is what is confirmed"
+        );
+        assert_eq!(
+            b.pending, "E",
+            "the provisional tail is this pass's, the old one replaced"
+        );
+        // With more right context the E (20.6) reads as an I.
+        let c = s.pass(
+            1,
+            21.2,
+            WIN,
+            &chars(&[(13.7, "G"), (14.4, "I"), (14.8, "T")]),
+        );
+        assert_eq!((c.confirmed.as_str(), c.pending.as_str()), ("I", "T"));
+    }
+
+    /// Once confirmed, a letter is final: a later pass that reads the same moment differently
+    /// changes nothing already confirmed.
+    #[test]
+    fn a_confirmed_letter_is_never_reissued_or_revised() {
+        let mut s = Stitcher::default();
+        let a = s.pass(1, 20.0, WIN, &chars(&[(13.0, "K")]));
+        assert_eq!(a.confirmed, "K");
+        let b = s.pass(1, 20.6, WIN, &chars(&[(12.4, "R"), (14.0, "E")]));
+        assert_eq!((b.confirmed.as_str(), b.pending.as_str()), ("E", ""));
     }
 
     /// The same stream across passes: the overlap is emitted once.

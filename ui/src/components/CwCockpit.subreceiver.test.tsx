@@ -118,11 +118,11 @@ function snapWith(receivers: ReceiversStatus | undefined): AppSnapshot {
 /** The rendered cockpit once its mount-time reads have settled, React's generated ids made
  *  position-independent (they count useId calls across the whole file).
  *
- *  ⚠️ READ ON A HELD CLOCK (2026-10-04). The decode pane's typewriter reveals the transcript on a
- *  50 ms interval, and the golden holds it unrevealed (`listening…`). On a real clock a loaded box
- *  let the first tick land inside act's flush and drew `C` there instead: red, with nothing wrong.
- *  With the timers faked no timer moves the document; the mount-time reads are promises and still
- *  land. */
+ *  ⚠️ READ ON A HELD CLOCK (2026-10-04). The decode pane's typewriter revealed the transcript on a
+ *  50 ms interval, and on a real clock a loaded box let a tick land inside act's flush: red, with
+ *  nothing wrong. The typewriter is gone (the AI copy now arrives in small steps and draws at
+ *  once, so the golden holds the first poll's text), but no timer should move the document here
+ *  either: with the timers faked none does; the mount-time reads are promises and still land. */
 async function cockpitHtml(receivers: ReceiversStatus | undefined): Promise<string> {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
   try {
