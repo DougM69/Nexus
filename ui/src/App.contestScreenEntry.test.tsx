@@ -587,7 +587,7 @@ describe('the entry transmits nothing, and Esc is still the stop', () => {
 describe('the Logger window is unchanged: one entry, its own', () => {
   afterEach(() => window.history.replaceState(null, '', '/'))
 
-  it('shows the entry once, first, over its copy of the screen, and its Esc still only clears', async () => {
+  it('shows the entry once, first, over its copy of the screen, and its Esc stops and still clears', async () => {
     window.history.replaceState(null, '', '/?panel=contestlog')
     render(<DetachedPanel panel="contestlog" />)
     const app = await waitFor(
@@ -610,9 +610,118 @@ describe('the Logger window is unchanged: one entry, its own', () => {
     const from = mark()
     fireEvent.keyDown(boxes[0], { key: 'Escape', code: 'Escape' })
     await settle()
-    expect(keyingSince(from), 'the logger window sends no stop').toEqual([])
+    expect(keyingSince(from), 'the logger window’s Esc is the station’s stop').toEqual(['halt_tx'])
     expect(boxesIn(app)[0].value, 'its Esc clears the entry, as it always did').toBe('')
   })
+})
+
+// ── Esc stops CW from every place focus can be ──────────────────────────────────────────────
+//
+// The Illinois QSO Party (operator, 2026-10-18, on 1.20.0-test4): working CW from the Contest
+// screen, Esc did not stop the CW message, unlike every other mode. The main window’s Contest screen
+// halted on Esc already; its pop-outs — the entry alone in a window (the Logger window), the screen
+// below the entry in a window of its own, the band maps — are documents of their own, so no listener
+// in the main window hears a key typed there, and none of them bound one. Esc in each is now the
+// station’s halt (`halt_tx`, which cuts the CW keyer, a voice message and every other over), from
+// every place focus can be: the Call, RST and county boxes, the county pick list, the screen below,
+// the band map, and the window itself.
+
+/** Esc pressed (down and up) on `el`: the transmit-path commands it sent. */
+async function escFrom(el: Element): Promise<string[]> {
+  const from = mark()
+  fireEvent.keyDown(el, { key: 'Escape', code: 'Escape' })
+  fireEvent.keyUp(el, { key: 'Escape', code: 'Escape' })
+  await settle()
+  return keyingSince(from)
+}
+
+/** The county box's pick list, opened by typing the start of a county. */
+async function countyPicks(root: Element): Promise<HTMLElement> {
+  const county = boxesIn(root)[2]
+  fireEvent.focus(county)
+  fireEvent.change(county, { target: { value: 'CO' } })
+  await settle()
+  return waitFor(() => {
+    const pick = root.querySelector<HTMLElement>('.le-fd-suggest button')
+    expect(pick, 'control: the county box opened its pick list').toBeTruthy()
+    return pick!
+  })
+}
+
+/** A pop-out window, past its first snapshot. */
+async function popOut(panel: string, drawn: string): Promise<HTMLElement> {
+  window.history.replaceState(null, '', `/?panel=${panel}`)
+  render(<DetachedPanel panel={panel} />)
+  return waitFor(
+    () => {
+      const a = document.querySelector<HTMLElement>('.app.detached')
+      expect(a?.querySelector(drawn), `control: the ${panel} window drew ${drawn}`).toBeTruthy()
+      return a!
+    },
+    { timeout: 15_000 },
+  )
+}
+
+describe('Esc stops CW sending from everywhere on the Contest screen and its windows', () => {
+  beforeEach(() => {
+    operatingMode = 'cw'
+    transmitting = true
+  })
+  afterEach(() => window.history.replaceState(null, '', '/'))
+
+  it('the main window: the Call, RST and county boxes, the county pick list, the screen below and the window', async () => {
+    const host = await contestScreen()
+    const boxes = await typeContact(host)
+    for (const [where, el] of [['Call', boxes[0]], ['RST', boxes[1]], ['county', boxes[2]]] as const) {
+      transmitting = true
+      expect(await escFrom(el), `Esc in the ${where} box`).toEqual(['halt_tx'])
+    }
+    transmitting = true
+    expect(await escFrom(await countyPicks(host)), 'Esc on the county pick list').toEqual(['halt_tx'])
+    transmitting = true
+    expect(await escFrom(host.querySelector('section.panel.fieldday')!), 'Esc on the screen below').toEqual(['halt_tx'])
+    transmitting = true
+    expect(await escFrom(document.body), 'Esc on the window').toEqual(['halt_tx'])
+  })
+
+  for (const layout of ['full', 'entry'] as const) {
+    it(`the entry’s own window (${layout} layout): every box, the county pick list and the window`, async () => {
+      localStorage.setItem('nexus.contestLogger.layout', layout)
+      const app = await popOut('contestlog', '.le-fd-input-call')
+      expect(app.querySelector('main.layout.single') != null, 'control: the layout is the one asked for').toBe(layout === 'full')
+      const boxes = await typeContact(app)
+      for (const [where, el] of [['Call', boxes[0]], ['RST', boxes[1]], ['county', boxes[2]]] as const) {
+        expect(await escFrom(el), `Esc in the ${where} box`).toEqual(['halt_tx'])
+      }
+      expect(await escFrom(await countyPicks(app)), 'Esc on the county pick list').toEqual(['halt_tx'])
+      if (layout === 'full') {
+        expect(await escFrom(app.querySelector('section.panel.fieldday')!), 'Esc on the screen below').toEqual(['halt_tx'])
+      }
+      expect(await escFrom(document.body), 'Esc on the window').toEqual(['halt_tx'])
+    })
+  }
+
+  it('the screen below in its own window: its header, the screen and the window', async () => {
+    const app = await popOut('contestscreen', 'section.panel.fieldday')
+    expect(await escFrom(app.querySelector('.fd-header')!), 'Esc on the header').toEqual(['halt_tx'])
+    expect(await escFrom(app.querySelector('section.panel.fieldday')!), 'Esc on the screen').toEqual(['halt_tx'])
+    expect(await escFrom(document.body), 'Esc on the window').toEqual(['halt_tx'])
+  })
+
+  for (const panel of ['bandmapCw', 'bandmapPhone'] as const) {
+    it(`the band map in its own window (${panel}): the map and the window`, async () => {
+      const app = await popOut(panel, '.bandmap')
+      expect(await escFrom(app.querySelector('.bandmap')!), 'Esc on the band map').toEqual(['halt_tx'])
+      expect(await escFrom(document.body), 'Esc on the window').toEqual(['halt_tx'])
+    })
+  }
+
+  for (const panel of ['fieldday', 'fdclub'] as const) {
+    it(`the contest’s other window (${panel})`, async () => {
+      await popOut(panel, '*')
+      expect(await escFrom(document.body), 'Esc on the window').toEqual(['halt_tx'])
+    })
+  }
 })
 
 // ── a satellite held: the logger window's line, not this screen's ───────────────────────────

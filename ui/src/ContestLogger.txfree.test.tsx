@@ -6,6 +6,11 @@
 // the entry, so a logger clearing a typo never cuts your over. Space and the F-keys type or do
 // nothing there. All TX and Stop stay on your screen."
 //
+// EXCEPT ESC, WHICH IS NOW THE STOP HERE TOO (operator, Illinois QSO Party 2026-10-18): working CW with
+// this window as the entry, Esc did not stop the message, unlike every other mode. So Esc sends the
+// station's halt (`halt_tx`) and still clears the entry; it is the one key that reaches the transmitter,
+// and only to stop it. The sweep below presses every OTHER key; Esc has a test of its own.
+//
 // SO THIS FILE MOCKS AT THE BRIDGE, NOT AT THE MODULE (the stop-control-wiring.test.tsx idiom). The
 // REAL `./api` runs under the REAL `?panel=contestlog` window (`DetachedPanel`), and what is replaced
 // is `window.__TAURI_INTERNALS__.invoke`, with a recorder. Then EVERY key — the F-keys, Space,
@@ -135,6 +140,7 @@ function respond(cmd: string): unknown {
   if (cmd === 'contest_entry_put') return ++rev
   if (cmd === 'contest_removed' || cmd === 'contest_unmerged') return []
   if (cmd === 'contest_log_manual' || cmd === 'contest_working' || cmd === 'contest_entry_reset') return snapshot
+  if (cmd === 'halt_tx') return snapshot // the stop answers with the snapshot, as the engine does
   if (cmd === 'contest_log_manual_rows') return [true]
   if (cmd === 'export_log' || cmd === 'fd_club_export') return 'QSO: …'
   if (cmd === 'save_text_to_downloads') return '/tmp/x'
@@ -170,11 +176,12 @@ afterEach(() => {
 
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
 
-/** Every key a keyboard can send that any cockpit binds, and the rest of the keyboard besides. */
+/** Every key a keyboard can send that any cockpit binds, and the rest of the keyboard besides; all
+ *  but Esc, the stop, which has a test of its own. */
 function everyKey(): KeyboardEventInit[] {
   const out: KeyboardEventInit[] = []
   for (let n = 1; n <= 24; n++) out.push({ key: `F${n}`, code: `F${n}` })
-  for (const key of ['Escape', 'Enter', 'Tab', 'Backspace', 'Delete', 'Insert', 'Pause', 'Home', 'End', 'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ContextMenu']) {
+  for (const key of ['Enter', 'Tab', 'Backspace', 'Delete', 'Insert', 'Pause', 'Home', 'End', 'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ContextMenu']) {
     out.push({ key, code: key })
   }
   const mods: KeyboardEventInit[] = [{}, { ctrlKey: true }, { altKey: true }, { metaKey: true }, { shiftKey: true }]
@@ -261,6 +268,25 @@ describe('the contest logger window transmits nothing', () => {
     expect(refused, 'a key in the logger window reached a command nobody has reviewed').toEqual([])
     // Control: the sweep did reach the log line — typing put the contact, Enter logged it.
     expect(bridgeCalls).toContain('contest_entry_put')
+  })
+
+  it('Esc, at the window and in every box, is the stop and only the stop: one halt a press, and the entry clears', async () => {
+    await mountLogger()
+    const box = screen.getByPlaceholderText('W1AW') as HTMLInputElement
+    const targets: Element[] = [document.body, ...Array.from(document.querySelectorAll('input, textarea'))]
+    expect(targets.length, 'control: the boxes are there to press it in').toBeGreaterThan(2)
+    for (const target of targets) {
+      fireEvent.change(box, { target: { value: 'K9ABC' } })
+      await settle()
+      const from = bridgeCalls.length
+      fireEvent.keyDown(target, { key: 'Escape', code: 'Escape' })
+      fireEvent.keyUp(target, { key: 'Escape', code: 'Escape' })
+      await settle()
+      const sent = bridgeCalls.slice(from)
+      expect(sent.filter((c) => KEYING.includes(c)), 'Esc sent the halt, once, and nothing else that transmits').toEqual(['halt_tx'])
+      expect(judge(sent.filter((c) => c !== 'halt_tx')).refused, 'Esc reached a command nobody has reviewed').toEqual([])
+    }
+    expect(box.value, 'and the entry cleared, as it always did').toBe('')
   })
 
   it('the F-keys do nothing there, the webview\'s own included', async () => {
