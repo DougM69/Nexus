@@ -13323,10 +13323,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .le-fd-input {
   width: 100%;
-  min-height: 58px;
-  font-size: calc(30px * var(--text-scale));
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+/* The entry's SIZE at two classes: every entry box also carries `.settings-input`, declared later in
+   this sheet at one class, so at one class its 14 px and touch height won on source order and the
+   cockpits' boxes lettered at 14 px. Only these two properties are contested; the width stays at one
+   class so `.le-fd-input-code` still narrows the exchange boxes. The logger window's
+   `.contest-logger-scaled .le-fd-input` is two classes too, and later. */
+.settings-input.le-fd-input {
+  min-height: 58px;
+  font-size: calc(30px * var(--text-scale));
 }
 .le-fd-input-call {
   text-align: left;

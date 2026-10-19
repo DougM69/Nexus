@@ -244,6 +244,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **The contest entry's boxes are full size in the Phone, CW, RTTY, PSK and JS8 screens.** The Call and exchange
+  boxes under the log showed small 14 px text. They now use the entry's large 30 px lettering and 58 px height.
 - **Contacts held during a contest are no longer forgotten by a restart.** While Contest mode is on, a contact logged
   in the Logbook waits to go to QRZ, Club Log and the other services until Contest mode is turned off. That waiting
   list now survives closing Nexus: after a restart the contacts still wait, and go once, a few seconds apart, when you
