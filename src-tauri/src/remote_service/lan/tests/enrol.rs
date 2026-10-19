@@ -9,8 +9,9 @@ use super::super::enrol as lan_enrol;
 use super::*;
 use crate::remote_service::tests::MemoryVault;
 use crate::remote_service::vault::AccountVault;
+use std::sync::atomic::AtomicU64;
 use tempo_client::account::{
-    mailbox, CachedDevice, Invite, KeySet, Owner, Role, Tenant, PROOF_MAX_AGE_S,
+    mailbox, CachedDevice, DeviceCache, Invite, KeySet, Owner, Role, Tenant, PROOF_MAX_AGE_S,
 };
 
 const CASES: &str =
@@ -285,4 +286,232 @@ async fn pairing_stands_beside_enrolment() {
     )
     .await;
     assert_eq!(next(&mut socket).await["type"], "pairProof");
+}
+
+// ---- A proof's age on the LAN --------------------------------------------------------------------
+
+/// A device kept for the LAN by `pin`, its proof signed at `issued_at`.
+fn kept(pin: &[u8; 32], guest: bool, issued_at: u64) -> CachedDevice {
+    CachedDevice {
+        pin: tempo_client::hex(pin),
+        role: Role::Operate,
+        guest,
+        issued_at,
+        confirmed_at: 0,
+    }
+}
+/// A store holding the LAN's device cache with `devices`.
+fn caching(devices: Vec<CachedDevice>) -> MemoryVault {
+    let vault = MemoryVault::default();
+    let mut cache = DeviceCache::new(SERVICE_STATION);
+    for device in devices {
+        cache.keep(device).unwrap();
+    }
+    vault.save_device_cache(&cache).unwrap();
+    vault
+}
+
+/// ★ A computer enrolled on its own sign-in is admitted for thirty days from its proof's signing, the
+/// owner's and a guest's alike, and not a second longer; a computer paired by code is not held to
+/// it, and the book's own refusal stands. Until the cache has been read nobody is admitted, as the
+/// book admits nobody until it has read its own.
+#[test]
+fn an_enrolled_computer_is_admitted_for_thirty_days_from_its_proof() {
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    let signed = 1_000_000;
+    let (owners, guests, by_code) = ([1; 32], [2; 32], [3; 32]);
+    let vault = caching(vec![
+        kept(&owners, false, signed),
+        kept(&guests, true, signed),
+    ]);
+    let enrolment = Arc::new(lan_enrol::Enrolment::kept_in(Arc::new(vault), clock));
+    let paired = enrolment.bounded(Arc::new(|pin: &[u8; 32]| Some(book::device_id(pin))));
+    let admitted = |pin: &[u8; 32]| paired(pin) == Some(book::device_id(pin));
+    CLOCK.store(signed, Ordering::SeqCst);
+    assert!(!admitted(&owners) && !admitted(&by_code), "not read yet");
+
+    enrolment.load();
+    for at in [signed, signed + PROOF_MAX_AGE_S - 1] {
+        CLOCK.store(at, Ordering::SeqCst);
+        assert!(
+            admitted(&owners) && admitted(&guests) && admitted(&by_code),
+            "{at}"
+        );
+        assert_eq!(enrolment.expired(), Vec::<[u8; 32]>::new());
+    }
+    CLOCK.store(signed + PROOF_MAX_AGE_S, Ordering::SeqCst);
+    assert!(!admitted(&owners), "the owner's, thirty days on");
+    assert!(!admitted(&guests), "a guest's, thirty days on");
+    assert!(admitted(&by_code), "paired by code: the book alone decides");
+    assert_eq!(enrolment.expired(), vec![owners, guests]);
+    // Signed in the future (past the clock's leeway): not yet.
+    CLOCK.store(signed - 61, Ordering::SeqCst);
+    assert!(!admitted(&owners));
+
+    CLOCK.store(signed, Ordering::SeqCst);
+    let refused = enrolment.bounded(Arc::new(|_: &[u8; 32]| None));
+    assert_eq!(refused(&owners), None, "never more than the book admits");
+    // With no account at all (a test's LAN), nothing is enrolled and nothing held to an age.
+    assert!(lan_enrol::Enrolment::default().admits(&owners));
+}
+
+/// Enrolling again once the old proof has aged out replaces it: admitted from the new proof's
+/// signing, at once, with no re-read of the store.
+#[test]
+fn enrolling_again_admits_from_the_new_proof() {
+    let pin = tls::pin(&spki("computerLan"));
+    let vault = caching(vec![kept(&pin, false, issued_at() - PROOF_MAX_AGE_S)]);
+    let enrolment = Arc::new(lan_enrol::Enrolment::kept_in(
+        Arc::new(vault.clone()),
+        fixture_now,
+    ));
+    enrolment.arm(Some(ready(&vault, Vec::new())));
+    enrolment.load();
+    assert!(!enrolment.admits(&pin), "premise: aged out");
+    let book = empty_book();
+    let asked = computer(&token("computer"), "computerLan");
+    lan_enrol::admit(&book, &enrolment, STATION, &asked, fixture_now()).unwrap();
+    assert!(enrolment.admits(&pin));
+    assert_eq!(
+        vault.device_cache().unwrap().unwrap().devices,
+        vec![kept(&pin, false, issued_at())]
+    );
+}
+
+/// The LAN on the station `s` serves, its book `book` and its enrolment `enrolment`.
+fn lan_enrolled(
+    s: &Shack,
+    scratch: &Scratch,
+    network: Network,
+    book: Arc<Book>,
+    enrolment: Arc<lan_enrol::Enrolment>,
+) -> Lan {
+    Lan::start(
+        scratch.path(),
+        Deps {
+            authority: s.shared.authority.clone(),
+            engine: s.shared.engine.clone(),
+            feeds: s.shared.feeds.clone(),
+            book,
+            enrolment,
+            resolve: Arc::new(move |_| only(Ok(network))),
+            advertise: advertise(),
+            firewall: firewall_says(),
+            dispatcher: s.shared.dispatcher.clone(),
+            commands: s.shared.commands.clone(),
+        },
+    )
+}
+
+/// ★ At launch, before anything listens, an enrolled computer past its proof's age leaves the book
+/// and the LAN's device cache (it signs in again to come back). One within its age stays, and so
+/// does a computer paired by code.
+#[tokio::test]
+async fn at_launch_a_computer_past_its_proofs_age_leaves_the_lan() {
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    let signed = 1_000_000;
+    let (aged, fresh, by_code) = ([1; 32], [2; 32], [3; 32]);
+    let vault = caching(vec![
+        kept(&aged, false, signed),
+        kept(&fresh, true, signed + 1),
+    ]);
+    CLOCK.store(signed + PROOF_MAX_AGE_S, Ordering::SeqCst);
+    let s = shack(home());
+    let store = LanStore::holding(
+        &s.station_key,
+        STATION,
+        &[(&aged, "Aged"), (&fresh, "Fresh"), (&by_code, "Den PC")],
+    );
+    let scratch = Scratch::new();
+    let enrolment = Arc::new(lan_enrol::Enrolment::kept_in(
+        Arc::new(vault.clone()),
+        clock,
+    ));
+    let lan = lan_enrolled(&s, &scratch, home(), book_on(&store), enrolment);
+    let names = |status: &LanStatus| {
+        let mut names: Vec<String> = status.devices.iter().map(|d| d.name.clone()).collect();
+        names.sort();
+        names
+    };
+    let status = eventually(&lan, "the aged one stayed", |st| names(st).len() == 2).await;
+    assert_eq!(names(&status), vec!["Den PC", "Fresh"]);
+    assert_eq!(
+        vault.device_cache().unwrap().unwrap().devices,
+        vec![kept(&fresh, true, signed + 1)]
+    );
+}
+
+/// ★ Over the LAN's own listener: an enrolled computer is welcomed within its proof's age; once that
+/// passes, its session ends at its next tick and its next connection is refused. CONTROL: a computer
+/// paired by code on the same listener is welcomed after.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_lans_listener_holds_an_enrolled_computer_to_its_proofs_age() {
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return;
+    };
+    let port = std::net::TcpListener::bind((address, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let network = Network::new(address, 32).unwrap();
+    let signed = 1_000_000;
+    let (station_key, enrolled, by_code) = (fixture_key(), Computer::new(), Computer::new());
+    let store = LanStore::holding(
+        &station_key,
+        STATION,
+        &[(&enrolled.pin, "Enrolled"), (&by_code.pin, "Den PC")],
+    );
+    let s = shack_with(network, station_key, enrolled, store);
+    let vault = caching(vec![kept(&s.computer.pin, false, signed)]);
+    CLOCK.store(signed + PROOF_MAX_AGE_S - 1, Ordering::SeqCst);
+    let scratch = Scratch::new();
+    let enrolment = Arc::new(lan_enrol::Enrolment::kept_in(Arc::new(vault), clock));
+    let lan = lan_enrolled(&s, &scratch, network, book_on(&s.store), enrolment);
+    lan.turn_on(None, Some(port)).unwrap();
+    let at = SocketAddr::new(address.into(), port);
+    eventually(&lan, "never listened", |st| {
+        st.listening.as_deref() == Some(at.to_string().as_str())
+    })
+    .await;
+    let dial_at = |key: &str| {
+        let (key, station) = (key.to_string(), s.public_key.clone());
+        async move {
+            let stream = tokio::net::TcpStream::connect(at).await.unwrap();
+            open(stream, &key, &station).await
+        }
+    };
+    let mut socket = dial_at(&s.computer.key).await.unwrap();
+    assert_eq!(hello(&mut socket, VERSIONS).await["type"], "welcome");
+
+    CLOCK.store(signed + PROOF_MAX_AGE_S, Ordering::SeqCst);
+    let ended = loop {
+        let message = next(&mut socket).await;
+        assert!(
+            message["silent"].is_null(),
+            "the session outlived the proof's age"
+        );
+        if message["closed"].is_string() {
+            break message;
+        }
+    };
+    assert!(ended["closed"].is_string());
+    let control = hello(&mut dial_at(&by_code.key).await.unwrap(), VERSIONS).await;
+    assert_eq!(control["type"], "welcome", "{control}");
+    let again = match dial_at(&s.computer.key).await {
+        Ok(mut socket) => hello(&mut socket, VERSIONS).await,
+        Err(refused) => json!({ "refused": refused }),
+    };
+    assert_ne!(again["type"], "welcome", "{again}");
 }

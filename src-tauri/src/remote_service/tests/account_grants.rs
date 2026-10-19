@@ -631,6 +631,59 @@ async fn a_computer_the_service_stops_listing_leaves_the_lan() {
     assert_eq!(vault.device_cache().unwrap().unwrap().devices, Vec::new());
 }
 
+/// ★ A computer enrolled on the LAN whose proof has passed its age leaves the book and the LAN's
+/// keeping at the next list, though the service still lists it as approved (it signs in again to
+/// come back). A computer paired by code is left alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_past_its_proofs_age_leaves_the_lan_at_the_next_list() {
+    use crate::remote_service::lan::tests::{LanStore, Scratch};
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let enrolled: [u8; 32] = tempo_stream::protocol::hex_bytes(&sha256(&key("computerLan")))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let paired: [u8; 32] = [7; 32];
+    let (_, station) = station_key::Signer::generate().unwrap();
+    let store = LanStore::holding(
+        &station,
+        "60000000-0000-4000-8000-0000000000aa",
+        &[(&paired, "Den PC"), (&enrolled, "DESKTOP-7Q")],
+    );
+    let scratch = Scratch::new();
+    let engine = engine();
+    let service =
+        super::lan_grants::with_lan(launch_owned(&cloud, &vault), &engine, &store, &scratch);
+    let names = |status: &Status| -> Vec<String> {
+        let mut names: Vec<String> = status
+            .lan
+            .as_ref()
+            .map(|lan| lan.devices.iter().map(|d| d.name.clone()).collect())
+            .unwrap_or_default();
+        names.sort();
+        names
+    };
+    eventually(&service, "the book read", |s| names(s).len() == 2).await;
+    // Kept since launch, its proof now exactly thirty days old: listed, approved, with no proof of
+    // its own to vouch for again.
+    let mut cache = tempo_client::account::DeviceCache::new(STATION);
+    cache
+        .keep(CachedDevice {
+            pin: sha256(&key("computerLan")),
+            role: Role::Operate,
+            guest: false,
+            issued_at: fixture_now() - tempo_client::account::PROOF_MAX_AGE_S,
+            confirmed_at: 0,
+        })
+        .unwrap();
+    vault.save_device_cache(&cache).unwrap();
+    let mut row = computer_row(&token("computer"), "operate");
+    row["proof"] = serde_json::Value::Null;
+    let status = listed(&service, &cloud, vec![row]).await;
+    assert_eq!(names(&status), vec!["Den PC"]);
+    assert_eq!(vault.device_cache().unwrap().unwrap().devices, Vec::new());
+}
+
 // ---- Removals made offline -----------------------------------------------------------------------
 
 /// ★ A device removed at the shack while the service cannot be told: out at the station at once, as

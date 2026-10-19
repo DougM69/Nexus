@@ -1005,6 +1005,10 @@ impl Service {
         let control = Arc::new(Mutex::new(Control {
             operations,
             vault_writer,
+            enrolment: Arc::new(lan::enrol::Enrolment::kept_in(
+                accounts.vault.clone(),
+                accounts.now_s,
+            )),
             ..Default::default()
         }));
         // The tunnel's approved computers hold station control while hosted Remote is on, as the
@@ -2122,6 +2126,10 @@ impl Controller {
             }
         }
         self.sweep(devices, now_s);
+        // And every computer enrolled on the LAN on a proof past the offline age.
+        if let Some(lan) = self.control.lock().ok().and_then(|c| c.lan.clone()) {
+            lan.expire();
+        }
         // The issuer's keys may be new, and the owner or the people may have changed.
         self.arm_enrolment();
         if let Ok(mut status) = self.status.lock() {

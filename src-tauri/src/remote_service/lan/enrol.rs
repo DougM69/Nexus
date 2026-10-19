@@ -17,6 +17,15 @@
 //! station control while the LAN is on. A refused proof counts against its address at the gate, as
 //! a wrong pairing code does.
 //!
+//! **Its proof's age.** A computer enrolled this way is admitted on the LAN for
+//! `tempo_client::account::PROOF_MAX_AGE_S` from its proof's signing, owner's and guest's alike,
+//! internet up or down, and then signs in again (it enrols afresh, and its new proof replaces the
+//! old). The station hears the service only when it reads its list, so between lists nothing else
+//! vouches for it. [`Enrolment::bounded`] holds every admission to that age: TLS, the hello, and the
+//! check each session makes at every status tick, so one that passes it mid-session ends; and one
+//! past it is taken out of the book at launch and after each list (`super::Lan::expire`). A computer
+//! paired by code is not enrolled and is not held to it.
+//!
 //! Nothing here writes a log line, and no proof is kept: the cache holds the key's pin, the role
 //! and the proof's signing time.
 use std::sync::{Arc, Mutex};
@@ -49,12 +58,110 @@ pub(crate) struct Ready {
 
 /// Whether, and against what, the LAN takes enrolments now. Unarmed (the station is not bound, or
 /// its owner or the issuer's keys are not kept) it takes none, and TLS takes no unknown key for one.
+/// And the computers enrolled already, which every admission holds to their proofs' age.
 #[derive(Default)]
 pub(crate) struct Enrolment {
     ready: Mutex<Option<Arc<Ready>>>,
+    /// Where the LAN's device cache is kept, and the clock proofs are read by. `None` only in a test
+    /// with no account: then nothing is enrolled, and nothing is held to an age.
+    kept: Option<(Arc<dyn AccountVault>, fn() -> u64)>,
+    /// The devices that cache holds, as last read: `None` until it has been read, and then nobody
+    /// is admitted, as the book admits nobody until it has read its own.
+    enrolled: Mutex<Option<Vec<CachedDevice>>>,
 }
 
 impl Enrolment {
+    /// The enrolment for the station whose LAN device cache `vault` keeps, its proofs read by `now_s`.
+    pub(crate) fn kept_in(vault: Arc<dyn AccountVault>, now_s: fn() -> u64) -> Self {
+        Self {
+            kept: Some((vault, now_s)),
+            ..Self::default()
+        }
+    }
+
+    /// Reads the device cache, if it has not been read yet: before anything listens.
+    pub(super) fn load(&self) {
+        if self.enrolled.lock().is_ok_and(|held| held.is_none()) {
+            self.reread();
+        }
+    }
+
+    /// Reads the device cache again, after the station changed it. One that does not read leaves
+    /// what was read before.
+    pub(crate) fn reread(&self) {
+        let Some((vault, _)) = &self.kept else {
+            return;
+        };
+        let read = match vault.device_cache() {
+            Ok(cache) => cache.map(|cache| cache.devices).unwrap_or_default(),
+            Err(_) => return,
+        };
+        self.hold(read);
+    }
+
+    fn hold(&self, devices: Vec<CachedDevice>) {
+        if let Ok(mut held) = self.enrolled.lock() {
+            *held = Some(devices);
+        }
+    }
+
+    /// Whether the LAN admits the computer holding the key with `pin` now, as far as its enrolment
+    /// goes: one the cache does not hold was paired by code, and the book alone decides; one it holds
+    /// is admitted for [`account::PROOF_MAX_AGE_S`] from its proof's signing (see the header).
+    pub(crate) fn admits(&self, pin: &[u8; 32]) -> bool {
+        let Some((_, now_s)) = &self.kept else {
+            return true;
+        };
+        let Ok(held) = self.enrolled.lock() else {
+            return false;
+        };
+        held.as_ref().is_some_and(|devices| {
+            let pin = tempo_client::hex(pin);
+            devices
+                .iter()
+                .find(|device| device.pin == pin)
+                .is_none_or(|device| device.admits(now_s(), false))
+        })
+    }
+
+    /// The pins of the enrolled computers whose proofs are past their age now, as last read.
+    pub(super) fn expired(&self) -> Vec<[u8; 32]> {
+        let Some((_, now_s)) = &self.kept else {
+            return Vec::new();
+        };
+        let now_s = now_s();
+        let Ok(held) = self.enrolled.lock() else {
+            return Vec::new();
+        };
+        held.iter()
+            .flatten()
+            .filter(|device| !device.admits(now_s, false))
+            .filter_map(|device| super::pairing::hex32(&device.pin))
+            .collect()
+    }
+
+    /// Takes the computers with `pins` out of the device cache, once they are out of the book. A
+    /// store that will not keep it leaves them there, still refused.
+    pub(super) fn forget(&self, pins: &[[u8; 32]]) {
+        let Some((vault, _)) = &self.kept else {
+            return;
+        };
+        if let Ok(Some(mut cache)) = vault.device_cache() {
+            for pin in pins {
+                cache.forget(&tempo_client::hex(pin));
+            }
+            let _ = vault.save_device_cache(&cache);
+        }
+        self.reread();
+    }
+
+    /// `paired` (who the book admits), held to [`Enrolment::admits`]: what the LAN's TLS and its
+    /// sessions ask.
+    pub(super) fn bounded(self: &Arc<Self>, paired: tls::Paired) -> tls::Paired {
+        let enrolment = self.clone();
+        Arc::new(move |pin: &[u8; 32]| paired(pin).filter(|_| enrolment.admits(pin)))
+    }
+
     /// Armed with `ready`, or disarmed with `None`.
     pub(crate) fn arm(&self, ready: Option<Ready>) {
         if let Ok(mut held) = self.ready.lock() {
@@ -170,6 +277,7 @@ pub(super) fn admit(
         confirmed_at: 0,
     })?;
     ready.vault.save_device_cache(&cache)?;
+    enrolment.hold(cache.devices);
     book.add(pin, &asked.name, under)
 }
 
