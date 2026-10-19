@@ -754,6 +754,65 @@ pub(crate) fn raw_mode_query(model: u32) -> Option<&'static str> {
     .then_some("MD0;")
 }
 
+/// The raw CAT strings that stop this radio's CW keyer-memory playback, sent through rigctld's
+/// `w` after `\stop_morse` when Stop TX cuts a CW message. Empty for every other model.
+///
+/// **Why Nexus sends them itself.** The bundled Hamlib (4.7.1) keys a newcat Yaesu's CAT CW by
+/// loading the text into a keyer memory and playing it (`KM1<text>;` `KY6;`, `newcat.c`
+/// `newcat_send_morse`) and gives newcat no `stop_morse` at all, so `\stop_morse` answers
+/// `RPRT -11` without touching the radio (`src/rig.c` `rig_stop_morse`), and the word in the
+/// radio played to its end after the operator pressed Esc. The FTX-1's own backend sends `KY0;`
+/// (`ftx1_cw.c`), which is not a form its reference lists.
+///
+/// **What Yaesu documents.** The FT-710 and FTX-1 CAT references define `KY P1 P2;` (CW KEYING
+/// / CW KEYING MEMORY PLAY): P1 `0` the CW TEXT memory, `1` the CW MESSAGE memory, P2 `0` the
+/// playback STOP (FTX-1 CAT OM 2508-C, "KY CW KEYING MEMORY PLAY"; FT-710 CAT manual, Japanese
+/// edition, KY "P2 0: 再生停止"). Both stops go out, so whichever memory is playing ends. The
+/// FT-991A and FTDX10 references list only the playback forms of `KY` (P1 `1`–`A`), no stop, so
+/// nothing is sent to them: a made-up command is never written to a transmitter, and absent is
+/// the safe direction, as for [`raw_mode_query`].
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
+pub(crate) fn cw_playback_stops(model: u32) -> &'static [&'static str] {
+    match model {
+        1049 | 1051 => &["KY00;", "KY10;"],
+        _ => &[],
+    }
+}
+
+/// Models whose CAT CW no stop is sure to reach: whatever text Nexus has handed the radio's keyer
+/// plays out after Stop TX. Nexus therefore paces each word at the speed the radio itself reports
+/// (`l KEYSPD`), so the radio holds no more than the word it is keying.
+///
+/// - **2036**, a Flex over SmartSDR CAT. Hamlib stops it with the Kenwood `KY0;`, which the
+///   SmartSDR CAT User Guide does not list, and its `KY;` buffer answer "will always return a 0"
+///   (room), so the radio cannot say how much it still holds (§3.4.11). Its `KS` speed is
+///   readable (§3.4.10).
+/// - The Yaesu newcat radios Hamlib 4.7.1 keys with `newcat_send_morse` (`KM1<text>;` `KY6;`)
+///   and gives no `stop_morse`, so `\stop_morse` reaches nothing: FT-450 (1027), FT-950 (1028),
+///   FT-2000 (1029), FTDX9000 (1030, 1050), FTDX5000 (1032), FTDX1200 (1034), FT-991 (1035),
+///   FT-891 (1036), FTDX3000 (1037), FTDX101D (1040), FTDX10 (1042), FTDX101MP (1044). Not the
+///   FT-710 (1049) or the FTX-1 (1051): Nexus sends them their documented playback stop
+///   ([`cw_playback_stops`]).
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
+pub(crate) fn cat_cw_has_no_sure_stop(model: u32) -> bool {
+    matches!(
+        model,
+        2036 | 1027
+            | 1028
+            | 1029
+            | 1030
+            | 1032
+            | 1034
+            | 1035
+            | 1036
+            | 1037
+            | 1040
+            | 1042
+            | 1044
+            | 1050
+    )
+}
+
 /// The raw query that reads this radio's ALC meter on the radio's OWN scale: Yaesu's `RM4;`
 /// (READ METER, ALC) for the FT-991/991A (1035), the FT-710 (1049) and the FTDX10 (1042), sent
 /// through rigctld's `w`. `None` for every other model, which keeps Hamlib's `l ALC` unchanged.

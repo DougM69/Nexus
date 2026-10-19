@@ -129,6 +129,8 @@ pub mod yaesu_wf;
 
 #[cfg(all(feature = "device", feature = "ai-cw"))]
 pub mod aicw;
+/// The AI CW decode thread's stitch rule (pure; built without the model so it is tested).
+pub mod aicw_stitch;
 
 /// Settle the AI CW decoder's CPU-cache probe before any thread exists.
 ///

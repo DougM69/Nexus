@@ -199,6 +199,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Contest entry: the sample text in empty boxes is quieter.** The grey examples ("W1AW", "599", a county) are now
   in normal weight instead of bold, and a shade darker in the dark themes, so they no longer read like something
   typed in. They stay readable in every theme.
+- **The AI CW decoder keeps up with the signal.** Clicking a spot, changing band or typing a frequency no longer
+  leaves the decode pane blank for about 13 seconds while the decoder refills: copy of the new station starts about
+  a second after it does. Letters now land about a second after they are sent instead of two to three seconds, in
+  small steps instead of bursts. The last few letters, the ones the decoder is still unsure of, show at once in a
+  dimmer colour and turn normal when it confirms them; it may still correct a dim letter. Only confirmed letters are
+  used for anything: the callsign chips, the report and name the log picks up, and the copy seen from a Remote client.
+  The decoder works harder for this: about half of one CPU core where it used a sixth, never more than two thirds of
+  a core on a slow computer, and on Windows it runs at a lower priority than the radio and audio.
 - **From the Remote client, Settings now shows which logbook credentials are saved at the station, and the connector
   Test buttons work.** The saved / not saved badges (and the Icom network password's) are read at the station and come
   back as yes or no; they no longer look empty, as if nothing were saved. QRZ Logbook, N3FJP and Cloudlog/Wavelog Test
@@ -253,6 +261,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a scoreboard or a band map in a window of its own, Esc there did nothing to a CW message or a voice message
   on the air; it only cleared the entry. Esc in any of those windows now stops transmitting, the same as Esc
   on the main window, and still clears the entry.
+- **CW: Esc (Stop TX) ends a CW message sooner.** A WinKeyer, the serial keyline and the soundcard keyer now stop before
+  Nexus asks the radio to stop its own CW, so a slow radio no longer holds them keying. A word the serial keyline had
+  not started yet is dropped instead of being sent after the stop. On an FT-710 or FTX-1 keyed over CAT, the stop now
+  also sends Yaesu's own playback stop, so the rest of the word is cut off.
+- **CW: on a radio that cannot be stopped mid-word, Esc leaves at most the word being sent.** On a Flex over SmartSDR
+  CAT, and on Yaesu radios keyed over CAT that have no CW stop (FT-991A, FTDX10 and others), Nexus now times each word
+  at the speed the radio reports. A speed changed on the radio no longer lets words pile up and keep sending after Esc,
+  and the CW speed control follows it. With a Flex on SmartSDR CAT, the CW settings suggest SmartSDR CAT's WinKeyer
+  port or the Flex native client, which both stop mid-word.
 - **Remote: Operate from this computer now works at an address you type.** When nothing answers where a paired
   station was, Stations on this network asks where it is now. That box offered only Stream; it now offers **Operate
   at this address** first, with Stream still beside it. Nexus checks it is the same paired station there, as it does

@@ -4562,6 +4562,9 @@ body.resizing-row {
   --text-faint: #7c8ca3;
   /* The contest entry's sample text (LogEntry): semi-dark, under every other hint, over the floor. */
   --text-sample: color-mix(in srgb, var(--text-faint) 92%, var(--bg));
+  /* The AI CW decoder's unconfirmed (provisional) letters: readable, plainly dimmer than
+     confirmed copy. On :root, so every theme has it, in that theme's own --text-faint. */
+  --cw-unconfirmed: var(--text-faint);
   --accent: #4cc9f0;
   --accent-ink: #06222c;
   --bubble-mine: #1f5d73;
@@ -9799,6 +9802,10 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cw-decode-idle {
   color: var(--text-faint);
   font-style: italic;
+}
+/* The AI decoder's unconfirmed tail, replaced by its next pass (confirmed copy is --text). */
+.cw-decode-unconfirmed {
+  color: var(--cw-unconfirmed);
 }
 .cw-decode-wpm {
   font-size: calc(11px * var(--text-scale));

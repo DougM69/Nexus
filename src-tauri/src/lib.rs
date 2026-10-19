@@ -16898,6 +16898,10 @@ struct CwCandidateDto {
 #[serde(rename_all = "camelCase")]
 struct CwDecodeResult {
     text: String,
+    /// The AI decoder's PROVISIONAL tail: characters too near the live edge to be confirmed
+    /// yet, shown dimmed after `text` and replaced by the next pass. For the eye only: every
+    /// field below is read from the confirmed `text`, never from this.
+    pending: String,
     wpm: u32,
     /// TX echo: recent EXPANDED CW transmissions (oldest→newest) so the cockpit shows
     /// exactly what was sent (macro tokens resolved).
@@ -16953,6 +16957,7 @@ fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
     });
     CwDecodeResult {
         text: d.text,
+        pending: eng.cw_decode_pending(),
         wpm: d.wpm,
         sent,
         keyer_error: eng.cw_keyer_error(),
@@ -38707,6 +38712,49 @@ fn winlink_disconnect() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use crate::remote_service::stored_log_tests::StoredLog;
+
+    /// The AI decoder's provisional tail is for the eye only. The copilot's callsign chips, the
+    /// report and name the log entry takes, and the guidance all read the CONFIRMED copy, so a
+    /// letter the next pass may still change never reaches a log, a macro or the entry.
+    #[test]
+    fn the_cw_copilot_reads_only_the_confirmed_ai_copy() {
+        let mut e = tempo_app::engine::Engine::new("W9XYZ", "EN61", 0);
+        e.set_ai_cw_enabled(true);
+        e.feed_rx_audio(&vec![0.25; 12_000]);
+        let (_, _, g) = e.ai_cw_window().expect("a window");
+        e.push_ai_cw_pass(g, "CQ TEST K9ABC K9ABC ", "W9XYZ DE K1XYZ UR 5NN NAME BOB");
+        let r = super::read_cw_state(&e);
+        assert_eq!(
+            r.text, "CQ TEST K9ABC K9ABC ",
+            "the transcript is the confirmed copy"
+        );
+        assert_eq!(
+            r.pending, "W9XYZ DE K1XYZ UR 5NN NAME BOB",
+            "…and the tail rides beside it"
+        );
+        let calls: Vec<&str> = r.candidates.iter().map(|c| c.call.as_str()).collect();
+        assert!(
+            calls.contains(&"K9ABC"),
+            "control: a confirmed call is a chip: {calls:?}"
+        );
+        assert!(
+            !calls.contains(&"K1XYZ"),
+            "a provisional call is never a chip: {calls:?}"
+        );
+        assert_eq!(r.rst, None, "a provisional report is never read");
+        assert_eq!(r.name, None, "…nor a provisional name");
+        // The next pass confirms the same letters: now, and only now, they are data.
+        e.push_ai_cw_pass(g, "W9XYZ DE K1XYZ UR 5NN NAME BOB", "");
+        let r = super::read_cw_state(&e);
+        let calls: Vec<&str> = r.candidates.iter().map(|c| c.call.as_str()).collect();
+        assert!(
+            calls.contains(&"K1XYZ"),
+            "control: confirmed, the call is a chip: {calls:?}"
+        );
+        assert!(r.rst.is_some(), "control: confirmed, the report is read");
+        assert!(r.name.is_some(), "control: confirmed, the name is read");
+        assert_eq!(r.pending, "");
+    }
 
     /// The settings backup's stated contract is that it CARRIES NO SECRETS, and
     /// `command_dispatch::SECRET_SETTINGS` can only name credentials this build knows about. With

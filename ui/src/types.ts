@@ -1735,6 +1735,9 @@ export interface CatTestResult {
 /** A single-signal CW decode of the recent RX audio (live readout). */
 export interface CwDecodeResult {
   text: string
+  /** The AI decoder's unconfirmed tail: letters drawn dimmed after `text`, replaced or confirmed by
+   *  the next pass. Display only; never read as data. Absent from an older station. */
+  pending?: string
   wpm: number
   /** TX echo: recent expanded CW transmissions (oldest→newest) — what actually went out. */
   sent: string[]

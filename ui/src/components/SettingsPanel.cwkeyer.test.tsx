@@ -282,3 +282,51 @@ describe('the soundcard keyer says that it takes the radio out of CW', () => {
     expect(option.textContent).toMatch(/data mode/i)
   })
 })
+
+/**
+ * ⭐ A FLEX KEYED THROUGH SMARTSDR CAT CANNOT BE STOPPED MID-WORD, AND THE OPERATOR IS TOLD SO
+ * WHERE HE CHOOSES THE KEYER (IL QSO Party: Esc dropped TX in Nexus while the radio finished the
+ * word it had been handed). FlexRadio documents no CW stop over SmartSDR CAT. SmartSDR CAT's
+ * WinKeyer port has one (Clear input buffer), and so does Nexus's own Flex client (CWX clear).
+ */
+describe('the CAT keyer on a Flex over SmartSDR CAT says a stop may finish the word', () => {
+  async function openCwOn(cwKeyer: string, rigModel: number, flexNativeCat = false) {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({
+        ...defaultSettings,
+        mycall: 'KD9TAW',
+        mygrid: 'EN52',
+        cwKeyer,
+        rigModel,
+        flexNativeCat,
+      } as never),
+    )
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'CW' }))
+    await screen.findByText('Keyer backend')
+  }
+  const note = () => screen.queryByText(/may finish the word/i)
+
+  it('shows on a Flex over SmartSDR CAT with the CAT keyer, and routes to the two clean stops', async () => {
+    await openCwOn('cat', 2036)
+    const text = (await screen.findByText(/may finish the word/i)).closest('span')?.textContent ?? ''
+    expect(text).toMatch(/SmartSDR CAT/)
+    expect(text).toMatch(/WinKeyer port/)
+    expect(text).toMatch(/Flex native client/)
+  })
+
+  it('stays silent on a radio with its own CAT CW stop', async () => {
+    await openCwOn('cat', 3073) // IC-7300: 17 FF
+    expect(note()).toBeNull()
+  })
+
+  it('stays silent when the Flex keys through the WinKeyer port already', async () => {
+    await openCwOn('winkeyer', 2036)
+    expect(note()).toBeNull()
+  })
+
+  it("stays silent when Nexus's own Flex client carries the radio", async () => {
+    await openCwOn('cat', 2036, true)
+    expect(note()).toBeNull()
+  })
+})
