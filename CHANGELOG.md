@@ -198,6 +198,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers. Receive audio waits 120 ms before playing over the internet (60 ms on your own network) to ride out the
   internet's jitter. NEEDS-BENCH: the shack on one network and the second PC on another (a phone hotspot), the radio
   into a dummy load.
+- **Nexus Remote: add your station to a second PC by signing in, with no code (Beta, test builds).** In **Stations on
+  this network** on the second PC, press **Sign in** and sign in to Nexus Remote in your web browser with the account
+  your station is linked to, or one its owner invited to operate it. The station is then on that PC, on its own
+  network and over the internet, in one step: no code to type and nothing to press at the shack. Nexus finds the
+  station on the network by name, or asks for its address, and before it connects it checks that the station Nexus
+  Remote lists is the one its owner signed in for at the shack; the shack checks the PC's sign-in itself in turn. The
+  station must be signed in to Nexus Remote at the shack first (Settings → Station → Remote access). A PC already paired
+  with a code has **Sign in** on its row in place of **Add the internet road**: it links that pairing to your account
+  and adds the internet road; for a station not yet signed in at the shack the road waits for Approve there, as
+  before. **Pair with a code instead** stays for such a station. A PC invited only to listen is not added; listen in
+  your web browser instead.
+- **Nexus Remote: a signed-in PC keeps its place on the station's network by signing in again every 30 days.** The
+  station takes a PC on its own network for 30 days from that PC's sign-in, with the internet up or down. In the last
+  week the PC's row in Stations on this network says by what day to sign in again and offers **Sign in again**, and
+  **Operate from this computer** signs in again by itself, opening the browser while you operate, so the link is
+  never dropped for it. NEEDS-BENCH: a second PC on the shack's network, signed in, then the internet off; a phone
+  hotspot.
 - **Nexus Remote from a second PC: every JS8 switch, and satellite tracks that end when the second PC goes.** HB, Relay,
   HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
