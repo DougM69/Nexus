@@ -153,6 +153,19 @@ fn flex_client_ip(t: &Transport) -> Option<&str> {
         .then(|| t.flex_radio_ip.trim())
 }
 
+/// Whether the CAT keyer paces each word at the speed the radio reports
+/// ([`crate::rigmodels::cat_cw_has_no_sure_stop`]). Not when Nexus's own Flex client serves the
+/// radio: it keys through CWX, which `cwx clear` stops, and follows the radio's speed itself.
+fn cat_cw_paced_by_radio(model: u32, native_flex: bool) -> bool {
+    !native_flex && crate::rigmodels::cat_cw_has_no_sure_stop(model)
+}
+
+/// How long the radio takes to key `text` at `wpm` and leave a word space (7 dits): the earliest
+/// the next word may reach it without queueing behind this one.
+fn cw_word_window_ms(text: &str, wpm: u32) -> f64 {
+    tempo_core::cw::morse_duration_ms(text, wpm) + 7.0 * 1200.0 / wpm.clamp(5, 60) as f64
+}
+
 /// The radio's Beta setting for the Flex client's CW, Tune and ATU (`flex_native_unbenched`) where
 /// the client serves the radio ([`flex_client_ip`]); `None` on every other radio, so the setting
 /// restarts nothing there.
@@ -5896,6 +5909,44 @@ impl RadioLoop {
         }
     }
 
+    /// ⛔ A RADIO NO CAT CW STOP IS SURE TO REACH IS NEVER HANDED MORE THAN THE WORD IT IS KEYING
+    /// (IL QSO Party: a Flex over SmartSDR CAT went on keying a macro after Esc). Nothing tells
+    /// Nexus how much such a radio still holds, so each word is timed: the next one goes when
+    /// this one and its word space have been keyed. That timing is only as good as the speed it
+    /// assumes, and the radio's speed can be changed where Nexus never sees it (SmartSDR, a
+    /// Maestro, the front panel). Timed at Nexus's own speed, a slower radio fell behind by part
+    /// of a word with every word, and the backlog played out after a stop. So the radio is asked
+    /// its speed right after each word is handed over (the read overlaps the keying, so it adds no
+    /// gap), and the word is timed at that.
+    ///
+    /// The radio's speed is followed, never fought, as Nexus's Flex client does: one Nexus did not
+    /// set becomes the WPM control's, and is not pushed back. A radio that does not answer keeps
+    /// the timing at Nexus's speed. NEEDS-BENCH: whether a radio's keyer runs at the speed it
+    /// reports, and how much the radio's own latency adds.
+    fn pace_cw_at_radio_speed(
+        &mut self,
+        rig: &mut Rig,
+        engine: &Arc<Mutex<Engine>>,
+        text: &str,
+        now: f64,
+    ) {
+        let Some(radio) = rig
+            .read_meter_f32("KEYSPD")
+            .map(|w| w.round() as u32)
+            .filter(|w| (5..=100).contains(w))
+        else {
+            return;
+        };
+        self.cw_busy_until = now + cw_word_window_ms(text, radio);
+        if radio != self.last_cat_wpm {
+            let mut eng = engine_lock(engine);
+            eng.set_cw_wpm(radio);
+            // The control's range is narrower than the radio's: what it holds is what this loop
+            // would send, so the radio's speed is not sent back over it.
+            self.last_cat_wpm = eng.cw_wpm();
+        }
+    }
+
     fn may_key(&self) -> bool {
         !self.handoff_deferred && !self.cat_hold_active && !self.switch_unhanded
     }
@@ -9810,16 +9861,20 @@ impl RadioLoop {
                 self.serial_keyer = None;
             }
             if abort {
-                let _ = rig.stop_morse(); // CAT keyer abort (cut the one word in the rig buffer)
-                                          // WinKeyer abort: one Clear Buffer byte stops keying + flushes its queue.
-                #[cfg(feature = "serial")]
-                if let Some((_, wk)) = self.winkeyer.as_mut() {
-                    let _ = wk.clear();
-                }
+                // ⛔ THE STOPS THAT ASK THE RADIO NOTHING GO FIRST. Each keyer Nexus drives itself
+                // is stopped before the CAT CW stop, which is a round trip a slow or silent radio
+                // holds for a whole CAT deadline: behind it, a WinKeyer, the keyline and the
+                // soundcard tone kept keying after Stop TX (IL QSO Party, 1.20.0-test4).
+                //
                 // Serial keyline abort: key up NOW + drop the rest of the macro.
                 #[cfg(feature = "serial")]
                 if let Some((_, _, sk)) = self.serial_keyer.as_ref() {
                     sk.clear();
+                }
+                // WinKeyer abort: one Clear Buffer byte stops keying + flushes its queue.
+                #[cfg(feature = "serial")]
+                if let Some((_, wk)) = self.winkeyer.as_mut() {
+                    let _ = wk.clear();
                 }
                 if soundcard && now < self.cw_busy_until {
                     // Soundcard abort: dump the queued tone audio + unkey now — but
@@ -9832,6 +9887,14 @@ impl RadioLoop {
                     backend.flush_output();
                     let _ = rig.ptt(false);
                     self.tx_until_ms = None;
+                }
+                // CAT keyer abort (cut the one word in the rig buffer), and the playback stop a
+                // Yaesu's own reference defines where Hamlib sends none
+                // (`rigmodels::cw_playback_stops`), written without waiting: Hamlib answers a raw
+                // set with nothing.
+                let _ = rig.stop_morse();
+                for stop in crate::rigmodels::cw_playback_stops(self.applied.rig_model) {
+                    rig.send_raw_set(stop);
                 }
                 self.cw_busy_until = 0.0; // a fresh macro after Stop keys immediately
                 self.cw_keying_until = 0.0;
@@ -9906,9 +9969,7 @@ impl RadioLoop {
             if let Some(text) = word {
                 // Hold the next word until this one finishes keying + a word space (7 dits),
                 // so only ONE word is buffered in the rig at a time.
-                let unit_ms = 1200.0 / wpm.clamp(5, 60) as f64;
-                self.cw_busy_until =
-                    now + tempo_core::cw::morse_duration_ms(&text, wpm) + 7.0 * unit_ms;
+                self.cw_busy_until = now + cw_word_window_ms(&text, wpm);
                 let mut handled = false;
                 // WinKeyer hardware keyer: open the serial port on demand (reopen if the
                 // configured port changed) and stream the word to it. On open failure,
@@ -10060,6 +10121,14 @@ impl RadioLoop {
                         let asked = Instant::now();
                         let cw_err = rig.send_morse(&text).err();
                         if cw_err.is_none() {
+                            let native_flex = self
+                                .rigctld_proc
+                                .as_ref()
+                                .and_then(CatDaemon::flex)
+                                .is_some();
+                            if cat_cw_paced_by_radio(self.applied.rig_model, native_flex) {
+                                self.pace_cw_at_radio_speed(rig, engine, &text, now);
+                            }
                             self.cw_keying_until = self.cw_busy_until;
                         }
                         // Nexus's own Flex client says why it sent nothing (the slice not in CW,
@@ -16502,6 +16571,7 @@ mod tests {
     mod clock_repair_tests;
     mod contest_reply;
     mod contest_status;
+    mod cw_stop;
     mod decode_in_flight;
     mod failed_unkey;
     mod filter_width;
