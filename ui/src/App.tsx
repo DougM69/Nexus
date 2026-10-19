@@ -2783,8 +2783,9 @@ function App() {
   // THE CONTEST SCREEN TOO, WHILE ITS ENTRY SHOWS (2026-10-11). With a contest running the screen
   // takes contacts in the logger window's large entry (`ContestLargeEntry`, in the workspace switch
   // below), a contest strip in this window, so its Esc is this window's: the halt, as in the Phone
-  // LOG pane, and the entry keeps what it holds (the logger window's own Esc clears, because nothing
-  // there transmits). With no contest running there is no entry, and Esc there is as it was.
+  // LOG pane, and the entry keeps what it holds (the logger window's own Esc halts and clears:
+  // DetachedPanel binds the halt in every contest window). With no contest running there is no entry,
+  // and Esc there is as it was.
   const contestEntryShown = effectiveView === 'fieldDay' && snap?.fieldDay != null
   useEscStop(ESC_HALT_VIEWS.has(effectiveView) || contestEntryShown, handleHaltTx)
   // …AND ITS F-KEYS DO NOTHING, as in the logger window: nothing on that entry sends a message, and

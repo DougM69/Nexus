@@ -43,8 +43,10 @@
 // read-only (`ContestView`'s `logger`); the F-keys do nothing (the webview's own as well, so F5
 // does not reload the logger mid-contact); Esc clears the entry (`LogEntry`'s `sharedEntry`); and
 // A− / A+ only size the text.
-// Every TX and stop control stays on the operator's screen, whose hotkeys are bound in the main
-// window's document only. This is a separate window with a document of its own, so a keystroke
+// Every TX control stays on the operator's screen, whose hotkeys are bound in the main window's
+// document only. The ONE exception is a stop: Esc here is also the station's halt (`DetachedPanel`,
+// since the Illinois QSO Party, 2026-10-18, where this window was the operator's entry and Esc did
+// not stop a CW message), so it stops and clears on the same press. This is a separate window with a document of its own, so a keystroke
 // here never reaches them, and one there never reaches this.
 //
 // ⭐ KEEP IN FRONT (the operator, from a contest tester: "resize it to the point where I can drop it in

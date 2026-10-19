@@ -1784,8 +1784,8 @@ export function LogEntry({
   pressWipeRef.current = pressWipe
 
   // THE LOGGER WINDOW'S ESC (`sharedEntry`): it clears the entry, as Clear does, from anywhere in
-  // that window. Nothing in that window transmits, so its Esc has no over to stop, and a logger
-  // clearing a typo never reaches the operator's. On every other strip Esc stays the cockpit's
+  // that window. The same press is also the station's halt there (`DetachedPanel`), so this listener
+  // only clears. On every other strip Esc stays the cockpit's
   // (in CW, Operate, RTTY and PSK it stops TX), exactly as before. Left alone in the "I moved"
   // editor and a contact's edit, whose own Esc backs out of the edit, and while a dialog has the
   // key.

@@ -18,7 +18,7 @@
 //   · The window holds the whole section and works as it does in the main window: the contest switch
 //     (whose save the main window follows), Running / S&P, the exports, the club board, the scoreboard,
 //     the county or sections board, the bonuses and the log. Its F-keys are held as the Logger window
-//     holds them, and its Esc sends nothing.
+//     holds them, and its Esc is the station's stop (`halt_tx`), as the main window's is.
 //   · The control is in the main window only: not in the Logger window, in the window itself, or on the
 //     Remote page.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -489,7 +489,7 @@ describe('the contest screen window holds the whole lower section', () => {
     expect(fireEvent.keyDown(document.body, { key: 'F4', code: 'F4', altKey: true }), 'Alt+F4 must still close the window').toBe(true)
   })
 
-  it('its Esc sends nothing: no halt, nothing that transmits — the stop is the main window’s', async () => {
+  it('its Esc is the station’s stop, as the main window’s is: one halt a press, and nothing else that transmits', async () => {
     transmitting = true
     const app = await mountPopOut('contestscreen')
     await settle()
@@ -497,7 +497,7 @@ describe('the contest screen window holds the whole lower section', () => {
     fireEvent.keyDown(app.querySelector('.fd-header')!, { key: 'Escape', code: 'Escape' })
     fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' })
     await settle()
-    expect(keyingSince(from)).toEqual([])
+    expect(keyingSince(from)).toEqual(['halt_tx', 'halt_tx'])
   })
 })
 

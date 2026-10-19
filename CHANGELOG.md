@@ -217,6 +217,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.
+- **Esc stops transmitting in the contest's pop-out windows.** With the contest entry, the Contest screen,
+  a scoreboard or a band map in a window of its own, Esc there did nothing to a CW message or a voice message
+  on the air; it only cleared the entry. Esc in any of those windows now stops transmitting, the same as Esc
+  on the main window, and still clears the entry.
 - **Remote: Operate from this computer now works at an address you type.** When nothing answers where a paired
   station was, Stations on this network asks where it is now. That box offered only Stream; it now offers **Operate
   at this address** first, with Stream still beside it. Nexus checks it is the same paired station there, as it does

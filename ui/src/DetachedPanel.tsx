@@ -16,6 +16,7 @@
 // that would fill the board, and the board component never renders in that state.
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { t } from './i18n'
+import { useEscStop } from './useEscStop'
 import { publishBandConditions } from './bandConditions'
 import { confirmDialog, ConfirmHost } from './confirm'
 import { setPopupNotifications, withErrorToast } from './toast'
@@ -216,6 +217,9 @@ function DetachedShell({ className, children }: { className?: string; children?:
   )
 }
 
+/** The pop-outs a contest is worked from, where Esc is the station's stop (DetachedPanelBody). */
+const CONTEST_ESC_STOP_PANELS = new Set(['contestlog', 'contestscreen', 'fieldday', 'fdclub', 'bandmapCw', 'bandmapPhone'])
+
 function DetachedPanelBody({ panel }: { panel: string }) {
   const [theme] = useTheme()
   // The built-in theme rides on the theme: this document's own writer of `data-skin`.
@@ -374,6 +378,17 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   const apply = (p: Promise<AppSnapshot>) => {
     void p.then((s) => s && setSnap(s)).catch(() => {})
   }
+
+  // ESC STOPS TRANSMIT IN THE CONTEST'S WINDOWS TOO (operator, Illinois QSO Party 2026-10-18: working
+  // CW from the Contest screen, Esc did not stop the message). The entry alone in a window, the screen
+  // below it in one of its own, the scoreboards and the band maps are each a document of their own, so
+  // the main window's Esc never hears a key typed here. Each sends the halt the main window's Contest
+  // screen sends (`halt_tx`, which cuts the CW keyer, a voice message and every other over), on the
+  // shared capture listener, so no box, pick list or dialog here can swallow it, and Esc's own meaning
+  // in the window (the Logger window's clear, a dialog's close) still happens on the same press.
+  useEscStop(CONTEST_ESC_STOP_PANELS.has(panel), () => {
+    void withErrorToast(() => haltTx(), t('shell.halt.failed')).then((s) => s && setSnap(s))
+  })
 
   // `freqMhz` is the spot's exact frequency (source of truth — DXpeditions run off the
   // standard dial); fall back to the band's dial only when the spot has no frequency.
