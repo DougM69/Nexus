@@ -16771,6 +16771,8 @@ mod tests {
             banned: false,
             // The forwarder's cursor reads it; the emitter tests this helper feeds do not.
             seq: 0,
+            // Read nowhere this helper feeds.
+            nr: None,
         }
     }
 

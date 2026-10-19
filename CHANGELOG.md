@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Every contest log numbers its contacts 1, 2, 3…** The contest screen's log and the logger window's last
+  contacts show each contact's number in a first column, in every contest. In a contest that sends a serial
+  (Sweepstakes, CQ WPX) the number is the serial that contact was sent; in every other contest it counts the
+  contacts in the order you logged them, dupes included. A removed contact's number is never given to another
+  contact (as in N1MM), an edit keeps the number, Clear test contacts starts again at 1, and after a restart the
+  count carries on where it was. The exported ADIF writes the number as STX, and so does each contact's copy in
+  your Logbook. Your sent exchange and the {EXCH} macro carry a serial only in a contest whose rules ask for one.
 - **Contest entry: Shift+Space goes back a box.** Space already moves to the next box, as in N1MM; Shift+Space
   now moves back the other way (from Call it goes to the last box), so a wrong entry is fixed without the mouse.
   Shift+Tab still works, and Alt+W still wipes the line and returns to the Call box.

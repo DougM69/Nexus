@@ -364,6 +364,12 @@ function slotGrid(n: number): { 'data-slots'?: number; style?: CSSProperties } {
   return n > 0 ? { 'data-slots': n, style: { '--fd-slots': n } as CSSProperties } : {}
 }
 
+/** ⭐ The log carries QSO numbers (`FieldDayQso.nr`), so its tables show them in a first column. A
+ *  station older than the field sends none, and the tables keep the columns they had. */
+export function logIsNumbered(log: readonly FieldDayQso[]): boolean {
+  return log.some((q) => q.nr != null)
+}
+
 /** "HH:MM" UTC for the FD log's time column. Blank the column when the QSO
  * predates the timestamp field or hasn't been logged yet. */
 function qsoTimeUtc(q: FieldDayQso): string {
@@ -384,6 +390,7 @@ export function ContestLogHead({
   slotColumns,
   role,
   position = false,
+  numbered = false,
 }: {
   fieldDayColumns: boolean
   isWfd: boolean
@@ -392,9 +399,18 @@ export function ContestLogHead({
   role?: string
   /** One more column after Mode: the position that logged each contact (`ClubLogList`). */
   position?: boolean
+  /** One more column before Time: each contact's QSO number (`logIsNumbered`). */
+  numbered?: boolean
 }) {
   return (
-    <div className="fd-log-head" {...slotGrid(slotColumns.length)} data-pos={position ? '' : undefined}>
+    <div
+      className="fd-log-head"
+      {...slotGrid(slotColumns.length)}
+      data-pos={position ? '' : undefined}
+      data-nr={numbered ? '' : undefined}
+    >
+      {/* `#` is the column's caption in every language, as N1MM heads it. */}
+      {numbered && <span className="fd-col nr">#</span>}
       <span className="fd-col time">{t('fieldDay.log.column.time')}</span>
       <span className="fd-col call">{t('fieldDay.log.column.call')}</span>
       {fieldDayColumns ? (
@@ -428,6 +444,7 @@ export function ContestLogRow({
   fieldDayColumns,
   slotColumns,
   position,
+  numbered = false,
   children,
 }: {
   row: LogRowMeta
@@ -435,6 +452,8 @@ export function ContestLogRow({
   slotColumns: readonly ContestFieldSpec[]
   /** The position that logged it, in the column `ContestLogHead`'s `position` adds. */
   position?: string
+  /** Its QSO number, in the column `ContestLogHead`'s `numbered` adds. */
+  numbered?: boolean
   children?: ReactNode
 }) {
   return (
@@ -442,6 +461,7 @@ export function ContestLogRow({
       className={`fd-log-row${fieldDayColumns && row.isNewSection ? ' mult' : ''}${row.isDupe ? ' dupe' : ''}`}
       {...slotGrid(slotColumns.length)}
       data-pos={position !== undefined ? '' : undefined}
+      data-nr={numbered ? '' : undefined}
       title={
         row.isDupe
           ? t('fieldDay.log.dupe.title')
@@ -450,6 +470,7 @@ export function ContestLogRow({
             : undefined
       }
     >
+      {numbered && <span className="fd-col nr mono">{row.qso.nr ?? ''}</span>}
       <span className="fd-col time mono">{qsoTimeUtc(row.qso)}</span>
       <span className="fd-col call mono">{row.qso.call}</span>
       {fieldDayColumns ? (
@@ -3022,6 +3043,7 @@ export function ContestView({
   }, [observed])
 
   const rows = useMemo(() => annotate(log), [log])
+  const numbered = logIsNumbered(log)
   const modes = useMemo(() => modeCounts(log), [log])
 
   // ⭐ REMOVE THE NEWEST CONTACT, AND THE REMOVED LIST WITH RESTORE — the screen's half of the
@@ -4137,7 +4159,13 @@ export function ContestView({
 
       {/* LOG TABLE */}
       <div className="fd-log">
-        <ContestLogHead fieldDayColumns={fdEventIsFieldDay} isWfd={isWfd} slotColumns={slotColumns} role={fieldDay?.role} />
+        <ContestLogHead
+          fieldDayColumns={fdEventIsFieldDay}
+          isWfd={isWfd}
+          slotColumns={slotColumns}
+          role={fieldDay?.role}
+          numbered={numbered}
+        />
         <div className="fd-log-scroll" ref={logPin.ref} onScroll={logPin.onScroll}>
           {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}
           {rows.map((r, i) => {
@@ -4161,6 +4189,7 @@ export function ContestView({
                 row={r}
                 fieldDayColumns={fdEventIsFieldDay}
                 slotColumns={slotColumns}
+                numbered={numbered}
               >
                 {removable && r.qso.whenUnix ? (
                   <button

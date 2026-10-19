@@ -82,11 +82,13 @@ impl Engine {
                 .contest_rst_sent_box
                 .then(|| log.session.sent_rst_constant().map(str::to_string))
                 .flatten(),
-            log: log
-                .qsos()
-                .iter()
-                .map(|q| field_day_qso(q, rs, spec, role))
-                .collect(),
+            log: {
+                let numbers = log.qso_numbers();
+                log.qsos()
+                    .iter()
+                    .map(|q| field_day_qso(q, rs, spec, role, numbers.get(&q.seq).copied()))
+                    .collect()
+            },
             // The club block, plus the generalised keys `fd_club_dto` does not carry —
             // it lives in `engine.rs` and projects the mirror to the legacy triple. The
             // unprojected set is right here on the mirror, so it is added here rather
@@ -417,6 +419,7 @@ pub(super) fn field_day_qso(
     rs: &tempo_core::fd_rules::FdRuleset,
     spec: &'static tempo_core::contest::ExchangeSpec,
     role: &'static tempo_core::contest::RoleSpec,
+    nr: Option<u32>,
 ) -> FieldDayQso {
     FieldDayQso {
         call: q.call.clone(),
@@ -464,6 +467,7 @@ pub(super) fn field_day_qso(
         // …and whether it was worked in a mode the contest bans, which counts for nothing.
         banned: q.banned_under(rs),
         seq: q.seq,
+        nr,
     }
 }
 
@@ -1241,6 +1245,36 @@ mod tests {
     /// nothing, and the hosted Remote page, which recounts `qsoCount` from the rows and refuses a
     /// capture whose count it cannot reproduce, has to be able to tell it from a contact that
     /// counts. Skipped when false, like `dupe`.
+    /// ⭐ **Every row carries its QSO number on the wire**, in a contest that sends no serial as
+    /// in one that does — the number the log table shows (`FieldDayLog::qso_numbers`).
+    #[test]
+    fn every_contest_row_carries_its_qso_number() {
+        let mut e = Engine::with_settings(crate::settings::Settings {
+            mycall: "W9XYZ".into(),
+            fd_active: true,
+            fd_event: "ilqp".into(),
+            contest_qth_state: "IL".into(),
+            contest_qth_county: "MCLN".into(),
+            ..Default::default()
+        });
+        e.restore_field_day_if_enabled();
+        for (call, qth) in [("K9AAA", "COOK"), ("W9BBB", "LAKE"), ("K9AAA", "COOK")] {
+            let ex = vec![
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), qth.to_string()),
+            ];
+            assert!(e.contest_log_manual(call, &ex, "CW", None).unwrap());
+        }
+        let fd = e.snapshot().field_day.expect("in the party");
+        assert_eq!(
+            fd.log.iter().map(|q| q.nr).collect::<Vec<_>>(),
+            [Some(1), Some(2), Some(3)],
+            "the dupe is numbered too"
+        );
+        let wire = serde_json::to_value(&fd).unwrap();
+        assert_eq!(wire["log"][2]["nr"], 3, "{}", wire["log"][2]);
+    }
+
     #[test]
     fn a_banned_mode_contact_says_so_on_the_row_and_counts_for_nothing() {
         let mut e = Engine::with_settings(crate::settings::Settings {
