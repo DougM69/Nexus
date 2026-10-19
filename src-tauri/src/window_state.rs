@@ -692,6 +692,19 @@ pub fn set_window_on_top(window: tauri::WebviewWindow, on: bool) -> Result<Windo
     })
 }
 
+/// Bring the calling window to the front and give it the keyboard: un-minimised, shown and focused.
+/// The main window asks this for itself when a contest window sends the operator to a cockpit in it
+/// ("Work this contest in CW"): the screen they asked for is then the one in front of them, not one
+/// left behind the contest window. Nothing at the radio; only this window's place on the desktop.
+#[tauri::command]
+pub fn focus_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.is_minimized().unwrap_or(false) {
+        window.unminimize().map_err(|e| e.to_string())?;
+    }
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

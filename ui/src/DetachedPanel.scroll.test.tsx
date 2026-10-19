@@ -456,10 +456,11 @@ function declOf(el: Element, prop: string): string {
 describe('the contest logger window', () => {
   it('puts the log line first and never scrolls it; the last contacts and the screen give way under it', async () => {
     const { app, roots } = await mountPopout('contestlog')
-    const [line, recent, screenBox] = roots
-    expect(roots.map(name), 'the log line, the last contacts, then the contest screen').toEqual([
+    const [line, recent, , screenBox] = roots
+    expect(roots.map(name), 'the log line, the last contacts, their divider, then the contest screen').toEqual([
       'section.contest-logger-entry',
       'section.contest-logger-recent',
+      'div.pane-splitter.horizontal.contest-seam',
       'main.layout.single',
     ])
     // The line is a control strip: content height, never grown, never shrunk away…

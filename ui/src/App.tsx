@@ -159,6 +159,7 @@ import {
   resendChat,
   type RadioLaunchInfo,
   getOtaMapSpots,
+  focusWindow,
 } from './api'
 import {
   hotkeyRecallTarget,
@@ -201,6 +202,7 @@ import { ContestView } from './components/ContestView'
 import { ContestLargeEntry } from './components/ContestLogger'
 import { openContestLogger } from './features/contestLoggerLayout'
 import { ContestScreenAway, useContestScreenWindow } from './components/ContestScreenWindow'
+import { useWorkInRequests } from './features/contestWorkIn'
 import { useContestSwitch } from './contestSwitch'
 import { useOperatorBoxAsk } from './features/contestKeys'
 import { OperateDecodes } from './components/OperateDecodes'
@@ -2477,6 +2479,15 @@ function App() {
     [handleSetMode, settings?.fdActive, snap?.mode],
   )
 
+  // ⭐ "WORK THIS CONTEST IN CW / IN PHONE" FROM A CONTEST WINDOW (features/contestWorkIn): the same switch
+  // as the rail's, so the contest's S&P is entered where the session dropped and a station already in
+  // the contest keeps its role, and then this window comes to the front, where the operator asked to be.
+  // The Contest screen here passes `handleView` itself.
+  useWorkInRequests((next) => {
+    handleView(next)
+    void focusWindow().catch(() => {})
+  })
+
   // ⭐ CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`): the Contest screen, with an ask its
   // operator box answers by taking the caret. Only the view changes. A key in a log line leaves the
   // station's mode as it is, so the FT8/FT4 role `handleView` enters on the way in is not touched.
@@ -3140,9 +3151,15 @@ function App() {
       },
     }
   }
+  // CONTEST MODE ON, THE CONTEST NOT RUNNING: the CW and Phone log lines say so, with Resume, which enters
+  // the contest's S&P (never a CQ). Opening either screen re-enters on its own (`handleView`); this is for
+  // a session that did not come back, or dropped while the screen was open.
+  const resumeContest =
+    settings?.fdActive === true && snap.mode !== 'fieldDay' ? () => handleSetMode('fieldday-sp') : undefined
   const cwWorkspace = (
     <CwCockpit
       esmSetting={esmSettingFor('cw')}
+      onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.cw}
       pitchHz={settings?.cwPitchHz ?? 600}
@@ -3169,6 +3186,7 @@ function App() {
   const phoneWorkspace = (
     <PhoneCockpit
       esmSetting={esmSettingFor('phone')}
+      onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.phone}
       snap={snap}
@@ -3293,6 +3311,7 @@ function App() {
                 operatorBoxAbove={snap.fieldDay != null}
                 entryAbove={snap.fieldDay != null}
                 onPopOut={contestScreen.popOut}
+                onWorkIn={handleView}
               />
             )}
           </main>

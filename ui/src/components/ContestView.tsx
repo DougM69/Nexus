@@ -60,6 +60,11 @@ import { bandColor } from '../bandColors'
 const SCORE_NOTES: { noteKey: MessageKey }[] = [{ noteKey: 'settings.contestScore.incomplete' }]
 const SCORE_NOTE_KEYS: ReadonlySet<string> = new Set(SCORE_NOTES.map((n) => n.noteKey))
 import { modeClassOf } from '../features/needs'
+import { CONTEST_LOG_MAX_SHARE, CONTEST_LOG_SPLIT_MAX, CONTEST_LOG_SPLIT_MIN } from '../features/paneSeam'
+import { PaneSeam } from './PaneSeam'
+import { UtcClock } from './UtcClock'
+import { askMainToWorkIn, dismissWorkInHint, workInHintSeen, type WorkInView } from '../features/contestWorkIn'
+import { useFeatures } from '../useFeatures'
 
 /**
  * ⚠️ INVARIANT — the FD mode codes an entry is scored by, printed as they are logged and
@@ -225,6 +230,10 @@ interface Props {
   /** Opens this screen in a window of its own (App's, in the main window only — never the logger
    *  window's copy, the window itself or the Remote page): its Pop out, at the end of the banner. */
   onPopOut?: () => void
+  /** "Work this contest in CW / in Phone": the main window's own switch to that cockpit (App's
+   *  `handleView`). Absent in every other window, where a press asks the main window instead
+   *  (`askMainToWorkIn`, features/contestWorkIn). */
+  onWorkIn?: (view: WorkInView) => void
 }
 
 /**
@@ -2981,6 +2990,7 @@ export function ContestView({
   operatorBoxAbove = false,
   entryAbove = false,
   onPopOut,
+  onWorkIn,
 }: Props) {
   const observed = observation !== undefined
   // The mode the banned-mode chip names: the station's own, given its section.
@@ -2993,6 +3003,8 @@ export function ContestView({
   // contacts up) the moment the next contact landed. Pinned follows the run;
   // scrolled-up checking is never yanked.
   const logPin = usePinnedScroll<HTMLDivElement>()
+  // The log's box, for the divider above it that sizes it.
+  const logBox = useRef<HTMLDivElement>(null)
   const running = fieldDay?.running ?? false
   const log = fieldDay?.log ?? []
   const [exportError, setExportError] = useState<string | null>(null)
@@ -3002,6 +3014,13 @@ export function ContestView({
   // running the panel opens itself, ONCE: `openedForRun` means a club that deliberately
   // closes it is not fought on the next snapshot.
   const [bonusOpen, setBonusOpen] = useState(false)
+  // The work-in hint, until it is dismissed on this computer (features/contestWorkIn).
+  const [workInHint, setWorkInHint] = useState(() => !workInHintSeen())
+  // The route to the cockpits that send: only with Contest mode on, and never on a page that watches;
+  // one button per cockpit this station shows (Settings ▸ Features, read as the rail reads it).
+  const features = useFeatures()
+  const workInViews = (['cw', 'phone'] as const).filter((v) => features.enabled[v] !== false)
+  const workIn = fdActive && !observed && workInViews.length > 0
   const openedForRun = useRef(false)
 
   useEffect(() => {
@@ -3649,6 +3668,14 @@ export function ContestView({
             })}
           </span>
         ) : null}
+        {/* ⭐ THE CLOCK, large (the Illinois QSO Party, 2026-10-18: the operator squinted at the top bar's):
+            UTC first, the time a contest and its log run on, then this computer's local time beside it.
+            The top bar's own clock (`UtcClock`), so the two can never read differently. On the banner, so
+            the main window's screen, its pop-out and the logger window each show it. */}
+        <div className="contest-clock" role="group" aria-label={t('fieldDay.clock.aria')}>
+          <UtcClock />
+          <UtcClock local />
+        </div>
         {/* ⭐ THIS SCREEN IN A WINDOW OF ITS OWN, for another monitor (App's, in the main window). The
             scoreboard's own ⧉ Pop out, lower down, tears off the scoreboard alone, so this one is
             named for the screen to a screen reader. */}
@@ -3758,6 +3785,26 @@ export function ContestView({
             {t('fieldDay.role.sp')}
           </button>
         </div>
+        {/* ⭐ WORK THIS CONTEST IN CW / IN PHONE (a tester at the Illinois QSO Party, 2026-10-18, looked
+            for Enter Sends Message here): this screen never transmits, so it offers the way to the
+            cockpit that does, with the contest's strip on it (Enter Sends Message, Running / S&P, the
+            F-keys). In the main window that is its own switch; from another window a press asks the
+            main window, and sends the station nothing (features/contestWorkIn). */}
+        {workIn && (
+          <div className="fd-work-in" role="group" aria-label={t('fieldDay.workIn.aria')}>
+            {workInViews.map((view) => (
+              <button
+                key={view}
+                type="button"
+                className="export-btn"
+                title={view === 'cw' ? t('fieldDay.workIn.cw.title') : t('fieldDay.workIn.phone.title')}
+                onClick={() => (onWorkIn ?? askMainToWorkIn)(view)}
+              >
+                {view === 'cw' ? t('fieldDay.workIn.cw') : t('fieldDay.workIn.phone')}
+              </button>
+            ))}
+          </div>
+        )}
         {/* Spot me: one DX cluster spot of this station per press (ContestSpotMe.tsx). Not on a page
             that only watches. */}
         {fdActive && !observed && (
@@ -3938,6 +3985,22 @@ export function ContestView({
           </div>
         )}
       </div>
+      {/* …and, once, where sending happens, until it is dismissed on this computer. */}
+      {workIn && workInHint && (
+        <p className="fd-work-in-hint" role="note" aria-label={t('fieldDay.workIn.hint.aria')}>
+          {t('fieldDay.workIn.hint')}{' '}
+          <button
+            type="button"
+            className="settings-linkbtn"
+            onClick={() => {
+              dismissWorkInHint()
+              setWorkInHint(false)
+            }}
+          >
+            {t('fieldDay.workIn.hint.dismiss')}
+          </button>
+        </p>
+      )}
 
       {/* CLUB SYNC (chip + counters + band board) — only while hosting/joined */}
       {fieldDay?.club && (
@@ -4143,8 +4206,27 @@ export function ContestView({
       </div>
       )}
 
+      {/* THE LOG'S DIVIDER (the Illinois QSO Party, 2026-10-18: "splitters to resize sub-windows (county
+          list etc.)"). It sizes the log, and the multiplier board above takes what is left, down to its
+          floor, past which the screen scrolls. It paints NOTHING until moved: the log's stock height is
+          the sheet's 190 px cap (`.fd-log[data-sized]`, styles.css). Moved, the size is stored per window
+          and fitted into the screen on every load and resize; Backspace or a double-click gives the stock
+          log back. It stops nothing and sends nothing. */}
+      <PaneSeam
+        axis="y"
+        varName="--fd-log-h"
+        strip={logBox}
+        after
+        storageKey="nexus.split.contest.log"
+        min={CONTEST_LOG_SPLIT_MIN}
+        max={CONTEST_LOG_SPLIT_MAX}
+        maxShare={CONTEST_LOG_MAX_SHARE}
+        defaultPct={null}
+        label={t('fieldDay.log.splitter.label')}
+        className="contest-seam"
+      />
       {/* LOG TABLE */}
-      <div className="fd-log">
+      <div className="fd-log" ref={logBox}>
         <ContestLogHead fieldDayColumns={fdEventIsFieldDay} isWfd={isWfd} slotColumns={slotColumns} role={fieldDay?.role} />
         <div className="fd-log-scroll" ref={logPin.ref} onScroll={logPin.onScroll}>
           {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}

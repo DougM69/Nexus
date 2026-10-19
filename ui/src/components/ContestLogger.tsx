@@ -67,10 +67,11 @@
 // engine, so a contact logged here is credited as the operator's own would be. A Remote viewer
 // never sees this window: the stream is the main window's picture.
 
-import { useEffect, useId, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import { getSatTransponder, getWindowOnTop, setWindowOnTop, type FdRulesetDto, type WindowOnTop } from '../api'
 import { isFieldDay } from '../fdEvent'
 import { BOX_SCALE_MAX, BOX_SCALE_MIN, BOX_SCALE_STEP, boxScaleValue } from '../features/panelState'
+import { CONTEST_RECENT_SPLIT_MAX, CONTEST_RECENT_SPLIT_MIN } from '../features/paneSeam'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
 import { pollSingleFlight } from '../singleFlight'
@@ -83,6 +84,7 @@ import { contestLogMode, stationMode, usePskName } from '../features/contestMode
 import { annotate, ContestLogHead, ContestLogRow, ContestView, OperatorBox } from './ContestView'
 import { NoCreditChip } from './FdAdvisories'
 import { LogEntry } from './LogEntry'
+import { PaneSeam } from './PaneSeam'
 
 /** Where the entry keeps its text size. Per surface (`windowScope`): each window its own, on this
  *  computer — the main window's Contest screen under the bare key, this window under its own, which
@@ -136,7 +138,15 @@ function KeepInFront() {
 }
 
 /** The newest contacts of the running contest, newest first, in the contest screen's own columns. */
-function LastContacts({ fieldDay, style }: { fieldDay: FieldDayStatus; style: CSSProperties }) {
+function LastContacts({
+  fieldDay,
+  style,
+  boxRef,
+}: {
+  fieldDay: FieldDayStatus
+  style: CSSProperties
+  boxRef: RefObject<HTMLElement>
+}) {
   const titleId = useId()
   const fieldDayColumns = isFieldDay(fieldDay.event)
   const slotColumns = fieldDayColumns ? [] : (fieldDay.receives ?? [])
@@ -151,7 +161,7 @@ function LastContacts({ fieldDay, style }: { fieldDay: FieldDayStatus; style: CS
     [fieldDay.log],
   )
   return (
-    <section className="contest-logger-recent" aria-labelledby={titleId} style={style}>
+    <section className="contest-logger-recent" aria-labelledby={titleId} style={style} ref={boxRef}>
       <div className="contest-logger-recent-body">
         <h2 id={titleId} className="contest-logger-recent-title">
           {t('contestLogger.recent.title')}
@@ -240,6 +250,7 @@ export function ContestLargeEntry({
     surfaceSet(TEXT_SCALE_KEY, String(next))
   }
   const scaled = { '--logger-text-scale': textScale } as CSSProperties
+  const recentBox = useRef<HTMLElement>(null)
   return (
     <>
       <section className="contest-logger-entry" aria-label={t('contestLogger.entry.aria')}>
@@ -304,7 +315,28 @@ export function ContestLargeEntry({
           />
         </div>
       </section>
-      {!entryOnly && <LastContacts fieldDay={fieldDay} style={scaled} />}
+      {!entryOnly && (
+        <>
+          <LastContacts fieldDay={fieldDay} style={scaled} boxRef={recentBox} />
+          {/* THE LAST CONTACTS' DIVIDER: it sizes the list, and the Contest screen under it takes what is
+              left (the Illinois QSO Party, 2026-10-18: "splitters to resize sub-windows"). The list stays
+              no taller than its rows, so the divider shortens it and gives the room back; it paints
+              nothing until moved (`.contest-logger-recent[data-sized]`, styles.css), is stored per window
+              and fitted into the window on every load and resize, and Backspace or a double-click puts
+              the list's own height back. It stops nothing and sends nothing. */}
+          <PaneSeam
+            axis="y"
+            varName="--contest-recent-h"
+            strip={recentBox}
+            storageKey="nexus.split.contest.recent"
+            min={CONTEST_RECENT_SPLIT_MIN}
+            max={CONTEST_RECENT_SPLIT_MAX}
+            defaultPct={null}
+            label={t('contestLogger.recent.splitter.label')}
+            className="contest-seam"
+          />
+        </>
+      )}
     </>
   )
 }

@@ -10201,6 +10201,21 @@ input.cw-pitch::-webkit-inner-spin-button {
   max-width: 96px;
 }
 /* Pending POTA/SOTA hunt chip — the QSO will be park-tagged on log (matched by callsign). */
+/* The CW and Phone log line with Contest mode on and the contest not running (LogEntry): one warning line
+   over the everyday form, with Resume beside the words. */
+.le-contest-resume {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text);
+  background: color-mix(in srgb, var(--alert-warning) 14%, var(--bg-elev));
+  border: 1px solid color-mix(in srgb, var(--alert-warning) 40%, var(--border-soft));
+  border-radius: var(--radius-sm);
+}
 .le-hunt-chip {
   display: inline-flex;
   align-items: center;
@@ -12623,6 +12638,19 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   max-height: 190px;
   overflow-y: auto;
 }
+/* THE OPERATOR'S LOG HEIGHT: once the divider above the log is moved (ContestView), the log is
+   `--fd-log-h`, a % of the screen the divider paints on `.fieldday` and fits into it on load and on
+   every resize (features/paneSeam CONTEST_LOG_*), and its rows scroll inside that height instead of
+   under the stock cap. The board above keeps growing into what is left, down to its own floor. */
+.fd-log[data-sized] {
+  flex: 0 0 var(--fd-log-h);
+  min-height: 0;
+}
+.fd-log[data-sized] > .fd-log-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: none;
+}
 .fd-log-row {
   border-bottom: 1px solid var(--border-soft);
   font-size: calc(13px * var(--text-scale));
@@ -12705,9 +12733,42 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   white-space: nowrap;
 }
-/* The screen's Pop out (main window only) ends the banner, at its right edge like every header's: on its
-   own auto margin, or right after the rules line, which already took the row's free space. */
-.fd-event-rules + .fd-screen-popout {
+/* THE CONTEST CLOCK (ContestView), large, at the banner's right end: on its own auto margin, or right
+   after the rules line, which already took the row's free space. UTC reads first and largest, the
+   local time beside it a size down; each on one line ("23:05:09 UTC"), the dashboard bar's way. The
+   time is the top bar's own clock (`UtcClock`); only its size is the banner's. */
+.contest-clock {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-left: auto;
+}
+.fd-event-rules + .contest-clock {
+  margin-left: 0;
+}
+.contest-clock .utc-clock {
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--space-1);
+  line-height: 1;
+}
+.contest-clock .utc-time {
+  font-size: calc(28px * var(--text-scale));
+  font-weight: 800;
+  color: var(--text);
+}
+.contest-clock .local-clock .utc-time {
+  font-size: calc(20px * var(--text-scale));
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.contest-clock .utc-label {
+  font-size: calc(12px * var(--text-scale));
+}
+/* The screen's Pop out (main window only) ends the banner, at its right edge like every header's,
+   right after the clock, which already took the row's free space. */
+.contest-clock + .fd-screen-popout {
   margin-left: 0;
 }
 /* The Field Day mode switch, first in the banner, beside the contest's name and window. The
@@ -12724,6 +12785,23 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
+}
+/* "Work this contest in CW / in Phone" (ContestView): two of the control row's buttons, kept together
+   when the row wraps. */
+.fd-work-in {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--space-2);
+}
+/* …and, once, the line under the control row that says sending happens in those cockpits. */
+.fd-work-in-hint {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px var(--space-4);
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border-soft);
 }
 /* The lines under the banner: what keeps the contest from starting, or which rules apply now. */
 .fd-mode-status {
@@ -20034,6 +20112,20 @@ button.cq-skiptx1.on {
   background: var(--bg-elev);
   border-top: 1px solid var(--border-soft);
 }
+/* THE OPERATOR'S LAST-CONTACTS HEIGHT: once the divider under the list is moved (ContestLargeEntry),
+   the list is at most `--contest-recent-h`, a % of the window the divider paints on the list's parent
+   (this window, or the main window's `.contest-screen`) and fits into it on load and on every resize
+   (features/paneSeam CONTEST_RECENT_*). A cap, not a height, so the list is never taller than its
+   rows; the stock floor goes with the stock height, since the divider's own is 4em. */
+.contest-logger-recent[data-sized] {
+  max-height: var(--contest-recent-h);
+  min-height: 0;
+}
+/* The sm tier keeps the contest windows' column as it is (1024×768, the supported floor, lands there),
+   so it keeps their two dividers; xs hides them with every other divider. */
+[data-viewport='sm'] .pane-splitter.contest-seam {
+  display: block;
+}
 .contest-logger > .layout.single {
   min-height: min(9em, 30%);
   border-top: 1px solid var(--border-soft);
@@ -20239,7 +20331,7 @@ button.cq-skiptx1.on {
   overflow-y: auto;
   --logger-outer-text-scale: var(--text-scale);
 }
-.contest-screen > .contest-logger-recent + .layout.single {
+.contest-screen > .contest-logger-recent ~ .layout.single {
   min-height: min(9em, 30%);
   border-top: 1px solid var(--border-soft);
 }

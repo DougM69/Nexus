@@ -156,6 +156,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("fetch_fd_rules",                 RunsAtShack, "Updates the shack's Field Day rules."),
     ("fetch_lotw_users",               RunsAtShack, "Updates the shack's LoTW user list."),
     ("fetch_tles_now",                 RunsAtShack, "Updates the shack's satellite elements."),
+    ("focus_window",                   RunsHere,    "A window on this computer."),
     ("freq_marker_qsy",                RunsAtShack, "Tunes the shack's rig back to a marked frequency; refused while transmitting, keys nothing."),
     ("geocode_city",                   RunsAtShack, "A city search from the shack, for its location."),
     ("get_activation",                 RunsAtShack, "The shack's activation."),

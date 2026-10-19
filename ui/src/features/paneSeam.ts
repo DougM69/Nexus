@@ -136,6 +136,20 @@ export const LOG_GLOBE_STOCK_PX = 320
 export const LOG_GLOBE_SPLIT_MIN: SplitClamp = (g) => 8 * g.fontPx
 export const LOG_GLOBE_SPLIT_MAX: SplitClamp = (g) => Math.max(LOG_GLOBE_STOCK_PX, 0.9 * (g.span ?? 0))
 
+/** The Contest screen's log once sized, from its own rules (`.fd-log[data-sized]`): a 6em floor (the
+ *  column heads and two contacts), no ceiling of its own, and never more than three quarters of the
+ *  screen (`CONTEST_LOG_MAX_SHARE`, the divider's `maxShare`), so the multiplier board above it keeps a
+ *  quarter. Stock, the log is capped at 190 px and the board takes the rest; that is where it starts. */
+export const CONTEST_LOG_SPLIT_MIN: SplitClamp = (g) => 6 * g.fontPx
+export const CONTEST_LOG_SPLIT_MAX: SplitClamp = Infinity
+export const CONTEST_LOG_MAX_SHARE = 0.75
+
+/** The last contacts under a contest log line once sized (`.contest-logger-recent[data-sized]`): a 4em
+ *  floor (the title and the column heads), and no ceiling of its own, because the sized list is still
+ *  never taller than its rows (a cap, not a height), which only the measured range can know. */
+export const CONTEST_RECENT_SPLIT_MIN: SplitClamp = (g) => 4 * g.fontPx
+export const CONTEST_RECENT_SPLIT_MAX: SplitClamp = Infinity
+
 /** A split percentage as stored by any build (Splitter wrote the same key and format): NaN-safe,
  *  and the impossible ends — 0, 100 and outside — read as "never set". */
 export function parseSplitPct(raw: string | null): number | null {

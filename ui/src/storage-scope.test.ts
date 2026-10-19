@@ -122,6 +122,10 @@ export const PER_SURFACE = [
   'nexus.spotlegend',
   // Connect's bottom strip height (layout L7): a % of THIS window's grid, like the strips below.
   'nexus.split.connect.strip',
+  // The Contest screen's log height and the last contacts' over it: a % of THIS window's screen, like
+  // the strips around them (the main window's Contest screen, its pop-out and the logger window differ).
+  'nexus.split.contest.log',
+  'nexus.split.contest.recent',
   'nexus.split.cw.scope',
   // JS8's waterfall height (layout L2): a % of THIS window's shell, like the three beside it.
   'nexus.split.js8.waterfall',
@@ -282,6 +286,11 @@ const SHARED = [
   // stamp the band map window hears as a `storage` event (features/freqMarkers.ts). SHARED on purpose:
   // the entry and the band map are different windows, which is the whole reason for both keys.
   'nexus.contest.entryCall',
+  // "Work this contest in CW / in Phone" from a contest window (features/contestWorkIn): the request the
+  // main window hears as a `storage` event, the whole mechanism between the two; and the hint beside the
+  // buttons, dismissed once for this computer whichever window showed it.
+  'nexus.contest.workIn',
+  'nexus.contest.workInHint',
   'nexus.freqMarkers.changed',
   'nexus.waterfall.detached',
   'nexus.waterfall.gain',
@@ -450,6 +459,8 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.operate.tx',
     'nexus.split.connect.strip',
     'nexus.split.logbook.globe',
+    'nexus.split.contest.log',
+    'nexus.split.contest.recent',
   ],
   // The Needed board's filter record: its own key as the view and the pop-out, or the key the
   // host of a PANE of it passes (NeededPane — the Phone and CW cockpits', #345 and plan H8, and the
@@ -651,6 +662,8 @@ describe('call sites agree with the classification', () => {
       ['components/OperateCockpit.tsx', 'nexus.split.operate.tx'],
       ['components/ConnectView.tsx', 'nexus.split.connect.strip'],
       ['components/Logbook.tsx', 'nexus.split.logbook.globe'],
+      ['components/ContestView.tsx', 'nexus.split.contest.log'],
+      ['components/ContestLogger.tsx', 'nexus.split.contest.recent'],
     ]) {
       expect(readFileSync(join(SRC, file), 'utf8')).toContain(`storageKey="${key}"`)
     }

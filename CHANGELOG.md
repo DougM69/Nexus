@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **CW and Phone: a Resume line when the contest is not running.** If Contest mode is on but the contest
+  session is not running (it did not start again when you opened the screen, or it stopped while you were on
+  it), the log line said nothing and showed the everyday form, with no exchange boxes and no dupe check. It
+  now shows "Contest mode is on, but the contest is not running" and a **Resume** button. Resume puts the
+  contest back in S&P and never starts calling CQ.
+- **Contest screen: "Work this contest in CW" and "Work this contest in Phone".** The Contest screen and the
+  Contest Logger window log and keep score but never transmit. With Contest mode on, these two buttons take the
+  main window to the CW or Phone screen, where the contest's log line has Enter Sends Message, Running / S&P and
+  the F-key messages. Pressed in another window, they bring the main window to the front on that screen. If the
+  contest had dropped out, it picks up again in S&P; it never starts calling CQ. A one-time note beside them
+  explains that sending happens there. "Got it" hides the note on this computer.
+- **Contest screen: a big clock.** The Contest screen's top line now shows the time large enough to read at a
+  glance: UTC first, your local time beside it. It is the same clock as the top bar's, so the two always agree,
+  and it is on the screen in the main window, the popped-out Contest screen and the Contest Logger window.
+- **Contest screen: drag to resize the log and the last contacts.** A divider above the Contest screen's log
+  sizes the log against the county/section board above it, and a divider under the last contacts sizes them
+  against the screen below. Drag either, or focus it and use the arrow keys (Shift for bigger steps, Home and
+  End for the ends); double-click or Backspace puts it back. Each window remembers its own sizes (the main
+  window, the popped-out Contest screen and the Contest Logger window), and a size too big for a smaller window
+  is fitted to it when the window opens.
 - **Contest entry: Shift+Space goes back a box.** Space already moves to the next box, as in N1MM; Shift+Space
   now moves back the other way (from Call it goes to the last box), so a wrong entry is fixed without the mouse.
   Shift+Tab still works, and Alt+W still wipes the line and returns to the Call box.
