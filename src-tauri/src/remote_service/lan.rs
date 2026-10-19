@@ -127,6 +127,8 @@ pub(crate) mod audio_road;
 mod book;
 mod channel;
 pub(crate) mod commands;
+/// Enrolling a computer on this network by its own sign-in to the station's account.
+pub(crate) mod enrol;
 /// The datagram layer of the roads beside the link (the client core's, which both ends read).
 pub(crate) use tempo_client::datagram;
 mod gate;
@@ -333,6 +335,8 @@ pub(super) struct Deps {
     pub feeds: Feeds,
     /// The LAN key and the paired computers.
     pub book: Arc<Book>,
+    /// Whether, and against what, a computer may enrol by its own sign-in (`enrol`).
+    pub enrolment: Arc<enrol::Enrolment>,
     pub resolve: Resolve,
     pub advertise: Advertise,
     pub firewall: FirewallSays,
@@ -900,8 +904,12 @@ impl Listener {
             return Err("noNetwork");
         }
         let (paired, pairing) = deps.book.verifier();
-        let tls = tls::server(&identity, paired, pairing).map_err(|_| "unavailable")?;
-        let desk = pairing::Desk::new(deps.book.clone(), &identity).ok_or("unavailable")?;
+        // An unknown key is taken for a pairing-only or an enrol-only connection: while the pairing
+        // window is open, or while the station can check an enrolment.
+        let unknown = deps.enrolment.or_pairing(pairing);
+        let tls = tls::server(&identity, paired, unknown).map_err(|_| "unavailable")?;
+        let desk = pairing::Desk::new(deps.book.clone(), &identity, deps.enrolment.clone())
+            .ok_or("unavailable")?;
         let socket = tokio::net::TcpListener::bind(SocketAddr::new(network.address().into(), port))
             .await
             .map_err(|e| match e.kind() {

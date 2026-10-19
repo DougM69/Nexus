@@ -652,6 +652,9 @@ struct Control {
     /// own lock, for the tunnel's computers' station control (`Authority::hold_tunnel_devices`).
     /// Cleared before every stop's invalidation, set only by [`Control::start`].
     hosted: Arc<std::sync::atomic::AtomicBool>,
+    /// What a computer enrolling on the LAN by its own sign-in is checked against, armed by the
+    /// controller while the station is bound to its owner ([`Controller::arm_enrolment`]).
+    enrolment: Arc<lan::enrol::Enrolment>,
 }
 impl Control {
     fn stop(&mut self) {
@@ -862,8 +865,12 @@ impl Service {
         resolve: lan::Resolve,
         commands: lan::commands::Commands,
     ) -> Self {
-        let authority = self.control.lock().ok().map(|c| c.operations.clone());
-        if let Some(authority) = authority {
+        let held = self
+            .control
+            .lock()
+            .ok()
+            .map(|c| (c.operations.clone(), c.enrolment.clone()));
+        if let Some((authority, enrolment)) = held {
             let dispatcher =
                 crate::command_dispatch::Dispatcher::new(crate::command_dispatch::ShackStores {
                     engine: engine.clone(),
@@ -885,6 +892,7 @@ impl Service {
                     engine,
                     feeds,
                     book,
+                    enrolment,
                     resolve,
                     advertise: lan::advertise(),
                     firewall: lan::firewall_says(),
@@ -1409,6 +1417,7 @@ impl Controller {
     /// browsers. A locked or unreadable store, a record written for another pairing, or a record
     /// that says off all leave it off.
     async fn resume(&mut self, binding: Binding) {
+        self.arm_enrolment();
         let remembered = match self.vault.state() {
             Ok(state) => state.filter(|s| {
                 s.binding == binding
@@ -1795,6 +1804,7 @@ impl Controller {
         }
         self.binding = Some(binding);
         self.pending = None;
+        self.arm_enrolment();
         self.reflect("disabled");
         let turned_on = self.control.lock().ok().and_then(|mut control| {
             (control.generation == generation).then(|| {
@@ -1806,6 +1816,71 @@ impl Controller {
             self.enable(generation)?;
         }
         Ok(())
+    }
+    /// Arms the LAN's enrolment with what the station keeps of its account (`lan::enrol`): its owner,
+    /// the issuer's keys and the people invited, read now. Disarmed while the station is not bound
+    /// to an owner of its own, while either is not kept, or while one of the three does not read.
+    fn arm_enrolment(&self) {
+        let vault = &self.accounts.vault;
+        let ready = self.accounts.service.as_ref().ok().and_then(|service| {
+            let station_id = &self.binding.as_ref()?.station_id;
+            let owner = vault
+                .owner()
+                .ok()
+                .flatten()
+                .filter(|owner| owner.station_id == *station_id)?;
+            let tenant = service.tenant();
+            let keys = vault
+                .account_keys()
+                .ok()
+                .flatten()
+                .filter(|kept| kept.issuer == tenant.issuer)?
+                .keys;
+            let invites = match vault.people().ok()? {
+                Some(people) if people.station_id == *station_id => people.invites,
+                _ => Vec::new(),
+            };
+            Some(lan::enrol::Ready {
+                tenant,
+                owner,
+                keys,
+                invites,
+                vault: vault.clone(),
+                now_s: self.accounts.now_s,
+            })
+        });
+        if let Ok(control) = self.control.lock() {
+            control.enrolment.arm(ready);
+        }
+    }
+    /// The service's list, heard: every device the station keeps for the LAN on a proof that the
+    /// service no longer lists as approved is taken out of that keeping (`account::sweep`), and out
+    /// of the LAN at once, as a removal at the shack takes it out.
+    fn sweep(&self, devices: &[Device], now_s: u64) {
+        let Some(binding) = &self.binding else {
+            return;
+        };
+        let now = now_ms();
+        let rows: Vec<serde_json::Value> = devices
+            .iter()
+            .map(|d| {
+                let mut row = d.proof_row();
+                row["approved"] = u8::from(d.approved == 1 && d.expires_at > now).into();
+                row
+            })
+            .collect();
+        let Ok(gone) = account::sweep(&rows, &*self.accounts.vault, &binding.station_id, now_s)
+        else {
+            return;
+        };
+        let lan = self.control.lock().ok().and_then(|c| c.lan.clone());
+        for pin in gone {
+            let pin = lan::pairing::hex32(&pin);
+            if let (Some(lan), Some(pin)) = (&lan, pin) {
+                // Not every kept device is in the LAN's book (a browser never is).
+                let _ = lan.revoke(&lan::device_id(&pin));
+            }
+        }
     }
     fn reflect_account(&self) {
         if let Ok(mut status) = self.status.lock() {
@@ -1835,6 +1910,7 @@ impl Controller {
         };
         let mut unconfirmed = BTreeMap::new();
         let mut reproof = None;
+        let now_s = (self.accounts.now_s)();
         if !waiting.is_empty() {
             let rows: Vec<serde_json::Value> = waiting.iter().map(|d| d.proof_row()).collect();
             let station_id = self
@@ -1842,7 +1918,6 @@ impl Controller {
                 .as_ref()
                 .map(|b| b.station_id.clone())
                 .unwrap_or_default();
-            let now_s = (self.accounts.now_s)();
             let results = match &self.accounts.service {
                 Ok(service) => {
                     let (results, again) =
@@ -1877,6 +1952,9 @@ impl Controller {
                 }
             }
         }
+        self.sweep(devices, now_s);
+        // The issuer's keys may be new, and the owner or the people may have changed.
+        self.arm_enrolment();
         if let Ok(mut status) = self.status.lock() {
             status.account.unconfirmed = unconfirmed;
             // Known only when the issuer's keys were read for this list.
@@ -2328,6 +2406,7 @@ impl Controller {
                     control.remember(Persist::Removed);
                 }
                 self.binding = None;
+                self.arm_enrolment();
                 self.pending = None;
                 self.reflect("unpaired");
             }

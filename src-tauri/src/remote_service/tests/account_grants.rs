@@ -523,3 +523,99 @@ async fn the_operators_own_decision_outlasts_the_next_list() {
     );
     assert_eq!(again.pinned_devices, vec![BROWSER.to_string()]);
 }
+
+// ---- The LAN's side ------------------------------------------------------------------------------
+
+/// The LAN takes enrolments while the station is bound to an owner of its own, with the issuer's keys
+/// kept: from the launch on, and no longer once the station is removed.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_lan_takes_enrolments_only_while_the_station_has_its_owner() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let service = launch_owned(&cloud, &vault);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    let open = || service.control.lock().unwrap().enrolment.open();
+    assert!(!open(), "no owner kept: closed");
+
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_owned(&cloud, &vault);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    let open = || service.control.lock().unwrap().enrolment.open();
+    assert!(open(), "bound to its owner: open");
+    service.action(Action::Forget {}).await.unwrap();
+    assert!(!open(), "removed: closed");
+
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let mut owner = vault.owner().unwrap().unwrap();
+    owner.station_id = "20000000-0000-4000-8000-0000000000ff".into();
+    vault.save_owner(&owner).unwrap();
+    let service = launch_owned(&cloud, &vault);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    let open = || service.control.lock().unwrap().enrolment.open();
+    assert!(!open(), "another station's owner: closed");
+}
+
+/// ★ A computer kept for the LAN on its proof stays while the service lists it as approved, and
+/// leaves the LAN's book and its keeping at the first list that no longer does. A computer paired
+/// by code, which the station keeps on no proof, is left alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_the_service_stops_listing_leaves_the_lan() {
+    use crate::remote_service::lan::tests::{LanStore, Scratch};
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let enrolled: [u8; 32] = tempo_stream::protocol::hex_bytes(&sha256(&key("computerLan")))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let paired: [u8; 32] = [7; 32];
+    let (_, station) = station_key::Signer::generate().unwrap();
+    let store = LanStore::holding(
+        &station,
+        "60000000-0000-4000-8000-0000000000aa",
+        &[(&paired, "Den PC"), (&enrolled, "DESKTOP-7Q")],
+    );
+    let mut cache = tempo_client::account::DeviceCache::new(STATION);
+    cache
+        .keep(CachedDevice {
+            pin: sha256(&key("computerLan")),
+            role: Role::Operate,
+            guest: false,
+            issued_at: cases()["issuedAt"].as_u64().unwrap(),
+            confirmed_at: 0,
+        })
+        .unwrap();
+    vault.save_device_cache(&cache).unwrap();
+    let scratch = Scratch::new();
+    let engine = engine();
+    let service =
+        super::lan_grants::with_lan(launch_owned(&cloud, &vault), &engine, &store, &scratch);
+    let names = |status: &Status| -> Vec<String> {
+        let mut names: Vec<String> = status
+            .lan
+            .as_ref()
+            .map(|lan| lan.devices.iter().map(|d| d.name.clone()).collect())
+            .unwrap_or_default();
+        names.sort();
+        names
+    };
+    eventually(&service, "the book read", |s| names(s).len() == 2).await;
+
+    let status = listed(
+        &service,
+        &cloud,
+        vec![computer_row(&token("computer"), "operate")],
+    )
+    .await;
+    assert_eq!(names(&status), vec!["DESKTOP-7Q", "Den PC"]);
+    let kept = vault.device_cache().unwrap().unwrap().devices;
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].confirmed_at, fixture_now(), "confirmed by the list");
+
+    // Removed on the web: listed, no longer approved.
+    let mut removed = computer_row(&token("computer"), "operate");
+    removed["approved"] = 0.into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [removed] }).to_string();
+    let status = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(names(&status), vec!["Den PC"]);
+    assert_eq!(vault.device_cache().unwrap().unwrap().devices, Vec::new());
+}

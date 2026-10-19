@@ -87,6 +87,11 @@ impl Service {
         })
     }
 
+    /// The tenant this build signs in to.
+    pub(crate) fn tenant(&self) -> &'static Tenant {
+        self.tenant
+    }
+
     /// The service's API audience (`GET /api/remote/config`): only that. The issuer and the
     /// application are this build's own.
     async fn audience(&self) -> Result<String, &'static str> {
