@@ -2195,11 +2195,14 @@ export function LogEntry({
    * have no space-stripping of their own, so without it a reflexive space would quietly log
    * a class of "3A " or a section of " WI".
    */
-  const onExchangeSpace = (e: React.KeyboardEvent, next: HTMLInputElement | null) => {
+  const onExchangeSpace = (e: React.KeyboardEvent, next: HTMLInputElement | null, prev: HTMLInputElement | null) => {
     if (e.key !== ' ' && e.code !== 'Space') return
     e.preventDefault()
-    next?.focus()
-    next?.select()
+    // SHIFT+SPACE WALKS BACK, the reverse of the same loop (Call ← field₁ ← … ← Call), as Shift+Tab
+    // does in DOM order: a wrong box is corrected without the mouse.
+    const to = e.shiftKey ? prev : next
+    to?.focus()
+    to?.select()
   }
 
   // ⭐ THE SENT SIDE: what the session is composing right now, as a VECTOR. Never a
@@ -2769,8 +2772,12 @@ export function LogEntry({
               onChange={(e) => setLogCall(e.target.value.replace(/\s+/g, '').toUpperCase())}
               onBlur={onCallBlur}
               onKeyDown={(e) => {
-                // SPACE walks Call → field₁, whatever field₁ is.
-                onExchangeSpace(e, fdBoxRefs.current[fdReceives[0]?.key ?? ''] ?? null)
+                // SPACE walks Call → field₁, whatever field₁ is; Shift+Space back to the last.
+                onExchangeSpace(
+                  e,
+                  fdBoxRefs.current[fdReceives[0]?.key ?? ''] ?? null,
+                  fdBoxRefs.current[fdReceives[fdReceives.length - 1]?.key ?? ''] ?? null,
+                )
                 onEnter(e)
               }}
               placeholder={LOG_EXAMPLES.call}
@@ -2791,6 +2798,9 @@ export function LogEntry({
             // The "RST sent" box stands just before the received report, sent then received, as
             // N1MM lays out Snt and Rcv (before the first box, for a contest that receives none).
             const sentHere = sentRstConst !== undefined && i === Math.max(0, fdReceives.findIndex((r) => r.kind === 'rst'))
+            // Where Shift+Space goes from this box (and from the "RST sent" box before it): the box
+            // before it, or Call from the first. Read at the key press, as the refs are.
+            const prevBox = () => (i > 0 ? (fdBoxRefs.current[fdReceives[i - 1].key] ?? null) : callInputRef.current)
             return (
             <Fragment key={f.key}>
             {sentHere && (
@@ -2810,7 +2820,7 @@ export function LogEntry({
                     setFdField(SENT_RST_KEY, e.target.value.replace(/\s+/g, ''))
                   }}
                   onKeyDown={(e) => {
-                    onExchangeSpace(e, fdBoxRefs.current[f.key] ?? null)
+                    onExchangeSpace(e, fdBoxRefs.current[f.key] ?? null, prevBox())
                     onEnter(e)
                   }}
                   placeholder={sentRstDefault}
@@ -2867,6 +2877,7 @@ export function LogEntry({
                   onExchangeSpace(
                     e,
                     next ? (fdBoxRefs.current[next.key] ?? null) : callInputRef.current,
+                    prevBox(),
                   )
                   onEnter(e)
                 }}

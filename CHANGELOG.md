@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contest entry: Shift+Space goes back a box.** Space already moves to the next box, as in N1MM; Shift+Space
+  now moves back the other way (from Call it goes to the last box), so a wrong entry is fixed without the mouse.
+  Shift+Tab still works, and Alt+W still wipes the line and returns to the Call box.
 - **Contest entry: the county/state box fills itself from your own log.** When you type a call, the box takes
   the county or state from your last contact with that station in this contest, else from your call-history
   file, else from your most recent contact with them anywhere in your log (looked up by call, so a big log costs
