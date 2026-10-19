@@ -16234,6 +16234,29 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.call_station_ctx(dxcall, dxgrid, reply_msg, reply_snr, dx_freq)
     }
 
+    /// A logger's WSJT-X UDP Reply (GridTracker, JTAlert): [`Self::work_station`] on the clicked
+    /// line, then TX armed whatever "double-click sets Tx" says, as before.
+    ///
+    /// ⛔ **Another program never overrides a stop.** While the operator's stop holds
+    /// (`tx_stop_hold`) or a watchdog trip stands, the Reply is refused whole: no station is
+    /// worked, nothing is armed, and neither flag comes down (working a contest CQ enters the
+    /// contest's S&P, whose entry restarts the watchdog clock). TX stays off until the operator's
+    /// own act turns it back on.
+    pub fn answer_udp_reply(
+        &mut self,
+        dxcall: &str,
+        message: &str,
+        snr: i32,
+        dx_freq: Option<f32>,
+    ) -> Result<(), String> {
+        if self.tx_stop_hold || self.tx_watchdog {
+            return Err("TX is stopped: turn TX on in Nexus before answering from a logger".into());
+        }
+        self.work_station(dxcall, None, Some(message), Some(snr), dx_freq)?;
+        self.set_tx_enabled(true);
+        Ok(())
+    }
+
     /// The CQ a click hands to the running contest's S&P ([`Self::work_station`]): the click's
     /// message is a CQ from the clicked station, not from you, while the contest's own FT8/FT4
     /// messages apply. Those messages, and the CQ's sender and grid.
@@ -16847,8 +16870,34 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     pub fn broadcast(&mut self, text: &str) {
+        if self.queue_broadcast(text) {
+            // Broadcasting IS an explicit "put this on the air" action — arm TX so the
+            // canned band macros key on the next over without a separate Enable-Tx click.
+            self.reset_tx_watchdog();
+            self.arm_tx_now();
+        }
+    }
+
+    /// A logger's WSJT-X FreeText with "send" set (JTAlert, GridTracker). In WSJT-X it sets Tx5
+    /// and selects it as the next message (`on_txb5_clicked`), which goes out only if TX is
+    /// already enabled. So here the text is queued only while the operator has TX armed (a stop
+    /// and a watchdog trip both disarm), and this never arms TX, never restarts the watchdog
+    /// clock and never clears a stop: another program does not decide that the station transmits.
+    pub fn udp_free_text(&mut self, text: &str) -> Result<(), String> {
+        if !self.tx_enabled {
+            return Err(
+                "TX is off: turn TX on in Nexus before sending a logger's free text".into(),
+            );
+        }
+        self.queue_broadcast(text);
+        Ok(())
+    }
+
+    /// Queue `text` for the air and show it in band activity. Arms nothing. `false` when there
+    /// is nothing to send or nothing to send it on.
+    fn queue_broadcast(&mut self, text: &str) -> bool {
         if text.trim().is_empty() {
-            return; // nothing to say — never put a bare "DE <MYCALL>" carrier on the air
+            return false; // nothing to say — never put a bare "DE <MYCALL>" carrier on the air
         }
         // Receive-only tier: nothing to broadcast on. This is reachable WITHOUT any
         // Nexus UI action — a companion app's FreeText-with-send datagram (JTAlert,
@@ -16856,9 +16905,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // not only in the buttons. Without it the text is queued, echoed into the
         // band feed as if sent, and silently dropped at the wave builder.
         if self.tier_is_rx_only(self.app.tier()) {
-            return;
+            return false;
         }
-        self.reset_tx_watchdog();
         let mycall = self.settings.mycall.clone();
         let full = tempo_core::inbox::broadcast_text(&mycall, text);
         let sane = tempo_core::text::sanitize(&full);
@@ -16878,9 +16926,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         self.app.note_broadcast(text);
         self.record_own_tx(text.to_string()); // band activity shows the clean message
-                                              // Broadcasting IS an explicit "put this on the air" action — arm TX so the
-                                              // canned band macros key on the next over without a separate Enable-Tx click.
-        self.arm_tx_now();
+        true
     }
     /// The current worked/active peer — drives the `!` CW macro + logging. `None` if unset.
     pub fn active_peer(&self) -> Option<String> {
