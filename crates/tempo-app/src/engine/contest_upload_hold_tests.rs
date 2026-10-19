@@ -210,7 +210,11 @@ fn the_held_contacts_survive_a_restart_and_go_once_when_contest_mode_is_turned_o
     e.log_qso(cw("K1ABC"));
     e.log_qso(cw("W1AW"));
     assert!(e.take_pending_uploads().is_empty(), "premise: held");
-    let held = e.contest_held_uploads.clone();
+    let held: Vec<QsoRecord> = e
+        .contest_held_uploads
+        .iter()
+        .map(|h| h.rec.clone())
+        .collect();
     assert_eq!(held.len(), 2, "premise: two held");
     drop(e);
 
@@ -237,6 +241,10 @@ fn the_held_contacts_survive_a_restart_and_go_once_when_contest_mode_is_turned_o
         CATCHUP_UPLOAD_SPACING_SECS,
         "paced, one slot apart"
     );
+    assert!(path.exists(), "kept until each upload is done");
+    for p in &sent {
+        settle(&mut e, p, 0);
+    }
     assert!(!path.exists(), "nothing is left to send at the next launch");
 
     // Neither another save nor another restart sends them again.
@@ -268,6 +276,7 @@ fn a_launch_with_contest_mode_off_sends_the_held_list_once() {
     let sent = e.take_pending_uploads();
     assert_eq!(calls(&sent), ["K1ABC"]);
     assert_eq!(sent[0].origin, UploadOrigin::CatchUp);
+    settle(&mut e, &sent[0], 0);
     assert!(!path.exists());
     e.restore_contest_held_uploads(NOW);
     assert_eq!(calls(&e.take_pending_uploads()), Vec::<&str>::new());
@@ -279,10 +288,16 @@ fn a_launch_with_contest_mode_off_sends_the_held_list_once() {
 #[test]
 fn an_unreadable_held_list_is_kept_aside_and_reported_never_cleared() {
     let wrong_count = format!(
-        "{{\"version\":1,\"count\":2,\"adif\":\"{}\"}}",
+        "{{\"version\":1,\"count\":2,\"adif\":\"{}\",\"owed\":[{all},{all}]}}",
+        tempo_core::logbook::adif_record_own_log(&cw("K1ABC")).replace('\n', "\\n"),
+        all = upload_legs::ALL
+    );
+    let short_owed = format!(
+        "{{\"version\":1,\"count\":1,\"adif\":\"{}\",\"owed\":[]}}",
         tempo_core::logbook::adif_record_own_log(&cw("K1ABC")).replace('\n', "\\n")
     );
     for (label, text) in [
+        ("owed", short_owed),
         (
             "torn",
             "{\"version\":1,\"count\":1,\"adif\":\"<CALL:5>K1A".to_string(),
@@ -322,4 +337,94 @@ fn an_unreadable_held_list_is_kept_aside_and_reported_never_cleared() {
         assert_eq!(calls(&e.take_pending_uploads()), ["W1AW"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// What the upload worker reports for one pushed record: `failed` is the legs that failed for a
+/// reason that may pass and go back on the queue; every other leg it owed is done.
+fn settle(e: &mut Engine, p: &PendingUpload, failed: u8) {
+    e.contest_upload_done(&p.rec, p.legs & !failed);
+}
+
+/// ⭐ Quitting part-way through the paced release loses nothing and sends nothing twice: a held
+/// contact leaves the file only when its upload is done, leg by leg, so the next launch sends
+/// exactly what was still owed.
+#[test]
+fn a_quit_part_way_through_the_release_sends_only_what_was_still_owed() {
+    let dir = scratch_dir("part-way");
+    let path = dir.join("contest_held_uploads.json");
+    let mut e = contest_on();
+    e.set_contest_held_uploads_path(path.clone());
+    for call in ["K1ABC", "W1AW", "N0CALL", "K9XYZ"] {
+        e.log_qso(cw(call));
+    }
+    contest_off(&mut e);
+    let sent = e.take_pending_uploads();
+    assert_eq!(calls(&sent), ["K1ABC", "W1AW", "N0CALL", "K9XYZ"]);
+    // K1ABC went everywhere; W1AW reached all but Club Log, which was busy; every service
+    // was busy for N0CALL; K9XYZ's slot had not come round when Nexus was closed.
+    settle(&mut e, &sent[0], 0);
+    settle(&mut e, &sent[1], upload_legs::CLUBLOG);
+    settle(&mut e, &sent[2], upload_legs::ALL);
+    // A second word on a record already done changes nothing.
+    settle(&mut e, &sent[0], 0);
+    assert!(path.exists(), "three of the four are still owed");
+    drop(e);
+
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    assert!(!e.settings().fd_active, "premise: the switch is off");
+    e.set_contest_held_uploads_path(path.clone());
+    e.restore_contest_held_uploads(NOW);
+    let again = e.take_pending_uploads();
+    let owed: Vec<(&str, u8)> = again
+        .iter()
+        .map(|p| (p.rec.call.as_str(), p.legs))
+        .collect();
+    assert_eq!(
+        owed,
+        [
+            ("W1AW", upload_legs::CLUBLOG),
+            ("N0CALL", upload_legs::ALL),
+            ("K9XYZ", upload_legs::ALL)
+        ],
+        "exactly what was still owed, and K1ABC not again"
+    );
+    assert!(again.iter().all(|p| p.origin == UploadOrigin::CatchUp));
+    for p in &again {
+        settle(&mut e, p, 0);
+    }
+    assert!(!path.exists(), "all done: nothing for the next launch");
+    drop(e);
+
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.set_contest_held_uploads_path(path.clone());
+    e.restore_contest_held_uploads(NOW);
+    assert_eq!(calls(&e.take_pending_uploads()), Vec::<&str>::new());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A contact still being released is not sent a second time by the next save with the switch
+/// off, nor by the next contest's end; the list on disk still names it until it is done.
+#[test]
+fn a_contact_being_released_is_not_released_again_before_it_is_done() {
+    let dir = scratch_dir("in-flight");
+    let path = dir.join("contest_held_uploads.json");
+    let mut e = contest_on();
+    e.set_contest_held_uploads_path(path.clone());
+    e.log_qso(cw("K1ABC"));
+    contest_off(&mut e);
+    let sent = e.take_pending_uploads();
+    assert_eq!(calls(&sent), ["K1ABC"]);
+    contest_off(&mut e);
+    let mut s = e.settings().clone();
+    s.fd_active = true;
+    e.apply_settings(s);
+    e.log_qso(cw("W1AW"));
+    contest_off(&mut e);
+    assert_eq!(
+        calls(&e.take_pending_uploads()),
+        ["W1AW"],
+        "only the newly held one"
+    );
+    assert!(path.exists(), "K1ABC is not done yet");
+    let _ = std::fs::remove_dir_all(&dir);
 }
