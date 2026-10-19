@@ -233,6 +233,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a scoreboard or a band map in a window of its own, Esc there did nothing to a CW message or a voice message
   on the air; it only cleared the entry. Esc in any of those windows now stops transmitting, the same as Esc
   on the main window, and still clears the entry.
+- **CW: Esc (Stop TX) ends a CW message sooner.** A WinKeyer, the serial keyline and the soundcard keyer now stop before
+  Nexus asks the radio to stop its own CW, so a slow radio no longer holds them keying. A word the serial keyline had
+  not started yet is dropped instead of being sent after the stop. On an FT-710 or FTX-1 keyed over CAT, the stop now
+  also sends Yaesu's own playback stop, so the rest of the word is cut off.
+- **CW: on a radio that cannot be stopped mid-word, Esc leaves at most the word being sent.** On a Flex over SmartSDR
+  CAT, and on Yaesu radios keyed over CAT that have no CW stop (FT-991A, FTDX10 and others), Nexus now times each word
+  at the speed the radio reports. A speed changed on the radio no longer lets words pile up and keep sending after Esc,
+  and the CW speed control follows it. With a Flex on SmartSDR CAT, the CW settings suggest SmartSDR CAT's WinKeyer
+  port or the Flex native client, which both stop mid-word.
 - **Remote: Operate from this computer now works at an address you type.** When nothing answers where a paired
   station was, Stations on this network asks where it is now. That box offered only Stream; it now offers **Operate
   at this address** first, with Stream still beside it. Nexus checks it is the same paired station there, as it does
