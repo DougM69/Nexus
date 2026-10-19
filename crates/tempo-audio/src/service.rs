@@ -5636,7 +5636,8 @@ impl RadioLoop {
     /// it in place of what it still holds ([`AudioBackend::retune_tx`]). The over keeps its key,
     /// its window and its PTT: nothing here touches `tx_until_ms` or the audio stop. Not while the
     /// operator holds live PTT, and not on a rig the loop does not own. A route that cannot replace
-    /// what it was handed (Flex DAX) sends the over as first chosen, and the engine logs it.
+    /// what it was handed (nothing left to play) sends the over as first chosen, and the engine
+    /// logs it.
     fn ft_midover_switch<B: AudioBackend>(&mut self, eng: &mut Engine, backend: &mut B, now: f64) {
         let Some((stop, held_until)) = self.slot_audio_stop else {
             return;

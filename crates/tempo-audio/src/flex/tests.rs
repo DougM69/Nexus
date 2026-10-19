@@ -1961,6 +1961,232 @@ fn nothing_leaves_without_our_key() {
     assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
 }
 
+/// A tone at the modem rate, at `hz`.
+fn tone_at(seconds: f32, hz: f32, amplitude: f32) -> Vec<f32> {
+    (0..(seconds * 12_000.0) as usize)
+        .map(|i| amplitude * (2.0 * std::f32::consts::PI * hz * i as f32 / 12_000.0).sin())
+        .collect()
+}
+
+/// The 24 kHz audio the route makes of `over` (the pacer's resampler, from its start).
+fn resampled(over: &[f32]) -> Vec<f32> {
+    crate::capture_resample::CaptureResampler::new(12_000, 24_000).process(over)
+}
+
+/// Where `a` and `b` first differ by more than float noise, or `None`.
+fn first_difference(a: &[f32], b: &[f32]) -> Option<usize> {
+    a.iter().zip(b).position(|(x, y)| (x - y).abs() > 1e-6)
+}
+
+/// ⭐ A mid-over switch on the DAX route (WSJT-X's `m_restart`) replaces only what Nexus has not
+/// sent the radio yet. The over leaves paced in real time, so the rest of it waits in Nexus: what
+/// was sent is the first message to the sample, what follows is the second, spliced at one place
+/// as if the over had been built that way, and the over is as long as it was. The rebuild is made
+/// while the pacer keeps sending, and the packets keep their real-time cadence across it.
+#[test]
+fn a_switch_mid_over_on_dax_replaces_only_what_has_not_been_sent() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let tee = d.tx_tee().expect("the route");
+    tee.set_level(1.0);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    let first = tone_at(1.5, 1_000.0, 0.5);
+    let second = tone_at(1.5, 1_500.0, 0.5);
+    tee.feed(&first);
+    eventually("a third of a second sent", || {
+        (dax_tx_packets(&sim).len() >= 60).then_some(())
+    });
+    let sent_before = dax_tx_packets(&sim).len();
+    let mut asked = None;
+    let mut during = 0;
+    let switched = tee.retune(&mut |left, before| {
+        asked = Some((left, before));
+        // Built slowly, so less is queued by the time it lands than when it was asked for.
+        let at = dax_tx_packets(&sim).len();
+        std::thread::sleep(Duration::from_millis(200));
+        during = dax_tx_packets(&sim).len() - at;
+        second[second.len() - left - before..].to_vec()
+    });
+    assert!(switched, "the DAX route switches");
+    let (left, before) = asked.expect("the rest was asked for");
+    assert_eq!(before, 0, "no look-back: the resampler runs on");
+    assert!(
+        left + sent_before * 64 <= first.len(),
+        "only what was not sent is asked for: {left} left, {sent_before} packets sent"
+    );
+    assert!(
+        during >= 20,
+        "the pacer kept sending while the rest was built: {during} packets in 200 ms"
+    );
+    let unswitched = resampled(&first);
+    let total = unswitched.len() / 128;
+    let packets = eventually("the whole over", || {
+        let p = dax_tx_packets(&sim);
+        (p.len() >= total).then_some(p)
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        dax_tx_packets(&sim).len(),
+        total,
+        "the over is as long as it was"
+    );
+    let sent = left_samples(&packets);
+    let splice = first_difference(&sent, &unswitched).expect("the over was switched");
+    assert!(
+        splice >= (sent_before + during) * 128,
+        "what was sent is untouched: first change at {splice}, {} sent",
+        (sent_before + during) * 128
+    );
+    // One splice point, in the modem-rate over, explains every sample sent.
+    let at = (splice / 2).saturating_sub(16)..splice / 2 + 96;
+    let k = at
+        .clone()
+        .find(|&k| {
+            let mut over = first[..k].to_vec();
+            over.extend_from_slice(&second[k..]);
+            first_difference(&sent, &resampled(&over)).is_none()
+        })
+        .unwrap_or_else(|| panic!("no single splice in {at:?} makes what was sent"));
+    assert!(k >= sent_before * 64, "spliced after what was sent: {k}");
+    // The cadence: each packet within the pacer's catch-up window of its real-time slot, so the
+    // radio is never left waiting past it (the switch included).
+    let start = packets[0].0;
+    let mut gaps: Vec<Duration> = packets.windows(2).map(|w| w[1].0 - w[0].0).collect();
+    let late = packets
+        .iter()
+        .enumerate()
+        .map(|(i, (t, _))| (*t - start).saturating_sub(TX_PERIOD * i as u32))
+        .max()
+        .unwrap();
+    gaps.sort();
+    eprintln!(
+        "dax cadence over {total} packets: gap p50 {:?} p99 {:?} max {:?}; latest packet {late:?} behind its slot",
+        gaps[gaps.len() / 2],
+        gaps[gaps.len() * 99 / 100],
+        gaps[gaps.len() - 1]
+    );
+    assert!(
+        late < Duration::from_millis(100),
+        "a packet {late:?} behind its real-time slot"
+    );
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// One DAX TX packet's airtime: 128 frames at 24 kHz.
+const TX_PERIOD: Duration = Duration::from_nanos(128 * 1_000_000_000 / 24_000);
+
+/// ⭐ Stop TX wins over a switch: a Stop that lands while the rest is being built leaves the queue
+/// empty and the switch refused (so nothing is booked as sent), and a Stop just after a switch cuts
+/// the new message as it cuts any over.
+#[test]
+fn stop_tx_cuts_a_dax_over_during_and_after_a_switch() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let tee = d.tx_tee().unwrap();
+    let tx = d.audio.as_ref().unwrap().tx();
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    let second = tone_at(1.5, 1_500.0, 0.5);
+    let settled = |sim: &Simulator| {
+        let mut n = dax_tx_packets(sim).len();
+        loop {
+            std::thread::sleep(Duration::from_millis(100));
+            let now = dax_tx_packets(sim).len();
+            if now == n {
+                return n;
+            }
+            n = now;
+        }
+    };
+    for stop_during in [true, false] {
+        tee.feed(&tone_at(1.5, 1_000.0, 0.5));
+        let base = dax_tx_packets(&sim).len();
+        eventually("the over on the air", || {
+            (dax_tx_packets(&sim).len() >= base + 30).then_some(())
+        });
+        let switched = tee.retune(&mut |left, before| {
+            if stop_during {
+                tee.flush();
+            }
+            second[second.len() - left - before..].to_vec()
+        });
+        assert_eq!(
+            switched, !stop_during,
+            "stop during the build: {stop_during}"
+        );
+        if !stop_during {
+            tee.flush();
+        }
+        let cut = dax_tx_packets(&sim).len();
+        let end = settled(&sim);
+        assert!(
+            end <= cut + 2,
+            "stop during the build: {stop_during}: {} packets after the stop",
+            end - cut
+        );
+        assert_eq!(audio::queued(&tx), 0, "nothing left to send");
+    }
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// Nothing to replace, nothing asked: an empty queue refuses without building anything, and a
+/// queue that grew while the rest was built is left as it is (where its over ends is not known).
+#[test]
+fn a_dax_switch_with_nothing_left_or_a_grown_queue_changes_nothing() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let tee = d.tx_tee().unwrap();
+    let tx = d.audio.as_ref().unwrap().tx();
+    let mut asked = false;
+    assert!(!tee.retune(&mut |_, _| {
+        asked = true;
+        Vec::new()
+    }));
+    assert!(!asked, "nothing queued: nothing built");
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    let first = tone_at(1.5, 1_000.0, 0.5);
+    tee.feed(&first);
+    eventually("the over on the air", || {
+        (dax_tx_packets(&sim).len() >= 10).then_some(())
+    });
+    let extra = vec![0.1f32; 6_000];
+    let mut queued_after_feed = 0;
+    let switched = tee.retune(&mut |left, _| {
+        tee.feed(&extra);
+        queued_after_feed = audio::queued(&tx);
+        vec![0.0; left]
+    });
+    assert!(!switched, "a grown queue is not replaced");
+    let now = audio::queued(&tx);
+    assert!(
+        now + 300 >= queued_after_feed,
+        "the queue left as it was: {now} of {queued_after_feed}"
+    );
+    let mut whole = first.clone();
+    whole.extend_from_slice(&extra);
+    let total = resampled(&whole).len() / 128;
+    let packets = eventually("the over and what was added", || {
+        let p = dax_tx_packets(&sim);
+        (p.len() >= total).then_some(p)
+    });
+    let sent = left_samples(&packets);
+    let unswitched = resampled(&first);
+    assert_eq!(
+        first_difference(&sent[..unswitched.len()], &unswitched),
+        None,
+        "the first over unchanged"
+    );
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
 /// ⭐ No DAX audio rides a CWX word. While the radio keys our CW word (the session holds it keyed
 /// until its readback proves the end) audio handed to the route is dropped, not sent, as with
 /// nothing keyed: the pacer sends only during an over, whose control is

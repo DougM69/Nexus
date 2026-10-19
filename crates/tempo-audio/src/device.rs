@@ -1959,9 +1959,9 @@ impl CpalBackend {
     /// A ring too full to take the start of the rebuild beside what it must drop (the first
     /// seconds of a Slow frame, which is longer than the ring) keeps what it holds: only the part
     /// still parked at the modem rate is played anew, the resampler running on into it, so the
-    /// move lands where the ring's audio ends. Not on the DAX route (`tee`): its queue holds two
-    /// rates, and the over plays on there as it was. Nor with nothing left to play: `false`, and
-    /// nothing is touched.
+    /// move lands where the ring's audio ends. On the DAX route (`tee`) the over is the tee's,
+    /// not the card's, so the tee replaces it ([`crate::backend::TxTee::retune`]) and the ring is
+    /// left alone. With nothing left to play: `false`, and nothing is touched.
     fn retune_route(
         tee: Option<&crate::backend::TxTeeHandle>,
         tx_rs: &mut CaptureResampler,
@@ -1970,8 +1970,8 @@ impl CpalBackend {
         draining: bool,
         tail: &mut dyn FnMut(usize, usize) -> Vec<f32>,
     ) -> bool {
-        if tee.is_some() {
-            return false;
+        if let Some(tee) = tee {
+            return tee.retune(tail);
         }
         let card_rate = match tx_rs.out_rate() {
             0 => u64::from(MODEM_RATE),
@@ -3184,7 +3184,7 @@ mod tx_route_tests {
                 Vec::new()
             }
         ));
-        assert!(!asked, "the DAX route: nothing asked for");
+        assert!(!asked, "a DAX route that cannot replace: nothing asked for");
         assert_eq!(ring.len(), 1_000, "and the over left as it was");
         while ring.pop().is_some() {}
         assert!(!CpalBackend::retune_route(
@@ -3199,6 +3199,53 @@ mod tx_route_tests {
             }
         ));
         assert!(!asked, "nothing left to play: nothing asked for");
+    }
+
+    /// A tee that replaces the rest of the over, recording what it was asked.
+    #[derive(Default)]
+    struct ReplacingTee {
+        asked: Mutex<Vec<(usize, usize)>>,
+    }
+
+    impl TxTee for ReplacingTee {
+        fn feed(&self, _samples: &[f32]) {}
+        fn set_level(&self, _level: f32) {}
+        fn flush(&self) -> usize {
+            0
+        }
+        fn retune(&self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
+            let rest = tail(500, 0);
+            self.asked.lock().unwrap().push((500, rest.len()));
+            true
+        }
+    }
+
+    /// ⭐ With the Flex DAX route installed the over is the tee's, so a mid-over switch is the
+    /// tee's to make: the backend hands it the request, and the card's ring (which may still hold
+    /// audio from before the tee) is not touched.
+    #[test]
+    fn a_retune_on_the_dax_route_is_the_tees_and_leaves_the_card_alone() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
+        let ring = tx_ring();
+        let mut pending = VecDeque::new();
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &[0.5; 1_000]);
+        let tee = Arc::new(ReplacingTee::default());
+        let handle: TxTeeHandle = tee.clone();
+        assert!(CpalBackend::retune_route(
+            Some(&handle),
+            &mut tx_rs,
+            &ring,
+            &mut pending,
+            false,
+            &mut |left, before| vec![0.25; left + before]
+        ));
+        assert_eq!(
+            *tee.asked.lock().unwrap(),
+            vec![(500, 500)],
+            "the tee was asked"
+        );
+        assert_eq!(ring.len(), 1_000, "the card's ring left as it was");
+        assert!(pending.is_empty());
     }
 }
 
