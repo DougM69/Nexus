@@ -1,5 +1,10 @@
 //! Local approval and the Remote background task. Engine access is restricted to
 //! bounded observation, the stream, the lease and Stop, and the separately approved FT gestures.
+/// The station's account: binding it to its owner by a sign-in at the shack, the issuer's keys,
+/// and the checks a listed device's proof must pass. Nothing calls it yet outside its tests: the
+/// setup screen and the grant path that use it come with the rest of account sign-in.
+#[allow(dead_code)]
+mod account;
 /// Receive audio for a listening browser. Gated with the radio feature because the
 /// encoder lives in tempo-audio, which a build without it does not have at all.
 #[cfg(feature = "radio")]
