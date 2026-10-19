@@ -78,6 +78,9 @@ const ALLOWED = new Set([
   'contest_entry_put', 'contest_entry_reset', 'contest_working', 'contest_zone_hint', 'contest_i_moved',
   'contest_log_manual', 'contest_log_manual_rows', 'resolve_entity', 'set_cw_peer_info', 'set_log_form_grid',
   'scp_ensure', 'get_scp_calls', 'get_call_history',
+  // the box's pre-fill from the log: a read of one station's rows through the per-call index
+  // (contest_logged_qth), which keys, tunes, holds and writes nothing
+  'contest_logged_qth',
 ])
 
 /** What transmits, or decides whether or what the station transmits: the stop-line census's verbs,
