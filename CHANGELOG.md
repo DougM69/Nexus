@@ -184,6 +184,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unplugged.
 
 ### Changed
+- **Contest entry: the sample text in empty boxes is quieter.** The grey examples ("W1AW", "599", a county) are now
+  in normal weight instead of bold, and a shade darker in the dark themes, so they no longer read like something
+  typed in. They stay readable in every theme.
 - **From the Remote client, Settings now shows which logbook credentials are saved at the station, and the connector
   Test buttons work.** The saved / not saved badges (and the Icom network password's) are read at the station and come
   back as yes or no; they no longer look empty, as if nothing were saved. QRZ Logbook, N3FJP and Cloudlog/Wavelog Test
