@@ -5606,6 +5606,16 @@ fn pending_qso_path() -> PathBuf {
         .join("pending_qso.json")
 }
 
+/// `<config dir>/contest_held_uploads.json` — the contacts logged while contest mode is on, whose
+/// upload waits for it to go off (`Engine::restore_contest_held_uploads`).
+fn contest_held_uploads_path() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("contest_held_uploads.json")
+}
+
 /// `<config dir>/pending_msgs.json` — the store-and-forward outbound-queue journal,
 /// beside the pending-QSO journal. Held Tempo messages survive a restart.
 fn pending_msgs_path() -> PathBuf {
@@ -35742,6 +35752,11 @@ fn start_on_the_logbook(
         // was pending; one this build cannot read is kept aside, and the screen says where.
         eng.set_pending_qso_path(pending_qso_path());
         eng.restore_pending_qso_journal(now_unix());
+        // The uploads contest mode held when the app last closed: still held while it is on, sent
+        // once, paced, when it goes off. One this build cannot read is kept aside, and the screen
+        // says where.
+        eng.set_contest_held_uploads_path(contest_held_uploads_path());
+        eng.restore_contest_held_uploads(now_unix());
         // Saved RX-period WAVs (settings.save_wav) land beside the QSO recordings.
         eng.set_periods_dir(&recordings_dir().join("periods").to_string_lossy());
         // Restore the store-and-forward outbound queue BEFORE the conversation

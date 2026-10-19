@@ -11716,6 +11716,8 @@ export const EN = {
   // (logPrompt.title), quoted as this language shows it.
   'shell.keptFile.pendingQso':
     'Nexus could not read the file of QSOs that were waiting in the “Log this QSO?” popup, so it kept that file, untouched, at {{path}}. Nothing was deleted.',
+  'shell.keptFile.contestHeldUploads':
+    'Nexus could not read the list of contacts waiting for contest mode to end before they upload to QRZ, Club Log and the others, so it kept that file, untouched, at {{path}}. The contacts are in your Logbook. Nothing was deleted.',
   'shell.keptFile.fieldDay':
     'Nexus could not read all of the backup of your Field Day or contest log, so it kept that file, untouched, at {{path}}, and started a new backup from the contacts it could read. Nothing was deleted.',
   'shell.keptFile.js8Inbox':

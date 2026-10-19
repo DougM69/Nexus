@@ -7483,6 +7483,7 @@ export const ES: PartialCatalog = {
   "shell.log.failed": "No se pudo anotar el QSO",
   "shell.logStore.failed": "Nexus no pudo abrir la base de datos del libro de guardia. Motivo: {{reason}}. No se pierde nada: esta sesión guarda tu log en log.adi, como antes. El registro de diagnóstico tiene los detalles, en Ajustes ▸ Log y conectores ▸ Integraciones y feeds ▸ Diagnostic log.",
   "shell.keptFile.pendingQso": "Nexus no pudo leer el archivo de los QSO que esperaban en la ventana “¿Anotar este QSO?”, así que conservó ese archivo, intacto, en {{path}}. No se borró nada.",
+  "shell.keptFile.contestHeldUploads": "Nexus no pudo leer la lista de contactos que esperan a que termine el modo concurso para subirse a QRZ, Club Log y los demás, así que conservó ese archivo, intacto, en {{path}}. Los contactos están en tu libro de guardia. No se borró nada.",
   "shell.keptFile.fieldDay": "Nexus no pudo leer entera la copia de seguridad de tu log de Field Day o del concurso, así que conservó ese archivo, intacto, en {{path}} y empezó una copia nueva con los contactos que pudo leer. No se borró nada.",
   "shell.keptFile.js8Inbox": "Nexus no pudo leer tu bandeja de entrada de JS8, así que conservó ese archivo, intacto, en {{path}} y empezó una bandeja nueva. No se borró nada.",
   "shell.keptFile.pendingMsgs": "Nexus no pudo leer el archivo de los mensajes de Tempo que esperaban para enviarse, así que conservó ese archivo, intacto, en {{path}}. No se borró nada.",

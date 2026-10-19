@@ -9,6 +9,7 @@ const PATH = '/home/op/.config/tempo/x.unreadable-20260930-142233.json'
 describe('keptFileMessage', () => {
   it.each([
     ['pendingQso', 'shell.keptFile.pendingQso'],
+    ['contestHeldUploads', 'shell.keptFile.contestHeldUploads'],
     ['fieldDay', 'shell.keptFile.fieldDay'],
     ['js8Inbox', 'shell.keptFile.js8Inbox'],
     ['pendingMsgs', 'shell.keptFile.pendingMsgs'],
