@@ -88,6 +88,12 @@ impl vault::AccountVault for MemoryVault {
     fn save_revokes(&self, revokes: &vault::Revokes) -> Result<(), &'static str> {
         self.save_account_entry("account-revokes", revokes)
     }
+    fn uninvites(&self) -> Result<Option<vault::Uninvites>, &'static str> {
+        self.account_entry("account-uninvites")
+    }
+    fn save_uninvites(&self, uninvites: &vault::Uninvites) -> Result<(), &'static str> {
+        self.save_account_entry("account-uninvites", uninvites)
+    }
 }
 impl Vault for MemoryVault {
     fn binding(&self) -> Result<Option<Binding>, &'static str> {

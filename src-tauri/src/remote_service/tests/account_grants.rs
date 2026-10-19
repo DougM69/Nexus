@@ -414,8 +414,17 @@ async fn listed(service: &Service, cloud: &FakeCloud, rows: Vec<serde_json::Valu
     service.action(Action::Refresh {}).await.unwrap()
 }
 fn launch_owned(cloud: &FakeCloud, vault: &MemoryVault) -> Service {
+    launch_owned_at(&cloud.origin, vault)
+}
+fn launch_owned_at(origin: &str, vault: &MemoryVault) -> Service {
     let (bind, _) = binder(Vec::new());
-    launch_with(cloud, vault, accounts(vault, bind))
+    Service::with_accounts(
+        origin.to_string(),
+        Box::new(vault.clone()),
+        engine(),
+        crate::remote_monitor::Publisher::default(),
+        accounts(vault, bind),
+    )
 }
 
 /// ★ A browser signed in as the station's owner: the service approved it, and the station, having
@@ -1006,7 +1015,8 @@ async fn an_invitation_is_kept_here_and_its_guest_is_approved_on_their_proof() {
 }
 
 /// An invitation the service did not take is not kept; an address out of shape is sent nowhere; and
-/// an invitation taken back while the service cannot be told is out here all the same.
+/// an invitation taken back while the service cannot be told is out here all the same (and waits to
+/// be sent).
 #[tokio::test(flavor = "multi_thread")]
 async fn invitations_fail_closed() {
     let cloud = fake_cloud().await;
@@ -1049,13 +1059,159 @@ async fn invitations_fail_closed() {
         Err("serviceUnavailable")
     ));
     assert_eq!(vault.people().unwrap().unwrap().invites.len(), 1);
+    service
+        .action(Action::Uninvite {
+            email: "K9.Guest@example.test".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(vault.people().unwrap().unwrap().invites, Vec::new());
+}
+
+/// The invitations taken back offline, as the store keeps them.
+fn waiting_uninvites(vault: &MemoryVault) -> Vec<String> {
+    vault
+        .uninvites()
+        .unwrap()
+        .map(|u| u.people)
+        .unwrap_or_default()
+}
+
+/// ★ An invitation taken back while the service cannot be told: out here at once, as ever, and kept
+/// waiting (in the store too, read back after a restart) instead of failing. It is sent before the
+/// next list once the service answers, and no longer waits; the service then removes that person's
+/// devices.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invitation_taken_back_offline_is_sent_before_the_next_list() {
+    let cloud = fake_cloud().await;
+    let invite = Invite {
+        mailbox: "k9.guest@example.test".into(),
+        role: Role::Operate,
+    };
+    let vault = owned_vault(&cloud.origin, vec![invite]);
+    let service = launch_owned(&cloud, &vault);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    cloud.refusing.store(true, Ordering::SeqCst);
+    let taken_back = service
+        .action(Action::Uninvite {
+            email: " K9.Guest@example.test ".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(taken_back.account.people, Vec::new());
+    assert_eq!(
+        vault.uninvites().unwrap(),
+        Some(vault::Uninvites {
+            station_id: STATION.into(),
+            people: vec!["K9.Guest@example.test".into()]
+        })
+    );
+    // Still out of reach at the next list: still waiting.
     assert!(matches!(
-        service
-            .action(Action::Uninvite {
-                email: "K9.Guest@example.test".into(),
-            })
-            .await,
+        service.action(Action::Refresh {}).await,
         Err("serviceUnavailable")
     ));
-    assert_eq!(vault.people().unwrap().unwrap().invites, Vec::new());
+    assert_eq!(waiting_uninvites(&vault), vec!["K9.Guest@example.test"]);
+    assert!(cloud.invites.lock().unwrap().is_empty());
+
+    drop(service);
+    let service = launch_owned(&cloud, &vault);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    cloud.refusing.store(false, Ordering::SeqCst);
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        cloud.invites.lock().unwrap().clone(),
+        vec![(
+            "uninvite".to_string(),
+            json!({"email": "K9.Guest@example.test"})
+        )]
+    );
+    assert_eq!(waiting_uninvites(&vault), Vec::<String>::new());
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(cloud.invites.lock().unwrap().len(), 1, "sent once");
+}
+
+/// Inviting the same person again, once the service takes it, drops the invitation taken back
+/// offline: sent later, it would take the new one back. CONTROL: another person's stays waiting.
+#[tokio::test(flavor = "multi_thread")]
+async fn inviting_again_drops_the_same_persons_waiting_uninvite() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_owned(&cloud, &vault);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    cloud.refusing.store(true, Ordering::SeqCst);
+    for email in ["K9.Guest@example.test", "w1aw@example.test"] {
+        service
+            .action(Action::Uninvite {
+                email: email.into(),
+            })
+            .await
+            .unwrap();
+    }
+    // Not taken by the service: the uninvite still waits.
+    assert!(service
+        .action(Action::Invite {
+            email: "k9.guest+radio@example.test".into(),
+            role: Role::Listen,
+        })
+        .await
+        .is_err());
+    assert_eq!(waiting_uninvites(&vault).len(), 2);
+    cloud.refusing.store(false, Ordering::SeqCst);
+    service
+        .action(Action::Invite {
+            email: "k9.guest+radio@example.test".into(),
+            role: Role::Listen,
+        })
+        .await
+        .unwrap();
+    assert_eq!(waiting_uninvites(&vault), vec!["w1aw@example.test"]);
+    service.action(Action::Refresh {}).await.unwrap();
+    let sent = cloud.invites.lock().unwrap().clone();
+    assert_eq!(
+        sent.last().cloned(),
+        Some((
+            "uninvite".to_string(),
+            json!({"email": "w1aw@example.test"})
+        ))
+    );
+    assert_eq!(
+        sent.iter().filter(|(verb, _)| verb == "uninvite").count(),
+        1
+    );
+}
+
+/// An invitation taken back that the service refuses by name is that refusal, and nothing waits;
+/// taken back offline with the waiting ones unreadable, it is out here, and the shack says the store
+/// failed rather than losing it silently.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_uninvite_waits_only_for_an_unreachable_service() {
+    let origin = refusing_cloud("403 Forbidden", r#"{"error":"stationRevoked"}"#).await;
+    let vault = owned_vault(&origin, Vec::new());
+    let service = launch_owned_at(&origin, &vault);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    let refused = service
+        .action(Action::Uninvite {
+            email: "k9.guest@example.test".into(),
+        })
+        .await;
+    assert_eq!(refused.err(), Some("stationRevoked"));
+    assert_eq!(vault.uninvites().unwrap(), None);
+
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    vault
+        .values
+        .lock()
+        .unwrap()
+        .insert("account-uninvites".into(), "{not json".into());
+    let service = launch_owned(&cloud, &vault);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    cloud.refusing.store(true, Ordering::SeqCst);
+    let unkept = service
+        .action(Action::Uninvite {
+            email: "k9.guest@example.test".into(),
+        })
+        .await;
+    assert_eq!(unkept.err(), Some("credentialStoreUnavailable"));
 }

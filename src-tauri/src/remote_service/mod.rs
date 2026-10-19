@@ -1065,6 +1065,7 @@ impl Service {
                             signing: None,
                             staged: None,
                             removals: Some(Vec::new()),
+                            uninvites: Some(Vec::new()),
                         }
                         .run(receiver),
                     ),
@@ -1328,6 +1329,9 @@ struct Controller {
     /// `None` when they could not be read: then no device is granted on its proof, since one of
     /// them may have been removed here.
     removals: Option<Vec<String>>,
+    /// The invitations taken back here that the service has not heard yet, each address as it was
+    /// typed ([`Controller::queue_uninvite`]). `None` when they could not be read.
+    uninvites: Option<Vec<String>>,
 }
 /// The station's account, as the controller reaches it (`account`): its entries in the credential
 /// store, the service's account side, how a sign-in binds, the LAN key a binding names, and the
@@ -1463,6 +1467,11 @@ impl Controller {
         self.arm_enrolment();
         self.removals = match self.accounts.vault.revokes() {
             Ok(Some(kept)) if kept.station_id == binding.station_id => Some(kept.devices),
+            Ok(_) => Some(Vec::new()),
+            Err(_) => None,
+        };
+        self.uninvites = match self.accounts.vault.uninvites() {
+            Ok(Some(kept)) if kept.station_id == binding.station_id => Some(kept.people),
             Ok(_) => Some(Vec::new()),
             Err(_) => None,
         };
@@ -1625,6 +1634,7 @@ impl Controller {
     /// The service's list, read after it has been told of every removal made here offline; a
     /// removal it no longer lists as approved is one it has heard.
     async fn list(&mut self) -> Result<Vec<Device>, &'static str> {
+        self.send_uninvites().await;
         self.send_removals().await;
         let devices = self.devices().await?;
         let now = now_ms();
@@ -1668,6 +1678,45 @@ impl Controller {
             }
             let _ = self.keep_removals(|removals| removals.retain(|id| *id != device_id));
         }
+    }
+    /// Tells the service of each invitation taken back here while it could not be reached, in order,
+    /// until one cannot be sent. Each it answers is no longer waiting.
+    async fn send_uninvites(&mut self) {
+        let Some(waiting) = self.uninvites.clone().filter(|w| !w.is_empty()) else {
+            return;
+        };
+        let Ok((binding, token)) = self.bound() else {
+            return;
+        };
+        for address in waiting {
+            let sent = self
+                .client
+                .post(
+                    &station_path(&binding, "uninvite"),
+                    Some(&token),
+                    json!({ "email": address }),
+                )
+                .await;
+            if matches!(sent, Err("serviceUnavailable" | "tryLater")) {
+                break;
+            }
+            let _ = self.keep_uninvites(|people| people.retain(|a| *a != address));
+        }
+    }
+    /// Changes the invitations taken back and waiting, and keeps them in the store. One the store
+    /// will not keep is still held here for this run.
+    fn keep_uninvites(
+        &mut self,
+        change: impl FnOnce(&mut Vec<String>),
+    ) -> Result<(), &'static str> {
+        let (Some(people), Some(binding)) = (self.uninvites.as_mut(), self.binding.as_ref()) else {
+            return Err("stationNotPaired");
+        };
+        change(people);
+        self.accounts.vault.save_uninvites(&vault::Uninvites {
+            station_id: binding.station_id.clone(),
+            people: people.clone(),
+        })
     }
     /// A removal made here that the service could not be told of: kept, so it is sent before the
     /// next list and no proof grants the device again meanwhile.
@@ -1987,6 +2036,7 @@ impl Controller {
         self.binding = Some(binding);
         self.pending = None;
         self.removals = Some(Vec::new());
+        self.uninvites = Some(Vec::new());
         self.reflect_removals();
         self.reflect_people();
         self.arm_enrolment();
@@ -2634,6 +2684,12 @@ impl Controller {
                     )
                     .await?;
                 let mailbox = tempo_client::account::mailbox(address);
+                // The service holds this invitation now: one taken back offline and not heard yet
+                // must not take it back when it is sent.
+                let same = |a: &String| tempo_client::account::mailbox(a) == mailbox;
+                if self.uninvites.as_ref().is_some_and(|w| w.iter().any(same)) {
+                    let _ = self.keep_uninvites(|people| people.retain(|a| !same(a)));
+                }
                 self.keep_people(|invites| {
                     invites.retain(|invite| invite.mailbox != mailbox);
                     invites.push(tempo_client::account::Invite { mailbox, role });
@@ -2649,13 +2705,31 @@ impl Controller {
                 // or not the service can be told.
                 let mailbox = tempo_client::account::mailbox(address);
                 self.keep_people(|invites| invites.retain(|invite| invite.mailbox != mailbox))?;
-                self.client
+                let sent = self
+                    .client
                     .post(
                         &station_path(&binding, "uninvite"),
                         Some(&token),
                         json!({ "email": address }),
                     )
-                    .await?;
+                    .await;
+                match sent {
+                    Ok(_) => {}
+                    // Out here already; the service is told before the station's next list, and
+                    // then removes their devices.
+                    Err("serviceUnavailable" | "tryLater") => {
+                        if self.uninvites.is_none() {
+                            return Err("credentialStoreUnavailable");
+                        }
+                        let address = address.to_string();
+                        self.keep_uninvites(|people| {
+                            if !people.contains(&address) {
+                                people.push(address);
+                            }
+                        })?;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             Action::DismissAdded { device_id } => {
                 if let Ok(mut status) = self.status.lock() {
@@ -2689,6 +2763,7 @@ impl Controller {
                 }
                 self.binding = None;
                 self.removals = Some(Vec::new());
+                self.uninvites = Some(Vec::new());
                 self.reflect_removals();
                 self.reflect_people();
                 self.arm_enrolment();

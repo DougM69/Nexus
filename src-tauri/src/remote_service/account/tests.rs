@@ -73,6 +73,15 @@ impl AccountVault for Store {
     fn save_revokes(&self, _: &crate::remote_service::vault::Revokes) -> Result<(), &'static str> {
         Ok(())
     }
+    fn uninvites(&self) -> Result<Option<crate::remote_service::vault::Uninvites>, &'static str> {
+        Ok(None)
+    }
+    fn save_uninvites(
+        &self,
+        _: &crate::remote_service::vault::Uninvites,
+    ) -> Result<(), &'static str> {
+        Ok(())
+    }
 }
 
 /// What the stand-in saw.
