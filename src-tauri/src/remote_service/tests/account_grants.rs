@@ -152,6 +152,10 @@ async fn signing_in_binds_the_station_with_the_keys_it_staged_and_turns_remote_o
         asked[1], asked[0],
         "the second sign-in names the same keys and credential"
     );
+    // Nothing the screen is shown holds a secret: no credential, no signing key.
+    let kept_key = vault.station_key().unwrap().unwrap().pkcs8;
+    let shown = serde_json::to_string(&service.status().unwrap()).unwrap();
+    assert!(!shown.contains(&credential) && !shown.contains(&kept_key));
 
     let binding = Binding {
         origin: cloud.origin.clone(),
@@ -315,6 +319,13 @@ async fn a_browser_signed_in_as_the_owner_is_granted_and_pinned_with_no_press() 
     let status = listed(&service, &cloud, vec![browser_row(&token("browser"))]).await;
     assert_eq!(status.account.unconfirmed, BTreeMap::new());
     assert_eq!(status.station_permissions, vec![BROWSER.to_string()]);
+    // The proof was listed to the station, and the screen is never shown it.
+    let shown = serde_json::to_string(&status).unwrap();
+    assert!(!shown.contains(&token("browser")[..40]), "{shown}");
+    assert!(
+        shown.contains(r#""addedBy":"account""#),
+        "CONTROL: the row itself is shown"
+    );
     assert_eq!(status.logging_permissions, vec![BROWSER.to_string()]);
     assert_eq!(status.transmit_permissions, Vec::<String>::new());
     assert_eq!(status.pinned_devices, vec![BROWSER.to_string()]);

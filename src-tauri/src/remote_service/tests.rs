@@ -2366,7 +2366,11 @@ async fn a_removal_the_service_never_heard_still_stands_at_the_shack() {
                     kind: None,
                 })
                 .await;
-            assert!(refused.is_err(), "premise: the service never heard it");
+            assert_eq!(
+                refused.map(|s| s.account.removals),
+                Ok(vec![BROWSER.to_string()]),
+                "premise: the service never heard it, and it waits to be told"
+            );
             let status = service.status().unwrap();
             assert!(
                 status.station_permissions.is_empty()
@@ -2374,6 +2378,9 @@ async fn a_removal_the_service_never_heard_still_stands_at_the_shack() {
                     && status.transmit_permissions.is_empty(),
                 "the removal did not stand at once"
             );
+            // The service answers again, but still never hears the removal: it lists the approval as
+            // it was.
+            cloud.refusing_removals.store(true, Ordering::SeqCst);
             cloud.refusing.store(false, Ordering::SeqCst);
         }
         service.action(Action::Disable {}).await.unwrap();
