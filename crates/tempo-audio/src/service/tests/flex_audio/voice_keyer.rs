@@ -188,6 +188,19 @@ fn message_of(secs: f32) -> Vec<f32> {
 /// The whole message, as DAX frames at 24 kHz.
 const ONE_SECOND_OF_DAX: usize = 24_000;
 
+/// The first over held since the scene's steps were last cleared, in ms on Nexus's own clock: from
+/// the step that keyed it to the step that let it go. The simulator's times for `xmit 1` and
+/// `xmit 0` also carry when inside its step the key went out and when its own threads read each
+/// line, which under load put that span up to 22 ms under the over Nexus held.
+fn held_over(s: &FlexScene) -> f64 {
+    let keyed = s.held.iter().position(|(_, h)| *h).expect("an over keyed");
+    let let_go = s.held[keyed..]
+        .iter()
+        .find(|(_, h)| !*h)
+        .expect("the over let go");
+    let_go.0 - s.held[keyed].0
+}
+
 /// ⭐ DAX ONLY FOR THE MESSAGE. The radio has the mic; a message asks it for DAX (Nexus's transmit
 /// stream first, on the first message after a connect), keys only once the radio reports DAX, plays
 /// the whole message over it, unkeys at its end plus the tail, and puts the mic back only after the
@@ -197,6 +210,7 @@ const ONE_SECOND_OF_DAX: usize = 24_000;
 #[test]
 fn a_voice_message_switches_to_dax_plays_and_gives_the_mic_back() {
     let mut s = phone();
+    s.held.clear();
     let since = Instant::now();
     let sent = s.engine.lock().unwrap().send_voice(message());
     assert_eq!(sent, Ok(()), "the voice keyer plays in Phone at the shack");
@@ -238,10 +252,10 @@ fn a_voice_message_switches_to_dax_plays_and_gives_the_mic_back() {
         (ONE_SECOND_OF_DAX - 2 * 128..=ONE_SECOND_OF_DAX).contains(&frames),
         "the whole message went out: {frames} frames"
     );
-    let over = at("xmit 0").duration_since(at("xmit 1"));
+    let over = held_over(&s);
     assert!(
-        over >= Duration::from_millis(1_250) && over < Duration::from_millis(3_000),
-        "the over is the message and its tail: {over:?}"
+        (1_250.0..3_000.0).contains(&over),
+        "the over is the message and its tail: {over} ms"
     );
 
     // A second message: the stream is there, so only the write.
@@ -1080,12 +1094,10 @@ fn the_mics_ptt_during_a_message_still_alarms_and_reconnects() {
     let mut s = FlexScene::with_faults(true, mic_ptt_mid_over(), Vec::new(), short_deadline());
     s.replace_on_rebuild = true;
     shack_on(&mut s);
-    let since = Instant::now();
+    s.held.clear();
     s.engine.lock().unwrap().send_voice(message()).unwrap();
     let detail = status_after_the_rebuild(&mut s);
-    let over = seen_at(&s, since, "xmit 0")
-        .expect("the unkey")
-        .duration_since(seen_at(&s, since, "xmit 1").expect("the key"));
+    let over = held_over(&s);
     assert!(
         detail.starts_with(
             "the radio did not confirm the unkey — it may still be transmitting. Check the radio \
@@ -1093,10 +1105,7 @@ fn the_mics_ptt_during_a_message_still_alarms_and_reconnects() {
         ),
         "{detail}"
     );
-    assert!(
-        over >= Duration::from_millis(1_250),
-        "the message was cut short: {over:?}"
-    );
+    assert!(over >= 1_250.0, "the message was cut short: {over} ms");
     assert_eq!(
         sent(&s.sim.log(), 0)
             .iter()

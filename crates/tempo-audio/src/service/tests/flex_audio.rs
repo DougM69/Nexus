@@ -61,6 +61,9 @@ struct FlexScene {
     /// A rebuild of the CAT link starts a fresh client on the same radio, as `open_cat` does, in
     /// place of failing the test.
     replace_on_rebuild: bool,
+    /// Each step's clock, and whether the loop held an over to a deadline after it: an over's
+    /// length as Nexus scheduled it, on its own clock.
+    held: Vec<(f64, bool)>,
 }
 
 impl FlexScene {
@@ -165,6 +168,7 @@ impl FlexScene {
             sim,
             rebuilt: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             replace_on_rebuild: false,
+            held: Vec::new(),
         }
     }
 
@@ -207,6 +211,7 @@ impl FlexScene {
                 &mut station,
             )
             .unwrap();
+        self.held.push((now, self.state.tx_until_ms.is_some()));
         assert!(
             self.replace_on_rebuild || !self.rebuilt.load(std::sync::atomic::Ordering::Relaxed),
             "the loop rebuilt its transport: the client under test is gone"
