@@ -301,6 +301,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **Programs that listen to Nexus the way they listen to WSJT-X now see what you are transmitting.** GridTracker, JTAlert
+  and the like got your decodes but not your TX message, and were always told TX was off. Nexus now reports the message
+  on the air, whether TX is enabled, the report you are sending, the station's grid and a tripped TX watchdog, as
+  WSJT-X does, and tells them the moment one changes rather than once a period. What Nexus transmits, and when, is unchanged.
 - **JS8 sends to your own groups.** A group you added in Settings, such as @MAGNET, was refused as "not a callsign or
   @group JS8 can address". It now goes out the way JS8Call sends it, a message or a command alike, and a message to a
   group you joined is marked as yours. Compound calls such as KD4JRX/WFD can be put in the To box too. A name JS8Call
