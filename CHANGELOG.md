@@ -207,8 +207,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Contacts held during a contest are no longer forgotten by a restart.** While Contest mode is on, a contact logged
   in the Logbook waits to go to QRZ, Club Log and the other services until Contest mode is turned off. That waiting
   list now survives closing Nexus: after a restart the contacts still wait, and go once, a few seconds apart, when you
-  turn Contest mode off. If Nexus cannot read the list, it keeps the file untouched, says where on screen, and the
-  contacts stay in your Logbook.
+  turn Contest mode off. A contact stays on the list until it has gone, so closing Nexus part-way through sending a
+  long contest sends the rest at the next start, and nothing twice. If Nexus cannot read the list, it keeps the file
+  untouched, says where on screen, and the contacts stay in your Logbook.
 - **The CW and Phone screens go back into the contest.** With Contest mode on, a visit to Chat or a change of FT
   mode could leave the contest, and the CW and Phone log lines then showed the everyday form: no exchange boxes, no
   dupe check, the casual macros. Opening the CW or Phone screen now enters the contest again in S&P, as the Contest

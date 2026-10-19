@@ -2530,33 +2530,45 @@ pub const CATCHUP_UPLOAD_SPACING_SECS: i64 = 15;
 /// no growth without limit when contest mode is never turned off.
 const CONTEST_HELD_UPLOADS_CAP: usize = 4096;
 
-/// The held list's file (`contest_held_uploads.json`): `{"version":1,"count":N,"adif":"…"}`. The
-/// contacts are the operator's own-log ADIF, the Logbook's own lossless form; `count` lets a
-/// read tell a list it got whole from one it did not, because an ADIF parse skips what it cannot
-/// read rather than failing.
+/// One contact contest mode held ([`Engine::release_contest_uploads`]): the services it still
+/// owes ([`upload_legs`]), and whether this run has handed it to the upload queue yet.
+#[derive(Clone)]
+struct ContestHeld {
+    rec: QsoRecord,
+    owed: u8,
+    released: bool,
+}
+
+/// The held list's file (`contest_held_uploads.json`):
+/// `{"version":1,"count":N,"adif":"…","owed":[…]}`. The contacts are the operator's own-log ADIF,
+/// the Logbook's own lossless form, and `owed` is each one's owed services, in the same order;
+/// `count` lets a read tell a list it got whole from one it did not, because an ADIF parse skips
+/// what it cannot read rather than failing.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ContestHeldFile {
     version: u32,
     count: usize,
     adif: String,
+    owed: Vec<u8>,
 }
 
 const CONTEST_HELD_FILE_VERSION: u32 = 1;
 
-fn contest_held_to_json(held: &[QsoRecord]) -> std::io::Result<String> {
+fn contest_held_to_json(held: &[ContestHeld]) -> std::io::Result<String> {
     let file = ContestHeldFile {
         version: CONTEST_HELD_FILE_VERSION,
         count: held.len(),
         adif: held
             .iter()
-            .map(tempo_core::logbook::adif_record_own_log)
+            .map(|h| tempo_core::logbook::adif_record_own_log(&h.rec))
             .collect::<Vec<_>>()
             .join("\n"),
+        owed: held.iter().map(|h| h.owed).collect(),
     };
     serde_json::to_string(&file).map_err(std::io::Error::other)
 }
 
-fn contest_held_from_json(text: &str) -> Result<Vec<QsoRecord>, String> {
+fn contest_held_from_json(text: &str) -> Result<Vec<ContestHeld>, String> {
     let file: ContestHeldFile = serde_json::from_str(text).map_err(|e| e.to_string())?;
     if file.version != CONTEST_HELD_FILE_VERSION {
         return Err(format!(
@@ -2572,7 +2584,22 @@ fn contest_held_from_json(text: &str) -> Result<Vec<QsoRecord>, String> {
             file.count
         ));
     }
-    Ok(held)
+    if file.owed.len() != file.count {
+        return Err(format!(
+            "{} owed entries for {} contacts",
+            file.owed.len(),
+            file.count
+        ));
+    }
+    Ok(held
+        .into_iter()
+        .zip(file.owed)
+        .map(|(rec, owed)| ContestHeld {
+            rec,
+            owed,
+            released: false,
+        })
+        .collect())
 }
 
 /// Where the STANDING N1MM broadcast should go, or `None` when it is off.
@@ -3126,8 +3153,9 @@ pub struct Engine {
     /// is turned off ([`Self::release_contest_uploads`]): a contest's contacts reach QRZ,
     /// ClubLog and the rest through the merge at the end, never live. A copy is kept on disk
     /// ([`Self::persist_contest_held_uploads`]), so a restart with the switch on does not forget
-    /// what is owed.
-    contest_held_uploads: Vec<QsoRecord>,
+    /// what is owed. A released contact stays here until its upload is done
+    /// ([`Self::contest_upload_done`]).
+    contest_held_uploads: Vec<ContestHeld>,
     /// Where the held list is kept between launches, beside the settings, when the shell set it
     /// ([`Self::set_contest_held_uploads_path`]).
     contest_held_path: Option<PathBuf>,
@@ -14984,25 +15012,56 @@ impl Engine {
                     "the QSO with {} logged during the contest will not be uploaded when \
                      contest mode is turned off: {CONTEST_HELD_UPLOADS_CAP} contacts are \
                      already waiting",
-                    dropped.call
+                    dropped.rec.call
                 ),
             );
         }
-        self.contest_held_uploads.push(rec);
+        self.contest_held_uploads.push(ContestHeld {
+            rec,
+            owed: upload_legs::ALL,
+            released: false,
+        });
         self.persist_contest_held_uploads();
     }
 
     /// Contest mode went off: send what it held, once, as catch-up — paced one slot apart,
     /// because a contest's worth of contacts arriving at once is history, not news (the merge's
-    /// own rule). Every leg is owed, as for a contact at the key; the worker still sends only
-    /// to the services the operator has turned on.
+    /// own rule). Each goes to every service it is still owed, as a contact at the key would; the
+    /// worker still sends only to the services the operator has turned on.
+    ///
+    /// The list, and its file, keep each contact until its upload is done
+    /// ([`Self::contest_upload_done`]): the paced release of a long contest takes a while, and a
+    /// quit part-way through sends the rest at the next launch.
     fn release_contest_uploads(&mut self) {
-        for rec in std::mem::take(&mut self.contest_held_uploads) {
-            self.station
-                .requeue_upload_at(rec, upload_legs::ALL, 0, 0, UploadOrigin::CatchUp);
+        for held in self.contest_held_uploads.iter_mut().filter(|h| !h.released) {
+            self.station.requeue_upload_at(
+                held.rec.clone(),
+                held.owed,
+                0,
+                0,
+                UploadOrigin::CatchUp,
+            );
+            held.released = true;
         }
-        // Queued first, then the file goes: a crash between the two sends them again at the
-        // next launch, from a queue that died with this run, never twice.
+    }
+
+    /// The upload worker is done with `rec` on the `done` services: sent, or refused for good. A
+    /// held contact leaves the held list, and its file, once it owes nothing, so the next
+    /// launch sends only what is still owed and never again what went. A service that failed
+    /// for a reason that may pass is not in `done`, nor is one the retry budget gave up on: it
+    /// stays owed, and the next launch tries it again.
+    pub fn contest_upload_done(&mut self, rec: &QsoRecord, done: u8) {
+        let Some(i) = self
+            .contest_held_uploads
+            .iter()
+            .position(|h| h.owed & done != 0 && h.rec == *rec)
+        else {
+            return;
+        };
+        self.contest_held_uploads[i].owed &= !done;
+        if self.contest_held_uploads[i].owed == 0 {
+            self.contest_held_uploads.remove(i);
+        }
         self.persist_contest_held_uploads();
     }
 
@@ -15059,7 +15118,8 @@ impl Engine {
             tempo_core::applog::warn(
                 "upload",
                 &format!(
-                    "could not save the list of contacts waiting for contest mode to end ({}):                      {e}; a restart before it ends would leave them in the Logbook unsent",
+                    "could not save the list of contacts waiting for contest mode to end ({}): \
+                     {e}; a restart before it ends would leave them in the Logbook unsent",
                     path.display()
                 ),
             );

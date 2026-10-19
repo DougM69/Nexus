@@ -36433,6 +36433,16 @@ fn start_on_the_logbook(
                         ),
                     );
                 }
+                // Every leg it owed but did not fail transiently is done: sent, or refused for
+                // good. A contact contest mode held stays in its file until it owes nothing, so
+                // a quit part-way through the paced release sends the rest at the next launch.
+                // `failed` before the HRDLog cap: a leg that cap gives up on is retried then.
+                let done = p.legs & !failed;
+                if done != 0 {
+                    engine_lock_result(&push_engine)
+                        .unwrap_or_else(|e| e.into_inner())
+                        .contest_upload_done(&rec, done);
+                }
                 let failed = capped;
                 // Transient failures (network down / service busy) → re-queue ONLY
                 // the legs that failed so the next tick retries them, without
