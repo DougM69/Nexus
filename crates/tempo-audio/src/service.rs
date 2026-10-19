@@ -3807,9 +3807,18 @@ struct RadioLoop {
     /// check is safe where a "quiet band" objection would apply to real capture.
     dax_last_audio: Option<Instant>,
     /// We wrote the current audio-error line with a voice-mic open failure, so we clear
-    /// Slot index whose WSJT-X-style EARLY decode pass already ran (once per
-    /// RX slot; the boundary decode then ingests only the stragglers).
+    /// Slot index whose WSJT-X-style EARLY decode pass, or its full pass, already ran (once
+    /// per RX slot; the boundary decode then ingests only the stragglers).
     early_done_slot: Option<u64>,
+    /// Slot index whose FULL pass already ran: WSJT-X's `m_hsymStop` decode, FT8 at 14.40 s and
+    /// FT4 at 6.048 s into the slot. It is that slot's authoritative decode, in place of the one
+    /// the boundary would dispatch, so its decodes are folded before the boundary's TX decision
+    /// whenever it finishes in time.
+    full_done_slot: Option<u64>,
+    /// A full pass that finished BEFORE its boundary: the boundary slot it decodes for and its
+    /// frame. Its decodes are already folded; the boundary named here runs its TX decision and
+    /// housekeeping with it, and any other boundary drops it unused.
+    full_pass_frame: Option<(u64, Vec<f32>)>,
     /// MSK144's repeating early passes: (slot, index of the last 2 s interval decoded).
     /// One fixed early pass per slot is right for FT8/FT4 (callers appear before the TX
     /// window opens) and wrong for meteor scatter, where a ping lands at ANY moment and is
@@ -4338,6 +4347,8 @@ impl RadioLoop {
             audio_awaiting_samples: false,
             silent_capture_since: None,
             early_done_slot: None,
+            full_done_slot: None,
+            full_pass_frame: None,
             early_msk_done: None,
             js8_done: [None; Js8Speed::ALL.len()],
             js8_multi_worker: DecodeWorker::spawn_with("nexus-js8-multi", run_worker_job),
@@ -13041,6 +13052,8 @@ impl RadioLoop {
             // Slot indices renumber with the new period — stale per-slot markers from
             // the old tier must not coincidentally match a new tier's slot.
             self.early_done_slot = None;
+            self.full_done_slot = None;
+            self.full_pass_frame = None;
             self.early_msk_done = None;
             self.js8_done = [None; Js8Speed::ALL.len()];
             self.boundary_keyed = None;
@@ -13093,7 +13106,14 @@ impl RadioLoop {
                     // folds its decodes and emits its period below — it must never
                     // reach the TX decision.
                     let live = self.clock.slot_index(now);
-                    if bslot == live {
+                    if self.full_done_slot.map(|s| s + 1) == Some(bslot)
+                        && self.last_slot.is_none_or(|l| l < bslot)
+                    {
+                        // A FULL pass finished before its boundary: its decodes are folded
+                        // (above), so the boundary's TX decision will have them. That boundary
+                        // keys and runs the housekeeping with it, and only that one.
+                        self.full_pass_frame = Some((bslot, frame));
+                    } else if bslot == live {
                         self.finish_boundary(
                             &mut eng,
                             rig,
@@ -13210,28 +13230,44 @@ impl RadioLoop {
             }
         }
 
-        // --- WSJT-X-style early decode (FT8/FT4): a few seconds before the
-        // boundary, decode the partial capture so callers appear while the
-        // period is still running (stock decodes ~3×/period from ~11.8 s; our
-        // single boundary pass made decodes land exactly as the operator's TX
-        // window opened — zero decision time). RX slots only: our own carrier
-        // (current TX or its boundary-crossing tail) must never reach the
-        // decoder. The boundary pass below stays authoritative and ingests only
-        // the stragglers this pass missed.
+        // --- WSJT-X's decode moments before the boundary (FT8/FT4), so callers appear while the
+        // period is still running and the boundary's TX decision has their decodes. RX slots only:
+        // our own carrier (current TX or its boundary-crossing tail) must never reach the decoder.
+        //
+        // WSJT-X counts the moments in half-symbol steps of `m_FFTSize = m_nsps/2` = 3456 samples
+        // at 12 kHz, 0.288 s (mainwindow.cpp:10920-10921 FT4, :10984-10985 FT8), and calls the
+        // decoder when the step count reaches them (:2379-2383):
+        // - FT8 EARLY pass at `m_earlyDecode` = 41 steps = 11.808 s (mainwindow.h:666): cheap,
+        //   over the audio so far, AP off (`nzhsym = 41`, :2480);
+        // - FT8 FULL pass at `m_hsymStop` = 50 steps = 14.40 s (:2222), over the first 14.4 s
+        //   with the rest of the buffer zero (`d2` is zeroed at each period start, :2610);
+        // - FT4's only pass at `m_hsymStop` = 21 steps = 6.048 s (:2226), the whole FT4 frame.
+        // The full pass is the period's authoritative decode: it replaces the boundary's, and
+        // the boundary keys with its decodes when it has finished. WSJT-X's third FT8 moment
+        // (`m_earlyDecode2` = 47, :2223) decodes nothing new (ft8_decode.f90:124-150: it
+        // subtracts the early decodes for the full pass) and has no counterpart here: the full
+        // pass's own multi-pass subtraction covers it.
         if self.tx_until_ms.is_none()
             && !self.prev_slot_was_tx
-            && self.early_done_slot != Some(slot)
+            && self.full_done_slot != Some(slot)
             && !is_tuning
         {
             /// Interval between MSK144's repeating early passes (ms). 2 s keeps ping-to-
             /// screen latency ~2 s (WSJT-X's rtd is ~0.3 s; the difference buys reuse of the
             /// existing early machinery instead of a new streaming path into rxdsp).
             const MSK_EARLY_STEP_MS: f64 = 2_000.0;
+            /// One WSJT-X half-symbol step, 3456 samples at 12 kHz (ms).
+            const HSYM_MS: f64 = 288.0;
             let slot_ms_now = eng.active_slot_secs() * 1000.0;
             let elapsed_now = slot_ms_now - self.clock.ms_to_next_slot(now);
+            let full_at_ms = match tier_now {
+                Tier::Ft8 => Some(50.0 * HSYM_MS),
+                Tier::Ft4 => Some(21.0 * HSYM_MS),
+                _ => None,
+            };
             let early_at_ms = match tier_now {
-                Tier::Ft8 => Some(11_800.0),
-                Tier::Ft4 => Some(5_500.0),
+                _ if self.early_done_slot == Some(slot) => None,
+                Tier::Ft8 => Some(41.0 * HSYM_MS),
                 // FT2's tones end at 2.52 s of 3.75 (slot-start audio, Decodium's
                 // convention) — this is a COMPLETE-signal pass with 1.15 s of decode
                 // room against a measured 510 ms, not a partial. Without it FT2 fell
@@ -13248,7 +13284,13 @@ impl RadioLoop {
                 }
                 _ => None,
             };
-            if let Some(at) = early_at_ms {
+            // The full pass once its moment has come (it supersedes an early pass not yet run),
+            // else the early pass.
+            let due = match full_at_ms {
+                Some(at) if elapsed_now >= at => Some((at, DecodePass::Boundary)),
+                _ => early_at_ms.map(|at| (at, DecodePass::Early)),
+            };
+            if let Some((at, pass)) = due {
                 let slot_ms = eng.active_slot_secs() * 1000.0;
                 let elapsed_ms = slot_ms - self.clock.ms_to_next_slot(now);
                 // `< slot_ms` guards the exact-boundary tick (ms_to_next_slot
@@ -13264,6 +13306,9 @@ impl RadioLoop {
                     && eng.source_kind() == SourceKind::Native
                 {
                     self.early_done_slot = Some(slot);
+                    if pass == DecodePass::Boundary {
+                        self.full_done_slot = Some(slot);
+                    }
                     if tier_now == Tier::Msk144 {
                         self.early_msk_done =
                             Some((slot, (elapsed_ms / MSK_EARLY_STEP_MS).floor() as u32));
@@ -13295,10 +13340,11 @@ impl RadioLoop {
                             eng.keep_prebuilt_wave(&next, &wave);
                         }
                     }
-                    // Dispatch the early partial decode (boundary-slot index = audio
-                    // slot + 1, matching the boundary ingest's parity/history). The
-                    // result folds in — and publishes its spots — via the drain block.
-                    let job = eng.build_decode_job(frame, slot + 1, DecodePass::Early);
+                    // Dispatch the decode (boundary-slot index = audio slot + 1, matching the
+                    // boundary ingest's parity/history). The result folds in via the drain
+                    // block: an early one publishes its spots there, a full one is kept for its
+                    // boundary.
+                    let job = eng.build_decode_job(frame, slot + 1, pass);
                     self.decode.dispatch(WorkerJob::Slot(job));
                     self.decode_in_flight = true;
                 }
@@ -13323,8 +13369,42 @@ impl RadioLoop {
         if Some(slot) != self.last_slot {
             let currently_tx = self.tx_until_ms.is_some();
             let prev_was_tx = self.prev_slot_was_tx;
+            // A full pass kept for a boundary is this one's only when it names it: a boundary the
+            // clock skipped leaves its pass to be dropped here, never to decide a later slot.
+            let full_pass = self.full_pass_frame.take().filter(|(s, _)| *s == slot);
             if crate::slot::slot_wants_decode(currently_tx, prev_was_tx, self.rx.is_empty()) {
-                if !self.decode_in_flight {
+                if let Some((_, frame)) = full_pass {
+                    // The just-ended period's full pass (FT8 14.40 s, FT4 6.048 s) finished
+                    // before this boundary, so its decodes are already folded: run the TX
+                    // decision with them now, then the housekeeping, as the deferred path does
+                    // once a boundary decode drains. Nothing is decoded again.
+                    self.last_slot = Some(slot);
+                    let lead = js8_lead_waves.take();
+                    self.finish_boundary(
+                        &mut eng,
+                        rig,
+                        backend,
+                        sinks,
+                        station,
+                        now,
+                        slot,
+                        true,
+                        Some(frame),
+                        lead,
+                    )?;
+                } else if self.decode_in_flight && self.full_done_slot == Some(slot.wrapping_sub(1))
+                {
+                    // That full pass is still running. It IS this period's decode, not a decoder
+                    // falling behind, so nothing is dropped and nothing else is dispatched. Key
+                    // now with what has folded (WSJT-X keys at t = 0 whatever its decoder is
+                    // doing: `m_transmitting = true` at :8214); the pass's decodes reach the
+                    // sequencer the moment it drains, and that drain is this slot's
+                    // housekeeping only (`finish_boundary` sees `boundary_keyed`).
+                    self.last_slot = Some(slot);
+                    let lead = js8_lead_waves.take();
+                    let _ =
+                        self.key_boundary_tx(&mut eng, rig, backend, now, slot, false, None, lead);
+                } else if !self.decode_in_flight {
                     self.last_slot = Some(slot);
                     // Capture the just-ended slot's audio BEFORE any keying — a TX
                     // start clears the ring (own-carrier guard) and the straggler
@@ -13347,7 +13427,7 @@ impl RadioLoop {
                     };
                     // WSJT-X key-at-boundary (operator-approved 2026-07-21): when the
                     // just-ended RX slot's EARLY decode already folded (FT8/FT4 native —
-                    // dispatched at 11.8 s / 5.5 s and drained above), the
+                    // dispatched at 11.808 s and drained above), the
                     // auto-sequencer's inputs are ready NOW. Run the TX decision AT the
                     // boundary — exactly WSJT-X's ordering (it keys at t=0 and decodes
                     // in parallel; stragglers can't change an in-flight over there
@@ -27795,6 +27875,369 @@ mod tests {
             played_after_key,
             "no second wave: the straggler drain is housekeeping only (double-TX guard)"
         );
+    }
+
+    // ---- WSJT-X's decode moments (FT8 full pass at 14.40 s, FT4 at 6.048 s) ----
+    //
+    // The scene each test below plays: W9XYZ (us, even slots) has sent K1ABC an R-report and
+    // waits for the RR73; K1ABC's RR73 is in the odd slot 1. Which over the slot-2 boundary
+    // keys tells whether that decode was in the boundary's TX decision: "K1ABC W9XYZ 73" when
+    // it was, the R-report again when it was not.
+
+    /// The slot's audio from its start, `len` samples: `msg` as a `kind` signal at 1500 Hz in
+    /// light noise (strong enough that every pass that sees the frame decodes it).
+    fn wsjt_slot_audio(kind: tempo_core::modes::ModeKind, msg: &str, len: usize) -> Vec<f32> {
+        let mode = tempo_core::modes::make_mode(kind);
+        let wave = mode.gen_wave(&mode.encode(msg), 12_000.0, 1500.0);
+        let mut seed = 0x5EED_u64;
+        (0..len)
+            .map(|i| {
+                seed = seed
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                let noise = ((seed >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * 0.02;
+                noise + 0.05 * wave.get(i).copied().unwrap_or(0.0)
+            })
+            .collect()
+    }
+
+    /// What went on the air: the messages a `kind` decoder finds in the played TX audio.
+    fn wsjt_messages_played(kind: tempo_core::modes::ModeKind, played: &[f32]) -> Vec<String> {
+        use tempo_core::modes::{DecodeRequest, NativeSource, SignalSource};
+        let mut frame = played.to_vec();
+        frame.resize(kind.frame_samples().max(kind.capture_samples()), 0.0);
+        let iwave = tempo_core::channel::capture_to_i16(&frame);
+        let req = DecodeRequest {
+            iwave: &iwave,
+            nfa: 200,
+            nfb: 2900,
+            ndepth: 3,
+            mycall: "",
+            hiscall: "",
+            nqso_progress: 0,
+            nfqso: 1500,
+            nftx: 1500,
+            frame_time_ms: 0,
+            ap: false,
+            ap_cq_only: false,
+            partial: false,
+        };
+        NativeSource::from_kind(kind)
+            .decode_a7(&req, false)
+            .into_iter()
+            .map(|d| d.message.trim().to_string())
+            .collect()
+    }
+
+    /// W9XYZ on `tier`.
+    fn wsjt_engine(tier: Tier) -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tier(tier);
+        engine
+    }
+
+    /// Put W9XYZ on even slots, mid-QSO with K1ABC: the R-report is the next over (K1ABC's
+    /// report decoded from real audio first, as a double-click needs).
+    fn awaiting_rr73(engine: &Arc<Mutex<Engine>>, kind: tempo_core::modes::ModeKind) {
+        {
+            let mut e = engine.lock().unwrap();
+            let heard = wsjt_slot_audio(kind, "W9XYZ K1ABC -10", kind.capture_samples());
+            assert_eq!(e.ingest(&heard, 0), 1, "K1ABC's report decoded");
+            e.call_station_ctx("K1ABC", None, Some("W9XYZ K1ABC -10"), Some(-10), None)
+                .unwrap();
+            e.set_tx_even(true);
+            // Only the boundary path under test may key.
+            let _ = e.take_immediate_tx();
+            assert_eq!(
+                e.snapshot().qso.and_then(|q| q.tx_now).as_deref(),
+                Some("K1ABC W9XYZ R-10"),
+                "the scene: the R-report is next"
+            );
+        }
+    }
+
+    /// One radio-loop tick at `now` (ms).
+    fn tick(
+        state: &mut RadioLoop,
+        engine: &Arc<Mutex<Engine>>,
+        backend: &mut MockBackend,
+        rig: &mut Rig,
+        station: &mut StationSinks,
+        now: f64,
+    ) {
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        state
+            .step(engine, backend, rig, &sinks, now, &mut ra, &mut rr, station)
+            .unwrap();
+    }
+
+    /// Tick from `from` (1 ms apart, 20 ms of real time apart) until the decode in flight
+    /// drains; true when it drained before `before`.
+    fn drain_decode(
+        state: &mut RadioLoop,
+        engine: &Arc<Mutex<Engine>>,
+        backend: &mut MockBackend,
+        rig: &mut Rig,
+        station: &mut StationSinks,
+        from: f64,
+        before: f64,
+    ) -> bool {
+        let mut now = from;
+        while state.decode_in_flight && now < before {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            tick(state, engine, backend, rig, station, now);
+            now += 1.0;
+        }
+        !state.decode_in_flight
+    }
+
+    /// FT8: the full pass runs at WSJT-X's `m_hsymStop` = 50 half-symbols = 14.40 s
+    /// (mainwindow.cpp:2222, 3456-sample steps at :10984-10985), over the slot's first 14.4 s,
+    /// and a reply it finds before 15.0 s is in the boundary's TX decision: the 73 goes out,
+    /// not the R-report again.
+    #[test]
+    fn ft8_full_pass_at_14_4_s_puts_its_decodes_in_the_boundary_decision() {
+        use tempo_core::modes::ModeKind;
+        let engine = wsjt_engine(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+
+        tick(&mut state, &engine, b, r, s, 100.0); // slot 0: nothing queued yet
+        awaiting_rr73(&engine, ModeKind::Ft8);
+        tick(&mut state, &engine, b, r, s, 15_020.0); // slot 1: theirs
+        assert!(!rig.keyed, "odd slot: not ours");
+
+        // Slot 1's first 14.4 s, K1ABC's RR73 in it. The early pass found nothing.
+        backend.queue_capture(wsjt_slot_audio(ModeKind::Ft8, "W9XYZ K1ABC RR73", 172_800));
+        state.early_done_slot = Some(1);
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 29_399.0);
+        assert!(
+            !state.decode_in_flight,
+            "no full pass before 14.40 s into the slot"
+        );
+        tick(&mut state, &engine, b, r, s, 29_400.0);
+        assert!(
+            state.decode_in_flight && state.full_done_slot == Some(1),
+            "the full pass dispatches at 14.40 s"
+        );
+        assert!(
+            drain_decode(&mut state, &engine, b, r, s, 29_401.0, 29_990.0),
+            "the full pass drained before the boundary"
+        );
+        tick(&mut state, &engine, b, r, s, 29_995.0);
+        assert!(!state.decode_in_flight, "one full pass per slot");
+
+        tick(&mut state, &engine, b, r, s, 30_020.0); // slot 2: ours
+        assert!(rig.keyed, "keyed at the boundary");
+        assert_eq!(
+            wsjt_messages_played(ModeKind::Ft8, &backend.played),
+            vec!["K1ABC W9XYZ 73".to_string()],
+            "the RR73 the full pass found was in the boundary's decision"
+        );
+        assert!(
+            !state.decode_in_flight,
+            "the full pass was the period's decode: no second decode of it at the boundary"
+        );
+        assert_eq!(state.dropped_decodes, 0);
+    }
+
+    /// FT8: a full pass still decoding at the boundary is that period's decode running, not a
+    /// decoder falling behind. The boundary keys on time without it (WSJT-X keys at t = 0 and
+    /// decodes in parallel) and drops nothing; its decodes reach the sequencer the moment they
+    /// land, and its drain is housekeeping only (no second over).
+    #[test]
+    fn ft8_full_pass_still_running_at_the_boundary_is_not_dropped() {
+        use tempo_core::modes::ModeKind;
+        let engine = wsjt_engine(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+
+        tick(&mut state, &engine, b, r, s, 100.0); // slot 0: nothing queued yet
+        awaiting_rr73(&engine, ModeKind::Ft8);
+        tick(&mut state, &engine, b, r, s, 15_020.0);
+        backend.queue_capture(wsjt_slot_audio(ModeKind::Ft8, "W9XYZ K1ABC RR73", 172_800));
+        state.early_done_slot = Some(1);
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 29_400.0);
+        assert!(state.decode_in_flight, "the full pass is running");
+
+        // The boundary, with the full pass still decoding (a decode takes far longer than
+        // the gap between these two ticks).
+        tick(&mut state, &engine, b, r, s, 30_000.0);
+        assert!(r.keyed, "keyed at the boundary, on time");
+        assert_eq!(
+            state.dropped_decodes, 0,
+            "the running full pass IS the period's decode: nothing dropped"
+        );
+        let played_at_key = b.played.len();
+
+        assert!(
+            drain_decode(&mut state, &engine, b, r, s, 30_001.0, 45_000.0),
+            "the full pass drained"
+        );
+        assert_eq!(
+            engine
+                .lock()
+                .unwrap()
+                .snapshot()
+                .qso
+                .and_then(|q| q.tx_now)
+                .as_deref(),
+            Some("K1ABC W9XYZ 73"),
+            "its RR73 reached the sequencer as soon as it landed"
+        );
+        assert_eq!(
+            backend.played.len(),
+            played_at_key,
+            "its drain is housekeeping only: no second over"
+        );
+        assert!(
+            state.full_pass_frame.is_none(),
+            "finished as its own boundary's housekeeping, not parked for a boundary already past"
+        );
+    }
+
+    /// A full pass parked for its boundary is only that boundary's. When the clock skips that
+    /// boundary (a stall, a clock step), the next one must not take the TX decision from a
+    /// decode two periods old: it decodes the period that just ended, as any boundary does.
+    #[test]
+    fn a_parked_full_pass_never_decides_a_later_boundary() {
+        use tempo_core::modes::ModeKind;
+        let engine = wsjt_engine(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+
+        tick(&mut state, &engine, b, r, s, 100.0); // slot 0: nothing queued yet
+        awaiting_rr73(&engine, ModeKind::Ft8);
+        tick(&mut state, &engine, b, r, s, 15_020.0);
+        backend.queue_capture(wsjt_slot_audio(ModeKind::Ft8, "W9XYZ K1ABC RR73", 172_800));
+        state.early_done_slot = Some(1);
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 29_400.0);
+        assert!(drain_decode(
+            &mut state, &engine, b, r, s, 29_401.0, 30_000.0
+        ));
+        assert!(
+            matches!(state.full_pass_frame, Some((2, _))),
+            "parked for the slot-2 boundary"
+        );
+
+        // The next tick is in slot 4 (even, ours): slot 2's boundary never ran.
+        tick(&mut state, &engine, b, r, s, 60_020.0);
+        assert!(
+            !rig.keyed,
+            "slot 4's decision waits for slot 3's decode, never slot 1's parked one"
+        );
+        assert!(state.decode_in_flight, "slot 3's period is being decoded");
+        assert!(
+            state.full_pass_frame.is_none(),
+            "the parked pass is dropped"
+        );
+    }
+
+    /// FT4: WSJT-X's only FT4 decode is at `m_hsymStop` = 21 half-symbols = 6.048 s
+    /// (mainwindow.cpp:2226, :10924; 3456-sample steps at :10920-10921), nothing at 5.5 s, and
+    /// its decodes are in the 7.5 s boundary's decision.
+    #[test]
+    fn ft4_full_pass_at_6_048_s_puts_its_decodes_in_the_boundary_decision() {
+        use tempo_core::modes::ModeKind;
+        let engine = wsjt_engine(Tier::Ft4);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+
+        tick(&mut state, &engine, b, r, s, 100.0); // slot 0: nothing queued yet
+        awaiting_rr73(&engine, ModeKind::Ft4);
+        tick(&mut state, &engine, b, r, s, 7_520.0); // slot 1: theirs
+        assert!(!rig.keyed, "odd slot: not ours");
+
+        backend.queue_capture(wsjt_slot_audio(ModeKind::Ft4, "W9XYZ K1ABC RR73", 72_576));
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 13_000.0); // 5.5 s
+        tick(&mut state, &engine, b, r, s, 13_547.0);
+        assert!(
+            !state.decode_in_flight,
+            "no FT4 decode before 6.048 s (WSJT-X has no 5.5 s pass)"
+        );
+        tick(&mut state, &engine, b, r, s, 13_548.0);
+        assert!(
+            state.decode_in_flight && state.full_done_slot == Some(1),
+            "the FT4 full pass dispatches at 6.048 s"
+        );
+        assert!(drain_decode(
+            &mut state, &engine, b, r, s, 13_549.0, 15_000.0
+        ));
+
+        tick(&mut state, &engine, b, r, s, 15_020.0); // slot 2: ours
+        assert!(rig.keyed, "keyed at the boundary");
+        assert_eq!(
+            wsjt_messages_played(ModeKind::Ft4, &backend.played),
+            vec!["K1ABC W9XYZ 73".to_string()],
+            "the RR73 the 6.048 s pass found was in the boundary's decision"
+        );
+    }
+
+    /// FT8's early pass stays where WSJT-X runs it: `m_earlyDecode` = 41 half-symbols =
+    /// 11.808 s (mainwindow.h:666, triggered at mainwindow.cpp:2381).
+    #[test]
+    fn ft8_early_pass_runs_at_11_808_s() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tier(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 100.0);
+        tick(&mut state, &engine, b, r, s, 15_020.0);
+        backend.queue_capture(vec![0.001f32; 120_000]);
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 26_807.0);
+        assert!(!state.decode_in_flight, "nothing before 11.808 s");
+        tick(&mut state, &engine, b, r, s, 26_808.0);
+        assert!(
+            state.decode_in_flight
+                && state.early_done_slot == Some(1)
+                && state.full_done_slot.is_none(),
+            "the early pass, at 11.808 s"
+        );
+    }
+
+    /// An EARLY pass still running at the boundary is the decoder falling behind, and that
+    /// period's decode is dropped as before (WSJT-X: `if(m_decoderBusy) return;`,
+    /// mainwindow.cpp:5377). Only the full pass of the period that just ended is exempt.
+    #[test]
+    fn an_early_pass_still_running_at_the_boundary_still_drops_its_period() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tier(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 100.0);
+        tick(&mut state, &engine, b, r, s, 15_020.0);
+        backend.queue_capture(vec![0.001f32; 120_000]);
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 26_808.0);
+        assert!(state.decode_in_flight && state.full_done_slot.is_none());
+        tick(&mut state, &engine, b, r, s, 30_000.0);
+        assert_eq!(state.dropped_decodes, 1, "the busy-worker drop, unchanged");
+        assert!(drain_decode(
+            &mut state, &engine, b, r, s, 30_001.0, 45_000.0
+        ));
     }
 
     /// THE 2026-08-17 FIELD INCIDENT (KF4YHC, FTX-1, 1.6.1): a boundary decode that
