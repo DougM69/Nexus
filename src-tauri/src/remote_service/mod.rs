@@ -1984,6 +1984,8 @@ impl Controller {
         let Some(signing) = self.signing.take() else {
             return;
         };
+        // Said ended before the station is bound, so nothing shows it bound and still signing in.
+        self.reflect_account();
         let result = done.unwrap_or(Err("signInFailed")).and_then(|bound| {
             if signing.again {
                 self.proven_again();
@@ -1992,7 +1994,6 @@ impl Controller {
                 self.install(bound, signing.generation)
             }
         });
-        self.reflect_account();
         if let Err(error) = result {
             if let Ok(mut status) = self.status.lock() {
                 status.error = Some(error);

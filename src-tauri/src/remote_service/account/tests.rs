@@ -697,7 +697,16 @@ async fn signing_in_again_replaces_the_stations_proof() {
     let (result, _, seen) =
         reprove_with(&token("station"), "stationLan", Some(retired), &store).await;
     assert_eq!(result, Ok(()));
+    // Nothing kept holds a secret: neither the access token, the proof, its signature nor the
+    // credential. CONTROL: the stand-in was sent the last three.
+    let kept = serde_json::to_string(&store.owner().unwrap()).unwrap();
+    let signature = token("station").rsplit('.').next().unwrap().to_string();
+    for secret in [ACCESS, &token("station"), &signature, CREDENTIAL] {
+        assert!(!kept.contains(secret), "kept: {secret}");
+    }
     let seen = seen.lock().unwrap();
+    let sent = seen.proof.as_ref().unwrap().0.to_string();
+    assert!(sent.contains(&signature) && sent.contains(CREDENTIAL));
     assert_eq!(seen.station, None, "nothing is bound again");
     let (body, authorization) = seen.proof.clone().unwrap();
     assert_eq!(authorization, format!("Bearer {ACCESS}"));

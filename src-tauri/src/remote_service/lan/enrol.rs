@@ -62,19 +62,25 @@ pub(crate) struct Ready {
 #[derive(Default)]
 pub(crate) struct Enrolment {
     ready: Mutex<Option<Arc<Ready>>>,
-    /// Where the LAN's device cache is kept, and the clock proofs are read by. `None` only in a test
-    /// with no account: then nothing is enrolled, and nothing is held to an age.
-    kept: Option<(Arc<dyn AccountVault>, fn() -> u64)>,
+    /// Where the LAN's device cache is kept. `None` only in a test with no account: then nothing is
+    /// enrolled, and nothing is held to an age.
+    kept: Option<Kept>,
     /// The devices that cache holds, as last read: `None` until it has been read, and then nobody
     /// is admitted, as the book admits nobody until it has read its own.
     enrolled: Mutex<Option<Vec<CachedDevice>>>,
+}
+
+/// Where the LAN's device cache is kept, and the clock proofs are read by.
+struct Kept {
+    vault: Arc<dyn AccountVault>,
+    now_s: fn() -> u64,
 }
 
 impl Enrolment {
     /// The enrolment for the station whose LAN device cache `vault` keeps, its proofs read by `now_s`.
     pub(crate) fn kept_in(vault: Arc<dyn AccountVault>, now_s: fn() -> u64) -> Self {
         Self {
-            kept: Some((vault, now_s)),
+            kept: Some(Kept { vault, now_s }),
             ..Self::default()
         }
     }
@@ -89,7 +95,7 @@ impl Enrolment {
     /// Reads the device cache again, after the station changed it. One that does not read leaves
     /// what was read before.
     pub(crate) fn reread(&self) {
-        let Some((vault, _)) = &self.kept else {
+        let Some(Kept { vault, .. }) = &self.kept else {
             return;
         };
         let read = match vault.device_cache() {
@@ -109,7 +115,7 @@ impl Enrolment {
     /// goes: one the cache does not hold was paired by code, and the book alone decides; one it holds
     /// is admitted for [`account::PROOF_MAX_AGE_S`] from its proof's signing (see the header).
     pub(crate) fn admits(&self, pin: &[u8; 32]) -> bool {
-        let Some((_, now_s)) = &self.kept else {
+        let Some(Kept { now_s, .. }) = &self.kept else {
             return true;
         };
         let Ok(held) = self.enrolled.lock() else {
@@ -126,7 +132,7 @@ impl Enrolment {
 
     /// The pins of the enrolled computers whose proofs are past their age now, as last read.
     pub(super) fn expired(&self) -> Vec<[u8; 32]> {
-        let Some((_, now_s)) = &self.kept else {
+        let Some(Kept { now_s, .. }) = &self.kept else {
             return Vec::new();
         };
         let now_s = now_s();
@@ -143,7 +149,7 @@ impl Enrolment {
     /// Takes the computers with `pins` out of the device cache, once they are out of the book. A
     /// store that will not keep it leaves them there, still refused.
     pub(super) fn forget(&self, pins: &[[u8; 32]]) {
-        let Some((vault, _)) = &self.kept else {
+        let Some(Kept { vault, .. }) = &self.kept else {
             return;
         };
         if let Ok(Some(mut cache)) = vault.device_cache() {
