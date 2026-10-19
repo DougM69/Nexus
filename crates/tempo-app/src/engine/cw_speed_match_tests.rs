@@ -42,7 +42,7 @@ fn hear(e: &mut Engine, text: &str, wpm: u32, silence: f32) {
 
 /// Every queued word with the speed the loop keys it at, in order.
 fn keyed(e: &mut Engine) -> Vec<(String, u32)> {
-    std::iter::from_fn(|| e.poll_cw_word()).collect()
+    std::iter::from_fn(|| e.poll_cw_word().map(|(w, wpm, _)| (w, wpm))).collect()
 }
 
 fn at(words: &[&str], wpm: u32) -> Vec<(String, u32)> {
@@ -185,11 +185,11 @@ fn a_speed_the_operator_chooses_drops_the_match_for_what_is_queued() {
     hear(&mut e, "TEST W1AW", 30, 1.0);
     let m = e.cw_decode().wpm;
     e.send_cw_as("{MYCALL} 5NN IL", true);
-    assert_eq!(e.poll_cw_word(), Some(("KD9TAW".into(), m)));
+    assert_eq!(e.poll_cw_word(), Some(("KD9TAW".into(), m, true)));
     e.set_cw_wpm(OWN);
     assert_eq!(
         e.poll_cw_word(),
-        Some(("5NN".into(), m)),
+        Some(("5NN".into(), m, false)),
         "the same speed again is no choice (the control's settle-save)"
     );
     e.set_cw_wpm(20);
@@ -230,4 +230,17 @@ fn a_speed_the_decoder_mistimed_is_not_used_whatever_the_ai_copied() {
     assert_eq!(e.cw_reply_wpm(), None);
     e.send_cw_as("{MYCALL}", true);
     assert_eq!(keyed(&mut e), at(&["KD9TAW"], OWN));
+}
+
+/// Each word says whether it starts its message, where a keyer told its speed once per message
+/// is told it; a word queued outside any message counts as a start.
+#[test]
+fn each_word_says_whether_it_starts_its_message() {
+    let mut e = station(false);
+    e.send_cw("CQ TEST");
+    e.send_cw("K");
+    let starts: Vec<bool> = std::iter::from_fn(|| e.poll_cw_word().map(|(_, _, s)| s)).collect();
+    assert_eq!(starts, [true, false, true]);
+    e.cw_queue.push_back("E".into());
+    assert_eq!(e.poll_cw_word().map(|(_, _, s)| s), Some(true));
 }

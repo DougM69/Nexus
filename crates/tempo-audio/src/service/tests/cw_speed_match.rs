@@ -187,7 +187,7 @@ fn speed_match_off_leaves_the_cat_wire_as_it_was() {
 /// The WPM control stays the operator's, the answer is paced at the station's speed, and the
 /// operator's speed goes back afterwards.
 #[test]
-fn a_smartsdr_cat_answer_is_not_overwritten_by_following_the_radio() {
+fn a_smartsdr_cat_answer_sets_the_station_speed_and_mine_after_it() {
     let (engine, m) = station(2036, "cat", true, |_| {});
     let (addr, log, knob) = keyer_speed_rigctld();
     let mut rig = Rig::rigctld(&addr);
@@ -204,8 +204,8 @@ fn a_smartsdr_cat_answer_is_not_overwritten_by_following_the_radio() {
         5_000.0,
     );
     assert!(
-        log.lock().unwrap().iter().any(|l| l == "l KEYSPD"),
-        "control: the radio's speed was read back (the follow ran)"
+        !log.lock().unwrap().iter().any(|l| l == "l KEYSPD"),
+        "Nexus's speed wins there: the radio's is never read"
     );
     let set_m = format!("L KEYSPD {m}");
     assert_eq!(
@@ -226,10 +226,11 @@ fn a_smartsdr_cat_answer_is_not_overwritten_by_following_the_radio() {
     assert_eq!(knob.load(std::sync::atomic::Ordering::Relaxed), OWN);
 }
 
-/// The operator turning the radio's knob during an answer is followed, and the rest of the
-/// answer keys at the knob's speed: Nexus does not push the matched speed back over it.
+/// Nexus's speed wins on SmartSDR CAT: the radio's knob turned during an answer is not taken into
+/// the CW control, nothing is sent inside the answer, and the next message tells the radio
+/// Nexus's own speed again.
 #[test]
-fn a_knob_turned_during_an_answer_wins_over_the_match() {
+fn a_knob_turned_during_an_answer_does_not_move_my_speed() {
     let (engine, m) = station(2036, "cat", true, |_| {});
     let (addr, log, knob) = keyer_speed_rigctld();
     let mut rig = Rig::rigctld(&addr);
@@ -261,10 +262,29 @@ fn a_knob_turned_during_an_answer_wins_over_the_match() {
     );
     assert_eq!(
         names(&rest),
-        vec!["b 5NN", "b TU"],
-        "no speed pushed back: {rest:?}"
+        vec!["b 5NN", "b TU", "L KEYSPD 25"],
+        "nothing inside the answer; my speed after it"
     );
-    assert_eq!(engine.lock().unwrap().cw_wpm(), 22, "the knob is followed");
+    engine.lock().unwrap().send_cw("CQ");
+    let cq = keyed(
+        &mut state,
+        &engine,
+        &mut backend,
+        &mut rig,
+        &log,
+        6_000.0,
+        7_000.0,
+    );
+    assert_eq!(
+        names(&cq),
+        vec!["L KEYSPD 25", "b CQ"],
+        "told again before the CQ"
+    );
+    assert_eq!(
+        engine.lock().unwrap().cw_wpm(),
+        OWN,
+        "the knob does not move my speed"
+    );
 }
 
 /// ⭐ WINKEYER: its Set Speed carries the station's speed before the answer's first character,

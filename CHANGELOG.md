@@ -251,10 +251,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not started yet is dropped instead of being sent after the stop. On an FT-710 or FTX-1 keyed over CAT, the stop now
   also sends Yaesu's own playback stop, so the rest of the word is cut off.
 - **CW: on a radio that cannot be stopped mid-word, Esc leaves at most the word being sent.** On a Flex over SmartSDR
-  CAT, and on Yaesu radios keyed over CAT that have no CW stop (FT-991A, FTDX10 and others), Nexus now times each word
-  at the speed the radio reports. A speed changed on the radio no longer lets words pile up and keep sending after Esc,
-  and the CW speed control follows it. With a Flex on SmartSDR CAT, the CW settings suggest SmartSDR CAT's WinKeyer
-  port or the Flex native client, which both stop mid-word.
+  CAT, and on Yaesu radios keyed over CAT that have no CW stop (FT-991A, FTDX10 and others), Nexus hands the radio one
+  word at a time, timed at the speed it keys. With a Flex on SmartSDR CAT, the CW settings suggest SmartSDR CAT's
+  WinKeyer port or the Flex native client, which both stop mid-word.
+- **CW: on those same radios, Nexus's CW speed wins.** Nexus sends its speed to the radio at the start of every
+  message, so a speed turned on the radio (SmartSDR, a Maestro, the front panel) lasts only until your next message,
+  and Nexus's CW speed control is never changed by it. Words can no longer pile up behind a slower radio and keep
+  sending after Esc.
 - **Remote: Operate from this computer now works at an address you type.** When nothing answers where a paired
   station was, Stations on this network asks where it is now. That box offered only Stream; it now offers **Operate
   at this address** first, with Stream still beside it. Nexus checks it is the same paired station there, as it does

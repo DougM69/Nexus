@@ -3678,11 +3678,12 @@ pub struct Engine {
     /// keys via `rig.send_morse`. Operator-initiated; gated by `tx_enabled` (Monitor) and the
     /// privileges, and a word they refuse is dropped, never held (`poll_cw_one`).
     cw_queue: VecDeque<String>,
-    /// The messages in [`Self::cw_queue`], oldest first, as (words left, CW speed match's speed):
-    /// `None` keys at the operator's own speed. Words leave the front as the loop takes them.
+    /// The messages in [`Self::cw_queue`], oldest first, as (words left, CW speed match's speed,
+    /// whether its first word has been taken): `None` keys at the operator's own speed. Words leave
+    /// the front as the loop takes them.
     /// Only ever describes words still queued: every path that drops the queue drops all of it,
     /// so an empty queue means these are spent ([`Self::queue_cw`] starts afresh then).
-    cw_messages: VecDeque<(usize, Option<u32>)>,
+    cw_messages: VecDeque<(usize, Option<u32>, bool)>,
     /// Recent EXPANDED CW transmissions (macros resolved) — a TX echo the cockpit shows
     /// so the operator sees exactly what went out. Capped; cleared with the RX transcript.
     cw_sent: VecDeque<String>,
@@ -10447,7 +10448,7 @@ impl Engine {
                     &format!("CW speed match: this answer keys at {w} WPM"),
                 );
             }
-            self.cw_messages.push_back((words, wpm));
+            self.cw_messages.push_back((words, wpm, false));
         }
     }
 
@@ -10525,7 +10526,7 @@ impl Engine {
             // A speed the operator chose (the control, or the radio's own knob followed) wins over
             // CW speed match for what is still queued: the rest keys at the new speed, and the
             // loop does not push the matched speed back over the operator's.
-            for (_, matched) in self.cw_messages.iter_mut() {
+            for (_, matched, _) in self.cw_messages.iter_mut() {
                 *matched = None;
             }
         }
@@ -10595,12 +10596,14 @@ impl Engine {
     /// offset from the dial, not the CW: a parting ID goes out after its 73 or not at all, never
     /// at some later moment when it happens to be allowed.
     pub fn poll_cw_one(&mut self) -> Option<String> {
-        self.poll_cw_word().map(|(word, _)| word)
+        self.poll_cw_word().map(|(word, _, _)| word)
     }
 
-    /// [`Self::poll_cw_one`] with the speed to key the word at: its message's CW speed match
-    /// speed, else the operator's own. Every gate is `poll_cw_one`'s.
-    pub fn poll_cw_word(&mut self) -> Option<(String, u32)> {
+    /// [`Self::poll_cw_one`] with the speed to key the word at (its message's CW speed match speed,
+    /// else the operator's own) and whether the word STARTS its message, where a keyer that must be
+    /// told its speed once per message is told. A word queued outside any message counts as one.
+    /// Every gate is `poll_cw_one`'s.
+    pub fn poll_cw_word(&mut self) -> Option<(String, u32, bool)> {
         let refused = if self.clock_repair_holds_tx() {
             Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
         } else if !self.tx_enabled {
@@ -10630,13 +10633,16 @@ impl Engine {
         }
         let wpm = self.cw_next_wpm();
         let word = self.cw_queue.pop_front()?;
-        if let Some((left, _)) = self.cw_messages.front_mut() {
+        let mut starts = true;
+        if let Some((left, _, started)) = self.cw_messages.front_mut() {
+            starts = !*started;
+            *started = true;
             *left -= 1;
             if *left == 0 {
                 self.cw_messages.pop_front();
             }
         }
-        Some((word, wpm))
+        Some((word, wpm, starts))
     }
 
     /// The speed the next queued word keys at: its message's CW speed match speed, else (and with
@@ -10647,7 +10653,7 @@ impl Engine {
         }
         self.cw_messages
             .front()
-            .and_then(|(_, matched)| *matched)
+            .and_then(|(_, matched, _)| *matched)
             .unwrap_or(self.settings.cw_wpm)
     }
 
