@@ -35,7 +35,7 @@ impl AudioBackend for NoRetune {
 }
 
 /// W1AW's over `msg`, as this station's sound card captured it in the period before `slot`.
-fn capture_of(tier: Tier, msg: &str) -> Vec<f32> {
+pub(super) fn capture_of(tier: Tier, msg: &str) -> Vec<f32> {
     if tier == Tier::Ft8 {
         return ft8_frame(msg);
     }
@@ -67,6 +67,11 @@ struct Qso<B: AudioBackend> {
 
 impl<B: AudioBackend + Default> Qso<B> {
     fn new(tier: Tier, backend: B) -> Qso<B> {
+        Qso::heard_before(tier, backend, 0)
+    }
+
+    /// As [`Qso::new`], with W1AW's grid heard at the boundary `periods` before `t0`'s.
+    fn heard_before(tier: Tier, backend: B, periods: u64) -> Qso<B> {
         let peer = retuning_peer(14_074_000, "PKTUSB", |line, state| {
             (line == "T 1").then(|| {
                 state.keyed = true;
@@ -96,7 +101,7 @@ impl<B: AudioBackend + Default> Qso<B> {
             let mut e = engine.lock().unwrap();
             let line = "KD9TAW W1AW FN31";
             assert!(
-                e.ingest(&capture_of(tier, line), slot) >= 1,
+                e.ingest(&capture_of(tier, line), slot - periods) >= 1,
                 "premise: W1AW's grid decoded"
             );
             e.call_station_ctx("W1AW", Some("FN31"), Some(line), Some(-10), None)
@@ -212,7 +217,7 @@ fn same_audio(got: &[f32], want: &[f32]) -> Result<(), String> {
 }
 
 /// The slot-positioned over `text` keys as on `tier`, at 1500 Hz.
-fn over_of(tier: Tier, text: &str) -> Vec<f32> {
+pub(super) fn over_of(tier: Tier, text: &str) -> Vec<f32> {
     let kind = match tier {
         Tier::Ft8 => tempo_core::modes::ModeKind::Ft8,
         _ => tempo_core::modes::ModeKind::Ft4,
@@ -450,4 +455,198 @@ fn a_tx_slot_click_during_the_over_switches_it_on_the_next_tick() {
         "what played stays the report's"
     );
     assert_eq!(s.backend.retunes, 1);
+}
+
+/// The loop's decode worker, held by the test: a job the loop dispatches waits here, and its
+/// result reaches the loop only when the test hands it back, so a scene says when a decode lands.
+/// The decode is the worker's own (`run_worker_job`), on the frame the loop built.
+pub(super) struct HeldWorker {
+    jobs: std::sync::mpsc::Receiver<WorkerJob>,
+    results: std::sync::mpsc::Sender<DecodeResult>,
+}
+
+impl HeldWorker {
+    pub(super) fn install(state: &mut RadioLoop) -> HeldWorker {
+        let (job_tx, jobs) = std::sync::mpsc::channel::<WorkerJob>();
+        let (results, result_rx) = std::sync::mpsc::channel::<DecodeResult>();
+        state.decode = DecodeWorker {
+            job_tx: Some(job_tx),
+            result_rx,
+            handle: None,
+        };
+        HeldWorker { jobs, results }
+    }
+
+    /// The one decode the loop has dispatched, decoded as its worker decodes it. The loop does not
+    /// have the result yet.
+    pub(super) fn decode(&self) -> DecodeResult {
+        let job = self.jobs.try_recv().expect("the loop dispatched a decode");
+        assert!(self.jobs.try_recv().is_err(), "one decode at a time");
+        let mut results = run_worker_job(job);
+        assert_eq!(results.len(), 1, "a slot decode yields one result");
+        results.remove(0)
+    }
+
+    /// Hand `result` to the loop: its next tick drains it.
+    pub(super) fn land(&self, result: DecodeResult) {
+        self.results.send(result).unwrap();
+    }
+}
+
+/// W1AW's RR73 to our report, and the 73 that answers it.
+const RR73_TO_US: &str = "KD9TAW W1AW RR73";
+const BYE73: &str = "W1AW KD9TAW 73";
+
+/// THE REPORTED CASE, END TO END, up to the switch. We sent W1AW our report two periods before
+/// `t0`, and W1AW rogered it with RR73 at once, too weakly for the early pass (it ran and found
+/// nothing), so only the full pass finds it. The loop runs that pass at WSJT-X's `m_hsymStop`
+/// (FT8 14.40 s, FT4 6.048 s), and it is still running at `t0`: the boundary keys the report again,
+/// on time (WSJT-X keys at t = 0 whatever its decoder is doing), and the pass lands `land_ms` into
+/// that over, the card having played that much of it. Returns the scene after that tick and the
+/// over as keyed.
+fn rr73_found_only_by_the_late_full_pass(tier: Tier, land_ms: f64) -> (Qso<MockBackend>, Vec<f32>) {
+    let mut s = Qso::heard_before(tier, MockBackend::new(), 2);
+    let period = s.period_ms;
+    let worker = HeldWorker::install(&mut s.state);
+    let rx_slot = s.slot() - 1;
+    s.t = s.t0 - period;
+    s.run_to(20.0 - period);
+    s.state.early_done_slot = Some(rx_slot);
+    // The full pass's moment, on the loop's 20 ms tick, and the audio it decodes: the period from
+    // its start, W1AW's RR73 in it.
+    let full_at = if tier == Tier::Ft8 { 14_400.0 } else { 6_048.0 };
+    let due = (full_at / 20.0_f64).ceil() * 20.0;
+    let heard = capture_of(tier, RR73_TO_US);
+    let n = ((due / 1000.0 * tempo_fast::SAMPLE_RATE as f64) as usize).min(heard.len());
+    s.run_to(due - period - 40.0);
+    s.backend.queue_capture(heard[..n].to_vec());
+    s.run_to(due - period - 20.0);
+    assert!(
+        !s.state.decode_in_flight,
+        "premise: nothing decoded before the full pass's moment"
+    );
+    s.run_to(due - period);
+    assert!(
+        s.state.decode_in_flight && s.state.full_done_slot == Some(rx_slot),
+        "the full pass dispatched at {full_at} ms"
+    );
+    let full = worker.decode();
+    assert_eq!(full.pass(), DecodePass::Boundary, "the full pass");
+    assert_eq!(full.slot(), s.slot(), "for t0's boundary");
+    assert!(
+        full.decodes()
+            .iter()
+            .any(|d| d.message.trim() == RR73_TO_US),
+        "premise: the full pass finds W1AW's RR73, got {:?}",
+        full.decodes()
+    );
+
+    s.run_to(0.0);
+    let keyed = s.backend.played.clone();
+    assert_eq!(
+        same_audio(&keyed, &over_of(tier, TX2)),
+        Ok(()),
+        "the report keyed again at t0, as before the fix"
+    );
+    assert!(s.state.decode_in_flight, "the full pass still running");
+    assert_eq!(s.state.dropped_decodes, 0, "nothing dropped");
+    assert_eq!(s.tx_rows().len(), 1, "premise: the report's Tx row");
+
+    s.run_to(land_ms - 20.0);
+    assert_eq!(
+        s.backend.retunes, 0,
+        "premise: nothing switched before it lands"
+    );
+    s.played_for(land_ms);
+    worker.land(full);
+    s.run_to(land_ms);
+    (s, keyed)
+}
+
+/// What a decoder on W1AW's side copies from the over `played`.
+fn copied(tier: Tier, played: &[f32]) -> Vec<String> {
+    let kind = match tier {
+        Tier::Ft8 => tempo_core::modes::ModeKind::Ft8,
+        _ => tempo_core::modes::ModeKind::Ft4,
+    };
+    wsjt_messages_played(kind, played)
+}
+
+/// The over after the switch: what played stays the report's, the rest is the 73's in place, and
+/// because the switch was inside the clean-switch window (the first symbols are the Costas sync,
+/// the same for every message) the over on the air is the 73's, sample for sample: W1AW copies a
+/// 73, not the report again. The over keeps its length and its PTT end, a second Tx row says what
+/// went out, TX goes off after it ("Disable Tx after sending 73"), and nothing more is sent (the
+/// engine's `rr73_folded_while_the_report_is_on_the_air_switches_the_rest_to_73` holds the log).
+fn the_over_on_the_air_is_the_73(mut s: Qso<MockBackend>, keyed: Vec<f32>, at: usize) {
+    let tier = s.tier;
+    let bye = over_of(tier, BYE73);
+    let played = s.backend.played.clone();
+    assert_eq!(copied(tier, &played), [BYE73], "W1AW copies the 73");
+    assert_eq!(
+        copied(tier, &keyed),
+        [TX2],
+        "control: the over as keyed is the report"
+    );
+    assert_eq!(s.backend.retunes, 1, "the rest handed to the card once");
+    assert_eq!(
+        same_audio(&played[at..], &bye[at..]),
+        Ok(()),
+        "the rest is the 73's, in place"
+    );
+    assert_eq!(
+        same_audio(&played[..at], &keyed[..at]),
+        Ok(()),
+        "what played stays the report's"
+    );
+    assert_eq!(
+        same_audio(&played, &bye),
+        Ok(()),
+        "inside the clean-switch window the over on the air is the 73's"
+    );
+    assert!(
+        same_audio(&keyed, &bye).is_err(),
+        "control: the report's over is not the 73's"
+    );
+    let rows = s.tx_rows();
+    assert_eq!(rows.len(), 1, "a second Tx row: {rows:?}");
+    assert!(rows[0].ends_with(BYE73), "{}", rows[0]);
+
+    s.run_to(s.period_ms - 500.0);
+    assert_eq!(s.state.tx_until_ms, None, "the over ended");
+    assert_eq!(s.ptt_lines(), ["T 1", "T 0"]);
+    s.run_to(2.0 * s.period_ms + 1_000.0);
+    assert_eq!(
+        s.backend.played.len(),
+        bye.len(),
+        "nothing keyed after the 73"
+    );
+    assert_eq!(s.ptt_lines(), ["T 1", "T 0"]);
+    let e = s.engine.lock().unwrap();
+    assert!(!e.tx_enabled(), "TX off after the 73");
+    assert_eq!(
+        e.snapshot().qso.and_then(|q| q.tx_now),
+        None,
+        "the 73 went once: nothing left to send"
+    );
+}
+
+/// ⭐⭐ THE REPORTED CASE, END TO END, FT8: the RR73 only the late full pass finds lands 1 s into
+/// the report keyed again, inside the first 1.4 s, and the rest of the over becomes the 73.
+#[test]
+fn ft8_an_rr73_only_the_late_full_pass_finds_turns_the_report_on_the_air_into_73() {
+    let (s, keyed) = rr73_found_only_by_the_late_full_pass(Tier::Ft8, 1_000.0);
+    let until = s.state.tx_until_ms;
+    assert_eq!(until, Some(s.t0 + 13_840.0), "PTT's end untouched");
+    the_over_on_the_air_is_the_73(s, keyed, 12_000);
+}
+
+/// ⭐⭐ THE SAME, FT4: the 6.048 s pass lands 400 ms into the report keyed again, before its
+/// tones start, and the over on the air is the 73.
+#[test]
+fn ft4_an_rr73_only_the_late_full_pass_finds_turns_the_report_on_the_air_into_73() {
+    let (s, keyed) = rr73_found_only_by_the_late_full_pass(Tier::Ft4, 400.0);
+    let until = s.state.tx_until_ms;
+    assert_eq!(until, Some(s.t0 + 6_240.0), "PTT's end untouched");
+    the_over_on_the_air_is_the_73(s, keyed, 4_800);
 }

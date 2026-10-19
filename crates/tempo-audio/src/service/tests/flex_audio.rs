@@ -48,6 +48,15 @@ impl AudioBackend for TeeBackend {
     fn flush_output(&mut self) -> usize {
         self.tee.lock().unwrap().as_ref().map_or(0, |t| t.flush())
     }
+    /// A mid-over switch, as the sound card hands it to an installed tee (`retune_route`): the
+    /// over is the tee's, so the tee replaces what it still holds.
+    fn retune_tx(&mut self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
+        self.tee
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|t| t.retune(tail))
+    }
 }
 
 /// The radio loop on a simulated FLEX-6400 behind Nexus's own client, in FT8 with TX enabled.
@@ -4116,4 +4125,174 @@ fn rtty_afsk_follows_the_sideband_setting_on_a_flex_slice() {
             slice_mode(s).as_deref() == Some(want)
         });
     }
+}
+
+// ── The reported FT8 case on DAX, end to end ─────────────────────────────────────────────────
+
+/// One loop step at `now`, the receive floor kept fresh by hand (no DAX receive audio arrives).
+fn fresh_step(s: &mut FlexScene, now: f64) {
+    s.state.dax_last_audio = Some(Instant::now());
+    s.step(now);
+}
+
+/// The audio of every DAX TX packet the radio got, in order, at 24 kHz: each packet checked
+/// whole, the same audio on both sides.
+fn dax_tx_audio(s: &FlexScene) -> Vec<f32> {
+    let mut out = Vec::new();
+    for l in s.sim.log() {
+        let SimEvent::UdpIn { bytes, .. } = l.event else {
+            continue;
+        };
+        if bytes.len() <= 1 {
+            continue; // the registration datagram
+        }
+        let v = tempo_net::flexvita::parse_vita(&bytes).expect("a VITA-49 packet");
+        let stereo = tempo_net::flex::streams::decode_dax_audio(v.packet_class.unwrap(), v.payload)
+            .expect("whole float32 stereo frames");
+        for lr in stereo.chunks_exact(2) {
+            assert_eq!(lr[0], lr[1], "the same audio on both sides");
+            out.push(lr[0]);
+        }
+    }
+    out
+}
+
+/// The 24 kHz audio the DAX route makes of `over` from its start (the pacer's resampler, the
+/// device format's clamp after the unity level).
+fn on_dax_as(over: &[f32]) -> Vec<f32> {
+    crate::capture_resample::CaptureResampler::new(12_000, 24_000)
+        .process(over)
+        .into_iter()
+        .map(|s| s.clamp(-1.0, 1.0))
+        .collect()
+}
+
+/// ⭐⭐ THE REPORTED CASE ON FLEX NATIVE DAX, END TO END (FT8), as on the sound card
+/// (`ft_midover::ft8_an_rr73_only_the_late_full_pass_finds_turns_the_report_on_the_air_into_73`):
+/// W1AW's RR73 to our report is found only by the full pass at 14.40 s (the early pass ran and
+/// found nothing), and that pass is still running when the boundary keys the report again. The
+/// over goes to the radio over DAX, paced in real time; the pass lands once 0.75 s of it has gone,
+/// inside the first 1.4 s where every FT8 message is the same Costas sync, and the rest, still in
+/// Nexus, is replaced before it is sent. What the radio got is the 73's over, sample for sample,
+/// as long as the report's: W1AW copies the 73, and TX goes off after it.
+#[test]
+fn on_dax_an_rr73_only_the_late_full_pass_finds_turns_the_report_on_the_air_into_73() {
+    use super::ft_midover::{capture_of, over_of, HeldWorker};
+    const TX2: &str = "W1AW W9XYZ -10";
+    const RR73_TO_US: &str = "W9XYZ W1AW RR73";
+    const BYE73: &str = "W1AW W9XYZ 73";
+    let mut s = on_dax_without_receive_audio();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while s.state.last_mode != "PKTUSB" || s.state.decode_in_flight {
+        assert!(Instant::now() < deadline, "settle: the slice on PKTUSB");
+        s.state.dax_last_audio = Some(Instant::now());
+        s.run(100);
+    }
+    let worker = HeldWorker::install(&mut s.state);
+    let period = 15_000.0;
+    let t0 = first_boundary();
+    let slot = (t0 / period) as u64;
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_tx_offset(1500.0);
+        let line = "W9XYZ W1AW FN31";
+        assert!(
+            e.ingest(&capture_of(Tier::Ft8, line), slot - 2) >= 1,
+            "premise: W1AW's grid decoded"
+        );
+        e.call_station_ctx("W1AW", Some("FN31"), Some(line), Some(-10), None)
+            .expect("premise: W1AW worked");
+        let _ = e.take_immediate_tx();
+    }
+
+    // W1AW's period: the early pass found nothing; the full pass at 14.40 s decodes it from its
+    // start, the RR73 in it.
+    fresh_step(&mut s, t0 - period + 20.0);
+    s.state.early_done_slot = Some(slot - 1);
+    fresh_step(&mut s, t0 - 620.0);
+    s.state
+        .rx
+        .push(&capture_of(Tier::Ft8, RR73_TO_US)[..172_800]);
+    fresh_step(&mut s, t0 - 600.0);
+    assert!(
+        s.state.decode_in_flight && s.state.full_done_slot == Some(slot - 1),
+        "the full pass dispatched at 14.40 s"
+    );
+    let full = worker.decode();
+    assert!(
+        full.decodes()
+            .iter()
+            .any(|d| d.message.trim() == RR73_TO_US),
+        "premise: the full pass finds W1AW's RR73, got {:?}",
+        full.decodes()
+    );
+
+    // The boundary, the pass still running: the report keys on time.
+    let plays = s.backend.played.lock().unwrap().len();
+    fresh_step(&mut s, t0);
+    let key = Instant::now();
+    assert_eq!(
+        s.backend.played.lock().unwrap().len(),
+        plays + 1,
+        "the report keyed at t0"
+    );
+    assert!(s.state.decode_in_flight, "the full pass still running");
+    assert_eq!(s.state.tx_until_ms, Some(t0 + 13_840.0), "WSJT-X's PTT off");
+
+    // From the key the loop runs on the real clock, as the pacer does. The pass lands once 0.75 s
+    // of the over has gone to the radio.
+    let mut full = Some(full);
+    let mut sent_at_landing = 0;
+    loop {
+        std::thread::sleep(Duration::from_millis(20));
+        if full.is_some() {
+            let sent = dax_tx_audio(&s).len();
+            if sent >= 18_000 {
+                sent_at_landing = sent;
+                worker.land(full.take().unwrap());
+            }
+        }
+        let v = t0 + key.elapsed().as_secs_f64() * 1000.0;
+        fresh_step(&mut s, v);
+        if v > t0 + 14_200.0 {
+            break;
+        }
+        assert!(
+            full.is_none() || v < t0 + 5_000.0,
+            "the over never reached the radio"
+        );
+    }
+    eprintln!(
+        "dax: the pass landed with {sent_at_landing} samples (24 kHz) of the over sent to the radio"
+    );
+
+    let sent = dax_tx_audio(&s);
+    let bye = on_dax_as(&over_of(Tier::Ft8, BYE73));
+    let report = on_dax_as(&over_of(Tier::Ft8, TX2));
+    let at_12k: Vec<f32> = sent.iter().step_by(2).copied().collect();
+    assert_eq!(
+        wsjt_messages_played(tempo_core::modes::ModeKind::Ft8, &at_12k),
+        [BYE73],
+        "W1AW copies the 73"
+    );
+    assert_eq!(
+        sent.len() / 128,
+        bye.len() / 128,
+        "the over is as long as it was"
+    );
+    let first_difference = |a: &[f32], b: &[f32]| a.iter().zip(b).position(|(x, y)| x != y);
+    assert_eq!(
+        first_difference(&sent, &bye),
+        None,
+        "what the radio got is the 73's over, sample for sample"
+    );
+    assert!(
+        first_difference(&sent, &report).is_some(),
+        "control: the report's over is not what was sent"
+    );
+    assert_eq!(s.state.tx_until_ms, None, "the over ended");
+    assert!(
+        !s.engine.lock().unwrap().tx_enabled(),
+        "TX off after the 73"
+    );
 }
