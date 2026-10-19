@@ -100,5 +100,5 @@ it('invites someone with a role, lists the people invited, and takes an invitati
   fireEvent.click(invite)
   await waitFor(() => expect(actions).toEqual([{ type: 'invite', email: 'W1AW@example.test', role: 'listen' }]))
   fireEvent.click(screen.getByRole('button', { name: EN['remote.account.uninvite'] }))
-  await waitFor(() => expect(actions.at(-1)).toEqual({ type: 'uninvite', email: 'k9.guest@example.test' }))
+  await waitFor(() => expect(actions[actions.length - 1]).toEqual({ type: 'uninvite', email: 'k9.guest@example.test' }))
 })

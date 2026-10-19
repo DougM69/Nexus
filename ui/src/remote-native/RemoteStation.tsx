@@ -137,18 +137,19 @@ export function RemoteStation() {
     {status?.keyRefused && <p role="alert">{t('remote.nativeStationKeyPinned')}</p>}
     {/* The notice: a device the station granted on its own proof, until the operator has seen it. Inline,
         never a modal: nothing here may stand between the operator and Stop TX. */}
-    {account?.added?.map(added => <div key={added.deviceId} role="status" className="remote-native-browser">
-      <span>{t(added.guest ? 'remote.account.addedGuest' : 'remote.account.added', {
-        name: added.name, key: added.key ? shortFingerprint(added.key) : '—', role: roleName(added.role),
-        what: added.kind === 'browser' ? t('remote.account.aBrowser')
-          : t('remote.native.computerPlatform', { platform: added.platform ? PLATFORM_NAMES[added.platform] : '—' }) })}</span>
+    {account?.added?.map(added => { const what = added.kind === 'browser' ? t('remote.account.aBrowser')
+      : t('remote.native.computerPlatform', { platform: added.platform ? PLATFORM_NAMES[added.platform] : '—' })
+    const key = added.key ? shortFingerprint(added.key) : '—'
+    return <div key={added.deviceId} role="status" className="remote-native-browser">
+      <span>{added.guest ? t('remote.account.addedGuest', { name: added.name, what, key, role: roleName(added.role) })
+        : t('remote.account.added', { name: added.name, what, key })}</span>
       <span className="remote-actions">
         <button type="button" className="remote-button" disabled={busy}
           onClick={() => void act({ type: 'device', deviceId: added.deviceId, approve: false })}>{t('remote.native.remove')}</button>
         <button type="button" className="remote-button" disabled={busy}
           onClick={() => void act({ type: 'dismissAdded', deviceId: added.deviceId })}>{t('remote.account.gotIt')}</button>
       </span>
-    </div>)}
+    </div> })}
     {account?.reproof && <p role="alert">{t('remote.account.reproof')}</p>}
     {/* Linking the station to the account IS the sign-in, so its steps stay in the card while it is
         not linked; the pairing's transmit option is under Advanced. */}
