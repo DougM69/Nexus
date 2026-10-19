@@ -8173,4 +8173,12 @@ export const FR: PartialCatalog = {
   "fieldDay.log.splitter.label": "hauteur du journal du concours",
   "contestLogger.recent.splitter.label": "hauteur des derniers contacts",
   "fieldDay.clock.aria": "Horloge du concours, UTC et heure locale",
+  "fieldDay.workIn.aria": "Travailler ce concours depuis un cockpit",
+  "fieldDay.workIn.cw": "Travailler ce concours en CW",
+  "fieldDay.workIn.cw.title": "Aller à l'écran CW de la fenêtre principale, avec ce concours sur sa ligne de saisie : Entrée envoie le message, Running / S&P et les messages des touches F s'y trouvent.",
+  "fieldDay.workIn.phone": "Travailler ce concours en phonie",
+  "fieldDay.workIn.phone.title": "Aller à l'écran phonie de la fenêtre principale, avec ce concours sur sa ligne de saisie : Entrée envoie le message, Running / S&P et les messages des touches F s'y trouvent.",
+  "fieldDay.workIn.hint.aria": "Où l'on émet",
+  "fieldDay.workIn.hint": "Cet écran enregistre et compte les points, et n'émet jamais. Pour émettre, travaillez le concours depuis l'écran CW ou phonie : sa ligne de saisie a Entrée envoie le message, Running / S&P et les messages des touches F.",
+  "fieldDay.workIn.hint.dismiss": "Compris",
 }

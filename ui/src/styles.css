@@ -12771,6 +12771,23 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text);
   white-space: nowrap;
 }
+/* "Work this contest in CW / in Phone" (ContestView): two of the control row's buttons, kept together
+   when the row wraps. */
+.fd-work-in {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--space-2);
+}
+/* …and, once, the line under the control row that says sending happens in those cockpits. */
+.fd-work-in-hint {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px var(--space-4);
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border-soft);
+}
 /* The lines under the banner: what keeps the contest from starting, or which rules apply now. */
 .fd-mode-status {
   flex: 0 0 auto;

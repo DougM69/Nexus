@@ -286,6 +286,11 @@ const SHARED = [
   // stamp the band map window hears as a `storage` event (features/freqMarkers.ts). SHARED on purpose:
   // the entry and the band map are different windows, which is the whole reason for both keys.
   'nexus.contest.entryCall',
+  // "Work this contest in CW / in Phone" from a contest window (features/contestWorkIn): the request the
+  // main window hears as a `storage` event, the whole mechanism between the two; and the hint beside the
+  // buttons, dismissed once for this computer whichever window showed it.
+  'nexus.contest.workIn',
+  'nexus.contest.workInHint',
   'nexus.freqMarkers.changed',
   'nexus.waterfall.detached',
   'nexus.waterfall.gain',

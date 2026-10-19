@@ -8173,4 +8173,12 @@ export const ES: PartialCatalog = {
   "fieldDay.log.splitter.label": "altura del registro del concurso",
   "contestLogger.recent.splitter.label": "altura de los últimos contactos",
   "fieldDay.clock.aria": "Reloj del concurso, UTC y hora local",
+  "fieldDay.workIn.aria": "Trabajar este concurso desde una cabina",
+  "fieldDay.workIn.cw": "Trabajar este concurso en CW",
+  "fieldDay.workIn.cw.title": "Ir a la pantalla de CW en la ventana principal, con este concurso en su línea de registro: allí están Intro envía mensaje, Running / S&P y los mensajes de las teclas F.",
+  "fieldDay.workIn.phone": "Trabajar este concurso en fonía",
+  "fieldDay.workIn.phone.title": "Ir a la pantalla de fonía en la ventana principal, con este concurso en su línea de registro: allí están Intro envía mensaje, Running / S&P y los mensajes de las teclas F.",
+  "fieldDay.workIn.hint.aria": "Dónde se transmite",
+  "fieldDay.workIn.hint": "Esta pantalla registra y lleva la puntuación, y nunca transmite. Para transmitir, trabaje el concurso desde la pantalla de CW o de fonía: su línea de registro tiene Intro envía mensaje, Running / S&P y los mensajes de las teclas F.",
+  "fieldDay.workIn.hint.dismiss": "Entendido",
 }

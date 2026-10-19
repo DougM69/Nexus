@@ -8163,4 +8163,12 @@ export const DE: PartialCatalog = {
   "fieldDay.log.splitter.label": "Höhe des Contest-Logs",
   "contestLogger.recent.splitter.label": "Höhe der letzten Kontakte",
   "fieldDay.clock.aria": "Contest-Uhr, UTC und Ortszeit",
+  "fieldDay.workIn.aria": "Diesen Contest aus einem Cockpit arbeiten",
+  "fieldDay.workIn.cw": "Diesen Contest in CW arbeiten",
+  "fieldDay.workIn.cw.title": "Zum CW-Bildschirm im Hauptfenster wechseln, mit diesem Contest in seiner Logzeile: Dort sind Enter sendet Meldung, Running / S&P und die F-Tasten-Meldungen.",
+  "fieldDay.workIn.phone": "Diesen Contest in Phone arbeiten",
+  "fieldDay.workIn.phone.title": "Zum Phone-Bildschirm im Hauptfenster wechseln, mit diesem Contest in seiner Logzeile: Dort sind Enter sendet Meldung, Running / S&P und die F-Tasten-Meldungen.",
+  "fieldDay.workIn.hint.aria": "Wo gesendet wird",
+  "fieldDay.workIn.hint": "Dieser Bildschirm loggt und zählt Punkte und sendet nie. Zum Senden arbeiten Sie den Contest vom CW- oder Phone-Bildschirm aus: Seine Logzeile hat Enter sendet Meldung, Running / S&P und die F-Tasten-Meldungen.",
+  "fieldDay.workIn.hint.dismiss": "Verstanden",
 }

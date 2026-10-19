@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contest screen: "Work this contest in CW" and "Work this contest in Phone".** The Contest screen and the
+  Contest Logger window log and keep score but never transmit. With Contest mode on, these two buttons take the
+  main window to the CW or Phone screen, where the contest's log line has Enter Sends Message, Running / S&P and
+  the F-key messages. Pressed in another window, they bring the main window to the front on that screen. If the
+  contest had dropped out, it picks up again in S&P; it never starts calling CQ. A one-time note beside them
+  explains that sending happens there. "Got it" hides the note on this computer.
 - **Contest screen: a big clock.** The Contest screen's top line now shows the time large enough to read at a
   glance: UTC first, your local time beside it. It is the same clock as the top bar's, so the two always agree,
   and it is on the screen in the main window, the popped-out Contest screen and the Contest Logger window.

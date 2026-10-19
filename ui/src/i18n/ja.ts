@@ -8156,4 +8156,12 @@ export const JA: PartialCatalog = {
   "fieldDay.log.splitter.label": "コンテストログの高さ",
   "contestLogger.recent.splitter.label": "最近の交信の高さ",
   "fieldDay.clock.aria": "コンテスト時計（UTC と現地時刻）",
+  "fieldDay.workIn.aria": "このコンテストをコックピットで運用",
+  "fieldDay.workIn.cw": "このコンテストを CW で運用",
+  "fieldDay.workIn.cw.title": "メインウィンドウの CW 画面に移ります。ログ行がこのコンテスト用になり、Enter でメッセージ送信、Running / S&P、F キーのメッセージはそこにあります。",
+  "fieldDay.workIn.phone": "このコンテストを電話で運用",
+  "fieldDay.workIn.phone.title": "メインウィンドウの電話画面に移ります。ログ行がこのコンテスト用になり、Enter でメッセージ送信、Running / S&P、F キーのメッセージはそこにあります。",
+  "fieldDay.workIn.hint.aria": "送信する場所",
+  "fieldDay.workIn.hint": "この画面はログとスコアのためのもので、送信はしません。送信するには CW 画面か電話画面からコンテストを運用してください。そのログ行に Enter でメッセージ送信、Running / S&P、F キーのメッセージがあります。",
+  "fieldDay.workIn.hint.dismiss": "了解",
 }
