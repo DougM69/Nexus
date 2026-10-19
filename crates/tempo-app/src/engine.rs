@@ -2530,6 +2530,51 @@ pub const CATCHUP_UPLOAD_SPACING_SECS: i64 = 15;
 /// no growth without limit when contest mode is never turned off.
 const CONTEST_HELD_UPLOADS_CAP: usize = 4096;
 
+/// The held list's file (`contest_held_uploads.json`): `{"version":1,"count":N,"adif":"…"}`. The
+/// contacts are the operator's own-log ADIF, the Logbook's own lossless form; `count` lets a
+/// read tell a list it got whole from one it did not, because an ADIF parse skips what it cannot
+/// read rather than failing.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ContestHeldFile {
+    version: u32,
+    count: usize,
+    adif: String,
+}
+
+const CONTEST_HELD_FILE_VERSION: u32 = 1;
+
+fn contest_held_to_json(held: &[QsoRecord]) -> std::io::Result<String> {
+    let file = ContestHeldFile {
+        version: CONTEST_HELD_FILE_VERSION,
+        count: held.len(),
+        adif: held
+            .iter()
+            .map(tempo_core::logbook::adif_record_own_log)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    serde_json::to_string(&file).map_err(std::io::Error::other)
+}
+
+fn contest_held_from_json(text: &str) -> Result<Vec<QsoRecord>, String> {
+    let file: ContestHeldFile = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    if file.version != CONTEST_HELD_FILE_VERSION {
+        return Err(format!(
+            "version {} is not one this build reads",
+            file.version
+        ));
+    }
+    let held = tempo_core::logbook::parse_adif(&file.adif);
+    if held.len() != file.count {
+        return Err(format!(
+            "{} contacts read of the {} it lists",
+            held.len(),
+            file.count
+        ));
+    }
+    Ok(held)
+}
+
 /// Where the STANDING N1MM broadcast should go, or `None` when it is off.
 ///
 /// Two independent conditions, both required: the operator's toggle, and an
@@ -3079,9 +3124,13 @@ pub struct Engine {
     unconfirmed_auto_logs: Vec<QsoRecord>,
     /// The contacts logged while contest mode is on, kept from the logging services until it
     /// is turned off ([`Self::release_contest_uploads`]): a contest's contacts reach QRZ,
-    /// ClubLog and the rest through the merge at the end, never live. In memory, like the
-    /// upload queue: a contact still held when the app closes stays in the Logbook unsent.
+    /// ClubLog and the rest through the merge at the end, never live. A copy is kept on disk
+    /// ([`Self::persist_contest_held_uploads`]), so a restart with the switch on does not forget
+    /// what is owed.
     contest_held_uploads: Vec<QsoRecord>,
+    /// Where the held list is kept between launches, beside the settings, when the shell set it
+    /// ([`Self::set_contest_held_uploads_path`]).
+    contest_held_path: Option<PathBuf>,
     /// How many contacts have been logged unreviewed SINCE THE OPERATOR LAST ANSWERED THE
     /// POPUP — the number the popup itself shows, on the desktop and on Remote.
     ///
@@ -5801,6 +5850,7 @@ impl Engine {
             pending_logs: VecDeque::new(),
             unconfirmed_auto_logs: Vec::new(),
             contest_held_uploads: Vec::new(),
+            contest_held_path: None,
             pending_logs_auto_logged: 0,
             pending_log_identity: std::sync::Arc::new(()),
             pending_log_epoch: 0,
@@ -14939,6 +14989,7 @@ impl Engine {
             );
         }
         self.contest_held_uploads.push(rec);
+        self.persist_contest_held_uploads();
     }
 
     /// Contest mode went off: send what it held, once, as catch-up — paced one slot apart,
@@ -14949,6 +15000,69 @@ impl Engine {
         for rec in std::mem::take(&mut self.contest_held_uploads) {
             self.station
                 .requeue_upload_at(rec, upload_legs::ALL, 0, 0, UploadOrigin::CatchUp);
+        }
+        // Queued first, then the file goes: a crash between the two sends them again at the
+        // next launch, from a queue that died with this run, never twice.
+        self.persist_contest_held_uploads();
+    }
+
+    /// Keep the held list at `path` from now on. See [`Self::restore_contest_held_uploads`].
+    pub fn set_contest_held_uploads_path(&mut self, path: PathBuf) {
+        self.contest_held_path = Some(path);
+    }
+
+    /// Read back, at launch, the contacts a previous run held, ahead of anything held since. With
+    /// the switch off by now (turned off in a restored backup or a hand-edited settings.json), they
+    /// go at once, as the save that turns it off would have sent them. A list this build cannot
+    /// read holds REAL uploads, so it is kept aside ([`tempo_core::keep_aside`]) and the screen
+    /// says where, never cleared; its contacts are in the Logbook all the same.
+    pub fn restore_contest_held_uploads(&mut self, now_unix: i64) {
+        let Some(path) = self.contest_held_path.clone() else {
+            return;
+        };
+        let Some(mut held) = tempo_core::keep_aside::read_or_keep(
+            "contestHeldUploads",
+            &path,
+            now_unix,
+            contest_held_from_json,
+        ) else {
+            return;
+        };
+        held.append(&mut self.contest_held_uploads);
+        self.contest_held_uploads = held;
+        if !self.settings.fd_active {
+            self.release_contest_uploads();
+        }
+    }
+
+    /// Write the held list to its file, or remove the file when nothing is held: temp file,
+    /// fsync, rename, so a crash leaves the old list or the new one and never half of either. A
+    /// file this run could not read and could not move aside is neither written over nor
+    /// removed. A failed write is named in the diagnostic log; the list in memory still stands.
+    fn persist_contest_held_uploads(&self) {
+        let Some(path) = &self.contest_held_path else {
+            return;
+        };
+        if tempo_core::keep_aside::refuses(path) {
+            return;
+        }
+        let res = if self.contest_held_uploads.is_empty() {
+            match std::fs::remove_file(path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                other => other,
+            }
+        } else {
+            contest_held_to_json(&self.contest_held_uploads)
+                .and_then(|text| crate::scp::write_atomic(path, text.as_bytes()))
+        };
+        if let Err(e) = res {
+            tempo_core::applog::warn(
+                "upload",
+                &format!(
+                    "could not save the list of contacts waiting for contest mode to end ({}):                      {e}; a restart before it ends would leave them in the Logbook unsent",
+                    path.display()
+                ),
+            );
         }
     }
 

@@ -2464,7 +2464,14 @@ function App() {
       // from inside the contest stopped a run's CQs and dropped the contact being worked —
       // every time the operator looked at the score. A station already in the contest keeps
       // its role.
-      else if (next === 'fieldDay' && settings?.fdActive === true && snap?.mode !== 'fieldDay')
+      // The CW and Phone screens too: their log line IS the contest's while the session runs, and
+      // with the mode on and the session dropped (a trip to Chat, a tier switch) it fell back to the
+      // everyday form, with no exchange boxes and no dupe check.
+      else if (
+        (next === 'fieldDay' || next === 'cw' || next === 'phone') &&
+        settings?.fdActive === true &&
+        snap?.mode !== 'fieldDay'
+      )
         handleSetMode('fieldday-sp')
     },
     [handleSetMode, settings?.fdActive, snap?.mode],

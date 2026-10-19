@@ -450,3 +450,51 @@ describe('a pick saved in Settings while the mode is on switches, and the screen
     expect(modeLines()).not.toContain(SWITCHED)
   })
 })
+
+// THE CW AND PHONE SCREENS ENTER THE CONTEST AS THE CONTEST SCREEN DOES. With the mode on and the
+// session dropped (a trip to Chat, a tier switch), the CW and Phone log lines fell back to the
+// everyday form: no exchange boxes, no dupe check, the casual macros. Opening either screen now
+// enters the contest's S&P from another mode, the contest screen's own rule (`handleView`), and
+// keeps a station already in the contest in its role.
+describe('opening CW or Phone with the mode on enters the contest, as the contest screen does', () => {
+  const railButton = (name: RegExp) => screen.findByRole('button', { name }, WAIT)
+  const CW = /^CW operating/
+  const PHONE = /^Phone \(SSB\) operating/
+  beforeEach(() => {
+    localStorage.setItem('nexus.features.v1', JSON.stringify({ profile: 'custom', enabled: { cw: true, phone: true } }))
+  })
+
+  it.each([
+    ['CW', CW],
+    ['Phone', PHONE],
+  ] as const)('%s, after the session dropped to Chat: S&P, never calling CQ', async (_name, rail) => {
+    station.current = { ...station.current, fdActive: true }
+    engine.current = entered('chat')
+    render(<App />)
+    fireEvent.click(await railButton(rail))
+    await waitFor(() => expect(engine.current).toEqual({ spec: 'fieldday-sp', queue: [], dxcall: null }), WAIT)
+    expect(setMode.mock.calls.map((c) => c[0])).toEqual(['fieldday-sp'])
+  })
+
+  it('CONTROL: with the mode off, opening CW does not enter the contest', async () => {
+    engine.current = entered('chat')
+    render(<App />)
+    fireEvent.click(await railButton(CW))
+    await settle()
+    expect(engine.current).toEqual({ spec: 'chat', queue: [], dxcall: null })
+    expect(setMode.mock.calls.some((c) => c[0] === 'fieldday-sp')).toBe(false)
+  })
+
+  it.each([
+    ['CW', CW],
+    ['Phone', PHONE],
+  ] as const)('%s keeps a running station running: its CQ still queued, and no set_mode', async (_name, rail) => {
+    station.current = { ...station.current, fdActive: true }
+    engine.current = entered('fieldday-run')
+    render(<App />)
+    fireEvent.click(await railButton(rail))
+    await settle()
+    expect(engine.current).toEqual({ spec: 'fieldday-run', queue: ['CQ FD W9XYZ EN52'], dxcall: null })
+    expect(setMode).not.toHaveBeenCalled()
+  })
+})

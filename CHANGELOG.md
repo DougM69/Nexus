@@ -199,6 +199,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **Contacts held during a contest are no longer forgotten by a restart.** While Contest mode is on, a contact logged
+  in the Logbook waits to go to QRZ, Club Log and the other services until Contest mode is turned off. That waiting
+  list now survives closing Nexus: after a restart the contacts still wait, and go once, a few seconds apart, when you
+  turn Contest mode off. If Nexus cannot read the list, it keeps the file untouched, says where on screen, and the
+  contacts stay in your Logbook.
+- **The CW and Phone screens go back into the contest.** With Contest mode on, a visit to Chat or a change of FT
+  mode could leave the contest, and the CW and Phone log lines then showed the everyday form: no exchange boxes, no
+  dupe check, the casual macros. Opening the CW or Phone screen now enters the contest again in S&P, as the Contest
+  screen already does. It never starts calling CQ, and a station already in the contest keeps running or S&P.
+- **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
+  does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
+  in it.
 - **Remote: Operate from this computer now works at an address you type.** When nothing answers where a paired
   station was, Stations on this network asks where it is now. That box offered only Stream; it now offers **Operate
   at this address** first, with Stream still beside it. Nexus checks it is the same paired station there, as it does

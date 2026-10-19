@@ -7489,6 +7489,7 @@ export const FR: PartialCatalog = {
   "shell.log.failed": "Impossible d'enregistrer le QSO",
   "shell.logStore.failed": "Nexus n'a pas pu ouvrir la base de données du journal. Raison : {{reason}}. Rien n'est perdu : cette session tient votre journal dans log.adi, comme avant. Le journal de diagnostic donne les détails, dans Réglages ▸ Journal et connecteurs ▸ Intégrations et flux ▸ Diagnostic log.",
   "shell.keptFile.pendingQso": "Nexus n'a pas pu lire le fichier des QSO qui attendaient dans la fenêtre « Enregistrer ce QSO ? » : il a donc conservé ce fichier, intact, sous {{path}}. Rien n'a été supprimé.",
+  "shell.keptFile.contestHeldUploads": "Nexus n'a pas pu lire la liste des contacts qui attendent la fin du mode concours pour être envoyés à QRZ, Club Log et aux autres : il a donc conservé ce fichier, intact, sous {{path}}. Les contacts sont dans votre journal. Rien n'a été supprimé.",
   "shell.keptFile.fieldDay": "Nexus n'a pas pu lire en entier la sauvegarde de votre journal de Field Day ou du concours : il a donc conservé ce fichier, intact, sous {{path}} et en a commencé une nouvelle avec les contacts qu'il a pu lire. Rien n'a été supprimé.",
   "shell.keptFile.js8Inbox": "Nexus n'a pas pu lire votre boîte de réception JS8 : il a donc conservé ce fichier, intact, sous {{path}} et en a commencé une nouvelle. Rien n'a été supprimé.",
   "shell.keptFile.pendingMsgs": "Nexus n'a pas pu lire le fichier des messages Tempo en attente d'envoi : il a donc conservé ce fichier, intact, sous {{path}}. Rien n'a été supprimé.",

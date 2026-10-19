@@ -182,3 +182,144 @@ fn the_lotw_automatic_upload_waits_while_contest_mode_is_on() {
     s.fd_active = true;
     assert!(!lotw_auto_upload_due(&s, false, 1_800_000_000));
 }
+
+/// A scratch directory of this test's own, standing in for the settings directory.
+fn scratch_dir(label: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "nexus-contest-held-{label}-{}-{}",
+        std::process::id(),
+        now_unix_secs()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// 2026-10-18 12:00:00 UTC, for the name a kept-aside file gets.
+const NOW: i64 = 1_792_324_800;
+
+/// ⭐ A restart with contest mode on keeps the held list: the contacts go out once, paced, when
+/// the switch goes off after the restart, each exactly as it was held, and never again.
+#[test]
+fn the_held_contacts_survive_a_restart_and_go_once_when_contest_mode_is_turned_off() {
+    let dir = scratch_dir("restart");
+    let path = dir.join("contest_held_uploads.json");
+    let mut e = contest_on();
+    e.set_contest_held_uploads_path(path.clone());
+    e.restore_contest_held_uploads(NOW);
+    e.log_qso(cw("K1ABC"));
+    e.log_qso(cw("W1AW"));
+    assert!(e.take_pending_uploads().is_empty(), "premise: held");
+    let held = e.contest_held_uploads.clone();
+    assert_eq!(held.len(), 2, "premise: two held");
+    drop(e);
+
+    // The restart: a new engine, the switch still on, the list read back.
+    let mut e = contest_on();
+    e.set_contest_held_uploads_path(path.clone());
+    e.restore_contest_held_uploads(NOW);
+    assert_eq!(
+        calls(&e.take_pending_uploads()),
+        Vec::<&str>::new(),
+        "still held while the switch is on"
+    );
+
+    contest_off(&mut e);
+    let sent = e.take_pending_uploads();
+    assert_eq!(calls(&sent), ["K1ABC", "W1AW"]);
+    for (p, was) in sent.iter().zip(&held) {
+        assert_eq!(&p.rec, was, "{} goes out as it was held", was.call);
+        assert_eq!(p.origin, UploadOrigin::CatchUp);
+        assert_eq!(p.legs, upload_legs::ALL);
+    }
+    assert_eq!(
+        sent[1].retry_after_unix - sent[0].retry_after_unix,
+        CATCHUP_UPLOAD_SPACING_SECS,
+        "paced, one slot apart"
+    );
+    assert!(!path.exists(), "nothing is left to send at the next launch");
+
+    // Neither another save nor another restart sends them again.
+    contest_off(&mut e);
+    assert_eq!(calls(&e.take_pending_uploads()), Vec::<&str>::new());
+    drop(e);
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.set_contest_held_uploads_path(path.clone());
+    e.restore_contest_held_uploads(NOW);
+    assert_eq!(calls(&e.take_pending_uploads()), Vec::<&str>::new());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Contest mode was turned off while Nexus was closed (a restored backup, another copy of the
+/// settings): the held contacts go out once, paced, at the launch.
+#[test]
+fn a_launch_with_contest_mode_off_sends_the_held_list_once() {
+    let dir = scratch_dir("launch-off");
+    let path = dir.join("contest_held_uploads.json");
+    let mut e = contest_on();
+    e.set_contest_held_uploads_path(path.clone());
+    e.log_qso(cw("K1ABC"));
+    drop(e);
+
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    assert!(!e.settings().fd_active, "premise: the switch is off");
+    e.set_contest_held_uploads_path(path.clone());
+    e.restore_contest_held_uploads(NOW);
+    let sent = e.take_pending_uploads();
+    assert_eq!(calls(&sent), ["K1ABC"]);
+    assert_eq!(sent[0].origin, UploadOrigin::CatchUp);
+    assert!(!path.exists());
+    e.restore_contest_held_uploads(NOW);
+    assert_eq!(calls(&e.take_pending_uploads()), Vec::<&str>::new());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A held list this build cannot read is kept aside untouched and named for the screen, never
+/// cleared or written over; a contact held after it starts a new file beside it.
+#[test]
+fn an_unreadable_held_list_is_kept_aside_and_reported_never_cleared() {
+    let wrong_count = format!(
+        "{{\"version\":1,\"count\":2,\"adif\":\"{}\"}}",
+        tempo_core::logbook::adif_record_own_log(&cw("K1ABC")).replace('\n', "\\n")
+    );
+    for (label, text) in [
+        (
+            "torn",
+            "{\"version\":1,\"count\":1,\"adif\":\"<CALL:5>K1A".to_string(),
+        ),
+        ("count", wrong_count),
+    ] {
+        let dir = scratch_dir(label);
+        let path = dir.join("contest_held_uploads.json");
+        std::fs::write(&path, &text).unwrap();
+        let mut e = contest_on();
+        e.set_contest_held_uploads_path(path.clone());
+        e.restore_contest_held_uploads(NOW);
+        assert!(
+            e.contest_held_uploads.is_empty(),
+            "{label}: nothing guessed"
+        );
+        let aside = tempo_core::keep_aside::kept()
+            .into_iter()
+            .find(|k| k.path.parent() == Some(dir.as_path()))
+            .unwrap_or_else(|| panic!("{label}: the file is reported"));
+        assert_eq!(aside.store, "contestHeldUploads");
+        assert!(!aside.kept_in_place);
+        assert_eq!(
+            std::fs::read_to_string(&aside.path).unwrap(),
+            text,
+            "{label}: kept untouched"
+        );
+
+        e.log_qso(cw("W1AW"));
+        assert_eq!(
+            std::fs::read_to_string(&aside.path).unwrap(),
+            text,
+            "{label}: never written over"
+        );
+        assert!(path.exists(), "{label}: a new list beside it");
+        contest_off(&mut e);
+        assert_eq!(calls(&e.take_pending_uploads()), ["W1AW"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -17,6 +17,8 @@ export function keptFileMessage(f: KeptFile): string {
   switch (f.store) {
     case 'pendingQso':
       return t('shell.keptFile.pendingQso', { path: f.path })
+    case 'contestHeldUploads':
+      return t('shell.keptFile.contestHeldUploads', { path: f.path })
     case 'fieldDay':
       return t('shell.keptFile.fieldDay', { path: f.path })
     case 'js8Inbox':
