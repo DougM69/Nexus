@@ -492,6 +492,12 @@ pub struct DaxTx {
     level: AtomicU32,
     queue: Mutex<TxQueue>,
     wake: Condvar,
+    /// The packets the pacer has sent, and how many had gone when it first found the session
+    /// closed ([`crate::backend::TxTee::sent_before_its_session_closed`]).
+    #[cfg(test)]
+    sent: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    sent_when_closed: std::sync::OnceLock<usize>,
 }
 
 struct TxQueue {
@@ -523,6 +529,10 @@ impl DaxTx {
                 samples: VecDeque::new(),
             }),
             wake: Condvar::new(),
+            #[cfg(test)]
+            sent: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            sent_when_closed: std::sync::OnceLock::new(),
         }
     }
 
@@ -570,6 +580,19 @@ impl DaxTx {
         )
     }
 
+    /// The packets sent so far, noted the first time the pacer finds its session closed: before
+    /// each pass, so ahead of any packet it could send after, and as it stops.
+    #[cfg(test)]
+    fn note_if_closed(&self) {
+        if self
+            .conn
+            .upgrade()
+            .is_none_or(|c| c.snapshot().phase == Phase::Closed)
+        {
+            let _ = self.sent_when_closed.set(self.sent.load(Ordering::Relaxed));
+        }
+    }
+
     #[cfg(test)]
     fn queued(&self) -> usize {
         let q = lock(&self.queue);
@@ -607,6 +630,11 @@ impl crate::backend::TxTee for DaxTx {
         q.modem.clear();
         n
     }
+
+    #[cfg(test)]
+    fn sent_before_its_session_closed(&self) -> Option<usize> {
+        self.sent_when_closed.get().copied()
+    }
 }
 
 /// The pacer's clock: the next packet is due one packet's airtime after the last due time, so
@@ -624,6 +652,8 @@ fn pace(tx: &DaxTx, stop: &AtomicBool, sock: &UdpSocket, vita: SocketAddr) {
     let mut count = 0u8;
     let mut next_at = Instant::now();
     while !stop.load(Ordering::Relaxed) {
+        #[cfg(test)]
+        tx.note_if_closed();
         // Idle: wait for an over. Waking holds the clock at now, so an idle gap banks no credit
         // that would burst the start of the next one.
         {
@@ -659,9 +689,13 @@ fn pace(tx: &DaxTx, stop: &AtomicBool, sock: &UdpSocket, vita: SocketAddr) {
         if let Some(packet) = streams::dax_tx_packet(stream, count, &samples) {
             count = (count + 1) & 0x0F;
             let _ = sock.send_to(&packet, vita);
+            #[cfg(test)]
+            tx.sent.fetch_add(1, Ordering::Relaxed);
         }
         next_at = advance(now, next_at);
     }
+    #[cfg(test)]
+    tx.note_if_closed();
 }
 
 #[cfg(test)]

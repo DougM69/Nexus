@@ -25,6 +25,8 @@ mod voice_keyer;
 struct TeeBackend {
     played: Arc<Mutex<Vec<Instant>>>,
     tee: Arc<Mutex<Option<crate::backend::TxTeeHandle>>>,
+    /// Every tee installed, in order: a rebuilt session's route follows the lost one's.
+    installed: Arc<Mutex<Vec<crate::backend::TxTeeHandle>>>,
 }
 
 impl AudioBackend for TeeBackend {
@@ -38,6 +40,9 @@ impl AudioBackend for TeeBackend {
         }
     }
     fn set_tx_tee(&mut self, tee: Option<crate::backend::TxTeeHandle>) {
+        if let Some(tee) = &tee {
+            self.installed.lock().unwrap().push(tee.clone());
+        }
         *self.tee.lock().unwrap() = tee;
     }
     fn flush_output(&mut self) -> usize {

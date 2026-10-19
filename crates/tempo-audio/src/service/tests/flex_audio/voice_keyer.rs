@@ -981,9 +981,9 @@ fn holder_kept_in_usb() -> SimSession {
 }
 
 /// ⭐ A SESSION LOST MID-MESSAGE. The radio drops the connection while the message plays and stays
-/// keyed. No DAX leaves after the loss; the operator is told the radio may still be transmitting;
-/// the loop starts a fresh session, whose first stop unkeys the lost session's transmitter, and the
-/// radio's DAX source goes back to the mic only after that.
+/// keyed. No DAX leaves after Nexus reads the loss; the operator is told the radio may still be
+/// transmitting; the loop starts a fresh session, whose first stop unkeys the lost session's
+/// transmitter, and the radio's DAX source goes back to the mic only after that.
 #[test]
 fn a_session_lost_mid_message_stops_dax_and_unkeys_before_the_mic_comes_back() {
     let mut s = FlexScene::with_faults(
@@ -1017,8 +1017,19 @@ fn a_session_lost_mid_message_stops_dax_and_unkeys_before_the_mic_comes_back() {
         .find(|(at, e)| *at >= since && matches!(e, SimEvent::Closed { conn: 0, .. }))
         .map(|(at, _)| *at)
         .expect("the first session closed");
+    // The radio can take DAX after its own close: what Nexus paced out before it read the close.
+    // So the count is the guard, not the radio's clock: every packet the radio got was sent before
+    // Nexus found the session closed, and none came after, on either session.
+    let dax = dax_in(&s, since);
+    // The lost session's DAX route: the first the loop installed.
+    let route = s.backend.installed.lock().unwrap()[0].clone();
     assert!(
-        dax_in(&s, since).iter().all(|(t, _)| *t < lost),
+        dax.iter().any(|(t, _)| *t < lost),
+        "premise: the message was on the air when the session was lost"
+    );
+    assert_eq!(
+        Some(dax.len()),
+        route.sent_before_its_session_closed(),
         "DAX after the session was lost"
     );
     // The new session writes the mic once the loop has put its fresh slice back in USB, which

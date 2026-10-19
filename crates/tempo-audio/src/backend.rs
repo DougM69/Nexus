@@ -25,6 +25,13 @@ pub trait TxTee: Send + Sync {
     fn set_level(&self, level: f32);
     /// Discard anything queued on this route (hard Stop TX). Returns the count discarded.
     fn flush(&self) -> usize;
+    /// How many packets this route had sent when it first found its radio session over: the
+    /// last DAX the radio can take after it drops the connection. `None` until then, and for a
+    /// route with no session.
+    #[cfg(test)]
+    fn sent_before_its_session_closed(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// A shared handle to the installed [`TxTee`].
