@@ -286,6 +286,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at the bottom of the log pane while the fields above them scroll. The callsign card below them is never covered.
 - **The contest entry's boxes are full size in the Phone, CW, RTTY, PSK and JS8 screens.** The Call and exchange
   boxes under the log showed small 14 px text. They now use the entry's large 30 px lettering and 58 px height.
+- **A rotator set to a serial port that is not there now says so, once.** On a Mac a USB serial port's name changes
+  when the controller is plugged into a different socket or hub, so a saved port can stop existing. Nexus used to
+  start the rotator daemon every 5 seconds anyway and fill the Connections log with "launched" and "exited" lines
+  that never named the port. It now writes one line naming the missing port and the serial ports that are there, and
+  starts the rotator by itself as soon as the saved port appears.
 - **Contacts held during a contest are no longer forgotten by a restart.** While Contest mode is on, a contact logged
   in the Logbook waits to go to QRZ, Club Log and the other services until Contest mode is turned off. That waiting
   list now survives closing Nexus: after a restart the contacts still wait, and go once, a few seconds apart, when you

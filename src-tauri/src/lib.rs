@@ -15512,6 +15512,35 @@ fn sync_rotctld_owned(owner: &mut RotctldOwner, st: &Settings) -> RotctldSync {
     reconcile_rotctld(owner, st, spawn_rotator_daemon)
 }
 
+/// The Connections line for a rotator serial port that is not on this computer, or None when
+/// the port is there or is not a device path this check can judge.
+///
+/// Hamlib retries a missing serial port for about two seconds before rotctld exits (4.5.5: four
+/// "open failed" tries), so the daemon outlives the first-moment check in [`reconcile_rotctld`],
+/// is logged as launched, and is logged as exited on the next supervisor tick: two lines every
+/// [`ROTCTLD_RETRY`] that never name the port. A Mac renames a USB serial port when it moves to
+/// another socket or hub (`cu.usbmodem13201` → `cu.usbmodem113201`), so a saved port going
+/// missing is ordinary there. Only a `/dev/` path is judged: a Windows COM name is not a file,
+/// and a network address is not a serial port.
+fn absent_serial_port(port: &str, present: impl FnOnce() -> Vec<String>) -> Option<String> {
+    if !port.starts_with("/dev/") || std::path::Path::new(port).exists() {
+        return None;
+    }
+    let here = present();
+    let here = if here.is_empty() {
+        "none".to_string()
+    } else {
+        here.join(", ")
+    };
+    Some(format!(
+        "the rotator's serial port {port} is not on this computer, so rotctld was not started. \
+         Serial ports here now: {here}. A Mac renames a USB serial port when it is plugged into \
+         a different socket or hub: if one of these is the controller, choose it in Settings > \
+         Radio > Rotator. Nexus checks again every {} s.",
+        ROTCTLD_RETRY.as_secs()
+    ))
+}
+
 /// The reconcile itself, with the spawn handed in so a test can count its attempts.
 fn reconcile_rotctld(
     owner: &mut RotctldOwner,
@@ -15551,6 +15580,17 @@ fn reconcile_rotctld(
             }
             let slot = &mut *g;
             *slot = None; // kill-on-drop reaps a stale daemon first
+
+            // A serial port that is not there: say so once, spawn nothing, and let the
+            // supervisor look again — a controller switched on later still comes up by itself.
+            let absent = absent_serial_port(&params.1, tempo_audio::ports::available_ports);
+            if let Some(why) = absent {
+                if report {
+                    conn_log("Rotator", "error", why);
+                }
+                owner.failing = Some(params);
+                return RotctldSync::StartFailed { reported: report };
+            }
             match spawn(params.0, &params.1, params.2, params.3) {
                 Ok(mut proc) => {
                     let port = params.3;
@@ -15819,6 +15859,60 @@ mod rotctld_supervisor_tests {
             RotctldSync::StartFailed { reported: true }
         );
         drop(off);
+    }
+
+    /// A Mac field report: the saved port was `/dev/cu.usbmodem13201`, the controller was at
+    /// `/dev/cu.usbmodem113201`. Hamlib retries a missing serial port for about two seconds
+    /// before rotctld exits, so every 5 s retry was logged as "launched" and then "exited",
+    /// never once naming the port. A device path that is not there spawns nothing and is
+    /// reported once per episode.
+    #[test]
+    fn a_serial_port_that_is_not_there_spawns_nothing_and_is_reported_once() {
+        let mut st = station(4533, 602);
+        st.rotator_port = "/dev/nexus-test-no-such-rotator".into();
+        let mut owner = owner();
+        let tries = Cell::new(0u32);
+        let spawn = |_: u32, _: &str, _: u32, _: u16| -> std::io::Result<RotDaemon> {
+            tries.set(tries.get() + 1);
+            Err(std::io::Error::other("spawned"))
+        };
+        assert_eq!(
+            reconcile_rotctld(&mut owner, &st, spawn),
+            RotctldSync::StartFailed { reported: true }
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                rotctld_tick(&mut owner, &st, spawn),
+                Some(RotctldSync::StartFailed { reported: false })
+            );
+        }
+        assert_eq!(tries.get(), 0, "no rotctld for a port that is not there");
+    }
+
+    #[test]
+    fn a_missing_serial_port_is_named_with_the_ports_that_are_there() {
+        let here = || vec!["/dev/cu.usbmodem113201".to_string()];
+        assert_eq!(
+            absent_serial_port("/dev/cu.usbmodem13201", here).as_deref(),
+            Some(
+                "the rotator's serial port /dev/cu.usbmodem13201 is not on this computer, so \
+                 rotctld was not started. Serial ports here now: /dev/cu.usbmodem113201. A Mac \
+                 renames a USB serial port when it is plugged into a different socket or hub: if \
+                 one of these is the controller, choose it in Settings > Radio > Rotator. Nexus \
+                 checks again every 5 s."
+            )
+        );
+        assert!(
+            absent_serial_port("/dev/cu.gone", Vec::new)
+                .is_some_and(|w| w.contains("Serial ports here now: none")),
+            "an empty list says none"
+        );
+        // Positive control: a device that IS there, and the ports this check cannot judge (a
+        // Windows COM name, a network address), go to the daemon as before.
+        assert_eq!(absent_serial_port("/dev/null", here), None);
+        assert_eq!(absent_serial_port("COM8", here), None);
+        assert_eq!(absent_serial_port("127.0.0.1:12000", here), None);
+        assert_eq!(absent_serial_port("", here), None);
     }
 
     #[test]
