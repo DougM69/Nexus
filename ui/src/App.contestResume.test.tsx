@@ -6,14 +6,16 @@
 // the everyday form; one line now says so, with Resume, which enters the contest's S&P (never a CQ). With the
 // station in the contest, or the switch off, there is no line. The line on its own: LogEntry.contestResume.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { t } from './i18n'
 import { APP_SNAPSHOT, COCKPIT_MAIN } from './appCockpits.testkit'
 
-const { stationSettings, snap, setMode } = vi.hoisted(() => ({
+const { stationSettings, snap, setMode, pushSnapshot } = vi.hoisted(() => ({
   stationSettings: { current: {} as Record<string, unknown> },
   snap: { current: {} as Record<string, unknown> },
   setMode: vi.fn(),
+  // The live snapshot feed: what the engine's poll hands App.
+  pushSnapshot: { current: (_s: Record<string, unknown>) => {} },
 }))
 
 vi.mock('./api', async (importOriginal) => {
@@ -30,14 +32,18 @@ vi.mock('./api', async (importOriginal) => {
     ...Object.fromEntries(
       ['setOperatingMode', 'setArea', 'selectPeer', 'workSpot', 'setHuntTarget'].map((k) => [k, vi.fn(async () => snap.current)]),
     ),
-    subscribeSnapshot: vi.fn(() => () => {}),
+    subscribeSnapshot: vi.fn((listener: (s: Record<string, unknown>) => void) => {
+      pushSnapshot.current = listener
+      return () => {}
+    }),
     setMode,
   }
 })
 vi.mock('./toast', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   pushToast: vi.fn(),
-  withErrorToast: vi.fn(async (action: () => Promise<unknown>) => action()),
+  // As the real one: a refusal is a toast and a null, never a throw.
+  withErrorToast: vi.fn(async (action: () => Promise<unknown>) => action().catch(() => null)),
 }))
 vi.mock('./components/Waterfall', () => ({ Waterfall: () => <div data-testid="waterfall" /> }))
 vi.mock('./components/MapView', () => ({ MapView: () => <div data-testid="map" /> }))
@@ -133,5 +139,77 @@ describe('the CW and Phone log line, Contest mode on and the contest not running
     await waitFor(() => expect(main.querySelector('.log-entry')).not.toBeNull(), WAIT)
     await new Promise((r) => setTimeout(r, 100))
     expect(notice(main)).toBeNull()
+  })
+})
+
+// OPENING CW OR PHONE FROM THE RAIL re-enters the contest in S&P (`handleView`). Until the engine answers, the
+// snapshot still shows the station out of the contest, and the line flashed for that one snapshot. It must not
+// show while the re-entry is on its way; it shows when the re-entry did not happen, or the session drops later.
+describe('opening CW or Phone with the contest down: no line while the re-entry is on its way', () => {
+  const RAIL = { cw: /^CW operating/, phone: /^Phone \(SSB\) operating/ } as const
+  /** The engine's answer to set_mode, held until the test lets it land. */
+  function holdSetMode(answer: () => Promise<Record<string, unknown>>) {
+    let land!: () => void
+    const landed = new Promise<void>((r) => (land = r))
+    setMode.mockImplementation((spec: string) => (spec === 'fieldday-sp' ? landed.then(answer) : Promise.resolve(snap.current)))
+    return land
+  }
+  async function openFromRail(view: 'cw' | 'phone') {
+    window.location.hash = '#chat'
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: RAIL[view] }, WAIT))
+    return waitFor(() => {
+      const main = document.querySelector(COCKPIT_MAIN[view]) as HTMLElement | null
+      expect(main).not.toBeNull()
+      return main!
+    }, WAIT)
+  }
+  /** One poll's snapshot from before the re-entry: the station still on Chat. */
+  async function pollStillOut() {
+    act(() => pushSnapshot.current({ ...APP_SNAPSHOT }))
+    await new Promise((r) => setTimeout(r, 100))
+  }
+
+  it.each(['cw', 'phone'] as const)('%s: no line before the re-entry lands, none after, and a later drop shows it', async (view) => {
+    const land = holdSetMode(async () => {
+      snap.current = { ...APP_SNAPSHOT, ...IN_CONTEST }
+      return snap.current
+    })
+    const main = await openFromRail(view)
+    await waitFor(() => expect(setMode.mock.calls.map((c) => c[0])).toEqual(['fieldday-sp']), WAIT)
+    await pollStillOut()
+    expect(notice(main)).toBeNull()
+    // The everyday form is what stands there meanwhile: the line's absence is not a missing log line.
+    expect(main.querySelector('.log-entry')).not.toBeNull()
+    expect(main.querySelector('.log-entry.log-entry-fd')).toBeNull()
+
+    land()
+    await waitFor(() => expect(main.querySelector('.log-entry.log-entry-fd')).not.toBeNull(), WAIT)
+    expect(notice(main)).toBeNull()
+
+    // The session drops later (a trip to Chat in another window): now the line says so.
+    act(() => pushSnapshot.current({ ...APP_SNAPSHOT }))
+    await waitFor(() => expect(notice(main)).not.toBeNull(), WAIT)
+    // And Resume enters S&P, never a CQ.
+    setMode.mockImplementation(async () => {
+      snap.current = { ...APP_SNAPSHOT, ...IN_CONTEST }
+      return snap.current
+    })
+    fireEvent.click(within(notice(main)!).getByRole('button', { name: t('logEntry.contest.resume') }))
+    await waitFor(() => expect(setMode.mock.calls.map((c) => c[0])).toEqual(['fieldday-sp', 'fieldday-sp']), WAIT)
+    await waitFor(() => expect(notice(main)).toBeNull(), WAIT)
+  })
+
+  it.each(['cw', 'phone'] as const)('%s: a re-entry the engine refuses shows the line once it answers', async (view) => {
+    const land = holdSetMode(async () => {
+      throw new Error('blank class')
+    })
+    const main = await openFromRail(view)
+    await waitFor(() => expect(setMode.mock.calls.map((c) => c[0])).toEqual(['fieldday-sp']), WAIT)
+    await pollStillOut()
+    expect(notice(main)).toBeNull()
+    land()
+    await waitFor(() => expect(notice(main)).not.toBeNull(), WAIT)
+    expect(notice(main)!.textContent).toContain(t('logEntry.contest.notRunning'))
   })
 })

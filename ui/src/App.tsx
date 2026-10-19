@@ -2398,7 +2398,7 @@ function App() {
   }, [])
 
   const handleSetMode = useCallback((mode: ModeRequest, expectedQso?: import('./types').QsoStatus | null) => {
-    void withErrorToast(() => apiSetMode(mode, expectedQso), t('shell.error.switchMode')).then((s) => {
+    return withErrorToast(() => apiSetMode(mode, expectedQso), t('shell.error.switchMode')).then((s) => {
       if (s) setSnap(s)
       // A contest that starts about to send the DX exchange from a US or Canadian call says so,
       // loudly and once, as it starts (the strip keeps saying it). Never a refusal.
@@ -2451,6 +2451,10 @@ function App() {
     undefined,
   )
 
+  // The contest re-entry an opened screen asked for, until the engine answers. Until then the snapshot
+  // still shows the station out of the contest, and the CW and Phone log lines must not call it stopped.
+  const [contestReentering, setContestReentering] = useState(false)
+
   const handleView = useCallback(
     (next: View) => {
       setView(next)
@@ -2473,8 +2477,10 @@ function App() {
         (next === 'fieldDay' || next === 'cw' || next === 'phone') &&
         settings?.fdActive === true &&
         snap?.mode !== 'fieldDay'
-      )
-        handleSetMode('fieldday-sp')
+      ) {
+        setContestReentering(true)
+        void handleSetMode('fieldday-sp').finally(() => setContestReentering(false))
+      }
     },
     [handleSetMode, settings?.fdActive, snap?.mode],
   )
@@ -3153,9 +3159,12 @@ function App() {
   }
   // CONTEST MODE ON, THE CONTEST NOT RUNNING: the CW and Phone log lines say so, with Resume, which enters
   // the contest's S&P (never a CQ). Opening either screen re-enters on its own (`handleView`); this is for
-  // a session that did not come back, or dropped while the screen was open.
+  // a session that did not come back, or dropped while the screen was open. Not while that re-entry is
+  // still on its way: the line would flash for the one snapshot before it lands.
   const resumeContest =
-    settings?.fdActive === true && snap.mode !== 'fieldDay' ? () => handleSetMode('fieldday-sp') : undefined
+    settings?.fdActive === true && snap.mode !== 'fieldDay' && !contestReentering
+      ? () => void handleSetMode('fieldday-sp')
+      : undefined
   const cwWorkspace = (
     <CwCockpit
       esmSetting={esmSettingFor('cw')}
