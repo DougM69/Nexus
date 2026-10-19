@@ -28037,7 +28037,8 @@ mod tests {
     /// FT8: a full pass still decoding at the boundary is that period's decode running, not a
     /// decoder falling behind. The boundary keys on time without it (WSJT-X keys at t = 0 and
     /// decodes in parallel) and drops nothing; its decodes reach the sequencer the moment they
-    /// land, and its drain is housekeeping only (no second over).
+    /// land, where the mid-over switch turns the rest of the over on the air into the message they
+    /// move the QSO to, and its drain is housekeeping only (no second over).
     #[test]
     fn ft8_full_pass_still_running_at_the_boundary_is_not_dropped() {
         use tempo_core::modes::ModeKind;
@@ -28066,21 +28067,22 @@ mod tests {
             "the running full pass IS the period's decode: nothing dropped"
         );
         let played_at_key = b.played.len();
+        // The card has only begun the over: all of it is still to play.
+        b.tx_unplayed = played_at_key;
 
         assert!(
             drain_decode(&mut state, &engine, b, r, s, 30_001.0, 45_000.0),
             "the full pass drained"
         );
         assert_eq!(
-            engine
-                .lock()
-                .unwrap()
-                .snapshot()
-                .qso
-                .and_then(|q| q.tx_now)
-                .as_deref(),
-            Some("K1ABC W9XYZ 73"),
-            "its RR73 reached the sequencer as soon as it landed"
+            wsjt_messages_played(ModeKind::Ft8, &backend.played),
+            vec!["K1ABC W9XYZ 73".to_string()],
+            "its RR73 reached the sequencer as soon as it landed: the over on the air is the 73"
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().qso.and_then(|q| q.tx_now),
+            None,
+            "the 73 went out in this over: nothing left to send"
         );
         assert_eq!(
             backend.played.len(),
