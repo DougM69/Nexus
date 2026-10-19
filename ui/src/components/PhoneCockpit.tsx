@@ -71,6 +71,7 @@ import { SubReceiverStrip, MainReceiverPlate, subScopeMarker } from './SubReceiv
 import { WheelRange } from './WheelRange'
 import { LogEntry } from './LogEntry'
 import { CallStatsFrame, statsHere, useStatsRoom, withStats, withStatsRoom } from './CallStatsPane'
+import { RecentQsosFrame, withRecent } from './RecentQsosPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import {
   setPtt,
@@ -238,7 +239,7 @@ interface Props {
   onOpenSettings?: (target: string) => void
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
-  onOpenLogbook?: (call: string) => void
+  onOpenLogbook?: (call: string, id?: string | null) => void
   /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
   onEntryCall?: (call: string) => void
   /** The Spots board exactly as App wires the Spots VIEW (#345) — its handlers, not a copy of
@@ -289,6 +290,7 @@ const phonePanelLabels = (): Record<Exclude<PhonePanelId, BoxId>, string> => ({
   voiceKeyer: t('phone.panel.voiceKeyer'),
   spots: t('phone.panel.spots'),
   needed: t('phone.panel.needed'),
+  recent: t('recentQsos.pane.title'),
   stats: t('callStats.pane.title'),
 })
 
@@ -1479,7 +1481,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   const statsRoom = useStatsRoom()
   const host = panels
     ? panelHost(withStatsRoom(panels, statsRoom), {
-        menu: withStats(PHONE_MENU),
+        menu: withRecent(withStats(PHONE_MENU)),
         side: [],
         main: 'bandActivity',
         labels,
@@ -1544,6 +1546,8 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
   // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
   const hasStatsPane = host != null && shown('stats') && statsHere()
+  // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): inside the log pane, under the form.
+  const hasRecentPane = host != null && shown('recent') && statsHere()
   // Everything the LEADING column can hold below the 3-col tier. The keyer used to make
   // this unconditionally true; now that it has a ⊞ entry, a rig with no DSP and no native
   // scope can have the operator untick its way to an empty leading track — a `minmax(0,1fr)`
@@ -2520,6 +2524,9 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
     <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={logMode} logTick={snap.logTick} />
   )
 
+  // The last few contacts, a row a click into the Logbook's editor (App's handoff).
+  const recentPane = <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
+
   const logPane = (
     <CockpitPaneFrame
       title={t('phone.pane.log.title')}
@@ -2560,6 +2567,8 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         // App unmounts this cockpit on a page switch; the contact in its strip waits for it.
         draft="phone"
       /> : null}
+      {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
+      {hasRecentPane && recentPane}
     </CockpitPaneFrame>
   )
 

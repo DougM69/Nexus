@@ -1567,6 +1567,7 @@ export const EN = {
   'logbook.form.save': 'Save',
   'logbook.form.log': 'Log',
   'logbook.form.saveFailed': 'Could not save the edit',
+  'logbook.form.editGone': 'Could not open the {{call}} contact for editing: the log no longer holds it as it was. Find it in the list.',
   'logbook.form.updated': 'Updated {{call}}',
   'logbook.form.logFailed': 'Could not log QSO',
 
@@ -12800,6 +12801,9 @@ export const EN = {
   // short forms, band names, entity names, state codes and zone numbers are invariant tokens or
   // data, kept in the component, never here.
   'callStats.pane.title': 'Stats',
+  'recentQsos.pane.title': 'Recent contacts',
+  'recentQsos.empty': 'No contacts logged yet',
+  'recentQsos.aria': 'The last {{count}} contacts, newest first',
   'callStats.empty': 'Type a call in the log entry: its DXCC, WAS and WAZ standing shows here.',
   'callStats.emptyPicked': 'Pick a station: its DXCC, WAS and WAZ standing shows here.',
   'callStats.loading': 'Reading the log…',

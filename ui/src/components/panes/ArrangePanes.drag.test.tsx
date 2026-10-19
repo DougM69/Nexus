@@ -34,6 +34,7 @@ const PHONE_LABELS: Record<PhonePanelId, string> = {
   voiceKeyer: 'Voice Keyer',
   spots: 'Spots',
   needed: 'Needed',
+  recent: 'Recent contacts',
   stats: 'Stats',
   ...boxLabels({}),
 }

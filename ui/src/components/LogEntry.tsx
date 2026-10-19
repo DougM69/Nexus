@@ -302,7 +302,7 @@ interface Props {
   /** Open the Logbook filtered to a callsign — handed straight to the recall card below, whose
    *  previous-contact rows become clickable when it is present (#192). Omitted = inert rows,
    *  which is what a build with the Logbook section switched off gets. */
-  onOpenLogbook?: (call: string) => void
+  onOpenLogbook?: (call: string, id?: string | null) => void
   /** Click-to-work handoff from the Needed board: the callsign to prefill + focus RST.
    * `ts` changes per click so re-working the same call refires the prefill. `park` is the park
    * or summit a Needed row is an activation of: it fills the park box for that call, and no

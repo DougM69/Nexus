@@ -26,6 +26,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
+import { installRecentLog, recentRows, resetRecentLog } from './RecentQsosPane.testkit'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
 import { PHONE_PANEL_IDS, PHONE_PANELS, panelStorageKey, usePanelLayout } from '../features/panelState'
@@ -1074,5 +1075,55 @@ describe('the Stats pane, on where there is room', () => {
     tall(STATS_ROOM.minVh)
     render(<Live />)
     expect(statsShown(), 'an untick on a tall window').toBe(false)
+  })
+})
+
+// THE RECENT CONTACTS PANE (2026-10-18): inside the log pane under the form, above the Stats pane, its own height; a row
+// click opens that contact in the Logbook's editor (the cockpit's `onOpenLogbook`, with the contact's id).
+describe('the Recent contacts pane under the log form', () => {
+  afterEach(resetRecentLog)
+
+  it('ticked, stands inside the log pane under the form, its own height, and a row opens THAT contact', async () => {
+    installRecentLog()
+    const onOpenLogbook = vi.fn()
+    renderCockpit({ panels: fakePanels(), onOpenLogbook })
+    const recent = document.querySelector('[data-pane="recent"]')
+    expect(recent, 'ticked, the Recent contacts pane is not on screen').not.toBeNull()
+    expect(recent!.getAttribute('data-fit')).toBe('content')
+    // INSIDE THE LOG PANE, under the form, in the pane's own scrolling body: all it can take is what the
+    // form leaves, so showing it never moves the form or its Log button (measured in Chrome).
+    const logPane = recent!.closest('[data-pane="log"]')
+    expect(logPane, 'not inside the log pane').not.toBeNull()
+    expect(recent!.parentElement, 'not in the log pane’s scrolling body').toBe(logPane!.querySelector(':scope > .pane-body'))
+    expect(recent!.previousElementSibling?.getAttribute('data-testid'), 'not directly under the log form').toBe('log-stub')
+    expect(recent!.nextElementSibling, 'something stands under it inside the log pane').toBeNull()
+    expect(logPane!.nextElementSibling?.getAttribute('data-pane'), 'the Stats pane is not under the log pane').toBe('stats')
+    await act(async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve()
+    })
+    const rows = recentRows()
+    expect(rows, 'the newest contacts, newest first').toHaveLength(2)
+    fireEvent.click(rows[1])
+    expect(onOpenLogbook.mock.calls).toEqual([['W1AW', 'id-older']])
+  })
+
+  it('is one ⊞ tick: hidden, it is gone and the log form stays', async () => {
+    renderCockpit({ panels: fakePanels(['recent']) })
+    expect(document.querySelector('[data-pane="recent"]')).toBeNull()
+    expect(document.querySelector('[data-pane="log"]'), 'control: the log rendered').not.toBeNull()
+  })
+})
+
+describe('the Recent contacts pane on the hosted page', () => {
+  it('is left out, as the Stats pane is: that page edits no contact', async () => {
+    const { installApplicationTransport } = await import('../applicationTransport')
+    const off = installApplicationTransport({ kind: 'remote', invoke: async () => null as never })
+    try {
+      renderCockpit({ panels: fakePanels() })
+      expect(document.querySelector('[data-pane="recent"]')).toBeNull()
+      expect(document.querySelector('[data-pane="log"]'), 'control: the log column rendered').not.toBeNull()
+    } finally {
+      off()
+    }
   })
 })

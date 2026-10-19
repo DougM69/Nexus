@@ -18,6 +18,7 @@ import { PSK_PANEL_IDS, PSK_PANELS, type PskPanelId, type PanelLayoutApi } from 
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
 import { CallStatsFrame, statsHere, withStats } from './CallStatsPane'
+import { RecentQsosFrame, withRecent } from './RecentQsosPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
@@ -69,7 +70,7 @@ import {
 interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
-  onOpenLogbook?: (call: string) => void
+  onOpenLogbook?: (call: string, id?: string | null) => void
   /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
   onEntryCall?: (call: string) => void
   /** Live snapshot — may be absent while the app is still connecting; the stream
@@ -125,6 +126,7 @@ const pskPanelLabels = (): Record<PskPanelId, string> => ({
   scope: t('psk.panel.waterfall'),
   rfScope: t('rfScope.title'),
   stream: t('psk.panel.stream'),
+  recent: t('recentQsos.pane.title'),
   stats: t('callStats.pane.title'),
 })
 
@@ -161,7 +163,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const control = useStationControl(), receiverControl = useStationCapability('decoder'), rotatorControl = useStationCapability('rotator')
   const dataAvailable = useStationData()
   const host = panels
-    ? panelHost(panels, { menu: withStats(PSK_PANEL_IDS), side: [], main: 'stream', labels: pskPanelLabels(), shipsHidden: PSK_PANELS.defaultRemoved })
+    ? panelHost(panels, { menu: withRecent(withStats(PSK_PANEL_IDS)), side: [], main: 'stream', labels: pskPanelLabels(), shipsHidden: PSK_PANELS.defaultRemoved })
     : null
   // No panel record (a render without a host): every pane at its vocabulary's default — shown,
   // except the RF scope pane, which ships hidden (`defaultRemoved`).
@@ -1013,6 +1015,12 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             fdMode="DIG"
             fdSubmode={mode.name}
           />
+          )}
+          {/* THE RECENT CONTACTS PANE (RecentQsosPane), inside the log strip's frame under the form: the
+              last few contacts, a row a click into the Logbook's editor. It takes only the room the form
+              leaves. No stop control, nothing sent. */}
+          {shown('recent') && statsHere() && (
+            <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
           )}
         </CockpitPaneFrame>
       )}

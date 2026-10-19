@@ -255,7 +255,8 @@ describe('Phone’s arrange list', () => {
   it('lists every region pane of its vocabulary exactly once, and nothing that is not a region pane', () => {
     const ids = arrangeIds(SPEC)
     expect(new Set(ids).size).toBe(ids.length)
-    const region = PHONE_PANELS.panelIds.filter((id) => id !== 'scope' && id !== 'txmeters')
+    // The Recent contacts pane is no region pane: it rides inside the log pane, under the form.
+    const region = PHONE_PANELS.panelIds.filter((id) => id !== 'scope' && id !== 'txmeters' && id !== 'recent')
     expect([...ids].sort()).toEqual([...region].sort())
   })
 

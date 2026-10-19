@@ -134,7 +134,7 @@ interface Props {
   onTierChange: (t: Tier) => void
   /** Open the Logbook filtered to a callsign (#192) — handed to the recall card in the side
    *  rail, whose previous-contact rows become clickable when it is present. Omitted ⇒ inert. */
-  onOpenLogbook?: (call: string) => void
+  onOpenLogbook?: (call: string, id?: string | null) => void
   /** Switch the RX signal source (native engine vs WSJT-X companion over UDP). */
   onSourceChange: (k: SourceKind) => void
   /** Click-to-tune on the waterfall: left=TX, right=RX, both buttons=TX+RX. */
@@ -2383,7 +2383,7 @@ function OperateRecall({
   paneTitle?: string
   /** The id the card's head is dragged by (RecallPanel `grip`). */
   grip?: string
-  onOpenLog?: (call: string) => void
+  onOpenLog?: (call: string, id?: string | null) => void
   /** #204: open the card of the station this one is calling. */
   onShowCall?: (call: string) => void
 }) {

@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those contacts as an ADIF file in your Downloads folder, each written exactly as the whole-log export writes
   it. A new search or filter clears the picks, so nothing you can no longer see is exported. When an export
   (selected, date range or CSV) holds no contacts, the Logbook now says so and writes no empty file.
+- **Click a contact to edit it.** A previous contact in a cockpit's lookup card now opens the Logbook with its
+  editor already on that contact, the same form the Logbook's ✎ opens, and Save there saves it exactly as an
+  edit made from the Logbook does. In Awards, each contact in the confirmation checklist
+  has a ✎ that does the same. A contact changed or deleted elsewhere since it was listed is not overwritten:
+  Nexus says so and leaves you in the Logbook to find it.
+- **A Recent contacts box under the log entry.** Phone, CW, JS8, RTTY and PSK can show your last five contacts,
+  newest first, right under the log form; click one to open it in the Logbook's editor and fix a busted call
+  or a wrong report. Five reaches back past the contact you just logged without crowding the form. Turn it on
+  in ⊞ Panels ("Recent contacts"); it starts hidden, so your screen does not change until you do. It sits
+  inside the log pane under the form and uses only the room the form leaves, so the form and its Log button
+  stay where they were; on a short window the log pane scrolls to it, and the stop and transmit controls stay
+  where they are.
 - **Contest entry: an optional "RST sent" box.** Turn on "Show the RST sent box" in Settings ▸ Contesting ▸
   Contest, and the contest entry gets an RST sent box just before the received report, as N1MM shows Snt and Rcv.
   It holds the report the contact logs as sent: 59 on phone, 599 on CW and digital. Space and Tab skip it, so

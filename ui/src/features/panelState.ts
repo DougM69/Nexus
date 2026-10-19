@@ -1057,6 +1057,21 @@ const SHARED_IDS: ReadonlySet<string> = new Set(SHARED_PANES.map((e) => e.id))
  */
 const STATS_PANEL_ID = 'stats'
 
+/**
+ * THE RECENT CONTACTS PANE (components/RecentQsosPane): the last few contacts in the log, newest
+ * first, each a click into the Logbook's editor. One id across every cockpit with a log entry form,
+ * directly under that form INSIDE the log pane (Phone's, CW's and JS8's log pane, RTTY's and PSK's
+ * log strip), so it takes only the room the form leaves; the Stats pane stands under the log pane. It
+ * is no column member, so no ⊞ Arrange column lists it: it goes where the log pane goes. FT has no log
+ * entry form (it logs through its confirm dialog), so it has no entry.
+ *
+ * Every vocabulary ships it hidden (`defaultRemoved`), as the Stats pane does where it is short of
+ * room, so nobody's screen changes; one tick in ⊞ Panels shows it. Under THE STOP LINE it is a plain
+ * entry: it lists contacts, sends nothing, hosts no stop control and its hide ends nothing, so it
+ * carries no note. `recent` is no stop-control word.
+ */
+const RECENT_PANEL_ID = 'recent'
+
 /** The Operate cockpit's removable panels — the first consumer's vocabulary.
  *
  *  FIVE OF THESE ARE SENDERS, and they are the shipped counter-example that falsified
@@ -1280,6 +1295,7 @@ export const PHONE_PANEL_IDS = [
   'voiceKeyer',
   'spots',
   'needed',
+  RECENT_PANEL_ID,
   STATS_PANEL_ID,
   ...BOX_IDS,
 ] as const
@@ -1288,7 +1304,7 @@ export type PhonePanelId = (typeof PHONE_PANEL_IDS)[number]
 export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   view: 'phone',
   panelIds: PHONE_PANEL_IDS,
-  defaultRemoved: ['spots', 'needed', STATS_PANEL_ID, ...BOX_IDS],
+  defaultRemoved: ['spots', 'needed', RECENT_PANEL_ID, STATS_PANEL_ID, ...BOX_IDS],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as PhoneCockpit renders it — Band
   // Activity, the voice keyer and Spots lead; the rig strips and Needed in the middle; the log form
   // (no id) heading the last column, the Stats pane under it. The scope above the region and the
@@ -1345,6 +1361,7 @@ export const CW_PANEL_IDS = [
   'sent',
   'spots',
   'needed',
+  RECENT_PANEL_ID,
   STATS_PANEL_ID,
   ...BOX_IDS,
 ] as const
@@ -1353,7 +1370,7 @@ export type CwPanelId = (typeof CW_PANEL_IDS)[number]
 export const CW_PANELS: PanelVocabulary<CwPanelId> = {
   view: 'cw',
   panelIds: CW_PANEL_IDS,
-  defaultRemoved: ['spots', 'needed', STATS_PANEL_ID, ...BOX_IDS],
+  defaultRemoved: ['spots', 'needed', RECENT_PANEL_ID, STATS_PANEL_ID, ...BOX_IDS],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as CwCockpit renders it — the decode
   // and the sent echo lead; Band Activity and the copilot in the middle, under the Rig controls
   // frame; the log form (no id) heading the last column, the Stats pane under it. The three
@@ -1406,13 +1423,13 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
  *  transmit tone) by 5 Hz; the nudges are disabled while anything of ours is keyed. It hosts no
  *  control that stops a transmission and none that starts one, and hiding it ends nothing, so it
  *  carries no ⊞ note and THE STOP LINE is untouched by it. */
-export const RTTY_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'tuning', 'stream', STATS_PANEL_ID] as const
+export const RTTY_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'tuning', 'stream', RECENT_PANEL_ID, STATS_PANEL_ID] as const
 export type RttyPanelId = (typeof RTTY_PANEL_IDS)[number]
 
 export const RTTY_PANELS: PanelVocabulary<RttyPanelId> = {
   view: 'rtty',
   panelIds: RTTY_PANEL_IDS,
-  defaultRemoved: [RF_SCOPE_PANEL_ID, STATS_PANEL_ID],
+  defaultRemoved: [RF_SCOPE_PANEL_ID, RECENT_PANEL_ID, STATS_PANEL_ID],
 }
 
 /** PSK cockpit's removable panels (Keyboard Modes; TX since Phase 2).
@@ -1433,13 +1450,13 @@ export const RTTY_PANELS: PanelVocabulary<RttyPanelId> = {
  *  with no control pressed: the engine's per-tick gate re-check (`poll_psk_stream`),
  *  which unkeys within one tick on a section change, a QSY out of privileges, a tune,
  *  or a radio handoff. */
-export const PSK_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'stream', STATS_PANEL_ID] as const
+export const PSK_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'stream', RECENT_PANEL_ID, STATS_PANEL_ID] as const
 export type PskPanelId = (typeof PSK_PANEL_IDS)[number]
 
 export const PSK_PANELS: PanelVocabulary<PskPanelId> = {
   view: 'psk',
   panelIds: PSK_PANEL_IDS,
-  defaultRemoved: [RF_SCOPE_PANEL_ID, STATS_PANEL_ID],
+  defaultRemoved: [RF_SCOPE_PANEL_ID, RECENT_PANEL_ID, STATS_PANEL_ID],
 }
 
 /** JS8 cockpit's removable panels (the JS8 programme, 2026-09). CW's region shape:
@@ -1463,13 +1480,13 @@ export const PSK_PANELS: PanelVocabulary<PskPanelId> = {
  *  completes), so it is not on the sweep list. The dock's "Drop queue" is a SENDER-class
  *  control (it empties the queue; a frame already keyed finishes) and must never be added to
  *  stopControls. Swept in stop-line.test.tsx's JS8 case, rendered with App's props. */
-export const JS8_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'activity', 'offsets', 'stations', 'inbox', 'log', STATS_PANEL_ID, ...BOX_IDS] as const
+export const JS8_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'activity', 'offsets', 'stations', 'inbox', 'log', RECENT_PANEL_ID, STATS_PANEL_ID, ...BOX_IDS] as const
 export type Js8PanelId = (typeof JS8_PANEL_IDS)[number]
 
 export const JS8_PANELS: PanelVocabulary<Js8PanelId> = {
   view: 'js8',
   panelIds: JS8_PANEL_IDS,
-  defaultRemoved: [RF_SCOPE_PANEL_ID, STATS_PANEL_ID, ...BOX_IDS],
+  defaultRemoved: [RF_SCOPE_PANEL_ID, RECENT_PANEL_ID, STATS_PANEL_ID, ...BOX_IDS],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as Js8Cockpit renders it — the two
   // decode surfaces lead, Stations and the inbox in the middle, the log alone in the last column.
   // The RF scope pane, once ticked, heads the leading column: the first pane under the TX strip, as

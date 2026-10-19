@@ -435,10 +435,13 @@ const AWARDS_COLUMN_VARS = ['--awards-col-a', '--awards-col-b'] as const
 export function AwardsView({
   showGamification = true,
   onOpenSettings,
+  onOpenLogbook,
   observation,
   diagnostics,
 }: {
   showGamification?: boolean
+  /** Open a diagnosed contact in the Logbook's editor (by its id), as its ✎ there opens it. */
+  onOpenLogbook?: (call: string, id?: string | null) => void
   /** A complete station-owned summary; observation never starts upload/diagnostic reads. */
   observation?: AwardSummary
   /** The station's confirmation diagnostics for an observed summary, shown read only. */
@@ -1202,6 +1205,19 @@ export function AwardsView({
                       onOpenSettings={observation ? undefined : onOpenSettings}
                       observed={!!observation}
                     />
+                    {/* The contact itself, in the Logbook's editor: the Logbook row's ✎, the one edit
+                        path. Only for a contact the report names by id, in the station's own window. */}
+                    {!observation && onOpenLogbook && d.id && d.call && (
+                      <button
+                        type="button"
+                        className="conf-btn"
+                        onClick={() => onOpenLogbook(d.call!, d.id)}
+                        title={t('logbook.row.edit', { call: d.call })}
+                        aria-label={t('logbook.row.edit', { call: d.call })}
+                      >
+                        ✎
+                      </button>
+                    )}
                   </li>
                 )
               })}

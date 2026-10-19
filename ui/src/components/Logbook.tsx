@@ -17,7 +17,7 @@ import { useLogbookGlobe } from '../features/logbookGlobe'
 import { PaneSeam } from './PaneSeam'
 import { LOG_GLOBE_SPLIT_MAX, LOG_GLOBE_SPLIT_MIN } from '../features/paneSeam'
 import { emptyAnswer, rowKeyAt, type LogLocate, type LogPage, type LogQuestion } from '../features/logAnswers'
-import { defaultAsc, fmtUtc, logOrder, logQueryKey, type LogQuery, type LogSortKey } from '../features/logQuery'
+import { DEFAULT_LOG_QUERY, defaultAsc, fmtUtc, logOrder, logQueryKey, type LogQuery, type LogSortKey } from '../features/logQuery'
 import { failureToShow, logSource, useLogAnswer, useLogAnswers, useLogPages, useLogStatus } from '../features/logSource'
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { sayExportLacks } from '../features/exportLacks'
@@ -68,8 +68,10 @@ interface Props {
   defaultMode: string
   /** Cross-view handoff from a cockpit's recall card (#192): open with this callsign already
    *  in the search box. `ts` is a nonce, not data — it is what makes a re-click of the SAME
-   *  call refire after the operator has typed over the box (the `pendingWork` idiom). */
-  focusCall?: { call: string; ts: number } | null
+   *  call refire after the operator has typed over the box (the `pendingWork` idiom). `editId`, when
+   *  the handoff came from one contact (a recall card's row, Awards, a cockpit's recent contacts),
+   *  also opens THIS view's form on that contact: the one editor, saving through the one write path. */
+  focusCall?: { call: string; ts: number; editId?: string | null } | null
   /** Called once the handoff has been applied, so the parent can clear it — otherwise a later
    *  trip to the Logbook through the nav would re-apply a filter nobody asked for. */
   onConsumeFocusCall?: () => void
@@ -133,6 +135,20 @@ const PURGE_WORD = 'DELETE'
 
 /** #239 "More columns" — a per-viewer convenience, so browser storage; any failure reads as off. */
 const MORE_COLUMNS_KEY = 'nexus.logbook.moreColumns'
+/** One contact by its id, with the edit key a change to it must send: read as the list reads its rows,
+ *  a page of the order the Logbook opens on. The order can move between the two questions (a contact
+ *  logged meanwhile), so a page whose row is not this one is asked again; null when the log no longer
+ *  holds it. */
+async function keyedRow(id: string): Promise<{ row: LoggedQso; editKey: string } | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const at = await logSource().ask({ kind: 'locate', query: DEFAULT_LOG_QUERY, id })
+    if (at.index === null) return null
+    const page = await logSource().ask({ kind: 'page', query: DEFAULT_LOG_QUERY, offset: at.index, limit: 1 })
+    if (page.keys[0] === id && page.rows[0]) return { row: page.rows[0], editKey: page.editKeys[0] }
+  }
+  return null
+}
+
 function loadMoreColumns(): boolean {
   try {
     return window.localStorage.getItem(MORE_COLUMNS_KEY) === '1'
@@ -669,6 +685,30 @@ export function Logbook({
     })
     setShowForm(true)
   }
+
+  // THE EDIT HANDOFF (`focusCall.editId`): a contact clicked where another view lists it opens here,
+  // in this form, exactly as its row's ✎ opens it. The row and its edit key are read from the engine
+  // as the list reads them, so a save made after the contact changed elsewhere is refused, never
+  // overwritten. The search the handoff also sets (above) puts the row on screen, marked. A Remote
+  // browser edits nothing from here (`control`), so there the handoff only searches, as before.
+  const handoff = useRef<number | null>(null)
+  const alive = useRef(true)
+  useEffect(() => () => void (alive.current = false), [])
+  useEffect(() => {
+    const id = focusCall?.editId
+    if (!focusCall || !id || !control) return
+    const call = focusCall.call
+    handoff.current = focusCall.ts
+    const ts = focusCall.ts
+    void keyedRow(id)
+      .catch(() => null)
+      .then((found) => {
+        if (!alive.current || handoff.current !== ts) return
+        if (found) startEdit(found.row, id, { id, editKey: found.editKey })
+        else pushToast(t('logbook.form.editGone', { call }), 'error')
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per handoff (`ts` is its nonce)
+  }, [focusCall])
 
   const cancelForm = () => {
     setShowForm(false)

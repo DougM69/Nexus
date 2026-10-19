@@ -58,6 +58,7 @@ import { BOX_IDS, CW_PANEL_IDS, CW_PANELS, boxEntries, isBoxId, type BoxId, type
 import { isStockPlacement, regionGroups, type PaneDrop } from '../features/panelPlace'
 import { LogEntry } from './LogEntry'
 import { CallStatsFrame, statsHere, useStatsRoom, withStats, withStatsRoom } from './CallStatsPane'
+import { RecentQsosFrame, withRecent } from './RecentQsosPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import { SpotDialog } from './SpotDialog'
 import { SpotsPanel, type SpotsPanelProps } from './SpotsPanel'
@@ -285,7 +286,7 @@ interface Props {
   onOpenSettings?: (target: string) => void
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
-  onOpenLogbook?: (call: string) => void
+  onOpenLogbook?: (call: string, id?: string | null) => void
   /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
   onEntryCall?: (call: string) => void
   /** Panel visibility/resize record — host-owned (App) so it survives this view's remounts.
@@ -340,6 +341,7 @@ const cwPanelLabels = (): Record<Exclude<CwPanelId, BoxId>, string> => ({
   // The Spots and Needed boards as CW panes, named as the views they come from (Phone's words).
   spots: t('cw.panel.spots'),
   needed: t('cw.panel.needed'),
+  recent: t('recentQsos.pane.title'),
   stats: t('callStats.pane.title'),
 })
 
@@ -721,7 +723,7 @@ export function CwCockpit({
   const statsRoom = useStatsRoom()
   const host = panels
     ? panelHost(withStatsRoom(panels, statsRoom), {
-        menu: withStats(CW_MENU),
+        menu: withRecent(withStats(CW_MENU)),
         side: [],
         main: 'decode',
         labels,
@@ -1379,6 +1381,8 @@ export function CwCockpit({
   // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
   // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
   const hasStatsPane = host != null && shown('stats') && statsHere()
+  // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): inside the log pane, under the form.
+  const hasRecentPane = host != null && shown('recent') && statsHere()
   // The three rig-control groups share ONE frame (see rigCtlPane), so the frame renders when
   // ANY of them can — each group is still gated on its own ⊞ id inside it.
   const hasRigCtlPane = hasScopeCtlPane || hasDspPane || hasRxDspPane || hasSubRow
@@ -1831,6 +1835,8 @@ export function CwCockpit({
         </CockpitPaneFrame>
   ) : null
 
+  // The last few contacts, a row a click into the Logbook's editor (App's handoff).
+  const recentPane = <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
   const statsPane = (
     <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode="CW" logTick={snap.logTick} />
   )
@@ -1883,6 +1889,8 @@ export function CwCockpit({
         // it puts back reaches His Call through `onCallChange`, as a typed one does.
         draft="cw"
       /> : null}
+      {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
+      {hasRecentPane && recentPane}
     </CockpitPaneFrame>
   )
 

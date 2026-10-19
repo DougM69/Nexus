@@ -15,6 +15,7 @@
 import type { ReactNode, Ref } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
+import { installRecentLog, recentRows, resetRecentLog } from './RecentQsosPane.testkit'
 import { PskCockpit } from './PskCockpit'
 import * as api from '../api'
 import type { AppSnapshot, PskState } from '../types'
@@ -154,7 +155,8 @@ describe('PskCockpit pane shell', () => {
     await renderCockpit({ panels: fakePanels() })
     const shell = document.querySelector('main.layout.single.psk-cockpit')!
     const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame')).map((f) => f.getAttribute('data-pane'))
-    // …and the Stats pane, ticked too (it ships hidden here): the LAST frame, under the log strip.
+    // …and the Stats pane, ticked too (it ships hidden here): the LAST frame, under the log strip. (The Recent
+    // contacts pane, ticked too, stands inside the log strip's frame, not beside it.)
     expect(frames).toEqual(['rfScope', 'stream', 'log', 'stats'])
     const strip = shell.querySelector(':scope > .cockpit-txstrip')!
     expect(strip.previousElementSibling?.matches('.pane-splitter'), 'the TX strip left its place under the scope').toBe(true)
@@ -581,5 +583,41 @@ describe('the Stats pane under the log strip', () => {
     const mode = screen.getByTestId('log-stub').getAttribute('data-mode')!
     expect(mode, 'premise: the strip logs a mode').toMatch(/PSK/)
     expect(getCallStats).toHaveBeenCalledWith('W1AW', '20m', mode)
+  })
+})
+
+// THE RECENT CONTACTS PANE (2026-10-18): inside the log strip's frame under the form, above the Stats pane, its own height; a row
+// click opens that contact in the Logbook's editor (the cockpit's `onOpenLogbook`, with the contact's id).
+describe('the Recent contacts pane under the log strip', () => {
+  afterEach(resetRecentLog)
+
+  it('ticked, stands inside the log strip’s frame under the form, its own height, and a row opens THAT contact', async () => {
+    installRecentLog()
+    const onOpenLogbook = vi.fn()
+    await renderCockpit({ panels: fakePanels(), onOpenLogbook })
+    const recent = document.querySelector('[data-pane="recent"]')
+    expect(recent, 'ticked, the Recent contacts pane is not on screen').not.toBeNull()
+    expect(recent!.getAttribute('data-fit')).toBe('content')
+    // INSIDE THE LOG PANE, under the form, in the pane's own scrolling body: all it can take is what the
+    // form leaves, so showing it never moves the form or its Log button (measured in Chrome).
+    const logPane = recent!.closest('[data-pane="log"]')
+    expect(logPane, 'not inside the log pane').not.toBeNull()
+    expect(recent!.parentElement, 'not in the log pane’s scrolling body').toBe(logPane!.querySelector(':scope > .pane-body'))
+    expect(recent!.previousElementSibling?.getAttribute('data-testid'), 'not directly under the log form').toBe('log-stub')
+    expect(recent!.nextElementSibling, 'something stands under it inside the log pane').toBeNull()
+    expect(logPane!.nextElementSibling?.getAttribute('data-pane'), 'the Stats pane is not under the log pane').toBe('stats')
+    await act(async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve()
+    })
+    const rows = recentRows()
+    expect(rows, 'the newest contacts, newest first').toHaveLength(2)
+    fireEvent.click(rows[1])
+    expect(onOpenLogbook.mock.calls).toEqual([['W1AW', 'id-older']])
+  })
+
+  it('is one ⊞ tick: hidden, it is gone and the log strip stays', async () => {
+    await renderCockpit({ panels: fakePanels(['recent']) })
+    expect(document.querySelector('[data-pane="recent"]')).toBeNull()
+    expect(document.querySelector('[data-pane="log"]'), 'control: the log rendered').not.toBeNull()
   })
 })

@@ -26,6 +26,7 @@ import { regionGroups, type PaneDrop } from '../features/panelPlace'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
 import { CallStatsFrame, statsHere, useStatsRoom, withStats, withStatsRoom } from './CallStatsPane'
+import { RecentQsosFrame, withRecent } from './RecentQsosPane'
 import { RotorStrip } from './RotorStrip'
 import { Js8HbButton, Js8HbNetChip, js8HbAckRateBlockedNote, js8HbAckSuppressedTitle, js8HbShown } from './Js8Heartbeat'
 import { Js8WaterfallControls, js8CentreFilterItem } from './Js8WaterfallControls'
@@ -134,7 +135,7 @@ import { patchSettings } from '../settings/patch'
 
 interface Props {
   /** Open the Logbook filtered to a callsign — handed to the log strip's recall card. */
-  onOpenLogbook?: (call: string) => void
+  onOpenLogbook?: (call: string, id?: string | null) => void
   /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
   onEntryCall?: (call: string) => void
   /** Live snapshot — may be absent while the app is still connecting. */
@@ -233,6 +234,7 @@ const js8PanelLabels = (): Record<Exclude<Js8PanelId, BoxId>, string> => ({
   stations: t('js8.panel.stations'),
   inbox: t('js8.panel.inbox'),
   log: t('js8.panel.log'),
+  recent: t('recentQsos.pane.title'),
   stats: t('callStats.pane.title'),
 })
 
@@ -288,7 +290,7 @@ export function Js8Cockpit({
   const statsRoom = useStatsRoom()
   const host = panels
     ? panelHost(withStatsRoom(panels, statsRoom), {
-        menu: withStats(JS8_MENU),
+        menu: withRecent(withStats(JS8_MENU)),
         side: ['stations', 'inbox'],
         main: 'activity',
         labels,
@@ -836,10 +838,14 @@ export function Js8Cockpit({
   const place = panels?.layout.place
   // The Stats pane follows the log pane's call, so it stands only while the log pane does (with its
   // snapshot), and only in the station's own window: with the log hidden it would have nothing to follow.
+  // The Recent contacts pane stands inside the log pane, under the form, so it goes with it.
   const paneShown = (id: Js8PanelId): boolean =>
     isBoxId(id)
       ? entries[id] != null
-      : shown(id) && (id !== 'log' || snap != null) && (id !== 'stats' || (snap != null && shown('log') && statsHere()))
+      : shown(id) &&
+        (id !== 'log' || snap != null) &&
+        (id !== 'stats' || (snap != null && shown('log') && statsHere())) &&
+        (id !== 'recent' || (snap != null && shown('log') && statsHere()))
   const placed3 = regionGroups(JS8_PANELS.arrange!, place, 3, paneShown)
   // The DASHBOARD RAIL'S boxes, on a window too small for the rail (the operator's "They move into the
   // columns"), stand at the foot of the leading column, where JS8's own boxes stand until placed.
@@ -1481,6 +1487,12 @@ export function Js8Cockpit({
     </CockpitPaneFrame>
   )
 
+  // THE RECENT CONTACTS PANE inside the log pane, under the form: the last few contacts, a row a click into
+  // the Logbook's editor (App's handoff).
+  const recentPane = snap && paneShown('recent') && (
+    <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
+  )
+
   // THE STATS PANE over the log pane: what the log holds for the call the strip reports, settled.
   const statsPane = snap && paneShown('stats') && (
     <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={JS8} logTick={snap.logTick} />
@@ -1522,6 +1534,8 @@ export function Js8Cockpit({
         fdMode="DIG"
         fdSubmode={JS8}
       />}
+      {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
+      {recentPane}
     </CockpitPaneFrame>
   )
 
@@ -1583,6 +1597,8 @@ export function Js8Cockpit({
     stations: stationsPane,
     inbox: inboxPane,
     log: logPane,
+    // Inside the log pane (above), never a column member of its own.
+    recent: null,
     stats: statsPane,
     ...boxEls,
   }

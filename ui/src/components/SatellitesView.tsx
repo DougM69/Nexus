@@ -109,7 +109,7 @@ interface Props {
   onPopOut?: () => void
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
-  onOpenLogbook?: (call: string) => void
+  onOpenLogbook?: (call: string, id?: string | null) => void
   /** Apply a snapshot the log strip's hunt-tag ✕ answered (LogEntry's `onSnap`). */
   onSnap?: (s: AppSnapshot) => void
 }
