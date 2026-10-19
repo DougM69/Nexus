@@ -407,18 +407,30 @@ async fn binding_hands_back_no_secret() {
     }
 }
 
-/// The account signs in only at the service this build is for, and only once this build has its
-/// tenant's applications: until the operator creates them, no sign-in is offered at all.
+/// The account signs in only at the service this build is for (staging, whose tenant is built in),
+/// never at another origin, production's included.
 #[test]
 fn the_account_signs_in_only_where_this_build_has_a_configured_tenant() {
-    assert!(matches!(
-        Service::new("https://elsewhere.test.invalid"),
-        Err("originDenied")
-    ));
-    assert!(matches!(
-        Service::new(crate::remote_service::REMOTE_ORIGIN),
-        Err("accountNotReady")
-    ));
+    for origin in [
+        "https://elsewhere.test.invalid",
+        "https://remote.hamradiotools.io",
+    ] {
+        assert!(
+            matches!(Service::new(origin), Err("originDenied")),
+            "{origin}"
+        );
+    }
+    let service = Service::new(crate::remote_service::REMOTE_ORIGIN)
+        .ok()
+        .unwrap();
+    assert_eq!(
+        service.tenant(),
+        Tenant::of("https://remote-staging.hamradiotools.io").unwrap()
+    );
+    assert_eq!(
+        service.tenant().issuer,
+        "https://dev-60ma72hxdqoohki1.us.auth0.com/"
+    );
 }
 
 /// The service's config without its API is no sign-in: nothing is opened.

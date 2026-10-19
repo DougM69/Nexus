@@ -66,13 +66,14 @@ const UNCONFIGURED: &str = "unconfigured";
 const UNCONFIGURED_ISSUER: &str = "https://unconfigured.invalid/";
 
 /// Every service this build signs in to. The client ids are public (every sign-in sends them), but
-/// they are the operator's to create, so a tenant stays [`UNCONFIGURED`] until they exist.
+/// they are the operator's to create, so a tenant stays [`UNCONFIGURED`] until they exist. Staging's
+/// exist; production's do not yet.
 pub const TENANTS: [Tenant; 2] = [
     Tenant {
         origin: "https://remote-staging.hamradiotools.io",
-        issuer: UNCONFIGURED_ISSUER,
-        native_client_id: UNCONFIGURED,
-        spa_client_id: UNCONFIGURED,
+        issuer: "https://dev-60ma72hxdqoohki1.us.auth0.com/",
+        native_client_id: "JJKIvb7BorB4geDgMBxdylkPjsbTt9kw",
+        spa_client_id: "GO8aSXhb5SmfNKajeCuvgTpvbCAYScKQ",
     },
     Tenant {
         origin: "https://remote.hamradiotools.io",
@@ -947,10 +948,26 @@ mod tests {
         assert!(serde_json::to_string(&full).unwrap().len() <= 1280);
     }
 
+    /// Staging signs in to its own tenant, with exactly its two applications; production has none
+    /// yet, so no sign-in is offered there.
+    #[test]
+    fn staging_carries_its_tenant_and_production_none_yet() {
+        assert_eq!(
+            Tenant::of("https://remote-staging.hamradiotools.io"),
+            Some(&Tenant {
+                origin: "https://remote-staging.hamradiotools.io",
+                issuer: "https://dev-60ma72hxdqoohki1.us.auth0.com/",
+                native_client_id: "JJKIvb7BorB4geDgMBxdylkPjsbTt9kw",
+                spa_client_id: "GO8aSXhb5SmfNKajeCuvgTpvbCAYScKQ",
+            })
+        );
+        assert_eq!(Tenant::of("https://remote.hamradiotools.io"), None);
+        assert!(!TENANTS[1].configured());
+    }
+
     #[test]
     fn only_a_configured_tenant_signs_in() {
         assert!(TENANTS.iter().all(|t| !t.issuer.is_empty()));
-        assert_eq!(Tenant::of("https://remote-staging.hamradiotools.io"), None);
         assert_eq!(Tenant::of("https://elsewhere.test"), None);
         assert!(TEST.configured());
         for unset in [
