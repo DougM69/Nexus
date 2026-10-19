@@ -1606,6 +1606,55 @@ impl FieldDayLog {
         &self.removed
     }
 
+    /// ⭐ **Every row's QSO number, by its [`seq`](LoggedQso::seq)** — live rows and removed ones,
+    /// in every contest, the number the log table shows and the export writes as ADIF `STX`.
+    ///
+    /// In a contest that sends a serial it IS the serial the row was sent ([`issued_serial`]),
+    /// because a second count beside the one that went on the air would show the operator a
+    /// number nobody copied. A row that carries none has no number.
+    ///
+    /// In every other contest it is the row's place in its run, in the order the rows were
+    /// logged (their seq: a contact typed in late with an earlier time takes the next number and
+    /// moves nobody, as N1MM numbers it). **Removed rows are counted**, so a number once shown is
+    /// never given to another contact, after a restart too (the journal keeps removed rows); and
+    /// a run is the rows since the latest Clear test contacts (`cleared`), which starts the count
+    /// again at 1 as it starts the serial run again. A row restored after the clear is counted in
+    /// the run it was logged in.
+    ///
+    /// ⚠️ **Read off the rows, never stored beside them** — the reason `restore_row` gives for
+    /// the serial run. A journal written before numbers existed loads exactly as it did and is
+    /// numbered by the order of its rows (a restore gives a row without a seq the next one, in
+    /// file order); nothing is rewritten.
+    pub fn qso_numbers(&self) -> std::collections::HashMap<u64, u32> {
+        let rows = self
+            .qsos
+            .iter()
+            .chain(self.removed.iter().flat_map(|r| &r.rows))
+            .filter(|q| q.seq != 0);
+        if self.session.serial_now().is_some() {
+            let spec = self.session.exchange;
+            return rows
+                .filter_map(|q| issued_serial(spec, &q.tx).map(|n| (q.seq, n)))
+                .collect();
+        }
+        let mut order: Vec<(bool, u64)> = rows
+            .map(|q| (self.cleared.passed_over(q.seq, q.when_unix), q.seq))
+            .collect();
+        order.sort_unstable();
+        let mut out = std::collections::HashMap::with_capacity(order.len());
+        let mut run = None;
+        let mut n = 0;
+        for (before_clear, seq) in order {
+            if run != Some(before_clear) {
+                run = Some(before_clear);
+                n = 0;
+            }
+            n += 1;
+            out.insert(seq, n);
+        }
+        out
+    }
+
     /// Log a contact.
     ///
     /// ⭐ **The bool is "did this contact ENTER THE LOG", which is no longer the same
@@ -2220,6 +2269,7 @@ impl FieldDayLog {
             sent_moved,
             true,
             false,
+            None,
         )
     }
 
@@ -2235,6 +2285,7 @@ impl FieldDayLog {
             sent_moved,
             true,
             false,
+            Some(&self.qso_numbers()),
         )
     }
 
@@ -2254,6 +2305,11 @@ impl FieldDayLog {
     ///
     /// `journal`: the journal's own rows, which also carry the call each was logged on
     /// (`APP_NEXUS_ONAIR`, [`LoggedQso::on_air_call`]). No export writes it.
+    ///
+    /// `numbers`: each row's QSO number under ADIF's `STX` ([`qso_numbers`](Self::qso_numbers)),
+    /// the serial it was sent in a serial contest. Only the submitted file asks for it: the
+    /// journal never stores a number it can read off the rows, and the club's export is pinned
+    /// byte for byte by the Field Day goldens.
     fn adif_of<'a>(
         &'a self,
         header: &str,
@@ -2261,6 +2317,7 @@ impl FieldDayLog {
         sent_moved: bool,
         rst_sent: bool,
         journal: bool,
+        numbers: Option<&std::collections::HashMap<u64, u32>>,
     ) -> String {
         let mut s = format!("ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n{header}<EOH>\n");
         for (q, removed_unix) in rows {
@@ -2380,6 +2437,9 @@ impl FieldDayLog {
                 if let Some(rst) = crate::contest::merge::rst_of(&sent, spec) {
                     s.push_str(&adif_field("RST_SENT", &rst));
                 }
+            }
+            if let Some(n) = numbers.and_then(|by_seq| by_seq.get(&q.seq)) {
+                s.push_str(&adif_field("STX", &n.to_string()));
             }
             // ⭐ The private carrier rides ONLY when the standard tags cannot give the
             // row back — and that condition is not a guess, it is the restore run
@@ -2615,6 +2675,7 @@ impl FieldDayLog {
             true,
             false,
             true,
+            None,
         );
         for h in &self.held {
             s.push_str(&h.adif);
@@ -7030,9 +7091,9 @@ mod tests {
     }
 
     /// ⭐ **…and nothing else in the file moves**: a whole submitted file, byte for byte, which is
-    /// the file this build wrote before with the one tag added. A phone contact, so the row's
-    /// `59` is neither the session's `599` nor the `57` it received, and the carrier is written
-    /// beside it as before.
+    /// the file this build wrote before with the one tag added, and its QSO number as `STX`
+    /// ([`FieldDayLog::qso_numbers`]). A phone contact, so the row's `59` is neither the
+    /// session's `599` nor the `57` it received, and the carrier is written beside it as before.
     #[test]
     fn a_submitted_record_gains_its_sent_report_and_nothing_else() {
         let mut log = ilqp_from_kane();
@@ -7044,7 +7105,7 @@ mod tests {
             "ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n<EOH>\n\
              <CALL:5>K9AAA <MODE:3>SSB <BAND:3>20m <FREQ:9>14.250000 \
              <APP_NEXUS_DIALKHZ:5>14250 <QSO_DATE:8>20261014 <TIME_ON:6>174640 \
-             <CONTEST_ID:12>IL QSO Party <RST_RCVD:2>57 <RST_SENT:2>59 \
+             <CONTEST_ID:12>IL QSO Party <RST_RCVD:2>57 <RST_SENT:2>59 <STX:1>1 \
              <APP_NEXUS_EX:28>RST::57;QTH:il_counties:COOK \
              <APP_NEXUS_MYEX:28>RST::59;QTH:il_counties:KANE <APP_NEXUS_QSEQ:1>1 <EOR>\n"
         );

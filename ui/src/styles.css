@@ -13109,6 +13109,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .fd-log-row[data-slots][data-pos] {
   grid-template-columns: 0.55fr 1.3fr repeat(var(--fd-slots), 0.7fr) 0.7fr 0.7fr minmax(0, 1.2fr);
 }
+/* …and the contest screen's own log and the logger window's last contacts, once the log carries QSO
+   numbers (ContestLogHead's `numbered`, which sets `data-nr`): the number first, then the same
+   columns. The club log never sets it, so no `data-pos` pair is needed. */
+.fd-log-head[data-nr],
+.fd-log-row[data-nr] {
+  grid-template-columns: 0.45fr 0.55fr 1.3fr 0.7fr 0.9fr 0.7fr 0.7fr;
+}
+.fd-log-head[data-slots][data-nr],
+.fd-log-row[data-slots][data-nr] {
+  grid-template-columns: 0.45fr 0.55fr 1.3fr repeat(var(--fd-slots), 0.7fr) 0.7fr 0.7fr;
+}
+.fd-log-row .fd-col.nr {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
 .fd-col.pos {
   overflow: hidden;
   text-overflow: ellipsis;

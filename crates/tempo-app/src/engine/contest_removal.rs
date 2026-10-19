@@ -307,11 +307,15 @@ impl Engine {
         };
         let log = &station.log;
         let (rs, spec, role) = (log.ruleset(), log.session.exchange, log.session.role());
+        let numbers = log.qso_numbers();
         ContestRemoval {
             rows: entry
                 .rows
                 .iter()
-                .map(|q| super::field_day_display::field_day_qso(q, rs, spec, role))
+                .map(|q| {
+                    let nr = numbers.get(&q.seq).copied();
+                    super::field_day_display::field_day_qso(q, rs, spec, role, nr)
+                })
                 .collect(),
             qids: entry
                 .rows

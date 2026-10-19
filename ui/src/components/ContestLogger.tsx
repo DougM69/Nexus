@@ -80,7 +80,7 @@ import { useContestSwitch } from '../contestSwitch'
 import { useOperatorBoxAsk } from '../features/contestKeys'
 import { useLoggerLayout } from '../features/contestLoggerLayout'
 import { contestLogMode, stationMode, usePskName } from '../features/contestMode'
-import { annotate, ContestLogHead, ContestLogRow, ContestView, OperatorBox } from './ContestView'
+import { annotate, ContestLogHead, ContestLogRow, ContestView, logIsNumbered, OperatorBox } from './ContestView'
 import { NoCreditChip } from './FdAdvisories'
 import { LogEntry } from './LogEntry'
 
@@ -136,10 +136,11 @@ function KeepInFront() {
 }
 
 /** The newest contacts of the running contest, newest first, in the contest screen's own columns. */
-function LastContacts({ fieldDay, style }: { fieldDay: FieldDayStatus; style: CSSProperties }) {
+export function LastContacts({ fieldDay, style }: { fieldDay: FieldDayStatus; style: CSSProperties }) {
   const titleId = useId()
   const fieldDayColumns = isFieldDay(fieldDay.event)
   const slotColumns = fieldDayColumns ? [] : (fieldDay.receives ?? [])
+  const numbered = logIsNumbered(fieldDay.log)
   // Marked over the whole log, as the screen marks it (a new section is new in log order), then the
   // newest few, each keyed by its place in the log.
   const rows = useMemo(
@@ -156,7 +157,13 @@ function LastContacts({ fieldDay, style }: { fieldDay: FieldDayStatus; style: CS
         <h2 id={titleId} className="contest-logger-recent-title">
           {t('contestLogger.recent.title')}
         </h2>
-        <ContestLogHead fieldDayColumns={fieldDayColumns} isWfd={fieldDay.event === 'wfd'} slotColumns={slotColumns} role={fieldDay.role} />
+        <ContestLogHead
+          fieldDayColumns={fieldDayColumns}
+          isWfd={fieldDay.event === 'wfd'}
+          slotColumns={slotColumns}
+          role={fieldDay.role}
+          numbered={numbered}
+        />
         {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}
         {rows.map(({ row, at }) => (
           <ContestLogRow
@@ -164,6 +171,7 @@ function LastContacts({ fieldDay, style }: { fieldDay: FieldDayStatus; style: CS
             row={row}
             fieldDayColumns={fieldDayColumns}
             slotColumns={slotColumns}
+            numbered={numbered}
           />
         ))}
       </div>
