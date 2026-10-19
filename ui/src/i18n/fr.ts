@@ -8181,4 +8181,7 @@ export const FR: PartialCatalog = {
   "fieldDay.workIn.hint.aria": "Où l'on émet",
   "fieldDay.workIn.hint": "Cet écran enregistre et compte les points, et n'émet jamais. Pour émettre, travaillez le concours depuis l'écran CW ou phonie : sa ligne de saisie a Entrée envoie le message, Running / S&P et les messages des touches F.",
   "fieldDay.workIn.hint.dismiss": "Compris",
+  "logEntry.contest.notRunning.aria": "Concours arrêté",
+  "logEntry.contest.notRunning": "Le mode concours est activé, mais le concours n'est pas en cours.",
+  "logEntry.contest.resume": "Reprendre",
 }

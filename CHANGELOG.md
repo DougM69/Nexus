@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **CW and Phone: a Resume line when the contest is not running.** If Contest mode is on but the contest
+  session is not running (it did not start again when you opened the screen, or it stopped while you were on
+  it), the log line said nothing and showed the everyday form, with no exchange boxes and no dupe check. It
+  now shows "Contest mode is on, but the contest is not running" and a **Resume** button. Resume puts the
+  contest back in S&P and never starts calling CQ.
 - **Contest screen: "Work this contest in CW" and "Work this contest in Phone".** The Contest screen and the
   Contest Logger window log and keep score but never transmit. With Contest mode on, these two buttons take the
   main window to the CW or Phone screen, where the contest's log line has Enter Sends Message, Running / S&P and

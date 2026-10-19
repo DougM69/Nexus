@@ -8164,4 +8164,7 @@ export const JA: PartialCatalog = {
   "fieldDay.workIn.hint.aria": "送信する場所",
   "fieldDay.workIn.hint": "この画面はログとスコアのためのもので、送信はしません。送信するには CW 画面か電話画面からコンテストを運用してください。そのログ行に Enter でメッセージ送信、Running / S&P、F キーのメッセージがあります。",
   "fieldDay.workIn.hint.dismiss": "了解",
+  "logEntry.contest.notRunning.aria": "コンテスト停止中",
+  "logEntry.contest.notRunning": "コンテストモードはオンですが、コンテストは実行されていません。",
+  "logEntry.contest.resume": "再開",
 }

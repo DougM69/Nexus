@@ -486,6 +486,13 @@ interface Props {
    * (the draft effect says why).
    */
   draft?: string
+  /**
+   * CW AND PHONE ONLY — Contest mode is on but the station is out of the contest (the re-entry on
+   * opening did not happen, or the session dropped while the screen was open), so this line is the
+   * everyday form, with no exchange boxes and no dupe check. Given, one line says so, with Resume: the
+   * host re-enters the contest in S&P (never a CQ). App passes it only while that is so.
+   */
+  onResumeContest?: () => void
 }
 
 /**
@@ -527,6 +534,7 @@ export function LogEntry({
   noCreditChip,
   operatorBox,
   draft,
+  onResumeContest,
 }: Props) {
   const remoteMode = remote != null
   // THE STATION'S OWN WINDOW, where the hunt tag's ✕ can end a hunt. Not the hosted Remote page,
@@ -3116,6 +3124,14 @@ export function LogEntry({
   return (
     <div className="log-entry" onChangeCapture={remoteMode ? rememberRemoteContext : undefined}>
       {titled && <h2>{t('logEntry.title')}</h2>}
+      {onResumeContest && (
+        <p className="le-contest-resume" role="status" aria-label={t('logEntry.contest.notRunning.aria')}>
+          {t('logEntry.contest.notRunning')}{' '}
+          <button type="button" className="export-btn" onClick={onResumeContest}>
+            {t('logEntry.contest.resume')}
+          </button>
+        </p>
+      )}
       {remoteMode && remoteWorkOffer && <div>
         <p role="status">{t('remote.workDraftKept', { call: remoteWorkOffer.call })}</p>
         <div className="remote-actions"><button type="button" className="remote-button" disabled={remote?.pending}

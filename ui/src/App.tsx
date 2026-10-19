@@ -3151,9 +3151,15 @@ function App() {
       },
     }
   }
+  // CONTEST MODE ON, THE CONTEST NOT RUNNING: the CW and Phone log lines say so, with Resume, which enters
+  // the contest's S&P (never a CQ). Opening either screen re-enters on its own (`handleView`); this is for
+  // a session that did not come back, or dropped while the screen was open.
+  const resumeContest =
+    settings?.fdActive === true && snap.mode !== 'fieldDay' ? () => handleSetMode('fieldday-sp') : undefined
   const cwWorkspace = (
     <CwCockpit
       esmSetting={esmSettingFor('cw')}
+      onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.cw}
       pitchHz={settings?.cwPitchHz ?? 600}
@@ -3180,6 +3186,7 @@ function App() {
   const phoneWorkspace = (
     <PhoneCockpit
       esmSetting={esmSettingFor('phone')}
+      onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.phone}
       snap={snap}

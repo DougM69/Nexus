@@ -10201,6 +10201,21 @@ input.cw-pitch::-webkit-inner-spin-button {
   max-width: 96px;
 }
 /* Pending POTA/SOTA hunt chip — the QSO will be park-tagged on log (matched by callsign). */
+/* The CW and Phone log line with Contest mode on and the contest not running (LogEntry): one warning line
+   over the everyday form, with Resume beside the words. */
+.le-contest-resume {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding: 4px var(--space-2);
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text);
+  background: color-mix(in srgb, var(--alert-warning) 14%, var(--bg-elev));
+  border: 1px solid color-mix(in srgb, var(--alert-warning) 40%, var(--border-soft));
+  border-radius: var(--radius-sm);
+}
 .le-hunt-chip {
   display: inline-flex;
   align-items: center;

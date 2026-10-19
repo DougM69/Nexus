@@ -8171,4 +8171,7 @@ export const DE: PartialCatalog = {
   "fieldDay.workIn.hint.aria": "Wo gesendet wird",
   "fieldDay.workIn.hint": "Dieser Bildschirm loggt und zählt Punkte und sendet nie. Zum Senden arbeiten Sie den Contest vom CW- oder Phone-Bildschirm aus: Seine Logzeile hat Enter sendet Meldung, Running / S&P und die F-Tasten-Meldungen.",
   "fieldDay.workIn.hint.dismiss": "Verstanden",
+  "logEntry.contest.notRunning.aria": "Contest läuft nicht",
+  "logEntry.contest.notRunning": "Der Contest-Modus ist an, aber der Contest läuft nicht.",
+  "logEntry.contest.resume": "Fortsetzen",
 }

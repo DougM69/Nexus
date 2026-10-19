@@ -4309,6 +4309,11 @@ export const EN = {
   'fieldDay.workIn.hint':
     'This screen logs and keeps score, and never transmits. To send, work the contest from the CW or Phone screen: its log line has Enter Sends Message, Running / S&P and the F-key messages.',
   'fieldDay.workIn.hint.dismiss': 'Got it',
+  // The CW and Phone log line with Contest mode on and the contest not running (LogEntry): one line, and
+  // Resume, which re-enters the contest in S&P.
+  'logEntry.contest.notRunning.aria': 'Contest not running',
+  'logEntry.contest.notRunning': 'Contest mode is on, but the contest is not running.',
+  'logEntry.contest.resume': 'Resume',
   'fieldDay.log.remove': 'Remove',
   'fieldDay.log.remove.ask': 'Remove {{contact}}? Click Remove again.',
   'fieldDay.log.remove.title': 'Take this contact out of the contest log. It is kept under Removed and can be restored. Click twice: the first click asks.',

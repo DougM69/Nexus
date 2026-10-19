@@ -8181,4 +8181,7 @@ export const ES: PartialCatalog = {
   "fieldDay.workIn.hint.aria": "Dónde se transmite",
   "fieldDay.workIn.hint": "Esta pantalla registra y lleva la puntuación, y nunca transmite. Para transmitir, trabaje el concurso desde la pantalla de CW o de fonía: su línea de registro tiene Intro envía mensaje, Running / S&P y los mensajes de las teclas F.",
   "fieldDay.workIn.hint.dismiss": "Entendido",
+  "logEntry.contest.notRunning.aria": "Concurso detenido",
+  "logEntry.contest.notRunning": "El modo concurso está activado, pero el concurso no está en marcha.",
+  "logEntry.contest.resume": "Reanudar",
 }
