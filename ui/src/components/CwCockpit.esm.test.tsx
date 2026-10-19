@@ -479,3 +479,53 @@ describe('the contest score chip', () => {
     expect(document.querySelector('.le-fd-score')).toBeNull()
   })
 })
+
+// CW SPEED MATCH through Enter and the F-keys on the keyboard: the answer goes to the engine
+// marked as one, the CQ unmarked.
+describe('CW speed match through Enter Sends Message and the keyboard', () => {
+  it('marks the S&P answer Enter sends, and the F4 key, but not the CQ key', async () => {
+    settings.macros.cwProfiles = []
+    render(
+      <CwCockpit
+        snap={snap()}
+        theme="dark"
+        onWorkSpot={() => {}}
+        spots={[]}
+        fieldDay={ILQP}
+        esmSetting={{ on: true, callOnce: false, onSwitch }}
+        speedMatch={{ on: true, onSwitch: () => {} }}
+      />,
+    )
+    await flush()
+    await flush()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    await enter(stripCall())
+    expect(api.sendCwArmed.mock.calls.map((c) => c.slice(1))).toEqual([[true]])
+    fireEvent.keyDown(window, { key: 'F4' })
+    await flush()
+    fireEvent.keyDown(window, { key: 'F1' })
+    await flush()
+    expect(api.sendCw.mock.calls.map((c) => c.slice(1))).toEqual([[true], []])
+  })
+  it('reads a key pressed on the keyboard by its step: a CQ that does not say CQ is still the CQ', async () => {
+    settings.macros.cwProfiles = [
+      { ...MINE, macros: MINE.macros.map((m) => (m.key === 'F1' ? { ...m, text: 'TEST {MYCALL}' } : m)) },
+    ]
+    render(
+      <CwCockpit
+        snap={snap()}
+        theme="dark"
+        onWorkSpot={() => {}}
+        spots={[]}
+        fieldDay={ILQP}
+        speedMatch={{ on: true, onSwitch: () => {} }}
+      />,
+    )
+    await flush()
+    await flush()
+    fireEvent.keyDown(window, { key: 'F1' })
+    await flush()
+    expect(api.sendCw.mock.calls).toEqual([['TEST {MYCALL}']])
+  })
+})

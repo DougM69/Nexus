@@ -330,7 +330,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'sidetone', 'pitch', 'keyline', 'f-key', 'macro', 'iambic',
       // Reverse CW (2026-09-11). A findability entry as much as a keyword list: an operator
       // whose rig shows CW-R searches for what the RADIO says, not for what Nexus calls it.
-      'reverse', 'cw-r', 'cwr', 'cw-l', 'sideband'],
+      'reverse', 'cw-r', 'cwr', 'cw-l', 'sideband',
+      // CW speed match: answer a station at the speed the decoder measured for it.
+      'speed match', 'match speed'],
   },
   {
     id: 'rtty',

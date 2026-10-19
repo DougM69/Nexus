@@ -8868,6 +8868,45 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">{t('settings.cw.pitch.hint')}</span>
               </label>
+              {/* CW SPEED MATCH: its switch is also in the CW contest strip, which saves it alone;
+                  this form saves it with the rest. The min/max live only here. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.cw.speedMatch.label')}</span>
+                <span className="settings-input-row">
+                  <input
+                    type="checkbox"
+                    disabled={remote}
+                    checked={!!form.cwSpeedMatch}
+                    onChange={(e) => updateBool('cwSpeedMatch', e.target.checked)}
+                    aria-label={t('settings.cw.speedMatch.label')}
+                  />
+                  <span className="settings-hint">{t('settings.cw.speedMatch.hint')}</span>
+                </span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.cw.speedMatch.min.label')}</span>
+                <input disabled={remote}
+                  className="settings-input"
+                  type="number"
+                  min="5"
+                  max="50"
+                  inputMode="numeric"
+                  value={form.cwSpeedMatchMin ?? 15}
+                  onChange={(e) => updateNum('cwSpeedMatchMin', Number(e.target.value))}
+                />
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.cw.speedMatch.max.label')}</span>
+                <input disabled={remote}
+                  className="settings-input"
+                  type="number"
+                  min="5"
+                  max="50"
+                  inputMode="numeric"
+                  value={form.cwSpeedMatchMax ?? 35}
+                  onChange={(e) => updateNum('cwSpeedMatchMax', Number(e.target.value))}
+                />
+              </label>
               {/* REVERSE CW — a preference, not a band rule (operator 2026-09-11, reversing the
                   2026-07-24 band-aware ruling). Nexus used to command CWR below 10 MHz by itself;
                   it does not any more, because CW/CWR name no sideband: Yaesu's CW-L is the LSB

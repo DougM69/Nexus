@@ -158,3 +158,16 @@ export function resolveEsmRole(
   }
   return { keys: [...keys], text: texts.join(' ') }
 }
+
+/** CW SPEED MATCH: whether a CW message ANSWERS a station, so it may key at that station's
+ *  measured speed. A key with a step in `roles` answers unless the step is the CQ; anything else
+ *  (a key of the everyday set or of the operator's own, typed text) answers unless its first word
+ *  is CQ. The engine still keys it at the operator's own speed unless speed match is on and the
+ *  decoder has a fresh speed for the station being worked. */
+export function cwSendsAnswer(roles: EsmRoleMap, key: string | null, text: string): boolean {
+  if (key) {
+    const role = (Object.keys(roles) as EsmRole[]).find((r) => roles[r]?.includes(key as MacroKey))
+    if (role) return role !== 'cq'
+  }
+  return text.trim().split(/\s+/)[0]?.toUpperCase() !== 'CQ'
+}

@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader, Write};
 /// A rigctld that logs each line it is sent and answers it, `hook` first: `Some(reply)` answers
 /// with that (an empty reply writes nothing, as Hamlib does for a raw `w` set), `None` falls
 /// through to `RPRT 0`.
-fn logging_rigctld(
+pub(super) fn logging_rigctld(
     hook: impl Fn(&str) -> Option<String> + Send + 'static,
 ) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -74,7 +74,7 @@ fn cw_engine(
 }
 
 /// Step the loop once at `t` ms.
-fn step(
+pub(super) fn step(
     state: &mut RadioLoop,
     engine: &Arc<Mutex<Engine>>,
     backend: &mut MockBackend,
@@ -98,7 +98,7 @@ fn step(
 }
 
 /// The lines the rigctld was sent from `from` on.
-fn lines_since(log: &Mutex<Vec<String>>, from: usize) -> Vec<String> {
+pub(super) fn lines_since(log: &Mutex<Vec<String>>, from: usize) -> Vec<String> {
     log.lock().unwrap()[from..].to_vec()
 }
 
@@ -277,7 +277,7 @@ fn a_winkeyer_is_cleared_before_the_radio_is_asked_to_stop_cw() {
 
 /// A rigctld whose radio keeps its own CW speed: `L KEYSPD n` sets it, `l KEYSPD` reads it back,
 /// and the test can turn the radio's speed knob itself (SmartSDR, a Maestro, the front panel).
-fn keyer_speed_rigctld() -> (
+pub(super) fn keyer_speed_rigctld() -> (
     String,
     Arc<Mutex<Vec<String>>>,
     Arc<std::sync::atomic::AtomicU32>,
@@ -299,7 +299,7 @@ fn keyer_speed_rigctld() -> (
 }
 
 /// An engine in the CW section on 40 m with the CAT keyer, on `model`, at `wpm`, nothing queued.
-fn cat_engine(model: u32, wpm: u32) -> Arc<Mutex<Engine>> {
+pub(super) fn cat_engine(model: u32, wpm: u32) -> Arc<Mutex<Engine>> {
     let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
     {
         let mut e = engine.lock().unwrap();
@@ -347,7 +347,7 @@ fn handovers(
 
 /// What the radio takes to key `word` at `wpm` and then leave a word space: the earliest the next
 /// word may reach it without queueing behind this one.
-fn word_window_ms(word: &str, wpm: u32) -> f64 {
+pub(super) fn word_window_ms(word: &str, wpm: u32) -> f64 {
     tempo_core::cw::morse_duration_ms(word, wpm) + 7.0 * 1200.0 / wpm as f64
 }
 

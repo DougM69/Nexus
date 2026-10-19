@@ -4203,6 +4203,13 @@ export interface Settings {
    * factory-default Icom's CW-R is the UPPER side), so no band rule in these words is right
    * for both brands. Optional here as older saved settings omit it. */
   cwReverse?: boolean
+  /** CW speed match: an answer to a station keys at the decoder's measured speed for it, held to
+   *  the min/max below; a CQ keys at the operator's own speed. OFF by default; the contest strip's
+   *  switch saves it alone (`setCwSpeedMatch`), Settings ▸ CW with the form. */
+  cwSpeedMatch?: boolean
+  /** The slowest / fastest speed (WPM) CW speed match keys an answer at. */
+  cwSpeedMatchMin?: number
+  cwSpeedMatchMax?: number
   /** Serial port for the K1EL WinKeyer (when the CW keyer backend is WinKeyer). */
   winkeyerPort: string
   /** Serial port for the DTR/RTS CW keyline (when cwKeyer === 'serial') — a SEPARATE port

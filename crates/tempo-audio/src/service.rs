@@ -3525,6 +3525,13 @@ struct RadioLoop {
     /// CAT→WinKeyer at the same WPM found the cache already holding that number and pushed
     /// nothing, so the hardware keyer never heard a speed at all. One cache per device.
     last_cat_wpm: u32,
+    /// The CW speed match speed (WPM) the word in flight was keyed at; `None` when it keyed at the
+    /// operator's own. A keyer keeps a matched speed until that word's window ends
+    /// (`cw_busy_until`).
+    cw_word_matched: Option<u32>,
+    /// The radio's CAT keyer speed was last set to a CW speed match speed, so the operator's own
+    /// goes back once the answer has keyed (the paddle included), not only with the next message.
+    cat_wpm_matched: bool,
     /// Last CW keyer speed (WPM) pushed to the open WinKeyer (WK Set Speed, `02 nn`).
     /// Reset to 0 whenever the port is (re)opened: a keyer that just came up is back on its
     /// own pot / power-on speed and knows nothing of what we told the last one.
@@ -4251,6 +4258,8 @@ impl RadioLoop {
             mode_giveup: None,
             mode_saw_reject: false,
             last_cat_wpm: 0, // 0 = unset → first send pushes the speed
+            cw_word_matched: None,
+            cat_wpm_matched: false,
             #[cfg(feature = "serial")]
             last_winkeyer_wpm: 0, // 0 = unset → the open pushes the speed
             cw_busy_until: 0.0,
@@ -5944,6 +5953,7 @@ impl RadioLoop {
             // The control's range is narrower than the radio's: what it holds is what this loop
             // would send, so the radio's speed is not sent back over it.
             self.last_cat_wpm = eng.cw_wpm();
+            self.cat_wpm_matched = false;
         }
     }
 
@@ -6402,6 +6412,7 @@ impl RadioLoop {
         self.mode_giveup = None;
         self.mode_saw_reject = false;
         self.last_cat_wpm = 0;
+        self.cat_wpm_matched = false;
         self.cw_radio_wpm = None;
         // The WinKeyer is not the thing being handed off (it is its own box on its own
         // port), but the handoff resets every "already told it" cache and this one costs
@@ -9804,6 +9815,7 @@ impl RadioLoop {
                         // The control's range is narrower than the radio's: what it holds is what
                         // this loop would send, so the radio's speed is not sent back over it.
                         self.last_cat_wpm = eng.cw_wpm();
+                        self.cat_wpm_matched = false;
                     }
                 }
             }
@@ -9821,10 +9833,29 @@ impl RadioLoop {
                 if paddle {
                     eng.cw_operator_break();
                 }
+                let abort = eng.take_cw_abort();
+                let word = if ready { eng.poll_cw_word() } else { None };
+                // CW SPEED MATCH: a matched speed changes only BETWEEN messages. A word taken now
+                // keys at its message's speed; while a MATCHED word still keys, its speed holds (a
+                // keyer told a new speed now would change it mid-word); otherwise the next queued
+                // word's speed, or the operator's own. A word keyed at the operator's own speed
+                // follows the control live, as the WinKeyer always has (issue #135).
+                let wpm = match &word {
+                    Some((_, w)) => *w,
+                    None if now < self.cw_busy_until => {
+                        self.cw_word_matched.unwrap_or_else(|| eng.cw_next_wpm())
+                    }
+                    None => eng.cw_next_wpm(),
+                };
+                let own = eng.cw_wpm();
+                let word = word.map(|(text, w)| {
+                    self.cw_word_matched = (w != own).then_some(w);
+                    text
+                });
                 (
-                    eng.take_cw_abort(),
-                    eng.cw_wpm(),
-                    if ready { eng.poll_cw_one() } else { None },
+                    abort,
+                    wpm,
+                    word,
                     eng.cw_soundcard(),
                     eng.cw_pitch_hz(),
                     eng.cw_winkeyer_port(),
@@ -9965,6 +9996,23 @@ impl RadioLoop {
                         self.last_winkeyer_wpm = wpm;
                     }
                 }
+            }
+            // CW SPEED MATCH over CAT: once an answer has keyed, the radio's keyer goes back to the
+            // operator's own speed (its paddle keys at it too), not only with the next message. A
+            // WinKeyer gets the same from the per-tick push above. Only after a matched speed, so
+            // with speed match off nothing new reaches the wire.
+            if word.is_none()
+                && self.cat_wpm_matched
+                && now >= self.cw_busy_until
+                && self.may_key()
+                && !soundcard
+                && winkeyer_port.is_none()
+                && serial_key.is_none()
+            {
+                if wpm != self.last_cat_wpm && rig.set_keyspd(wpm).is_ok() {
+                    self.last_cat_wpm = wpm;
+                }
+                self.cat_wpm_matched = false;
             }
             if let Some(text) = word {
                 // Hold the next word until this one finishes keying + a word space (7 dits),
@@ -10109,6 +10157,7 @@ impl RadioLoop {
                         // speed of its own between overs, is the one that could not wait.
                         if wpm != self.last_cat_wpm && rig.set_keyspd(wpm).is_ok() {
                             self.last_cat_wpm = wpm;
+                            self.cat_wpm_matched = wpm != engine_lock(engine).cw_wpm();
                         }
                         self.ensure_commanded(rig); // read-only launch: assert before key
                                                     // QUOTE WHAT THE RIG SAID (#332). The sentence alone was
@@ -16571,6 +16620,7 @@ mod tests {
     mod clock_repair_tests;
     mod contest_reply;
     mod contest_status;
+    mod cw_speed_match;
     mod cw_stop;
     mod decode_in_flight;
     mod failed_unkey;

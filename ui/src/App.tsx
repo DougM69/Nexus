@@ -140,6 +140,7 @@ import {
   sstvAutoDisarm,
   setSettings as apiSetSettings,
   setContestEsm,
+  setCwSpeedMatch,
   setFdOperator,
   setSidebandOverride,
   testCat,
@@ -3140,9 +3141,21 @@ function App() {
       },
     }
   }
+  // CW speed match's switch in the CW contest strip: saved alone, as ESM's is.
+  const cwSpeedMatch = {
+    on: settings?.cwSpeedMatch === true,
+    onSwitch: (on: boolean) => {
+      setSettings((prev) => (prev ? { ...prev, cwSpeedMatch: on } : prev))
+      setCwSpeedMatch(on).catch(() => {
+        setSettings((prev) => (prev ? { ...prev, cwSpeedMatch: !on } : prev))
+        pushToast(t('cw.speedMatch.failed'), 'error')
+      })
+    },
+  }
   const cwWorkspace = (
     <CwCockpit
       esmSetting={esmSettingFor('cw')}
+      speedMatch={cwSpeedMatch}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.cw}
       pitchHz={settings?.cwPitchHz ?? 600}
