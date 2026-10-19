@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 
 const contestSelfSpot = vi.fn()
-vi.mock('../api', () => ({ contestSelfSpot: (c: string) => contestSelfSpot(c) }))
+vi.mock('../api', () => ({ contestSelfSpot: (c: string, ok: boolean) => contestSelfSpot(c, ok) }))
 const pushToast = vi.fn()
 vi.mock('../toast', () => ({ pushToast: (...a: unknown[]) => pushToast(...a) }))
 
@@ -58,7 +58,7 @@ describe('Spot me', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Spot comment' }), { target: { value: 'ILQP CQ' } })
     fireEvent.click(button())
     await settle()
-    expect(contestSelfSpot.mock.calls).toEqual([['ILQP CQ']])
+    expect(contestSelfSpot.mock.calls).toEqual([['ILQP CQ', false]])
     expect(pushToast).toHaveBeenCalledWith('Spotted to the DX cluster: DX 14025.5 KD9TAW ILQP CQ', 'success')
   })
 
@@ -109,5 +109,93 @@ describe('Spot me', () => {
     await settle()
     expect(pushToast).toHaveBeenCalledWith(words, 'error')
     expect((button() as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  describe('a contest not known to allow self-spotting', () => {
+    const warning = 'This contest may not allow self-spotting. Press Spot anyway within 10 s to post.'
+    const anyway = () => screen.getByRole('button', { name: 'Spot anyway' })
+    const unconfirmed = (_c: string, ok: boolean) =>
+      ok ? Promise.resolve(posted) : Promise.reject('spotSelfUnconfirmed')
+
+    it('the first press posts nothing and warns; a second press inside the window posts', async () => {
+      contestSelfSpot.mockImplementation(unconfirmed)
+      render(<ContestSpotMe contestShort="CQWW" />)
+      fireEvent.click(button())
+      await settle()
+      expect(contestSelfSpot.mock.calls).toEqual([['CQWW CQ', false]])
+      expect(pushToast.mock.calls).toEqual([[warning, 'info']])
+      await act(async () => {
+        vi.advanceTimersByTime(9_000)
+      })
+      fireEvent.click(anyway())
+      await settle()
+      expect(contestSelfSpot.mock.calls).toEqual([
+        ['CQWW CQ', false],
+        ['CQWW CQ', true],
+      ])
+      expect(pushToast).toHaveBeenLastCalledWith('Spotted to the DX cluster: DX 14025.5 KD9TAW ILQP CQ', 'success')
+      // The cooldown still follows the spot that went.
+      expect((screen.getByRole('button', { name: 'Wait 60 s' }) as HTMLButtonElement).disabled).toBe(true)
+    })
+
+    it('a second press after the window is a first press again', async () => {
+      contestSelfSpot.mockImplementation(unconfirmed)
+      render(<ContestSpotMe contestShort="CQWW" />)
+      fireEvent.click(button())
+      await settle()
+      await act(async () => {
+        vi.advanceTimersByTime(10_000)
+      })
+      fireEvent.click(button())
+      await settle()
+      expect(contestSelfSpot.mock.calls).toEqual([
+        ['CQWW CQ', false],
+        ['CQWW CQ', false],
+      ])
+      expect(pushToast.mock.calls).toEqual([
+        [warning, 'info'],
+        [warning, 'info'],
+      ])
+    })
+
+    it('a press after the window is a first press even when the closing timer is late', async () => {
+      contestSelfSpot.mockImplementation(unconfirmed)
+      render(<ContestSpotMe contestShort="CQWW" />)
+      fireEvent.click(button())
+      await settle()
+      // The clock moves past the window but no timer has run (a throttled background window).
+      vi.setSystemTime(Date.now() + 11_000)
+      fireEvent.click(anyway())
+      await settle()
+      expect(contestSelfSpot.mock.calls).toEqual([
+        ['CQWW CQ', false],
+        ['CQWW CQ', false],
+      ])
+    })
+
+    it('the warning never posts by itself: a minute later, still one unconfirmed press', async () => {
+      contestSelfSpot.mockImplementation(unconfirmed)
+      render(<ContestSpotMe contestShort="CQWW" />)
+      fireEvent.click(button())
+      await settle()
+      await act(async () => {
+        vi.advanceTimersByTime(60_000)
+      })
+      expect(contestSelfSpot.mock.calls).toEqual([['CQWW CQ', false]])
+    })
+
+    it('where spotting itself is not allowed, the second press is refused too', async () => {
+      contestSelfSpot.mockRejectedValue('spotNotAllowed')
+      render(<ContestSpotMe contestShort="CQWW" />)
+      fireEvent.click(button())
+      await settle()
+      fireEvent.click(button())
+      await settle()
+      expect(contestSelfSpot.mock.calls).toEqual([
+        ['CQWW CQ', false],
+        ['CQWW CQ', false],
+      ])
+      expect(pushToast).toHaveBeenLastCalledWith("Not spotted: this contest's rules allow no spotting.", 'error')
+    })
   })
 })

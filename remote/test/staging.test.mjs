@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { STAGING, TARGETS, billingServices, deployable, identity, stagingConfig, target, verifyIdentity, requestBytes, requestJson } from '../scripts/staging-common.mjs'
+import { STAGING, TARGETS, billingServices, deployable, identity, settingsFromEnv, stagingConfig, target, verifyIdentity, requestBytes, requestJson } from '../scripts/staging-common.mjs'
 import { cloudflare, relayKeyCheck, workerDigest } from '../scripts/cloudflare-staging.mjs'
 import { createArtifact, verifyArtifact, verifyLive, verifyLiveSettled, verifyPublicSource } from '../scripts/staging-artifact.mjs'
 import { runtime } from './runtime.mjs'
@@ -289,20 +289,21 @@ test('denied/ambiguous reads and hostname collisions refuse writes without loggi
   assert.equal(p.calls.filter(call => call.method === 'POST').length, 1, 'an ambiguous write is not automatically repeated')
 })
 
-function uploadedProvider({ fault, denied = false, legacy = false, observabilityAbsent = false, tagged = false, billing = false, secrets = {}, secretText = 'synthetic|someone' } = {}) {
+function uploadedProvider({ fault, denied = false, legacy = false, observabilityAbsent = false, tagged = false, billing = false, secrets = {}, secretText = 'synthetic|someone', values = {}, live = values } = {}) {
   const env = { CLOUDFLARE_ACCOUNT_ID: randomBytes(16).toString('hex'), CLOUDFLARE_API_TOKEN: randomBytes(32).toString('hex'), ...secrets }
   const writes = [], privateText = randomBytes(20).toString('hex')
   let tags = tagged ? [STAGING.tag] : null, attached = false
-  const config = stagingConfig(template, ids)
+  // `values` are the optional settings the artifact carries; `live`, the ones the Worker reads back.
+  const config = stagingConfig(template, { ...ids, ...values }), uploaded = stagingConfig(template, { ...ids, ...live })
   // The artifact of a row whose billing Worker is deployed: the one binding it adds.
   if (billing) config.services = billingServices({ billing: { ...STAGING.billing, deployed: true } })
   const settings = { compatibility_date: config.compatibility_date, observability: { enabled: false }, bindings: [
-    ...Object.entries(config.vars).map(([name, text]) => ({ name, type: 'plain_text', text })),
+    ...Object.entries(uploaded.vars).map(([name, text]) => ({ name, type: 'plain_text', text })),
     { name: 'DB', type: 'd1', id: ids.databaseId }, { name: 'ASSETS', type: 'assets' },
     { name: 'STATIONS', type: 'durable_object_namespace', class_name: 'StationRoom' },
     // Every secret the config declares required must be present AND encrypted. A live Worker
     // carrying ADMIN_SUBJECT as a plain var, or not carrying it at all, is not the artifact.
-    ...(config.secrets?.required ?? []).map(name => ({ name, type: 'secret_text' })),
+    ...(uploaded.secrets?.required ?? []).map(name => ({ name, type: 'secret_text' })),
   ] }
   if (fault === 'secret-as-var') {
     const row = settings.bindings.find(binding => binding.name === 'ADMIN_SUBJECT')
@@ -651,6 +652,154 @@ test('the billing Worker is bound only once its row says it is deployed, and the
     await assert.rejects(bad.api.recover(bad.config, artifact.manifest.files['worker.js']),
       fault === 'billing-missing' ? /binding inventory/ : /billing binding differs/, fault)
     assert.equal(bad.writes.length, 0, fault)
+  }
+})
+
+// The Worker settings a deploy writes only when the GitHub environment sets them. Before this, the
+// configuration held five fixed vars, so the Native client id, the trial settings and the move overlap
+// never reached a deployed Worker (staging answered nativeClientId: null). Synthetic values only.
+const nativeClientId = 'synthetic-native-client-id'
+const movedTo = TARGETS.production.origin
+const optional = { native: { nativeClientId }, trialIdentity: { trialIdentityRequired: '1' },
+  move: { movedTo, moveStage: 'announce' }, trialKey: { secrets: ['TRIAL_KEY'] } }
+optional.all = Object.assign({}, ...Object.values(optional))
+test('each optional Worker setting is written only when set, and refused by value', () => {
+  const plain = stagingConfig(template, ids)
+  assert.deepEqual(Object.keys(plain.vars), ['PUBLIC_REMOTE_ORIGIN', 'AUTH0_ISSUER', 'AUTH0_CLIENT_ID', 'AUTH0_AUDIENCE', 'REMOTE_BUILD_REVISION'])
+  assert.deepEqual(plain.secrets, template.secrets, 'nothing set: the configuration is what it was')
+  // An unset GitHub variable arrives as an empty string, and means unset.
+  assert.deepEqual(stagingConfig(template, { ...ids, nativeClientId: '', trialIdentityRequired: '', movedTo: '', moveStage: '', secrets: [] }), plain)
+
+  const all = stagingConfig(template, { ...ids, ...optional.all })
+  assert.deepEqual(all.vars, { ...plain.vars, AUTH0_NATIVE_CLIENT_ID: nativeClientId, TRIAL_IDENTITY_REQUIRED: '1',
+    REMOTE_MOVED_TO: movedTo, REMOTE_MOVE_STAGE: 'announce' })
+  assert.deepEqual(all.secrets.required, [...template.secrets.required, 'TRIAL_KEY'])
+  assert.deepEqual(template.secrets.required, ['ADMIN_SUBJECT', 'TURN_KEY_ID', 'TURN_KEY_TOKEN'], 'the template is not changed')
+  for (const moveStage of ['announce', 'pairing-closed', 'closed'])
+    assert.equal(stagingConfig(template, { ...ids, movedTo, moveStage }).vars.REMOTE_MOVE_STAGE, moveStage)
+
+  for (const [change, message] of [
+    // The Native id is the SPA's: authority.ts refuses that at run time, so it is refused before a deploy.
+    [{ nativeClientId: ids.clientId }, /REMOTE_AUTH0_NATIVE_CLIENT_ID must differ from the SPA client ID/],
+    ...['unconfigured', 'short', 'line\nbreak', 'has space id', 'a'.repeat(129), 42].map(nativeClientId =>
+      [{ nativeClientId }, /REMOTE_AUTH0_NATIVE_CLIENT_ID is not a public Auth0 Native client ID/]),
+    ...['0', 'true', 'yes', ' 1', 1].map(trialIdentityRequired => [{ trialIdentityRequired }, /REMOTE_TRIAL_IDENTITY_REQUIRED must be 1 or unset/]),
+    [{ movedTo }, /set together/], [{ moveStage: 'announce' }, /set together/],
+    ...[STAGING.origin, `${movedTo}/`, 'https://elsewhere.example', 'http://remote.hamradiotools.io'].map(other =>
+      [{ movedTo: other, moveStage: 'announce' }, /REMOTE_MOVED_TO must be the origin of another Remote environment/]),
+    ...['open', 'Announce', 'closed '].map(moveStage => [{ movedTo, moveStage }, /REMOTE_MOVE_STAGE must be one of announce, pairing-closed, closed/]),
+    [{ secrets: ['STRIPE_KEY'] }, /Unknown optional Worker secret/], [{ secrets: 'TRIAL_KEY' }, /Unknown optional Worker secret/],
+  ]) assert.throws(() => stagingConfig(template, { ...ids, ...change }), message, JSON.stringify(change))
+})
+
+test('the environment names reach the configuration, and an optional secret by its presence only', () => {
+  const env = { REMOTE_TARGET: 'staging', REMOTE_AUTH0_ISSUER: ids.issuer, REMOTE_AUTH0_CLIENT_ID: ids.clientId,
+    REMOTE_AUTH0_NATIVE_CLIENT_ID: nativeClientId, REMOTE_TRIAL_IDENTITY_REQUIRED: '1', REMOTE_MOVED_TO: movedTo,
+    REMOTE_MOVE_STAGE: 'closed', REMOTE_TRIAL_KEY_PRESENT: 'true' }
+  const settings = settingsFromEnv(env)
+  assert.deepEqual(settings, { issuer: ids.issuer, clientId: ids.clientId, audience: STAGING.audience, nativeClientId,
+    trialIdentityRequired: '1', movedTo, moveStage: 'closed', secrets: ['TRIAL_KEY'] })
+  for (const present of [{ REMOTE_TRIAL_KEY_PRESENT: 'false' }, { REMOTE_TRIAL_KEY_PRESENT: '' }, { REMOTE_TRIAL_KEY_PRESENT: undefined }])
+    assert.deepEqual(settingsFromEnv({ ...env, ...present }).secrets, [], JSON.stringify(present))
+  assert.throws(() => settingsFromEnv({ ...env, REMOTE_AUTH0_NATIVE_CLIENT_ID: ids.clientId }), /must differ/)
+})
+
+test('the post-upload binding count includes each optional setting exactly when the artifact carries it', async () => {
+  for (const [name, values] of Object.entries({ none: {}, ...optional })) {
+    // Not firing: the Worker reads back what the artifact declared, with or without the setting.
+    const good = uploadedProvider({ values })
+    await good.api.recover(good.config, artifact.manifest.files['worker.js'])
+    assert.equal(good.writes.length, 1, name)
+    if (name === 'none') continue
+    // Firing: the artifact carries it and the Worker does not, and the reverse: a setting left over on
+    // the Worker that this deploy did not write is an extra binding.
+    for (const [declared, held] of [[values, {}], [{}, values]]) {
+      const bad = uploadedProvider({ values: declared, live: held })
+      await assert.rejects(bad.api.recover(bad.config, artifact.manifest.files['worker.js']), /binding inventory differs/, name)
+      assert.equal(bad.writes.length, 0, name)
+    }
+  }
+  // Same count, different value: refused by the value comparison, not the count.
+  const moved = uploadedProvider({ values: optional.move, live: { movedTo, moveStage: 'closed' } })
+  await assert.rejects(moved.api.recover(moved.config, artifact.manifest.files['worker.js']), /public configuration differs/)
+})
+
+test('a supplied optional secret is demanded, applied through the private file, counted, and never printed', async () => {
+  const trialKey = randomBytes(32).toString('hex')
+  const supplied = { REMOTE_ADMIN_SUBJECT: subject, ...relaySecrets }
+  const required = [...template.secrets.required, 'TRIAL_KEY']
+  // The preflight demands it once the artifact declares it.
+  const missing = provider({ database: ids.databaseId, extraEnv: supplied })
+  await assert.rejects(missing.api.preflight(required, ids.databaseId), /^Error: REMOTE_TRIAL_KEY not set in this GitHub environment/)
+  assert.equal(missing.calls.length, 0)
+  const present = uploadedProvider({ tagged: true, values: optional.trialKey, secrets: { ...supplied, REMOTE_TRIAL_KEY: trialKey } })
+  const result = await present.api.preflight(required, ids.databaseId)
+  assert.equal(result.liveSecretTypes.TRIAL_KEY, 'secret_text')
+  assert.ok(!JSON.stringify(result).includes(trialKey))
+
+  // A key the Worker already holds that this deploy would not apply survives the upload, and would then
+  // fail the count with the Worker live. Refused before any write, by name.
+  const stranded = uploadedProvider({ tagged: true, live: optional.trialKey, secrets: supplied })
+  await assert.rejects(stranded.api.preflight(template.secrets.required, ids.databaseId), error => {
+    assert.equal(error.message, 'The Worker holds TRIAL_KEY but REMOTE_TRIAL_KEY is not set in this GitHub environment; '
+      + 'set it to the same value or remove it from the Worker, so nothing was migrated or uploaded')
+    return true
+  })
+  assert.equal(stranded.writes.length, 0)
+  // Positive control: the same Worker, with the artifact applying the key, passes.
+  const applied = uploadedProvider({ tagged: true, live: optional.trialKey, values: optional.trialKey, secrets: { ...supplied, REMOTE_TRIAL_KEY_PRESENT: 'true' } })
+  await applied.api.preflight(required, ids.databaseId)
+
+  // The upload's private file carries it beside the required ones.
+  const env = { ...supplied, REMOTE_TRIAL_KEY: trialKey }
+  await withSecretsFile(env, required, async file => {
+    assert.deepEqual(Object.keys(JSON.parse(await readFile(file, 'utf8'))), required)
+    assert.equal(JSON.parse(await readFile(file, 'utf8')).TRIAL_KEY, trialKey)
+  })
+  await assert.rejects(withSecretsFile({ ...supplied, REMOTE_TRIAL_KEY: 'short' }, required, async () => assert.fail('no upload')),
+    error => error.message === 'REMOTE_TRIAL_KEY is not set in this GitHub environment as a usable secret')
+  // Absent from the report and the error of a failed check.
+  const logs = [], live = () => verifyLive(artifact, served)
+  const wrong = uploadedProvider({ live: optional.trialKey, secrets: env })
+  await assert.rejects(settleUpload(wrong.api, wrong.config, artifact.manifest, live, line => logs.push(line)), error => {
+    assert.match(error.message, /binding inventory differs/)
+    return !error.message.includes(trialKey)
+  })
+  assert.ok(logs.every(line => !line.includes(trialKey)))
+})
+
+test('an artifact carrying optional settings verifies, passes the real Wrangler dry run, and the live check reads the Native id back', async () => {
+  const other = await mkdtemp(join(tmpdir(), 'nexus-staging-test-'))
+  try {
+    await cp(scratch, other, { recursive: true, filter: source => !source.includes('staging-artifact') })
+    await createArtifact(other, { ...ids, ...optional.all })
+    const carried = await verifyArtifact(other, ids.revision)
+    assert.equal(carried.config.vars.AUTH0_NATIVE_CLIENT_ID, nativeClientId)
+    assert.deepEqual(carried.config.secrets.required, [...template.secrets.required, 'TRIAL_KEY'])
+    // The pinned Wrangler accepts the declared optional secret through the same synthetic file.
+    await uploadArtifact(other, 'dry-run', { PATH: process.env.PATH, GITHUB_SHA: ids.revision })
+    // The live Worker in this test has no Native id, so an artifact that declares one does not match it.
+    await assert.rejects(verifyLive(carried, served), /does not match the selected source and identity/)
+  } finally { await rm(other, { recursive: true, force: true }) }
+  // Positive control: the plain artifact matches the same Worker, whose config answers null.
+  assert.equal((await (await served(`${STAGING.origin}/api/remote/config`)).json()).nativeClientId, null)
+  await verifyLive(artifact, served)
+})
+
+test('both workflows hand the optional settings to the steps that build, check and upload a deploy, and the key value to the upload alone', async () => {
+  for (const file of ['remote-staging.yml', 'remote-production.yml']) {
+    const text = await readFile(join(root, '.github/workflows', file), 'utf8')
+    const step = name => { const at = text.indexOf(`- name: ${name}`); assert.ok(at > 0, `${file}: ${name}`); return text.slice(at, text.indexOf('\n\n', at)) }
+    const vars = ['REMOTE_AUTH0_NATIVE_CLIENT_ID', 'REMOTE_TRIAL_IDENTITY_REQUIRED', 'REMOTE_MOVED_TO', 'REMOTE_MOVE_STAGE']
+      .map(name => `${name}: \${{ vars.${name} }}`)
+    const present = "REMOTE_TRIAL_KEY_PRESENT: ${{ secrets.REMOTE_TRIAL_KEY != '' }}"
+    for (const name of ['Package the tested bytes', 'Recover ownership']) {
+      for (const line of [...vars, present]) assert.ok(step(name).includes(line), `${file}: ${name} lacks ${line}`)
+    }
+    assert.ok(step('Check public identity configuration').includes(vars[0]), `${file}: the identity check sees the Native id`)
+    for (const name of ['Check deploy preconditions', 'Apply ']) assert.ok(step(name).includes(present), `${file}: ${name}`)
+    assert.ok(step('Upload the verified Worker').includes('REMOTE_TRIAL_KEY: ${{ secrets.REMOTE_TRIAL_KEY }}'), file)
+    assert.equal(text.match(/secrets\.REMOTE_TRIAL_KEY }}/g).length, 1, `${file}: the key's value reaches the upload step only`)
   }
 })
 

@@ -8169,4 +8169,6 @@ export const DE: PartialCatalog = {
   "spotMe.refused.notAllowed": "Nicht gespottet: Die Regeln dieses Contests erlauben kein Spotten.",
   "spotMe.refused.rfOnly": "Nicht gespottet: Dieser Contest erlaubt Spots während seiner Laufzeit nur über Amateurfunk.",
   "spotMe.refused.failed": "Nicht gespottet: Der DX-Cluster hat den Spot nicht angenommen.",
+  "spotMe.selfSpot.warn": "Dieser Contest erlaubt Self-Spotting möglicherweise nicht. Drücke innerhalb von {{secs}} s auf Trotzdem spotten, um zu senden.",
+  "spotMe.selfSpot.confirm": "Trotzdem spotten",
 }

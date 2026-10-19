@@ -196,6 +196,22 @@ pub struct AssistancePolicy {
     /// key rather than a Winter Field Day branch, so another contest with the same rule
     /// takes it by one line of data.
     pub spots_rf_only: bool,
+    /// May the entrant spot THEMSELVES? Separate from `spotting_allowed` because many contests
+    /// that let an assisted entrant read spots still forbid posting your own call (CQ WW's
+    /// "Self-spotting or asking to be spotted is not permitted."). Set only from the sponsor's
+    /// own words, quoted in the seed's `_provenance.self_spot`; anything not read is `Unknown`.
+    pub self_spot_allowed: SelfSpot,
+}
+
+/// Whether a contest's rules let an entrant spot their own call — three states, because "the
+/// sponsor's text says nothing we could find" is not "allowed".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelfSpot {
+    Allowed,
+    NotAllowed,
+    #[default]
+    Unknown,
 }
 
 /// Which Saturday of the month anchors the event weekend.
@@ -1819,6 +1835,9 @@ struct AssistanceSpec {
     /// restriction, which is what every ruleset before the key means.
     #[serde(default)]
     spots_rf_only: bool,
+    /// See [`AssistancePolicy::self_spot_allowed`]. `#[serde(default)]`: absent is `Unknown`.
+    #[serde(default)]
+    self_spot_allowed: SelfSpot,
 }
 
 fn stats_of(spec: &FileSpec) -> RulesStats {
@@ -3326,6 +3345,7 @@ fn build(spec: FileSpec) -> RulesTable {
                     cluster_allowed: r.assistance.cluster_allowed,
                     assistance_note_key: leak_str(r.assistance.assistance_note_key),
                     spots_rf_only: r.assistance.spots_rf_only,
+                    self_spot_allowed: r.assistance.self_spot_allowed,
                 },
                 enforcement: leak_str(r.enforcement),
                 score_note_key: leak_str(r.score_note_key),
@@ -5701,6 +5721,66 @@ mod tests {
             assert_eq!(a.assistance_note_key, "");
             assert_eq!(ruleset(e, CURRENT_RULES_YEAR).enforcement, "warn");
         }
+    }
+
+    /// Each value is the sponsor's own sentence, quoted with its URL in the seed's
+    /// `_provenance.self_spot`; a contest whose text says nothing on self-spotting stays unknown.
+    #[test]
+    fn self_spotting_follows_each_sponsors_rules_text() {
+        let self_spot = |id: &str| {
+            ruleset_by_id(id, CURRENT_RULES_YEAR)
+                .unwrap_or_else(|| panic!("{id} is in the seed"))
+                .assistance
+                .self_spot_allowed
+        };
+        for id in [
+            "cqww_cw",
+            "cqww_ssb",
+            "cqww_rtty",
+            "cqwpx_cw",
+            "cqwpx_ssb",
+            "cqp",
+        ] {
+            assert_eq!(self_spot(id), SelfSpot::NotAllowed, "{id}");
+        }
+        for id in [
+            "wfd",
+            "tnqp",
+            "ohqp",
+            "arrlvhf_jan",
+            "arrlvhf_jun",
+            "arrlvhf_sep",
+            // The Illinois QSO Party: the operator's own word (KD9TAW, 2026-10-19); the
+            // sponsor's pages say nothing on spotting yourself.
+            "ilqp",
+        ] {
+            assert_eq!(self_spot(id), SelfSpot::Allowed, "{id}");
+        }
+        for id in ["arrlfd", "arrlss_cw", "arrlss_ssb", "txqp", "nyqp"] {
+            assert_eq!(self_spot(id), SelfSpot::Unknown, "{id}");
+        }
+    }
+
+    #[test]
+    fn self_spot_reads_three_states_and_absent_is_unknown() {
+        let read = |v: serde_json::Value| {
+            serde_json::from_value::<AssistanceSpec>(v).map(|a| a.self_spot_allowed)
+        };
+        let base = |s: Option<&str>| {
+            let mut v = serde_json::json!({"spotting_allowed": true, "cluster_allowed": true});
+            if let Some(s) = s {
+                v["self_spot_allowed"] = s.into();
+            }
+            v
+        };
+        assert_eq!(read(base(None)).unwrap(), SelfSpot::Unknown);
+        assert_eq!(read(base(Some("allowed"))).unwrap(), SelfSpot::Allowed);
+        assert_eq!(
+            read(base(Some("not_allowed"))).unwrap(),
+            SelfSpot::NotAllowed
+        );
+        assert_eq!(read(base(Some("unknown"))).unwrap(), SelfSpot::Unknown);
+        assert!(read(base(Some("yes"))).is_err());
     }
 
     #[test]

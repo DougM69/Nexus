@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kept between the slowest and fastest you set in Settings ▸ CW (15 and 35 WPM to start). Your CQ, and
   everything after the answer, goes at your own speed, and your speed control never moves. If Nexus has not
   copied that station's call in the last few seconds, it sends at your own speed. Off until you turn it on.
+- **Contest: Spot me asks twice where self-spotting may be against the rules.** Many contests that let you use
+  spots still forbid spotting yourself (CQ WW, CQ WPX, CQ WW RTTY, the California QSO Party). There, and in any
+  contest whose rules Nexus has not checked on this, the first press of Spot me sends nothing and says "This
+  contest may not allow self-spotting"; press **Spot anyway** within 10 seconds to post. Contests whose rules
+  allow it (the ARRL VHF contests, Winter Field Day over RF, the Tennessee and Ohio QSO Parties) spot on one
+  press as before.
 - **Logbook: export just the contacts you pick.** Ctrl-click (⌘-click on a Mac) rows in the Logbook to pick
   them, Shift-click to pick a run, or press Space on the focused row; Esc clears. **Export selected** saves
   those contacts as an ADIF file in your Downloads folder, each written exactly as the whole-log export writes

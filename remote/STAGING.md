@@ -41,6 +41,12 @@ In `kd9taw/Nexus` → Settings → Environments → **production**, add these **
 |---|---|
 | `REMOTE_AUTH0_ISSUER` | `https://YOUR-TENANT.REGION.auth0.com/`, copied from the tenant, with a trailing slash |
 | `REMOTE_AUTH0_CLIENT_ID` | The SPA application's public Client ID |
+| `REMOTE_AUTH0_NATIVE_CLIENT_ID` | Optional: the Native application's public Client ID, for the desktop's account sign-in. Never the SPA's; a deploy refuses that |
+| `REMOTE_TRIAL_IDENTITY_REQUIRED` | Optional: `1`, or unset (below) |
+| `REMOTE_MOVED_TO`, `REMOTE_MOVE_STAGE` | Optional, set together: another environment's origin, and `announce`, `pairing-closed` or `closed` |
+
+An unset variable writes nothing to the Worker; any other value than the ones above stops the
+deploy before it writes. The optional secret `REMOTE_TRIAL_KEY` (below) goes under **secrets**.
 
 The staging API audience is fixed in the tooling. The preflight checks public OIDC
 discovery and signing keys; it cannot read the app's callback list or prove a real
@@ -187,7 +193,11 @@ direct first.
 
 ## Paid access and trial identity (built, not configured)
 
-Two optional Worker settings, neither in `secrets.required`, so a deploy without them behaves as before:
+Two optional Worker settings, neither in the template's `secrets.required`, so a deploy without them
+behaves as before. A deploy applies them from the GitHub environment: the secret `REMOTE_TRIAL_KEY`
+and the variable `REMOTE_TRIAL_IDENTITY_REQUIRED`. A deploy whose environment holds the key declares it
+in the artifact, applies it like the required secrets and checks it reads back encrypted. A Worker that
+already holds `TRIAL_KEY` is refused before any write while the environment does not supply it.
 
 - `TRIAL_KEY`: the HMAC key trial markers and the US licence copy are kept under. **It can never be
   rotated**: the callsigns and PC identifiers it was taken over are not kept, so a new key matches no

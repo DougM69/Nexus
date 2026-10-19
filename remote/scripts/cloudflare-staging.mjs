@@ -3,7 +3,7 @@
 import { appendFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
-import { databaseId, deployable, revision, identityFromEnv, secretSupplied, secretValue, secretVariable, stagingConfig, requireValue, requestJson, requestBytes, target } from './staging-common.mjs'
+import { databaseId, deployable, revision, settingsFromEnv, OPTIONAL_SECRETS, secretSupplied, secretValue, secretVariable, stagingConfig, requireValue, requestJson, requestBytes, target } from './staging-common.mjs'
 import { trialGrant } from './grant-trial.mjs'
 
 // The two fixed assets, plus one or more D1 migrations matched by PATTERN - deliberately not a
@@ -133,9 +133,15 @@ export function cloudflare(env = process.env, fetcher = fetch, row = target(env)
     if (artifactDatabase !== undefined) requireValue(databaseId(artifactDatabase) === current.databaseId,
       'The artifact database does not match the staging account inventory')
     const liveSecretTypes = {}
-    if (required.length > 0 && current.workerExists) {
+    if (current.workerExists) {
       const settings = (await api(`/workers/scripts/${TARGET.name}/settings`, 'Worker configuration read')).result
       requireValue(Array.isArray(settings?.bindings), 'Worker configuration returned an unexpected shape')
+      // An optional secret the Worker already holds (put by hand, or by an earlier deploy) survives an
+      // upload that does not apply it, because --secrets-file is additive, and then fails the exact
+      // post-upload count with the Worker already live. Refused here instead, by name only.
+      const stranded = OPTIONAL_SECRETS.filter(name => !required.includes(name) && settings.bindings.some(binding => binding?.name === name))
+      requireValue(stranded.length === 0, `The Worker holds ${stranded.join(', ')} but ${stranded.map(secretVariable).join(', ')} is not set in this `
+        + 'GitHub environment; set it to the same value or remove it from the Worker, so nothing was migrated or uploaded')
       for (const name of required) {
         const found = settings.bindings.filter(binding => binding?.name === name)
         liveSecretTypes[name] = found.length === 0 ? 'absent' : found.length > 1 ? 'duplicated'
@@ -301,13 +307,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const api = cloudflare()
     let result
     if (mode === 'preflight') {
-      // Before the gates and before any write: the secrets the checked-in template requires. The
+      // Before the gates and before any write: the secrets the checked-in template requires, and the
+      // optional ones this environment supplies, which the artifact will declare. The
       // artifact's database is compared again, at migrate and at upload, once an artifact exists.
       // Then the relay key itself, which this step alone holds besides the upload: one minted
       // credential, reported as Cloudflare's status.
       const { readFile } = await import('node:fs/promises')
       const template = JSON.parse(await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8'))
-      result = await api.preflight(template.secrets?.required ?? [])
+      result = await api.preflight([...template.secrets?.required ?? [], ...OPTIONAL_SECRETS.filter(name => secretSupplied(process.env, name))])
       result = { ...result, relayKey: (await relayKeyCheck()).status }
     } else if (mode === 'recover') {
       const { readFile } = await import('node:fs/promises')
@@ -315,7 +322,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const sha = revision(process.env.REMOTE_RECOVERY_REVISION)
       await verifyPublicSource(sha)
       const template = JSON.parse(await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8'))
-      const config = stagingConfig(template, { ...identityFromEnv(), revision: sha,
+      const config = stagingConfig(template, { ...settingsFromEnv(), revision: sha,
         databaseId: process.env.REMOTE_RECOVERY_DATABASE_ID })
       let additional
       try { additional = JSON.parse(process.env.REMOTE_RECOVERY_ADDITIONAL_MODULES || '{}') }

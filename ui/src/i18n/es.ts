@@ -8179,4 +8179,6 @@ export const ES: PartialCatalog = {
   "spotMe.refused.notAllowed": "Sin spot: las reglas de este concurso no permiten spots.",
   "spotMe.refused.rfOnly": "Sin spot: este concurso solo permite spots por radio de aficionado mientras dura.",
   "spotMe.refused.failed": "Sin spot: el clúster DX no aceptó el spot.",
+  "spotMe.selfSpot.warn": "Puede que este concurso no permita el auto-spot. Pulsa Spot de todos modos en {{secs}} s para publicarlo.",
+  "spotMe.selfSpot.confirm": "Spot de todos modos",
 }

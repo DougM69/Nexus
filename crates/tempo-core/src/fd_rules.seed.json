@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "generated": "2026-10-14T12:00:00Z",
+  "generated": "2026-10-19T16:00:00Z",
   "_provenance": {
     "qso_parties": "The four state QSO parties (TNQP, OhQP, CQP, TXQP) were written from each sponsor's own current page or PDF, all read 2026-09-09. TNQP: https://tnqp.org/rules/ renders only navigation (an EmbedPress wrapper), so the source is the PDF that page embeds, https://tnqp.org/wp-content/uploads/2026/08/Tennessee-QSO-Party-2026-Rules.pdf, \"Tennessee QSO Party 2026 Rules\". OhQP: https://www.ohqp.org/index.php/rules/ plus /official-list-of-mults-for-ohio-stations/ and /official-list-of-mults-for-non-ohio-stations/. CQP: https://www.cqp.org/Rules.html (Last Update 19-July-2026, 61st running) plus https://www.cqp.org/cqp_multipliers.html. TXQP: https://www.txqp.net/?page_id=23 plus https://www.txqp.net/?page_id=90 (the previously-cited https://www.txqp.net/index.php/rules/operating-rules is DEAD, HTTP 404 — the sponsor rebuilt the site). Each county list was PARSED off the sponsor's own table and its size counted, never read off a stated total: 95 TN, 88 OH (+62 non-county codes = 150), 58 CA (+63 state/province codes), 254 TX.",
     "txqp_county_codes": "⚠️ THE SPONSOR'S PROSE AND THE SPONSOR'S LIST DISAGREE, AND THE LIST WINS. txqp.net/?page_id=23 says \"Log submissions must use the approved four-letter county abbreviation for the exchange.\" The official list on ?page_id=90 has 254 entries, of which TWO ARE THREE LETTERS: BEE (Bee) and LEE (Lee). A domain or validator written to the prose (len == 4) rejects two real Texas counties, and a Texas mobile operating in either one produces an unsubmittable log for every QSO made from it. The domain below is the sponsor's 254 codes verbatim. Do not normalise, pad or \"fix\" BEE and LEE, and do not generate codes from county names — the scheme is irregular (Brazoria=BZIA, Brazos=BZOS, Cameron=CMRN, Collin=COLN, Collingsworth=COLW, Comal=COML, Comanche=COMA, Dallam=DALM, Dallas=DALS).",
@@ -17,6 +17,23 @@
     "assistance": {
       "arrlfd": "arrl.org/field-day-rules read 2026-08-29 (2026 rules, rev. 2026-03-01): no restriction language on spotting networks / DX cluster / assistance found in any of the 9 sections — spotting_allowed/cluster_allowed stay true (dormant advisory).",
       "wfd": "The sponsor's 2027 rules PDF (\"Version 3, 04 OCT 2026\", https://winterfieldday.org/downloads/2027-rules-v3.pdf, read 2026-10-08), p.8: \"Spotting: You may spot yourself and others only via amateur RF.\" and \"QSOs may be solicited only over amateur RF during the event.\" RECEIVING spots is not restricted, so spotting_allowed and cluster_allowed stay true: the rule limits where a spot is POSTED, which neither flag says. That is spots_rf_only, which is true: while the event runs, a station with WFD switched on posts no spot over the internet (no PSK Reporter report, DX cluster spot or POTA self-spot), and receiving spots carries on. The key is new (1.14 to 1.17 ignore it) and absent means false, no restriction."
+    },
+    "self_spot": {
+      "_note": "self_spot_allowed is set only from the sponsor's own words, read 2026-10-19, or where a value names it, the operator's; a contest whose text says nothing we could find on spotting yourself stays unknown (absent = unknown), and Spot me asks for a second press there.",
+      "cqww_cw": "not_allowed. https://www.cqww.com/rules.htm (2026 rules), IX. GENERAL RULES FOR ALL ENTRANTS: \"Self-spotting or asking to be spotted is not permitted.\" The one rules page covers CW and SSB.",
+      "cqww_ssb": "not_allowed. Same page and clause as cqww_cw.",
+      "cqww_rtty": "not_allowed. https://www.cqwwrtty.com/rules.htm (2026 rules), IX. GENERAL RULES FOR ALL ENTRANTS, 4: \"Self-spotting or asking to be spotted is not permitted.\"",
+      "cqwpx_cw": "not_allowed. https://www.cqwpx.com/rules.htm (2026 rules), X. GENERAL RULES FOR ALL ENTRANTS, D: \"Self-spotting or asking to be spotted is not permitted.\" The one rules page covers CW and SSB.",
+      "cqwpx_ssb": "not_allowed. Same page and clause as cqwpx_cw.",
+      "cqp": "not_allowed. https://cqp.org/Rules.html (2026 CQP, last update 19-July-2026): Single Operator: \"It is prohibited to use spotting nets (operator arrangements involving any assistance through RBN, DX packet cluster, county spotting networks, CW Skimmer, self-spotting, or live streaming).\" Single-Operator-Assisted: \"... but self-spotting and live streaming is prohibited.\" Multi-Single, Multi-Two and Multi-Multi: \"Self spotting or live streaming is not allowed.\"",
+      "wfd": "allowed. https://winterfieldday.org/downloads/2027-rules-v3.pdf p.8: \"Spotting: You may spot yourself and others only via amateur RF.\" Allowed, but only over RF: spots_rf_only still refuses an internet spot while the event runs.",
+      "tnqp": "allowed. https://tnqp.org/wp-content/uploads/2026/08/Tennessee-QSO-Party-2026-Rules.pdf: \"Spotting: The spotting of stations, especially mobile and rover stations, is encouraged. All categories of entrants are permitted to self-spot.\"",
+      "ohqp": "allowed. https://www.ohqp.org/index.php/rules/ (2026): \"Self spotting on the “spotting nets” (i.e. PacketCluster, Reverse Beacon Network, Skimmer, POTA Activator) is permitted. [New 2026]\"",
+      "arrlvhf_jan": "allowed. https://contests.arrl.org/ContestRules/JanJunSep-VHF-Rules.pdf (Version 1.2), OPRG.8.1: \"All entrants, regardless of category, are permitted to use spotting assistance or nets ... to identify stations available for contacts and to announce their availability for contacts.\" OPRG.8.2: \"Announcements shall be limited to call sign, location, band or frequency, mode and — if applicable — transmitting sequence and listening direction.\" One rules document covers January, June and September.",
+      "arrlvhf_jun": "allowed. Same document and clauses as arrlvhf_jan.",
+      "arrlvhf_sep": "allowed. Same document and clauses as arrlvhf_jan.",
+      "ilqp": "allowed. Source: the operator (KD9TAW), 2026-10-19. No sponsor clause found: https://w9awe.org/ilqp/ has no spotting language.",
+      "unknown": "arrlfd (https://www.arrl.org/files/file/Field-Day/2026/2026-Field-Day-Rules.pdf: no spotting language), arrlss_cw / arrlss_ssb (https://contests.arrl.org/ContestRules/SS-Rules.pdf v2.1: categories allow or forbid spotting ASSISTANCE, and PROH.3 forbids \"Arranging, soliciting, or confirming any contacts ... by use of any non-amateur radio means\", but no clause names self-spotting), txqp (https://www.txqp.net/?page_id=23: \"The use of spotting nets ... by any other means is permissible\", nothing on spotting yourself), nyqp (https://nyqp.org/wordpress/nyqp-rules/: the page's rules text did not load for reading)."
     },
     "wfd_window": "WFD's window rule is the sponsor's own sentence for 2027 (https://winterfieldday.org/queries/query_rules.php, the rules text sop.php loads, read 2026-10-08): \"Winter Field Day is held the 4th full weekend in January. For 2027, it will be held on January 23rd and 24th. The 30-hour operational period starts at 1600 UTC on Saturday (11 am EST), the 23rd, and ends at 21:59 UTC on Sunday, the 24th (4:59 pm EST).\" Carried as month 1, nth_full n=4, start_hour_utc 16, duration 30. ⚠️ IT CHANGED: the 2025 rules (https://winterfieldday.org/downloads/2025-rules.pdf) said \"Winter Field Day is held the last full weekend in January. For 2025, it will be held on January 25th and 26th.\", which this file carried as last_full. The two readings part only in a January with five full weekends, and 2027 is the first such year since: last_full put it on 30-31 January, a week late. Checked year by year against the stated rule (the first Saturday whose Sunday is also in January, then the fourth): 2026 24-25 (the 2026 event, where both readings agree), 2027 23-24 (the sponsor's own dates), 2028 22-23 (last_full would say 29-30), 2029 27-28, 2030 26-27, 2031 25-26, 2032 24-25, 2033 22-23 (last_full 29-30); pinned by winter_field_day_is_the_fourth_full_weekend_of_january. The sponsor publishes a date one year at a time, so re-read it each year; a year the sponsor moves is a window.overrides entry.",
     "banned_modes": "WFD 2026 WSJT-suite ban carried over verbatim from the fd_rules.rs consts landed in c76f5242 (RTTY and SSTV explicitly legal as Digital). FT2 added from the sponsor's 2027 list (https://winterfieldday.org/queries/query_rules.php, read 2026-10-08): \"All modes, except WSJT modes\" may be used, and \"WSJT modes include: FT2, FST4, FT4, FT8, JT4, JT9, JT65, Q65, MSK144, WSPR, FST4W, and Echo.\" Advisory like the rest: the strip warns, nothing is refused.",
@@ -326,7 +343,8 @@
         "spotting_allowed": true,
         "cluster_allowed": true,
         "assistance_note_key": "",
-        "spots_rf_only": true
+        "spots_rf_only": true,
+        "self_spot_allowed": "allowed"
       },
       "enforcement": "warn",
       "objectives": [],
@@ -986,7 +1004,8 @@
       "assistance": {
         "spotting_allowed": true,
         "cluster_allowed": true,
-        "assistance_note_key": ""
+        "assistance_note_key": "",
+        "self_spot_allowed": "allowed"
       },
       "enforcement": "warn",
       "objectives": [],
@@ -1839,7 +1858,8 @@
       "assistance": {
         "spotting_allowed": true,
         "cluster_allowed": true,
-        "assistance_note_key": ""
+        "assistance_note_key": "",
+        "self_spot_allowed": "allowed"
       },
       "enforcement": "warn",
       "objectives": []
@@ -2509,7 +2529,8 @@
       "assistance": {
         "spotting_allowed": true,
         "cluster_allowed": true,
-        "assistance_note_key": ""
+        "assistance_note_key": "",
+        "self_spot_allowed": "not_allowed"
       },
       "enforcement": "warn",
       "objectives": [],
@@ -4671,7 +4692,8 @@
       "assistance": {
         "spotting_allowed": true,
         "cluster_allowed": true,
-        "assistance_note_key": ""
+        "assistance_note_key": "",
+        "self_spot_allowed": "allowed"
       },
       "enforcement": "warn",
       "objectives": [],
@@ -6703,7 +6725,8 @@
       "assistance": {
         "spotting_allowed": true,
         "cluster_allowed": true,
-        "assistance_note_key": ""
+        "assistance_note_key": "",
+        "self_spot_allowed": "not_allowed"
       },
       "enforcement": "warn",
       "objectives": [],
@@ -6885,7 +6908,8 @@
       "assistance": {
         "spotting_allowed": true,
         "cluster_allowed": true,
-        "assistance_note_key": ""
+        "assistance_note_key": "",
+        "self_spot_allowed": "not_allowed"
       },
       "enforcement": "warn",
       "objectives": [],
@@ -7434,7 +7458,8 @@
       "assistance": {
         "spotting_allowed": true,
         "cluster_allowed": true,
-        "assistance_note_key": ""
+        "assistance_note_key": "",
+        "self_spot_allowed": "not_allowed"
       },
       "enforcement": "warn",
       "objectives": [],
@@ -7678,7 +7703,8 @@
       "assistance": {
         "spotting_allowed": true,
         "cluster_allowed": true,
-        "assistance_note_key": ""
+        "assistance_note_key": "",
+        "self_spot_allowed": "not_allowed"
       },
       "enforcement": "warn",
       "objectives": [],
@@ -7888,7 +7914,8 @@
       "assistance": {
         "spotting_allowed": true,
         "cluster_allowed": true,
-        "assistance_note_key": ""
+        "assistance_note_key": "",
+        "self_spot_allowed": "not_allowed"
       },
       "enforcement": "warn",
       "objectives": [],
@@ -8059,7 +8086,8 @@
       "assistance": {
         "spotting_allowed": true,
         "cluster_allowed": true,
-        "assistance_note_key": ""
+        "assistance_note_key": "",
+        "self_spot_allowed": "allowed"
       },
       "enforcement": "warn",
       "objectives": [],
@@ -8192,7 +8220,8 @@
       "assistance": {
         "spotting_allowed": true,
         "cluster_allowed": true,
-        "assistance_note_key": ""
+        "assistance_note_key": "",
+        "self_spot_allowed": "allowed"
       },
       "enforcement": "warn",
       "objectives": [],
@@ -8325,7 +8354,8 @@
       "assistance": {
         "spotting_allowed": true,
         "cluster_allowed": true,
-        "assistance_note_key": ""
+        "assistance_note_key": "",
+        "self_spot_allowed": "allowed"
       },
       "enforcement": "warn",
       "objectives": [],

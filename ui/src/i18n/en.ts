@@ -4221,6 +4221,8 @@ export const EN = {
   'spotMe.refused.notAllowed': 'Not spotted: this contest\'s rules allow no spotting.',
   'spotMe.refused.rfOnly': 'Not spotted: this contest allows spotting only over amateur radio while it runs.',
   'spotMe.refused.failed': 'Not spotted: the DX cluster did not take the spot.',
+  'spotMe.selfSpot.warn': 'This contest may not allow self-spotting. Press Spot anyway within {{secs}} s to post.',
+  'spotMe.selfSpot.confirm': 'Spot anyway',
   'fieldDay.role.sp': 'S&P',
 
   // The exports. Cabrillo and ADIF are the file formats' own names and stay in the sentence.
