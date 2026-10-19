@@ -37874,6 +37874,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         window_state::set_window_behind,
         window_state::get_window_on_top,
         window_state::set_window_on_top,
+        window_state::focus_window,
         remote_window::open_remote_stations_window,
         remote_window::open_lan_stations_window,
         street_map::street_map_packs,
@@ -40603,6 +40604,7 @@ mod tests {
             "window_state::set_window_behind",
             "window_state::get_window_on_top",
             "window_state::set_window_on_top",
+            "window_state::focus_window",
         ] {
             assert!(
                 list.lines().any(|l| l.trim() == format!("{name},")),

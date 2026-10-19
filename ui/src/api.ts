@@ -1335,6 +1335,13 @@ export async function setWindowOnTop(on: boolean): Promise<WindowOnTop> {
   return invoke<WindowOnTop>('set_window_on_top', { on })
 }
 
+/** Bring the calling window to the front with the keyboard: the main window, for itself, when a
+ *  contest window sends the operator to a cockpit in it. Rejects where there is no window to move
+ *  (a browser). */
+export async function focusWindow(): Promise<void> {
+  return invoke<void>('focus_window')
+}
+
 /** Switch the Operate mode: 'dx' (FT8/FT4) or 'msg' (Tempo two-way calling).
  * Atomically sets the mode's tier + mode. Returns the fresh snapshot. */
 export async function setArea(area: 'dx' | 'msg'): Promise<AppSnapshot> {

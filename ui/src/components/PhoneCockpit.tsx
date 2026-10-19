@@ -255,6 +255,9 @@ interface Props {
   /** Enter Sends Message's switch for this cockpit and the voice keyer's step mapping (App, from
    *  Settings). Absent on the hosted page. */
   esmSetting?: EsmSetting
+  /** Contest mode is on but this station is out of the contest (App's: the switch on, the session not):
+   *  the log line says so, with Resume, which re-enters the contest in S&P. Absent otherwise. */
+  onResumeContest?: () => void
 }
 
 /** The ⊞ menu's entries: the cockpit's own panes. A box comes and goes through ⊞ Arrange's "+ Add a
@@ -617,7 +620,7 @@ const FLEX_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
+export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const rotatorControl = useStationCapability('rotator')
   const control = useStationControl()
@@ -2566,6 +2569,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         esm={esm.host}
         // App unmounts this cockpit on a page switch; the contact in its strip waits for it.
         draft="phone"
+        onResumeContest={onResumeContest}
       /> : null}
       {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
       {hasRecentPane && recentPane}

@@ -4062,6 +4062,8 @@ export const EN = {
   'contestScreen.entry.popOut.label': '⧉ Pop out entry',
   'contestScreen.entry.popOut.title': 'Open this entry alone in a window of its own, without the rest of the contest screen. It shares the contact with this entry, and Enter in either logs it once.',
   'contestLogger.recent.title': 'Last contacts',
+  // The divider under the last contacts (ContestLargeEntry): its accessible name, as every divider's.
+  'contestLogger.recent.splitter.label': 'last contacts height',
   // The logger window's one line under its bar while the engine holds a satellite's transponder: its
   // log line logs every contact the ordinary way (the radio's band, no bird), so a pass's contacts go
   // on the Satellites screen. `{{bird}}` is the satellite's own name (AO-91, ISS), never translated.
@@ -4301,6 +4303,28 @@ export const EN = {
   'fieldDay.log.column.band': 'Band',
   'fieldDay.log.column.mode': 'Mode',
   'fieldDay.log.empty': 'No contacts logged yet.',
+  // The divider above the Contest screen's log (ContestView): its accessible name, as every divider's.
+  'fieldDay.log.splitter.label': 'contest log height',
+  // The Contest screen's large clock on its banner (ContestView): UTC, then local time. Its accessible name.
+  'fieldDay.clock.aria': 'Contest clock, UTC and local time',
+  // "Work this contest in CW / in Phone" on the Contest screen (ContestView, features/contestWorkIn): the screen
+  // never transmits, so it offers the cockpit that does, and says so once.
+  'fieldDay.workIn.aria': 'Work this contest from a cockpit',
+  'fieldDay.workIn.cw': 'Work this contest in CW',
+  'fieldDay.workIn.cw.title':
+    'Go to the CW screen in the main window, with this contest on its log line: Enter Sends Message, Running / S&P and the F-key messages are there.',
+  'fieldDay.workIn.phone': 'Work this contest in Phone',
+  'fieldDay.workIn.phone.title':
+    'Go to the Phone screen in the main window, with this contest on its log line: Enter Sends Message, Running / S&P and the F-key messages are there.',
+  'fieldDay.workIn.hint.aria': 'Where sending happens',
+  'fieldDay.workIn.hint':
+    'This screen logs and keeps score, and never transmits. To send, work the contest from the CW or Phone screen: its log line has Enter Sends Message, Running / S&P and the F-key messages.',
+  'fieldDay.workIn.hint.dismiss': 'Got it',
+  // The CW and Phone log line with Contest mode on and the contest not running (LogEntry): one line, and
+  // Resume, which re-enters the contest in S&P.
+  'logEntry.contest.notRunning.aria': 'Contest not running',
+  'logEntry.contest.notRunning': 'Contest mode is on, but the contest is not running.',
+  'logEntry.contest.resume': 'Resume',
   'fieldDay.log.remove': 'Remove',
   'fieldDay.log.remove.ask': 'Remove {{contact}}? Click Remove again.',
   'fieldDay.log.remove.title': 'Take this contact out of the contest log. It is kept under Removed and can be restored. Click twice: the first click asks.',

@@ -291,9 +291,11 @@ describe('the contest logger window puts the entry first', () => {
     expect(parts.map(tagged)).toEqual([
       'section.contest-logger-entry',
       'section.contest-logger-recent',
+      // The divider that sizes the last contacts against the screen under them.
+      'div.pane-splitter.horizontal.contest-seam',
       'main.layout.single',
     ])
-    const [entry, recent, contestScreen] = parts as HTMLElement[]
+    const [entry, recent, , contestScreen] = parts as HTMLElement[]
     // The entry holds the contact in progress, the main window's, in its boxes.
     expect(within(entry).getByPlaceholderText('W1AW')).toBe(callBox())
     expect([...entry.querySelectorAll<HTMLInputElement>('.le-fd-big input')].map((b) => b.value)).toEqual([

@@ -308,6 +308,9 @@ interface Props {
   /** CW speed match's switch (App, from Settings): an answer to a station keys at its measured
    *  speed. Shown in the contest strip; absent on the hosted page. */
   speedMatch?: { on: boolean; onSwitch: (on: boolean) => void }
+  /** Contest mode is on but this station is out of the contest (App's: the switch on, the session not):
+   *  the log line says so, with Resume, which re-enters the contest in S&P. Absent otherwise. */
+  onResumeContest?: () => void
 }
 
 /** The ⊞ menu's entries: the cockpit's own panes. A box comes and goes through ⊞ Arrange's "+ Add a
@@ -428,6 +431,7 @@ const CW_DSP_FUNCS = [
 export function CwCockpit({
   esmSetting,
   speedMatch,
+  onResumeContest,
   active = true,
   snap,
   theme,
@@ -1892,6 +1896,7 @@ export function CwCockpit({
         // App unmounts this cockpit on a page switch; the contact in its strip waits for it. A call
         // it puts back reaches His Call through `onCallChange`, as a typed one does.
         draft="cw"
+        onResumeContest={onResumeContest}
       /> : null}
       {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
       {hasRecentPane && recentPane}

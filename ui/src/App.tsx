@@ -160,6 +160,7 @@ import {
   resendChat,
   type RadioLaunchInfo,
   getOtaMapSpots,
+  focusWindow,
 } from './api'
 import {
   hotkeyRecallTarget,
@@ -202,6 +203,7 @@ import { ContestView } from './components/ContestView'
 import { ContestLargeEntry } from './components/ContestLogger'
 import { openContestLogger } from './features/contestLoggerLayout'
 import { ContestScreenAway, useContestScreenWindow } from './components/ContestScreenWindow'
+import { useWorkInRequests } from './features/contestWorkIn'
 import { useContestSwitch } from './contestSwitch'
 import { useOperatorBoxAsk } from './features/contestKeys'
 import { OperateDecodes } from './components/OperateDecodes'
@@ -2397,7 +2399,7 @@ function App() {
   }, [])
 
   const handleSetMode = useCallback((mode: ModeRequest, expectedQso?: import('./types').QsoStatus | null) => {
-    void withErrorToast(() => apiSetMode(mode, expectedQso), t('shell.error.switchMode')).then((s) => {
+    return withErrorToast(() => apiSetMode(mode, expectedQso), t('shell.error.switchMode')).then((s) => {
       if (s) setSnap(s)
       // A contest that starts about to send the DX exchange from a US or Canadian call says so,
       // loudly and once, as it starts (the strip keeps saying it). Never a refusal.
@@ -2450,6 +2452,10 @@ function App() {
     undefined,
   )
 
+  // The contest re-entry an opened screen asked for, until the engine answers. Until then the snapshot
+  // still shows the station out of the contest, and the CW and Phone log lines must not call it stopped.
+  const [contestReentering, setContestReentering] = useState(false)
+
   const handleView = useCallback(
     (next: View) => {
       setView(next)
@@ -2472,11 +2478,22 @@ function App() {
         (next === 'fieldDay' || next === 'cw' || next === 'phone') &&
         settings?.fdActive === true &&
         snap?.mode !== 'fieldDay'
-      )
-        handleSetMode('fieldday-sp')
+      ) {
+        setContestReentering(true)
+        void handleSetMode('fieldday-sp').finally(() => setContestReentering(false))
+      }
     },
     [handleSetMode, settings?.fdActive, snap?.mode],
   )
+
+  // ⭐ "WORK THIS CONTEST IN CW / IN PHONE" FROM A CONTEST WINDOW (features/contestWorkIn): the same switch
+  // as the rail's, so the contest's S&P is entered where the session dropped and a station already in
+  // the contest keeps its role, and then this window comes to the front, where the operator asked to be.
+  // The Contest screen here passes `handleView` itself.
+  useWorkInRequests((next) => {
+    handleView(next)
+    void focusWindow().catch(() => {})
+  })
 
   // ⭐ CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`): the Contest screen, with an ask its
   // operator box answers by taking the caret. Only the view changes. A key in a log line leaves the
@@ -3152,10 +3169,19 @@ function App() {
       })
     },
   }
+  // CONTEST MODE ON, THE CONTEST NOT RUNNING: the CW and Phone log lines say so, with Resume, which enters
+  // the contest's S&P (never a CQ). Opening either screen re-enters on its own (`handleView`); this is for
+  // a session that did not come back, or dropped while the screen was open. Not while that re-entry is
+  // still on its way: the line would flash for the one snapshot before it lands.
+  const resumeContest =
+    settings?.fdActive === true && snap.mode !== 'fieldDay' && !contestReentering
+      ? () => void handleSetMode('fieldday-sp')
+      : undefined
   const cwWorkspace = (
     <CwCockpit
       esmSetting={esmSettingFor('cw')}
       speedMatch={cwSpeedMatch}
+      onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.cw}
       pitchHz={settings?.cwPitchHz ?? 600}
@@ -3182,6 +3208,7 @@ function App() {
   const phoneWorkspace = (
     <PhoneCockpit
       esmSetting={esmSettingFor('phone')}
+      onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.phone}
       snap={snap}
@@ -3306,6 +3333,7 @@ function App() {
                 operatorBoxAbove={snap.fieldDay != null}
                 entryAbove={snap.fieldDay != null}
                 onPopOut={contestScreen.popOut}
+                onWorkIn={handleView}
               />
             )}
           </main>

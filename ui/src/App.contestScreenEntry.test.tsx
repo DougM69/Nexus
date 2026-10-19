@@ -273,9 +273,11 @@ describe('the main window’s Contest screen takes contacts', () => {
     expect([...host.children].map(tagged)).toEqual([
       'section.contest-logger-entry',
       'section.contest-logger-recent',
+      // The divider that sizes the last contacts against the screen under them.
+      'div.pane-splitter.horizontal.contest-seam',
       'main.layout.single',
     ])
-    const [entry, recent, screen] = [...host.children] as HTMLElement[]
+    const [entry, recent, , screen] = [...host.children] as HTMLElement[]
     const boxes = await typeContact(entry)
     expect(boxes.map((b) => b.value)).toEqual(['K9ABC', '59', 'COOK'])
     // The band and mode the contact logs under, in the header row the Phone LOG pane shows.
@@ -602,6 +604,8 @@ describe('the Logger window is unchanged: one entry, its own', () => {
     expect(parts.map((c) => `${c.tagName.toLowerCase()}.${[...c.classList].join('.')}`)).toEqual([
       'section.contest-logger-entry',
       'section.contest-logger-recent',
+      // The divider that sizes the last contacts against the screen under them.
+      'div.pane-splitter.horizontal.contest-seam',
       'main.layout.single',
     ])
     expect(document.querySelectorAll('.contest-logger-entry')).toHaveLength(1)

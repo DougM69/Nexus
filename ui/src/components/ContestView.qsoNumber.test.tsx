@@ -7,6 +7,7 @@
 // table and the logger window's last contacts show it in a first column. A station older than the
 // field sends no `nr`, and the tables keep the columns they had.
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { createRef } from 'react'
 import { render, act, cleanup } from '@testing-library/react'
 import { ContestView } from './ContestView'
 import { LastContacts } from './ContestLogger'
@@ -101,7 +102,7 @@ describe('the contest log numbers every contact', () => {
   })
 
   it('and so do the logger window’s last contacts, newest first', () => {
-    render(<LastContacts fieldDay={ILQP(LOG)} style={{}} />)
+    render(<LastContacts fieldDay={ILQP(LOG)} style={{}} boxRef={createRef()} />)
     const recent = document.querySelector('.contest-logger-recent')!
     expect(texts(recent, '.fd-log-head .fd-col')[0]).toBe('#')
     expect(texts(recent, '.fd-log-row .fd-col.nr')).toEqual(['5', '4', '2', '1'])
