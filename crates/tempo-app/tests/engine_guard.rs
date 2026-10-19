@@ -872,7 +872,8 @@ fn the_guard_constructors_answer_as_the_mutex_does_and_count_while_held() {
 
 /// Every `.save(` call outside test code, as `path:line: receiver.save(`, but the Remote vault's
 /// (`vault.save(`, a credential store, not a settings file), Remote over this network's switch
-/// (`switch.save(` in `remote_service/lan.rs`, a one-writer file of its own) and, unless
+/// (`switch.save(` in `remote_service/lan.rs`, a one-writer file of its own), the contest's frequency
+/// markers (`markers.save(` in `freq_markers.rs`, written outside the Engine's lock) and, unless
 /// `launch_too`, launch's in `run()`, made before the Engine or any writer thread exists. Every
 /// other `.save(` in these crates writes a settings file, and each one belongs to the file's writer
 /// (`tempo_app::settings::writer::SettingsWriter`): a snapshot queued under the Engine lock, a
@@ -896,6 +897,12 @@ fn bare_settings_saves(files: &[(String, String)], launch_too: bool) -> Vec<Stri
             // writer, saved under the switch's own lock with its own temporary file, never under the
             // Engine's lock and never `settings.json`. Not a settings file.
             if path == "src-tauri/src/remote_service/lan.rs" && recv == "switch" {
+                continue;
+            }
+            // The contest's frequency markers (`freq_markers.rs`, a file per contest session): not a
+            // settings file, written by `Unwritten::write` only after the caller has let the Engine go,
+            // one write at a time under its own lock, beside the file and renamed over it.
+            if path == "src-tauri/src/freq_markers.rs" && recv == "markers" {
                 continue;
             }
             let in_run = items
