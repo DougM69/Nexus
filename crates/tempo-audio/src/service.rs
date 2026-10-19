@@ -5629,6 +5629,30 @@ impl RadioLoop {
         }
     }
 
+    /// WSJT-X's mid-over message switch (`m_restart`): while this loop's FT8/FT4 slot over is on
+    /// the air, from its key to the stop at its window's end (WSJT-X's `m_transmitting`,
+    /// `widgets/mainwindow.cpp:8214` to `:8569`), the engine rebuilds it for the message the
+    /// sequencer now sends ([`Engine::ft_midover_switch`]) and the audio route plays the rest of
+    /// it in place of what it still holds ([`AudioBackend::retune_tx`]). The over keeps its key,
+    /// its window and its PTT: nothing here touches `tx_until_ms` or the audio stop. Not while the
+    /// operator holds live PTT, and not on a rig the loop does not own. A route that cannot replace
+    /// what it was handed (Flex DAX) sends the over as first chosen, and the engine logs it.
+    fn ft_midover_switch<B: AudioBackend>(&mut self, eng: &mut Engine, backend: &mut B, now: f64) {
+        let Some((stop, held_until)) = self.slot_audio_stop else {
+            return;
+        };
+        if self.tx_until_ms != Some(held_until)
+            || now >= stop
+            || !self.holds_slot_over()
+            || self.manual_ptt_applied
+            || !self.may_key()
+        {
+            return;
+        }
+        let live = self.clock.slot_index(now);
+        let _ = eng.ft_midover_switch(live, now, |tail| backend.retune_tx(tail));
+    }
+
     /// Whether this loop's PTT hold is a slot over's (FT8, FT4, JS8 and the other timed-slot
     /// modes): the two slot keying sites stamp its deadline on `slot_tx_until_ms` as well, and
     /// every other keyed source leaves that behind. The unkey that drops it follows WSJT-X when the
@@ -13032,9 +13056,21 @@ impl RadioLoop {
         // is dropped. Draining BEFORE the new-boundary dispatch guarantees an early
         // result's `early_seen` is set before the same-slot boundary filters
         // against it. At most one decode is ever in flight (the in-flight guard).
+        //
+        // A result of the period that just ended (its boundary slot is the one on the clock) that
+        // changes what the QSO sequencer would send next asks for WSJT-X's mid-over switch
+        // (`ft_midover_switch`, below). A stale one folds as before and never does: what it moved
+        // goes out at the next over, as it always did.
+        let mut ft_restart = false;
         while let Some(result) = self.decode.try_recv() {
             self.decode_in_flight = false;
-            match eng.apply_decode_result(result) {
+            let live = self.clock.slot_index(now);
+            let next_before = (result.slot() == live).then(|| eng.ft_next_over(live));
+            let applied = eng.apply_decode_result(result);
+            if next_before.is_some_and(|before| eng.ft_next_over(live) != before) {
+                ft_restart = true;
+            }
+            match applied {
                 DecodeApplied::Boundary {
                     slot: bslot, frame, ..
                 } => {
@@ -13099,6 +13135,11 @@ impl RadioLoop {
                 // TX decision, and WSJT-X sends it to neither a logger nor PSK Reporter.
                 DecodeApplied::Late { .. } | DecodeApplied::Stale => {}
             }
+        }
+        // A Tx-slot click's switch is taken every tick, so one made with no over on the air is
+        // dropped here and never acts on a later one.
+        if eng.take_ft_restart() || ft_restart {
+            self.ft_midover_switch(&mut eng, backend, now);
         }
 
         // --- JS8: the once-a-second station tick and the MULTI-SPEED scheduler. JS8Call
@@ -16597,6 +16638,7 @@ mod tests {
     mod failed_unkey;
     mod filter_width;
     mod flex_audio;
+    mod ft_midover;
     mod ft_window;
     mod ic905_ten_ghz;
     mod icom_lan;

@@ -213,6 +213,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unplugged.
 
 ### Changed
+- **FT8/FT4: a late reply changes the over already on the air, as in WSJT-X.** When your partner's reply is
+  decoded after your over has started (a weak R-report or RR73 that only the full decode finds), Nexus used to send
+  the old message to the end of the over and the right one an over later. It now switches the rest of the over to the
+  new message, as WSJT-X does: the over keeps its start and end, and ALL.TXT gets a second Tx line for it. A Tx button
+  clicked during an over switches it the same way. Over Flex native DAX the over goes out as first chosen, and the
+  log says so. NEEDS-BENCH: FT8 and FT4 into a dummy load, then on the air with a weak station.
 - **Contest entry: the sample text in empty boxes is quieter.** The grey examples ("W1AW", "599", a county) are now
   in normal weight instead of bold, and a shade darker in the dark themes, so they no longer read like something
   typed in. They stay readable in every theme.

@@ -81,6 +81,11 @@ mod cw_sending_gate_tests;
 #[cfg(test)]
 mod cw_speed_match_tests;
 mod field_day_display;
+/// WSJT-X's mid-over message switch for FT8 and FT4 (`m_restart`).
+pub mod ft_midover;
+/// …and its tests.
+#[cfg(test)]
+mod ft_midover_tests;
 /// Every contact held in one form: one band, one phone mode, whichever way it came in.
 #[cfg(test)]
 mod held_form_tests;
@@ -3318,6 +3323,11 @@ pub struct Engine {
     /// radio loop consumes it AFTER tx_until expires; disabling immediately
     /// would trip the hard-stop path and cut the 73 itself mid-over.
     pending_tx_disable: bool,
+    /// The FT8/FT4 over handed to the radio loop last, for WSJT-X's mid-over switch
+    /// ([`Engine::ft_midover_switch`]).
+    ft_on_air: Option<ft_midover::FtOnAir>,
+    /// WSJT-X's `m_restart` from a Tx-slot click ([`Engine::take_ft_restart`]).
+    ft_restart: bool,
     /// Deferred WSJT-X-style CW ID (armed when the final 73 leaves; consumed
     /// by the service on TX-idle so the ID never keys over the over's audio).
     /// Never armed in FT8, FT4, FT2, FT1 or DX1 (WSJT-X sends none in FT8/FT4).
@@ -5961,6 +5971,8 @@ impl Engine {
             js8_on_air: None,
             js8_links: Default::default(),
             pending_tx_disable: false,
+            ft_on_air: None,
+            ft_restart: false,
             pending_cw_id: false,
             highlights: std::collections::HashMap::new(),
             highlight_seq: 0,
@@ -24538,6 +24550,9 @@ contact yourself."
         }
         // Fire this period when it still fits (the snappy path).
         self.immediate_tx = true;
+        // …and, during an FT8/FT4 over, switch the rest of it to this message, as WSJT-X's Tx
+        // buttons do (`if(m_transmitting) m_restart=true;`, `widgets/mainwindow.cpp:8751-8816`).
+        self.ft_restart = true;
         Ok(())
     }
 
@@ -26568,6 +26583,7 @@ contact yourself."
         // Kept, so the next over that is the same one (a CQ called again, a message repeated
         // while the reply is not yet heard) keys without being built again (`prebuilt_wave`).
         self.keep_prebuilt_wave(&plan.waveform, &wave);
+        self.note_ft_on_air(plan, wave.len());
         vec![wave]
     }
 
