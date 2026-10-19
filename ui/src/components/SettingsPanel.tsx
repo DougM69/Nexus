@@ -8844,6 +8844,15 @@ export function SettingsPanel({
                     ⚠ <T k="settings.cw.keyer.unproven" tags={{ b: <strong /> }} />
                   </span>
                 )}
+                {/* A FLEX OVER SMARTSDR CAT (model 2036) HAS NO DOCUMENTED CW STOP: Esc stops Nexus,
+                    and the radio may finish the word it was handed (IL QSO Party). Its WinKeyer
+                    port and Nexus's own Flex client both have one. Not shown when that client
+                    carries the radio, which keys CW through CWX. */}
+                {(form.cwKeyer ?? 'cat') === 'cat' && form.rigModel === 2036 && !form.flexNativeCat && (
+                  <span className="settings-hint" role="note">
+                    <T k="settings.cw.keyer.flexCatStop" tags={{ b: <strong /> }} />
+                  </span>
+                )}
               </label>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.cw.pitch.label')}</span>

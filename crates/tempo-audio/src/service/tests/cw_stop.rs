@@ -274,3 +274,260 @@ fn a_winkeyer_is_cleared_before_the_radio_is_asked_to_stop_cw() {
         "the WinKeyer's Clear Buffer must already be on its wire when the radio is asked: {bytes:02x?}"
     );
 }
+
+/// A rigctld whose radio keeps its own CW speed: `L KEYSPD n` sets it, `l KEYSPD` reads it back,
+/// and the test can turn the radio's speed knob itself (SmartSDR, a Maestro, the front panel).
+fn keyer_speed_rigctld() -> (
+    String,
+    Arc<Mutex<Vec<String>>>,
+    Arc<std::sync::atomic::AtomicU32>,
+) {
+    use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+    let speed = Arc::new(AtomicU32::new(0));
+    let knob = Arc::clone(&speed);
+    let (addr, log) = logging_rigctld(move |l| {
+        if let Some(wpm) = l.strip_prefix("L KEYSPD ") {
+            knob.store(wpm.trim().parse().unwrap_or(0), AtomicOrdering::Relaxed);
+            None
+        } else if l == "l KEYSPD" {
+            Some(format!("{}\n", knob.load(AtomicOrdering::Relaxed)))
+        } else {
+            None
+        }
+    });
+    (addr, log, speed)
+}
+
+/// An engine in the CW section on 40 m with the CAT keyer, on `model`, at `wpm`, nothing queued.
+fn cat_engine(model: u32, wpm: u32) -> Arc<Mutex<Engine>> {
+    let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+    {
+        let mut e = engine.lock().unwrap();
+        let mut s = e.settings().clone();
+        s.rig_model = model;
+        e.apply_settings(s);
+        e.set_license_class("extra");
+        e.set_cw_keyer("cat", 600.0);
+        e.set_operating_mode("cw", false);
+        e.set_frequency(7.03, "40m", "CW");
+        e.set_cw_wpm(wpm);
+    }
+    engine
+}
+
+/// Step the loop every `tick` ms over `[from, to)`, and return when (ms) each word reached the
+/// radio's keyer (`b <word>`), in order.
+#[allow(clippy::too_many_arguments)]
+fn handovers(
+    state: &mut RadioLoop,
+    engine: &Arc<Mutex<Engine>>,
+    backend: &mut MockBackend,
+    rig: &mut Rig,
+    log: &Mutex<Vec<String>>,
+    from: f64,
+    to: f64,
+    tick: f64,
+) -> Vec<(String, f64)> {
+    let mut out = Vec::new();
+    let mut seen = log.lock().unwrap().len();
+    let mut t = from;
+    while t < to {
+        step(state, engine, backend, rig, t);
+        let lines = lines_since(log, seen);
+        seen += lines.len();
+        for l in lines {
+            if let Some(word) = l.strip_prefix("b ") {
+                out.push((word.trim().to_string(), t));
+            }
+        }
+        t += tick;
+    }
+    out
+}
+
+/// What the radio takes to key `word` at `wpm` and then leave a word space: the earliest the next
+/// word may reach it without queueing behind this one.
+fn word_window_ms(word: &str, wpm: u32) -> f64 {
+    tempo_core::cw::morse_duration_ms(word, wpm) + 7.0 * 1200.0 / wpm as f64
+}
+
+/// ⭐ A FLEX OVER SMARTSDR CAT IS HANDED A WORD ONLY WHEN IT HAS KEYED THE LAST ONE, AT THE SPEED
+/// IT KEYS. FlexRadio documents no CW stop over SmartSDR CAT, and its `KY;` buffer answer is
+/// always "room" (SmartSDR CAT User Guide §3.4.11), so whatever text Nexus has handed the radio
+/// plays out after Esc. Nexus hands it one word at a time, but it timed each word at its own WPM
+/// and told the radio that speed only when its own control moved: turn the radio's speed down in
+/// SmartSDR and Nexus went on handing words over at the old pace, ahead of the radio, and the
+/// backlog kept keying after a stop (IL QSO Party, a Flex on SmartSDR CAT).
+#[test]
+fn a_smartsdr_cat_flex_is_paced_at_the_speed_the_radio_reports() {
+    let engine = cat_engine(2036, 30);
+    let (addr, log, knob) = keyer_speed_rigctld();
+    let mut rig = Rig::rigctld(&addr);
+    let mut backend = MockBackend::new();
+    let mut state = loop_state_for(&engine);
+    // The last message went out at Nexus's 30 WPM, so the radio was told 30.
+    engine.lock().unwrap().send_cw("E");
+    let first = handovers(
+        &mut state,
+        &engine,
+        &mut backend,
+        &mut rig,
+        &log,
+        100.0,
+        1_000.0,
+        5.0,
+    );
+    assert_eq!(
+        first.len(),
+        1,
+        "control: the first message keyed: {first:?}"
+    );
+    assert_eq!(
+        knob.load(std::sync::atomic::Ordering::Relaxed),
+        30,
+        "control: Nexus told the radio its speed"
+    );
+    // Between messages the operator turns the radio's speed down in SmartSDR.
+    knob.store(20, std::sync::atomic::Ordering::Relaxed);
+    let from = log.lock().unwrap().len();
+    engine.lock().unwrap().send_cw("CQ TEST KD9TAW");
+    let words = handovers(
+        &mut state,
+        &engine,
+        &mut backend,
+        &mut rig,
+        &log,
+        2_000.0,
+        12_000.0,
+        5.0,
+    );
+    let names: Vec<&str> = words.iter().map(|(w, _)| w.as_str()).collect();
+    assert_eq!(
+        names,
+        ["CQ", "TEST", "KD9TAW"],
+        "control: every word keyed once"
+    );
+    let gaps: Vec<f64> = words.windows(2).map(|w| w[1].1 - w[0].1).collect();
+    let want = [word_window_ms("CQ", 20), word_window_ms("TEST", 20)];
+    for (gap, want) in gaps.iter().zip(want) {
+        assert!(
+            (gap - want).abs() <= 5.0,
+            "each word must wait for the radio to key the last one at ITS 20 WPM: gaps {gaps:?}, want {want}"
+        );
+    }
+    // The radio's speed is followed, never fought: the CW control shows what the radio keys at,
+    // and Nexus's old 30 is not pushed back over the operator's choice.
+    assert_eq!(
+        engine.lock().unwrap().cw_wpm(),
+        20,
+        "the CW control follows the radio"
+    );
+    let pushed: Vec<String> = lines_since(&log, from)
+        .into_iter()
+        .filter(|l| l.starts_with("L KEYSPD"))
+        .collect();
+    assert_eq!(
+        pushed,
+        Vec::<String>::new(),
+        "no speed pushed back over the radio's"
+    );
+}
+
+/// ⭐ PACED, BUT NEVER GAPPED. At a speed the radio and Nexus agree on, each word reaches the radio
+/// exactly as the last one's word space ends (within one loop tick): the macro sounds as one
+/// message, and the radio never holds more than the word it is keying.
+#[test]
+fn normal_sending_on_smartsdr_cat_hands_each_word_over_as_the_last_one_ends() {
+    let engine = cat_engine(2036, 25);
+    let (addr, log, knob) = keyer_speed_rigctld();
+    let mut rig = Rig::rigctld(&addr);
+    let mut backend = MockBackend::new();
+    let mut state = loop_state_for(&engine);
+    let macro_words = ["CQ", "TEST", "KD9TAW", "KD9TAW", "TEST", "CQ"];
+    engine.lock().unwrap().send_cw(&macro_words.join(" "));
+    let tick = 5.0;
+    let words = handovers(
+        &mut state,
+        &engine,
+        &mut backend,
+        &mut rig,
+        &log,
+        100.0,
+        15_000.0,
+        tick,
+    );
+    let names: Vec<&str> = words.iter().map(|(w, _)| w.as_str()).collect();
+    assert_eq!(
+        names, macro_words,
+        "control: every word keyed once, in order"
+    );
+    assert_eq!(
+        knob.load(std::sync::atomic::Ordering::Relaxed),
+        25,
+        "control: radio at 25"
+    );
+    for (pair, word) in words.windows(2).zip(macro_words) {
+        let gap = pair[1].1 - pair[0].1;
+        let want = word_window_ms(word, 25);
+        assert!(
+            gap >= want && gap < want + tick,
+            "{word}: the next word goes when this one and its word space end, not before (a \
+             second word queued in the radio) and not a tick later (a gap on the air): {gap} vs {want}"
+        );
+    }
+    let sets = lines_since(&log, 0)
+        .into_iter()
+        .filter(|l| l.starts_with("L KEYSPD"))
+        .count();
+    assert_eq!(sets, 1, "the radio is told the speed once, not per word");
+}
+
+/// Only a radio that no CAT CW stop is sure to reach is asked its keyer speed with each word: a
+/// Flex over SmartSDR CAT, and the Yaesu newcat radios Hamlib keys with `KM1…;` `KY6;` and stops
+/// with nothing. A radio with a stop of its own (Icom `17 FF`, Kenwood and Elecraft `KY`, the
+/// FT-710 and FTX-1 playback stop Nexus sends) is not asked, so its CAT link carries nothing new.
+#[test]
+fn only_a_radio_without_a_sure_cat_cw_stop_is_asked_its_keyer_speed() {
+    for (model, name, asked) in [
+        (2036u32, "Flex over SmartSDR CAT", true),
+        (1035, "FT-991A", true),
+        (1042, "FTDX10", true),
+        (1049, "FT-710", false),
+        (1051, "FTX-1", false),
+        (3073, "IC-7300", false),
+        (2037, "TS-590SG", false),
+        (2047, "K4", false),
+    ] {
+        let engine = cat_engine(model, 25);
+        let (addr, log) = logging_rigctld(|_| None);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        engine.lock().unwrap().send_cw("TEST");
+        step(&mut state, &engine, &mut backend, &mut rig, 100.0);
+        let lines = lines_since(&log, 0);
+        assert!(
+            lines.iter().any(|l| l == "b TEST"),
+            "{name}: control: the word went to the radio's keyer: {lines:?}"
+        );
+        assert_eq!(
+            lines.iter().any(|l| l == "l KEYSPD"),
+            asked,
+            "{name}: asked the radio's keyer speed: {lines:?}"
+        );
+    }
+}
+
+/// Nexus's own Flex client keys CW through CWX, which `cwx clear` stops, and it already follows
+/// the radio's speed itself; the SmartSDR CAT pacing is not laid over it.
+#[test]
+fn the_native_flex_client_is_not_paced_as_smartsdr_cat() {
+    assert!(
+        cat_cw_paced_by_radio(2036, false),
+        "control: SmartSDR CAT is"
+    );
+    assert!(
+        !cat_cw_paced_by_radio(2036, true),
+        "Nexus's Flex client is not"
+    );
+}
