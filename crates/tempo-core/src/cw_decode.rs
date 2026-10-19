@@ -208,6 +208,10 @@ const CW_TRANSCRIPT_CAP: usize = 4000; // keep the tail; drop older text
 /// low-side probe is skipped when it would fall at/below ~DC (a low operator pitch).
 const OFF_NOISE_HZ: [f32; 4] = [250.0, 400.0, 600.0, 800.0];
 
+/// The dit (30 WPM) the spike floor scales from before the speed has locked, instead of the
+/// 20 WPM seed: even the strictest floor (0.55 of it, 22 ms) passes a 50 WPM dit (24 ms).
+const FASTEST_DIT_SECS: f32 = 1.2 / 30.0;
+
 pub struct CwStreamDecoder {
     sr: f32,
     pitch: f32,
@@ -225,9 +229,14 @@ pub struct CwStreamDecoder {
     space_run: usize,       // accumulated gap hops (carries THROUGH sub-dit spikes)
     dit_avg: f32,           // adaptive dit length (hops)
     dah_avg: f32,           // adaptive dah length (hops); the pair classify each mark
+    dah_seen: bool,         // dah_avg has learned from a real mark (else it is still the seed)
+    last_run: f32,          // length of the previous real mark (hops); 0 before the first
+    misfit: u8,             // consecutive dit/dah pairs the trackers split wrongly
+    locked: bool,           // a dit/dah pair has confirmed the trackers (the seed is not a speed)
     saw_mark: bool,         // any real mark seen yet (gates WPM before sync)
     hops_since_mark: usize, // hops of audio since the last real mark ended (the speed's age)
     sym: String,            // in-progress Morse symbol (".-")
+    sym_runs: Vec<f32>,     // the mark lengths behind `sym`, so a re-sync can re-read it
     flushed_char: bool,     // this gap already flushed its pending character
     flushed_word: bool,     // this gap already emitted a word space
     transcript: String,
@@ -258,9 +267,14 @@ impl CwStreamDecoder {
             space_run: 0,
             dit_avg: default_dit,
             dah_avg: 3.0 * default_dit,
+            dah_seen: false,
+            last_run: 0.0,
+            misfit: 0,
+            locked: false,
             saw_mark: false,
             hops_since_mark: 0,
             sym: String::new(),
+            sym_runs: Vec::new(),
             flushed_char: false,
             flushed_word: false,
             transcript: String::new(),
@@ -336,11 +350,21 @@ impl CwStreamDecoder {
     }
 
     /// Estimated sending speed (WPM) from the current dit unit; 0 before any marks.
+    ///
+    /// Once both trackers have learned, the unit is half the dah-dit difference: a dah is
+    /// two units longer than a dit however the sender weights the marks, and the envelope
+    /// detector's constant lengthening or shortening of every mark cancels (measured dits
+    /// at 40 WPM ran a hop short, reading ~10% fast).
     pub fn wpm(&self) -> u32 {
         if !self.saw_mark {
             return 0;
         }
-        let dit_secs = self.dit_avg * self.hop as f32 / self.sr;
+        let unit = if self.dah_seen && self.dah_avg > 2.0 * self.dit_avg {
+            (self.dah_avg - self.dit_avg) * 0.5
+        } else {
+            self.dit_avg
+        };
+        let dit_secs = unit * self.hop as f32 / self.sr;
         if dit_secs > 0.0 {
             (1.2 / dit_secs).round().clamp(0.0, 99.0) as u32
         } else {
@@ -367,6 +391,7 @@ impl CwStreamDecoder {
     pub fn clear(&mut self) {
         self.transcript.clear();
         self.sym.clear();
+        self.sym_runs.clear();
         self.flushed_char = false;
         self.flushed_word = false;
     }
@@ -457,7 +482,17 @@ impl CwStreamDecoder {
     }
 
     fn on_mark_end(&mut self) {
-        let spike_min = (self.spike_frac() * self.dit_avg).max(1.0);
+        // Until a dit/dah pair has confirmed the speed, the dit tracker is only the 20 WPM
+        // seed (or a dah misread as a dit), and a floor scaled from it rejects a fast
+        // sender's real dits (0.4 of a 20 WPM dit is a whole 50 WPM dit), so the trackers
+        // never see a pair to lock on. Before the lock the floor scales from a 30 WPM dit
+        // instead.
+        let unit = if self.locked {
+            self.dit_avg
+        } else {
+            FASTEST_DIT_SECS * self.sr / self.hop as f32
+        };
+        let spike_min = (self.spike_frac() * unit).max(1.0);
         // Reject a mark that is too SHORT (impulse) OR too WEAK (its peak barely clears the
         // noise floor — whichever of the on-pitch and off-pitch estimates is larger). The weak
         // case kills the "E E E…" storm the decoder otherwise emits from noise between signals:
@@ -474,6 +509,43 @@ impl CwStreamDecoder {
         self.saw_mark = true;
         self.hops_since_mark = 0;
         let run = self.run as f32;
+        // Re-sync on dit/dah pairs the trackers split wrongly. Two adjacent marks 2-4x apart
+        // in length are a dit and a dah whatever the trackers say (the pairing rule fldigi's
+        // CW speed tracker also relies on), when the space between them is element-sized as
+        // keying makes it; noise chattering through one weak blip splits it into fragments
+        // a hop or two apart, which would otherwise pass for pairs. From the 20 WPM seed a
+        // fast sender's dah falls below the dit/dah midpoint (every element read as a dit:
+        // 40 WPM showed as ~15 and copied as E/I), and a slow sender's dit above it. Two such
+        // pairs in a row, so one noise fragment cannot re-time a good lock, take the pair as
+        // the new dit and dah and re-read the character in progress.
+        let (short, long) = (self.last_run.min(run), self.last_run.max(run));
+        let gap = self.space_run as f32;
+        if short > 0.0
+            && (2.0 * short..=4.0 * short).contains(&long)
+            && (0.5 * short..=4.0 * short).contains(&gap)
+        {
+            let mid = (self.dit_avg + self.dah_avg) * 0.5;
+            if short < mid && long >= mid {
+                self.misfit = 0;
+                self.locked = true;
+            } else {
+                self.misfit += 1;
+                if self.misfit >= 2 {
+                    self.misfit = 0;
+                    self.dit_avg = short;
+                    self.dah_avg = long;
+                    self.dah_seen = true;
+                    self.locked = true;
+                    let mid = (short + long) * 0.5;
+                    self.sym = self
+                        .sym_runs
+                        .iter()
+                        .map(|&r| if r < mid { '.' } else { '-' })
+                        .collect();
+                }
+            }
+        }
+        self.last_run = run;
         // Classify by the midpoint between the tracked dit and dah lengths, then nudge the
         // matching average toward this mark -- a standard adaptive-Morse speed tracker. It
         // follows the sender's speed and, unlike a min-cluster estimate, never lets one
@@ -484,7 +556,9 @@ impl CwStreamDecoder {
         } else {
             self.sym.push('-');
             self.dah_avg += 0.25 * (run - self.dah_avg);
+            self.dah_seen = true;
         }
+        self.sym_runs.push(run);
         // A real element begins a fresh gap.
         self.space_run = 0;
         self.flushed_char = false;
@@ -504,12 +578,19 @@ impl CwStreamDecoder {
                 }
             }
             self.sym.clear();
+            self.sym_runs.clear();
             self.flushed_char = true;
         }
         // Word gap (≈7 dit): one space between words.
         if !self.flushed_word && self.flushed_char && g >= 5.0 * self.dit_avg {
             self.push_char(' ');
             self.flushed_word = true;
+        }
+        // A silence well past a word gap usually means the next signal is another station. Let
+        // the spike floor drop back to the cold-start one so a faster sender's dits are not
+        // rejected against the last station's speed; the next dit/dah pair locks again.
+        if g >= 10.0 * self.dit_avg {
+            self.locked = false;
         }
     }
 
@@ -846,5 +927,400 @@ mod tests {
         assert_eq!(d.transcript().trim(), "E");
         d.retune(PITCH + 200.0); // new pitch → full reset
         assert_eq!(d.transcript(), "");
+    }
+
+    // ---- Cold-start speed lock: synthetic senders from 15 to 50 WPM ----
+
+    /// Contest-style copy every speed test keys. Mixed dit/dah characters lead, as real CQs do.
+    const SPEED_TEXT: &str = "CQ TEST K1ABC K1ABC TEST";
+
+    /// Tiny deterministic xorshift in [-1, 1) for jitter and noise.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> f32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            ((self.0 >> 33) as f32 / (1u32 << 31) as f32) - 1.0
+        }
+    }
+
+    /// Keyed CW at `wpm` where every element and gap wanders by up to ±`jitter` of its length
+    /// (a hand or bug sender) and every mark is stretched by `weight` dits at the expense of the
+    /// gap after it (a weighted keyer). Returns the audio and, per character, the sample index
+    /// where its inter-character gap has just elapsed (so a decoder fed that far has seen it).
+    fn keyed(text: &str, wpm: u32, jitter: f32, weight: f32, seed: u64) -> (Vec<f32>, Vec<usize>) {
+        let dit = 1.2 / wpm as f32 * SR;
+        let ramp = ((0.005 * SR) as usize).min(dit as usize / 2 + 1);
+        let step = 2.0 * std::f32::consts::PI * PITCH / SR;
+        let mut rng = Rng(seed | 1);
+        let len = |units: f32, rng: &mut Rng| {
+            ((units * dit) * (1.0 + jitter * rng.next())).max(1.0) as usize
+        };
+        let mut out = vec![0.0f32; (SR * 0.1) as usize];
+        let mut ends = Vec::new();
+        let mut phase = 0.0f32;
+        for (wi, word) in text.split_whitespace().enumerate() {
+            if wi > 0 {
+                let n = len(4.0, &mut rng); // a word gap is 7 dits; 3 already followed the char
+                out.extend(std::iter::repeat_n(0.0, n));
+            }
+            for ch in word.chars() {
+                let code = crate::cw::morse_code(ch).expect("keyable");
+                for (ei, el) in code.chars().enumerate() {
+                    if ei > 0 {
+                        let n = len(1.0 - weight, &mut rng);
+                        out.extend(std::iter::repeat_n(0.0, n));
+                    }
+                    let units = if el == '-' { 3.0 } else { 1.0 };
+                    let n = len(units + weight, &mut rng);
+                    for i in 0..n {
+                        let env = if i < ramp {
+                            0.5 - 0.5 * (std::f32::consts::PI * i as f32 / ramp as f32).cos()
+                        } else if i + ramp >= n {
+                            0.5 - 0.5
+                                * (std::f32::consts::PI * (n - 1 - i) as f32 / ramp as f32).cos()
+                        } else {
+                            1.0
+                        };
+                        out.push(env * phase.sin());
+                        phase += step;
+                    }
+                }
+                let n = len(3.0 - weight, &mut rng);
+                out.extend(std::iter::repeat_n(0.0, n));
+                ends.push(out.len());
+            }
+        }
+        out.extend(vec![0.0f32; (SR * 0.6) as usize]);
+        (out, ends)
+    }
+
+    /// Add broadband white noise of peak `amp` (the signal peaks at 1.0).
+    fn with_noise(mut a: Vec<f32>, amp: f32, seed: u64) -> Vec<f32> {
+        let mut rng = Rng(seed | 1);
+        for s in a.iter_mut() {
+            *s = (*s + amp * rng.next()).clamp(-1.0, 1.0);
+        }
+        a
+    }
+
+    /// Edit distance between two strings, by character.
+    fn edits(a: &str, b: &str) -> usize {
+        let b: Vec<char> = b.chars().collect();
+        let mut row: Vec<usize> = (0..=b.len()).collect();
+        for (i, ca) in a.chars().enumerate() {
+            let mut prev = row[0];
+            row[0] = i + 1;
+            for j in 0..b.len() {
+                let cur = row[j + 1];
+                row[j + 1] = (prev + usize::from(ca != b[j]))
+                    .min(row[j] + 1)
+                    .min(cur + 1);
+                prev = cur;
+            }
+        }
+        row[b.len()]
+    }
+
+    /// Character accuracy of a copy against `SPEED_TEXT`: 1 − edits / length (whitespace
+    /// collapsed to single spaces), floored at 0.
+    fn accuracy(copy: &str) -> f32 {
+        let copy = copy.split_whitespace().collect::<Vec<_>>().join(" ");
+        let e = edits(&copy, SPEED_TEXT) as f32;
+        (1.0 - e / SPEED_TEXT.len() as f32).max(0.0)
+    }
+
+    /// The four conditions every speed is keyed under: (name, jitter, noise peak).
+    const CONDITIONS: [(&str, f32, f32); 4] = [
+        ("clean", 0.0, 0.0),
+        ("noise", 0.0, 0.5),
+        ("jitter", 0.10, 0.0),
+        ("noise+jitter", 0.10, 0.5),
+    ];
+
+    /// One cold-start run: the WPM estimate after `n_chars` characters, and the whole copy's accuracy.
+    fn cold_run(
+        wpm: u32,
+        jitter: f32,
+        noise: f32,
+        weight: f32,
+        n_chars: usize,
+        seed: u64,
+    ) -> (u32, f32, String) {
+        let (audio, ends) = keyed(SPEED_TEXT, wpm, jitter, weight, seed);
+        let audio = if noise > 0.0 {
+            with_noise(audio, noise, seed ^ 0xA5A5)
+        } else {
+            audio
+        };
+        let mut d = CwStreamDecoder::new(SR, PITCH);
+        let cut = ends[n_chars - 1];
+        d.push(&audio[..cut]);
+        let est = d.wpm();
+        d.push(&audio[cut..]);
+        (
+            est,
+            accuracy(d.transcript()),
+            d.transcript().trim().to_string(),
+        )
+    }
+
+    /// Characters a cold decoder hears before its speed must be within ±10%.
+    const LOCK_CHARS: usize = 6;
+
+    #[test]
+    fn cold_start_locks_onto_15_to_50_wpm_within_six_characters() {
+        // From a cold start the 20 WPM seed read every dah of a 34+ WPM sender as a dit:
+        // 40 WPM measured ~15 and copied as E/I. Three senders per speed and condition.
+        let mut off = Vec::new();
+        for wpm in (15u32..=50).step_by(5) {
+            for (name, jitter, noise) in CONDITIONS {
+                for seed in 1..=3u64 {
+                    let (est, _, _) = cold_run(wpm, jitter, noise, 0.0, LOCK_CHARS, seed * 7919);
+                    if (est as f32 - wpm as f32).abs() > 0.10 * wpm as f32 {
+                        off.push(format!("{wpm} {name} seed {seed}: {est}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            off.is_empty(),
+            "estimate off by more than 10% after {LOCK_CHARS} characters: {off:?}"
+        );
+    }
+
+    #[test]
+    fn cold_start_copies_fast_cw() {
+        let mut bad = Vec::new();
+        for wpm in [35u32, 40, 45, 50] {
+            for (name, jitter, noise) in CONDITIONS {
+                for seed in 1..=3u64 {
+                    let (_, acc, copy) = cold_run(wpm, jitter, noise, 0.0, 1, seed * 7919);
+                    if acc < 0.9 {
+                        bad.push(format!("{wpm} {name} seed {seed}: {acc:.2} {copy:?}"));
+                    }
+                }
+            }
+        }
+        assert!(bad.is_empty(), "fast copy below 90%: {bad:?}");
+    }
+
+    /// Worst character accuracy over the three senders, measured on the decoder before the
+    /// cold-start re-sync (the same harness), per (WPM, condition). The copy must not get worse.
+    const BASELINE_ACCURACY: [(u32, &str, f32); 30] = [
+        (15, "clean", 1.00),
+        (15, "noise", 0.96),
+        (15, "jitter", 1.00),
+        (15, "noise+jitter", 0.96),
+        (20, "clean", 1.00),
+        (20, "noise", 0.96),
+        (20, "jitter", 1.00),
+        (20, "noise+jitter", 0.96),
+        (25, "clean", 1.00),
+        (25, "noise", 0.96),
+        (25, "jitter", 1.00),
+        (25, "noise+jitter", 0.96),
+        (30, "clean", 0.17),
+        (30, "noise", 0.96),
+        (30, "jitter", 0.12),
+        (30, "noise+jitter", 0.75),
+        // Slow, weighted (marks +0.3 dit) and hand-sent (±20% timing) senders.
+        (8, "clean", 0.92),
+        (10, "clean", 0.92),
+        (12, "clean", 1.00),
+        (8, "weighted", 0.96),
+        (12, "weighted", 1.00),
+        (20, "weighted", 1.00),
+        (30, "weighted", 0.88),
+        (8, "hand", 0.75),
+        (10, "hand", 0.92),
+        (12, "hand", 1.00),
+        (15, "hand", 1.00),
+        (20, "hand", 1.00),
+        (25, "hand", 0.88),
+        (30, "hand", 0.12),
+    ];
+
+    #[test]
+    fn cold_start_copy_is_no_worse_than_before() {
+        let mut worse = Vec::new();
+        for (wpm, name, before) in BASELINE_ACCURACY {
+            let (jitter, noise, weight) = match name {
+                "weighted" => (0.05, 0.0, 0.3),
+                "hand" => (0.20, 0.0, 0.0),
+                _ => CONDITIONS
+                    .iter()
+                    .find(|c| c.0 == name)
+                    .map(|c| (c.1, c.2, 0.0))
+                    .unwrap(),
+            };
+            let now = (1..=3u64)
+                .map(|seed| cold_run(wpm, jitter, noise, weight, 1, seed * 7919).1)
+                .fold(1.0, f32::min);
+            if now + 0.005 < before {
+                worse.push(format!("{wpm} {name}: {before:.2} -> {now:.2}"));
+            }
+        }
+        assert!(worse.is_empty(), "copy got worse: {worse:?}");
+    }
+
+    #[test]
+    fn a_weighted_sender_reads_at_its_speed() {
+        // Weighting stretches every mark at the expense of the space after it. The speed is
+        // half the dah-dit difference, which weighting does not change; the dit alone read a
+        // +0.3 weighted 20 WPM sender as 17.
+        for wpm in [10u32, 20, 30, 40, 50] {
+            let (est, _, _) = cold_run(wpm, 0.0, 0.0, 0.3, LOCK_CHARS, 7919);
+            assert!(
+                (est as f32 - wpm as f32).abs() <= 0.10 * wpm as f32,
+                "weighted {wpm} WPM read as {est}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_noise_fragment_does_not_retime_a_locked_speed() {
+        // Locked on 20 WPM, then a long dit and a fragment a third its length, an element
+        // apart: one pair the trackers split wrongly. A single such pair must not re-time
+        // the decoder (two in a row do, which is how a fast sender re-syncs).
+        let (mut audio, _) = keyed("CQ TEST", 20, 0.0, 0.0, 1);
+        audio.truncate(audio.len() - (SR * 0.5) as usize);
+        let dit = (SR * 0.06) as usize;
+        let tone =
+            |n: usize| (0..n).map(|k| (2.0 * std::f32::consts::PI * PITCH * k as f32 / SR).sin());
+        audio.extend(tone(dit * 18 / 10));
+        audio.extend(std::iter::repeat_n(0.0, dit));
+        audio.extend(tone(dit * 6 / 10));
+        audio.extend(std::iter::repeat_n(0.0, dit * 3));
+        let mut d = CwStreamDecoder::new(SR, PITCH);
+        d.push(&audio);
+        assert!(
+            (18..=22).contains(&d.wpm()),
+            "one fragment re-timed 20 WPM to {}",
+            d.wpm()
+        );
+    }
+
+    #[test]
+    fn a_fast_station_after_a_slow_one_and_a_pause_is_copied() {
+        // The decoder is rarely cold: it was locked on the last station heard. Locked at 15 or
+        // 20 WPM, the spike floor rejected every dit of a 50 WPM station heard after a pause
+        // (copy "5E EIIE E", 21 WPM).
+        for slow in [15u32, 20] {
+            let (first, _) = keyed(SPEED_TEXT, slow, 0.0, 0.0, 3);
+            let mut d = CwStreamDecoder::new(SR, PITCH);
+            d.push(&first);
+            d.push(&vec![0.0f32; (SR * 2.0) as usize]);
+            d.clear();
+            let (audio, ends) = keyed(SPEED_TEXT, 50, 0.10, 0.0, 5);
+            let audio = with_noise(audio, 0.5, 77);
+            d.push(&audio[..ends[LOCK_CHARS - 1]]);
+            let est = d.wpm();
+            d.push(&audio[ends[LOCK_CHARS - 1]..]);
+            assert!(
+                (45..=55).contains(&est),
+                "50 WPM after {slow} WPM read as {est}"
+            );
+            assert!(
+                accuracy(d.transcript()) >= 0.9,
+                "50 WPM after {slow} WPM copied {:?}",
+                d.transcript()
+            );
+        }
+    }
+
+    /// Keyed `text` with the lead-in and tail silence cut, so pieces join with element-sized gaps.
+    fn keyed_tight(text: &str, wpm: u32) -> Vec<f32> {
+        let (a, _) = keyed(text, wpm, 0.0, 0.0, 1);
+        a[(SR * 0.1) as usize..a.len() - (SR * 0.6) as usize].to_vec()
+    }
+
+    fn tone(n: usize) -> impl Iterator<Item = f32> {
+        (0..n).map(|k| (2.0 * std::f32::consts::PI * PITCH * k as f32 / SR).sin())
+    }
+
+    #[test]
+    fn a_cold_decoder_copies_the_first_word_of_a_fast_sender() {
+        // The re-sync re-reads the character it lands in, so the CQ is not lost to the seed.
+        for wpm in [35u32, 40, 45, 50] {
+            let (audio, _) = keyed(SPEED_TEXT, wpm, 0.0, 0.0, 7919);
+            let mut d = CwStreamDecoder::new(SR, PITCH);
+            d.push(&audio);
+            assert!(
+                d.transcript().starts_with("CQ TEST"),
+                "{wpm} WPM copied {:?}",
+                d.transcript()
+            );
+        }
+    }
+
+    #[test]
+    fn short_blips_inside_a_locked_senders_copy_stay_rejected() {
+        // Once a sender's dit/dah pairs confirm 20 WPM, the spike floor scales from its dit
+        // again: a 16 ms blip (a 75 WPM dit) in the word gaps of its copy is noise, not an E.
+        let dit = (SR * 0.06) as usize;
+        let mut audio = vec![0.0f32; (SR * 0.1) as usize];
+        audio.extend(keyed_tight("CQ", 20));
+        for word in ["TEST", "TEST"] {
+            audio.extend(tone((SR * 0.016) as usize));
+            audio.extend(std::iter::repeat_n(0.0, dit * 4));
+            audio.extend(keyed_tight(word, 20));
+        }
+        let mut d = CwStreamDecoder::new(SR, PITCH);
+        d.push(&audio);
+        assert_eq!(d.transcript().trim(), "CQ TEST TEST");
+    }
+
+    #[test]
+    fn two_noise_fragments_apart_do_not_retime_a_locked_speed() {
+        // A correctly split pair between them clears the count: only two misread pairs in a
+        // row re-time the decoder, not two in a whole QSO.
+        let dit = (SR * 0.06) as usize;
+        let fragment = |a: &mut Vec<f32>| {
+            a.extend(std::iter::repeat_n(0.0, dit * 3));
+            a.extend(tone(dit * 18 / 10));
+            a.extend(std::iter::repeat_n(0.0, dit));
+            a.extend(tone(dit * 6 / 10));
+            a.extend(std::iter::repeat_n(0.0, dit * 3));
+        };
+        let mut audio = vec![0.0f32; (SR * 0.1) as usize];
+        audio.extend(keyed_tight("CQ TEST", 20));
+        fragment(&mut audio);
+        audio.extend(keyed_tight("TEST", 20));
+        fragment(&mut audio);
+        let mut d = CwStreamDecoder::new(SR, PITCH);
+        d.push(&audio);
+        assert!(
+            (18..=22).contains(&d.wpm()),
+            "two fragments re-timed 20 WPM to {}",
+            d.wpm()
+        );
+    }
+
+    #[test]
+    #[ignore = "measurement table; run with --ignored --nocapture"]
+    fn print_cold_start_table() {
+        let mut rows: Vec<(&str, f32, f32, f32)> =
+            CONDITIONS.iter().map(|&(n, j, z)| (n, j, z, 0.0)).collect();
+        rows.push(("weighted", 0.05, 0.0, 0.3));
+        rows.push(("hand", 0.20, 0.0, 0.0));
+        rows.push(("hand+noise", 0.20, 0.5, 0.0));
+        for wpm in [8u32, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50] {
+            for &(name, j, nz, w) in &rows {
+                let mut line = format!("{wpm:>3} {name:<13}");
+                let mut amin = 1.0f32;
+                for n in [4usize, 6, 8] {
+                    let ests: Vec<u32> = (1..=3u64)
+                        .map(|s| cold_run(wpm, j, nz, w, n, s * 7919).0)
+                        .collect();
+                    line += &format!(" N{n}={ests:?}");
+                }
+                for s in 1..=3u64 {
+                    amin = amin.min(cold_run(wpm, j, nz, w, 4, s * 7919).1);
+                }
+                println!("{line} acc_min={amin:.2}");
+            }
+        }
     }
 }

@@ -209,17 +209,17 @@ fn a_stopped_answer_leaves_nothing_behind_for_the_next_message() {
     assert_eq!(keyed(&mut e), at(&["CQ", "TEST"], OWN));
 }
 
-/// From a cold start the classic decoder mistimes a fast station (34 WPM and up read as ~12-16,
-/// every dah taken for a dit) and copies garbage. Its own copy then does not name the station, so
-/// the wrong speed is never used, even when the AI decoder copied the call perfectly.
+/// Only the classic decoder's own copy can name the station for its speed: the AI decoder measures
+/// no speed, so a call only the AI copied never lends the classic estimate to the answer. (This
+/// once rode on the classic decoder mistiming a fast station from a cold start; it no longer does,
+/// see the next test, so the premise is now a different station in the classic copy.)
 #[test]
-fn a_speed_the_decoder_mistimed_is_not_used_whatever_the_ai_copied() {
+fn a_call_only_the_ai_copied_does_not_choose_the_speed() {
     let mut e = station(true);
-    hear(&mut e, "TEST W1AW", 40, 1.0);
-    let wrong = e.cw_decode().wpm;
+    hear(&mut e, "TEST K1ABC", 30, 1.0);
     assert!(
-        wrong < 20,
-        "premise: a cold decoder mistimes 40 WPM: {wrong}"
+        !e.cw_decode().text.contains("W1AW"),
+        "premise: the classic copy does not name W1AW"
     );
     let epoch = e.ai_cw_epoch;
     e.push_ai_cw_pass(epoch, "TEST W1AW", "");
@@ -230,6 +230,22 @@ fn a_speed_the_decoder_mistimed_is_not_used_whatever_the_ai_copied() {
     assert_eq!(e.cw_reply_wpm(), None);
     e.send_cw_as("{MYCALL}", true);
     assert_eq!(keyed(&mut e), at(&["KD9TAW"], OWN));
+}
+
+/// A fast station heard from a cold start is timed right (the classic decoder locks onto 15-50
+/// WPM within a few characters), so its answer is matched, held to the operator's max.
+#[test]
+fn a_fast_station_from_a_cold_start_is_matched_and_held_to_my_max() {
+    let mut e = station(true);
+    hear(&mut e, "TEST W1AW", 40, 1.0);
+    let measured = e.cw_decode().wpm;
+    assert!(
+        (36..=44).contains(&measured),
+        "premise: the cold decoder times 40 WPM: {measured}"
+    );
+    assert_eq!(e.cw_reply_wpm(), Some(35));
+    e.send_cw_as("{MYCALL}", true);
+    assert_eq!(keyed(&mut e), at(&["KD9TAW"], 35));
 }
 
 /// Each word says whether it starts its message, where a keyer told its speed once per message
