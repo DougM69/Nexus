@@ -456,3 +456,26 @@ describe('Take control, while another device holds the station', () => {
     expect(mockTake).not.toHaveBeenCalled()
   })
 })
+
+describe('signing in again for the station', () => {
+  it('says while Operate’s launch signs in again, and by what day to sign in when it did not; nothing otherwise', async () => {
+    // 1 802 592 000 s is 2027-02-14 UTC.
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, signInBy: 1_802_592_000, signingAgain: true })
+    await shown()
+    let banner = screen.getByRole('status').textContent ?? ''
+    expect(banner).toContain(EN['client.banner.signingAgain'])
+    expect(banner, 'one line at a time').not.toContain(fill(EN['client.banner.signInBy'], { date: '2027-02-14' }))
+    cleanup()
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, signInBy: 1_802_592_000, signingAgain: false })
+    await shown()
+    banner = screen.getByRole('status').textContent ?? ''
+    expect(banner).toContain(fill(EN['client.banner.signInBy'], { date: '2027-02-14' }))
+    expect(banner).not.toContain(EN['client.banner.signingAgain'])
+    cleanup()
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, signInBy: null, signingAgain: false })
+    await shown()
+    banner = screen.getByRole('status').textContent ?? ''
+    expect(banner).not.toContain(EN['client.banner.signingAgain'])
+    expect(banner).not.toContain(fill(EN['client.banner.signInBy'], { date: '' }).slice(0, 12))
+  })
+})
