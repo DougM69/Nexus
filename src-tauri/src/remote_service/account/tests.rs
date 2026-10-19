@@ -38,13 +38,11 @@ struct Store {
     cache: Mutex<Option<DeviceCache>>,
     people: Mutex<Option<People>>,
 }
-impl Store {
+impl AccountVault for Store {
     fn save_people(&self, people: &People) -> Result<(), &'static str> {
         *self.people.lock().unwrap() = Some(people.clone());
         Ok(())
     }
-}
-impl AccountVault for Store {
     fn owner(&self) -> Result<Option<Owner>, &'static str> {
         Ok(self.owner.lock().unwrap().clone())
     }

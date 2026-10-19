@@ -757,3 +757,130 @@ async fn a_removal_the_service_refuses_by_name_does_not_wait() {
     );
     assert_eq!(vault.revokes().unwrap(), None);
 }
+
+// ---- People --------------------------------------------------------------------------------------
+
+/// ★ Inviting someone tells the service (the address as typed, and the role), then keeps them here
+/// by their address as the service matches it; their computer is then approved on their own proof.
+/// Taking the invitation back takes them out here before the service is told.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invitation_is_kept_here_and_its_guest_is_approved_on_their_proof() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_owned(&cloud, &vault);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    // Invited again with another role: one invitation, the later role.
+    for role in [Role::Listen, Role::Operate] {
+        service
+            .action(Action::Invite {
+                email: " K9.Guest+radio@Example.test ".into(),
+                role,
+            })
+            .await
+            .unwrap();
+    }
+    let invited = service.status().unwrap();
+    let kept = vec![Invite {
+        mailbox: "k9.guest@example.test".into(),
+        role: Role::Operate,
+    }];
+    assert_eq!(invited.account.people, kept);
+    let enrolment = service.control.lock().unwrap().enrolment.clone();
+    assert_eq!(
+        enrolment.invites(),
+        Some(kept.clone()),
+        "the LAN takes them too"
+    );
+    assert_eq!(
+        vault.people().unwrap(),
+        Some(People {
+            station_id: STATION.into(),
+            invites: kept
+        })
+    );
+    assert_eq!(
+        cloud.invites.lock().unwrap().last().cloned(),
+        Some((
+            "invite".to_string(),
+            json!({"email": "K9.Guest+radio@Example.test", "role": "operate"})
+        ))
+    );
+    let status = listed(
+        &service,
+        &cloud,
+        vec![computer_row(&token("guest"), "operate")],
+    )
+    .await;
+    assert_eq!(status.pinned_devices, vec![COMPUTER_ID.to_string()]);
+
+    let taken_back = service
+        .action(Action::Uninvite {
+            email: "k9.guest@example.test".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(taken_back.account.people, Vec::new());
+    assert_eq!(vault.people().unwrap().unwrap().invites, Vec::new());
+    assert_eq!(
+        cloud.invites.lock().unwrap().last().cloned(),
+        Some((
+            "uninvite".to_string(),
+            json!({"email": "k9.guest@example.test"})
+        ))
+    );
+}
+
+/// An invitation the service did not take is not kept; an address out of shape is sent nowhere; and
+/// an invitation taken back while the service cannot be told is out here all the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn invitations_fail_closed() {
+    let cloud = fake_cloud().await;
+    let invite = Invite {
+        mailbox: "k9.guest@example.test".into(),
+        role: Role::Operate,
+    };
+    let vault = owned_vault(&cloud.origin, vec![invite]);
+    let service = launch_owned(&cloud, &vault);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    for email in [
+        "no-at-sign",
+        "@example.test",
+        "k9@",
+        "two words@example.test",
+    ] {
+        assert!(
+            matches!(
+                service
+                    .action(Action::Invite {
+                        email: email.into(),
+                        role: Role::Listen,
+                    })
+                    .await,
+                Err("invalidRequest")
+            ),
+            "{email}"
+        );
+    }
+    assert!(cloud.invites.lock().unwrap().is_empty());
+
+    cloud.refusing.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        service
+            .action(Action::Invite {
+                email: "w1aw@example.test".into(),
+                role: Role::Listen,
+            })
+            .await,
+        Err("serviceUnavailable")
+    ));
+    assert_eq!(vault.people().unwrap().unwrap().invites.len(), 1);
+    assert!(matches!(
+        service
+            .action(Action::Uninvite {
+                email: "K9.Guest@example.test".into(),
+            })
+            .await,
+        Err("serviceUnavailable")
+    ));
+    assert_eq!(vault.people().unwrap().unwrap().invites, Vec::new());
+}

@@ -93,6 +93,9 @@ pub struct AccountStatus {
     /// Devices removed here while the service could not be reached: out at the station already,
     /// and told to the service before the station's next list.
     removals: Vec<String>,
+    /// The people invited to this station, as it keeps them: each address as the service matches
+    /// it, and a role.
+    people: Vec<tempo_client::account::Invite>,
 }
 /// A device the station granted on its own proof: what the notice says of it.
 #[derive(Clone, Serialize)]
@@ -394,6 +397,17 @@ pub enum Action {
     /// once it is bound, as approving a pairing turns it on.
     SignIn {
         name: String,
+    },
+    /// Invite someone to this station by their address, to operate it or only to listen: their
+    /// devices are then approved when they sign in with that address, verified.
+    Invite {
+        email: String,
+        role: tempo_client::account::Role,
+    },
+    /// Take an invitation back: none of that person's proofs is taken here from now on, and the
+    /// service removes their devices.
+    Uninvite {
+        email: String,
     },
     /// The operator has seen the notice of a device the station granted on its own proof.
     DismissAdded {
@@ -812,6 +826,14 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+/// An address one could invite: something before and after an `@`, no space, at most 254 characters.
+fn invitable(address: &str) -> bool {
+    address.len() <= 254
+        && !address.chars().any(|c| c.is_whitespace() || c.is_control())
+        && address
+            .find('@')
+            .is_some_and(|at| at > 0 && at + 1 < address.len())
 }
 fn valid_name(name: &str) -> bool {
     !name.trim().is_empty() && name.chars().count() <= 48 && !name.chars().any(char::is_control)
@@ -1432,6 +1454,7 @@ impl Controller {
             Err(_) => None,
         };
         self.reflect_removals();
+        self.reflect_people();
         let remembered = match self.vault.state() {
             Ok(state) => state.filter(|s| {
                 s.binding == binding
@@ -1660,6 +1683,45 @@ impl Controller {
         let saved = self.accounts.vault.save_revokes(&kept);
         self.reflect_removals();
         saved
+    }
+    /// Changes the people invited to this station, and keeps them in the store, before anything
+    /// takes them in: an entry that does not read is never written over.
+    fn keep_people(
+        &self,
+        change: impl FnOnce(&mut Vec<tempo_client::account::Invite>),
+    ) -> Result<(), &'static str> {
+        let binding = self.binding.as_ref().ok_or("stationNotPaired")?;
+        let vault = &self.accounts.vault;
+        let mut people = vault
+            .people()?
+            .filter(|people| people.station_id == binding.station_id)
+            .unwrap_or_else(|| vault::People {
+                station_id: binding.station_id.clone(),
+                invites: Vec::new(),
+            });
+        change(&mut people.invites);
+        let saved = vault.save_people(&people);
+        self.reflect_people();
+        self.arm_enrolment();
+        saved
+    }
+    fn reflect_people(&self) {
+        let people = self
+            .binding
+            .as_ref()
+            .and_then(|binding| {
+                self.accounts
+                    .vault
+                    .people()
+                    .ok()
+                    .flatten()
+                    .filter(|people| people.station_id == binding.station_id)
+            })
+            .map(|people| people.invites)
+            .unwrap_or_default();
+        if let Ok(mut status) = self.status.lock() {
+            status.account.people = people;
+        }
     }
     fn reflect_removals(&self) {
         if let Ok(mut status) = self.status.lock() {
@@ -1900,6 +1962,7 @@ impl Controller {
         self.pending = None;
         self.removals = Some(Vec::new());
         self.reflect_removals();
+        self.reflect_people();
         self.arm_enrolment();
         self.reflect("disabled");
         let turned_on = self.control.lock().ok().and_then(|mut control| {
@@ -2481,6 +2544,43 @@ impl Controller {
                 });
                 self.reflect_account();
             }
+            Action::Invite { email, role } => {
+                let address = email.trim();
+                if !invitable(address) {
+                    return Err("invalidRequest");
+                }
+                let (binding, token) = self.bound()?;
+                self.client
+                    .post(
+                        &station_path(&binding, "invite"),
+                        Some(&token),
+                        json!({ "email": address, "role": role }),
+                    )
+                    .await?;
+                let mailbox = tempo_client::account::mailbox(address);
+                self.keep_people(|invites| {
+                    invites.retain(|invite| invite.mailbox != mailbox);
+                    invites.push(tempo_client::account::Invite { mailbox, role });
+                })?;
+            }
+            Action::Uninvite { email } => {
+                let address = email.trim();
+                if !invitable(address) {
+                    return Err("invalidRequest");
+                }
+                let (binding, token) = self.bound()?;
+                // Out here first: from now on no proof of theirs is taken at this station, whether
+                // or not the service can be told.
+                let mailbox = tempo_client::account::mailbox(address);
+                self.keep_people(|invites| invites.retain(|invite| invite.mailbox != mailbox))?;
+                self.client
+                    .post(
+                        &station_path(&binding, "uninvite"),
+                        Some(&token),
+                        json!({ "email": address }),
+                    )
+                    .await?;
+            }
             Action::DismissAdded { device_id } => {
                 if let Ok(mut status) = self.status.lock() {
                     status
@@ -2514,6 +2614,7 @@ impl Controller {
                 self.binding = None;
                 self.removals = Some(Vec::new());
                 self.reflect_removals();
+                self.reflect_people();
                 self.arm_enrolment();
                 self.pending = None;
                 self.reflect("unpaired");

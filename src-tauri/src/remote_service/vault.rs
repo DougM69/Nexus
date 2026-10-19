@@ -266,6 +266,7 @@ pub trait AccountVault: Send + Sync {
         cache: &tempo_client::account::DeviceCache,
     ) -> Result<(), &'static str>;
     fn people(&self) -> Result<Option<People>, &'static str>;
+    fn save_people(&self, people: &People) -> Result<(), &'static str>;
     fn revokes(&self) -> Result<Option<Revokes>, &'static str>;
     fn save_revokes(&self, revokes: &Revokes) -> Result<(), &'static str>;
 }
@@ -558,6 +559,9 @@ impl AccountVault for SystemVault {
     }
     fn people(&self) -> Result<Option<People>, &'static str> {
         account_entry(ACCOUNT_PEOPLE)
+    }
+    fn save_people(&self, people: &People) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_PEOPLE, people)
     }
     fn revokes(&self) -> Result<Option<Revokes>, &'static str> {
         account_entry(ACCOUNT_REVOKES)

@@ -149,6 +149,8 @@ impl Client {
                 Some("trialUsedOnThisPc") => "trialUsedOnThisPc",
                 // The service needs a newer Nexus at the shack to approve a station.
                 Some("updateRequired") => "updateRequired",
+                // The station has invited as many people as the service keeps.
+                Some("inviteLimit") => "inviteLimit",
                 _ => match status {
                     401 | 403 => "accessDenied",
                     410 => "pairingExpired",

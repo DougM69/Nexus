@@ -74,6 +74,12 @@ impl Enrolment {
         Arc::new(move || pairing() || enrolment.open())
     }
 
+    /// The people it takes, while armed: for a test to read.
+    #[cfg(test)]
+    pub(crate) fn invites(&self) -> Option<Vec<Invite>> {
+        self.ready().map(|ready| ready.invites.clone())
+    }
+
     fn ready(&self) -> Option<Arc<Ready>> {
         self.ready.lock().ok()?.clone()
     }
