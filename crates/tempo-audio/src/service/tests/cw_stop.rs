@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader, Write};
 /// A rigctld that logs each line it is sent and answers it, `hook` first: `Some(reply)` answers
 /// with that (an empty reply writes nothing, as Hamlib does for a raw `w` set), `None` falls
 /// through to `RPRT 0`.
-fn logging_rigctld(
+pub(super) fn logging_rigctld(
     hook: impl Fn(&str) -> Option<String> + Send + 'static,
 ) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -74,7 +74,7 @@ fn cw_engine(
 }
 
 /// Step the loop once at `t` ms.
-fn step(
+pub(super) fn step(
     state: &mut RadioLoop,
     engine: &Arc<Mutex<Engine>>,
     backend: &mut MockBackend,
@@ -98,7 +98,7 @@ fn step(
 }
 
 /// The lines the rigctld was sent from `from` on.
-fn lines_since(log: &Mutex<Vec<String>>, from: usize) -> Vec<String> {
+pub(super) fn lines_since(log: &Mutex<Vec<String>>, from: usize) -> Vec<String> {
     log.lock().unwrap()[from..].to_vec()
 }
 
@@ -277,7 +277,7 @@ fn a_winkeyer_is_cleared_before_the_radio_is_asked_to_stop_cw() {
 
 /// A rigctld whose radio keeps its own CW speed: `L KEYSPD n` sets it, `l KEYSPD` reads it back,
 /// and the test can turn the radio's speed knob itself (SmartSDR, a Maestro, the front panel).
-fn keyer_speed_rigctld() -> (
+pub(super) fn keyer_speed_rigctld() -> (
     String,
     Arc<Mutex<Vec<String>>>,
     Arc<std::sync::atomic::AtomicU32>,
@@ -299,7 +299,7 @@ fn keyer_speed_rigctld() -> (
 }
 
 /// An engine in the CW section on 40 m with the CAT keyer, on `model`, at `wpm`, nothing queued.
-fn cat_engine(model: u32, wpm: u32) -> Arc<Mutex<Engine>> {
+pub(super) fn cat_engine(model: u32, wpm: u32) -> Arc<Mutex<Engine>> {
     let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
     {
         let mut e = engine.lock().unwrap();
@@ -347,25 +347,25 @@ fn handovers(
 
 /// What the radio takes to key `word` at `wpm` and then leave a word space: the earliest the next
 /// word may reach it without queueing behind this one.
-fn word_window_ms(word: &str, wpm: u32) -> f64 {
+pub(super) fn word_window_ms(word: &str, wpm: u32) -> f64 {
     tempo_core::cw::morse_duration_ms(word, wpm) + 7.0 * 1200.0 / wpm as f64
 }
 
-/// ⭐ A FLEX OVER SMARTSDR CAT IS HANDED A WORD ONLY WHEN IT HAS KEYED THE LAST ONE, AT THE SPEED
-/// IT KEYS. FlexRadio documents no CW stop over SmartSDR CAT, and its `KY;` buffer answer is
-/// always "room" (SmartSDR CAT User Guide §3.4.11), so whatever text Nexus has handed the radio
-/// plays out after Esc. Nexus hands it one word at a time, but it timed each word at its own WPM
-/// and told the radio that speed only when its own control moved: turn the radio's speed down in
-/// SmartSDR and Nexus went on handing words over at the old pace, ahead of the radio, and the
-/// backlog kept keying after a stop (IL QSO Party, a Flex on SmartSDR CAT).
+/// ⭐ ON A FLEX OVER SMARTSDR CAT, NEXUS'S SPEED WINS, AND EACH WORD IS PACED AT IT. FlexRadio
+/// documents no CW stop over SmartSDR CAT, and its `KY;` buffer answer is always "room" (SmartSDR
+/// CAT User Guide §3.4.11), so whatever text Nexus has handed the radio plays out after Esc. Nexus
+/// hands it one word at a time, timed at Nexus's speed, which holds only if the radio keys at that
+/// speed: turn the radio's speed down in SmartSDR and the words went over ahead of the radio, and
+/// the backlog kept keying after a stop (IL QSO Party). So the radio is told Nexus's speed at the
+/// start of every message, even unchanged (operator ruling, 2026-10-19: Nexus's speed always wins),
+/// and the radio's own speed is neither read nor taken into the CW control.
 #[test]
-fn a_smartsdr_cat_flex_is_paced_at_the_speed_the_radio_reports() {
+fn on_smartsdr_cat_nexus_speed_wins_over_a_speed_set_on_the_radio() {
     let engine = cat_engine(2036, 30);
     let (addr, log, knob) = keyer_speed_rigctld();
     let mut rig = Rig::rigctld(&addr);
     let mut backend = MockBackend::new();
     let mut state = loop_state_for(&engine);
-    // The last message went out at Nexus's 30 WPM, so the radio was told 30.
     engine.lock().unwrap().send_cw("E");
     let first = handovers(
         &mut state,
@@ -382,11 +382,6 @@ fn a_smartsdr_cat_flex_is_paced_at_the_speed_the_radio_reports() {
         1,
         "control: the first message keyed: {first:?}"
     );
-    assert_eq!(
-        knob.load(std::sync::atomic::Ordering::Relaxed),
-        30,
-        "control: Nexus told the radio its speed"
-    );
     // Between messages the operator turns the radio's speed down in SmartSDR.
     knob.store(20, std::sync::atomic::Ordering::Relaxed);
     let from = log.lock().unwrap().len();
@@ -401,35 +396,32 @@ fn a_smartsdr_cat_flex_is_paced_at_the_speed_the_radio_reports() {
         12_000.0,
         5.0,
     );
-    let names: Vec<&str> = words.iter().map(|(w, _)| w.as_str()).collect();
+    let wire: Vec<String> = lines_since(&log, from)
+        .into_iter()
+        .filter(|l| l.starts_with("L KEYSPD") || l.starts_with("b ") || l == "l KEYSPD")
+        .collect();
     assert_eq!(
-        names,
-        ["CQ", "TEST", "KD9TAW"],
-        "control: every word keyed once"
+        wire,
+        ["L KEYSPD 30", "b CQ", "b TEST", "b KD9TAW"],
+        "Nexus's 30 goes to the radio before the message, once; the radio's speed is not read"
     );
     let gaps: Vec<f64> = words.windows(2).map(|w| w[1].1 - w[0].1).collect();
-    let want = [word_window_ms("CQ", 20), word_window_ms("TEST", 20)];
+    let want = [word_window_ms("CQ", 30), word_window_ms("TEST", 30)];
     for (gap, want) in gaps.iter().zip(want) {
         assert!(
             (gap - want).abs() <= 5.0,
-            "each word must wait for the radio to key the last one at ITS 20 WPM: gaps {gaps:?}, want {want}"
+            "each word is paced at the 30 WPM the radio was just told: gaps {gaps:?}, want {want}"
         );
     }
-    // The radio's speed is followed, never fought: the CW control shows what the radio keys at,
-    // and Nexus's old 30 is not pushed back over the operator's choice.
     assert_eq!(
         engine.lock().unwrap().cw_wpm(),
-        20,
-        "the CW control follows the radio"
+        30,
+        "the CW control is not moved"
     );
-    let pushed: Vec<String> = lines_since(&log, from)
-        .into_iter()
-        .filter(|l| l.starts_with("L KEYSPD"))
-        .collect();
     assert_eq!(
-        pushed,
-        Vec::<String>::new(),
-        "no speed pushed back over the radio's"
+        knob.load(std::sync::atomic::Ordering::Relaxed),
+        30,
+        "the radio keys at Nexus's speed"
     );
 }
 
@@ -482,13 +474,14 @@ fn normal_sending_on_smartsdr_cat_hands_each_word_over_as_the_last_one_ends() {
     assert_eq!(sets, 1, "the radio is told the speed once, not per word");
 }
 
-/// Only a radio that no CAT CW stop is sure to reach is asked its keyer speed with each word: a
-/// Flex over SmartSDR CAT, and the Yaesu newcat radios Hamlib keys with `KM1…;` `KY6;` and stops
-/// with nothing. A radio with a stop of its own (Icom `17 FF`, Kenwood and Elecraft `KY`, the
-/// FT-710 and FTX-1 playback stop Nexus sends) is not asked, so its CAT link carries nothing new.
+/// Only a radio that no CAT CW stop is sure to reach is told Nexus's speed before EVERY message,
+/// changed or not: a Flex over SmartSDR CAT, and the Yaesu newcat radios Hamlib keys with `KM1…;`
+/// `KY6;` and stops with nothing. A radio with a stop of its own (Icom `17 FF`, Kenwood and
+/// Elecraft `KY`, the FT-710 and FTX-1 playback stop Nexus sends) is told it only when it changes,
+/// as before. No radio is asked its speed.
 #[test]
-fn only_a_radio_without_a_sure_cat_cw_stop_is_asked_its_keyer_speed() {
-    for (model, name, asked) in [
+fn only_a_radio_without_a_sure_cat_cw_stop_is_told_the_speed_before_every_message() {
+    for (model, name, every) in [
         (2036u32, "Flex over SmartSDR CAT", true),
         (1035, "FT-991A", true),
         (1042, "FTDX10", true),
@@ -505,29 +498,33 @@ fn only_a_radio_without_a_sure_cat_cw_stop_is_asked_its_keyer_speed() {
         let mut state = loop_state_for(&engine);
         engine.lock().unwrap().send_cw("TEST");
         step(&mut state, &engine, &mut backend, &mut rig, 100.0);
+        engine.lock().unwrap().send_cw("TEST");
+        step(&mut state, &engine, &mut backend, &mut rig, 5_000.0);
         let lines = lines_since(&log, 0);
-        assert!(
-            lines.iter().any(|l| l == "b TEST"),
-            "{name}: control: the word went to the radio's keyer: {lines:?}"
-        );
-        assert_eq!(
-            lines.iter().any(|l| l == "l KEYSPD"),
-            asked,
-            "{name}: asked the radio's keyer speed: {lines:?}"
-        );
+        let wire: Vec<&str> = lines
+            .iter()
+            .map(String::as_str)
+            .filter(|l| l.starts_with("L KEYSPD") || l.starts_with("b ") || *l == "l KEYSPD")
+            .collect();
+        let want: &[&str] = if every {
+            &["L KEYSPD 25", "b TEST", "L KEYSPD 25", "b TEST"]
+        } else {
+            &["L KEYSPD 25", "b TEST", "b TEST"]
+        };
+        assert_eq!(wire, want, "{name}");
     }
 }
 
 /// Nexus's own Flex client keys CW through CWX, which `cwx clear` stops, and it already follows
-/// the radio's speed itself; the SmartSDR CAT pacing is not laid over it.
+/// the radio's speed itself; the SmartSDR CAT per-message speed is not laid over it.
 #[test]
 fn the_native_flex_client_is_not_paced_as_smartsdr_cat() {
     assert!(
-        cat_cw_paced_by_radio(2036, false),
+        cat_cw_speed_set_per_message(2036, false),
         "control: SmartSDR CAT is"
     );
     assert!(
-        !cat_cw_paced_by_radio(2036, true),
+        !cat_cw_speed_set_per_message(2036, true),
         "Nexus's Flex client is not"
     );
 }

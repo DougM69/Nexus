@@ -77,6 +77,9 @@ mod cw_keying_owner_tests;
 /// The keying paths that take no owner (Tune, manual PTT, the FT slot planner) wait for CW too.
 #[cfg(test)]
 mod cw_sending_gate_tests;
+/// CW speed match: an answer keys at the station's measured speed, a CQ at the operator's own.
+#[cfg(test)]
+mod cw_speed_match_tests;
 mod field_day_display;
 /// Every contact held in one form: one band, one phone mode, whichever way it came in.
 #[cfg(test)]
@@ -3675,6 +3678,12 @@ pub struct Engine {
     /// keys via `rig.send_morse`. Operator-initiated; gated by `tx_enabled` (Monitor) and the
     /// privileges, and a word they refuse is dropped, never held (`poll_cw_one`).
     cw_queue: VecDeque<String>,
+    /// The messages in [`Self::cw_queue`], oldest first, as (words left, CW speed match's speed,
+    /// whether its first word has been taken): `None` keys at the operator's own speed. Words leave
+    /// the front as the loop takes them.
+    /// Only ever describes words still queued: every path that drops the queue drops all of it,
+    /// so an empty queue means these are spent ([`Self::queue_cw`] starts afresh then).
+    cw_messages: VecDeque<(usize, Option<u32>, bool)>,
     /// Recent EXPANDED CW transmissions (macros resolved) — a TX echo the cockpit shows
     /// so the operator sees exactly what went out. Capped; cleared with the RX transcript.
     cw_sent: VecDeque<String>,
@@ -4367,6 +4376,28 @@ pub struct Engine {
 const CW_WINDOW: usize = 72_000;
 /// The AI CW decoder's ring: 15 s at 12 kHz — exactly the DeepCW model's decode window.
 const AI_CW_WINDOW: usize = 180_000;
+/// CW speed match uses the decoder's speed only if a keyed element was heard this recently
+/// (seconds): long enough to span the pause before an answer, short enough that the speed is
+/// still the station just heard.
+const CW_SPEED_MATCH_FRESH_SECS: f32 = 10.0;
+/// How much of the newest CW copy CW speed match looks in for the call being answered.
+const CW_SPEED_MATCH_COPY_CHARS: usize = 200;
+
+/// Whether the newest [`CW_SPEED_MATCH_COPY_CHARS`] of `copy` hold `call` (upper case) as a word,
+/// or as one part of a portable call (`W1AW/P`, `VE3/W1AW`).
+fn copy_names_call(copy: &str, call: &str) -> bool {
+    let start = copy
+        .char_indices()
+        .rev()
+        .nth(CW_SPEED_MATCH_COPY_CHARS - 1)
+        .map_or(0, |(i, _)| i);
+    copy[start..].split_whitespace().any(|word| {
+        let word = word.to_ascii_uppercase();
+        word == call
+            || word.split('/').any(|part| part == call)
+            || call.split('/').any(|part| part.len() >= 3 && part == word)
+    })
+}
 /// Per-QSO WAV ring: ~60 s at 12 kHz — captures the exchange around a logged contact.
 const QSO_WAV_WINDOW: usize = 720_000;
 /// RTTY decoded-character ring cap: ~4000 chars ≈ tens of minutes of copy at 45.45 baud.
@@ -6009,6 +6040,7 @@ impl Engine {
             off_band_from: None,
             rig_dial_seen: false,
             cw_queue: VecDeque::new(),
+            cw_messages: VecDeque::new(),
             cw_sent: VecDeque::new(),
             cw_keyer_error: None,
             cw_paddle_took_over: false,
@@ -10279,6 +10311,13 @@ impl Engine {
     }
 
     pub fn send_cw(&mut self, text: &str) {
+        self.send_cw_as(text, false);
+    }
+
+    /// [`Self::send_cw`], saying whether the message ANSWERS a station (`reply`): CW speed match
+    /// keys an answer at that station's measured speed ([`Self::cw_reply_wpm`]). A CQ, typed
+    /// text and any message not marked as an answer keys at the operator's own speed.
+    pub fn send_cw_as(&mut self, text: &str, reply: bool) {
         let expanded = self.expand_cw(text);
         // A clock repair holds transmit ([`Self::hold_tx_for_clock_repair`]): the send is refused
         // before it arms or queues anything, and the CW cockpit's warning line says so.
@@ -10312,7 +10351,8 @@ impl Engine {
             // it — keyed, then flushed away a tick later.
             self.cw_abort = false;
             self.slot_tx_abort = false;
-            self.queue_cw(expanded);
+            let wpm = if reply { self.cw_reply_wpm() } else { None };
+            self.queue_cw(expanded, wpm);
         }
     }
 
@@ -10337,6 +10377,12 @@ impl Engine {
     /// the radio loop has not consumed yet still lands. After a Stop TX the latch is down anyway,
     /// and this refuses.
     pub fn send_cw_armed(&mut self, text: &str) -> Result<(), String> {
+        self.send_cw_armed_as(text, false)
+    }
+
+    /// [`Self::send_cw_armed`], saying whether the message answers a station, as
+    /// [`Self::send_cw_as`] does.
+    pub fn send_cw_armed_as(&mut self, text: &str, reply: bool) -> Result<(), String> {
         use crate::settings::OperatingMode;
         if self.settings.operating_mode != OperatingMode::Cw {
             return Err(CW_ARMED_NOT_CW.to_string());
@@ -10367,13 +10413,16 @@ impl Engine {
             return Err(CW_ARMED_EMPTY.to_string());
         }
         tempo_core::applog::info("tx", &format!("CW over queued by Enter: {expanded:?}"));
-        self.queue_cw(expanded);
+        let wpm = if reply { self.cw_reply_wpm() } else { None };
+        self.queue_cw(expanded, wpm);
         Ok(())
     }
 
     /// Queue an EXPANDED CW message for the radio loop, shared by [`Self::send_cw`] and
-    /// [`Self::send_cw_armed`], which have already decided it may go.
-    fn queue_cw(&mut self, expanded: String) {
+    /// [`Self::send_cw_armed`], which have already decided it may go. `wpm` is CW speed match's
+    /// speed for the whole message (`None`: the operator's own); it is fixed here, before the
+    /// message's first word is keyed, and never changes inside it.
+    fn queue_cw(&mut self, expanded: String, wpm: Option<u32>) {
         // A new send is the operator's next key: the paddle's line has been read.
         self.cw_paddle_took_over = false;
         // TX echo: show the operator what actually went out (tokens resolved).
@@ -10384,9 +10433,69 @@ impl Engine {
         // Queue WORD-BY-WORD so the radio loop feeds the rig one word at a time. That
         // keeps at most one word in the rig's CW keyer buffer, so Stop TX (which clears
         // this queue) drops the rest of the macro instead of the rig playing it all out.
+        if self.cw_queue.is_empty() {
+            self.cw_messages.clear();
+        }
+        let before = self.cw_queue.len();
         for word in expanded.split_whitespace() {
             self.cw_queue.push_back(word.to_string());
         }
+        let words = self.cw_queue.len() - before;
+        if words > 0 {
+            if let Some(w) = wpm {
+                tempo_core::applog::info(
+                    "tx",
+                    &format!("CW speed match: this answer keys at {w} WPM"),
+                );
+            }
+            self.cw_messages.push_back((words, wpm, false));
+        }
+    }
+
+    /// CW SPEED MATCH's speed for an answer to the station being worked, or `None` to key at the
+    /// operator's own speed. Every condition must hold, or it is `None`:
+    /// - the switch is on (`Settings::cw_speed_match`, OFF by default);
+    /// - a station is being worked (the His Call the macros send as `!`);
+    /// - the decoder that measured the speed copied that call, recently: then the signal it timed
+    ///   is the one being answered, and its timing read that signal's Morse right. The AI
+    ///   decoder's copy does not count, because the AI measures no speed: a call the AI copied
+    ///   says nothing about whether the classic decoder's timing is that station's;
+    /// - the classic decoder has a speed, from a keyed element heard within
+    ///   [`CW_SPEED_MATCH_FRESH_SECS`] (an older one may be another station's, or none at all).
+    ///
+    /// The speed is held to the operator's min/max. There is one estimate, the classic decoder's,
+    /// at the operator's CW pitch: the signal the operator is tuned to, not one per station.
+    pub fn cw_reply_wpm(&self) -> Option<u32> {
+        if !self.settings.cw_speed_match {
+            return None;
+        }
+        let call = self.app.active_peer()?.trim().to_ascii_uppercase();
+        if call.is_empty() {
+            return None;
+        }
+        let age = self.cw_stream.secs_since_mark()?;
+        if age > CW_SPEED_MATCH_FRESH_SECS {
+            return None;
+        }
+        let measured = self.cw_stream.wpm();
+        if !(5..=99).contains(&measured) {
+            return None;
+        }
+        if !copy_names_call(self.cw_stream.transcript(), &call) {
+            return None;
+        }
+        let lo = self.settings.cw_speed_match_min.clamp(5, 50);
+        let hi = self.settings.cw_speed_match_max.clamp(lo, 50);
+        Some(measured.clamp(lo, hi))
+    }
+
+    /// CW speed match on or off: the contest strip's switch, saved alone. NEVER a form save, for
+    /// [`Self::set_contest_esm`]'s reason: `apply_settings` clears the transmit queues, and this is
+    /// flipped in the middle of a contest.
+    pub fn set_cw_speed_match(&mut self, on: bool) -> Result<(), crate::remote_control::Reason> {
+        let mut values = serde_json::Map::new();
+        values.insert("cwSpeedMatch".into(), serde_json::Value::Bool(on));
+        self.save_remote_preferences(&values, &["cwSpeedMatch"])
     }
 
     /// Recent expanded CW transmissions (oldest→newest) — the cockpit's SENT echo.
@@ -10412,7 +10521,16 @@ impl Engine {
     /// settings to disk — the CW decoder's automatic speed-match also lands here, and the
     /// operator's stored preference must not be overwritten by whatever the last station sent.
     pub fn set_cw_wpm(&mut self, wpm: u32) {
-        self.settings.cw_wpm = wpm.clamp(5, 50);
+        let wpm = wpm.clamp(5, 50);
+        if wpm != self.settings.cw_wpm {
+            // A speed the operator chose (the control, or the radio's own knob followed) wins over
+            // CW speed match for what is still queued: the rest keys at the new speed, and the
+            // loop does not push the matched speed back over the operator's.
+            for (_, matched, _) in self.cw_messages.iter_mut() {
+                *matched = None;
+            }
+        }
+        self.settings.cw_wpm = wpm;
     }
 
     /// FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep). Live-settable from the Operate cockpit so
@@ -10478,6 +10596,14 @@ impl Engine {
     /// offset from the dial, not the CW: a parting ID goes out after its 73 or not at all, never
     /// at some later moment when it happens to be allowed.
     pub fn poll_cw_one(&mut self) -> Option<String> {
+        self.poll_cw_word().map(|(word, _, _)| word)
+    }
+
+    /// [`Self::poll_cw_one`] with the speed to key the word at (its message's CW speed match speed,
+    /// else the operator's own) and whether the word STARTS its message, where a keyer that must be
+    /// told its speed once per message is told. A word queued outside any message counts as one.
+    /// Every gate is `poll_cw_one`'s.
+    pub fn poll_cw_word(&mut self) -> Option<(String, u32, bool)> {
         let refused = if self.clock_repair_holds_tx() {
             Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
         } else if !self.tx_enabled {
@@ -10505,7 +10631,30 @@ impl Engine {
             }
             return None;
         }
-        self.cw_queue.pop_front()
+        let wpm = self.cw_next_wpm();
+        let word = self.cw_queue.pop_front()?;
+        let mut starts = true;
+        if let Some((left, _, started)) = self.cw_messages.front_mut() {
+            starts = !*started;
+            *started = true;
+            *left -= 1;
+            if *left == 0 {
+                self.cw_messages.pop_front();
+            }
+        }
+        Some((word, wpm, starts))
+    }
+
+    /// The speed the next queued word keys at: its message's CW speed match speed, else (and with
+    /// nothing queued) the operator's own. The radio loop sets a keyer to this between messages.
+    pub fn cw_next_wpm(&self) -> u32 {
+        if self.cw_queue.is_empty() {
+            return self.settings.cw_wpm;
+        }
+        self.cw_messages
+            .front()
+            .and_then(|(_, matched, _)| *matched)
+            .unwrap_or(self.settings.cw_wpm)
     }
 
     /// Take + reset the one-shot CW abort flag (the loop calls `rig.stop_morse`).

@@ -221,14 +221,15 @@ pub struct CwStreamDecoder {
     hi_thresh: f32,  // Schmitt upper rail (enter mark at/above this)
     present: bool,   // a keyed signal is present (else don't decode noise)
     key_down: bool,
-    run: usize,         // current key-run length (hops), mark or space per `key_down`
-    space_run: usize,   // accumulated gap hops (carries THROUGH sub-dit spikes)
-    dit_avg: f32,       // adaptive dit length (hops)
-    dah_avg: f32,       // adaptive dah length (hops); the pair classify each mark
-    saw_mark: bool,     // any real mark seen yet (gates WPM before sync)
-    sym: String,        // in-progress Morse symbol (".-")
-    flushed_char: bool, // this gap already flushed its pending character
-    flushed_word: bool, // this gap already emitted a word space
+    run: usize,             // current key-run length (hops), mark or space per `key_down`
+    space_run: usize,       // accumulated gap hops (carries THROUGH sub-dit spikes)
+    dit_avg: f32,           // adaptive dit length (hops)
+    dah_avg: f32,           // adaptive dah length (hops); the pair classify each mark
+    saw_mark: bool,         // any real mark seen yet (gates WPM before sync)
+    hops_since_mark: usize, // hops of audio since the last real mark ended (the speed's age)
+    sym: String,            // in-progress Morse symbol (".-")
+    flushed_char: bool,     // this gap already flushed its pending character
+    flushed_word: bool,     // this gap already emitted a word space
     transcript: String,
     sensitivity: f32, // 0..1 operator control; scales the presence + per-mark SNR gates
 }
@@ -258,6 +259,7 @@ impl CwStreamDecoder {
             dit_avg: default_dit,
             dah_avg: 3.0 * default_dit,
             saw_mark: false,
+            hops_since_mark: 0,
             sym: String::new(),
             flushed_char: false,
             flushed_word: false,
@@ -346,6 +348,20 @@ impl CwStreamDecoder {
         }
     }
 
+    /// Seconds of audio since the last real keyed element ended: how old [`Self::wpm`] is. `None`
+    /// before any mark. A keyed element in progress counts as fresh.
+    pub fn secs_since_mark(&self) -> Option<f32> {
+        if !self.saw_mark {
+            return None;
+        }
+        let hops = if self.key_down {
+            0
+        } else {
+            self.hops_since_mark
+        };
+        Some(hops as f32 * self.hop as f32 / self.sr)
+    }
+
     /// Clear the accumulated text (keeps the learned speed/threshold so decoding of an
     /// in-progress signal continues cleanly).
     pub fn clear(&mut self) {
@@ -385,6 +401,7 @@ impl CwStreamDecoder {
             // on-pitch floor if every probe was skipped (unreachable: the high side always runs).
             let off = if off.is_finite() { off } else { self.noise };
             i += self.hop;
+            self.hops_since_mark = self.hops_since_mark.saturating_add(1);
             // Threshold from the CURRENT followers (before updating them) so a signal onset
             // is judged against the PRIOR noise floor and detected on its first hop — no
             // warmup dead-zone (a percentile window can't flag a signal until it fills a
@@ -455,6 +472,7 @@ impl CwStreamDecoder {
             return;
         }
         self.saw_mark = true;
+        self.hops_since_mark = 0;
         let run = self.run as f32;
         // Classify by the midpoint between the tracked dit and dah lengths, then nudge the
         // matching average toward this mark -- a standard adaptive-Morse speed tracker. It
@@ -592,6 +610,30 @@ mod tests {
         d.push(&morse_audio("CQ TEST DE W1ABC", 20, 0.6));
         assert_eq!(d.transcript().trim(), "CQ TEST DE W1ABC");
         assert!((d.wpm() as i32 - 20).abs() <= 3, "≈20 wpm, got {}", d.wpm());
+    }
+
+    /// The speed estimate says how old it is: fresh just after a keyed element, older by exactly
+    /// the silence that follows, and unknown before any mark.
+    #[test]
+    fn stream_reports_how_old_its_speed_estimate_is() {
+        let mut d = CwStreamDecoder::new(SR, PITCH);
+        assert_eq!(d.secs_since_mark(), None, "no mark, no age");
+        d.push(&vec![0.0f32; SR as usize]);
+        assert_eq!(d.secs_since_mark(), None, "silence alone is no mark");
+        d.push(&morse_audio("TEST", 25, 0.0));
+        let fresh = d.secs_since_mark().expect("a keyed word was heard");
+        assert!(fresh < 0.1, "just after the last element: {fresh}");
+        d.push(&vec![0.0f32; 12 * SR as usize]);
+        let old = d.secs_since_mark().unwrap();
+        assert!(
+            (old - fresh - 12.0).abs() < 0.05,
+            "aged by the 12 s of silence: {old}"
+        );
+        d.clear();
+        assert!(
+            d.secs_since_mark().unwrap() >= 12.0,
+            "Clear empties the text, not the age"
+        );
     }
 
     #[test]

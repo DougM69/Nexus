@@ -11181,6 +11181,14 @@ export const EN = {
   'cw.compose.send.label': 'Send',
   'cw.send.txLocked': 'TX locked — this frequency is outside your license privileges',
   'cw.send.failed': 'CW send failed',
+  'cw.speedMatch.label': 'CW speed match',
+  'cw.speedMatch.short': 'Match WPM',
+  'cw.speedMatch.title': 'CW speed match: an answer to a station (your call, your exchange) is sent at the speed Nexus measured for that station, within the slowest and fastest set in Settings ▸ CW. A CQ is sent at your own speed, and so is everything once the answer has gone. Without a recent measurement of the station you are working, your own speed.',
+  'cw.speedMatch.failed': 'CW speed match was not saved, so the switch is as it was.',
+  'settings.cw.speedMatch.label': 'Answer at the station’s speed',
+  'settings.cw.speedMatch.hint': 'CW speed match: a message answering a station is sent at the speed the decoder measured for it, held between the two speeds below. A CQ, and everything after the answer, goes at your own speed. Off by default; the contest strip has the same switch.',
+  'settings.cw.speedMatch.min.label': 'Speed match: slowest (WPM)',
+  'settings.cw.speedMatch.max.label': 'Speed match: fastest (WPM)',
 
   // ══════════════════════════════════════════════════════════════════════════════════════
   // PHONE — the voice cockpit and the voice keyer pane inside it.

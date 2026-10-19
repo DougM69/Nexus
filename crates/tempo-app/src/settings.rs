@@ -1817,6 +1817,19 @@ pub struct Settings {
     /// — the exact inversion of its intent (reported by an IC-7300 operator on 40 m, 2026-09-11).
     #[serde(default)]
     pub cw_reverse: bool,
+    /// CW SPEED MATCH: a message that answers a station is keyed at the speed the decoder
+    /// measured for that station, held to [`Self::cw_speed_match_min`]..=[`Self::cw_speed_match_max`];
+    /// a CQ, and everything once the answer has gone, keys at [`Self::cw_wpm`]. OFF by default. The
+    /// contest strip's switch saves it alone; Settings ▸ CW saves it with the form. It changes the
+    /// keying speed of a message the operator started, never when or what is sent.
+    #[serde(default)]
+    pub cw_speed_match: bool,
+    /// The slowest speed CW speed match keys an answer at (WPM, 5–50).
+    #[serde(default = "default_cw_speed_match_min")]
+    pub cw_speed_match_min: u32,
+    /// The fastest speed CW speed match keys an answer at (WPM, 5–50).
+    #[serde(default = "default_cw_speed_match_max")]
+    pub cw_speed_match_max: u32,
     /// How RTTY is keyed: "afsk" (default — soundcard two-tone audio through the rig in
     /// LSB; soundcard-clocked, the timing-cleanest path) or "fsk" (true FSK — bit-bang a
     /// serial control line into the rig's FSK input, rig in RTTY mode, unlocking its
@@ -3407,6 +3420,14 @@ fn default_cw_key_line() -> String {
 /// Default CW sending speed (WPM) — matches the engine's historical seed.
 fn default_cw_wpm() -> u32 {
     25
+}
+
+fn default_cw_speed_match_min() -> u32 {
+    15
+}
+
+fn default_cw_speed_match_max() -> u32 {
+    35
 }
 
 fn default_units() -> String {
@@ -5261,10 +5282,13 @@ impl Default for Settings {
             cw_pitch_hz: 600.0,
             cw_wpm: default_cw_wpm(),
             cw_reverse: false, // plain CW on every band; reverse is an opt-in preference
+            cw_speed_match: false,
+            cw_speed_match_min: default_cw_speed_match_min(),
+            cw_speed_match_max: default_cw_speed_match_max(),
             rtty_backend: default_rtty_backend(), // "afsk" — soundcard-clocked, the robust default
             rtty_fsk_line: default_rtty_fsk_line(), // "dtr" (RTS stays free for PTT)
-            rtty_fsk_port: String::new(), // "" = the CAT serial port
-            rtty_baud: default_rtty_baud(), // true 45.45, never 45
+            rtty_fsk_port: String::new(),         // "" = the CAT serial port
+            rtty_baud: default_rtty_baud(),       // true 45.45, never 45
             rtty_shift_hz: default_rtty_shift_hz(), // 170 Hz — the HF standard
             rtty_reverse: false,
             rtty_afsk_sideband: default_rtty_afsk_sideband(), // "lsb" — the RTTY convention
@@ -12497,6 +12521,28 @@ mod tests {
             s.contest_esm_phone,
             s.contest_esm_call_once,
         ]
+    }
+
+    /// CW SPEED MATCH ships OFF, at 15..=35 WPM, also in a file that predates it, on its wire keys,
+    /// declared in `ui/src/types.ts`.
+    #[test]
+    fn cw_speed_match_ships_off_with_its_wire_keys_and_ts_mirror() {
+        let read = |s: &Settings| (s.cw_speed_match, s.cw_speed_match_min, s.cw_speed_match_max);
+        assert_eq!(read(&Settings::default()), (false, 15, 35));
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(read(&old), (false, 15, 35));
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        let ts = include_str!("../../../ui/src/types.ts");
+        for key in ["cwSpeedMatch", "cwSpeedMatchMin", "cwSpeedMatchMax"] {
+            assert!(
+                json.contains(&format!("\"{key}\":")),
+                "missing wire key {key}"
+            );
+            assert!(
+                ts.contains(&format!("  {key}?: ")),
+                "ui/src/types.ts lacks {key}"
+            );
+        }
     }
 
     /// ENTER SENDS MESSAGE's four switches: OFF on a fresh install and in a file that predates

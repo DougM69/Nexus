@@ -3323,6 +3323,82 @@ fn a_speed_another_program_sets_on_the_radio_is_followed_never_fought() {
     assert_eq!(other_program_sets_30(&mut s), 20);
 }
 
+/// W1AW heard at 30 WPM on the operator's CW pitch, then a second of silence.
+fn hear_w1aw_at_30(e: &mut Engine) {
+    let sr = tempo_fast::SAMPLE_RATE;
+    let mut audio = vec![0.0f32; (sr * 0.2) as usize];
+    audio.extend(tempo_core::cw::morse_samples(
+        "TEST W1AW",
+        30,
+        600.0,
+        sr as u32,
+    ));
+    audio.extend(vec![0.0f32; sr as usize]);
+    for chunk in audio.chunks(1200) {
+        e.feed_rx_audio(chunk);
+    }
+}
+
+/// ⭐ CW SPEED MATCH ON NEXUS'S FLEX CLIENT, WHICH FOLLOWS THE RADIO'S SPEED. An answer to W1AW
+/// tells the radio the station's speed before the answer's `cwx send`; the radio reporting that
+/// speed back is Nexus's own, so the WPM control stays the operator's 20; and once the answer has
+/// keyed, the operator's 20 goes back to the radio (its paddle keys at it), before any CQ.
+#[test]
+fn a_speed_match_answer_on_the_flex_client_is_not_followed_back() {
+    let m = {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        hear_w1aw_at_30(&mut e);
+        e.cw_decode().wpm
+    };
+    assert!((28..=32).contains(&m), "premise: about 30 measured: {m}");
+    let session = speed_reported(speed_reported(reports(&["CW", "DIGU"]), m), 20);
+    let mut s = cw_scene_on(session, Vec::new(), unbenched());
+    {
+        let mut e = s.engine.lock().unwrap();
+        let mut set = e.settings().clone();
+        set.cw_speed_match = true;
+        e.apply_settings(set);
+        e.select_peer("W1AW");
+        hear_w1aw_at_30(&mut e);
+        e.send_cw_as("5NN", true);
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while speed_wire(&s).len() < 2 {
+        assert!(
+            Instant::now() < deadline,
+            "the speed never went back: {:?}",
+            speed_wire(&s)
+        );
+        s.step(now_unix_ms());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    s.run(500);
+    let wire: Vec<String> = s
+        .log()
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            SimEvent::Command { text, .. }
+                if text.starts_with("cw wpm") || text.starts_with("cwx send") =>
+            {
+                Some(text)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        (wire, s.engine.lock().unwrap().cw_wpm()),
+        (
+            vec![
+                format!("cw wpm {m}"),
+                "cwx send \"5NN\" 1".to_string(),
+                "cw wpm 20".to_string()
+            ],
+            20
+        ),
+        "the station's speed before the answer, mine after it, and the control never moved"
+    );
+}
+
 // ── Tune with the radio's own carrier: switched on in tests only ─────────────────────────────
 //
 // Admission refuses the radio's tune carrier in production (`tempo_net::flex::admission::BENCHED`)

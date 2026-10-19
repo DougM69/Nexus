@@ -15,6 +15,7 @@ import {
   CW_CONTEST_LAYOUT,
   CW_CONTEST_NO_REPORT_LAYOUT,
   CW_FIELD_DAY_LAYOUT,
+  cwSendsAnswer,
   RTTY_SET_ROLES,
   VOICE_KEYS,
   VOICE_SLOT_ROLES,
@@ -290,5 +291,27 @@ describe('the role picker — the operator\'s own macros mapped to ESM\'s steps'
     expect(roles).toEqual({ ...CONTEST_LAYOUT_ROLES, tu: ['F5'] })
     const roleNames: EsmRole[] = ['cq', 'callExch', 'myCall', 'exch', 'again']
     for (const role of roleNames) expect(roles[role]).toEqual(CONTEST_LAYOUT_ROLES[role])
+  })
+})
+
+// CW SPEED MATCH: which CW messages answer a station.
+describe('cwSendsAnswer', () => {
+  it('reads a contest step by its role: every step answers but the CQ', () => {
+    const r = CONTEST_LAYOUT_ROLES
+    expect(cwSendsAnswer(r, 'F1', 'CQ TEST DE {MYCALL} {MYCALL} K')).toBe(false)
+    for (const key of ['F2', 'F3', 'F4', 'F6', 'F7', 'F8']) {
+      expect(cwSendsAnswer(r, key, 'anything'), key).toBe(true)
+    }
+  })
+  it('reads the role over the text: a CQ step is no answer whatever it says, a step is', () => {
+    expect(cwSendsAnswer({ cq: ['F1'] }, 'F1', 'TEST {MYCALL}')).toBe(false)
+    expect(cwSendsAnswer({ myCall: ['F1'] }, 'F1', 'CQ')).toBe(true)
+  })
+  it('reads a key with no step, and typed text, by its first word', () => {
+    expect(cwSendsAnswer({}, 'F1', 'CQ CQ DE {MYCALL} K')).toBe(false)
+    expect(cwSendsAnswer({}, 'F2', '! DE {MYCALL} {MYCALL} K')).toBe(true)
+    expect(cwSendsAnswer({}, null, '  cq test')).toBe(false)
+    expect(cwSendsAnswer({}, null, 'TU 73')).toBe(true)
+    expect(cwSendsAnswer(CONTEST_LAYOUT_ROLES, 'F5', '! ')).toBe(true)
   })
 })

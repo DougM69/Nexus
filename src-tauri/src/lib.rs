@@ -19662,16 +19662,18 @@ fn work_spot_split_offset(
 /// Queue CW to transmit (CAT keyer path). `text` is an F-key macro template or literal
 /// type-ahead; the engine expands it (mycall/name/grid + the worked call + a 599 report)
 /// and the radio loop keys it via the rig. Operator-initiated; respects Monitor. `afar`: as
-/// [`set_tx_enabled`]'s.
+/// [`set_tx_enabled`]'s. `reply`: the message answers a station, so CW speed match may key it
+/// at that station's speed (`Engine::send_cw_as`); absent is not an answer.
 #[tauri::command(async)]
 fn send_cw(
     state: State<'_, SharedEngine>,
     text: String,
+    reply: Option<bool>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
-    eng.send_cw(&text);
+    eng.send_cw_as(&text, reply == Some(true));
     command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
@@ -19684,11 +19686,12 @@ fn send_cw(
 fn send_cw_armed(
     state: State<'_, SharedEngine>,
     text: String,
+    reply: Option<bool>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
-    eng.send_cw_armed(&text)?;
+    eng.send_cw_armed_as(&text, reply == Some(true))?;
     command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
@@ -19707,6 +19710,15 @@ fn set_cw_peer_info(
     let mut eng = engine_lock(&state);
     eng.set_cw_peer_info(call, name, peer_state);
     Ok(())
+}
+
+/// CW speed match on or off, from the contest strip's switch: saved alone, never a settings-form
+/// save. It changes only the speed an answer keys at.
+#[tauri::command(async)]
+fn set_cw_speed_match(state: State<'_, SharedEngine>, on: bool) -> Result<(), String> {
+    engine_lock(&state)
+        .set_cw_speed_match(on)
+        .map_err(|reason| format!("CW speed match was not saved ({reason:?})"))
 }
 
 /// Set the CW keyer speed in WPM (5–50).
@@ -37636,6 +37648,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         send_cw,
         send_cw_armed,
         set_cw_peer_info,
+        set_cw_speed_match,
         set_cw_wpm,
         set_decode_depth,
         stop_cw,

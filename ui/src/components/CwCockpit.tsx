@@ -28,6 +28,7 @@ import {
   CW_CONTEST_NO_REPORT_LAYOUT,
   CW_FIELD_DAY_LAYOUT,
   cwBuiltInRoles,
+  cwSendsAnswer,
   esmRoles,
   type EsmRoleMap,
 } from '../features/esmRoles'
@@ -304,6 +305,9 @@ interface Props {
   boxes?: BoxSource
   /** Enter Sends Message's switch for this cockpit (App, from Settings). Absent on the hosted page. */
   esmSetting?: EsmSetting
+  /** CW speed match's switch (App, from Settings): an answer to a station keys at its measured
+   *  speed. Shown in the contest strip; absent on the hosted page. */
+  speedMatch?: { on: boolean; onSwitch: (on: boolean) => void }
 }
 
 /** The ⊞ menu's entries: the cockpit's own panes. A box comes and goes through ⊞ Arrange's "+ Add a
@@ -423,6 +427,7 @@ const CW_DSP_FUNCS = [
 
 export function CwCockpit({
   esmSetting,
+  speedMatch,
   active = true,
   snap,
   theme,
@@ -1037,14 +1042,21 @@ export function CwCockpit({
   // `sendCwArmed` refuses while TX is off where `sendCw` would turn it on (rule 5).
   // A profile on the built-in sets sends their steps, as Settings shows them: a mapping is the
   // profile's only while it has keys of its own, and the one an earlier Reset left is not read.
+  const roles = esmRoles(
+    cwBuiltInRoles(macros),
+    profileMacros && profileMacros.length ? profiles[activeProfile]?.esmRoles : undefined,
+  )
+  // CW SPEED MATCH: an answer is marked as one only while the switch is on, so with it off every
+  // send goes to the engine exactly as before. The engine decides the speed (and falls back to
+  // the operator's own without a fresh measurement of the station being worked).
+  const speedMatchOn = !!speedMatch?.on
+  const speedMatchRef = useRef({ on: speedMatchOn, roles })
+  speedMatchRef.current = { on: speedMatchOn, roles }
   const esm = useEsmHost({
     cockpit: 'cw',
     on: !!esmSetting?.on && !!fieldDay && control,
     callOnce: !!esmSetting?.callOnce,
-    roles: esmRoles(
-      cwBuiltInRoles(macros),
-      profileMacros && profileMacros.length ? profiles[activeProfile]?.esmRoles : undefined,
-    ),
+    roles,
     slots: macros,
     guards: () => ({
       cockpit: 'cw',
@@ -1052,10 +1064,11 @@ export function CwCockpit({
       txAllowed: snapRef.current.radio.txAllowed,
       clockRepair: snapRef.current.radio.clockRepairTxHeld === true,
     }),
-    send: async ({ text, call }: EsmMessage) => {
+    send: async ({ role, text, call }: EsmMessage) => {
       await commitHisCall(call)
       try {
-        await sendCwArmed(text)
+        if (speedMatchRef.current.on && role !== 'cq') await sendCwArmed(text, true)
+        else await sendCwArmed(text)
         return null
       } catch (e) {
         return e instanceof Error ? e.message : String(e)
@@ -1071,7 +1084,7 @@ export function CwCockpit({
   //
   // It answers whether the line went to `send_cw` (true) or was refused here (false), for the
   // macro editor's Send once, which keeps the operator's draft open when the send was refused.
-  const send = (line: string): boolean => {
+  const send = (line: string, key: string | null = null): boolean => {
     if (!control) return false
     if (!line.trim()) return false
     // The engine blocks keying outside privileges anyway; surface why up front.
@@ -1082,16 +1095,19 @@ export function CwCockpit({
     // #286: an edited His Call, or the decoder's guess in it, lands BEFORE the send that may
     // expand `!` to it.
     const committing = hisCallEditing.current || guessing.current ? commitHisCall() : null
+    // Through the ref: the keyboard handler is bound once and calls the first render's `send`.
+    const answer =
+      speedMatchRef.current.on && cwSendsAnswer(speedMatchRef.current.roles, key, line)
     void withErrorToast(async () => {
       if (committing) await committing
-      return sendCw(line)
+      return answer ? sendCw(line, true) : sendCw(line)
     }, t('cw.send.failed'))
     return true
   }
   /** One F-key macro, from its button or the editor's Send once: `send()` and Enter Sends
    *  Message hearing the key, as the F-key itself does. */
   const sendMacro = (m: { key: string; text: string }): boolean => {
-    const sent = send(m.text)
+    const sent = send(m.text, m.key)
     esm.noteKey(m.key)
     return sent
   }
@@ -1308,7 +1324,7 @@ export function CwCockpit({
         e.preventDefault()
         // Not while the editor is open: the caret is in it, as in RTTY and PSK.
         if (!e.repeat && !editRef.current.editorOpen) {
-          send(macro.text)
+          send(macro.text, macro.key)
           esmRef.current.noteKey(macro.key)
         }
       } else if (e.key === 'PageUp') {
@@ -2605,6 +2621,20 @@ export function CwCockpit({
               onToggle={esm.toggle}
               preview={esm.preview}
             />
+          )}
+          {/* CW SPEED MATCH's switch, beside ESM's while a contest runs. */}
+          {speedMatch && fieldDay && control && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={speedMatch.on}
+              aria-label={t('cw.speedMatch.label')}
+              className={`esm-switch${speedMatch.on ? ' on' : ''}`}
+              onClick={() => speedMatch.onSwitch(!speedMatch.on)}
+              title={t('cw.speedMatch.title')}
+            >
+              {t('cw.speedMatch.short')}
+            </button>
           )}
         </div>
       </div>

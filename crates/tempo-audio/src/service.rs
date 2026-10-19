@@ -153,10 +153,13 @@ fn flex_client_ip(t: &Transport) -> Option<&str> {
         .then(|| t.flex_radio_ip.trim())
 }
 
-/// Whether the CAT keyer paces each word at the speed the radio reports
-/// ([`crate::rigmodels::cat_cw_has_no_sure_stop`]). Not when Nexus's own Flex client serves the
-/// radio: it keys through CWX, which `cwx clear` stops, and follows the radio's speed itself.
-fn cat_cw_paced_by_radio(model: u32, native_flex: bool) -> bool {
+/// Whether the CAT keyer tells the radio Nexus's speed at the start of every message, changed or
+/// not ([`crate::rigmodels::cat_cw_has_no_sure_stop`]): each word is paced at Nexus's speed so a
+/// stop leaves at most the word in flight, and that holds only if the radio keys at that speed.
+/// Nexus's speed wins over one set on the radio (operator ruling, 2026-10-19). Not when Nexus's own
+/// Flex client serves the radio: it keys through CWX, which `cwx clear` stops, and follows the
+/// radio's speed itself.
+fn cat_cw_speed_set_per_message(model: u32, native_flex: bool) -> bool {
     !native_flex && crate::rigmodels::cat_cw_has_no_sure_stop(model)
 }
 
@@ -3525,6 +3528,13 @@ struct RadioLoop {
     /// CAT→WinKeyer at the same WPM found the cache already holding that number and pushed
     /// nothing, so the hardware keyer never heard a speed at all. One cache per device.
     last_cat_wpm: u32,
+    /// The CW speed match speed (WPM) the word in flight was keyed at; `None` when it keyed at the
+    /// operator's own. A keyer keeps a matched speed until that word's window ends
+    /// (`cw_busy_until`).
+    cw_word_matched: Option<u32>,
+    /// The radio's CAT keyer speed was last set to a CW speed match speed, so the operator's own
+    /// goes back once the answer has keyed (the paddle included), not only with the next message.
+    cat_wpm_matched: bool,
     /// Last CW keyer speed (WPM) pushed to the open WinKeyer (WK Set Speed, `02 nn`).
     /// Reset to 0 whenever the port is (re)opened: a keyer that just came up is back on its
     /// own pot / power-on speed and knows nothing of what we told the last one.
@@ -4251,6 +4261,8 @@ impl RadioLoop {
             mode_giveup: None,
             mode_saw_reject: false,
             last_cat_wpm: 0, // 0 = unset → first send pushes the speed
+            cw_word_matched: None,
+            cat_wpm_matched: false,
             #[cfg(feature = "serial")]
             last_winkeyer_wpm: 0, // 0 = unset → the open pushes the speed
             cw_busy_until: 0.0,
@@ -5909,44 +5921,6 @@ impl RadioLoop {
         }
     }
 
-    /// ⛔ A RADIO NO CAT CW STOP IS SURE TO REACH IS NEVER HANDED MORE THAN THE WORD IT IS KEYING
-    /// (IL QSO Party: a Flex over SmartSDR CAT went on keying a macro after Esc). Nothing tells
-    /// Nexus how much such a radio still holds, so each word is timed: the next one goes when
-    /// this one and its word space have been keyed. That timing is only as good as the speed it
-    /// assumes, and the radio's speed can be changed where Nexus never sees it (SmartSDR, a
-    /// Maestro, the front panel). Timed at Nexus's own speed, a slower radio fell behind by part
-    /// of a word with every word, and the backlog played out after a stop. So the radio is asked
-    /// its speed right after each word is handed over (the read overlaps the keying, so it adds no
-    /// gap), and the word is timed at that.
-    ///
-    /// The radio's speed is followed, never fought, as Nexus's Flex client does: one Nexus did not
-    /// set becomes the WPM control's, and is not pushed back. A radio that does not answer keeps
-    /// the timing at Nexus's speed. NEEDS-BENCH: whether a radio's keyer runs at the speed it
-    /// reports, and how much the radio's own latency adds.
-    fn pace_cw_at_radio_speed(
-        &mut self,
-        rig: &mut Rig,
-        engine: &Arc<Mutex<Engine>>,
-        text: &str,
-        now: f64,
-    ) {
-        let Some(radio) = rig
-            .read_meter_f32("KEYSPD")
-            .map(|w| w.round() as u32)
-            .filter(|w| (5..=100).contains(w))
-        else {
-            return;
-        };
-        self.cw_busy_until = now + cw_word_window_ms(text, radio);
-        if radio != self.last_cat_wpm {
-            let mut eng = engine_lock(engine);
-            eng.set_cw_wpm(radio);
-            // The control's range is narrower than the radio's: what it holds is what this loop
-            // would send, so the radio's speed is not sent back over it.
-            self.last_cat_wpm = eng.cw_wpm();
-        }
-    }
-
     fn may_key(&self) -> bool {
         !self.handoff_deferred && !self.cat_hold_active && !self.switch_unhanded
     }
@@ -6402,6 +6376,7 @@ impl RadioLoop {
         self.mode_giveup = None;
         self.mode_saw_reject = false;
         self.last_cat_wpm = 0;
+        self.cat_wpm_matched = false;
         self.cw_radio_wpm = None;
         // The WinKeyer is not the thing being handed off (it is its own box on its own
         // port), but the handoff resets every "already told it" cache and this one costs
@@ -9804,6 +9779,7 @@ impl RadioLoop {
                         // The control's range is narrower than the radio's: what it holds is what
                         // this loop would send, so the radio's speed is not sent back over it.
                         self.last_cat_wpm = eng.cw_wpm();
+                        self.cat_wpm_matched = false;
                     }
                 }
             }
@@ -9816,15 +9792,36 @@ impl RadioLoop {
                 .as_ref()
                 .and_then(CatDaemon::flex)
                 .is_some_and(crate::flex::FlexDaemon::take_operator_break);
-            let (abort, wpm, word, soundcard, pitch, winkeyer_port, serial_key, in_cw) = {
+            let (abort, wpm, word, starts, soundcard, pitch, winkeyer_port, serial_key, in_cw) = {
                 let mut eng = engine_lock(engine);
                 if paddle {
                     eng.cw_operator_break();
                 }
+                let abort = eng.take_cw_abort();
+                let word = if ready { eng.poll_cw_word() } else { None };
+                // CW SPEED MATCH: a matched speed changes only BETWEEN messages. A word taken now
+                // keys at its message's speed; while a MATCHED word still keys, its speed holds (a
+                // keyer told a new speed now would change it mid-word); otherwise the next queued
+                // word's speed, or the operator's own. A word keyed at the operator's own speed
+                // follows the control live, as the WinKeyer always has (issue #135).
+                let wpm = match &word {
+                    Some((_, w, _)) => *w,
+                    None if now < self.cw_busy_until => {
+                        self.cw_word_matched.unwrap_or_else(|| eng.cw_next_wpm())
+                    }
+                    None => eng.cw_next_wpm(),
+                };
+                let own = eng.cw_wpm();
+                let starts = word.as_ref().is_some_and(|(_, _, starts)| *starts);
+                let word = word.map(|(text, w, _)| {
+                    self.cw_word_matched = (w != own).then_some(w);
+                    text
+                });
                 (
-                    eng.take_cw_abort(),
-                    eng.cw_wpm(),
-                    if ready { eng.poll_cw_one() } else { None },
+                    abort,
+                    wpm,
+                    word,
+                    starts,
                     eng.cw_soundcard(),
                     eng.cw_pitch_hz(),
                     eng.cw_winkeyer_port(),
@@ -9965,6 +9962,23 @@ impl RadioLoop {
                         self.last_winkeyer_wpm = wpm;
                     }
                 }
+            }
+            // CW SPEED MATCH over CAT: once an answer has keyed, the radio's keyer goes back to the
+            // operator's own speed (its paddle keys at it too), not only with the next message. A
+            // WinKeyer gets the same from the per-tick push above. Only after a matched speed, so
+            // with speed match off nothing new reaches the wire.
+            if word.is_none()
+                && self.cat_wpm_matched
+                && now >= self.cw_busy_until
+                && self.may_key()
+                && !soundcard
+                && winkeyer_port.is_none()
+                && serial_key.is_none()
+            {
+                if wpm != self.last_cat_wpm && rig.set_keyspd(wpm).is_ok() {
+                    self.last_cat_wpm = wpm;
+                }
+                self.cat_wpm_matched = false;
             }
             if let Some(text) = word {
                 // Hold the next word until this one finishes keying + a word space (7 dits),
@@ -10107,8 +10121,22 @@ impl RadioLoop {
                         // commands queued ahead of the next poll for no visible gain. At
                         // send time is soon enough here; the hardware keyer, which HOLDS a
                         // speed of its own between overs, is the one that could not wait.
-                        if wpm != self.last_cat_wpm && rig.set_keyspd(wpm).is_ok() {
+                        //
+                        // ⛔ NEXUS'S SPEED ALWAYS WINS on a radio no CAT CW stop is sure to reach
+                        // ([`cat_cw_speed_set_per_message`]): it is told Nexus's speed again at
+                        // the start of EVERY message, so a speed turned on the radio (SmartSDR, a
+                        // Maestro, the front panel) lasts until the next message, and each word is
+                        // paced (`cw_busy_until`, above) at the speed the radio was just told.
+                        let native_flex = self
+                            .rigctld_proc
+                            .as_ref()
+                            .and_then(CatDaemon::flex)
+                            .is_some();
+                        let reassert = starts
+                            && cat_cw_speed_set_per_message(self.applied.rig_model, native_flex);
+                        if (wpm != self.last_cat_wpm || reassert) && rig.set_keyspd(wpm).is_ok() {
                             self.last_cat_wpm = wpm;
+                            self.cat_wpm_matched = wpm != engine_lock(engine).cw_wpm();
                         }
                         self.ensure_commanded(rig); // read-only launch: assert before key
                                                     // QUOTE WHAT THE RIG SAID (#332). The sentence alone was
@@ -10121,14 +10149,6 @@ impl RadioLoop {
                         let asked = Instant::now();
                         let cw_err = rig.send_morse(&text).err();
                         if cw_err.is_none() {
-                            let native_flex = self
-                                .rigctld_proc
-                                .as_ref()
-                                .and_then(CatDaemon::flex)
-                                .is_some();
-                            if cat_cw_paced_by_radio(self.applied.rig_model, native_flex) {
-                                self.pace_cw_at_radio_speed(rig, engine, &text, now);
-                            }
                             self.cw_keying_until = self.cw_busy_until;
                         }
                         // Nexus's own Flex client says why it sent nothing (the slice not in CW,
@@ -16571,6 +16591,7 @@ mod tests {
     mod clock_repair_tests;
     mod contest_reply;
     mod contest_status;
+    mod cw_speed_match;
     mod cw_stop;
     mod decode_in_flight;
     mod failed_unkey;

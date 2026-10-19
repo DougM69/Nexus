@@ -2090,6 +2090,16 @@ const NO_OFF_HALF: &[(&str, &str)] = &[
         "Its No declines a reply that only a Yes would queue: nothing is on the air to stop.",
     ),
     (
+        "send_cw",
+        "Its `reply` says whether the message answers a station (the speed it may key at), not a \
+         switch: the CW is stopped by `stop_cw`.",
+    ),
+    (
+        "send_cw_armed",
+        "Its `reply` says whether the message answers a station, not a switch: the CW is stopped \
+         by `stop_cw`.",
+    ),
+    (
         "sstv_send",
         "Whether the call goes in the picture is part of what is sent, not a switch.",
     ),

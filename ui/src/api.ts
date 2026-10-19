@@ -2475,15 +2475,22 @@ export async function setRigFunc(
 }
 
 /** Queue CW to transmit (CAT keyer). `text` is an F-key macro template or literal
- * type-ahead — the engine expands the tokens and the rig keys it. */
-export async function sendCw(text: string): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('send_cw', { text })
+ * type-ahead — the engine expands the tokens and the rig keys it. `reply`: the message answers a
+ * station, so CW speed match may key it at that station's speed (`cwSendsAnswer`). */
+export async function sendCw(text: string, reply = false): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('send_cw', { text, reply })
 }
 
 /** Queue CW for Enter Sends Message. Unlike `sendCw` it NEVER turns TX on: it rejects, with the
  *  reason, while TX is off or any transmit gate refuses, and then nothing was taken. */
-export async function sendCwArmed(text: string): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('send_cw_armed', { text })
+export async function sendCwArmed(text: string, reply = false): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('send_cw_armed', { text, reply })
+}
+
+/** CW speed match on or off: the contest strip's switch, saved alone (never a settings-form save).
+ *  It changes only the speed an answer to a station keys at. */
+export async function setCwSpeedMatch(on: boolean): Promise<void> {
+  await invoke('set_cw_speed_match', { on })
 }
 
 /** The ESM switch in a cockpit's TX dock, saved alone (never a settings-form save). */
