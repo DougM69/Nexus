@@ -351,13 +351,15 @@ describe('A− / A+ sizes the entry and the last contacts', () => {
     // At 100 % the boxes are read from a chair: 40 px against the app's 14 px input…
     expect(fontPx(callBox())).toBe(40)
     expect(fontPx(newestRow())).toBe(20)
-    // …which is what the same box gets outside this window: the main window's log line is untouched.
+    // …and outside this window the same box keeps the entry's own 30 px: the main window's log line
+    // is untouched by the window's scale. (It read 14 here while `.settings-input` out-cascaded the
+    // entry's own size in the main window; styles-contest-entry-size.test.tsx holds that down.)
     const nest = (parent: Element, tag: string, className: string) =>
       parent.appendChild(Object.assign(document.createElement(tag), { className }))
     const strip = nest(document.body, 'div', 'log-entry log-entry-fd')
     const field = nest(nest(strip, 'div', 'le-fd-big'), 'label', 'le-fd-field le-fd-field-call')
     const mainBox = nest(field, 'input', 'settings-input mono le-fd-input le-fd-input-call')
-    expect(fontPx(mainBox), 'the main window keeps the app input size').toBe(14)
+    expect(fontPx(mainBox), "the main window keeps the entry's own size").toBe(30)
     strip.remove()
 
     fireEvent.click(larger())
