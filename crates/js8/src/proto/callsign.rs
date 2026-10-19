@@ -40,6 +40,11 @@ pub enum CallRef {
     Js8Net,
     /// Index into [`GROUPS`]: `NBASECALL + 4 + idx`.
     Group(u8),
+    /// A destination no 28-bit field can carry, by name: a group not in [`GROUPS`] or a compound
+    /// call. JS8Call puts `<....>` in the directed frame (`packDirectedMessage`,
+    /// varicode.cpp:1578-1584) and sends the name in a compound frame instead (`buildMessageFrames`
+    /// CASE 2, :2100-2135), so [`pack28`] refuses it. Only [`CallRef::parse_destination`] makes one.
+    Compound(String),
 }
 
 impl CallRef {
@@ -62,6 +67,14 @@ impl CallRef {
         None
     }
 
+    /// A destination as JS8Call's `isValidCallsign` (varicode.cpp:1266-1290) takes it, on the
+    /// upper-cased, trimmed text: everything [`CallRef::parse`] takes, then a custom @group or a
+    /// compound call ([`is_compound_call`]) as [`CallRef::Compound`].
+    pub fn parse_destination(s: &str) -> Option<CallRef> {
+        let u = s.trim().to_ascii_uppercase();
+        CallRef::parse(&u).or_else(|| is_compound_call(&u).then_some(CallRef::Compound(u)))
+    }
+
     /// The exact upstream text.
     pub fn render(&self) -> String {
         match self {
@@ -70,12 +83,17 @@ impl CallRef {
             CallRef::AllCall => "@ALLCALL".to_string(),
             CallRef::Js8Net => "@JS8NET".to_string(),
             CallRef::Group(i) => GROUPS.get(*i as usize).copied().unwrap_or("@?").to_string(),
+            CallRef::Compound(s) => s.clone(),
         }
     }
 
-    /// `@`-destinations: ALLCALL, JS8NET and the group table.
+    /// `@`-destinations: ALLCALL, JS8NET, the group table and a custom group.
     pub fn is_group(&self) -> bool {
-        matches!(self, CallRef::AllCall | CallRef::Js8Net | CallRef::Group(_))
+        match self {
+            CallRef::AllCall | CallRef::Js8Net | CallRef::Group(_) => true,
+            CallRef::Compound(s) => s.starts_with('@'),
+            CallRef::Base(_) | CallRef::Placeholder => false,
+        }
     }
 }
 
@@ -117,6 +135,7 @@ pub fn pack28(c: &CallRef) -> Option<u32> {
             return (usize::from(*i) < GROUPS.len()).then(|| NBASECALL + 4 + u32::from(*i))
         }
         CallRef::Base(s) => s.trim().to_ascii_uppercase(),
+        CallRef::Compound(_) => return None,
     };
     if call.contains('/') {
         return None; // `/P` is split by the caller; anything else is a compound call (pack50)
@@ -328,7 +347,12 @@ pub fn is_compound_call(s: &str) -> bool {
     if raw_shape_and_pair_ok(raw_core) {
         return false;
     }
-    // (3) isValidCompoundCallsign, verbatim.
+    // (3) `compound_callsign_pattern` ends in `\b` (:42), so the whole text matches only when
+    // it ends in a letter or digit: never a bare "@" or a trailing "/".
+    if !b.last().is_some_and(u8::is_ascii_alphanumeric) {
+        return false;
+    }
+    // isValidCompoundCallsign, verbatim.
     let body_ok = b.iter().enumerate().all(|(i, &c)| {
         c.is_ascii_digit() || c.is_ascii_uppercase() || c == b'/' || (i == 0 && c == b'@')
     });
@@ -573,5 +597,56 @@ mod tests {
         assert!(!may_join_group("@APRSIS"));
         assert!(!may_join_group("@JS8NET"));
         assert!(may_join_group("@FUN"), "control: any other group may be");
+    }
+
+    /// A group JS8Call's "Add New Station or Group…" takes (`startsWith("@")` and
+    /// `isCompoundCallsign`, mainwindow.cpp:1053-1058) is at most nine characters without its
+    /// slashes (varicode.cpp:1233-1236) and, as `compound_callsign_pattern` ends in `\b` (:42),
+    /// ends in a letter or digit: a bare "@" or a trailing "/" never matches the whole text.
+    #[test]
+    fn a_group_name_is_valid_by_js8calls_rule() {
+        for ok in ["@MAGNET", "@MAGNETIC", "@A", "@MAG/NET", "@QRP"] {
+            assert!(is_compound_call(ok), "{ok:?}");
+        }
+        for bad in ["@", "@MAG/", "@MAGNETICS", "@MAG NET", "@MAG@", "KD9TAW/"] {
+            assert!(!is_compound_call(bad), "{bad:?}");
+        }
+    }
+
+    /// The destinations JS8Call's `isValidCallsign` takes: the specials and built-in groups keep
+    /// their 28-bit codes, a custom group or a compound call is carried by name in a compound
+    /// frame and never packs into 28 bits.
+    #[test]
+    fn a_destination_is_what_js8call_can_address() {
+        assert_eq!(CallRef::parse_destination("@qrp"), CallRef::parse("@QRP"));
+        assert!(matches!(
+            CallRef::parse_destination("@QRP"),
+            Some(CallRef::Group(_))
+        ));
+        assert_eq!(
+            CallRef::parse_destination(" @allcall "),
+            Some(CallRef::AllCall)
+        );
+        assert_eq!(
+            CallRef::parse_destination("w1aw"),
+            Some(CallRef::Base("W1AW".into()))
+        );
+        let magnet = CallRef::parse_destination(" @magnet ").expect("a custom group");
+        assert_eq!(magnet, CallRef::Compound("@MAGNET".into()));
+        assert_eq!(magnet.render(), "@MAGNET");
+        assert!(magnet.is_group());
+        assert_eq!(pack28(&magnet), None, "never in a 28-bit field");
+        let compound = CallRef::parse_destination("KD4JRX/WFD").expect("a compound call");
+        assert_eq!(compound, CallRef::Compound("KD4JRX/WFD".into()));
+        assert!(!compound.is_group());
+        for bad in ["@", "@MAG/", "@MAGNETICS", "HELLO", ""] {
+            assert_eq!(CallRef::parse_destination(bad), None, "{bad:?}");
+        }
+        // packAlphaNumeric50("@MAGNET") by hand (varicode.cpp:857-943): "@MA GNE T  " (a space
+        // put in at slots 3 and 7, padded to 11); '@' = 38, ' ' = 36 in `alphanumeric`;
+        // 38 → ·38+M(22) → ·38+A(10) → ·2+0 → ·38+G(16) → ·38+N(23) → ·38+E(14) → ·2+0 →
+        // ·38+T(29) → ·38+36 → ·38+36.
+        assert_eq!(pack50("@MAGNET"), Some(671_056_046_796_176));
+        assert_eq!(unpack50(671_056_046_796_176), "@MAGNET");
     }
 }
