@@ -129,6 +129,11 @@ pub struct Station {
     /// is reset by every advance, so it cannot answer "did we ever key?").
     /// See [`Self::report_impossible_exchange`].
     pub keyed_on_air: bool,
+    /// True when the partner's bare 73 closed the QSO while we were `Confirming` (we had sent
+    /// our roger). WSJT-X answers that 73 at ROGERS with Tx6, its CQ
+    /// (`widgets/mainwindow.cpp:9216-9231`); the engine reads this to do the same with the rest
+    /// of an over still on the air. Nothing is queued for a later over.
+    pub signed_off_with_73: bool,
     /// Human-readable event log.
     pub transcript: Vec<String>,
 }
@@ -182,6 +187,7 @@ impl Station {
             report_follows_latest_decode: false,
             advanced_on_air: false,
             keyed_on_air: false,
+            signed_off_with_73: false,
             transcript: Vec::new(),
         }
     }
@@ -206,6 +212,7 @@ impl Station {
             report_follows_latest_decode: false,
             advanced_on_air: false,
             keyed_on_air: false,
+            signed_off_with_73: false,
             transcript: Vec::new(),
         }
     }
@@ -409,6 +416,7 @@ impl Station {
             // sets the first; only `after_tx` sets the second.
             advanced_on_air: false,
             keyed_on_air: false,
+            signed_off_with_73: false,
             transcript: vec![log_line],
         };
         // The resume table above names the Tx we queue; only now, with both calls in
@@ -448,45 +456,6 @@ impl Station {
         !crate::message::is_std_call(&self.mycall)
             || dx.is_some_and(|dx| !crate::message::is_std_call(dx))
             || dx.is_some_and(|dx| crate::message::suffix_conflict(&self.mycall, dx))
-    }
-
-    /// True when either call carries a slash at all. **Receive-side tolerance only**:
-    /// a partner who chose the hashed forms — a station running a Nexus from before
-    /// this fix, say — answers a `/P` QSO grid-less, and the [`Self::observe`] arms
-    /// keyed on this must still advance the exchange. Never decides what we send.
-    fn is_compound_qso(&self) -> bool {
-        crate::message::is_compound(&self.mycall)
-            || self
-                .dxcall
-                .as_deref()
-                .is_some_and(crate::message::is_compound)
-    }
-
-    /// True when this QSO's overs may arrive — or must go out — in the DEGRADED i3=4
-    /// vocabulary, whose ENTIRE payload set is blank / `RRR` / `RR73` / `73`
-    /// (`pack77_4` spends 2 bits on `nrpt`; there is no grid field and no report
-    /// field). Gates the [`Self::observe`] arm that must accept an EARLY roger — an
-    /// `RRR`/`RR73` where a plain QSO would still owe us an R-report — as genuine
-    /// progress. **Never decides what we send** — [`Self::hashed_form`] does that.
-    ///
-    /// **Not the gate for the grid-less floor arm.** That one is
-    /// [`Self::needs_hashed_form`] alone: this predicate is deliberately the wider of the
-    /// two, and admitting a plain-form `/P` pair to an arm that ROGERS made a portable
-    /// operator acknowledge a report nobody had sent.
-    ///
-    /// Two sources, and BOTH have to be here:
-    ///
-    /// * [`Self::needs_hashed_form`] — the pairs *we* cannot express in Type 1/2, so
-    ///   this is the vocabulary we put on the air ourselves. [`Self::is_compound_qso`]
-    ///   alone misses them: a 77-bit nonstandard call need carry no slash at all
-    ///   (`YW18FIFA`), and the `/P` × `/R` conflict is a property of neither call on
-    ///   its own. Guarding the degraded arms on the slash test is why those pairs
-    ///   livelocked — every over was legal, and no arm would look at it.
-    /// * [`Self::is_compound_qso`] — receive-side tolerance for a partner who degrades
-    ///   where we would not: a `/P` station running a Nexus from before `c745a842`
-    ///   answers a plain-form QSO grid-less, and we must still advance.
-    fn degraded_vocabulary(&self) -> bool {
-        self.needs_hashed_form() || self.is_compound_qso()
     }
 
     /// True when a NUMERIC report can ride this pair's overs in at least one direction.
@@ -941,6 +910,7 @@ impl Station {
                 | (State::Confirming, Msg::Rrr { to, de })
                     if crate::message::same_call(to, &self.mycall) && self.from_dx(de) =>
                 {
+                    self.signed_off_with_73 = matches!(m, Msg::Bye73 { .. });
                     self.pending = None;
                     self.state = State::Done;
                     self.log("got the closing over → QSO complete".into());
@@ -1113,19 +1083,24 @@ impl Station {
                     self.state = State::AwaitRoger;
                     self.log(format!("{de} answered my call → sending report {rpt}"));
                 }
-                // The compound DX rogered my report (RR73/RRR) → QSO complete, send 73.
+                // The DX rogered my report with RR73/RRR, skipping its R+report → QSO
+                // complete, send 73. Every pair, as WSJT-X 3.0.2 answers it
+                // (`widgets/mainwindow.cpp:9171-9214`): a closing word while our QSO progress
+                // is past CALLING and short of ROGERS (we sent the grid or the report) sets
+                // `m_ntx=5`, the 73. Without it a standard pair kept sending the report at a
+                // partner that had already closed. (A bare 73 here is not a closing word to
+                // WSJT-X — `word_3_as_number == 73` counts only at ROGERS — so it still
+                // changes nothing.)
                 (State::AwaitRoger, Msg::Rr73 { to, de })
                 | (State::AwaitRoger, Msg::Rrr { to, de })
-                    if self.degraded_vocabulary()
-                        && crate::message::same_call(to, &self.mycall)
-                        && self.from_dx(de) =>
+                    if crate::message::same_call(to, &self.mycall) && self.from_dx(de) =>
                 {
                     self.pending = Some(Msg::Bye73 {
                         to: de.clone(),
                         de: self.mycall.clone(),
                     });
                     self.state = State::Done;
-                    self.log("compound DX rogered → sending 73, QSO complete".into());
+                    self.log("DX rogered my report → sending 73, QSO complete".into());
                 }
                 // THE FLOOR OF THE DEGRADED VOCABULARY, and the arm whose absence
                 // livelocked SEVEN of the sixteen callsign-class pairs — every pair whose
@@ -1494,6 +1469,30 @@ mod start_context_tests {
         }
     }
 
+    /// Only the partner's bare 73 to our roger is WSJT-X's sign-off at ROGERS (`:9216-9231`);
+    /// its RR73 or RRR there closes the QSO too, but is not that sign-off.
+    #[test]
+    fn the_partners_73_to_our_roger_is_recorded_as_its_sign_off() {
+        for (closing, signed_off) in [
+            ("KD9TAW W9XYZ 73", true),
+            ("KD9TAW W9XYZ RR73", false),
+            ("KD9TAW W9XYZ RRR", false),
+        ] {
+            let mut s = start("KD9TAW W9XYZ R-05", -9);
+            assert_eq!(s.state, State::Confirming, "premise: our roger");
+            assert!(!s.signed_off_with_73);
+            s.observe(&[dec(closing, -9)]);
+            assert_eq!(s.state, State::Done, "{closing}");
+            assert_eq!(s.signed_off_with_73, signed_off, "{closing}");
+        }
+        let mut s = start("KD9TAW W9XYZ R-05", -9);
+        s.observe(&[dec("KD9TAW K2DEF 73", -9)]);
+        assert!(
+            !s.signed_off_with_73,
+            "another station's 73 is not the sign-off"
+        );
+    }
+
     #[test]
     fn dx_sent_rr73_sends_final_73() {
         let s = start("KD9TAW W9XYZ RR73", -8);
@@ -1847,6 +1846,43 @@ mod start_context_tests {
         s.observe(&[dec("KD9TAW W9XYZ RR73", -8)]);
         assert_eq!(s.state, State::Done, "an early RR73 completes the QSO");
         assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW 73"));
+    }
+
+    /// WSJT-X `mainwindow.cpp:9171-9214`: RR73 (or RRR) while we send our report → 73.
+    #[test]
+    fn dx_rogers_our_report_with_rr73_skipping_its_r_report() {
+        for closing in ["KD9TAW W9XYZ RR73", "KD9TAW W9XYZ RRR"] {
+            let mut s = Station::calling_cq(ME, MY_GRID);
+            s.observe(&[dec("KD9TAW W9XYZ EN37", -8)]);
+            assert_eq!(s.state, State::AwaitRoger, "premise: sending the report");
+            s.observe(&[dec(closing, -8)]);
+            assert_eq!(s.state, State::Done, "{closing}");
+            assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW 73"));
+            s.after_tx();
+            assert_eq!(s.pending_text(), None, "{closing}: the 73 goes once");
+        }
+    }
+
+    /// Only the station being worked closes it, only to us, and a bare 73 is not a roger here
+    /// (WSJT-X reads `73` as closing only at ROGERS): the report goes again.
+    #[test]
+    fn only_the_partners_roger_to_us_closes_a_qso_awaiting_the_roger() {
+        for other in [
+            "KD9TAW K2DEF RR73",
+            "K2DEF W9XYZ RR73",
+            "KD9TAW W9XYZ 73",
+            "W9XYZ RR73",
+        ] {
+            let mut s = Station::calling_cq(ME, MY_GRID);
+            s.observe(&[dec("KD9TAW W9XYZ EN37", -8)]);
+            s.observe(&[dec(other, -8)]);
+            assert_eq!(s.state, State::AwaitRoger, "{other}");
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("W9XYZ KD9TAW -08"),
+                "{other}"
+            );
+        }
     }
 
     #[test]
