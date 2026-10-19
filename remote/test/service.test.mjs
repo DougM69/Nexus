@@ -1201,8 +1201,9 @@ test('renaming a station is housekeeping: allowed on your own, and survives a la
   await pair.browser.post(`stations/${pair.stationId}/rename`, { name: 'Still mine' })
   const { value: after } = await pair.browser.post('session')
   assert.equal(after.stations[0].name, 'Still mine')
-  // ...while operating is refused, which is the line this sits above.
-  await pair.browser.post(`stations/${pair.stationId}/device`, { name: 'Browser' }, 403)
+  // ...while operating is refused, which is the line this sits above. (Registering a browser is free,
+  // as enrolling is: the relay is the internet's.)
+  assert.equal((await pair.browser.post(`stations/${pair.stationId}/turn`, {}, 403)).value.error, 'trialRequired')
 
   // Somebody else's station is not theirs to rename.
   const other = await app.owner()

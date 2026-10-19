@@ -103,14 +103,16 @@ test('the entitlement is read from the trial and the plan together, at every sta
 
 test('a subscriber whose trial has ended still passes every internet gate, and loses them when the plan ends', async () => {
   const pair = await plain.paired()
+  // Registering a browser is free (enrolling is), so the gate is the ticket an approved browser takes.
+  await plain.approved(pair)
   await plain.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() - DAY, pair.browser.accountId).run()
-  const path = `stations/${pair.stationId}/device`
-  const { value: refused } = await pair.browser.post(path, { name: 'Browser' }, 403)
+  const path = `stations/${pair.stationId}/ticket`
+  const { value: refused } = await pair.browser.post(path, {}, 403)
   assert.equal(refused.error, 'trialRequired', 'positive control: an ended trial alone is refused')
   await subscribe(plain, pair.browser.accountId, 'active', Date.now() + 30 * DAY)
-  await pair.browser.post(path, { name: 'Browser' })
+  await pair.browser.post(path, {})
   await plain.db.prepare("UPDATE subscriptions SET status='canceled' WHERE account_id=?").bind(pair.browser.accountId).run()
-  assert.equal((await pair.browser.post(path, { name: 'Browser' }, 403)).value.error, 'trialRequired')
+  assert.equal((await pair.browser.post(path, {}, 403)).value.error, 'trialRequired')
 })
 
 test('a subscriber pairs whatever a sibling sign-in spent, and paying starts no trial clock', async () => {
