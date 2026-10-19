@@ -12455,6 +12455,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--accent);
   color: var(--accent-ink);
 }
+/* Spot me (ContestSpotMe.tsx), beside Running / S&P: the comment it sends, then the button. */
+.contest-spot-me {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.contest-spot-comment {
+  width: 12ch;
+  min-height: 36px;
+  font-family: var(--font-mono);
+}
+.contest-spot-btn {
+  min-height: 36px;
+  font-weight: 700;
+  white-space: nowrap;
+}
 
 /* Export buttons in the Field Day header (moved from deleted LogView), right after Running / S&P:
    pushed to the row's far end, across a window-wide screen they sat a long way from the contest
@@ -15811,6 +15827,31 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .bandmap-dial.blocked {
   background: var(--state-weak);
+}
+/* Frequency markers (features/freqMarkers.ts): on the track's right edge, at their own frequency,
+   clear of the spot labels on the left; above the dial line so a marker on the dial still takes a
+   click. */
+.bandmap-marker {
+  position: absolute;
+  right: 2px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 15px;
+  padding: 0 5px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--state-warn);
+  border-radius: 3px;
+  color: var(--state-warn);
+  font-size: calc(10px * var(--text-scale));
+  font-weight: 700;
+  cursor: pointer;
+  z-index: 4;
+}
+.bandmap-marker:hover,
+.bandmap-marker:focus-visible {
+  background: color-mix(in srgb, var(--state-warn) 18%, var(--bg-elev-2));
 }
 .bandmap-dial.blocked .bandmap-dial-lbl {
   color: var(--state-weak);

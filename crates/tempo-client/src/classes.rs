@@ -37,6 +37,7 @@ use Class::{RefusedHere, RunsAtShack, RunsHere, StartsTx, StopsTx};
 /// One row per registered command, in name order: the command, its class, and why.
 #[rustfmt::skip]
 pub const CLASSES: &[(&str, Class, &str)] = &[
+    ("add_freq_marker",                RunsAtShack, "Marks the shack's dial on the band map; local to the station, posts nothing."),
     ("add_radio",                      RunsAtShack, "Adds a radio to the shack's roster."),
     ("all_txt_location",               RunsAtShack, "The path of the shack's decode log, for display."),
     ("amp_command",                    RunsAtShack, "Band up, band down or operate on the shack's amplifier; keys nothing."),
@@ -107,6 +108,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("contest_remove_last",            RunsAtShack, "Takes back the newest contact in the shack's contest log; kept, so it can be put back."),
     ("contest_removed",                RunsAtShack, "The contest contacts taken back at the shack."),
     ("contest_restore",                RunsAtShack, "Puts a taken-back contact back in the shack's contest log."),
+    ("contest_self_spot",              RunsAtShack, "Posts the operator's own spot to the shack's DX cluster, one per press, as post_spot does."),
     ("contest_unmerged",               RunsAtShack, "The aged-out contest contacts the shack's logbook does not hold."),
     ("contest_working",                RunsAtShack, "Binds a contest serial to a station at the shack."),
     ("contest_zone_hint",              RunsAtShack, "From the shack's country file."),
@@ -154,6 +156,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("fetch_fd_rules",                 RunsAtShack, "Updates the shack's Field Day rules."),
     ("fetch_lotw_users",               RunsAtShack, "Updates the shack's LoTW user list."),
     ("fetch_tles_now",                 RunsAtShack, "Updates the shack's satellite elements."),
+    ("freq_marker_qsy",                RunsAtShack, "Tunes the shack's rig back to a marked frequency; refused while transmitting, keys nothing."),
     ("geocode_city",                   RunsAtShack, "A city search from the shack, for its location."),
     ("get_activation",                 RunsAtShack, "The shack's activation."),
     ("get_all_rig_models",             RunsAtShack, "The rig catalog, for the shack's rig setup."),
@@ -187,6 +190,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("get_fd_rules_status",            RunsAtShack, "The shack's Field Day rules."),
     ("get_fd_ruleset",                 RunsAtShack, "The shack's Field Day rules."),
     ("get_feed_health",                RunsAtShack, "The shack's live feeds."),
+    ("get_freq_markers",               RunsAtShack, "The shack's band map markers for this contest; changes nothing."),
     ("get_getting_out",                RunsAtShack, "Who is hearing the shack."),
     ("get_iss_pass",                   RunsAtShack, "From the shack's location."),
     ("get_journey",                    RunsAtShack, "From the shack's logbook."),
@@ -355,6 +359,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("redecode",                       RunsAtShack, "Runs the shack's decoder again."),
     ("release_stream_mic",             StopsTx,     "Ends a microphone over armed through the stream."),
     ("remote_station_action",          RefusedHere, "Remote-access admin stays at the shack."),
+    ("remove_freq_marker",             RunsAtShack, "Deletes a band map marker at the shack."),
     ("remove_radio",                   RunsAtShack, "Removes a radio from the shack's roster."),
     ("rename_radio",                   RunsAtShack, "Renames a radio in the shack's roster."),
     ("repair_clock",                   RefusedHere, "Repairs the shack's clock through an administrator prompt that waits on the shack's own screen."),

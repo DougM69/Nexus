@@ -278,6 +278,11 @@ const SHARED = [
   // is the whole mechanism, as the viewer's path above is: the window writes it and the main window's
   // `storage` listener reads its settings again. Per-surface, the main window would never hear it.
   'nexus.contestScreen.saved',
+  // The contest entry's call, for the band map window's right-click mark, and the "a marker changed"
+  // stamp the band map window hears as a `storage` event (features/freqMarkers.ts). SHARED on purpose:
+  // the entry and the band map are different windows, which is the whole reason for both keys.
+  'nexus.contest.entryCall',
+  'nexus.freqMarkers.changed',
   'nexus.waterfall.detached',
   'nexus.waterfall.gain',
   'nexus.waterfall.palette',

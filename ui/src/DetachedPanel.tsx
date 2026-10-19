@@ -19,7 +19,8 @@ import { t } from './i18n'
 import { useEscStop } from './useEscStop'
 import { publishBandConditions } from './bandConditions'
 import { confirmDialog, ConfirmHost } from './confirm'
-import { setPopupNotifications, withErrorToast } from './toast'
+import { pushToast, setPopupNotifications, withErrorToast } from './toast'
+import { announceMarkersChanged, entryCall, markHere, markerRefusal, MARKERS_CHANGED_KEY } from './features/freqMarkers'
 import { pollSingleFlight } from './singleFlight'
 import { WSPR_WATERFALL_WINDOW, markerWidthHz } from './waterfall'
 import type {
@@ -73,6 +74,10 @@ import {
   setSidebandOverride,
   getFdRuleset,
   type FdRulesetDto,
+  getFreqMarkers,
+  freqMarkerQsy,
+  removeFreqMarker,
+  type FreqMarker,
 } from './api'
 import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
 import { failureToShow, useLatestLogAnswer, useLogStatus } from './features/logSource'
@@ -373,6 +378,29 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     }
   }, [pollsSpots])
 
+  // Band-map pop-out: the station's frequency markers (features/freqMarkers.ts), asked for and never
+  // in the snapshot. Read every 5 s (a marker whose call was logged is gone at the next read), and at
+  // once when another window says one changed.
+  const [freqMarkers, setFreqMarkers] = useState<FreqMarker[]>([])
+  useEffect(() => {
+    if (!isBandMap) return
+    let live = true
+    const load = () => {
+      getFreqMarkers().then((m) => live && setFreqMarkers(m)).catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 5_000)
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === MARKERS_CHANGED_KEY) load()
+    }
+    window.addEventListener('storage', onStorage)
+    return () => {
+      live = false
+      clearInterval(id)
+      window.removeEventListener('storage', onStorage)
+    }
+  }, [isBandMap])
+
   // Drive a command then mirror the returned snapshot immediately (the 300 ms poll would
   // catch it anyway, but this keeps the cockpit snappy).
   const apply = (p: Promise<AppSnapshot>) => {
@@ -609,6 +637,22 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           onWorkSpot={(s) =>
             onWorkSpot({ call: s.call, band: s.band, mode: s.mode, freqMhz: s.freqMhz })
           }
+          markers={freqMarkers}
+          // Jumping back is the station's operator QSY, which refuses while anything transmits.
+          onMarkerQsy={(m) =>
+            void freqMarkerQsy(m.id)
+              .then(setSnap)
+              .catch((e) => pushToast(markerRefusal(e), 'error'))
+          }
+          onMarkerDelete={(m) =>
+            void removeFreqMarker(m.id)
+              .then((list) => {
+                setFreqMarkers(list)
+                announceMarkersChanged()
+              })
+              .catch((e) => pushToast(markerRefusal(e), 'error'))
+          }
+          onMarkHere={() => void markHere(entryCall()).then((list) => list && setFreqMarkers(list))}
         />
       </DetachedShell>
     )

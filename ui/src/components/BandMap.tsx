@@ -1,5 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { SpotRow, NeedTag, AppSnapshot, FieldDayStatus } from '../types'
+import type { FreqMarker } from '../api'
+import { markerMhz } from '../features/freqMarkers'
 import { bandRangeForLabel } from '../band'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
@@ -69,6 +71,17 @@ interface Props {
   wheelSensitivity?: number
   /** Fresh snapshot after a tune, so the dial marker moves without waiting for a poll. */
   onSnap?: (s: AppSnapshot) => void
+
+  // ── Frequency markers (features/freqMarkers.ts) ─────────────────────────────────────────
+  // The station's, per contest session; the map draws this band's and asks for every change.
+  /** Every marker; the map draws the ones on `band`. */
+  markers?: FreqMarker[]
+  /** A click or Enter on a marker: tune back to it. */
+  onMarkerQsy?: (m: FreqMarker) => void
+  /** Delete on a marker. */
+  onMarkerDelete?: (m: FreqMarker) => void
+  /** A right-click on the track: mark the dial. Absent ⇒ the browser's own menu, as before. */
+  onMarkHere?: () => void
 }
 
 /** Compact "how long ago" for a spot tooltip. The unit letter rides inside the message with
@@ -115,6 +128,10 @@ export function BandMap({
   stepHz,
   wheelSensitivity,
   onSnap,
+  markers,
+  onMarkerQsy,
+  onMarkerDelete,
+  onMarkHere,
 }: Props) {
   const marker = useContestSpotMarker(fieldDay)
   // PER-SURFACE (matching BandStrip, which writes the same key): a wide second-monitor
@@ -161,11 +178,20 @@ export function BandMap({
     [spots, spotMode, band],
   )
 
-  // Zoom window: the activity (spots + dial) plus a margin, clamped to the band, with a minimum
+  const bandMarkers = useMemo(
+    () => (markers ?? []).filter((m) => m.band === band.toUpperCase()),
+    [markers, band],
+  )
+
+  // Zoom window: the activity (spots + dial + markers) plus a margin, clamped to the band, with a minimum
   // span. Empty → the whole band. This is what keeps the calls spread out instead of crammed.
   const win = useMemo(() => {
     if (!range) return null
     const anchor = inBand.map((s) => s.freqMhz)
+    for (const m of bandMarkers) {
+      const mhz = m.dialHz / 1e6
+      if (mhz >= range.lo && mhz <= range.hi) anchor.push(mhz)
+    }
     if (dialMhz >= range.lo && dialMhz <= range.hi) anchor.push(dialMhz)
     let lo = range.lo
     let hi = range.hi
@@ -179,7 +205,7 @@ export function BandMap({
       }
     }
     return { lo, hi }
-  }, [range, inBand, dialMhz])
+  }, [range, inBand, bandMarkers, dialMhz])
 
   // % from the TOP for a frequency (high freq → 0% = top, low freq → 100% = bottom), clamped.
   const yOf = useMemo(() => {
@@ -216,7 +242,8 @@ export function BandMap({
       // one means "work this station", never "tune to wherever the label drifted to". Those
       // buttons carry their own onWorkSpot and it already QSYs; tuning as well would fight it
       // with a frequency that is visibly not the spot's.
-      if ((e.target as HTMLElement).closest('.bandmap-spot')) return
+      // A marker likewise carries its own jump back.
+      if ((e.target as HTMLElement).closest('.bandmap-spot, .bandmap-marker')) return
       const el = trackEl.current
       if (!el) return
       const rect = el.getBoundingClientRect()
@@ -339,11 +366,19 @@ export function BandMap({
       <div
         ref={trackRef}
         onClick={onTrackClick}
+        onContextMenu={
+          onMarkHere
+            ? (e) => {
+                e.preventDefault()
+                onMarkHere()
+              }
+            : undefined
+        }
         className={`bandmap-track${tuneEnabled === true ? ' tunable' : ''}`}
         title={
-          tuneEnabled === true
+          (tuneEnabled === true
             ? t('bandMap.track.title.tunable', { band })
-            : t('bandMap.track.title', { band })
+            : t('bandMap.track.title', { band })) + (onMarkHere ? `\n${t('bandMap.track.markHint')}` : '')
         }
       >
         {grid.map((g, k) => (
@@ -434,6 +469,34 @@ export function BandMap({
             <span className="bandmap-dial-lbl mono">{dialMhz.toFixed(3)}</span>
           </div>
         )}
+        {bandMarkers.map((m) => {
+          const freq = markerMhz(m)
+          const label = m.call
+            ? t('bandMap.marker.title', { freq, call: m.call })
+            : t('bandMap.marker.titleBare', { freq })
+          return (
+            <button
+              type="button"
+              key={m.id}
+              className="bandmap-marker mono"
+              style={{ top: `${yOf(m.dialHz / 1e6)}%` }}
+              title={label}
+              aria-label={label}
+              onClick={() => onMarkerQsy?.(m)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  onMarkerQsy?.(m)
+                } else if (e.key === 'Delete') {
+                  e.preventDefault()
+                  onMarkerDelete?.(m)
+                }
+              }}
+            >
+              ◆{m.call ? ` ${m.call}` : ''}
+            </button>
+          )
+        })}
         {rows.length === 0 && (
           <div className="bandmap-empty">{t('bandMap.empty.none', { mode: modeLabel, band })}</div>
         )}
