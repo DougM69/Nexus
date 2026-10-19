@@ -1,0 +1,143 @@
+//! The AI CW decode thread's stitch: which characters of one inference pass are new, by
+//! absolute stream time. Pure (std only) so it is unit-tested without the model or a device,
+//! and so a replay bench can run the exact rule the app runs.
+
+/// Don't emit characters from the last second of a window: the model has no right
+/// context there yet; the next (overlapping) window decodes that region reliably.
+pub const TAIL_GUARD_SECS: f64 = 1.0;
+
+/// One pass's new text.
+#[derive(Debug, Default, PartialEq)]
+pub struct Pass {
+    /// Characters newer than everything emitted before and older than the tail guard.
+    pub confirmed: String,
+}
+
+/// The transcript cursor across passes.
+#[derive(Debug, Default)]
+pub struct Stitcher {
+    /// ABSOLUTE stream seconds (fed samples / 12 kHz): characters at or before this moment
+    /// are already emitted. Windows overlap by most of their length; this is what keeps the
+    /// overlap from re-printing.
+    emitted_until: f64,
+    /// The engine's stream generation the cursor belongs to; `None` before the first pass.
+    epoch: Option<u64>,
+}
+
+impl Stitcher {
+    /// Forget the cursor (the feature went off; the engine's stream clock restarts).
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Stitch one pass. `chars` are the model's (seconds into the window, text); the window
+    /// ends at `end_abs` stream seconds and is `win_secs` long. A window longer than the
+    /// stream so far is zero-padded at the front, so its start is before zero.
+    pub fn pass(
+        &mut self,
+        epoch: u64,
+        end_abs: f64,
+        win_secs: f64,
+        chars: &[(f32, String)],
+    ) -> Pass {
+        let start_abs = end_abs - win_secs;
+        // A new stream (a QSY or a toggle restarted the engine's clock), or more time since
+        // the last pass than the window holds: nothing before this window is ours. Nor is
+        // anything before the stream's own start: that is the zero padding.
+        if self.epoch != Some(epoch)
+            || self.emitted_until < start_abs
+            || self.emitted_until > end_abs
+        {
+            self.emitted_until = start_abs.max(0.0);
+            self.epoch = Some(epoch);
+        }
+        let cutoff = end_abs - TAIL_GUARD_SECS;
+        let mut out = Pass::default();
+        for (t_rel, ch) in chars {
+            let t_abs = start_abs + *t_rel as f64;
+            if t_abs > self.emitted_until && t_abs <= cutoff {
+                out.confirmed.push_str(ch);
+            }
+        }
+        self.emitted_until = cutoff.max(self.emitted_until);
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WIN: f64 = 15.0;
+
+    fn chars(v: &[(f32, &str)]) -> Vec<(f32, String)> {
+        v.iter().map(|(t, c)| (*t, c.to_string())).collect()
+    }
+
+    /// The first pass after a QSY sees a window mostly made of zero padding. A character the
+    /// model places in the padding cannot be a signal the new stream carried.
+    #[test]
+    fn a_partial_window_emits_only_the_streams_own_audio() {
+        let mut s = Stitcher::default();
+        // 3 s into a fresh stream: the window spans −12 s … 3 s.
+        let p = s.pass(
+            1,
+            3.0,
+            WIN,
+            &chars(&[(11.5, "E"), (13.2, "K"), (14.6, "T")]),
+        );
+        // t_abs: −0.5 (padding), 1.2 (ours), 2.6 (inside the tail guard).
+        assert_eq!(p.confirmed, "K");
+    }
+
+    /// Two QSYs a second or two apart: the cursor the old stream left sits INSIDE the new
+    /// stream's time range. Without the stream generation the new stream's first characters
+    /// are taken as already emitted and silently dropped.
+    #[test]
+    fn a_new_stream_never_inherits_the_old_streams_cursor() {
+        let mut s = Stitcher::default();
+        let _ = s.pass(1, 4.0, WIN, &chars(&[]));
+        // The old stream's cursor is now 3.0 (4.0 − guard). A QSY restarts the clock; the
+        // new stream's first pass ends at 5.0 and has characters at 1.5 and 2.5.
+        let p = s.pass(2, 5.0, WIN, &chars(&[(11.5, "C"), (12.5, "Q")]));
+        assert_eq!(p.confirmed, "CQ");
+    }
+
+    /// The same stream across passes: the overlap is emitted once.
+    #[test]
+    fn the_overlap_of_two_passes_is_emitted_once() {
+        let mut s = Stitcher::default();
+        let a = s.pass(1, 20.0, WIN, &chars(&[(10.0, "C"), (13.0, "Q")]));
+        // C at 15.0, Q at 18.0: both confirmed (cutoff 19.0).
+        assert_eq!(a.confirmed, "CQ");
+        // Next window ends at 22.0: the same C and Q again (shifted 2 s), plus D at 20.5.
+        let b = s.pass(
+            1,
+            22.0,
+            WIN,
+            &chars(&[(8.0, "C"), (11.0, "Q"), (13.5, "D")]),
+        );
+        assert_eq!(b.confirmed, "D");
+    }
+
+    /// A pass slower than the audio it covers never builds a backlog: the next pass decodes
+    /// the newest window, and a gap longer than a window skips ahead rather than queueing.
+    #[test]
+    fn a_long_gap_skips_ahead_instead_of_queueing() {
+        let mut s = Stitcher::default();
+        let _ = s.pass(1, 20.0, WIN, &chars(&[]));
+        // 40 s later (the cursor, 19.0, is now before this window's start, 45.0).
+        let p = s.pass(1, 60.0, WIN, &chars(&[(1.0, "A"), (12.0, "B")]));
+        assert_eq!(
+            p.confirmed, "AB",
+            "everything in the newest window that is guard-clear"
+        );
+        let q = s.pass(
+            1,
+            61.0,
+            WIN,
+            &chars(&[(0.0, "A"), (11.0, "B"), (13.5, "C")]),
+        );
+        assert_eq!(q.confirmed, "C", "and the cursor follows the newest window");
+    }
+}

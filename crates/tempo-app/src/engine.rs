@@ -3884,6 +3884,10 @@ pub struct Engine {
     /// Total samples ever fed to the AI-CW ring — the absolute stream clock the decode
     /// thread stitches windows with. Resets when the feature turns off.
     ai_cw_fed: u64,
+    /// The AI-CW stream's generation: bumped every time the ring and its clock restart (a
+    /// QSY, a toggle). A pass started on an older generation decoded the station before the
+    /// QSY; its text is dropped rather than written into the new station's transcript.
+    ai_cw_epoch: u64,
     /// AI CW decoder status for the UI ("listening…", "model not installed", …).
     ai_cw_status: String,
     /// Streaming single-signal CW decoder at the operator's pitch. Fed incrementally so it
@@ -6006,6 +6010,7 @@ impl Engine {
             ai_cw_audio: Vec::new(),
             ai_cw_text: String::new(),
             ai_cw_fed: 0,
+            ai_cw_epoch: 0,
             ai_cw_status: String::new(),
             cw_stream: tempo_core::cw_decode::CwStreamDecoder::new(tempo_fast::SAMPLE_RATE, 600.0),
             qso_audio: Vec::new(),
@@ -16081,9 +16086,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // the 30 s load-retry backoff kept the lie up until the next attempt.
         // A successful decode clears it (aicw.rs), which is the only state
         // that means "healthy".
+        self.restart_ai_cw_stream();
+        self.cw_stream.clear();
+    }
+
+    /// Empty the AI-CW ring and restart its stream clock as a new generation.
+    fn restart_ai_cw_stream(&mut self) {
         self.ai_cw_audio.clear();
         self.ai_cw_fed = 0;
-        self.cw_stream.clear();
+        self.ai_cw_epoch = self.ai_cw_epoch.wrapping_add(1);
     }
 
     /// The best resume point from `dxcall` addressed to `mycall` in this slot, for
@@ -19699,8 +19710,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 self.ai_cw_audio.drain(0..drop);
             }
         } else if !self.ai_cw_audio.is_empty() {
-            self.ai_cw_audio.clear();
-            self.ai_cw_fed = 0;
+            self.restart_ai_cw_stream();
         }
         // The RTTY/SSTV RX taps: plain drain buffers the decode threads empty on
         // their own cadence (`take_rtty_audio`/`take_sstv_audio`). Session-armed
@@ -19776,16 +19786,28 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
-    /// A full 15 s AI-CW window when the ring has filled, else `None`. Returns the
-    /// window plus the ABSOLUTE sample index of its end (the stream clock the decode
-    /// thread stitches with). Brief lock + copy; the decode happens off-lock.
-    pub fn ai_cw_window(&self) -> Option<(Vec<f32>, u64)> {
-        (self.ai_cw_audio.len() >= AI_CW_WINDOW).then(|| (self.ai_cw_audio.clone(), self.ai_cw_fed))
+    /// The model's 15 s AI-CW window, `None` only while the ring is empty. A ring still
+    /// filling (just after a QSY, a toggle or startup) is zero-padded at the FRONT, so the
+    /// decoder copies from the first second instead of waiting 15 s for the ring to fill.
+    /// Returns the window, the ABSOLUTE sample index of its end (the stream clock the decode
+    /// thread stitches with) and the stream generation. Brief lock + copy; the decode
+    /// happens off-lock.
+    pub fn ai_cw_window(&self) -> Option<(Vec<f32>, u64, u64)> {
+        if self.ai_cw_audio.is_empty() {
+            return None;
+        }
+        let mut window = vec![0.0; AI_CW_WINDOW.saturating_sub(self.ai_cw_audio.len())];
+        window.extend_from_slice(&self.ai_cw_audio);
+        Some((window, self.ai_cw_fed, self.ai_cw_epoch))
     }
 
     /// Append newly-stitched AI-CW transcript text (already deduplicated by the decode
-    /// thread's absolute-time cursor). Bounded; oldest text drains off the front.
-    pub fn push_ai_cw_text(&mut self, text: &str) {
+    /// thread's absolute-time cursor) from a pass over generation `epoch`. Bounded; oldest
+    /// text drains off the front. A pass over an older generation is dropped.
+    pub fn push_ai_cw_text(&mut self, epoch: u64, text: &str) {
+        if epoch != self.ai_cw_epoch {
+            return;
+        }
         self.ai_cw_text.push_str(text);
         const CAP: usize = 1500;
         if self.ai_cw_text.len() > CAP {
@@ -19809,7 +19831,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if !on {
             self.ai_cw_text.clear();
             self.ai_cw_status.clear();
-            self.ai_cw_fed = 0;
+            self.restart_ai_cw_stream();
         }
     }
 
@@ -19830,7 +19852,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if on {
             self.ai_cw_text.clear();
             self.ai_cw_status.clear();
-            self.ai_cw_fed = 0;
+            self.restart_ai_cw_stream();
         }
     }
 
@@ -34858,6 +34880,70 @@ mod tests {
             e.ai_cw_text.is_empty(),
             "working a spot (same band, new freq) clears the CW decode"
         );
+    }
+
+    /// A QSY (or a toggle) restarts the AI-CW ring. The decoder used to see nothing until the
+    /// ring held a full 15 s again, so every spot click blanked the copy for ~13 s.
+    #[test]
+    fn a_qsy_never_blanks_the_ai_cw_decoder_for_the_ring_refill() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.ai_cw_enabled = true;
+        e.feed_rx_audio(&vec![0.25; AI_CW_WINDOW]);
+        assert!(e.ai_cw_window().is_some(), "control: a full ring decodes");
+        e.work_spot("CW", 14.025, "20m");
+        assert!(
+            e.ai_cw_window().is_none(),
+            "control: the QSY emptied the ring"
+        );
+        e.feed_rx_audio(&vec![0.5; 12_000]); // one second of the new station
+        let (w, fed, _) = e
+            .ai_cw_window()
+            .expect("one second after a QSY the decoder already has a window");
+        assert_eq!(
+            w.len(),
+            AI_CW_WINDOW,
+            "the model's input is always the full 15 s"
+        );
+        assert_eq!(
+            fed, 12_000,
+            "the stream clock restarted with the new station"
+        );
+        assert!(
+            w[..AI_CW_WINDOW - 12_000].iter().all(|&x| x == 0.0),
+            "the missing 14 s are silence at the FRONT"
+        );
+        assert!(
+            w[AI_CW_WINDOW - 12_000..].iter().all(|&x| x == 0.5),
+            "…and the new station's second is the window's end"
+        );
+    }
+
+    /// The decode thread copies a window, then decodes it off-lock for a few hundred ms. A QSY
+    /// in that time must not let the old station's text land in the new station's copy.
+    #[test]
+    fn a_pass_over_the_station_before_a_qsy_never_reaches_the_new_copy() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.ai_cw_enabled = true;
+        e.feed_rx_audio(&vec![0.25; 24_000]);
+        let (_, _, before) = e.ai_cw_window().unwrap();
+        e.push_ai_cw_text(before, "CQ ");
+        assert_eq!(e.ai_cw_text, "CQ ", "control: a current pass lands");
+        e.work_spot("CW", 14.025, "20m"); // the spot click, mid-pass
+        e.feed_rx_audio(&vec![0.25; 2_400]);
+        e.push_ai_cw_text(before, "K1ABC");
+        assert_eq!(
+            e.ai_cw_text, "",
+            "the old station's text never reaches the new station"
+        );
+        let (_, _, after) = e.ai_cw_window().unwrap();
+        e.push_ai_cw_text(after, "W1AW");
+        assert_eq!(e.ai_cw_text, "W1AW", "the new station's own pass lands");
+        // A toggle is a restart too.
+        e.set_ai_cw_enabled(false);
+        e.set_ai_cw_enabled(true);
+        e.feed_rx_audio(&vec![0.25; 2_400]);
+        e.push_ai_cw_text(after, "DE");
+        assert_eq!(e.ai_cw_text, "", "a pass from before the toggle is dropped");
     }
 
     #[test]

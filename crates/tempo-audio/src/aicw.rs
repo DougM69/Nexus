@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::settings::OperatingMode;
 
+use crate::aicw_stitch::Stitcher;
 use crate::service::SHUTDOWN;
 
 /// Decode cadence: a fresh 15 s window every ~2 s (13 s overlap). The stitch emits only
@@ -41,10 +42,6 @@ pub fn spawn_ai_cw(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
         .expect("spawn ai-cw");
 }
 
-/// Don't emit characters from the last second of a window: the model has no right
-/// context there yet; the next (overlapping) window decodes that region reliably.
-const TAIL_GUARD_SECS: f64 = 1.0;
-
 fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
     let mut model: Option<deepcw::DeepCw> = None;
     let mut last_model_try: Option<Instant> = None;
@@ -54,10 +51,8 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
     // ~half a core on AI CW, while a fast one enjoys the full 2 s cadence.
     let mut last_pass: Duration = Duration::ZERO;
     let mut logged_pass_time = false;
-    // The transcript cursor, in ABSOLUTE stream seconds (fed samples / 12 kHz): characters
-    // at or before this moment are already emitted. Windows overlap 9 s; this is what
-    // keeps the overlap from re-printing.
-    let mut emitted_until: f64 = 0.0;
+    // The transcript cursor (see `aicw_stitch`).
+    let mut stitch = Stitcher::default();
     loop {
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
             return;
@@ -70,7 +65,7 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
             e.settings().ai_cw_active() && e.settings().operating_mode == OperatingMode::Cw
         };
         if !on {
-            emitted_until = 0.0; // ring + stream clock reset when the feature is off
+            stitch.reset(); // ring + stream clock reset when the feature is off
             continue;
         }
         // Lazy model load, with a retry backoff and an honest status.
@@ -97,23 +92,20 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
         if !due {
             continue;
         }
-        // A full 15 s window + the absolute stream position of its end, copied under a
-        // brief lock; decode runs off-lock.
+        // A 15 s window (zero-padded while the ring is still filling) + the absolute stream
+        // position of its end + the stream's generation, copied under a brief lock; decode
+        // runs off-lock.
         let window = {
             let e = engine_lock(&engine);
             e.ai_cw_window()
         };
-        let Some((window, fed)) = window else {
+        let Some((window, fed, epoch)) = window else {
             set_status(&engine, "listening…");
             continue;
         };
         last_decode = Some(Instant::now());
         let win_secs = window.len() as f64 / 12_000.0;
         let end_abs = fed as f64 / 12_000.0;
-        let start_abs = end_abs - win_secs;
-        if emitted_until < start_abs || emitted_until > end_abs {
-            emitted_until = start_abs; // first window, or the stream clock reset
-        }
         let ai = model.as_ref().unwrap();
         let audio_3200 = deepcw::resample_linear(&window, 12_000, ai.meta.sample_rate);
         let pass_t0 = Instant::now();
@@ -127,23 +119,12 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
         }
         match decoded {
             Ok(chars) => {
-                // Stitch: only characters NEWER than the cursor and older than the tail
-                // guard (the guarded second re-decodes with full context next window).
-                let cutoff = end_abs - TAIL_GUARD_SECS;
-                let mut fresh = String::new();
-                for (t_rel, ch) in &chars {
-                    let t_abs = start_abs + *t_rel as f64;
-                    if t_abs > emitted_until && t_abs <= cutoff {
-                        fresh.push_str(ch);
-                    }
-                }
-                emitted_until = cutoff.max(emitted_until);
-                {
-                    let mut e = engine_lock(&engine);
-                    e.set_ai_cw_status("");
-                    if !fresh.trim().is_empty() {
-                        e.push_ai_cw_text(&fresh);
-                    }
+                let pass = stitch.pass(epoch, end_abs, win_secs, &chars);
+                let mut e = engine_lock(&engine);
+                e.set_ai_cw_status("");
+                if !pass.confirmed.trim().is_empty() {
+                    // Dropped by the engine if a QSY started a new stream during the pass.
+                    e.push_ai_cw_text(epoch, &pass.confirmed);
                 }
             }
             Err(e) => {
