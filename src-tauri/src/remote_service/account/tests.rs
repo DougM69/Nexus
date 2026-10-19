@@ -82,6 +82,8 @@ struct Seen {
     requests: Vec<(String, String)>,
     /// The body and the authorization of the `client/station` request.
     station: Option<(Value, String)>,
+    /// The same of the `station-proof` request.
+    proof: Option<(Value, String)>,
     /// The token form the issuer was sent.
     form: Option<String>,
 }
@@ -181,6 +183,15 @@ async fn stand_in(id_token: String) -> (String, Arc<Mutex<Seen>>) {
                             seen.station =
                                 Some((serde_json::from_slice(&body).unwrap(), authorization));
                             reply(200, &json!({"stationId": STATION, "accountId": ACCOUNT}))
+                        }
+                        ("POST", p)
+                            if p == format!(
+                                "/api/remote/stations/{STATION}/client/station-proof"
+                            ) =>
+                        {
+                            seen.proof =
+                                Some((serde_json::from_slice(&body).unwrap(), authorization));
+                            reply(200, &json!({"ok": true}))
                         }
                         _ => reply(404, &json!({"error": "notFound"})),
                     }
@@ -612,4 +623,183 @@ fn each_list_sweeps_the_devices_kept_for_the_lan() {
         store.device_cache().unwrap(),
         Some(DeviceCache::new("another-station"))
     );
+}
+
+// ---- Signing in again ----------------------------------------------------------------------------
+
+/// Proves the station bound as `STATION` again, with the station's keys `station` and `lan`
+/// (fixture names), the store keeping `kept` as its owner: the result, whether the browser was
+/// opened, and what the stand-in saw.
+async fn reprove_with(
+    id_token: &str,
+    lan: &str,
+    kept: Option<Owner>,
+    store: &Store,
+) -> (Result<(), &'static str>, bool, Arc<Mutex<Seen>>) {
+    *store.owner.lock().unwrap() = kept;
+    let (at, seen) = stand_in(id_token.to_string()).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let local = listener.local_addr().unwrap();
+    let opened = Arc::new(Mutex::new(false));
+    let was = opened.clone();
+    let (station_key, lan_key) = (key("station"), key(lan));
+    let result = reprove_on(
+        &service(&at),
+        store,
+        &Station {
+            name: "",
+            station_key: &station_key,
+            lan_key: &lan_key,
+            credential: CREDENTIAL,
+        },
+        STATION,
+        listener,
+        Duration::from_secs(10),
+        move |url| {
+            *was.lock().unwrap() = true;
+            let state = url
+                .split(['?', '&'])
+                .find_map(|pair| pair.strip_prefix("state="))
+                .unwrap()
+                .to_string();
+            tokio::spawn(async move {
+                ask(local, &format!("/callback?code=the-code&state={state}")).await;
+            });
+            Ok(())
+        },
+        now(),
+    )
+    .await;
+    let opened = *opened.lock().unwrap();
+    (result, opened, seen)
+}
+
+/// ★ Signing in again replaces the station's proof at the service: its owner's sign-in, for exactly
+/// the station's keys, checked here first, then sent with its credential to `station-proof`; the
+/// owner is kept with the new proof's key id and signing time, under the same station.
+#[tokio::test]
+async fn signing_in_again_replaces_the_stations_proof() {
+    let store = Store::default();
+    let retired = Owner {
+        proof_kid: "test-retired".into(),
+        proof_issued_at: 1,
+        ..owner("test-retired")
+    };
+    let (result, _, seen) =
+        reprove_with(&token("station"), "stationLan", Some(retired), &store).await;
+    assert_eq!(result, Ok(()));
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.station, None, "nothing is bound again");
+    let (body, authorization) = seen.proof.clone().unwrap();
+    assert_eq!(authorization, format!("Bearer {ACCESS}"));
+    assert_eq!(
+        body,
+        json!({"credential": CREDENTIAL, "stationKey": key("station"),
+            "lanKey": key("stationLan"), "proof": token("station")})
+    );
+    assert_eq!(
+        store.owner().unwrap(),
+        Some(Owner {
+            station_id: STATION.into(),
+            issuer: "https://issuer.test.invalid/".into(),
+            subject: cases()["owner"].as_str().unwrap().into(),
+            proof_kid: "test-p".into(),
+            proof_issued_at: cases()["issuedAt"].as_u64().unwrap(),
+        })
+    );
+}
+
+/// Signing in again as anyone but the station's owner, or with a token for other keys, replaces
+/// nothing: nothing is sent and the owner kept is unchanged. With no owner kept for this station,
+/// the browser is never opened.
+#[tokio::test]
+async fn signing_in_again_takes_only_the_owners_proof_for_the_stations_keys() {
+    let someone_else = Owner {
+        subject: "auth0|someone-else".into(),
+        ..owner("test-retired")
+    };
+    let elsewhere = Owner {
+        issuer: "https://elsewhere.test.invalid/".into(),
+        ..owner("test-retired")
+    };
+    for (kept, lan, refusal) in [
+        (someone_else, "stationLan", "proofNotYours"),
+        (elsewhere, "stationLan", "proofNotYours"),
+        (owner("test-retired"), "computerLan", "tokenNonce"),
+    ] {
+        let store = Store::default();
+        let (result, opened, seen) =
+            reprove_with(&token("station"), lan, Some(kept.clone()), &store).await;
+        assert_eq!(result, Err(refusal), "{refusal}");
+        assert!(opened);
+        assert_eq!(seen.lock().unwrap().proof, None, "{refusal}: sent");
+        assert_eq!(store.owner().unwrap(), Some(kept), "{refusal}: kept");
+    }
+    let other_station = Owner {
+        station_id: "20000000-0000-4000-8000-0000000000ff".into(),
+        ..owner("test-retired")
+    };
+    for kept in [None, Some(other_station)] {
+        let store = Store::default();
+        let (result, opened, _) = reprove_with(&token("station"), "stationLan", kept, &store).await;
+        assert_eq!(result, Err("stationNotPaired"));
+        assert!(!opened, "the browser was opened");
+    }
+}
+
+/// The sign-in dispatches on what it is given: a station not bound yet is bound (`client/station`),
+/// one bound already is proven again (`station-proof`) and given back its binding, bound to nothing
+/// new.
+#[tokio::test]
+async fn a_sign_in_binds_a_new_station_and_proves_a_bound_one_again() {
+    for again in [
+        None,
+        Some(Bound {
+            station_id: STATION.into(),
+            account_id: ACCOUNT.into(),
+        }),
+    ] {
+        let store = Store::default();
+        *store.owner.lock().unwrap() = Some(owner("test-retired"));
+        let (at, seen) = stand_in(token("station")).await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let local = listener.local_addr().unwrap();
+        let reproving = again.is_some();
+        let result = sign_in_on(
+            &service(&at),
+            &store,
+            Binds {
+                name: "Shack".into(),
+                station_key: key("station"),
+                lan_key: key("stationLan"),
+                credential: CREDENTIAL.into(),
+                again,
+            },
+            listener,
+            Duration::from_secs(10),
+            move |url| {
+                let state = url
+                    .split(['?', '&'])
+                    .find_map(|pair| pair.strip_prefix("state="))
+                    .unwrap()
+                    .to_string();
+                tokio::spawn(async move {
+                    ask(local, &format!("/callback?code=the-code&state={state}")).await;
+                });
+                Ok(())
+            },
+            now(),
+        )
+        .await;
+        assert_eq!(
+            result,
+            Ok(Bound {
+                station_id: STATION.into(),
+                account_id: ACCOUNT.into()
+            })
+        );
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.proof.is_some(), reproving, "station-proof");
+        assert_eq!(seen.station.is_some(), !reproving, "client/station");
+    }
 }

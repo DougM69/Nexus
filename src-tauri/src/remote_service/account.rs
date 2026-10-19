@@ -2,7 +2,7 @@
 //! issuer's keys kept for checking proofs with the internet down, and the checks a device the
 //! service lists must pass before the station would grant it anything (`tempo_client::account`).
 //!
-//! ## Binding ([`bind`])
+//! ## Binding ([`bind_on`])
 //!
 //! Settings ▸ Remote access ▸ Sign in to Nexus Remote. The station's two keys exist first (its
 //! signing key and its LAN key); their hash is the sign-in's nonce. The operator signs in through
@@ -19,7 +19,7 @@
 //! again when due, or once for a proof naming a key the set lacks (at most every
 //! `KEY_SET_RETRY_S`). Each fetch says whether the key that signed the station's proof is still in
 //! the set; when it is not, devices can no longer check that proof and the station must sign in
-//! again ([`Keys::reproof`]).
+//! again ([`Keys::reproof`]), which replaces its proof at the service ([`reprove_on`]).
 //!
 //! ## A listed device ([`vouch_listed`], [`sweep`])
 //!
@@ -196,7 +196,7 @@ pub(crate) async fn keys(
     Ok(Keys { set, reproof })
 }
 
-/// What [`bind`] gives the caller, which turns Remote on as an approved pairing does: the service's
+/// What [`sign_in`] gives the caller, which turns Remote on as an approved pairing does: the service's
 /// ids for the station and its account.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Bound {
@@ -213,14 +213,13 @@ pub(crate) struct Station<'a> {
     pub(crate) credential: &'a str,
 }
 
-/// Binds this station to the account the operator signs in to through `open`'s browser (see the
-/// header), keeping the owner its own sign-in proves. `accountNotReady` while the tenant or the
-/// service is not configured; the sign-in's own refusals; `tokenNonce` (and the other checks'
-/// names) when the issuer's token is not for exactly this station's keys; the service's refusal.
-pub(crate) async fn bind(
+/// Signs in at the shack through `open`'s browser, on the sign-in's own port, for `binds`: binds
+/// the station ([`bind_on`]), or, for one bound already, proves it again ([`reprove_on`]) and gives
+/// back its binding.
+pub(crate) async fn sign_in(
     service: &Service,
     vault: &dyn AccountVault,
-    station: &Station<'_>,
+    binds: Binds,
     open: impl FnOnce(&str) -> Result<(), String>,
     now_s: u64,
 ) -> Result<Bound, &'static str> {
@@ -230,18 +229,39 @@ pub(crate) async fn bind(
     ))
     .await
     .map_err(|_| "signInPortBusy")?;
-    bind_on(
-        service,
-        vault,
-        station,
-        listener,
-        crate::account_sign_in::SIGN_IN_WAIT,
-        open,
-        now_s,
-    )
-    .await
+    let wait = crate::account_sign_in::SIGN_IN_WAIT;
+    sign_in_on(service, vault, binds, listener, wait, open, now_s).await
 }
 
+async fn sign_in_on(
+    service: &Service,
+    vault: &dyn AccountVault,
+    binds: Binds,
+    listener: TcpListener,
+    wait: Duration,
+    open: impl FnOnce(&str) -> Result<(), String>,
+    now_s: u64,
+) -> Result<Bound, &'static str> {
+    let station = Station {
+        name: &binds.name,
+        station_key: &binds.station_key,
+        lan_key: &binds.lan_key,
+        credential: &binds.credential,
+    };
+    match binds.again {
+        None => bind_on(service, vault, &station, listener, wait, open, now_s).await,
+        Some(bound) => {
+            let id = &bound.station_id;
+            reprove_on(service, vault, &station, id, listener, wait, open, now_s).await?;
+            Ok(bound)
+        }
+    }
+}
+
+/// Binds this station to the account the operator signs in to through `open`'s browser (see the
+/// header), keeping the owner its own sign-in proves. `accountNotReady` while the tenant or the
+/// service is not configured; the sign-in's own refusals; `tokenNonce` (and the other checks'
+/// names) when the issuer's token is not for exactly this station's keys; the service's refusal.
 async fn bind_on(
     service: &Service,
     vault: &dyn AccountVault,
@@ -251,26 +271,12 @@ async fn bind_on(
     open: impl FnOnce(&str) -> Result<(), String>,
     now_s: u64,
 ) -> Result<Bound, &'static str> {
-    let spki = |hex: &str| tempo_stream::protocol::hex_bytes(hex).ok_or("invalidRequest");
-    let (station_key, lan_key) = (spki(station.station_key)?, spki(station.lan_key)?);
-    let tenant = service.tenant;
-    // The built-in issuer, asked at its own address (the same, outside a test).
-    let sign = SignIn {
-        issuer: service.issuer_at.clone(),
-        client_id: tenant.native_client_id.to_string(),
-        audience: service.audience().await?,
-    };
-    let nonce = account::station_nonce(&station_key, &lan_key);
-    let signed =
-        crate::account_sign_in::signed_in(&service.http, &sign, Some(&nonce), listener, wait, open)
-            .await?;
-    let proof = signed.id_token.ok_or("signInFailed")?;
-    let held = keys(service, vault, account::kid_of(&proof).as_deref(), now_s).await?;
-    let owner = Owner::proven("", &proof, &held.set, tenant, &station_key, &lan_key, now_s)?;
+    let (access, proof, owner) =
+        proven(service, vault, station, listener, wait, open, now_s).await?;
     let response = service
         .http
         .post(format!("{}/api/remote/client/station", service.origin))
-        .header("authorization", format!("Bearer {}", signed.access))
+        .header("authorization", format!("Bearer {access}"))
         .header("content-type", "application/json")
         .body(
             json!({
@@ -304,6 +310,89 @@ async fn bind_on(
     Ok(bound)
 }
 
+/// The sign-in for exactly `station`'s two keys, its token checked here before anything is sent:
+/// the access token, the proof, and the owner it proves (under no station id yet).
+async fn proven(
+    service: &Service,
+    vault: &dyn AccountVault,
+    station: &Station<'_>,
+    listener: TcpListener,
+    wait: Duration,
+    open: impl FnOnce(&str) -> Result<(), String>,
+    now_s: u64,
+) -> Result<(String, String, Owner), &'static str> {
+    let spki = |hex: &str| tempo_stream::protocol::hex_bytes(hex).ok_or("invalidRequest");
+    let (station_key, lan_key) = (spki(station.station_key)?, spki(station.lan_key)?);
+    let tenant = service.tenant;
+    // The built-in issuer, asked at its own address (the same, outside a test).
+    let sign = SignIn {
+        issuer: service.issuer_at.clone(),
+        client_id: tenant.native_client_id.to_string(),
+        audience: service.audience().await?,
+    };
+    let nonce = account::station_nonce(&station_key, &lan_key);
+    let signed =
+        crate::account_sign_in::signed_in(&service.http, &sign, Some(&nonce), listener, wait, open)
+            .await?;
+    let proof = signed.id_token.ok_or("signInFailed")?;
+    let held = keys(service, vault, account::kid_of(&proof).as_deref(), now_s).await?;
+    let owner = Owner::proven("", &proof, &held.set, tenant, &station_key, &lan_key, now_s)?;
+    Ok((signed.access, proof, owner))
+}
+
+/// Proves the station bound as `station_id` again, by its owner's sign-in through `open`'s browser:
+/// what keeps it adding devices once the issuer has retired the key that signed its proof
+/// ([`Keys::reproof`]). The new proof names the station's keys as they are now (its LAN key may have
+/// been reset), is checked here for the owner the station already keeps (`proofNotYours` for any
+/// other account), and replaces the old at the service (`station-proof`), with the station's
+/// credential; then the owner is kept with the new proof's key id and signing time.
+#[allow(clippy::too_many_arguments)]
+async fn reprove_on(
+    service: &Service,
+    vault: &dyn AccountVault,
+    station: &Station<'_>,
+    station_id: &str,
+    listener: TcpListener,
+    wait: Duration,
+    open: impl FnOnce(&str) -> Result<(), String>,
+    now_s: u64,
+) -> Result<(), &'static str> {
+    let kept = vault
+        .owner()?
+        .filter(|owner| owner.station_id == station_id)
+        .ok_or("stationNotPaired")?;
+    let (access, proof, owner) =
+        proven(service, vault, station, listener, wait, open, now_s).await?;
+    if owner.issuer != kept.issuer || owner.subject != kept.subject {
+        return Err("proofNotYours");
+    }
+    let response = service
+        .http
+        .post(format!(
+            "{}/api/remote/stations/{station_id}/client/station-proof",
+            service.origin
+        ))
+        .header("authorization", format!("Bearer {access}"))
+        .header("content-type", "application/json")
+        .body(
+            json!({
+                "credential": station.credential,
+                "stationKey": station.station_key,
+                "lanKey": station.lan_key,
+                "proof": proof,
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .map_err(|_| "serviceUnavailable")?;
+    answer(response).await?;
+    vault.save_owner(&Owner {
+        station_id: kept.station_id,
+        ..owner
+    })
+}
+
 /// Opens an address in the system browser: the sign-in's first step.
 pub(crate) type Opener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
@@ -314,16 +403,19 @@ pub(crate) struct Binds {
     pub(crate) station_key: String,
     pub(crate) lan_key: String,
     pub(crate) credential: String,
+    /// The station's binding when it is bound already: then the sign-in proves it again
+    /// ([`reprove_on`]) and binds nothing, and [`Bound`] is that binding.
+    pub(crate) again: Option<Bound>,
 }
 
-/// How the station binds: [`bind`] through the system browser, outside a test.
+/// How the station binds: [`sign_in`] through the system browser, outside a test.
 pub(crate) type Binder = Arc<
     dyn Fn(Binds) -> Pin<Box<dyn Future<Output = Result<Bound, &'static str>> + Send>>
         + Send
         + Sync,
 >;
 
-/// [`bind`] on `service`, keeping the owner in `vault`, signing in through `open`'s browser, at the
+/// [`sign_in`] on `service`, keeping the owner in `vault`, signing in through `open`'s browser, at the
 /// time `now_s` gives when the sign-in starts.
 pub(crate) fn binder(
     service: Result<Arc<Service>, &'static str>,
@@ -333,15 +425,7 @@ pub(crate) fn binder(
 ) -> Binder {
     Arc::new(move |binds: Binds| {
         let (service, vault, open) = (service.clone(), vault.clone(), open.clone());
-        Box::pin(async move {
-            let station = Station {
-                name: &binds.name,
-                station_key: &binds.station_key,
-                lan_key: &binds.lan_key,
-                credential: &binds.credential,
-            };
-            bind(&*service?, &*vault, &station, |url| open(url), now_s()).await
-        })
+        Box::pin(async move { sign_in(&*service?, &*vault, binds, |url| open(url), now_s()).await })
     })
 }
 

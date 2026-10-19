@@ -43,8 +43,9 @@ fn test_service() -> Arc<account::Service> {
     Arc::new(account::Service::with("http://127.0.0.1:9", tenant, "http://127.0.0.1:9/").unwrap())
 }
 
-/// What the stand-in binder was given, call by call: name, station key, LAN key, credential.
-type Asked = Arc<Mutex<Vec<(String, String, String, String)>>>;
+/// What the stand-in binder was given, call by call: name, station key, LAN key, credential, and
+/// the station it was to prove again.
+type Asked = Arc<Mutex<Vec<(String, String, String, String, Option<String>)>>>;
 
 /// The account on `vault`, binding through `bind`, naming the fixture's LAN key, at the fixture's
 /// time.
@@ -78,6 +79,7 @@ fn binder(answers: Vec<Result<account::Bound, &'static str>>) -> (account::Binde
             binds.station_key,
             binds.lan_key,
             binds.credential,
+            binds.again.map(|bound| bound.station_id),
         ));
         let answer = answers.lock().unwrap().next();
         Box::pin(async move {
@@ -140,7 +142,8 @@ async fn signing_in_binds_the_station_with_the_keys_it_staged_and_turns_remote_o
 
     let asked = asked.lock().unwrap().clone();
     assert_eq!(asked.len(), 2);
-    let (name, station_key, lan_key, credential) = asked[0].clone();
+    let (name, station_key, lan_key, credential, again) = asked[0].clone();
+    assert_eq!(again, None, "a station bound by this sign-in");
     assert_eq!(name, "Shack", "the name, trimmed");
     assert_eq!(lan_key, key("stationLan"), "the LAN's own key");
     assert!(
@@ -245,10 +248,118 @@ async fn cancel_ends_a_sign_in_left_open() {
         service.action(begin()).await,
         Err("invalidRequest")
     ));
+    // Ending a sign-in again is not this: a first sign-in goes on.
+    let still = service.action(Action::CancelSignInAgain {}).await.unwrap();
+    assert!(still.account.signing_in);
     let cancelled = service.action(Action::Cancel {}).await.unwrap();
     assert!(!cancelled.account.signing_in);
     assert_eq!(cancelled.phase, "unpaired");
     service.action(begin()).await.unwrap();
+}
+
+/// ★ Sign in again, for a station bound already (its proof's key retired): the sign-in names the
+/// station's own signing key, the LAN's key as it is now and the station's credential, and proves
+/// that station again. Once it holds, the prompt goes, and nothing else about the station changes:
+/// the same binding, the same key, and Remote as it was. Refused while another sign-in or a pairing
+/// is open, and for a station not bound.
+#[tokio::test(flavor = "multi_thread")]
+async fn signing_in_again_proves_the_bound_station_and_changes_nothing_else() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let (bind, asked) = binder(vec![Err("proofNotYours"), Ok(bound())]);
+    let service = launch_with(&cloud, &vault, accounts(&vault, bind));
+    let before = eventually(&service, "the pairing loaded", |s| {
+        s.station_id.is_some() && s.station_key.is_some()
+    })
+    .await;
+    service.status.lock().unwrap().account.reproof = true;
+    let kept = vault.station_key().unwrap().unwrap();
+
+    service.action(Action::SignInAgain {}).await.unwrap();
+    let failed = eventually(&service, "the first sign-in ended", |s| {
+        !s.account.signing_in && s.error.is_some()
+    })
+    .await;
+    assert_eq!(failed.error, Some("proofNotYours"));
+    assert!(failed.account.reproof, "still to be signed in again");
+
+    service.action(Action::SignInAgain {}).await.unwrap();
+    let proven = eventually(&service, "the second sign-in ended", |s| {
+        !s.account.signing_in
+    })
+    .await;
+    assert!(!proven.account.reproof);
+    assert_eq!(proven.error, None);
+    assert_eq!(proven.phase, before.phase, "Remote as it was");
+    assert_eq!(proven.station_id, before.station_id);
+    assert_eq!(proven.station_key, before.station_key);
+
+    let binding = Binding {
+        origin: cloud.origin.clone(),
+        station_id: STATION.into(),
+        account_id: ACCOUNT.into(),
+    };
+    let asked = asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 2);
+    assert_eq!(
+        asked[1],
+        (
+            String::new(),
+            station_key::Signer::restore(&kept.pkcs8)
+                .unwrap()
+                .public_key()
+                .to_string(),
+            key("stationLan"),
+            vault.credential(&binding).unwrap(),
+            Some(STATION.to_string()),
+        )
+    );
+    assert!(vault.binding().unwrap() == Some(binding));
+    assert_eq!(vault.station_key().unwrap().unwrap().pkcs8, kept.pkcs8);
+
+    // Not bound: nothing to prove.
+    let vault = MemoryVault::default();
+    let (bind, asked) = binder(vec![Ok(bound())]);
+    let service = launch_with(&cloud, &vault, accounts(&vault, bind));
+    assert!(matches!(
+        service.action(Action::SignInAgain {}).await,
+        Err("stationNotPaired")
+    ));
+    assert!(asked.lock().unwrap().is_empty());
+}
+
+/// While signing in again, no second sign-in starts; ending it leaves Remote on, under the same
+/// generation (Cancel, a stop, would turn it off).
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_ends_signing_in_again_and_leaves_remote_as_it_was() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let (bind, _) = binder(Vec::new());
+    let service = launch_with(&cloud, &vault, accounts(&vault, bind));
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    let on = eventually(&service, "on", on).await;
+    assert!(
+        service
+            .action(Action::SignInAgain {})
+            .await
+            .unwrap()
+            .account
+            .signing_in
+    );
+    assert!(matches!(
+        service.action(Action::SignInAgain {}).await,
+        Err("invalidRequest")
+    ));
+    let cancelled = service.action(Action::CancelSignInAgain {}).await.unwrap();
+    assert!(!cancelled.account.signing_in);
+    assert!(
+        cancelled.observation_generation.is_some()
+            && cancelled.observation_generation == on.observation_generation,
+        "Remote still on, as it was: {:?} {:?}",
+        cancelled.observation_generation,
+        on.observation_generation
+    );
 }
 
 // ---- A device approved on its own proof ----------------------------------------------------------

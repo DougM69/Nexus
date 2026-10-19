@@ -102,3 +102,23 @@ it('invites someone with a role, lists the people invited, and takes an invitati
   fireEvent.click(screen.getByRole('button', { name: EN['remote.account.uninvite'] }))
   await waitFor(() => expect(actions[actions.length - 1]).toEqual({ type: 'uninvite', email: 'k9.guest@example.test' }))
 })
+
+it('asks a bound station to sign in again once its proof key is retired, and waits for the browser', async () => {
+  const actions = shack(bound({ reproof: true }), (action, status) => action.type === 'signInAgain'
+    ? { ...status, account: { ...status.account!, signingIn: true } }
+    : action.type === 'cancelSignInAgain' ? { ...status, account: { ...status.account!, signingIn: false } } : status)
+  await screen.findByText(EN['remote.account.reproof'])
+  fireEvent.click(await screen.findByRole('button', { name: EN['remote.account.signInAgain'] }))
+  await screen.findByText(EN['remote.account.signingIn'])
+  expect(actions[actions.length - 1]).toEqual({ type: 'signInAgain' })
+  expect(screen.queryByRole('button', { name: EN['remote.account.signInAgain'] })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: EN['remote.account.cancelSignIn'] }))
+  await screen.findByRole('button', { name: EN['remote.account.signInAgain'] })
+  expect(actions[actions.length - 1]).toEqual({ type: 'cancelSignInAgain' })
+})
+
+it('offers no second sign-in while the proof still holds, and names a sign-in by someone else', async () => {
+  shack({ ...bound({}), error: 'proofNotYours' })
+  await screen.findByText(EN['remote.account.notOwner'])
+  expect(screen.queryByRole('button', { name: EN['remote.account.signInAgain'] })).toBeNull()
+})

@@ -337,6 +337,8 @@ export const DE: PartialCatalog = {
   "remote.account.signInPortBusy": "Auf diesem Computer ist bereits eine andere Anmeldung offen. Schließe sie ab oder beende sie und versuche es dann erneut.",
   "remote.account.stationLimit": "Dein Konto hat bereits zwei Stationen. Entferne zuerst eine auf der Remote-Seite.",
   "remote.account.reproof": "Melde dich erneut an, um weiter Geräte hinzuzufügen: Der Schlüssel, mit dem die Anmeldung deiner Station geprüft wurde, wurde zurückgezogen.",
+  "remote.account.signInAgain": "Erneut anmelden",
+  "remote.account.notOwner": "Melde dich mit dem Konto an, zu dem diese Station gehört.",
   "remote.account.added": "Durch deine Anmeldung hinzugefügt: {{name}} ({{what}}), Schlüssel {{key}}.",
   "remote.account.addedGuest": "Für eine eingeladene Person hinzugefügt ({{role}}): {{name}} ({{what}}), Schlüssel {{key}}.",
   "remote.account.aBrowser": "ein Browser",

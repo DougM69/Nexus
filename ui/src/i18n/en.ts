@@ -433,6 +433,8 @@ export const EN = {
   "remote.account.signInPortBusy": "Another sign-in is already open on this computer. Finish or close it, then try again.",
   "remote.account.stationLimit": "Your account already has two stations. Remove one on the Remote page first.",
   "remote.account.reproof": "Sign in again to keep adding devices: the key your station's sign-in was checked with has been retired.",
+  "remote.account.signInAgain": "Sign in again",
+  "remote.account.notOwner": "Sign in with the account this station belongs to.",
   "remote.account.added": "Added by signing in as you: {{name}} ({{what}}), key {{key}}.",
   "remote.account.addedGuest": "Added for someone you invited ({{role}}): {{name}} ({{what}}), key {{key}}.",
   "remote.account.aBrowser": "a browser",

@@ -352,6 +352,8 @@ export const FR: PartialCatalog = {
   "remote.account.signInPortBusy": "Une autre connexion est déjà ouverte sur cet ordinateur. Terminez-la ou fermez-la, puis réessayez.",
   "remote.account.stationLimit": "Votre compte a déjà deux stations. Retirez-en une sur la page Remote d’abord.",
   "remote.account.reproof": "Reconnectez-vous pour continuer à ajouter des appareils : la clé qui a servi à vérifier la connexion de votre station a été retirée.",
+  "remote.account.signInAgain": "Se reconnecter",
+  "remote.account.notOwner": "Connectez-vous avec le compte auquel appartient cette station.",
   "remote.account.added": "Ajouté par votre connexion : {{name}} ({{what}}), clé {{key}}.",
   "remote.account.addedGuest": "Ajouté pour une personne invitée ({{role}}) : {{name}} ({{what}}), clé {{key}}.",
   "remote.account.aBrowser": "un navigateur",

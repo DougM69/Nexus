@@ -342,6 +342,8 @@ export const JA: PartialCatalog = {
   "remote.account.signInPortBusy": "このコンピューターでは別のサインインがすでに開いています。それを終えるか閉じてから、もう一度お試しください。",
   "remote.account.stationLimit": "このアカウントにはすでに局が 2 つあります。先に Remote ページで 1 つ削除してください。",
   "remote.account.reproof": "端末の追加を続けるには、もう一度サインインしてください。局のサインインの確認に使った鍵が廃止されました。",
+  "remote.account.signInAgain": "もう一度サインイン",
+  "remote.account.notOwner": "この局が属するアカウントでサインインしてください。",
   "remote.account.added": "あなたのサインインで追加されました: {{name}}({{what}})、鍵 {{key}}。",
   "remote.account.addedGuest": "招待した人のために追加されました({{role}}): {{name}}({{what}})、鍵 {{key}}。",
   "remote.account.aBrowser": "ブラウザー",

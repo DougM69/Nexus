@@ -98,6 +98,10 @@ export type RemoteStationAction =
   | { type: 'lanRevoke'; deviceId: string }
   /** Sign in to Nexus Remote at the shack: binds the station named `name` to the account, with no code. */
   | { type: 'signIn'; name: string }
+  /** Sign in again, for a station bound already: its proof is replaced, so devices can check it again. */
+  | { type: 'signInAgain' }
+  /** End signing in again; unlike `cancel`, which is a stop, it leaves Remote as it was. */
+  | { type: 'cancelSignInAgain' }
   | { type: 'dismissAdded'; deviceId: string }
   | { type: 'invite'; email: string; role: AccountRole }
   | { type: 'uninvite'; email: string }

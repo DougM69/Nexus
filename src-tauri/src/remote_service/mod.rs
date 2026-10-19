@@ -398,6 +398,13 @@ pub enum Action {
     SignIn {
         name: String,
     },
+    /// Sign in again, at the shack, for a station bound already: its proof is replaced at the
+    /// service, so devices can check it again once the issuer has retired the key that signed the
+    /// old one. Nothing else about the station changes.
+    SignInAgain {},
+    /// End signing in again while the browser is still open: the station stays as it was, on or
+    /// off (Cancel is a stop, and turns Remote off).
+    CancelSignInAgain {},
     /// Invite someone to this station by their address, to operate it or only to listen: their
     /// devices are then approved when they sign in with that address, verified.
     Invite {
@@ -1366,6 +1373,8 @@ impl Accounts {
 struct Signing {
     task: tokio::task::JoinHandle<Result<account::Bound, &'static str>>,
     generation: u64,
+    /// Proving a bound station again (`Action::SignInAgain`): nothing is installed when it ends.
+    again: bool,
 }
 /// The keys and credential a sign-in binds with: made once and kept until the station is bound, so a
 /// sign-in tried again names the same keys and the service finds the station it already made for
@@ -1926,15 +1935,28 @@ impl Controller {
         let Some(signing) = self.signing.take() else {
             return;
         };
-        let result = done
-            .unwrap_or(Err("signInFailed"))
-            .and_then(|bound| self.install(bound, signing.generation));
+        let result = done.unwrap_or(Err("signInFailed")).and_then(|bound| {
+            if signing.again {
+                self.proven_again();
+                Ok(())
+            } else {
+                self.install(bound, signing.generation)
+            }
+        });
         self.reflect_account();
         if let Err(error) = result {
             if let Ok(mut status) = self.status.lock() {
                 status.error = Some(error);
             }
         }
+    }
+    /// The station's proof was replaced: devices can check it again, with the owner kept now.
+    fn proven_again(&self) {
+        if let Ok(mut status) = self.status.lock() {
+            status.account.reproof = false;
+            status.error = None;
+        }
+        self.arm_enrolment();
     }
     /// The station is bound to the account: its credential and its signing key are kept under the
     /// binding the service gave (the key first: the service already holds its public half, so a key
@@ -2340,6 +2362,12 @@ impl Controller {
                 });
                 self.reflect("pairing");
             }
+            Action::CancelSignInAgain {} => {
+                if let Some(signing) = self.signing.take_if(|signing| signing.again) {
+                    signing.task.abort();
+                }
+                self.reflect_account();
+            }
             Action::Cancel {} => {
                 if let Some(signing) = self.signing.take() {
                     signing.task.abort();
@@ -2545,10 +2573,50 @@ impl Controller {
                     station_key: staged.public_key.clone(),
                     lan_key,
                     credential: staged.credential.clone(),
+                    again: None,
                 };
                 self.signing = Some(Signing {
                     task: tokio::spawn((self.accounts.bind)(binds)),
                     generation,
+                    again: false,
+                });
+                self.reflect_account();
+            }
+            Action::SignInAgain {} => {
+                if self.pending.is_some() || self.signing.is_some() {
+                    return Err("invalidRequest");
+                }
+                self.accounts.service.as_ref().map_err(|reason| *reason)?;
+                let (binding, credential) = self.bound()?;
+                let station_key = self
+                    .control
+                    .lock()
+                    .map_err(|_| "serviceUnavailable")?
+                    .station_key
+                    .as_ref()
+                    .map(|key| key.public_key().to_string())
+                    .ok_or("noKey")?;
+                // The LAN key as it is now: one reset since the station was bound is proven too.
+                let lan_key = self
+                    .accounts
+                    .lan_key
+                    .as_ref()
+                    .and_then(|lan_key| lan_key())
+                    .ok_or("noKey")?;
+                let binds = account::Binds {
+                    name: String::new(),
+                    station_key,
+                    lan_key,
+                    credential,
+                    again: Some(account::Bound {
+                        station_id: binding.station_id,
+                        account_id: binding.account_id,
+                    }),
+                };
+                self.signing = Some(Signing {
+                    task: tokio::spawn((self.accounts.bind)(binds)),
+                    generation,
+                    again: true,
                 });
                 self.reflect_account();
             }

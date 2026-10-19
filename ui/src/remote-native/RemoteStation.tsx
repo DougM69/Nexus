@@ -128,6 +128,7 @@ export function RemoteStation() {
       : issue === 'accountNotReady' ? t('remote.account.notReady')
       : issue === 'signInPortBusy' ? t('remote.account.signInPortBusy')
       : issue === 'signInFailed' || issue === 'proofInvalid' || issue.startsWith('token') ? t('remote.account.signInFailed')
+      : issue === 'proofNotYours' ? t('remote.account.notOwner')
       : issue === 'stationLimit' ? t('remote.account.stationLimit')
       : issue === 'inviteLimit' ? t('remote.account.inviteLimit')
       : issue === 'noKey' ? t('remote.vaultFailed')
@@ -151,6 +152,13 @@ export function RemoteStation() {
       </span>
     </div> })}
     {account?.reproof && <p role="alert">{t('remote.account.reproof')}</p>}
+    {/* Signing in again, for a station bound already: the same sign-in, the station otherwise as it was. */}
+    {phase !== 'unpaired' && (account?.signingIn ? <>
+      <p role="status">{t('remote.account.signingIn')}</p>
+      <button type="button" className="remote-button" onClick={() => void act({ type: 'cancelSignInAgain' })}>{t('remote.account.cancelSignIn')}</button>
+    </> : account?.reproof && <div className="remote-actions">
+      <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'signInAgain' })}>{t('remote.account.signInAgain')}</button>
+    </div>)}
     {/* Linking the station to the account IS the sign-in, so its steps stay in the card while it is
         not linked; the pairing's transmit option is under Advanced. */}
     {phase === 'unpaired' && <>
