@@ -27617,6 +27617,7 @@ contact yourself."
                 // it fixed once sent.
                 station.report_follows_latest_decode =
                     matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4 | Tier::Fst4);
+                station.cq_running = self.cq_running;
                 let next_before = station.outgoing();
                 station.observe(observed);
                 sequence_advanced = station.state != state_before;

@@ -567,6 +567,170 @@ fn the_partners_73_during_our_rr73_leaves_the_rr73_on_the_air() {
     assert_eq!(key(&mut e, 102), None, "nothing after it");
 }
 
+/// W1AW's RRR to us.
+const RRR_TO_US: &str = "KD9TAW W1AW RRR";
+
+/// ⭐ RULING 542 (bench step B2). We rogered with RRR, which is not a 73, so WSJT-X's Enable Tx
+/// stays on at its key; the fold during that over logged the contact. W1AW answered with RR73 (or
+/// RRR), weak: only the full pass found it, 2.5 s into our second RRR. WSJT-X checks `^RR(?:R|73)$`
+/// before its ROGERS branch and sets `m_ntx=5` (`widgets/mainwindow.cpp:9210-9214`), then
+/// regenerates the over (:9446): the rest of this over is the 73. "Disable Tx after sending 73"
+/// acts as at a key; nothing follows; the contact stays logged once.
+#[test]
+fn the_partners_roger_during_our_second_rrr_switches_the_rest_to_73() {
+    for (heard, disable) in [(RR73_TO_US, true), (RRR_TO_US, true), (RR73_TO_US, false)] {
+        let what = format!("{heard}, Disable Tx after 73 {disable}");
+        let mut e = rogering_with_rrr();
+        e.settings.disable_tx_after_73 = disable;
+        hear(&mut e, "CQ K1ABC FN42", -5, 100);
+        assert_eq!(
+            e.stored_log().len(),
+            1,
+            "{what}: premise: logged at our RRR"
+        );
+        assert_eq!(
+            key(&mut e, 102).as_deref(),
+            Some(RRR),
+            "{what}: premise: again"
+        );
+        e.take_all_txt_pending();
+
+        hear(&mut e, heard, -21, 102);
+        let mut route = Route::new(100_000);
+        assert_eq!(
+            route.switch(&mut e, 102, at(102, 2_500.0)),
+            switched(RRR, BYE73),
+            "{what}"
+        );
+        let bye = wave_of(BYE73);
+        assert_eq!(
+            route.handed.as_deref(),
+            Some(&bye[bye.len() - 100_000..]),
+            "{what}: the rest of the over is the 73's, in place"
+        );
+        let rows = e.take_all_txt_pending();
+        let tx = tx_rows(&rows);
+        assert_eq!(tx.len(), 1, "{what}: a second Tx row: {rows:?}");
+        assert!(tx[0].ends_with(BYE73), "{what}: {}", tx[0]);
+        assert_eq!(tx_now(&e), None, "{what}: the 73 goes once");
+        assert_eq!(e.take_pending_tx_disable(), disable, "{what}");
+        assert!(!e.take_pending_tx_disable(), "{what}: armed once at most");
+        assert_eq!(key(&mut e, 104), None, "{what}: nothing after it");
+        assert!(!e.take_pending_tx_disable(), "{what}: nor at the next key");
+        assert_eq!(e.stored_log().len(), 1, "{what}: logged once");
+    }
+}
+
+/// The same roger found before our next over (the early pass): that over is the 73, keyed whole.
+#[test]
+fn the_partners_roger_to_our_rrr_heard_before_the_key_is_answered_with_73() {
+    for heard in [RR73_TO_US, RRR_TO_US] {
+        let mut e = rogering_with_rrr();
+        hear(&mut e, heard, -10, 102);
+        assert_eq!(key(&mut e, 102).as_deref(), Some(BYE73), "{heard}");
+        assert!(e.take_pending_tx_disable(), "{heard}: TX off after it");
+        assert!(!e.take_pending_tx_disable(), "{heard}: …once");
+        assert_eq!(key(&mut e, 104), None, "{heard}: nothing after it");
+        assert_eq!(e.stored_log().len(), 1, "{heard}: logged once");
+    }
+}
+
+/// ⛔ RULING 541: after OUR RR73, nothing new. At the RR73's key WSJT-X turns Enable Tx off
+/// (:8105-8139), so W1AW's 73, RR73 or RRR is never processed: the RR73 Nexus sends again is not
+/// cut, and nothing follows it.
+#[test]
+fn after_our_rr73_the_partners_73_rr73_or_rrr_changes_nothing() {
+    for heard in [BYE73_TO_US, RR73_TO_US, RRR_TO_US] {
+        let mut e = station();
+        work(&mut e, "KD9TAW W1AW R-12", -10, 100);
+        assert_eq!(key(&mut e, 100).as_deref(), Some(RR73), "{heard}: premise");
+        hear(&mut e, "CQ K1ABC FN42", -5, 100);
+        assert_eq!(key(&mut e, 102).as_deref(), Some(RR73), "{heard}: premise");
+        hear(&mut e, heard, -21, 102);
+        let mut route = Route::new(80_000);
+        assert_eq!(route.switch(&mut e, 102, at(102, 2_500.0)), None, "{heard}");
+        assert!(route.handed.is_none(), "{heard}");
+        assert_eq!(key(&mut e, 104), None, "{heard}: nothing after it");
+        assert_eq!(e.stored_log().len(), 1, "{heard}: logged once");
+    }
+}
+
+/// ⛔ #236 (`reference-ft8-wrong-73-fabricated-sender`): only W1AW's own roger to us answers our
+/// RRR with 73. A bystander's RR73 to us, W1AW's RR73 to another station and a Fox's multiplex
+/// whose sender-less first half is addressed to us never key a 73, mid-over or at the next key.
+#[test]
+fn only_the_partners_own_roger_answers_our_rrr_with_73() {
+    for other in [
+        "KD9TAW K2DEF RR73",
+        "K2DEF W1AW RR73",
+        "KD9TAW RR73; NEXTHOUND <PJ4DX> -08",
+    ] {
+        let mut e = rogering_with_rrr();
+        assert_eq!(key(&mut e, 102).as_deref(), Some(RRR), "{other}: premise");
+        hear(&mut e, other, -10, 102);
+        let mut route = Route::new(50_000);
+        assert_eq!(route.switch(&mut e, 102, at(102, 2_000.0)), None, "{other}");
+        assert_eq!(key(&mut e, 104).as_deref(), Some(RRR), "{other}: our RRR");
+    }
+    // Control: W1AW's own RR73 does.
+    let mut e = rogering_with_rrr();
+    key(&mut e, 102);
+    hear(&mut e, RR73_TO_US, -10, 102);
+    assert_eq!(
+        Route::new(50_000).switch(&mut e, 102, at(102, 2_000.0)),
+        switched(RRR, BYE73)
+    );
+}
+
+/// RULING 542 (a): a CQ run is left as it was. The run logs the contact and calls CQ again on the
+/// first fold after our RRR is keyed (`resume_cq`), before W1AW can answer it, so W1AW's RR73 finds
+/// the run on its CQ. Where our RRR was switched in mid-over no fold came between, and W1AW's RR73
+/// closes the contact as before, with no 73: the next over is the CQ. WSJT-X's CQ auto-reply sends
+/// the 73 there; what a Nexus run should do is the operator's open question.
+#[test]
+fn a_cq_run_after_our_rrr_calls_cq_without_answering_the_callers_rr73() {
+    let run = || {
+        let mut e = station();
+        e.settings.prefer_rrr = true;
+        e.start_cq(None).expect("premise: Call CQ");
+        let _ = e.take_immediate_tx();
+        assert_eq!(key(&mut e, 100).as_deref(), Some(CQ), "premise");
+        hear(&mut e, "KD9TAW W1AW FN31", -10, 102);
+        assert_eq!(key(&mut e, 102).as_deref(), Some(TX2), "premise");
+        e
+    };
+    // Our RRR keyed at a boundary.
+    let mut e = run();
+    hear(&mut e, "KD9TAW W1AW R-12", -12, 104);
+    assert_eq!(key(&mut e, 104).as_deref(), Some(RRR), "premise");
+    hear(&mut e, "CQ K1ABC FN42", -5, 104);
+    assert_eq!(
+        e.ft_next_over(104).as_deref(),
+        Some(CQ),
+        "premise: the run resumed"
+    );
+    hear(&mut e, RR73_TO_US, -10, 106);
+    assert_eq!(key(&mut e, 106).as_deref(), Some(CQ), "keyed at a boundary");
+    assert_eq!(e.stored_log().len(), 1);
+
+    // Our RRR switched in mid-over: W1AW's R-12 was found 1 s into our second report.
+    let mut e = run();
+    assert_eq!(key(&mut e, 104).as_deref(), Some(TX2), "premise: again");
+    hear(&mut e, "KD9TAW W1AW R-12", -12, 104);
+    assert_eq!(
+        Route::new(80_000).switch(&mut e, 104, at(104, 1_000.0)),
+        switched(TX2, RRR),
+        "premise"
+    );
+    hear(&mut e, RR73_TO_US, -10, 106);
+    assert_eq!(
+        key(&mut e, 106).as_deref(),
+        Some(CQ),
+        "switched in mid-over"
+    );
+    assert_eq!(e.stored_log().len(), 1);
+}
+
 /// ⛔ A CQ RUN's OWN BOOKKEEPING NEVER CUTS THE CLOSING OVER. The run logs the contact and returns
 /// to its CQ on the first fold after our RR73 (or RRR) is keyed, whatever that fold holds. That is
 /// not WSJT-X's `processMessage` reacting to a message: the over on the air goes out to its end,
