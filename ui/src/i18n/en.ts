@@ -4101,6 +4101,15 @@ export const EN = {
   'fieldDay.rate.hour.title':
     'Contacts logged in the last 60 minutes — a rolling hour, not the clock hour.',
   'fieldDay.rate.hour.aria': 'Contacts in the last 60 minutes',
+  // Operating time by the sponsors' rule: a break of 30 minutes or more between two contacts is
+  // off time, the rest from the first contact to the last is on time.
+  'fieldDay.opTime.on': 'On time',
+  'fieldDay.opTime.on.title': 'Time on the air from the first contact to the last, less the breaks.',
+  'fieldDay.opTime.on.aria': 'On time {{time}}',
+  'fieldDay.opTime.off': 'Off time',
+  'fieldDay.opTime.off.title':
+    'Breaks of {{minutes}} minutes or more between two contacts, the sponsors’ off-time rule.',
+  'fieldDay.opTime.off.aria': 'Off time {{time}}',
   'fieldDay.operators.heading': 'Operators',
   'fieldDay.operators.caption': 'Contest statistics per operator',
   'fieldDay.operators.col.operator': 'Operator',

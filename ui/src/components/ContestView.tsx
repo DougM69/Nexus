@@ -36,6 +36,7 @@ import { receivedCaption } from '../features/contestSlots'
 import { contestUnsavedText } from '../features/contestUnsaved'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { bandRank, operatorSummaryLines } from '../features/contestOperators'
+import { formatOpTime, OFF_TIME_MIN_SEC, operatingTime } from '../features/contestOpTime'
 import { OperatorStatsBoard } from './ContestOperators'
 import { stationMode, usePskName } from '../features/contestMode'
 import { CLEAR_TOAST_MS, REMOVE_CONFIRM_MS, SERVICE_NAMES, clearText, contactCount, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
@@ -661,6 +662,13 @@ export function buildSummaryText(a: SummaryArgs): string {
   L.push(`  By mode:  DIG ${a.modes.dig}   CW ${a.modes.cw}   PH ${a.modes.ph}`)
   const bands = bandCounts(a.log)
   L.push(`  By band:  ${bands.length ? bands.map((b) => `${b.band} ${b.n}`).join('   ') : '—'}`)
+  // How long the station was on, by the sponsors' off-time rule (features/contestOpTime).
+  const op = operatingTime(a.log)
+  if (op) {
+    L.push(
+      `Operating time:  on ${formatOpTime(op.onSec)}   off ${formatOpTime(op.offSec)} (breaks of ${OFF_TIME_MIN_SEC / 60} min or more)`,
+    )
+  }
   L.push('')
   // ⭐ The same contacts by band AND mode, as ARRL's Field Day summary sheet asks for them.
   L.push(a.fieldDaySheet ? 'QSOs BY BAND AND MODE (ARRL summary sheet, item 18)' : 'QSOs BY BAND AND MODE')
@@ -2709,6 +2717,42 @@ export function RateTiles({ log, nowUnix }: { log: FieldDayQso[]; nowUnix: numbe
 }
 
 /**
+ * ⭐ **ON TIME AND OFF TIME** — two `.fd-score` tiles beside the rate meter, the shipped tile idiom
+ * as `RateTiles` uses it: a break of 30 minutes or more between two contacts is off time, the rest
+ * from the first contact to the last is on time (`features/contestOpTime`). Nothing before the
+ * first contact.
+ */
+export function OperatingTimeTiles({ log }: { log: FieldDayQso[] }) {
+  const op = useMemo(() => operatingTime(log), [log])
+  if (!op) return null
+  const minutes = OFF_TIME_MIN_SEC / 60
+  return (
+    <>
+      <div
+        className="fd-score"
+        role="group"
+        data-optime="on"
+        title={t('fieldDay.opTime.on.title')}
+        aria-label={t('fieldDay.opTime.on.aria', { time: formatOpTime(op.onSec) })}
+      >
+        <span className="fd-score-val">{formatOpTime(op.onSec)}</span>
+        <span className="fd-score-label">{t('fieldDay.opTime.on')}</span>
+      </div>
+      <div
+        className="fd-score"
+        role="group"
+        data-optime="off"
+        title={t('fieldDay.opTime.off.title', { minutes })}
+        aria-label={t('fieldDay.opTime.off.aria', { time: formatOpTime(op.offSec) })}
+      >
+        <span className="fd-score-val">{formatOpTime(op.offSec)}</span>
+        <span className="fd-score-label">{t('fieldDay.opTime.off')}</span>
+      </div>
+    </>
+  )
+}
+
+/**
  * ⭐ THE OPERATOR BOX — who is at the key. One component wherever it is drawn, so the places cannot
  * drift: the scoreboard's row (`FieldDayScoreboard`: the torn-off scoreboard, the Remote page's
  * read-only copy, and the Contest screen while no contest runs) and, while a contest runs, the large
@@ -2906,6 +2950,8 @@ export function FieldDayScoreboard({
             "how fast" are one glance. Every contest gets it; the data is the log's own
             timestamps and nothing about the score touches it. */}
         <RateTiles log={log} nowUnix={nowUnix} />
+        {/* …and how long the station has been on, by the sponsors' off-time rule. */}
+        <OperatingTimeTiles log={log} />
         {/* Per-mode chips — a count and a mode code, both invariant. */}
         <div className="fd-mode-chips">
           {modes.dig > 0 && <span className="fd-mode-chip dig">{modes.dig} {FD_MODE_CODES.dig}</span>}
