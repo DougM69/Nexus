@@ -5750,10 +5750,13 @@ mod tests {
             "arrlvhf_jan",
             "arrlvhf_jun",
             "arrlvhf_sep",
+            // The Illinois QSO Party: the operator's own word (KD9TAW, 2026-10-19); the
+            // sponsor's pages say nothing on spotting yourself.
+            "ilqp",
         ] {
             assert_eq!(self_spot(id), SelfSpot::Allowed, "{id}");
         }
-        for id in ["arrlfd", "arrlss_cw", "arrlss_ssb", "txqp", "ilqp", "nyqp"] {
+        for id in ["arrlfd", "arrlss_cw", "arrlss_ssb", "txqp", "nyqp"] {
             assert_eq!(self_spot(id), SelfSpot::Unknown, "{id}");
         }
     }

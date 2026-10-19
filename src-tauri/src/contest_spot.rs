@@ -312,8 +312,8 @@ mod tests {
 
     #[test]
     fn a_contest_not_known_to_allow_self_spotting_posts_only_on_the_second_press() {
-        // Rules data: CQ WW forbids self-spotting, the ARRL VHF contests allow it, ARRL
-        // Sweepstakes' text says nothing either way.
+        // Rules data: CQ WW forbids self-spotting, the ARRL VHF contests and the Illinois QSO
+        // Party allow it, ARRL Sweepstakes' text says nothing either way.
         for event in ["cqww_cw", "arrlss_cw"] {
             let e = contest_engine(event);
             assert_eq!(
@@ -323,8 +323,10 @@ mod tests {
             );
             assert_eq!(station_spot(&e, true).unwrap().0, "KD9TAW", "{event}");
         }
-        let vhf = contest_engine("arrlvhf_jan");
-        assert_eq!(station_spot(&vhf, false).unwrap().0, "KD9TAW");
+        for event in ["arrlvhf_jan", "ilqp"] {
+            let e = contest_engine(event);
+            assert_eq!(station_spot(&e, false).unwrap().0, "KD9TAW", "{event}");
+        }
         let off = Engine::new("KD9TAW", "EN61", 0);
         assert_eq!(station_spot(&off, true).unwrap_err(), NO_CONTEST);
     }
