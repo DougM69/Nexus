@@ -58,6 +58,7 @@ import { BOX_IDS, CW_PANEL_IDS, CW_PANELS, boxEntries, isBoxId, type BoxId, type
 import { isStockPlacement, regionGroups, type PaneDrop } from '../features/panelPlace'
 import { LogEntry } from './LogEntry'
 import { CallStatsFrame, statsHere, useStatsRoom, withStats, withStatsRoom } from './CallStatsPane'
+import { RecentQsosFrame, withRecent } from './RecentQsosPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import { SpotDialog } from './SpotDialog'
 import { SpotsPanel, type SpotsPanelProps } from './SpotsPanel'
@@ -340,6 +341,7 @@ const cwPanelLabels = (): Record<Exclude<CwPanelId, BoxId>, string> => ({
   // The Spots and Needed boards as CW panes, named as the views they come from (Phone's words).
   spots: t('cw.panel.spots'),
   needed: t('cw.panel.needed'),
+  recent: t('recentQsos.pane.title'),
   stats: t('callStats.pane.title'),
 })
 
@@ -721,7 +723,7 @@ export function CwCockpit({
   const statsRoom = useStatsRoom()
   const host = panels
     ? panelHost(withStatsRoom(panels, statsRoom), {
-        menu: withStats(CW_MENU),
+        menu: withRecent(withStats(CW_MENU)),
         side: [],
         main: 'decode',
         labels,
@@ -1379,6 +1381,8 @@ export function CwCockpit({
   // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
   // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
   const hasStatsPane = host != null && shown('stats') && statsHere()
+  // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): under the log form, above the Stats pane.
+  const hasRecentPane = host != null && shown('recent') && statsHere()
   // The three rig-control groups share ONE frame (see rigCtlPane), so the frame renders when
   // ANY of them can — each group is still gated on its own ⊞ id inside it.
   const hasRigCtlPane = hasScopeCtlPane || hasDspPane || hasRxDspPane || hasSubRow
@@ -1406,6 +1410,7 @@ export function CwCockpit({
           copilot: hasCopilotPane,
           spots: hasSpotsPane,
           needed: hasNeededPane,
+          recent: hasRecentPane,
           stats: hasStatsPane,
         })[id as string] ?? false)
   const placed3 = regionGroups(CW_PANELS.arrange!, place, 3, paneShown)
@@ -1831,6 +1836,8 @@ export function CwCockpit({
         </CockpitPaneFrame>
   ) : null
 
+  // The last few contacts, a row a click into the Logbook's editor (App's handoff).
+  const recentPane = <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
   const statsPane = (
     <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode="CW" logTick={snap.logTick} />
   )
@@ -1977,6 +1984,7 @@ export function CwCockpit({
     copilot: copilotPane,
     spots: spotsPane,
     needed: neededPane,
+    recent: recentPane,
     stats: statsPane,
   }
   // THE BOXES (2026-10-07), as Phone's: each one on screen, its picker marking what is on screen

@@ -17,6 +17,7 @@ import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { LogEntry } from './LogEntry'
 import { CallStatsFrame, statsHere, withStats } from './CallStatsPane'
+import { RecentQsosFrame, withRecent } from './RecentQsosPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
@@ -167,6 +168,7 @@ const rttyPanelLabels = (): Record<RttyPanelId, string> => ({
   rfScope: t('rfScope.title'),
   tuning: t('rtty.tuning.title'),
   stream: t('rtty.panel.stream'),
+  recent: t('recentQsos.pane.title'),
   stats: t('callStats.pane.title'),
 })
 
@@ -342,7 +344,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // NOT "all TX chrome is pinned" — the `stream` pane hosts the Auto toggle, whose off-click is
   // a real stop (see the pane comment below). What is pinned is this cockpit's stop-line census.
   const host = panels
-    ? panelHost(panels, { menu: withStats(RTTY_PANEL_IDS), side: [], main: 'stream', labels: rttyPanelLabels(), shipsHidden: RTTY_PANELS.defaultRemoved })
+    ? panelHost(panels, { menu: withRecent(withStats(RTTY_PANEL_IDS)), side: [], main: 'stream', labels: rttyPanelLabels(), shipsHidden: RTTY_PANELS.defaultRemoved })
     : null
   // No panel record (a render without a host): every pane at its vocabulary's default — shown,
   // except the RF scope pane, which ships hidden (`defaultRemoved`).
@@ -1497,6 +1499,13 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           />
           )}
         </CockpitPaneFrame>
+      )}
+
+      {/* THE RECENT CONTACTS PANE (RecentQsosPane), under the log strip and above the Stats pane: the
+          last few contacts, a row a click into the Logbook's editor. Content-height, shipped hidden like
+          the Stats pane, for the same shortage of room. No stop control, nothing sent. */}
+      {snap && shown('recent') && statsHere() && (
+        <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
       )}
 
       {/* THE STATS PANE (CallStatsPane), under the log strip: what the log holds for the call typed

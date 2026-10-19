@@ -12788,6 +12788,9 @@ export const EN = {
   // short forms, band names, entity names, state codes and zone numbers are invariant tokens or
   // data, kept in the component, never here.
   'callStats.pane.title': 'Stats',
+  'recentQsos.pane.title': 'Recent contacts',
+  'recentQsos.empty': 'No contacts logged yet',
+  'recentQsos.aria': 'The last {{count}} contacts, newest first',
   'callStats.empty': 'Type a call in the log entry: its DXCC, WAS and WAZ standing shows here.',
   'callStats.emptyPicked': 'Pick a station: its DXCC, WAS and WAZ standing shows here.',
   'callStats.loading': 'Reading the log…',

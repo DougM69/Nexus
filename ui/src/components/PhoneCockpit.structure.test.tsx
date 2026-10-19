@@ -26,6 +26,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
+import { installRecentLog, recentRows, resetRecentLog } from './RecentQsosPane.testkit'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
 import { PHONE_PANEL_IDS, PHONE_PANELS, panelStorageKey, usePanelLayout } from '../features/panelState'
@@ -622,15 +623,15 @@ describe('PhoneCockpit Spots and Needed feeds', () => {
       expect(framesIn(lead).slice(0, 2), `tier ${cols}: band + keyer no longer lead`).toEqual(['bandActivity', 'voiceKeyer'])
       expect(framesIn(lead).slice(-2), `tier ${cols}: the feeds left the leading column`).toEqual(['spots', 'needed'])
       const log = region.querySelector(':scope > .cockpit-col:last-child')!
-      // The log form, and (this fixture docks every id) the Stats pane under it.
-      expect(framesIn(log), `tier ${cols}: the log column holds more than the log`).toEqual(['log', 'stats'])
+      // The log form, and (this fixture docks every id) the Recent contacts and Stats panes under it.
+      expect(framesIn(log), `tier ${cols}: the log column holds more than the log`).toEqual(['log', 'recent', 'stats'])
     }
     await tier(region, 1800)
     expect(region.getAttribute('data-cols')).toBe('3')
     const cols3 = region.querySelectorAll(':scope > .cockpit-col')
     expect(framesIn(cols3[0])).toEqual(['bandActivity', 'voiceKeyer', 'spots'])
     expect(framesIn(cols3[1])).toEqual(['receiver', 'transmitter', 'needed'])
-    expect(framesIn(cols3[2])).toEqual(['log', 'stats'])
+    expect(framesIn(cols3[2])).toEqual(['log', 'recent', 'stats'])
     for (const id of ['spots', 'needed']) {
       const f = document.querySelector(`[data-pane="${id}"]`) as HTMLElement
       expect(f.dataset.fit, `${id} is a content strip — a list must be able to use the surplus`).toBe('fill')
@@ -684,19 +685,19 @@ describe('PhoneCockpit Spots and Needed feeds', () => {
     await tier(region, 1800)
     expect(region.getAttribute('data-cols')).toBe('3')
     let cols = region.querySelectorAll(':scope > .cockpit-col')
-    expect([...cols].map(framesIn)).toEqual([['spots'], ['needed'], ['log', 'stats']])
+    expect([...cols].map(framesIn)).toEqual([['spots'], ['needed'], ['log', 'recent', 'stats']])
     // Spots alone as well: nothing for a middle track, so an ultrawide stays at two.
     r.rerender(withFeeds(fakePanels(['bandActivity', 'voiceKeyer', 'receiver', 'transmitter', 'needed'])))
     await frame()
     expect(region.getAttribute('data-cols')).toBe('2')
     cols = region.querySelectorAll(':scope > .cockpit-col')
-    expect([...cols].map(framesIn)).toEqual([['spots'], ['log', 'stats']])
+    expect([...cols].map(framesIn)).toEqual([['spots'], ['log', 'recent', 'stats']])
     // …and Needed alone, with nothing in the leading track at tier 3: two, Needed leading.
     r.rerender(withFeeds(fakePanels(['bandActivity', 'voiceKeyer', 'receiver', 'transmitter', 'spots'])))
     await frame()
     expect(region.getAttribute('data-cols')).toBe('2')
     cols = region.querySelectorAll(':scope > .cockpit-col')
-    expect([...cols].map(framesIn)).toEqual([['needed'], ['log', 'stats']])
+    expect([...cols].map(framesIn)).toEqual([['needed'], ['log', 'recent', 'stats']])
   })
 
   it('without the board wiring (no host to feed them) neither pane renders, ticked or not', () => {
@@ -974,7 +975,7 @@ describe('the Stats pane beside the log form', () => {
   it('stands under the log form in the log column, its own height, and follows the strip’s call', async () => {
     const { getCallStats } = await import('../api')
     vi.mocked(getCallStats).mockClear()
-    renderCockpit({ panels: fakePanels() })
+    renderCockpit({ panels: fakePanels(['recent']) /* the Recent contacts pane, which stands between them, unticked */ })
     const stats = document.querySelector('[data-pane="stats"]')!
     expect(stats, 'the Stats pane is not on a stock Phone screen').not.toBeNull()
     expect(stats.getAttribute('data-fit')).toBe('content')
@@ -1074,5 +1075,49 @@ describe('the Stats pane, on where there is room', () => {
     tall(STATS_ROOM.minVh)
     render(<Live />)
     expect(statsShown(), 'an untick on a tall window').toBe(false)
+  })
+})
+
+// THE RECENT CONTACTS PANE (2026-10-18): directly under the log form, above the Stats pane, its own height; a row
+// click opens that contact in the Logbook's editor (the cockpit's `onOpenLogbook`, with the contact's id).
+describe('the Recent contacts pane under the log form', () => {
+  afterEach(resetRecentLog)
+
+  it('ticked, stands directly under the log form, its own height, and a row opens THAT contact', async () => {
+    installRecentLog()
+    const onOpenLogbook = vi.fn()
+    renderCockpit({ panels: fakePanels(), onOpenLogbook })
+    const recent = document.querySelector('[data-pane="recent"]')
+    expect(recent, 'ticked, the Recent contacts pane is not on screen').not.toBeNull()
+    expect(recent!.getAttribute('data-fit')).toBe('content')
+    expect(recent!.previousElementSibling?.getAttribute('data-pane'), 'not directly under the log form').toBe('log')
+    expect(recent!.nextElementSibling?.getAttribute('data-pane'), 'the Stats pane is not under it').toBe('stats')
+    await act(async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve()
+    })
+    const rows = recentRows()
+    expect(rows, 'the newest contacts, newest first').toHaveLength(2)
+    fireEvent.click(rows[1])
+    expect(onOpenLogbook.mock.calls).toEqual([['W1AW', 'id-older']])
+  })
+
+  it('is one ⊞ tick: hidden, it is gone and the log form stays', async () => {
+    renderCockpit({ panels: fakePanels(['recent']) })
+    expect(document.querySelector('[data-pane="recent"]')).toBeNull()
+    expect(document.querySelector('[data-pane="log"]'), 'control: the log rendered').not.toBeNull()
+  })
+})
+
+describe('the Recent contacts pane on the hosted page', () => {
+  it('is left out, as the Stats pane is: that page edits no contact', async () => {
+    const { installApplicationTransport } = await import('../applicationTransport')
+    const off = installApplicationTransport({ kind: 'remote', invoke: async () => null as never })
+    try {
+      renderCockpit({ panels: fakePanels() })
+      expect(document.querySelector('[data-pane="recent"]')).toBeNull()
+      expect(document.querySelector('[data-pane="log"]'), 'control: the log column rendered').not.toBeNull()
+    } finally {
+      off()
+    }
   })
 })

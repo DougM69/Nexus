@@ -31885,6 +31885,67 @@ tr.sel .aprs-sym {
   background: var(--text-dim);
 }
 
+/* THE RECENT CONTACTS PANE (components/RecentQsosPane) — the last few contacts under a cockpit's log
+   entry, a row a click into the Logbook's editor. Every line is one line high whether it holds a
+   contact or not (ONE HEIGHT, in the component), so logging into a short log moves nothing below. The
+   row is the recall card's (date, call, band and mode) at the same size; the click target is the whole
+   row, its focus ring inside it, as the recall card's is. */
+.recent-qsos {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.recent-qso-row {
+  min-height: 1.6em;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-micro);
+}
+.recent-qso-row:nth-child(even) {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.recent-qso-row.empty {
+  padding: 3px var(--space-1);
+  color: var(--text-dim);
+}
+.recent-qso-open,
+.recent-qso-line {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: baseline;
+  width: 100%;
+  padding: 3px var(--space-1);
+}
+.recent-qso-open {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.recent-qso-open:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.recent-qso-open:focus-visible {
+  outline-offset: -2px;
+}
+.recent-qso-when {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.recent-qso-call {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+.recent-qso-bm {
+  color: var(--text);
+  font-weight: 600;
+}
+
 /* NEEDED BY BAND (AwardsView): per band, never worked and worked-not-confirmed, each count a
    button that opens its list under the row. */
 .aw-bn-table {

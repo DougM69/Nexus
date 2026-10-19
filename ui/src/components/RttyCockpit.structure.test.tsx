@@ -18,6 +18,7 @@
 import type { Ref } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
+import { installRecentLog, recentRows, resetRecentLog } from './RecentQsosPane.testkit'
 import { RttyCockpit } from './RttyCockpit'
 import type { AppSnapshot, RttyState } from '../types'
 import type { PanelLayoutApi, RttyPanelId } from '../features/panelState'
@@ -147,8 +148,9 @@ describe('RttyCockpit pane shell', () => {
     await renderCockpit({ panels: fakePanels() })
     const shell = document.querySelector('main.layout.single.rtty-cockpit')!
     const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame')).map((f) => f.getAttribute('data-pane'))
-    // …and the Stats pane, ticked too (it ships hidden here): the LAST frame, under the log strip.
-    expect(frames).toEqual(['rfScope', 'stream', 'log', 'stats'])
+    // …and the Recent contacts and Stats panes, ticked too (they ship hidden here): the LAST frames, under
+    // the log strip.
+    expect(frames).toEqual(['rfScope', 'stream', 'log', 'recent', 'stats'])
     const strip = shell.querySelector(':scope > .cockpit-txstrip')!
     expect(strip.previousElementSibling?.matches('.pane-splitter'), 'the TX strip left its place under the scope').toBe(true)
     expect(strip.nextElementSibling?.getAttribute('data-pane'), 'the RF scope pane is not first under the TX strip').toBe('rfScope')
@@ -473,7 +475,7 @@ describe('the Stats pane under the log strip', () => {
     await renderCockpit()
     expect(document.querySelector('[data-pane="stats"]'), 'the Stats pane shipped visible').toBeNull()
     cleanup()
-    await renderCockpit({ panels: fakePanels() })
+    await renderCockpit({ panels: fakePanels(['recent']) /* the Recent contacts pane, which stands between them, unticked */ })
     const shell = document.querySelector('main.layout.single.rtty-cockpit')!
     const stats = shell.querySelector(':scope > [data-pane="stats"]')!
     expect(stats.getAttribute('data-fit')).toBe('content')
@@ -482,5 +484,35 @@ describe('the Stats pane under the log strip', () => {
     fireEvent.click(screen.getByTestId('log-stub'))
     await act(async () => {})
     expect(getCallStats).toHaveBeenCalledWith('W1AW', '20m', 'RTTY')
+  })
+})
+
+// THE RECENT CONTACTS PANE (2026-10-18): directly under the log strip, above the Stats pane, its own height; a row
+// click opens that contact in the Logbook's editor (the cockpit's `onOpenLogbook`, with the contact's id).
+describe('the Recent contacts pane under the log strip', () => {
+  afterEach(resetRecentLog)
+
+  it('ticked, stands directly under the log strip, its own height, and a row opens THAT contact', async () => {
+    installRecentLog()
+    const onOpenLogbook = vi.fn()
+    await renderCockpit({ panels: fakePanels(), onOpenLogbook })
+    const recent = document.querySelector('main.layout.single.rtty-cockpit')!.querySelector(':scope > [data-pane="recent"]')
+    expect(recent, 'ticked, the Recent contacts pane is not on screen').not.toBeNull()
+    expect(recent!.getAttribute('data-fit')).toBe('content')
+    expect(recent!.previousElementSibling?.getAttribute('data-pane'), 'not directly under the log strip').toBe('log')
+    expect(recent!.nextElementSibling?.getAttribute('data-pane'), 'the Stats pane is not under it').toBe('stats')
+    await act(async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve()
+    })
+    const rows = recentRows()
+    expect(rows, 'the newest contacts, newest first').toHaveLength(2)
+    fireEvent.click(rows[1])
+    expect(onOpenLogbook.mock.calls).toEqual([['W1AW', 'id-older']])
+  })
+
+  it('is one ⊞ tick: hidden, it is gone and the log strip stays', async () => {
+    await renderCockpit({ panels: fakePanels(['recent']) })
+    expect(document.querySelector('[data-pane="recent"]')).toBeNull()
+    expect(document.querySelector('[data-pane="log"]'), 'control: the log rendered').not.toBeNull()
   })
 })

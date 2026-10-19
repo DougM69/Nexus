@@ -22,6 +22,7 @@
 // jsdom has no layout, so widths are stubbed the way useRegionCols.test.tsx does.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
+import { installRecentLog, recentRows, resetRecentLog } from './RecentQsosPane.testkit'
 import { CwCockpit } from './CwCockpit'
 import type { AppSnapshot } from '../types'
 import type { CwPanelId, PanelLayoutApi } from '../features/panelState'
@@ -846,7 +847,7 @@ describe('the Stats pane beside the log form', () => {
   it('stands under the log form in the log column, its own height, and follows the strip’s call', async () => {
     const { getCallStats } = await import('../api')
     vi.mocked(getCallStats).mockClear()
-    await renderCockpit({ panels: fakePanels() })
+    await renderCockpit({ panels: fakePanels(['recent']) /* the Recent contacts pane, which stands between them, unticked */ })
     const stats = document.querySelector('[data-pane="stats"]')!
     expect(stats, 'the Stats pane is not on a stock CW screen').not.toBeNull()
     expect(stats.getAttribute('data-fit')).toBe('content')
@@ -861,5 +862,35 @@ describe('the Stats pane beside the log form', () => {
     await renderCockpit({ panels: fakePanels(['stats']) })
     expect(document.querySelector('[data-pane="stats"]')).toBeNull()
     expect(document.querySelector('[data-pane="log"]')).not.toBeNull()
+  })
+})
+
+// THE RECENT CONTACTS PANE (2026-10-18): directly under the log form, above the Stats pane, its own height; a row
+// click opens that contact in the Logbook's editor (the cockpit's `onOpenLogbook`, with the contact's id).
+describe('the Recent contacts pane under the log form', () => {
+  afterEach(resetRecentLog)
+
+  it('ticked, stands directly under the log form, its own height, and a row opens THAT contact', async () => {
+    installRecentLog()
+    const onOpenLogbook = vi.fn()
+    await renderCockpit({ panels: fakePanels(), onOpenLogbook })
+    const recent = document.querySelector('[data-pane="recent"]')
+    expect(recent, 'ticked, the Recent contacts pane is not on screen').not.toBeNull()
+    expect(recent!.getAttribute('data-fit')).toBe('content')
+    expect(recent!.previousElementSibling?.getAttribute('data-pane'), 'not directly under the log form').toBe('log')
+    expect(recent!.nextElementSibling?.getAttribute('data-pane'), 'the Stats pane is not under it').toBe('stats')
+    await act(async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve()
+    })
+    const rows = recentRows()
+    expect(rows, 'the newest contacts, newest first').toHaveLength(2)
+    fireEvent.click(rows[1])
+    expect(onOpenLogbook.mock.calls).toEqual([['W1AW', 'id-older']])
+  })
+
+  it('is one ⊞ tick: hidden, it is gone and the log form stays', async () => {
+    await renderCockpit({ panels: fakePanels(['recent']) })
+    expect(document.querySelector('[data-pane="recent"]')).toBeNull()
+    expect(document.querySelector('[data-pane="log"]'), 'control: the log rendered').not.toBeNull()
   })
 })
