@@ -1277,7 +1277,10 @@ jobs:
   # crash-on-Settings incident). Flows live in e2e/smoke.mjs — zero npm deps.
   e2e-linux:
     name: E2E smoke (launch + wizard + Settings)
-    runs-on: ubuntu-latest
+    # ubuntu-24.04, not -latest: on 26.04 (ubuntu-latest since 2026-10-19) the WebKitGTK WebDriver
+    # package is renamed (webkit2gtk-driver -> webkitgtk-webdriver) and apt refuses the install.
+    # Move to the new image with its own package name and a green run, not by guessing.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
