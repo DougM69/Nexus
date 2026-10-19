@@ -619,3 +619,141 @@ async fn a_computer_the_service_stops_listing_leaves_the_lan() {
     assert_eq!(names(&status), vec!["Den PC"]);
     assert_eq!(vault.device_cache().unwrap().unwrap().devices, Vec::new());
 }
+
+// ---- Removals made offline -----------------------------------------------------------------------
+
+/// ★ A device removed at the shack while the service cannot be told: out at the station at once, as
+/// ever, and kept waiting (in the store too) instead of failing. While it waits, its proof grants
+/// it nothing, though the service still lists it as approved; the service is told before the next
+/// list once it answers, and it is no longer waiting.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removal_made_offline_is_sent_before_the_next_list_and_grants_nothing_meanwhile() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_owned(&cloud, &vault);
+    let status = listed(&service, &cloud, vec![browser_row(&token("browser"))]).await;
+    assert_eq!(status.pinned_devices, vec![BROWSER.to_string()], "premise");
+
+    cloud.refusing_removals.store(true, Ordering::SeqCst);
+    let removed = service
+        .action(Action::Device {
+            device_id: BROWSER.into(),
+            approve: false,
+            transmit: false,
+            key: None,
+            kind: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(removed.account.removals, vec![BROWSER.to_string()]);
+    assert!(removed.station_permissions.is_empty());
+    assert!(removed.pinned_devices.is_empty());
+    assert_eq!(
+        vault.revokes().unwrap(),
+        Some(vault::Revokes {
+            station_id: STATION.into(),
+            devices: vec![BROWSER.into()]
+        })
+    );
+
+    // The service still lists it as approved, with its proof: nothing is granted.
+    let waiting = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(waiting.account.removals, vec![BROWSER.to_string()]);
+    assert!(waiting.station_permissions.is_empty());
+    assert!(waiting.pinned_devices.is_empty());
+
+    // A restart reads them back, and still grants nothing.
+    drop(service);
+    let service = launch_owned(&cloud, &vault);
+    let restarted = listed(&service, &cloud, vec![browser_row(&token("browser"))]).await;
+    assert_eq!(restarted.account.removals, vec![BROWSER.to_string()]);
+    assert!(restarted.pinned_devices.is_empty());
+
+    cloud.refusing_removals.store(false, Ordering::SeqCst);
+    let heard = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(heard.account.removals, Vec::<String>::new());
+    assert_eq!(heard.devices.len(), 0, "the service took it off its list");
+    assert_eq!(
+        vault.revokes().unwrap().unwrap().devices,
+        Vec::<String>::new()
+    );
+}
+
+/// A removal the service has meanwhile taken off its list (removed on the web too) is no longer
+/// waiting, though the service still will not answer the removal itself.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removal_the_service_no_longer_lists_is_not_waiting() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_owned(&cloud, &vault);
+    listed(&service, &cloud, vec![browser_row(&token("browser"))]).await;
+    cloud.refusing_removals.store(true, Ordering::SeqCst);
+    let removed = service
+        .action(Action::Device {
+            device_id: BROWSER.into(),
+            approve: false,
+            transmit: false,
+            key: None,
+            kind: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        removed.account.removals,
+        vec![BROWSER.to_string()],
+        "premise"
+    );
+    *cloud.devices.lock().unwrap() = json!({ "devices": [] }).to_string();
+    let heard = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(heard.account.removals, Vec::<String>::new());
+}
+
+/// Removals that cannot be read may hide a device removed here: then no proof grants anything.
+#[tokio::test(flavor = "multi_thread")]
+async fn unreadable_removals_grant_nothing_on_a_proof() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    vault
+        .values
+        .lock()
+        .unwrap()
+        .insert("account-revokes".into(), "{not json".into());
+    let service = launch_owned(&cloud, &vault);
+    let status = listed(&service, &cloud, vec![browser_row(&token("browser"))]).await;
+    assert_eq!(
+        status.account.unconfirmed,
+        BTreeMap::from([(BROWSER.to_string(), "credentialStoreUnavailable")])
+    );
+    assert!(status.pinned_devices.is_empty());
+}
+
+/// A removal the service refuses by name (not for being out of reach) is that refusal, said at the
+/// shack, and nothing waits to be sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removal_the_service_refuses_by_name_does_not_wait() {
+    let origin = refusing_cloud("403 Forbidden", r#"{"error":"stationRevoked"}"#).await;
+    let vault = paired_vault(&origin);
+    let service = Service::with_accounts(
+        origin,
+        Box::new(vault.clone()),
+        engine(),
+        crate::remote_monitor::Publisher::default(),
+        accounts(&vault, binder(Vec::new()).0),
+    );
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    let refused = service
+        .action(Action::Device {
+            device_id: BROWSER.into(),
+            approve: false,
+            transmit: false,
+            key: None,
+            kind: None,
+        })
+        .await;
+    assert_eq!(refused.err(), Some("stationRevoked"));
+    assert_eq!(
+        service.status().unwrap().account.removals,
+        Vec::<String>::new()
+    );
+    assert_eq!(vault.revokes().unwrap(), None);
+}

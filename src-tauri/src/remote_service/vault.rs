@@ -44,7 +44,9 @@
 //! entry so no older Nexus ever reads them: who owns the station (the service's id for it, the
 //! issuer and the owner's subject, and the key id and signing time of its proof: no token), the
 //! issuer's key set, the devices kept for the LAN (each the SHA-256 of its key, its role and two
-//! times), and the people invited (each an address as the service matches it, and a role). None
+//! times), and the people invited (each an address as the service matches it, and a role). A fifth
+//! holds the removals made at the shack that the service has not heard yet (device ids), so a
+//! device removed offline is never granted again on its proof before the service hears of it. None
 //! holds a secret: a key set is public, and a pin is a hash. Like the LAN entries they read past a
 //! field they do not know, and one that does not read at all is never taken for none: the station
 //! then admits no device on a proof until it signs in again.
@@ -75,6 +77,7 @@ const ACCOUNT_OWNER: &str = "account-owner";
 const ACCOUNT_KEYS: &str = "account-keys";
 const ACCOUNT_DEVICES: &str = "account-devices";
 const ACCOUNT_PEOPLE: &str = "account-people";
+const ACCOUNT_REVOKES: &str = "account-revokes";
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -242,6 +245,15 @@ pub struct People {
     pub invites: Vec<tempo_client::account::Invite>,
 }
 
+/// The removals made at the station that the service known as `station_id` has not heard yet: the
+/// ids it lists those devices under.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Revokes {
+    pub station_id: String,
+    pub devices: Vec<String>,
+}
+
 /// The station's account entries (see the header), kept apart from [`Vault`]'s and the LAN's.
 pub trait AccountVault: Send + Sync {
     fn owner(&self) -> Result<Option<tempo_client::account::Owner>, &'static str>;
@@ -254,6 +266,8 @@ pub trait AccountVault: Send + Sync {
         cache: &tempo_client::account::DeviceCache,
     ) -> Result<(), &'static str>;
     fn people(&self) -> Result<Option<People>, &'static str>;
+    fn revokes(&self) -> Result<Option<Revokes>, &'static str>;
+    fn save_revokes(&self, revokes: &Revokes) -> Result<(), &'static str>;
 }
 
 pub trait Vault: Send + Sync {
@@ -544,6 +558,12 @@ impl AccountVault for SystemVault {
     }
     fn people(&self) -> Result<Option<People>, &'static str> {
         account_entry(ACCOUNT_PEOPLE)
+    }
+    fn revokes(&self) -> Result<Option<Revokes>, &'static str> {
+        account_entry(ACCOUNT_REVOKES)
+    }
+    fn save_revokes(&self, revokes: &Revokes) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_REVOKES, revokes)
     }
 }
 

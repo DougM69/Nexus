@@ -79,6 +79,12 @@ impl vault::AccountVault for MemoryVault {
     fn people(&self) -> Result<Option<vault::People>, &'static str> {
         self.account_entry("account-people")
     }
+    fn revokes(&self) -> Result<Option<vault::Revokes>, &'static str> {
+        self.account_entry("account-revokes")
+    }
+    fn save_revokes(&self, revokes: &vault::Revokes) -> Result<(), &'static str> {
+        self.save_account_entry("account-revokes", revokes)
+    }
 }
 impl Vault for MemoryVault {
     fn binding(&self) -> Result<Option<Binding>, &'static str> {
@@ -1551,6 +1557,8 @@ struct FakeCloud {
     refusing: Arc<AtomicBool>,
     /// Every `enroll/approve` body, as sent.
     approvals: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// While set, a removal alone is not answered (a 503), while the list still is.
+    refusing_removals: Arc<AtomicBool>,
 }
 fn device_list(approved: u8, expires_at: u64) -> String {
     json!({"devices":[{"id":BROWSER,"name":"Test browser","approved":approved,"expiresAt":expires_at}]})
@@ -1577,12 +1585,15 @@ async fn fake_cloud() -> FakeCloud {
     let down = refusing.clone();
     let approvals = Arc::new(Mutex::new(Vec::new()));
     let approved_bodies = approvals.clone();
+    let refusing_removals = Arc::new(AtomicBool::new(false));
+    let removals_down = refusing_removals.clone();
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
             let served = served.clone();
             let held = held.clone();
             let down = down.clone();
             let approved_bodies = approved_bodies.clone();
+            let removals_down = removals_down.clone();
             tokio::spawn(async move {
                 let mut request = Vec::new();
                 let mut chunk = [0u8; 4096];
@@ -1733,7 +1744,9 @@ async fn fake_cloud() -> FakeCloud {
                     }
                     *served.lock().unwrap() = approved.to_string();
                     ("200 OK", r#"{"ok":true}"#.to_string())
-                } else if head.contains("/native/revoke-device ") && down.load(Ordering::SeqCst) {
+                } else if head.contains("/native/revoke-device ")
+                    && (down.load(Ordering::SeqCst) || removals_down.load(Ordering::SeqCst))
+                {
                     ("503 Service Unavailable", "{}".to_string())
                 } else if head.contains("/native/revoke-device ")
                     && serde_json::from_str::<serde_json::Value>(&served.lock().unwrap())
@@ -1799,6 +1812,7 @@ async fn fake_cloud() -> FakeCloud {
         station_key,
         refusing,
         approvals,
+        refusing_removals,
     }
 }
 fn paired_vault(origin: &str) -> MemoryVault {
@@ -3053,6 +3067,7 @@ async fn a_closed_service_is_named_on_http_and_on_the_station_socket() {
         station_key: Default::default(),
         refusing: Default::default(),
         approvals: Default::default(),
+        refusing_removals: Default::default(),
     };
     let vault = paired_vault(&refused.origin);
     let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));

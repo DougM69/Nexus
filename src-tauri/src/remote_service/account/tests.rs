@@ -69,6 +69,12 @@ impl AccountVault for Store {
     fn people(&self) -> Result<Option<People>, &'static str> {
         Ok(self.people.lock().unwrap().clone())
     }
+    fn revokes(&self) -> Result<Option<crate::remote_service::vault::Revokes>, &'static str> {
+        Ok(None)
+    }
+    fn save_revokes(&self, _: &crate::remote_service::vault::Revokes) -> Result<(), &'static str> {
+        Ok(())
+    }
 }
 
 /// What the stand-in saw.

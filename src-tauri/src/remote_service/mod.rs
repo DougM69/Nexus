@@ -90,6 +90,9 @@ pub struct AccountStatus {
     /// The devices the service approved on a proof the station could not confirm, each with why:
     /// granted nothing, and shown with the prompt a device added at the station gets.
     unconfirmed: BTreeMap<String, &'static str>,
+    /// Devices removed here while the service could not be reached: out at the station already,
+    /// and told to the service before the station's next list.
+    removals: Vec<String>,
 }
 /// A device the station granted on its own proof: what the notice says of it.
 #[derive(Clone, Serialize)]
@@ -1028,6 +1031,7 @@ impl Service {
                             accounts,
                             signing: None,
                             staged: None,
+                            removals: Some(Vec::new()),
                         }
                         .run(receiver),
                     ),
@@ -1287,6 +1291,10 @@ struct Controller {
     accounts: Accounts,
     signing: Option<Signing>,
     staged: Option<Staged>,
+    /// The removals made here that the service has not heard yet ([`Controller::queue_removal`]).
+    /// `None` when they could not be read: then no device is granted on its proof, since one of
+    /// them may have been removed here.
+    removals: Option<Vec<String>>,
 }
 /// The station's account, as the controller reaches it (`account`): its entries in the credential
 /// store, the service's account side, how a sign-in binds, the LAN key a binding names, and the
@@ -1418,6 +1426,12 @@ impl Controller {
     /// that says off all leave it off.
     async fn resume(&mut self, binding: Binding) {
         self.arm_enrolment();
+        self.removals = match self.accounts.vault.revokes() {
+            Ok(Some(kept)) if kept.station_id == binding.station_id => Some(kept.devices),
+            Ok(_) => Some(Vec::new()),
+            Err(_) => None,
+        };
+        self.reflect_removals();
         let remembered = match self.vault.state() {
             Ok(state) => state.filter(|s| {
                 s.binding == binding
@@ -1484,7 +1498,7 @@ impl Controller {
             self.restore = None;
             return;
         }
-        match self.devices().await {
+        match self.list().await {
             Ok(devices) => {
                 self.apply_restore(&devices);
                 self.listed(&devices);
@@ -1570,6 +1584,86 @@ impl Controller {
     fn listed(&self, devices: &[Device]) {
         if let Ok(mut control) = self.control.lock() {
             control.listed(devices);
+        }
+    }
+    /// The service's list, read after it has been told of every removal made here offline; a
+    /// removal it no longer lists as approved is one it has heard.
+    async fn list(&mut self) -> Result<Vec<Device>, &'static str> {
+        self.send_removals().await;
+        let devices = self.devices().await?;
+        let now = now_ms();
+        if let Some(removals) = &self.removals {
+            let heard: Vec<String> = removals
+                .iter()
+                .filter(|id| {
+                    !devices
+                        .iter()
+                        .any(|d| d.id == **id && d.approved == 1 && d.expires_at > now)
+                })
+                .cloned()
+                .collect();
+            if !heard.is_empty() {
+                // A store that will not keep the shorter list leaves it held here for this run.
+                let _ = self.keep_removals(|removals| removals.retain(|id| !heard.contains(id)));
+            }
+        }
+        Ok(devices)
+    }
+    /// Tells the service of each removal made here while it could not be reached, in order, until
+    /// one cannot be sent. Each it answers is no longer waiting.
+    async fn send_removals(&mut self) {
+        let Some(waiting) = self.removals.clone().filter(|w| !w.is_empty()) else {
+            return;
+        };
+        let Ok((binding, token)) = self.bound() else {
+            return;
+        };
+        for device_id in waiting {
+            let sent = self
+                .client
+                .post(
+                    &station_path(&binding, "revoke-device"),
+                    Some(&token),
+                    json!({ "deviceId": device_id }),
+                )
+                .await;
+            if matches!(sent, Err("serviceUnavailable" | "tryLater")) {
+                break;
+            }
+            let _ = self.keep_removals(|removals| removals.retain(|id| *id != device_id));
+        }
+    }
+    /// A removal made here that the service could not be told of: kept, so it is sent before the
+    /// next list and no proof grants the device again meanwhile.
+    fn queue_removal(&mut self, device_id: String) -> Result<(), &'static str> {
+        if self.removals.is_none() {
+            return Err("credentialStoreUnavailable");
+        }
+        self.keep_removals(|removals| {
+            if !removals.contains(&device_id) {
+                removals.push(device_id);
+            }
+        })
+    }
+    /// Changes the removals waiting, and keeps them in the store. One the store will not keep is
+    /// still held here for this run.
+    fn keep_removals(&mut self, change: impl FnOnce(&mut Vec<String>)) -> Result<(), &'static str> {
+        let (Some(removals), Some(binding)) = (self.removals.as_mut(), self.binding.as_ref())
+        else {
+            return Err("stationNotPaired");
+        };
+        change(removals);
+        let kept = vault::Revokes {
+            station_id: binding.station_id.clone(),
+            devices: removals.clone(),
+        };
+        let saved = self.accounts.vault.save_revokes(&kept);
+        self.reflect_removals();
+        saved
+    }
+    fn reflect_removals(&self) {
+        if let Ok(mut status) = self.status.lock() {
+            status.account.removals = self.removals.clone().unwrap_or_default();
         }
     }
     async fn devices(&self) -> Result<Vec<Device>, &'static str> {
@@ -1804,6 +1898,8 @@ impl Controller {
         }
         self.binding = Some(binding);
         self.pending = None;
+        self.removals = Some(Vec::new());
+        self.reflect_removals();
         self.arm_enrolment();
         self.reflect("disabled");
         let turned_on = self.control.lock().ok().and_then(|mut control| {
@@ -1906,6 +2002,12 @@ impl Controller {
                     d.pin()
                         .is_none_or(|pin| control.remembered.pins.get(&d.id) != Some(&pin))
                 })
+                // Removed here, and the service not told yet: never granted again meanwhile.
+                .filter(|d| {
+                    self.removals
+                        .as_ref()
+                        .is_none_or(|removals| !removals.contains(&d.id))
+                })
                 .collect()
         };
         let mut unconfirmed = BTreeMap::new();
@@ -1919,6 +2021,10 @@ impl Controller {
                 .map(|b| b.station_id.clone())
                 .unwrap_or_default();
             let results = match &self.accounts.service {
+                _ if self.removals.is_none() => rows
+                    .iter()
+                    .map(|_| Err("credentialStoreUnavailable"))
+                    .collect(),
                 Ok(service) => {
                     let (results, again) =
                         account::vouch(service, &*self.accounts.vault, &station_id, &rows, now_s)
@@ -2223,7 +2329,7 @@ impl Controller {
                         },
                     );
                 } else if self.binding.is_some() {
-                    let devices = self.devices().await?;
+                    let devices = self.list().await?;
                     // A fresh list is also what a restore after a restart is waiting for.
                     self.apply_restore(&devices);
                     self.listed(&devices);
@@ -2406,6 +2512,8 @@ impl Controller {
                     control.remember(Persist::Removed);
                 }
                 self.binding = None;
+                self.removals = Some(Vec::new());
+                self.reflect_removals();
                 self.arm_enrolment();
                 self.pending = None;
                 self.reflect("unpaired");
@@ -2429,7 +2537,8 @@ impl Controller {
                     }
                 }
                 let (binding, token) = self.bound()?;
-                self.client
+                let sent = self
+                    .client
                     .post(
                         &station_path(
                             &binding,
@@ -2442,13 +2551,21 @@ impl Controller {
                         Some(&token),
                         json!({ "deviceId": device_id }),
                     )
-                    .await?;
+                    .await;
+                match sent {
+                    Ok(_) => {}
+                    // Removed here already; the service is told before the station's next list.
+                    Err("serviceUnavailable" | "tryLater") if !approve => {
+                        return self.queue_removal(device_id);
+                    }
+                    Err(error) => return Err(error),
+                }
                 if let Ok(mut status) = self.status.lock() {
                     status.devices.clear();
                 }
                 if approve {
                     // The list names the approval the service just wrote; the grant binds to it.
-                    let devices = self.devices().await?;
+                    let devices = self.list().await?;
                     let granted = self.grant_approved(
                         &devices,
                         device_id,
