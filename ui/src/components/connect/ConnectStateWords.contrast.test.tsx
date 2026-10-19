@@ -49,6 +49,7 @@ import {
   baseTheme,
   chainOf,
   cmpSpec,
+  compoundMatches,
   contrast,
   expandWith,
   parseRules,
@@ -507,9 +508,24 @@ function rulesWith(rules: Rule[], props: string[]): Rule[] {
   if (!out) byProps.set(key, (out = rules.filter((r) => r.decls.some((d) => props.includes(d.prop)))))
   return out
 }
+/** Only the rules whose subject compound matches an element can reach it (reachesChain's first test, the
+ *  same split): cut once per element, the rest of the walk is the same answer. Nearly every rule fails there,
+ *  and the walk ran that test on every rule, per chain prefix and mode (the beforeAll took ~55 s alone). */
+const SUBJECT = new WeakMap<Rule[], Map<string, Rule[]>>()
+function subjectCut(rules: Rule[], el: El): Rule[] {
+  let byEl = SUBJECT.get(rules)
+  if (!byEl) SUBJECT.set(rules, (byEl = new Map()))
+  const key = JSON.stringify(el)
+  let out = byEl.get(key)
+  if (!out) {
+    const subject = (r: Rule) => r.selector.replace(/\s*>\s*/g, ' > ').split(/\s+/).filter(Boolean).pop()
+    byEl.set(key, (out = rules.filter((r) => { const s = subject(r); return s !== undefined && compoundMatches(s, el) })))
+  }
+  return out
+}
 const winAt = (rules: Rule[], mode: Mode, w: Word, i: number, ...props: string[]) =>
   once(rules, `w|${winnerMode(mode)}|${keysOf(w).shape[i]}|${props.join()}`, () =>
-    winnerAt(rulesWith(rules, props), winnerMode(mode), w.chain.slice(0, i + 1), ...props),
+    winnerAt(subjectCut(rulesWith(rules, props), w.chain[i]), winnerMode(mode), w.chain.slice(0, i + 1), ...props),
   )
 /** Tokens at word.chain[0..i], built element by element with cssCascade.tokensAt's own semantics (a token an
  *  element inherits arrives computed; one declared on it resolves against its own tokens), then what the
@@ -525,7 +541,7 @@ function tokensAtIndex(rules: Rule[], mode: Mode, w: Word, i: number): Map<strin
     } else tokens = tokensAtIndex(rules, mode, w, i - 1)
     const at = w.chain.slice(0, i + 1)
     const declared = new Map<string, { rule: Rule; value: string }>()
-    for (const rule of rulesWithTokens(rules)) {
+    for (const rule of subjectCut(rulesWithTokens(rules), w.chain[i])) {
       if (!reachesChain(rule.selector, at, mode)) continue
       for (const d of rule.decls) {
         if (!d.prop.startsWith('--')) continue
