@@ -3958,9 +3958,17 @@ pub struct Engine {
     /// The AI CW decoder's rolling transcript (window decodes stitched by absolute
     /// stream time — no re-emitted overlap). Bounded; oldest text drains off the front.
     ai_cw_text: String,
+    /// The AI decoder's PROVISIONAL tail: what its latest pass heard inside the tail guard,
+    /// replaced by every pass. For display only — every reader of the copy as DATA (the
+    /// copilot's calls, report and name, the snapshot) reads `ai_cw_text`, never this.
+    ai_cw_pending: String,
     /// Total samples ever fed to the AI-CW ring — the absolute stream clock the decode
     /// thread stitches windows with. Resets when the feature turns off.
     ai_cw_fed: u64,
+    /// The AI-CW stream's generation: bumped every time the ring and its clock restart (a
+    /// QSY, a toggle). A pass started on an older generation decoded the station before the
+    /// QSY; its text is dropped rather than written into the new station's transcript.
+    ai_cw_epoch: u64,
     /// AI CW decoder status for the UI ("listening…", "model not installed", …).
     ai_cw_status: String,
     /// Streaming single-signal CW decoder at the operator's pitch. Fed incrementally so it
@@ -6083,7 +6091,9 @@ impl Engine {
             cw_audio: Vec::new(),
             ai_cw_audio: Vec::new(),
             ai_cw_text: String::new(),
+            ai_cw_pending: String::new(),
             ai_cw_fed: 0,
+            ai_cw_epoch: 0,
             ai_cw_status: String::new(),
             cw_stream: tempo_core::cw_decode::CwStreamDecoder::new(tempo_fast::SAMPLE_RATE, 600.0),
             qso_audio: Vec::new(),
@@ -16248,6 +16258,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// CW copy is stale (operator report: the CW decode area lingered across a QSY).
     fn clear_cw_decode(&mut self) {
         self.ai_cw_text.clear();
+        self.ai_cw_pending.clear();
         // ⚠️ NOT the status: that describes the DECODER'S HEALTH, not the
         // transcript. Clearing it on a QSY erased a live fault ("model not
         // installed") and the cockpit then rendered its idle placeholder —
@@ -16255,9 +16266,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // the 30 s load-retry backoff kept the lie up until the next attempt.
         // A successful decode clears it (aicw.rs), which is the only state
         // that means "healthy".
+        self.restart_ai_cw_stream();
+        self.cw_stream.clear();
+    }
+
+    /// Empty the AI-CW ring and restart its stream clock as a new generation.
+    fn restart_ai_cw_stream(&mut self) {
         self.ai_cw_audio.clear();
         self.ai_cw_fed = 0;
-        self.cw_stream.clear();
+        self.ai_cw_epoch = self.ai_cw_epoch.wrapping_add(1);
     }
 
     /// The best resume point from `dxcall` addressed to `mycall` in this slot, for
@@ -19873,8 +19890,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 self.ai_cw_audio.drain(0..drop);
             }
         } else if !self.ai_cw_audio.is_empty() {
-            self.ai_cw_audio.clear();
-            self.ai_cw_fed = 0;
+            self.restart_ai_cw_stream();
         }
         // The RTTY/SSTV RX taps: plain drain buffers the decode threads empty on
         // their own cadence (`take_rtty_audio`/`take_sstv_audio`). Session-armed
@@ -19950,16 +19966,36 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
-    /// A full 15 s AI-CW window when the ring has filled, else `None`. Returns the
-    /// window plus the ABSOLUTE sample index of its end (the stream clock the decode
-    /// thread stitches with). Brief lock + copy; the decode happens off-lock.
-    pub fn ai_cw_window(&self) -> Option<(Vec<f32>, u64)> {
-        (self.ai_cw_audio.len() >= AI_CW_WINDOW).then(|| (self.ai_cw_audio.clone(), self.ai_cw_fed))
+    /// The model's 15 s AI-CW window, `None` only while the ring is empty. A ring still
+    /// filling (just after a QSY, a toggle or startup) is zero-padded at the FRONT, so the
+    /// decoder copies from the first second instead of waiting 15 s for the ring to fill.
+    /// Returns the window, the ABSOLUTE sample index of its end (the stream clock the decode
+    /// thread stitches with) and the stream generation. Brief lock + copy; the decode
+    /// happens off-lock.
+    pub fn ai_cw_window(&self) -> Option<(Vec<f32>, u64, u64)> {
+        if self.ai_cw_audio.is_empty() {
+            return None;
+        }
+        let mut window = vec![0.0; AI_CW_WINDOW.saturating_sub(self.ai_cw_audio.len())];
+        window.extend_from_slice(&self.ai_cw_audio);
+        Some((window, self.ai_cw_fed, self.ai_cw_epoch))
     }
 
-    /// Append newly-stitched AI-CW transcript text (already deduplicated by the decode
-    /// thread's absolute-time cursor). Bounded; oldest text drains off the front.
-    pub fn push_ai_cw_text(&mut self, text: &str) {
+    /// One AI-CW pass over generation `epoch`: append its newly CONFIRMED text (already
+    /// deduplicated by the decode thread's absolute-time cursor) and replace the provisional
+    /// tail with its `pending`. Confirmed text is only ever appended, never revised. Bounded;
+    /// oldest text drains off the front. A pass over an older generation is dropped, and so
+    /// is whitespace with nothing before it; a word space between two batches is kept.
+    pub fn push_ai_cw_pass(&mut self, epoch: u64, text: &str, pending: &str) {
+        if epoch != self.ai_cw_epoch {
+            return;
+        }
+        self.ai_cw_pending = pending.to_string();
+        let text = if self.ai_cw_text.is_empty() {
+            text.trim_start()
+        } else {
+            text
+        };
         self.ai_cw_text.push_str(text);
         const CAP: usize = 1500;
         if self.ai_cw_text.len() > CAP {
@@ -19969,6 +20005,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 .find(|&i| self.ai_cw_text.is_char_boundary(i))
                 .unwrap_or(0);
             self.ai_cw_text.drain(0..cut);
+        }
+    }
+
+    /// The AI decoder's provisional tail, for DISPLAY beside [`Self::cw_decode`]'s text: empty
+    /// unless the AI copy is what the cockpit shows and the decoder is healthy (a fault leaves
+    /// no stale tail on screen). Never read it as data; [`Self::cw_decode`] is the copy.
+    pub fn cw_decode_pending(&self) -> String {
+        if self.settings.ai_cw_active() && self.ai_cw_status.is_empty() {
+            self.ai_cw_pending.clone()
+        } else {
+            String::new()
         }
     }
 
@@ -19982,8 +20029,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.settings.ai_cw_enabled = on;
         if !on {
             self.ai_cw_text.clear();
+            self.ai_cw_pending.clear();
             self.ai_cw_status.clear();
-            self.ai_cw_fed = 0;
+            self.restart_ai_cw_stream();
         }
     }
 
@@ -20003,8 +20051,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.note_contest_before(was, self.settings.fd_active);
         if on {
             self.ai_cw_text.clear();
+            self.ai_cw_pending.clear();
             self.ai_cw_status.clear();
-            self.ai_cw_fed = 0;
+            self.restart_ai_cw_stream();
         }
     }
 
@@ -20014,6 +20063,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.cw_stream.clear();
         self.cw_sent.clear();
         self.ai_cw_text.clear();
+        self.ai_cw_pending.clear();
     }
 
     /// Wideband CW skim of the recent receive audio: every distinct keyed signal across
@@ -35032,6 +35082,145 @@ mod tests {
             e.ai_cw_text.is_empty(),
             "working a spot (same band, new freq) clears the CW decode"
         );
+    }
+
+    /// A QSY (or a toggle) restarts the AI-CW ring. The decoder used to see nothing until the
+    /// ring held a full 15 s again, so every spot click blanked the copy for ~13 s.
+    #[test]
+    fn a_qsy_never_blanks_the_ai_cw_decoder_for_the_ring_refill() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.ai_cw_enabled = true;
+        e.feed_rx_audio(&vec![0.25; AI_CW_WINDOW]);
+        assert!(e.ai_cw_window().is_some(), "control: a full ring decodes");
+        e.work_spot("CW", 14.025, "20m");
+        assert!(
+            e.ai_cw_window().is_none(),
+            "control: the QSY emptied the ring"
+        );
+        e.feed_rx_audio(&vec![0.5; 12_000]); // one second of the new station
+        let (w, fed, _) = e
+            .ai_cw_window()
+            .expect("one second after a QSY the decoder already has a window");
+        assert_eq!(
+            w.len(),
+            AI_CW_WINDOW,
+            "the model's input is always the full 15 s"
+        );
+        assert_eq!(
+            fed, 12_000,
+            "the stream clock restarted with the new station"
+        );
+        assert!(
+            w[..AI_CW_WINDOW - 12_000].iter().all(|&x| x == 0.0),
+            "the missing 14 s are silence at the FRONT"
+        );
+        assert!(
+            w[AI_CW_WINDOW - 12_000..].iter().all(|&x| x == 0.5),
+            "…and the new station's second is the window's end"
+        );
+    }
+
+    /// Passes come back to back, so a batch is often a single character, and the space
+    /// between two words is often a batch on its own. It used to be dropped (a batch was
+    /// pushed only when it held something other than whitespace), running words together.
+    #[test]
+    fn a_word_space_arriving_alone_still_separates_the_words() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.ai_cw_enabled = true;
+        e.feed_rx_audio(&vec![0.25; 12_000]);
+        let (_, _, g) = e.ai_cw_window().unwrap();
+        e.push_ai_cw_pass(g, " ", "");
+        assert_eq!(e.ai_cw_text, "", "no leading space on an empty copy");
+        e.push_ai_cw_pass(g, "CQ", "");
+        e.push_ai_cw_pass(g, " ", "");
+        e.push_ai_cw_pass(g, "TEST", "");
+        assert_eq!(e.ai_cw_text, "CQ TEST");
+    }
+
+    /// The provisional tail is for the eye only: every reader of the AI copy as data sees the
+    /// confirmed text, and the confirmed text only ever grows.
+    #[test]
+    fn provisional_ai_cw_letters_never_reach_a_reader_of_the_copy() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.ai_cw_enabled = true;
+        e.feed_rx_audio(&vec![0.25; 12_000]);
+        let (_, _, g) = e.ai_cw_window().unwrap();
+        e.push_ai_cw_pass(g, "CQ ", "K9A");
+        assert_eq!(e.cw_decode().text, "CQ ", "the copy is the confirmed text");
+        assert_eq!(
+            e.snapshot().ai_cw.text,
+            "CQ ",
+            "…in the snapshot (and Remote) too"
+        );
+        assert_eq!(
+            e.cw_decode_pending(),
+            "K9A",
+            "control: the tail is there to be drawn"
+        );
+        e.push_ai_cw_pass(g, "K9ABC ", "5N");
+        assert_eq!(
+            e.cw_decode().text,
+            "CQ K9ABC ",
+            "confirmed text is appended, never revised"
+        );
+        assert_eq!(
+            e.cw_decode_pending(),
+            "5N",
+            "the tail is replaced by each pass"
+        );
+        e.set_ai_cw_status("decode error (see log)");
+        assert_eq!(
+            e.cw_decode_pending(),
+            "",
+            "a faulted decoder leaves no stale tail"
+        );
+        e.set_ai_cw_status("");
+        e.cw_clear();
+        assert_eq!(
+            e.cw_decode_pending(),
+            "",
+            "Clear wipes the tail with the copy"
+        );
+        e.push_ai_cw_pass(g, "", "TU");
+        e.work_spot("CW", 14.025, "20m");
+        assert_eq!(
+            e.cw_decode_pending(),
+            "",
+            "a QSY wipes the tail with the copy"
+        );
+        e.feed_rx_audio(&vec![0.25; 12_000]);
+        let (_, _, g) = e.ai_cw_window().unwrap();
+        e.push_ai_cw_pass(g, "", "TU");
+        e.set_ai_cw_enabled(false);
+        assert_eq!(e.cw_decode_pending(), "", "switching the AI off wipes it");
+    }
+
+    /// The decode thread copies a window, then decodes it off-lock for a few hundred ms. A QSY
+    /// in that time must not let the old station's text land in the new station's copy.
+    #[test]
+    fn a_pass_over_the_station_before_a_qsy_never_reaches_the_new_copy() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.ai_cw_enabled = true;
+        e.feed_rx_audio(&vec![0.25; 24_000]);
+        let (_, _, before) = e.ai_cw_window().unwrap();
+        e.push_ai_cw_pass(before, "CQ ", "");
+        assert_eq!(e.ai_cw_text, "CQ ", "control: a current pass lands");
+        e.work_spot("CW", 14.025, "20m"); // the spot click, mid-pass
+        e.feed_rx_audio(&vec![0.25; 2_400]);
+        e.push_ai_cw_pass(before, "K1ABC", "");
+        assert_eq!(
+            e.ai_cw_text, "",
+            "the old station's text never reaches the new station"
+        );
+        let (_, _, after) = e.ai_cw_window().unwrap();
+        e.push_ai_cw_pass(after, "W1AW", "");
+        assert_eq!(e.ai_cw_text, "W1AW", "the new station's own pass lands");
+        // A toggle is a restart too.
+        e.set_ai_cw_enabled(false);
+        e.set_ai_cw_enabled(true);
+        e.feed_rx_audio(&vec![0.25; 2_400]);
+        e.push_ai_cw_pass(after, "DE", "");
+        assert_eq!(e.ai_cw_text, "", "a pass from before the toggle is dropped");
     }
 
     #[test]

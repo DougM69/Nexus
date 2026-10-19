@@ -4560,6 +4560,9 @@ body.resizing-row {
   --text: #e7edf6;
   --text-dim: #9aa8bd;
   --text-faint: #7c8ca3;
+  /* The AI CW decoder's unconfirmed (provisional) letters: readable, plainly dimmer than
+     confirmed copy. On :root, so every theme has it, in that theme's own --text-faint. */
+  --cw-unconfirmed: var(--text-faint);
   --accent: #4cc9f0;
   --accent-ink: #06222c;
   --bubble-mine: #1f5d73;
@@ -9788,6 +9791,10 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cw-decode-idle {
   color: var(--text-faint);
   font-style: italic;
+}
+/* The AI decoder's unconfirmed tail, replaced by its next pass (confirmed copy is --text). */
+.cw-decode-unconfirmed {
+  color: var(--cw-unconfirmed);
 }
 .cw-decode-wpm {
   font-size: calc(11px * var(--text-scale));
