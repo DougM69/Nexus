@@ -236,6 +236,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **CW: the classic decoder copies fast stations from the first few characters.** A station sending at about 34 WPM
+  or faster used to be timed wrong when the decoder had not yet heard anyone, or had last heard a slow station: 40 WPM
+  read as 14 and the copy came out as E's and I's. It now finds the speed of anyone sending 15 to 50 WPM within about
+  six characters, also through noise and uneven hand keying, and a weighted keyer reads at its real speed. Slow and
+  hand-sent CW copies at least as well as before.
 - **Contacts held during a contest are no longer forgotten by a restart.** While Contest mode is on, a contact logged
   in the Logbook waits to go to QRZ, Club Log and the other services until Contest mode is turned off. That waiting
   list now survives closing Nexus: after a restart the contacts still wait, and go once, a few seconds apart, when you
