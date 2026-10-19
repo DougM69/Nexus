@@ -3498,6 +3498,17 @@ export const EN = {
   // ⚠️ Band and mode names, dial frequencies and every spot's own data are tokens and stay
   // in the component. `{{mode}}` here is CW or SSB — the plotted spot mode, not prose.
   'bandMap.title': 'Band map',
+  // Frequency markers (features/freqMarkers.ts). `{{freq}}` is MHz, `{{call}}` a callsign: tokens.
+  'bandMap.marker.title': 'Marked {{freq}} {{call}}. Click or Enter: tune back here. Delete: remove the marker.',
+  'bandMap.marker.titleBare': 'Marked {{freq}}. Click or Enter: tune back here. Delete: remove the marker.',
+  'bandMap.track.markHint': 'Right-click: mark this frequency with the call in the contest entry (Alt+M in the entry does the same).',
+  'freqMarker.marked': 'Marked {{freq}} for {{call}} on the band map',
+  'freqMarker.markedBare': 'Marked {{freq}} on the band map',
+  'freqMarker.refused.noContest': 'Frequency markers belong to a contest: turn Contest mode on to mark a frequency.',
+  'freqMarker.refused.transmitting': 'Not while transmitting: tuning now would move your signal on the air. Try again when the over ends.',
+  'freqMarker.refused.offBand': 'Not marked: the dial is outside the amateur bands.',
+  'freqMarker.refused.gone': 'That marker is gone: its call was logged on this band, or it was removed.',
+  'freqMarker.refused.failed': 'The marker did not change: {{reason}}',
   'bandMap.offPlan': '{{band}} — off the band plan',
   'bandMap.empty.noPlan': 'no band-plan data for {{band}}',
   // What stands in for the band name when the dial is somewhere the plan cannot name.
@@ -4196,6 +4207,20 @@ export const EN = {
   // children itself, so an entity here would render as the literal characters.
   'fieldDay.role.aria': 'Running or S&P',
   'fieldDay.role.running': 'Running',
+  // Spot me (components/ContestSpotMe.tsx). `{{line}}` is the cluster line as sent: a token.
+  'spotMe.button': 'Spot me',
+  'spotMe.button.title': 'Post ONE spot of your call on this frequency to the DX cluster, with the comment beside it. Once per press; then a {{secs}} s wait.',
+  'spotMe.comment.label': 'Spot comment',
+  'spotMe.cooling': 'Wait {{secs}} s',
+  'spotMe.posted': 'Spotted to the DX cluster: {{line}}',
+  'spotMe.refused.noCall': 'Not spotted: set your callsign in Settings first.',
+  'spotMe.refused.noCluster': 'Not spotted: no DX cluster is connected. Set a cluster in Settings ▸ Spot Sources.',
+  'spotMe.refused.cooldown': 'Not spotted again yet: one spot a minute. {{secs}} s to go.',
+  'spotMe.refused.offBand': 'Not spotted: the dial is outside the amateur bands.',
+  'spotMe.refused.noContest': 'Not spotted: Contest mode is off.',
+  'spotMe.refused.notAllowed': 'Not spotted: this contest\'s rules allow no spotting.',
+  'spotMe.refused.rfOnly': 'Not spotted: this contest allows spotting only over amateur radio while it runs.',
+  'spotMe.refused.failed': 'Not spotted: the DX cluster did not take the spot.',
   'fieldDay.role.sp': 'S&P',
 
   // The exports. Cabrillo and ADIF are the file formats' own names and stay in the sentence.

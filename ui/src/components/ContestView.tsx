@@ -40,6 +40,7 @@ import { OperatorStatsBoard } from './ContestOperators'
 import { stationMode, usePskName } from '../features/contestMode'
 import { CLEAR_TOAST_MS, REMOVE_CONFIRM_MS, SERVICE_NAMES, clearText, contactCount, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
 import { ContestContactEdit, type EditNote } from './ContestContactEdit'
+import { ContestSpotMe } from './ContestSpotMe'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
@@ -3757,6 +3758,13 @@ export function ContestView({
             {t('fieldDay.role.sp')}
           </button>
         </div>
+        {/* Spot me: one DX cluster spot of this station per press (ContestSpotMe.tsx). Not on a page
+            that only watches. */}
+        {fdActive && !observed && (
+          <ContestSpotMe
+            contestShort={fdEventIsFieldDay ? (isWfd ? FD_SHORT_NAMES.wfd : FD_SHORT_NAMES.arrlfd) : contestShortName(fieldDay?.event)}
+          />
+        )}
         {/* Export buttons */}
         {!observed && <div className="fd-export">
           {exportError && (

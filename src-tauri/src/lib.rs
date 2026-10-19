@@ -62,9 +62,13 @@ mod command_dispatch;
 /// The contest strip's Super Check Partial download and call-history file: the HTTP and the
 /// commands, off the Engine lock. The rules are `tempo_app::scp` and `tempo_app::call_history`.
 mod contest_lists;
+/// The contest's self-spot: one DX cluster spot of the operator's own call per press, with a cooldown.
+mod contest_spot;
 /// Is the data folder somewhere a DATABASE must not live — a network share, or a folder some
 /// consumer sync client is also writing to? The log is the one thing here that cannot be rebuilt.
 mod data_folder_location;
+/// Band map frequency markers: a dial and a call to come back to, per contest session, local only.
+mod freq_markers;
 /// JS8Call's API for other programs on this computer: TCP and UDP on 127.0.0.1, read-only, off
 /// until the operator turns a side on. What each line says is `tempo_app::engine::js8_api`.
 mod js8_api;
@@ -37886,6 +37890,11 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_contests,
         post_spot,
         self_spot_activation,
+        contest_spot::contest_self_spot,
+        freq_markers::get_freq_markers,
+        freq_markers::add_freq_marker,
+        freq_markers::remove_freq_marker,
+        freq_markers::freq_marker_qsy,
         get_lotw_users_status,
         fetch_lotw_users,
         get_fcc_states_status,

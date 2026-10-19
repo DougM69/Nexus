@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is one already logged, and a rover in a new county clears it, since that contact still counts. The list
   narrows as you type the county. In the cockpits' contest entry, the contest logger window and the Contest
   screen's entry.
+- **Contest: frequency markers on the band map, as N1MM's Mark.** With Contest mode on, press **Alt+M** in the
+  contest entry, or right-click the band map, to mark the frequency you are on; the call in the entry goes
+  with it, or none if the entry is empty. The marker sits on the band map at its frequency: click it, or
+  press Enter on it, to tune straight back (never while transmitting: Nexus says why and stays put), and
+  press Delete on it to remove it. It goes by itself once you log that call on that band. Markers are yours
+  alone: nothing is posted or spotted, and they are kept for this contest across a restart.
+- **Contest: Spot me.** A **Spot me** button beside Running / S&P on the Contest screen posts ONE spot of your
+  call on your current frequency to the DX cluster Nexus is connected to, with a short comment beside it
+  ("ILQP CQ" for the Illinois QSO Party, and so on; edit it as you like). One spot per press, then the button
+  waits a minute before it will spot again, so a double-click never sends two. Nothing is ever spotted
+  without your press. With no cluster connected, no callsign set, or a contest whose rules allow no
+  spotting (or spotting only over the air), Nexus says so and sends nothing.
 - **Logbook: export just the contacts you pick.** Ctrl-click (⌘-click on a Mac) rows in the Logbook to pick
   them, Shift-click to pick a run, or press Space on the focused row; Esc clears. **Export selected** saves
   those contacts as an ADIF file in your Downloads folder, each written exactly as the whole-log export writes

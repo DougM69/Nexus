@@ -78,6 +78,12 @@ const ALLOWED = new Set([
   'contest_entry_put', 'contest_entry_reset', 'contest_working', 'contest_zone_hint', 'contest_i_moved',
   'contest_log_manual', 'contest_log_manual_rows', 'resolve_entity', 'set_cw_peer_info', 'set_log_form_grid',
   'scp_ensure', 'get_scp_calls', 'get_call_history',
+  // Alt+M in the log line: a band map marker at the dial the station is on, which it reads and never
+  // moves (freq_markers.rs); the jump back to one is the band map's, never this window's
+  'add_freq_marker',
+  // Spot me: one DX cluster spot of the station's call per press, posted over the internet, keying
+  // nothing (contest_spot.rs)
+  'contest_self_spot',
 ])
 
 /** What transmits, or decides whether or what the station transmits: the stop-line census's verbs,
@@ -356,7 +362,7 @@ describe('the contest logger window transmits nothing', () => {
 
   it('every command on both lists exists in src-tauri, so the lists name real commands', () => {
     const dir = resolve(__dirname, '../../src-tauri/src')
-    const src = ['lib.rs', 'contest_lists.rs', 'window_state.rs'].map((f) => readFileSync(resolve(dir, f), 'utf8')).join('\n')
+    const src = ['lib.rs', 'contest_lists.rs', 'window_state.rs', 'freq_markers.rs', 'contest_spot.rs'].map((f) => readFileSync(resolve(dir, f), 'utf8')).join('\n')
     const missing = [...ALLOWED, ...KEYING].filter(
       (cmd) => !new RegExp(`\\n(?:pub )?(?:async )?fn ${cmd}\\(`).test(src),
     )
