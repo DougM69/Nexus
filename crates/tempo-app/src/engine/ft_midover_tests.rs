@@ -13,11 +13,14 @@
 
 use super::ft_midover::FtSwitch;
 use super::*;
+use crate::test_util::StoredLog;
 
 const TX2: &str = "W1AW KD9TAW -10";
 const TX3: &str = "W1AW KD9TAW R-12";
 const RR73: &str = "W1AW KD9TAW RR73";
 const BYE73: &str = "W1AW KD9TAW 73";
+/// W1AW's RR73 to us.
+const RR73_TO_US: &str = "KD9TAW W1AW RR73";
 
 /// A station on 20 m FT8 at 1500 Hz with ALL.TXT on, TX on the even slots.
 fn station() -> Engine {
@@ -396,4 +399,91 @@ fn a_late_repeat_from_the_partner_the_run_left_switches_the_cq_to_the_owed_roger
     );
     assert!(e.recent_partner.is_none(), "the owed over is spent");
     assert_eq!(key(&mut e, 108).as_deref(), Some(cq.as_str()), "back to CQ");
+}
+
+/// ⭐ THE USER'S CASE, WITH WSJT-X's RR73 RULE. We answered W1AW's grid with the report (Tx2)
+/// and keyed it again; W1AW had our report, rogered it with RR73 straight away, and only the full
+/// pass found that RR73, 3 s into our second Tx2. WSJT-X answers an RR73 received while it sends
+/// the report with 73 (`m_ntx=5`, `widgets/mainwindow.cpp:9171-9214`) and regenerates the over
+/// (:9446): the rest of this over is the 73, and Tx2 never goes out again.
+#[test]
+fn rr73_folded_while_the_report_is_on_the_air_switches_the_rest_to_73() {
+    let mut e = station();
+    work(&mut e, "KD9TAW W1AW FN31", -10, 100);
+    assert_eq!(
+        key(&mut e, 100).as_deref(),
+        Some(TX2),
+        "premise: the report"
+    );
+    assert_eq!(key(&mut e, 102).as_deref(), Some(TX2), "premise: and again");
+    e.take_all_txt_pending();
+
+    hear(&mut e, RR73_TO_US, -21, 102);
+    let mut route = Route::new(100_000);
+    assert_eq!(
+        route.switch(&mut e, 102, at(102, 3_000.0)),
+        switched(TX2, BYE73)
+    );
+    let bye = wave_of(BYE73);
+    assert_eq!(
+        route.handed.as_deref(),
+        Some(&bye[bye.len() - 100_000..]),
+        "the rest of the over is the 73's, in place"
+    );
+    let rows = e.take_all_txt_pending();
+    let tx = tx_rows(&rows);
+    assert_eq!(tx.len(), 1, "a second Tx row: {rows:?}");
+    assert!(tx[0].ends_with(BYE73), "{}", tx[0]);
+    assert_eq!(tx_now(&e), None, "the 73 goes once");
+    assert!(e.take_pending_tx_disable(), "Disable Tx after 73: armed");
+    assert_eq!(key(&mut e, 104), None, "Tx2 never goes out again");
+    assert_eq!(e.stored_log().len(), 1, "the contact is logged");
+}
+
+/// The same in a CQ run: the caller answered our CQ with its grid, rogered our report with RR73,
+/// and the RR73 folds during the report's second over. The rest is the 73; TX stays on (a run
+/// returns to CQ) and the next over is the CQ, not the report.
+#[test]
+fn in_a_cq_run_rr73_folded_during_the_report_closes_with_73_and_the_run_calls_cq() {
+    let mut e = station();
+    e.start_cq(None).expect("premise: Call CQ");
+    let _ = e.take_immediate_tx();
+    let cq = key(&mut e, 100).expect("premise: the CQ");
+    hear(&mut e, "KD9TAW W1AW FN31", -10, 102);
+    assert_eq!(key(&mut e, 102).as_deref(), Some(TX2));
+    assert_eq!(key(&mut e, 104).as_deref(), Some(TX2), "premise: again");
+    hear(&mut e, RR73_TO_US, -21, 104);
+    let mut route = Route::new(100_000);
+    assert_eq!(
+        route.switch(&mut e, 104, at(104, 2_500.0)),
+        switched(TX2, BYE73)
+    );
+    assert!(!e.take_pending_tx_disable(), "a run keeps TX on");
+    hear(&mut e, "CQ K1ABC FN42", -5, 106);
+    assert_eq!(
+        key(&mut e, 106).as_deref(),
+        Some(cq.as_str()),
+        "the run calls CQ"
+    );
+}
+
+/// ⛔ #236 (`reference-ft8-wrong-73-fabricated-sender`) still holds now that a QSO awaiting the
+/// roger answers RR73 with 73: a bystander Fox's multiplex whose sender-less first half is
+/// addressed to us never closes the contact or keys a 73, mid-over or at the next key.
+#[test]
+fn a_bystander_fox_rr73_never_closes_a_qso_awaiting_the_roger() {
+    let mut e = station();
+    work(&mut e, "KD9TAW W1AW FN31", -10, 100);
+    assert_eq!(key(&mut e, 100).as_deref(), Some(TX2));
+    hear(&mut e, "KD9TAW RR73; NEXTHOUND <PJ4DX> -08", -10, 100);
+    let mut route = Route::new(50_000);
+    assert_eq!(route.switch(&mut e, 100, at(100, 2_000.0)), None);
+    assert!(e.stored_log().is_empty(), "nothing logged");
+    assert_eq!(key(&mut e, 102).as_deref(), Some(TX2), "the report again");
+    // Control: the partner's own RR73 does close it.
+    hear(&mut e, RR73_TO_US, -10, 102);
+    assert_eq!(
+        route.switch(&mut e, 102, at(102, 2_000.0)),
+        switched(TX2, BYE73)
+    );
 }

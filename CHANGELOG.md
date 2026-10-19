@@ -219,6 +219,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new message, as WSJT-X does: the over keeps its start and end, and ALL.TXT gets a second Tx line for it. A Tx button
   clicked during an over switches it the same way. Over Flex native DAX the over goes out as first chosen, and the
   log says so. NEEDS-BENCH: FT8 and FT4 into a dummy load, then on the air with a weak station.
+- **FT8/FT4: an RR73 answering your report is answered with 73, as in WSJT-X.** When the station you sent
+  your report to rogers it with RR73 (or RRR) without sending its own R-report first, Nexus kept sending the report.
+  It now sends 73 and the QSO is complete, as WSJT-X does; if the RR73 is decoded while the report is already on the
+  air, the rest of that over becomes the 73. A bare 73, an RR73 from another station, or one sent to another
+  station changes nothing. NEEDS-BENCH: FT8 and FT4, a second station that answers your report with RR73.
 - **Contest entry: the sample text in empty boxes is quieter.** The grey examples ("W1AW", "599", a county) are now
   in normal weight instead of bold, and a shade darker in the dark themes, so they no longer read like something
   typed in. They stay readable in every theme.
