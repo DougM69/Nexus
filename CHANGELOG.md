@@ -199,6 +199,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **CW: Esc (Stop TX) ends a CW message sooner.** A WinKeyer, the serial keyline and the soundcard keyer now stop before
+  Nexus asks the radio to stop its own CW, so a slow radio no longer holds them keying. A word the serial keyline had
+  not started yet is dropped instead of being sent after the stop. On an FT-710 or FTX-1 keyed over CAT, the stop now
+  also sends Yaesu's own playback stop, so the rest of the word is cut off.
 - **Remote: Operate from this computer now works at an address you type.** When nothing answers where a paired
   station was, Stations on this network asks where it is now. That box offered only Stream; it now offers **Operate
   at this address** first, with Stream still beside it. Nexus checks it is the same paired station there, as it does

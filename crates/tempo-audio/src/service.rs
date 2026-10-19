@@ -9810,16 +9810,20 @@ impl RadioLoop {
                 self.serial_keyer = None;
             }
             if abort {
-                let _ = rig.stop_morse(); // CAT keyer abort (cut the one word in the rig buffer)
-                                          // WinKeyer abort: one Clear Buffer byte stops keying + flushes its queue.
-                #[cfg(feature = "serial")]
-                if let Some((_, wk)) = self.winkeyer.as_mut() {
-                    let _ = wk.clear();
-                }
+                // ⛔ THE STOPS THAT ASK THE RADIO NOTHING GO FIRST. Each keyer Nexus drives itself
+                // is stopped before the CAT CW stop, which is a round trip a slow or silent radio
+                // holds for a whole CAT deadline: behind it, a WinKeyer, the keyline and the
+                // soundcard tone kept keying after Stop TX (IL QSO Party, 1.20.0-test4).
+                //
                 // Serial keyline abort: key up NOW + drop the rest of the macro.
                 #[cfg(feature = "serial")]
                 if let Some((_, _, sk)) = self.serial_keyer.as_ref() {
                     sk.clear();
+                }
+                // WinKeyer abort: one Clear Buffer byte stops keying + flushes its queue.
+                #[cfg(feature = "serial")]
+                if let Some((_, wk)) = self.winkeyer.as_mut() {
+                    let _ = wk.clear();
                 }
                 if soundcard && now < self.cw_busy_until {
                     // Soundcard abort: dump the queued tone audio + unkey now — but
@@ -9832,6 +9836,14 @@ impl RadioLoop {
                     backend.flush_output();
                     let _ = rig.ptt(false);
                     self.tx_until_ms = None;
+                }
+                // CAT keyer abort (cut the one word in the rig buffer), and the playback stop a
+                // Yaesu's own reference defines where Hamlib sends none
+                // (`rigmodels::cw_playback_stops`), written without waiting: Hamlib answers a raw
+                // set with nothing.
+                let _ = rig.stop_morse();
+                for stop in crate::rigmodels::cw_playback_stops(self.applied.rig_model) {
+                    rig.send_raw_set(stop);
                 }
                 self.cw_busy_until = 0.0; // a fresh macro after Stop keys immediately
                 self.cw_keying_until = 0.0;
@@ -16502,6 +16514,7 @@ mod tests {
     mod clock_repair_tests;
     mod contest_reply;
     mod contest_status;
+    mod cw_stop;
     mod decode_in_flight;
     mod failed_unkey;
     mod filter_width;
