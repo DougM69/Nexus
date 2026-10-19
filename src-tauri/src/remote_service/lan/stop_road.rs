@@ -268,6 +268,8 @@ struct Road {
     peer: Option<SocketAddr>,
     /// Whether its computer is still paired here, as last asked: what its Stop is admitted on.
     paired: bool,
+    /// `Powers::pairings` as `paired` was asked when the road opened, read before it.
+    asked: u64,
     /// When its connection ended: from then only a Stop is taken, until [`AFTERLIFE`].
     closed: Option<Instant>,
     /// The presence this road last renewed.
@@ -408,7 +410,11 @@ impl StopRoad {
         pin: [u8; 32],
         clock: Arc<StateClock>,
     ) -> Option<Opened> {
-        let (tag, road, ready) = self.road(exported, session, device, pin, clock)?;
+        let (tag, mut road, ready) = self.road(exported, session, device, pin, clock)?;
+        // Asked here, on the opener's thread: on the road's, a Stop on any road would wait behind
+        // the book. The count first, so a change during the ask is asked again there.
+        road.asked = (self.powers.pairings)();
+        road.paired = (self.powers.paired)(&road.pin).as_deref() == Some(road.device.as_str());
         self.changes.send(Change::Open(tag, Box::new(road))).ok()?;
         Some(Opened {
             port: self.port,
@@ -487,6 +493,7 @@ impl StopRoad {
             clock,
             peer: None,
             paired: false,
+            asked: 0,
             closed: None,
             presence: None,
             ready: ready.clone(),
@@ -669,8 +676,12 @@ impl Thread {
             match self.changed.try_recv() {
                 Ok(Change::Open(tag, road)) => {
                     let mut road = *road;
-                    road.paired =
-                        (self.powers.paired)(&road.pin).as_deref() == Some(road.device.as_str());
+                    // Asked as it opened; asked again here only if who is paired moved between
+                    // that and this thread's last ask, which did not ask it.
+                    if road.asked != self.pairings {
+                        road.paired = (self.powers.paired)(&road.pin).as_deref()
+                            == Some(road.device.as_str());
+                    }
                     self.roads.entry(tag).or_insert(road);
                 }
                 Ok(Change::Closed(tag, at)) => {
