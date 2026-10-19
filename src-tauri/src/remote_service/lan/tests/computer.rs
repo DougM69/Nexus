@@ -1131,7 +1131,8 @@ fn pairing_then_control_then_stop_from_the_page_end_to_end() {
             find: Arc::new(|_| Ok(Vec::new())),
             name: "Den PC".into(),
             operate: Arc::new(|_, _| {}),
-            add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
+            sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+            now_s: || 0,
             forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
         })
         .unwrap();
@@ -1273,7 +1274,8 @@ async fn a_station_not_where_it_was_is_tried_where_it_is_found_by_name() {
         },
         name: "Den PC".into(),
         operate: Arc::new(|_, _| {}),
-        add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+        now_s: || 0,
         forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     })
     .unwrap();
@@ -1372,7 +1374,8 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
         },
         name: "Den PC".into(),
         operate: Arc::new(|_, _| {}),
-        add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+        now_s: || 0,
         forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     })
     .unwrap();
@@ -1457,7 +1460,8 @@ async fn another_stations_refusals_that_end_late_still_tell_the_key() {
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
         operate: Arc::new(|_, _| {}),
-        add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+        now_s: || 0,
         forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     })
     .unwrap();
@@ -1502,7 +1506,8 @@ async fn pairing_again_with_a_known_station_keeps_this_computers_key() {
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
         operate: Arc::new(|_, _| {}),
-        add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+        now_s: || 0,
         forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     })
     .unwrap();

@@ -22,6 +22,8 @@ mod drops;
 mod enrol;
 mod hostile;
 mod link;
+/// A computer signing in with the station's account (`crate::lan_client::account`).
+mod signing;
 mod stop_road;
 mod tunnel;
 

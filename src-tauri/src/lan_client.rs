@@ -21,12 +21,23 @@
 //!   Operate tries first, once Operate opened there or the operator set it on the station's row.
 //!   Not a secret, so it is kept in a file of its own ([`typed_path`]), never in the credential
 //!   store: keeping, changing or clearing it reads and writes no entry that holds a key.
+//! - **When this computer signed in for each station** ([`Stations::signed`]): for a station added
+//!   with the account ([`account`]), the time its proof was signed, from which the station admits
+//!   it on its network for thirty days. Not a secret either: a file of its own ([`signed_path`]).
+//! - **The keys for the next station signed in to** ([`Stations::staged`]): made before that
+//!   sign-in, and kept in the credential store until a station is kept with them.
 //! - **No engine, no radio and no operations authority.** This computer's own station, if it has
 //!   one, is out of reach: nothing here names the engine, and the window's page reaches no Nexus
 //!   command (the loopback origin, below).
 //! - **This computer's headset, in client mode** ([`audio_road`]): the station's audio out and the
 //!   operator's microphone in, on this computer's own devices, opened only while wanted. It plays
 //!   and captures; nothing here keys anything.
+//!
+//! ## Signing in ([`account`])
+//!
+//! The way a station is added now: one sign-in with the station's account, and the station is on
+//! this computer on its network and over the internet, with no code and nothing pressed at the
+//! station. Code pairing stays beside it for a station whose owner has not signed in at the shack.
 //!
 //! ## Pairing ([`pairing`])
 //!
@@ -79,6 +90,9 @@
 //! Remote on or off, revoking a browser), and gives the grant back at once. The page acquires
 //! again after `notController` or `leaseExpired`, when nobody else holds control; nothing at the
 //! station changes for it.
+/// Signing in with the station's account: adding a station, linking one paired with a code, and
+/// signing in again before a station stops admitting this computer on its network.
+pub(crate) mod account;
 /// The audio road, beside the command link, and this computer's headset (the client core's).
 pub(crate) use tempo_client::audio_road;
 /// The command link, protocol 2, which client mode drives (the client core's).
@@ -112,7 +126,9 @@ use tempo_stream::lan::Typed;
 use tempo_stream::protocol;
 
 use crate::remote_service::lan::{valid_name, NAME_CHARS};
-use crate::remote_service::vault::{InternetRoad, PairedStation, PairedStations, StationVault};
+use crate::remote_service::vault::{
+    InternetRoad, PairedStation, PairedStations, StagedKeys, StationVault,
+};
 
 /// The most stations this computer keeps a pairing with.
 pub(crate) const MAX_STATIONS: usize = 8;
@@ -126,6 +142,12 @@ const TYPED_FILE_BYTES: u64 = 16 * 1024;
 /// settings, as the paired stations are this computer's, not one profile's.
 pub(crate) fn typed_path() -> PathBuf {
     crate::config_dir_for(None).join("lan-typed.json")
+}
+
+/// Where the app keeps when this computer signed in for each station it added with the account,
+/// beside the typed file.
+pub(crate) fn signed_path() -> PathBuf {
+    crate::config_dir_for(None).join("lan-account.json")
 }
 /// The smallest OS credential blob, Windows': 2560 bytes of UTF-16.
 const CREDENTIAL_BYTES: usize = 2560;
@@ -185,6 +207,12 @@ fn sound(record: &PairedStation) -> bool {
         && ComputerKey::restore(&record.pkcs8).is_some()
 }
 
+/// Are these keys this module could have made: two P-256 keys? Ones that are not read as none: new
+/// keys are made.
+fn sound_staged(keys: &StagedKeys) -> bool {
+    ComputerKey::restore(&keys.road).is_some() && ComputerKey::restore(&keys.lan).is_some()
+}
+
 /// Is this an internet road this module could have written: the service's ids, a station key that
 /// is a P-256 SPKI, and a key that is one? One that is not reads as none: the road is added again.
 fn sound_road(road: &InternetRoad) -> bool {
@@ -201,6 +229,9 @@ pub(crate) struct Stations {
     /// The file that keeps what the operator typed for each station ([`Stations::keep_typed`]),
     /// none in a test that keeps nothing typed.
     typed: Option<PathBuf>,
+    /// The file that keeps when this computer signed in for each station ([`Stations::keep_signed`]),
+    /// none in a test that keeps nothing of it.
+    signed: Option<PathBuf>,
     /// One writer at a time, so two presses never interleave their writes to the list.
     writing: Mutex<()>,
 }
@@ -210,6 +241,7 @@ impl Stations {
         Self {
             vault,
             typed: None,
+            signed: None,
             writing: Mutex::new(()),
         }
     }
@@ -217,6 +249,12 @@ impl Stations {
     /// The same stations, with what the operator typed for each kept in the file at `path`.
     pub(crate) fn typed_in(mut self, path: PathBuf) -> Self {
         self.typed = Some(path);
+        self
+    }
+
+    /// The same stations, with when this computer signed in for each kept in the file at `path`.
+    pub(crate) fn signed_in(mut self, path: PathBuf) -> Self {
+        self.signed = Some(path);
         self
     }
 
@@ -408,10 +446,94 @@ impl Stations {
             .map_err(|_| "storeUnavailable")
     }
 
+    /// The time the proof of this computer's last sign-in for station `id` was signed, seconds
+    /// since 1970, when it was added with the account; none for a station paired with a code.
+    pub(crate) fn signed(&self, id: &str) -> Option<u64> {
+        self.signed_file().remove(id)
+    }
+
+    /// Keep `issued_at`, the time the proof of this computer's sign-in for station `id` was signed,
+    /// paired here. Lines for stations no longer paired here go with the write.
+    pub(crate) fn keep_signed(&self, id: &str, issued_at: u64) -> Result<(), &'static str> {
+        let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
+        let ids = self.ids()?;
+        if !ids.iter().any(|kept| kept == id) {
+            return Err("unknownStation");
+        }
+        let mut file = self.signed_file();
+        file.insert(id.to_string(), issued_at);
+        file.retain(|kept, _| ids.contains(kept));
+        self.write_signed(&file)
+    }
+
+    /// The signed file, each station id with the time its proof was signed. A file that is missing,
+    /// too big, not JSON, or not ids to times is nothing signed; a line that is not one is skipped.
+    fn signed_file(&self) -> BTreeMap<String, u64> {
+        let Some(path) = &self.signed else {
+            return BTreeMap::new();
+        };
+        let text = match std::fs::metadata(path) {
+            Ok(meta) if meta.len() <= TYPED_FILE_BYTES => std::fs::read_to_string(path).ok(),
+            _ => None,
+        };
+        let lines: BTreeMap<String, serde_json::Value> = text
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        lines
+            .into_iter()
+            .filter(|(id, _)| protocol::identifier(id))
+            .filter_map(|(id, at)| Some((id, at.as_u64()?)))
+            .collect()
+    }
+
+    /// Write the signed file, through a temporary file the rename publishes, as the typed file.
+    fn write_signed(&self, file: &BTreeMap<String, u64>) -> Result<(), &'static str> {
+        let Some(path) = &self.signed else {
+            return Err("storeUnavailable");
+        };
+        let text = serde_json::to_string(file).map_err(|_| "storeUnavailable")?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|_| "storeUnavailable")?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, text).map_err(|_| "storeUnavailable")?;
+        std::fs::rename(&tmp, path).map_err(|_| "storeUnavailable")
+    }
+
+    /// This computer's two keys for the next station it signs in to with the account, made and kept
+    /// now when none are: kept until a station is kept with them ([`Stations::drop_staged`]), so a
+    /// sign-in that stopped part-way and is tried again names the same keys.
+    pub(crate) fn staged(&self) -> Result<StagedKeys, &'static str> {
+        let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
+        let kept = self
+            .vault
+            .staged_keys()
+            .map_err(|_| "storeUnavailable")?
+            .filter(sound_staged);
+        if let Some(kept) = kept {
+            return Ok(kept);
+        }
+        let (_, road) = ComputerKey::generate().ok_or("storeUnavailable")?;
+        let (_, lan) = ComputerKey::generate().ok_or("storeUnavailable")?;
+        let made = StagedKeys { road, lan };
+        self.vault
+            .save_staged_keys(&made)
+            .map_err(|_| "storeUnavailable")?;
+        Ok(made)
+    }
+
+    /// The staged keys, gone: a station is kept with them.
+    pub(crate) fn drop_staged(&self) -> Result<(), &'static str> {
+        let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
+        self.vault
+            .remove_staged_keys()
+            .map_err(|_| "storeUnavailable")
+    }
+
     /// Forget station `id` on this computer: its internet road and its record, with this
-    /// computer's keys for it, first, then the list, then its line in the typed file. A list that
-    /// still names it after a failure names a record that is gone, which reads as no pairing; a
-    /// line the file would not let go of goes with its next write.
+    /// computer's keys for it, first, then the list, then its lines in the typed and signed files.
+    /// A list that still names it after a failure names a record that is gone, which reads as no
+    /// pairing; a line a file would not let go of goes with its next write.
     pub(crate) fn forget(&self, id: &str) -> Result<(), &'static str> {
         let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
         if !protocol::identifier(id) {
@@ -428,10 +550,14 @@ impl Stations {
         self.vault
             .save_paired_stations(&PairedStations { stations: ids })
             .map_err(|_| "storeUnavailable")?;
-        // Forgotten all the same when the file will not take it: the station is listed nowhere.
+        // Forgotten all the same when a file will not take it: the station is listed nowhere.
         let mut file = self.typed_file();
         if file.remove(id).is_some() {
             let _ = self.write_typed(&file);
+        }
+        let mut file = self.signed_file();
+        if file.remove(id).is_some() {
+            let _ = self.write_signed(&file);
         }
         Ok(())
     }

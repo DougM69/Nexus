@@ -288,6 +288,53 @@ async fn pairing_stands_beside_enrolment() {
     assert_eq!(next(&mut socket).await["type"], "pairProof");
 }
 
+/// ★ The computer's own enrolment (`crate::lan_client::account::enrol`) against the station's real
+/// channel: its message is the one the station reads (parsed whole and exactly), and the station's
+/// refusal of a proof made for another key comes back named as the window says it
+/// (`proofRefused`), with nothing paired. CONTROL: with nothing to check a sign-in against, the
+/// station refuses the unknown key in TLS (`stationNotSignedIn`); and a computer pinning another
+/// station's key goes no further than TLS (`keyChanged`).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_computers_enrolment_is_the_one_the_station_reads() {
+    use crate::lan_client::account::enrol as computer_enrols;
+    let (_tx, stop) = watch::channel(false);
+    let vault = MemoryVault::default();
+    let mut s = shack(home());
+    let stranger = Computer::new();
+    let asked = |at, station: String| {
+        let pkcs8 = stranger.key.clone();
+        async move {
+            computer_enrols(
+                at,
+                &pkcs8,
+                &station,
+                "Den PC",
+                &key("road"),
+                &token("computer"),
+            )
+            .await
+        }
+    };
+    let closed = super::computer::behind_a_port(&s, stop.clone()).await;
+    assert_eq!(
+        asked(closed, s.public_key.clone()).await,
+        Err("stationNotSignedIn")
+    );
+    enrolling(&mut s, armed(&vault, Vec::new()));
+    let open = super::computer::behind_a_port(&s, stop.clone()).await;
+    assert_eq!(asked(open, s.public_key.clone()).await, Err("proofRefused"));
+    assert_eq!(
+        s.shared.desk.as_ref().unwrap().book.ids(),
+        vec![s.device.clone()],
+        "nothing paired"
+    );
+    assert_eq!(vault.device_cache().unwrap(), None);
+    assert_eq!(
+        asked(open, super::computer::another_key()).await,
+        Err("keyChanged")
+    );
+}
+
 // ---- A proof's age on the LAN --------------------------------------------------------------------
 
 /// A device kept for the LAN by `pin`, its proof signed at `issued_at`.

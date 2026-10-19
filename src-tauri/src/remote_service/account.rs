@@ -67,7 +67,7 @@ impl Service {
         Self::with(origin, tenant, tenant.issuer)
     }
 
-    pub(super) fn with(
+    pub(crate) fn with(
         origin: &str,
         tenant: &'static Tenant,
         issuer_at: &str,
@@ -92,6 +92,21 @@ impl Service {
         self.tenant
     }
 
+    /// The client the sign-in and the service's requests go out on.
+    pub(crate) fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    /// A sign-in to this build's own tenant and its Native application, at the issuer's own address,
+    /// for the service's API: the station's and a computer's alike.
+    pub(crate) async fn native_sign_in(&self) -> Result<SignIn, &'static str> {
+        Ok(SignIn {
+            issuer: self.issuer_at.clone(),
+            client_id: self.tenant.native_client_id.to_string(),
+            audience: self.audience().await?,
+        })
+    }
+
     /// The service's API audience (`GET /api/remote/config`): only that. The issuer and the
     /// application are this build's own.
     async fn audience(&self) -> Result<String, &'static str> {
@@ -110,7 +125,7 @@ impl Service {
     }
 
     /// The issuer's key set, fetched now from the issuer itself.
-    async fn fetch_keys(&self, now_s: u64) -> Result<KeySet, &'static str> {
+    pub(crate) async fn fetch_keys(&self, now_s: u64) -> Result<KeySet, &'static str> {
         let response = self
             .http
             .get(format!("{}.well-known/jwks.json", self.issuer_at))
@@ -325,11 +340,7 @@ async fn proven(
     let (station_key, lan_key) = (spki(station.station_key)?, spki(station.lan_key)?);
     let tenant = service.tenant;
     // The built-in issuer, asked at its own address (the same, outside a test).
-    let sign = SignIn {
-        issuer: service.issuer_at.clone(),
-        client_id: tenant.native_client_id.to_string(),
-        audience: service.audience().await?,
-    };
+    let sign = service.native_sign_in().await?;
     let nonce = account::station_nonce(&station_key, &lan_key);
     let signed =
         crate::account_sign_in::signed_in(&service.http, &sign, Some(&nonce), listener, wait, open)

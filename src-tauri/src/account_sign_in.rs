@@ -1,14 +1,13 @@
 //! Signing in to the Remote service's account through the system browser, for both ends of Remote:
-//! the shack binding itself to its owner (`remote_service::account`), and a computer adding its
-//! internet road (`lan_client::internet`). One sign-in, so the two cannot drift: PKCE (RFC 7636,
-//! S256 only) and a redirect to this computer's loopback address (RFC 8252 §7.3), on the one port
-//! the Native application allows.
+//! the shack binding itself to its owner (`remote_service::account`), and a computer adding a
+//! station with the account (`lan_client::account`). One sign-in, so the two cannot drift: PKCE
+//! (RFC 7636, S256 only) and a redirect to this computer's loopback address (RFC 8252 §7.3), on the
+//! one port the Native application allows.
 //!
 //! A sign-in may carry a `nonce`, the hash of the keys it vouches for (`tempo_client::account`).
 //! The issuer's answer then carries an ID token with that nonce, which is kept beside the access
 //! token for the caller to check and forward. Neither is ever written to a log or kept past the
 //! exchange that needs it.
-use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -31,24 +30,12 @@ pub(crate) struct Signed {
     pub(crate) id_token: Option<String>,
 }
 
-/// One sign-in through the system browser to `sign`'s issuer and application: this computer's
-/// loopback port opened for the redirect, the browser sent to the issuer by `open`, and the code it
-/// brings back exchanged for tokens over `http`. With a `nonce`, an answer with no ID token is
-/// `signInFailed`: whoever asked for one cannot go on without it. `signInPortBusy` when the port is
-/// taken, `signInTimedOut` after [`SIGN_IN_WAIT`], `signInRefused` when the issuer said no.
-pub(crate) async fn sign_in(
-    http: &reqwest::Client,
-    sign: &SignIn,
-    nonce: Option<&str>,
-    open: impl FnOnce(&str) -> Result<(), String>,
-) -> Result<Signed, &'static str> {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, SIGN_IN_PORT))
-        .await
-        .map_err(|_| "signInPortBusy")?;
-    signed_in(http, sign, nonce, listener, SIGN_IN_WAIT, open).await
-}
-
-/// [`sign_in`] on a listener already bound, waiting at most `wait` for the redirect.
+/// One sign-in through the system browser to `sign`'s issuer and application, on `listener`, this
+/// computer's loopback port, already bound for the redirect (each caller binds [`SIGN_IN_PORT`]
+/// first, so a port that is taken is `signInPortBusy` before any browser opens): the browser sent
+/// to the issuer by `open`, and the code it brings back within `wait` exchanged for tokens over
+/// `http`. With a `nonce`, an answer with no ID token is `signInFailed`: whoever asked for one
+/// cannot go on without it. `signInTimedOut` after `wait`, `signInRefused` when the issuer said no.
 pub(crate) async fn signed_in(
     http: &reqwest::Client,
     sign: &SignIn,

@@ -59,7 +59,11 @@
 //! never logged, shown or sent), the station's key as it presented it while pairing, the two ids
 //! and the addresses it answered at. Each fits the smallest credential blob on its own; a last
 //! entry lists them, since a credential store cannot be asked what it holds. Neither is ever read
-//! by the shack's side, nor the shack's entries by these.
+//! by the shack's side, nor the shack's entries by these. One more holds the two keys this computer
+//! made for the next station it signs in to with the account (`crate::lan_client::account`), kept
+//! until a station is kept with them so a sign-in tried again names the same keys: handled as the
+//! others (never logged, shown or sent), its own entry so no older Nexus reads it, and read past a
+//! field it does not know.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -75,6 +79,8 @@ const PAIRED_STATIONS: &str = "lan-stations";
 const PAIRED_STATION: &str = "lan-station-";
 /// One paired station's internet road: this, then its LAN station id.
 const INTERNET_ROAD: &str = "lan-internet-";
+/// The two keys made for the next station this computer signs in to with the account.
+const STAGED_KEYS: &str = "lan-account-staged";
 const ACCOUNT_OWNER: &str = "account-owner";
 const ACCOUNT_KEYS: &str = "account-keys";
 const ACCOUNT_DEVICES: &str = "account-devices";
@@ -207,6 +213,17 @@ pub struct InternetRoad {
     pub pkcs8: String,
 }
 
+/// The two keys this computer made for the next station it signs in to with the account
+/// (`crate::lan_client::account`): one for the internet road and one for the station's network,
+/// each PKCS#8 as lowercase hex. No `Debug` and no `Clone`: they are private keys. Read past a field
+/// it does not know (see the header).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedKeys {
+    pub road: String,
+    pub lan: String,
+}
+
 /// The computer's side of Remote over this network: its entries, kept apart from the shack's and
 /// from [`Vault`]'s, so no test of either reaches them, nor they it.
 pub trait StationVault: Send + Sync {
@@ -219,6 +236,10 @@ pub trait StationVault: Send + Sync {
     fn internet_road(&self, id: &str) -> Result<Option<InternetRoad>, &'static str>;
     fn save_internet_road(&self, id: &str, road: &InternetRoad) -> Result<(), &'static str>;
     fn remove_internet_road(&self, id: &str) -> Result<(), &'static str>;
+    /// The keys made for the next station this computer signs in to, if any are kept.
+    fn staged_keys(&self) -> Result<Option<StagedKeys>, &'static str>;
+    fn save_staged_keys(&self, keys: &StagedKeys) -> Result<(), &'static str>;
+    fn remove_staged_keys(&self) -> Result<(), &'static str>;
 }
 
 /// Remote over this network's two entries, kept apart from [`Vault`]'s: a test of the hosted
@@ -529,6 +550,26 @@ impl StationVault for SystemVault {
     }
     fn remove_internet_road(&self, id: &str) -> Result<(), &'static str> {
         match internet_entry(id)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn staged_keys(&self) -> Result<Option<StagedKeys>, &'static str> {
+        match entry(STAGED_KEYS)?.get_password() {
+            // Unreadable is none: new keys are made, and nothing was kept with those.
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_staged_keys(&self, keys: &StagedKeys) -> Result<(), &'static str> {
+        let value = serde_json::to_string(keys).map_err(|_| "credentialStoreUnavailable")?;
+        entry(STAGED_KEYS)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
+    }
+    fn remove_staged_keys(&self) -> Result<(), &'static str> {
+        match entry(STAGED_KEYS)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err("credentialStoreUnavailable"),
         }

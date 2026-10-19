@@ -102,6 +102,24 @@ impl StationVault for StationStore {
             .remove(&format!("lan-internet-{id}"));
         Ok(())
     }
+    fn staged_keys(&self) -> Result<Option<StagedKeys>, &'static str> {
+        self.key_reads.fetch_add(1, Ordering::SeqCst);
+        self.get("lan-account-staged")
+    }
+    fn save_staged_keys(&self, keys: &StagedKeys) -> Result<(), &'static str> {
+        self.put(
+            "lan-account-staged".into(),
+            serde_json::to_string(keys).unwrap(),
+        )
+    }
+    fn remove_staged_keys(&self) -> Result<(), &'static str> {
+        if self.locked.load(Ordering::SeqCst) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        self.entries.lock().unwrap().remove("lan-account-staged");
+        Ok(())
+    }
 }
 
 fn id(n: u8) -> String {
@@ -322,6 +340,97 @@ fn forgetting_a_station_removes_its_key() {
     assert!(store.raw(&format!("lan-station-{}", id(2))).is_some());
 }
 
+/// ★ The keys for the next station signed in to are made once and kept: asked again, the same
+/// two come back, and they go only when dropped (a station kept with them). Keys that are not keys
+/// read as none, and new ones are made. CONTROL: dropped, the next ask makes new ones.
+#[test]
+fn the_keys_for_the_next_sign_in_are_kept_until_a_station_is_kept_with_them() {
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    let first = stations.staged().unwrap();
+    let again = stations.staged().unwrap();
+    assert_eq!((&again.road, &again.lan), (&first.road, &first.lan));
+    assert_ne!(first.road, first.lan, "one key for each road");
+    assert!(store.raw("lan-account-staged").is_some());
+    stations.drop_staged().unwrap();
+    assert!(store.raw("lan-account-staged").is_none());
+    let fresh = stations.staged().unwrap();
+    assert_ne!(fresh.road, first.road);
+    store
+        .put(
+            "lan-account-staged".into(),
+            json!({"road":"00","lan":"00"}).to_string(),
+        )
+        .unwrap();
+    assert!(ComputerKey::restore(&stations.staged().unwrap().road).is_some());
+}
+
+/// ★ When this computer signed in for each station is kept in a file of its own, outside the
+/// credential store, read back by a Stations started again, and gone with the station's Forget. A
+/// station not paired here keeps no time. CONTROL: another station's line survives the forget.
+#[test]
+fn when_this_computer_signed_in_is_kept_beside_the_stations_and_forgotten_with_them() {
+    let (dir, file) = typed_file("signed");
+    let signed = dir.join("lan-account.json");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).signed_in(signed.clone());
+    stations.keep(&record(&id(1), &["10.0.0.1"])).unwrap();
+    stations.keep(&record(&id(2), &["10.0.0.2"])).unwrap();
+    let writes = store.writes.load(Ordering::SeqCst);
+    stations.keep_signed(&id(1), 1_799_999_900).unwrap();
+    stations.keep_signed(&id(2), 1_700_000_000).unwrap();
+    assert_eq!(stations.keep_signed(&id(9), 1), Err("unknownStation"));
+    assert_eq!(
+        store.writes.load(Ordering::SeqCst),
+        writes,
+        "a credential entry written"
+    );
+    let again = Stations::new(Arc::new(store.clone())).signed_in(signed.clone());
+    assert_eq!(again.signed(&id(1)), Some(1_799_999_900));
+    stations.forget(&id(1)).unwrap();
+    assert_eq!(again.signed(&id(1)), None);
+    assert_eq!(again.signed(&id(2)), Some(1_700_000_000));
+    assert!(!file.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// ★ The window is told, for each station added with the account, until when it admits this
+/// computer on its network, and whether to sign in again now: in the last week, and not before.
+/// A station paired with a code is not named.
+#[tokio::test]
+async fn the_window_is_told_until_when_each_station_admits_this_computer() {
+    let (dir, _) = typed_file("listed");
+    let store = StationStore::default();
+    let stations =
+        Arc::new(Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json")));
+    for n in 1..=3 {
+        stations
+            .keep(&record(&id(n), &[&format!("10.0.0.{n}")]))
+            .unwrap();
+    }
+    let now = 1_800_000_000;
+    let age = tempo_client::account::PROOF_MAX_AGE_S;
+    let renew = tempo_client::account::RENEW_BEFORE_S;
+    stations.keep_signed(&id(1), now - age + renew + 1).unwrap();
+    stations.keep_signed(&id(2), now - age + renew).unwrap();
+    let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
+        stations,
+        ..reach(StationStore::default())
+    })
+    .unwrap();
+    let mut socket = page_socket(&origin).await;
+    let told = said(&mut socket, json!({"type":"stations"})).await;
+    assert_eq!(
+        told["account"],
+        json!([
+            {"stationId": id(1), "until": now + renew + 1, "renew": false},
+            {"stationId": id(2), "until": now + renew, "renew": true},
+        ])
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// ★ A record this module could not have written reads as no pairing, and the page sees only the
 /// station's fingerprint, never this computer's key. CONTROL: the sound record reads back.
 #[test]
@@ -521,8 +630,9 @@ fn reach(store: StationStore) -> Reach {
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
         operate: Arc::new(|_, _| {}),
-        add_internet: Arc::new(|_, _| Box::pin(async { Err("internetNotReady") })),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
         forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
+        now_s: || 1_800_000_000,
     }
 }
 
@@ -1164,19 +1274,37 @@ async fn forgetting_a_station_ends_its_internet_road_at_the_service_first() {
     }
 }
 
-/// ★ Adding the internet road for an account with two stations: the page is offered each one
-/// (`chooseStation`), and the one the operator picks goes back to the add, which then says it was
-/// added. CONTROL: cancelled (no station), the add is told none was picked.
+/// The page's socket's next word, as JSON.
+async fn heard_from(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) -> Value {
+    let Ok(Some(Ok(Message::Text(text)))) =
+        tokio::time::timeout(Duration::from_secs(5), socket.next()).await
+    else {
+        panic!("no answer")
+    };
+    serde_json::from_str(&text).unwrap()
+}
+
+/// ★ Signing in with the account's two stations: the page is offered each one (`chooseStation`),
+/// the one the operator picks goes back to the sign-in; asked where that station is
+/// (`stationAddress`, with why the last address did not take this computer), the address the
+/// operator types goes back too; and the sign-in's end is said (`signedIn`). CONTROL: cancelled at
+/// the pick, the sign-in is told none was picked and says so (`signInRefused`); a second sign-in
+/// while one waits is refused (`signInUnderWay`).
 #[tokio::test]
-async fn the_page_picks_the_station_while_the_internet_road_is_added() {
+async fn the_page_picks_the_station_and_says_where_it_is_while_signing_in() {
     use super::internet::Choice;
     const CLUB: &str = "20000000-0000-4000-8000-0000000000c1";
     for pick in [Some(STATION), None] {
-        let picked: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
-        let kept = picked.clone();
+        let told: Arc<Mutex<Vec<(Option<String>, Option<String>, Option<String>)>>> =
+            Arc::default();
+        let kept = told.clone();
         let origin = Origin::start(Reach {
             lookup: Arc::new(tempo_stream::lan::lookup),
-            add_internet: Arc::new(move |_, choose| {
+            sign_in: Arc::new(move |here, choose, ask| {
                 let kept = kept.clone();
                 Box::pin(async move {
                     let offered = vec![
@@ -1189,37 +1317,36 @@ async fn the_page_picks_the_station_while_the_internet_road_is_added() {
                             name: "Shack".into(),
                         },
                     ];
-                    let answer = choose(offered).await;
-                    kept.lock().unwrap().push(answer.clone());
-                    answer.map(|_| true).ok_or("stationNotChosen")
+                    let picked = choose(offered).await;
+                    let Some(picked) = picked else {
+                        kept.lock().unwrap().push((here, None, None));
+                        return Err("stationNotChosen");
+                    };
+                    let at = ask("Shack".into(), Some("noAnswer")).await;
+                    kept.lock().unwrap().push((here, Some(picked), at));
+                    Ok(super::account::Signed {
+                        station: STATION.into(),
+                        waiting: false,
+                    })
                 })
             }),
             ..reach(StationStore::default())
         })
         .unwrap();
         let mut socket = page_socket(&origin).await;
-        let mut heard = Vec::new();
-        socket
-            .send(Message::Text(
-                json!({"type":"addInternet","stationId":STATION})
-                    .to_string()
-                    .into(),
-            ))
-            .await
-            .unwrap();
-        for _ in 0..2 {
-            let Ok(Some(Ok(Message::Text(text)))) =
-                tokio::time::timeout(Duration::from_secs(5), socket.next()).await
-            else {
-                panic!("no answer after {heard:?}")
-            };
-            heard.push(serde_json::from_str::<Value>(&text).unwrap());
-        }
-        assert_eq!(heard[0], json!({"type":"signingIn"}));
+        // Signing in for the station on this computer it names, or for a new one with none.
         assert_eq!(
-            heard[1],
+            said(&mut socket, json!({"type":"signIn","stationId":pick})).await,
+            json!({"type":"signingIn"})
+        );
+        assert_eq!(
+            heard_from(&mut socket).await,
             json!({"type":"chooseStation","stations":[{"id":CLUB,"name":"Club station"},
                 {"id":STATION,"name":"Shack"}]})
+        );
+        assert_eq!(
+            said(&mut socket, json!({"type":"signIn","stationId":null})).await,
+            json!({"type":"signInRefused","reason":"signInUnderWay"})
         );
         socket
             .send(Message::Text(
@@ -1229,22 +1356,40 @@ async fn the_page_picks_the_station_while_the_internet_road_is_added() {
             ))
             .await
             .unwrap();
-        let Ok(Some(Ok(Message::Text(text)))) =
-            tokio::time::timeout(Duration::from_secs(5), socket.next()).await
-        else {
-            panic!("no answer after the pick")
-        };
-        let told: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(*picked.lock().unwrap(), vec![pick.map(str::to_string)]);
         match pick {
-            Some(_) => assert_eq!(
-                told,
-                json!({"type":"internetAdded","stationId":STATION,"waiting":true})
-            ),
-            None => assert_eq!(
-                told,
-                json!({"type":"internetRefused","reason":"stationNotChosen"})
-            ),
+            Some(_) => {
+                assert_eq!(
+                    heard_from(&mut socket).await,
+                    json!({"type":"stationAddress","name":"Shack","reason":"noAnswer"})
+                );
+                socket
+                    .send(Message::Text(
+                        json!({"type":"stationAddress","address":"192.168.1.20"})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    heard_from(&mut socket).await,
+                    json!({"type":"signedIn","stationId":STATION,"waiting":false})
+                );
+                assert_eq!(
+                    *told.lock().unwrap(),
+                    vec![(
+                        Some(STATION.to_string()),
+                        Some(STATION.to_string()),
+                        Some("192.168.1.20".to_string())
+                    )]
+                );
+            }
+            None => {
+                assert_eq!(
+                    heard_from(&mut socket).await,
+                    json!({"type":"signInRefused","reason":"stationNotChosen"})
+                );
+                assert_eq!(*told.lock().unwrap(), vec![(None, None, None)]);
+            }
         }
     }
 }
