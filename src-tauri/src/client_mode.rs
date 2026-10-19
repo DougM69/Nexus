@@ -100,6 +100,14 @@
 //! says where it is. Nothing in this module decides anything by it: the rules above meet a blocked
 //! road as they would meet a firewall on this computer.
 //!
+//! ## Signing in again
+//!
+//! A station added with the account takes this computer on its network for thirty days from the
+//! sign-in that added it (`crate::lan_client::account`). In the last week of them, Operate's launch
+//! signs in again by itself ([`sign_in_again_by`]): the browser opens for it while the link runs,
+//! and the new proof goes to the station on a connection of its own, so the link is never closed for
+//! it. The banner says so, and, when it did not happen, by what day to sign in again.
+//!
 //! ## What a refusal says
 //!
 //! A call refused here or at the shack fails with `nexusClient:<code>`, a refusal's code or one of
@@ -672,6 +680,11 @@ pub(crate) struct Status {
     /// The station's Nexus version, as its last welcome said it, the link opened or refused for
     /// another build: `None` until a welcome has said it.
     pub(crate) station_build: Option<String>,
+    /// The day the station stops taking this computer on its network, seconds since 1970, while
+    /// that is within a week and this computer has not signed in again ([`sign_in_again_by`]).
+    pub(crate) sign_in_by: Option<u64>,
+    /// Operate's launch is signing in again for the station: the sign-in waits in the browser.
+    pub(crate) signing_again: bool,
 }
 
 /// This computer's PTT between the screen's re-assertions.
@@ -784,6 +797,8 @@ impl Client {
                 bench: Default::default(),
                 computer_build: tempo_client::wire::APP,
                 station_build: None,
+                sign_in_by: None,
+                signing_again: false,
             }),
             station_id,
             shack: Mutex::new(None),
@@ -911,6 +926,14 @@ impl Client {
             bench: self.road_switch.position(),
             ..lock(&self.status).clone()
         }
+    }
+
+    /// Signing in again for the station: the day the station stops taking this computer on its
+    /// network while that is still to be done (`by`), and whether the sign-in is under way.
+    pub(crate) fn signing_again(&self, by: Option<u64>, under_way: bool) {
+        let mut status = lock(&self.status);
+        status.sign_in_by = by;
+        status.signing_again = under_way;
     }
 
     /// A test build's road switch.
@@ -2343,6 +2366,58 @@ pub(crate) fn start_driving<R: Runtime>(
     tauri::async_runtime::spawn(client.drive(app, find, look, typed))
 }
 
+/// When Operate's launch signs in again for station `id`: the day the station stops taking this
+/// computer on its network, once that is within `tempo_client::account::RENEW_BEFORE_S` or past, for
+/// a station added with the account. `None` for one paired with a code, or signed in to lately.
+pub(crate) fn sign_in_again_by(
+    stations: &crate::lan_client::Stations,
+    id: &str,
+    now_s: u64,
+) -> Option<u64> {
+    let issued_at = stations.signed(id)?;
+    tempo_client::account::renew_due(issued_at, now_s)
+        .then(|| tempo_client::account::admitted_until(issued_at))
+}
+
+/// Signs in again for the station `client` drives, through the system browser
+/// (`lan_client::account::sign_in`), saying so on the banner; `by` stays there when it did not
+/// happen. Nothing is picked and nobody is asked where the station is: it is the one this launch
+/// drives, at the addresses it is known at.
+fn sign_in_again<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    client: Arc<Client>,
+    stations: Arc<crate::lan_client::Stations>,
+    by: u64,
+) {
+    use crate::lan_client::account::{Ask, Env};
+    client.signing_again(Some(by), true);
+    tauri::async_runtime::spawn(async move {
+        use tauri_plugin_opener::OpenerExt;
+        let env = Env::new(
+            stations,
+            Arc::new(tempo_stream::lan::dnssd::find),
+            Arc::new(tempo_stream::lan::lookup),
+            crate::lan_client::computer_name(),
+        );
+        let signed = match env {
+            Ok(env) => {
+                let open = |url: &str| {
+                    app.opener()
+                        .open_url(url, None::<&str>)
+                        .map_err(|e| e.to_string())
+                };
+                let choose: crate::lan_client::internet::Choose =
+                    Arc::new(|_| Box::pin(async { None }));
+                let ask: Ask = Arc::new(|_, _| Box::pin(async { None }));
+                let id = client.station_id.clone();
+                crate::lan_client::account::sign_in(&env, Some(id), open, choose, ask).await
+            }
+            Err(why) => Err(why),
+        };
+        client.signing_again(signed.is_err().then_some(by), false);
+    });
+}
+
 pub(crate) fn run(station: String) {
     tempo_core::applog::info(
         "startup",
@@ -2402,8 +2477,23 @@ pub(crate) fn run(station: String) {
                 crate::lan_client::Stations::new(Arc::new(
                     crate::remote_service::vault::SystemVault,
                 ))
-                .typed_in(crate::lan_client::typed_path()),
+                .typed_in(crate::lan_client::typed_path())
+                .signed_in(crate::lan_client::signed_path()),
             );
+            // In the last week before the station stops taking this computer on its network, this
+            // launch signs in again by itself (see the header).
+            let now_s = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            if let Some(by) = sign_in_again_by(&stations, &driving.station_id, now_s) {
+                sign_in_again(
+                    app.handle().clone(),
+                    Arc::clone(&driving),
+                    Arc::clone(&stations),
+                    by,
+                );
+            }
             match crate::lan_client::internet::Roads::new(Arc::clone(&stations)) {
                 Ok(roads) => driving.reach_afar(Arc::new(roads)),
                 Err(why) => tempo_core::applog::warn(

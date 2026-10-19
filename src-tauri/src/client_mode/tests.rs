@@ -1881,3 +1881,54 @@ fn a_gallery_picture_arrives_in_client_mode() {
     assert_eq!(shack.sent().len(), 2, "nothing more crossed");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// ★ Operate's launch signs in again for a station added with the account in the last week before
+/// the station stops taking this computer on its network, and not before; never for a station
+/// paired with a code. The banner's status names the day while it is still to be done, and says
+/// while the sign-in waits in the browser. CONTROL: one day earlier, nothing is due.
+#[test]
+fn the_launch_signs_in_again_in_the_last_week_before_the_station_stops_taking_this_computer() {
+    use crate::lan_client::tests::{record, StationStore};
+    use tempo_client::account::{PROOF_MAX_AGE_S, RENEW_BEFORE_S};
+    let dir = scratch("sign-in-again");
+    let stations = crate::lan_client::Stations::new(Arc::new(StationStore::default()))
+        .signed_in(dir.join("lan-account.json"));
+    let coded = "60000000-0000-4000-8000-0000000000c0";
+    stations
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    stations
+        .keep(&record(coded, &["192.168.1.21:42075"]))
+        .unwrap();
+    let issued_at = 1_800_000_000;
+    stations.keep_signed(STATION, issued_at).unwrap();
+    let until = issued_at + PROOF_MAX_AGE_S;
+    let start = until - RENEW_BEFORE_S;
+    assert_eq!(sign_in_again_by(&stations, STATION, start - 86_400), None);
+    assert_eq!(sign_in_again_by(&stations, STATION, start - 1), None);
+    assert_eq!(sign_in_again_by(&stations, STATION, start), Some(until));
+    assert_eq!(sign_in_again_by(&stations, STATION, until + 1), Some(until));
+    assert_eq!(
+        sign_in_again_by(&stations, coded, until + 1),
+        None,
+        "paired with a code"
+    );
+
+    let client = client_in(&dir, &FakeShack::new());
+    assert_eq!(
+        (client.status().sign_in_by, client.status().signing_again),
+        (None, false)
+    );
+    client.signing_again(Some(until), true);
+    let status = serde_json::to_value(client.status()).unwrap();
+    assert_eq!(
+        (&status["signInBy"], &status["signingAgain"]),
+        (&json!(until), &json!(true))
+    );
+    client.signing_again(None, false);
+    assert_eq!(
+        (client.status().sign_in_by, client.status().signing_again),
+        (None, false)
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
