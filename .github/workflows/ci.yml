@@ -39,6 +39,11 @@ concurrency:
 permissions:
   contents: read
 
+# Every Linux job runs on ubuntu-24.04, not ubuntu-latest. ubuntu-latest became 26.04 on 2026-10-19,
+# and its gfortran 15 / libm moved the vendored WSJT-X synthesis by a few parts in a million, so the
+# FT8/FST4 waveform pins (recorded on 24.04) failed with no code change; localhost resolution and the
+# WebKitGTK WebDriver package also changed there. Move to 26.04 as one deliberate step: re-record the
+# pins there, prove the change is the toolchain's alone, and get a green run.
 jobs:
   # Job 1 — Rust workspace: build the Fortran/C/C++ libtempo modem (via the
   # tempo-fast-sys build.rs CMake project) and run the headless modem/engine/net/TempoDeep
@@ -59,7 +64,7 @@ jobs:
 
   test:
     name: Rust tests + clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -184,7 +189,7 @@ jobs:
 
   test-features:
     name: Rust feature-gated crates (tempo-audio, propagation)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -300,7 +305,7 @@ jobs:
 
   test-tauri:
     name: Rust src-tauri + native Remote
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -438,7 +443,7 @@ jobs:
   # new features; new Remote work goes to the stream, the LAN stream window or the native client.
   remote-web:
     name: Remote browser and Cloudflare service (local only)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -498,7 +503,7 @@ jobs:
   # and would add a way for the sweep to be silently skipped.
   remote-browser:
     name: Compiled browser (shard ${{ matrix.shard }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -556,7 +561,7 @@ jobs:
   # crates/tempo-app/src/dto.rs.
   ui:
     name: Web UI build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -774,7 +779,7 @@ jobs:
   # included; most of it is real time the probes wait out, so a slower runner adds little.
   spectrum-harness:
     name: Scope and waterfall in a real browser
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -845,7 +850,7 @@ jobs:
   # incl. the propagation `live` feature (the heaviest dep set).
   msrv:
     name: MSRV (1.91) check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -883,7 +888,7 @@ jobs:
   # Job 4 — Supply chain: RustSec advisories, license allow-list, sources, bans.
   deny:
     name: cargo-deny (supply chain + licenses)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -991,7 +996,7 @@ jobs:
   # via scripts/build-windows-cross.sh, which adds --bundles nsis).
   windows-cross:
     name: Windows cross-compile (src-tauri)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
