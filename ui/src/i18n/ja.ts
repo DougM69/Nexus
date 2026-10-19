@@ -8155,4 +8155,5 @@ export const JA: PartialCatalog = {
   "spotMe.refused.failed": "スポットしていません: DX クラスターがスポットを受け付けませんでした。",
   "fieldDay.log.splitter.label": "コンテストログの高さ",
   "contestLogger.recent.splitter.label": "最近の交信の高さ",
+  "fieldDay.clock.aria": "コンテスト時計（UTC と現地時刻）",
 }

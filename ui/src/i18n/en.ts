@@ -4294,6 +4294,8 @@ export const EN = {
   'fieldDay.log.empty': 'No contacts logged yet.',
   // The divider above the Contest screen's log (ContestView): its accessible name, as every divider's.
   'fieldDay.log.splitter.label': 'contest log height',
+  // The Contest screen's large clock on its banner (ContestView): UTC, then local time. Its accessible name.
+  'fieldDay.clock.aria': 'Contest clock, UTC and local time',
   'fieldDay.log.remove': 'Remove',
   'fieldDay.log.remove.ask': 'Remove {{contact}}? Click Remove again.',
   'fieldDay.log.remove.title': 'Take this contact out of the contest log. It is kept under Removed and can be restored. Click twice: the first click asks.',

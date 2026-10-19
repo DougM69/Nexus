@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contest screen: a big clock.** The Contest screen's top line now shows the time large enough to read at a
+  glance: UTC first, your local time beside it. It is the same clock as the top bar's, so the two always agree,
+  and it is on the screen in the main window, the popped-out Contest screen and the Contest Logger window.
 - **Contest screen: drag to resize the log and the last contacts.** A divider above the Contest screen's log
   sizes the log against the county/section board above it, and a divider under the last contacts sizes them
   against the screen below. Drag either, or focus it and use the arrow keys (Shift for bigger steps, Home and

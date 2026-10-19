@@ -62,6 +62,7 @@ const SCORE_NOTE_KEYS: ReadonlySet<string> = new Set(SCORE_NOTES.map((n) => n.no
 import { modeClassOf } from '../features/needs'
 import { CONTEST_LOG_MAX_SHARE, CONTEST_LOG_SPLIT_MAX, CONTEST_LOG_SPLIT_MIN } from '../features/paneSeam'
 import { PaneSeam } from './PaneSeam'
+import { UtcClock } from './UtcClock'
 
 /**
  * ⚠️ INVARIANT — the FD mode codes an entry is scored by, printed as they are logged and
@@ -3653,6 +3654,14 @@ export function ContestView({
             })}
           </span>
         ) : null}
+        {/* ⭐ THE CLOCK, large (the Illinois QSO Party, 2026-10-18: the operator squinted at the top bar's):
+            UTC first, the time a contest and its log run on, then this computer's local time beside it.
+            The top bar's own clock (`UtcClock`), so the two can never read differently. On the banner, so
+            the main window's screen, its pop-out and the logger window each show it. */}
+        <div className="contest-clock" role="group" aria-label={t('fieldDay.clock.aria')}>
+          <UtcClock />
+          <UtcClock local />
+        </div>
         {/* ⭐ THIS SCREEN IN A WINDOW OF ITS OWN, for another monitor (App's, in the main window). The
             scoreboard's own ⧉ Pop out, lower down, tears off the scoreboard alone, so this one is
             named for the screen to a screen reader. */}

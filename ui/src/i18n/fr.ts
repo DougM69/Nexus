@@ -8172,4 +8172,5 @@ export const FR: PartialCatalog = {
   "spotMe.refused.failed": "Pas de spot : le cluster DX n'a pas pris le spot.",
   "fieldDay.log.splitter.label": "hauteur du journal du concours",
   "contestLogger.recent.splitter.label": "hauteur des derniers contacts",
+  "fieldDay.clock.aria": "Horloge du concours, UTC et heure locale",
 }
