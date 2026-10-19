@@ -30,6 +30,9 @@
 //! Windows: WebView2; macOS: WKWebView): `cargo tauri dev` /
 //! `cargo tauri build --features radio`.
 
+/// Signing in to the Remote service's account through the system browser: the shack binding itself
+/// to its owner, and a computer adding its internet road.
+mod account_sign_in;
 /// One alert, made in Rust where it is raised, with its id and a versioned shape: what every window
 /// and a computer driving the station hear.
 mod alert;

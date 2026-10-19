@@ -34,10 +34,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tempo_client::native::{self, Pkce, SignIn, TurnServer};
+use tempo_client::native::{self, SignIn, TurnServer};
 use tempo_client::ComputerKey;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -45,11 +44,6 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use super::Stations;
 use crate::remote_service::vault::InternetRoad;
 
-/// The loopback port the sign-in's redirect comes back to: the Native application's allowed
-/// callback is exactly `http://127.0.0.1:42078/callback`.
-pub(crate) const SIGN_IN_PORT: u16 = 42078;
-/// How long the browser has to come back with the code.
-const SIGN_IN_WAIT: Duration = Duration::from_secs(5 * 60);
 /// How often an open pipe is renewed. The room gives it a minute at a time.
 pub(crate) const RENEW_EVERY: Duration = Duration::from_secs(20);
 /// How long the pipe's socket may take to open: the room waits 10 s for the station's end.
@@ -85,7 +79,7 @@ pub(crate) struct Choice {
 }
 
 /// How long the operator has to pick the station, as for the sign-in.
-pub(crate) const CHOOSE_WAIT: Duration = SIGN_IN_WAIT;
+pub(crate) const CHOOSE_WAIT: Duration = crate::account_sign_in::SIGN_IN_WAIT;
 
 /// The longest station name offered, in characters: the service's bound for a name (`label`).
 const CHOICE_NAME_CHARS: usize = 48;
@@ -419,104 +413,16 @@ pub(crate) fn lasting(reason: &str) -> bool {
     )
 }
 
-/// The first sign-in, through the system browser: the service's sign-in read, this computer's
-/// loopback port opened for the redirect, the browser sent to the issuer by `open`, and the code it
-/// brings back exchanged for a token. The token, kept in memory by the caller for this one
-/// exchange. `signInPortBusy` when the port is taken, `signInTimedOut` after [`SIGN_IN_WAIT`].
+/// The first sign-in, through the system browser (`crate::account_sign_in`), to the application
+/// the service names: the token, kept in memory by the caller for this one exchange.
 pub(crate) async fn sign_in(
     service: &Service,
     open: impl FnOnce(&str) -> Result<(), String>,
 ) -> Result<String, &'static str> {
     let sign = service.config().await?;
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, SIGN_IN_PORT))
+    crate::account_sign_in::sign_in(&service.http, &sign, None, open)
         .await
-        .map_err(|_| "signInPortBusy")?;
-    let redirect = format!("http://127.0.0.1:{SIGN_IN_PORT}{}", native::CALLBACK_PATH);
-    let pkce = Pkce::new().ok_or("signInFailed")?;
-    open(&native::authorize_url(&sign, &redirect, &pkce)).map_err(|_| "signInFailed")?;
-    let code = tokio::time::timeout(SIGN_IN_WAIT, redirected(&listener, &pkce.state))
-        .await
-        .map_err(|_| "signInTimedOut")??;
-    drop(listener);
-    let form = native::token_form(&sign, &redirect, &pkce, &code);
-    let response = service
-        .http
-        .post(format!("{}oauth/token", sign.issuer))
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(form)
-        .send()
-        .await
-        .map_err(|_| "signInFailed")?;
-    let given = answer(response).await.map_err(|_| "signInFailed")?;
-    native::token(&given)
-        .map(|(token, _)| token)
-        .ok_or("signInFailed")
-}
-
-/// The browser's redirect to this computer's loopback port: the code it brought for this sign-in's
-/// `state`, or the issuer's refusal. A request for anything else (a favicon, a redirect this
-/// sign-in did not start) is answered and the wait goes on.
-pub(crate) async fn redirected(
-    listener: &TcpListener,
-    state: &str,
-) -> Result<String, &'static str> {
-    loop {
-        let Ok((mut stream, peer)) = listener.accept().await else {
-            continue;
-        };
-        if !peer.ip().is_loopback() {
-            continue;
-        }
-        let target = read_target(&mut stream).await;
-        let result = match target.as_deref() {
-            Some(target) => native::callback(target, state),
-            None => Err("signInFailed"),
-        };
-        let page = match result {
-            Ok(_) => "Nexus is signed in. You can close this tab and go back to Nexus.",
-            Err("signInRefused") => "The sign-in was cancelled. You can close this tab.",
-            Err(_) => "This is not the sign-in Nexus is waiting for.",
-        };
-        let body =
-            format!("<!doctype html><meta charset=\"utf-8\"><title>Nexus</title><p>{page}</p>");
-        let reply = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\n\
-             cache-control: no-store\r\nconnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let _ = stream.write_all(reply.as_bytes()).await;
-        let _ = stream.shutdown().await;
-        match result {
-            Ok(code) => return Ok(code),
-            Err("signInRefused") => return Err("signInRefused"),
-            Err(_) => continue,
-        }
-    }
-}
-
-/// A GET's request target from the first line of a request read within a second, or `None`.
-async fn read_target(stream: &mut TcpStream) -> Option<String> {
-    let mut head = Vec::new();
-    let mut chunk = [0u8; 1024];
-    let read = async {
-        while !head.windows(4).any(|w| w == b"\r\n\r\n") && head.len() < 8192 {
-            let n = stream.read(&mut chunk).await.ok()?;
-            if n == 0 {
-                break;
-            }
-            head.extend_from_slice(&chunk[..n]);
-        }
-        Some(())
-    };
-    tokio::time::timeout(Duration::from_secs(1), read)
-        .await
-        .ok()??;
-    let line = std::str::from_utf8(&head).ok()?.lines().next()?.to_string();
-    let mut parts = line.split(' ');
-    match (parts.next(), parts.next()) {
-        (Some("GET"), Some(target)) => Some(target.to_string()),
-        _ => None,
-    }
+        .map(|signed| signed.access)
 }
 
 /// Adds the internet road to the station paired here as `id`: signed in through `open`'s browser,
