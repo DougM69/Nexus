@@ -123,14 +123,25 @@ fn seen_at(s: &FlexScene, since: Instant, want: &str) -> Option<Instant> {
         .map(|(at, _)| at)
 }
 
-/// The DAX transmit datagrams the radio received at or after `since`: when, and how many 24 kHz
-/// frames each carried.
+/// The DAX transmit datagrams the radio received from Nexus at or after `since`: when, and how
+/// many 24 kHz frames each carried. Only from the ports Nexus's sessions named (`client udpport`):
+/// the simulator listens on an ephemeral port, and a datagram another process on the machine still
+/// aims at that port lands in its log as well (seen once under load, with no VITA class, which
+/// every packet Nexus sends carries).
 fn dax_in(s: &FlexScene, since: Instant) -> Vec<(Instant, usize)> {
-    s.log()
-        .into_iter()
+    let log = s.log();
+    let nexus: Vec<u16> = log
+        .iter()
+        .filter_map(|(_, e)| match e {
+            SimEvent::Command { text, .. } => text.strip_prefix("client udpport ")?.parse().ok(),
+            _ => None,
+        })
+        .collect();
+    assert!(!nexus.is_empty(), "premise: Nexus named its UDP port");
+    log.into_iter()
         .filter(|(at, _)| *at >= since)
         .filter_map(|(at, e)| match e {
-            SimEvent::UdpIn { bytes, .. } if bytes.len() > 1 => {
+            SimEvent::UdpIn { bytes, from } if bytes.len() > 1 && nexus.contains(&from.port()) => {
                 let v = tempo_net::flexvita::parse_vita(&bytes).expect("a VITA-49 packet");
                 let stereo = tempo_net::flex::streams::decode_dax_audio(
                     v.packet_class.expect("a class"),
