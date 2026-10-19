@@ -261,6 +261,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **FT8 and FT4: a weak reply that arrives late in the period now counts for your next over.** Nexus now
+  decodes at the same moments as WSJT-X. FT8's full decode runs 14.4 seconds into the period instead of after the
+  period ends, and FT4's one decode runs at 6.05 seconds instead of at 5.5 and again at 7.5. A weak RR73 or report
+  that only the full decode finds is then known before your next over starts, so Nexus answers it instead of
+  sending its last message again. If that decode is still running when your over starts, its result still counts
+  as soon as it is done. The early FT8 decode at 11.8 seconds is unchanged. NEEDS-BENCH: an FT8 and an FT4 QSO
+  with a weak station, into a dummy load first.
 - **The Log button stays on screen in the Phone, CW, JS8, RTTY and PSK screens.** At 1280×800 the log form was taller
   than its pane, so Log and Spot sat below the fold. The "logs to … as" line and the Log/Spot buttons now stay together
   at the bottom of the log pane while the fields above them scroll. The callsign card below them is never covered.
