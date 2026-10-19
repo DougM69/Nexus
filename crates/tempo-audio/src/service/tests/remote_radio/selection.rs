@@ -2062,8 +2062,12 @@ fn a_selection_stops_the_outgoing_radios_voice_memory_after_its_unkey() {
     let incoming = retuning_peer(7_100_000, "LSB", |_, _| None);
     let mut s = station(&outgoing);
     let pool = Arc::new(MonitorConnections::new(vec![connection(&s, &incoming)]));
-    let receipt = queue(&s, 1);
-    apply(&mut s, &pool, |_| panic!("warm radio must be reused"));
+    let receipt = apply_gesture(
+        &mut s,
+        &pool,
+        |s| queue(s, 1),
+        |_| panic!("warm radio must be reused"),
+    );
     assert_eq!(
         receipt.outcome(),
         Outcome::Applied {
