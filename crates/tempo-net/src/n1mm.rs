@@ -67,6 +67,10 @@ pub struct N1mmContact {
     /// The signal report we RECEIVED, as `<rcv>` (#129). This one was not in the datagram
     /// in any form.
     pub rst_rcvd: String,
+    /// The number we SENT this contact, as `<sntnr>`: the serial in a serial contest, the
+    /// contact's QSO number in every other contest. `None` for an ordinary QSO, and then the
+    /// element is omitted.
+    pub sent_nr: Option<u32>,
     pub operator: String,
     /// 32-hex unique id (consumers dedup on it).
     pub id: String,
@@ -105,7 +109,7 @@ pub fn build_contactinfo(c: &N1mmContact) -> String {
             "<ID>{id}</ID>",
             "<IsClaimedQso>1</IsClaimedQso>",
             "<SentExchange>{sent}</SentExchange>",
-            "{snt}{rcv}",
+            "{snt}{sntnr}{rcv}",
             "</contactinfo>"
         ),
         // Omitted when empty, like `gridsquare` above — this module's convention, and it keeps
@@ -115,6 +119,12 @@ pub fn build_contactinfo(c: &N1mmContact) -> String {
         } else {
             format!("<snt>{}</snt>", esc(&c.rst_sent))
         },
+        // N1MM's own element for the number sent, in its place between the reports. Omitted
+        // without a number, so a plain QSO's datagram is unchanged.
+        sntnr = c
+            .sent_nr
+            .map(|n| format!("<sntnr>{n}</sntnr>"))
+            .unwrap_or_default(),
         rcv = if c.rst_rcvd.is_empty() {
             String::new()
         } else {
@@ -349,6 +359,7 @@ mod tests {
             sent_exchange: "3A WI".into(),
             rst_sent: String::new(),
             rst_rcvd: String::new(),
+            sent_nr: None,
             operator: "KD9TAW".into(),
             id: "0123456789abcdef0123456789abcdef".into(),
         }
@@ -401,5 +412,43 @@ mod tests {
             xml.contains("<SentExchange>3A WI</SentExchange>"),
             "the FD exchange is unchanged"
         );
+    }
+
+    /// N1MM's External UDP Broadcasts appendix sends the number given to a contact as
+    /// `<sntnr>`, after `<snt>` and before `<rcv>`. A contest contact with a number gains
+    /// that one element; every other byte is the datagram it was before.
+    #[test]
+    fn a_contest_number_is_sent_as_sntnr_and_nothing_else_moves() {
+        let before = build_contactinfo(&fd_contact());
+        let c = N1mmContact {
+            sent_nr: Some(5),
+            ..fd_contact()
+        };
+        assert_eq!(
+            build_contactinfo(&c),
+            before.replace("</contactinfo>", "<sntnr>5</sntnr></contactinfo>")
+        );
+    }
+
+    #[test]
+    fn sntnr_sits_between_the_reports_in_n1mms_order() {
+        let c = N1mmContact {
+            rst_sent: "599".into(),
+            rst_rcvd: "579".into(),
+            sent_nr: Some(12),
+            ..fd_contact()
+        };
+        let xml = build_contactinfo(&c);
+        assert!(
+            xml.contains("<snt>599</snt><sntnr>12</sntnr><rcv>579</rcv>"),
+            "{xml}"
+        );
+    }
+
+    /// An ordinary QSO has no contest number, so it carries no `<sntnr>` at all.
+    #[test]
+    fn no_number_emits_no_sntnr_element() {
+        let xml = build_contactinfo(&fd_contact());
+        assert!(!xml.contains("sntnr"), "{xml}");
     }
 }

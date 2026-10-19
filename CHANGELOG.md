@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contact (as in N1MM), an edit keeps the number, Clear test contacts starts again at 1, and after a restart the
   count carries on where it was. The exported ADIF writes the number as STX, and so does each contact's copy in
   your Logbook. Your sent exchange and the {EXCH} macro carry a serial only in a contest whose rules ask for one.
+- **The N1MM broadcast now carries each contest contact's number.** Scoreboards and loggers that listen for
+  N1MM's contact broadcast receive the number you sent in N1MM's own sent-number field: the serial in a serial
+  contest, the contact's QSO number in every other contest. Ordinary (non-contest) contacts are broadcast as before.
 - **Contest operating time.** The contest screen's scoreboard shows On time and Off time beside the rate meter,
   and the Score Summary states both. As the sponsors count it, a break of 30 minutes or more between two
   contacts is off time; the rest from your first contact to your last is on time. Cabrillo has no field for it,

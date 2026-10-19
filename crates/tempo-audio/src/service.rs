@@ -14082,6 +14082,9 @@ fn fd_n1mm_contact(
         // the one that has been on the air since 0.8.0.
         rst_sent: String::new(),
         rst_rcvd: String::new(),
+        // The row's QSO number: the serial it was sent in a serial contest, its place in the
+        // run in every other contest.
+        sent_nr: q.nr,
         operator: ctx.operator.clone(),
         // 32-hex dedup id: time + batch index + call hash.
         id: tempo_net::n1mm::dedup_id(when, &q.call, batch_index as u64),
@@ -16868,6 +16871,137 @@ mod tests {
             .map(|(i, q)| tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(q, i, &nctx)))
             .collect();
         assert_eq!(n1mm, vec![N1MM_WFD_ROW0, N1MM_WFD_ROW1]);
+    }
+
+    /// ⭐ **THE CONTEST NUMBER RIDES THE N1MM DATAGRAM AS `<sntnr>`**, the element N1MM's
+    /// External UDP Broadcasts appendix names for the number sent. A numbered row adds that
+    /// ONE element and nothing else: the rest is the Field Day bytes pinned above.
+    #[test]
+    fn a_numbered_contest_row_adds_sntnr_and_nothing_else() {
+        let nctx = n1mm_ctx("arrlfd");
+        let n1mm: Vec<String> = fd_rows()
+            .into_iter()
+            .zip([1, 2])
+            .enumerate()
+            .map(|(i, (q, nr))| {
+                let q = FieldDayQso { nr: Some(nr), ..q };
+                tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(&q, i, &nctx))
+            })
+            .collect();
+        let with_sntnr = |golden: &str, nr: u32| {
+            golden.replace(
+                "</contactinfo>",
+                &format!("<sntnr>{nr}</sntnr></contactinfo>"),
+            )
+        };
+        assert_eq!(
+            n1mm,
+            vec![with_sntnr(N1MM_FD_ROW0, 1), with_sntnr(N1MM_FD_ROW1, 2)]
+        );
+    }
+
+    /// The `<sntnr>` of each row the engine logs, through the real snapshot and emitter.
+    ///
+    /// Each row goes out as its own one-row batch (index 0), as the slot loop pushes a contact
+    /// the slot after it is logged, so a number taken from the batch position cannot pass.
+    fn engine_sntnr(
+        settings: tempo_app::settings::Settings,
+        logs: &[(&str, Vec<(&str, &str)>)],
+    ) -> Vec<(String, String)> {
+        let mut e = Engine::with_settings(settings);
+        e.restore_field_day_if_enabled();
+        for (call, ex) in logs {
+            let ex: Vec<(String, String)> = ex
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            assert!(
+                e.contest_log_manual(call, &ex, "CW", None).unwrap(),
+                "{call} logged"
+            );
+        }
+        let fd = e.snapshot().field_day.expect("in the contest");
+        let nctx = n1mm_ctx(&fd.event);
+        fd.log
+            .iter()
+            .map(|q| {
+                let xml = tempo_net::n1mm::build_contactinfo(&fd_n1mm_contact(q, 0, &nctx));
+                let sntnr = xml
+                    .split_once("<sntnr>")
+                    .and_then(|(_, t)| t.split_once("</sntnr>"))
+                    .map(|(n, _)| n.to_string())
+                    .unwrap_or_default();
+                let sent = q
+                    .sent
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                (sntnr, sent)
+            })
+            .collect()
+    }
+
+    /// In a serial contest `<sntnr>` is the serial the contact was SENT: the number on the
+    /// row's own sent exchange, as N1MM fills the field.
+    #[test]
+    fn a_serial_contest_broadcasts_the_serial_it_sent() {
+        let ss = |call| {
+            (
+                call,
+                vec![("NR", "7"), ("PREC", "A"), ("CK", "72"), ("SEC", "IL")],
+            )
+        };
+        let rows = engine_sntnr(
+            tempo_app::settings::Settings {
+                mycall: "W1ABC".into(),
+                fd_active: true,
+                fd_event: "arrlss_cw".into(),
+                contest_check: "68".into(),
+                fd_section: "EMA".into(),
+                contest_category_assisted: "NON-ASSISTED".into(),
+                contest_category_power: "LOW".into(),
+                ..Default::default()
+            },
+            &[ss("K1AAA"), ss("K1BBB")],
+        );
+        assert_eq!(
+            rows.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            ["1", "2"],
+            "{rows:?}"
+        );
+        for (n, sent) in &rows {
+            assert!(
+                sent.split(' ').any(|kv| kv.ends_with(&format!("={n}"))),
+                "sntnr {n} is not on the sent exchange {sent}"
+            );
+        }
+    }
+
+    /// In a contest with no serial, `<sntnr>` is the contact's QSO number, the dupe included.
+    #[test]
+    fn a_contest_without_a_serial_broadcasts_the_qso_number() {
+        let qp = |call, qth| (call, vec![("RST", "599"), ("QTH", qth)]);
+        let rows = engine_sntnr(
+            tempo_app::settings::Settings {
+                mycall: "W9XYZ".into(),
+                fd_active: true,
+                fd_event: "ilqp".into(),
+                contest_qth_state: "IL".into(),
+                contest_qth_county: "MCLN".into(),
+                ..Default::default()
+            },
+            &[
+                qp("K9AAA", "COOK"),
+                qp("W9BBB", "LAKE"),
+                qp("K9AAA", "COOK"),
+            ],
+        );
+        assert_eq!(
+            rows.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            ["1", "2", "3"],
+            "{rows:?}"
+        );
     }
 
     /// ⭐ **THE DIFFERENTIAL ORACLE — the replaced expression, quoted, as the control.**

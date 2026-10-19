@@ -2687,6 +2687,8 @@ pub fn n1mm_contact_for(
         // received every QSO with both reports blank.
         rst_sent: rec.rst_sent.clone().unwrap_or_default(),
         rst_rcvd: rec.rst_rcvd.clone().unwrap_or_default(),
+        // A plain QSO is in no contest, so it has no contest number to send.
+        sent_nr: None,
         // One station, one operator on this path (the rotating-operator field is
         // Field Day's, and Field Day does not come through here).
         operator: mycall.to_string(),
