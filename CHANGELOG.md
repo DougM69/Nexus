@@ -244,6 +244,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **The Log button stays on screen in the Phone, CW, JS8, RTTY and PSK screens.** At 1280×800 the log form was taller
+  than its pane, so Log and Spot sat below the fold. The "logs to … as" line and the Log/Spot buttons now stay together
+  at the bottom of the log pane while the fields above them scroll. The callsign card below them is never covered.
 - **The contest entry's boxes are full size in the Phone, CW, RTTY, PSK and JS8 screens.** The Call and exchange
   boxes under the log showed small 14 px text. They now use the entry's large 30 px lettering and 58 px height.
 - **Contacts held during a contest are no longer forgotten by a restart.** While Contest mode is on, a contact logged
