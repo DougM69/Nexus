@@ -1,9 +1,7 @@
 //! Local approval and the Remote background task. Engine access is restricted to
 //! bounded observation, the stream, the lease and Stop, and the separately approved FT gestures.
 /// The station's account: binding it to its owner by a sign-in at the shack, the issuer's keys,
-/// and the checks a listed device's proof must pass. Nothing calls it yet outside its tests: the
-/// setup screen and the grant path that use it come with the rest of account sign-in.
-#[allow(dead_code)]
+/// and the checks a listed device's proof must pass.
 mod account;
 /// Receive audio for a listening browser. Gated with the radio feature because the
 /// encoder lives in tempo-audio, which a build without it does not have at all.
@@ -73,6 +71,39 @@ pub struct Status {
     /// Absent only from a build of the service without it.
     #[serde(skip_serializing_if = "Option::is_none")]
     lan: Option<lan::LanStatus>,
+    /// The station's account (`account`): signing in at the shack, and the devices it granted on
+    /// their own proof.
+    account: AccountStatus,
+}
+/// The station's account, as the shack shows it.
+#[derive(Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountStatus {
+    /// A sign-in at the shack is waiting for the browser.
+    signing_in: bool,
+    /// The key that signed the station's own proof has left the issuer's set, so devices can no
+    /// longer check it: the operator signs in again to keep adding devices.
+    reproof: bool,
+    /// The devices the station granted on their own proof since Nexus started, for the notice at
+    /// the shack, each until the operator dismisses it.
+    added: Vec<Added>,
+    /// The devices the service approved on a proof the station could not confirm, each with why:
+    /// granted nothing, and shown with the prompt a device added at the station gets.
+    unconfirmed: BTreeMap<String, &'static str>,
+}
+/// A device the station granted on its own proof: what the notice says of it.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Added {
+    device_id: String,
+    name: String,
+    kind: Kind,
+    platform: Option<Platform>,
+    /// Its pin's fingerprint, shown shortened.
+    key: Option<String>,
+    role: tempo_client::account::Role,
+    /// Someone the station invited, not its owner.
+    guest: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -111,6 +142,21 @@ struct Device {
     /// never decided on: every list is still held to `expires_at`.
     #[serde(default)]
     until_removed: u8,
+    /// What the device may do: listed only to a Nexus that checks proofs itself
+    /// (`transport::Client::post` asks), as are the three fields after it. None from a service
+    /// before roles: every device it lists operates.
+    #[serde(default)]
+    role: Option<tempo_client::account::Role>,
+    /// How it was added: at the station (`shack`), or on its own proof (`account`).
+    #[serde(default)]
+    added_by: Option<String>,
+    /// The proof it registered with: the issuer's ID token for exactly its keys. Checked here
+    /// (`account::vouch`) before anything is granted on it, and never shown.
+    #[serde(default, skip_serializing)]
+    proof: Option<String>,
+    /// A computer's LAN key, SPKI as lowercase hex, which its proof names beside its own key.
+    #[serde(default, skip_serializing)]
+    lan_key: Option<String>,
 }
 /// A device's kind, held to the service's own values: a browser, or Nexus itself on another
 /// computer or a phone (the native client). Approving a native device grants nothing on the
@@ -216,6 +262,12 @@ impl Device {
     /// The pin approving it as it is listed makes: a browser's key's fingerprint, or a computer's or
     /// phone's [`native_pin`]. `None` with no key, and for a computer or phone with no approval
     /// generation, which pins nothing.
+    /// What its proof is checked against (`account::vouch_listed`): its kind, its keys, and the
+    /// proof itself.
+    fn proof_row(&self) -> serde_json::Value {
+        json!({"kind": self.kind, "publicKey": self.public_key, "lanKey": self.lan_key,
+            "proof": self.proof})
+    }
     fn pin(&self) -> Option<String> {
         let key = self.key.as_deref()?;
         match self.kind {
@@ -334,6 +386,17 @@ pub enum Action {
     /// Reset this station's network identity, at the shack: a new LAN key, and every paired
     /// computer removed.
     LanReset {},
+    /// Sign in to Nexus Remote, at the shack: the station named `name` is bound to the account the
+    /// operator signs in to through the system browser, with no code (`account`). Remote turns on
+    /// once it is bound, as approving a pairing turns it on.
+    SignIn {
+        name: String,
+    },
+    /// The operator has seen the notice of a device the station granted on its own proof.
+    DismissAdded {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+    },
 }
 type Reply = oneshot::Sender<Result<(), &'static str>>;
 /// The most browsers a restart remembers grants for. The service lists at most eight per station,
@@ -734,6 +797,10 @@ pub(super) fn phase(status: &Arc<Mutex<Status>>, value: &str, error: Option<&'st
         status.error = error;
     }
 }
+/// The wall clock in seconds, as proofs are read.
+fn now_s() -> u64 {
+    now_ms() / 1000
+}
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -754,6 +821,8 @@ impl Service {
         stream: stream::Host,
         // How a paired computer's calls run at the shack, and the events that cross to it.
         commands: lan::commands::Commands,
+        // Opens the system browser, for signing in to Nexus Remote at the shack.
+        open: account::Opener,
     ) -> Self {
         tempo_app::engine::engine_lock(&engine)
             .configure_remote_settings_store(crate::settings_path());
@@ -769,6 +838,7 @@ impl Service {
             Box::new(SystemVault),
             engine.clone(),
             feeds.clone(),
+            Accounts::system(open),
         );
         // Its LAN key and paired computers are in the OS credential store, read on its own thread.
         service.with_lan(
@@ -836,6 +906,16 @@ impl Service {
         engine: crate::SharedEngine,
         publisher: crate::remote_monitor::Publisher,
     ) -> Self {
+        Self::with_accounts(origin, vault, engine, publisher, Accounts::not_ready())
+    }
+    #[cfg(test)]
+    fn with_accounts(
+        origin: String,
+        vault: Box<dyn Vault>,
+        engine: crate::SharedEngine,
+        publisher: crate::remote_monitor::Publisher,
+        accounts: Accounts,
+    ) -> Self {
         Self::start(
             origin,
             vault,
@@ -846,6 +926,7 @@ impl Service {
                 audio: None,
                 stream: stream::Host::default(),
             },
+            accounts,
         )
     }
     /// `feeds` arrives whole rather than as four parameters. They were four until the audio
@@ -856,6 +937,7 @@ impl Service {
         vault: Box<dyn Vault>,
         engine: crate::SharedEngine,
         feeds: transport::Feeds,
+        mut accounts: Accounts,
     ) -> Self {
         let vault: Arc<dyn Vault> = Arc::from(vault);
         let status = Arc::new(Mutex::new(Status {
@@ -905,6 +987,14 @@ impl Service {
                 }
             }));
         }
+        // A binding names the LAN's own key, once the LAN has started beside this service.
+        if accounts.lan_key.is_none() {
+            let held = Arc::downgrade(&control);
+            accounts.lan_key = Some(Arc::new(move || {
+                let lan = held.upgrade()?.lock().ok()?.lan.clone()?;
+                lan.public_key()
+            }));
+        }
         let (commands, receiver) = mpsc::channel(1);
         let task_status = status.clone();
         let task_control = control.clone();
@@ -927,6 +1017,9 @@ impl Service {
                             engine,
                             feeds,
                             restore: None,
+                            accounts,
+                            signing: None,
+                            staged: None,
                         }
                         .run(receiver),
                     ),
@@ -1183,6 +1276,68 @@ struct Controller {
     engine: crate::SharedEngine,
     feeds: transport::Feeds,
     restore: Option<Restore>,
+    accounts: Accounts,
+    signing: Option<Signing>,
+    staged: Option<Staged>,
+}
+/// The station's account, as the controller reaches it (`account`): its entries in the credential
+/// store, the service's account side, how a sign-in binds, the LAN key a binding names, and the
+/// clock proofs are read by.
+pub(crate) struct Accounts {
+    vault: Arc<dyn vault::AccountVault>,
+    /// `accountNotReady` while this build has no configured sign-in for its service.
+    service: Result<Arc<account::Service>, &'static str>,
+    bind: account::Binder,
+    /// The LAN key's public half, SPKI as lowercase hex (made now if there is none): `None` while
+    /// the store will not give one up. `None` here: the LAN's own, once the service has started.
+    lan_key: Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>,
+    now_s: fn() -> u64,
+}
+impl Accounts {
+    /// The account of the service this build is made for, in the OS credential store, signing in
+    /// through `open`'s browser.
+    fn system(open: account::Opener) -> Self {
+        let vault: Arc<dyn vault::AccountVault> = Arc::new(SystemVault);
+        let service = account::Service::new(REMOTE_ORIGIN).map(Arc::new);
+        Self {
+            bind: account::binder(service.clone(), vault.clone(), open, now_s),
+            vault,
+            service,
+            lan_key: None,
+            now_s,
+        }
+    }
+    /// No account sign-in: this build's own tenant is not a test's service.
+    #[cfg(test)]
+    fn not_ready() -> Self {
+        Self {
+            vault: Arc::new(tests::MemoryVault::default()),
+            service: Err("accountNotReady"),
+            bind: Arc::new(|_| Box::pin(async { Err("accountNotReady") })),
+            lan_key: None,
+            now_s,
+        }
+    }
+}
+/// A sign-in at the shack, running on a task of its own while the operator is in the browser, and
+/// the Remote generation it was asked under: a later Turn off or Cancel wins.
+struct Signing {
+    task: tokio::task::JoinHandle<Result<account::Bound, &'static str>>,
+    generation: u64,
+}
+/// The keys and credential a sign-in binds with: made once and kept until the station is bound, so a
+/// sign-in tried again names the same keys and the service finds the station it already made for
+/// them. No `Debug`: the signing key and the credential are secrets.
+struct Staged {
+    pkcs8: String,
+    public_key: String,
+    credential: String,
+}
+/// What the controller waits on next.
+enum Next {
+    Command(Option<Command>),
+    Retry,
+    Signed(Result<Result<account::Bound, &'static str>, tokio::task::JoinError>),
 }
 /// Remote came on with grants remembered; they wait for the service's browser list.
 struct Restore {
@@ -1208,9 +1363,27 @@ impl Controller {
         }
         loop {
             let retry = self.restore.as_ref().map(|r| r.at);
-            tokio::select! {
-                next = receiver.recv() => {
-                    let Some((action, generation, epoch, reply)) = next else { break };
+            let signing = self.signing.as_mut().map(|s| &mut s.task);
+            let next = tokio::select! {
+                next = receiver.recv() => Next::Command(next),
+                _ = async {
+                    match retry {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                } => Next::Retry,
+                done = async {
+                    match signing {
+                        Some(task) => task.await,
+                        None => std::future::pending().await,
+                    }
+                } => Next::Signed(done),
+            };
+            match next {
+                Next::Command(next) => {
+                    let Some((action, generation, epoch, reply)) = next else {
+                        break;
+                    };
                     let result = self.handle(action, generation, epoch).await;
                     if let Err(error) = result {
                         if let Ok(mut status) = self.status.lock() {
@@ -1219,13 +1392,12 @@ impl Controller {
                     }
                     let _ = reply.send(result);
                 }
-                _ = async {
-                    match retry {
-                        Some(at) => tokio::time::sleep_until(at).await,
-                        None => std::future::pending().await,
-                    }
-                } => self.retry_restore().await,
+                Next::Retry => self.retry_restore().await,
+                Next::Signed(done) => self.signed(done),
             }
+        }
+        if let Some(signing) = self.signing.take() {
+            signing.task.abort();
         }
         if let Ok(mut control) = self.control.lock() {
             control.stop();
@@ -1307,6 +1479,14 @@ impl Controller {
             Ok(devices) => {
                 self.apply_restore(&devices);
                 self.listed(&devices);
+                let at = self
+                    .control
+                    .lock()
+                    .ok()
+                    .map(|c| (c.generation, c.operations.epoch()));
+                if let Some(at) = at {
+                    self.vouch(&devices, at).await;
+                }
                 if let Ok(mut status) = self.status.lock() {
                     status.devices = devices;
                 }
@@ -1546,6 +1726,259 @@ impl Controller {
         });
         Ok(())
     }
+    /// The keys and credential this station binds with: those staged for it already, or new ones,
+    /// staged now. The credential store is asked to take the credential first, as for a pairing, so
+    /// the service never makes a station the shack cannot keep.
+    fn staged(&mut self) -> Result<&Staged, &'static str> {
+        if self.staged.is_none() {
+            let (signer, pkcs8) =
+                station_key::Signer::generate().ok_or("credentialStoreUnavailable")?;
+            let credential = transport::random_secret()?;
+            let unbound = Binding {
+                origin: self.client.origin().into(),
+                station_id: String::new(),
+                account_id: String::new(),
+            };
+            self.vault.stage(&unbound, &credential)?;
+            self.staged = Some(Staged {
+                public_key: signer.public_key().to_string(),
+                pkcs8,
+                credential,
+            });
+        }
+        self.staged.as_ref().ok_or("credentialStoreUnavailable")
+    }
+    /// The sign-in at the shack has ended: bound, or why not. Kept staged on a failure, so trying
+    /// again names the same keys.
+    fn signed(
+        &mut self,
+        done: Result<Result<account::Bound, &'static str>, tokio::task::JoinError>,
+    ) {
+        let Some(signing) = self.signing.take() else {
+            return;
+        };
+        let result = done
+            .unwrap_or(Err("signInFailed"))
+            .and_then(|bound| self.install(bound, signing.generation));
+        self.reflect_account();
+        if let Err(error) = result {
+            if let Ok(mut status) = self.status.lock() {
+                status.error = Some(error);
+            }
+        }
+    }
+    /// The station is bound to the account: its credential and its signing key are kept under the
+    /// binding the service gave (the key first: the service already holds its public half, so a key
+    /// made later would be refused), and Remote turns on as approving a pairing turns it on: a
+    /// fresh authority, the TX-enable latch untouched, nothing remembered. A Turn off or Cancel
+    /// since the sign-in started moved the generation, and wins.
+    fn install(&mut self, bound: account::Bound, generation: u64) -> Result<(), &'static str> {
+        let staged = self.staged.as_ref().ok_or("signInFailed")?;
+        let binding = Binding {
+            origin: self.client.origin().into(),
+            station_id: bound.station_id,
+            account_id: bound.account_id,
+        };
+        self.vault.save_station_key(&vault::StationKey {
+            binding: binding.clone(),
+            pkcs8: staged.pkcs8.clone(),
+        })?;
+        self.vault.save(&binding, &staged.credential)?;
+        let key = station_key::Signer::restore(&staged.pkcs8).map(Arc::new);
+        let identity = tunnel_identity(&staged.pkcs8, &binding);
+        self.staged = None;
+        if let Ok(mut control) = self.control.lock() {
+            control.station_key = key;
+            control.station_identity = identity;
+            control.key_refused = false;
+            control.remember(Persist::Bound(binding.clone(), None, None));
+        }
+        self.binding = Some(binding);
+        self.pending = None;
+        self.reflect("disabled");
+        let turned_on = self.control.lock().ok().and_then(|mut control| {
+            (control.generation == generation).then(|| {
+                control.start();
+                control.generation
+            })
+        });
+        if let Some(generation) = turned_on {
+            self.enable(generation)?;
+        }
+        Ok(())
+    }
+    fn reflect_account(&self) {
+        if let Ok(mut status) = self.status.lock() {
+            status.account.signing_in = self.signing.is_some();
+        }
+    }
+    /// Each device the service lists as approved on its own proof, and not pinned here at that
+    /// approval yet, is checked by the station itself (`account::vouch`) before anything is granted
+    /// on it. One whose proof holds is granted as its role says, as an Approve press grants
+    /// ([`Controller::grant_vouched`]), kept for the LAN, and named in the notice at the shack. One
+    /// whose proof does not hold is granted nothing and shown with why, beside the prompt a device
+    /// added at the station gets. Once pinned, a device is left to the operator's own decisions.
+    async fn vouch(&self, devices: &[Device], at: (u64, u64)) {
+        let now = now_ms();
+        let waiting: Vec<&Device> = {
+            let Ok(control) = self.control.lock() else {
+                return;
+            };
+            devices
+                .iter()
+                .filter(|d| d.proof.is_some() && d.approved == 1 && d.expires_at > now)
+                .filter(|d| {
+                    d.pin()
+                        .is_none_or(|pin| control.remembered.pins.get(&d.id) != Some(&pin))
+                })
+                .collect()
+        };
+        let mut unconfirmed = BTreeMap::new();
+        let mut reproof = None;
+        if !waiting.is_empty() {
+            let rows: Vec<serde_json::Value> = waiting.iter().map(|d| d.proof_row()).collect();
+            let station_id = self
+                .binding
+                .as_ref()
+                .map(|b| b.station_id.clone())
+                .unwrap_or_default();
+            let now_s = (self.accounts.now_s)();
+            let results = match &self.accounts.service {
+                Ok(service) => {
+                    let (results, again) =
+                        account::vouch(service, &*self.accounts.vault, &station_id, &rows, now_s)
+                            .await;
+                    reproof = Some(again);
+                    results
+                }
+                Err(reason) => rows.iter().map(|_| Err(*reason)).collect(),
+            };
+            let approved: Vec<String> = devices
+                .iter()
+                .filter(|d| d.approved == 1 && d.expires_at > now)
+                .map(|d| d.id.clone())
+                .collect();
+            for (device, result) in waiting.into_iter().zip(results) {
+                match result.and_then(|(vouched, lan)| {
+                    let granted = self.grant_vouched(device, &vouched, &approved, at)?;
+                    Ok(granted.then_some((vouched, lan)))
+                }) {
+                    Ok(Some((vouched, lan))) => {
+                        // The LAN's entry for it. One the store will not take leaves it out of the
+                        // LAN with the internet down, which is where a refusal belongs.
+                        let _ = self.keep_for_lan(&station_id, &vouched, lan, now_s);
+                        self.added(device, &vouched);
+                    }
+                    // A local decision since the list was asked for: the next list asks again.
+                    Ok(None) => {}
+                    Err(reason) => {
+                        unconfirmed.insert(device.id.clone(), reason);
+                    }
+                }
+            }
+        }
+        if let Ok(mut status) = self.status.lock() {
+            status.account.unconfirmed = unconfirmed;
+            // Known only when the issuer's keys were read for this list.
+            if let Some(reproof) = reproof {
+                status.account.reproof = reproof;
+            }
+        }
+    }
+    /// What an Approve press grants a device the operator was shown, for one the station vouched
+    /// for on its own proof, by its role: a browser that operates gets station control and logging,
+    /// one that listens gets neither, and neither gets FT8/FT4 transmit (that stays a tick at the
+    /// shack); every device gets its pin ([`Device::pin`]). With Remote on the grants take effect at
+    /// once; with it off they wait in the record for Turn on. `false`, granting nothing, when a
+    /// local decision (Turn off or on, take over) was made after the list was asked for.
+    ///
+    /// A computer or phone that would only listen is refused (`listenNative`): its pin alone holds
+    /// station control on the room's tunnel whenever Remote is on (`Control::sync_approved`), so it
+    /// cannot be pinned as a listener. The operator can still approve it at the shack to operate.
+    fn grant_vouched(
+        &self,
+        device: &Device,
+        vouched: &tempo_client::account::Vouched,
+        approved: &[String],
+        (generation, epoch): (u64, u64),
+    ) -> Result<bool, &'static str> {
+        let pin = device.pin().ok_or("deviceKey")?;
+        let operate = vouched.role == tempo_client::account::Role::Operate;
+        let browser = device.kind == Kind::Browser;
+        if !browser && !operate {
+            return Err("listenNative");
+        }
+        let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
+        if control.generation != generation || control.operations.epoch() != epoch {
+            return Ok(false);
+        }
+        if control.enabled && browser {
+            let operations = control.operations.clone();
+            operations.permit(&device.id, operate)?;
+            operations.permit_station(&device.id, operate)?;
+            operations.permit_transmit(&device.id, false)?;
+        }
+        if browser {
+            control.remember(Persist::Browser {
+                device_id: device.id.clone(),
+                approval: Some(device.approval()),
+                logging: Some(operate),
+                control: Some(operate),
+                transmit: Some(false),
+            });
+        }
+        control.remember(Persist::Listed(approved.to_vec()));
+        control.remember(Persist::Pin {
+            device_id: device.id.clone(),
+            key: Some(pin),
+        });
+        Ok(true)
+    }
+    /// Keeps a device the station vouched for in the LAN's entry, by the pin the LAN admits it by.
+    /// An entry that does not read is never written over.
+    fn keep_for_lan(
+        &self,
+        station_id: &str,
+        vouched: &tempo_client::account::Vouched,
+        pin: String,
+        now_s: u64,
+    ) -> Result<(), &'static str> {
+        let vault = &self.accounts.vault;
+        let mut cache = vault
+            .device_cache()?
+            .filter(|cache| cache.station_id == station_id)
+            .unwrap_or_else(|| tempo_client::account::DeviceCache::new(station_id));
+        cache.keep(tempo_client::account::CachedDevice {
+            pin,
+            role: vouched.role,
+            guest: vouched.guest,
+            issued_at: vouched.issued_at,
+            confirmed_at: now_s,
+        })?;
+        vault.save_device_cache(&cache)
+    }
+    /// The notice of a device the station granted on its own proof, once.
+    fn added(&self, device: &Device, vouched: &tempo_client::account::Vouched) {
+        if let Ok(mut status) = self.status.lock() {
+            if status
+                .account
+                .added
+                .iter()
+                .any(|a| a.device_id == device.id)
+            {
+                return;
+            }
+            status.account.added.push(Added {
+                device_id: device.id.clone(),
+                name: device.name.clone(),
+                kind: device.kind,
+                platform: device.platform,
+                key: device.key.clone(),
+                role: vouched.role,
+                guest: vouched.guest,
+            });
+        }
+    }
     /// Connect under `generation`, which the caller has already made enabled with a fresh
     /// authority (Turn on Remote, a launch that remembers being on, or approving the pairing).
     fn enable(&mut self, generation: u64) -> Result<(), &'static str> {
@@ -1613,7 +2046,11 @@ impl Controller {
             | Action::LanRevoke { .. }
             | Action::LanReset {} => return Err("invalidRequest"),
             Action::Begin { name } => {
-                if self.binding.is_some() || self.pending.is_some() || !valid_name(&name) {
+                if self.binding.is_some()
+                    || self.pending.is_some()
+                    || self.signing.is_some()
+                    || !valid_name(&name)
+                {
                     return Err("invalidRequest");
                 }
                 let value = self
@@ -1649,6 +2086,10 @@ impl Controller {
                 self.reflect("pairing");
             }
             Action::Cancel {} => {
+                if let Some(signing) = self.signing.take() {
+                    signing.task.abort();
+                }
+                self.reflect_account();
                 self.pending = None;
                 self.reflect(if self.binding.is_some() {
                     "disabled"
@@ -1708,6 +2149,7 @@ impl Controller {
                     // A fresh list is also what a restore after a restart is waiting for.
                     self.apply_restore(&devices);
                     self.listed(&devices);
+                    self.vouch(&devices, (generation, epoch)).await;
                     if let Ok(mut status) = self.status.lock() {
                         status.devices = devices;
                         status.error = None;
@@ -1826,6 +2268,43 @@ impl Controller {
                     self.enable(generation)?;
                 }
             }
+            Action::SignIn { name } => {
+                if self.binding.is_some()
+                    || self.pending.is_some()
+                    || self.signing.is_some()
+                    || !valid_name(&name)
+                {
+                    return Err("invalidRequest");
+                }
+                // Not ready: no key is made and nothing is staged.
+                self.accounts.service.as_ref().map_err(|reason| *reason)?;
+                let lan_key = self
+                    .accounts
+                    .lan_key
+                    .as_ref()
+                    .and_then(|lan_key| lan_key())
+                    .ok_or("noKey")?;
+                let staged = self.staged()?;
+                let binds = account::Binds {
+                    name: name.trim().to_string(),
+                    station_key: staged.public_key.clone(),
+                    lan_key,
+                    credential: staged.credential.clone(),
+                };
+                self.signing = Some(Signing {
+                    task: tokio::spawn((self.accounts.bind)(binds)),
+                    generation,
+                });
+                self.reflect_account();
+            }
+            Action::DismissAdded { device_id } => {
+                if let Ok(mut status) = self.status.lock() {
+                    status
+                        .account
+                        .added
+                        .retain(|added| added.device_id != device_id);
+                }
+            }
             Action::Enable {} => self.enable(generation)?,
             Action::Disable {} => {
                 self.reflect(if self.binding.is_some() {
@@ -1900,6 +2379,7 @@ impl Controller {
                         (generation, epoch),
                     );
                     self.listed(&devices);
+                    self.vouch(&devices, (generation, epoch)).await;
                     if let Ok(mut status) = self.status.lock() {
                         status.devices = devices;
                     }

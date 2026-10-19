@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tempo_app::{dto::AmpStatusDto, engine::Engine, settings::Settings};
 
+/// Signing in at the shack binds the station; a device the service approved on its own proof is
+/// granted only once the station has checked that proof itself.
+mod account_grants;
 /// Remote over this network beside the hosted mode: a paired computer's grant through hosted
 /// decisions.
 mod lan_grants;
@@ -17,9 +20,65 @@ mod lan_grants;
 mod tunnel_grants;
 
 #[derive(Clone, Default)]
-struct MemoryVault {
+pub(super) struct MemoryVault {
     values: Arc<Mutex<HashMap<String, String>>>,
     fail: Arc<AtomicBool>,
+}
+impl MemoryVault {
+    fn account_entry<T: serde::de::DeserializeOwned>(
+        &self,
+        name: &str,
+    ) -> Result<Option<T>, &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.values
+            .lock()
+            .unwrap()
+            .get(name)
+            .map(|v| serde_json::from_str(v).map_err(|_| "unreadable"))
+            .transpose()
+    }
+    fn save_account_entry<T: serde::Serialize>(
+        &self,
+        name: &str,
+        value: &T,
+    ) -> Result<(), &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.values
+            .lock()
+            .unwrap()
+            .insert(name.into(), serde_json::to_string(value).unwrap());
+        Ok(())
+    }
+}
+impl vault::AccountVault for MemoryVault {
+    fn owner(&self) -> Result<Option<tempo_client::account::Owner>, &'static str> {
+        self.account_entry("account-owner")
+    }
+    fn save_owner(&self, owner: &tempo_client::account::Owner) -> Result<(), &'static str> {
+        self.save_account_entry("account-owner", owner)
+    }
+    fn account_keys(&self) -> Result<Option<vault::AccountKeys>, &'static str> {
+        self.account_entry("account-keys")
+    }
+    fn save_account_keys(&self, keys: &vault::AccountKeys) -> Result<(), &'static str> {
+        self.save_account_entry("account-keys", keys)
+    }
+    fn device_cache(&self) -> Result<Option<tempo_client::account::DeviceCache>, &'static str> {
+        self.account_entry("account-devices")
+    }
+    fn save_device_cache(
+        &self,
+        cache: &tempo_client::account::DeviceCache,
+    ) -> Result<(), &'static str> {
+        self.save_account_entry("account-devices", cache)
+    }
+    fn people(&self) -> Result<Option<vault::People>, &'static str> {
+        self.account_entry("account-people")
+    }
 }
 impl Vault for MemoryVault {
     fn binding(&self) -> Result<Option<Binding>, &'static str> {
@@ -312,6 +371,7 @@ fn cloud_runtime_probe() {
             audio: None,
             stream: Default::default(),
         },
+        Accounts::not_ready(),
     );
     let runtime = tokio::runtime::Runtime::new().unwrap();
     println!("REMOTE_TEST:{{\"ready\":true}}");
@@ -527,6 +587,7 @@ fn cloud_runtime_probe() {
                         audio: None,
                         stream: Default::default(),
                     },
+                    Accounts::not_ready(),
                 );
                 std::thread::sleep(Duration::from_millis(100));
                 service.status()
@@ -1617,6 +1678,16 @@ async fn fake_cloud() -> FakeCloud {
                             device.remove("kind");
                             device.remove("platform");
                             device.remove("untilRemoved");
+                        }
+                    }
+                    if !head.contains("\r\nx-nexus-device-proof: 1\r\n") {
+                        // Each device's role, how it was added, its proof and a computer's LAN
+                        // key, only to a Nexus that checks proofs itself.
+                        for device in listed["devices"].as_array_mut().unwrap() {
+                            let device = device.as_object_mut().unwrap();
+                            for field in ["role", "addedBy", "proof", "lanKey"] {
+                                device.remove(field);
+                            }
                         }
                     }
                     ("200 OK", listed.to_string())
@@ -2830,6 +2901,10 @@ async fn local_transmit_grant_requires_approved_enabled_station_control_and_clea
         kind: Kind::Browser,
         platform: None,
         until_removed: 0,
+        role: None,
+        added_by: None,
+        proof: None,
+        lan_key: None,
     });
     assert!(matches!(
         service.action(grant()).await,

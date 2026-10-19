@@ -37946,6 +37946,17 @@ fn remote_service_for(
             shape: Some(Arc::new(window_state::MainShape(handle.clone()))),
         },
         commands,
+        // Signing in to Nexus Remote at the shack opens the system browser, as the internet road's
+        // sign-in does on the operator's computer.
+        {
+            let app = handle.clone();
+            Arc::new(move |url: &str| {
+                use tauri_plugin_opener::OpenerExt;
+                app.opener()
+                    .open_url(url, None::<&str>)
+                    .map_err(|e| e.to_string())
+            })
+        },
     )
 }
 

@@ -533,6 +533,14 @@ impl Lan {
         renewed
     }
 
+    /// The LAN key's public half, SPKI as lowercase hex, made now if the store holds none: what
+    /// binding the station to its account names beside its signing key. `None` while the store
+    /// will not give one up.
+    pub fn public_key(&self) -> Option<String> {
+        let (identity, _) = self.state.book.identity()?;
+        Some(identity.public_key().to_string())
+    }
+
     pub fn status(&self) -> LanStatus {
         let mut status = self
             .state

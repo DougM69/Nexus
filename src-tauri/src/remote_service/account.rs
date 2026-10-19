@@ -31,6 +31,9 @@
 //! Nothing here writes a log line. What it returns to a caller is a name (`&'static str`) or a
 //! value with no token in it: no access token, proof or credential leaves this module except in
 //! the request that needs it.
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -64,7 +67,11 @@ impl Service {
         Self::with(origin, tenant, tenant.issuer)
     }
 
-    fn with(origin: &str, tenant: &'static Tenant, issuer_at: &str) -> Result<Self, &'static str> {
+    pub(super) fn with(
+        origin: &str,
+        tenant: &'static Tenant,
+        issuer_at: &str,
+    ) -> Result<Self, &'static str> {
         let http = reqwest::Client::builder()
             .https_only(!cfg!(test))
             .redirect(reqwest::redirect::Policy::none())
@@ -292,6 +299,47 @@ async fn bind_on(
     Ok(bound)
 }
 
+/// Opens an address in the system browser: the sign-in's first step.
+pub(crate) type Opener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
+/// What binding is given, owned because it runs on a task of its own while the operator signs in.
+/// No `Debug`: the credential is a secret.
+pub(crate) struct Binds {
+    pub(crate) name: String,
+    pub(crate) station_key: String,
+    pub(crate) lan_key: String,
+    pub(crate) credential: String,
+}
+
+/// How the station binds: [`bind`] through the system browser, outside a test.
+pub(crate) type Binder = Arc<
+    dyn Fn(Binds) -> Pin<Box<dyn Future<Output = Result<Bound, &'static str>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// [`bind`] on `service`, keeping the owner in `vault`, signing in through `open`'s browser, at the
+/// time `now_s` gives when the sign-in starts.
+pub(crate) fn binder(
+    service: Result<Arc<Service>, &'static str>,
+    vault: Arc<dyn AccountVault>,
+    open: Opener,
+    now_s: fn() -> u64,
+) -> Binder {
+    Arc::new(move |binds: Binds| {
+        let (service, vault, open) = (service.clone(), vault.clone(), open.clone());
+        Box::pin(async move {
+            let station = Station {
+                name: &binds.name,
+                station_key: &binds.station_key,
+                lan_key: &binds.lan_key,
+                credential: &binds.credential,
+            };
+            bind(&*service?, &*vault, &station, |url| open(url), now_s()).await
+        })
+    })
+}
+
 /// The keys a listed device's proof must name, SPKI DER in its nonce's order: its key, then a
 /// computer's LAN key; and the key the LAN admits it by (a computer's LAN key, else its one key).
 fn listed_keys(row: &Value) -> Option<(Vec<Vec<u8>>, Vec<u8>)> {
@@ -348,6 +396,44 @@ pub(crate) fn vouch_listed(
         now_s,
     )?;
     Ok((vouched, pin(&lan)))
+}
+
+/// [`vouch_listed`] for each of `rows`, with the issuer's keys fetched at most once for them all
+/// ([`keys`]: for a proof naming a key the kept set lacks, if any does), and whether the station must
+/// sign in again ([`Keys::reproof`]). Every row is refused with `stationNotBound` unless the owner
+/// kept is this station's (`station_id`, the service's id for it): an owner left by another binding
+/// vouches for nobody here.
+pub(crate) async fn vouch(
+    service: &Service,
+    vault: &dyn AccountVault,
+    station_id: &str,
+    rows: &[Value],
+    now_s: u64,
+) -> (Vec<Result<(Vouched, String), &'static str>>, bool) {
+    let refused = |reason| (rows.iter().map(|_| Err(reason)).collect(), false);
+    match vault.owner() {
+        Ok(Some(owner)) if owner.station_id == station_id => {}
+        Ok(_) => return refused("stationNotBound"),
+        Err(reason) => return refused(reason),
+    }
+    let kept = vault
+        .account_keys()
+        .ok()
+        .flatten()
+        .filter(|kept| kept.issuer == service.tenant.issuer);
+    let unknown = rows
+        .iter()
+        .filter_map(|row| account::kid_of(row["proof"].as_str()?))
+        .find(|kid| kept.as_ref().is_none_or(|kept| !kept.keys.knows(kid)));
+    let held = match keys(service, vault, unknown.as_deref(), now_s).await {
+        Ok(held) => held,
+        Err(reason) => return refused(reason),
+    };
+    let vouched = rows
+        .iter()
+        .map(|row| vouch_listed(row, vault, service.tenant, &held.set, now_s))
+        .collect();
+    (vouched, held.reproof)
 }
 
 /// The service's device list for the station, heard at `now_s`: every kept device it no longer

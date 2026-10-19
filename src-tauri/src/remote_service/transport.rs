@@ -101,6 +101,10 @@ impl Client {
             // service may list them to it, each device with its kind and platform. A service
             // without them ignores the header and lists browsers alone.
             .header("x-nexus-device-kind", "1")
+            // This Nexus checks devices' proofs itself (`account`), so the service may list each
+            // device's role, how it was added, its proof and a computer's LAN key. A service without
+            // account sign-in ignores the header.
+            .header("x-nexus-device-proof", "1")
             .json(&body);
         if let Some(token) = token {
             request = request.bearer_auth(token);
