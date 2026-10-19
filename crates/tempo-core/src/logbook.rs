@@ -2435,6 +2435,9 @@ pub enum ExportKind {
         day_start_unix: u64,
         callsign: Option<String>,
     },
+    /// ADIF of exactly the contacts whose ids are listed — the rows the operator selected in the
+    /// Logbook — in log order. An id no contact holds adds nothing.
+    Selected(std::collections::HashSet<RecordId>),
 }
 
 /// One export, built a contact at a time, in log order — THE rules of the Logbook's exports,
@@ -2467,6 +2470,9 @@ enum ExportRule {
         want: String,
         day: u64,
         want_call: Option<String>,
+    },
+    Selected {
+        ids: std::collections::HashSet<RecordId>,
     },
 }
 
@@ -2502,6 +2508,7 @@ impl Export {
                 },
                 adif_header(),
             ),
+            ExportKind::Selected(ids) => (ExportRule::Selected { ids }, adif_header()),
         };
         Export { rule, out }
     }
@@ -2565,6 +2572,11 @@ impl Export {
                 let mut one = QsoRecord::clone(r);
                 one.ota.my_ref = Some(want.clone());
                 self.out.push_str(&adif_record_own_log(&one));
+            }
+            ExportRule::Selected { ids } => {
+                if r.id.is_some_and(|id| ids.contains(&id)) {
+                    self.out.push_str(&adif_record_own_log(r));
+                }
             }
         }
     }

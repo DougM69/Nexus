@@ -14408,20 +14408,28 @@ async fn export_general_log(
     from: Option<String>,
     to: Option<String>,
 ) -> Result<tempo_app::dto::LogExportDto, String> {
-    let parse = |d: Option<String>| -> Result<Option<(u64, u64)>, String> {
-        match d.as_deref().map(str::trim) {
-            None | Some("") => Ok(None),
-            Some(s) => tempo_core::logbook::day_bounds_utc(s)
-                .map(Some)
-                .ok_or_else(|| format!("bad export date {s:?} (expected YYYY-MM-DD)")),
-        }
-    };
-    // A day bound is (start, end) of that UTC day: `from` uses the day's start, `to` its end.
-    let from_unix = parse(from)?.map(|b| b.0);
-    let to_unix = parse(to)?.map(|b| b.1);
+    let (from_unix, to_unix) = tempo_app::logexport::day_range(from.as_deref(), to.as_deref())?;
     let source = tempo_app::logexport::Source::of(&engine_lock(&state));
     log_folds::off_the_runtime(move || {
         tempo_app::logexport::export_logbook(&source, &format, from_unix, to_unix).map(Into::into)
+    })
+    .await
+}
+
+/// Export the contacts selected in the Logbook as ADIF: exactly the rows whose ids are `ids`, in
+/// log order, each written as [`export_general_log`] writes it
+/// (`tempo_app::logexport::export_selected`).
+///
+/// Read from the logbook store with the engine lock released, on the blocking pool, as
+/// [`export_general_log`].
+#[tauri::command]
+async fn export_selected_log(
+    state: State<'_, SharedEngine>,
+    ids: Vec<String>,
+) -> Result<tempo_app::dto::LogExportDto, String> {
+    let source = tempo_app::logexport::Source::of(&engine_lock(&state));
+    log_folds::off_the_runtime(move || {
+        tempo_app::logexport::export_selected(&source, &ids).map(Into::into)
     })
     .await
 }
@@ -37214,6 +37222,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         reset_settings,
         export_log,
         export_general_log,
+        export_selected_log,
         save_text_to_downloads,
         save_png_to_downloads,
         civ_diagnostic_log,

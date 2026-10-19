@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Logbook: export just the contacts you pick.** Ctrl-click (⌘-click on a Mac) rows in the Logbook to pick
+  them, Shift-click to pick a run, or press Space on the focused row; Esc clears. **Export selected** saves
+  those contacts as an ADIF file in your Downloads folder, each written exactly as the whole-log export writes
+  it. A new search or filter clears the picks, so nothing you can no longer see is exported. When an export
+  (selected, date range or CSV) holds no contacts, the Logbook now says so and writes no empty file.
 - **Contest entry: an optional "RST sent" box.** Turn on "Show the RST sent box" in Settings ▸ Contesting ▸
   Contest, and the contest entry gets an RST sent box just before the received report, as N1MM shows Snt and Rcv.
   It holds the report the contact logs as sent: 59 on phone, 599 on CW and digital. Space and Tab skip it, so
