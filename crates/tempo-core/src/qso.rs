@@ -129,6 +129,11 @@ pub struct Station {
     /// is reset by every advance, so it cannot answer "did we ever key?").
     /// See [`Self::report_impossible_exchange`].
     pub keyed_on_air: bool,
+    /// True when the partner's bare 73 closed the QSO while we were `Confirming` (we had sent
+    /// our roger). WSJT-X answers that 73 at ROGERS with Tx6, its CQ
+    /// (`widgets/mainwindow.cpp:9214-9227`); the engine reads this to do the same with the rest
+    /// of an over still on the air. Nothing is queued for a later over.
+    pub signed_off_with_73: bool,
     /// Human-readable event log.
     pub transcript: Vec<String>,
 }
@@ -182,6 +187,7 @@ impl Station {
             report_follows_latest_decode: false,
             advanced_on_air: false,
             keyed_on_air: false,
+            signed_off_with_73: false,
             transcript: Vec::new(),
         }
     }
@@ -206,6 +212,7 @@ impl Station {
             report_follows_latest_decode: false,
             advanced_on_air: false,
             keyed_on_air: false,
+            signed_off_with_73: false,
             transcript: Vec::new(),
         }
     }
@@ -409,6 +416,7 @@ impl Station {
             // sets the first; only `after_tx` sets the second.
             advanced_on_air: false,
             keyed_on_air: false,
+            signed_off_with_73: false,
             transcript: vec![log_line],
         };
         // The resume table above names the Tx we queue; only now, with both calls in
@@ -902,6 +910,7 @@ impl Station {
                 | (State::Confirming, Msg::Rrr { to, de })
                     if crate::message::same_call(to, &self.mycall) && self.from_dx(de) =>
                 {
+                    self.signed_off_with_73 = matches!(m, Msg::Bye73 { .. });
                     self.pending = None;
                     self.state = State::Done;
                     self.log("got the closing over → QSO complete".into());
@@ -1458,6 +1467,30 @@ mod start_context_tests {
             assert_eq!(s.state, State::Done, "{closing} must complete the QSO");
             assert_eq!(s.pending, None, "{closing} must leave nothing to send");
         }
+    }
+
+    /// Only the partner's bare 73 to our roger is WSJT-X's sign-off at ROGERS (`:9214-9227`);
+    /// its RR73 or RRR there closes the QSO too, but is not that sign-off.
+    #[test]
+    fn the_partners_73_to_our_roger_is_recorded_as_its_sign_off() {
+        for (closing, signed_off) in [
+            ("KD9TAW W9XYZ 73", true),
+            ("KD9TAW W9XYZ RR73", false),
+            ("KD9TAW W9XYZ RRR", false),
+        ] {
+            let mut s = start("KD9TAW W9XYZ R-05", -9);
+            assert_eq!(s.state, State::Confirming, "premise: our roger");
+            assert!(!s.signed_off_with_73);
+            s.observe(&[dec(closing, -9)]);
+            assert_eq!(s.state, State::Done, "{closing}");
+            assert_eq!(s.signed_off_with_73, signed_off, "{closing}");
+        }
+        let mut s = start("KD9TAW W9XYZ R-05", -9);
+        s.observe(&[dec("KD9TAW K2DEF 73", -9)]);
+        assert!(
+            !s.signed_off_with_73,
+            "another station's 73 is not the sign-off"
+        );
     }
 
     #[test]

@@ -76,6 +76,8 @@ fn wave_of(text: &str) -> Vec<f32> {
 struct Route {
     left: usize,
     takes: bool,
+    /// A Tx-slot click asks, not a decode.
+    clicked: bool,
     handed: Option<Vec<f32>>,
 }
 
@@ -84,6 +86,7 @@ impl Route {
         Route {
             left,
             takes: true,
+            clicked: false,
             handed: None,
         }
     }
@@ -91,7 +94,7 @@ impl Route {
     fn switch(&mut self, e: &mut Engine, slot: u64, now_ms: f64) -> Option<FtSwitch> {
         let (left, takes) = (self.left, self.takes);
         let mut handed = None;
-        let got = e.ft_midover_switch(slot, now_ms, |tail| {
+        let got = e.ft_midover_switch(slot, now_ms, self.clicked, |tail| {
             handed = Some(tail(left, 0));
             takes
         });
@@ -361,6 +364,7 @@ fn a_tx_slot_click_during_an_over_switches_it_to_the_clicked_message() {
         "a click during the over asks for the switch"
     );
     let mut route = Route::new(40_000);
+    route.clicked = true;
     assert_eq!(
         route.switch(&mut e, 100, at(100, 4_000.0)),
         switched(TX2, RR73)
@@ -486,4 +490,144 @@ fn a_bystander_fox_rr73_never_closes_a_qso_awaiting_the_roger() {
         route.switch(&mut e, 102, at(102, 2_000.0)),
         switched(TX2, BYE73)
     );
+}
+
+const RRR: &str = "W1AW KD9TAW RRR";
+const CQ: &str = "CQ KD9TAW EN52";
+const BYE73_TO_US: &str = "KD9TAW W1AW 73";
+
+/// A station that rogers with RRR (Settings: RRR instead of RR73), working W1AW from its R-report:
+/// our RRR is keyed in slot 100.
+fn rogering_with_rrr() -> Engine {
+    let mut e = station();
+    e.settings.prefer_rrr = true;
+    work(&mut e, "KD9TAW W1AW R-12", -10, 100);
+    assert_eq!(key(&mut e, 100).as_deref(), Some(RRR), "premise: our RRR");
+    e.take_all_txt_pending();
+    e
+}
+
+/// ⭐ WSJT-X's Tx6 AFTER THE PARTNER's 73. We sent RRR (WSJT-X's ROGERS; RRR is not a 73, so
+/// sequencing goes on); W1AW's 73 folds during the over. WSJT-X sets `m_ntx=6`
+/// (`widgets/mainwindow.cpp:9214-9227`), regenerates the over (:9446) and turns Enable Tx off
+/// (`cease_auto_Tx_after_QSO`, :10518): the rest of this over is the CQ, and nothing goes after it.
+#[test]
+fn the_partners_73_during_our_rrr_switches_the_rest_to_the_cq_and_tx_goes_off() {
+    let mut e = rogering_with_rrr();
+    hear(&mut e, BYE73_TO_US, -10, 100);
+    let mut route = Route::new(80_000);
+    assert_eq!(
+        route.switch(&mut e, 100, at(100, 2_000.0)),
+        switched(RRR, CQ)
+    );
+    let cq = wave_of(CQ);
+    assert_eq!(route.handed.as_deref(), Some(&cq[cq.len() - 80_000..]));
+    let rows = e.take_all_txt_pending();
+    let tx = tx_rows(&rows);
+    assert_eq!(tx.len(), 1, "{rows:?}");
+    assert!(tx[0].ends_with(CQ), "{}", tx[0]);
+    assert!(e.take_pending_tx_disable(), "TX off after this over");
+    assert!(!e.take_pending_tx_disable(), "…once");
+    assert_eq!(key(&mut e, 102), None, "and no CQ after it");
+    assert_eq!(e.stored_log().len(), 1, "the contact is logged once");
+}
+
+/// With "Disable Tx after sending 73" off, the rest of the over is still the CQ, as WSJT-X's
+/// regenerated Tx6 is; the CQ is never called again on its own: the QSO is over and nothing is
+/// queued, so no over follows.
+#[test]
+fn the_cq_after_the_partners_73_is_never_called_again_on_its_own() {
+    let mut e = rogering_with_rrr();
+    e.settings.disable_tx_after_73 = false;
+    hear(&mut e, BYE73_TO_US, -10, 100);
+    let mut route = Route::new(80_000);
+    assert_eq!(
+        route.switch(&mut e, 100, at(100, 2_000.0)),
+        switched(RRR, CQ)
+    );
+    assert!(!e.take_pending_tx_disable(), "the setting is off");
+    for slot in [102, 104, 106] {
+        hear(&mut e, "CQ K1ABC FN42", -5, slot);
+        assert_eq!(key(&mut e, slot), None, "slot {slot}");
+    }
+}
+
+/// ⛔ NOT AFTER A 73 WENT OUT. Our RR73 is a 73 (`message_is_73`, :315-321): at its key WSJT-X's
+/// auto-sequencing turns Enable Tx off (:8105-8139) and no decode reaches `processMessage`
+/// (:7542-7560). The partner's 73 (or anything else) leaves the RR73 on the air.
+#[test]
+fn the_partners_73_during_our_rr73_leaves_the_rr73_on_the_air() {
+    let mut e = station();
+    work(&mut e, "KD9TAW W1AW R-12", -10, 100);
+    assert_eq!(key(&mut e, 100).as_deref(), Some(RR73), "premise: our RR73");
+    hear(&mut e, BYE73_TO_US, -10, 100);
+    let mut route = Route::new(80_000);
+    assert_eq!(route.switch(&mut e, 100, at(100, 2_000.0)), None);
+    assert!(route.handed.is_none());
+    assert_eq!(key(&mut e, 102), None, "nothing after it");
+}
+
+/// ⛔ A CQ RUN's OWN BOOKKEEPING NEVER CUTS THE CLOSING OVER. The run logs the contact and returns
+/// to its CQ on the first fold after our RR73 (or RRR) is keyed, whatever that fold holds. That is
+/// not WSJT-X's `processMessage` reacting to a message: the over on the air goes out to its end,
+/// and the CQ follows at the next over. With the partner's 73 the RR73 also stays (a 73 went out);
+/// the RRR becomes the CQ, as WSJT-X's Tx6.
+#[test]
+fn a_cq_run_returning_to_cq_leaves_our_closing_over_on_the_air() {
+    for (rrr, heard, switched_to) in [
+        (false, "CQ K1ABC FN42", None),
+        (false, BYE73_TO_US, None),
+        (true, "CQ K1ABC FN42", None),
+        (true, BYE73_TO_US, Some(CQ)),
+    ] {
+        let what = format!("RRR {rrr}, heard {heard:?}");
+        let mut e = station();
+        e.settings.prefer_rrr = rrr;
+        e.start_cq(None).expect("premise: Call CQ");
+        let _ = e.take_immediate_tx();
+        assert_eq!(key(&mut e, 100).as_deref(), Some(CQ), "{what}");
+        hear(&mut e, "KD9TAW W1AW FN31", -10, 102);
+        assert_eq!(key(&mut e, 102).as_deref(), Some(TX2), "{what}");
+        hear(&mut e, "KD9TAW W1AW R-12", -12, 104);
+        let closing = if rrr { RRR } else { RR73 };
+        assert_eq!(key(&mut e, 104).as_deref(), Some(closing), "{what}");
+        hear(&mut e, heard, -10, 104);
+        assert_eq!(e.ft_next_over(104).as_deref(), Some(CQ), "premise: {what}");
+        let mut route = Route::new(80_000);
+        assert_eq!(
+            route.switch(&mut e, 104, at(104, 1_000.0)),
+            switched_to.and_then(|to| switched(closing, to)),
+            "{what}"
+        );
+        assert_eq!(e.stored_log().len(), 1, "{what}: logged once");
+        assert_eq!(key(&mut e, 106).as_deref(), Some(CQ), "{what}: then the CQ");
+    }
+}
+
+/// A run that gives up on a caller who went silent (`cq_stall_overs`) returns to CQ at a fold,
+/// which is again the run's bookkeeping: the report on the air goes out to its end.
+#[test]
+fn giving_up_on_a_silent_caller_leaves_the_over_on_the_air() {
+    let mut e = station();
+    e.start_cq(None).expect("premise: Call CQ");
+    let _ = e.take_immediate_tx();
+    key(&mut e, 100).expect("premise: the CQ");
+    hear(&mut e, "KD9TAW W1AW FN31", -10, 102);
+    let mut slot = 102;
+    while e.ft_next_over(slot).as_deref() == Some(TX2) {
+        assert_eq!(key(&mut e, slot).as_deref(), Some(TX2), "premise");
+        hear(&mut e, "CQ K1ABC FN42", -5, slot);
+        if e.ft_next_over(slot).as_deref() != Some(TX2) {
+            break;
+        }
+        slot += 2;
+        assert!(slot < 130, "premise: the run gives up");
+    }
+    assert_eq!(
+        e.ft_next_over(slot).as_deref(),
+        Some(CQ),
+        "premise: given up"
+    );
+    let mut route = Route::new(80_000);
+    assert_eq!(route.switch(&mut e, slot, at(slot, 1_000.0)), None);
 }

@@ -5637,7 +5637,14 @@ impl RadioLoop {
     /// its window and its PTT: nothing here touches `tx_until_ms` or the audio stop. Not while the
     /// operator holds live PTT, and not on a rig the loop does not own. A route that cannot replace
     /// what it was handed (Flex DAX) sends the over as first chosen, and the engine logs it.
-    fn ft_midover_switch<B: AudioBackend>(&mut self, eng: &mut Engine, backend: &mut B, now: f64) {
+    /// `clicked`: a Tx-slot click asked, not a decode.
+    fn ft_midover_switch<B: AudioBackend>(
+        &mut self,
+        eng: &mut Engine,
+        backend: &mut B,
+        now: f64,
+        clicked: bool,
+    ) {
         let Some((stop, held_until)) = self.slot_audio_stop else {
             return;
         };
@@ -5650,7 +5657,7 @@ impl RadioLoop {
             return;
         }
         let live = self.clock.slot_index(now);
-        let _ = eng.ft_midover_switch(live, now, |tail| backend.retune_tx(tail));
+        let _ = eng.ft_midover_switch(live, now, clicked, |tail| backend.retune_tx(tail));
     }
 
     /// Whether this loop's PTT hold is a slot over's (FT8, FT4, JS8 and the other timed-slot
@@ -13138,8 +13145,9 @@ impl RadioLoop {
         }
         // A Tx-slot click's switch is taken every tick, so one made with no over on the air is
         // dropped here and never acts on a later one.
-        if eng.take_ft_restart() || ft_restart {
-            self.ft_midover_switch(&mut eng, backend, now);
+        let clicked = eng.take_ft_restart();
+        if clicked || ft_restart {
+            self.ft_midover_switch(&mut eng, backend, now, clicked);
         }
 
         // --- JS8: the once-a-second station tick and the MULTI-SPEED scheduler. JS8Call

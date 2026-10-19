@@ -224,6 +224,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It now sends 73 and the QSO is complete, as WSJT-X does; if the RR73 is decoded while the report is already on the
   air, the rest of that over becomes the 73. A bare 73, an RR73 from another station, or one sent to another
   station changes nothing. NEEDS-BENCH: FT8 and FT4, a second station that answers your report with RR73.
+- **FT8/FT4: which late replies change the over on the air, as in WSJT-X.** Once an over carries your RR73 or
+  73, no reply changes it any more (WSJT-X turns Enable Tx off as it sends one). A CQ run that logs the contact and
+  goes back to CQ, or gives up on a caller who went quiet, now lets the over on the air finish: before, the rest
+  of your RR73 or report could become the CQ. If you close with RRR and your partner's 73 arrives while the RRR is
+  on the air, the rest of that over is your CQ (WSJT-X's Tx6) and TX turns off after it with "Disable Tx after
+  sending 73"; nothing is sent after it. NEEDS-BENCH: FT8 and FT4, Call CQ and a station you work by double-click.
 - **Contest entry: the sample text in empty boxes is quieter.** The grey examples ("W1AW", "599", a county) are now
   in normal weight instead of bold, and a shade darker in the dark themes, so they no longer read like something
   typed in. They stay readable in every theme.

@@ -3328,6 +3328,12 @@ pub struct Engine {
     ft_on_air: Option<ft_midover::FtOnAir>,
     /// WSJT-X's `m_restart` from a Tx-slot click ([`Engine::take_ft_restart`]).
     ft_restart: bool,
+    /// The last fold moved the QSO sequencer on a message (its next message or its
+    /// state changed), or owed an over to a partner the run left: WSJT-X's `processMessage`
+    /// reacting to a decode, the only decode that may switch an over on the air
+    /// ([`Engine::ft_midover_switch`]). Run bookkeeping after it (back to CQ, a silent caller
+    /// given up) is not.
+    ft_seq_moved: bool,
     /// Deferred WSJT-X-style CW ID (armed when the final 73 leaves; consumed
     /// by the service on TX-idle so the ID never keys over the over's audio).
     /// Never armed in FT8, FT4, FT2, FT1 or DX1 (WSJT-X sends none in FT8/FT4).
@@ -5973,6 +5979,7 @@ impl Engine {
             pending_tx_disable: false,
             ft_on_air: None,
             ft_restart: false,
+            ft_seq_moved: false,
             pending_cw_id: false,
             highlights: std::collections::HashMap::new(),
             highlight_seq: 0,
@@ -27550,12 +27557,14 @@ contact yourself."
                 if let Some(p) = self.recent_partner.as_mut() {
                     p.owed = Some(m);
                 }
+                self.ft_seq_moved = true;
                 return;
             }
         }
     }
 
     fn observe_modes(&mut self, decodes: &[modes::Decode], slot: u64) {
+        self.ft_seq_moved = false;
         // The completed contact to auto-log, gathered while `self.mode` is
         // borrowed and committed after (so building the record doesn't conflict
         // with the mutable borrow of the sequencer).
@@ -27608,8 +27617,10 @@ contact yourself."
                 // it fixed once sent.
                 station.report_follows_latest_decode =
                     matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4 | Tier::Fst4);
+                let next_before = station.outgoing();
                 station.observe(observed);
                 sequence_advanced = station.state != state_before;
+                self.ft_seq_moved = sequence_advanced || station.outgoing() != next_before;
                 // Quiet-finish (hound) completion sends NOTHING after the Fox's
                 // RR73 — so the stock "disable TX after 73" one-shot in the TX
                 // path never fires. Arm it here instead: the service loop drops

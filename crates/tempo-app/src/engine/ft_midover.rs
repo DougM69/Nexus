@@ -17,10 +17,22 @@
 //! - **No time limit.** Nothing in `processMessage`, `guiUpdate` or the Modulator bounds when the
 //!   switch may happen: a late one sends the start of one message and the rest of another.
 //!
+//! - **Not after a 73 goes out.** A decode reaches `processMessage` only through `auto_sequence`,
+//!   which needs `m_auto` (Enable Tx) and auto-sequencing on (:7542-7560). The moment the over on
+//!   the air carries a 73 or an RR73 (`message_is_73`, :315-321), auto-sequencing turns Enable Tx
+//!   off (:8105-8139, `auto_tx_mode (false)`), so no decode switches the rest of that over. A
+//!   Tx-slot click still does: the buttons do not ask for `m_auto`.
+//! - **Tx6 after the partner's 73 to our roger.** At ROGERS (we sent RRR: an RR73 is a 73 and
+//!   ends sequencing at its key) the partner's 73 sets `m_ntx=6`, the CQ (:9214-9227), and the
+//!   rest of the over is that CQ; Enable Tx then goes off (`cease_auto_Tx_after_QSO`, :10518).
+//!
 //! Nexus switches when the message the sequencer would send next differs from the one on the
-//! air, which is when WSJT-X's regenerated tones differ.
+//! air, which is when WSJT-X's regenerated tones differ, and only when the sequencer itself moved
+//! on a message in that fold (`Engine::ft_seq_moved`): a CQ run that returns to its CQ, or gives
+//! up on a silent caller, is the run's own bookkeeping, not `processMessage`, and leaves the over
+//! on the air as it is.
 
-use super::{Engine, Mode, QsoState, Tier, TxGateStamp, TxPlan, TxWaveform};
+use super::{Engine, Mode, Msg, QsoState, QsoStation, Tier, TxGateStamp, TxPlan, TxWaveform};
 
 /// The FT8/FT4 over [`Engine::commit_tx`] handed to the radio loop last: what is on the air while
 /// the loop holds its slot over, and how it was built.
@@ -32,6 +44,15 @@ pub(crate) struct FtOnAir {
     f0: f32,
     wave_len: usize,
     stamp: TxGateStamp,
+    /// The over carries a 73 or an RR73, so a decode no longer switches it (WSJT-X's Enable Tx is
+    /// off from its key).
+    sent_73: bool,
+}
+
+/// WSJT-X's `message_is_73` for a standard message (`widgets/mainwindow.cpp:315-321`): one of its
+/// words is `73` or `RR73`.
+fn is_73(text: &str) -> bool {
+    text.split_whitespace().any(|w| w == "73" || w == "RR73")
 }
 
 /// What [`Engine::ft_midover_switch`] did.
@@ -59,6 +80,7 @@ impl Engine {
                     f0: *f0,
                     wave_len,
                     stamp: plan.stamp.clone(),
+                    sent_73: is_73(text),
                 })
             }
             _ => None,
@@ -71,9 +93,12 @@ impl Engine {
         std::mem::take(&mut self.ft_restart)
     }
 
-    /// The text the QSO sequencer would send in `slot` if asked now, as [`Engine::plan_tx`] picks
-    /// it: the one over owed to a partner the run has left, else the station's own. Changes
-    /// nothing. `None` outside a QSO, or with nothing to send.
+    /// The text the sequencer would send in `slot` if asked now, as [`Engine::plan_tx`] picks it:
+    /// the one over owed to a partner the run has left, else the station's own; in a QSO the
+    /// partner's 73 just closed after our roger, WSJT-X's Tx6 (the CQ) for the rest of the over on
+    /// the air ([`QsoStation::signed_off_with_73`]), which `plan_tx` never keys (a CQ run that has
+    /// logged the contact is already calling its CQ). Changes nothing. `None` with nothing to
+    /// send.
     pub fn ft_next_over(&self, slot: u64) -> Option<String> {
         let Mode::Qso { station, .. } = &self.mode else {
             return None;
@@ -85,8 +110,27 @@ impl Engine {
             .and_then(|p| p.owed.as_ref())
         {
             Some(owed) => Some(owed.to_text()),
-            None => Some(station.outgoing_rv()?.0.to_text()),
+            None => match station.outgoing_rv() {
+                Some((m, _)) => Some(m.to_text()),
+                None if station.signed_off_with_73 && station.done() => Some(self.tx6()),
+                None => None,
+            },
         }
+    }
+
+    /// WSJT-X's Tx6: the CQ this station calls, directed as the operator last typed it, built as
+    /// a CQ run builds it.
+    fn tx6(&self) -> String {
+        let mycall = &self.settings.mycall;
+        let mut s = QsoStation::calling_cq(mycall, &self.settings.mygrid);
+        if let Some(d) = &self.cq_dir {
+            s.override_next(Msg::Cq {
+                de: mycall.clone(),
+                grid: self.settings.mygrid.clone(),
+                dir: d.clone(),
+            });
+        }
+        s.outgoing().map(|m| m.to_text()).unwrap_or_default()
     }
 
     /// WSJT-X's mid-over switch: when the over this station keyed in `slot` (the live slot) is on
@@ -102,15 +146,23 @@ impl Engine {
     /// over, still passes, the live slot is still this station's, and the dial, sideband, TX
     /// offset, operating mode and licence class are those the over was planned for: an over
     /// that would not be planned now is never rebuilt. Stop TX and TX Off end here too.
+    ///
+    /// `clicked`: a Tx-slot click asked. Otherwise a decode did, and it switches only when the
+    /// sequencer moved on a message in that fold and the over carries no 73 yet (WSJT-X's
+    /// `auto_sequence`).
     pub fn ft_midover_switch(
         &mut self,
         slot: u64,
         now_ms: f64,
+        clicked: bool,
         retune: impl FnOnce(&mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool,
     ) -> Option<FtSwitch> {
         let tier = self.app.tier();
         let on = self.ft_on_air.as_ref()?;
         if on.slot != slot || on.tier != tier {
+            return None;
+        }
+        if !clicked && (!self.ft_seq_moved || on.sent_73) {
             return None;
         }
         self.poll_remote_transmit(std::time::Instant::now());
