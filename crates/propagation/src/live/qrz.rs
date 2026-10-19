@@ -14,34 +14,67 @@
 use super::neterr;
 use std::time::Duration;
 
-const UA: &str = "nexus-propagation/0.1 (+ham radio propagation nowcast)";
-
 /// Fetch a QRZ XML URL (login or lookup, both built by [`tempo_core::qrz`]).
 /// Returns the raw XML body; the caller validates with `qrz::is_qrz_xml` and
 /// parses with `qrz::parse_session`/`parse_callsign`.
 ///
 /// On any failure returns a **redacted** message that never contains the URL, the
-/// password, the session key, or the raw transport error.
-pub fn fetch(url: &str) -> Result<String, String> {
-    let resp = client()?.get(url).send().map_err(redact)?;
-    read_body(resp)
+/// password, the session key, or the raw transport error. `app_version` names the Nexus build in
+/// the User-Agent ([`user_agent`]).
+pub fn fetch(url: &str, app_version: &str) -> Result<String, String> {
+    let client = client()?;
+    let request = get_request(&client, url, app_version)?;
+    read_body(client.execute(request).map_err(redact)?)
 }
 
 /// POST a `name=value` form body — the QRZ Logbook push (`ACTION=INSERT`). Same
 /// HTTPS + redacted discipline as [`fetch`]. ⚠️ The `body` carries the per-logbook
 /// API key, so it must NEVER be logged; transport errors echo the URL (no secret)
 /// only, and are redacted regardless.
-pub fn post_form(url: &str, body: String) -> Result<String, String> {
-    let resp = client()?
+pub fn post_form(url: &str, app_version: &str, body: String) -> Result<String, String> {
+    let client = client()?;
+    let request = post_request(&client, url, app_version, body)?;
+    read_body(client.execute(request).map_err(redact)?)
+}
+
+/// What Nexus calls itself to QRZ: `Nexus/<version>`, the app's own name and version and nothing
+/// else. QRZ asks every application for an identifiable User-Agent and may restrict a generic one;
+/// its suggested form adds the user's callsign, which Nexus does not send.
+fn user_agent(app_version: &str) -> String {
+    super::hrdlog::product(app_version)
+}
+
+/// The lookup or login request, built and not sent, so its User-Agent is testable offline. Set on
+/// the request itself: a client's default headers are only merged in when it executes.
+fn get_request(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    app_version: &str,
+) -> Result<reqwest::blocking::Request, String> {
+    client
+        .get(url)
+        .header(reqwest::header::USER_AGENT, user_agent(app_version))
+        .build()
+        .map_err(redact)
+}
+
+/// The Logbook form post, built and not sent, as [`get_request`]. The body carries the API key.
+fn post_request(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    app_version: &str,
+    body: String,
+) -> Result<reqwest::blocking::Request, String> {
+    client
         .post(url)
+        .header(reqwest::header::USER_AGENT, user_agent(app_version))
         .header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
         )
         .body(body)
-        .send()
-        .map_err(redact)?;
-    read_body(resp)
+        .build()
+        .map_err(redact)
 }
 
 /// The live QRZ Logbook API for the operator-invoked **"correct at QRZ"** action.
@@ -62,12 +95,16 @@ pub fn post_form(url: &str, body: String) -> Result<String, String> {
 ///
 /// Every body carries the per-logbook API key, so the same rule as [`post_form`] holds: never
 /// log a body, and let [`redact`] own the error text.
-pub struct LogbookApi;
+pub struct LogbookApi {
+    /// The Nexus build, for the User-Agent ([`user_agent`]).
+    pub app_version: &'static str,
+}
 
 impl tempo_core::qrz_correct::QrzLogbook for LogbookApi {
     fn status(&self, api_key: &str) -> Result<String, String> {
         post_form(
             tempo_core::qrz::QRZ_LOGBOOK_URL,
+            self.app_version,
             tempo_core::qrz::build_status_body(api_key),
         )
     }
@@ -75,6 +112,7 @@ impl tempo_core::qrz_correct::QrzLogbook for LogbookApi {
     fn fetch_callsign(&self, api_key: &str, callsign: &str) -> Result<String, String> {
         post_form(
             tempo_core::qrz::QRZ_LOGBOOK_URL,
+            self.app_version,
             tempo_core::qrz::build_fetch_call_body(api_key, callsign),
         )
     }
@@ -82,6 +120,7 @@ impl tempo_core::qrz_correct::QrzLogbook for LogbookApi {
     fn replace(&self, api_key: &str, adif: &str) -> Result<String, String> {
         post_form(
             tempo_core::qrz::QRZ_LOGBOOK_URL,
+            self.app_version,
             tempo_core::qrz::build_insert_body(api_key, adif, true),
         )
     }
@@ -93,6 +132,7 @@ impl tempo_core::qrz_correct::QrzLogbook for LogbookApi {
     ) -> Result<String, String> {
         post_form(
             tempo_core::qrz::QRZ_LOGBOOK_URL,
+            self.app_version,
             tempo_core::qrz::build_delete_body(api_key, recovery),
         )
     }
@@ -101,7 +141,6 @@ impl tempo_core::qrz_correct::QrzLogbook for LogbookApi {
 fn client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
-        .user_agent(UA)
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -128,6 +167,36 @@ fn redact(e: reqwest::Error) -> String {
 mod tests {
     use super::*;
 
+    /// Every QRZ request, the callbook lookup and login and each Logbook post, names Nexus and its
+    /// version, and nothing that identifies the operator.
+    #[test]
+    fn every_qrz_request_names_nexus_and_its_version_only() {
+        let client = client().expect("client");
+        let lookup = get_request(
+            &client,
+            "https://xmldata.qrz.com/xml/current/?s=KEY&callsign=AA7BQ",
+            "1.19.0",
+        )
+        .expect("request");
+        let post = post_request(
+            &client,
+            tempo_core::qrz::QRZ_LOGBOOK_URL,
+            "1.19.0",
+            "KEY=K&ACTION=STATUS".into(),
+        )
+        .expect("request");
+        for request in [&lookup, &post] {
+            let agents: Vec<_> = request
+                .headers()
+                .get_all(reqwest::header::USER_AGENT)
+                .iter()
+                .collect();
+            assert_eq!(agents, ["Nexus/1.19.0"], "{}", request.method());
+        }
+        // A version can never end the header early.
+        assert_eq!(user_agent("1.19.0\r\nX-Evil: 1"), "Nexus/1.19.0X-Evil1");
+    }
+
     #[test]
     fn non_https_url_is_rejected_without_leaking_secrets() {
         // `.https_only(true)` rejects http before network I/O, and `redact` must
@@ -135,7 +204,7 @@ mod tests {
         // session key; a login URL the password — neither may appear.
         let secret =
             "http://xmldata.qrz.example/xml/current/?s=SECRETKEY&callsign=AA7BQ&password=Sup3r";
-        let err = fetch(secret).unwrap_err();
+        let err = fetch(secret, "1.19.0").unwrap_err();
         assert!(!err.contains("SECRETKEY"), "session key leaked: {err}");
         assert!(!err.contains("Sup3r"), "password leaked: {err}");
         assert!(
@@ -151,6 +220,7 @@ mod tests {
         // surface it (nor the URL).
         let err = post_form(
             "http://logbook.qrz.example/api",
+            "1.19.0",
             "KEY=SECRETKEY-1234&ACTION=INSERT&ADIF=%3Ceor%3E".to_string(),
         )
         .unwrap_err();
@@ -181,7 +251,7 @@ mod tests {
         // POSITIVE CONTROL: the body really does carry the key, so a clean error below is the
         // redaction working rather than a fixture with nothing in it.
         assert!(body.contains("SECRETKEY-1234"), "{body}");
-        let err = post_form("http://logbook.qrz.example/api", body).unwrap_err();
+        let err = post_form("http://logbook.qrz.example/api", "1.19.0", body).unwrap_err();
         assert!(!err.contains("SECRETKEY-1234"), "API key leaked: {err}");
         assert!(!err.contains("130877825"), "log id leaked: {err}");
         assert!(err.starts_with("QRZ: "), "unexpected message: {err}");

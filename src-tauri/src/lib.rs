@@ -23505,7 +23505,11 @@ async fn confirmation_check(
                 propagation::live::eqsl::fetch_inbox(url)
             }),
             Channel::Qrz => qrz_check_on(&engine, &qrz_access(&engine)?, &|body| {
-                propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)
+                propagation::live::qrz::post_form(
+                    tempo_core::qrz::QRZ_LOGBOOK_URL,
+                    env!("CARGO_PKG_VERSION"),
+                    body,
+                )
             }),
         })
     })
@@ -27231,12 +27235,15 @@ fn sync_qrz_since(
             Some(d) => tempo_core::qrz::build_fetch_since_body(&key, &d),
             None => tempo_core::qrz::build_fetch_body(&key),
         };
-        propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body).map_err(
-            |message| QrzSyncFailure {
-                detail: QRZ_SYNC_UNREACHABLE,
-                message: ScreenReason::new(message),
-            },
-        )?
+        propagation::live::qrz::post_form(
+            tempo_core::qrz::QRZ_LOGBOOK_URL,
+            env!("CARGO_PKG_VERSION"),
+            body,
+        )
+        .map_err(|message| QrzSyncFailure {
+            detail: QRZ_SYNC_UNREACHABLE,
+            message: ScreenReason::new(message),
+        })?
     };
     let fetched = qrz_sync_answer(&resp)?;
     // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
@@ -27406,7 +27413,8 @@ impl QrzFailure {
 /// [`QrzEntitlement`] beside the record is what the health stamp reads.
 fn qrz_try_lookup(session_key: &str, callsign: &str) -> Result<QrzOutcome, QrzFailure> {
     let url = tempo_core::qrz::build_lookup_url(session_key, callsign);
-    let body = propagation::live::qrz::fetch(&url).map_err(QrzFailure::unreachable)?;
+    let body = propagation::live::qrz::fetch(&url, env!("CARGO_PKG_VERSION"))
+        .map_err(QrzFailure::unreachable)?;
     qrz_outcome_from_body(&body)
 }
 
@@ -27452,7 +27460,8 @@ fn qrz_login(username: &str, password: &str) -> Result<String, QrzFailure> {
         password: password.to_string(),
         agent: "nexus/0.1".to_string(),
     });
-    let body = propagation::live::qrz::fetch(&url).map_err(QrzFailure::unreachable)?;
+    let body = propagation::live::qrz::fetch(&url, env!("CARGO_PKG_VERSION"))
+        .map_err(QrzFailure::unreachable)?;
     if !tempo_core::qrz::is_qrz_xml(&body) {
         return Err(QrzFailure::unreachable(
             "QRZ returned an unexpected response — check your credentials.".to_string(),
@@ -28043,7 +28052,11 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
     let body = tempo_core::qrz::build_status_body(&key);
     // Blocking HTTP: on the blocking pool (see `get_aurora`).
     let resp = tauri::async_runtime::spawn_blocking(move || {
-        propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)
+        propagation::live::qrz::post_form(
+            tempo_core::qrz::QRZ_LOGBOOK_URL,
+            env!("CARGO_PKG_VERSION"),
+            body,
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -28296,9 +28309,12 @@ fn qrz_push_qso_impl(
                 // The same STATUS request Test Connection sends. Only the owner is kept; the
                 // response is never logged (it is QRZ's, and the request carried the key).
                 let body = tempo_core::qrz::build_status_body(&key);
-                let resp =
-                    propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)
-                        .ok()?;
+                let resp = propagation::live::qrz::post_form(
+                    tempo_core::qrz::QRZ_LOGBOOK_URL,
+                    env!("CARGO_PKG_VERSION"),
+                    body,
+                )
+                .ok()?;
                 let st = tempo_core::qrz::parse_status_response(&resp);
                 st.owner
                     .filter(|_| st.ok)
@@ -28335,7 +28351,11 @@ fn qrz_push_qso_impl(
     let rec = upload_record(record);
     let adif = tempo_core::logbook::adif_record(&rec);
     let body = tempo_core::qrz::build_insert_body(&key, &adif, false);
-    let resp = propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)?;
+    let resp = propagation::live::qrz::post_form(
+        tempo_core::qrz::QRZ_LOGBOOK_URL,
+        env!("CARGO_PKG_VERSION"),
+        body,
+    )?;
     let push = tempo_core::qrz::parse_push_response(&resp);
     // Record the outcome on the just-pushed QSO so diagnostics can surface R1 (never
     // pushed to QRZ) / R9 (QRZ upload bounced). QRZ outcomes are always definitive.
@@ -28419,7 +28439,9 @@ async fn qrz_correct_preview(
         let key = qrz_correct_key()?;
         let rec: tempo_core::logbook::QsoRecord = record.into();
         let plan = tempo_core::qrz_correct::preview(
-            &propagation::live::qrz::LogbookApi,
+            &propagation::live::qrz::LogbookApi {
+                app_version: env!("CARGO_PKG_VERSION"),
+            },
             &key,
             &rec,
             selected,
@@ -28447,7 +28469,9 @@ async fn qrz_correct_apply(
         let key = qrz_correct_key()?;
         let rec: tempo_core::logbook::QsoRecord = record.into();
         let outcome = tempo_core::qrz_correct::apply(
-            &propagation::live::qrz::LogbookApi,
+            &propagation::live::qrz::LogbookApi {
+                app_version: env!("CARGO_PKG_VERSION"),
+            },
             &key,
             &rec,
             selected,
@@ -28495,7 +28519,9 @@ async fn qrz_correct_undo_miss() -> Result<String, String> {
             })?;
         let key = qrz_correct_key()?;
         let said = tempo_core::qrz_correct::recover_from_miss(
-            &propagation::live::qrz::LogbookApi,
+            &propagation::live::qrz::LogbookApi {
+                app_version: env!("CARGO_PKG_VERSION"),
+            },
             &key,
             &recovery,
         );

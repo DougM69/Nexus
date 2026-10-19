@@ -120,14 +120,22 @@ fn post(url: &str, app_version: &str, body: &str) -> Result<String, Failure> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// `Nexus/<version> (+project URL)`. Only version characters survive, because this lands in a
-/// header line and a CR/LF would end the header block early. Also the pota.app spot post's.
+/// `Nexus/<version> (+project URL)`. Also the pota.app spot post's.
 pub(crate) fn user_agent(app_version: &str) -> String {
+    format!(
+        "{} (+https://github.com/kd9taw/Nexus)",
+        product(app_version)
+    )
+}
+
+/// `Nexus/<version>`, the product token alone (QRZ's User-Agent). Only version characters survive,
+/// because this lands in a header line and a CR/LF would end the header block early.
+pub(crate) fn product(app_version: &str) -> String {
     let version: String = app_version
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
         .collect();
-    format!("Nexus/{version} (+https://github.com/kd9taw/Nexus)")
+    format!("Nexus/{version}")
 }
 
 /// The whole request. Carries the upload code — never log it.
