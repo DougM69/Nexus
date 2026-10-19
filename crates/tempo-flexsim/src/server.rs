@@ -96,7 +96,8 @@ pub enum Event {
         conn: usize,
         line: String,
     },
-    /// A whole line the simulator sent, after template expansion, in the order written.
+    /// A whole line the simulator sent, after template expansion, in the order written. Its time
+    /// is when its last bytes started out, so anything the client answers to it comes after it.
     Sent {
         conn: usize,
         line: String,
@@ -370,6 +371,16 @@ impl Shared {
     fn record(&self, event: Event) {
         let at = self.started.elapsed();
         lock(&self.log).push(Logged { at, event });
+        self.logged.notify_all();
+    }
+
+    /// Log `event` at `at`, a time taken earlier on this thread, in its place among the events
+    /// other threads logged since, so the log stays in time order.
+    fn record_at(&self, at: Duration, event: Event) {
+        let mut log = lock(&self.log);
+        let place = log.iter().rposition(|l| l.at <= at).map_or(0, |i| i + 1);
+        log.insert(place, Logged { at, event });
+        drop(log);
         self.logged.notify_all();
     }
 
@@ -963,6 +974,10 @@ fn write_line(shared: &Shared, conn: &Conn, tcp: &mut TcpStream, text: &str) -> 
         } if text.contains(containing.as_str()) => Some((cuts, *max_hold)),
         _ => None,
     });
+    // A line is logged at the time its last bytes start out, not once the write returns: a
+    // client's answer to it can be read and logged in between, by the reader thread, while this
+    // thread is preempted, and the log would then show the answer before the line it answers.
+    let mut at = shared.started.elapsed();
     match split {
         None => {
             tcp.write_all(&bytes)?;
@@ -987,15 +1002,19 @@ fn write_line(shared: &Shared, conn: &Conn, tcp: &mut TcpStream, text: &str) -> 
                     }
                     seen = lock(&conn.out).commands;
                 }
+                at = shared.started.elapsed();
                 tcp.write_all(piece)?;
                 tcp.flush()?;
             }
         }
     }
-    shared.record(Event::Sent {
-        conn: conn.id,
-        line: text.to_string(),
-    });
+    shared.record_at(
+        at,
+        Event::Sent {
+            conn: conn.id,
+            line: text.to_string(),
+        },
+    );
     Ok(())
 }
 

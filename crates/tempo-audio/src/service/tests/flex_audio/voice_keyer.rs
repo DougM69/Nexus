@@ -123,14 +123,25 @@ fn seen_at(s: &FlexScene, since: Instant, want: &str) -> Option<Instant> {
         .map(|(at, _)| at)
 }
 
-/// The DAX transmit datagrams the radio received at or after `since`: when, and how many 24 kHz
-/// frames each carried.
+/// The DAX transmit datagrams the radio received from Nexus at or after `since`: when, and how
+/// many 24 kHz frames each carried. Only from the ports Nexus's sessions named (`client udpport`):
+/// the simulator listens on an ephemeral port, and a datagram another process on the machine still
+/// aims at that port lands in its log as well (seen once under load, with no VITA class, which
+/// every packet Nexus sends carries).
 fn dax_in(s: &FlexScene, since: Instant) -> Vec<(Instant, usize)> {
-    s.log()
-        .into_iter()
+    let log = s.log();
+    let nexus: Vec<u16> = log
+        .iter()
+        .filter_map(|(_, e)| match e {
+            SimEvent::Command { text, .. } => text.strip_prefix("client udpport ")?.parse().ok(),
+            _ => None,
+        })
+        .collect();
+    assert!(!nexus.is_empty(), "premise: Nexus named its UDP port");
+    log.into_iter()
         .filter(|(at, _)| *at >= since)
         .filter_map(|(at, e)| match e {
-            SimEvent::UdpIn { bytes, .. } if bytes.len() > 1 => {
+            SimEvent::UdpIn { bytes, from } if bytes.len() > 1 && nexus.contains(&from.port()) => {
                 let v = tempo_net::flexvita::parse_vita(&bytes).expect("a VITA-49 packet");
                 let stereo = tempo_net::flex::streams::decode_dax_audio(
                     v.packet_class.expect("a class"),
@@ -188,6 +199,19 @@ fn message_of(secs: f32) -> Vec<f32> {
 /// The whole message, as DAX frames at 24 kHz.
 const ONE_SECOND_OF_DAX: usize = 24_000;
 
+/// The first over held since the scene's steps were last cleared, in ms on Nexus's own clock: from
+/// the step that keyed it to the step that let it go. The simulator's times for `xmit 1` and
+/// `xmit 0` also carry when inside its step the key went out and when its own threads read each
+/// line, which under load put that span up to 22 ms under the over Nexus held.
+fn held_over(s: &FlexScene) -> f64 {
+    let keyed = s.held.iter().position(|(_, h)| *h).expect("an over keyed");
+    let let_go = s.held[keyed..]
+        .iter()
+        .find(|(_, h)| !*h)
+        .expect("the over let go");
+    let_go.0 - s.held[keyed].0
+}
+
 /// ⭐ DAX ONLY FOR THE MESSAGE. The radio has the mic; a message asks it for DAX (Nexus's transmit
 /// stream first, on the first message after a connect), keys only once the radio reports DAX, plays
 /// the whole message over it, unkeys at its end plus the tail, and puts the mic back only after the
@@ -197,6 +221,7 @@ const ONE_SECOND_OF_DAX: usize = 24_000;
 #[test]
 fn a_voice_message_switches_to_dax_plays_and_gives_the_mic_back() {
     let mut s = phone();
+    s.held.clear();
     let since = Instant::now();
     let sent = s.engine.lock().unwrap().send_voice(message());
     assert_eq!(sent, Ok(()), "the voice keyer plays in Phone at the shack");
@@ -238,10 +263,10 @@ fn a_voice_message_switches_to_dax_plays_and_gives_the_mic_back() {
         (ONE_SECOND_OF_DAX - 2 * 128..=ONE_SECOND_OF_DAX).contains(&frames),
         "the whole message went out: {frames} frames"
     );
-    let over = at("xmit 0").duration_since(at("xmit 1"));
+    let over = held_over(&s);
     assert!(
-        over >= Duration::from_millis(1_250) && over < Duration::from_millis(3_000),
-        "the over is the message and its tail: {over:?}"
+        (1_250.0..3_000.0).contains(&over),
+        "the over is the message and its tail: {over} ms"
     );
 
     // A second message: the stream is there, so only the write.
@@ -981,9 +1006,9 @@ fn holder_kept_in_usb() -> SimSession {
 }
 
 /// ⭐ A SESSION LOST MID-MESSAGE. The radio drops the connection while the message plays and stays
-/// keyed. No DAX leaves after the loss; the operator is told the radio may still be transmitting;
-/// the loop starts a fresh session, whose first stop unkeys the lost session's transmitter, and the
-/// radio's DAX source goes back to the mic only after that.
+/// keyed. No DAX leaves after Nexus reads the loss; the operator is told the radio may still be
+/// transmitting; the loop starts a fresh session, whose first stop unkeys the lost session's
+/// transmitter, and the radio's DAX source goes back to the mic only after that.
 #[test]
 fn a_session_lost_mid_message_stops_dax_and_unkeys_before_the_mic_comes_back() {
     let mut s = FlexScene::with_faults(
@@ -1017,8 +1042,19 @@ fn a_session_lost_mid_message_stops_dax_and_unkeys_before_the_mic_comes_back() {
         .find(|(at, e)| *at >= since && matches!(e, SimEvent::Closed { conn: 0, .. }))
         .map(|(at, _)| *at)
         .expect("the first session closed");
+    // The radio can take DAX after its own close: what Nexus paced out before it read the close.
+    // So the count is the guard, not the radio's clock: every packet the radio got was sent before
+    // Nexus found the session closed, and none came after, on either session.
+    let dax = dax_in(&s, since);
+    // The lost session's DAX route: the first the loop installed.
+    let route = s.backend.installed.lock().unwrap()[0].clone();
     assert!(
-        dax_in(&s, since).iter().all(|(t, _)| *t < lost),
+        dax.iter().any(|(t, _)| *t < lost),
+        "premise: the message was on the air when the session was lost"
+    );
+    assert_eq!(
+        Some(dax.len()),
+        route.sent_before_its_session_closed(),
         "DAX after the session was lost"
     );
     // The new session writes the mic once the loop has put its fresh slice back in USB, which
@@ -1069,12 +1105,10 @@ fn the_mics_ptt_during_a_message_still_alarms_and_reconnects() {
     let mut s = FlexScene::with_faults(true, mic_ptt_mid_over(), Vec::new(), short_deadline());
     s.replace_on_rebuild = true;
     shack_on(&mut s);
-    let since = Instant::now();
+    s.held.clear();
     s.engine.lock().unwrap().send_voice(message()).unwrap();
     let detail = status_after_the_rebuild(&mut s);
-    let over = seen_at(&s, since, "xmit 0")
-        .expect("the unkey")
-        .duration_since(seen_at(&s, since, "xmit 1").expect("the key"));
+    let over = held_over(&s);
     assert!(
         detail.starts_with(
             "the radio did not confirm the unkey — it may still be transmitting. Check the radio \
@@ -1082,10 +1116,7 @@ fn the_mics_ptt_during_a_message_still_alarms_and_reconnects() {
         ),
         "{detail}"
     );
-    assert!(
-        over >= Duration::from_millis(1_250),
-        "the message was cut short: {over:?}"
-    );
+    assert!(over >= 1_250.0, "the message was cut short: {over} ms");
     assert_eq!(
         sent(&s.sim.log(), 0)
             .iter()
