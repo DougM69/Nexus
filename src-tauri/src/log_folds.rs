@@ -632,6 +632,81 @@ pub(crate) fn newest_logged_grid(rows: &LogRows, peer: &str) -> Result<Option<St
     Ok(best.map(|(_, g)| g))
 }
 
+// ── a station's last logged county or state ─────────────────────────────────
+
+/// [`newest_logged_qth`]'s inputs: enough to choose the row; the received exchange of the
+/// one chosen is read whole afterwards, since a narrow read never carries an exchange.
+const QTHS: Narrow = Narrow {
+    columns: &["call", "state", "contest_id", "when_unix"],
+    uploads: false,
+};
+
+/// Where the log last had `peer`, for the contest entry's QTH box: the newest logged contact
+/// with that callsign (exact, case aside) that says. A row of this contest, any year's (its
+/// `CONTEST_ID` one of `contest_ids`), says what it received in `slot`; any other row says its
+/// `STATE`. Another contest's received slot is never read: the same slot id holds another
+/// sponsor's counties there (a California "LAKE" is not Illinois's). The value is raw, as
+/// logged; the strip fills it only if it is one of the slot's own codes. With the time of that
+/// contact, for the strip's source tag. Of two contacts in the same second the later in the
+/// log wins, as for [`newest_logged_grid`]. Only that callsign's contacts are read, through
+/// the `qso_callhist` index, and only this contest's rows are read whole, newest first, until
+/// one received the slot.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn newest_logged_qth(
+    rows: &LogRows,
+    peer: &str,
+    contest_ids: &[String],
+    slot: &str,
+) -> Result<Option<(String, u64)>, String> {
+    // Newest first: (when, Ok(state)) for an ordinary row, (when, Err(id)) for this contest's.
+    let mut found: Vec<(u64, Result<String, tempo_core::logbook::RecordId>)> = Vec::new();
+    rows.each(
+        QTHS,
+        Scope::CallNorm(&call_norm_of(peer)),
+        Order::Log,
+        &mut |q| {
+            if q.call.eq_ignore_ascii_case(peer) {
+                let ours = q
+                    .contest
+                    .as_deref()
+                    .is_some_and(|c| contest_ids.contains(&c.contest_id));
+                match (ours, q.id, q.state.as_deref().map(str::trim)) {
+                    (true, Some(id), _) => found.push((q.when_unix, Err(id))),
+                    (false, _, Some(st)) if !st.is_empty() => {
+                        found.push((q.when_unix, Ok(st.to_string())))
+                    }
+                    _ => {}
+                }
+            }
+            ControlFlow::Continue(())
+        },
+    )
+    .map_err(unreadable)?
+    .or_refuse()?;
+    // Stable, so of two in the same second the later in log order stays first once reversed.
+    found.sort_by_key(|(when, _)| *when);
+    for (when, said) in found.into_iter().rev() {
+        match said {
+            Ok(state) => return Ok(Some((state, when))),
+            Err(id) => {
+                let (whole, fresh) = rows.rows_by_ids(&[id]).map_err(unreadable)?;
+                fresh.or_refuse()?;
+                let received = whole
+                    .iter()
+                    .filter_map(|r| r.contest.as_deref())
+                    .flat_map(|c| c.rcvd.iter())
+                    .find(|(k, v)| k == slot && !v.trim().is_empty())
+                    .map(|(_, v)| v.trim().to_string());
+                if let Some(v) = received {
+                    return Ok(Some((v, when)));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
 // ── the upload health ───────────────────────────────────────────────────────
 
 /// Last real outcome per connector, off the persisted per-QSO upload stamps — see
@@ -1598,6 +1673,80 @@ mod tests {
             row("KP4ABC", "20200102", "<DXCC:3>291<STATE:2>FL"),
         ]
         .concat()
+    }
+
+    /// ★ The contest entry's pre-fill from the whole log: the NEWEST contact with the call that
+    /// says where the station was. This contest's rows (any year) say their received slot, and
+    /// another contest's never do (its QTH is another sponsor's county: a California LAKE), so
+    /// such a row says only its STATE. Each answer by value.
+    #[test]
+    fn the_newest_logged_qth_is_this_contests_slot_or_a_state_never_another_contests_slot() {
+        let row = |call: &str, date: &str, fields: String| {
+            format!(
+                "<CALL:{}>{call}<QSO_DATE:8>{date}<TIME_ON:6>123400<BAND:3>40m<MODE:2>CW{fields}<EOR>\n",
+                call.len()
+            )
+        };
+        let tag = |name: &str, val: &str| format!("<{name}:{}>{val}", val.len());
+        let party = |id: &str, qth: &str| {
+            let ex = tempo_core::contest::carrier::encode_pairs(&[
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), qth.to_string()),
+            ]);
+            format!("{}{}", tag("CONTEST_ID", id), tag("APP_NEXUS_EX", &ex))
+        };
+        let log = [
+            // K9AAA: last year's party from DuPage, then a ragchew giving a state, then this
+            // contest's party from Cook — the newest, so Cook.
+            row("K9AAA", "20251018", party("IL-QSO-PARTY", "DUPA")),
+            row("K9AAA", "20260101", tag("STATE", "IL")),
+            row("K9AAA", "20261018", party("IL-QSO-PARTY", "COOK")),
+            // K9BBB: last year's party from Kane, then a California party from (CA) Lake: the
+            // newest row is another contest's, which says nothing, so last year's KANE.
+            row("K9BBB", "20251018", party("IL-QSO-PARTY", "KANE")),
+            row("K9BBB", "20261003", party("CA-QSO-PARTY", "LAKE")),
+            // K9CCC: an ordinary contact giving a state after this contest's row.
+            row("K9CCC", "20251018", party("IL-QSO-PARTY", "WILL")),
+            row("K9CCC", "20260301", tag("STATE", "WI")),
+            // K9DDD: only another contest's row: nothing.
+            row("K9DDD", "20261003", party("CA-QSO-PARTY", "MARN")),
+        ]
+        .concat();
+        let d = Dir::new("logged-qth");
+        std::fs::write(
+            d.log(),
+            format!("{}{log}", tempo_core::logbook::adif_header()),
+        )
+        .unwrap();
+        let e = launch(&d);
+        let rows = e.lock().unwrap().log_rows();
+        let ids = ["IL-QSO-PARTY".to_string()];
+        let qth = |call: &str| {
+            answered(&mut || newest_logged_qth(&rows, call, &ids, "QTH")).map(|(v, _)| v)
+        };
+        assert_eq!(
+            qth("K9AAA").as_deref(),
+            Some("COOK"),
+            "this contest's newest"
+        );
+        assert_eq!(qth("k9aaa").as_deref(), Some("COOK"), "case aside");
+        assert_eq!(
+            qth("K9BBB").as_deref(),
+            Some("KANE"),
+            "never another contest's slot"
+        );
+        assert_eq!(qth("K9CCC").as_deref(), Some("WI"), "a newer state");
+        assert_eq!(qth("K9DDD"), None, "another contest's row says nothing");
+        assert_eq!(qth("K9ZZZ"), None, "a call never logged");
+        let (_, when) = answered(&mut || newest_logged_qth(&rows, "K9AAA", &ids, "QTH")).unwrap();
+        assert_eq!(
+            when, 1_792_326_840,
+            "the contact's own time (2026-10-18 12:34 UTC)"
+        );
+        // Another contest running: K9AAA's newest row that says is its state.
+        let other = ["CA-QSO-PARTY".to_string()];
+        let in_ca = answered(&mut || newest_logged_qth(&rows, "K9AAA", &other, "QTH"));
+        assert_eq!(in_ca.map(|(v, _)| v).as_deref(), Some("IL"));
     }
 
     /// ★ The award fold reads what each record carries beyond its call — its DXCC number, CQ zone

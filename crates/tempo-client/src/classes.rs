@@ -102,6 +102,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("contest_log_manual",             RunsAtShack, "Logs a contest contact at the shack."),
     ("contest_log_manual_rows",        RunsAtShack, "Logs a contest contact on a county line at the shack, one row per county."),
     ("contest_log_satellite",          RunsAtShack, "Logs a contest contact made through a satellite at the shack."),
+    ("contest_logged_qth",             RunsAtShack, "From the shack's logbook."),
     ("contest_merge_unmerged",         RunsAtShack, "Merges aged-out contest contacts into the shack's logbook."),
     ("contest_remove_last",            RunsAtShack, "Takes back the newest contact in the shack's contest log; kept, so it can be put back."),
     ("contest_removed",                RunsAtShack, "The contest contacts taken back at the shack."),

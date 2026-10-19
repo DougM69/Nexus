@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contest entry: the county/state box fills itself from your own log.** When you type a call, the box takes
+  the county or state from your last contact with that station in this contest, else from your call-history
+  file, else from your most recent contact with them anywhere in your log (looked up by call, so a big log costs
+  nothing). A small word over the box says where it came from: "this contest", "call history" or "log 2025".
+  Space or Tab into the box selects it, so typing replaces it, and nothing you typed is ever written over. A
+  station already in the log on this band and mode is not filled from this contest or the log: what it sends now
+  decides dupe or new county, and the amber line shows where you worked it from. Mobiles and rovers (/M, /R) are
+  never filled.
 - **Contest entry: an early "Worked" warning at QSO parties.** As soon as the call is in, a station you
   already logged on this band and mode turns the Call box amber and lists the counties or states you worked
   it from ("Worked: COOK, DUPA"), before you type the county. It turns red (DUPE) only when the county you type

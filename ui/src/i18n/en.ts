@@ -1955,7 +1955,14 @@ export const EN = {
   'logEntry.scp.worked.title': 'Already in this log',
   'logEntry.scp.near.title': 'One character different from what you typed',
   'logEntry.scp.none': 'Super Check Partial has no list yet. Settings › Contesting says why.',
-  'logEntry.history.mark': 'history',
+  'logEntry.history.mark': 'call history',
+  // The other two sources of a contest box's pre-fill: the station's last contact in this contest,
+  // and the most recent one anywhere in the log ({{year}} is that contact's year, digits).
+  'logEntry.fill.contest': 'this contest',
+  'logEntry.fill.contest.title': 'From your last contact with them in this contest. Type over it if they sent something else.',
+  'logEntry.fill.log': 'log {{year}}',
+  'logEntry.fill.log.title':
+    'From your most recent contact with them in the log ({{year}}). Type over it if they sent something else.',
   'logEntry.history.title':
     'From call history ({{file}}). Type over it if they sent something else.',
   // A COUNTY LINE: a station on the border of two to four counties, typed as the counties
