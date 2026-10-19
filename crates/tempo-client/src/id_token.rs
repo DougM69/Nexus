@@ -114,6 +114,13 @@ pub(crate) fn signed(
         .map_err(|_| "tokenSignature")?;
 
     let claims: Value = serde_json::from_slice(&payload).map_err(|_| MALFORMED)?;
+    issued_for(&claims, issuer, client)?;
+    Ok(claims)
+}
+
+/// Whether a payload names exactly `issuer`, and is for `client` (when its audience names several,
+/// `azp` must be that client: §3.1.3.7 rules 3 to 5): `tokenIssuer` or `tokenAudience` when not.
+pub(crate) fn issued_for(claims: &Value, issuer: &str, client: &str) -> Result<(), &'static str> {
     if claims["iss"] != issuer {
         return Err("tokenIssuer");
     }
@@ -127,7 +134,7 @@ pub(crate) fn signed(
     if !audience || claims.get("azp").is_some_and(|azp| azp != client) {
         return Err("tokenAudience");
     }
-    Ok(claims)
+    Ok(())
 }
 
 /// What a payload that held says. `tokenMalformed` without a subject or a signing time.

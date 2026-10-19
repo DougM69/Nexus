@@ -20,12 +20,18 @@
 //! - **Who is admitted** ([`vouched`]): the owner's own devices, and the devices of a person the
 //!   station invited by address, with the role the invitation gave. Kept for the LAN in a
 //!   [`DeviceCache`], swept against the service's list whenever the station hears it.
+//! - **What a device trusts** ([`listed_station`]): the stations its account's list names, each
+//!   only once the station's own proof holds for the two keys listed beside it, so the LAN key it
+//!   then pins is the one the owner signed in for at the shack. Its own sign-in's token it reads
+//!   for when it signed and who ([`own_token`]), and it signs in again for each station before
+//!   that station stops admitting it on its LAN ([`renew_due`]).
 //!
 //! Nothing here fetches or stores anything, and nothing keeps a token: the caller does both. A token
 //! is never written to a log: it is no password, but it names a person.
 use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tempo_stream::protocol;
 
 use crate::id_token::{self, Claims, Expected, LEEWAY_S};
 use crate::native::base64url;
@@ -35,6 +41,22 @@ use crate::native::base64url;
 /// the sign-in that made its proof, and then signs in again. Also the oldest proof a station takes
 /// at all. Built in here, and only here: the service deliberately carries no copy of it.
 pub const PROOF_MAX_AGE_S: u64 = 30 * 24 * 60 * 60;
+
+/// How long before a station stops admitting a device on its LAN the device signs in again for it:
+/// the last week of [`PROOF_MAX_AGE_S`]. Not a bound on anything (the station keeps that one), only
+/// when the device starts to.
+pub const RENEW_BEFORE_S: u64 = 7 * 24 * 60 * 60;
+
+/// When a station stops admitting, on its LAN, a device whose proof was signed at `issued_at`.
+pub fn admitted_until(issued_at: u64) -> u64 {
+    issued_at.saturating_add(PROOF_MAX_AGE_S)
+}
+
+/// Whether a device whose proof was signed at `issued_at` should sign in again for its station now:
+/// within [`RENEW_BEFORE_S`] of [`admitted_until`], or past it.
+pub fn renew_due(issued_at: u64, now_s: u64) -> bool {
+    now_s.saturating_add(RENEW_BEFORE_S) >= admitted_until(issued_at)
+}
 
 /// How often a kept key set is fetched again while the internet is up.
 pub const KEY_SET_REFRESH_S: u64 = 24 * 60 * 60;
@@ -395,6 +417,100 @@ pub fn vouched(
         }),
         None => Err("proofNotYours"),
     }
+}
+
+/// The claims of the ID token a device's own sign-in was given, once it is this tenant's issuer's,
+/// for the tenant's Native application, and carries exactly the `nonce` the sign-in sent. Its
+/// signature is not checked: the token came straight from the issuer's token endpoint, over the TLS
+/// this build verifies, to the sign-in that asked for it with PKCE (OpenID Connect Core 1.0
+/// §3.1.3.7, rule 6). It is read for the device's own use (who signed in, and when); the proof the
+/// device sends on is checked by the station itself.
+pub fn own_token(token: &str, tenant: &Tenant, nonce: &str) -> Result<Claims, &'static str> {
+    let payload = token.split('.').nth(1).ok_or("tokenMalformed")?;
+    let claims: Value = crate::id_token::unbase64url(payload)
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .ok_or("tokenMalformed")?;
+    id_token::issued_for(&claims, tenant.issuer, tenant.native_client_id)?;
+    if claims["nonce"] != nonce {
+        return Err("tokenNonce");
+    }
+    id_token::claims_of(&claims)
+}
+
+/// A station a device's account lists (`client/session`), as the device trusts it once its proof
+/// holds ([`listed_station`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listed {
+    /// The service's id for it, and the name it was given.
+    pub id: String,
+    pub name: String,
+    /// Its signing key and its LAN key, SPKI as lowercase hex: the two its proof names.
+    pub station_key: String,
+    pub lan_key: String,
+    /// Whether it is the device's own account's station, or one the account was invited to.
+    pub own: bool,
+    /// What the device may do there.
+    pub role: Role,
+}
+
+/// One station of a device's account list, trusted: the service lists it with the proof the
+/// station's owner signed in with at the shack, and that proof holds here, signed by the issuer for
+/// its Native application, for exactly the station's signing key and LAN key as listed beside it
+/// ([`station_nonce`]). For a station listed as the account's own, the proof must also be that
+/// account's own sign-in (`own_subject`, `proofNotYours`). Only then is its LAN key the one to pin:
+/// neither the service nor a machine on the network can stand in for the station.
+///
+/// A station's proof is not held to [`PROOF_MAX_AGE_S`], which bounds a device's: it stays evidence
+/// of the owner's sign-in for those keys until the station signs in again
+/// ([`Owner::needs_reproof`]). One signed ahead of `now_s` (with [`LEEWAY_S`]) is refused.
+/// `stationNotProven` for a station listed with no proof or no LAN key (one paired by code whose
+/// owner has not signed in at the shack yet); `invalidResponse` for a row out of shape.
+pub fn listed_station(
+    row: &Value,
+    keys: &KeySet,
+    tenant: &Tenant,
+    own_subject: &str,
+    now_s: u64,
+) -> Result<Listed, &'static str> {
+    let text = |name: &str| row[name].as_str().ok_or("invalidResponse");
+    let id = text("id").map(str::to_string)?;
+    let (own, role) = match text("role")? {
+        "owner" => (true, Role::Operate),
+        "operate" => (false, Role::Operate),
+        "listen" => (false, Role::Listen),
+        _ => return Err("invalidResponse"),
+    };
+    let (Some(proof), Some(lan_key)) = (row["proof"].as_str(), row["lanKey"].as_str()) else {
+        return Err("stationNotProven");
+    };
+    let station_key = text("stationKey")?;
+    let spki = |hex: &str| {
+        Some(hex)
+            .filter(|hex| protocol::device_key(hex))
+            .and_then(protocol::hex_bytes)
+            .ok_or("invalidResponse")
+    };
+    let nonce = station_nonce(&spki(station_key)?, &spki(lan_key)?);
+    let claims = id_token::signed(proof, &keys.jwks(), tenant.issuer, tenant.native_client_id)?;
+    let issued = claims["iat"].as_u64().ok_or("tokenIssuedAt")?;
+    if issued > now_s.saturating_add(LEEWAY_S) {
+        return Err("tokenIssuedAt");
+    }
+    if claims["nonce"] != nonce.as_str() {
+        return Err("tokenNonce");
+    }
+    let claims = id_token::claims_of(&claims)?;
+    if own && claims.subject != own_subject {
+        return Err("proofNotYours");
+    }
+    Ok(Listed {
+        id,
+        name: row["name"].as_str().unwrap_or_default().to_string(),
+        station_key: station_key.to_string(),
+        lan_key: lan_key.to_string(),
+        own,
+        role,
+    })
 }
 
 /// A device the station admitted on its proof, kept so it is admitted on the LAN with the internet
@@ -946,6 +1062,178 @@ mod tests {
             .unwrap();
         }
         assert!(serde_json::to_string(&full).unwrap().len() <= 1280);
+    }
+
+    /// The fixture's station as the service lists it to a device of `role` there.
+    fn station_row(case: &Case, role: &str) -> Value {
+        json!({"id":"20000000-0000-4000-8000-000000000001","name":"Shack",
+            "stationKey":case.all["keys"]["station"],"lanKey":case.all["keys"]["stationLan"],
+            "proof":case.token("station"),"role":role})
+    }
+
+    /// ★ A listed station is trusted only when its own proof names exactly the two keys listed
+    /// beside it: the LAN key a device then pins is the one the owner signed in for at the shack.
+    /// CONTROL: the same proof beside another LAN key, or another station key, or a device's proof
+    /// beside the station's keys, is `tokenNonce`.
+    #[test]
+    fn a_listed_station_holds_for_exactly_its_two_keys() {
+        let case = Case::load();
+        let owner = case.all["owner"].as_str().unwrap();
+        let listed = listed_station(
+            &station_row(&case, "owner"),
+            &case.keys(),
+            &TEST,
+            owner,
+            case.now(),
+        );
+        assert_eq!(
+            listed,
+            Ok(Listed {
+                id: "20000000-0000-4000-8000-000000000001".into(),
+                name: "Shack".into(),
+                station_key: case.all["keys"]["station"].as_str().unwrap().into(),
+                lan_key: case.all["keys"]["stationLan"].as_str().unwrap().into(),
+                own: true,
+                role: Role::Operate,
+            })
+        );
+        let check = |row: Value| listed_station(&row, &case.keys(), &TEST, owner, case.now());
+        let mut other_lan = station_row(&case, "owner");
+        other_lan["lanKey"] = case.all["keys"]["computerLan"].clone();
+        assert_eq!(check(other_lan), Err("tokenNonce"));
+        let mut other_station = station_row(&case, "owner");
+        other_station["stationKey"] = case.all["keys"]["road"].clone();
+        assert_eq!(check(other_station), Err("tokenNonce"));
+        let mut device_proof = station_row(&case, "owner");
+        device_proof["proof"] = case.token("computer").into();
+        assert_eq!(check(device_proof), Err("tokenNonce"));
+    }
+
+    /// ★ A listed station's proof keeps every check a token has: the issuer's signature, its
+    /// issuer, and the Native application (a browser's sign-in is no station's).
+    #[test]
+    fn a_listed_stations_proof_keeps_every_check_a_token_has() {
+        let case = Case::load();
+        let owner = case.all["owner"].as_str().unwrap();
+        for (name, why) in [
+            ("forged", "tokenSignature"),
+            ("wrongIss", "tokenIssuer"),
+            ("browser", "tokenAudience"),
+        ] {
+            let mut row = station_row(&case, "owner");
+            row["proof"] = case.token(name).into();
+            assert_eq!(
+                listed_station(&row, &case.keys(), &TEST, owner, case.now()),
+                Err(why),
+                "{name}"
+            );
+        }
+    }
+
+    /// ★ A station's proof is evidence of its owner's sign-in at the shack, and is not held to a
+    /// device's thirty days: a year on, it still vouches for the station's keys. CONTROL: one
+    /// signed ahead of this clock by more than two clocks may disagree is refused.
+    #[test]
+    fn a_stations_proof_is_not_held_to_a_devices_age() {
+        let case = Case::load();
+        let owner = case.all["owner"].as_str().unwrap();
+        let row = station_row(&case, "owner");
+        let at = |now| listed_station(&row, &case.keys(), &TEST, owner, now).map(|l| l.own);
+        assert_eq!(at(case.issued() + 400 * 86_400), Ok(true));
+        assert_eq!(at(case.issued() - LEEWAY_S), Ok(true));
+        assert_eq!(at(case.issued() - LEEWAY_S - 1), Err("tokenIssuedAt"));
+    }
+
+    /// ★ A station listed as the account's own must be proven by that account's own sign-in, so a
+    /// service cannot list another account's station as one's own. A station the account was
+    /// invited to is proven by its owner, whoever that is, and carries the invitation's role.
+    #[test]
+    fn a_station_listed_as_ones_own_is_proven_by_ones_own_sign_in() {
+        let case = Case::load();
+        let check = |role: &str, subject: &str| {
+            listed_station(
+                &station_row(&case, role),
+                &case.keys(),
+                &TEST,
+                subject,
+                case.now(),
+            )
+            .map(|l| (l.own, l.role))
+        };
+        assert_eq!(check("owner", "auth0|test-guest"), Err("proofNotYours"));
+        assert_eq!(
+            check("operate", "auth0|test-guest"),
+            Ok((false, Role::Operate))
+        );
+        assert_eq!(
+            check("listen", "auth0|test-guest"),
+            Ok((false, Role::Listen))
+        );
+        assert_eq!(check("admin", "auth0|test-guest"), Err("invalidResponse"));
+    }
+
+    /// ★ A station listed with no proof, or no LAN key (paired by code, its owner never signed in
+    /// at the shack), is not proven, and nothing of it is trusted.
+    #[test]
+    fn a_station_listed_with_no_proof_is_not_proven() {
+        let case = Case::load();
+        let owner = case.all["owner"].as_str().unwrap();
+        let check = |row: Value| listed_station(&row, &case.keys(), &TEST, owner, case.now());
+        for gone in ["proof", "lanKey"] {
+            let mut row = station_row(&case, "owner");
+            row[gone] = Value::Null;
+            assert_eq!(check(row), Err("stationNotProven"), "{gone}");
+        }
+        let mut row = station_row(&case, "owner");
+        row["lanKey"] = "not-a-key".into();
+        assert_eq!(check(row), Err("invalidResponse"));
+        let mut row = station_row(&case, "owner");
+        row.as_object_mut().unwrap().remove("id");
+        assert_eq!(check(row), Err("invalidResponse"));
+    }
+
+    /// ★ A device's own token is read for its issuer, its application and its nonce: the one its
+    /// sign-in sent. Its signature is not this check's (the token came straight from the issuer;
+    /// the station checks what the device sends on): a forged signature still reads.
+    #[test]
+    fn a_devices_own_token_is_read_for_its_issuer_application_and_nonce() {
+        let case = Case::load();
+        let nonce = case.nonce("computer");
+        let own = own_token(case.token("computer"), &TEST, nonce).unwrap();
+        assert_eq!(
+            (own.subject.as_str(), own.issued_at),
+            (case.all["owner"].as_str().unwrap(), case.issued())
+        );
+        assert_eq!(
+            own_token(case.token("computer"), &TEST, case.nonce("station")),
+            Err("tokenNonce")
+        );
+        assert_eq!(
+            own_token(case.token("wrongIss"), &TEST, nonce),
+            Err("tokenIssuer")
+        );
+        assert_eq!(
+            own_token(case.token("browser"), &TEST, case.nonce("browser")),
+            Err("tokenAudience")
+        );
+        assert_eq!(
+            own_token("not-a-token", &TEST, nonce),
+            Err("tokenMalformed")
+        );
+        assert!(own_token(case.token("forged"), &TEST, nonce).is_ok());
+    }
+
+    /// A device signs in again in the last week before its station stops admitting it on the LAN,
+    /// and not before.
+    #[test]
+    fn a_device_signs_in_again_in_the_last_week_of_its_proof() {
+        let issued = 1_000_000;
+        assert_eq!(admitted_until(issued), issued + PROOF_MAX_AGE_S);
+        assert_eq!(RENEW_BEFORE_S, 7 * 86_400);
+        let start = issued + PROOF_MAX_AGE_S - RENEW_BEFORE_S;
+        assert!(!renew_due(issued, start - 1));
+        assert!(renew_due(issued, start));
+        assert!(renew_due(issued, issued + PROOF_MAX_AGE_S + 1));
     }
 
     /// Staging signs in to its own tenant, with exactly its two applications; production has none
