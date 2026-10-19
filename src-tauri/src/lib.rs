@@ -38003,6 +38003,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         post_spot,
         self_spot_activation,
         contest_spot::contest_self_spot,
+        contest_spot::cluster_self_spot,
         freq_markers::get_freq_markers,
         freq_markers::add_freq_marker,
         freq_markers::remove_freq_marker,

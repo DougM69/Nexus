@@ -12502,6 +12502,45 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 700;
   white-space: nowrap;
 }
+/* Spot me in the Spots board's head (SpotsSpotMe.tsx): the same pair, drawn like the search box and
+   the funnel beside it. */
+.np-spot-me {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.np-spot-comment {
+  width: 13ch;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.73rem;
+  padding: 3px 6px;
+}
+.np-spot-comment:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.np-spot-btn {
+  font-size: 0.73rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  white-space: nowrap;
+}
+.np-spot-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.np-spot-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
 
 /* Export buttons in the Field Day header (moved from deleted LogView), right after Running / S&P:
    pushed to the row's far end, across a window-wide screen they sat a long way from the contest

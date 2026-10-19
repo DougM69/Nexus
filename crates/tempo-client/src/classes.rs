@@ -91,6 +91,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("club_firewall_press",            RefusedHere, "Opens an administrator prompt for the shack's firewall, which waits on the shack's own screen."),
     ("club_firewall_status",           RunsAtShack, "Where the shack's firewall stands for its club ports; changes nothing."),
     ("clublog_push_qso",               RunsAtShack, "An upload from the shack, with its stored credential."),
+    ("cluster_self_spot",              RunsAtShack, "Posts the operator's own spot to the shack's DX cluster from the Spots board, one per press, under the contest Spot me's cooldown and rules, as contest_self_spot does."),
     ("confirm_pending_log",            RunsAtShack, "Logs the contact the prompt showed, by its key."),
     ("confirm_sat_uplink",             RunsAtShack, "Records the shack's satellite VFO mapping; keys nothing."),
     ("confirmation_check",             RunsAtShack, "Checks one service's confirmations (LoTW, eQSL or QRZ) against the shack's logbook, with its stored credential; changes nothing."),

@@ -62,6 +62,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contest may not allow self-spotting"; press **Spot anyway** within 10 seconds to post. Contests whose rules
   allow it (the ARRL VHF contests, Winter Field Day over RF, the Tennessee and Ohio QSO Parties) spot on one
   press as before.
+- **Spot me on the Spots board.** The Spots board (the Spots view, the Spots pane in Phone and CW, and the Spots
+  box in any cockpit) has its own **Spot me**: one press posts ONE spot of your call on your current frequency to
+  the DX cluster Nexus is connected to, with the comment beside it, "CQ CW", "CQ SSB" and so on for the mode you
+  are on. Edit it as you like: Nexus keeps the last comment you typed for each mode, and emptying the box brings
+  "CQ" and the mode back. It shares the Contest screen's one-minute wait, so a spot from either button holds
+  both. Nothing is ever spotted without your press. With Contest mode on, the running contest's rules apply
+  exactly as on the Contest screen. With no cluster connected or no callsign set, Nexus says so and sends
+  nothing.
 - **Logbook: export just the contacts you pick.** Ctrl-click (⌘-click on a Mac) rows in the Logbook to pick
   them, Shift-click to pick a run, or press Space on the focused row; Esc clears. **Export selected** saves
   those contacts as an ADIF file in your Downloads folder, each written exactly as the whole-log export writes

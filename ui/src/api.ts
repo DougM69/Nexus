@@ -4024,6 +4024,12 @@ export async function contestSelfSpot(comment: string, confirmed: boolean): Prom
   return invoke<ContestSpotPosted>('contest_self_spot', { comment, confirmed })
 }
 
+/** The Spots board's Spot me, in any cockpit: the contest screen's press and its ONE cooldown. Outside a
+ *  contest it posts on one press; with Contest mode on it rejects exactly as `contestSelfSpot` does. */
+export async function clusterSelfSpot(comment: string, confirmed: boolean): Promise<ContestSpotPosted> {
+  return invoke<ContestSpotPosted>('cluster_self_spot', { comment, confirmed })
+}
+
 /** A band map frequency marker (`freq_markers.rs`): local to the station, never posted. */
 export interface FreqMarker {
   id: number
