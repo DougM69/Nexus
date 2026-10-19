@@ -130,7 +130,11 @@ impl Engine {
         };
         let log = &station.log;
         let (rs, spec, role) = (log.ruleset(), log.session.exchange, log.session.role());
-        let shown = |q: &LoggedQso| super::field_day_display::field_day_qso(q, rs, spec, role);
+        let numbers = log.qso_numbers();
+        let shown = |q: &LoggedQso| {
+            let nr = numbers.get(&q.seq).copied();
+            super::field_day_display::field_day_qso(q, rs, spec, role, nr)
+        };
         let after: Vec<&LoggedQso> = log
             .qsos()
             .iter()

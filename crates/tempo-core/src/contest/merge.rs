@@ -296,6 +296,7 @@ pub fn plan_merge(
         }
     }
     let mut report = MergeReport::default();
+    let numbers = log.qso_numbers();
     for q in log.qsos() {
         if q.seq == 0 {
             report.refused += 1;
@@ -314,7 +315,9 @@ pub fn plan_merge(
         // means by "already there", and a set that only knew about the log it started
         // with would be true of the first duplicate and false of the second.
         there.push((id.qid.clone(), q.when_unix));
-        report.written.push(record_for(log, q, &id));
+        report
+            .written
+            .push(record_for(log, q, &id, numbers.get(&q.seq).copied()));
     }
     report
 }
@@ -443,8 +446,14 @@ fn named(
     })
 }
 
-/// One contest row as a general-log record.
-fn record_for(log: &FieldDayLog, q: &LoggedQso, id: &MergeIdentity) -> QsoRecord {
+/// One contest row as a general-log record. `number`: the row's QSO number
+/// ([`FieldDayLog::qso_numbers`]), which is its `STX` in a contest that sends no serial.
+fn record_for(
+    log: &FieldDayLog,
+    q: &LoggedQso,
+    id: &MergeIdentity,
+    number: Option<u32>,
+) -> QsoRecord {
     let spec = log.session.exchange;
     // The SENT side comes from the one renderer, which takes a ROW — never from the
     // session, which holds only what is being sent right now.
@@ -453,7 +462,8 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, id: &MergeIdentity) -> QsoRecord
     // QSO parties do. Neither Field Day event does, and those stay `None`. Inventing 599
     // would be a claim about the air that nobody made.
     let (rst_sent, rst_rcvd) = (rst_of(&sent, spec), rst_of(&q.rx, spec));
-    let (stx, srx) = (serial_of(&sent, spec), serial_of(&q.rx, spec));
+    // The serial it sent, or in a contest that sends none the number the log gave it.
+    let (stx, srx) = (serial_of(&sent, spec).or(number), serial_of(&q.rx, spec));
     let contest = ContestFields {
         session: id.session.clone(),
         // A mode-split contest has a distinct id per mode, and a general-log record
