@@ -152,6 +152,17 @@ impl Roster {
     fn paired(&self, pin: &[u8; 32]) -> Option<String> {
         (self.paired)(pin)
     }
+
+    /// The same, asked on the runtime's blocking pool, for a session's own re-asks: the book's lock
+    /// (and the room's) is a plain one, and a worker parked on it reads no socket and fires no timer
+    /// for anything else on the runtime until it is let go.
+    async fn asked(&self, pin: [u8; 32]) -> Option<String> {
+        let paired = self.paired.clone();
+        tokio::task::spawn_blocking(move || paired(&pin))
+            .await
+            .ok()
+            .flatten()
+    }
 }
 
 /// What a connection's internet roads are opened with: the listener's own Stop road and audio road
@@ -716,7 +727,7 @@ async fn session<S>(
             // Removed at the shack, or the station's network identity reset: out at once, before
             // anything else it sent is answered.
             Ok(()) = revised.changed() => {
-                if roster.paired(&pin).as_deref() != Some(device.as_str()) {
+                if roster.asked(pin).await.as_deref() != Some(device.as_str()) {
                     break StreamReason::NotController;
                 }
             }
@@ -888,7 +899,7 @@ async fn session<S>(
             _ = status_tick.tick() => {
                 // Asked again at each tick, for what tells no session: an approval that reached its
                 // end (the room's tunnel holds each one's), or a roster that cannot be read.
-                if roster.paired(&pin).as_deref() != Some(device.as_str()) {
+                if roster.asked(pin).await.as_deref() != Some(device.as_str()) {
                     break StreamReason::NotController;
                 }
                 // Each internet road's candidates as it finds them (its server-reflexive address
