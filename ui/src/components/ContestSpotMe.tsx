@@ -8,6 +8,9 @@
 // same cooldown and reads the call and dial itself (`contest_spot.rs`); this is the button's half.
 // A contest not known to allow SELF-spotting (the station's rules data says so) refuses the first
 // press with a warning; only a second press inside CONFIRM_SECS posts.
+//
+// The press itself (`useSpotMe`) is the Spots board's Spot me too (SpotsSpotMe.tsx): one press, one
+// cooldown and one warning for both buttons.
 import { useEffect, useRef, useState } from 'react'
 import { contestSelfSpot, type ContestSpotPosted } from '../api'
 import { t } from '../i18n'
@@ -41,13 +44,9 @@ function spotLine(p: ContestSpotPosted): string {
   return ['DX', String(p.freqKhz), p.call, p.comment].filter(Boolean).join(' ')
 }
 
-export function ContestSpotMe({ contestShort }: { contestShort: string }) {
-  const [comment, setComment] = useState(() => defaultSpotComment(contestShort))
-  // Follow the contest until the operator types their own.
-  const edited = useRef(false)
-  useEffect(() => {
-    if (!edited.current) setComment(defaultSpotComment(contestShort))
-  }, [contestShort])
+/** A Spot me button's press, through `send` (the station's command for that button): what it says,
+ *  whether it is free, and the press itself. */
+export function useSpotMe(send: (comment: string, confirmed: boolean) => Promise<ContestSpotPosted>) {
   const busy = useRef(false)
   const [sending, setSending] = useState(false)
   const [coolUntil, setCoolUntil] = useState(0)
@@ -69,14 +68,14 @@ export function ContestSpotMe({ contestShort }: { contestShort: string }) {
     return () => window.clearInterval(id)
   }, [coolUntil])
 
-  const press = async () => {
+  const press = async (comment: string) => {
     if (busy.current || left > 0) return
     busy.current = true
     setSending(true)
     const confirmed = armedUntil > Date.now()
     setArmedUntil(0)
     try {
-      const posted = await contestSelfSpot(comment, confirmed)
+      const posted = await send(comment, confirmed)
       const at = Date.now()
       setNow(at)
       setCoolUntil(at + (posted.cooldownSecs || COOLDOWN_SECS) * 1000)
@@ -93,6 +92,25 @@ export function ContestSpotMe({ contestShort }: { contestShort: string }) {
       setSending(false)
     }
   }
+
+  return {
+    press: (comment: string) => void press(comment),
+    disabled: sending || left > 0,
+    title: t('spotMe.button.title', { secs: COOLDOWN_SECS }),
+    label: left > 0 ? t('spotMe.cooling', { secs: left }) : armedUntil ? t('spotMe.selfSpot.confirm') : t('spotMe.button'),
+  }
+}
+
+export function ContestSpotMe({ contestShort }: { contestShort: string }) {
+  const [comment, setComment] = useState(() => defaultSpotComment(contestShort))
+  // Follow the contest until the operator types their own.
+  const edited = useRef(false)
+  useEffect(() => {
+    if (!edited.current) setComment(defaultSpotComment(contestShort))
+  }, [contestShort])
+  // The command is looked up at the press, never at render: a screen whose tests mock the api without it
+  // still renders.
+  const spot = useSpotMe((text, confirmed) => contestSelfSpot(text, confirmed))
 
   return (
     <div className="contest-spot-me">
@@ -111,11 +129,11 @@ export function ContestSpotMe({ contestShort }: { contestShort: string }) {
       <button
         type="button"
         className="contest-spot-btn"
-        title={t('spotMe.button.title', { secs: COOLDOWN_SECS })}
-        disabled={sending || left > 0}
-        onClick={() => void press()}
+        title={spot.title}
+        disabled={spot.disabled}
+        onClick={() => spot.press(comment)}
       >
-        {left > 0 ? t('spotMe.cooling', { secs: left }) : armedUntil ? t('spotMe.selfSpot.confirm') : t('spotMe.button')}
+        {spot.label}
       </button>
     </div>
   )
