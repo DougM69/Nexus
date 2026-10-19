@@ -32,6 +32,14 @@ pub trait TxTee: Send + Sync {
     fn sent_before_its_session_closed(&self) -> Option<usize> {
         None
     }
+    /// Play the rest of the over anew, as [`AudioBackend::retune_tx`] asks: `tail(left, before)`
+    /// is given how many 12 kHz samples of what [`Self::feed`] was handed have not left yet, and
+    /// returns them built again, after the `before` samples ahead of them the route asks for too
+    /// (none for one whose resampler runs on through the splice). Never lengthens the over. `false` when this route cannot
+    /// take it, or nothing is left: the over plays on as it was. Default `false`.
+    fn retune(&self, _tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
+        false
+    }
 }
 
 /// A shared handle to the installed [`TxTee`].

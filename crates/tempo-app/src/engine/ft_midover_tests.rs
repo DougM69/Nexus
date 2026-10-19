@@ -313,7 +313,7 @@ fn an_over_that_would_not_be_planned_now_is_never_rebuilt() {
     }
 }
 
-/// A route that cannot replace what it holds (Flex DAX): the over goes out as first chosen, and
+/// A route that cannot replace what it holds (nothing left to play): the over goes out as first chosen, and
 /// nothing about the QSO moves: no row, nothing counted; the next over sends the new message, as
 /// it always has.
 #[test]

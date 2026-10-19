@@ -25,7 +25,8 @@
 //! default. A packet leaves only while an over of ours (`xmit 1`) is keyed on the session, never
 //! during a CWX word, a tune or an ATU cycle, on our own transmit stream, and while no other
 //! program feeds DAX: anything queued otherwise is dropped, never held for a later key. The pacer wakes the moment an over is queued, so its first packet leaves
-//! without waiting out an idle tick.
+//! without waiting out an idle tick. Because the rest of the over waits in Nexus until it is due,
+//! a mid-over switch replaces it there ([`crate::backend::TxTee::retune`]).
 //!
 //! Nexus's own design, not a port: the broker and the formats it uses are ported in
 //! `tempo_net::flex::streams`.
@@ -634,6 +635,34 @@ impl crate::backend::TxTee for DaxTx {
     #[cfg(test)]
     fn sent_before_its_session_closed(&self) -> Option<usize> {
         self.sent_when_closed.get().copied()
+    }
+
+    /// The rest of the over, played anew (a mid-over switch). What has not left is the queue at
+    /// the modem rate, less the packet's worth the pacer has resampled ahead: the pacer sends in
+    /// real time, so the radio has been handed only what is due. The rebuild is made with the
+    /// queue unlocked, so the pacer keeps sending while it is made, and then replaces what is
+    /// still queued by then, sample for sample at the same place in the over: never more, so the
+    /// over ends when it would have. The resampler runs on through the splice, which makes the
+    /// audio there the resampled splice itself. A queue emptied meanwhile (Stop TX, the key lost)
+    /// stays empty, and one that grew is left as it is (nothing here can tell where its over ends):
+    /// both `false`, as is a queue with nothing left.
+    fn retune(&self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
+        let left = lock(&self.queue).modem.len();
+        if left == 0 {
+            return false;
+        }
+        let rebuilt = tail(left, 0);
+        let mut q = lock(&self.queue);
+        let still = q.modem.len();
+        if still == 0 || still > left {
+            return false;
+        }
+        // `rebuilt` ends where the over ends, as the queue does. Short of what is still queued
+        // (never, from the engine), it plays what it has and the over ends early.
+        let rest = &rebuilt[rebuilt.len().saturating_sub(still)..];
+        q.modem.clear();
+        q.modem.extend(rest);
+        true
     }
 }
 

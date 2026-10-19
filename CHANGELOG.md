@@ -257,8 +257,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decoded after your over has started (a weak R-report or RR73 that only the full decode finds), Nexus used to send
   the old message to the end of the over and the right one an over later. It now switches the rest of the over to the
   new message, as WSJT-X does: the over keeps its start and end, and ALL.TXT gets a second Tx line for it. A Tx button
-  clicked during an over switches it the same way. Over Flex native DAX the over goes out as first chosen, and the
-  log says so. NEEDS-BENCH: FT8 and FT4 into a dummy load, then on the air with a weak station.
+  clicked during an over switches it the same way. NEEDS-BENCH: FT8 and FT4 into a dummy load, then on the air with
+  a weak station.
+- **Flex native audio (Beta): the late-reply switch works on DAX too.** With Nexus's own Flex client sending the
+  over over DAX, a reply decoded after the over has started now switches the rest of it to the new message, as on a
+  sound card. Nexus sends the radio only the audio that is due, so the part not yet sent is replaced; the over keeps
+  its start, its end and its PTT, and Stop TX still cuts it at once. NEEDS-BENCH: a Flex, FT8 and FT4 into a dummy
+  load with a second receiver.
 - **FT8/FT4: an RR73 answering your report is answered with 73, as in WSJT-X.** When the station you sent
   your report to rogers it with RR73 (or RRR) without sending its own R-report first, Nexus kept sending the report.
   It now sends 73 and the QSO is complete, as WSJT-X does; if the RR73 is decoded while the report is already on the

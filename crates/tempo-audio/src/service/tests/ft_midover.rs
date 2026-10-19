@@ -18,7 +18,7 @@ use tempo_app::engine::{run_decode_job, DecodePass};
 const TX2: &str = "W1AW KD9TAW -10";
 const RR73: &str = "W1AW KD9TAW RR73";
 
-/// A sound card that cannot replace what it was handed, as the Flex DAX route cannot.
+/// A route that cannot replace what it was handed, as one with nothing left to play cannot.
 #[derive(Default)]
 struct NoRetune(MockBackend);
 
@@ -401,7 +401,7 @@ fn a_decode_after_the_audio_has_stopped_switches_nothing() {
     assert_eq!(s.backend.retunes, 1, "control: 20 ms earlier it switches");
 }
 
-/// A route that cannot replace what it was handed (Flex DAX): the over goes out as first chosen,
+/// A route that cannot replace what it was handed (nothing left to play): the over goes out as first chosen,
 /// with no second row, and the RR73 keys at the next own boundary, as before.
 #[test]
 fn a_route_that_cannot_replace_its_audio_sends_the_over_as_first_chosen() {
