@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contest: frequency markers on the band map, as N1MM's Mark.** With Contest mode on, press **Alt+M** in the
+  contest entry, or right-click the band map, to mark the frequency you are on; the call in the entry goes
+  with it, or none if the entry is empty. The marker sits on the band map at its frequency: click it, or
+  press Enter on it, to tune straight back (never while transmitting: Nexus says why and stays put), and
+  press Delete on it to remove it. It goes by itself once you log that call on that band. Markers are yours
+  alone: nothing is posted or spotted, and they are kept for this contest across a restart.
 - **Logbook: export just the contacts you pick.** Ctrl-click (⌘-click on a Mac) rows in the Logbook to pick
   them, Shift-click to pick a run, or press Space on the focused row; Esc clears. **Export selected** saves
   those contacts as an ADIF file in your Downloads folder, each written exactly as the whole-log export writes

@@ -259,6 +259,7 @@ const MIGRATED = [
   'components/ConfirmationReview.tsx',
   'components/SpotLegend.tsx',
   'components/BandMap.tsx',
+  'features/freqMarkers.ts',
   'components/PounceBanner.tsx',
   'components/WatchlistPanel.tsx',
   // The one-time notice that the retired "Wanted watch list" joined the watch list (2026-09-24).

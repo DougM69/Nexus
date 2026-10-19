@@ -46,6 +46,7 @@ import { contestUnsavedText } from '../features/contestUnsaved'
 import { contestDupe, contestDupeRow, type ContestDupeVerdict } from '../features/contestDupe'
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
 import { askForOperatorBox, isOperatorBoxKey, isWipeKey } from '../features/contestKeys'
+import { isMarkKey, markHere, publishEntryCall } from '../features/freqMarkers'
 import { isEditKey } from '../features/contestEdit'
 import { ContestContactEdit, type EditNote } from './ContestContactEdit'
 import { esmPress, type EsmCaret, type EsmRole, type EsmStrip } from '../features/esm'
@@ -787,6 +788,9 @@ export function LogEntry({
   // The line Alt+W wiped (`pressWipe`, below), kept until any other key: what a second Alt+W puts back.
   const wipedRef = useRef<{ call: string; fields: Record<string, string>; fill: FillState } | null>(null)
   const pressWipeRef = useRef<() => void>(() => {})
+  // The call Alt+M marks with (`features/freqMarkers.ts`).
+  const markCallRef = useRef(logCall)
+  markCallRef.current = logCall
   const armedRef = useRef(removeArmed)
   armedRef.current = removeArmed
   const pressRemove = () => {
@@ -922,11 +926,20 @@ export function LogEntry({
       } else if (isOperatorBoxKey(e)) {
         e.preventDefault()
         if (!e.repeat) askForOperatorBox()
+      } else if (isMarkKey(e)) {
+        // N1MM's Mark: the dial, on the band map, with the call in this line (`features/freqMarkers.ts`).
+        e.preventDefault()
+        if (!e.repeat) void markHere(markCallRef.current)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [removable, active])
+  // The one the band map's right-click reads (another window, so a shared key): this strip's call,
+  // while it is on screen.
+  useEffect(() => {
+    if (removable && active) publishEntryCall(logCall)
+  }, [removable, active, logCall])
   // ONE line in the verdict slot while a press waits or an answer shows: the strip does not grow.
   const removeLine = removeArmed
     ? t('logEntry.remove.armed', { contact: removeArmed.label })

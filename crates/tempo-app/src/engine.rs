@@ -28151,6 +28151,20 @@ contact yourself."
         Some(station.log.journal_adif())
     }
 
+    /// The call and band of every live contest contact, uppercase: what clears a band map
+    /// frequency marker for that call on that band. Empty outside the contest mode.
+    pub fn contest_logged_call_bands(&self) -> Vec<(String, String)> {
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return Vec::new();
+        };
+        station
+            .log
+            .qsos()
+            .iter()
+            .map(|q| (q.call.to_ascii_uppercase(), q.band.to_ascii_uppercase()))
+            .collect()
+    }
+
     /// One waterfall row: the Goertzel power spectrum of the **live** captured
     /// audio (the rolling window fed by the radio loop), so the waterfall tracks
     /// real sound-card input continuously. Falls back to the last decoded frame,

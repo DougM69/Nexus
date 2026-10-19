@@ -3993,6 +3993,36 @@ export async function selfSpot(reference: string, dialHz: number): Promise<SelfS
   return invoke<SelfSpotReport>('self_spot_activation', { reference, dialHz })
 }
 
+/** A band map frequency marker (`freq_markers.rs`): local to the station, never posted. */
+export interface FreqMarker {
+  id: number
+  dialHz: number
+  /** Uppercase band label, e.g. "20M". */
+  band: string
+  /** Uppercase; empty for a marker made with an empty entry. */
+  call: string
+}
+
+/** This contest session's markers; empty with Contest mode off. */
+export async function getFreqMarkers(): Promise<FreqMarker[]> {
+  return invoke<FreqMarker[]>('get_freq_markers')
+}
+
+/** Mark the station's dial now with `call` (may be empty). Rejects `markerNoContest` with Contest
+ *  mode off. */
+export async function addFreqMarker(call: string): Promise<FreqMarker[]> {
+  return invoke<FreqMarker[]>('add_freq_marker', { call })
+}
+
+export async function removeFreqMarker(id: number): Promise<FreqMarker[]> {
+  return invoke<FreqMarker[]>('remove_freq_marker', { id })
+}
+
+/** Jump back to a marker (an operator QSY). Rejects `markerTransmitting` while anything transmits. */
+export async function freqMarkerQsy(id: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('freq_marker_qsy', { id })
+}
+
 /** Upcoming contests from the WA7BNM calendar (rejects if the feed is unreachable). */
 export async function getContests(): Promise<import('./types').ContestEvent[]> {
   return invoke<import('./types').ContestEvent[]>('get_contests')

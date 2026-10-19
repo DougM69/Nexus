@@ -3487,6 +3487,17 @@ export const EN = {
   // ⚠️ Band and mode names, dial frequencies and every spot's own data are tokens and stay
   // in the component. `{{mode}}` here is CW or SSB — the plotted spot mode, not prose.
   'bandMap.title': 'Band map',
+  // Frequency markers (features/freqMarkers.ts). `{{freq}}` is MHz, `{{call}}` a callsign: tokens.
+  'bandMap.marker.title': 'Marked {{freq}} {{call}}. Click or Enter: tune back here. Delete: remove the marker.',
+  'bandMap.marker.titleBare': 'Marked {{freq}}. Click or Enter: tune back here. Delete: remove the marker.',
+  'bandMap.track.markHint': 'Right-click: mark this frequency with the call in the contest entry (Alt+M in the entry does the same).',
+  'freqMarker.marked': 'Marked {{freq}} for {{call}} on the band map',
+  'freqMarker.markedBare': 'Marked {{freq}} on the band map',
+  'freqMarker.refused.noContest': 'Frequency markers belong to a contest: turn Contest mode on to mark a frequency.',
+  'freqMarker.refused.transmitting': 'Not while transmitting: tuning now would move your signal on the air. Try again when the over ends.',
+  'freqMarker.refused.offBand': 'Not marked: the dial is outside the amateur bands.',
+  'freqMarker.refused.gone': 'That marker is gone: its call was logged on this band, or it was removed.',
+  'freqMarker.refused.failed': 'The marker did not change: {{reason}}',
   'bandMap.offPlan': '{{band}} — off the band plan',
   'bandMap.empty.noPlan': 'no band-plan data for {{band}}',
   // What stands in for the band name when the dial is somewhere the plan cannot name.
