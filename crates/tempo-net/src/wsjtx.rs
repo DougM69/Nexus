@@ -518,6 +518,67 @@ mod tests {
         assert_eq!(r.remaining(), 0);
     }
 
+    /// A Status shaped as WSJT-X 3.0.2 sends one mid-QSO on FT8, against bytes laid out by hand
+    /// from `NetworkMessage.hpp` (big-endian QDataStream; a utf8 field is a quint32 length and
+    /// its bytes): Tx Enabled set, F Tol and T/R `quint32_max` because FT8 shows neither box
+    /// (`statusUpdate`, mainwindow.cpp:13958-13978), and the Tx Message blank-padded to the 37
+    /// characters of `msgsent`.
+    #[test]
+    fn status_matches_a_wsjtx_shaped_datagram_byte_for_byte() {
+        let msg = format!("{:<37}", "K1ABC W9XYZ -12");
+        let s = Status {
+            dial_freq: 14_074_000,
+            mode: "FT8",
+            dx_call: "K1ABC",
+            report: "-12",
+            tx_mode: "FT8",
+            tx_enabled: true,
+            transmitting: true,
+            decoding: false,
+            rx_df: 1234,
+            tx_df: 1500,
+            de_call: "W9XYZ",
+            de_grid: "EN37",
+            dx_grid: "FN42",
+            tx_watchdog: false,
+            sub_mode: "",
+            fast_mode: false,
+            special_op: 0,
+            freq_tol: u32::MAX,
+            tr_period: u32::MAX,
+            config_name: "Default",
+            tx_message: &msg,
+        };
+        let mut want: Vec<u8> = Vec::new();
+        let utf8 = |w: &mut Vec<u8>, v: &str| {
+            w.extend((v.len() as u32).to_be_bytes());
+            w.extend(v.as_bytes());
+        };
+        want.extend(0xADBC_CBDAu32.to_be_bytes());
+        want.extend(3u32.to_be_bytes());
+        want.extend(1u32.to_be_bytes());
+        utf8(&mut want, "WSJT-X");
+        want.extend(14_074_000u64.to_be_bytes());
+        utf8(&mut want, "FT8");
+        utf8(&mut want, "K1ABC");
+        utf8(&mut want, "-12");
+        utf8(&mut want, "FT8");
+        want.extend([1, 1, 0]); // Tx Enabled, Transmitting, Decoding
+        want.extend(1234u32.to_be_bytes());
+        want.extend(1500u32.to_be_bytes());
+        utf8(&mut want, "W9XYZ");
+        utf8(&mut want, "EN37");
+        utf8(&mut want, "FN42");
+        want.push(0); // Tx Watchdog
+        utf8(&mut want, "");
+        want.extend([0, 0]); // Fast mode, Special Operation Mode
+        want.extend(u32::MAX.to_be_bytes());
+        want.extend(u32::MAX.to_be_bytes());
+        utf8(&mut want, "Default");
+        utf8(&mut want, "K1ABC W9XYZ -12                      ");
+        assert_eq!(encode_status("WSJT-X", &s), want);
+    }
+
     #[test]
     fn status_layout_full() {
         let s = Status {

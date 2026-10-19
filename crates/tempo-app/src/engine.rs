@@ -3032,6 +3032,11 @@ pub struct Engine {
     tuning: bool,
     /// Whether the transmit watchdog has tripped (auto-halted TX).
     tx_watchdog: bool,
+    /// The over on the air, or the last one sent: WSJT-X's `m_currentMessage`, the Tx Message
+    /// its UDP Status reports ([`Engine::wsjtx_tx_status`]). Set when an over is accepted for
+    /// keying (`commit_tx`) and to "TUNE" when the tune carrier goes up, and kept after the over
+    /// ends, as upstream keeps it. Read for that report only; nothing keys on it.
+    tx_message: String,
     /// The slot over whose key the radio did not accept, which halted TX
     /// ([`Engine::halt_tx_for_refused_key`]), or that Nexus would not key because the transmit
     /// audio output would not open ([`Engine::halt_tx_for_tx_audio`]). Kept until the operator
@@ -5419,6 +5424,49 @@ pub struct TxPlan {
     stamp: TxGateStamp,
 }
 
+/// The transmit side of WSJT-X's UDP Status (type 1, `Network/NetworkMessage.hpp`), as
+/// `MainWindow::statusUpdate` fills it (`widgets/mainwindow.cpp:13979-13989`) — see
+/// [`Engine::wsjtx_tx_status`]. Output only: nothing keys, refuses or stops on it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WsjtxTxStatus {
+    /// "DX Call": `m_hisCall`, the station being worked.
+    pub dx_call: String,
+    /// "Report": `QString::number (ui->rptSpinBox->value ())`, the report sent to the DX.
+    pub report: String,
+    /// "Tx Enabled": `ui->autoButton->isChecked ()`, the Enable Tx latch.
+    pub tx_enabled: bool,
+    /// "Transmitting": `m_transmitting`.
+    pub transmitting: bool,
+    /// "DX grid": `m_hisGrid`.
+    pub dx_grid: String,
+    /// "Tx Watchdog": `m_tx_watchdog`, true while a tripped watchdog holds TX off.
+    pub tx_watchdog: bool,
+    /// "Tx Message": `m_currentMessage`, the over on the air or the last one sent.
+    pub tx_message: String,
+}
+
+/// The Tx Message WSJT-X reports for an over: `m_currentMessage = QString::fromLatin1 (msgsent)`
+/// (mainwindow.cpp:8072-8073), the generator's fixed-width Fortran string, blank-padded. The
+/// 77-bit modes' `msgsent` is `character*37` (lib/ft8/genft8.f90:7, lib/ft4/genft4.f90:22, and
+/// MSK144, FST4/FST4W and Q65 through the same 37-character call at mainwindow.cpp:7936-8038);
+/// JT65's and WSPR's is `character*22` (lib/gen65.f90:10, lib/genwspr.f90:4). The modes WSJT-X
+/// does not have (FT1, DX1, FT2) go unpadded, and a JS8 frame carries no message text of its own,
+/// so a JS8 over reports none.
+fn wsjtx_msgsent(tier: Tier, waveform: &TxWaveform) -> String {
+    let text = match waveform {
+        TxWaveform::Deep { text, .. }
+        | TxWaveform::Fast { text, .. }
+        | TxWaveform::Native { text, .. } => text.as_str(),
+        TxWaveform::Js8 { .. } => return String::new(),
+    };
+    let width = match tier {
+        Tier::Ft8 | Tier::Ft4 | Tier::Msk144 | Tier::Fst4 | Tier::Fst4w | Tier::Q65 => 37,
+        Tier::Jt65 | Tier::Wspr => 22,
+        _ => return text.to_string(),
+    };
+    format!("{text:<width$}")
+}
+
 /// A keying source that currently owns the transmitter — see [`Engine::tx_owner`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TxOwner {
@@ -5891,6 +5939,7 @@ impl Engine {
             skip_tx1: false,
             tuning: false,
             tx_watchdog: false,
+            tx_message: String::new(),
             slot_key_refused: None,
             slot_unkey_failed: None,
             slot_audio_lost: None,
@@ -18143,6 +18192,35 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.tx_enabled
     }
 
+    /// The transmit side of the WSJT-X UDP Status ([`WsjtxTxStatus`]): what is being sent, to
+    /// whom, and whether TX is enabled. Cheap enough to read every radio-loop tick, which is how
+    /// the loop sends a Status on each change as WSJT-X does.
+    pub fn wsjtx_tx_status(&self) -> WsjtxTxStatus {
+        // The report is WSJT-X's Rpt box: the report the Tx2/Tx3 messages carry, so the one
+        // queued while a report over is next, else the last one sent this QSO.
+        let (dx_call, dx_grid, report) = match &self.mode {
+            Mode::Qso { station, .. } => (
+                station.dxcall.clone().unwrap_or_default(),
+                station
+                    .dxcall
+                    .as_deref()
+                    .and_then(|c| self.dx_grid_resolved(c, station.dxgrid.clone()))
+                    .unwrap_or_default(),
+                report_in(station.outgoing()).or(self.qso_report_sent),
+            ),
+            _ => (String::new(), String::new(), None),
+        };
+        WsjtxTxStatus {
+            dx_call,
+            report: report.map(|r| r.to_string()).unwrap_or_default(),
+            tx_enabled: self.tx_enabled,
+            transmitting: self.app.transmitting(),
+            dx_grid,
+            tx_watchdog: self.tx_watchdog,
+            tx_message: self.tx_message.clone(),
+        }
+    }
+
     /// Whether the slot sequencer (FT8, FT4, JS8 and the other timed-slot modes) is armed to key:
     /// TX on, in the Digital section, on a tier that transmits. The gates [`Self::plan_tx`] opens
     /// with that hold for the whole arm, not just for one over (the dial, the licence and the clock
@@ -19959,6 +20037,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // same, though incidentally: any click or keystroke anywhere in its window zeroes
             // `m_idleMinutes` (mainwindow.cpp:2823-2827), and the Tune button is a click.
             self.reset_tx_watchdog();
+            // WSJT-X reports a tune as the Tx Message "TUNE" (mainwindow.cpp:8083-8085).
+            self.tx_message = "TUNE".to_string();
             return;
         }
         if !was_tuning {
@@ -26570,6 +26650,7 @@ contact yourself."
         // Kept, so the next over that is the same one (a CQ called again, a message repeated
         // while the reply is not yet heard) keys without being built again (`prebuilt_wave`).
         self.keep_prebuilt_wave(&plan.waveform, &wave);
+        self.tx_message = wsjtx_msgsent(plan.tier, &plan.waveform);
         vec![wave]
     }
 
@@ -42208,6 +42289,46 @@ mod tests {
         r.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-05", -8)], 3);
         let _ = r.poll_tx(4); // RR73 → resume CQ
         assert!(!r.take_pending_tx_disable(), "a run never self-disarms");
+    }
+
+    /// The WSJT-X UDP Status's transmit side as `statusUpdate` fills it (mainwindow.cpp:13979-13989):
+    /// the over on the air and after it (`m_currentMessage`), the DX call and grid, the report sent,
+    /// the Enable Tx latch and a tripped watchdog. A CQ run answered by K1ABC, by value.
+    #[test]
+    fn the_wsjtx_tx_status_follows_the_qso_the_over_and_the_watchdog() {
+        let mut r = Engine::new("W9XYZ", "EN37", 0);
+        r.set_tier(Tier::Ft8);
+        let _ = r.take_slot_tx_abort();
+        r.set_mode("qso-run").unwrap();
+        assert_eq!(r.wsjtx_tx_status().tx_message, "", "nothing sent yet");
+        assert!(!r.poll_tx(0).is_empty(), "premise: the CQ keys");
+        let cq = r.wsjtx_tx_status();
+        assert_eq!(cq.tx_message, format!("{:<37}", "CQ W9XYZ EN37"));
+        assert_eq!((cq.dx_call.as_str(), cq.report.as_str()), ("", ""));
+        assert!(cq.tx_enabled);
+
+        r.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 1);
+        assert!(!r.poll_tx(2).is_empty(), "premise: the report keys");
+        let rpt = r.wsjtx_tx_status();
+        assert_eq!(rpt.tx_message, format!("{:<37}", "K1ABC W9XYZ -08"));
+        assert_eq!(rpt.dx_call, "K1ABC");
+        assert_eq!(rpt.dx_grid, "FN42");
+        assert_eq!(rpt.report, "-8", "QString::number of the report sent");
+        assert!(!rpt.tx_watchdog);
+
+        // A tripped watchdog: reported, TX disabled, and the last over still the Tx Message.
+        let mut s = r.settings().clone();
+        s.tx_watchdog_min = 1;
+        r.apply_settings(s);
+        r.tx_watchdog_start = Some(now_unix_secs().saturating_sub(61));
+        let _ = r.poll_tx(4);
+        let wd = r.wsjtx_tx_status();
+        assert!(wd.tx_watchdog, "the watchdog tripped");
+        assert!(!wd.tx_enabled, "a trip disables TX");
+        assert_eq!(
+            wd.tx_message, rpt.tx_message,
+            "kept after the over, as upstream keeps it"
+        );
     }
 
     #[test]

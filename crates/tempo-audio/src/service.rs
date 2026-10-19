@@ -3365,6 +3365,9 @@ struct StationSinks {
     /// edge seeds `last_fd_seq` past the restored journal rows (removed ones included) so
     /// they are never re-pushed to the club network / WSJT-X sinks as newly logged.
     fd_was_active: bool,
+    /// The WSJT-X UDP Status last sent, so the loop sends another on each change between slot
+    /// boundaries, as WSJT-X does ([`wsjtx_status_change`]). `None` until the first boundary.
+    wsjtx_status: Option<WsjtxStatusOwned>,
 }
 
 impl StationSinks {
@@ -3377,6 +3380,7 @@ impl StationSinks {
             last_reported_band: now_unix_ms(),
             last_reported_bm: String::new(),
             fd_was_active: false,
+            wsjtx_status: None,
         }
     }
 }
@@ -13488,6 +13492,19 @@ impl RadioLoop {
             let _ = rig.stop_voice_mem();
         }
 
+        // WSJT-X sends a Status on each change of what it reports (`statusUpdate` from
+        // `on_autoButton_clicked`, the TX start and stop, a new Tx message, the DX call and grid,
+        // the watchdog: mainwindow.cpp:3811, 8076, 8216, 8580, 10452-10497, 14059), not once a
+        // period. The boundary sends one every period (`emit_boundary_housekeeping`); this sends
+        // the ones in between, so a logger sees TX enabled or the next over the moment it happens.
+        if let (Some(server), Some(last)) = (sinks.wsjtx, station.wsjtx_status.as_ref()) {
+            let changed = wsjtx_status_change(last, &engine_lock(engine));
+            if let Some(status) = changed {
+                let _ = server.send_status(&status.as_status());
+                station.wsjtx_status = Some(status);
+            }
+        }
+
         // PSK Reporter: flush accumulated spots periodically (outside the lock). JS8's spots are
         // the engine's (`take_js8_psk_spots`: the stations JS8Call would spot, with their grids),
         // taken into the same buffer when the flush is due, so they ride the same upload.
@@ -13789,58 +13806,38 @@ impl RadioLoop {
                 );
             }
             if let Some(server) = sinks.wsjtx {
-                let dx = snap
-                    .qso
-                    .as_ref()
-                    .and_then(|q| q.dxcall.clone())
-                    .unwrap_or_default();
-                let _ = server.send_status(&WsjtxStatus {
-                    dial_freq: cur_dial,
-                    mode: tier,
-                    dx_call: &dx,
-                    report: "",
-                    tx_mode: tier,
-                    tx_enabled: false,
-                    transmitting: snap.radio.transmitting,
+                // The LIVE mode wins: field_day is Some only while a
+                // contest is actually RUNNING, whereas special_op
+                // is a persistent setting an operator can forget to turn
+                // off — a stale Hound flag must not misadvertise an
+                // active contest session (review catch). 6=FOX stays unbuilt.
+                // A running contest reports the activity WSJT-X itself would
+                // be set to for it: 3 (Field Day) in ARRL Field Day only,
+                // 1 (NA VHF) in the ARRL VHF contests, 0 everywhere else.
+                let special_op = if let Some(fd) = &snap.field_day {
+                    tempo_core::fieldday::FtMessages::of_contest(&fd.event).special_op()
+                } else if matches!(
+                    eng.settings().special_op,
+                    tempo_app::settings::SpecialOp::Hound
+                        | tempo_app::settings::SpecialOp::SuperHound
+                ) {
+                    7
+                } else {
+                    0
+                };
+                let status = wsjtx_status(
+                    &*eng,
+                    cur_dial,
+                    &snap.mycall,
+                    &snap.mygrid,
+                    special_op,
                     // `decoding` and `transmitting` are disjoint phases in
                     // WSJT-X: when we decode the prior RX slot AND transmit in
                     // this one (calling CQ), report the transmit phase only.
-                    decoding: did_rx && !tx_this_slot,
-                    // REAL audio offsets (GridTracker/JTAlert show these) —
-                    // hardcoded 1500s confused every cooperating logger.
-                    rx_df: snap.radio.rx_offset_hz.max(0.0) as u32,
-                    tx_df: snap.radio.tx_offset_hz.max(0.0) as u32,
-                    de_call: &snap.mycall,
-                    de_grid: &snap.mygrid,
-                    dx_grid: "",
-                    tx_watchdog: false,
-                    sub_mode: "",
-                    fast_mode: false,
-                    // The LIVE mode wins: field_day is Some only while a
-                    // contest is actually RUNNING, whereas special_op
-                    // is a persistent setting an operator can forget to turn
-                    // off — a stale Hound flag must not misadvertise an
-                    // active contest session (review catch). 6=FOX stays unbuilt.
-                    // A running contest reports the activity WSJT-X itself would
-                    // be set to for it: 3 (Field Day) in ARRL Field Day only,
-                    // 1 (NA VHF) in the ARRL VHF contests, 0 everywhere else.
-                    special_op: if let Some(fd) = &snap.field_day {
-                        tempo_core::fieldday::FtMessages::of_contest(&fd.event).special_op()
-                    } else if matches!(
-                        eng.settings().special_op,
-                        tempo_app::settings::SpecialOp::Hound
-                            | tempo_app::settings::SpecialOp::SuperHound
-                    ) {
-                        7
-                    } else {
-                        0
-                    },
-                    freq_tol: 0,
-                    // T/R period (s), mode-driven: FT1 = 4, FT4 ≈ 8, FT8/DX1 = 15.
-                    tr_period: eng.active_slot_secs().round() as u32,
-                    config_name: "Default",
-                    tx_message: "",
-                });
+                    did_rx && !tx_this_slot,
+                );
+                let _ = server.send_status(&status.as_status());
+                station.wsjtx_status = Some(status);
                 if !fd_new.is_empty() {
                     let ctx = FdWsjtxCtx {
                         when_secs: now_secs,
@@ -14260,6 +14257,125 @@ fn fd_interop_mode(mode: &str, submode: &str) -> String {
 }
 
 /// The WSJT-X mode string for a link [`Tier`].
+/// A WSJT-X UDP Status (type 1, `Network/NetworkMessage.hpp`), owned, so the loop can keep the
+/// one it last sent and tell a change from a repeat. Filled as `MainWindow::statusUpdate` fills
+/// it (`widgets/mainwindow.cpp:13955-13989`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WsjtxStatusOwned {
+    dial_freq: u64,
+    mode: &'static str,
+    tx: tempo_app::engine::WsjtxTxStatus,
+    decoding: bool,
+    rx_df: u32,
+    tx_df: u32,
+    de_call: String,
+    de_grid: String,
+    sub_mode: String,
+    special_op: u8,
+    freq_tol: u32,
+    tr_period: u32,
+}
+
+impl WsjtxStatusOwned {
+    fn as_status(&self) -> WsjtxStatus<'_> {
+        WsjtxStatus {
+            dial_freq: self.dial_freq,
+            mode: self.mode,
+            dx_call: &self.tx.dx_call,
+            report: &self.tx.report,
+            tx_mode: self.mode,
+            tx_enabled: self.tx.tx_enabled,
+            transmitting: self.tx.transmitting,
+            decoding: self.decoding,
+            rx_df: self.rx_df,
+            tx_df: self.tx_df,
+            de_call: &self.de_call,
+            de_grid: &self.de_grid,
+            dx_grid: &self.tx.dx_grid,
+            tx_watchdog: self.tx.tx_watchdog,
+            sub_mode: &self.sub_mode,
+            fast_mode: false,
+            special_op: self.special_op,
+            freq_tol: self.freq_tol,
+            tr_period: self.tr_period,
+            config_name: "Default",
+            tx_message: &self.tx.tx_message,
+        }
+    }
+}
+
+/// The Status for the engine as it stands. `de_call`, `de_grid`, `special_op` and `decoding` come
+/// from the slot boundary that sends it (see `emit_boundary_housekeeping`).
+fn wsjtx_status(
+    eng: &Engine,
+    dial_freq: u64,
+    de_call: &str,
+    de_grid: &str,
+    special_op: u8,
+    decoding: bool,
+) -> WsjtxStatusOwned {
+    let tier = eng.tier();
+    let (sub_mode, freq_tol, tr_period) =
+        wsjtx_mode_fields(tier, eng.settings(), eng.active_slot_secs());
+    WsjtxStatusOwned {
+        dial_freq,
+        mode: tier_mode(tier),
+        tx: eng.wsjtx_tx_status(),
+        decoding,
+        // REAL audio offsets (GridTracker/JTAlert show these) —
+        // hardcoded 1500s confused every cooperating logger.
+        rx_df: eng.rx_offset_hz().max(0.0) as u32,
+        tx_df: eng.tx_offset_hz().max(0.0) as u32,
+        de_call: de_call.to_string(),
+        de_grid: de_grid.to_string(),
+        sub_mode,
+        special_op,
+        freq_tol,
+        tr_period,
+    }
+}
+
+/// The Status to send between boundaries when what it reports has changed since `last`, else
+/// `None`. The boundary's own fields (`decoding`, the station, the special operation) stay as
+/// the boundary sent them.
+fn wsjtx_status_change(last: &WsjtxStatusOwned, eng: &Engine) -> Option<WsjtxStatusOwned> {
+    let now = wsjtx_status(
+        eng,
+        eng.settings().dial_hz(),
+        &last.de_call,
+        &last.de_grid,
+        last.special_op,
+        last.decoding,
+    );
+    (now != *last).then_some(now)
+}
+
+/// Sub-mode, Frequency Tolerance and T/R Period as `statusUpdate` fills them
+/// (mainwindow.cpp:13958-13978).
+///
+/// - Sub-mode: `current_submode ()` (mainwindow.cpp:13126-13134), a letter for JT65 and Q65 (and
+///   JT4, not built here) when VHF features are on, else empty. Nexus always offers the JT65 and
+///   Q65 submode, as WSJT-X does only with VHF features on, so those report their letter.
+/// - Frequency Tolerance: the F Tol box, or `quint32_max` when the mode does not show it. Nexus
+///   has no F Tol control in any mode, so it always reports `u32::MAX`, WSJT-X's "not offered".
+/// - T/R Period: the T/R box, or `quint32_max` when the mode hides it. WSJT-X shows it for FST4,
+///   Q65 and MSK144 (and FST4W's own box), and hides it for FT8, FT4, JT65 and WSPR (the
+///   `displayWidgets` strings, mainwindow.cpp:10836-11515, position 5). The modes WSJT-X does not
+///   have (FT1, DX1, FT2, JS8) report their real period, the only honest value there.
+fn wsjtx_mode_fields(tier: Tier, settings: &Settings, slot_secs: f64) -> (String, u32, u32) {
+    let letter = |n: u8| char::from(b'A' + n.min(25)).to_string();
+    let sub_mode = match tier {
+        Tier::Jt65 => letter(settings.jt65_submode),
+        Tier::Q65 => letter(settings.q65_submode),
+        _ => String::new(),
+    };
+    let tr_period = match tier {
+        Tier::Ft8 | Tier::Ft4 | Tier::Jt65 | Tier::Wspr => u32::MAX,
+        _ => slot_secs.round() as u32,
+    };
+    (sub_mode, u32::MAX, tr_period)
+}
+
 fn tier_mode(tier: Tier) -> &'static str {
     match tier {
         Tier::TempoFast => "TempoFast",
@@ -17692,6 +17808,343 @@ mod tests {
             );
         }
         drop(worker);
+    }
+
+    /// A WSJT-X-mode engine on FT8 that has just keyed its report to K1ABC (the operator's
+    /// Tx-slot pick of Tx2), so every transmit-side Status field has a value to carry.
+    fn wsjtx_status_engine() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        let _ = e.take_slot_tx_abort();
+        e.override_next_tx("K1ABC", Some("FN42"), "K1ABC W9XYZ -12");
+        assert!(!e.poll_tx(0).is_empty(), "premise: the report over keys");
+        e
+    }
+
+    /// One Status datagram through a real WSJT-X server socket, read back field by field in
+    /// `NetworkMessage.hpp`'s order.
+    fn wsjtx_status_on_the_wire(status: &WsjtxStatusOwned) -> Vec<String> {
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            listener.local_addr().unwrap(),
+        )
+        .unwrap();
+        server.send_status(&status.as_status()).unwrap();
+        let mut buf = [0u8; 4096];
+        let (n, _) = listener.recv_from(&mut buf).expect("the Status datagram");
+        wsjtx_status_fields(&buf[..n])
+    }
+
+    /// A Status datagram's fields, in order, as text.
+    fn wsjtx_status_fields(datagram: &[u8]) -> Vec<String> {
+        let mut r = tempo_net::qds::QdsReader::new(datagram);
+        let mut f = Vec::new();
+        assert_eq!(r.read_u32(), Some(tempo_net::wsjtx::MAGIC));
+        r.read_u32().unwrap(); // schema
+        assert_eq!(r.read_u32(), Some(1), "type 1 = Status");
+        let mut s = |v: Option<Option<String>>| f.push(v.unwrap().unwrap_or_default());
+        s(r.read_utf8()); // Id
+        let dial = r.read_u64().unwrap();
+        s(r.read_utf8()); // Mode
+        s(r.read_utf8()); // DX call
+        s(r.read_utf8()); // Report
+        s(r.read_utf8()); // Tx Mode
+        let b = |v: Option<bool>| v.unwrap().to_string();
+        let tx_enabled = b(r.read_bool());
+        let transmitting = b(r.read_bool());
+        let decoding = b(r.read_bool());
+        let rx_df = r.read_u32().unwrap().to_string();
+        let tx_df = r.read_u32().unwrap().to_string();
+        s(r.read_utf8()); // DE call
+        s(r.read_utf8()); // DE grid
+        s(r.read_utf8()); // DX grid
+        let watchdog = b(r.read_bool());
+        s(r.read_utf8()); // Sub-mode
+        let fast = b(r.read_bool());
+        let special = r.read_u8().unwrap().to_string();
+        let ftol = r.read_u32().unwrap().to_string();
+        let tr = r.read_u32().unwrap().to_string();
+        s(r.read_utf8()); // Configuration name
+        s(r.read_utf8()); // Tx Message
+        assert_eq!(r.remaining(), 0, "nothing after the Tx Message");
+        let [id, mode, dx, rpt, tx_mode, de, de_grid, dx_grid, sub, config, msg] =
+            <[String; 11]>::try_from(f).unwrap();
+        vec![
+            id,
+            dial.to_string(),
+            mode,
+            dx,
+            rpt,
+            tx_mode,
+            tx_enabled,
+            transmitting,
+            decoding,
+            rx_df,
+            tx_df,
+            de,
+            de_grid,
+            dx_grid,
+            watchdog,
+            sub,
+            fast,
+            special,
+            ftol,
+            tr,
+            config,
+            msg,
+        ]
+    }
+
+    /// The user report: "when using the WSJT-X UDP API it doesn't pass through what the TX
+    /// message is, only decodes." Every field of the Status is filled as WSJT-X's
+    /// `statusUpdate` fills it (mainwindow.cpp:13955-13989), checked by value off the wire.
+    #[test]
+    fn the_wsjtx_status_carries_the_tx_message_and_tx_state_by_value() {
+        let e = wsjtx_status_engine();
+        let status = wsjtx_status(&e, 14_074_000, "W9XYZ", "EN37", 0, false);
+        let on_air = format!("{:<37}", "K1ABC W9XYZ -12");
+        let max = u32::MAX.to_string();
+        let expect: Vec<&str> = vec![
+            tempo_net::APP_ID,
+            "14074000",
+            "FT8",
+            "K1ABC", // DX call: m_hisCall
+            "-12",   // Report: the report sent, QString::number
+            "FT8",
+            "true", // Tx Enabled: the Enable Tx latch
+            "true", // Transmitting: the report over is keyed
+            "false",
+            "1500",
+            "1500",
+            "W9XYZ",
+            "EN37",
+            "FN42",  // DX grid: m_hisGrid
+            "false", // Tx Watchdog: not tripped
+            "",      // Sub-mode: none in FT8
+            "false",
+            "0",
+            &max, // Frequency Tolerance: quint32_max, FT8 shows no F Tol
+            &max, // T/R Period: quint32_max, FT8 hides the T/R box
+            "Default",
+            &on_air, // Tx Message: m_currentMessage, msgsent's 37 blank-padded characters
+        ];
+        assert_eq!(wsjtx_status_on_the_wire(&status), expect);
+    }
+
+    /// WSJT-X sends a Status on each change (Enable Tx, a new over, the TX start and stop,
+    /// the DX call), not once a period: the loop's between-boundary check sends exactly then.
+    #[test]
+    fn a_wsjtx_status_goes_out_on_each_change_and_never_on_a_repeat() {
+        let mut e = wsjtx_status_engine();
+        let first = wsjtx_status(&e, e.settings().dial_hz(), "W9XYZ", "EN37", 0, false);
+        assert_eq!(wsjtx_status_change(&first, &e), None, "nothing changed");
+
+        e.set_tx_enabled(false);
+        let off = wsjtx_status_change(&first, &e).expect("Enable Tx off is sent");
+        assert!(!off.tx.tx_enabled);
+        assert_eq!(
+            off.tx.tx_message, first.tx.tx_message,
+            "the last over stays"
+        );
+        assert_eq!(wsjtx_status_change(&off, &e), None, "and only once");
+
+        e.set_tx_enabled(true);
+        let on = wsjtx_status_change(&off, &e).expect("Enable Tx on is sent");
+        assert!(on.tx.tx_enabled);
+
+        e.override_next_tx("K1ABC", Some("FN42"), "K1ABC W9XYZ RR73");
+        assert!(!e.poll_tx(2).is_empty(), "premise: the next over keys");
+        let next = wsjtx_status_change(&on, &e).expect("a new Tx message is sent");
+        assert_eq!(next.tx.tx_message, format!("{:<37}", "K1ABC W9XYZ RR73"));
+    }
+
+    /// WSJT-X's Tx Message for a tune is "TUNE" (mainwindow.cpp:8083-8085), unpadded.
+    #[test]
+    fn a_tune_reports_tune_as_the_tx_message() {
+        let mut e = wsjtx_status_engine();
+        e.set_tune(true);
+        assert_eq!(e.wsjtx_tx_status().tx_message, "TUNE");
+    }
+
+    /// Sub-mode, F Tol and T/R per mode, as `statusUpdate` reads its boxes.
+    #[test]
+    fn the_wsjtx_mode_fields_follow_what_wsjtx_shows_per_mode() {
+        let s = Settings {
+            q65_submode: 2,
+            jt65_submode: 1,
+            ..Default::default()
+        };
+        let max = u32::MAX;
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Ft8, &s, 15.0),
+            (String::new(), max, max)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Ft4, &s, 7.5),
+            (String::new(), max, max)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Wspr, &s, 120.0),
+            (String::new(), max, max)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Jt65, &s, 60.0),
+            ("B".into(), max, max)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Q65, &s, 30.0),
+            ("C".into(), max, 30)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Msk144, &s, 15.0),
+            (String::new(), max, 15)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Fst4, &s, 60.0),
+            (String::new(), max, 60)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::TempoFast, &s, 4.0),
+            (String::new(), max, 4)
+        );
+    }
+
+    /// The radio loop itself sends the Status when Enable Tx changes between slot boundaries, and
+    /// sends nothing more while nothing changes.
+    #[test]
+    fn the_radio_loop_sends_a_wsjtx_status_when_enable_tx_changes() {
+        let engine = Arc::new(Mutex::new(wsjtx_status_engine()));
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            listener.local_addr().unwrap(),
+        )
+        .unwrap();
+        let statuses = || {
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok((n, _)) = listener.recv_from(&mut buf) {
+                let mut r = tempo_net::qds::QdsReader::new(&buf[..n]);
+                r.read_u32();
+                r.read_u32();
+                if r.read_u32() == Some(1) {
+                    got.push(buf[..n].to_vec());
+                }
+            }
+            got
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let sinks = Sinks {
+            wsjtx: Some(&server),
+            psk: None,
+            cfg_dial_hz: 14_074_000,
+        };
+        let (mut ra, mut reopen) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        // As the last boundary left it: the Status it sent.
+        let sent = {
+            let e = engine.lock().unwrap();
+            wsjtx_status(&e, e.settings().dial_hz(), "W9XYZ", "EN37", 0, false)
+        };
+        station.wsjtx_status = Some(sent.clone());
+        let mut tick = |now: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut reopen,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        tick(100.0);
+        let settled = statuses();
+        engine.lock().unwrap().set_tx_enabled(false);
+        tick(120.0);
+        let after = statuses();
+        assert_eq!(
+            after.len(),
+            1,
+            "one Status for the change (settled first: {settled:?})"
+        );
+        let f = wsjtx_status_fields(&after[0]);
+        assert_eq!(f[6], "false", "Tx Enabled off");
+        assert_eq!(f[21], sent.tx.tx_message, "the Tx message rides along");
+        tick(140.0);
+        assert!(statuses().is_empty(), "nothing changed, nothing sent");
+    }
+
+    /// The slot boundary sends a Status and keeps it, as the one the next change is told
+    /// against: without it no change between boundaries would ever be sent.
+    #[test]
+    fn the_slot_boundary_sends_a_wsjtx_status_and_keeps_it() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tier(Tier::Ft8);
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            listener.local_addr().unwrap(),
+        )
+        .unwrap();
+        let sinks = Sinks {
+            wsjtx: Some(&server),
+            psk: None,
+            cfg_dial_hz: 14_074_000,
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        for now in [100.0, 15_020.0] {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        let mut last = None;
+        let mut buf = [0u8; 4096];
+        while let Ok((n, _)) = listener.recv_from(&mut buf) {
+            let mut r = tempo_net::qds::QdsReader::new(&buf[..n]);
+            r.read_u32();
+            r.read_u32();
+            if r.read_u32() == Some(1) {
+                last = Some(buf[..n].to_vec());
+            }
+        }
+        let kept = station
+            .wsjtx_status
+            .as_ref()
+            .expect("the boundary keeps its Status");
+        assert_eq!(
+            last.expect("the boundary sends a Status"),
+            tempo_net::wsjtx::encode_status(tempo_net::APP_ID, &kept.as_status()),
+            "the one kept is the one sent"
+        );
     }
 
     #[test]
