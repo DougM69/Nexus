@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
-import { revision, stagingConfig, identityFromEnv, verifyIdentity, requireValue, requestJson, requestBytes, target } from './staging-common.mjs'
+import { revision, stagingConfig, identityFromEnv, settingsFromEnv, verifyIdentity, requireValue, requestJson, requestBytes, target } from './staging-common.mjs'
 
 const repository = fileURLToPath(new URL('../../', import.meta.url))
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -82,7 +82,10 @@ export async function verifyArtifact(root, expectedRevision, row = target()) {
   const config = JSON.parse(await readFile(join(directory, 'wrangler.jsonc'), 'utf8'))
   const template = JSON.parse(await readFile(join(root, 'remote/wrangler.jsonc'), 'utf8'))
   const expected = bundledConfig(template, { issuer: config.vars?.AUTH0_ISSUER, clientId: config.vars?.AUTH0_CLIENT_ID,
-    audience: config.vars?.AUTH0_AUDIENCE, databaseId: config.d1_databases?.[0]?.database_id, revision: expectedRevision }, row)
+    audience: config.vars?.AUTH0_AUDIENCE, nativeClientId: config.vars?.AUTH0_NATIVE_CLIENT_ID,
+    trialIdentityRequired: config.vars?.TRIAL_IDENTITY_REQUIRED, movedTo: config.vars?.REMOTE_MOVED_TO, moveStage: config.vars?.REMOTE_MOVE_STAGE,
+    secrets: (config.secrets?.required ?? []).filter(name => !(template.secrets?.required ?? []).includes(name)),
+    databaseId: config.d1_databases?.[0]?.database_id, revision: expectedRevision }, row)
   requireValue(JSON.stringify(config) === JSON.stringify(expected), 'Artifact configuration exceeds the staging scope')
   requireValue(actual.includes('worker.js') && actual.includes('assets/index.html') && actual.includes('assets/remote-licenses.txt'), 'Artifact is incomplete')
   return { manifest, config }
@@ -125,7 +128,7 @@ export async function verifyLive({ manifest, config }, fetcher = fetch, row = ta
   const active = await requestJson(`${origin}/api/remote/config`, options, fetcher, 'Deployed Worker identity')
   requireValue(active.ready === true && active.revision === manifest.revision
     && active.issuer === config.vars.AUTH0_ISSUER && active.clientId === config.vars.AUTH0_CLIENT_ID
-    && active.audience === config.vars.AUTH0_AUDIENCE, 'The live Worker does not match the selected source and identity configuration')
+    && active.audience === config.vars.AUTH0_AUDIENCE && active.nativeClientId === (config.vars.AUTH0_NATIVE_CLIENT_ID ?? null), 'The live Worker does not match the selected source and identity configuration')
   let count = 0
   for (const [name, expected] of Object.entries(manifest.files).filter(([name]) => name.startsWith('assets/'))) {
     const path = name === 'assets/index.html' ? '/' : `/${name.slice('assets/'.length)}`
@@ -187,7 +190,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (mode === 'identity') console.log(JSON.stringify(await verifyIdentity(identityFromEnv())))
     else if (mode === 'source') console.log(await verifyPublicSource(process.env.GITHUB_SHA))
     else if (mode === 'prepare') {
-      const result = await createArtifact(repository, { ...identityFromEnv(), databaseId: process.env.REMOTE_D1_DATABASE_ID, revision: process.env.GITHUB_SHA })
+      const result = await createArtifact(repository, { ...settingsFromEnv(), databaseId: process.env.REMOTE_D1_DATABASE_ID, revision: process.env.GITHUB_SHA })
       console.log(`Packaged ${Object.keys(result.files).length} files from ${result.revision}`)
     } else {
       const artifact = await verifyArtifact(repository, process.env.GITHUB_SHA)
