@@ -1146,6 +1146,97 @@ fn a_stop_is_acknowledged_while_the_pairing_book_is_held() {
     });
 }
 
+/// ★ The same with the book held across the shack's status tick, on a runtime of one worker that
+/// the computer's end shares with the shack's: the session asks the book again at each tick, and
+/// nothing at the shack waits for the book on a worker, which would leave no worker to read any
+/// socket or fire any timer on the runtime (a slow PC's runtime, here the computer's own end). The
+/// test above is a lottery for this (its Stop usually goes before a tick asks); this one is not.
+/// CONTROL: the lock was still held when the acknowledgement came.
+#[test]
+fn a_stop_is_acknowledged_with_the_pairing_book_held_across_a_status_tick() {
+    let _alone = alone();
+    on_a_runtime(1, async {
+        let app = App::new();
+        let r = roadside(&app);
+        let mut seat = seated(&r).await;
+        key_the_mic(&r.s);
+        let book = r.s.shared.desk.as_ref().unwrap().book.clone();
+        let (held, holding) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let guard = book.held();
+            held.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(1600));
+            drop(guard);
+            Instant::now()
+        });
+        holding.recv().unwrap();
+        // Past a whole tick (`tempo_app::remote_monitor::POLL_MS`), on this thread: a runtime timer
+        // would wait for the very worker this is about.
+        std::thread::sleep(Duration::from_millis(
+            tempo_app::remote_monitor::POLL_MS + 200,
+        ));
+        let took = seat.road.road_stop(1, Duration::from_millis(600)).await;
+        let acknowledged = Instant::now();
+        let let_go = tokio::task::spawn_blocking(move || holder.join().unwrap())
+            .await
+            .unwrap();
+        eprintln!("measured: a Stop acknowledged in {took:?} with the pairing book held a tick");
+        let took = took.expect("acknowledged");
+        assert!(took < ACKNOWLEDGED, "took {took:?}");
+        assert!(acknowledged < let_go, "while the lock was held");
+        assert!(came_to_a_stop(&r.s).await);
+    });
+}
+
+/// ★ Another computer's road opening while the book is held keeps no Stop waiting: its opener asks
+/// the book, never the road's thread, which every road's Stop shares. CONTROL: the opening was
+/// still waiting on the book when the acknowledgement came, and it opened once the book was free.
+#[test]
+fn a_stop_is_acknowledged_while_a_road_opens_with_the_pairing_book_held() {
+    let _alone = alone();
+    on_a_runtime(4, async {
+        let app = App::new();
+        let r = roadside(&app);
+        let mut seat = seated(&r).await;
+        key_the_mic(&r.s);
+        let book = r.s.shared.desk.as_ref().unwrap().book.clone();
+        let road = r.s.shared.stop_road.clone().expect("a road");
+        let (held, holding) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let guard = book.held();
+            held.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(1600));
+            drop(guard);
+            Instant::now()
+        });
+        holding.recv().unwrap();
+        let opener = std::thread::spawn(move || {
+            let clock = Arc::new(StateClock::default());
+            let opened = road.open(&[7; EXPORTED], "another", "another", [7; 32], clock);
+            (Instant::now(), opened.is_some())
+        });
+        // Many of the road thread's ticks, so it has taken the opening if it would.
+        std::thread::sleep(Duration::from_millis(200));
+        let took = seat.road.road_stop(1, Duration::from_millis(600)).await;
+        let acknowledged = Instant::now();
+        let (opened_at, opened) = tokio::task::spawn_blocking(move || opener.join().unwrap())
+            .await
+            .unwrap();
+        let let_go = tokio::task::spawn_blocking(move || holder.join().unwrap())
+            .await
+            .unwrap();
+        eprintln!("measured: a Stop acknowledged in {took:?} while a road opened, the book held");
+        let took = took.expect("acknowledged");
+        assert!(took < ACKNOWLEDGED, "took {took:?}");
+        assert!(acknowledged < let_go, "while the lock was held");
+        assert!(
+            acknowledged < opened_at && opened,
+            "the opening waited on the book, then opened"
+        );
+        assert!(came_to_a_stop(&r.s).await);
+    });
+}
+
 // ----- Each road alone -----
 
 /// The commands a cockpit's Stop sends for each kind of over: the kind's own stop and the header's
