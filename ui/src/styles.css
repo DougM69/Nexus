@@ -12444,6 +12444,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--accent);
   color: var(--accent-ink);
 }
+/* Spot me (ContestSpotMe.tsx), beside Running / S&P: the comment it sends, then the button. */
+.contest-spot-me {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.contest-spot-comment {
+  width: 12ch;
+  min-height: 36px;
+  font-family: var(--font-mono);
+}
+.contest-spot-btn {
+  min-height: 36px;
+  font-weight: 700;
+  white-space: nowrap;
+}
 
 /* Export buttons in the Field Day header (moved from deleted LogView), right after Running / S&P:
    pushed to the row's far end, across a window-wide screen they sat a long way from the contest

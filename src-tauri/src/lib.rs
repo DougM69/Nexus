@@ -62,6 +62,8 @@ mod command_dispatch;
 /// The contest strip's Super Check Partial download and call-history file: the HTTP and the
 /// commands, off the Engine lock. The rules are `tempo_app::scp` and `tempo_app::call_history`.
 mod contest_lists;
+/// The contest's self-spot: one DX cluster spot of the operator's own call per press, with a cooldown.
+mod contest_spot;
 /// Is the data folder somewhere a DATABASE must not live — a network share, or a folder some
 /// consumer sync client is also writing to? The log is the one thing here that cannot be rebuilt.
 mod data_folder_location;
@@ -37844,6 +37846,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_contests,
         post_spot,
         self_spot_activation,
+        contest_spot::contest_self_spot,
         freq_markers::get_freq_markers,
         freq_markers::add_freq_marker,
         freq_markers::remove_freq_marker,

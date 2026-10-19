@@ -4196,6 +4196,20 @@ export const EN = {
   // children itself, so an entity here would render as the literal characters.
   'fieldDay.role.aria': 'Running or S&P',
   'fieldDay.role.running': 'Running',
+  // Spot me (components/ContestSpotMe.tsx). `{{line}}` is the cluster line as sent: a token.
+  'spotMe.button': 'Spot me',
+  'spotMe.button.title': 'Post ONE spot of your call on this frequency to the DX cluster, with the comment beside it. Once per press; then a {{secs}} s wait.',
+  'spotMe.comment.label': 'Spot comment',
+  'spotMe.cooling': 'Wait {{secs}} s',
+  'spotMe.posted': 'Spotted to the DX cluster: {{line}}',
+  'spotMe.refused.noCall': 'Not spotted: set your callsign in Settings first.',
+  'spotMe.refused.noCluster': 'Not spotted: no DX cluster is connected. Set a cluster in Settings ▸ Spot Sources.',
+  'spotMe.refused.cooldown': 'Not spotted again yet: one spot a minute. {{secs}} s to go.',
+  'spotMe.refused.offBand': 'Not spotted: the dial is outside the amateur bands.',
+  'spotMe.refused.noContest': 'Not spotted: Contest mode is off.',
+  'spotMe.refused.notAllowed': 'Not spotted: this contest\'s rules allow no spotting.',
+  'spotMe.refused.rfOnly': 'Not spotted: this contest allows spotting only over amateur radio while it runs.',
+  'spotMe.refused.failed': 'Not spotted: the DX cluster did not take the spot.',
   'fieldDay.role.sp': 'S&P',
 
   // The exports. Cabrillo and ADIF are the file formats' own names and stay in the sentence.

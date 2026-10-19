@@ -76,6 +76,9 @@ const ALLOWED = new Set([
   // Alt+M in the log line: a band map marker at the dial the station is on, which it reads and never
   // moves (freq_markers.rs); the jump back to one is the band map's, never this window's
   'add_freq_marker',
+  // Spot me: one DX cluster spot of the station's call per press, posted over the internet, keying
+  // nothing (contest_spot.rs)
+  'contest_self_spot',
 ])
 
 /** What transmits, or decides whether or what the station transmits: the stop-line census's verbs,
@@ -333,7 +336,7 @@ describe('the contest logger window transmits nothing', () => {
 
   it('every command on both lists exists in src-tauri, so the lists name real commands', () => {
     const dir = resolve(__dirname, '../../src-tauri/src')
-    const src = ['lib.rs', 'contest_lists.rs', 'window_state.rs', 'freq_markers.rs'].map((f) => readFileSync(resolve(dir, f), 'utf8')).join('\n')
+    const src = ['lib.rs', 'contest_lists.rs', 'window_state.rs', 'freq_markers.rs', 'contest_spot.rs'].map((f) => readFileSync(resolve(dir, f), 'utf8')).join('\n')
     const missing = [...ALLOWED, ...KEYING].filter(
       (cmd) => !new RegExp(`\\n(?:pub )?(?:async )?fn ${cmd}\\(`).test(src),
     )
