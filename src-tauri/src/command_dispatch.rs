@@ -344,14 +344,18 @@ pub(crate) const SECRETS_WITHHELD_FROM_AFAR: [&str; 1] = ["get_settings"];
 /// of [`SECRET_SETTINGS`] saved: the other computer shows "saved at the station" from it.
 pub(crate) const SAVED_AT_THE_STATION: &str = "secretsSavedAtStation";
 
-/// ⛔ What a settings read from afar shows of [`SECRET_SETTINGS`]: each blanked in `read`, and
-/// whether the shack has one saved, by name. From the shack's own screen (`None`) nothing is
-/// blanked and there is nothing to say.
+/// ⛔ What a settings read from afar, or at the shack while a stream watches its screen
+/// (`watched`), shows of [`SECRET_SETTINGS`]: each blanked in `read`, and whether the shack has one
+/// saved, by name. From the shack's own unwatched screen nothing is blanked and there is nothing to
+/// say.
 pub(crate) fn withhold_the_shacks_secret_settings(
     read: &mut tempo_app::settings::Settings,
     afar: Option<&Afar>,
+    watched: bool,
 ) -> Option<BTreeMap<&'static str, bool>> {
-    afar?;
+    if afar.is_none() && !watched {
+        return None;
+    }
     Some(
         SECRET_SETTINGS
             .iter()
@@ -368,16 +372,18 @@ pub(crate) fn withhold_the_shacks_secret_settings(
 /// ⛔ What a settings save from afar may not change, blank or plant ([`SETTINGS_FROM_AFAR`]): each
 /// of [`SECRET_SETTINGS`], put back into `save` as the shack has it, so the read's blanks never
 /// reach the shack and a crafted save cannot write a key of its own. From the shack's own screen
-/// (`None`) the save is taken as it came. Either way the read's "saved at the station" and "set at the station" go:
-/// neither is a setting, and kept as an unknown key each would be saved into the file.
+/// (`None`) the save is taken as it came, unless its form was read without the keys (while a
+/// stream watched): it carries that read's "saved at the station", and its blanks are no edit.
+/// Either way the read's "saved at the station" and "set at the station" go: neither is a
+/// setting, and kept as an unknown key each would be saved into the file.
 pub(crate) fn keep_the_shacks_secret_settings(
     shack: &tempo_app::settings::Settings,
     save: &mut tempo_app::settings::Settings,
     afar: Option<&Afar>,
 ) {
-    save.unknown.remove(SAVED_AT_THE_STATION);
+    let read_without_them = save.unknown.remove(SAVED_AT_THE_STATION).is_some();
     save.unknown.remove(SET_AT_THE_STATION);
-    if afar.is_none() {
+    if afar.is_none() && !read_without_them {
         return;
     }
     let mut shack = shack.clone();

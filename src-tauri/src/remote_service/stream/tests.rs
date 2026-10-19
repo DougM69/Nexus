@@ -181,6 +181,7 @@ fn fixture(now: Instant) -> Fixture {
                     Arc::new(|_: &str| {}),
                 ),
                 shape: Some(Arc::new(ShapeRecorder(shaped.clone()))),
+                watched: Default::default(),
             },
             #[cfg(feature = "radio")]
             audio: None,
@@ -1472,6 +1473,46 @@ fn a_connected_stream_keeps_the_shack_awake_until_it_is_gone() {
         requests(),
         ["hold", "release"],
         "the stream's end did not release it"
+    );
+}
+
+/// ⛔ The station's screen is watched from a session's state on until that state is gone, however
+/// the session ends: closed, or dropped by a panic on its thread. The screen is told each change, in
+/// order. While one session is still ending another keeps it watched. CONTROL: before any session,
+/// and after each, it is not.
+#[test]
+fn a_stream_watches_the_screen_from_its_state_until_it_is_gone_however_it_ends() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let watched = f.station.host.watched.clone();
+    let told = Arc::new(Mutex::new(Vec::new()));
+    let heard = told.clone();
+    watched.tell(Arc::new(move |live| heard.lock().unwrap().push(live)));
+    assert!(!watched.live(), "CONTROL: watched before any session");
+    let streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    assert!(
+        watched.live(),
+        "a session's state, and the screen not watched"
+    );
+    drop(streaming);
+    assert!(!watched.live(), "a closed session left the screen watched");
+    let (station, dropped) = (f.station.clone(), offer(&f.lease));
+    let thread = std::thread::spawn(move || {
+        let _streaming = Streaming::new(station, dropped, Instant::now());
+        panic!("the session's thread died");
+    });
+    assert!(thread.join().is_err(), "premise: the thread panicked");
+    assert!(!watched.live(), "a dropped session left the screen watched");
+    let first = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let second = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    drop(first);
+    assert!(watched.live(), "one session's end ended another's watch");
+    drop(second);
+    assert!(!watched.live());
+    assert_eq!(
+        *told.lock().unwrap(),
+        [true, false, true, false, true, false],
+        "the screen was not told each change, in order"
     );
 }
 

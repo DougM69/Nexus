@@ -5526,6 +5526,7 @@ export const JA: PartialCatalog = {
   "settings.confirmations.clublog.apiKey.hide": "隠す",
   "settings.confirmations.clublog.apiKey.savedAtStation": "ステーションに保存済み",
   "settings.confirmations.clublog.apiKey.notSavedAtStation": "ステーションに未保存",
+  "settings.confirmations.clublog.apiKey.watched": "ストリーム視聴中は非表示",
   "settings.stationOnly.hint": "ステーションで設定",
   "settings.confirmations.clublog.apiKey.hint": "これは<b>アプリケーション</b>側の資格情報で、個人のものではありません — 公式インストーラー版には同梱されており、必要なのは上のメールアドレスとアプリパスワードだけです。ソースからビルドする場合は clublog.org/requestapikey.php で無料のキーを申請し、ここに貼り付けてください（オープンソースにはキーを同梱できません — ClubLogは公開されたキーを自動的に失効させます）。",
   "settings.confirmations.clublog.upload.label": "QSOをClubLogへ自動アップロード",

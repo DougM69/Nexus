@@ -247,6 +247,8 @@ export async function getRemoteMonitorFrame(): Promise<unknown> {
 }
 
 export function getRemoteStationStatus(): Promise<RemoteStationStatus> { return invoke('get_remote_station_status') }
+/** Whether a stream watches this station's screen now; `remote-stream-watched` tells each change. */
+export function getStreamWatched(): Promise<boolean> { return invoke('get_stream_watched') }
 export function remoteStationAction(action: RemoteStationAction): Promise<RemoteStationStatus> { return invoke('remote_station_action', { action }) }
 
 export async function getSnapshot(): Promise<AppSnapshot> {

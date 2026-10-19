@@ -5745,6 +5745,7 @@ export const ES: PartialCatalog = {
   "settings.confirmations.clublog.apiKey.hide": "Ocultar",
   "settings.confirmations.clublog.apiKey.savedAtStation": "Guardada en la estación",
   "settings.confirmations.clublog.apiKey.notSavedAtStation": "Ninguna guardada en la estación",
+  "settings.confirmations.clublog.apiKey.watched": "Oculta mientras una transmisión está mirando",
   "settings.stationOnly.hint": "Se ajusta en la estación",
   "settings.confirmations.clublog.callsign.hint": "El logbook de ClubLog al que subir (vacío = tu indicativo).",
   "settings.confirmations.clublog.callsign.label": "Indicativo de ClubLog",
