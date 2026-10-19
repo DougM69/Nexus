@@ -272,6 +272,9 @@ export function cloudflare(env = process.env, fetcher = fetch, row = target(env)
   return { inspect, preflight, provision, confirmUpload, markUpload, attachDomain, recover, grantTrial }
 }
 
+// The operations the CLI below accepts; a workflow may run no other (staging.test.mjs).
+export const MODES = Object.freeze(['inspect', 'preflight', 'provision', 'resolve', 'recover', 'grant-trial'])
+
 // The stream's relay key, proved before any write (2026-10-03). GitHub never hands a secret back,
 // so a swapped or mistyped key id or token would otherwise surface only on the first stream that
 // needs the relay, as a `relayUnavailable` nobody sees. This mints ONE credential with the key, the
@@ -303,7 +306,7 @@ export async function relayKeyCheck(env = process.env, fetcher = fetch) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const mode = process.argv[2]
-    requireValue(process.argv.length === 3 && ['inspect', 'preflight', 'provision', 'resolve', 'recover', 'grant-trial'].includes(mode), 'Use inspect, preflight, provision, resolve, recover or grant-trial')
+    requireValue(process.argv.length === 3 && MODES.includes(mode), 'Use inspect, preflight, provision, resolve, recover or grant-trial')
     const api = cloudflare()
     let result
     if (mode === 'preflight') {

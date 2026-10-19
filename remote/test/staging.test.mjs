@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { STAGING, TARGETS, billingServices, deployable, identity, settingsFromEnv, stagingConfig, target, verifyIdentity, requestBytes, requestJson } from '../scripts/staging-common.mjs'
-import { cloudflare, relayKeyCheck, workerDigest } from '../scripts/cloudflare-staging.mjs'
+import { MODES, cloudflare, relayKeyCheck, workerDigest } from '../scripts/cloudflare-staging.mjs'
 import { createArtifact, verifyArtifact, verifyLive, verifyLiveSettled, verifyPublicSource } from '../scripts/staging-artifact.mjs'
 import { runtime } from './runtime.mjs'
 import { uploadArtifact, compareSchema, redactedDiagnostic, runWrangler, schemaQuery, settleUpload, withSecretsFile, wranglerLogLevel } from '../scripts/deploy-staging.mjs'
@@ -859,13 +859,20 @@ test('the production workflow is the staging one aimed at production, behind the
   assert.doesNotMatch(guard, /secrets\.|environment:/)
   assert.match(guard, /run: node remote\/scripts\/production-guard\.mjs/)
   const options = text => text.match(/options:\n((?:          - .+\n)+)/)[1].trim().split(/\n\s*- /).map(o => o.replace(/^- /, ''))
-  assert.deepEqual(options(production), ['inspect', 'provision', 'deploy', 'recover', 'import-trial-markers'])
-  assert.match(production, /inspect\|provision\|deploy\|recover\|import-trial-markers\) ;;/)
+  assert.deepEqual(options(production), ['inspect', 'provision', 'deploy', 'recover'])
+  assert.match(production, /inspect\|provision\|deploy\|recover\) ;;/)
   // The same scripts and gates as staging, operation for operation.
   const runs = text => [...text.matchAll(/node remote\/scripts\/[\w.-]+\.mjs [\w-]+|scripts\/gates --job .*/g)].map(m => m[0]).sort()
-  assert.deepEqual(runs(production).filter(r => !r.includes('import-trial-markers')),
-    runs(staging).filter(r => !r.includes('grant-trial')))
-  assert.ok(runs(production).includes('node remote/scripts/cloudflare-staging.mjs import-trial-markers'))
+  assert.deepEqual(runs(production), runs(staging).filter(r => !r.includes('grant-trial')))
+})
+
+test('every Cloudflare operation a Remote workflow runs is one the script implements', async () => {
+  const modes = text => [...text.matchAll(/node remote\/scripts\/cloudflare-staging\.mjs ([\w-]+)/g)].map(m => m[1])
+  for (const file of ['remote-staging.yml', 'remote-production.yml']) {
+    const used = modes(await readFile(join(root, '.github/workflows', file), 'utf8'))
+    assert.ok(used.length >= 5, `${file}: positive control, its operations are found`)
+    assert.deepEqual(used.filter(mode => !MODES.includes(mode)), [], `${file} runs an operation the script refuses`)
+  }
 })
 
 
