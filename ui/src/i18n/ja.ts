@@ -8153,4 +8153,6 @@ export const JA: PartialCatalog = {
   "spotMe.refused.notAllowed": "スポットしていません: このコンテストの規則はスポットを認めていません。",
   "spotMe.refused.rfOnly": "スポットしていません: このコンテストは開催中、アマチュア無線経由のスポットのみ認めています。",
   "spotMe.refused.failed": "スポットしていません: DX クラスターがスポットを受け付けませんでした。",
+  "spotMe.selfSpot.warn": "このコンテストはセルフスポットを認めていない可能性があります。{{secs}} 秒以内に「それでもスポット」を押すと送信します。",
+  "spotMe.selfSpot.confirm": "それでもスポット",
 }

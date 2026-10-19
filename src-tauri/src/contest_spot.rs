@@ -10,6 +10,10 @@
 //! - **Clear refusals**, as tokens the screen turns into sentences: no call set, no cluster
 //!   connected, off the band plan, Contest mode off, a contest whose rules allow no spotting, or
 //!   one that allows spotting only over amateur RF ([`crate::internet_spot_allowed`]).
+//! - **Self-spotting is asked twice where the rules may forbid it.** A contest whose rules data does
+//!   not say self-spotting is allowed (`AssistancePolicy::self_spot_allowed`: not allowed, or not
+//!   read) refuses the press with [`SELF_UNCONFIRMED`]; the screen warns, and only its second
+//!   press, sent as `confirmed`, posts.
 //! - **The line is the cluster's own DX command**, `DX <freq kHz> <call> <comment>` (DXSpider's
 //!   `dx [by <call>] <freq> <call> <remarks>`; AR-Cluster and CC Cluster take the same), built by
 //!   `tempo_net::cluster::format_dx_spot` and queued for the connected node by [`crate::queue_spot`].
@@ -19,6 +23,9 @@ use serde::Serialize;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use tauri::State;
+
+use tempo_app::engine::Engine;
+use tempo_core::fd_rules::SelfSpot;
 
 use crate::SharedEngine;
 
@@ -32,6 +39,9 @@ pub const NO_CLUSTER: &str = "spotNoCluster";
 pub const OFF_BAND: &str = "spotOffBand";
 pub const NO_CONTEST: &str = "spotNoContest";
 pub const NOT_ALLOWED: &str = "spotNotAllowed";
+/// A contest whose rules are not known to allow SELF-spotting: the screen warns, and only a
+/// second press (sent as `confirmed`) posts.
+pub const SELF_UNCONFIRMED: &str = "spotSelfUnconfirmed";
 pub const FAILED: &str = "spotFailed";
 /// `spotCooldown:<seconds left>`.
 pub const COOLING: &str = "spotCooldown";
@@ -128,28 +138,36 @@ fn post_cluster(_: f64, _: &str, _: &str) -> Result<(), String> {
     Err("test build: nothing is posted".into())
 }
 
+/// May this press spot, by the station's contest and its rules? The station's call and dial when
+/// it may. `confirmed` is the operator's second press after the self-spot warning.
+fn station_spot(eng: &Engine, confirmed: bool) -> Result<(String, u64), String> {
+    let s = eng.settings();
+    if !s.fd_active {
+        return Err(NO_CONTEST.into());
+    }
+    crate::internet_spot_allowed(eng)?;
+    let event = s.fd_event.trim();
+    let event = if event.is_empty() { "arrlfd" } else { event };
+    let rules =
+        tempo_core::fd_rules::ruleset_by_id(event, tempo_core::fd_rules::CURRENT_RULES_YEAR);
+    if rules.is_some_and(|rs| !rs.assistance.spotting_allowed) {
+        return Err(NOT_ALLOWED.into());
+    }
+    let self_spot = rules.map_or(SelfSpot::Unknown, |rs| rs.assistance.self_spot_allowed);
+    if self_spot != SelfSpot::Allowed && !confirmed {
+        return Err(SELF_UNCONFIRMED.into());
+    }
+    Ok((s.mycall.clone(), s.dial_hz()))
+}
+
 /// The Spot button's press: the station's call and dial, the operator's comment.
 #[tauri::command(async)]
 pub fn contest_self_spot(
     state: State<'_, SharedEngine>,
     comment: String,
+    confirmed: Option<bool>,
 ) -> Result<Posted, String> {
-    let (call, dial_hz) = {
-        let eng = crate::engine_lock(&state);
-        let s = eng.settings();
-        if !s.fd_active {
-            return Err(NO_CONTEST.into());
-        }
-        crate::internet_spot_allowed(&eng)?;
-        let event = s.fd_event.trim();
-        let event = if event.is_empty() { "arrlfd" } else { event };
-        if tempo_core::fd_rules::ruleset_by_id(event, tempo_core::fd_rules::CURRENT_RULES_YEAR)
-            .is_some_and(|rs| !rs.assistance.spotting_allowed)
-        {
-            return Err(NOT_ALLOWED.into());
-        }
-        (s.mycall.clone(), s.dial_hz())
-    };
+    let (call, dial_hz) = station_spot(&crate::engine_lock(&state), confirmed.unwrap_or(false))?;
     send_with(
         &GATE,
         Instant::now(),
@@ -281,6 +299,34 @@ mod tests {
             post_cluster,
         );
         assert_eq!(r.unwrap_err(), FAILED);
+    }
+
+    fn contest_engine(event: &str) -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = event.into();
+        e.apply_settings(s);
+        e
+    }
+
+    #[test]
+    fn a_contest_not_known_to_allow_self_spotting_posts_only_on_the_second_press() {
+        // Rules data: CQ WW forbids self-spotting, the ARRL VHF contests allow it, ARRL
+        // Sweepstakes' text says nothing either way.
+        for event in ["cqww_cw", "arrlss_cw"] {
+            let e = contest_engine(event);
+            assert_eq!(
+                station_spot(&e, false).unwrap_err(),
+                SELF_UNCONFIRMED,
+                "{event}"
+            );
+            assert_eq!(station_spot(&e, true).unwrap().0, "KD9TAW", "{event}");
+        }
+        let vhf = contest_engine("arrlvhf_jan");
+        assert_eq!(station_spot(&vhf, false).unwrap().0, "KD9TAW");
+        let off = Engine::new("KD9TAW", "EN61", 0);
+        assert_eq!(station_spot(&off, true).unwrap_err(), NO_CONTEST);
     }
 
     /// A spot is public, so it goes only on the operator's press: the one command is the only

@@ -6,6 +6,8 @@
 // POSTS: nothing here runs on a timer or an event, a press while one is on its way is the same press,
 // and after a spot went the button waits out the cooldown and says how long. The station holds the
 // same cooldown and reads the call and dial itself (`contest_spot.rs`); this is the button's half.
+// A contest not known to allow SELF-spotting (the station's rules data says so) refuses the first
+// press with a warning; only a second press inside CONFIRM_SECS posts.
 import { useEffect, useRef, useState } from 'react'
 import { contestSelfSpot, type ContestSpotPosted } from '../api'
 import { t } from '../i18n'
@@ -18,6 +20,8 @@ export function defaultSpotComment(contestShort: string): string {
 
 /** The cooldown, in seconds, before the station has said (`contest_spot::COOLDOWN`). */
 const COOLDOWN_SECS = 60
+/** How long after the self-spot warning a second press still posts. */
+const CONFIRM_SECS = 10
 
 function refusal(err: unknown): string {
   const token = String(err)
@@ -49,6 +53,12 @@ export function ContestSpotMe({ contestShort }: { contestShort: string }) {
   const [coolUntil, setCoolUntil] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const left = Math.max(0, Math.ceil((coolUntil - now) / 1000))
+  const [armedUntil, setArmedUntil] = useState(0)
+  useEffect(() => {
+    if (!armedUntil) return
+    const id = window.setTimeout(() => setArmedUntil(0), Math.max(0, armedUntil - Date.now()))
+    return () => window.clearTimeout(id)
+  }, [armedUntil])
   useEffect(() => {
     if (coolUntil <= Date.now()) return
     const id = window.setInterval(() => {
@@ -63,13 +73,20 @@ export function ContestSpotMe({ contestShort }: { contestShort: string }) {
     if (busy.current || left > 0) return
     busy.current = true
     setSending(true)
+    const confirmed = armedUntil > Date.now()
+    setArmedUntil(0)
     try {
-      const posted = await contestSelfSpot(comment)
+      const posted = await contestSelfSpot(comment, confirmed)
       const at = Date.now()
       setNow(at)
       setCoolUntil(at + (posted.cooldownSecs || COOLDOWN_SECS) * 1000)
       pushToast(t('spotMe.posted', { line: spotLine(posted) }), 'success')
     } catch (e) {
+      if (String(e).includes('spotSelfUnconfirmed')) {
+        setArmedUntil(Date.now() + CONFIRM_SECS * 1000)
+        pushToast(t('spotMe.selfSpot.warn', { secs: CONFIRM_SECS }), 'info')
+        return
+      }
       pushToast(refusal(e), 'error')
     } finally {
       busy.current = false
@@ -98,7 +115,7 @@ export function ContestSpotMe({ contestShort }: { contestShort: string }) {
         disabled={sending || left > 0}
         onClick={() => void press()}
       >
-        {left > 0 ? t('spotMe.cooling', { secs: left }) : t('spotMe.button')}
+        {left > 0 ? t('spotMe.cooling', { secs: left }) : armedUntil ? t('spotMe.selfSpot.confirm') : t('spotMe.button')}
       </button>
     </div>
   )

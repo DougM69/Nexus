@@ -4011,9 +4011,10 @@ export interface ContestSpotPosted {
 }
 
 /** The contest screen's Spot me: ONE DX cluster spot of the station's own call on its dial, with
- *  `comment`. Rejects with a token (`spotNoCall`, `spotNoCluster`, `spotCooldown:<secs>`, …). */
-export async function contestSelfSpot(comment: string): Promise<ContestSpotPosted> {
-  return invoke<ContestSpotPosted>('contest_self_spot', { comment })
+ *  `comment`. Rejects with a token (`spotNoCall`, `spotNoCluster`, `spotCooldown:<secs>`, …);
+ *  `spotSelfUnconfirmed` for a contest not known to allow self-spotting until `confirmed`. */
+export async function contestSelfSpot(comment: string, confirmed: boolean): Promise<ContestSpotPosted> {
+  return invoke<ContestSpotPosted>('contest_self_spot', { comment, confirmed })
 }
 
 /** A band map frequency marker (`freq_markers.rs`): local to the station, never posted. */
