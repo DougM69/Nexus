@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { answerRemoteAutostartOffer, getRemoteStationStatus, getSettings, remoteStationAction, setLaunchAtLogin } from '../api'
 import { t } from '../i18n'
-import { isNative, PLATFORM_NAMES, type RemoteStationAction, type RemoteStationStatus } from './types'
+import { isNative, PLATFORM_NAMES, type AccountRole, type RemoteStationAction, type RemoteStationStatus } from './types'
 import { shortFingerprint } from '../remote-web/stream-protocol'
 import '../remote-web/remote.css'
 
@@ -23,6 +23,9 @@ export function RemoteStation() {
   // is the operator at the shack, transmit included (the operator, 2026-10-03), so the card's words say so.
   const [pairingTransmit, setPairingTransmit] = useState(false)
   const [browserTransmit, setBrowserTransmit] = useState<Record<string, boolean>>({})
+  // People: the address and role of the next invitation.
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteRole, setInviteRole] = useState<AccountRole>('operate')
   const pending = useRef(false), mounted = useRef(true), requestEpoch = useRef(0)
   useEffect(() => {
     mounted.current = true
@@ -80,6 +83,15 @@ export function RemoteStation() {
   // that takes the whole of Settings down with this card.
   const browsers = status?.devices?.filter(device => !isNative(device)) ?? []
   const computers = status?.devices?.filter(isNative) ?? []
+  const account = status?.account
+  const roleName = (role: AccountRole) => role === 'listen' ? t('remote.account.role.listen') : t('remote.account.role.operate')
+  // What the station knows of a device beyond its approval: added by its own sign-in, a proof the station
+  // could not confirm (never granted), or a removal the service has not heard yet.
+  const accountNotes = (device: RemoteStationStatus['devices'][number]) => <>
+    {device.addedBy === 'account' && <span>{t('remote.account.addedByAccount')}</span>}
+    {account?.unconfirmed?.[device.id] && <span className="remote-warning">{t('remote.account.unconfirmed')}</span>}
+    {account?.removals?.includes(device.id) && <span>{t('remote.account.removalWaiting')}</span>}
+  </>
   // One card (the operator, 2026-10-02: "Settings ▸ Remote access becomes one card"): where this
   // station stands with the Remote service and the one thing to do next, then the browsers with their
   // keys. Everything else the panel had folds under Advanced, unchanged: the same state, the same
@@ -112,15 +124,47 @@ export function RemoteStation() {
       // Approving at the shack before the browser agreed to attach the station. Falling through to
       // requestFailed would point an operator standing at the radio at their network.
       : issue === 'awaitingConfirmation' ? t('remote.nativeAwaitingConfirmation')
+      // Signing in at the shack, and inviting people.
+      : issue === 'accountNotReady' ? t('remote.account.notReady')
+      : issue === 'signInPortBusy' ? t('remote.account.signInPortBusy')
+      : issue === 'signInFailed' || issue === 'proofInvalid' || issue.startsWith('token') ? t('remote.account.signInFailed')
+      : issue === 'stationLimit' ? t('remote.account.stationLimit')
+      : issue === 'inviteLimit' ? t('remote.account.inviteLimit')
+      : issue === 'noKey' ? t('remote.vaultFailed')
       : t('remote.requestFailed')}</p>}
     {/* S3-M1: browsers check this station's stream against the key the service recorded for it at
         pairing. Another one there is not fixed by waiting, so it gets its own line until it is. */}
     {status?.keyRefused && <p role="alert">{t('remote.nativeStationKeyPinned')}</p>}
+    {/* The notice: a device the station granted on its own proof, until the operator has seen it. Inline,
+        never a modal: nothing here may stand between the operator and Stop TX. */}
+    {account?.added?.map(added => <div key={added.deviceId} role="status" className="remote-native-browser">
+      <span>{t(added.guest ? 'remote.account.addedGuest' : 'remote.account.added', {
+        name: added.name, key: added.key ? shortFingerprint(added.key) : '—', role: roleName(added.role),
+        what: added.kind === 'browser' ? t('remote.account.aBrowser')
+          : t('remote.native.computerPlatform', { platform: added.platform ? PLATFORM_NAMES[added.platform] : '—' }) })}</span>
+      <span className="remote-actions">
+        <button type="button" className="remote-button" disabled={busy}
+          onClick={() => void act({ type: 'device', deviceId: added.deviceId, approve: false })}>{t('remote.native.remove')}</button>
+        <button type="button" className="remote-button" disabled={busy}
+          onClick={() => void act({ type: 'dismissAdded', deviceId: added.deviceId })}>{t('remote.account.gotIt')}</button>
+      </span>
+    </div>)}
+    {account?.reproof && <p role="alert">{t('remote.account.reproof')}</p>}
     {/* Linking the station to the account IS the sign-in, so its steps stay in the card while it is
         not linked; the pairing's transmit option is under Advanced. */}
     {phase === 'unpaired' && <>
       <label>{t('remote.stationName')}<input value={name} maxLength={48} onChange={event => setName(event.target.value)} /></label>
-      <button type="button" className="remote-button" disabled={busy || !name.trim()} onClick={() => void act({ type: 'begin', name })}>{t('remote.pairStation')}</button>
+      {/* Signing in binds the station with no code; pairing with a code stays beside it. */}
+      {account?.signingIn ? <>
+        <p role="status">{t('remote.account.signingIn')}</p>
+        <button type="button" className="remote-button" onClick={() => void act({ type: 'cancel' })}>{t('remote.account.cancelSignIn')}</button>
+      </> : <>
+        <p>{t('remote.account.signInHint')}</p>
+        <div className="remote-actions">
+          <button type="button" className="remote-button" disabled={busy || !name.trim()} onClick={() => void act({ type: 'signIn', name })}>{t('remote.account.signIn')}</button>
+          <button type="button" className="remote-button" disabled={busy || !name.trim()} onClick={() => void act({ type: 'begin', name })}>{t('remote.pairStation')}</button>
+        </div>
+      </>}
     </>}
     {status?.pairingCode && <>
       <p>{t('remote.openService')} <a href={status.origin} target="_blank" rel="noreferrer">{status.origin}</a></p>
@@ -161,6 +205,7 @@ export function RemoteStation() {
             <span className="remote-native-browser-state">{device.approved !== 1 ? t('remote.native.asks')
               : unpinned ? t('remote.browserKeyNotPinned') : device.untilRemoved === 1 ? t('remote.browserApprovedUntilRemoved')
               : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
+            {accountNotes(device)}
             <span className="remote-actions">
               {(device.approved !== 1 || unpinned) && <button type="button" className="remote-button" disabled={busy}
                 onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key, kind: device.kind ?? 'browser' })}>{t('remote.approve')}</button>}
@@ -183,6 +228,7 @@ export function RemoteStation() {
               <span className="remote-native-browser-state">{device.approved !== 1 ? t('remote.native.computerAsks')
                 : unpinned ? t('remote.native.computerKeyNotPinned') : device.untilRemoved === 1 ? t('remote.browserApprovedUntilRemoved')
                 : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
+              {accountNotes(device)}
               <span className="remote-actions">
                 {(device.approved !== 1 || unpinned) && <button type="button" className="remote-button" disabled={busy}
                   onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: false, key, kind: device.kind ?? 'browser' })}>{t('remote.approve')}</button>}
@@ -192,6 +238,29 @@ export function RemoteStation() {
             </li> })}
         </ul>
       </>}
+      {/* People: invited by the address they sign in with, to operate or only to listen. Their devices are
+          added when they sign in; the station checks each one's proof against this list itself. */}
+      <h3>{t('remote.account.people')}</h3>
+      <p>{t('remote.account.peopleHint')}</p>
+      {(account?.people?.length ?? 0) === 0 ? <p>{t('remote.account.noPeople')}</p> : <ul className="remote-native-browsers">
+        {account!.people.map(person => <li key={person.mailbox} className="remote-native-browser">
+          <span className="remote-native-browser-name">{person.mailbox}</span>
+          <span>{roleName(person.role)}</span>
+          <span className="remote-actions">
+            <button type="button" className="remote-button" disabled={busy}
+              onClick={() => void act({ type: 'uninvite', email: person.mailbox })}>{t('remote.account.uninvite')}</button>
+          </span>
+        </li>)}
+      </ul>}
+      <label>{t('remote.account.email')}<input type="email" value={inviteEmail} maxLength={254} onChange={event => setInviteEmail(event.target.value)} /></label>
+      <label>{t('remote.account.role')}<select value={inviteRole} onChange={event => setInviteRole(event.target.value === 'listen' ? 'listen' : 'operate')}>
+        <option value="operate">{t('remote.account.role.operate')}</option>
+        <option value="listen">{t('remote.account.role.listen')}</option>
+      </select></label>
+      <div className="remote-actions">
+        <button type="button" className="remote-button" disabled={busy || !inviteEmail.trim()}
+          onClick={() => void act({ type: 'invite', email: inviteEmail.trim(), role: inviteRole })}>{t('remote.account.invite')}</button>
+      </div>
     </>}
     {/* Advanced: the old panel's options, kept as they were (the operator, 2026-10-02: "The old
         pairing and permission options fold under "Advanced" (kept, not deleted)"). */}
