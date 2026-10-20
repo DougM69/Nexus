@@ -239,7 +239,11 @@ the station is linked to, or one its owner invited to operate it: the window fin
 your network by name (or asks for its address), checks that it is the station its owner signed in
 for, and the station is then on this computer on its own network and over the internet, with no
 code. The station takes this computer on its network for 30 days from that sign-in; in the last
-week the window offers **Sign in again**. For a station whose owner has not signed in to Nexus
+week the window offers **Sign in again**. Signing in from somewhere else (a laptop away from home,
+a friend you invited at their own house), press **Not on this network** when the window asks
+where the station is: the station is then on this computer by its name, over the internet only,
+until you press **Sign in** on its row once while this computer is on the station's network.
+For a station whose owner has not signed in to Nexus
 Remote at the station, choose **Pair with a code instead…**: the window looks for stations by
 name on your network and offers each one it finds ("Nexus" and the first characters of its key,
 as the station's card shows it). Press one to use its address, or type the address the station

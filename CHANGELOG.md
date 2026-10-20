@@ -221,6 +221,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sign-in on to every computer that you, or someone you invite, signs in on, so a guest's computer never receives
   your address. A second PC's sign-in carries its verified email address, which is how your shack recognises a person
   you invited.
+- **Nexus Remote: add your station from a PC that has never been on its network (Beta, test builds).** A laptop away
+  from home, or a friend you invited who lives elsewhere, can now sign in from **Stations on this network** and keep
+  the station: when Nexus does not find it on the network the PC is on, press **Not on this network** and the station
+  is added over the internet. **Operate from this computer** then drives it over the internet road (part of Nexus
+  Remote's paid service). The first time that PC is on the station's own network, press **Sign in** on the station's
+  row there once: the station is then on the PC on its network too, with the same keys and no second device at
+  Nexus Remote, and from then on it signs in again every 30 days as any other. NEEDS-BENCH: a laptop on a phone hotspot
+  that has never been on the shack's network, then the same laptop at home.
 - **Nexus Remote from a second PC: every JS8 switch, and satellite tracks that end when the second PC goes.** HB, Relay,
   HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
