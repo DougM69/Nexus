@@ -284,7 +284,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Spots pops out into its own window.** **⧉ Pop out** in the Spots header opens the board in a window of its own,
   for a second monitor, as the Needed board's does. It is the whole board: the search, the filters, Hide worked and
   Spot me. Clicking a row tunes the radio to the spot and the main window opens the matching screen, as from the
-  Needed window. The window's filters are its own: it opens with the board's defaults, and closing it forgets them.
+  Needed window. The window's filters are its own: it opens with your Spots view's filters, and closing it forgets them.
   The Spots box in the popped-out Conditions window now has Spot me too, as it has in the main window.
 
 ### Changed

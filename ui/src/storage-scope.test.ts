@@ -156,6 +156,9 @@ const SHARED = [
   // Spot me's last comment for each mode on the Spots board (SpotsSpotMe): what the operator says about
   // themselves on a mode, the same whichever window's board they spot from.
   'nexus.spotMe.comments',
+  // The Spots view's filters on their way to the window its Pop out opens (SpotsPanel's hand-off): written by
+  // the main window, taken and deleted by that window. Per window, it would never reach the window it is for.
+  'nexus.spotsPopOut.filters',
   // The contest logger window's layout (features/contestLoggerLayout): written by the main window to
   // say which layout it opens that window in, read by that window. One window, so one key.
   'nexus.contestLogger.layout',
