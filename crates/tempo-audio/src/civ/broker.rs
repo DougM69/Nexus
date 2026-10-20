@@ -3249,9 +3249,14 @@ mod tests {
             data_mode,
             model,
         ));
-        // The engine's own first frame is scope-off housekeeping (`27 11 00`), sent
-        // asynchronously on its first loop pass. Wait it out, so a test that snapshots the
-        // log to see what ONE verb sent never counts the engine's frame as the verb's.
+        await_housekeeping(&regs);
+        (engine, b, regs)
+    }
+
+    /// The engine's own first frame is scope-off housekeeping (`27 11 00`), sent
+    /// asynchronously on its first loop pass. Wait it out, so a test that snapshots the
+    /// log to see what ONE verb sent never counts the engine's frame as the verb's.
+    fn await_housekeeping(regs: &Arc<Mutex<Regs>>) {
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while regs.lock().unwrap().log.is_empty() {
             assert!(
@@ -3260,7 +3265,6 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(2));
         }
-        (engine, b, regs)
     }
 
     /// Plant DISAGREEING values in the two bands' receive registers — every one different
@@ -3575,14 +3579,7 @@ mod tests {
             2,
             Some(IcomModel::Ic7610),
         );
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while regs2.lock().unwrap().log.is_empty() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "engine housekeeping never ran"
-            );
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        await_housekeeping(&regs2);
         let n = regs2.lock().unwrap().wire.len();
         assert!(b2.set_mode("PKTUSB", 0));
         assert_eq!(
@@ -5178,6 +5175,10 @@ mod tests {
             let regs = radio.regs();
             let daemon =
                 CivDaemon::start_with_link(Box::new(radio), addr, 0, 1, Some(model), link).unwrap();
+            // Both windows below open after the engine's own first frame. On the link that may
+            // not key, nothing ahead of `T 0` reaches the engine (every key is refused before
+            // it), so a late engine thread put `27 11 00` inside the unkey window.
+            await_housekeeping(&regs);
             let (mut c, mut rd) = client(daemon.local_addr().port());
             let before = regs.lock().unwrap().log.len();
             for (line, serial_reply) in [
