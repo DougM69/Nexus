@@ -662,6 +662,17 @@ fn no_stored_station_is_replaced_by_one_with_another_key() {
         Err("notStation"),
         "A's id, another road"
     );
+    let a_road_again = || InternetRoad {
+        station_id: AWAY.into(),
+        device_id: a_road.device_id.clone(),
+        station_key: a_road.station_key.clone(),
+        pkcs8: a_road.pkcs8.clone(),
+    };
+    assert_eq!(
+        stations.keep_away(&listed_as(AWAY, &impostor.station_key), &a_road_again()),
+        Err("notStation"),
+        "A's id, A's road, another LAN key"
+    );
     assert_eq!(
         *store.entries.lock().unwrap(),
         before,
@@ -674,14 +685,8 @@ fn no_stored_station_is_replaced_by_one_with_another_key() {
             ..copy_of(&b)
         })
         .unwrap();
-    let same_road = InternetRoad {
-        station_id: AWAY.into(),
-        device_id: a_road.device_id.clone(),
-        station_key: a_road.station_key.clone(),
-        pkcs8: a_road.pkcs8.clone(),
-    };
     stations
-        .keep_away(&listed_as(AWAY, &a.station_key), &same_road)
+        .keep_away(&listed_as(AWAY, &a.station_key), &a_road_again())
         .unwrap();
     assert_eq!(
         stations.get(&id(1)).unwrap().unwrap().addresses,
