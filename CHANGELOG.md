@@ -360,6 +360,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **FT8 and FT4 no longer transmit on top of another program keying your radio through Nexus.** With "Other programs
+  may key transmit" on, a program sharing the radio through Nexus's CAT broker (WSJT-X, VarAC) could key for a
+  transmission of its own while your FT8 or FT4 CQ or QSO was armed, and at the start of your next period Nexus sent its
+  own over under that program's key: two signals from one transmitter. Nexus now sends nothing while the other program
+  holds the key. Your CQ or QSO stays armed and stays where it was, and its message goes out in your first period after
+  the program lets go. Stop TX still drops the other program's key and stops everything. JS8 and Nexus's other timed
+  modes wait the same way. NEEDS-BENCH: WSJT-X on the CAT broker holding PTT through a Nexus FT8 CQ's period, into a
+  dummy load first.
 - **A logger can no longer turn TX back on after you stop it.** With the WSJT-X UDP feed on, a Reply from GridTracker or
   JTAlert used to arm TX even after Stop TX, Esc or a TX watchdog trip, and cleared the trip. Now that Reply is ignored
   until you turn TX on yourself, and the watchdog trip stays until you do. A logger's free text with "send" no longer
