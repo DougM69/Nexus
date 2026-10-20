@@ -378,6 +378,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **An unassisted contest entry now stops all CW decoding, not only the AI decoder.** With Settings ▸ Contesting ▸
+  Unassisted entry on, the classic decoder still copied CW into the Decode pane, offered the calls it heard as chips
+  and filled His Call with its best guess. CQ WW's rules count a CW decoder as QSO-finding assistance, which an
+  unassisted entry may not use. Now neither decoder runs: no copy, call chips or His Call guess, no report or name
+  for the log strip and no speed, and the Decode pane says why. CW speed match sends at your own speed. A call you
+  type is still the one the F-keys send. Ending the entry brings the decoder back as you had it, with nothing from
+  before or during the entry. Assisted entries and everyday operating are unchanged.
 - **The speed beside the CW Decode pane's title no longer shows a station heard long ago.** The classic decoder
   measures it, and clicking a call chip sets your keyer to it, but it stayed at the last speed measured however long
   ago that was, so a click could send your next over at the previous station's speed. It now shows, and a chip click

@@ -332,6 +332,9 @@ If the rig has a split TX frequency set (`splitTxMhz` in the radio snapshot), a 
   DECODE header falls back to the classic pitch decoder (also used automatically if the
   model file is missing). Fused prosigns (<AR>, <BT>) aren't in the model's alphabet and
   can appear as letter fragments.
+- **Off in an unassisted contest entry:** with Settings → Contesting ▸ Unassisted entry on, neither
+  decoder runs (CQ WW counts a CW decoder as assistance): no copy, call chips, His Call guess or
+  speed, and the Decode pane says why.
 - **Not a full-band skimmer:** the decode follows the audio passband, not every signal on
   the band at once; the WPM readout is estimated by the classic decoder underneath.
 - **CAT abort reliability:** `\stop_morse` varies by Hamlib version and rig manufacturer; older builds and some rigs may not halt mid-element.

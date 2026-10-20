@@ -2262,7 +2262,7 @@ What your Cabrillo log declares about the entry, and the switch that keeps the
   100 W PEP), and says so beside the picker: HIGH writes no CATEGORY-POWER line there.
   This is the one power your log declares: **Power sent** is what an exchange carries,
   and Field Day's power multiplier is its score.
-- **Unassisted entry** — "Turns off the AI CW decoder, DX cluster / RBN spots, the
+- **Unassisted entry** — "Turns off the CW decoder (AI and classic), DX cluster / RBN spots, the
   PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp.
   **Takes effect at once**" — its own command, not Save, because an operator
   flips it as an event starts. "Your own settings for each of those are left

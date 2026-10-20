@@ -87,6 +87,9 @@ mod cw_sending_gate_tests;
 /// CW speed match: an answer keys at the station's measured speed, a CQ at the operator's own.
 #[cfg(test)]
 mod cw_speed_match_tests;
+/// An unassisted contest entry decodes no CW at all.
+#[cfg(test)]
+mod cw_unassisted_tests;
 mod field_day_display;
 /// WSJT-X's mid-over message switch for FT8 and FT4 (`m_restart`).
 pub mod ft_midover;
@@ -10586,6 +10589,7 @@ impl Engine {
     ///   says nothing about whether the classic decoder's timing is that station's;
     /// - the classic decoder has a speed, from a keyed element heard within
     ///   [`CW_SPEED_MATCH_FRESH_SECS`] (an older one may be another station's, or none at all).
+    ///   It has none in an unassisted entry, where it does not run (`Settings::cw_decoder_active`).
     ///
     /// The speed is held to the operator's min/max. There is one estimate, the classic decoder's,
     /// at the operator's CW pitch: the signal the operator is tuned to, not one per station.
@@ -20273,11 +20277,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // loop: moving them would need an engine handle on that thread, and a contended lock
         // would start DROPPING CW/RTTY audio during exactly the stall this fixed.
         // Feed the longer CW-decode ring (the 2048-sample waterfall window is far too
-        // short for Morse — CW_WINDOW holds several seconds so a callsign fits).
-        self.cw_audio.extend_from_slice(samples);
-        if self.cw_audio.len() > CW_WINDOW {
-            let drop = self.cw_audio.len() - CW_WINDOW;
-            self.cw_audio.drain(0..drop);
+        // short for Morse — CW_WINDOW holds several seconds so a callsign fits). Not in an
+        // unassisted entry, which decodes no CW at all (`Settings::cw_decoder_active`): the
+        // first audio after one is declared, however it was, drops what the decoders held.
+        if self.settings.cw_decoder_active() {
+            self.cw_audio.extend_from_slice(samples);
+            if self.cw_audio.len() > CW_WINDOW {
+                let drop = self.cw_audio.len() - CW_WINDOW;
+                self.cw_audio.drain(0..drop);
+            }
+        } else if !self.cw_audio.is_empty() {
+            self.drop_cw_decoding();
         }
         // The AI CW decoder's longer ring (15 s — the model's window) fills only while
         // the feature is on, so everyone else pays nothing. `ai_cw_active` (not the raw
@@ -20324,9 +20334,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
             }
         }
         // Feed the streaming CW decoder (retune first, cheaply, if the operator moved the
-        // marker pitch) — it keeps a persistent transcript across polls + window slides.
-        self.cw_stream.retune(self.settings.cw_pitch_hz);
-        self.cw_stream.push(samples);
+        // marker pitch) — it keeps a persistent transcript across polls + window slides. Not in
+        // an unassisted entry (above).
+        if self.settings.cw_decoder_active() {
+            self.cw_stream.retune(self.settings.cw_pitch_hz);
+            self.cw_stream.push(samples);
+        }
         // And the per-QSO WAV ring — the last ~60 s of RX, captured on log when enabled.
         self.qso_audio.extend_from_slice(samples);
         if self.qso_audio.len() > QSO_WAV_WINDOW {
@@ -20349,9 +20362,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// quietly underneath — it supplies the WPM estimate (the model doesn't measure speed)
     /// and the transcript fallback when the AI is off or its model is missing.
     ///
-    /// `ai_cw_active` folds in Unassisted mode, so an unassisted entry falls through to the
-    /// Goertzel transcript here: the operator keeps copying CW, without the model's help.
+    /// An unassisted entry gets nothing here, neither decoder's copy nor the speed
+    /// ([`crate::settings::Settings::cw_decoder_active`]), however it was declared.
     pub fn cw_decode(&self) -> tempo_core::cw_decode::CwDecode {
+        if !self.settings.cw_decoder_active() {
+            return tempo_core::cw_decode::CwDecode::default();
+        }
         let ai_live = self.settings.ai_cw_active()
             && (!self.ai_cw_text.is_empty() || self.ai_cw_status.is_empty());
         tempo_core::cw_decode::CwDecode {
@@ -20447,19 +20463,30 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// cluster settings. Those stay exactly as the operator left them and are overridden while
     /// this is on, so ending Unassisted mode restores their station with nothing to restore.
     ///
-    /// Declaring an unassisted entry drops any AI transcript already on screen — leaving the
-    /// model's copy visible after the model has been switched off would be stale text
-    /// presented as live decode.
+    /// Declaring an unassisted entry drops every CW copy already on screen, the classic
+    /// decoder's and its speed included — leaving copy visible after the decoders have been
+    /// switched off would be stale text presented as live decode — so nothing heard before the
+    /// entry comes back when it ends either.
     pub fn set_unassisted_mode(&mut self, on: bool) {
         let was = crate::settings::ContestBefore::of(&self.settings);
         self.settings.unassisted_mode = on;
         self.note_contest_before(was, self.settings.fd_active);
         if on {
-            self.ai_cw_text.clear();
-            self.ai_cw_pending.clear();
-            self.ai_cw_status.clear();
-            self.restart_ai_cw_stream();
+            self.drop_cw_decoding();
         }
+    }
+
+    /// Drop everything the CW decoders hold: the AI decoder's copy, its unconfirmed tail, its
+    /// status and its ring, and the classic decoder's copy, its timing and its ring. An
+    /// unassisted entry starts here ([`Self::set_unassisted_mode`], and the first audio after
+    /// any other way of declaring one, [`Self::feed_rx_audio`]).
+    fn drop_cw_decoding(&mut self) {
+        self.ai_cw_text.clear();
+        self.ai_cw_pending.clear();
+        self.ai_cw_status.clear();
+        self.restart_ai_cw_stream();
+        self.cw_audio.clear();
+        self.cw_stream.reset();
     }
 
     /// Clear the streaming CW decoder's accumulated transcript (the cockpit's Clear button).
@@ -20473,8 +20500,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// Wideband CW skim of the recent receive audio: every distinct keyed signal across
     /// the 300–1500 Hz CW passband, each as (pitch, text, WPM). The multi-signal sibling
-    /// of [`Self::cw_decode`].
+    /// of [`Self::cw_decode`], and like it, nothing in an unassisted entry.
     pub fn cw_skim(&self) -> Vec<tempo_core::cw_decode::SkimHit> {
+        if !self.settings.cw_decoder_active() {
+            return Vec::new();
+        }
         tempo_core::cw_decode::skim_cw(&self.cw_audio, tempo_fast::SAMPLE_RATE, 300, 1500, 50)
     }
 
@@ -25467,10 +25497,20 @@ contact yourself."
         // model), so `catOk`/`smeterDb` are None for them.
         s.active_radio_id = self.settings.active_radio;
         s.radio_pegged = self.settings.radio_pegged;
+        // No AI copy or status from an unassisted entry, however it was declared (`cw_decode`).
+        let decoding = self.settings.cw_decoder_active();
         s.ai_cw = crate::dto::AiCwStatus {
             enabled: self.settings.ai_cw_enabled,
-            status: self.ai_cw_status.clone(),
-            text: self.ai_cw_text.clone(),
+            status: if decoding {
+                self.ai_cw_status.clone()
+            } else {
+                String::new()
+            },
+            text: if decoding {
+                self.ai_cw_text.clone()
+            } else {
+                String::new()
+            },
         };
         if self.settings.radios.len() > 1 {
             s.radios = self

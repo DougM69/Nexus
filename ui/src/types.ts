@@ -1765,6 +1765,9 @@ export interface CwDecodeResult {
   recommended: string | null
   /** The operator-confirmed worked callsign (active peer), if any. */
   workedCall: string | null
+  /** An unassisted contest entry is declared at the station: no CW decoder runs, so every field the
+   *  decoder fills is empty, and the Decode pane says why. Absent from an older station. */
+  unassisted?: boolean
 }
 
 /** One signal found by the wideband CW skimmer (audio pitch + text + WPM). */

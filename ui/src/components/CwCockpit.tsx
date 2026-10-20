@@ -760,6 +760,10 @@ export function CwCockpit({
     rst: null,
     name: null,
   })
+  // An unassisted contest entry at the station: it decodes no CW, so its read carries no copy,
+  // speed, calls, report or name, and the Decode pane says why in place of the copy. Anything drawn
+  // from the read (a turn cue, when one is built) has nothing to show then either.
+  const [unassisted, setUnassisted] = useState(false)
   // True once the operator sets WPM by hand → stop auto-matching to the decoded speed.
   const wpmTouched = useRef(false)
   // F-key macros come from the ACTIVE named CW profile (Settings ▸ CW). A rotating
@@ -858,6 +862,7 @@ export function CwCockpit({
             setSent(d.sent)
             setKeyerError(d.keyerError)
             setPaddleTookOver(d.paddleTookOver === true)
+            setUnassisted(d.unassisted === true)
             setCand(d.candidates)
             setGuide({
               state: d.state,
@@ -873,6 +878,7 @@ export function CwCockpit({
         .catch(() => {
           if (owns() && !control) {
             setDecodeAvailable(false); setDecoded({ text: '', pending: '', wpm: 0 }); setSent([]); setCand([]); setKeyerError(null)
+            setUnassisted(false)
             setGuide({ state: 'listening', headline: '', prompt: '', recommended: null, workedCall: null, rst: null, name: null })
           }
         })
@@ -1553,25 +1559,33 @@ export function CwCockpit({
   const decodePane = hasDecodePane ? (
     <CockpitPaneFrame title={t('cw.pane.decode.title')} paneId="decode" weight={3} actions={decodeActions} {...closeProps('decode')}>
       <div className="cw-decode panel" title={t('cw.decode.title', { window: AI_WINDOW_HZ })}>
-        {/* The visible transcript animates character-by-character (typewriter) —
-            aria-hidden so a screen reader doesn't announce every keystroke; the
-            hidden role=log mirror below receives whole batches instead (a log
-            region announces only ADDITIONS). */}
-        <div className="cw-decode-text" ref={decodePin.ref} onScroll={decodePin.onScroll} aria-hidden="true">
-          {decoded.text || decoded.pending ? (
-            <>
+        {unassisted ? (
+          // No transcript at all in an unassisted entry: the one line saying why, where a screen
+          // reader reads it too (the typed-out copy below is hidden from one).
+          <p className="cw-decode-off">{t('cw.decode.unassisted')}</p>
+        ) : (
+          <>
+            {/* The visible transcript animates character-by-character (typewriter) —
+                aria-hidden so a screen reader doesn't announce every keystroke; the
+                hidden role=log mirror below receives whole batches instead (a log
+                region announces only ADDITIONS). */}
+            <div className="cw-decode-text" ref={decodePin.ref} onScroll={decodePin.onScroll} aria-hidden="true">
+              {decoded.text || decoded.pending ? (
+                <>
+                  {decoded.text}
+                  {decoded.pending && <span className="cw-decode-unconfirmed">{decoded.pending}</span>}
+                </>
+              ) : (
+                <span className="cw-decode-idle">
+                  {!decodeAvailable ? t('remote.cwUnavailable') : (snap.aiCw?.enabled && snap.aiCw.status) || t('cw.decode.listening')}
+                </span>
+              )}
+            </div>
+            <div className="sr-only" role="log" aria-label={t('cw.decode.log.aria')}>
               {decoded.text}
-              {decoded.pending && <span className="cw-decode-unconfirmed">{decoded.pending}</span>}
-            </>
-          ) : (
-            <span className="cw-decode-idle">
-              {!decodeAvailable ? t('remote.cwUnavailable') : (snap.aiCw?.enabled && snap.aiCw.status) || t('cw.decode.listening')}
-            </span>
-          )}
-        </div>
-        <div className="sr-only" role="log" aria-label={t('cw.decode.log.aria')}>
-          {decoded.text}
-        </div>
+            </div>
+          </>
+        )}
       </div>
     </CockpitPaneFrame>
   ) : null

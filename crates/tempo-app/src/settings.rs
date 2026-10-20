@@ -2001,10 +2001,11 @@ pub struct Settings {
     /// QSO-finding assistance. One switch, so there is exactly one thing to get right
     /// before an event, and one thing to point at afterwards.
     ///
-    /// While on it SUPPRESSES every assistance source at once: the DeepCW AI CW decoder,
-    /// DX cluster / RBN spot ingestion, and the PSK Reporter reception-report feed that
-    /// drives the Needed board. Each state change is journaled with a timestamp so the
-    /// operator can show what was running during the event.
+    /// While on it SUPPRESSES every assistance source at once: CW decoding (the DeepCW AI
+    /// decoder and the classic one, [`Settings::cw_decoder_active`]), DX cluster / RBN spot
+    /// ingestion, and the PSK Reporter reception-report feed that drives the Needed board.
+    /// Each state change is journaled with a timestamp so the operator can show what was
+    /// running during the event.
     ///
     /// **It overrides, never overwrites.** `ai_cw_enabled` / `cluster_enabled` /
     /// `pskreporter` keep the operator's own values untouched; the effective getters
@@ -5825,9 +5826,21 @@ impl Settings {
     /// Every gate that decides whether the decoder runs must go through here rather than
     /// reading `ai_cw_enabled`, or Unassisted mode becomes a switch that claims more than
     /// it does. Turning the AI decoder off restores the classic Goertzel transcript, so
-    /// the operator still copies CW — just without the model's help.
+    /// the operator still copies CW — just without the model's help. Unassisted mode stops
+    /// that one too ([`Settings::cw_decoder_active`]).
     pub fn ai_cw_active(&self) -> bool {
         self.ai_cw_enabled && !self.unassisted_mode
+    }
+
+    /// Does any CW decoding run, the classic decoder's included? Not in an unassisted entry:
+    /// CQ WW's rules count a CW decoder as QSO-finding assistance, so an unassisted entry gets
+    /// nothing from either decoder — no copy, no call chips or His Call guess, no report or
+    /// name, no measured speed (the Decode head's, a chip click's, CW speed match's) and no
+    /// skim. Every reader of the classic decoder goes through here, and so must anything else
+    /// drawn from the copy, a turn cue when one is built. [`Settings::ai_cw_active`] already
+    /// folds the same flag in for the AI decoder.
+    pub fn cw_decoder_active(&self) -> bool {
+        !self.unassisted_mode
     }
 
     /// Choose [`Settings::cluster_nodes_auto`] for settings written before it existed: automatic
