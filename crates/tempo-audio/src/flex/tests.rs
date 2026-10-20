@@ -218,8 +218,7 @@ fn the_shim_authors_its_caps_and_answers_the_rest_as_the_broker_does() {
     assert_eq!(caps.rfpower_floor_milli, Some(0));
     assert!(caps.vfo_read_native);
     assert_eq!(caps.split_detect, crate::baud_ladder::SplitDetect::Absent);
-    // Byte for byte the encoder's answers for a backend without the verb. A read between them,
-    // because three unrecognised verbs in a row cost a client its connection, by design.
+    // Byte for byte the encoder's answers for a backend without the verb. A read between them.
     let mock = crate::rigctld_server::tests::MockRig::default();
     for verb in ["l STRENGTH", "J 100", "Z 100", "I 14075000", "R +"] {
         let shared = match crate::rigctld_server::handle_command(verb, &mock) {

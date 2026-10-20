@@ -4835,9 +4835,9 @@ mod tests {
     /// can see one. Returns the reply to each XIT line and the payload of every `21` frame
     /// the radio received, in order.
     ///
-    /// One connection per line, because the server hangs up on a peer after three `RPRT -11`
-    /// in a row (`MAX_CONSECUTIVE_UNKNOWN`, its defence against a web page posting to the
-    /// port). Nexus's own `Rig::set_xit` stops at the first refusal, so it never sends more.
+    /// One connection per line. The server's hang-up (`MAX_CONSECUTIVE_UNKNOWN`, its defence
+    /// against a web page posting to the port) counts only lines that are not rigctld protocol,
+    /// so these refusals would not trip it on one connection either.
     fn xit_then_rit(addr: u8, model: IcomModel) -> (Vec<String>, Vec<Vec<u8>>) {
         let (radio, _push) = FakeRadio::new(addr);
         let regs = radio.regs();
@@ -4953,9 +4953,10 @@ mod tests {
     }
 
     /// ★ A RADIO SWITCH NEVER PUSHES A NATIVE CONNECTION TOWARD HANG-UP. The server drops a peer
-    /// after `MAX_CONSECUTIVE_UNKNOWN` (3) not-implemented replies in a row. A switch sends the
-    /// radio being left `T 0`, `\stop_morse` and `\stop_voice_mem`, and none of them may answer
-    /// `RPRT -11`, so switches back to back leave the loop's connection up.
+    /// after `MAX_CONSECUTIVE_UNKNOWN` (3) lines in a row that are not rigctld protocol. A switch
+    /// sends the radio being left `T 0`, `\stop_morse` and `\stop_voice_mem`: rigctld verbs, which
+    /// never count, and none of them may answer `RPRT -11` either, so switches back to back leave
+    /// the loop's connection up.
     #[test]
     fn back_to_back_switches_leave_the_native_connection_up() {
         let (_d, port, _regs) = daemon_with_regs();
@@ -4963,7 +4964,7 @@ mod tests {
         for _ in 0..3 {
             for line in ["T 0\n", "\\stop_morse\n", "\\stop_voice_mem\n"] {
                 let reply = roundtrip(&mut c, &mut rd, line);
-                assert_ne!(reply, "RPRT -11\n", "{line:?} fed the hang-up counter");
+                assert_ne!(reply, "RPRT -11\n", "{line:?} answered not-implemented");
             }
         }
         assert!(
@@ -4973,19 +4974,17 @@ mod tests {
                 .is_ok(),
             "the connection is still up and answering"
         );
-        // The control, on a fresh connection: three not-implemented verbs in a row DO hang up,
-        // so the check above would see one. (No reply to the third; the server closes first.)
+        // The control, on a fresh connection: three lines in a row that are not rigctld protocol
+        // DO hang up, so the check above would see one. (No reply to the third; the server closes
+        // first.)
         let (mut c, mut rd) = client(port);
         for _ in 0..2 {
-            assert_eq!(
-                roundtrip(&mut c, &mut rd, "\\send_voice_mem 1\n"),
-                "RPRT -11\n"
-            );
+            assert_eq!(roundtrip(&mut c, &mut rd, "\\warble\n"), "RPRT -11\n");
         }
         assert_eq!(
-            roundtrip(&mut c, &mut rd, "\\send_voice_mem 1\n"),
+            roundtrip(&mut c, &mut rd, "\\warble\n"),
             "",
-            "the third not-implemented reply in a row hangs up"
+            "the third line in a row that is not rigctld protocol hangs up"
         );
     }
 

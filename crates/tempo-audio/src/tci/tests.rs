@@ -281,8 +281,7 @@ fn the_daemon_serves_the_transceiver_once_the_server_is_ready() {
 }
 
 /// A verb the shim does not implement answers what the shared encoder answers any backend that
-/// lacks it, byte for byte: CW is the SDR program's keyer's, a later change. A read between them,
-/// because three unrecognised verbs in a row cost a client its connection, by design.
+/// lacks it, byte for byte: CW is the SDR program's keyer's, a later change. A read between them.
 #[test]
 fn the_rest_answers_as_the_broker_answers_a_backend_without_it() {
     let sim = esdr3([]);
@@ -731,8 +730,8 @@ fn the_meters_read_the_servers_sensors() {
         swr: 1.5,
     });
     let d = daemon(&sim);
-    // A meter not reported yet answers as a verb not implemented (`RPRT -11`), and three of those
-    // in a row cost a client its connection: wait for the server's first push of each.
+    // A meter not reported yet answers as a verb not implemented (`RPRT -11`): wait for the
+    // server's first push of each.
     assert!(
         d.session().wait_until(WAIT, |s| {
             let t = s.model.trx(trx0());
