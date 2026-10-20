@@ -281,6 +281,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   becomes the 73 when the caller's RR73 arrives. It never starts a contact: a CQ on the air is never switched to an
   answer, and an over to one station never becomes a call to another. NEEDS-BENCH: FT8 and FT4, a second station in
   the same contest.
+- **FT8/FT4: an RR73 answering your RRR is answered with 73, as in WSJT-X.** If you close with RRR (Settings: RRR
+  instead of RR73) and your partner answers it with RR73 or RRR, Nexus now sends 73, once, and the QSO is complete;
+  before, it closed without one. If the RR73 is decoded while your RRR is already on the air, the rest of that over
+  becomes the 73, and "Disable Tx after sending 73" turns TX off after it as usual. The contact is logged once. After
+  your RR73 nothing changes: your partner's 73, RR73 or RRR gets no reply. A Hound never sends the 73. NEEDS-BENCH:
+  FT8 and FT4, a second station that answers your RRR with RR73.
+- **FT8/FT4 Call CQ: a caller's RR73 to your RRR gets one 73, then the run calls CQ.** With "Roger with RRR (not
+  RR73)" on, a Call CQ run now answers the caller's RR73 (or RRR) to your RRR with 73, once, as WSJT-X does, and
+  then calls CQ again. Before, the run went back to CQ without a reply, and when that RR73 was decoded while your
+  RRR was on the air, the rest of the RRR became the CQ. If the RR73 is decoded late, while the next over is
+  already on the air, the rest of that over becomes the 73. TX stays on, the contact is logged once, and a repeat
+  of the caller's RR73 gets nothing more. Only the caller's own RR73 or RRR to you counts. NEEDS-BENCH: FT8 and
+  FT4, a second station that answers your RRR with RR73.
 - **Contest entry: the sample text in empty boxes is quieter.** The grey examples ("W1AW", "599", a county) are now
   in normal weight instead of bold, and a shade darker in the dark themes, so they no longer read like something
   typed in. They stay readable in every theme.

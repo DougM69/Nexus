@@ -2785,6 +2785,10 @@ enum LateAnswer {
     /// #170 — the contact COMPLETED and our closing roger went out. A repeated report means
     /// they never copied it, so the only useful thing we can do is send it again.
     Roger,
+    /// Ruling 544 — as [`Self::Roger`], where that roger was RRR, which carries no 73: a
+    /// repeated report re-sends it, and their RR73/RRR to it earns the 73 WSJT-X sends
+    /// (`widgets/mainwindow.cpp:9210-9214`). Whichever comes first is the one over.
+    RogerOrBye73,
     /// #153 — the run GAVE UP on them mid-exchange. A late RR73/RRR is them closing the
     /// contact, and it earns the 73 that closes it back.
     Bye73,
@@ -27568,7 +27572,9 @@ contact yourself."
                 // `(CallingCq, Report)`, which locks on and re-works them — which is itself
                 // what WSJT-X's bare-report arm does, `mainwindow.cpp:6415-6440`.)
                 Msg::Report { to, de, .. } | Msg::RReport { to, de, .. }
-                    if answer == LateAnswer::Roger && same(&to, &mycall) && same(&de, &call) =>
+                    if matches!(answer, LateAnswer::Roger | LateAnswer::RogerOrBye73)
+                        && same(&to, &mycall)
+                        && same(&de, &call) =>
                 {
                     Some(if rrr {
                         Msg::Rrr {
@@ -27583,9 +27589,12 @@ contact yourself."
                     })
                 }
                 // #153 — the station the run gave up on came back and closed. Answer with the
-                // 73 that closes it back, and nothing else.
+                // 73 that closes it back, and nothing else. Ruling 544 — likewise the partner's
+                // roger to our RRR: one 73, then the run's CQ.
                 Msg::Rr73 { to, de } | Msg::Rrr { to, de }
-                    if answer == LateAnswer::Bye73 && same(&to, &mycall) && same(&de, &call) =>
+                    if matches!(answer, LateAnswer::Bye73 | LateAnswer::RogerOrBye73)
+                        && same(&to, &mycall)
+                        && same(&de, &call) =>
                 {
                     Some(Msg::Bye73 {
                         to: de,
@@ -27980,11 +27989,17 @@ contact yourself."
                         call: dx,
                         // `resume_cq` and `abandon_stalled` are mutually exclusive by
                         // construction (one needs `qso_logged`, the other `!qso_logged`), so
-                        // this reads the origin exactly rather than guessing at it.
-                        answer: if resume_cq {
-                            LateAnswer::Roger
-                        } else {
+                        // this reads the origin exactly rather than guessing at it. A run
+                        // resumes from `Confirming` with our roger still queued, as it went on
+                        // the air (an RRR the packer had to render counts, as in the
+                        // sequencer's own arm), or from `done()` with nothing queued: our 73
+                        // went, and nothing more is owed.
+                        answer: if !resume_cq {
                             LateAnswer::Bye73
+                        } else if matches!(station.outgoing(), Some(Msg::Rrr { .. })) {
+                            LateAnswer::RogerOrBye73
+                        } else {
+                            LateAnswer::Roger
                         },
                         confirm_with_rrr: station.confirm_with_rrr,
                         until_slot: slot.saturating_add(LATE_REPLY_SLOTS),

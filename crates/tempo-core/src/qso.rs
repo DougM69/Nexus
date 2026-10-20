@@ -899,12 +899,36 @@ impl Station {
                     }
                     self.state = State::Done;
                 }
+                // We rogered with RRR, which carries no 73, and the partner answers it with a
+                // roger of its own, RR73 or RRR: send the 73, once. WSJT-X 3.0.2 checks
+                // `^RR(?:R|73)$` before its ROGERS branch and sets `m_ntx=5`
+                // (`widgets/mainwindow.cpp:9210-9214`); the decode reaches `processMessage`
+                // because an RRR is not a 73 message (`message_is_73`, :315-321), so its key left
+                // Enable Tx on (:8105-8139). "Our RRR" is the over we put on the air, so a roger
+                // the packer had to render as RRR counts too. Never as a Hound (the Fox's RR73
+                // ends the QSO in silence; a 73 would land in its segment). A CQ run that still
+                // holds the contact answers it too (ruling 544): the run calls CQ only once the 73
+                // has gone (`done()`), so an RRR still on the air becomes the 73, never the CQ.
+                (State::Confirming, Msg::Rr73 { to, de })
+                | (State::Confirming, Msg::Rrr { to, de })
+                    if crate::message::same_call(to, &self.mycall)
+                        && self.from_dx(de)
+                        && matches!(self.outgoing(), Some(Msg::Rrr { .. }))
+                        && !self.quiet_finish =>
+                {
+                    self.pending = Some(Msg::Bye73 {
+                        to: de.clone(),
+                        de: self.mycall.clone(),
+                    });
+                    self.state = State::Done;
+                    self.log("DX rogered our RRR → sending 73, QSO complete".into());
+                }
                 // We rogered and are waiting to be signed off. Any of the three closing
-                // words does it: a bare `73`, or the partner's own `RR73`/`RRR`. We owe
-                // nothing after our roger — a partner who answers it with a roger of their
-                // own (which is what a degraded pair's `RRR` is, and what two stations that
-                // both think they are closing send in the plain forms) has confirmed the
-                // contact, and re-sending ours at them forever is not a courtesy.
+                // words does it: a bare `73`, or the partner's own `RR73`/`RRR`. After our RR73
+                // we owe nothing: it is a 73 message, at its key WSJT-X turns Enable Tx off
+                // (:8105-8139), and a partner who answers it with a roger of their own has
+                // confirmed the contact; re-sending ours at them forever is not a courtesy. (A
+                // roger to our RRR is answered by the arm above, except as a Hound.)
                 (State::Confirming, Msg::Bye73 { to, de })
                 | (State::Confirming, Msg::Rr73 { to, de })
                 | (State::Confirming, Msg::Rrr { to, de })
@@ -1883,6 +1907,126 @@ mod start_context_tests {
                 "{other}"
             );
         }
+    }
+
+    /// Our roger was RRR, keyed (Settings: RRR instead of RR73).
+    fn rogered_with_rrr() -> Station {
+        let m = Msg::parse("KD9TAW W9XYZ R-15");
+        let mut s = Station::start(ME, MY_GRID, DX, Some((&m, -8)), true, false);
+        assert_eq!(
+            s.pending_text().as_deref(),
+            Some("W9XYZ KD9TAW RRR"),
+            "premise: our RRR"
+        );
+        s.after_tx();
+        s
+    }
+
+    /// WSJT-X `mainwindow.cpp:9210-9214`: our RRR is not a 73 message, so its key left Enable Tx
+    /// on, and the partner's RR73 or RRR is processed: `^RR(?:R|73)$`, checked before the ROGERS
+    /// branch, sets `m_ntx=5`. The 73 goes once.
+    #[test]
+    fn the_partners_roger_to_our_rrr_is_answered_with_73() {
+        for closing in ["KD9TAW W9XYZ RR73", "KD9TAW W9XYZ RRR"] {
+            let mut s = rogered_with_rrr();
+            s.observe(&[dec(closing, -8)]);
+            assert_eq!(s.state, State::Done, "{closing}");
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("W9XYZ KD9TAW 73"),
+                "{closing}"
+            );
+            assert!(!s.signed_off_with_73, "{closing}: not the partner's 73");
+            s.after_tx();
+            assert_eq!(s.pending_text(), None, "{closing}: the 73 goes once");
+        }
+    }
+
+    /// The same where RRR is what the packer made of our roger (a pair with no room for a number,
+    /// D4): WSJT-X answers RR73 or RRR with 73 at ROGER_REPORT as at ROGERS
+    /// (`m_QSOProgress < ROGERS || ^RR(?:R|73)$`).
+    #[test]
+    fn the_partners_roger_to_a_degraded_rrr_is_answered_with_73() {
+        for closing in ["<KD9TAW/P> F4CYH/R RR73", "<KD9TAW/P> F4CYH/R RRR"] {
+            let mut d = Station::calling_cq("KD9TAW/P", MY_GRID);
+            d.observe(&[dec("<KD9TAW/P> F4CYH/R", -7)]);
+            d.observe(&[dec("<KD9TAW/P> F4CYH/R", -7)]);
+            assert_eq!(d.state, State::Confirming, "premise");
+            assert_eq!(
+                d.pending_text().as_deref(),
+                Some("<F4CYH/R> KD9TAW/P RRR"),
+                "premise"
+            );
+            d.after_tx();
+            d.observe(&[dec(closing, -7)]);
+            assert_eq!(d.state, State::Done, "{closing}");
+            assert_eq!(
+                d.pending_text().as_deref(),
+                Some("<F4CYH/R> KD9TAW/P 73"),
+                "{closing}"
+            );
+        }
+    }
+
+    /// ⛔ After our RR73 nothing is owed: RR73 is a 73 message (`message_is_73`, :315-321), and
+    /// at its key WSJT-X's auto-sequencing turns Enable Tx off (:8105-8139), so the partner's 73,
+    /// RR73 or RRR is never processed. The QSO closes with nothing queued.
+    #[test]
+    fn after_our_rr73_the_partners_closing_over_is_not_answered() {
+        for closing in ["KD9TAW W9XYZ RR73", "KD9TAW W9XYZ RRR", "KD9TAW W9XYZ 73"] {
+            let mut s = start("KD9TAW W9XYZ R-15", -8);
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("W9XYZ KD9TAW RR73"),
+                "premise: our RR73"
+            );
+            s.after_tx();
+            s.observe(&[dec(closing, -8)]);
+            assert_eq!(s.state, State::Done, "{closing}");
+            assert_eq!(s.pending_text(), None, "{closing}");
+        }
+    }
+
+    /// ⛔ #236: only the partner's own roger, addressed to us, earns the 73. A bystander's RR73 or
+    /// RRR to us, the partner's RR73 to another station and a sender-less RR73 leave our RRR
+    /// queued.
+    #[test]
+    fn only_the_partners_roger_to_us_answers_our_rrr() {
+        for other in [
+            "KD9TAW K2DEF RR73",
+            "KD9TAW K2DEF RRR",
+            "K2DEF W9XYZ RR73",
+            "W9XYZ RR73",
+        ] {
+            let mut s = rogered_with_rrr();
+            s.observe(&[dec(other, -8)]);
+            assert_eq!(s.state, State::Confirming, "{other}");
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("W9XYZ KD9TAW RRR"),
+                "{other}"
+            );
+        }
+    }
+
+    /// No 73 as a Hound: the pair has no room for a number, so our roger went out as RRR, and the
+    /// Fox's RR73 ends the QSO in silence, as every Hound QSO ends (a 73 would land in the Fox's
+    /// segment). (A CQ run answers it, ruling 544: the engine's run scenes.)
+    #[test]
+    fn a_hound_closes_on_the_roger_to_our_rrr_without_a_73() {
+        let mut hound = Station::answering("KD9TAW/P", MY_GRID, "F4CYH/R");
+        hound.quiet_finish = true;
+        hound.observe(&[dec("<KD9TAW/P> F4CYH/R", -7)]);
+        hound.observe(&[dec("<KD9TAW/P> F4CYH/R", -7)]);
+        assert_eq!(
+            hound.pending_text().as_deref(),
+            Some("<F4CYH/R> KD9TAW/P RRR"),
+            "premise"
+        );
+        hound.after_tx();
+        hound.observe(&[dec("<KD9TAW/P> F4CYH/R RR73", -7)]);
+        assert_eq!(hound.state, State::Done);
+        assert_eq!(hound.pending_text(), None, "no 73");
     }
 
     #[test]
