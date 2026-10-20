@@ -344,6 +344,45 @@ async fn adding_the_road_registers_a_new_key_for_the_accounts_station() {
     );
 }
 
+/// ★ The road kept says this computer's key for it as the station shows that key when it asks to
+/// approve this computer: the shack's own fingerprint (`remote_service::fingerprint`) of the key the
+/// service registered for the device, which is what the service lists to the station. And whether the
+/// device still waits for that approval; the road is kept for the station paired here. CONTROL: a road
+/// the service approved at once waits for nothing.
+#[tokio::test]
+async fn the_road_kept_says_this_computers_key_as_the_station_shows_it() {
+    const PAIRED: &str = "60000000-0000-4000-8000-000000000001";
+    let (origin, seen) = service().await;
+    for approved in [false, true] {
+        let road = registered(&origin, &seen).await;
+        let listed = seen.lock().unwrap().device_key.clone().unwrap();
+        let stations = Arc::new(Stations::new(Arc::new(
+            crate::lan_client::tests::StationStore::default(),
+        )));
+        stations
+            .keep(&crate::lan_client::tests::record(
+                PAIRED,
+                &["192.168.1.20:42075"],
+            ))
+            .unwrap();
+        let pkcs8 = road.pkcs8.clone();
+        let (waiting, key) = keep_road(Arc::clone(&stations), PAIRED.into(), road, approved)
+            .await
+            .unwrap();
+        assert_eq!(
+            Some(key),
+            crate::remote_service::fingerprint(&listed),
+            "the key the station shows"
+        );
+        assert_eq!(waiting, !approved, "waits only while not approved there");
+        assert_eq!(
+            stations.internet(PAIRED).unwrap().map(|kept| kept.pkcs8),
+            Some(pkcs8),
+            "kept for the station paired here"
+        );
+    }
+}
+
 /// ★ An account with two stations: the operator is offered each one's id and name, and the station
 /// picked is the one registered with, and its listed key the one kept. CONTROL: no pick (cancelled,
 /// or the window gone), or an id the service never listed, registers nothing (`stationNotChosen`).

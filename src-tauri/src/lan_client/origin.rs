@@ -24,9 +24,11 @@
 //! (`stationId`), `keepAddress` (`stationId`, and the `address` Operate tries first, or none to
 //! clear it), `chooseStation`
 //! (`stationId`, or none to cancel), and on an open road the station's own `operationRequest` and
-//! `streamSignal`. To the page: `stations` (`stations`, `computer`, `internet`, and after a forget
-//! the service could not be told of, `forgetUnreached`), `signingIn`, `chooseStation` (`stations`:
-//! each `id` and `name`), `internetAdded` or `internetRefused`, `found` (`shacks`,
+//! `streamSignal`. To the page: `stations` (`stations`, `computer`, `internet`: each station the
+//! internet road has been added to, by `id`, with this computer's `key` for the road as the station
+//! shows it, and after a forget the service could not be told of, `forgetUnreached`), `signingIn`,
+//! `chooseStation` (`stations`: each `id` and `name`), `internetAdded` (`stationId`, `waiting` and
+//! that `key`) or `internetRefused`, `found` (`shacks`,
 //! `available`), `paired` (`station`) or `pairRefused`, `connected` (`stationId`, `deviceId`,
 //! `sessionId`, `stationKey`, `address`) or `connectRefused`, `closed` (`stationLeft`,
 //! `connectionLost`), `answerRefused`, and the station's own `operationResponse`, `streamSignal`,
@@ -62,7 +64,7 @@ use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
-use super::internet::{Choice, Choose, CHOOSE_WAIT};
+use super::internet::{Added, Choice, Choose, CHOOSE_WAIT};
 use super::road::{self, Road, ToPage};
 use super::{code, hex, pairing, StationView, Stations, MAX_STATIONS};
 use crate::remote_service::lan::valid_name;
@@ -559,7 +561,8 @@ async fn store<T: Send + 'static>(
         .unwrap_or(Err("storeUnavailable"))
 }
 
-/// The stations, as the page shows them, and which of them have the internet road.
+/// The stations, as the page shows them, and which of them have the internet road, each with this
+/// computer's key for it as the station shows it (`internet::shown_key`): its public half only.
 async fn stations(reach: &Reach) -> String {
     listed(reach).await.to_string()
 }
@@ -568,10 +571,12 @@ async fn listed(reach: &Reach) -> serde_json::Value {
     let kept = reach.stations.clone();
     let listed = store(move || {
         let list = kept.list()?;
-        let internet: Vec<String> = list
+        let internet: Vec<serde_json::Value> = list
             .iter()
-            .filter(|station| matches!(kept.internet(&station.id), Ok(Some(_))))
-            .map(|station| station.id.clone())
+            .filter_map(|station| {
+                let road = kept.internet(&station.id).ok().flatten()?;
+                Some(json!({"id":station.id,"key":super::internet::shown_key(&road)?}))
+            })
             .collect();
         Ok((list, internet))
     });
@@ -637,7 +642,7 @@ async fn page(
     // A look by name under way, on a thread that may wait: a second `find` has its answer.
     let mut finding: Option<tokio::task::JoinHandle<Result<Vec<Found>, Unavailable>>> = None;
     // The internet road being added, while the sign-in waits for the browser: one at a time.
-    let mut adding: Option<tokio::task::JoinHandle<(String, Result<bool, &'static str>)>> = None;
+    let mut adding: Option<tokio::task::JoinHandle<(String, Result<Added, &'static str>)>> = None;
     // An account with more than one station: the stations the add offers the page, and where the
     // operator's pick goes back to it.
     let (offering, mut offered) =
@@ -669,8 +674,8 @@ async fn page(
             added = async { adding.as_mut().expect("guarded add").await }, if adding.is_some() => {
                 adding = None;
                 match added {
-                    Ok((id, Ok(waiting))) => {
-                        json!({"type":"internetAdded","stationId":id,"waiting":waiting})
+                    Ok((id, Ok((waiting, key)))) => {
+                        json!({"type":"internetAdded","stationId":id,"waiting":waiting,"key":key})
                     }
                     Ok((_, Err(reason))) => json!({"type":"internetRefused","reason":reason}),
                     Err(_) => json!({"type":"internetRefused","reason":"signInFailed"}),

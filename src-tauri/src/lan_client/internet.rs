@@ -15,6 +15,10 @@
 //! station's: the service's station id, the device id it gave, the station key it listed (pinned
 //! from then on) and the road's key. No account credential is ever kept.
 //!
+//! The station asks the operator to approve this computer only if the key it shows matches the one
+//! Nexus shows on this computer, so the window shows this computer's key for each road too
+//! ([`shown_key`]): the public half's fingerprint, as the station shows it, never the private key.
+//!
 //! ## Opening it ([`Service::pipe`], [`Service::turn`], [`Service::renew`])
 //!
 //! With no sign-in: every request names the device, and is signed by its key over a challenge the
@@ -63,13 +67,16 @@ use tempo_client::tunnel::PIPE_MESSAGE_BYTES;
 pub(crate) type PipeSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// Adding the internet road to a paired station, from the Stations on this network window: the
-/// station's id here, and what the page is told (`internetAdded` and whether it waits for approval
-/// at the station), or why not.
+/// station's id here, and what the page is told ([`Added`]), or why not.
 pub(crate) type AddInternet = Arc<
-    dyn Fn(String, Choose) -> Pin<Box<dyn Future<Output = Result<bool, &'static str>> + Send>>
+    dyn Fn(String, Choose) -> Pin<Box<dyn Future<Output = Result<Added, &'static str>> + Send>>
         + Send
         + Sync,
 >;
+
+/// What the page is told once the road is added (`internetAdded`): whether the device still waits for
+/// approval at the station, and this computer's key for the road as the station shows it.
+pub(crate) type Added = (bool, String);
 
 /// An account with more than one station asks the operator which is the one being added: each
 /// station's id and name are offered, and the one picked comes back, or none (cancelled, or the
@@ -521,7 +528,8 @@ async fn read_target(stream: &mut TcpStream) -> Option<String> {
 
 /// Adds the internet road to the station paired here as `id`: signed in through `open`'s browser,
 /// the account's station chosen, this computer registered as its device, and the road kept. Whether
-/// the device still waits for approval at the station, or why not.
+/// the device still waits for approval at the station, and this computer's key for the road as the
+/// station shows it ([`keep_road`]), or why not.
 ///
 /// The station is the account's only one, or, when it has more, the one the operator picks from its
 /// list through `choose` (`stationNotChosen` when none is). The token is held, in memory only, while
@@ -534,7 +542,7 @@ pub(crate) async fn add(
     name: String,
     open: impl FnOnce(&str) -> Result<(), String>,
     choose: Choose,
-) -> Result<bool, &'static str> {
+) -> Result<Added, &'static str> {
     let kept = stations.clone();
     let lan_id = id.clone();
     tokio::task::spawn_blocking(move || kept.get(&lan_id))
@@ -544,11 +552,31 @@ pub(crate) async fn add(
     let token = sign_in(service, open).await?;
     let (road, approved) = register_with(service, &token, &name, choose).await?;
     drop(token);
-    let kept = stations.clone();
-    tokio::task::spawn_blocking(move || kept.keep_internet(&id, &road))
+    keep_road(stations, id, road, approved).await
+}
+
+/// The road [`register_with`] gave, kept for the station paired here as `id`: whether the device
+/// still waits for approval at the station (not `approved` there already), and this computer's key
+/// for the road as the station shows it ([`shown_key`]).
+pub(crate) async fn keep_road(
+    stations: Arc<Stations>,
+    id: String,
+    road: InternetRoad,
+    approved: bool,
+) -> Result<Added, &'static str> {
+    let key = shown_key(&road).ok_or("notStation")?;
+    tokio::task::spawn_blocking(move || stations.keep_internet(&id, &road))
         .await
         .unwrap_or(Err("storeUnavailable"))?;
-    Ok(!approved)
+    Ok((!approved, key))
+}
+
+/// This computer's key for `road` as the station shows it when it asks to approve this computer,
+/// and under Remote access ▸ Your computers: the station's own fingerprint
+/// (`remote_service::fingerprint`) of the key this computer registered, its public half. The
+/// private half is never shown, sent or logged. `None` for a record with no key in it.
+pub(crate) fn shown_key(road: &InternetRoad) -> Option<String> {
+    crate::remote_service::fingerprint(ComputerKey::restore(&road.pkcs8)?.public_key())
 }
 
 /// With the signed-in `token`: the account's station (its only one, or the one the operator picks
