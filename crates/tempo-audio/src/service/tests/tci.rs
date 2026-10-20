@@ -987,6 +987,57 @@ fn with_audio_over_tci_off_an_over_keys_the_programs_input_and_plays_on_the_soun
     assert!(s.sim.tx_audio(0).is_empty(), "nothing over TCI");
 }
 
+/// ⭐ AND AN FT8 OVER, WITH AUDIO OVER TCI OFF (NEEDS-BENCH): the slot over keys the SDR program's
+/// own input at its boundary, as any CAT radio's does, and the whole over plays on the sound card,
+/// which the operator routes to that input. No transmit tee goes in, no audio stream is asked for,
+/// and nothing of it reaches the program over TCI: one route.
+#[test]
+fn with_audio_over_tci_off_an_ft8_over_keys_the_programs_input_and_plays_on_the_sound_card() {
+    let mut s = TciScene::new([], waits(), |e| {
+        let mut settings = e.settings().clone();
+        settings.tci_audio = false;
+        e.apply_settings(settings);
+        ft8_cq_at_the_boundary(e);
+    })
+    .on_a_made_up_clock();
+    assert!(
+        s.daemon().session().wait_until(WAIT, |snap| snap.phase
+            == tempo_net::tci::session::Phase::Ready),
+        "premise: the SDR program is ready"
+    );
+    for _ in 0..50 {
+        s.step();
+    }
+    assert!(
+        s.sim.wait_for(WAIT, |log| !keys(log).is_empty()),
+        "the FT8 over never keyed: {:?}",
+        s.sim.commands_from(0)
+    );
+    assert_eq!(
+        s.keys(),
+        [(Keyer::Client(0), SimSource::Mic(Mic::Selected))],
+        "the program's own input"
+    );
+    assert_eq!(s.sent(0, "trx:0,true"), 1);
+    let played = s.card.played.lock().unwrap().clone();
+    assert!(
+        played.len() > 12 * 12_000 && peak(&played) > 0.0,
+        "the over on the sound card: {} samples, peak {}",
+        played.len(),
+        peak(&played)
+    );
+    assert_eq!(s.state.dax_tee_id, None, "no transmit tee");
+    assert!(!s.daemon().tx_route_ready());
+    assert!(
+        !s.sim
+            .commands_from(0)
+            .iter()
+            .any(|c| c.starts_with("audio_start")),
+        "no stream asked for"
+    );
+    assert!(s.sim.tx_audio(0).is_empty(), "nothing over TCI");
+}
+
 /// ⛔ STOP TX MID-OVER ON TCI SENDS NO MORE OF IT (M10 in the loop). A voice-keyer message going out
 /// on Nexus's audio is stopped part way: the loop's hard stop empties the transmit route, so nothing
 /// of the message is left to send, and the over ends. Here the SDR program does not confirm the
