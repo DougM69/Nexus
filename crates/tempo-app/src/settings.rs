@@ -303,7 +303,7 @@ pub const SWR_VERIFIED_FLEX_RIGS: [u32; 2] = [2036, 23005];
 /// THREE paths and nothing else, because those are the places a raw meter reading is turned
 /// into a ratio by something we can point at:
 /// * **Native Icom CI-V** — the operator's `icom_native_cat` opt-in, on a transport the daemon
-///   can actually own (not network, not OmniRig — the same two refusals
+///   can actually own (not network, not OmniRig, not TCI — the refusals
 ///   [`native_civ_reachable`] makes), for a model in [`SWR_VERIFIED_CIV_RIGS`].
 /// * **The Icom network connection** — whenever [`icom_lan_reachable`] holds, because that
 ///   client carries the SAME CI-V daemon over its session, so `SWR` is answered by the same
@@ -325,10 +325,12 @@ pub fn swr_scale_verified(
     let network = rig_conn_is_network(rig_conn, rig_addr);
     // `!icom_lan`: the serial daemon never opens a port on that connection (see
     // `tempo_audio::service::native_civ_model`), so the toggle left on from USB counts for nothing.
+    // Nor on TCI, where the SDR program's own `tx_sensors` are the meter.
     let native_civ = icom_native_cat
         && !network
         && !rig_conn_is_omnirig(rig_conn)
         && !rig_conn_is_icom_lan(rig_conn)
+        && !rig_conn_is_tci(rig_conn)
         && SWR_VERIFIED_CIV_RIGS.contains(&rig_model);
     let icom_lan = icom_lan_reachable(rig_model, rig_conn, icom_lan_host);
     let flex_vita = network && SWR_VERIFIED_FLEX_RIGS.contains(&rig_model);
@@ -479,6 +481,9 @@ pub fn native_civ_reachable(rig_model: u32, rig_conn: &str, rig_addr: &str) -> b
         // to speak CI-V itself. Without this the satellite offer would pre-fill a Main/Sub
         // mapping whose write has no path at all.
         && !rig_conn_is_omnirig(rig_conn)
+        // TCI too: the SDR program drives the radio, and the only port Nexus opens toward it is
+        // the program's own TCI server.
+        && !rig_conn_is_tci(rig_conn)
 }
 
 /// The FlexRadio profiles Nexus's own Flex client can serve: the SmartSDR CAT profile (2036) and
@@ -9150,6 +9155,34 @@ mod tests {
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// ⛔ THE TCI CONNECTION CLOSES THE NATIVE CI-V DOOR, as OmniRig's does: the SDR program drives
+    /// the radio, so no CI-V daemon of Nexus's reaches it, and no CI-V SWR curve reads its meter. A
+    /// model and the native toggle left over from a USB setup change nothing. The radio loop's own
+    /// half (`tempo_audio::service::native_civ_model`) is held to this one by that crate's
+    /// `one_reachability_rule_answers_for_the_daemon_and_for_the_refusal`.
+    #[test]
+    fn the_tci_connection_closes_the_native_civ_door() {
+        // 3081 = IC-9700: a native-CI-V satellite rig whose CI-V SWR is verified. Controls first.
+        assert!(
+            native_civ_reachable(3081, "serial", ""),
+            "control: a serial IC-9700 can reach the native daemon"
+        );
+        assert!(
+            swr_scale_verified(3081, "serial", "", "", true),
+            "control: …and its SWR is the native daemon's verified one"
+        );
+        for conn in ["tci", "TCI"] {
+            assert!(
+                !native_civ_reachable(3081, conn, ""),
+                "{conn}: no CI-V daemon of Nexus's serves a radio the SDR program drives"
+            );
+            assert!(
+                !swr_scale_verified(3081, conn, "", "", true),
+                "{conn}: its SWR is not the CI-V daemon's"
+            );
+        }
     }
 
     /// A stored dialect reads as its own word whatever its case and surrounding space, and any other
