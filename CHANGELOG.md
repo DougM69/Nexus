@@ -215,6 +215,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Operate from this computer** signs in again by itself, opening the browser while you operate, so the link is
   never dropped for it. NEEDS-BENCH: a second PC on the shack's network, signed in, then the internet off; a phone
   hotspot.
+- **Nexus Remote: signing in shares less about you.** The Remote web page's sign-in no longer asks your account for
+  your name, nickname or picture, and neither does any sign-in in Nexus. The shack's own sign-in (Settings → Station →
+  Remote access → Sign in to Nexus Remote) does not ask for your email address either: Nexus Remote passes that
+  sign-in on to every computer that you, or someone you invite, signs in on, so a guest's computer never receives
+  your address. A second PC's sign-in carries its verified email address, which is how your shack recognises a person
+  you invited.
 - **Nexus Remote from a second PC: every JS8 switch, and satellite tracks that end when the second PC goes.** HB, Relay,
   HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
