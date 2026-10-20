@@ -405,7 +405,9 @@ fn loopback_carries_the_transmitted_audio_back_into_the_receive_audio() {
     c.send("audio_start:0;trx:0,true,tci;");
     let mut phase = 0;
     let mut heard = Vec::new();
-    let deadline = Instant::now() + WAIT;
+    // Half a second of the loopback's audio is 24 answers from this thread: a loaded machine can
+    // take many times the usual wait to send them.
+    let deadline = Instant::now() + WAIT * 6;
     while heard.len() < 24_000 && Instant::now() < deadline {
         match c.until(|m| matches!(m, Incoming::Binary(_))) {
             Some(Incoming::Binary(b)) => {
@@ -417,17 +419,21 @@ fn loopback_carries_the_transmitted_audio_back_into_the_receive_audio() {
                 } else if h.kind == kind::RX_AUDIO && phase > 0 {
                     let s = frame::decode_samples(SampleType::Float32, &b[frame::HEADER_LEN..])
                         .unwrap();
-                    heard.extend(s.iter().step_by(2).copied());
+                    // The loopback lays each answer where it arrives, or straight after the one
+                    // before, so an answer later than any before it leaves a silence and moves
+                    // the tone after it along, as on the air. How late each answer comes is this
+                    // machine's scheduling (this client's, and the simulator's own writes of the
+                    // chronos), not the loopback's, so the silences are left out: nothing else is
+                    // on the band, and what remains must be the tone as it was sent.
+                    heard.extend(s.iter().step_by(2).copied().filter(|v| *v != 0.0));
                 }
             }
             _ => break,
         }
     }
-    assert!(
-        tone_level(&heard, 48_000, 700.0) > 0.2,
-        "{}",
-        tone_level(&heard, 48_000, 700.0)
-    );
+    assert!(heard.len() >= 24_000, "{} samples came back", heard.len());
+    let level = tone_level(&heard, 48_000, 700.0);
+    assert!((level - 0.5).abs() < 0.01, "{level}");
 }
 
 #[test]

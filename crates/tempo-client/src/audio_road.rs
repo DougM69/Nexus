@@ -228,6 +228,10 @@ struct Shared {
     lease: Mutex<Option<String>>,
     /// The link this road was made for has ended.
     ended: AtomicBool,
+    /// How many turns the road's thread has finished: a test waits on it to know the road has
+    /// acted on what changed.
+    #[cfg(test)]
+    turns: std::sync::atomic::AtomicU64,
 }
 
 /// This computer's end of one link's audio road. Cheap to share: every holder is the same road.
@@ -282,6 +286,8 @@ impl AudioRoad {
             on_air,
             lease: Mutex::new(None),
             ended: AtomicBool::new(false),
+            #[cfg(test)]
+            turns: Default::default(),
         });
         let theirs = shared.clone();
         std::thread::Builder::new()
@@ -299,6 +305,12 @@ impl AudioRoad {
     /// The link this road was made for has ended: the road goes, its keys with it.
     pub fn link_ended(&self) {
         self.shared.ended.store(true, Ordering::Release);
+    }
+
+    /// How many turns the road's thread has finished.
+    #[cfg(test)]
+    fn turns(&self) -> u64 {
+        self.shared.turns.load(Ordering::Acquire)
     }
 }
 
@@ -539,6 +551,8 @@ fn serve(shared: &Arc<Shared>, mut receive: Opener) {
                 tone = false;
             }
         }
+        #[cfg(test)]
+        shared.turns.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -646,6 +660,18 @@ mod tests {
             heard
         }
 
+        /// Waits for the road's first word, so the station knows where the road is: its thread
+        /// says `listen` at its next turn, which a loaded machine can wake late.
+        fn met(&mut self) {
+            assert!(
+                until(|| {
+                    let _ = self.heard(TICK);
+                    self.peer.is_some()
+                }),
+                "the road never spoke"
+            );
+        }
+
         /// One frame of receive audio to the computer.
         fn send(&self, down: &Down) {
             let datagram = self.keys.send.seal(down.kind(), &down.body()).unwrap();
@@ -705,8 +731,26 @@ mod tests {
             .collect()
     }
 
-    fn settle() {
-        std::thread::sleep(Duration::from_millis(60));
+    /// Waits for `done` as long as a loaded machine may take to get there: whether it did.
+    fn until(mut done: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !done() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        true
+    }
+
+    /// Waits until the road's thread has finished a whole turn begun after this call, so it has
+    /// acted on everything that changed before it, however late a loaded machine woke it.
+    fn turned(road: &AudioRoad) {
+        let from = road.turns();
+        assert!(
+            until(|| road.turns() >= from + 2),
+            "the road's thread took no turn"
+        );
     }
 
     /// ★ `listen` goes every half second, naming the lease, only while this computer holds one,
@@ -753,20 +797,21 @@ mod tests {
     fn the_stations_frames_play_in_order_and_a_known_gap_plays_the_bed() {
         let (road, mut station, headset, _) = road();
         road.lease(Some(LEASE.to_string()));
-        let _ = station.heard(Duration::from_millis(100));
+        station.met();
         let frames = band();
         let rings = &headset.rings;
         let frame = PLAY_FRAME_SAMPLES;
         for each in &frames[..4] {
             station.send(each);
         }
-        settle();
+        until(|| rings.waiting() == 4 * frame);
         assert_eq!(rings.waiting(), 4 * frame);
+        // The road reads one datagram a turn.
         station.send(&frames[1]);
-        settle();
+        turned(&road);
         assert_eq!(rings.waiting(), 4 * frame, "an older frame played");
         station.send(&frames[6]);
-        settle();
+        turned(&road);
         assert_eq!(rings.waiting(), 7 * frame, "the gap's length");
         let mut cushion = Cushion::new(48_000);
         cushion.begin(rings);
@@ -792,7 +837,7 @@ mod tests {
     fn the_stations_audio_is_muted_while_the_over_may_be_on_the_air() {
         let (road, mut station, headset, on_air) = road();
         road.lease(Some(LEASE.to_string()));
-        let _ = station.heard(Duration::from_millis(100));
+        station.met();
         let (frames, rings) = (band(), &headset.rings);
         let mutes: [fn(&OnAir); 2] = [
             |on_air| on_air.pressing(Some(1)),
@@ -800,22 +845,25 @@ mod tests {
         ];
         for (n, mute) in mutes.iter().enumerate() {
             mute(&on_air);
-            settle();
+            turned(&road);
             assert!(rings.muted(), "case {n}: not muted");
             for frame in &frames[10 * n..10 * n + 5] {
                 station.send(frame);
             }
-            settle();
+            // The road reads one datagram a turn.
+            for _ in 0..5 {
+                turned(&road);
+            }
             assert_eq!(rings.waiting(), 0, "case {n}: queued while muted");
             on_air.pressing(None);
             on_air.rig(Some(false));
         }
-        settle();
+        turned(&road);
         assert!(!rings.muted());
         for frame in &frames[30..35] {
             station.send(frame);
         }
-        settle();
+        until(|| rings.waiting() == 5 * PLAY_FRAME_SAMPLES);
         assert_eq!(rings.waiting(), 5 * PLAY_FRAME_SAMPLES, "control: it plays");
     }
 
@@ -922,11 +970,18 @@ mod tests {
         stop.fetched(1);
         let mut buffer = [0u8; 256];
         let (_, computer) = stop_socket.recv_from(&mut buffer).expect("a heartbeat");
+        // Stop's road takes each word on its own thread and the audio road acts on it at its own
+        // next turn: a loaded machine can wake either later than any fixed wait, so both are
+        // waited for.
         let say = |status: MicStatus| {
             let down = shack_stop::Down::Mic(status);
             let datagram = shack_keys.send.seal(down.kind(), &down.body()).unwrap();
             stop_socket.send_to(&datagram, computer).unwrap();
-            settle();
+            assert!(
+                until(|| stop.heard().mic == Some(status)),
+                "Stop's road never heard {status:?}"
+            );
+            turned(&road);
         };
         let rings = &headset.rings;
         let sounded = |rings: &Rings| {
@@ -965,8 +1020,10 @@ mod tests {
         on_air.pressing(Some(8));
         std::thread::sleep(super::super::stop_road::NO_WORD + Duration::from_millis(100));
         assert_eq!(stop.over(Instant::now()), Some(Over::NoWord));
+        turned(&road);
         assert!(sounded(rings) > 0.05, "no tone for the station's silence");
         std::thread::sleep(Duration::from_millis(400));
+        turned(&road);
         assert!(
             sounded(rings) < 0.01,
             "the silence's tone again for one press"
