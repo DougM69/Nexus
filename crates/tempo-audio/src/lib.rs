@@ -120,6 +120,11 @@ pub mod sstv_store;
 /// RX ONLY — no TX path.
 #[cfg(feature = "device")]
 pub mod sstvrx;
+/// Nexus's TCI client as a CAT daemon: one session to an SDR program's TCI server, served to the
+/// radio loop as rigctld on the radio's own port. Needs tempo-net, so it rides the `device`
+/// feature like the Flex and Icom network clients.
+#[cfg(feature = "device")]
+pub mod tci;
 pub mod usbrig;
 /// Which rig a sound card or serial port belongs to, from USB topology (macOS).
 pub mod usbtopo;

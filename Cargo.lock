@@ -2864,6 +2864,7 @@ dependencies = [
  "tempo-flexsim",
  "tempo-net",
  "tempo-sstv",
+ "tempo-tcisim",
  "windows 0.54.0",
  "windows-sys 0.59.0",
 ]
