@@ -1465,6 +1465,11 @@ fn a_lost_socket_ends_the_programs_transmissions() {
         .position(|c| *c == Call::Disconnected(b.id(1)))
         .expect("ended");
     assert_eq!(ended, calls.len() - 1, "nothing after it: {calls:?}");
+    // Its slot is freed after its transmissions end, not before.
+    let until = Instant::now() + WAIT;
+    while !b.handle.programs().is_empty() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert!(b.handle.programs().is_empty());
 }
 
