@@ -27,6 +27,13 @@
 //!   [`Config::stale_ms`] ends the session ([`End::Stale`]). A half-open socket is never trusted.
 //! - *Receive audio and IQ* for this session's transceiver go to the [`Streams`] the owner gives
 //!   it, on this thread. A receive block's arrival time is what admission's freshness term reads.
+//!   IQ also goes to the panadapter's [`IqTap`] while one is set ([`Connection::set_iq_tap`]),
+//!   with the receiver's centre frequency (`dds`) as the server last reported it before the
+//!   block: the panadapter is not the owner of the session's audio, so it never stands between
+//!   the session and those streams.
+//! - *IQ*: `iq_start:<trx>;` and `iq_stop:<trx>;` go out through [`Session::send`] like any other
+//!   stream command. A session that started its transceiver's IQ stops it in its close, after
+//!   the stops ([`Session::close`]).
 //!
 //! **Transmit.** [`Session::key`] runs admission ([`super::admission`]); only an admitted key is
 //! rendered, and the session's keyed belief is set before the write, so a key whose write fails
@@ -255,6 +262,14 @@ pub struct NoStreams;
 
 impl Streams for NoStreams {}
 
+/// Where an RF panadapter takes a session's IQ ([`Connection::set_iq_tap`]), beside the owner's
+/// [`Streams`]. Called on the session's own thread, between reads, for each IQ block of this
+/// session's transceiver, with the receiver's centre frequency (`dds`) as the server last reported
+/// it before the block, if it has: each call must be short.
+pub trait IqTap: Send + Sync {
+    fn iq(&self, block: &Block<'_>, centre: Option<Hz>);
+}
+
 /// Where the session is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -449,6 +464,10 @@ pub struct Session {
     closing: Option<(End, u64)>,
     events: VecDeque<Event>,
     now_ms: u64,
+    /// The panadapter's tap on this transceiver's IQ ([`IqTap`]).
+    iq_tap: Option<Arc<dyn IqTap>>,
+    /// `iq_start:<trx>;` for this transceiver went out and no `iq_stop` after it: the close stops it.
+    iq_started: bool,
 }
 
 impl Session {
@@ -486,7 +505,14 @@ impl Session {
             closing: None,
             events: VecDeque::new(),
             now_ms,
+            iq_tap: None,
+            iq_started: false,
         }
+    }
+
+    /// Hand this transceiver's IQ blocks to `tap` from the next block on, or stop handing them.
+    pub fn set_iq_tap(&mut self, tap: Option<Arc<dyn IqTap>>) {
+        self.iq_tap = tap;
     }
 
     pub fn phase(&self) -> Phase {
@@ -608,11 +634,19 @@ impl Session {
             }
             _ => {}
         }
-        if self.write(out, &command.render(), now) {
-            Ok(())
-        } else {
-            Err(SendError::Closed)
+        if !self.write(out, &command.render(), now) {
+            return Err(SendError::Closed);
         }
+        match command {
+            Command::Stream(StreamSetting::IqStart(trx)) if *trx == self.config.trx => {
+                self.iq_started = true;
+            }
+            Command::Stream(StreamSetting::IqStop(trx)) if *trx == self.config.trx => {
+                self.iq_started = false;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// What [`Self::send`] lets out, named variant by variant, so a command added to [`Command`]
@@ -981,7 +1015,12 @@ impl Session {
                     self.evidence.block(&block);
                     streams.receive(&block);
                 }
-                BlockKind::Iq => streams.iq(&block),
+                BlockKind::Iq => {
+                    if let Some(tap) = &self.iq_tap {
+                        tap.iq(&block, self.model.trx(ours).dds.known().copied());
+                    }
+                    streams.iq(&block);
+                }
                 BlockKind::TxAudio | BlockKind::LineOut => {}
             },
             Some(Frame::Chrono(chrono)) => self.on_chrono(out, streams, chrono, now),
@@ -1155,8 +1194,9 @@ impl Session {
 
     // ── Ending ───────────────────────────────────────────────────────────────────────────────
 
-    /// Close on purpose: the stops, then (with a key of ours on the air) a bounded wait for the
-    /// server's report of the unkey, then the close frame and [`Event::Closed`].
+    /// Close on purpose: the stops, then `iq_stop` when this session started its IQ, then (with a
+    /// key of ours on the air) a bounded wait for the server's report of the unkey, then the close
+    /// frame and [`Event::Closed`].
     pub fn close(&mut self, out: &mut dyn Outbox, now: u64) {
         self.close_with(out, End::Closed, now);
     }
@@ -1180,6 +1220,13 @@ impl Session {
         self.closing = Some((end, at));
         // The stops before every close; a failed write closes the session here.
         let _ = self.end_ours(out, now);
+        // Then the IQ stream this session started, which keys nothing, so it goes after them.
+        if self.phase == Phase::Closing && self.iq_started {
+            let stop = Command::Stream(StreamSetting::IqStop(self.config.trx));
+            if self.write(out, &stop.render(), now) {
+                self.iq_started = false;
+            }
+        }
         if self.phase == Phase::Closing && !wait {
             self.finish_close(out);
         }
@@ -1256,6 +1303,7 @@ enum Request {
     Key(TxStart, Sender<Result<(), Refusal>>),
     Stop(Stop, Sender<StopOutcome>),
     EndOurs(Sender<StopOutcome>),
+    IqTap(Option<Arc<dyn IqTap>>, Sender<()>),
     Close,
 }
 
@@ -1400,6 +1448,13 @@ impl Connection {
         rx.recv().unwrap_or(StopOutcome::NotConnected)
     }
 
+    /// Hand this transceiver's IQ blocks to `tap` from the next block on, or stop handing them
+    /// ([`Session::set_iq_tap`]). `false` when the session has ended.
+    pub fn set_iq_tap(&self, tap: Option<Arc<dyn IqTap>>) -> bool {
+        let (tx, rx) = mpsc::channel();
+        self.requests.send(Request::IqTap(tap, tx)).is_ok() && rx.recv().is_ok()
+    }
+
     /// Whether a key of ours may be on the air, as the last published state says, without copying
     /// it. Kept once the session has closed: a session that ended keyed still says so.
     pub fn ours_on_air(&self) -> bool {
@@ -1506,6 +1561,10 @@ fn drive<S: Read + Write>(
                 Ok(Request::EndOurs(reply)) => {
                     let stopped = session.end_ours(&mut out, now());
                     answer(&session, shared, reply, stopped);
+                }
+                Ok(Request::IqTap(tap, reply)) => {
+                    session.set_iq_tap(tap);
+                    let _ = reply.send(());
                 }
                 Ok(Request::Close) | Err(TryRecvError::Disconnected) => {
                     session.close(&mut out, now());

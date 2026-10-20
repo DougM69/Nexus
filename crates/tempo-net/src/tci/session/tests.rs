@@ -1224,3 +1224,117 @@ fn a_refused_drive_report_is_unknown_on_the_receiver_it_names_or_on_every_one() 
         "cut"
     );
 }
+
+/// What the panadapter's tap was handed: each block's frames and the centre it came with.
+#[derive(Default)]
+struct IqRecorder {
+    got: std::sync::Mutex<Vec<(usize, Option<i64>)>>,
+}
+
+impl IqTap for IqRecorder {
+    fn iq(&self, block: &Block<'_>, centre: Option<Hz>) {
+        self.got
+            .lock()
+            .unwrap()
+            .push((block.frames(), centre.map(Hz::get)));
+    }
+}
+
+impl IqRecorder {
+    fn take(&self) -> Vec<(usize, Option<i64>)> {
+        std::mem::take(&mut *self.got.lock().unwrap())
+    }
+}
+
+/// ⭐ THE PANADAPTER'S TAP GETS THIS TRANSCEIVER'S IQ, WITH THE CENTRE IT WAS SENT UNDER: the centre
+/// is the server's last `dds` report before the block, in stream order, so a block sent before a
+/// retune is placed where it was taken. Another transceiver's IQ, receive audio and a frame that
+/// does not decode never reach it; the owner's streams still get every IQ block of ours.
+#[test]
+fn the_panadapter_tap_gets_this_transceivers_iq_with_the_centre_it_was_sent_under() {
+    let mut b = Bench::ready(Config::new(trx(0)));
+    let tap = Arc::new(IqRecorder::default());
+    b.s.set_iq_tap(Some(tap.clone()));
+    b.at(10).binary(&block(0, BlockKind::Iq));
+    assert_eq!(tap.take(), [(256, None)], "no centre reported yet");
+    b.text("dds:0,14080000;");
+    b.binary(&block(0, BlockKind::Iq));
+    b.text("dds:0,14090000;");
+    b.binary(&block(0, BlockKind::Iq));
+    assert_eq!(
+        tap.take(),
+        [(256, Some(14_080_000)), (256, Some(14_090_000))],
+        "each block with the centre before it"
+    );
+    b.binary(&block(1, BlockKind::Iq));
+    b.text("dds:1,7074000;");
+    b.binary(&block(0, BlockKind::RxAudio));
+    b.binary(&[0u8; 10]);
+    assert!(tap.take().is_empty(), "not ours, not IQ, or not a frame");
+    assert_eq!(b.streams.iq, 3, "the owner's streams get our IQ too");
+    b.s.set_iq_tap(None);
+    b.binary(&block(0, BlockKind::Iq));
+    assert!(tap.take().is_empty(), "no tap: nothing handed");
+    assert_eq!(b.streams.iq, 4);
+}
+
+/// ⭐ A CLOSE STOPS THE IQ STREAM THIS SESSION STARTED, AFTER THE STOPS: `iq_stop` follows the
+/// transmitter's stops (it keys nothing) and comes before the close frame, also while a close waits
+/// for an unkey. An IQ stream already stopped, or another transceiver's, is not stopped again.
+#[test]
+fn a_close_stops_the_iq_stream_this_session_started_after_the_stops() {
+    let iq = |n: u32, on: bool| {
+        Command::Stream(if on {
+            StreamSetting::IqStart(trx(n))
+        } else {
+            StreamSetting::IqStop(trx(n))
+        })
+    };
+    let mut b = Bench::ready(Config::new(trx(0)));
+    b.s.send(&mut b.wire, &iq(0, true), 10).expect("sent");
+    assert_eq!(b.wire.texts(), ["iq_start:0;"]);
+    b.at(20).close();
+    assert_eq!(
+        b.wire.take(),
+        [
+            Out::Text("trx:0,false;".into()),
+            Out::Text("iq_stop:0;".into()),
+            Out::Close
+        ]
+    );
+
+    // Keyed: the stops, `iq_stop`, then the wait for the unkey before the close frame.
+    let mut b = Bench::ready(Config::new(trx(0)));
+    b.s.send(&mut b.wire, &iq(0, true), 10).expect("sent");
+    b.at(11).key(TxStart::Audio).expect("admitted");
+    b.at(12).text("trx:0,true;");
+    b.wire.take();
+    b.at(20).close();
+    assert_eq!(
+        b.wire.texts(),
+        ["trx:0,false;", "iq_stop:0;"],
+        "before the wait"
+    );
+    b.at(30).text("trx:0,false;");
+    assert_eq!(b.wire.take(), [Out::Close]);
+
+    // Started and stopped: the close does not stop it again. Another transceiver's is not ours.
+    let mut b = Bench::ready(Config::new(trx(0)));
+    for command in [iq(0, true), iq(0, false), iq(1, true)] {
+        b.s.send(&mut b.wire, &command, 10).expect("sent");
+    }
+    b.wire.take();
+    b.at(20).close();
+    assert_eq!(
+        b.wire.take(),
+        [Out::Text("trx:0,false;".into()), Out::Close]
+    );
+
+    // Never started: nothing.
+    let mut b = Bench::ready(Config::new(trx(0)));
+    b.at(10).close();
+    assert_eq!(
+        b.wire.take(),
+        [Out::Text("trx:0,false;".into()), Out::Close]
+    );
+}

@@ -45,6 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audio, CW macros and spots are not ready yet. The programs connected are listed with what each is doing and the
   last thing Nexus refused it, each with a **Disconnect**. Settings will not save the CAT sharing port and the TCI
   server port as the same number. A new guide, Share by TCI, covers turning it on and setting up each program.
+- **TCI (Beta): the SDR program's own panadapter in Nexus's scope.** On a TCI radio, **SDR panadapter in the
+  scope** (Settings ▸ Radio ▸ Rig & CAT, off as it comes) now draws the SDR program's own spectrum in the RF scope
+  and in the Phone and CW scopes: the program's whole receive bandwidth (48 kHz as the programs come) around its
+  receiver, each station at its own frequency and the dial where it is. If the program stops sending it, the scope
+  says so rather than holding an old picture. A program whose TCI has no panadapter (piHPSDR's) leaves the scope as
+  it was, and Nexus's log says why. Turning the switch off, or changing to another radio, stops it. It is a stream
+  of its own: receive audio and keying over TCI work as before. NEEDS-BENCH: ExpertSDR3 and Thetis on their radios,
+  a known carrier (a beacon or a signal generator) drawn at its frequency, against the dial and the program's own
+  panadapter, in USB and in LSB.
 - **Every contest log numbers its contacts 1, 2, 3…** The contest screen's log and the logger window's last
   contacts show each contact's number in a first column, in every contest. In a contest that sends a serial
   (Sweepstakes, CQ WPX) the number is the serial that contact was sent; in every other contest it counts the

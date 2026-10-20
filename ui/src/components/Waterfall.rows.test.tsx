@@ -198,7 +198,8 @@ describe('the rows the waterfall commits', () => {
       { row: audioRow(2), loHz: 144_975_000, hiHz: 145_025_000, source: 'civ' },
       { row: audioRow(3), loHz: 14_000_000, hiHz: 14_200_000, source: 'flex' },
       { row: audioRow(4), loHz: 7_000_000, hiHz: 7_100_000, source: 'yaesu' },
-      { row: audioRow(5), loHz: 0, hiHz: 4000, source: 'audio' },
+      { row: audioRow(5), loHz: 14_055_988.28125, hiHz: 14_103_988.28125, source: 'tci' },
+      { row: audioRow(6), loHz: 0, hiHz: 4000, source: 'audio' },
     ]
     render(<Waterfall transmitting={false} rxOffsetHz={1500} txOffsetHz={1000} theme="dark" rowMs={20} />)
     await until(() => served.length === 0 && commits.length === 2, 'the audio rows committed')
@@ -210,9 +211,9 @@ describe('the rows the waterfall commits', () => {
     // CONTROL: the same rows labelled audio are committed, so the skip is the label's doing.
     cleanup()
     commits.length = 0
-    served = [2, 3, 4].map((k) => ({ row: audioRow(k), loHz: 0, hiHz: 4000, source: 'audio' }))
+    served = [2, 3, 4, 5].map((k) => ({ row: audioRow(k), loHz: 0, hiHz: 4000, source: 'audio' }))
     render(<Waterfall transmitting={false} rxOffsetHz={1500} txOffsetHz={1000} theme="dark" rowMs={20} />)
-    await until(() => commits.length === 3, 'the relabelled rows committed')
+    await until(() => commits.length === 4, 'the relabelled rows committed')
     // It asks for the AUDIO row and nothing else (the mocked api has no other spectrum command).
     expect(vi.mocked(getSpectrumRow)).toHaveBeenCalled()
   })

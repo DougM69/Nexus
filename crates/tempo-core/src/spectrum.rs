@@ -312,6 +312,65 @@ pub fn power_spectrum_n(
     out
 }
 
+/// Power a FULL-SCALE COMPLEX tone (`|I + jQ| = 1`, on its own bin) deposits in that bin under the
+/// Hann window: all of it lands in the one bin, `N·CG = N/2`, so `p = (N/2)²`. Four times a real
+/// sine's [`full_scale_power`], which the real FFT splits between `+f` and `−f`.
+const fn full_scale_iq_power(n: usize) -> f32 {
+    ((n / 2) * (n / 2)) as f32
+}
+
+std::thread_local! {
+    /// The complex FFT's buffer, reused as [`FFT_SCRATCH`] is (32 KB at the longest window).
+    static IQ_SCRATCH: std::cell::RefCell<[microfft::Complex32; MAX_FFT_N]> =
+        const { std::cell::RefCell::new([microfft::Complex32::new(0.0, 0.0); MAX_FFT_N]) };
+}
+
+/// One window of an SDR's complex samples (its IQ) as power per FFT bin: the RF panadapter's
+/// spectrum. `iq` is `win.n()` pairs, I then Q; `power[j]` is bin `j`'s power RELATIVE TO FULL
+/// SCALE (a full-scale complex tone on its bin reads 1.0), in FREQUENCY order: index 0 is the most
+/// negative frequency (`−sr/2`), `n/2` the receiver's centre (DC), `n − 1` is `sr/2 − sr/n`. A tone
+/// above the centre lands above `n/2`, one below it below: the sign is the panadapter's whole
+/// orientation, pinned by `an_iq_tone_lands_on_its_own_side_of_the_centre`.
+///
+/// Linear power, not display values, so a caller averages windows before taking dB (the rule
+/// [`display_to_power`] states). Hann-windowed as the audio rows are, and with NO DC removal: at the
+/// centre of an IQ panadapter sits the receiver's own centre frequency, where a carrier is a real
+/// signal, not a capture's bias. `microfft`'s complex FFT, the kernel the RTTY and PSK demodulators
+/// use. `false`, with `power` untouched, when the lengths do not fit `win`.
+pub fn iq_power(iq: &[f32], win: WindowN, power: &mut [f32]) -> bool {
+    let n = win.n();
+    if iq.len() != 2 * n || power.len() != n {
+        return false;
+    }
+    IQ_SCRATCH.with(|sc| {
+        let mut buf = sc.borrow_mut();
+        for (k, (c, pair)) in buf[..n].iter_mut().zip(iq.chunks_exact(2)).enumerate() {
+            let w = hann(k, n);
+            *c = microfft::Complex32::new(pair[0] * w, pair[1] * w);
+        }
+        // One arm per length: `microfft` is a fixed-size kernel (see `with_rfft`).
+        let spec: &mut [microfft::Complex32] = match win {
+            WindowN::Fast => microfft::complex::cfft_1024(
+                (&mut buf[..1024]).try_into().expect("scratch covers 1024"),
+            ),
+            WindowN::Balanced => microfft::complex::cfft_2048(
+                (&mut buf[..2048]).try_into().expect("scratch covers 2048"),
+            ),
+            WindowN::Sharp => microfft::complex::cfft_4096(
+                (&mut buf[..4096]).try_into().expect("scratch covers 4096"),
+            ),
+        };
+        // The FFT's order puts DC and the positive frequencies first (bins 0..n/2) and the
+        // negative ones after them (n/2..n); the panadapter's order starts at −sr/2.
+        let full = full_scale_iq_power(n);
+        for (j, p) in power.iter_mut().enumerate() {
+            let c = spec[(j + n / 2) % n];
+            *p = (c.re * c.re + c.im * c.im) / full;
+        }
+    });
+    true
+}
+
 /// One tone found in the receive audio — the measurement behind the CW zero-beat indicator.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToneEstimate {
@@ -1131,5 +1190,82 @@ mod tests {
             dominant_tone(&audio, sr, 1400.0, 2200.0, 1800.0, MIN_TONE_SNR_DB).is_some(),
             "control: widening the band finds it"
         );
+    }
+
+    /// `n` pairs of a complex tone `amp · e^{+j·2π·bin·k/n}`: I the cosine, Q the sine, so a
+    /// positive `bin` is a frequency ABOVE the receiver's centre.
+    fn iq_tone(bin: f32, amp: f32, n: usize) -> Vec<f32> {
+        (0..n)
+            .flat_map(|k| {
+                let ph = 2.0 * std::f32::consts::PI * bin * k as f32 / n as f32;
+                [amp * ph.cos(), amp * ph.sin()]
+            })
+            .collect()
+    }
+
+    fn loudest(power: &[f32]) -> (usize, f32) {
+        power
+            .iter()
+            .copied()
+            .enumerate()
+            .fold((0, f32::MIN), |m, (i, p)| if p > m.1 { (i, p) } else { m })
+    }
+
+    /// ⭐ THE PANADAPTER'S ORIENTATION: a tone above the centre lands above the middle bin, one
+    /// below it below, each on its own bin, and a carrier ON the centre stays (no DC removal). A
+    /// spectrum read with I and Q swapped, or with the FFT's halves left unrotated, would draw a
+    /// station on the wrong side of the dial.
+    #[test]
+    fn an_iq_tone_lands_on_its_own_side_of_the_centre() {
+        for win in [WindowN::Fast, WindowN::Balanced, WindowN::Sharp] {
+            let n = win.n();
+            let mut power = vec![0.0f32; n];
+            for bin in [100i32, -100, 1, -1, 0, n as i32 / 2 - 1, -(n as i32) / 2] {
+                assert!(iq_power(&iq_tone(bin as f32, 1.0, n), win, &mut power));
+                let (at, p) = loudest(&power);
+                assert_eq!(
+                    at as i32,
+                    n as i32 / 2 + bin,
+                    "N={n}: a tone {bin} bins from the centre"
+                );
+                assert!(
+                    (p - 1.0).abs() < 0.01,
+                    "N={n}, bin {bin}: full scale reads {p}"
+                );
+            }
+        }
+    }
+
+    /// A complex tone's level in dB below full scale reads the same at every window length, as the
+    /// audio axis does (`the_absolute_db_axis_reads_the_same_at_every_window_length`).
+    #[test]
+    fn an_iq_level_reads_in_db_below_full_scale_at_every_window_length() {
+        for win in [WindowN::Fast, WindowN::Balanced, WindowN::Sharp] {
+            let n = win.n();
+            let mut power = vec![0.0f32; n];
+            for db in [0.0f32, -30.0, -90.0] {
+                let amp = 10f32.powf(db / 20.0);
+                assert!(iq_power(&iq_tone(37.0, amp, n), win, &mut power));
+                let read = 10.0 * loudest(&power).1.log10();
+                assert!((read - db).abs() < 0.05, "N={n}: {db} dB reads {read}");
+            }
+        }
+    }
+
+    #[test]
+    fn iq_power_refuses_lengths_that_do_not_fit_its_window() {
+        let n = WindowN::Balanced.n();
+        let mut power = vec![7.0f32; n];
+        assert!(!iq_power(
+            &vec![0.0; 2 * n - 2],
+            WindowN::Balanced,
+            &mut power
+        ));
+        assert!(!iq_power(&vec![0.0; 2 * n], WindowN::Sharp, &mut power));
+        let mut short = vec![7.0f32; n - 1];
+        assert!(!iq_power(&vec![0.0; 2 * n], WindowN::Balanced, &mut short));
+        assert!(power.iter().chain(&short).all(|p| *p == 7.0), "untouched");
+        assert!(iq_power(&vec![0.0; 2 * n], WindowN::Balanced, &mut power));
+        assert!(power.iter().all(|p| *p == 0.0), "silence is no power");
     }
 }

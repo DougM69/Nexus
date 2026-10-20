@@ -1047,3 +1047,64 @@ fn a_close_on_purpose_mid_over_stops_before_the_close_frame() {
     assert!(stop < closed);
     assert!(!s.radio().trx[0].transmitting());
 }
+
+/// One block as the panadapter's tap was handed it: its rate, channels and frames, and its centre.
+type Handed = (u32, crate::tci::frame::Channels, usize, Option<i64>);
+
+/// What the panadapter's tap was handed.
+#[derive(Default)]
+struct IqBlocks {
+    got: std::sync::Mutex<Vec<Handed>>,
+}
+
+impl IqTap for IqBlocks {
+    fn iq(&self, block: &Block<'_>, centre: Option<Hz>) {
+        self.got.lock().unwrap().push((
+            block.header.sample_rate,
+            block.header.channels,
+            block.frames(),
+            centre.map(Hz::get),
+        ));
+    }
+}
+
+/// ⭐ THE SDR PROGRAM'S IQ REACHES THE PANADAPTER'S TAP, CENTRED WHERE THE PROGRAM SAYS: after
+/// `iq_start` the simulated program's IQ blocks for our transceiver arrive with two channels at its
+/// IQ rate and the centre its burst reported.
+///
+/// The close's `iq_stop` is pinned on the manual clock, as written
+/// (`a_close_stops_the_iq_stream_this_session_started_after_the_stops`), not here: the session
+/// drops its socket straight after the close frame, while the program's frames are still arriving
+/// unread, so the socket closes with a reset, and the simulator, which writes before it reads, can
+/// end there without reading the last lines sent.
+#[test]
+fn the_programs_iq_reaches_the_tap_centred_where_the_program_says() {
+    let s = sim(SimDialect::expert_sdr3(), []);
+    let conn = connect(&s, Config::new(trx0()));
+    ready(&conn, true);
+    let tap = std::sync::Arc::new(IqBlocks::default());
+    assert!(conn.set_iq_tap(Some(tap.clone())));
+    conn.send(Command::Stream(StreamSetting::IqStart(trx0())))
+        .expect("sent");
+    let deadline = Instant::now() + WAIT;
+    while tap.got.lock().unwrap().len() < 5 {
+        assert!(Instant::now() < deadline, "no IQ reached the tap");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let dds = i64::try_from(s.radio().trx[0].dds).expect("a frequency");
+    for (rate, channels, frames, centre) in tap.got.lock().unwrap().iter() {
+        assert_eq!(
+            (*rate, *channels, *centre),
+            (48_000, crate::tci::frame::Channels::Two, Some(dds))
+        );
+        assert!(*frames > 0);
+    }
+    assert!(conn.set_iq_tap(None));
+    let handed = tap.got.lock().unwrap().len();
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        tap.got.lock().unwrap().len(),
+        handed,
+        "no tap: nothing handed"
+    );
+}
