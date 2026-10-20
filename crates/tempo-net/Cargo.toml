@@ -22,6 +22,10 @@ socket2 = "0.6"
 # new external code enters the tree.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The TCI server's WebSocket (`tci::server`): RFC 6455's handshake, framing and masking. Already in
+# the tree at this exact version through tokio-tungstenite (tempo-client, src-tauri), and with the
+# same one feature tempo-client turns on, so nothing new enters the lock.
+tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
 
 # fdsync's adapter list (`lan_addrs`): the host's club beacon goes to each subnet's broadcast
 # address, and its screen lists the addresses a joiner types. Both crates are already in the

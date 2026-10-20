@@ -39,7 +39,10 @@
 //! [`Command::render`] and [`Stop::render`] return [`ClientText`], and [`Notice::render`]
 //! [`ServerText`]. Neither has a public constructor, so a client's outbox that takes only
 //! `ClientText` cannot carry a notice (`trx:0,true;` is both a server's report and a key) or any
-//! raw string. A server reads a client's commands as [`Request`]s ([`requests`]).
+//! raw string. A server reads a client's commands as [`Request`]s ([`requests`]). Nexus's own
+//! server reads them with [`inbound`], which adds the forms real clients send that the spec gives
+//! no client ([`Extra`]: WSJT-X's `split_enable:false;`, MSHV's `rx_enable` and `tx_enable`, the
+//! recorder commands it refuses), and answers with [`Notice`]s and [`ExtraNotice`]s.
 //!
 //! # Bounds
 //!
@@ -2261,6 +2264,111 @@ fn request(name: &str, a: &Args<'_, '_>, dialect: &Dialect) -> Result<Request, F
     }
 }
 
+// ── A server's reading of a client ──────────────────────────────────────────────────────────
+
+/// A client's command as Nexus's TCI server reads it: a [`Request`], or one of the forms real
+/// clients send that the specification gives no client ([`Extra`]). The tokenizer is the one
+/// [`notices`] and [`requests`] use; [`inbound`] reads a whole message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Inbound {
+    Request(Request),
+    Extra(Extra),
+}
+
+impl Inbound {
+    /// One command, read as a client's in `dialect`: an [`Extra`] when it is one, otherwise what
+    /// [`Request::parse`] reads.
+    pub fn parse(raw: &Raw<'_>, dialect: &Dialect) -> Result<Inbound, WireError> {
+        match extra(raw.name(), &Args(raw.args())) {
+            Ok(Some(e)) => Ok(Inbound::Extra(e)),
+            Ok(None) => Request::parse(raw, dialect).map(Inbound::Request),
+            Err(fault) => Err(WireError::Command {
+                name: raw.name.clone(),
+                fault,
+            }),
+        }
+    }
+}
+
+/// What real clients send a server that a [`Request`] does not read. None of them keys: a server
+/// answers each with the value in force, or refuses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Extra {
+    /// `split_enable:<bool>;` with no receiver. WSJT-X 3.0.2 sends `split_enable:false;` two
+    /// seconds after it connects (`Transceiver/TCITransceiver.cpp:432-435`).
+    Split(bool),
+    /// `rx_enable:<trx>,<bool>;`, TCI 1.6's receiver switch: not in the 2.0 document, but in
+    /// eesdr-tci's command table (`tci.py`). MSHV writes `rx_enable:<trx>,true;` on the first
+    /// `vfo` it reads (`network.cpp:2482-2491`).
+    RxEnable { trx: Trx, on: bool },
+    /// `rx_enable:<trx>;`, its read.
+    RxEnableRead(Trx),
+    /// `tx_enable:<trx>,<bool>;` from a client. The spec gives it to the server alone, to tell
+    /// clients whether the transmitter may transmit (§4.3); MSHV writes `tx_enable:<trx>,true;` on
+    /// the first `vfo` (`network.cpp:2482-2491`). A server never arms on it.
+    TxEnable { trx: Trx, on: bool },
+    /// `line_out_recorder_start`, `line_out_recorder_save` or `line_out_recorder_break` (§4.3):
+    /// they make the server's computer record, and write a file at a path the client names. Read
+    /// only so that the refusal can name them; no argument is kept.
+    LineOutRecorder,
+}
+
+/// Every command in one message from a client, in order, as Nexus's server reads it.
+pub fn inbound<'a>(
+    message: &'a str,
+    dialect: &'a Dialect,
+) -> impl Iterator<Item = Result<Inbound, WireError>> + 'a {
+    split(message).map(move |raw| raw.and_then(|raw| Inbound::parse(&raw, dialect)))
+}
+
+/// The [`Extra`] forms. `Ok(None)`: not one of them, so the command is read as a [`Request`].
+fn extra(name: &str, a: &Args<'_, '_>) -> Result<Option<Extra>, Fault> {
+    let n = a.len();
+    Ok(Some(match name {
+        // Only the form with no receiver: `split_enable:<trx>;` (a read) and
+        // `split_enable:<trx>,<bool>;` (a write) are requests.
+        "split_enable" if n == 1 && a.0.first().copied().and_then(boolean).is_some() => {
+            Extra::Split(a.boolean(0)?)
+        }
+        "rx_enable" => match n {
+            1 => Extra::RxEnableRead(a.trx(0)?),
+            2 => Extra::RxEnable {
+                trx: a.trx(0)?,
+                on: a.boolean(1)?,
+            },
+            _ => return Err(Fault::Arity(n)),
+        },
+        "tx_enable" if n == 2 => Extra::TxEnable {
+            trx: a.trx(0)?,
+            on: a.boolean(1)?,
+        },
+        "line_out_recorder_start" | "line_out_recorder_save" | "line_out_recorder_break" => {
+            Extra::LineOutRecorder
+        }
+        _ => return Ok(None),
+    }))
+}
+
+/// What Nexus's server sends that [`Notice`] does not carry: its answers to [`Extra::RxEnable`]
+/// and to `cw_terminal`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExtraNotice {
+    /// `rx_enable:<trx>,<bool>;`
+    RxEnable { trx: Trx, on: bool },
+    /// `cw_terminal:<bool>;`: whether the transmitter stays keyed after a CW macro (§3.2.1).
+    CwTerminal(bool),
+}
+
+impl ExtraNotice {
+    /// The wire text a server sends.
+    pub fn render(&self) -> ServerText {
+        ServerText(match self {
+            ExtraNotice::RxEnable { trx, on } => Line::new("rx_enable").arg(trx).arg(on).end(),
+            ExtraNotice::CwTerminal(on) => Line::new("cw_terminal").arg(on).end(),
+        })
+    }
+}
+
 // ── Rendering ───────────────────────────────────────────────────────────────────────────────
 
 /// One command's wire text: the name, then `:` and the arguments joined by `,`, then `;`.
@@ -3609,6 +3717,262 @@ mod tests {
         #[test]
         fn edited_spec_examples_never_panic(text in edited_example()) {
             read_all(&text)?;
+        }
+    }
+}
+
+/// The server's reading ([`inbound`], [`Extra`], [`ExtraNotice`]).
+#[cfg(test)]
+mod server_tests {
+    use super::*;
+    use crate::tci::EXPERT_SDR3;
+    use proptest::prelude::*;
+
+    fn trx(n: u32) -> Trx {
+        Trx::new(n).expect("a receiver number below MAX_TRX")
+    }
+
+    fn one(text: &str) -> Result<Inbound, WireError> {
+        let mut all: Vec<_> = inbound(text, &EXPERT_SDR3).collect();
+        assert_eq!(all.len(), 1, "{text:?} holds one command: {all:?}");
+        all.remove(0)
+    }
+
+    #[test]
+    fn wsjtx_split_without_a_receiver_reads_as_an_extra() {
+        assert_eq!(
+            one("split_enable:false;"),
+            Ok(Inbound::Extra(Extra::Split(false)))
+        );
+        assert_eq!(
+            one("SPLIT_ENABLE:TRUE;"),
+            Ok(Inbound::Extra(Extra::Split(true)))
+        );
+        // The forms with a receiver are the spec's read and write, untouched.
+        assert_eq!(
+            one("split_enable:0;"),
+            Ok(Inbound::Request(Request::Command(Command::Read(
+                Query::Flag {
+                    flag: Flag::Split,
+                    trx: trx(0),
+                }
+            ))))
+        );
+        assert_eq!(
+            one("split_enable:0,false;"),
+            Ok(Inbound::Request(Request::Command(Command::Set(
+                Setting::Flag {
+                    flag: Flag::Split,
+                    trx: trx(0),
+                    on: false,
+                }
+            ))))
+        );
+        // A word that is neither a receiver nor a boolean is still the read's bad argument.
+        assert_eq!(
+            one("split_enable:maybe;").map_err(|e| e.fault()),
+            Err(Some(Fault::BadArg(0)))
+        );
+    }
+
+    #[test]
+    fn mshv_rx_enable_and_tx_enable_read_as_extras() {
+        assert_eq!(
+            one("rx_enable:0,true;"),
+            Ok(Inbound::Extra(Extra::RxEnable {
+                trx: trx(0),
+                on: true
+            }))
+        );
+        assert_eq!(
+            one("RX_ENABLE:1;"),
+            Ok(Inbound::Extra(Extra::RxEnableRead(trx(1))))
+        );
+        assert_eq!(
+            one("tx_enable:0,true;"),
+            Ok(Inbound::Extra(Extra::TxEnable {
+                trx: trx(0),
+                on: true
+            }))
+        );
+        // Malformed, each refused by name rather than guessed at.
+        for (text, fault) in [
+            ("rx_enable;", Fault::Arity(0)),
+            ("rx_enable:0,1,true;", Fault::Arity(3)),
+            ("rx_enable:0,yes;", Fault::BadArg(1)),
+            ("rx_enable:99,true;", Fault::BadArg(0)),
+            ("tx_enable:0,maybe;", Fault::BadArg(1)),
+            // A read of `tx_enable` is still nobody's: the spec has no client read of it.
+            ("tx_enable:0;", Fault::Direction),
+        ] {
+            let got = one(text);
+            assert_eq!(
+                got.as_ref().err().and_then(WireError::fault),
+                Some(fault),
+                "{text}: {got:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_recorder_commands_are_read_only_to_be_refused() {
+        // The spec's own examples (p33-34), and the forms a hostile client might try.
+        for text in [
+            "LINE_OUT_RECORDER_START:0,250;",
+            "LINE_OUT_RECORDER_SAVE:0,home/user_name/record_dir/file_name.wav;",
+            "LINE_OUT_RECORDER_SAVE:0,D|\\record_dir\\file_name.mp3;",
+            "LINE_OUT_RECORDER_BREAK:0;",
+            "line_out_recorder_save;",
+            "line_out_recorder_save:0,..,..,..,etc,passwd;",
+        ] {
+            assert_eq!(
+                one(text),
+                Ok(Inbound::Extra(Extra::LineOutRecorder)),
+                "{text}"
+            );
+        }
+        // T1's client reading is unchanged: as a request they stay unknown.
+        assert_eq!(
+            requests("line_out_recorder_break:0;", &EXPERT_SDR3)
+                .next()
+                .and_then(|r| r.err())
+                .and_then(|e| e.fault()),
+            Some(Fault::Unknown)
+        );
+    }
+
+    #[test]
+    fn extra_notices_render_as_a_server_sends_them() {
+        assert_eq!(
+            ExtraNotice::RxEnable {
+                trx: trx(0),
+                on: true
+            }
+            .render()
+            .as_str(),
+            "rx_enable:0,true;"
+        );
+        assert_eq!(
+            ExtraNotice::CwTerminal(false).render().as_str(),
+            "cw_terminal:false;"
+        );
+        // And they read back as the extras a client would write.
+        assert_eq!(
+            one("rx_enable:0,true;"),
+            Ok(Inbound::Extra(Extra::RxEnable {
+                trx: trx(0),
+                on: true
+            }))
+        );
+        assert_eq!(
+            one("cw_terminal:false;"),
+            Ok(Inbound::Request(Request::Stop(Stop::CwTerminal)))
+        );
+    }
+
+    /// Every name a client or server sends, the extras' among them, for the property below.
+    fn a_name() -> impl Strategy<Value = String> {
+        let mut names: Vec<&'static str> = CLIENT_ONLY
+            .iter()
+            .chain(SERVER_ONLY.iter())
+            .copied()
+            .chain(Flag::ALL.iter().map(|f| f.name()))
+            .chain([
+                "start",
+                "stop",
+                "dds",
+                "if",
+                "vfo",
+                "modulation",
+                "trx",
+                "tune",
+                "drive",
+                "tune_drive",
+                "rit_offset",
+                "xit_offset",
+                "audio_start",
+                "audio_samplerate",
+                "audio_stream_samples",
+                "rx_enable",
+                "line_out_recorder_start",
+                "line_out_recorder_save",
+                "line_out_recorder_break",
+                "no_such_command",
+            ])
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        prop::sample::select(names).prop_map(str::to_string)
+    }
+
+    fn an_arg() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("0".to_string()),
+            Just("1".to_string()),
+            Just("true".to_string()),
+            Just("FALSE".to_string()),
+            Just("tci".to_string()),
+            Just("14074000".to_string()),
+            Just("-1".to_string()),
+            Just(String::new()),
+            "[a-z0-9 .^~*/-]{0,6}",
+        ]
+    }
+
+    fn a_command() -> impl Strategy<Value = String> {
+        (
+            a_name(),
+            prop::option::of(prop::collection::vec(an_arg(), 0..5)),
+        )
+            .prop_map(|(name, args)| match args {
+                None => format!("{name};"),
+                Some(args) => format!("{name}:{};", args.join(",")),
+            })
+    }
+
+    const EXTRA_NAMES: [&str; 6] = [
+        "split_enable",
+        "rx_enable",
+        "tx_enable",
+        "line_out_recorder_start",
+        "line_out_recorder_save",
+        "line_out_recorder_break",
+    ];
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 2048, ..ProptestConfig::default() })]
+
+        /// The server's reading adds forms; it changes nothing T1's reading already reads. A
+        /// command whose name is not an extra's reads exactly as [`requests`] reads it, and one
+        /// whose name is either reads as an [`Extra`] or as [`requests`] reads it.
+        #[test]
+        fn inbound_reads_every_other_command_as_requests_does(text in a_command()) {
+            let ours: Vec<_> = inbound(&text, &EXPERT_SDR3).collect();
+            let theirs: Vec<_> = requests(&text, &EXPERT_SDR3).collect();
+            prop_assert_eq!(ours.len(), theirs.len());
+            let name = text.split([':', ';']).next().unwrap_or("").to_ascii_lowercase();
+            for (o, t) in ours.into_iter().zip(theirs) {
+                match o {
+                    Ok(Inbound::Extra(_)) => prop_assert!(
+                        EXTRA_NAMES.contains(&name.as_str()),
+                        "{} read as an extra", text
+                    ),
+                    Ok(Inbound::Request(r)) => prop_assert_eq!(Ok(r), t),
+                    Err(e) => {
+                        if !EXTRA_NAMES.contains(&name.as_str()) {
+                            prop_assert_eq!(Err(e), t);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// The fuzz: any string, never a panic.
+        #[test]
+        fn inbound_never_panics(text in any::<String>()) {
+            for item in inbound(&text, &EXPERT_SDR3) {
+                let _ = item;
+            }
         }
     }
 }
