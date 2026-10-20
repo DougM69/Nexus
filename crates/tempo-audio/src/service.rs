@@ -6729,6 +6729,11 @@ impl RadioLoop {
         if let Some(daemon) = old_proc.as_ref().and_then(CatDaemon::native) {
             daemon.set_scope_enabled(false);
         }
+        // A TCI radio leaves the loop's transmit tee behind: no audio of Nexus's reaches its
+        // session from the monitor, so its client keys none.
+        if let Some(daemon) = old_proc.as_ref().and_then(CatDaemon::tci) {
+            daemon.set_tx_route(false);
+        }
         let mut old_transport = std::mem::replace(&mut self.applied, conn.transport);
         // The demoted transport keeps the broker's port, which the monitor's own want carries
         // too (`monitor_want`), so ordinary reconciliation keeps the connection. Not the keying
@@ -7072,7 +7077,9 @@ impl RadioLoop {
         // Keep the DAX TX tee in sync with Nexus's own Flex client (Beta): install it once the
         // client's transmit route is up (its own DAX transmit stream, no other program's DAX), so
         // backend.play sends TX over DAX INSTEAD of the sound card — one route, never both — and
-        // clear it when the route goes. The TX schedule is unchanged either way.
+        // clear it when the route goes. The TX schedule is unchanged either way. Nexus's own TCI
+        // client's tee is the same route into its session, once the SDR program has taken Nexus's
+        // audio stream (Audio over TCI on): its client keys Nexus's audio only while that tee is in.
         //
         // ⚠️ AND TELL THE ENGINE ABOUT THE OPERATOR'S MICROPHONE (2026-08-17 Flex audit, critic
         // gap #6). The radio's DAX source flag is RADIO-WIDE: while it says DAX, the Flex's
@@ -7087,9 +7094,15 @@ impl RadioLoop {
         // mic is the operator's again after it, and the marker would flash for every message.
         let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
         let client = flex.filter(|_| self.flex_client_audio);
+        let tci = self.rigctld_proc.as_ref().and_then(CatDaemon::tci);
+        let tci_tee = tci
+            .filter(|d| d.tx_route_ready())
+            .and_then(crate::tci::TciDaemon::tx_tee);
+        let tci_route = tci_tee.is_some();
         let want_tee: Option<crate::backend::TxTeeHandle> = client
             .filter(|d| d.tx_route_ready())
-            .and_then(crate::flex::FlexDaemon::tx_tee);
+            .and_then(crate::flex::FlexDaemon::tx_tee)
+            .or(tci_tee);
         let mic_off = match client {
             Some(d) => d.radio_dax() == Some(true) && !d.dax_for_keyer(),
             None => flex.is_some_and(crate::flex::FlexDaemon::leaves_dax),
@@ -7097,6 +7110,10 @@ impl RadioLoop {
         let want_id = want_tee
             .as_ref()
             .map(|t| Arc::as_ptr(t) as *const () as usize);
+        // The TCI client's route is off before its tee goes, and on only once it is in.
+        if let Some(d) = tci.filter(|_| !tci_route) {
+            d.set_tx_route(false);
+        }
         if want_id != self.dax_tee_id {
             // ⛔ NEVER A SILENT OVER, PART WAY THROUGH EITHER (operator ruling, 2026-10-08, "End
             // the over"). A slot over hands its whole waveform to the tee at its key, so the tee
@@ -7127,14 +7144,17 @@ impl RadioLoop {
             {
                 tempo_core::applog::info(
                     "tx",
-                    "voice-keyer message ended: its Flex native DAX audio went part way through \
-                     (unkeyed; TX On unchanged)",
+                    "voice-keyer message ended: the route carrying its audio (Flex native DAX or \
+                     TCI) went part way through (unkeyed; TX On unchanged)",
                 );
                 engine_lock(engine).stop_voice();
             }
             self.dax_tee_id = want_id;
             backend.set_tx_tee(want_tee);
             self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
+        }
+        if let Some(d) = tci.filter(|_| tci_route) {
+            d.set_tx_route(true);
         }
         if self.flex_mic_off_pushed != Some(mic_off) {
             self.flex_mic_off_pushed = Some(mic_off);

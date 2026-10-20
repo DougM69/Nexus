@@ -32,7 +32,10 @@
 //!   digital over, the voice keyer and Remote's voice ([`TciDaemon::set_voice_key`]), the SDR
 //!   program's microphone for Phone at the shack. A band restore is put back before a key ([`shim`]).
 //! - **Never a silent over**: Nexus's audio is keyed only while its transmit route into this session
-//!   is up ([`TciDaemon::set_tx_route`]; the transmit tee is a later change).
+//!   is up: the radio loop installs the transmit tee ([`TciDaemon::tx_tee`], [`audio::TciTx`]) once
+//!   the SDR program has taken Nexus's audio stream ([`TciDaemon::tx_route_ready`]), and only then
+//!   says so ([`TciDaemon::set_tx_route`]). An over whose audio the program stops pulling part way
+//!   through is ended by the daemon, and the radio loop reads why ([`TciDaemon::take_halt`]).
 //! - **Stops are never gated**: `T 0`, the broker's disconnect fail-safe and teardown send them
 //!   whatever the session believes.
 //! - **Tune** is the SDR program's own carrier at its own tune drive (`tune:<trx>,true;`), started and
@@ -54,14 +57,14 @@
 //! and whether a key of ours may be on the air ([`TciDaemon::keyed`]). Each key's timing goes to
 //! the diagnostic log for the bench (plan U3, U11).
 //!
-//! ## Receive audio
-//! [`TciDaemon::start_with_receive`] gives the session Nexus's own receive path ([`audio`]): the
-//! transceiver's audio at the modem rate, which the radio loop takes in place of the sound card
-//! while the radio's TCI audio is on, and feeds to the waterfall and Remote Listen.
+//! ## Audio
+//! [`TciDaemon::start_with_receive`] gives the session Nexus's own audio paths ([`audio`]): the
+//! transceiver's receive audio at the modem rate, which the radio loop takes in place of the sound
+//! card while the radio's TCI audio is on, and feeds to the waterfall and Remote Listen; and the
+//! transmit route, Nexus's audio for an over of ours as the server pulls it.
 //!
 //! ## Not yet
-//! The transmit tee (until it is installed, every key that takes Nexus's audio is refused), CW
-//! through the SDR program's keyer, its IQ panadapter and spots.
+//! CW through the SDR program's keyer, its IQ panadapter and spots.
 //!
 //! Nexus's own design, not a port: the protocol core it drives (`tempo_net::tci`) is written from
 //! Expert Electronics' TCI 2.0 specification.
@@ -284,6 +287,12 @@ struct Watch {
     tune_until: Mutex<Option<Instant>>,
     /// Ended by whichever sees the session end first: the watcher, or teardown.
     claim: Mutex<Option<registry::Claim>>,
+    /// The transmit route, when the daemon has Nexus's own audio paths.
+    tx: OnceLock<Arc<audio::TciTx>>,
+    /// How long the server may leave an over of ours unpulled, part way through, while Nexus still
+    /// has its audio: the session's chrono window (`Config::chrono_window_ms`), the limit its first
+    /// pull is held to.
+    pull_gap: Duration,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -310,6 +319,8 @@ pub struct TciDaemon {
     clock: Clock,
     /// Nexus's own receive path, when the session was given it ([`Self::start_with_receive`]).
     receive: Option<Arc<audio::Receive>>,
+    /// Nexus's own transmit route into the session, given with the receive path.
+    tx: Option<Arc<audio::TciTx>>,
 }
 
 impl TciDaemon {
@@ -321,8 +332,8 @@ impl TciDaemon {
         Self::start_with(target, streams, Options::default())
     }
 
-    /// [`Self::start`] with Nexus's own receive path as the session's streams ([`audio`]): what
-    /// the radio loop starts.
+    /// [`Self::start`] with Nexus's own audio paths as the session's streams ([`audio`]): its
+    /// receive audio and its transmit route. What the radio loop starts.
     pub fn start_with_receive(target: &Target) -> Result<TciDaemon, StartError> {
         Self::start_receiving(target, Options::default())
     }
@@ -333,9 +344,15 @@ impl TciDaemon {
         options: Options,
     ) -> Result<TciDaemon, StartError> {
         let receive = Arc::new(audio::Receive::default());
-        let streams = Box::new(audio::SessionAudio::new(receive.clone()));
+        let tx = Arc::new(audio::TciTx::default());
+        let streams = Box::new(audio::SessionAudio::new(receive.clone(), tx.clone()));
         let mut daemon = Self::start_with(target, streams, options)?;
+        tx.attach(Arc::downgrade(
+            daemon.conn.as_ref().expect("held until drop"),
+        ));
+        let _ = daemon.watch.tx.set(tx.clone());
         daemon.receive = Some(receive);
+        daemon.tx = Some(tx);
         Ok(daemon)
     }
 
@@ -421,6 +438,7 @@ impl TciDaemon {
         let stop = Arc::new(AtomicBool::new(false));
         let watch = Arc::new(Watch {
             claim: Mutex::new(Some(claim)),
+            pull_gap: Duration::from_millis(config.chrono_window_ms),
             ..Watch::default()
         });
         let tcp_thread = {
@@ -475,6 +493,7 @@ impl TciDaemon {
             tune_margin: options.tune_margin,
             clock: options.clock,
             receive: None,
+            tx: None,
         };
         match watch_thread {
             Ok(t) => daemon.watch_thread = Some(t),
@@ -562,6 +581,31 @@ impl TciDaemon {
         self.receive.as_ref()
     }
 
+    /// Nexus's transmit route into this session ([`audio::TciTx`]), when this daemon was started
+    /// with its own audio paths ([`Self::start_with_receive`]): the radio loop's transmit tee while
+    /// [`Self::tx_route_ready`] holds.
+    pub fn tx_tee(&self) -> Option<crate::backend::TxTeeHandle> {
+        self.tx.clone().map(|tx| tx as crate::backend::TxTeeHandle)
+    }
+
+    /// The transmit route itself, for tests that read what it holds.
+    #[cfg(test)]
+    pub(crate) fn tx(&self) -> Option<&Arc<audio::TciTx>> {
+        self.tx.as_ref()
+    }
+
+    /// Whether Nexus's transmit audio can reach this session: the daemon has its transmit route,
+    /// Audio over TCI is on for this radio, the session is ready, and the SDR program reports
+    /// Nexus's audio stream for this transceiver running (its acknowledgement of `audio_start`).
+    /// The radio loop installs the transmit tee only then, and takes it out when this goes false.
+    pub fn tx_route_ready(&self) -> bool {
+        self.tx.is_some()
+            && self.state.audio
+            && self
+                .conn()
+                .read(|s| s.phase == Phase::Ready && s.model.trx(self.trx).audio.is_true())
+    }
+
     /// Tell the shim whether Nexus itself is transmitting, so the broker's disconnect fail-safe
     /// stands down while we are on the air. The same call as the CI-V, OmniRig and Flex daemons'.
     pub fn set_tx_intent(&self, on: bool) {
@@ -577,7 +621,7 @@ impl TciDaemon {
 
     /// Whether Nexus's transmit audio reaches this session (its transmit tee is installed): a key
     /// that takes Nexus's audio is refused while it does not, so no over goes out silent. Off until
-    /// the transmit path says so.
+    /// the radio loop has installed the tee ([`Self::tx_tee`]), and off again before it goes.
     pub fn set_tx_route(&self, ready: bool) {
         self.state.tx_route.store(ready, Ordering::SeqCst);
     }
@@ -847,6 +891,33 @@ fn end_a_tune_past_its_hold(conn: &Connection, server: SocketAddr, watch: &Watch
     push_halt(watch, words.to_string());
 }
 
+/// End an over of ours whose audio the SDR program stopped pulling part way through while Nexus
+/// still had some of it to send: the radio would stay keyed with nothing of ours to send until the
+/// over's own end (plan §6.1 item 4, "never a silent over"; the Flex client's route going ends an
+/// over the same way). Only once this key's first pull has come (until then the session's own chrono
+/// window rules), and only past the window that first pull is held to.
+fn end_an_over_the_server_stopped_pulling(conn: &Connection, server: SocketAddr, watch: &Watch) {
+    let Some(tx) = watch.tx.get() else {
+        return;
+    };
+    if !conn.audio_over_open() || tx.queued() == 0 {
+        return;
+    }
+    let pulled = conn.read(|s| s.timing.first_chrono_ms.is_some());
+    if !pulled
+        || tx
+            .last_pull()
+            .is_none_or(|at| at.elapsed() <= watch.pull_gap)
+    {
+        return;
+    }
+    let _ = conn.end_ours();
+    let words = "the SDR program stopped taking Nexus's audio part way through the over, so Nexus \
+                 ended it";
+    tempo_core::applog::warn("cat", &format!("TCI ({server}): {words}"));
+    push_halt(watch, words.to_string());
+}
+
 fn push_halt(watch: &Watch, words: String) {
     let mut halts = lock(&watch.halts);
     if halts.len() >= HALTS_KEPT {
@@ -876,6 +947,7 @@ fn watch_session(
     while !stop.load(Ordering::Relaxed) {
         let Some(conn) = conn.upgrade() else { break };
         end_a_tune_past_its_hold(&conn, server, watch);
+        end_an_over_the_server_stopped_pulling(&conn, server, watch);
         let mut event = conn.next_event(WATCH_POLL);
         // The session publishes a step's state before it sends that step's events, so one already
         // reading closed may not have sent its last ones yet: read it up to `Closed`. Once it has
