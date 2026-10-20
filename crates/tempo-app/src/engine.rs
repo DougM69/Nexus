@@ -4044,6 +4044,9 @@ pub struct Engine {
     /// Why the CAT broker is not serving, when its bind was refused (#165). See
     /// [`crate::dto::RadioStatus::cat_share_error`].
     cat_share_error: Option<String>,
+    /// The TCI server as its manager last saw it; `None` while it is switched off. See
+    /// [`crate::dto::RadioStatus::tci_server`].
+    tci_server: Option<crate::dto::TciServerStatus>,
     scope_error: Option<String>,
     /// See `RadioStatus::scope_span_refused`.
     scope_span_refused: Option<String>,
@@ -6195,6 +6198,7 @@ impl Engine {
             cat_reprobe: false,
             audio_error: None,
             cat_share_error: None,
+            tci_server: None,
             scope_error: None,
             scope_span_refused: None,
             scope_mode_code: None,
@@ -23661,6 +23665,12 @@ contact yourself."
         self.cat_share_error = err;
     }
 
+    /// Record the TCI server's state for the snapshot, or `None` once it is switched off. Written
+    /// by its manager on every tick, in both directions, as [`Self::set_cat_share_error`] is.
+    pub fn set_tci_server_status(&mut self, status: Option<crate::dto::TciServerStatus>) {
+        self.tci_server = status;
+    }
+
     /// Set the operator's TX-slot parity live. `true` = transmit on even/"1st"
     /// slots, `false` = odd/"2nd". Read by `poll_tx` each slot. Two stations must
     /// use OPPOSITE periods to complete a QSO.
@@ -25141,6 +25151,7 @@ contact yourself."
         s.radio.audio_error = self.audio_error.as_ref().map(|(_, line)| line.clone());
         s.radio.audio_error_kind = self.audio_error.as_ref().map(|(kind, _)| *kind);
         s.radio.cat_share_error = self.cat_share_error.clone();
+        s.radio.tci_server = self.tci_server.clone();
         // A map lookup and a clone: no I/O and no second lock. `Engine::snapshot` runs under
         // the engine mutex on the UI's 300 ms poll, and work done inside it has twice stalled
         // the radio loop.
