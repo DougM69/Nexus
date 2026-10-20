@@ -3,9 +3,9 @@
 //! audio, transmit audio, IQ). The SDR program is the server; Nexus is a client, and later a
 //! server too (operator ruling 553).
 //!
-//! **This module is the codecs only.** Nothing in the app uses it yet: the session, the status
-//! model, the admission that a key must pass and the reconnect ladder are later changes, built
-//! on what is here.
+//! **The client core.** The codecs, and the client session built on them: the status model, the
+//! dialect learned from a server, the admission a key must pass and the reconnect ladder. Nothing
+//! in the app uses it yet: the daemon that serves it to the radio loop is a later change.
 //!
 //! # The specification
 //!
@@ -25,6 +25,11 @@
 //! | [`wire`] | text commands: a message split into commands, each read into a typed value and rendered back |
 //! | [`frame`] | binary frames: the 64-byte header, the sample formats, the two readings of `length`, TX_CHRONO |
 //! | this file | receiver and channel numbers, and the [`Dialect`] table |
+//! | [`model`] | the radio as the server reports it, folded from its notices; a refused readback is unknown |
+//! | [`dialect`] | which [`Dialect`] a server speaks, learned from its init burst and pinned at `ready;` |
+//! | [`admission`] | the server-side checks a key must pass, and the only value a key renders from |
+//! | [`session`] | one connection: handshake to `ready;`, the model, keys and their readback, stops, keepalive, the close |
+//! | [`reconnect`] | what to do when a connection fails or a session ends |
 //!
 //! # The transmit rule
 //!
@@ -45,7 +50,12 @@
 //! Receiver and channel numbers are bounded here ([`MAX_TRX`], [`MAX_CHANNELS`]), so a model
 //! indexed by them stays small.
 
+pub mod admission;
+pub mod dialect;
 pub mod frame;
+pub mod model;
+pub mod reconnect;
+pub mod session;
 pub mod wire;
 
 use std::fmt;

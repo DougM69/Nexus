@@ -1193,14 +1193,7 @@ pub enum Unrenderable {
 
 impl Start {
     /// The wire text of this start for `dialect`. Private to the `tci` module: the admission a key
-    /// must pass is meant to be its only caller.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "its caller, the admission a key must pass, comes with the session"
-        )
-    )]
+    /// must pass ([`super::admission::Admitted::render`]) is its only caller outside the tests.
     pub(in crate::tci) fn render(&self, dialect: &Dialect) -> Result<ClientText, Unrenderable> {
         let line = match self {
             Start::Trx { trx, source } => {

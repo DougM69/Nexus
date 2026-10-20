@@ -22,6 +22,10 @@ socket2 = "0.6"
 # new external code enters the tree.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The WebSocket under TCI (`tci::session`): the client side of one connection to an SDR program.
+# Already in the lock through tempo-client and tempo-tcisim (operator ruling 554, 2026-10-19), so
+# this is an edge and no new crate. Only the handshake: TCI has no TLS.
+tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
 
 # fdsync's adapter list (`lan_addrs`): the host's club beacon goes to each subnet's broadcast
 # address, and its screen lists the addresses a joiner types. Both crates are already in the
@@ -62,3 +66,6 @@ tempo-flexsim = { path = "../tempo-flexsim" }
 # panic a decoder. Already a dev-dependency of js8, tempo-core and tempo-sstv, at the same version,
 # so nothing new enters the lock.
 proptest = "1"
+# The TCI server simulator, for the TCI session's fault suites (`tci::session`). Test support from
+# this workspace; it depends on tungstenite only, never on this crate.
+tempo-tcisim = { path = "../tempo-tcisim" }
