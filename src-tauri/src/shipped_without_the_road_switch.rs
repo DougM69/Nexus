@@ -398,6 +398,7 @@ fn without_the_feature_there_is_no_switch() {
     assert_eq!(
         keys,
         [
+            "away",
             "computerBuild",
             "internet",
             "over",

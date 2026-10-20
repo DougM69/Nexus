@@ -14,7 +14,7 @@ use crate::lan_client::tests::{where_nothing_listens, StationStore};
 use crate::lan_client::ComputerKey;
 use crate::remote_service::vault::{InternetRoad, PairedStation, StationVault};
 use std::net::SocketAddrV4;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tempo_stream::lan::dnssd::Found;
 
 /// A stand-in station on loopback: where it listens, its LAN key (SPKI, lowercase hex), and each
@@ -33,6 +33,8 @@ enum Answer {
     Take,
     /// `refused`, by this reason.
     Refuse(&'static str),
+    /// `refused`, by this reason, the first time; then as the real station takes one.
+    RefuseOnce(&'static str),
     /// `enrolled`, with a device id no station works out from that key.
     OtherDevice,
 }
@@ -59,9 +61,11 @@ async fn standing_as(station: &'static str, answer: Answer) -> Option<Standing> 
     };
     let heard: Arc<Mutex<Vec<(Value, String)>>> = Arc::default();
     let kept = heard.clone();
+    let refused_once = Arc::new(AtomicBool::new(false));
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
             let (config, kept) = (config.clone(), kept.clone());
+            let refused_once = refused_once.clone();
             tokio::spawn(async move {
                 let Ok(tls) = tokio_rustls::TlsAcceptor::from(config).accept(stream).await else {
                     return;
@@ -76,7 +80,10 @@ async fn standing_as(station: &'static str, answer: Answer) -> Option<Standing> 
                 let message: Value = serde_json::from_str(&text).unwrap_or_default();
                 let answer = match answer {
                     Answer::Refuse(reason) => json!({"type":"refused","reason":reason}),
-                    Answer::Take => json!({"type":"enrolled",
+                    Answer::RefuseOnce(reason) if !refused_once.swap(true, Ordering::SeqCst) => {
+                        json!({"type":"refused","reason":reason})
+                    }
+                    Answer::Take | Answer::RefuseOnce(_) => json!({"type":"enrolled",
                         "deviceId":book::device_id(&tls::pin(&spki)),"stationId":station}),
                     Answer::OtherDevice => json!({"type":"enrolled",
                         "deviceId":book::device_id(&[7; 32]),"stationId":station}),
@@ -160,7 +167,8 @@ async fn one_sign_in_adds_the_station_on_its_network_and_over_the_internet() {
         signed,
         Ok(Signed {
             station: LAN_STATION.into(),
-            waiting: false
+            waiting: false,
+            away: false
         })
     );
     assert_eq!(looked.load(Ordering::SeqCst), 1);
@@ -223,13 +231,13 @@ async fn one_sign_in_adds_the_station_on_its_network_and_over_the_internet() {
     assert!(store.staged_keys().unwrap().is_none(), "the staged keys go");
 }
 
-/// ★ A sign-in that stopped part-way (registered at the service, but the station found nowhere on
-/// this network and the operator said nothing) keeps nothing but the keys it made, and the next
-/// sign-in names those same keys: the service finds the device it registered, and the station
-/// hears the LAN key the first sign-in vouched for.
+/// ★ A sign-in that stopped part-way (registered at the service, but the station could not keep
+/// this computer this time) keeps nothing but the keys it made, and the next sign-in names those
+/// same keys: the service finds the device it registered, and the station hears the LAN key the
+/// first sign-in vouched for.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_sign_in_that_stopped_part_way_is_tried_again_with_the_same_keys() {
-    let Some(station) = standing(LAN_STATION, None).await else {
+    let Some(station) = standing_as(LAN_STATION, Answer::RefuseOnce("unavailable")).await else {
         return;
     };
     let (cloud, scratch, store) = (
@@ -246,11 +254,20 @@ async fn a_sign_in_that_stopped_part_way_is_tried_again_with_the_same_keys() {
     )]));
     let kept = stations(&store, &scratch.0);
 
-    let first = env(&cloud, kept.clone(), finding(Vec::new()).0, trusting);
+    let first = env(
+        &cloud,
+        kept.clone(),
+        finding(vec![advert(station.at, &station.key)]).0,
+        trusting,
+    );
     let (signed, opened_first) =
         signing_in(&first, &cloud, None, no_pick(), answering(Vec::new()).0).await;
-    assert_eq!(signed, Err("notOnThisNetwork"));
+    assert_eq!(signed, Err("stationCouldNotKeep"));
     assert!(kept.list().unwrap().is_empty());
+    assert!(
+        kept.list_away().unwrap().is_empty(),
+        "kept by its service id"
+    );
     let staged = store.staged_keys().unwrap().expect("the keys kept");
     let (road, lan) = (staged.road.clone(), staged.lan.clone());
 
@@ -329,7 +346,8 @@ fn road_unreached(why: &str) -> bool {
 /// ★ Another machine at an address the station seemed to be at (a forged advert naming the
 /// station's key tag) never hears the proof: TLS pins the LAN key the account vouched for, and the
 /// other key is refused before this computer says anything. The operator is then asked where the
-/// station is, told the key there was another.
+/// station is, told the key there was another; with no answer, the station is kept by its service
+/// id for the internet road, the LAN key the account vouched for still the one pinned.
 #[tokio::test(flavor = "multi_thread")]
 async fn another_machine_at_the_stations_address_never_hears_the_proof() {
     let Some(station) = standing(LAN_STATION, None).await else {
@@ -351,14 +369,22 @@ async fn another_machine_at_the_stations_address_never_hears_the_proof() {
         "owner"
     )]));
     let (ask, asked) = answering(Vec::new());
+    let kept = stations(&store, &scratch.0);
     let env = env(
         &cloud,
-        stations(&store, &scratch.0),
+        kept.clone(),
         finding(vec![advert(impostor.at, &station.key)]).0,
         trusting,
     );
     let (signed, _) = signing_in(&env, &cloud, None, no_pick(), ask).await;
-    assert_eq!(signed, Err("notOnThisNetwork"));
+    assert_eq!(
+        signed,
+        Ok(Signed {
+            station: SERVICE_STATION.into(),
+            waiting: false,
+            away: true
+        })
+    );
     assert!(
         impostor.heard.lock().unwrap().is_empty(),
         "the impostor heard the proof"
@@ -368,6 +394,142 @@ async fn another_machine_at_the_stations_address_never_hears_the_proof() {
         *asked.lock().unwrap(),
         vec![("Shack".to_string(), Some("keyChanged"))]
     );
+    assert_eq!(
+        kept.away(SERVICE_STATION).unwrap().unwrap().station_key,
+        station.key
+    );
+}
+
+/// ★ Signed in from elsewhere, first contact on the station's network. A station kept by its service id is signed
+/// in to from its row there: the sign-in names the SAME two keys this computer kept for it, and asks
+/// the service for nothing but the sign-in (no second device there, no second enrolment); the
+/// station, found by name and reached on TLS pinned to the LAN key the account vouched for at first
+/// sight, hears the enrolment with the new proof. It is then kept in place as any station on its
+/// network: its record by its network's ids, the same road (the same device at the service) under
+/// them, and the new proof's time, from which its thirty days there run (rulings 490, 528).
+/// CONTROL: still away (another machine advertising its key tag, no address from the operator), it
+/// stays as it was, and that machine never hears the proof.
+#[tokio::test(flavor = "multi_thread")]
+async fn first_contact_on_its_network_keeps_a_station_kept_away_in_place() {
+    let Some(station) = standing(LAN_STATION, None).await else {
+        return;
+    };
+    let Some(impostor) = standing(LAN_STATION, None).await else {
+        return;
+    };
+    let (cloud, scratch, store) = (
+        Cloud::start().await,
+        Scratch::new(),
+        StationStore::default(),
+    );
+    let (signing_key, _) = ComputerKey::generate().unwrap();
+    cloud.lists(json!([row(
+        signing_key.public_key(),
+        &station.key,
+        Some("p"),
+        "owner"
+    )]));
+    let kept = stations(&store, &scratch.0);
+    // Signed in from elsewhere: found nowhere, so kept by its service id.
+    let elsewhere = env(&cloud, kept.clone(), finding(Vec::new()).0, trusting);
+    let (signed, _) =
+        signing_in(&elsewhere, &cloud, None, no_pick(), answering(Vec::new()).0).await;
+    assert!(signed.is_ok_and(|signed| signed.away));
+    let away = kept.away(SERVICE_STATION).unwrap().unwrap();
+    let road = kept.internet(SERVICE_STATION).unwrap().unwrap();
+
+    // CONTROL: still not on its network.
+    let (ask, asked) = answering(Vec::new());
+    let still = env(
+        &cloud,
+        kept.clone(),
+        finding(vec![advert(impostor.at, &station.key)]).0,
+        trusting,
+    );
+    let (signed, _) =
+        signing_in(&still, &cloud, Some(SERVICE_STATION.into()), no_pick(), ask).await;
+    assert_eq!(signed, Err("notOnThisNetwork"));
+    assert!(
+        impostor.heard.lock().unwrap().is_empty(),
+        "the impostor heard the proof"
+    );
+    assert_eq!(
+        *asked.lock().unwrap(),
+        vec![("Shack".to_string(), Some("keyChanged"))]
+    );
+    assert!(
+        kept.away(SERVICE_STATION).unwrap().is_some(),
+        "kept as it was"
+    );
+    assert!(kept.list().unwrap().is_empty());
+
+    // On the station's network at last, a day later.
+    cloud.seen.lock().unwrap().issued_at += 86_400;
+    let (find, looked) = finding(vec![advert(station.at, &station.key)]);
+    let home = env(&cloud, kept.clone(), find, trusting);
+    let before = cloud.seen.lock().unwrap().requests.len();
+    let (signed, opened) = signing_in(
+        &home,
+        &cloud,
+        Some(SERVICE_STATION.into()),
+        no_pick(),
+        answering(Vec::new()).0,
+    )
+    .await;
+    assert_eq!(
+        signed,
+        Ok(Signed {
+            station: LAN_STATION.into(),
+            waiting: false,
+            away: false
+        })
+    );
+    assert_eq!(looked.load(Ordering::SeqCst), 1);
+    assert!(
+        opened.ends_with(&format!("&nonce={}", nonce_for(&road.pkcs8, &away.pkcs8))),
+        "{opened}"
+    );
+    let (paths, devices, issued_at) = {
+        let seen = cloud.seen.lock().unwrap();
+        (seen.paths(), seen.devices.len(), seen.issued_at)
+    };
+    assert_eq!(
+        paths[before..],
+        ["/api/remote/config".to_string(), "/oauth/token".to_string()]
+    );
+    assert_eq!(devices, 1, "a second device at the service");
+    assert_eq!(
+        *station.heard.lock().unwrap(),
+        vec![(
+            enrolment(&public(&road.pkcs8), &proof_given(&cloud)),
+            public(&away.pkcs8)
+        )]
+    );
+    let record = kept.get(LAN_STATION).unwrap().expect("kept on its network");
+    let spki = tempo_stream::protocol::hex_bytes(&public(&away.pkcs8)).unwrap();
+    assert_eq!(
+        (
+            record.device_id,
+            record.station_key,
+            record.pkcs8,
+            record.addresses
+        ),
+        (
+            book::device_id(&tls::pin(&spki)),
+            station.key.clone(),
+            away.pkcs8.clone(),
+            vec![station.at.to_string()]
+        )
+    );
+    let now_road = kept.internet(LAN_STATION).unwrap().expect("its road");
+    assert_eq!(
+        (now_road.device_id, now_road.pkcs8),
+        (road.device_id.clone(), road.pkcs8.clone())
+    );
+    assert_eq!(kept.signed(LAN_STATION), Some(issued_at));
+    assert!(kept.away(SERVICE_STATION).unwrap().is_none());
+    assert!(kept.internet(SERVICE_STATION).unwrap().is_none());
+    assert!(kept.list_away().unwrap().is_empty());
 }
 
 /// ★ A station that refuses the enrolment says why, and nothing is kept but the staged keys; and
@@ -495,7 +657,8 @@ async fn a_station_paired_with_a_code_is_linked_in_place() {
         signed,
         Ok(Signed {
             station: LAN_STATION.into(),
-            waiting: false
+            waiting: false,
+            away: false
         })
     );
     assert_eq!(
@@ -580,7 +743,8 @@ async fn a_code_paired_station_with_an_old_road_is_linked_with_a_new_road_key() 
         signed,
         Ok(Signed {
             station: LAN_STATION.into(),
-            waiting: false
+            waiting: false,
+            away: false
         })
     );
     let road = kept.internet(LAN_STATION).unwrap().unwrap();
@@ -669,7 +833,8 @@ async fn signing_in_again_proves_the_same_keys_and_tells_only_the_station() {
                 signed,
                 Ok(Signed {
                     station: LAN_STATION.into(),
-                    waiting: false
+                    waiting: false,
+                    away: false
                 })
             );
             assert_eq!(

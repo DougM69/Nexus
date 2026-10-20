@@ -31,6 +31,24 @@
 //! 6. **Kept**: the station's record for its network, its internet road, and when the proof was
 //!    signed ([`Stations::keep_signed`]); then the staged keys go.
 //!
+//! ## Signed in from elsewhere
+//!
+//! A computer that has never been on the station's network (a laptop away from home, a guest who
+//! lives elsewhere) finds the station nowhere at step 5, and the operator says it is not here. The
+//! station is then kept by the service's id for it ([`Stations::keep_away`]): its road, already
+//! registered at step 4, and this computer's two keys, with the station's LAN key exactly as its
+//! own proof vouched for it at step 3, pinned from then on. Operate drives it over the internet road
+//! alone (`crate::client_mode`). No sign-in time is kept for it: nothing on the station's network
+//! rests on this sign-in.
+//!
+//! **First contact on its network** is a sign-in from its row there ([`arrive`]): the same two keys
+//! proven again, the service asked for nothing but the sign-in (its device is the one registered
+//! already: no second device, no second enrolment), and `enrol` at the station found by name, or
+//! where the operator says, on TLS pinned to that LAN key. Then the station is kept as any other,
+//! in its place ([`Stations::fold`]): its record by its network's ids, the same road, and the new
+//! proof's time, from which the station counts its thirty days on its network. Not found, it stays
+//! as it was.
+//!
 //! ## A station paired here with a code
 //!
 //! Signing in from its row links that pairing to the account in place: the same LAN key (the
@@ -73,11 +91,11 @@ use tokio_tungstenite::tungstenite::Message;
 use super::internet::{self, Choose};
 use super::origin::{Find, FIND_FOR};
 use super::road::{self, Failed, Opened, Socket};
-use super::{ComputerKey, Stations, MAX_STATIONS};
+use super::{ComputerKey, Stations, AWAY_NAME_CHARS, MAX_STATIONS};
 use crate::account_sign_in::{SIGN_IN_PORT, SIGN_IN_WAIT};
 use crate::remote_service::account::Service as Account;
 use crate::remote_service::lan::{device_id, tls, VERSIONS};
-use crate::remote_service::vault::{InternetRoad, PairedStation};
+use crate::remote_service::vault::{AwayStation, InternetRoad, PairedStation};
 
 /// How long one enrolment at one address may take: the station's own handshake deadline, with
 /// room to spare.
@@ -144,17 +162,19 @@ fn now_s() -> u64 {
         .unwrap_or(0)
 }
 
-/// What a sign-in did: the station's id on this computer, and whether its internet road waits for
-/// Approve at the station (a station paired with a code whose owner has not signed in at the shack).
+/// What a sign-in did: the station's id on this computer, whether its internet road waits for
+/// Approve at the station (a station paired with a code whose owner has not signed in at the shack),
+/// and whether it is kept by its service id until this computer first reaches it on its network.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Signed {
     pub(crate) station: String,
     pub(crate) waiting: bool,
+    pub(crate) away: bool,
 }
 
 /// Signs in through `open`'s browser, on the sign-in's own port: to add a station new to this
-/// computer (`here` none), to link one paired here with a code, or again for one added with the
-/// account (`here` its id). See the header.
+/// computer (`here` none), to link one paired here with a code, again for one added with the
+/// account, or on its network for one kept by its service id (`here` its id). See the header.
 pub(crate) async fn sign_in(
     env: &Env,
     here: Option<String>,
@@ -187,18 +207,20 @@ pub(crate) async fn sign_in_on(
         return add(env, browser, choose, ask).await;
     };
     let wanted = id.clone();
-    let (record, road, signed) = store(env, move |stations| {
+    let (record, road, signed, away) = store(env, move |stations| {
         Ok((
             stations.get(&wanted)?,
             stations.internet(&wanted)?,
             stations.signed(&wanted),
+            stations.away(&wanted)?,
         ))
     })
     .await?;
-    match (record, road, signed) {
-        (None, _, _) => Err("unknownStation"),
-        (Some(record), Some(road), Some(_)) => again(env, record, road, browser, ask).await,
-        (Some(record), road, _) => link(env, record, road, browser, choose, ask).await,
+    match (record, road, signed, away) {
+        (None, Some(road), _, Some(away)) => arrive(env, away, road, browser, ask).await,
+        (None, _, _, _) => Err("unknownStation"),
+        (Some(record), Some(road), Some(_), _) => again(env, record, road, browser, ask).await,
+        (Some(record), road, _, _) => link(env, record, road, browser, choose, ask).await,
     }
 }
 
@@ -320,20 +342,26 @@ async fn add(
     ask: Ask,
 ) -> Result<Signed, &'static str> {
     // Room here first: a station this computer could not keep is never added at the station.
-    let (records, staged) = store(env, |stations| {
-        Ok((stations.records()?, stations.staged()?))
+    let (records, away, staged) = store(env, |stations| {
+        Ok((
+            stations.records()?,
+            stations.away_records()?,
+            stations.staged()?,
+        ))
     })
     .await?;
-    if records.len() >= MAX_STATIONS {
+    if records.len() + away.len() >= MAX_STATIONS {
         return Err("stationsFull");
     }
     let (road, lan) = (restore(&staged.road)?, restore(&staged.lan)?);
     let proven = signed(env, &road, &lan, browser).await?;
     let (trusted, refused, _) = listed(env, &proven).await?;
-    // A station on this computer already is signed in to from its own row.
-    let (here, fresh): (Vec<Listed>, Vec<Listed>) = trusted
-        .into_iter()
-        .partition(|station| records.iter().any(|r| r.station_key == station.lan_key));
+    // A station on this computer already, on its network or kept by its service id, is signed in
+    // to from its own row.
+    let (here, fresh): (Vec<Listed>, Vec<Listed>) = trusted.into_iter().partition(|station| {
+        records.iter().any(|r| r.station_key == station.lan_key)
+            || away.iter().any(|a| a.station_key == station.lan_key)
+    });
     let (operate, listen): (Vec<Listed>, Vec<Listed>) = fresh
         .into_iter()
         .partition(|station| station.role == Role::Operate);
@@ -361,7 +389,7 @@ async fn add(
             &env.name,
         )
         .await?;
-    let (lan_id, lan_device, at) = reach(
+    let reached = reach(
         env,
         &station.name,
         &station.lan_key,
@@ -369,7 +397,36 @@ async fn add(
         (&staged.lan, road.public_key(), &proven.proof),
         &ask,
     )
-    .await?;
+    .await;
+    let (lan_id, lan_device, at) = match reached {
+        // Found nowhere on this network, and the operator did not say where (see the header).
+        Err("notOnThisNetwork") => {
+            let id = station.id.clone();
+            let kept = AwayStation {
+                station_id: station.id.clone(),
+                name: station.name.chars().take(AWAY_NAME_CHARS).collect(),
+                station_key: station.lan_key,
+                pkcs8: staged.lan,
+            };
+            let internet = InternetRoad {
+                station_id: station.id,
+                device_id: device,
+                station_key: station.station_key,
+                pkcs8: staged.road,
+            };
+            store(env, move |stations| {
+                stations.keep_away(&kept, &internet)?;
+                stations.drop_staged()
+            })
+            .await?;
+            return Ok(Signed {
+                station: id,
+                waiting: !approved,
+                away: true,
+            });
+        }
+        reached => reached?,
+    };
     let record = PairedStation {
         station_id: lan_id.clone(),
         device_id: lan_device,
@@ -395,6 +452,7 @@ async fn add(
     Ok(Signed {
         station: lan_id,
         waiting: !approved,
+        away: false,
     })
 }
 
@@ -495,6 +553,7 @@ async fn link(
     Ok(Signed {
         station: id,
         waiting: !approved,
+        away: false,
     })
 }
 
@@ -531,6 +590,46 @@ async fn again(
     Ok(Signed {
         station: record.station_id,
         waiting: false,
+        away: false,
+    })
+}
+
+/// First contact on its network for a station kept by its service id (see the header): its same two
+/// keys proven by a new sign-in, nothing asked of the service but that, and `enrol` at the station
+/// on TLS pinned to the LAN key its proof vouched for when it was kept; then it is kept in its
+/// place as a station on its network, with the new proof's time. Found nowhere, and not said to be
+/// anywhere, it stays as it was (`notOnThisNetwork`).
+async fn arrive(
+    env: &Env,
+    away: AwayStation,
+    road: InternetRoad,
+    browser: Browser<impl FnOnce(&str) -> Result<(), String>>,
+    ask: Ask,
+) -> Result<Signed, &'static str> {
+    let (lan, road_key) = (restore(&away.pkcs8)?, restore(&road.pkcs8)?);
+    let proven = signed(env, &road_key, &lan, browser).await?;
+    let (lan_id, lan_device, at) = reach(
+        env,
+        &away.name,
+        &away.station_key,
+        Vec::new(),
+        (&away.pkcs8, road_key.public_key(), &proven.proof),
+        &ask,
+    )
+    .await?;
+    let record = PairedStation {
+        station_id: lan_id.clone(),
+        device_id: lan_device,
+        station_key: away.station_key,
+        pkcs8: away.pkcs8,
+        addresses: vec![at.to_string()],
+    };
+    let (id, issued_at) = (away.station_id, proven.own.issued_at);
+    store(env, move |stations| stations.fold(&id, &record, issued_at)).await?;
+    Ok(Signed {
+        station: lan_id,
+        waiting: false,
+        away: false,
     })
 }
 

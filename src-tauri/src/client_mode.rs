@@ -90,7 +90,9 @@
 //! and only when none answers (or another key does) where a look by name finds it, as the
 //! stations window does. When the link drops, the screens keep the shack's last state ("Not live"), and it
 //! connects again by itself. A call cut off by a drop is never sent again: the next link asks the
-//! shack what became of it.
+//! shack what became of it. A station kept by its service id (signed in to from elsewhere, ruling
+//! 556) has no record on this network, so its internet road is its only road until this computer
+//! first reaches it there and signs in on its row; the banner's status says so (`away`).
 //!
 //! ## A test build's road switch
 //!
@@ -685,6 +687,9 @@ pub(crate) struct Status {
     pub(crate) sign_in_by: Option<u64>,
     /// Operate's launch is signing in again for the station: the sign-in waits in the browser.
     pub(crate) signing_again: bool,
+    /// The station is kept by its service id until this computer first reaches it on its network
+    /// (`crate::lan_client::Stations::keep_away`): the internet road is its only road from here.
+    pub(crate) away: bool,
 }
 
 /// This computer's PTT between the screen's re-assertions.
@@ -799,6 +804,7 @@ impl Client {
                 station_build: None,
                 sign_in_by: None,
                 signing_again: false,
+                away: false,
             }),
             station_id,
             shack: Mutex::new(None),
@@ -1608,7 +1614,10 @@ impl Client {
                 .await
                 .unwrap_or(Err("storeUnavailable"));
             let record = match record {
-                Ok(Some(record)) => record,
+                Ok(Some(record)) => Some(record),
+                // Kept by its service id until this computer first reaches it on its network:
+                // no record of it here, so its internet road alone.
+                Ok(None) if self.road_kept().await => None,
                 Ok(None) => {
                     // Forgotten here, or never paired: nothing will change that but the operator.
                     self.set(Phase::Refused, Some("unknownStation"));
@@ -1620,7 +1629,8 @@ impl Client {
                     continue;
                 }
             };
-            if let Some(first) = record.addresses.first() {
+            lock(&self.status).away = record.is_none();
+            if let Some(first) = record.as_ref().and_then(|record| record.addresses.first()) {
                 self.at(first.clone());
             }
             // What the operator typed for this launch, or else what was kept for the station when
@@ -1638,13 +1648,20 @@ impl Client {
             let typing = typed.clone().or(kept);
             let typed_at = self.typed_at(typing.clone()).await;
             let unresolved = typing.is_some() && typed_at.is_none();
-            let connecting = self.connect(&record, typed_at, &look);
+            let connecting = record
+                .as_ref()
+                .map(|record| self.connect(record, typed_at, &look));
             // In a test build, what this link opens is under the road switch.
             #[cfg(feature = "bench-road-switch")]
-            let connecting = self.road_switch.over(connecting);
+            let connecting = connecting.map(|connecting| self.road_switch.over(connecting));
             let probed = self.lan_backoff.load(Ordering::SeqCst) > 1;
             // The station's version, heard from its welcome on either road, for a refusal to name.
             let (reached, heard) = crate::lan_client::link::hearing_build(async {
+                let Some(connecting) = connecting else {
+                    // No record of it on this network to try.
+                    let internet = self.over_the_internet("unknownStation").await;
+                    return internet.map(|link| (link, None));
+                };
                 match connecting.await {
                     Ok((link, at)) => Ok((link, Some(at))),
                     // Not on this network (nothing answered, or not the station): the internet
@@ -1759,15 +1776,23 @@ impl Client {
         let Some(afar) = self.afar.get().cloned() else {
             return Err(why);
         };
-        let (asked, id) = (Arc::clone(&afar), self.station_id.clone());
-        let kept = tokio::task::spawn_blocking(move || asked.has_road(&id))
-            .await
-            .unwrap_or(false);
-        if !kept {
+        if !self.road_kept().await {
             return Err(why);
         }
         let headset = self.link_headset();
         afar.open(self.station_id.clone(), headset).await
+    }
+
+    /// Whether an internet road is kept for this station, asked off the async threads (the store
+    /// can block). Never without the internet road ([`Client::reach_afar`]).
+    async fn road_kept(&self) -> bool {
+        let Some(afar) = self.afar.get().cloned() else {
+            return false;
+        };
+        let id = self.station_id.clone();
+        tokio::task::spawn_blocking(move || afar.has_road(&id))
+            .await
+            .unwrap_or(false)
     }
 
     /// One link, open, until it ends: the lease, the feeds, the events, and the calls the last

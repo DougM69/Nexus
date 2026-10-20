@@ -26,6 +26,12 @@
 //!   it on its network for thirty days. Not a secret either: a file of its own ([`signed_path`]).
 //! - **The keys for the next station signed in to** ([`Stations::staged`]): made before that
 //!   sign-in, and kept in the credential store until a station is kept with them.
+//! - **A station signed in to from elsewhere** ([`Stations::keep_away`]): one this computer signed
+//!   in to with the account but did not find on the network it was on (a laptop away from home, a
+//!   guest who lives elsewhere). It is kept by the service's id for it, with its internet road, the
+//!   station's LAN key as its own proof vouched for it and this computer's key for that network,
+//!   until this computer first reaches it there ([`Stations::fold`]); then it is kept as any other.
+//!   Until then Operate drives it over the internet road alone (`crate::client_mode`).
 //! - **No engine, no radio and no operations authority.** This computer's own station, if it has
 //!   one, is out of reach: nothing here names the engine, and the window's page reaches no Nexus
 //!   command (the loopback origin, below).
@@ -127,11 +133,14 @@ use tempo_stream::protocol;
 
 use crate::remote_service::lan::{valid_name, NAME_CHARS};
 use crate::remote_service::vault::{
-    InternetRoad, PairedStation, PairedStations, StagedKeys, StationVault,
+    AwayStation, InternetRoad, PairedStation, PairedStations, StagedKeys, StationVault,
 };
 
-/// The most stations this computer keeps a pairing with.
+/// The most stations this computer keeps a pairing with, those kept by their service id included.
 pub(crate) const MAX_STATIONS: usize = 8;
+/// The longest name kept for a station kept by its service id, in characters: as long as the
+/// account's stations are offered by name.
+pub(crate) const AWAY_NAME_CHARS: usize = 48;
 /// The most addresses one station's record keeps.
 pub(crate) const MAX_ADDRESSES: usize = 4;
 
@@ -220,6 +229,38 @@ fn sound_road(road: &InternetRoad) -> bool {
         && protocol::identifier(&road.device_id)
         && protocol::device_key(&road.station_key)
         && ComputerKey::restore(&road.pkcs8).is_some()
+}
+
+/// Is this a station kept by its service id that this module could have written: an id that is
+/// one, a name no longer than one is kept, the station's LAN key a P-256 SPKI, and a key that is
+/// one? One that is not reads as none: that station is signed in to again.
+fn sound_away(record: &AwayStation) -> bool {
+    protocol::identifier(&record.station_id)
+        && record.name.chars().count() <= AWAY_NAME_CHARS
+        && protocol::device_key(&record.station_key)
+        && ComputerKey::restore(&record.pkcs8).is_some()
+}
+
+/// A station kept by its service id, as the page shows it: that id, its name as the account listed
+/// it, and its LAN key's fingerprint (SHA-256 of the key, lowercase hex), as a station on this
+/// network is shown. Never this computer's key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct AwayView {
+    pub id: String,
+    pub name: String,
+    pub key: String,
+}
+
+impl AwayView {
+    fn of(record: &AwayStation) -> Option<Self> {
+        let spki = protocol::hex_bytes(&record.station_key)?;
+        let key = ring::digest::digest(&ring::digest::SHA256, &spki);
+        Some(Self {
+            id: record.station_id.clone(),
+            name: record.name.clone(),
+            key: hex(key.as_ref()),
+        })
+    }
 }
 
 /// The stations this computer is paired with, in the OS credential store. The store can block, so
@@ -530,10 +571,135 @@ impl Stations {
             .map_err(|_| "storeUnavailable")
     }
 
-    /// Forget station `id` on this computer: its internet road and its record, with this
-    /// computer's keys for it, first, then the list, then its lines in the typed and signed files.
-    /// A list that still names it after a failure names a record that is gone, which reads as no
-    /// pairing; a line a file would not let go of goes with its next write.
+    /// The station kept by the service's id `id` until this computer first reaches it on its network
+    /// ([`Stations::keep_away`]), if the store holds a sound one.
+    pub(crate) fn away(&self, id: &str) -> Result<Option<AwayStation>, &'static str> {
+        if !protocol::identifier(id) {
+            return Ok(None);
+        }
+        Ok(self
+            .vault
+            .away_station(id)
+            .map_err(|_| "storeUnavailable")?
+            .filter(|record| record.station_id == id && sound_away(record)))
+    }
+
+    /// Every station kept by its service id that the store holds a sound record for, in the order
+    /// they were kept.
+    pub(crate) fn away_records(&self) -> Result<Vec<AwayStation>, &'static str> {
+        let mut records = Vec::new();
+        for id in self.ids()? {
+            records.extend(self.away(&id)?);
+        }
+        Ok(records)
+    }
+
+    /// The same stations, as the page shows them.
+    pub(crate) fn list_away(&self) -> Result<Vec<AwayView>, &'static str> {
+        Ok(self
+            .away_records()?
+            .iter()
+            .filter_map(AwayView::of)
+            .collect())
+    }
+
+    /// Keep `record`, a station signed in to but not reached on its network, by the service's id
+    /// for it, with its internet road `road` under the same id, until this computer first reaches
+    /// it there ([`Stations::fold`]). The record and the road first, then the list, as
+    /// [`Stations::keep`]. `stationsFull` with [`MAX_STATIONS`] on this computer already, or a record
+    /// that would not fit one entry; `notStation` for a record or a road this module could not have
+    /// written, or a road to another station.
+    pub(crate) fn keep_away(
+        &self,
+        record: &AwayStation,
+        road: &InternetRoad,
+    ) -> Result<(), &'static str> {
+        let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
+        if !sound_away(record) || !sound_road(road) || road.station_id != record.station_id {
+            return Err("notStation");
+        }
+        if !fits(record) || !fits(road) {
+            return Err("stationsFull");
+        }
+        let mut ids = self.ids()?;
+        ids.retain(|id| *id != record.station_id);
+        if ids.len() >= MAX_STATIONS {
+            return Err("stationsFull");
+        }
+        ids.push(record.station_id.clone());
+        let list = PairedStations { stations: ids };
+        if !fits(&list) {
+            return Err("stationsFull");
+        }
+        self.vault
+            .save_away_station(record)
+            .map_err(|_| "storeUnavailable")?;
+        self.vault
+            .save_internet_road(&record.station_id, road)
+            .map_err(|_| "storeUnavailable")?;
+        self.vault
+            .save_paired_stations(&list)
+            .map_err(|_| "storeUnavailable")
+    }
+
+    /// The station kept by the service's id `away`, first reached on its network: kept from now on
+    /// as `record`, by the id its network gave it, with the same internet road (the same device at
+    /// the service), and `issued_at` as when this computer signed in for it, so its thirty days on
+    /// that network are counted from then. The record, the road and the time first; then the list,
+    /// where the network's id takes the away one's place (the station is kept the new way from that
+    /// write on); then the away entries. A crash before the list leaves the station as it was; one
+    /// after it, away entries that no list names.
+    pub(crate) fn fold(
+        &self,
+        away: &str,
+        record: &PairedStation,
+        issued_at: u64,
+    ) -> Result<(), &'static str> {
+        let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
+        if !sound(record) {
+            return Err("notStation");
+        }
+        if !fits(record) {
+            return Err("stationsFull");
+        }
+        let road = self
+            .vault
+            .internet_road(away)
+            .map_err(|_| "storeUnavailable")?
+            .filter(sound_road)
+            .ok_or("unknownStation")?;
+        let mut ids = self.ids()?;
+        ids.retain(|id| *id != record.station_id);
+        let place = ids
+            .iter()
+            .position(|id| id == away)
+            .ok_or("unknownStation")?;
+        ids[place] = record.station_id.clone();
+        let list = PairedStations { stations: ids };
+        self.vault
+            .save_paired_station(record)
+            .map_err(|_| "storeUnavailable")?;
+        self.vault
+            .save_internet_road(&record.station_id, &road)
+            .map_err(|_| "storeUnavailable")?;
+        let mut file = self.signed_file();
+        file.insert(record.station_id.clone(), issued_at);
+        file.retain(|kept, _| list.stations.contains(kept));
+        self.write_signed(&file)?;
+        self.vault
+            .save_paired_stations(&list)
+            .map_err(|_| "storeUnavailable")?;
+        // Listed nowhere now: one the store will not let go of is read by nothing.
+        let _ = self.vault.remove_away_station(away);
+        let _ = self.vault.remove_internet_road(away);
+        Ok(())
+    }
+
+    /// Forget station `id` on this computer: its internet road and its record (or, for one kept by
+    /// its service id, that record), with this computer's keys for it, first, then the list, then
+    /// its lines in the typed and signed files. A list that still names it after a failure names a
+    /// record that is gone, which reads as no pairing; a line a file would not let go of goes with
+    /// its next write.
     pub(crate) fn forget(&self, id: &str) -> Result<(), &'static str> {
         let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
         if !protocol::identifier(id) {
@@ -544,6 +710,9 @@ impl Stations {
             .map_err(|_| "storeUnavailable")?;
         self.vault
             .remove_paired_station(id)
+            .map_err(|_| "storeUnavailable")?;
+        self.vault
+            .remove_away_station(id)
             .map_err(|_| "storeUnavailable")?;
         let mut ids = self.ids()?;
         ids.retain(|kept| kept != id);

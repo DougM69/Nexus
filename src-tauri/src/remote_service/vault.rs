@@ -63,7 +63,13 @@
 //! made for the next station it signs in to with the account (`crate::lan_client::account`), kept
 //! until a station is kept with them so a sign-in tried again names the same keys: handled as the
 //! others (never logged, shown or sent), its own entry so no older Nexus reads it, and read past a
-//! field it does not know.
+//! field it does not know. And one for each station this computer signed in to with the account
+//! but has not yet reached on the station's network (a laptop away from home, a guest who lives
+//! elsewhere): kept by the service's id for it until it does, with its name, the station's LAN key
+//! as the station's own proof vouched for it (pinned from then on) and this computer's own key for
+//! that network, which its sign-in named. Handled as the others, its own entry so no older Nexus
+//! reads it, and read past a field it does not know. Its internet road is the station's road entry
+//! under the same id, and its id is on the list with the rest.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -81,6 +87,8 @@ const PAIRED_STATION: &str = "lan-station-";
 const INTERNET_ROAD: &str = "lan-internet-";
 /// The two keys made for the next station this computer signs in to with the account.
 const STAGED_KEYS: &str = "lan-account-staged";
+/// A station signed in to but not yet reached on its network: this, then the service's id for it.
+const AWAY_STATION: &str = "lan-away-";
 const ACCOUNT_OWNER: &str = "account-owner";
 const ACCOUNT_KEYS: &str = "account-keys";
 const ACCOUNT_DEVICES: &str = "account-devices";
@@ -224,6 +232,22 @@ pub struct StagedKeys {
     pub lan: String,
 }
 
+/// A station this computer signed in to with the account and has not reached on its network yet
+/// (`crate::lan_client::account`), kept by the service's id for it until it does: its name as the
+/// account listed it; the station's LAN key, SPKI as lowercase hex, exactly as the station's own
+/// proof vouched for it at that sign-in (pinned from then on); and this computer's own key for the
+/// station's network, PKCS#8 as lowercase hex, which the sign-in's proof named. Its internet road is
+/// kept under the same id ([`InternetRoad`]). No `Debug` and no `Clone`: it holds a private key.
+/// Read past a field it does not know (see the header).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AwayStation {
+    pub station_id: String,
+    pub name: String,
+    pub station_key: String,
+    pub pkcs8: String,
+}
+
 /// The computer's side of Remote over this network: its entries, kept apart from the shack's and
 /// from [`Vault`]'s, so no test of either reaches them, nor they it.
 pub trait StationVault: Send + Sync {
@@ -240,6 +264,11 @@ pub trait StationVault: Send + Sync {
     fn staged_keys(&self) -> Result<Option<StagedKeys>, &'static str>;
     fn save_staged_keys(&self, keys: &StagedKeys) -> Result<(), &'static str>;
     fn remove_staged_keys(&self) -> Result<(), &'static str>;
+    /// The station kept by the service's id `id` until this computer reaches it on its network, if
+    /// any.
+    fn away_station(&self, id: &str) -> Result<Option<AwayStation>, &'static str>;
+    fn save_away_station(&self, station: &AwayStation) -> Result<(), &'static str>;
+    fn remove_away_station(&self, id: &str) -> Result<(), &'static str>;
 }
 
 /// Remote over this network's two entries, kept apart from [`Vault`]'s: a test of the hosted
@@ -574,6 +603,35 @@ impl StationVault for SystemVault {
             Err(_) => Err("credentialStoreUnavailable"),
         }
     }
+    fn away_station(&self, id: &str) -> Result<Option<AwayStation>, &'static str> {
+        match away_entry(id)?.get_password() {
+            // Unreadable is none, as a paired station's is: that station is signed in to again.
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_away_station(&self, station: &AwayStation) -> Result<(), &'static str> {
+        let value = serde_json::to_string(station).map_err(|_| "credentialStoreUnavailable")?;
+        away_entry(&station.station_id)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
+    }
+    fn remove_away_station(&self, id: &str) -> Result<(), &'static str> {
+        match away_entry(id)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+}
+
+/// A station's entry while it is kept by the service's id ([`AwayStation`]): only an id names one,
+/// as for a paired station.
+fn away_entry(id: &str) -> Result<keyring::Entry, &'static str> {
+    if !tempo_stream::protocol::identifier(id) {
+        return Err("credentialStoreUnavailable");
+    }
+    entry(&format!("{AWAY_STATION}{id}"))
 }
 
 /// One of the account's entries, as the store gave it: read as the LAN's are ([`lan_entry`]).

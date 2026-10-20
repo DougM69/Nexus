@@ -120,6 +120,27 @@ impl StationVault for StationStore {
         self.entries.lock().unwrap().remove("lan-account-staged");
         Ok(())
     }
+    fn away_station(&self, id: &str) -> Result<Option<AwayStation>, &'static str> {
+        self.key_reads.fetch_add(1, Ordering::SeqCst);
+        self.get(&format!("lan-away-{id}"))
+    }
+    fn save_away_station(&self, station: &AwayStation) -> Result<(), &'static str> {
+        self.put(
+            format!("lan-away-{}", station.station_id),
+            serde_json::to_string(station).unwrap(),
+        )
+    }
+    fn remove_away_station(&self, id: &str) -> Result<(), &'static str> {
+        if self.locked.load(Ordering::SeqCst) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        self.entries
+            .lock()
+            .unwrap()
+            .remove(&format!("lan-away-{id}"));
+        Ok(())
+    }
 }
 
 fn id(n: u8) -> String {
@@ -338,6 +359,199 @@ fn forgetting_a_station_removes_its_key() {
         [id(2)]
     );
     assert!(store.raw(&format!("lan-station-{}", id(2))).is_some());
+}
+
+/// The service's id for a station signed in to from elsewhere.
+const AWAY: &str = "20000000-0000-4000-8000-0000000000a1";
+
+/// A sound record for a station kept by the service's id `station`, named `name`, with keys made for
+/// this run and never written down.
+pub(crate) fn away_record(station: &str, name: &str) -> AwayStation {
+    let (_, pkcs8) = ComputerKey::generate().unwrap();
+    let (lan_key, _) = ComputerKey::generate().unwrap();
+    AwayStation {
+        station_id: station.into(),
+        name: name.into(),
+        station_key: lan_key.public_key().to_string(),
+        pkcs8,
+    }
+}
+
+/// A sound internet road to the station the service knows as `station`.
+pub(crate) fn road_to(station: &str) -> InternetRoad {
+    let (station_key, _) = ComputerKey::generate().unwrap();
+    let (_, pkcs8) = ComputerKey::generate().unwrap();
+    InternetRoad {
+        station_id: station.into(),
+        device_id: "30000000-0000-4000-8000-000000000007".into(),
+        station_key: station_key.public_key().to_string(),
+        pkcs8,
+    }
+}
+
+/// ★ A station signed in to from elsewhere is kept by the service's id for it: its record (the
+/// station's LAN key as pinned, this computer's key for that network) and its internet road under
+/// that id, and the id on the list with the rest, the eight a computer keeps counting it. It is no
+/// station on this network: `get` and `list` never return it, so nothing tries this network's road
+/// for it, and the page sees its name and its LAN key's fingerprint, never this computer's key. A
+/// road to another station, or a record this module could not have written, is refused; one that
+/// reads wrong reads as none. CONTROL: the same record, sound, reads back.
+#[test]
+fn a_station_signed_in_from_elsewhere_is_kept_by_its_service_id() {
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    stations.keep(&record(&id(1), &["10.0.0.1"])).unwrap();
+    let kept = away_record(AWAY, "Shack");
+    let road = road_to(AWAY);
+    assert_eq!(
+        stations.keep_away(&kept, &road_to(&id(9))),
+        Err("notStation"),
+        "a road to another station"
+    );
+    stations.keep_away(&kept, &road).unwrap();
+    let read = stations.away(AWAY).unwrap().expect("kept");
+    assert_eq!(
+        (read.name.as_str(), &read.station_key, &read.pkcs8),
+        ("Shack", &kept.station_key, &kept.pkcs8)
+    );
+    let kept_road = stations.internet(AWAY).unwrap().expect("its road");
+    assert_eq!(
+        (&kept_road.device_id, &kept_road.pkcs8),
+        (&road.device_id, &road.pkcs8)
+    );
+    assert!(
+        stations.get(AWAY).unwrap().is_none(),
+        "a station on this network"
+    );
+    let listed: Vec<String> = stations.list().unwrap().into_iter().map(|v| v.id).collect();
+    assert_eq!(listed, [id(1)]);
+    let shown = stations.list_away().unwrap();
+    let spki = protocol::hex_bytes(&kept.station_key).unwrap();
+    assert_eq!(
+        shown,
+        [AwayView {
+            id: AWAY.into(),
+            name: "Shack".into(),
+            key: hex(ring::digest::digest(&ring::digest::SHA256, &spki).as_ref()),
+        }]
+    );
+    let page = serde_json::to_string(&shown).unwrap();
+    assert!(
+        !page.contains(&kept.pkcs8),
+        "the page was shown this computer's key"
+    );
+    // Eight on this computer, this one among them: a ninth of either kind is refused.
+    for n in 2..=7 {
+        stations
+            .keep(&record(&id(n), &[&format!("10.0.0.{n}")]))
+            .unwrap();
+    }
+    assert_eq!(
+        stations.keep(&record(&id(8), &["10.0.0.8"])),
+        Err("stationsFull")
+    );
+    let other = "20000000-0000-4000-8000-0000000000a2";
+    assert_eq!(
+        stations.keep_away(&away_record(other, "Club"), &road_to(other)),
+        Err("stationsFull")
+    );
+    // A record that reads wrong is none.
+    let name = format!("lan-away-{AWAY}");
+    let sound: Value = serde_json::from_str(&store.raw(&name).unwrap()).unwrap();
+    for (field, bad) in [
+        ("stationId", json!(id(1))),
+        ("stationKey", json!("04ab")),
+        ("pkcs8", json!("00")),
+        ("name", json!("N".repeat(AWAY_NAME_CHARS + 1))),
+    ] {
+        let mut tampered = sound.clone();
+        tampered[field] = bad;
+        store
+            .entries
+            .lock()
+            .unwrap()
+            .insert(name.clone(), tampered.to_string());
+        assert!(stations.away(AWAY).unwrap().is_none(), "{field}");
+        assert!(stations.list_away().unwrap().is_empty(), "{field}");
+    }
+    store
+        .entries
+        .lock()
+        .unwrap()
+        .insert(name, sound.to_string());
+    assert!(stations.away(AWAY).unwrap().is_some(), "the control");
+}
+
+/// ★ First reached on its network, a station kept by its service id is kept as any other, in its
+/// place on the list: its record by the id its network gave, the same internet road (the same
+/// device at the service) under that id, and the time this computer signed in for it, from which
+/// the station counts its thirty days on that network; the away record and the road under the
+/// service's id go. CONTROL: a station not kept away is not folded, and nothing is written.
+#[test]
+fn reached_on_its_network_a_station_kept_away_is_kept_in_its_place() {
+    let (dir, _) = typed_file("fold");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json"));
+    stations.keep(&record(&id(1), &["10.0.0.1"])).unwrap();
+    let away = away_record(AWAY, "Shack");
+    let road = road_to(AWAY);
+    stations.keep_away(&away, &road).unwrap();
+    stations.keep(&record(&id(2), &["10.0.0.2"])).unwrap();
+    // The id the station's network gives it: not one this computer holds.
+    let lan = id(0x0a);
+    let reached = PairedStation {
+        station_id: lan.clone(),
+        device_id: DEVICE.into(),
+        station_key: away.station_key.clone(),
+        pkcs8: away.pkcs8.clone(),
+        addresses: vec!["192.168.1.20:42075".into()],
+    };
+    let writes = store.writes.load(Ordering::SeqCst);
+    assert_eq!(
+        stations.fold(&id(9), &reached, 1_800_000_000),
+        Err("unknownStation")
+    );
+    assert_eq!(store.writes.load(Ordering::SeqCst), writes, "written");
+    stations.fold(AWAY, &reached, 1_800_000_000).unwrap();
+    let listed: Vec<String> = stations.list().unwrap().into_iter().map(|v| v.id).collect();
+    assert_eq!(listed, [id(1), lan.clone(), id(2)], "in its place");
+    let now = stations.get(&lan).unwrap().expect("kept");
+    assert_eq!(
+        (&now.station_key, &now.pkcs8, &now.addresses),
+        (&away.station_key, &away.pkcs8, &reached.addresses)
+    );
+    let now_road = stations.internet(&lan).unwrap().expect("its road");
+    assert_eq!(
+        (&now_road.station_id, &now_road.device_id, &now_road.pkcs8),
+        (&road.station_id, &road.device_id, &road.pkcs8),
+        "the same device at the service"
+    );
+    assert_eq!(stations.signed(&lan), Some(1_800_000_000));
+    assert!(stations.away(AWAY).unwrap().is_none());
+    assert!(stations.internet(AWAY).unwrap().is_none());
+    assert!(store.raw(&format!("lan-away-{AWAY}")).is_none());
+    assert!(stations.list_away().unwrap().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// ★ Forgetting a station kept by its service id removes its record, its road and its place on the
+/// list. CONTROL: a station on this network stays.
+#[test]
+fn forgetting_a_station_kept_away_removes_its_keys() {
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    stations.keep(&record(&id(1), &["10.0.0.1"])).unwrap();
+    stations
+        .keep_away(&away_record(AWAY, "Shack"), &road_to(AWAY))
+        .unwrap();
+    stations.forget(AWAY).unwrap();
+    assert!(store.raw(&format!("lan-away-{AWAY}")).is_none());
+    assert!(store.raw(&format!("lan-internet-{AWAY}")).is_none());
+    assert!(stations.list_away().unwrap().is_empty());
+    let listed: Vec<String> = stations.list().unwrap().into_iter().map(|v| v.id).collect();
+    assert_eq!(listed, [id(1)]);
+    let list: PairedStations = serde_json::from_str(&store.raw("lan-stations").unwrap()).unwrap();
+    assert_eq!(list.stations, [id(1)]);
 }
 
 /// ★ The keys for the next station signed in to are made once and kept: asked again, the same
@@ -1274,6 +1488,61 @@ async fn forgetting_a_station_ends_its_internet_road_at_the_service_first() {
     }
 }
 
+/// ★ The window and a station kept by its service id: `stations` lists it apart (`away`: its id,
+/// its name and its LAN key's fingerprint, never this computer's key), Operate from this computer
+/// starts Nexus driving it by that id, and Forget ends its internet road at the service with the
+/// road's own key and then forgets it here. CONTROL: a station on this network is listed as before.
+#[tokio::test]
+async fn the_window_lists_operates_and_forgets_a_station_kept_away() {
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    stations
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    let away = away_record(AWAY, "Shack");
+    let road = road_to(AWAY);
+    stations.keep_away(&away, &road).unwrap();
+    let started = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let forgot: Arc<Mutex<Vec<String>>> = Arc::default();
+    let origin = Origin::start(Reach {
+        operate: {
+            let started = started.clone();
+            Arc::new(move |station, typed| started.lock().unwrap().push((station, typed)))
+        },
+        forget_internet: {
+            let forgot = forgot.clone();
+            Arc::new(move |road: InternetRoad| {
+                forgot.lock().unwrap().push(road.pkcs8);
+                Box::pin(async { Ok(()) })
+            })
+        },
+        ..reach(store.clone())
+    })
+    .unwrap();
+    let mut socket = page_socket(&origin).await;
+    let told = said(&mut socket, json!({"type":"stations"})).await;
+    assert_eq!(told["stations"][0]["id"], STATION, "{told}");
+    assert_eq!(told["stations"].as_array().unwrap().len(), 1, "{told}");
+    let spki = protocol::hex_bytes(&away.station_key).unwrap();
+    assert_eq!(
+        told["away"],
+        json!([{"id": AWAY, "name": "Shack",
+            "key": hex(ring::digest::digest(&ring::digest::SHA256, &spki).as_ref())}])
+    );
+    assert!(!told.to_string().contains(&away.pkcs8));
+    assert_eq!(
+        said(&mut socket, json!({"type":"operate","stationId":AWAY})).await,
+        json!({"type":"operating"})
+    );
+    assert_eq!(*started.lock().unwrap(), vec![(AWAY.to_string(), None)]);
+    let told = said(&mut socket, json!({"type":"forget","stationId":AWAY})).await;
+    assert_eq!(told["away"], json!([]), "{told}");
+    assert_eq!(told["stations"][0]["id"], STATION, "{told}");
+    assert_eq!(*forgot.lock().unwrap(), vec![road.pkcs8.clone()]);
+    assert!(stations.away(AWAY).unwrap().is_none());
+    assert!(stations.internet(AWAY).unwrap().is_none());
+}
+
 /// The page's socket's next word, as JSON.
 async fn heard_from(
     socket: &mut tokio_tungstenite::WebSocketStream<
@@ -1328,6 +1597,7 @@ async fn the_page_picks_the_station_and_says_where_it_is_while_signing_in() {
                     Ok(super::account::Signed {
                         station: STATION.into(),
                         waiting: false,
+                        away: false,
                     })
                 })
             }),
@@ -1373,7 +1643,8 @@ async fn the_page_picks_the_station_and_says_where_it_is_while_signing_in() {
                     .unwrap();
                 assert_eq!(
                     heard_from(&mut socket).await,
-                    json!({"type":"signedIn","stationId":STATION,"waiting":false})
+                    json!({"type":"signedIn","stationId":STATION,"waiting":false,
+                        "away":false})
                 );
                 assert_eq!(
                     *told.lock().unwrap(),

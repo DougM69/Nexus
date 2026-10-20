@@ -498,8 +498,9 @@ impl Drop for Scratch {
 /// ★ A station is trusted only on its own proof, checked here with the issuer's signature, for the
 /// two keys listed beside it, and for a station listed as the account's own, by the account's own
 /// sign-in. One whose proof does not hold is neither registered at the service nor looked for on
-/// the network, and the keys made for it stay for the next try. CONTROL: the same station with its
-/// own keys beside its proof is trusted, and registered.
+/// the network, nor kept, and the keys made for it stay for the next try. CONTROL: the same station
+/// with its own keys beside its proof is trusted and registered; found nowhere on this network, it
+/// is kept by the service's id with exactly the two keys its proof vouched for pinned.
 #[tokio::test]
 async fn a_station_whose_proof_does_not_hold_is_neither_registered_nor_looked_for() {
     let station = fixture_key("station");
@@ -524,12 +525,9 @@ async fn a_station_whose_proof_does_not_hold_is_neither_registered_nor_looked_fo
         )]));
         cloud.seen.lock().unwrap().subject = subject.into();
         let (find, looked) = finding(Vec::new());
-        let env = env(
-            &cloud,
-            stations(&store, &scratch.0),
-            find,
-            proofs::listed_station,
-        );
+        let kept = stations(&store, &scratch.0);
+        let env = env(&cloud, kept.clone(), find, proofs::listed_station);
+        let staged = kept.staged().unwrap();
         let (signed, _) = signing_in(&env, &cloud, None, no_pick(), answering(Vec::new()).0).await;
         let registered = cloud
             .seen
@@ -540,10 +538,33 @@ async fn a_station_whose_proof_does_not_hold_is_neither_registered_nor_looked_fo
             .filter(|path| path.ends_with("/client/device"))
             .count();
         if trusted {
-            // Registered; then nowhere on this network, and the operator said nothing.
-            assert_eq!(signed, Err("notOnThisNetwork"), "{lan} {subject}");
+            // Registered; then nowhere on this network, and the operator said nothing: kept by its
+            // service id, the LAN key its proof vouched for pinned, its road beside it.
+            assert_eq!(
+                signed,
+                Ok(Signed {
+                    station: SERVICE_STATION.into(),
+                    waiting: false,
+                    away: true
+                }),
+                "{lan} {subject}"
+            );
             assert_eq!(registered, 1);
             assert_eq!(looked.load(Ordering::SeqCst), 1);
+            let away = kept.away(SERVICE_STATION).unwrap().expect("kept");
+            assert_eq!(
+                (away.station_key, away.pkcs8),
+                (fixture_key("stationLan"), staged.lan.clone())
+            );
+            let road = kept.internet(SERVICE_STATION).unwrap().expect("its road");
+            assert_eq!(
+                (road.station_key, road.device_id, road.pkcs8),
+                (station.clone(), device_at(0), staged.road.clone())
+            );
+            assert!(
+                store.staged_keys().unwrap().is_none(),
+                "the keys are the station's now"
+            );
         } else {
             assert_eq!(signed, Err("stationProofFailed"), "{lan} {subject}");
             assert_eq!(registered, 0, "{lan} {subject}: registered");
@@ -552,12 +573,104 @@ async fn a_station_whose_proof_does_not_hold_is_neither_registered_nor_looked_fo
                 0,
                 "{lan} {subject}: looked for"
             );
+            assert!(kept.away(SERVICE_STATION).unwrap().is_none());
+            assert!(
+                store.staged_keys().unwrap().is_some(),
+                "the keys stay for the next try"
+            );
         }
-        assert!(
-            store.staged_keys().unwrap().is_some(),
-            "the keys stay for the next try"
-        );
     }
+}
+
+/// ★ Signed in from elsewhere: a computer that has never been on the station's network (a laptop away, a guest
+/// who lives elsewhere) keeps a station its sign-in vouched for, found nowhere here and with no
+/// address from the operator, by the service's id: registered with its LAN key and proof as on the
+/// network, its road kept under that id for Operate, and this computer's two keys with it; no time
+/// is kept, since no admission on the station's network rests on this sign-in. A second sign-in
+/// for the account finds it here (`alreadyHere`) and registers nothing: one device at the service.
+/// A guest invited to operate is kept the same way; one invited only to listen is not kept. CONTROL:
+/// a road the service has not approved yet is said to wait.
+#[tokio::test]
+async fn a_station_found_nowhere_here_is_kept_by_its_service_id_for_the_internet_road() {
+    let (lan_key, _) = ComputerKey::generate().unwrap();
+    let station = fixture_key("station");
+    for (role, approve) in [("owner", true), ("operate", true), ("owner", false)] {
+        let (cloud, scratch, store) = (
+            Cloud::start().await,
+            Scratch::new(),
+            StationStore::default(),
+        );
+        cloud.lists(json!([row(
+            &station,
+            lan_key.public_key(),
+            Some("p"),
+            role
+        )]));
+        cloud.seen.lock().unwrap().approve = approve;
+        let kept = stations(&store, &scratch.0);
+        let env = env(&cloud, kept.clone(), finding(Vec::new()).0, trusting);
+        let staged = kept.staged().unwrap();
+        let (ask, asked) = answering(Vec::new());
+        let (signed, _) = signing_in(&env, &cloud, None, no_pick(), ask).await;
+        assert_eq!(
+            signed,
+            Ok(Signed {
+                station: SERVICE_STATION.into(),
+                waiting: !approve,
+                away: true
+            }),
+            "{role}"
+        );
+        assert_eq!(*asked.lock().unwrap(), vec![("Shack".to_string(), None)]);
+        {
+            let seen = cloud.seen.lock().unwrap();
+            let (body, _) = seen.devices[0].clone();
+            assert_eq!(
+                (&body["publicKey"], &body["lanKey"]),
+                (
+                    &json!(ComputerKey::restore(&staged.road).unwrap().public_key()),
+                    &json!(ComputerKey::restore(&staged.lan).unwrap().public_key())
+                ),
+                "{role}"
+            );
+            assert!(body["proof"].is_string(), "{body}");
+        }
+        assert!(kept.list().unwrap().is_empty(), "a station on this network");
+        let shown = kept.list_away().unwrap();
+        assert_eq!(
+            shown.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(),
+            ["Shack"]
+        );
+        let away = kept.away(SERVICE_STATION).unwrap().unwrap();
+        assert_eq!(
+            (away.station_key, away.pkcs8),
+            (lan_key.public_key().to_string(), staged.lan.clone())
+        );
+        assert_eq!(kept.signed(SERVICE_STATION), None, "a time kept");
+        // Signed in again for the same account: it is here, and nothing is registered twice.
+        let (again, _) = signing_in(&env, &cloud, None, no_pick(), answering(Vec::new()).0).await;
+        assert_eq!(again, Err("alreadyHere"), "{role}");
+        assert_eq!(cloud.seen.lock().unwrap().devices.len(), 1, "{role}");
+        assert_eq!(cloud.seen.lock().unwrap().keys.len(), 1, "{role}");
+    }
+    // Invited only to listen: not registered, not kept.
+    let (cloud, scratch, store) = (
+        Cloud::start().await,
+        Scratch::new(),
+        StationStore::default(),
+    );
+    cloud.lists(json!([row(
+        &station,
+        lan_key.public_key(),
+        Some("p"),
+        "listen"
+    )]));
+    let kept = stations(&store, &scratch.0);
+    let env = env(&cloud, kept.clone(), finding(Vec::new()).0, trusting);
+    let (signed, _) = signing_in(&env, &cloud, None, no_pick(), answering(Vec::new()).0).await;
+    assert_eq!(signed, Err("listenOnly"));
+    assert!(kept.list_away().unwrap().is_empty());
+    assert!(cloud.seen.lock().unwrap().devices.is_empty());
 }
 
 /// ★ The sign-in carries the hash of exactly the two keys this computer made for the station, to
@@ -723,7 +836,8 @@ async fn a_code_paired_station_whose_owner_never_signed_in_gets_its_internet_roa
                     signed,
                     Ok(Signed {
                         station: LAN_STATION.into(),
-                        waiting: true
+                        waiting: true,
+                        away: false
                     })
                 );
                 let (body, authorization) = seen.devices.last().unwrap().clone();

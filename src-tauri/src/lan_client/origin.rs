@@ -27,10 +27,12 @@
 //! station is, or none to cancel), and on an open road the station's own `operationRequest` and
 //! `streamSignal`. To the page: `stations` (`stations`, `computer`, `internet`, `account`: for each
 //! station added with the account, until when it admits this computer on its network and whether
-//! to sign in again now; and after a forget the service could not be told of, `forgetUnreached`),
-//! `signingIn`, `chooseStation` (`stations`: each `id` and `name`), `stationAddress` (`name`, and
-//! the `reason` the last address did not take this computer, if one was tried), `signedIn`
-//! (`stationId`, `waiting`) or `signInRefused`, `found` (`shacks`, `available`), `paired`
+//! to sign in again now; `away`: each station kept by its service id until this computer first
+//! reaches it on its network, its `id`, `name` and LAN key's fingerprint `key`; and after a forget
+//! the service could not be told of, `forgetUnreached`), `signingIn`, `chooseStation` (`stations`:
+//! each `id` and `name`), `stationAddress` (`name`, and the `reason` the last address did not take
+//! this computer, if one was tried), `signedIn` (`stationId`, `waiting`, and `away` for a station
+//! kept by its service id) or `signInRefused`, `found` (`shacks`, `available`), `paired`
 //! (`station`) or `pairRefused`, `connected` (`stationId`, `deviceId`, `sessionId`, `stationKey`,
 //! `address`) or `connectRefused`, `closed` (`stationLeft`, `connectionLost`), `answerRefused`, and
 //! the station's own `operationResponse`, `streamSignal`, `streamState` and `status`. Every
@@ -584,8 +586,9 @@ async fn store<T: Send + 'static>(
         .unwrap_or(Err("storeUnavailable"))
 }
 
-/// The stations, as the page shows them, which of them have the internet road, and for each added
-/// with the account, until when it admits this computer on its network.
+/// The stations, as the page shows them, which of them have the internet road, for each added with
+/// the account until when it admits this computer on its network, and those kept by their service
+/// id until this computer first reaches them there.
 async fn stations(reach: &Reach) -> String {
     listed(reach).await.to_string()
 }
@@ -603,10 +606,10 @@ async fn listed(reach: &Reach) -> serde_json::Value {
             .iter()
             .filter_map(|station| Some((station.id.clone(), kept.signed(&station.id)?)))
             .collect();
-        Ok((list, internet, signed))
+        Ok((list, internet, signed, kept.list_away()?))
     });
     match listed.await {
-        Ok((list, internet, signed)) => {
+        Ok((list, internet, signed, away)) => {
             let now = (reach.now_s)();
             let account: Vec<serde_json::Value> = signed
                 .into_iter()
@@ -617,7 +620,7 @@ async fn listed(reach: &Reach) -> serde_json::Value {
                 })
                 .collect();
             json!({"type":"stations","stations":list,"internet":internet,"account":account,
-                "computer":reach.name})
+                "away":away,"computer":reach.name})
         }
         Err(reason) => {
             json!({"type":"stations","stations":[],"computer":reach.name,"error":reason})
@@ -719,8 +722,9 @@ async fn page(
                 signing = None;
                 (choosing, placing) = (None, None);
                 match done {
-                    Ok(Ok(Signed { station, waiting })) => {
-                        json!({"type":"signedIn","stationId":station,"waiting":waiting})
+                    Ok(Ok(Signed { station, waiting, away })) => {
+                        json!({"type":"signedIn","stationId":station,"waiting":waiting,
+                            "away":away})
                     }
                     Ok(Err(reason)) => json!({"type":"signInRefused","reason":reason}),
                     Err(_) => json!({"type":"signInRefused","reason":"signInFailed"}),
@@ -893,9 +897,10 @@ async fn page(
     }
 }
 
-/// Operate from this computer: Nexus starts again driving station `id`, at the address the
-/// operator typed first, if any, read as [`connect`] reads one. The launch proves the key pinned
-/// for the station wherever it reaches it, so a typed address is never taken as the station.
+/// Operate from this computer: Nexus starts again driving station `id` (one on this network, or
+/// one kept by its service id, which it drives over the internet road), at the address the operator
+/// typed first, if any, read as [`connect`] reads one. The launch proves the key pinned for the
+/// station wherever it reaches it, so a typed address is never taken as the station.
 async fn operate(reach: &Reach, id: String, typed: Option<&str>) -> Result<(), &'static str> {
     let typed = match typed {
         Some(text) => Some(resolved(reach, text).await?.0),
@@ -903,9 +908,10 @@ async fn operate(reach: &Reach, id: String, typed: Option<&str>) -> Result<(), &
     };
     let kept = reach.stations.clone();
     let wanted = id.clone();
-    store(move || kept.get(&wanted))
-        .await?
-        .ok_or("unknownStation")?;
+    let here = store(move || Ok(kept.get(&wanted)?.is_some() || kept.away(&wanted)?.is_some()));
+    if !here.await? {
+        return Err("unknownStation");
+    }
     (reach.operate)(id, typed);
     Ok(())
 }
