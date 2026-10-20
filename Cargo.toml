@@ -22,6 +22,7 @@ members = [
     "crates/tempo-audio",
     "crates/tempo-net",
     "crates/tempo-flexsim",
+    "crates/tempo-tcisim",
     "crates/tempo-sstv",
     "crates/tempo-stream",
     "crates/tempo-client",
