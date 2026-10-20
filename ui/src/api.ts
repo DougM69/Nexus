@@ -4576,6 +4576,9 @@ export interface ClientStatus {
   signInBy?: number | null
   /** Operate's launch is signing in again for the station: the sign-in waits in the browser. */
   signingAgain?: boolean
+  /** The station is kept by its service id until this computer first reaches it on its network
+   *  (signed in to from elsewhere): the internet road is its only road from here. */
+  away?: boolean
 }
 
 /** The test build's road switch: both roads as they are, or one of them blocked. */

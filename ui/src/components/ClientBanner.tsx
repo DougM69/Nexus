@@ -21,7 +21,9 @@
 // at most every few seconds, while the link is on the internet), with a button that answers it,
 // and Reconnect once nobody did; and, when this network lets no datagram road through, that
 // transmitting from here is off. A pop-out window reports its input the same way (`ClientInput`, at
-// its root), so work in a pop-out answers "Still there?" too.
+// its root), so work in a pop-out answers "Still there?" too. A station signed in to from elsewhere
+// (`away`: kept by its service id) has no address to name, so the banner says the
+// internet while it connects and when the station does not take this computer.
 //
 // In a test build it carries the road switch too (`src-tauri/src/bench_road_switch.rs`): Normal,
 // Block the command link, Block the Stop road, one click each, and a mark while a road is blocked.
@@ -134,6 +136,14 @@ function line(status: ClientStatus): string {
       case 'live': return t('client.banner.internet.live')
       case 'notLive': return t('client.banner.internet.notLive')
       case 'busy': return t('client.banner.internet.busy')
+      default: break
+    }
+  }
+  // Signed in to from elsewhere: no address to name, and the internet its only road.
+  if (status.away) {
+    switch (status.phase) {
+      case 'connecting': return t('client.banner.internet.connecting')
+      case 'refused': return t('client.banner.internet.refused', { reason: reasonLine(status) })
       default: break
     }
   }

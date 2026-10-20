@@ -1,17 +1,19 @@
 // The Stations on this network window's page (src-tauri/src/remote_window.rs, `open_lan_stations_window`):
 // the stations on this computer, adding one by signing in with its Nexus Remote account (or, for a
 // station whose owner has not signed in there, pairing with its code), and the stream of the one the
-// operator opens (the operator's ruling of 2026-10-04, "Window only in v1"). Served from this
-// computer's own loopback origin, so it reaches no Nexus command; everything it does goes on its one
-// socket to this computer's Nexus, which signs in, holds the keys and the station records and does
-// the cryptography (src-tauri/src/lan_client.rs).
+// operator opens (the operator's ruling of 2026-10-04, "Window only in v1"). A station signed in to
+// from elsewhere (a laptop away from home, a guest who lives elsewhere) is listed apart,
+// by its name: Operate drives it over the internet until a sign-in on its row, made on its network,
+// adds it there. Served from this computer's own loopback origin, so it reaches no Nexus command;
+// everything it does goes on its one socket to this computer's Nexus, which signs in, holds the keys
+// and the station records and does the cryptography (src-tauri/src/lan_client.rs).
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { useViewport } from '../useViewport'
 import { StreamView } from '../remote-web/StreamView'
 import type { StreamEnvironment } from '../remote-web/stream-link'
 import { LanConnection, lanStream } from './connection'
-import { codeShaped, groupedKey, readTold, socketUrl, type ClosedReason, type ConnectReason, type LanChoice, type LanFound, type LanSigned, type LanStation, type PairReason, type SignInReason, type WhereReason } from './protocol'
+import { codeShaped, groupedKey, readTold, socketUrl, type ClosedReason, type ConnectReason, type LanAway, type LanChoice, type LanFound, type LanSigned, type LanStation, type PairReason, type SignInReason, type WhereReason } from './protocol'
 import { lanFindLine, lanReachLine, lanUnreached } from '../remote-native/lanReach'
 import '../remote-monitor/monitor.css'
 import '../remote-web/remote.css'
@@ -159,6 +161,11 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const [stations, setStations] = useState<LanStation[]>([])
   const [internet, setInternet] = useState<string[]>([])
   const [account, setAccount] = useState<LanSigned[]>([])
+  // The stations signed in to from elsewhere: kept by their service id until a sign-in here, on
+  // their network, adds them there.
+  const [away, setAway] = useState<LanAway[]>([])
+  const awayIds = useRef<Set<string>>(new Set())
+  awayIds.current = new Set(away.map(station => station.id))
   const [computer, setComputer] = useState('')
   const [storeFailed, setStoreFailed] = useState(false)
   const [pairing, setPairing] = useState(false)
@@ -214,6 +221,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           setStations(told.stations)
           setInternet(told.internet)
           setAccount(told.account)
+          setAway(told.away)
           setComputer(told.computer)
           setStoreFailed(told.error !== null)
           if (told.forgetUnreached !== null) setSaid({ text: t('lanWindow.internet.forgetUnreached'), alert: true })
@@ -267,17 +275,22 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           setSaid(null)
           return
         case 'signedIn': {
-          // Signed in again for a station added with the account; or added, or linked.
+          // Signed in again for a station added with the account; or added (on this network, or
+          // over the internet when found nowhere here), or linked.
           const again = signingFor.current !== null && renewing.current.has(signingFor.current)
           setBusy(null); setChoosing(null); setWhere(null)
-          setSaid({ text: told.waiting ? t('lanWindow.internet.waiting') : again ? t('lanWindow.signIn.renewed') : t('lanWindow.signIn.done'), alert: false })
+          setSaid({ text: told.waiting ? t('lanWindow.internet.waiting') : told.away ? t('lanWindow.away.added')
+            : again ? t('lanWindow.signIn.renewed') : t('lanWindow.signIn.done'), alert: false })
           say({ type: 'stations' })
           return
         }
-        case 'signInRefused':
+        case 'signInRefused': {
+          // A station signed in to from elsewhere, still not found on this network, stays as it was.
+          const stillAway = told.reason === 'notOnThisNetwork' && signingFor.current !== null && awayIds.current.has(signingFor.current)
           setBusy(null); setChoosing(null); setWhere(null)
-          setSaid({ text: signInSentence(told.reason), alert: true })
+          setSaid({ text: stillAway ? t('lanWindow.away.stillAway') : signInSentence(told.reason), alert: true })
           return
+        }
         case 'station':
           current.current?.connection.receive(told.message, new TextEncoder().encode(event.data).length)
       }
@@ -384,14 +397,17 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           <span className="settings-hint">{t('lanWindow.otherAddressHint', { example: EXAMPLE_ADDRESS, name: EXAMPLE_NAME })}</span>
           <div className="remote-actions">
             <button className="remote-button remote-button--primary" disabled={!where.address.trim()}>{t('lanWindow.signIn.tryAddress')}</button>
+            {/* For a station being added, or one signed in to from elsewhere, the other answer is that it
+                is not here: it is then kept, or stays, over the internet. */}
             <button type="button" className="remote-button remote-button--quiet"
-              onClick={() => { setWhere(null); say({ type: 'stationAddress', address: null }) }}>{t('lanWindow.cancel')}</button>
+              onClick={() => { setWhere(null); say({ type: 'stationAddress', address: null }) }}>
+              {signingFor.current === null || awayIds.current.has(signingFor.current) ? t('lanWindow.signIn.notHere') : t('lanWindow.cancel')}</button>
           </div>
         </form>
       </section>}
       <section className="rm-card remote-section">
         <h2>{t('lanWindow.paired')}</h2>
-        {stations.length === 0 && <p>{t('lanWindow.none')}</p>}
+        {stations.length === 0 && away.length === 0 && <p>{t('lanWindow.none')}</p>}
         {stations.map(station => <div key={station.id} className="remote-station lan-station">
           <p><strong>{t('lanWindow.stationAt', { address: station.addresses[0] })}</strong></p>
           <p className="remote-site-status">{t('lanWindow.stationKey', { key: groupedKey(station.key) })}</p>
@@ -482,6 +498,36 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
                 onClick={() => connect(station.id, another.address.trim())}>{t('lanWindow.stream')}</button>
             </div>
           </form>}
+        </div>)}
+        {/* Signed in to from elsewhere: by its name, Operate over the internet, and Sign in on its row
+            once on its network to add it there. No stream: that is this network's road alone. */}
+        {away.map(station => <div key={station.id} className="remote-station lan-station">
+          {station.name && <p><strong>{station.name}</strong></p>}
+          <p className="remote-site-status">{t('lanWindow.stationKey', { key: groupedKey(station.key) })}</p>
+          {forgetting === station.id ? <>
+            <p className="remote-warning">{t('lanWindow.forgetConfirm')}</p>
+            <div className="remote-actions">
+              <button type="button" className="remote-button" disabled={!!busy} onClick={() => { setForgetting(null); say({ type: 'forget', stationId: station.id }) }}>{t('lanWindow.forgetYes')}</button>
+              <button type="button" className="remote-button remote-button--quiet" onClick={() => setForgetting(null)}>{t('lanWindow.keep')}</button>
+            </div>
+          </> : operating === station.id ? <>
+            <p className="remote-warning">{t('lanWindow.away.operateConfirm')}</p>
+            <div className="remote-actions">
+              <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'} onClick={() => {
+                setOperating(null); setBusy(`operate:${station.id}`); setSaid(null)
+                say({ type: 'operate', stationId: station.id })
+              }}>{t('lanWindow.operateYes')}</button>
+              <button type="button" className="remote-button remote-button--quiet" onClick={() => setOperating(null)}>{t('lanWindow.operateNo')}</button>
+            </div>
+          </> : <>
+            <p className="remote-site-status">{t('lanWindow.away.status')}</p>
+            <div className="remote-actions">
+              <button type="button" className="remote-button remote-button--primary" disabled={!!busy || phase !== 'open'} onClick={() => setOperating(station.id)}>{t('lanWindow.operate')}</button>
+              <button type="button" className="remote-button remote-button--quiet" disabled={!!busy || phase !== 'open'} onClick={() => signIn(station.id)}>
+                {busy === 'signIn' && signingFor.current === station.id ? t('lanWindow.internet.adding') : t('lanWindow.signIn')}</button>
+              <button type="button" className="remote-button remote-button--quiet" disabled={!!busy} onClick={() => setForgetting(station.id)}>{t('lanWindow.forget')}</button>
+            </div>
+          </>}
         </div>)}
         {/* Signing in is how a station is added. A code stays for a station whose owner has not signed
             in to Nexus Remote at the station, until every station has. */}

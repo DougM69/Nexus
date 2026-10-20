@@ -479,3 +479,32 @@ describe('signing in again for the station', () => {
     expect(banner).not.toContain(fill(EN['client.banner.signInBy'], { date: '' }).slice(0, 12))
   })
 })
+
+describe('a station kept by its service id (signed in to from elsewhere)', () => {
+  const AWAY = '20000000-0000-4000-8000-0000000000a1'
+  it('says the internet is its road while it connects and when it is refused, and never shows its id', async () => {
+    mockStatus.mockResolvedValue({ station: AWAY, phase: 'connecting', reason: null, away: true })
+    await shown()
+    let banner = screen.getByRole('status').textContent ?? ''
+    expect(banner).toContain(EN['client.banner.internet.connecting'])
+    expect(banner).not.toContain(AWAY)
+    cleanup()
+    mockStatus.mockResolvedValue({ station: AWAY, phase: 'refused', reason: 'internetNotIncluded', away: true })
+    await shown()
+    banner = screen.getByRole('status').textContent ?? ''
+    expect(banner).toContain(fill(EN['client.banner.internet.refused'], { reason: EN['client.reason.internetNotIncluded'] }))
+    expect(banner).not.toContain(AWAY)
+    cleanup()
+    mockStatus.mockResolvedValue({ station: AWAY, phase: 'live', reason: null, away: true, internet: true })
+    await shown()
+    expect(screen.getByRole('status').textContent).toContain(EN['client.banner.internet.live'])
+  })
+
+  it('CONTROL: a station on this network still says where it is', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'refused', reason: 'keyChanged', away: false })
+    await shown()
+    expect(screen.getByRole('status').textContent).toContain(
+      fill(EN['client.banner.refused'], { station: AT, reason: EN['lanWindow.reason.keyChanged'] }),
+    )
+  })
+})
