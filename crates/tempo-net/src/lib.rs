@@ -58,6 +58,7 @@ pub mod pskreporter;
 pub mod qds;
 pub mod server;
 pub mod sntp;
+pub mod tci;
 pub mod wl2k;
 pub mod wsjtx;
 

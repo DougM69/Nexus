@@ -1,0 +1,248 @@
+# Every example in the TCI 2.0 specification, for the codec in crates/tempo-net/src/tci/wire.rs.
+#
+# Source: "TCI Protocol" version 2.0, 12 January 2024, Expert Electronics ("Expert Group" LLC),
+# MIT licence; `TCI Protocol.pdf` in https://github.com/ExpertSDR3/TCI at commit
+# b081213ff97150fd29f669c633f060f93c81a286, SHA-256
+# 2abd8d8df553403b28b8c7f0d910c8c777147821737d24cefb28ef08e67d8f09.
+#
+# One line per example:   <where> <sides> `<example>` [ => `<rendered>` | ! <reason> ]
+#   where   the PDF page (p12 = page 12); x = not in the spec, with its evidence above the line
+#   sides   s = a server sends it (read as a notice); c = a client sends it (read as a request, in
+#           TCI 2.0); cs = both. A one-sided example must be refused by the other side.
+#   =>      read, and rendered as this (otherwise rendered as itself, ignoring case)
+#   !       refused for this reason: unknown | direction | arity <n> | badarg <index>
+# Examples the PDF breaks across a table line are joined (noted where it happens).
+
+# ── §3.2.1 CW macro (p7) ──
+p7  c   `cw_macros:0,TU RA6LH 599;`
+p7  c   `cw_macros:0,>TU >599 004 |SK|;`
+p7  c   `cw_terminal:true;`
+p7  c   `cw_terminal:false;`
+p7  s   `cw_macros_empty;`
+
+# ── §3.2.2 CW message (p8) ──
+p8  c   `cw_msg:0,TU,RA6LH,599 004;`
+p8  c   `cw_msg:0,TU,RA6LH$2,599 004;`
+p8  c   `cw_msg:0,_,RA6$2,599 004;`
+p8  c   `cw_msg:RA6L;`
+p8  c   `cw_msg:RA6LH;`
+p8  s   `callsign_send:RA6LH;`
+p9  c   `cw_macros_stop;`
+
+# ── §4.1 Initialization commands (p12-13) ──
+p12 s   `VFO_LIMITS:10000,30000000;`
+p12 s   `IF_LIMITS:-48000,48000;`
+p12 s   `TRX_COUNT:2;`
+# The spec's singular; every server read sends the plural, which is rendered.
+p12 s   `CHANNEL_COUNT:2;`  =>  `channels_count:2;`
+p13 s   `DEVICE:SunSDR2DX;`
+p13 s   `RECEIVE_ONLY:true;`
+p13 s   `MODULATIONS_LIST:AM,LSB,USB,FM;`
+p13 s   `PROTOCOL:ExpertSDR3,1.9;`
+# READY has no example line; this is its "Reply" row.
+p13 s   `READY;`
+
+# ── §4.2 Bidirectional control commands (p14-29) ──
+p14 cs  `START;`
+p14 cs  `STOP;`
+p14 c   `DDS:0;`
+p14 cs  `DDS:0,7100000;`
+p15 c   `IF:0,1;`
+p15 cs  `IF:0,1,12500;`
+p15 cs  `IF:0,1,-17550;`
+p15 cs  `VFO:0,1,7100000;`
+p15 cs  `VFO:1,0,14250000;`
+p15 c   `VFO:0,1;`
+p15 cs  `MODULATION:0,LSB;`
+p15 c   `MODULATION:1;`
+p15 cs  `MODULATION:1,NFM;`
+p16 cs  `TRX:0,true;`
+p16 cs  `TRX:0,true,tci;`
+p16 cs  `TRX:0,false;`
+p16 cs  `TRX:0,true,micpc;`
+p16 cs  `TRX:0,true,ecoder2;`
+p16 cs  `TRX:0,true,mic2;`
+p16 c   `TRX:1;`
+p16 cs  `TUNE:0,true;`
+p16 cs  `TUNE:0,false;`
+p17 c   `TUNE:1;`
+p17 cs  `DRIVE:0,30;`
+p17 cs  `DRIVE:0,75;`
+# A server's `drive:<n>;` is TCI 1.x's drive at n (a server never reads); a 2.0 client's is a
+# read of receiver n. The same text, two meanings: read both ways.
+p17 cs  `DRIVE:1;`
+p17 cs  `TUNE_DRIVE:0,30;`
+p17 cs  `TUNE_DRIVE:0,75;`
+p17 c   `TUNE_DRIVE:1;`
+p18 cs  `RIT_ENABLE:0,true;`
+p18 c   `RIT_ENABLE:1;`
+p18 cs  `XIT_ENABLE:0,true;`
+p18 c   `XIT_ENABLE:1;`
+p18 cs  `SPLIT_ENABLE:0,true;`
+p18 c   `SPLIT_ENABLE:1;`
+p19 cs  `RIT_OFFSET:0,500;`
+p19 c   `RIT_OFFSET:1;`
+p19 cs  `XIT_OFFSET:0,-350;`
+p19 c   `XIT_OFFSET:1;`
+p19 cs  `RX_CHANNEL_ENABLE:0,1,true;`
+p19 c   `RX_CHANNEL_ENABLE:0,1;`
+p20 cs  `RX_FILTER_BAND:0,30,2700;`
+p20 cs  `RX_FILTER_BAND:1,-2900,-70;`
+p20 c   `RX_FILTER_BAND:0;`
+p20 cs  `CW_MACROS_SPEED:42;`
+p20 c   `CW_MACROS_SPEED;`
+p20 cs  `CW_MACROS_DELAY:100;`
+p21 c   `CW_MACROS_DELAY;`
+# "Sent only by TCI client", but piHPSDR sends it to its clients (src/tci.c), so both read it.
+p21 cs  `CW_KEYER_SPEED:35;`
+p21 cs  `CW_KEYER_SPEED:42;`
+p21 cs  `VOLUME:-12;`
+p21 c   `VOLUME;`
+p22 cs  `MUTE:true;`
+p22 cs  `MUTE:false;`
+p22 c   `MUTE;`
+p22 cs  `RX_MUTE:0,true;`
+p22 cs  `RX_MUTE:1,false;`
+p22 c   `RX_MUTE:0;`
+p22 cs  `RX_VOLUME:0,1,-6;`
+p22 c   `RX_VOLUME:0,0;`
+p23 cs  `RX_BALANCE:0,1,-6;`
+p23 cs  `RX_BALANCE:0,0,12;`
+p23 c   `RX_BALANCE:0,1;`
+p23 cs  `MON_VOLUME:-12;`
+p23 c   `MON_VOLUME;`
+p23 cs  `MON_ENABLE:true;`
+p23 cs  `MON_ENABLE:false;`
+p23 c   `MON_ENABLE;`
+p24 cs  `AGC_MODE:0,normal;`
+p24 c   `AGC_MODE:1;`
+p24 cs  `AGC_GAIN:0,87;`
+p24 c   `AGC_GAIN:1;`
+p24 cs  `RX_NB_ENABLE:0,true;`
+p24 c   `RX_NB_ENABLE:1;`
+p25 cs  `RX_NB_PARAM:0,70,25;`
+p25 c   `RX_NB_PARAM:1;`
+p25 cs  `RX_BIN_ENABLE:0,true;`
+p25 c   `RX_BIN_ENABLE:1;`
+p25 cs  `RX_NR_ENABLE:0,true;`
+p25 c   `RX_NR_ENABLE:1;`
+p26 cs  `RX_ANC_ENABLE:0,true;`
+p26 c   `RX_ANC_ENABLE:1;`
+p26 cs  `RX_ANF_ENABLE:0,true;`
+p26 c   `RX_ANF_ENABLE:1;`
+p27 cs  `RX_APF_ENABLE:0,true;`
+p27 c   `RX_APF_ENABLE:1;`
+p27 cs  `RX_DSE_ENABLE:0,true;`
+p27 c   `RX_DSE_ENABLE:1;`
+p27 cs  `RX_NF_ENABLE:0,true;`
+p27 c   `RX_NF_ENABLE:1;`
+p28 cs  `LOCK:0,true;`
+p28 c   `LOCK:1;`
+p28 cs  `SQL_ENABLE:0,true;`
+p28 c   `SQL_ENABLE:1;`
+p28 cs  `SQL_LEVEL:0,-83;`
+p28 c   `SQL_LEVEL:1;`
+p29 cs  `DIGL_OFFSET:1500;`
+p29 c   `DIGL_OFFSET;`
+p29 cs  `DIGU_OFFSET:2200;`
+p29 c   `DIGU_OFFSET;`
+
+# ── §4.3 Unidirectional control commands (p29-36) ──
+p29 s   `TX_ENABLE:0,true;`
+p30 c   `CW_MACROS_SPEED_UP:7;`
+p30 c   `CW_MACROS_SPEED_UP:2;`
+p30 c   `CW_MACROS_SPEED_DOWN:7;`
+p30 c   `CW_MACROS_SPEED_DOWN:2;`
+# Joined: the PDF breaks the colour after "167".
+p30 c   `SPOT:RN6LHF,CW,7100000,16711680,ANY_TEXT;`
+p30 c   `SPOT_DELETE:RN6LHF;`
+# The rates have a "Reply" row: a server answers with the rate.
+p31 cs  `IQ_SAMPLERATE:48000;`
+p31 cs  `AUDIO_SAMPLERATE:12000;`
+# Stream starts and stops: servers acknowledge them with the same command.
+p31 cs  `IQ_START:0;`
+p32 cs  `IQ_STOP:0;`
+p32 cs  `AUDIO_START:0;`
+p32 cs  `AUDIO_STOP:0;`
+p32 cs  `LINE_OUT_START:0;`
+p33 cs  `LINE_OUT_STOP:0;`
+# The recorder commands make the SDR program's computer write a file at a path the client names.
+# Deliberately not typed: never sent, and never read as anything. (Joined where the PDF breaks.)
+p33 c   `LINE_OUT_RECORDER_START:0,250;`  ! unknown
+p33 c   `LINE_OUT_RECORDER_SAVE:0,home/user_name/record_dir/file_name.wav;`  ! unknown
+p33 c   `LINE_OUT_RECORDER_SAVE:0,home/user_name/record_dir/file_name.mp3;`  ! unknown
+p33 c   `LINE_OUT_RECORDER_SAVE:0,D|\record_dir\file_name.mp3;`  ! unknown
+p34 c   `LINE_OUT_RECORDER_BREAK:0;`  ! unknown
+p34 c   `SPOT_CLEAR;`
+p34 cs  `AUDIO_STREAM_SAMPLE_TYPE:int24;`
+p34 cs  `AUDIO_STREAM_SAMPLE_TYPE:float32;`
+p35 cs  `AUDIO_STREAM_CHANNELS:1;`
+p35 cs  `AUDIO_STREAM_CHANNELS:2;`
+# The spec's "Install" row for AUDIO_STREAM_SAMPLES names AUDIO_STREAM_CHANNELS (a copying
+# slip); its examples name the right command.
+p35 cs  `AUDIO_STREAM_SAMPLES:200;`
+p35 cs  `AUDIO_STREAM_SAMPLES:512;`
+# Listed as "Reply" values.
+p36 cs  `TX_STREAM_AUDIO_BUFFERING:150;`
+p36 cs  `TX_STREAM_AUDIO_BUFFERING:270;`
+
+# ── §4.4 Notification commands (p36-40) ──
+# Joined: the PDF breaks the frequency after "71".
+p36 s   `CLICKED_ON_SPOT:RN6LHF,7147500;`
+# Joined: the PDF breaks the line after "0,1,".
+p37 s   `RX_CLICKED_ON_SPOT:0,1,RN6LHF,7147500;`
+# The heading says TX_FOOTSWITCH; the command's own rows say TX_FOOTCWITCH. Both read; the
+# heading's spelling is rendered.
+p37 s   `TX_FOOTCWITCH:0,true;`  =>  `tx_footswitch:0,true;`
+p37 s   `TX_FREQUENCY:7140000;`
+p37 s   `APP_FOCUS:true;`
+# SET_IN_FOCUS's example line repeats APP_FOCUS:true; (a copying slip); this is its "Set" row.
+p38 c   `SET_IN_FOCUS;`
+p38 c   `KEYER:0,true;`
+# KEYER's operation algorithm (p38) gives the three-argument form.
+p38 c   `keyer:0,true,0;`
+p38 c   `keyer:0,false,142;`
+p39 c   `RX_SENSORS_ENABLE:true;`
+p39 c   `RX_SENSORS_ENABLE:true,200;`
+p39 c   `TX_SENSORS_ENABLE:true;`
+p39 c   `TX_SENSORS_ENABLE:true,200;`
+# The space before the level is the spec's own; it is read.
+p39 s   `RX_SENSORS:0, -71.5;`  =>  `rx_sensors:0,-71.5;`
+p39 s   `RX_SENSORS:1,-112.7;`
+# The spec's example has four arguments and a malformed number ("47.4.67.5" for "47.4,67.5"):
+# refused as it stands. The line after it is the example as intended.
+p40 s   `TX_SENSORS:0, -27.2,47.4.67.5,1.7;`  ! arity 4
+p40 s   `TX_SENSORS:0,-27.2,47.4,67.5,1.7;`
+
+# ── §4.5 New commands in 2.0 (p40) ──
+p40 s   `VFO_LOCK:0,1,true;`
+p40 s   `VFO_LOCK:1,1,false;`
+p40 s   `RX_CHANNEL_SENSORS:0,0,-71.5;`
+p40 s   `RX_CHANNEL_SENSORS:1,1,-112.7;`
+# VFO_LOCK has a "Read" row: a client asks.
+p40 c   `VFO_LOCK:0,1;`
+
+# ── Not in the spec: forms real servers send (plan §2.2, §2.5), each with its evidence ──
+# TCI 1.x drive without a receiver: WSJT-X 3.0.2 reads it from ExpertSDR2
+# (Transceiver/TCITransceiver.cpp:737-743).
+x   s   `drive:30;`
+# The plural spelling: piHPSDR's initialization burst (src/tci.c), AetherSDR
+# (docs/architecture/tci-receivers.md); WSJT-X reads only it (TCITransceiver.cpp:58).
+x   s   `channels_count:2;`
+x   s   `tx_footswitch:0,false;`
+# A modulation with a channel: WSJT-X reads `modulation:<trx>,<ch>,<mode>;` from ExpertSDR3 and
+# Thetis (TCITransceiver.cpp:707-711). A client may write it the same way.
+x   cs  `modulation:0,0,usb;`
+# The polled S-meter and the 1.x transmit meters: WSJT-X maps them (TCITransceiver.cpp:90-92).
+x   c   `rx_smeter:0,0;`
+x   s   `rx_smeter:0,0,-73.0;`
+x   s   `tx_power:5.0;`
+x   s   `tx_swr:1.2;`
+# piHPSDR's meters: whole dBm with a ".0" (src/tci.c, `rx_channel_sensors:%d,0,%d.0;`).
+x   s   `rx_channel_sensors:0,0,-73.0;`
+# piHPSDR's mode list, upper case (src/tci.c).
+x   s   `modulations_list:LSB,USB,DSB,CW,FMN,AM,DIGU,SPEC,DIGL,SAM,DRM;`
+# AetherSDR's and piHPSDR's protocol lines: neither is ExpertSDR3.
+x   s   `protocol:ExpertSDR3,1.5;`
+x   s   `protocol:ExpertSDR3,2.0;`
+x   s   `device:SunSDR2QRP;`
