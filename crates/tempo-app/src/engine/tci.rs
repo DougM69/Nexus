@@ -616,9 +616,9 @@ impl Engine {
     // ── Dial, mode and power ─────────────────────────────────────────────────────────────────
 
     /// Why a program's `vfo` or `modulation` change is refused now, before the CAT broker's own
-    /// dial and mode rules judge it: not while anything is on the air (the lead's default for
-    /// design Q9; the program is told the dial in force). The app must ask this and make the change
-    /// under ONE hold of the engine lock, or a key can come between the two.
+    /// dial and mode rules judge it: not while anything is on the air (design Q9; the program is
+    /// told the dial in force). The app must ask this and make the change under ONE hold of the
+    /// engine lock, or a key can come between the two.
     pub fn tci_retune_refusal(&self) -> Option<Refusal> {
         self.on_air().then_some(Refusal::OnAir)
     }
@@ -631,11 +631,10 @@ impl Engine {
             .map(|p| (p * 100.0).round() as u32)
     }
 
-    /// `drive:0,<percent>` from a program: it may LOWER the power, never raise it (the lead's
-    /// default for design Q10), through [`Self::set_rf_power`], so the operator's ceiling still
-    /// holds. `Ok` with the power now in force. The level it asks is judged against
-    /// [`Self::tci_drive`]: above it, or with no power known to lower from, it is refused; at it,
-    /// nothing is written.
+    /// `drive:0,<percent>` from a program: it may LOWER the power, never raise it (design Q10),
+    /// through [`Self::set_rf_power`], so the operator's ceiling still holds. `Ok` with the power
+    /// now in force. The level it asks is judged against [`Self::tci_drive`]: above it, or with no
+    /// power known to lower from, it is refused; at it, nothing is written.
     pub fn tci_set_drive(&mut self, percent: u32) -> Result<u32, Refusal> {
         let Some(now) = self.tci_drive() else {
             return Err(Refusal::Raise);
