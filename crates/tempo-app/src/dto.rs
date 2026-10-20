@@ -4587,6 +4587,12 @@ pub struct AppSnapshot {
     /// Cleared on every work; absent from the wire when there is none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_park: Option<WorkPark>,
+    /// The last worked spot's Work came from afar (a computer driving this station, or Remote's own
+    /// Work) and entered its section without arming Enable TX. A window following the hint opens the
+    /// cockpit without re-asserting the section, which from the station's own screen would arm the
+    /// latch that Work withheld. Absent from the wire for a Work made at the station.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub work_afar: bool,
     /// Bumped by an inbound UDP Clear — the UI erases its panes on change.
     #[serde(default)]
     pub clear_tick: u32,

@@ -1013,6 +1013,7 @@ impl AppState {
             work_view: None,
             work_call: None,
             work_park: None,
+            work_afar: false,
             field_day: None,
             // The engine's club link (fills in snapshot()).
             club_link: None,

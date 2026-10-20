@@ -406,6 +406,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audio road for good. A Stop from the second PC then had the command link alone, and presence could no longer be
   renewed, so what was on the air stopped within about 5 s and starts from afar were refused; the audio went
   quiet. The station now carries on reading both roads.
+- **Remote from a second PC: working a spot there no longer turns TX on at the station.** A CW, Phone, RTTY or PSK
+  spot worked from the second PC opens that screen at the station too, and the station's own window turned TX on as
+  it opened it, though nothing had been pressed to transmit. With TX on, the station's own PTT and a program keying
+  the radio over the CAT share could transmit with nobody asking. The station's window now opens the screen and
+  leaves TX as the second PC left it, off until you turn it on. A spot worked at the station turns TX on as it always
+  has, and Stop TX still holds TX off everywhere. NEEDS-BENCH: two Windows PCs on one network, the radio into a dummy
+  load.
 - **Programs that listen to Nexus the way they listen to WSJT-X now see what you are transmitting.** GridTracker, JTAlert
   and the like got your decodes but not your TX message, and were always told TX was off. Nexus now reports the message
   on the air, whether TX is enabled, the report you are sending, the station's grid and a tripped TX watchdog, as

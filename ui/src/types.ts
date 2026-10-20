@@ -5400,6 +5400,10 @@ export interface AppSnapshot {
   /** The park or summit of the last worked spot, when a Needed row named one: the log line fills it
    *  with `workCall`. Never a hunt. Absent when there is none. */
   workPark?: { program: string; reference: string } | null
+  /** The last Work came from afar (a computer driving this station) and entered its section without
+   *  arming Enable TX: App opens its cockpit without re-asserting the section, which from the
+   *  station's own screen would arm the latch. Absent for a Work made at the station. */
+  workAfar?: boolean
   /** Pending one-click POTA/SOTA hunt (next QSO with this call auto-tags). */
   /** `states`: where the hunted park or summit is ("US-ND"; two or more for a park on a state
    *  line), absent when the hunt could not place it. */
