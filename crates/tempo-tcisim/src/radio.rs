@@ -17,6 +17,11 @@
 //! A `tci` key that takes TCI audio is pulled with TX_CHRONO, one header at a time at the rate
 //! the audio is consumed (§3.4), from the moment the key is echoed.
 //!
+//! **A radio that runs late** (its process starved of CPU) keeps to its own clock, as an SDR
+//! program does: a receive, IQ or TX_CHRONO frame more than [`BEHIND`] late is given up with every
+//! frame due since, and the stream goes on from the next one to come, its samples still counted
+//! from its start ([`Event::Lost`]). It never sends the whole backlog at once.
+//!
 //! **What is not modelled**: the line-out stream and recorder, `keyer`'s element timing, and the
 //! 200 ms hold for PTT (the hold applies to parameters; a key follows ownership instead).
 
@@ -463,6 +468,12 @@ fn millis(d: Duration) -> u64 {
 fn secs(frames: u64, rate: u32) -> Duration {
     Duration::from_secs_f64(frames as f64 / f64::from(rate.max(1)))
 }
+
+/// How late a stream's frame may go out before the radio gives it up. An SDR program that falls
+/// behind sends what it holds late, all at once, and loses what is older than its buffer. The
+/// length is this simulator's choice (UNVERIFIED for any real server): long enough that no
+/// scheduling hiccup on a loaded machine loses a frame.
+pub const BEHIND: Duration = Duration::from_millis(200);
 
 /// The radio. See the module header.
 pub(crate) struct Radio {
@@ -2201,6 +2212,16 @@ impl Radio {
         }
     }
 
+    /// A stream whose tick `n` is due at `origin` + `n` × `per` / `rate`, running tick `n` now: when
+    /// that is more than [`BEHIND`] late, the tick to go on from, the first still to come.
+    fn resume(&self, origin: Instant, n: u64, per: u64, rate: u32) -> Option<u64> {
+        if self.now <= origin + secs(n * per, rate) + BEHIND {
+            return None;
+        }
+        let elapsed = self.now.saturating_duration_since(origin).as_secs_f64();
+        Some((elapsed * f64::from(rate.max(1)) / per.max(1) as f64) as u64 + 1)
+    }
+
     fn rx_audio_tick(&mut self, conn: usize, trx: u32, id: u64) {
         let Some(client) = self.clients.get(&conn) else {
             return;
@@ -2215,6 +2236,26 @@ impl Radio {
         };
         let fmt = client.audio;
         let (frames, length) = self.shape(fmt.samples(), fmt.channels);
+        let k = stream.frames / frames;
+        if let Some(next) =
+            self.resume(stream.started + secs(frames, fmt.rate), k, frames, fmt.rate)
+        {
+            self.log(Event::Lost {
+                conn,
+                trx,
+                kind: kind::RX_AUDIO,
+                frames: next - k,
+            });
+            if let Some(s) = self
+                .clients
+                .get_mut(&conn)
+                .and_then(|c| c.audio_streams.get_mut(&trx))
+            {
+                s.frames = next * frames;
+            }
+            let due = stream.started + secs(next * frames + frames, fmt.rate);
+            return self.timer(due, Action::RxAudio { conn, trx, id });
+        }
         let stall = self.find(|f| match f {
             Fault::RxAudioStall { after } => Some(*after),
             _ => None,
@@ -2285,6 +2326,24 @@ impl Radio {
         };
         let rate = client.iq_rate;
         let (pairs, length) = self.shape(self.dialect.iq_values, 2);
+        let k = stream.frames / pairs;
+        if let Some(next) = self.resume(stream.started + secs(pairs, rate), k, pairs, rate) {
+            self.log(Event::Lost {
+                conn,
+                trx,
+                kind: kind::IQ,
+                frames: next - k,
+            });
+            if let Some(s) = self
+                .clients
+                .get_mut(&conn)
+                .and_then(|c| c.iq_streams.get_mut(&trx))
+            {
+                s.frames = next * pairs;
+            }
+            let due = stream.started + secs(next * pairs + pairs, rate);
+            return self.timer(due, Action::Iq { conn, trx, id });
+        }
         if self.running {
             let samples = synth::iq(
                 &self.receive,
@@ -2376,6 +2435,26 @@ impl Radio {
             .unwrap_or(1)
             .max(1),
         );
+        if let Some(next) = self.resume(epoch, n, frames, fmt.rate) {
+            let next = next.div_ceil(burst) * burst;
+            self.log(Event::Lost {
+                conn,
+                trx,
+                kind: kind::TX_CHRONO,
+                frames: next - n,
+            });
+            let due = epoch + secs(frames * next, fmt.rate);
+            return self.timer(
+                due,
+                Action::Chrono {
+                    conn,
+                    trx,
+                    key,
+                    n: next,
+                    epoch,
+                },
+            );
+        }
         let header = Header {
             receiver: trx,
             sample_rate: fmt.rate,

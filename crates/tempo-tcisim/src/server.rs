@@ -8,6 +8,15 @@
 //! radio's state is behind one lock, which every thread takes only to call the model and carry out
 //! its effects, never while writing to a socket.
 //!
+//! **A radio too slow for its streams** (a process starved of CPU) still serves its clients and
+//! stops. The timer thread works in passes: a pass runs the timers due when it began, once each,
+//! and looks at the stop flag before each one, so the lock is let go between passes and a
+//! connection waiting for it gets its turn. (It once ran every timer due, and each stream set its
+//! next one in the past: a radio that fell behind never let go.) A stream that falls more than
+//! [`crate::radio::BEHIND`] behind gives up what it missed and goes on at its own time, as an SDR
+//! program does ([`Event::Lost`]). Dropping the simulator waits a bounded time ([`JOIN`]) for its
+//! threads, so it returns even when one cannot run.
+//!
 //! **The log.** Every connection, message, command, frame, decision and fault action is logged with
 //! its time since the simulator started (monotonic clock), in time order. A message the simulator
 //! sends is stamped just before its bytes go out, on the thread that writes them, so nothing a
@@ -42,6 +51,11 @@ use crate::synth::Receive;
 const POLL: Duration = Duration::from_millis(2);
 /// The longest the timer thread sleeps with nothing due.
 const IDLE: Duration = Duration::from_millis(50);
+/// How long dropping the simulator waits for its threads to end. A thread still running then
+/// (starved of CPU, or waiting on a lock it cannot get) is left to end on its own: it holds only
+/// the simulator's shared state, and the stop flag is up. So a test on a starved machine fails
+/// instead of hanging in the drop.
+pub const JOIN: Duration = Duration::from_secs(2);
 /// How long a client has to finish its WebSocket handshake.
 const HANDSHAKE: Duration = Duration::from_secs(5);
 /// The largest client message read; larger ones end the connection.
@@ -106,8 +120,8 @@ struct Shared {
     /// Wakes the timer thread when a timer is set.
     wake: Condvar,
     workers: Mutex<Vec<JoinHandle<()>>>,
-    /// Sockets still in their handshake, so a drop can end them.
-    pending: Mutex<Vec<(u64, TcpStream)>>,
+    /// Every socket still open, so a drop can end them without the radio's lock.
+    sockets: Mutex<Vec<(u64, TcpStream)>>,
 }
 
 struct State {
@@ -116,7 +130,7 @@ struct State {
     next_conn: usize,
     timers: BTreeMap<(Instant, u64), Action>,
     timer_seq: u64,
-    pending_seq: u64,
+    socket_seq: u64,
 }
 
 struct Conn {
@@ -202,11 +216,11 @@ impl Simulator {
                 next_conn: 0,
                 timers: BTreeMap::new(),
                 timer_seq: 0,
-                pending_seq: 0,
+                socket_seq: 0,
             }),
             wake: Condvar::new(),
             workers: Mutex::new(Vec::new()),
-            pending: Mutex::new(Vec::new()),
+            sockets: Mutex::new(Vec::new()),
         });
         let accept = {
             let shared = Arc::clone(&shared);
@@ -362,21 +376,36 @@ impl Drop for Simulator {
         self.shared.wake.notify_all();
         // Wake the accept loop: it looks at the flag after each accept.
         let _ = TcpStream::connect_timeout(&self.addr, Duration::from_secs(1));
-        for (_, tcp) in lock(&self.shared.pending).iter() {
+        // Every socket ends, and its connection's thread with it.
+        for (_, tcp) in lock(&self.shared.sockets).iter() {
             let _ = tcp.shutdown(Shutdown::Both);
         }
-        let conns: Vec<Arc<Conn>> = lock(&self.shared.state).conns.values().cloned().collect();
-        for c in conns {
-            let _ = c.tcp.shutdown(Shutdown::Both);
-        }
-        for t in self.threads.drain(..) {
-            let _ = t.join();
-        }
+        let deadline = Instant::now() + JOIN;
+        let mut left = join_by(self.threads.drain(..).collect(), deadline);
         let workers = std::mem::take(&mut *lock(&self.shared.workers));
-        for w in workers {
-            let _ = w.join();
+        left += join_by(workers, deadline);
+        if left > 0 {
+            eprintln!(
+                "tempo-tcisim: {left} thread(s) still running {JOIN:?} after the drop, left to end on their own"
+            );
         }
     }
+}
+
+/// Join each of `threads` that ends by `deadline`; the rest are left running. How many were left.
+fn join_by(threads: Vec<JoinHandle<()>>, deadline: Instant) -> usize {
+    let mut left = 0;
+    for t in threads {
+        while !t.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        if t.is_finished() {
+            let _ = t.join();
+        } else {
+            left += 1;
+        }
+    }
+    left
 }
 
 impl Shared {
@@ -474,23 +503,21 @@ fn accept_loop(shared: &Arc<Shared>, listener: TcpListener) {
 fn timer_loop(shared: &Shared) {
     let mut state = lock(&shared.state);
     loop {
-        if shared.stopping() {
-            return;
-        }
-        loop {
-            let now = Instant::now();
-            let Some((&(at, seq), _)) = state.timers.first_key_value() else {
-                break;
-            };
-            if at > now {
-                break;
+        // A pass: the timers due when it began, each once, in order. What they set waits for a
+        // later pass, so a pass ends however far behind the radio is.
+        let began = Instant::now();
+        let later = state.timers.split_off(&(began, u64::MAX));
+        let due = std::mem::replace(&mut state.timers, later);
+        for action in due.into_values() {
+            if shared.stopping() {
+                return;
             }
-            let Some(action) = state.timers.remove(&(at, seq)) else {
-                break;
-            };
-            state.radio.on_action(action, now);
+            state.radio.on_action(action, Instant::now());
             let fx = state.radio.take();
             carry_out(shared, &mut state, fx);
+        }
+        if shared.stopping() {
+            return;
         }
         let wait = state
             .timers
@@ -514,26 +541,43 @@ fn would_block(e: &io::Error) -> bool {
     )
 }
 
+/// A new socket: its connection, then its end.
 fn serve(shared: &Arc<Shared>, tcp: TcpStream) {
     let _ = tcp.set_nodelay(true);
-    let _ = tcp.set_read_timeout(Some(HANDSHAKE));
-    let Ok(shutdown) = tcp.try_clone() else {
+    let Ok(listed) = tcp.try_clone() else {
         return;
     };
     let token = {
         let mut state = lock(&shared.state);
-        state.pending_seq += 1;
-        state.pending_seq
+        state.socket_seq += 1;
+        state.socket_seq
     };
-    if let Ok(clone) = tcp.try_clone() {
-        lock(&shared.pending).push((token, clone));
+    {
+        let mut sockets = lock(&shared.sockets);
+        // A drop has already ended every socket it knew of, and would not see this one.
+        if shared.stopping() {
+            return;
+        }
+        sockets.push((token, listed));
     }
+    connection(shared, tcp);
+    // However the connection ended, its socket ends too.
+    let mut sockets = lock(&shared.sockets);
+    if let Some(at) = sockets.iter().position(|(t, _)| *t == token) {
+        let _ = sockets.swap_remove(at).1.shutdown(Shutdown::Both);
+    }
+}
+
+/// A connection's thread: the WebSocket handshake (within [`HANDSHAKE`]), then all of its I/O.
+fn connection(shared: &Arc<Shared>, tcp: TcpStream) {
+    let _ = tcp.set_read_timeout(Some(HANDSHAKE));
+    let Ok(shutdown) = tcp.try_clone() else {
+        return;
+    };
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_CLIENT_MESSAGE))
         .max_frame_size(Some(MAX_CLIENT_MESSAGE));
-    let handshake = tungstenite::accept_with_config(tcp, Some(config));
-    lock(&shared.pending).retain(|(t, _)| *t != token);
-    let mut ws = match handshake {
+    let mut ws = match tungstenite::accept_with_config(tcp, Some(config)) {
         Ok(ws) => ws,
         Err(e) => {
             if !shared.stopping() {

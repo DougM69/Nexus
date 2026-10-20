@@ -992,3 +992,57 @@ fn chrono_burst_and_chrono_stall_shape_the_pull_exactly() {
     assert_eq!(times.first(), Some(&ms(300)));
     assert_eq!(times.len(), 5, "300, 321, 343, 364, 385 ms");
 }
+
+#[test]
+fn a_radio_that_runs_late_gives_up_what_it_cannot_send_in_time_and_keeps_to_its_clock() {
+    // The radio's turn comes a second late, as in a process starved of CPU: the receive audio, IQ
+    // and TX_CHRONOs due meanwhile are not all sent at once. Each stream gives up what is too
+    // late and goes on from its next frame on its own grid, as an SDR program whose buffer
+    // overflowed would: its clock did not wait for it.
+    let mut b = Bench::new(Dialect::expert_sdr3(), Vec::new());
+    b.connect(0);
+    b.send(0, "audio_start:0;iq_start:0;");
+    let m = b.mark();
+    b.send(0, "trx:0,true,tci;");
+    let t0 = b.now - b.t0;
+    b.advance(ms(100));
+    // 2048 values a frame, two channels: 1024 frames, 21.333 ms, for each of the three. Receive
+    // audio and IQ at 21, 43, 64, 85 ms; chronos from the key at 0 ms.
+    let period = 1024.0 / 48_000.0;
+    assert_eq!(b.frames(0, m).len(), 4 + 4 + 5);
+    let m = b.mark();
+    b.now += ms(1000);
+    b.advance(Duration::ZERO);
+    let at_once = b.frames(0, m);
+    assert!(
+        at_once.is_empty(),
+        "{} frames went out at once, up to a second late",
+        at_once.len()
+    );
+    // Each stream says what it gave up: the 47 frames due from 106.7 ms to 1088 ms.
+    let mut lost: Vec<(u32, u64)> = b
+        .events(m)
+        .iter()
+        .filter_map(|e| match e {
+            Event::Lost { kind, frames, .. } => Some((*kind, *frames)),
+            _ => None,
+        })
+        .collect();
+    lost.sort_unstable();
+    assert_eq!(
+        lost,
+        [(kind::IQ, 47), (kind::RX_AUDIO, 47), (kind::TX_CHRONO, 47)]
+    );
+    // From the next frame due: 1109.3, 1130.7, 1152, 1173.3 and 1194.7 ms, for each of the three.
+    b.advance(ms(100));
+    let resumed = b.frames(0, m);
+    assert_eq!(resumed.len(), 3 * 5, "{resumed:?}");
+    for (at, h, _) in &resumed {
+        let n = (*at - t0).as_secs_f64() / period;
+        assert!(
+            (n - n.round()).abs() < 1e-3 && n.round() >= 52.0,
+            "kind {} at {at:?} is off its grid",
+            h.kind
+        );
+    }
+}
