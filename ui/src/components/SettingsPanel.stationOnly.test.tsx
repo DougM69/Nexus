@@ -21,8 +21,20 @@ import STATION_ONLY from './__fixtures__/stationOnlySettings.json'
 vi.setConfig({ testTimeout: 60_000 })
 
 // The station-only settings no form here edits: each is kept by the save from afar all the same.
-// The source sweep below turns red the day one of them gets a control.
-const NOT_ON_THE_FORM = ['directedMaxCalls', 'maxPowerAm', 'catRtsState', 'catDtrState', 'cloudlogKey']
+// The source sweep below turns red the day one of them gets a control. The TCI server's five wait
+// for their section of the form.
+const NOT_ON_THE_FORM = [
+  'directedMaxCalls',
+  'maxPowerAm',
+  'catRtsState',
+  'catDtrState',
+  'cloudlogKey',
+  'tciServer',
+  'tciServerPort',
+  'tciServerTx',
+  'tciServerCw',
+  'tciServerSpots',
+]
 
 const SOURCES = import.meta.glob(['./*.tsx', '!./*.test.tsx'], {
   query: '?raw',

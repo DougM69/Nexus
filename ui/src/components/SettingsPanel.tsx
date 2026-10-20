@@ -908,6 +908,14 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     icomLanHost: s.icomLanHost ?? '',
     icomLanUser: s.icomLanUser ?? '',
     icomLanPort: s.icomLanPort ?? 50001,
+    // The TCI connection, per radio: Rust's defaults where the form has none.
+    tciHost: s.tciHost ?? '127.0.0.1',
+    tciPort: s.tciPort ?? 50001,
+    tciTrx: s.tciTrx ?? 0,
+    tciDialect: s.tciDialect ?? 'auto',
+    tciAudio: s.tciAudio ?? true,
+    tciPan: s.tciPan ?? false,
+    tciSpots: s.tciSpots ?? false,
   }
 }
 

@@ -137,6 +137,11 @@ export const SETTINGS_KEYS = [
   'satPassAlertSoundOff',
   'catBroker',
   'catBrokerPort',
+  'tciServer',
+  'tciServerPort',
+  'tciServerTx',
+  'tciServerCw',
+  'tciServerSpots',
   'flexRadioIp',
   'flexNativePan',
   'flexNativeAudio',
@@ -364,6 +369,13 @@ export const NEWER_SETTINGS = {
   js8TxDelayMs: 0,
   // A station that predates the RTTY AFSK sideband runs AFSK on LSB, which is that setting's default.
   rttyAfskSideband: 'lsb',
+  // A station that predates Nexus's TCI server serves no TCI: the server off, so no program
+  // transmits through it, sends it CW or spots, and 40001 is where a server would listen.
+  tciServer: false,
+  tciServerPort: 40001,
+  tciServerTx: false,
+  tciServerCw: false,
+  tciServerSpots: false,
 } as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
@@ -544,6 +556,11 @@ export const SETTINGS_SHAPES = {
   "satPassAlertSoundOff": "boolean",
   "catBroker": "boolean",
   "catBrokerPort": "number",
+  "tciServer": "boolean",
+  "tciServerPort": "number",
+  "tciServerTx": "boolean",
+  "tciServerCw": "boolean",
+  "tciServerSpots": "boolean",
   "flexRadioIp": "string",
   "flexNativePan": "boolean",
   "flexNativeAudio": "boolean",

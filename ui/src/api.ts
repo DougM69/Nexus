@@ -2940,6 +2940,18 @@ export interface RadioProfilePatch {
   icomLanHost: string
   icomLanUser: string
   icomLanPort: number
+  /** This radio's TCI connection (the "TCI" Connection choice): the SDR program's server address
+   *  and port, which of its transceivers (from 0), its dialect ('auto' | 'expertsdr3' | 'thetis' |
+   *  'pihpsdr'), Nexus's audio over it (both ways), its spectrum and its spots. Rust takes each as
+   *  optional and leaves a stored value alone when absent (a form from before them); this form
+   *  states every one. */
+  tciHost: string
+  tciPort: number
+  tciTrx: number
+  tciDialect: string
+  tciAudio: boolean
+  tciPan: boolean
+  tciSpots: boolean
 }
 
 /** Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio
