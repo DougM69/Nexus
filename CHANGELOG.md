@@ -381,6 +381,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the program lets go. Stop TX still drops the other program's key and stops everything. JS8 and Nexus's other timed
   modes wait the same way. NEEDS-BENCH: WSJT-X on the CAT broker holding PTT through a Nexus FT8 CQ's period, into a
   dummy load first.
+- **Mac: an IC-7300's sound card opens again.** macOS names that radio's USB sound card "USB Audio CODEC" with a space
+  at the end. Nexus listed and saved the name with the space, then dropped it when opening the device, so the radio
+  you chose never matched: there was no receive audio, the error said "USB Audio CODEC" is not available, and Nexus
+  would not key the radio because transmit audio could not open either. Nexus now opens the device by the name exactly
+  as saved, and ignores spaces at the ends of a name only when nothing matches exactly. Any other sound card macOS
+  names with a space at the end is fixed the same way. Nothing to change in Settings.
 - **A logger can no longer turn TX back on after you stop it.** With the WSJT-X UDP feed on, a Reply from GridTracker or
   JTAlert used to arm TX even after Stop TX, Esc or a TX watchdog trip, and cleared the trip. Now that Reply is ignored
   until you turn TX on yourself, and the watchdog trip stays until you do. A logger's free text with "send" no longer
