@@ -966,6 +966,118 @@ fn aprs_and_sstv_key_while_the_radio_takes_dax() {
     run_until(&mut s, "the picture never keyed", |s| keys(s) == 3);
 }
 
+/// The loop on the real clock for `ms`, a program on Nexus's TCI server sending 20 ms of its audio
+/// at `level` before each step, as the server hands it over.
+fn run_with_program_audio(s: &mut FlexScene, ms: u64, level: f32) {
+    let end = Instant::now() + Duration::from_millis(ms);
+    while Instant::now() < end {
+        let _ = s
+            .engine
+            .lock()
+            .unwrap()
+            .tci_tx_audio(1, &[level; 240], Instant::now());
+        s.step(now_unix_ms());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// ⛔ A TCI PROGRAM'S AUDIO OVER NEVER GOES OUT ON THE RADIO'S OWN MIC. Phone at the shack with native
+/// audio on, so the radio takes its transmit audio from its mic, and a program on Nexus's TCI server
+/// asks to send its own audio (`trx:0,true,tci`): it would leave over DAX, which the radio then
+/// ignores, and the mic would carry the over. Refused as APRS and SSTV are refused there, with its
+/// reason: none of its audio is taken, nothing keys and nothing plays. CONTROL: with native audio off
+/// the radio is the operator's again, and the same program's over keys it and plays.
+#[test]
+fn a_tci_programs_audio_over_refuses_while_the_radio_has_the_mic() {
+    use tempo_net::tci::server::{KeyKind, Refusal};
+    let mut s = FlexScene::with_session(true, reports(&["USB"]));
+    {
+        let mut e = s.engine.lock().unwrap();
+        let mut settings = e.settings().clone();
+        settings.tci_server_tx = true;
+        e.apply_settings(settings);
+        e.set_operating_mode("phone", false); // arms TX
+        e.set_frequency(14.250, "20m", "USB");
+    }
+    run_until(&mut s, "the radio never had the mic", has_mic);
+    assert_eq!(
+        s.engine.lock().unwrap().tci_key(1, KeyKind::Tci, true),
+        Err(Refusal::RadioMic),
+        "the program's over"
+    );
+    run_with_program_audio(&mut s, 1_000, 0.5);
+    assert_eq!(keys(&s), 0, "the radio keyed");
+    assert!(
+        s.backend.played.lock().unwrap().is_empty(),
+        "the program's audio was played"
+    );
+    // CONTROL: native audio off.
+    s.set_native_audio(false);
+    run_until(&mut s, "the radio kept the mic for native audio", |s| {
+        !has_mic(s)
+    });
+    assert_eq!(
+        s.engine.lock().unwrap().tci_key(1, KeyKind::Tci, true),
+        Ok(()),
+        "control: the program's over"
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while keys(&s) == 0 || s.backend.played.lock().unwrap().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "control: the over never keyed and played"
+        );
+        run_with_program_audio(&mut s, 100, 0.5);
+    }
+}
+
+/// ⭐ PROGRAMS ON NEXUS'S TCI SERVER HEAR THE FLEX'S DAX AUDIO. With native audio on, the server's copy
+/// of the receive audio carries the DAX stream the decoders take, at its 12 kHz, in place of the
+/// sound card's: a program's reader hears the radio (the simulated slice's tone), not silence. With
+/// native audio off, that reader ends and the copy is the sound card's again (this scene's card
+/// publishes none).
+#[test]
+fn programs_on_the_tci_server_hear_the_flexs_dax_audio() {
+    let mut s = FlexScene::new(true);
+    run_until(
+        &mut s,
+        "DAX receive audio never reached the decoders",
+        |s| s.state.dax_last_audio.is_some(),
+    );
+    let feed = s.state.rx_tap.tci_audio();
+    let source = feed.source().expect("the TCI copy has a source");
+    assert_eq!(source.rate, 12_000, "the DAX stream's rate");
+    let reader = feed.subscribe(source).expect("a program's reader");
+    let mut heard: Vec<f32> = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while heard.len() < 6_000 {
+        assert!(Instant::now() < deadline, "the TCI copy carried no audio");
+        s.run(100);
+        while let Ok(Some(block)) = reader.read(Instant::now()) {
+            heard.extend(block.samples);
+        }
+    }
+    let peak = heard.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!(
+        peak > 0.01,
+        "the TCI copy carried silence, not the radio: peak {peak}"
+    );
+    // Native audio off: the DAX copy ends, and the sound card's (none here) is the copy's again.
+    s.set_native_audio(false);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while feed.source().is_some() {
+        assert!(Instant::now() < deadline, "the copy kept the DAX source");
+        s.run(100);
+    }
+    assert!(
+        matches!(
+            reader.read(Instant::now()),
+            Err(crate::receive_audio::ReceiveError::Ended)
+        ),
+        "the program's DAX reader went on"
+    );
+}
+
 // ── What the client must tell the operator about the transmitter ─────────────────────────────
 
 /// The CAT status the operator reads (the cockpit's CAT chip): its verdict and its line.

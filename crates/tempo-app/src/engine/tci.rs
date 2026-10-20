@@ -20,7 +20,7 @@
 //! |---|---|---|
 //! | 2 | "Programs on TCI may transmit" is on; for CW, the CW tier as well | `Switch`, `Tier` |
 //! | 3 | no Stop held, no watchdog trip, TX armed, no context hold | `StopHold`, `WatchdogTrip`, `Disarmed`, `ContextHold` |
-//! | 4 | the radio's connection can transmit | `Connection` |
+//! | 4 | the radio's connection can transmit; for a `tci` over, a radio that takes the audio Nexus plays, not its own microphone | `Connection`, `RadioMic` |
 //! | 5 | the licence: a `tci` over across its whole passband, a microphone key as Nexus's own, Tune at its carrier, CW as Nexus's own CW | `Licence` |
 //! | 6 | nothing else owns the transmitter (a program re-asserting its own key passes, and its CW queues behind its own) | `Owner` |
 //! | 7 | no clock repair holds transmit (nor drops a key already held; CW is never admitted under one) | `ClockRepair` |
@@ -194,6 +194,9 @@ impl Engine {
         if self.connection_tx_refusal().is_some() {
             return Err(Refusal::Connection);
         }
+        if ask == Ask::Over && !self.tci_over_routed() {
+            return Err(Refusal::RadioMic);
+        }
         let licensed = match ask {
             Ask::Over => self.tci_over_licensed(),
             Ask::Mic => self.tx_allowed(),
@@ -249,6 +252,16 @@ impl Engine {
     /// of the gate as for Nexus's own overs.
     pub(super) fn tci_over_licensed(&self) -> bool {
         self.tx_allowed_for(PASSBAND)
+    }
+
+    /// ⛔ A program's audio over never goes out on the radio's own microphone: the radio must take
+    /// the audio Nexus plays. Not while Nexus's own Flex client reports the radio on its own mic
+    /// ([`Self::observe_flex_radio_has_mic`]: native audio on, Phone at the shack), where the over's
+    /// audio would leave over DAX, which the radio then ignores, and the microphone would carry the
+    /// over in its place: refused, as APRS and SSTV are refused there. Judged at the admission and
+    /// on every tick.
+    fn tci_over_routed(&self) -> bool {
+        !self.flex_radio_has_mic
     }
 
     /// The station's own gates on a program's key, re-checked on every tick: the switch, TX armed,
@@ -570,7 +583,8 @@ impl Engine {
         let key = self.tci.key;
         let gates = MicGates {
             tx_enabled: self.tci_may_transmit(),
-            tx_allowed: self.tci_over_licensed(),
+            // G2: the passband in the licence, and a radio that takes the audio Nexus plays.
+            tx_allowed: self.tci_over_licensed() && self.tci_over_routed(),
             // Nexus's own key wins (§2.4): a tune, or the operator's own PTT, takes the transmitter.
             tuning: self.tuning || self.manual_ptt,
             in_section: key.is_some_and(|k| k.section == self.settings.operating_mode),
@@ -890,6 +904,24 @@ mod tests {
                 |e| e.settings.rig_conn = "icomlan".into(),
                 Try::Over(true),
                 Err(Refusal::Connection),
+            ),
+            (
+                "an over with the radio on its own microphone",
+                |e| e.observe_flex_radio_has_mic(true),
+                Try::Over(true),
+                Err(Refusal::RadioMic),
+            ),
+            (
+                "control: a microphone key with the radio on its own microphone",
+                |e| e.observe_flex_radio_has_mic(true),
+                Try::Mic,
+                Ok(()),
+            ),
+            (
+                "control: Tune with the radio on its own microphone",
+                |e| e.observe_flex_radio_has_mic(true),
+                Try::Tune,
+                Ok(()),
             ),
             (
                 "the over's passband outside the licence",
@@ -1692,6 +1724,44 @@ mod tests {
         );
         s.tick(20);
         assert_eq!(s.e.tci_owner(), None, "the program kept its key");
+    }
+
+    /// ⛔ A PROGRAM'S OVER NEVER GOES OUT ON THE RADIO'S OWN MICROPHONE. With Nexus's own Flex client
+    /// reporting the radio on its mic (native audio on, Phone at the shack), the over's audio would
+    /// leave over DAX, which the radio then ignores, and the microphone would carry the over: a key
+    /// is refused, its `tx_enable` is false and nothing is armed; a keyed over ends with its abort
+    /// on the tick the radio takes its mic back. CONTROLS: the program's microphone key and its Tune
+    /// are what they ask for and stay admitted; with the radio on DAX the over is admitted.
+    #[test]
+    fn a_programs_over_never_goes_out_on_the_radios_own_microphone() {
+        let mut e = phone();
+        e.observe_flex_radio_has_mic(true);
+        assert_eq!(
+            e.tci_key(P1, KeyKind::Tci, true),
+            Err(Refusal::RadioMic),
+            "the over's key"
+        );
+        assert!(!e.tci_tx_enable(P1, true), "told it may transmit");
+        assert!(!e.tci_over_armed(), "an over was armed");
+        assert_eq!(e.tci_owner(), None);
+        assert_eq!(
+            try_key(&mut e, P1, Try::Mic),
+            Ok(()),
+            "control: its microphone key"
+        );
+        e.tci_release(P1);
+        assert_eq!(try_key(&mut e, P1, Try::Tune), Ok(()), "control: its Tune");
+        e.tci_tune_off(P1);
+        e.observe_flex_radio_has_mic(false);
+        assert_eq!(e.tci_key(P1, KeyKind::Tci, true), Ok(()), "control: on DAX");
+        // Keyed, and then the radio takes its mic back.
+        let mut s = Scene::new(phone());
+        s.keyed();
+        s.e.observe_flex_radio_has_mic(true);
+        s.audio(P1, 20, 0.5);
+        assert_eq!(s.tick(20), MicTick::Idle, "the over went on on the mic");
+        assert!(s.e.take_tci_abort(), "no abort");
+        assert!(!s.e.tci_over_armed());
     }
 
     /// ⛔ AN ARMED FT RUN PLANS NO OVER WHILE A PROGRAM'S KEY OWNS THE TRANSMITTER (design §2.3):

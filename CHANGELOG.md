@@ -37,14 +37,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comes. Turned on and saved, it makes Nexus a TCI server on this computer: WSJT-X, JTDX, MSHV, Log4OM and other
   programs that speak TCI connect to the address it shows (127.0.0.1:40001, with a Copy button) and use whichever
   radio Nexus runs. They follow and set the dial, switch the sideband, may lower the power but never raise it, and
-  get the receive audio from a sound card. Only programs on this computer can connect, never another computer or
+  get the receive audio Nexus hears. Only programs on this computer can connect, never another computer or
   a web page. **Programs on TCI may transmit** is a separate switch, off as it comes and set at the station only:
   with it on, a program can Tune and key the radio's microphone on the Phone screen, every Nexus transmit
   safeguard still applies, and no program can turn TX on. FT8, FT4 and the other slot-timed modes may not transmit
-  through TCI yet, until the delay Nexus adds to a program's timing has been measured. A program's own transmit
-  audio, CW macros and spots are not ready yet. The programs connected are listed with what each is doing and the
-  last thing Nexus refused it, each with a **Disconnect**. Settings will not save the CAT sharing port and the TCI
-  server port as the same number. A new guide, Share by TCI, covers turning it on and setting up each program.
+  through TCI yet, until the delay Nexus adds to a program's timing has been measured. Spots from programs are not
+  ready yet. The programs connected are listed with what each is doing and the last thing Nexus refused it, each
+  with a **Disconnect**. Settings will not save the CAT sharing port and the TCI server port as the same number. A
+  new guide, Share by TCI, covers turning it on and setting up each program.
+- **Share by TCI: a program's own transmit audio (Beta).** With **Programs on TCI may transmit** on, a program on
+  this computer can now put its own audio on the air through Nexus while Nexus is on the Phone screen, a logger's
+  voice macro for one. Nexus keys the radio when the program's first audio arrives and plays that audio and nothing
+  else, the way it plays its own (the sound card, a Flex's DAX, or an SDR program over TCI), never keying the
+  radio's microphone for it. On a Flex with native audio, where the radio takes its own microphone on the Phone
+  screen, a program's audio is refused, as APRS and SSTV are. When the program lets go, the last of its audio plays
+  out before the radio unkeys. It ends at once on Stop TX, Esc, TX Off, a logger's UDP Halt Tx, the Remote's Stop,
+  the high-SWR cutoff, a band or radio change, the switch turned off, the program's own stop or its lost
+  connection, 0.3 seconds with no audio from it, and 10 minutes on the air. Programs on a Flex's native connection
+  now hear the radio's own receive audio (DAX) instead of the sound card's; the Icom network connection carries no
+  audio, so there they hear the sound card. FT8, FT4 and the other slot-timed modes from programs stay refused.
+  NEEDS-BENCH: a program's voice audio through Share by TCI into a dummy load, on a sound-card radio and on a Flex:
+  the key on its first audio, its tail on its release, and each stop.
 - **Every contest log numbers its contacts 1, 2, 3…** The contest screen's log and the logger window's last
   contacts show each contact's number in a first column, in every contest. In a contest that sends a serial
   (Sweepstakes, CQ WPX) the number is the serial that contact was sent; in every other contest it counts the

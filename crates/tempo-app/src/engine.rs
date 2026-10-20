@@ -8370,7 +8370,8 @@ impl Engine {
     ///
     /// Pushed by the radio loop on the transition, from what the radio reports, never from the
     /// `flex_native_audio` setting (the same reasoning as [`Self::observe_flex_dax_tx`]). Only
-    /// the voice keyer, APRS and SSTV read it; nothing else is refused on it.
+    /// the voice keyer, APRS, SSTV and a TCI program's audio over (`engine/tci.rs`, refused as APRS
+    /// and SSTV are) read it; nothing else is refused on it.
     pub fn observe_flex_radio_has_mic(&mut self, on: bool) {
         self.flex_radio_has_mic = on;
     }

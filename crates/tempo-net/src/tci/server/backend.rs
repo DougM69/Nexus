@@ -104,6 +104,9 @@ pub enum Refusal {
     ContextHold,
     /// The radio's connection cannot transmit (item 4).
     Connection,
+    /// A `tci` key while the radio takes its transmit audio from its own microphone (item 4): the
+    /// program's audio would not reach the air, and the microphone would carry the over.
+    RadioMic,
     /// Outside the licence: for an audio over, the whole transmit passband (item 5, §3.6).
     Licence,
     /// Something else owns the transmitter (item 6).
@@ -148,6 +151,7 @@ impl Refusal {
             Refusal::WatchdogTrip => "the TX watchdog has tripped",
             Refusal::ContextHold => "a band or radio change holds programs' keys",
             Refusal::Connection => "this radio's connection cannot transmit",
+            Refusal::RadioMic => "the radio takes its transmit audio from its own microphone",
             Refusal::Licence => "outside the licence",
             Refusal::Owner => "something else is transmitting",
             Refusal::ClockRepair => "the clock is being repaired",

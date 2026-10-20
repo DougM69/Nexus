@@ -29,7 +29,7 @@ fn free_text_datagram(text: &str, send: bool) -> Vec<u8> {
 }
 
 /// A logger's HaltTx (WSJT-X UDP message type 8), auto-TX-only off: halt now.
-fn halt_tx_datagram() -> Vec<u8> {
+pub(super) fn halt_tx_datagram() -> Vec<u8> {
     let mut w = head(tempo_net::wsjtx::msg_type::HALT_TX);
     w.put_bool(false);
     w.into_bytes()

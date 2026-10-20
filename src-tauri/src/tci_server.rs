@@ -524,9 +524,10 @@ impl TciBackend for EngineTci {
     }
 
     fn audio_start(&self, _client: ClientId, _format: AudioFormat) -> Result<(), Refusal> {
-        // The sound card's capture, through the server's own copy of it. A radio whose audio
-        // Nexus takes another way (the Flex's DAX, the Icom network connection) has none for
-        // programs yet: task S5.
+        // What the decoders hear, through the server's own copy of it: the sound card's capture,
+        // the Flex's DAX audio while it is the receive source, or the SDR program's on Nexus's
+        // own TCI connection. The Icom network connection carries no audio, so there it is the
+        // sound card's. With none of them, there is nothing to send.
         if self.feed.source().is_some() {
             Ok(())
         } else {
