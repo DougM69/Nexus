@@ -3706,15 +3706,18 @@ pub struct Engine {
     /// is, every later knob move is the operator's exactly as before.
     rig_dial_seen: bool,
     /// CW transmit queue (CAT keyer path): expanded CW text the radio loop drains and
-    /// keys via `rig.send_morse`. Operator-initiated; gated by `tx_enabled` (Monitor) and the
-    /// privileges, and a word they refuse is dropped, never held (`poll_cw_one`).
+    /// keys via `rig.send_morse`. Operator-initiated, or a TCI program's CW behind every gate
+    /// (`engine/tci/cw.rs`); gated by `tx_enabled` (Monitor) and the privileges, and a word they
+    /// refuse is dropped, never held (`poll_cw_one`).
     cw_queue: VecDeque<String>,
     /// The messages in [`Self::cw_queue`], oldest first, as (words left, CW speed match's speed,
-    /// whether its first word has been taken): `None` keys at the operator's own speed. Words leave
-    /// the front as the loop takes them.
+    /// whether its first word has been taken, the TCI program that sent it): `None` keys at the
+    /// operator's own speed, and `None` for the sender is Nexus's own. Words leave the front as the
+    /// loop takes them.
     /// Only ever describes words still queued: every path that drops the queue drops all of it,
-    /// so an empty queue means these are spent ([`Self::queue_cw`] starts afresh then).
-    cw_messages: VecDeque<(usize, Option<u32>, bool)>,
+    /// or (a TCI program's CW ending) whole messages with their words, so an empty queue means
+    /// these are spent ([`Self::queue_cw_message`] starts afresh then).
+    cw_messages: VecDeque<(usize, Option<u32>, bool, Option<u64>)>,
     /// Recent EXPANDED CW transmissions (macros resolved) — a TX echo the cockpit shows
     /// so the operator sees exactly what went out. Capped; cleared with the RX transcript.
     cw_sent: VecDeque<String>,
@@ -6513,8 +6516,10 @@ impl Engine {
         // it held ([`Self::release_contest_uploads`]).
         let contest_was_on = self.settings.fd_active;
         // Whether programs on TCI could transmit before this save: the save that turns it off ends
-        // every program's key, over and tune at once (`engine/tci.rs`).
+        // every program's key, over and tune at once (`engine/tci.rs`). The same for the CW tier
+        // and programs' CW (`engine/tci/cw.rs`).
         let tci_tx_was_on = self.tci_transmit();
+        let tci_cw_was_on = self.settings.tci_server_cw;
         // Rebind identity IN PLACE (not a fresh AppState) so editing the callsign or
         // grid in Settings — or a GPS/UDP grid update routed through a save — does
         // NOT wipe conversation history, the `*` band feed, or the roster.
@@ -6965,6 +6970,9 @@ impl Engine {
         // here, hard, not at the radio loop's next look at the switch.
         if tci_tx_was_on && !self.tci_transmit() {
             self.drop_tci_all();
+        }
+        if tci_cw_was_on && !self.settings.tci_server_cw {
+            self.end_programs_cw("the CW tier was switched off");
         }
         // Another join address (or hosting switched on or off): what the link line knew was
         // about another host.
@@ -10518,13 +10526,32 @@ impl Engine {
     /// speed for the whole message (`None`: the operator's own); it is fixed here, before the
     /// message's first word is keyed, and never changes inside it.
     fn queue_cw(&mut self, expanded: String, wpm: Option<u32>) {
+        self.note_cw_send(&expanded);
+        if self.queue_cw_message(&expanded, wpm, None) > 0 {
+            if let Some(w) = wpm {
+                tempo_core::applog::info(
+                    "tx",
+                    &format!("CW speed match: this answer keys at {w} WPM"),
+                );
+            }
+        }
+    }
+
+    /// What every CW send does before its words are queued: the paddle's line is read, and the TX
+    /// echo shows what goes out. [`Self::queue_cw`]'s, and a TCI program's (`engine/tci/cw.rs`).
+    fn note_cw_send(&mut self, text: &str) {
         // A new send is the operator's next key: the paddle's line has been read.
         self.cw_paddle_took_over = false;
         // TX echo: show the operator what actually went out (tokens resolved).
-        self.cw_sent.push_back(expanded.clone());
+        self.cw_sent.push_back(text.to_string());
         while self.cw_sent.len() > 50 {
             self.cw_sent.pop_front();
         }
+    }
+
+    /// Queue `text`'s words as ONE message keyed at `wpm` (`None`: the operator's own speed), sent
+    /// by `from`: a TCI program, or `None` for Nexus's own. Answers the words queued.
+    fn queue_cw_message(&mut self, text: &str, wpm: Option<u32>, from: Option<u64>) -> usize {
         // Queue WORD-BY-WORD so the radio loop feeds the rig one word at a time. That
         // keeps at most one word in the rig's CW keyer buffer, so Stop TX (which clears
         // this queue) drops the rest of the macro instead of the rig playing it all out.
@@ -10532,19 +10559,14 @@ impl Engine {
             self.cw_messages.clear();
         }
         let before = self.cw_queue.len();
-        for word in expanded.split_whitespace() {
+        for word in text.split_whitespace() {
             self.cw_queue.push_back(word.to_string());
         }
         let words = self.cw_queue.len() - before;
         if words > 0 {
-            if let Some(w) = wpm {
-                tempo_core::applog::info(
-                    "tx",
-                    &format!("CW speed match: this answer keys at {w} WPM"),
-                );
-            }
-            self.cw_messages.push_back((words, wpm, false));
+            self.cw_messages.push_back((words, wpm, false, from));
         }
+        words
     }
 
     /// CW SPEED MATCH's speed for an answer to the station being worked, or `None` to key at the
@@ -10621,7 +10643,7 @@ impl Engine {
             // A speed the operator chose (the control, or the radio's own knob followed) wins over
             // CW speed match for what is still queued: the rest keys at the new speed, and the
             // loop does not push the matched speed back over the operator's.
-            for (_, matched, _) in self.cw_messages.iter_mut() {
+            for (_, matched, _, _) in self.cw_messages.iter_mut() {
                 *matched = None;
             }
         }
@@ -10729,14 +10751,18 @@ impl Engine {
         let wpm = self.cw_next_wpm();
         let word = self.cw_queue.pop_front()?;
         let mut starts = true;
-        if let Some((left, _, started)) = self.cw_messages.front_mut() {
+        let mut from = None;
+        if let Some((left, _, started, sender)) = self.cw_messages.front_mut() {
             starts = !*started;
             *started = true;
             *left -= 1;
+            from = *sender;
             if *left == 0 {
                 self.cw_messages.pop_front();
             }
         }
+        // Whose word the keyer is handed: a TCI program's ends with that program's stops.
+        self.note_tci_cw_word(from, &word, wpm);
         Some((word, wpm, starts))
     }
 
@@ -10748,7 +10774,7 @@ impl Engine {
         }
         self.cw_messages
             .front()
-            .and_then(|(_, matched, _)| *matched)
+            .and_then(|(_, matched, _, _)| *matched)
             .unwrap_or(self.settings.cw_wpm)
     }
 

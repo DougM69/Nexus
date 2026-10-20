@@ -17407,6 +17407,7 @@ mod tests {
     mod rf_pane;
     mod split_overs;
     mod tci;
+    mod tci_cw;
     mod udp_requests;
     mod wfview;
     mod yaesu_alc;
