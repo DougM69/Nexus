@@ -18,7 +18,7 @@
 
 use std::path::PathBuf;
 
-use ::js8::proto::callsign::{split_portable, CallRef};
+use ::js8::proto::callsign::{is_base_call, split_portable, CallRef};
 use ::js8::proto::reassembly::RxFrame;
 use ::js8::proto::station::{heartbeat_speed, FreqHint, InboxState, StationSnapshot};
 use ::js8::{Frame, MessageEvent, Origin, RawDecode, StationAction, StationConfig, Word87};
@@ -1028,15 +1028,27 @@ impl Engine {
     }
 
     /// The operator's To field as a destination JS8Call can address (`isValidCallsign`): a call,
-    /// a compound call, a built-in group by its short code or a group of the operator's own by
-    /// name. Anything else is refused, saying what a group may be.
+    /// a portable call, a compound call, a built-in group by its short code or a group of the
+    /// operator's own by name. Anything else is refused, saying what a group may be.
+    ///
+    /// A portable call ("W1AW/P") is not compound: `isValidCallsign` takes it through
+    /// `base_callsign_pattern`'s own `/P` group (JS8_Main/Varicode.cpp:37-38, :1301-1309). It goes
+    /// by its text, which compose keys as JS8Call does, a directed frame to the base call with the
+    /// portable flag set. It is taken here, not by `parse_destination`, which also reads where a
+    /// message heard was sent.
     fn js8_destination(to: &str) -> Result<CallRef, String> {
-        CallRef::parse_destination(to).ok_or_else(|| {
-            format!(
-                "{to} is not a callsign or @group JS8 can address. A group is @ and up to 8 \
-                 letters or digits (a / may separate them)."
-            )
-        })
+        CallRef::parse_destination(to)
+            .or_else(|| {
+                let call = to.trim().to_ascii_uppercase();
+                let (base, portable) = split_portable(&call);
+                (portable && is_base_call(base)).then_some(CallRef::Compound(call))
+            })
+            .ok_or_else(|| {
+                format!(
+                    "{to} is not a callsign or @group JS8 can address. A group is @ and up to 8 \
+                     letters or digits (a / may separate them)."
+                )
+            })
     }
 
     /// Operator send: `to` is a callsign or @group (None = plain text, which compose
@@ -4556,6 +4568,117 @@ mod tests {
             !msg.directed_to_me && !directed.directed_to_me,
             "control: not mine without the group joined"
         );
+    }
+
+    // ===== a portable call: addressed the way JS8Call addresses it =====
+
+    /// What the engine keys over the next `n` periods, each word as JS8Call writes a frame: its
+    /// twelve 6-bit characters, then its i3 bits (1 first, 2 last, 4 data). These are the two
+    /// columns of JS8Call's ALL.TXT, and what its own `buildMessageFrames` returns.
+    fn keyed_lab(e: &mut Engine, n: u64) -> Vec<String> {
+        let period_ms = u64::from(e.js8_tx_speed().period_s()) * 1000;
+        let first = now_unix_secs() * 1000 / period_ms + 1;
+        let mut out = Vec::new();
+        for slot in first..first + n {
+            e.js8_tick(slot * period_ms);
+            let Some(plan) = e.plan_tx(slot) else {
+                continue;
+            };
+            let TxWaveform::Js8 { word, .. } = plan.waveform else {
+                panic!("a JS8 plan carries the typed waveform");
+            };
+            out.push(word.to_lab());
+            let wave = plan.waveform.build();
+            e.commit_tx(&plan, wave, slot);
+        }
+        out
+    }
+
+    /// "W1AW/P" in the To box goes out as the frames JS8Call keys for it, byte for byte. They are
+    /// JS8Call 3.0.3's own, from `Varicode::buildMessageFrames` (JS8_Main/Varicode.cpp:2023) run
+    /// for KD9TAW in EN52 at Normal speed with W1AW/P as the selected call, and worked by hand from
+    /// the same file to the same bits. `isValidCallsign` (:1294) takes "W1AW/P" through
+    /// `base_callsign_pattern`'s own `/P` group (:37-38) as NOT compound, so `packDirectedMessage`
+    /// (:1605) keys one directed frame: type 3, KD9TAW (144467410), W1AW (261410543, the "/P"
+    /// taken off by `packCallsign`, :967-973), the command, then the extra byte
+    /// `portable_from << 7 | portable_to << 6 | num` (:1700-1701), here 0x40; `pack72bits` (:787)
+    /// makes the twelve characters. The portable flag is the low bit of the eleventh character:
+    /// "1" here, "0" to W1AW alone. A message is that frame with the free-text command (" ", :116)
+    /// and then its text in a data frame; a command is that frame alone.
+    ///
+    /// The last case is a frame JS8Call put on the air to a portable call, as JS8Call logged it
+    /// (`crates/js8/tests/fixtures/js8call_frames.txt`, line 280): KY4BC's
+    /// "K9BTR/P HEARTBEAT SNR -10".
+    #[test]
+    fn a_js8_message_to_a_portable_call_keys_the_frames_js8call_keys() {
+        let mut message = hb_engine("EN52", 0, 1500.0);
+        let message_sent = message.js8_send(Some("W1AW/P".into()), "hello".into());
+        let mut command = hb_engine("EN52", 0, 1500.0);
+        let command_sent =
+            command.js8_send_command("W1AW/P".into(), Command::SnrQuery.id(), String::new());
+        let mut on_air = Engine::new("KY4BC", "EN52", 0);
+        on_air.js8_enter();
+        on_air.set_frequency(14.078, "20m", "USB");
+        on_air.set_tx_offset(1500.0);
+        on_air.set_tx_enabled(true);
+        let on_air_sent = on_air.js8_send(Some("K9BTR/P".into()), "HEARTBEAT SNR -10".into());
+        let lab = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            [
+                (message_sent, keyed_lab(&mut message, 8)),
+                (command_sent, keyed_lab(&mut command, 8)),
+                (on_air_sent, keyed_lab(&mut on_air, 8)),
+            ],
+            [
+                (Ok(()), lab(&["SJZBfVAPtVz0 1", "tYuK++++++++ 2"])),
+                (Ok(()), lab(&["SJZBfVAPtU10 3"])),
+                (Ok(()), lab(&["SRE98-vbmzrL 3"])),
+            ]
+        );
+    }
+
+    /// The control: W1AW alone keys what it keyed before, the same frames with the portable flag
+    /// clear, which are JS8Call 3.0.3's own for that selected call.
+    #[test]
+    fn a_js8_message_to_a_base_call_keys_the_frames_js8call_keys() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_send(Some("W1AW".into()), "hello".into())
+            .expect("queues");
+        assert_eq!(keyed_lab(&mut e, 8), ["SJZBfVAPtVy0 1", "tYuK++++++++ 2"]);
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_send_command("W1AW".into(), Command::SnrQuery.id(), String::new())
+            .expect("queues");
+        assert_eq!(keyed_lab(&mut e, 8), ["SJZBfVAPtU00 3"]);
+    }
+
+    /// Any other suffix is what JS8Call makes of it. "/M", "/1" and "/QRP" make a compound call:
+    /// `isValidCallsign` finds no base-call shape in the whole text, and `isValidCompoundCallsign`
+    /// takes it (JS8_Main/Varicode.cpp:1258-1324). It goes as JS8Call 3.0.3 sends it, these
+    /// frames from its `buildMessageFrames`: "`KD9TAW EN52" in a compound frame, then
+    /// "`W1AW/M SNR?" in a compound directed frame. JS8Call can address no call "W1AW/PORTABLE"
+    /// (`isValidCallsign` is false for it), so it is refused, and nothing is queued.
+    #[test]
+    fn a_js8_call_with_another_suffix_is_addressed_as_js8call_addresses_it() {
+        for (to, want) in [
+            ("W1AW/M", ["AWxS4Z64OlNW 1", "JzLmzChoO+JG 2"]),
+            ("W1AW/1", ["AWxS4Z64OlNW 1", "JzLmyx6Uu+JG 2"]),
+            ("W1AW/QRP", ["AWxS4Z64OlNW 1", "JzLmzFxbC+JG 2"]),
+        ] {
+            let mut e = hb_engine("EN52", 0, 1500.0);
+            e.js8_send_command(to.into(), Command::SnrQuery.id(), String::new())
+                .expect("queues");
+            assert_eq!(keyed_lab(&mut e, 8), want, "{to}");
+        }
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        assert_eq!(
+            e.js8_send(Some("W1AW/PORTABLE".into()), "hello".into()),
+            Err(
+                "W1AW/PORTABLE is not a callsign or @group JS8 can address. A group is @ and up \
+                 to 8 letters or digits (a / may separate them)."
+                    .to_string()
+            )
+        );
+        assert!(e.js8_state().queue.is_empty(), "nothing queued");
     }
 
     // ===== <MYGRID4> / <MYGRID12> =====
