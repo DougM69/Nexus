@@ -1,8 +1,9 @@
 //! The TCI daemon against the simulated SDR program (`tempo-tcisim`), over a real WebSocket and a
 //! real rigctld socket on loopback: the shim's verb map as a rigctld client sends it, which source
-//! each key takes, the faults a guard here exists for, and the daemon's life (`ready;`, the alarms,
-//! the ladder, a lost link carried to the next session, teardown). Every keying test reads what
-//! keyed the simulated radio from the simulator's own log.
+//! each key takes, the faults a guard here exists for, the daemon's life (`ready;`, the alarms, the
+//! ladder, a lost link carried to the next session, teardown), and Nexus's transmit audio as the
+//! server pulls it (the transmit route, `audio::TciTx`). Every keying test reads what keyed the
+//! simulated radio, and every audio test what reached it, from the simulator's own log.
 //!
 //! The registry is process-wide and the simulators listen on ephemeral ports that a later test's
 //! simulator may be given, so each test forgets its server's entry before its first daemon. Waits
@@ -15,12 +16,15 @@ use std::sync::atomic::AtomicU64;
 
 use tempo_net::tci::session::NoStreams;
 use tempo_tcisim::client::Peer;
+use tempo_tcisim::frame::Fit;
 use tempo_tcisim::{
     Cause, Closer, Config as SimConfig, Dialect as SimDialect, Event as SimEvent, Fault, Keyer,
     Logged, Meters, Mic, Simulator, Source as SimSource,
 };
 
 use super::*;
+use crate::backend::TxTee;
+use crate::capture_resample::CaptureResampler;
 
 /// The longest any one expected thing may take here.
 const WAIT: Duration = Duration::from_secs(10);
@@ -967,4 +971,607 @@ fn a_server_that_never_says_ready_is_given_up_on_and_then_waits_for_the_operator
     assert!(attempt().contains("did not finish connecting"));
     assert_eq!(connections(), 4);
     registry::forget(key);
+}
+
+// ── Transmit audio ──────────────────────────────────────────────────────────────────────────
+
+/// One TX_CHRONO's ask at the simulated ExpertSDR3's stream (48 kHz, stereo, 2048 values): 1024
+/// frames, 21.3 ms. Every answer of ours is exactly that, so a sample's place in what the server
+/// read says which answer carried it.
+const FRAMES: usize = 1_024;
+
+/// A daemon with Nexus's own audio paths, as the radio loop starts one, on a fresh registry entry:
+/// the SDR program has taken Nexus's audio stream, the route is marked up as the radio loop marks it
+/// once its tee is in, and the shim is in a data mode. With the client that keys it.
+fn audio_daemon(sim: &Simulator, options: Options) -> (TciDaemon, Client) {
+    registry::forget(key_of(sim));
+    let d = TciDaemon::start_receiving(&target(sim), options).expect("the daemon starts");
+    wait_audio(&d);
+    assert!(d.tx_route_ready(), "premise: the transmit route is ready");
+    d.set_tx_route(true);
+    let mut c = Client::connect(&d);
+    assert_eq!(c.ask("M PKTUSB 0", 1), "RPRT 0\n");
+    (d, c)
+}
+
+/// The daemon's transmit route.
+fn route(d: &TciDaemon) -> Arc<audio::TciTx> {
+    d.tx().expect("the transmit route").clone()
+}
+
+/// Wait until `done`, or fail saying `what`.
+fn until(what: &str, done: impl Fn() -> bool) {
+    let deadline = Instant::now() + WAIT;
+    while !done() {
+        assert!(Instant::now() < deadline, "never: {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// A tone at the modem rate.
+fn tone_at(seconds: f32, hz: f32, amplitude: f32) -> Vec<f32> {
+    (0..(seconds * 12_000.0) as usize)
+        .map(|i| amplitude * (std::f32::consts::TAU * hz * i as f32 / 12_000.0).sin())
+        .collect()
+}
+
+/// What the route makes of `over` for the server: resampled to 48 kHz from its start, the TX level
+/// applied as it leaves.
+fn at_48k(over: &[f32], level: f32) -> Vec<f32> {
+    CaptureResampler::new(12_000, 48_000)
+        .process(over)
+        .into_iter()
+        .map(|s| (s * level).clamp(-1.0, 1.0))
+        .collect()
+}
+
+/// Where `a` and `b` first differ by more than float noise, or `None`.
+fn first_difference(a: &[f32], b: &[f32]) -> Option<usize> {
+    a.iter().zip(b).position(|(x, y)| (x - y).abs() > 1e-6)
+}
+
+/// Where `want` starts in `sent`, whole: at an answer's start, since audio handed over is first taken
+/// by the next chrono.
+fn start_of(sent: &[f32], want: &[f32]) -> Option<usize> {
+    let last = sent.len().checked_sub(want.len())?;
+    (0..=last)
+        .step_by(FRAMES)
+        .find(|&k| first_difference(&sent[k..k + want.len()], want).is_none())
+}
+
+/// The first answer at or after `from` (in answers) that carries anything but silence, as an index
+/// into what the server read.
+fn first_audio(sent: &[f32], from: usize) -> Option<usize> {
+    (from * FRAMES..sent.len()).step_by(FRAMES).find(|&k| {
+        sent[k..(k + FRAMES).min(sent.len())]
+            .iter()
+            .any(|s| *s != 0.0)
+    })
+}
+
+/// The transmit frames the server read from `conn`, in order: when, whether it held our key then,
+/// how each fit the TX_CHRONO it answered, and its size in bytes.
+fn frames_in(log: &[Logged], conn: usize) -> Vec<(Duration, bool, Option<Fit>, usize)> {
+    log.iter()
+        .filter_map(|l| match &l.event {
+            SimEvent::FrameIn {
+                conn: c,
+                ours,
+                asked,
+                bytes,
+                ..
+            } if *c == conn => Some((l.at, *ours, *asked, *bytes)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// How many TX_CHRONOs the server sent `conn`.
+fn chronos_to(log: &[Logged], conn: usize) -> usize {
+    log.iter()
+        .filter(|l| {
+            matches!(&l.event, SimEvent::FrameOut { conn: c, header: Some(h), .. }
+                if *c == conn && h.kind == tempo_tcisim::frame::kind::TX_CHRONO)
+        })
+        .count()
+}
+
+/// How many answers the server has read from the scene's client.
+fn answers(sim: &Simulator) -> usize {
+    frames_in(&sim.log(), 0).len()
+}
+
+/// ⭐ NEXUS'S AUDIO GOES OUT AS THE SDR PROGRAM PULLS IT. Each TX_CHRONO of our key is answered at
+/// once with exactly the frames it asks for: the over resampled to the server's rate from its start,
+/// whole and in order, with the operator's TX level applied as it leaves, and silence while the key
+/// is ours and nothing is queued, before the over and after it. The same when the chronos come in
+/// bursts at the same average rate. Each chrono is answered once, never more.
+#[test]
+fn nexus_audio_goes_out_as_the_sdr_program_pulls_it_with_silence_around_it() {
+    for faults in [vec![], vec![Fault::ChronoBurst { burst: 4 }]] {
+        let what = format!("{faults:?}");
+        let sim = esdr3(faults);
+        let (d, mut c) = audio_daemon(&sim, Options::default());
+        let tx = route(&d);
+        tx.set_level(0.8);
+        assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+        let over = tone_at(1.0, 1_000.0, 0.5);
+        tx.feed(&over);
+        until("the over pulled", || tx.queued() == 0);
+        let pulled = sim.tx_audio(0).len();
+        until("ten answers after it", || {
+            sim.tx_audio(0).len() >= pulled + 10 * FRAMES
+        });
+        assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+        wait_unkeyed(&d);
+        // Each chrono answered once, never more (the last answers may still be on their way).
+        assert!(
+            sim.wait_for(WAIT, |log| frames_in(log, 0).len() == chronos_to(log, 0)),
+            "{what}: each chrono answered once"
+        );
+        let log = sim.log();
+        let sent = sim.tx_audio(0);
+        let want = at_48k(&over, 0.8);
+        let k = start_of(&sent, &want)
+            .unwrap_or_else(|| panic!("{what}: the over, whole and in order, at the TX level"));
+        assert!(
+            sent[..k].iter().all(|s| *s == 0.0),
+            "{what}: silence before it"
+        );
+        assert!(
+            sent[k + want.len()..].iter().all(|s| *s == 0.0),
+            "{what}: silence after it"
+        );
+        let frames = frames_in(&log, 0);
+        assert!(
+            frames
+                .iter()
+                .all(|(.., bytes)| *bytes == tempo_tcisim::frame::HEADER_LEN + 2 * FRAMES * 4),
+            "{what}: every answer exactly its chrono's ask, 2048 float32 values: {frames:?}"
+        );
+        assert_eq!(
+            sent.len(),
+            frames.len() * FRAMES,
+            "{what}: channel 0 of each"
+        );
+        let stop = command_at(&log, 0, "trx:0,false").expect("our stop");
+        assert!(
+            frames
+                .iter()
+                .filter(|(at, ..)| *at < stop)
+                .all(|(_, ours, fit, _)| *ours && *fit == Some(Fit::Values)),
+            "{what}: each answer for our key, in the chrono's own size: {frames:?}"
+        );
+    }
+}
+
+/// ⛔ AUDIO ONLY FOR OUR KEY (plan §6.1 item 5, M6). Audio handed to the route while nothing of ours
+/// is keyed is dropped, never kept for a later key; another program's over, whose chronos reach
+/// every client, gets none of ours; and our next key carries silence until its own over is handed
+/// over, then that over alone.
+#[test]
+fn nexus_audio_goes_to_no_key_but_ours_and_waits_for_none() {
+    let sim = esdr3([Fault::ForeignKey {
+        after: Duration::from_millis(500),
+        hold: Duration::from_millis(600),
+        chrono_to_all: true,
+    }]);
+    let (d, mut c) = audio_daemon(&sim, Options::default());
+    let tx = route(&d);
+    tx.feed(&tone_at(0.5, 1_000.0, 0.5));
+    assert_eq!(tx.queued(), 0, "nothing of ours keyed: dropped");
+    wait_log(&sim, "the other program's key", |log| {
+        keys(log).contains(&(Keyer::Operator, SimSource::Tci))
+    });
+    tx.feed(&tone_at(0.5, 1_000.0, 0.5));
+    assert_eq!(tx.queued(), 0, "another program's key: dropped");
+    wait_log(&sim, "its end", |log| unkeys(log) == 1);
+    assert!(
+        d.snapshot().chronos_not_ours > 0,
+        "premise: the server asked us for audio during it"
+    );
+    assert_eq!(answers(&sim), 0, "none of ours went to it");
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    until("ten answers of our key", || answers(&sim) >= 10);
+    let over = tone_at(0.3, 1_500.0, 0.5);
+    tx.feed(&over);
+    until("our over pulled", || tx.queued() == 0);
+    let pulled = sim.tx_audio(0).len();
+    until("two answers after it", || {
+        sim.tx_audio(0).len() >= pulled + 2 * FRAMES
+    });
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_unkeyed(&d);
+    let sent = sim.tx_audio(0);
+    let k = start_of(&sent, &at_48k(&over, 1.0)).expect("our over, whole");
+    assert!(
+        sent[..k].iter().all(|s| *s == 0.0),
+        "silence until our over: nothing kept from before our key"
+    );
+}
+
+/// ⛔ STOP TX WINS AND FLUSHES (M10). The radio loop's hard stop: the unkey, then the flush. The rest
+/// of the over goes where it waits, with what the resampler had made ahead, so nothing of it reaches
+/// the server after the stop: the session answers silence until the server reports the unkey, and
+/// the next key carries silence until its own over is handed over, then that over from its first
+/// sample.
+#[test]
+fn stop_tx_drops_the_rest_of_the_over_and_nothing_of_it_leaves_after() {
+    let sim = esdr3([]);
+    let (d, mut c) = audio_daemon(&sim, Options::default());
+    let tx = route(&d);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    let n = answers(&sim);
+    tx.feed(&tone_at(2.0, 1_000.0, 0.5));
+    until("a third of a second of it", || answers(&sim) >= n + 16);
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    let dropped = tx.flush();
+    assert!(
+        dropped > 12_000,
+        "premise: most of the over queued: {dropped}"
+    );
+    assert_eq!(tx.queued(), 0, "nothing left to send");
+    wait_unkeyed(&d);
+    let log = sim.log();
+    let stop = command_at(&log, 0, "trx:0,false").expect("our stop");
+    let before = frames_in(&log, 0)
+        .iter()
+        .filter(|(at, ..)| *at < stop)
+        .count();
+    let sent = sim.tx_audio(0);
+    assert!(
+        sent[before * FRAMES..].iter().all(|s| *s == 0.0),
+        "audio after the stop"
+    );
+    // The next over.
+    let first = sent.len();
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    until("two answers of the next key", || {
+        sim.tx_audio(0).len() >= first + 2 * FRAMES
+    });
+    let second = tone_at(0.5, 1_500.0, 0.5);
+    tx.feed(&second);
+    until("the next over pulled", || tx.queued() == 0);
+    let pulled = sim.tx_audio(0).len();
+    until("two answers after it", || {
+        sim.tx_audio(0).len() >= pulled + 2 * FRAMES
+    });
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_unkeyed(&d);
+    let sent = &sim.tx_audio(0)[first..];
+    let k = start_of(sent, &at_48k(&second, 1.0)).expect("the next over, from its first sample");
+    assert!(
+        sent[..k].iter().all(|s| *s == 0.0),
+        "nothing of the stopped over at the next key"
+    );
+}
+
+/// ⭐ A MID-OVER SWITCH ON TCI (WSJT-X's `m_restart`) REPLACES ONLY WHAT THE SERVER HAS NOT PULLED.
+/// The server pulls the over in real time, so the rest of it waits in Nexus: what was sent is the
+/// first message to the sample, what follows is the second, spliced at one place as if the over had
+/// been built that way, and the over is as long as it was. The rebuild is made while the session
+/// goes on answering the server (it is built slowly here, on purpose).
+#[test]
+fn a_switch_mid_over_on_tci_replaces_only_what_the_server_has_not_pulled() {
+    let sim = esdr3([]);
+    let (d, mut c) = audio_daemon(&sim, Options::default());
+    let tx = route(&d);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    let first = tone_at(1.5, 1_000.0, 0.5);
+    let second = tone_at(1.5, 1_500.0, 0.5);
+    let fed_at = answers(&sim);
+    tx.feed(&first);
+    until("a third of a second of it", || answers(&sim) >= fed_at + 16);
+    let before_switch = answers(&sim);
+    let mut asked = None;
+    let mut after_build = 0;
+    let switched = tx.retune(&mut |left, before| {
+        asked = Some((left, before));
+        std::thread::sleep(Duration::from_millis(200));
+        after_build = answers(&sim);
+        second[second.len() - left - before..].to_vec()
+    });
+    assert!(switched, "the TCI route switches");
+    let (left, before) = asked.expect("the rest was asked for");
+    assert_eq!(before, 0, "no look-back: the resampler runs on");
+    let during = after_build - before_switch;
+    assert!(
+        during >= 5,
+        "the session went on answering while the rest was built: {during} answers in 200 ms"
+    );
+    until("the whole over", || tx.queued() == 0);
+    let pulled = sim.tx_audio(0).len();
+    until("two answers after it", || {
+        sim.tx_audio(0).len() >= pulled + 2 * FRAMES
+    });
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_unkeyed(&d);
+    let sent = sim.tx_audio(0);
+    let k = first_audio(&sent, fed_at).expect("the over");
+    let unswitched = at_48k(&first, 1.0);
+    let over = &sent[k..k + unswitched.len()];
+    assert!(
+        sent[k + unswitched.len()..].iter().all(|s| *s == 0.0),
+        "the over is as long as it was"
+    );
+    let pulled_before = (before_switch - k / FRAMES) * FRAMES / 4;
+    assert!(
+        left + pulled_before <= first.len(),
+        "only what was not pulled is asked for: {left} left, {pulled_before} pulled"
+    );
+    let splice = first_difference(over, &unswitched).expect("the over was switched");
+    assert!(
+        splice >= (after_build - k / FRAMES) * FRAMES,
+        "what was pulled before and during the build is untouched: first change at {splice}, {} \
+         pulled",
+        (after_build - k / FRAMES) * FRAMES
+    );
+    // One splice point, in the modem-rate over, explains every sample sent.
+    let at = (splice / 4).saturating_sub(64)..splice / 4 + 160;
+    let j = at
+        .clone()
+        .find(|&j| {
+            let mut spliced = first[..j].to_vec();
+            spliced.extend_from_slice(&second[j..]);
+            first_difference(over, &at_48k(&spliced, 1.0)).is_none()
+        })
+        .unwrap_or_else(|| panic!("no single splice in {at:?} makes what was sent"));
+    assert!(
+        j >= pulled_before,
+        "spliced after what was pulled: {j} < {pulled_before}"
+    );
+}
+
+/// ⭐ Stop TX wins over a switch: a Stop that lands while the rest is being built leaves the queue
+/// empty and the switch refused (so nothing is booked as sent), and a Stop just after a switch cuts
+/// the new message as it cuts any over: silence from the next answer on.
+#[test]
+fn stop_tx_cuts_a_tci_over_during_and_after_a_switch() {
+    let sim = esdr3([]);
+    let (d, mut c) = audio_daemon(&sim, Options::default());
+    let tx = route(&d);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    let second = tone_at(1.5, 1_500.0, 0.5);
+    for stop_during in [true, false] {
+        let n = answers(&sim);
+        tx.feed(&tone_at(1.5, 1_000.0, 0.5));
+        until("the over on the air", || answers(&sim) >= n + 10);
+        let switched = tx.retune(&mut |left, before| {
+            if stop_during {
+                tx.flush();
+            }
+            second[second.len() - left - before..].to_vec()
+        });
+        assert_eq!(
+            switched, !stop_during,
+            "stop during the build: {stop_during}"
+        );
+        if !stop_during {
+            tx.flush();
+        }
+        assert_eq!(
+            tx.queued(),
+            0,
+            "stop during the build: {stop_during}: nothing left to send"
+        );
+        let cut = answers(&sim);
+        until("ten answers after the stop", || answers(&sim) >= cut + 10);
+        let sent = sim.tx_audio(0);
+        assert!(
+            sent[(cut + 2) * FRAMES..].iter().all(|s| *s == 0.0),
+            "stop during the build: {stop_during}: audio after the stop"
+        );
+    }
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_unkeyed(&d);
+}
+
+/// Nothing to replace, nothing asked: an empty queue refuses without building anything; a queue
+/// that grew while the rest was built is left as it is (where its over ends is not known); and an
+/// over no longer open (our stop sent, the flush still to come) is not switched, so the engine
+/// books no message as sent that never was.
+#[test]
+fn a_tci_switch_with_nothing_left_a_grown_queue_or_no_over_open_changes_nothing() {
+    let sim = esdr3([]);
+    let (d, mut c) = audio_daemon(&sim, Options::default());
+    let tx = route(&d);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    let mut asked = false;
+    assert!(!tx.retune(&mut |_, _| {
+        asked = true;
+        Vec::new()
+    }));
+    assert!(!asked, "nothing queued: nothing built");
+    let first = tone_at(1.0, 1_000.0, 0.5);
+    tx.feed(&first);
+    until("the over on the air", || tx.queued() < first.len());
+    let extra = vec![0.1f32; 6_000];
+    let mut queued_after_feed = 0;
+    let switched = tx.retune(&mut |left, _| {
+        tx.feed(&extra);
+        queued_after_feed = tx.queued();
+        vec![0.0; left]
+    });
+    assert!(!switched, "a grown queue is not replaced");
+    assert!(
+        tx.queued() + 3_000 >= queued_after_feed,
+        "the queue left as it was: {} of {queued_after_feed}",
+        tx.queued()
+    );
+    until("the over and what was added", || tx.queued() == 0);
+    let pulled = sim.tx_audio(0).len();
+    until("two answers after it", || {
+        sim.tx_audio(0).len() >= pulled + 2 * FRAMES
+    });
+    let mut whole = first.clone();
+    whole.extend_from_slice(&extra);
+    assert!(
+        start_of(&sim.tx_audio(0), &at_48k(&whole, 1.0)).is_some(),
+        "the first over unchanged, what was added after it"
+    );
+    // Our stop sent, the rest still queued: the radio loop flushes it in the same tick.
+    tx.feed(&tone_at(1.0, 1_000.0, 0.5));
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    assert!(tx.queued() > 0, "premise: audio still queued");
+    let mut asked = false;
+    assert!(
+        !tx.retune(&mut |left, _| {
+            asked = true;
+            vec![0.0; left]
+        }),
+        "no over open: not switched"
+    );
+    assert!(!asked, "nothing built");
+    tx.flush();
+    wait_unkeyed(&d);
+}
+
+/// ⭐⭐ NEVER A SILENT OVER, PART WAY THROUGH EITHER (plan §6.1 item 4). The SDR program stops
+/// pulling Nexus's audio part way through an over and stays keyed. The daemon ends the over: our
+/// stop goes out once the last pull is older than the chrono window, and the radio loop reads why,
+/// as it reads the session's own halts.
+#[test]
+fn an_over_whose_audio_the_sdr_program_stops_pulling_is_ended_and_says_why() {
+    let sim = esdr3([Fault::ChronoStall {
+        after: Duration::from_millis(400),
+    }]);
+    let (d, mut c) = audio_daemon(&sim, Options::default());
+    let tx = route(&d);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    tx.feed(&tone_at(3.0, 1_000.0, 0.5));
+    assert_eq!(
+        halt(&d),
+        "the SDR program stopped taking Nexus's audio part way through the over, so Nexus ended it"
+    );
+    wait_log(&sim, "our stop", |log| count_in(log, 0, "trx:0,false") >= 1);
+    let log = sim.log();
+    let stalled = log
+        .iter()
+        .find_map(|l| {
+            matches!(
+                l.event,
+                SimEvent::Fault {
+                    name: "ChronoStall",
+                    ..
+                }
+            )
+            .then_some(l.at)
+        })
+        .expect("the stall");
+    let stop = command_at(&log, 0, "trx:0,false").expect("our stop");
+    let after = stop.saturating_sub(stalled);
+    assert!(
+        after <= Duration::from_millis(1_500),
+        "our stop {after:?} after the stall"
+    );
+    assert!(tx.queued() > 0, "premise: the over still had audio to send");
+    wait_unkeyed(&d);
+    assert_eq!(d.take_halt(), None, "one halt");
+}
+
+/// The watch on the last pull ends nothing a healthy server does: an over pulled to its end with
+/// silence after it, chronos in bursts, a first chrono that comes late after an earlier over's last
+/// pull (the session's own window rules until the first pull), and a server that stops pulling only
+/// once the over's audio has all gone out (the over was whole; what is left is its tail).
+#[test]
+fn the_pull_watch_ends_nothing_a_healthy_server_does() {
+    let trials: [(&str, Vec<Fault>, usize); 4] = [
+        ("healthy", vec![], 1),
+        ("bursts", vec![Fault::ChronoBurst { burst: 4 }], 1),
+        (
+            "late first chrono",
+            vec![Fault::ChronoLate {
+                delay: Duration::from_millis(150),
+            }],
+            2,
+        ),
+        (
+            "stall in the tail",
+            vec![Fault::ChronoStall {
+                after: Duration::from_millis(1_500),
+            }],
+            1,
+        ),
+    ];
+    for (what, faults, overs) in trials {
+        let sim = esdr3(faults);
+        let (d, mut c) = audio_daemon(&sim, Options::default());
+        let tx = route(&d);
+        for n in 0..overs {
+            if n > 0 {
+                // Well past the window since the last over's last pull.
+                assert!(
+                    !d.session()
+                        .wait_until(Duration::from_millis(600), |s| s.keyed.is_some()),
+                    "{what}: premise: nothing of ours keyed between the overs"
+                );
+                assert!(
+                    tx.last_pull()
+                        .is_some_and(|at| at.elapsed() >= Duration::from_millis(600)),
+                    "{what}: premise: the last over's last pull is older than the window"
+                );
+            }
+            assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+            tx.feed(&tone_at(1.0, 1_000.0, 0.5));
+            // The over, then past the window and its poll, and past a stall in the tail: the
+            // watch has had its chance.
+            assert!(
+                !d.session()
+                    .wait_until(Duration::from_millis(2_500), |s| !s.over_open),
+                "{what}: over {n} ended before our stop"
+            );
+            assert_eq!(tx.queued(), 0, "{what}: premise: the over pulled");
+            assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+            wait_unkeyed(&d);
+        }
+        assert_eq!(d.take_halt(), None, "{what}: ended by the watch");
+    }
+}
+
+/// The transmit route is ready only once the SDR program has taken Nexus's audio stream: never on a
+/// server that does not acknowledge `audio_start` (where a `tci` key would take its microphone),
+/// never with Audio over TCI off, never for a daemon without Nexus's own audio paths; and ready on a
+/// server that does.
+#[test]
+fn the_transmit_route_is_ready_only_once_the_sdr_program_takes_nexus_audio() {
+    let sim = esdr3([Fault::NoAudioAck]);
+    registry::forget(key_of(&sim));
+    let d = TciDaemon::start_receiving(&target(&sim), Options::default()).expect("starts");
+    wait_log(&sim, "the stream asked for", |log| {
+        count_in(log, 0, "audio_start:0") == 1
+    });
+    assert!(
+        !d.session().wait_until(Duration::from_millis(500), |s| s
+            .model
+            .trx(trx0())
+            .audio
+            .is_true()),
+        "premise: never acknowledged"
+    );
+    assert!(!d.tx_route_ready(), "unacknowledged");
+    drop(d);
+    let sim = esdr3([]);
+    registry::forget(key_of(&sim));
+    let d = TciDaemon::start_receiving(
+        &Target {
+            audio: false,
+            ..target(&sim)
+        },
+        Options::default(),
+    )
+    .expect("starts");
+    assert!(!d.tx_route_ready(), "Audio over TCI off");
+    drop(d);
+    let d = fresh(&sim, Options::default());
+    wait_audio(&d);
+    assert!(
+        d.tx_tee().is_none() && !d.tx_route_ready(),
+        "no audio paths"
+    );
+    drop(d);
+    registry::forget(key_of(&sim));
+    let d = TciDaemon::start_receiving(&target(&sim), Options::default()).expect("starts");
+    wait_audio(&d);
+    assert!(d.tx_route_ready(), "control: acknowledged and flowing");
+    assert!(d.tx_tee().is_some());
 }
