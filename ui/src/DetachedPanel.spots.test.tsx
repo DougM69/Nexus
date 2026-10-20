@@ -10,6 +10,7 @@
 // DetachedPanel is mounted, as the Spots window and, where a case is about the shared board, as the
 // dashboard window beside it; only the backend is stubbed.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { StrictMode } from 'react'
 import { render, cleanup, waitFor, fireEvent, act } from '@testing-library/react'
 import type { AppSnapshot, NeedAlert, SpotRow } from './types'
 import { t } from './i18n'
@@ -89,6 +90,7 @@ vi.mock('./toast', async (importOriginal) => ({
 }))
 
 import { DetachedPanel } from './DetachedPanel'
+import { SpotsPanel } from './components/SpotsPanel'
 import * as api from './api'
 import { spotNeed } from './features/needs'
 import { pastTheSwitch } from './components/ConnectView.testkit'
@@ -238,5 +240,185 @@ describe("the Spots window and the dashboard window's Spots box are one board", 
     fireEvent.click(press!)
     await act(() => vi.advanceTimersByTimeAsync(31_000))
     expect(api.clusterSelfSpot, 'one press, one spot').toHaveBeenCalledTimes(1)
+  })
+})
+
+// THE WINDOW OPENS ON THE VIEW'S FILTERS (the operator, 2026-10-20: copy the main view's filters). Pop out in the
+// main window's Spots view hands the view's filters, as they are at the press, to the window it opens; from there
+// each window keeps its own. The view is the real board as App mounts it in the main window (its own copy of the
+// filters, and Pop out); the window is the real DetachedPanel as main.tsx mounts it, under StrictMode.
+//
+// The board keeps its filters in sessionStorage, which the platform keeps one of per window; jsdom has one. So each
+// step taken in a window brings that window's copy in and puts it back after (`inWindow`), while localStorage, the
+// one store the two windows share, is left alone, as it is.
+describe("the Spots window opens on the view's filters, then keeps its own", () => {
+  type Win = 'main' | 'spots'
+  let sessions: Record<Win, Record<string, string>>
+  function inWindow<T>(win: Win, step: () => T): T {
+    sessionStorage.clear()
+    for (const [k, v] of Object.entries(sessions[win])) sessionStorage.setItem(k, v)
+    const out = step()
+    const copy: Record<string, string> = {}
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i)!
+      copy[k] = sessionStorage.getItem(k)!
+    }
+    sessions[win] = copy
+    return out
+  }
+  /** What a hand-off record held each time the view asked for the window: in place BEFORE the ask, or the window
+   *  could open first. */
+  let askedWith: (string | null)[]
+  beforeEach(() => {
+    sessions = { main: {}, spots: {} }
+    askedWith = []
+  })
+
+  const view = () =>
+    render(
+      <SpotsPanel
+        spots={SPOTS}
+        bandPlan={[]}
+        selectedCall={null}
+        onSelect={() => {}}
+        onWork={() => {}}
+        onPopOut={() => askedWith.push(localStorage.getItem('nexus.spotsPopOut.filters'))}
+      />,
+    )
+  const popOut = () =>
+    render(
+      <StrictMode>
+        <DetachedPanel panel="spots" />
+      </StrictMode>,
+    )
+  const press = (main: HTMLElement) => inWindow('main', () => fireEvent.click(main.querySelector('.np-popout')!))
+
+  const buttons = (root: Element | null | undefined) => [...(root?.querySelectorAll('button') ?? [])] as HTMLButtonElement[]
+  const modeGroup = (root: HTMLElement) =>
+    [...root.querySelectorAll('[role="group"]')].find((g) => g.getAttribute('aria-label') === t('spots.filters.modes.aria'))
+  const bandChip = (root: HTMLElement, band: string) => buttons(root.querySelector('.np-filter-bands')).find((b) => b.textContent === band)!
+  const modeChip = (root: HTMLElement, mode: string) => buttons(modeGroup(root)).find((b) => b.textContent === mode)!
+  const hideWorkedChip = (root: HTMLElement) => buttons(root).find((b) => b.title === t('spots.filter.worked.title'))!
+  /** The filters as the board shows them: the lit band chips, each mode chip and whether it is on, Hide worked,
+   *  the sorted column and the search. */
+  const filtersOf = (root: HTMLElement) => ({
+    bands: [...root.querySelectorAll('.np-filter-bands .np-chip.active')].map((b) => b.textContent),
+    modes: buttons(modeGroup(root)).map((b) => `${b.textContent} ${b.getAttribute('aria-pressed')}`),
+    hideWorked: hideWorkedChip(root)?.getAttribute('aria-pressed'),
+    sort: root.querySelector('.np-th.active')?.textContent,
+    search: root.querySelector<HTMLInputElement>('input[type="search"]')?.value,
+  })
+  /** The view's picks, every one of them off its default. */
+  const PICKED = { bands: ['20m'], modes: ['CW true', 'FT4 false'], hideWorked: 'false', sort: `${t('spots.column.call')} ▲`, search: 'K1' }
+  const DEFAULTS = { bands: [], modes: ['CW true', 'FT4 true'], hideWorked: 'true', sort: `${t('spots.column.age')} ▲`, search: '' }
+  function pick(main: HTMLElement) {
+    inWindow('main', () => {
+      fireEvent.click(bandChip(main, '20m'))
+      fireEvent.click(modeChip(main, 'FT4'))
+      fireEvent.click(hideWorkedChip(main))
+      fireEvent.click(main.querySelector('.np-th[data-col="call"]')!)
+      fireEvent.change(main.querySelector('input[type="search"]')!, { target: { value: 'K1' } })
+    })
+    expect(filtersOf(main), 'the view shows the picks').toEqual(PICKED)
+  }
+  /** The window, once its feed is in (the mode chips are the feed's). */
+  async function fed(win: HTMLElement) {
+    await waitFor(() => expect(modeGroup(win)).toBeDefined())
+    return win
+  }
+
+  it("opens on the view's filters as Pop out was pressed: bands, modes, Hide worked, sort and search", async () => {
+    const main = inWindow('main', view).container
+    pick(main)
+    press(main)
+    const win = inWindow('spots', popOut).container
+    // The first paint, before the feed: everything but the mode chips, which the feed brings.
+    const { modes: _modes, ...beforeTheFeed } = PICKED
+    const { modes: _none, ...firstPaint } = filtersOf(win)
+    expect(firstPaint, "the window's first paint is the view's filters").toEqual(beforeTheFeed)
+    await fed(win)
+    expect(filtersOf(win), "the window opens on the view's filters").toEqual(PICKED)
+    expect(callsIn(win.querySelector<HTMLElement>('main.spots-panel')), 'and lists what they let through').toEqual(['K1CW'])
+    expect(askedWith, 'the filters were handed over before the window was asked for').toEqual([expect.any(String)])
+  })
+
+  it("leaves the view's own filters as they were: on screen, in its own copy, and when the view is opened again", () => {
+    let main = inWindow('main', view)
+    pick(main.container)
+    const before = { ...sessions.main }
+    press(main.container)
+    expect(askedWith).toHaveLength(1)
+    expect(filtersOf(main.container), 'the press moves nothing in the view').toEqual(PICKED)
+    expect(sessions.main, '…nor in its own copy').toEqual(before)
+    main.unmount()
+    main = inWindow('main', view) // leave the Spots view and come back
+    expect(filtersOf(main.container), 'the view comes back on its own filters').toEqual(PICKED)
+  })
+
+  it('a hand-off from an earlier press or an earlier run of the app is ignored; a slow window still gets its own', async () => {
+    const main = inWindow('main', view).container
+    pick(main)
+    for (const [age, expected, why] of [
+      [10_000, PICKED, "a window ten seconds slow to open still opens on the view's filters"],
+      [61_000, DEFAULTS, "an earlier press's, over a minute old, is not this window's"],
+      [86_400_000, DEFAULTS, "an earlier run's, a day old, is not this window's"],
+      [-3_600_000, DEFAULTS, 'one stamped an hour ahead, the clock set back since, is not this window’s'],
+    ] as const) {
+      const at = Date.now()
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(at)
+      sessions.spots = {} // a new window
+      let win: ReturnType<typeof popOut>
+      try {
+        press(main)
+        clock.mockReturnValue(at + age)
+        win = inWindow('spots', popOut)
+      } finally {
+        clock.mockRestore()
+      }
+      await fed(win.container)
+      expect(filtersOf(win.container), why).toEqual(expected)
+      win.unmount()
+    }
+  })
+
+  it('the hand-off is taken once: closed and opened again with no press, the window opens on the defaults', async () => {
+    const main = inWindow('main', view).container
+    pick(main)
+    press(main)
+    const first = inWindow('spots', popOut)
+    expect(filtersOf(await fed(first.container)), "the window opens on the view's filters").toEqual(PICKED)
+    first.unmount()
+    sessions.spots = {} // closing the window forgets its copy
+    const second = inWindow('spots', popOut)
+    expect(filtersOf(await fed(second.container)), 'a window no press opened opens on the defaults').toEqual(DEFAULTS)
+  })
+
+  it('a chip in either window never moves the other, and a press while the window is open moves nothing in it, even as it reloads', async () => {
+    const main = inWindow('main', view).container
+    pick(main)
+    press(main)
+    let win = inWindow('spots', popOut)
+    expect(filtersOf(await fed(win.container)), "the window opens on the view's filters").toEqual(PICKED)
+
+    // A chip in the window: the view moves neither on screen nor in its own copy.
+    const mainCopy = { ...sessions.main }
+    inWindow('spots', () => fireEvent.click(bandChip(win.container, '40m')))
+    expect(filtersOf(win.container).bands, 'the chip lit in the window').toEqual(['40m', '20m'])
+    expect(filtersOf(main), 'a chip in the window moves nothing in the view').toEqual(PICKED)
+    expect(sessions.main, '…nor in its own copy').toEqual(mainCopy)
+
+    // A chip in the view, and Pop out pressed again while the window is open (Rust only brings it forward).
+    const winCopy = { ...sessions.spots }
+    inWindow('main', () => fireEvent.click(bandChip(main, '15m')))
+    press(main)
+    expect(askedWith, 'the second press asked for the window, with the view as it is now').toHaveLength(2)
+    expect(filtersOf(main).bands).toEqual(['20m', '15m'])
+    expect(filtersOf(win.container).bands, 'a chip in the view and a second press move nothing in the window').toEqual(['40m', '20m'])
+    expect(sessions.spots, '…nor in its own copy').toEqual(winCopy)
+
+    // The window reloads (its session outlives a reload, as the platform's does): still its own, not that press's.
+    win.unmount()
+    win = inWindow('spots', popOut)
+    expect(filtersOf(await fed(win.container)).bands, 'the window keeps its own as it reloads').toEqual(['40m', '20m'])
   })
 })

@@ -280,7 +280,7 @@ SSTV, APRS and JS8 cockpits.
 | Map | **Map** in the Operate header | Opens with the Parks layer on, independent of the Conditions map's layer picks. |
 | Conditions | ⧉ Pop out, Conditions header | The globe with its own pane grid. |
 | Needed board | ⧉ Pop out, Needed header | A header checkbox, **open at launch**, force-opens it every start. |
-| Spots board | ⧉ Pop out, Spots header | Its filters are its own and last while the window is open: it starts on the board's defaults, not on the main window's picks. |
+| Spots board | ⧉ Pop out, Spots header | Its filters are its own and last while the window is open: it starts on the Spots view's filters as they are when you press Pop out. |
 | DXpeditions | ⧉ Pop out, DXpeditions header | |
 | Satellites | ⧉ in the Satellites header | |
 | Memories | ↗ Pop out, Memories toolbar | |

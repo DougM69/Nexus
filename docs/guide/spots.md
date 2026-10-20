@@ -108,8 +108,8 @@ Filters, search text, sort column and the drawer's open state all survive leavin
 the section and coming back — they are held for the life of the app run and go
 when you quit.
 The popped-out window keeps a set of its own for as long as it is open: it starts
-on the defaults, and nothing set in it moves the main window's board, or the other
-way round.
+on the filters, search and sort your Spots view had when you pressed Pop out, and
+nothing set in it moves the main window's board, or the other way round.
 
 ## Core workflows
 
@@ -223,7 +223,7 @@ arrive."
   across restarts.
 - **A popped-out board forgets its filters when you close it.** The window's
   filters, search and sort are its own and go with the window; the next one opens
-  on the defaults.
+  on what your Spots view shows when you press Pop out.
 - **Twenty minutes, and nothing before that.** No history, no export, no "what did
   I miss while I was away".
 - **Declaring an unassisted entry empties the board.** The switch stops cluster/RBN

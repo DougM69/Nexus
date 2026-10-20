@@ -736,9 +736,11 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   }
 
   if (panel === 'spots') {
+    // The window Pop out opened: it opens on the view's filters as the press handed them over, then keeps its own
+    // (`poppedOut`, here only: the dashboard window's Spots box is a pane with its own copy).
     return (
       <DetachedShell>
-        <SpotsPanel spots={allSpots} {...spotsBoard} />
+        <SpotsPanel spots={allSpots} {...spotsBoard} poppedOut />
       </DetachedShell>
     )
   }
