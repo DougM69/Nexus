@@ -46,6 +46,7 @@
 //! indexed by them stays small.
 
 pub mod frame;
+pub mod server;
 pub mod wire;
 
 use std::fmt;

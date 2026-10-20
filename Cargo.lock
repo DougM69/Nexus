@@ -2951,6 +2951,7 @@ dependencies = [
  "serde_json",
  "socket2",
  "tempo-flexsim",
+ "tungstenite",
  "windows 0.62.2",
 ]
 
