@@ -44,6 +44,11 @@
 //! program's session, then its outbox. The backend is never called with any of them held, and
 //! [`Handle::publish`] never calls the backend, so the app may publish under its own engine lock
 //! (and must: [`Snapshot`] says why).
+//!
+//! Each program also has a transmit gate (`conn.rs`), held only around its calls that can transmit
+//! and by its end, which tells the backend under it: so nothing the program sends transmits after
+//! its end began. [`Handle::disconnect`] and [`Server::stop`] take it and call the backend, so the
+//! app never calls them under its backend's lock, nor from inside a backend call.
 
 mod backend;
 mod conn;
@@ -495,7 +500,8 @@ impl Handle {
         }
     }
 
-    /// The operator's Disconnect: the program's transmissions end, then it is closed.
+    /// The operator's Disconnect: the program's transmissions end (after any of its transmit
+    /// calls in flight returns), then it is closed. Nothing it sends transmits after this returns.
     pub fn disconnect(&self, client: ClientId) {
         if let Some(conn) = self.shared.find(client) {
             conn.end_transmit(&self.shared);

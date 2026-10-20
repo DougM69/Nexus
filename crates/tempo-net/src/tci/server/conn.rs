@@ -32,14 +32,29 @@
 //! [`STOP_SPACING`]: dropping a program's own `trx:0,false;` is never the safe way. Messages in a
 //! row that hold nothing the codec could even split ([`Limits::garbage`]) close it too.
 //!
-//! Transmit audio is taken only from the program holding an admitted `tci` key, and at most
-//! [`Limits::tx_audio_speed`] times real time; every other binary frame is dropped and counted,
-//! never queued for a later key (design §3.1 item 8).
+//! Transmit audio is taken only from the program holding an admitted `tci` key; every other
+//! binary frame is dropped and counted, never queued for a later key (design §3.1 item 8). A frame
+//! must claim at least one whole frame, carry all it claims in whole samples, and carry no more
+//! than twice it (WSJT-X sends twice and fills the first half): otherwise its claim and its payload
+//! disagree, and it is refused as bad. The backend is handed the claimed values alone, and they are
+//! paid for at most [`Limits::tx_audio_speed`] times real time, each frame at least
+//! [`MIN_TX_VALUES`] values, so neither a frame's own `length` nor a flood of tiny frames can buy
+//! audio or backend calls for nothing.
+//!
+//! # A program's end
+//!
+//! Everything that can transmit for one program (a key, a Tune, CW, its transmit audio) reaches the
+//! backend through that program's gate ([`Conn::transmit`]), and only while its end has not begun.
+//! The end ([`Conn::end_transmit`], from the program's own reader, the operator's Disconnect or
+//! the server's stop) takes the same gate to mark it begun and tell the backend. So a call in
+//! flight finishes first and its end ends what it admitted, and nothing the program sends can
+//! transmit after its end began. The reader also stops running a message the moment its program's
+//! end or close has begun.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -51,7 +66,7 @@ use crate::tci::frame::{BlockKind, RawHeader, HEADER_LEN};
 use crate::tci::wire::{self, Fault, Inbound, Raw, ServerText, WireError};
 use crate::tci::EXPERT_SDR3;
 
-use super::backend::{ClientId, Closed, Event, KeyKind};
+use super::backend::{AudioFormat, ClientId, Closed, Event, KeyKind};
 use super::dispatch::{self, Cx, Sink, StopKind};
 use super::state::{rx_sensor_lines, tx_sensor_lines, Out, Session, Snapshot};
 use super::{Limits, Shared};
@@ -77,6 +92,10 @@ const BATCH: usize = 64 * 1024;
 /// Control frames and TX_CHRONOs held at most: a ping flood's pongs are dropped past this, never a
 /// close.
 const QUEUE_CAP: usize = 64;
+
+/// The least a transmit frame is charged, in values: the smallest frame a program may stream
+/// (`audio_stream_samples`, §4.3).
+pub(super) const MIN_TX_VALUES: usize = *AudioFormat::SAMPLES.start() as usize;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -331,8 +350,9 @@ pub(super) struct Conn {
     born: Instant,
     /// When the last frame arrived, in milliseconds since `born`.
     heard: AtomicU64,
-    /// The backend has been told the program is gone.
-    ended: AtomicBool,
+    /// The program's transmit gate: true once its end has begun and the backend has been told. See
+    /// the module header.
+    gate: Mutex<bool>,
     counters: Counters,
     limits: Limits,
 }
@@ -355,7 +375,7 @@ impl Conn {
             session: Mutex::new(Session::default()),
             born: Instant::now(),
             heard: AtomicU64::new(0),
-            ended: AtomicBool::new(false),
+            gate: Mutex::new(false),
             counters: Counters::default(),
         }
     }
@@ -469,11 +489,27 @@ impl Conn {
         lock(&self.out).close
     }
 
-    /// Tell the backend the program is gone: anything it keyed ends now. Once.
+    /// The program's end begins: once its transmit calls in flight have returned, mark it begun
+    /// and tell the backend, which ends whatever the program keyed (those calls' included). Nothing
+    /// it sends reaches a transmit call after this. Once.
     pub(super) fn end_transmit(&self, shared: &Shared) {
-        if !self.ended.swap(true, Ordering::SeqCst) {
+        let mut ended = lock(&self.gate);
+        if !*ended {
+            *ended = true;
             shared.backend.disconnected(self.id);
         }
+    }
+
+    /// Whether the program's end has begun.
+    fn ended(&self) -> bool {
+        *lock(&self.gate)
+    }
+
+    /// Run a call that can transmit through the program's gate: only while its end has not begun,
+    /// and holding that end off until the call returns. `None`: the end has begun, and nothing ran.
+    pub(super) fn transmit<T>(&self, call: impl FnOnce() -> T) -> Option<T> {
+        let ended = lock(&self.gate);
+        (!*ended).then(call)
     }
 
     /// The connection is over: end its transmissions first, then free its slot, then let the
@@ -705,6 +741,28 @@ fn command_bytes(raw: &Raw<'_>) -> usize {
     raw.name().len() + raw.args().iter().map(|a| a.len() + 1).sum::<usize>() + 1
 }
 
+/// A transmit frame cut to the `length` values it claims, read with the program's own format
+/// (WSJT-X leaves the header's `channels` unset). `None` when the claim and the payload disagree:
+/// it must claim at least one whole frame, carry whole samples, carry no more than twice its claim
+/// (WSJT-X sends twice and fills the first half), and carry all of it.
+pub(super) fn tx_payload<'a>(
+    bytes: &'a [u8],
+    length: u32,
+    format: &AudioFormat,
+) -> Option<&'a [u8]> {
+    let size = format.sample_type.bytes();
+    let length = usize::try_from(length).ok()?;
+    let carried = bytes.len().checked_sub(HEADER_LEN)?;
+    let whole_frames = length > 0 && length.is_multiple_of(format.channels.count());
+    let whole_samples = carried.is_multiple_of(size);
+    let at_most_twice = carried / size <= length.saturating_mul(2);
+    if !(whole_frames && whole_samples && at_most_twice) {
+        return None;
+    }
+    // Carrying less than it claims, the slice does not exist.
+    bytes.get(..length.checked_mul(size)?.checked_add(HEADER_LEN)?)
+}
+
 impl Reader {
     fn new(limits: &Limits) -> Reader {
         let now = Instant::now();
@@ -722,6 +780,11 @@ impl Reader {
         let now = Instant::now();
         let (mut readable, mut garbage) = (false, false);
         for (i, item) in wire::split(text).enumerate() {
+            // Its end or its close has begun (the operator's Disconnect, a stop, a backlog): the
+            // rest of the message is not run.
+            if conn.ended() || conn.closing().is_some() {
+                break;
+            }
             if i >= limits.commands {
                 // The rest of the message is refused, counted once.
                 bump(&conn.counters.unreadable);
@@ -788,17 +851,25 @@ impl Reader {
             let _ = self.limiter.allow(None, now);
             return;
         }
-        // `length` counts values (WSJT-X fills only the first `length` of a payload twice that
-        // size), but never more than the payload holds.
-        let values = (bytes.len() - HEADER_LEN) / format.sample_type.bytes();
-        let frames = (head.length as usize).min(values) / format.channels.count();
-        let seconds = frames as f64 / f64::from(format.rate.hz());
+        let Some(paid) = tx_payload(bytes, head.length, &format) else {
+            // Its claim and its payload disagree: refused, counted, and paid for.
+            bump(&conn.counters.bad_frames);
+            let _ = self.limiter.allow(None, now);
+            return;
+        };
+        // Charged for the values handed on, and never less than the smallest frame a program may
+        // stream.
+        let values = (head.length as usize).max(MIN_TX_VALUES);
+        let seconds = (values / format.channels.count()) as f64 / f64::from(format.rate.hz());
         if !self.tx_budget.take(seconds, now) {
             bump(&conn.counters.tx_dropped);
             return;
         }
-        bump(&conn.counters.tx_frames);
-        shared.backend.tx_audio(conn.id, format, bytes);
+        match conn.transmit(|| shared.backend.tx_audio(conn.id, format, paid)) {
+            Some(()) => bump(&conn.counters.tx_frames),
+            // The program's end has begun.
+            None => bump(&conn.counters.tx_dropped),
+        }
     }
 }
 
@@ -812,6 +883,7 @@ fn run(conn: &Conn, shared: &Shared, action: dispatch::Action) {
             model: &shared.model,
             session: &conn.session,
             sink: conn,
+            gate: &conn.gate,
         },
     );
     shared.deliver(conn.id, &fx.all);

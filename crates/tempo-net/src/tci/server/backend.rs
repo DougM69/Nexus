@@ -27,6 +27,14 @@
 //! snapshot built and published under the lock that [`TciBackend::key`] and the setters take is
 //! never older than a command's answer, so a stale snapshot cannot undo an echo the server has
 //! just sent (`Snapshot` has the detail).
+//!
+//! A program's [`TciBackend::disconnected`] waits for that program's calls in flight that can
+//! transmit ([`TciBackend::key`], [`TciBackend::tune_on`], [`TciBackend::cw`],
+//! [`TciBackend::tx_audio`]), and none of them is made for it afterwards: what such a call admitted
+//! just before the end is ended by it, and nothing the program sends transmits after it. So the
+//! app must never call [`Handle::disconnect`](super::Handle::disconnect) or
+//! [`Server::stop`](super::Server::stop) while holding the lock its backend takes, nor from inside
+//! a backend call.
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -383,8 +391,10 @@ pub trait TciBackend: Send + Sync {
 
     /// The program is gone: it closed, the connection failed or went silent, or the server or the
     /// operator ended it. Anything it keyed, tuned or sent as CW ends hard now (design §3.4, a lost
-    /// socket unkeys within one radio-loop tick). Called once a program, before its slot is
-    /// freed, and never with a server lock held.
+    /// socket unkeys within one radio-loop tick). Called once a program, before its slot is freed,
+    /// after its transmit calls in flight have returned, and never followed by another of them. No
+    /// lock of the server's is held but that program's transmit gate, which only its transmit calls
+    /// take.
     fn disconnected(&self, client: ClientId);
 
     /// A line for the connection log.
@@ -429,9 +439,11 @@ pub trait TciBackend: Send + Sync {
     fn end_own(&self, client: ClientId);
 
     /// One transmit-audio frame (type 2, receiver 0) from the program that holds an admitted
-    /// [`KeyKind::Tci`] key, read with its `format`. The server drops every other program's frames
-    /// before they get here, and bounds the owner's to twice real time; the backend checks the
-    /// owner again, since an over can end between the two.
+    /// [`KeyKind::Tci`] key, to be read with its `format` (not the header's `channels`, which
+    /// WSJT-X leaves unset). The frame is cut to the `length` values it claims: the server refuses
+    /// a frame whose claim and payload disagree, drops every other program's frames, and bounds the
+    /// owner's to twice real time. The backend checks the owner again, since an over can end
+    /// between the two.
     fn tx_audio(&self, client: ClientId, format: AudioFormat, frame: &[u8]);
 
     /// `audio_start:0;`: `Ok` when a receive source exists, and the program is then sent receive

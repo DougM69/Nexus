@@ -8,9 +8,11 @@
 //! gate behind it.
 //!
 //! Every action that can put the transmitter on the air ([`Action::Key`], [`Action::TuneOn`],
-//! [`Action::Cw`]) is a question to the backend, whose verdict is final. The server's own part is
-//! to refuse more: receiver 0 only, sources it knows, the forms §3.5 refuses outright. A program
-//! is never told a key took that the backend did not admit.
+//! [`Action::Cw`]) is a question to the backend, whose verdict is final, asked through the
+//! program's transmit gate (`conn.rs`): never once the program's end has begun, and never while
+//! that end is being told. The server's own part is to refuse more: receiver 0 only, sources it
+//! knows, the forms §3.5 refuses outright. A program is never told a key took that the backend did
+//! not admit.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -358,13 +360,14 @@ pub(super) trait Sink {
 }
 
 /// What a program's command needs to run: who sent it, the backend, the snapshot, the program's
-/// session and its outbox.
+/// session, its outbox, and its transmit gate (true once its end has begun).
 pub(super) struct Cx<'a> {
     pub(super) client: ClientId,
     pub(super) backend: &'a dyn TciBackend,
     pub(super) model: &'a Mutex<Snapshot>,
     pub(super) session: &'a Mutex<Session>,
     pub(super) sink: &'a dyn Sink,
+    pub(super) gate: &'a Mutex<bool>,
 }
 
 /// What running a command leaves for the caller: state changes for every program (the sender
@@ -378,6 +381,14 @@ pub(super) struct Effects {
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Ask the backend something that can transmit, through the program's gate: only while its end has
+/// not begun, and holding that end off until the call returns. `None`: the end has begun, nothing
+/// reached the backend, and nothing is answered (the program is being closed).
+fn gated<T>(cx: &Cx<'_>, call: impl FnOnce() -> T) -> Option<T> {
+    let ended = lock(cx.gate);
+    (!*ended).then(call)
 }
 
 impl Effects {
@@ -502,14 +513,15 @@ pub(super) fn run(action: Action, cx: &Cx<'_>) -> Effects {
         },
         Action::Key(kind) => {
             let audio = lock(cx.session).audio;
-            match cx.backend.key(cx.client, kind, audio) {
-                Ok(()) => {
+            match gated(cx, || cx.backend.key(cx.client, kind, audio)) {
+                None => {}
+                Some(Ok(())) => {
                     lock(cx.session).admitted(kind);
                     // At admission, not when the radio keys: WSJT-X fails a key whose echo takes
                     // over a second, and a slow serial rig can take longer (design §3.5).
                     fx.all.push(Out::Trx(true));
                 }
-                Err(r) => {
+                Some(Err(r)) => {
                     fx.refusal(cx, r);
                     fx.echo(cx, Out::Trx(false));
                 }
@@ -528,9 +540,10 @@ pub(super) fn run(action: Action, cx: &Cx<'_>) -> Effects {
                 fx.echo(cx, Out::Trx(false));
             }
         }
-        Action::TuneOn => match cx.backend.tune_on(cx.client) {
-            Ok(()) => fx.all.push(Out::Tune(true)),
-            Err(r) => {
+        Action::TuneOn => match gated(cx, || cx.backend.tune_on(cx.client)) {
+            None => {}
+            Some(Ok(())) => fx.all.push(Out::Tune(true)),
+            Some(Err(r)) => {
                 fx.refusal(cx, r);
                 let now = snapshot().tune;
                 fx.echo(cx, Out::Tune(now));
@@ -567,7 +580,7 @@ pub(super) fn run(action: Action, cx: &Cx<'_>) -> Effects {
             );
         }
         Action::Cw(cw) => {
-            if let Err(r) = cx.backend.cw(cx.client, cw) {
+            if let Some(Err(r)) = gated(cx, || cx.backend.cw(cx.client, cw)) {
                 fx.refusal(cx, r);
             }
         }

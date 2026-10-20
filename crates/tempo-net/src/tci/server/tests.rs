@@ -1530,6 +1530,229 @@ fn the_operators_disconnect_ends_the_program() {
     assert!(b.handle.programs().is_empty());
 }
 
+// ── A program's end, and what it may still send ─────────────────────────────────────────────
+
+/// Wait until no program is connected.
+fn wait_gone(b: &Bench) {
+    let until = Instant::now() + WAIT;
+    while !b.handle.programs().is_empty() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(b.handle.programs().is_empty(), "the program is gone");
+}
+
+/// The backend's calls after `Disconnected(client)`.
+fn after_end(b: &Bench, client: ClientId) -> Vec<Call> {
+    let calls = b.mock.calls();
+    let ended = calls
+        .iter()
+        .position(|c| *c == Call::Disconnected(client))
+        .expect("the program was ended");
+    calls[ended + 1..].to_vec()
+}
+
+/// Those that could transmit: there must be none.
+fn transmit_after_end(b: &Bench, client: ClientId) -> Vec<Call> {
+    after_end(b, client)
+        .into_iter()
+        .filter(Call::can_transmit)
+        .collect()
+}
+
+/// The operator's Disconnect while one of the program's messages is still running: nothing later
+/// in that message reaches the backend, so nothing it sends can transmit once its end began
+/// (security review finding 1).
+#[test]
+fn nothing_after_the_operators_disconnect_can_transmit() {
+    let b = Bench::new();
+    let mut c = b.client();
+    c.ask("audio_start:0;", "audio_start:0;");
+    b.mock.pause_at("set_drive");
+    // One message: a write the backend holds, then a retune, a key, a Tune and CW behind it.
+    c.send("drive:0,25;vfo:0,0,14075000;trx:0,true,tci;tune:0,true;cw_macros:0,CQ;");
+    assert!(b
+        .mock
+        .wait_call(WAIT, |call| matches!(call, Call::SetDrive(..)))
+        .is_some());
+    b.handle.disconnect(b.id(1));
+    b.mock.release();
+    wait_gone(&b);
+    assert_eq!(
+        after_end(&b, b.id(1)),
+        [],
+        "nothing reaches the backend after the end"
+    );
+}
+
+/// The same while the server stops.
+#[test]
+fn nothing_after_a_stop_begins_can_transmit() {
+    let mut b = Bench::new();
+    let mut c = b.client();
+    c.ask("audio_start:0;", "audio_start:0;");
+    b.mock.pause_at("set_drive");
+    c.send("drive:0,25;vfo:0,0,14075000;trx:0,true,tci;tune:0,true;cw_macros:0,CQ;");
+    assert!(b
+        .mock
+        .wait_call(WAIT, |call| matches!(call, Call::SetDrive(..)))
+        .is_some());
+    let server = b.server.take().expect("running");
+    let stopper = std::thread::spawn(move || server.stop());
+    assert!(b
+        .mock
+        .wait_call(WAIT, |call| *call == Call::Disconnected(b.id(1)))
+        .is_some());
+    b.mock.release();
+    stopper.join().expect("stopped");
+    assert_eq!(
+        after_end(&b, b.id(1)),
+        [],
+        "nothing reaches the backend after the end"
+    );
+}
+
+/// A key the backend is admitting when the program's end begins: the end waits for the call and
+/// then ends what it admitted. Told first, the backend would end nothing, and the key would outlive
+/// it.
+#[test]
+fn a_disconnect_waits_for_a_key_in_flight_and_then_ends_it() {
+    let b = Bench::new();
+    let mut c = b.client();
+    b.mock.pause_at("key");
+    c.send("trx:0,true;");
+    assert!(b
+        .mock
+        .wait_call(WAIT, |call| matches!(call, Call::Key(..)))
+        .is_some());
+    let handle = b.handle.clone();
+    let id = b.id(1);
+    let ender = std::thread::spawn(move || handle.disconnect(id));
+    let early = b.mock.wait_call(Duration::from_millis(500), |call| {
+        *call == Call::Disconnected(id)
+    });
+    b.mock.release();
+    ender.join().expect("disconnected");
+    assert_eq!(early, None, "ended while its key was in flight");
+    let calls = b.mock.calls();
+    let key = calls.iter().position(|c| matches!(c, Call::Key(..)));
+    let ended = calls.iter().position(|c| *c == Call::Disconnected(id));
+    assert!(key < ended && ended.is_some(), "{calls:?}");
+    wait_gone(&b);
+    assert_eq!(transmit_after_end(&b, id), []);
+}
+
+/// Transmit audio the backend is taking when the program's end begins: the same.
+#[test]
+fn a_disconnect_waits_for_transmit_audio_in_flight() {
+    let b = Bench::new();
+    let mut c = keyed(&b);
+    b.mock.pause_at("tx_audio");
+    c.send_binary(tx_frame(2048, 4096));
+    assert!(b
+        .mock
+        .wait_call(WAIT, |call| matches!(call, Call::TxAudio(..)))
+        .is_some());
+    let handle = b.handle.clone();
+    let id = b.id(1);
+    let ender = std::thread::spawn(move || handle.disconnect(id));
+    let early = b.mock.wait_call(Duration::from_millis(500), |call| {
+        *call == Call::Disconnected(id)
+    });
+    // More audio behind it: none of it may reach the backend once the end began.
+    c.send_binary(tx_frame(2048, 4096));
+    b.mock.release();
+    ender.join().expect("disconnected");
+    assert_eq!(early, None, "ended while its audio was in flight");
+    wait_gone(&b);
+    assert_eq!(transmit_after_end(&b, id), [], "{:?}", b.mock.calls());
+}
+
+// ── Transmit audio: what a frame claims against what it carries ─────────────────────────────
+
+/// A transmit frame's header (float32 stereo at 48 kHz, as WSJT-X sends it) claiming `length`
+/// values, then `payload` bytes.
+fn claimed(length: u32, payload: usize) -> Vec<u8> {
+    let mut f = tx_frame(length, 0);
+    f.resize(HEADER_LEN + payload, 0);
+    f
+}
+
+/// Security review finding 2: a frame whose `length` and payload disagree is refused, counted, and
+/// never reaches the backend. A claim of 0 (or one too small for its payload) used to pay nothing.
+#[test]
+fn a_transmit_frame_whose_length_and_payload_disagree_is_refused() {
+    let b = Bench::new();
+    let mut c = keyed(&b);
+    let frames = [
+        // Claims nothing, carries nothing: a header alone.
+        claimed(0, 0),
+        // Claims nothing, carries 32 KiB.
+        claimed(0, 32 * 1024),
+        // Claims half a stereo frame.
+        claimed(1, 4),
+        // Claims 2048 values, carries 100.
+        claimed(2048, 400),
+        // Carries more than twice its claim.
+        claimed(100, 4 * 201),
+        // Not a whole number of samples.
+        claimed(2048, 2048 * 4 + 3),
+    ];
+    let n = frames.len() as u64;
+    for f in frames {
+        c.send_binary(f);
+    }
+    assert!(c.alive());
+    let counts = b.handle.programs()[0].counts;
+    assert_eq!((counts.bad_frames, counts.tx_frames), (n, 0), "{counts:?}");
+    assert!(!b
+        .mock
+        .calls()
+        .iter()
+        .any(|call| matches!(call, Call::TxAudio(..))));
+    // Positive control: WSJT-X's own shape, twice its claim, is taken.
+    c.send_binary(tx_frame(2048, 4096));
+    assert!(b
+        .mock
+        .wait_call(WAIT, |call| matches!(call, Call::TxAudio(..)))
+        .is_some());
+}
+
+/// A flood of tiny frames pays at least the smallest frame a program may stream (100 values) each,
+/// so it cannot buy unbounded backend calls with a small claim.
+#[test]
+fn tiny_transmit_frames_pay_at_least_the_smallest_stream_frame() {
+    let b = Bench::new();
+    let mut c = keyed(&b);
+    let t0 = Instant::now();
+    for _ in 0..3000 {
+        // One stereo frame claimed, two carried: a valid claim, 21 microseconds of audio.
+        c.send_binary(tx_frame(2, 4));
+    }
+    assert!(c.alive());
+    let sent_in = t0.elapsed();
+    let counts = b.handle.programs()[0].counts;
+    // Charged 100 values (50 stereo frames) each: half a second at once, then twice real time.
+    let most = (0.5 + 2.0 * (sent_in.as_secs_f64() + 0.3)) / (50.0 / 48_000.0);
+    assert!(
+        (counts.tx_frames as f64) <= most + 1.0,
+        "{counts:?} in {sent_in:?}: at most {most:.0}"
+    );
+    assert_eq!(counts.tx_frames + counts.tx_dropped, 3000, "{counts:?}");
+}
+
+/// The backend is handed the `length` values that were paid for, not the rest of the payload.
+#[test]
+fn the_backend_gets_only_the_values_that_were_paid_for() {
+    let b = Bench::new();
+    let mut c = keyed(&b);
+    // WSJT-X's shape: 2048 values claimed in a payload of 4096.
+    c.send_binary(tx_frame(2048, 4096));
+    let got = b
+        .mock
+        .wait_call(WAIT, |call| matches!(call, Call::TxAudio(..)));
+    assert_eq!(got, Some(Call::TxAudio(b.id(1), HEADER_LEN + 2048 * 4)));
+}
+
 // ── S-M23, S-M24: refused outright ──────────────────────────────────────────────────────────
 
 /// A unique directory under the system's temporary one, removed at the end.
@@ -2275,6 +2498,7 @@ fn run_one(text: &str, mock: &Mock) -> (Action, Vec<String>, Vec<String>) {
             model: &model,
             session: &session,
             sink: &lines,
+            gate: &Mutex::new(false),
         },
     );
     let mut sent = lines.0.into_inner().expect("lines");
@@ -2569,6 +2793,7 @@ proptest! {
                 model: &model,
                 session: &session,
                 sink: &lines,
+                gate: &Mutex::new(false),
             },
         );
         let calls = mock.calls();
@@ -2601,6 +2826,7 @@ proptest! {
                     model: &model,
                     session: &session,
                     sink: &lines,
+                    gate: &Mutex::new(false),
                 },
             );
         }

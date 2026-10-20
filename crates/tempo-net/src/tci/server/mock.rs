@@ -72,12 +72,22 @@ impl Default for Answers {
     }
 }
 
+/// A call the mock holds inside the backend until the test lets it go: the server is then mid-call,
+/// at a point the test chose.
+#[derive(Debug, Default)]
+struct Pause {
+    at: Option<&'static str>,
+    released: bool,
+}
+
 #[derive(Default)]
 pub(super) struct Mock {
     calls: Mutex<Vec<Call>>,
     events: Mutex<Vec<Event>>,
     changed: Condvar,
     pub(super) answers: Mutex<Answers>,
+    pause: Mutex<Pause>,
+    resumed: Condvar,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -100,6 +110,38 @@ impl Mock {
 
     pub(super) fn answers(&self) -> MutexGuard<'_, Answers> {
         lock(&self.answers)
+    }
+
+    /// Hold the next calls named `at` (after recording them) until [`Mock::release`].
+    pub(super) fn pause_at(&self, at: &'static str) {
+        *lock(&self.pause) = Pause {
+            at: Some(at),
+            released: false,
+        };
+    }
+
+    /// Let a held call return, and hold no more.
+    pub(super) fn release(&self) {
+        let mut pause = lock(&self.pause);
+        pause.released = true;
+        pause.at = None;
+        self.resumed.notify_all();
+    }
+
+    /// Where a call may be held. Ten seconds at most, so a broken test cannot hang the suite.
+    fn hold(&self, name: &'static str) {
+        let mut pause = lock(&self.pause);
+        if pause.at != Some(name) {
+            return;
+        }
+        let until = Instant::now() + Duration::from_secs(10);
+        while !pause.released && Instant::now() < until {
+            pause = self
+                .resumed
+                .wait_timeout(pause, until.saturating_duration_since(Instant::now()))
+                .map(|(g, _)| g)
+                .unwrap_or_else(|e| e.into_inner().0);
+        }
     }
 
     /// Wait until a call matches, or `within` passes. The matching call, if one came.
@@ -169,6 +211,7 @@ impl TciBackend for Mock {
 
     fn set_drive(&self, client: ClientId, level: u32) -> Result<u32, Refusal> {
         self.record(Call::SetDrive(client, level));
+        self.hold("set_drive");
         self.answers().drive.map(|()| level)
     }
 
@@ -179,6 +222,7 @@ impl TciBackend for Mock {
 
     fn key(&self, client: ClientId, kind: KeyKind, audio_started: bool) -> Result<(), Refusal> {
         self.record(Call::Key(client, kind, audio_started));
+        self.hold("key");
         self.answers().transmit
     }
 
@@ -201,6 +245,7 @@ impl TciBackend for Mock {
 
     fn tx_audio(&self, client: ClientId, _format: AudioFormat, frame: &[u8]) {
         self.record(Call::TxAudio(client, frame.len()));
+        self.hold("tx_audio");
     }
 
     fn audio_start(&self, client: ClientId, _format: AudioFormat) -> Result<(), Refusal> {
