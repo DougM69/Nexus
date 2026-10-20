@@ -757,28 +757,34 @@ impl Session {
         if self.phase == Phase::Closed {
             return;
         }
-        for item in wire::notices(text) {
-            match item {
-                Ok(notice) => self.on_notice(out, notice, now),
-                Err(e) => {
-                    self.text_refused = self.text_refused.saturating_add(1);
-                    // A command cut off at the message's end is a report that could not be read
-                    // as much as a malformed one: what it names is unknown (T2 finding 1).
-                    let name = match &e {
-                        WireError::Unterminated => cut_name(text),
-                        _ => e.command(),
-                    };
-                    if let Some(name) = name {
-                        self.model.refused(&name.to_ascii_lowercase());
-                    }
-                    self.last_text_error = Some(e);
-                }
+        for raw in wire::split(text) {
+            match raw {
+                Ok(raw) => match Notice::parse(&raw) {
+                    Ok(notice) => self.on_notice(out, notice, now),
+                    Err(e) => self.refused(e, Some(raw.args()), text),
+                },
+                Err(e) => self.refused(e, None, text),
             }
             if self.phase == Phase::Closed {
                 return;
             }
             self.check_audio(out, now);
         }
+    }
+
+    /// A command from the server that could not be read, with its arguments when the codec split
+    /// them: counted, and what it names is unknown ([`Model::refused`]). A command cut off at the
+    /// message's end is such a report as much as a malformed one (T2 finding 1).
+    fn refused(&mut self, e: WireError, args: Option<&[&str]>, text: &str) {
+        self.text_refused = self.text_refused.saturating_add(1);
+        let name = match &e {
+            WireError::Unterminated => cut_name(text),
+            _ => e.command(),
+        };
+        if let Some(name) = name {
+            self.model.refused(&name.to_ascii_lowercase(), args);
+        }
+        self.last_text_error = Some(e);
     }
 
     /// Our own open over of Nexus's audio, keyed on this connection, whose stream the server no

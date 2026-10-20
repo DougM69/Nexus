@@ -9,9 +9,10 @@
 //! reported, a value, or [`Reading::Unreadable`] when the server's last report of it could not be
 //! read. A command that fails to decode carries no receiver number that can be trusted, so the
 //! parameter it names becomes unreadable on every receiver ([`Model::refused`]) until a report
-//! that reads replaces it. Admission refuses a key on an unreadable parameter it relies on
-//! ([`super::admission`]), and the session asks again for what a query can ask
-//! ([`Model::rereads`]).
+//! that reads replaces it; the one exception is a drive report in its per-receiver form whose
+//! receiver number still reads, which is about that receiver alone. Admission refuses a key on an
+//! unreadable parameter it relies on ([`super::admission`]), and the session asks again for what
+//! a query can ask ([`Model::rereads`]).
 //!
 //! Bounded: receiver and channel numbers are bounded by their types ([`Trx`], [`Channel`]), so
 //! the model is a fixed [`MAX_TRX`] × [`MAX_CHANNELS`].
@@ -291,9 +292,15 @@ impl Model {
         }
     }
 
-    /// The server sent a `name` command that could not be read ([`super::wire::WireError::command`]):
-    /// the parameter it names is unknown on every receiver until a report that reads replaces it.
-    pub fn refused(&mut self, name: &str) {
+    /// The server sent a `name` command that could not be read
+    /// ([`super::wire::WireError::command`]), with `args` its arguments when the codec got as far
+    /// as splitting them: the parameter it names is unknown, never the value before, until a
+    /// report that reads replaces it. On every receiver, since a malformed command's receiver
+    /// number cannot be trusted; except a drive report in its per-receiver form
+    /// (`drive:<trx>,<v>;`, two arguments) whose receiver number still reads, which is about that
+    /// receiver alone. A 1.x `drive:<v>;` sets every receiver, so one that cannot be read leaves
+    /// every receiver's drive unknown.
+    pub fn refused(&mut self, name: &str, args: Option<&[&str]>) {
         let global = match name {
             "receive_only" => Some(&mut self.receive_only),
             "start" | "stop" => Some(&mut self.running),
@@ -309,7 +316,18 @@ impl Model {
             "tx_swr" => self.tx_swr = Reading::Unreadable,
             _ => {}
         }
-        for t in &mut self.trx {
+        let only = match name {
+            "drive" => args
+                .filter(|a| a.len() == 2)
+                .and_then(|a| a.first())
+                .and_then(|r| r.trim().parse::<u32>().ok())
+                .and_then(Trx::new),
+            _ => None,
+        };
+        for (i, t) in self.trx.iter_mut().enumerate() {
+            if only.is_some_and(|r| r.index() != i) {
+                continue;
+            }
             match name {
                 "dds" => t.dds = Reading::Unreadable,
                 "vfo" => t.vfo = std::array::from_fn(|_| Reading::Unreadable),
@@ -395,7 +413,7 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tci::wire::notices;
+    use crate::tci::wire::split;
     use crate::tci::{EXPERT_SDR2, EXPERT_SDR3};
 
     fn trx(n: u32) -> Trx {
@@ -405,12 +423,19 @@ mod tests {
     /// Fold a server's text in; a command that does not read is refused by name, as the session
     /// does.
     fn fold(model: &mut Model, text: &str) {
-        for item in notices(text) {
-            match item {
-                Ok(notice) => model.apply(&notice),
+        for raw in split(text) {
+            match raw {
+                Ok(raw) => match Notice::parse(&raw) {
+                    Ok(notice) => model.apply(&notice),
+                    Err(e) => {
+                        if let Some(name) = e.command() {
+                            model.refused(name, Some(raw.args()));
+                        }
+                    }
+                },
                 Err(e) => {
                     if let Some(name) = e.command() {
-                        model.refused(name);
+                        model.refused(name, None);
                     }
                 }
             }

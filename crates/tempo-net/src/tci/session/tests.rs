@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::tci::frame::{decode, encode_block, BlockHeader, Channels, LengthMeaning, SampleFormat};
+use crate::tci::model::Reading;
 use crate::tci::{EXPERT_SDR2, THETIS_NATIVE};
 
 fn trx(n: u32) -> Trx {
@@ -1185,4 +1186,41 @@ fn the_server_stopping_nexus_audio_mid_over_halts_it() {
     b.events();
     b.at(20).text("audio_stop:0;");
     assert!(b.events().is_empty());
+}
+
+#[test]
+fn a_refused_drive_report_is_unknown_on_the_receiver_it_names_or_on_every_one() {
+    let drives = |b: &Bench| {
+        (
+            b.s.model().drive(trx(0)).clone(),
+            b.s.model().drive(trx(1)).clone(),
+        )
+    };
+    let mut b = Bench::ready(Config::new(trx(0)));
+    b.at(10).text("drive:1,40;");
+    // The receiver reads: only its drive is unknown.
+    b.text("drive:1,x;");
+    assert_eq!(
+        drives(&b),
+        (Reading::Known(50), Reading::Unreadable),
+        "receiver 1's report"
+    );
+    // No receiver that reads: every receiver's drive is unknown.
+    for report in ["drive:x;", "drive:7x,30;", "drive:99,30;", "drive:-1,30;"] {
+        b.text("drive:0,50;drive:1,40;");
+        b.text(report);
+        assert_eq!(
+            drives(&b),
+            (Reading::Unreadable, Reading::Unreadable),
+            "{report}"
+        );
+    }
+    // A drive report cut off at a message's end: every receiver too.
+    b.text("drive:0,50;drive:1,40;");
+    b.text("drive:1,");
+    assert_eq!(
+        drives(&b),
+        (Reading::Unreadable, Reading::Unreadable),
+        "cut"
+    );
 }

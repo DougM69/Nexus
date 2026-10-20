@@ -16,7 +16,8 @@
 //!   ([`Facts::drive_ceiling`]). ExpertSDR restores a band's saved drive on a band change (§3.5),
 //!   so after a restore the key is refused until Nexus writes its drive again and the server
 //!   echoes it. A Tune checks `tune_drive` against the last tune drive Nexus wrote the same way.
-//!   With no ceiling written, the drive is the SDR operator's and is not checked;
+//!   With no ceiling written, the drive is the SDR operator's and is not held to one; a report of
+//!   it that could not be read still refuses, as every unreadable report admission reads does;
 //! - and for a key that takes **Nexus's audio** ([`TxStart::Audio`], `trx:<trx>,true,tci;`), never
 //!   a digital over on the SDR's microphone (§6.1 item 3, TCI 2.0 §4.2: "otherwise the microphone
 //!   signal is taken"): Nexus's audio is on for this radio; the dialect's `trx` takes a source
@@ -110,8 +111,9 @@ pub enum Refusal {
         ceiling: u32,
         tune: bool,
     },
-    /// Nexus wrote a drive and the server's drive is not known: not reported, or unreadable.
-    DriveUnknown { ceiling: u32, tune: bool },
+    /// The server's drive is not known: its report could not be read, or Nexus wrote a drive
+    /// (`ceiling`) and the server has not reported one.
+    DriveUnknown { ceiling: Option<u32>, tune: bool },
     /// Nexus's audio over TCI is off for this radio.
     AudioOff,
     /// The dialect's `trx` takes no source, so a key would take the SDR's microphone.
@@ -162,11 +164,18 @@ impl fmt::Display for Refusal {
                 "the SDR program's {} is {level}, above Nexus's {ceiling}",
                 drive(*tune)
             ),
-            Refusal::DriveUnknown { ceiling, tune } => write!(
+            Refusal::DriveUnknown {
+                ceiling: Some(ceiling),
+                tune,
+            } => write!(
                 f,
                 "the SDR program's {} is not known (Nexus set {ceiling})",
                 drive(*tune)
             ),
+            Refusal::DriveUnknown {
+                ceiling: None,
+                tune,
+            } => write!(f, "the SDR program's {} could not be read", drive(*tune)),
             Refusal::AudioOff => f.write_str("Nexus's audio over TCI is off for this radio"),
             Refusal::NoSourceArgument { dialect } => write!(
                 f,
@@ -253,20 +262,20 @@ pub fn admit(model: &Model, facts: &Facts, start: TxStart) -> Result<Admitted, R
     } else {
         (facts.drive_ceiling, model.drive(facts.trx))
     };
-    if let Some(ceiling) = ceiling {
-        match level {
-            Reading::Known(drive) if *drive > ceiling => {
-                return Err(Refusal::DriveAboveCeiling {
-                    drive: *drive,
-                    ceiling,
-                    tune,
-                })
-            }
-            Reading::Known(_) => {}
-            Reading::NotReported | Reading::Unreadable => {
-                return Err(Refusal::DriveUnknown { ceiling, tune })
-            }
+    match (level, ceiling) {
+        // Unknown is never trusted, ceiling or not; never reported matters only once Nexus has
+        // written a drive the readback must match.
+        (Reading::Unreadable, _) | (Reading::NotReported, Some(_)) => {
+            return Err(Refusal::DriveUnknown { ceiling, tune })
         }
+        (Reading::Known(drive), Some(ceiling)) if *drive > ceiling => {
+            return Err(Refusal::DriveAboveCeiling {
+                drive: *drive,
+                ceiling,
+                tune,
+            })
+        }
+        (Reading::Known(_), _) | (Reading::NotReported, None) => {}
     }
     if start == TxStart::Audio {
         if !facts.audio {
@@ -293,7 +302,7 @@ pub fn admit(model: &Model, facts: &Facts, start: TxStart) -> Result<Admitted, R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tci::wire::notices;
+    use crate::tci::wire::{split, Notice};
     use crate::tci::{EXPERT_SDR2, EXPERT_SDR3, THETIS_NATIVE};
 
     fn trx(n: u32) -> Trx {
@@ -302,10 +311,13 @@ mod tests {
 
     fn model(text: &str) -> Model {
         let mut m = Model::new();
-        for item in notices(text) {
-            match item {
-                Ok(n) => m.apply(&n),
-                Err(e) => m.refused(e.command().expect("a named command")),
+        for raw in split(text) {
+            match raw {
+                Ok(raw) => match Notice::parse(&raw) {
+                    Ok(n) => m.apply(&n),
+                    Err(e) => m.refused(e.command().expect("a named command"), Some(raw.args())),
+                },
+                Err(e) => m.refused(e.command().expect("a named command"), None),
             }
         }
         m
@@ -418,7 +430,7 @@ mod tests {
         assert_eq!(
             case(&format!("{READY}drive:0,x;"), f, TxStart::Microphone),
             Err(Refusal::DriveUnknown {
-                ceiling: 30,
+                ceiling: Some(30),
                 tune: false
             })
         );
@@ -501,7 +513,7 @@ mod tests {
         assert_eq!(
             admit(&bare, &facts(), TxStart::Microphone).err(),
             Some(Refusal::DriveUnknown {
-                ceiling: 30,
+                ceiling: Some(30),
                 tune: false
             })
         );
@@ -538,8 +550,12 @@ mod tests {
                 tune: false,
             },
             Refusal::DriveUnknown {
-                ceiling: 30,
+                ceiling: Some(30),
                 tune: true,
+            },
+            Refusal::DriveUnknown {
+                ceiling: None,
+                tune: false,
             },
             Refusal::AudioOff,
             Refusal::NoSourceArgument {
@@ -566,6 +582,49 @@ mod tests {
                     tune: false
                 }),
                 "{start:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unreadable_global_drive_after_a_receivers_own_refuses_the_key() {
+        // The review's scenario (2026-10-20): `drive:0,30;` then a 1.x `drive:x;` that cannot be
+        // read. The stale 30 must not pass the ceiling.
+        let m = model(&format!("{READY}drive:x;"));
+        for start in [TxStart::Audio, TxStart::Microphone] {
+            assert_eq!(
+                admit(&m, &facts(), start).err(),
+                Some(Refusal::DriveUnknown {
+                    ceiling: Some(30),
+                    tune: false
+                }),
+                "{start:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unreadable_drive_refuses_a_key_even_with_no_ceiling() {
+        // A report of the drive that could not be read refuses, as any unreadable report admission
+        // reads does, whether or not Nexus has written a drive of its own.
+        let no_ceiling = Facts {
+            drive_ceiling: None,
+            tune_drive_ceiling: None,
+            ..facts()
+        };
+        for (text, start) in [
+            ("drive:0,x;", TxStart::Audio),
+            ("drive:x;", TxStart::Microphone),
+            ("tune_drive:0,x;", TxStart::Tune),
+        ] {
+            let m = model(&format!("{READY}{text}"));
+            assert_eq!(
+                admit(&m, &no_ceiling, start).err(),
+                Some(Refusal::DriveUnknown {
+                    ceiling: None,
+                    tune: start == TxStart::Tune
+                }),
+                "{text} {start:?}"
             );
         }
     }
