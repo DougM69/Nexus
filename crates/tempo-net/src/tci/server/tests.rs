@@ -1195,6 +1195,26 @@ fn wsjtx_start_up_key_and_release() {
     assert!(c.until("trx:0,false;"));
 }
 
+/// A program's release: the server stops taking its transmit audio before the backend hears it,
+/// never after.
+#[test]
+fn the_server_stops_taking_audio_before_the_backend_hears_a_release() {
+    let b = Bench::new();
+    let mut c = keyed(&b);
+    b.mock.pause_at("release");
+    c.send("trx:0,false,tci;");
+    assert!(b
+        .mock
+        .wait_call(WAIT, |call| *call == Call::Release(b.id(1)))
+        .is_some());
+    let key = b.handle.programs()[0].key;
+    b.mock.release();
+    assert_eq!(
+        key, None,
+        "still taking its audio while the backend hears the release"
+    );
+}
+
 /// JTDX's "Rig" split: refused cleanly, the dial told back, nothing retuned for B.
 #[test]
 fn jtdx_rig_split_is_refused_cleanly() {

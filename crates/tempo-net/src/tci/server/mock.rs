@@ -228,6 +228,7 @@ impl TciBackend for Mock {
 
     fn release(&self, client: ClientId) {
         self.record(Call::Release(client));
+        self.hold("release");
     }
 
     fn tune_on(&self, client: ClientId) -> Result<(), Refusal> {

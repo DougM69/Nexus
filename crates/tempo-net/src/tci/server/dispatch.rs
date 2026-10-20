@@ -528,12 +528,14 @@ pub(super) fn run(action: Action, cx: &Cx<'_>) -> Effects {
             }
         }
         Action::Release => {
-            cx.backend.release(cx.client);
+            // The server stops taking the program's transmit audio before the backend hears the
+            // release, never after.
             let told = {
                 let mut session = lock(cx.session);
                 session.key = None;
                 session.told.trx()
             };
+            cx.backend.release(cx.client);
             // A program told something is on the air hears `trx:0,false;` when the radio
             // unkeys (the next snapshot); one that was not told so gets its echo now.
             if told != Some(true) {
@@ -554,8 +556,8 @@ pub(super) fn run(action: Action, cx: &Cx<'_>) -> Effects {
             fx.echo(cx, Out::Tune(false));
         }
         Action::EndOwn => {
-            cx.backend.end_own(cx.client);
             lock(cx.session).key = None;
+            cx.backend.end_own(cx.client);
         }
         Action::AudioStart => {
             let format = lock(cx.session).format;
