@@ -187,6 +187,16 @@ pub enum Event {
     CwStarted { trx: u32, text: String, ms: u64 },
     /// The CW keyer finished its text, or was stopped.
     CwEnded { trx: u32, stopped: bool },
+    /// The radio fell more than [`crate::radio::BEHIND`] behind a stream (its process starved of
+    /// CPU) and gave up `frames` frames of `kind` ([`crate::frame::kind`]: receive audio, IQ or
+    /// TX_CHRONO) for `conn` on transceiver `trx`, as an SDR program does; the stream went on from
+    /// the next frame to come.
+    Lost {
+        conn: usize,
+        trx: u32,
+        kind: u32,
+        frames: u64,
+    },
     /// A fault acted.
     Fault {
         name: &'static str,

@@ -5,7 +5,9 @@ use super::*;
 use crate::client::{Incoming, Peer};
 use crate::event::{Keyer, Source};
 use crate::frame::{self, fit, kind, Fit, SampleType};
-use crate::synth::tone_level;
+use crate::radio::BEHIND;
+use crate::synth::{tone_level, Tone};
+use std::mem::ManuallyDrop;
 
 /// How long any one wait may take before a test fails. Generous: the suite runs in parallel.
 const WAIT: Duration = Duration::from_secs(5);
@@ -1148,4 +1150,167 @@ fn a_rejected_handshake_is_logged_and_the_simulator_carries_on() {
         .any(|l| matches!(l.event, Event::Rejected { .. }))));
     let c = Client::ready(&sim);
     assert!(c.texts().contains(&"ready;".to_string()));
+}
+
+/// Drop `sim` on a thread of its own and wait at most `within` for the drop to return: how long it
+/// took, or `None` when it had not returned.
+fn drop_within(sim: Simulator, within: Duration) -> Option<Duration> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let started = Instant::now();
+        drop(sim);
+        let _ = tx.send(started.elapsed());
+    });
+    rx.recv_timeout(within).ok()
+}
+
+#[test]
+fn a_radio_too_slow_for_its_streams_still_answers_its_clients_and_stops_when_dropped() {
+    // Eight thousand tones make each receive frame take many times its own length to make, so the
+    // radio's thread can never keep up, as when the process is starved of CPU. A command must
+    // still be answered, and the drop must still return.
+    let config = Config {
+        receive: Receive {
+            carriers: Vec::new(),
+            tones: (0..8_000)
+                .map(|i| Tone {
+                    hz: 100.0 + f64::from(i) / 4.0,
+                    dbfs: -120.0,
+                })
+                .collect(),
+            clip: None,
+            loopback: false,
+        },
+        ..Config::default()
+    };
+    // A simulator that cannot stop fails this test, rather than hanging it in the drop at its end.
+    let sim = ManuallyDrop::new(Simulator::start(config).unwrap());
+    let mut c = Client::ready(&sim);
+    // 50 frames to a frame, about a millisecond: 400,000 tone samples to make in it.
+    c.send("audio_stream_samples:100;audio_start:0;");
+    c.frame(kind::RX_AUDIO).expect("receive audio");
+    let asked = Instant::now();
+    c.send("vfo:0,0,7074000;");
+    let answered = c.text_until(|t| t.starts_with("vfo:"));
+    let answer_took = asked.elapsed();
+    // What it could not make in time it gave up, rather than falling ever further behind.
+    let gave_up = sim.wait_for(WAIT, |log| {
+        log.iter().any(|l| {
+            matches!(
+                l.event,
+                Event::Lost {
+                    kind: kind::RX_AUDIO,
+                    ..
+                }
+            )
+        })
+    });
+    let dropped = drop_within(ManuallyDrop::into_inner(sim), WAIT);
+    assert_eq!(
+        (answered.as_deref(), gave_up, dropped.is_some()),
+        (Some("vfo:0,0,7074000;"), true, true),
+        "the echo, frames given up, and whether the drop returned"
+    );
+    // Within a pass of the radio's work (about 5 ms here), not after it caught up on a backlog
+    // as far as BEHIND.
+    assert!(answer_took < BEHIND / 2, "answered in {answer_took:?}");
+    // At once, not after the drop's bounded wait for a thread that did not stop.
+    let took = dropped.unwrap();
+    assert!(took < JOIN / 2, "the drop took {took:?}");
+}
+
+#[test]
+fn the_drop_returns_while_a_thread_cannot_end_and_the_thread_ends_once_it_can() {
+    // Every thread that needs the radio's lock to end must wait while this test holds it. The
+    // drop must still return, and the threads it left end once the lock is free.
+    let sim = start(Dialect::expert_sdr3(), Vec::new());
+    let _c = Client::ready(&sim);
+    let shared = Arc::clone(&sim.shared);
+    let held = lock(&shared.state);
+    let took = drop_within(sim, JOIN + WAIT);
+    drop(held);
+    let took = took.expect("the drop returned while the lock was held");
+    // It waited its whole bound for the threads that could not end, and no longer.
+    assert!(
+        took >= JOIN && took < JOIN + Duration::from_secs(1),
+        "the drop took {took:?}"
+    );
+    let deadline = Instant::now() + WAIT;
+    while Arc::strong_count(&shared) > 1 && Instant::now() < deadline {
+        thread::sleep(ms(10));
+    }
+    assert_eq!(
+        Arc::strong_count(&shared),
+        1,
+        "a thread it left never ended"
+    );
+}
+
+#[test]
+fn frames_go_out_at_their_time_and_answers_are_read_as_they_arrive() {
+    // The connection's thread waits for its socket and its outbox at once: a frame due now is
+    // written now, not when a read's timeout next ends (a 2 ms timeout lasts about 8 ms on a
+    // 250 Hz kernel), and a client's answer is read as it arrives.
+    let sim = start(Dialect::expert_sdr3(), Vec::new());
+    let mut c = Client::ready(&sim);
+    c.send("audio_start:0;trx:0,true,tci;");
+    let mut phase = 0;
+    let mut rx = 0;
+    while rx < 40 {
+        match c.until(|m| matches!(m, Incoming::Binary(_))) {
+            Some(Incoming::Binary(b)) => {
+                let h = Header::decode(&b).unwrap();
+                if h.kind == kind::TX_CHRONO {
+                    c.peer
+                        .send_binary(answer(h.length, 700.0, &mut phase))
+                        .unwrap();
+                } else if h.kind == kind::RX_AUDIO {
+                    rx += 1;
+                }
+            }
+            _ => panic!("the streams stopped"),
+        }
+    }
+    let log = sim.log();
+    let first = |want: &dyn Fn(&Event) -> bool| log.iter().find(|l| want(&l.event)).unwrap().at;
+    let started = first(&|e| matches!(e, Event::Command { name, .. } if name == "audio_start"));
+    let keyed = first(&|e| matches!(e, Event::Keyed { .. }));
+    // 2048 values a frame, two channels: 21.333 ms. Receive frame k is due k + 1 periods after
+    // the stream started, chrono n n periods after the key.
+    let period = Duration::from_secs_f64(1024.0 / 48_000.0);
+    let late = |times: &[Duration], first_due: Duration| -> Vec<Duration> {
+        let mut late: Vec<Duration> = (0u32..)
+            .zip(times)
+            .map(|(k, at)| at.saturating_sub(first_due + period * k))
+            .collect();
+        late.sort_unstable();
+        late
+    };
+    let chronos = sent_frames(&sim, 0, kind::TX_CHRONO);
+    let answers: Vec<Duration> = log
+        .iter()
+        .filter(|l| matches!(l.event, Event::FrameIn { .. }))
+        .map(|l| l.at)
+        .collect();
+    let mut read: Vec<Duration> = chronos
+        .iter()
+        .zip(&answers)
+        .map(|(sent, back)| back.saturating_sub(*sent))
+        .collect();
+    read.sort_unstable();
+    // The median, within 2 ms: about 0.3 ms here, against 3 to 7 ms while writes waited for a
+    // read's timeout. A loaded machine delays a few, by as much as the test's own threads taking
+    // turns on one core (up to 18 ms measured), so no tail is asserted. An answer's time includes
+    // this test's own thread answering.
+    for (what, times) in [
+        (
+            "receive frames",
+            late(&sent_frames(&sim, 0, kind::RX_AUDIO), started + period),
+        ),
+        ("chronos", late(&chronos, keyed)),
+        ("answers read", read),
+    ] {
+        assert!(times.len() >= 30, "{what}: {times:?}");
+        assert!(times[times.len() / 2] < ms(2), "{what}: {times:?}");
+    }
 }
