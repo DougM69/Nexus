@@ -881,9 +881,10 @@ fn ft8_cq(e: &mut Engine) {
 
 /// ⭐ THE LOOP'S OWN CAT LINK DROPPING UNDER ITS OVER DOES NOT UNKEY IT. The loop tells the client it
 /// is transmitting (the TX intent), so the shim's disconnect fail-safe stands down for a reconnect of
-/// Nexus's own `Rig`, as on the CI-V and Flex daemons. Three reads in a row of something the shim
-/// does not carry are what make it hang up on a connection (every rigctld backend's rule against a
-/// peer not speaking the protocol), and the radio loop's own polls meet that on TCI.
+/// Nexus's own `Rig`, as on the CI-V and Flex daemons. The shim hangs up on a connection after three
+/// lines in a row that are not rigctld protocol at all (every rigctld backend's rule against a peer
+/// not speaking the protocol). The loop's own client never sends one, so three ride on the loop's
+/// own connection here, behind a raw command.
 #[test]
 fn the_loops_own_link_dropping_under_its_over_does_not_unkey_it() {
     let mut s = TciScene::new([], waits(), phone);
@@ -891,10 +892,22 @@ fn the_loops_own_link_dropping_under_its_over_does_not_unkey_it() {
     s.engine().set_ptt(true);
     s.run_until("the PTT never keyed", |s| s.sent(0, "trx:0,true") == 1);
     s.run(200);
-    let _ = s.rig.read_level("NOT_A_LEVEL");
-    let _ = s.rig.read_level("NOT_A_LEVEL");
     assert!(
-        s.rig.read_level("NOT_A_LEVEL").is_err(),
+        s.rig.send_raw_set("X\nHELP\nHELP\nHELP"),
+        "the lines went out"
+    );
+    // A read may still take an answer to a line before the hang-up as its own, an error that is no
+    // link fault; the drive the shim does answer reads only on a link that is still up.
+    let hung_up = (0..10).any(|_| {
+        matches!(
+            s.rig.read_level("RFPOWER").map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::BrokenPipe)
+        )
+    });
+    assert!(
+        hung_up,
         "premise: the shim hung up on the loop's connection"
     );
     s.run(500);
