@@ -1257,6 +1257,34 @@ fn the_gate_table_is_not_uniform() {
         .any(|r| r.phone_seg.is_some_and(|(lo, _)| close(lo, 14.225))));
 }
 
+/// ⛔ A TCI PROGRAM'S OVER IS JUDGED ACROSS ITS WHOLE TRANSMIT PASSBAND, AND THAT CAN ONLY EVER
+/// REFUSE MORE than the gate does (the TCI server design, §3.6: Nexus cannot know where in the
+/// passband a program puts its audio). Over every station state of the table, the passband's
+/// verdict allows only where the gate allows. CONTROL: it parts from the gate somewhere (a Digital
+/// row by a segment edge), or the passband would be no more than the gate's own frame.
+#[test]
+fn a_tci_programs_passband_only_ever_refuses_more_than_the_gate() {
+    let (mut wider, mut parted) = (Vec::new(), Vec::new());
+    for row in rows() {
+        let e = (row.build)();
+        let (gate, passband) = (e.tx_allowed(), e.tci_over_licensed());
+        if passband && !gate {
+            wider.push(row.name);
+        }
+        if gate && !passband {
+            parted.push(row.name);
+        }
+    }
+    assert!(
+        wider.is_empty(),
+        "the passband allowed what the gate refuses: {wider:?}"
+    );
+    assert!(
+        !parted.is_empty(),
+        "control: the passband never parted from the gate"
+    );
+}
+
 // ── D1's input: which receiver transmits ─────────────────────────────────────────────────
 
 /// ⛔ THE RECEIVER A SPLIT RIDES REACHES THE GATE ONLY WHERE D1 SAYS, AND CAN ONLY REFUSE MORE.

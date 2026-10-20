@@ -128,6 +128,7 @@ pub mod slices;
 #[cfg(test)]
 mod stop_hold_tests;
 pub mod sub_controls;
+mod tci;
 mod tx_alarms;
 /// A data frame judged across its whole width, and where it keys.
 #[cfg(test)]
@@ -3462,6 +3463,9 @@ pub struct Engine {
     /// power out, or reported ~0 while the operator's voice was arriving.
     mic_rf_seen: bool,
     mic_zero_seen: bool,
+    /// Programs on Nexus's TCI server: their keys, and the over that carries their audio (see
+    /// `engine/tci.rs`).
+    tci: tci::TciState,
     /// The transponder the operator selected for the tracked bird, plus their
     /// position inside its passband and what was last written to the radio.
     /// `None` = no satellite tuning in force, which is every terrestrial path.
@@ -4064,6 +4068,9 @@ pub struct Engine {
     /// Why the CAT broker is not serving, when its bind was refused (#165). See
     /// [`crate::dto::RadioStatus::cat_share_error`].
     cat_share_error: Option<String>,
+    /// The TCI server as its manager last saw it; `None` while it is switched off. See
+    /// [`crate::dto::RadioStatus::tci_server`].
+    tci_server: Option<crate::dto::TciServerStatus>,
     scope_error: Option<String>,
     /// See `RadioStatus::scope_span_refused`.
     scope_span_refused: Option<String>,
@@ -5508,6 +5515,9 @@ pub enum TxOwner {
     Psk,
     /// An SSTV image is in flight.
     Sstv,
+    /// A program on Nexus's TCI server holds a key: an over of its audio, armed or keyed, or the
+    /// radio's microphone (`engine/tci.rs`).
+    Tci,
 }
 
 impl TxOwner {
@@ -5523,6 +5533,7 @@ impl TxOwner {
             TxOwner::Rtty => "RTTY is transmitting — stop it first",
             TxOwner::Psk => "PSK is transmitting — stop it first",
             TxOwner::Sstv => "An SSTV image is transmitting — stop it first",
+            TxOwner::Tci => "A program on TCI is transmitting — stop it first",
         }
         .to_string()
     }
@@ -6072,6 +6083,7 @@ impl Engine {
             mic_ended: None,
             mic_rf_seen: false,
             mic_zero_seen: false,
+            tci: tci::TciState::default(),
             sat_tune: None,
             sat_last_worked: None,
             sat_dial_owner: None,
@@ -6218,6 +6230,7 @@ impl Engine {
             cat_reprobe: false,
             audio_error: None,
             cat_share_error: None,
+            tci_server: None,
             scope_error: None,
             scope_span_refused: None,
             scope_mode_code: None,
@@ -6499,6 +6512,9 @@ impl Engine {
         // Whether contest mode was on before this save: the save that turns it off sends what
         // it held ([`Self::release_contest_uploads`]).
         let contest_was_on = self.settings.fd_active;
+        // Whether programs on TCI could transmit before this save: the save that turns it off ends
+        // every program's key, over and tune at once (`engine/tci.rs`).
+        let tci_tx_was_on = self.tci_transmit();
         // Rebind identity IN PLACE (not a fresh AppState) so editing the callsign or
         // grid in Settings — or a GPS/UDP grid update routed through a save — does
         // NOT wipe conversation history, the `*` band feed, or the roster.
@@ -6944,6 +6960,11 @@ impl Engine {
         let scope_now = self.settings.yaesu_rf_scope;
         if scope_was_on && !scope_now {
             self.clear_scope_state();
+        }
+        // "Programs on TCI may transmit" going off is a stop for every program: what one keyed ends
+        // here, hard, not at the radio loop's next look at the switch.
+        if tci_tx_was_on && !self.tci_transmit() {
+            self.drop_tci_all();
         }
         // Another join address (or hosting switched on or off): what the link line knew was
         // about another host.
@@ -10854,9 +10875,13 @@ impl Engine {
 
     /// Whether the operator is holding manual PTT (live phone) — read by the loop. Also
     /// masks on read, so a key that became out-of-privilege (knob turned to a locked
-    /// segment while holding PTT) drops the next loop pass.
+    /// segment while holding PTT) drops the next loop pass. A program's microphone key on the TCI
+    /// server is held here as a CAT-broker client's is, masked by its own gates as well
+    /// (`engine/tci.rs`).
     pub fn manual_ptt(&self) -> bool {
-        (self.manual_ptt || self.broker_ptt) && self.tx_enabled && self.tx_allowed()
+        (self.manual_ptt || self.broker_ptt || self.tci_mic_keyed())
+            && self.tx_enabled
+            && self.tx_allowed()
     }
 
     /// PTT arbitration for a FOREIGN app on the CAT broker (WSJT-X/N1MM sharing
@@ -11912,6 +11937,14 @@ impl Engine {
                 "voice-keyer over refused: the Remote microphone is transmitting",
             );
             return Err(TxOwner::Mic.busy_reason());
+        }
+        // So does a TCI program's key, for the same reason (`engine/tci.rs`).
+        if self.tci_holds_tx() {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer over refused: a program on TCI is transmitting",
+            );
+            return Err(TxOwner::Tci.busy_reason());
         }
         if self.clock_repair_holds_tx() {
             tempo_core::applog::info(
@@ -17508,6 +17541,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // …and a streamed operator's microphone over: dropped, its feed closed, and the abort
         // armed so the loop flushes and unkeys (M10: halt_tx is still the universal stop).
         self.drop_mic_latch();
+        // …and every TCI program's key, over and tune, the same way: Stop in Nexus always wins.
+        self.drop_tci_all();
         // A pending snappy-TX request dies with the halt — otherwise the loop
         // consumes it against a disabled TX and a later re-arm has lost it.
         self.immediate_tx = false;
@@ -18169,6 +18204,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // The microphone over joins RTTY and SSTV (the audio design's M10): it is latched,
             // with no end of its own, so TX Off ends it in flight rather than letting it run.
             self.drop_mic_latch();
+            // So do TCI programs' keys, overs and tunes: TX Off is a stop for each.
+            self.drop_tci_all();
             // Same for SSTV: a disarm aborts the image in flight and drops the job.
             self.sstv_tx = None;
             self.sstv_abort = true;
@@ -20085,6 +20122,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     fn set_tune_with_reset(&mut self, on: bool, reset: impl FnOnce()) {
+        self.set_tune_for(on, reset, None);
+    }
+
+    /// [`Self::set_tune`] for whoever asked: the station (`None`), or a program on the TCI server
+    /// (`engine/tci.rs`), whose tune is not the operator's act.
+    fn set_tune_for(&mut self, on: bool, reset: impl FnOnce(), program: Option<u64>) {
         // A clock repair holds transmit: a new tune is refused and changes nothing, and a carrier
         // already up is never dropped by it ([`Self::hold_tx_for_clock_repair`]).
         if on && !self.tuning && self.clock_repair_holds_tx() {
@@ -20101,11 +20144,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // Tune is the one keying path that bypasses poll_tx (the loop keys PTT directly), so
         // the privilege lockout must gate it here: never arm a tune carrier outside privileges.
         self.tuning = on && self.tune_allowed();
+        self.note_tci_tune(program);
         if self.tuning {
             // Holding Tune is an operator action and restarts the idle clock — WSJT-X does the
             // same, though incidentally: any click or keystroke anywhere in its window zeroes
-            // `m_idleMinutes` (mainwindow.cpp:2823-2827), and the Tune button is a click.
-            self.reset_tx_watchdog();
+            // `m_idleMinutes` (mainwindow.cpp:2823-2827), and the Tune button is a click. A
+            // program's tune is no operator action: it never starts or restarts the clock.
+            if program.is_none() {
+                self.reset_tx_watchdog();
+            }
             // WSJT-X reports a tune as the Tx Message "TUNE" (mainwindow.cpp:8083-8085).
             self.tx_message = "TUNE".to_string();
             return;
@@ -21298,6 +21345,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // From the arm, before any audio: an armed over owns the transmitter the way a
             // latched RTTY stream does from its first tick, so nothing else can key under it.
             Some(TxOwner::Mic)
+        } else if self.tci_holds_tx() {
+            // The same from a program's admission: its over owns the transmitter before its audio.
+            Some(TxOwner::Tci)
         } else if voice {
             Some(TxOwner::Voice)
         } else if self.cw_sending() {
@@ -23730,6 +23780,12 @@ contact yourself."
         self.cat_share_error = err;
     }
 
+    /// Record the TCI server's state for the snapshot, or `None` once it is switched off. Written
+    /// by its manager on every tick, in both directions, as [`Self::set_cat_share_error`] is.
+    pub fn set_tci_server_status(&mut self, status: Option<crate::dto::TciServerStatus>) {
+        self.tci_server = status;
+    }
+
     /// Set the operator's TX-slot parity live. `true` = transmit on even/"1st"
     /// slots, `false` = odd/"2nd". Read by `poll_tx` each slot. Two stations must
     /// use OPPOSITE periods to complete a QSO.
@@ -24762,6 +24818,14 @@ contact yourself."
         self.tx_watchdog_start = None;
     }
 
+    /// For tests outside this crate: a watchdog trip as the transmit paths make one (`plan_tx`,
+    /// `poll_rtty_one`), tripped and TX off. Their clock counts in minutes, which no test waits out.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn trip_tx_watchdog_for_test(&mut self) {
+        self.tx_watchdog = true;
+        self.tx_enabled = false;
+    }
+
     /// T/R slot length (seconds) for the active tier: DX1 = 15 s; the native
     /// tiers read it from their [`modes::ModeKind`] (FT1 = 4, FT8 = 15, FT4 = 7.5).
     pub fn active_slot_secs(&self) -> f64 {
@@ -25213,6 +25277,7 @@ contact yourself."
         s.radio.audio_error = self.audio_error.as_ref().map(|(_, line)| line.clone());
         s.radio.audio_error_kind = self.audio_error.as_ref().map(|(kind, _)| *kind);
         s.radio.cat_share_error = self.cat_share_error.clone();
+        s.radio.tci_server = self.tci_server.clone();
         // A map lookup and a clone: no I/O and no second lock. `Engine::snapshot` runs under
         // the engine mutex on the UI's 300 ms poll, and work done inside it has twice stalled
         // the radio loop.
@@ -25960,12 +26025,15 @@ contact yourself."
         // clock repair holds transmit ([`Self::hold_tx_for_clock_repair`]): an armed run
         // misses its overs until the repair ends, and keeps its arm for the ones after. Nor
         // while CW is sending ([`Self::cw_sending`], the CW ID after a 73): the slot is skipped
-        // as for a tune, the sequence untouched, and the next free slot keys as normal.
+        // as for a tune, the sequence untouched, and the next free slot keys as normal. Nor while
+        // a TCI program's key owns the transmitter ([`Self::tci_holds_tx`]), the same way: an
+        // armed run must never key over a program's over.
         if !self.tx_enabled
             || self.tuning
             || self.cw_sending()
             || !self.tx_allowed()
             || self.clock_repair_holds_tx()
+            || self.tci_holds_tx()
         {
             self.app.set_transmitting(false);
             return None;

@@ -234,6 +234,8 @@ impl Engine {
                 MicDrop::Ceiling => MicEnded::Ceiling,
                 MicDrop::Watchdog => MicEnded::Watchdog,
                 MicDrop::AudioGap => MicEnded::AudioGap,
+                // Never: nothing releases the microphone's latch (its release is a drop).
+                MicDrop::Drained => MicEnded::Released,
             });
             // An unexplained unkey reads as a fault: say why.
             tempo_core::applog::info(
@@ -248,6 +250,7 @@ impl Engine {
                         MicDrop::Ceiling => "it reached its 10-minute ceiling",
                         MicDrop::Watchdog => "the TX watchdog tripped",
                         MicDrop::AudioGap => "no audio arrived for 200 ms",
+                        MicDrop::Drained => "it was let go and played out",
                     }
                 ),
             );
