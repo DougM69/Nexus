@@ -249,18 +249,25 @@ fn within(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
-/// A microphone speaking a 1 kHz tone into the headset 10 ms at a time until the flag is cleared.
+/// A microphone speaking a 1 kHz tone into the headset until the flag is cleared, clocked as a
+/// sound card is: each pass, about every 10 ms, hands over every sample due since it began, so a
+/// pass the scheduler holds up catches up as a capture buffer would. Handing over 10 ms a pass fell
+/// behind real time by every late wake-up (0.13 to 0.62 s on a loaded box, measured 2026-10-19),
+/// and audio later than the station's lead-in is dropped at both ends, so the over ended at its
+/// 200 ms gap before the guard under test.
 fn speak(headset: &Arc<tempo_client::audio_road::StandIn>) -> Arc<AtomicBool> {
     let speaking = Arc::new(AtomicBool::new(true));
     let (rings, on) = (headset.rings.clone(), speaking.clone());
     std::thread::spawn(move || {
+        let began = Instant::now();
         let mut n = 0usize;
         while on.load(Ordering::SeqCst) {
-            rings.captured((0..480).map(|i| {
-                let t = (n + i) as f32 / 48_000.0;
+            let due = (began.elapsed().as_micros() * 48_000 / 1_000_000) as usize;
+            rings.captured((n..due).map(|i| {
+                let t = i as f32 / 48_000.0;
                 0.4 * (2.0 * std::f32::consts::PI * 1_000.0 * t).sin()
             }));
-            n += 480;
+            n = due;
             std::thread::sleep(Duration::from_millis(10));
         }
     });
