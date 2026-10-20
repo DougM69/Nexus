@@ -1667,6 +1667,64 @@ fn a_disconnect_waits_for_transmit_audio_in_flight() {
     assert_eq!(transmit_after_end(&b, id), [], "{:?}", b.mock.calls());
 }
 
+/// The gate on its own: a program whose end has begun but whose close has not (the moment between
+/// the two inside a Disconnect or a stop) still has its frames read, and none reaches the backend.
+#[test]
+fn an_ended_programs_transmit_audio_never_reaches_the_backend() {
+    let b = Bench::new();
+    let mut c = keyed(&b);
+    let id = b.id(1);
+    let conn = b.handle.shared.find(id).expect("connected");
+    conn.end_transmit(&b.handle.shared);
+    assert!(b.mock.calls().contains(&Call::Disconnected(id)));
+    c.send_binary(tx_frame(2048, 4096));
+    let until = Instant::now() + WAIT;
+    while b.handle.programs()[0].counts.tx_dropped == 0 && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let counts = b.handle.programs()[0].counts;
+    assert_eq!((counts.tx_dropped, counts.tx_frames), (1, 0), "{counts:?}");
+    assert_eq!(transmit_after_end(&b, id), []);
+}
+
+/// And the table's half of it: once a program's end has begun, a key, a Tune or CW asks the backend
+/// nothing and is answered nothing.
+#[test]
+fn an_ended_program_asks_the_backend_nothing_that_transmits() {
+    for text in [
+        "trx:0,true,tci;",
+        "trx:0,true;",
+        "tune:0,true;",
+        "cw_macros:0,CQ;",
+    ] {
+        let mock = Mock::default();
+        let model = Mutex::new(snapshot());
+        let session = Mutex::new(Session::default());
+        let lines = Lines::default();
+        let fx = dispatch::run(
+            classify(text),
+            &Cx {
+                client: ClientId::new(1),
+                backend: &mock,
+                model: &model,
+                session: &session,
+                sink: &lines,
+                gate: &Mutex::new(true),
+            },
+        );
+        assert_eq!(mock.calls(), [], "{text}: the backend");
+        assert!(fx.all.is_empty(), "{text}: told no one");
+        assert!(
+            lines.0.lock().expect("lines").is_empty(),
+            "{text}: answered"
+        );
+    }
+    // Positive control: with the gate open the same commands ask.
+    let mock = Mock::default();
+    let (_, calls, _) = run_one("trx:0,true,tci;", &mock);
+    assert_eq!(calls, ["Key(Tci)"]);
+}
+
 // ── Transmit audio: what a frame claims against what it carries ─────────────────────────────
 
 /// A transmit frame's header (float32 stereo at 48 kHz, as WSJT-X sends it) claiming `length`
