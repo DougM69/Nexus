@@ -1106,6 +1106,12 @@ mod tests {
             .filter(|_| from.accept(s, header(s, 2048), &single, t0).is_ok())
             .count();
         assert_eq!(admitted, 23);
+        // A program quiet for a while has not saved up: half a second at once is the ceiling.
+        let later = t0 + Duration::from_secs(10);
+        let admitted = (0..30)
+            .filter(|_| from.accept(s, header(s, 2048), &single, later).is_ok())
+            .count();
+        assert_eq!(admitted, 23, "after ten quiet seconds");
     }
 
     #[test]
@@ -1427,6 +1433,19 @@ mod tests {
             .push(48_000, wild)
             .iter()
             .all(|v| v.is_finite() && v.abs() <= 1.0));
+        // A sample that is not finite is silence before the filter, so it spoils nothing near it.
+        let mut src = tone(48_000, 1000.0, 0.5, 9600);
+        let mut clean = src.clone();
+        for (i, v) in [(1000, f32::NAN), (2001, f32::INFINITY), (5000, f32::NAN)] {
+            src[i] = v;
+            clean[i] = 0.0;
+        }
+        src[7000] = 40.0;
+        clean[7000] = 1.0;
+        assert_eq!(
+            FromServer::default().push(48_000, src),
+            FromServer::default().push(48_000, clean)
+        );
         // A block is read only as far as a frame can hold.
         let got = FromServer::default().push(48_000, std::iter::repeat_n(0.25, 1_000_000));
         assert!(got.len() <= MAX_VALUES / 4, "{} samples", got.len());
@@ -1545,6 +1564,44 @@ mod tests {
         assert!(answer.chunks_exact(2).all(|p| p[0] == p[1]));
         let sounding = answer.iter().rposition(|&v| v != 0.0).map_or(0, |i| i + 1);
         assert!((100..=400).contains(&sounding), "{sounding}");
+        // Nexus's audio is made fit before the filter as well, so a NaN spoils nothing near it.
+        let pull_all = |samples: Vec<f32>| {
+            let mut at = 0;
+            let mut source = |out: &mut [f32]| {
+                let n = out.len().min(samples.len() - at);
+                out[..n].copy_from_slice(&samples[at..at + n]);
+                at += n;
+                n
+            };
+            let mut out = vec![0.0f32; 4 * samples.len()];
+            let n = ToServer::default().fill(48_000, &mut out, &mut source);
+            out.truncate(n);
+            out
+        };
+        let mut src = tone(NEXUS_RATE, 1000.0, 0.5, 2400);
+        let mut clean = src.clone();
+        src[500] = f32::NAN;
+        clean[500] = 0.0;
+        src[1500] = 9.0;
+        clean[1500] = 1.0;
+        assert_eq!(pull_all(src), pull_all(clean));
+        // A new rate drops what was made for the old one.
+        let mut to = ToServer::default();
+        let mut out = [0.0f32; 100];
+        let mut half = |out: &mut [f32]| {
+            out.fill(0.5);
+            out.len()
+        };
+        assert_eq!(to.fill(48_000, &mut out, &mut half), 100);
+        let mut quarter = |out: &mut [f32]| {
+            out.fill(0.25);
+            out.len()
+        };
+        assert_eq!(to.fill(24_000, &mut out, &mut quarter), 100);
+        assert!(
+            out.iter().all(|&v| (v - 0.25).abs() < 0.01),
+            "audio made for 48 kHz handed out at 24 kHz: {out:?}"
+        );
         // Nothing to send, or a rate TCI does not have: nothing written.
         let mut none = |_: &mut [f32]| 0usize;
         assert_eq!(
