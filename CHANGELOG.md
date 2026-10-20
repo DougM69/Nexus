@@ -569,6 +569,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capitals, as the shack writes it.
 - **Stations on this network: after pairing, the line names the button that is there.** It said to press Stream, but a
   paired station's row leads with **Operate from this computer**. The line now says to press that.
+- **The built-in guide's Remote access section matches Remote as it is now.** It still called Remote an early pilot
+  on a test service, and described the Remote page's own FT8/FT4 controls and Log QSO form, which the page no longer
+  has. It now says that a browser streaming the station needs only station controls, and that the logging and FT8/FT4
+  transmit permissions under Advanced are not used by the Remote page any more.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
