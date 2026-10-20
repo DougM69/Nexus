@@ -642,6 +642,16 @@ pub fn tci_reachable(rig_model: u32, rig_conn: &str, host: &str, port: u16) -> b
     rig_model != 0 && rig_conn_is_tci(rig_conn) && !host.trim().is_empty() && port != 0
 }
 
+/// The port Nexus's own TCI server listens on unless the operator moves it
+/// ([`Settings::tci_server_port`]): 40001, where WSJT-X, JTDX, MacLoggerDX and the Go TCI tools
+/// look by default, and clear of 50001, where Thetis (and, by a user's report, ExpertSDR3) serves
+/// on the same computer ([`TciDialect::default_port`]).
+pub const TCI_SERVER_DEFAULT_PORT: u16 = 40001;
+
+fn default_tci_server_port() -> u16 {
+    TCI_SERVER_DEFAULT_PORT
+}
+
 impl Settings {
     /// Is the RECEIVE dial Doppler's to correct?
     ///
@@ -2169,6 +2179,37 @@ pub struct Settings {
     pub cat_broker: bool,
     /// TCP port the CAT broker listens on (Hamlib NET rigctl default 4532).
     pub cat_broker_port: u16,
+    /// Nexus as a TCI server: programs on this computer (WSJT-X, JTDX, MSHV, loggers, amplifier
+    /// and tuner tools) reach the radio in use THROUGH Nexus over TCI, as they would an SDR
+    /// program's. OFF by default. Its own switch beside the CAT broker's, and both may be on. It
+    /// listens on this computer only (127.0.0.1 and ::1), never the network (operator ruling,
+    /// 2026-10-19), so it has no address to set. Like each TCI server setting below it belongs to
+    /// the station, not to a radio, and is set at the shack only: a save from another computer
+    /// keeps the shack's value.
+    #[serde(default)]
+    pub tci_server: bool,
+    /// The TCP port the TCI server listens on: [`TCI_SERVER_DEFAULT_PORT`] unless the operator
+    /// moves it. While the server is on, no radio's CAT or rotator daemon is given it
+    /// ([`Settings::add_radio_profile`], [`Settings::ensure_distinct_radio_ports`]).
+    #[serde(default = "default_tci_server_port")]
+    pub tci_server_port: u16,
+    /// ⛔ "Programs on TCI may transmit": whether a program on the TCI server may key the
+    /// transmitter at all, with its own audio, the radio's microphone, Tune or CW. OFF by default
+    /// (operator ruling, 2026-10-19). On, every gate in front of Nexus's own transmissions still
+    /// decides each one (the TX-enable latch, the licence, the watchdog, Stop, the one
+    /// transmitter), and no program ever arms transmit.
+    #[serde(default)]
+    pub tci_server_tx: bool,
+    /// The CW-macro tier: programs' CW text (a logger's TCI keyer) keyed by Nexus, in the CW
+    /// section only. ON by default, as part of what the server offers; it transmits only while
+    /// [`Settings::tci_server_tx`] is on, as every program's transmission does.
+    #[serde(default = "default_true")]
+    pub tci_server_cw: bool,
+    /// The spots tier: programs' spots on Nexus's band map, and a click on a spot in Nexus told
+    /// back to them. ON by default, as part of what the server offers. A spot or a click never
+    /// transmits.
+    #[serde(default = "default_true")]
+    pub tci_server_spots: bool,
 
     /// A FlexRadio's IP address for the SmartSDR Ethernet API (port 4992), used by the native
     /// panadapter worker. Distinct from the CAT `rig_addr` (which for the SmartSDR-CAT model 2036
@@ -4734,16 +4775,20 @@ pub fn net_rigctl_port_here(p: &RadioProfile) -> Option<u16> {
 /// ([`port_clash_introduced`]), and one already stored is said in the status lane
 /// ([`net_rigctl_address_conflicts`]).
 pub fn validate_radio_ports(radios: &[RadioProfile], broker: Option<u16>) -> Result<(), String> {
-    if let Some(clash) = daemon_port_clash(radios, broker) {
+    if let Some(clash) = daemon_port_clash(radios, broker, None) {
         return Err(clash);
     }
     net_rigctl_address_conflicts(radios, broker).map_or(Ok(()), Err)
 }
 
-/// Two of Nexus's daemons (or one and the broker) on one TCP port, the first such pair in words:
-/// [`validate_radio_ports`]'s first half, and what [`Settings::ensure_distinct_radio_ports`]
-/// repairs.
-fn daemon_port_clash(radios: &[RadioProfile], broker: Option<u16>) -> Option<String> {
+/// Two of Nexus's daemons (or one and the broker, or the TCI server, `tci_server` while it serves)
+/// on one TCP port, the first such pair in words: [`validate_radio_ports`]'s first half, and what
+/// [`Settings::ensure_distinct_radio_ports`] repairs.
+fn daemon_port_clash(
+    radios: &[RadioProfile],
+    broker: Option<u16>,
+    tci_server: Option<u16>,
+) -> Option<String> {
     let mut used: Vec<(u16, String)> = Vec::new();
     for p in radios.iter().filter(|p| p.enabled) {
         used.push((p.rigctld_port, format!("{}'s CAT", p.name)));
@@ -4753,6 +4798,9 @@ fn daemon_port_clash(radios: &[RadioProfile], broker: Option<u16>) -> Option<Str
     }
     if let Some(b) = broker {
         used.push((b, "the CAT broker".to_string()));
+    }
+    if let Some(t) = tci_server {
+        used.push((t, "the TCI server".to_string()));
     }
     for i in 0..used.len() {
         for j in (i + 1)..used.len() {
@@ -5550,6 +5598,13 @@ impl Default for Settings {
             // operators flip it in the share block; pre-1.0.5 files lack the field and get ON.
             cat_broker: true,
             cat_broker_port: 4532,
+            // Off, and no program transmits through it until the operator says so at the shack
+            // (operator ruling, 2026-10-19); the CW and spots tiers come with the server.
+            tci_server: false,
+            tci_server_port: TCI_SERVER_DEFAULT_PORT,
+            tci_server_tx: false,
+            tci_server_cw: true,
+            tci_server_spots: true,
             flex_radio_ip: String::new(),
             flex_native_pan: false,
             flex_native_audio: false,
@@ -6167,6 +6222,10 @@ impl Settings {
         if self.cat_broker {
             used.push(self.cat_broker_port);
         }
+        // …nor the TCI server's, while it serves.
+        if self.tci_server {
+            used.push(self.tci_server_port);
+        }
         // …nor where a NET rigctl radio's Network Address points on this computer: the operator's
         // rigctld is there (`net_rigctl_port_here`).
         used.extend(self.radios.iter().filter_map(net_rigctl_port_here));
@@ -6206,12 +6265,14 @@ impl Settings {
     /// Auto-repair colliding daemon ports so every radio can run its OWN persistent rigctld/rotctld at
     /// the same time (true dual-radio needs two live daemons — a shared port would make the monitor
     /// connect through the active radio's daemon). Bumps any duplicate `rigctld_port`/`rotctld_port`
-    /// (and any that clashes with the CAT broker) to the next free value, first-radio-wins, never
-    /// onto a NET rigctl radio's Network Address on this computer; and moves a rotator's port off
-    /// one. Idempotent; called on load. `add_radio_profile` already assigns distinct ports, so this
-    /// only fixes older configs or hand-edited collisions.
+    /// (and any that clashes with the CAT broker or, while it serves, the TCI server) to the next
+    /// free value, first-radio-wins, never onto a NET rigctl radio's Network Address on this
+    /// computer; and moves a rotator's port off one. Idempotent; called on load.
+    /// `add_radio_profile` already assigns distinct ports, so this only fixes older configs or
+    /// hand-edited collisions.
     pub fn ensure_distinct_radio_ports(&mut self) {
         let broker = self.cat_broker.then_some(self.cat_broker_port);
+        let tci_server = self.tci_server.then_some(self.tci_server_port);
         // Where NET rigctl radios' Network Addresses point on this computer. The operator's rigctld
         // is there (wfview's, or their own), so no daemon is ever MOVED onto one. A CAT daemon
         // already on one is not moved off it either: its rigctld TCP Port is the operator's to
@@ -6235,11 +6296,11 @@ impl Settings {
         let has_invalid_port = self.radios.iter().any(|p| p.rigctld_port == 0);
         if !has_invalid_port
             && !rotator_on_an_address
-            && daemon_port_clash(&self.radios, broker).is_none()
+            && daemon_port_clash(&self.radios, broker, tci_server).is_none()
         {
             return;
         }
-        let mut used: Vec<u16> = broker.into_iter().collect();
+        let mut used: Vec<u16> = broker.into_iter().chain(tci_server).collect();
         let free_from = |start: u16, used: &mut Vec<u16>| -> u16 {
             let mut port = start.max(1024);
             while used.contains(&port) || addresses.contains(&port) {
@@ -8126,44 +8187,9 @@ mod tests {
             .map(String::as_str)
             .collect();
 
-        // ⚠️ ONE EXCEPTION, AND IT DISARMS ITSELF: the TCI connection's fields. Rust carries them
-        // before the radio form does, because the form's half has to wait for other work on
-        // ui/src/api.ts. Neither failure this guard exists for can happen to them meanwhile: they
-        // are `Option`s, so a form that leaves them out neither fails the Save nor resets them, it
-        // leaves each radio's stored values alone, which
-        // `a_radio_form_that_says_nothing_of_tci_leaves_the_radios_tci_settings_alone` holds. The
-        // interface declares none of them until the form's half lands, and then must declare every
-        // one, which puts them back under the plain rule below (and this exception can go). Some
-        // but not all is a half-done seam, the shape of every drift caught here.
-        const TCI_FORM_PENDING: [&str; 7] = [
-            "tciHost",
-            "tciPort",
-            "tciTrx",
-            "tciDialect",
-            "tciAudio",
-            "tciPan",
-            "tciSpots",
-        ];
-        for k in TCI_FORM_PENDING {
-            assert!(
-                rust_keys.contains(&k),
-                "{k} is not a field of the Rust patch, so the exception names nothing"
-            );
-        }
-        let declared: Vec<&str> = TCI_FORM_PENDING
-            .into_iter()
-            .filter(|k| ts_keys.iter().any(|t| t == k))
-            .collect();
-        assert!(
-            declared.is_empty() || declared.len() == TCI_FORM_PENDING.len(),
-            "the UI's RadioProfilePatch declares {declared:?} of the TCI fields \
-             {TCI_FORM_PENDING:?}: every one of them, or none until the form's half lands"
-        );
-        let pending = |k: &str| declared.is_empty() && TCI_FORM_PENDING.contains(&k);
-
         let missing_in_ts: Vec<&&str> = rust_keys
             .iter()
-            .filter(|k| !pending(k) && !ts_keys.iter().any(|t| t == *k))
+            .filter(|k| !ts_keys.iter().any(|t| t == *k))
             .collect();
         assert!(
             missing_in_ts.is_empty(),
@@ -9027,11 +9053,11 @@ mod tests {
         );
     }
 
-    /// THE PER-RADIO EDIT of a radio not in use (`update_radio_profile`). The radio form does not
-    /// send the TCI fields yet, so its save must leave the radio's TCI connection as stored: not
-    /// fail, and not reset it. The payload is the form's for this radio with every TCI key taken
-    /// out. And a patch that states them writes each one, the defaults included, so that "left
-    /// alone" cannot be "never written".
+    /// THE PER-RADIO EDIT of a radio not in use (`update_radio_profile`). A radio form that does
+    /// not send the TCI fields (one from a build before them) must have its save leave the radio's
+    /// TCI connection as stored: not fail, and not reset it. The payload is the form's for this
+    /// radio with every TCI key taken out. And a patch that states them writes each one, the
+    /// defaults included, so that "left alone" cannot be "never written".
     #[test]
     fn a_radio_form_that_says_nothing_of_tci_leaves_the_radios_tci_settings_alone() {
         let mut stored = RadioProfile {
@@ -9160,6 +9186,243 @@ mod tests {
             wrong.push(format!("the default ports are {ports:?}, not {want:?}"));
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// The TCI server's settings by their wire keys.
+    const TCI_SERVER_KEYS: [&str; 5] = [
+        "tciServer",
+        "tciServerPort",
+        "tciServerTx",
+        "tciServerCw",
+        "tciServerSpots",
+    ];
+
+    /// The TCI server on a fresh station and in every older file: off, on 40001, no program
+    /// transmitting through it, the CW and spots tiers offered.
+    fn tci_server_defaults() -> serde_json::Value {
+        serde_json::json!({
+            "tciServer": false, "tciServerPort": 40001, "tciServerTx": false,
+            "tciServerCw": true, "tciServerSpots": true,
+        })
+    }
+
+    /// Every TCI server setting of `v`, a serialized `Settings`, that is not as `want` has it,
+    /// labelled with `what`. Every one of them, so one red names each setting that moved.
+    fn tci_server_differences(
+        what: &str,
+        v: &serde_json::Value,
+        want: &serde_json::Value,
+    ) -> Vec<String> {
+        TCI_SERVER_KEYS
+            .iter()
+            .filter(|k| v[**k] != want[**k])
+            .map(|k| format!("{what}: {k} is {}, not {}", v[*k], want[*k]))
+            .collect()
+    }
+
+    /// ⭐ THE TCI SERVER STARTS OFF, and no program transmits through it until the operator turns
+    /// that on at the shack (operator ruling, 2026-10-19). It is the station's, not a radio's: no
+    /// radio profile carries any of its settings, a fresh one or one added to the roster.
+    #[test]
+    fn a_fresh_station_starts_with_the_tci_server_off() {
+        let mut differ = tci_server_differences(
+            "Settings::default()",
+            &serde_json::to_value(Settings::default()).unwrap(),
+            &tci_server_defaults(),
+        );
+        let mut e = crate::engine::Engine::with_settings(Settings::default());
+        e.add_radio();
+        let radios = serde_json::to_value(&e.settings().radios).unwrap();
+        for r in radios.as_array().expect("a roster") {
+            for k in TCI_SERVER_KEYS {
+                if r.get(k).is_some() {
+                    differ.push(format!("radio {} carries {k}", r["id"]));
+                }
+            }
+        }
+        assert!(
+            differ.is_empty(),
+            "not the TCI server's defaults:\n  {}",
+            differ.join("\n  ")
+        );
+    }
+
+    /// ⭐ THE UPGRADE PATH for the TCI server. A file from before it states none of its settings
+    /// and loads with the server off, as that station ran: through serde alone, and the last file
+    /// before TCI through the load and the save the app runs, which then writes each at its
+    /// default.
+    #[test]
+    fn an_older_settings_file_loads_with_the_tci_server_off() {
+        let want = tci_server_defaults();
+        let bare: Settings =
+            serde_json::from_str(r#"{"mycall":"KD9TAW","catBroker":true,"catBrokerPtt":true}"#)
+                .expect("an older settings file loads");
+        let mut differ = tci_server_differences(
+            "an older settings file",
+            &serde_json::to_value(&bare).unwrap(),
+            &want,
+        );
+
+        let text = include_str!("../tests/fixtures/settings-before-tci-two-radios.json");
+        assert!(
+            !text.contains("\"tciServer"),
+            "premise: the file predates the TCI server"
+        );
+        let dir = std::env::temp_dir().join("tempo_settings_tci_server_older");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("tci_server_older_{}.json", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        Settings::load(&path).save(&path).expect("saves");
+        let after: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        differ.extend(tci_server_differences(
+            "the last file before TCI, loaded and saved",
+            &after,
+            &want,
+        ));
+        assert!(
+            differ.is_empty(),
+            "an older file did not load with the TCI server off:\n  {}",
+            differ.join("\n  ")
+        );
+    }
+
+    /// The TCI server's settings keep their wire keys both ways: each set away from its default is
+    /// written under its own key with that value, and comes back through a load and through a
+    /// switch of radio, which a setting of the station's does not follow. Each is read off the
+    /// fields as well as off the JSON: a key serde did not map to its field would ride through the
+    /// file in `Settings::unknown` and read back as written, while the field itself never moved.
+    #[test]
+    fn the_tci_server_settings_keep_their_values_through_a_save_a_load_and_a_switch() {
+        let stated = serde_json::json!({
+            "tciServer": true, "tciServerPort": 40002, "tciServerTx": true,
+            "tciServerCw": false, "tciServerSpots": false,
+        });
+        let mut s = Settings {
+            radios: vec![
+                RadioProfile {
+                    id: 0,
+                    name: "FTDX10".into(),
+                    rig_model: 1042,
+                    ..RadioProfile::default()
+                },
+                RadioProfile {
+                    id: 1,
+                    name: "IC-7610".into(),
+                    rig_model: 3078,
+                    rigctld_port: 4535,
+                    ..RadioProfile::default()
+                },
+            ],
+            active_radio: 0,
+            ..Settings::default()
+        };
+        s.sync_flat_from_active();
+        let mut v = serde_json::to_value(&s).unwrap();
+        for k in TCI_SERVER_KEYS {
+            v[k] = stated[k].clone();
+        }
+        let s: Settings = serde_json::from_value(v).expect("settings deserialize");
+        let fields = |s: &Settings| {
+            (
+                s.tci_server,
+                s.tci_server_port,
+                s.tci_server_tx,
+                s.tci_server_cw,
+                s.tci_server_spots,
+            )
+        };
+        let want = (true, 40002, true, false, false);
+        let mut differ: Vec<String> = Vec::new();
+        if fields(&s) != want {
+            differ.push(format!(
+                "the fields as read: {:?}, not {want:?}",
+                fields(&s)
+            ));
+        }
+
+        let dir = std::env::temp_dir().join("tempo_settings_tci_server_keys");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("tci_server_keys_{}.json", std::process::id()));
+        s.save(&path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        differ.extend(tci_server_differences("the file", &written, &stated));
+        let mut e = crate::engine::Engine::with_settings(Settings::load(&path));
+        let _ = std::fs::remove_file(&path);
+        let live = |e: &crate::engine::Engine| serde_json::to_value(e.settings()).unwrap();
+        differ.extend(tci_server_differences("loaded again", &live(&e), &stated));
+        if fields(e.settings()) != want {
+            differ.push(format!(
+                "the fields loaded again: {:?}, not {want:?}",
+                fields(e.settings())
+            ));
+        }
+        e.set_active_radio(1);
+        differ.extend(tci_server_differences(
+            "switched to the IC-7610",
+            &live(&e),
+            &stated,
+        ));
+        if fields(e.settings()) != want {
+            differ.push(format!(
+                "the fields switched to the IC-7610: {:?}, not {want:?}",
+                fields(e.settings())
+            ));
+        }
+        assert!(
+            differ.is_empty(),
+            "the TCI server's settings did not keep their values:\n  {}",
+            differ.join("\n  ")
+        );
+    }
+
+    /// The UI types every TCI key where it lives (`ui/src/types.ts`): its `Settings` the
+    /// connection's seven, the radio in use's, and the server's five; its `RadioProfile` the
+    /// connection's seven and none of the server's, which are the station's. A key the UI spells
+    /// another way compiles on both sides and reads nothing, so each name is held to the wire key
+    /// the tests above hold serde to.
+    #[test]
+    fn the_ui_types_declare_every_tci_key_where_it_lives() {
+        let ts = include_str!("../../../ui/src/types.ts");
+        let body = |head: &str| {
+            let start = ts.find(head).expect("the UI declares it") + head.len();
+            let rest = &ts[start..];
+            &rest[..rest.find("\n}").expect("the interface is closed")]
+        };
+        let declares = |body: &str, key: &str| {
+            body.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("{key}:")) || l.starts_with(&format!("{key}?:"))
+            })
+        };
+        let settings = body("export interface Settings {");
+        let profile = body("export interface RadioProfile {");
+        let mut wrong: Vec<String> = Vec::new();
+        for k in TCI_KEYS.iter().chain(&TCI_SERVER_KEYS) {
+            if !declares(settings, k) {
+                wrong.push(format!("Settings does not declare {k}"));
+            }
+        }
+        for k in TCI_KEYS {
+            if !declares(profile, k) {
+                wrong.push(format!("RadioProfile does not declare {k}"));
+            }
+        }
+        for k in TCI_SERVER_KEYS {
+            if declares(profile, k) {
+                wrong.push(format!("RadioProfile declares the station's {k}"));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "ui/src/types.ts:\n  {}",
+            wrong.join("\n  ")
+        );
+        // CONTROL: the scan finds a key that is declared, and none that is not.
+        assert!(declares(settings, "catBroker") && declares(profile, "icomLanPort"));
+        assert!(!declares(settings, "tciServerHost") && !declares(profile, "catBroker"));
     }
 
     /// Two enabled radios on ONE network CAT address warn; the cases that are not a collision
@@ -14344,6 +14607,88 @@ mod tests {
         assert!(
             validate_radio_ports(&s.radios, None).is_ok(),
             "still pairwise-distinct after repair"
+        );
+    }
+
+    /// ⭐ NO RADIO'S DAEMON IS GIVEN THE TCI SERVER'S PORT while the server is on, as none is given
+    /// the CAT broker's: a radio added steps its CAT and rotator ports over it, and a CAT or
+    /// rotator daemon already on it (an older file, or a port the operator moved the server onto)
+    /// is moved off on load. CONTROL: with the server off its port is no one's, and nothing
+    /// moves.
+    #[test]
+    fn a_radio_daemon_never_takes_the_tci_servers_port() {
+        // The broker off and radio A's CAT on 4532 with its unused rotator port 4533, so 4534 is
+        // where a radio added next would put its CAT: the server sits there.
+        let station = |server: bool, radios: Vec<RadioProfile>| {
+            let mut s = Settings {
+                cat_broker: false,
+                tci_server: server,
+                tci_server_port: 4534,
+                ..Settings::default()
+            };
+            s.radios = radios;
+            s.active_radio = 0;
+            s
+        };
+        let added = |server: bool| {
+            let mut s = station(server, vec![serial_rig(0, "A", 4532)]);
+            let id = s.add_radio_profile();
+            let p = s
+                .radios
+                .iter()
+                .find(|p| p.id == id)
+                .expect("the added radio");
+            vec![(p.name.clone(), p.rigctld_port, p.rotctld_port)]
+        };
+        let repaired = |server: bool, b: RadioProfile| {
+            let mut s = station(server, vec![serial_rig(0, "A", 4532), b]);
+            s.ensure_distinct_radio_ports();
+            daemon_ports(&s)
+        };
+        let mut rotator_on_it = serial_rig(1, "B", 4535);
+        rotator_on_it.rotator_model = 1;
+        rotator_on_it.rotctld_port = 4534;
+        let rows = vec![
+            (
+                "a radio added, the server on",
+                added(true),
+                vec![("Radio 2".into(), 4535, 4536)],
+            ),
+            (
+                "CONTROL: a radio added, the server off",
+                added(false),
+                vec![("Radio 2".into(), 4534, 4535)],
+            ),
+            (
+                "B's CAT on the server's port, the server on",
+                repaired(true, serial_rig(1, "B", 4534)),
+                vec![("A".into(), 4532, 4533), ("B".into(), 4533, 4533)],
+            ),
+            (
+                "CONTROL: B's CAT there, the server off",
+                repaired(false, serial_rig(1, "B", 4534)),
+                vec![("A".into(), 4532, 4533), ("B".into(), 4534, 4533)],
+            ),
+            (
+                "B's rotator on the server's port, the server on",
+                repaired(true, rotator_on_it.clone()),
+                vec![("A".into(), 4532, 4533), ("B".into(), 4535, 4533)],
+            ),
+            (
+                "CONTROL: B's rotator there, the server off",
+                repaired(false, rotator_on_it),
+                vec![("A".into(), 4532, 4533), ("B".into(), 4535, 4534)],
+            ),
+        ];
+        let wrong: Vec<String> = rows
+            .into_iter()
+            .filter(|(_, got, want)| got != want)
+            .map(|(what, got, want)| format!("{what}: {got:?}, not {want:?}"))
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "the TCI server's port and the daemons:\n  {}",
+            wrong.join("\n  ")
         );
     }
 

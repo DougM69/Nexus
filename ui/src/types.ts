@@ -4584,6 +4584,19 @@ export interface Settings {
   catBroker: boolean
   /** TCP port the CAT broker listens on (Hamlib NET rigctl default 4532). */
   catBrokerPort: number
+  /** Nexus as a TCI server for programs on this computer (127.0.0.1 and ::1 only). Off by default.
+   *  The station's, not a radio's, and set at the station only, as are the four after it. */
+  tciServer?: boolean
+  /** The TCP port the TCI server listens on: 40001 unless moved. */
+  tciServerPort?: number
+  /** "Programs on TCI may transmit". Off by default; every Nexus transmit gate still applies. */
+  tciServerTx?: boolean
+  /** Programs' CW macros, keyed by Nexus in the CW section only, and only while tciServerTx is on.
+   *  On by default. */
+  tciServerCw?: boolean
+  /** Programs' spots on the band map, and a click on a spot told back to them. On by default; a
+   *  spot or a click never transmits. */
+  tciServerSpots?: boolean
   /** The rig's serial HANDSHAKE as the operator DECLARES it (`cat_serial_handshake`):
    *  `auto` | `none` | `hardware` | `xonxoff`. `auto` (the default) is today's behaviour to the
    *  byte — Nexus infers it exactly as before. Anything else REPLACES that inference.
@@ -4619,6 +4632,18 @@ export interface Settings {
   icomLanUser?: string
   /** The radio's control port (UDP), 50001 unless moved on the radio. */
   icomLanPort?: number
+  /** The radio in use's TCI connection (the "TCI" Connection choice): the SDR program's server
+   *  address (127.0.0.1 unless moved) and port (50001), which of its transceivers (from 0), its
+   *  dialect ('auto' | 'expertsdr3' | 'thetis' | 'pihpsdr'), Nexus's audio over it, both ways (on
+   *  by default), the SDR program's spectrum in Nexus's scope and Nexus's spots on its panadapter
+   *  (both off). Per radio: see RadioProfile. */
+  tciHost?: string
+  tciPort?: number
+  tciTrx?: number
+  tciDialect?: string
+  tciAudio?: boolean
+  tciPan?: boolean
+  tciSpots?: boolean
   /** Let a broker client (WSJT-X/N1MM) key PTT when Nexus is idle. OFF by
    * default — Nexus owns TX unless the operator opts in. */
   catBrokerPtt?: boolean
@@ -5289,6 +5314,14 @@ export interface RadioProfile {
   icomLanHost?: string
   icomLanUser?: string
   icomLanPort?: number
+  /** This radio's TCI connection: see Settings.tciHost and the six after it. */
+  tciHost?: string
+  tciPort?: number
+  tciTrx?: number
+  tciDialect?: string
+  tciAudio?: boolean
+  tciPan?: boolean
+  tciSpots?: boolean
 }
 
 /** A compact per-radio summary for the multi-radio switcher (dual-radio). One per configured

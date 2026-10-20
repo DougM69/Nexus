@@ -175,9 +175,9 @@ pub(crate) const PRESENCE_BOUND: [&str; 7] = [
 /// that let the station transmit with no press at it (a switch that transmits by itself, or one that
 /// lets a program at the shack or a browser start a transmission there) and the guards on a
 /// transmission (what stops or caps one by itself, the power ceilings, the licence privileges, and
-/// the line that keys the transmitter), and the one setting that names a program for the shack to
-/// run (the TQSL path). From afar a save keeps the shack's own value of each
-/// ([`keep_the_shacks_transmit_settings`], [`keep_the_shacks_radio_ptt`]): they are set at the
+/// the line that keys the transmitter), the one setting that names a program for the shack to run
+/// (the TQSL path), and the TCI server's settings. From afar a save keeps the shack's own value of
+/// each ([`keep_the_shacks_transmit_settings`], [`keep_the_shacks_radio_ptt`]): they are set at the
 /// shack only. So are the addresses Nexus sends a stored key or password to
 /// ([`keep_the_shacks_credential_addresses`], [`keep_the_shacks_radio_icom_address`]). (The presence
 /// beacon and JS8's automatic replies, relay and heartbeat acks each have one writer, their own
@@ -209,6 +209,13 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     save.js8_api_udp = shack.js8_api_udp;
     save.js8_api_tcp_accept = shack.js8_api_tcp_accept;
     save.js8_api_udp_accept = shack.js8_api_udp_accept;
+    // The TCI server, the station's: the server and its port, "Programs on TCI may transmit", and
+    // the CW and the spots it takes from programs.
+    save.tci_server = shack.tci_server;
+    save.tci_server_port = shack.tci_server_port;
+    save.tci_server_tx = shack.tci_server_tx;
+    save.tci_server_cw = shack.tci_server_cw;
+    save.tci_server_spots = shack.tci_server_spots;
     // What lets a browser drive the station's own window, its transmit keys included.
     save.remote_stream = shack.remote_stream;
     // What stops or caps a transmission by itself.
@@ -409,10 +416,11 @@ pub(crate) fn keep_the_shacks_settings(
 
 /// ⛔ Every setting a whole save from afar keeps as the shack has it ([`keep_the_shacks_settings`]),
 /// by its name on the wire, the stored keys ([`SECRET_SETTINGS`]) aside: the transmit settings and
-/// guards and the TQSL path ([`keep_the_shacks_transmit_settings`]), then the addresses the shack
-/// sends a stored key or password to ([`keep_the_shacks_credential_addresses`]). A test changes
-/// each setting alone in a save from afar and holds this list to exactly the ones that come back.
-pub(crate) const STATION_ONLY_SETTINGS: [&str; 40] = [
+/// guards, the TCI server's and the TQSL path ([`keep_the_shacks_transmit_settings`]), then the
+/// addresses the shack sends a stored key or password to
+/// ([`keep_the_shacks_credential_addresses`]). A test changes each setting alone in a save from
+/// afar and holds this list to exactly the ones that come back.
+pub(crate) const STATION_ONLY_SETTINGS: [&str; 45] = [
     "js8AprsRelay",
     "beaconTxPercent",
     "cqPauseSecs",
@@ -424,6 +432,11 @@ pub(crate) const STATION_ONLY_SETTINGS: [&str; 40] = [
     "js8ApiUdp",
     "js8ApiTcpAccept",
     "js8ApiUdpAccept",
+    "tciServer",
+    "tciServerPort",
+    "tciServerTx",
+    "tciServerCw",
+    "tciServerSpots",
     "remoteStream",
     "txWatchdogMin",
     "js8IdleWatchdogMin",
