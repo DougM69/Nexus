@@ -79,6 +79,15 @@
 # already pushed needs a history rewrite, not a follow-up commit. This check stops the leak
 # arriving; it cannot undo one.
 #
+# WHY --text ON EVERY CONTENT SCAN: without it git prints one line, "Binary files … differ",
+# for any file it judges binary, so checks 4b, 4c and 5 never saw a byte of that file. Git
+# judges a file binary on a single NUL byte in its first 8000 bytes, or on a `binary` or
+# `-diff` entry in .gitattributes (this repo marks *.png, *.bin and others that way), so one
+# NUL anywhere near the top of a file hid every line of it from all three scans. --text
+# overrides both, and every grep over that output already takes -a, so a NUL inside the text
+# cannot end a scan early either. Measured 2026-10-20: the whole tree is about 120 MB read
+# this way, and scanning it takes about a second.
+#
 # KNOWN GAPS, written down rather than papered over:
 #   - `git log -p` emits no patch for a merge commit, so content introduced BY a merge is
 #     covered only by the endpoint diff — which is kept for exactly that reason.
@@ -100,6 +109,8 @@
 #     OSS-integration checklist in CLAUDE.md.
 #   - The first push of a line of work with no remote refs at all scans its whole history:
 #     seconds, not minutes (1311 commits is about 5 s per pass). That is correct, not a bug.
+#   - --text reads a file's bytes, not what they encode: a match inside compressed data (a
+#     .tgz, a PNG's image stream, a .woff2) stays invisible to every scan here.
 #
 # Emergency bypass (maintainer only, deliberately loud): git push --no-verify
 
@@ -282,12 +293,12 @@ must never appear as an author."
 
   # 4b. ADDED lines of every commit in the range — what an endpoint diff cannot see.
   #     See WHY CHECK 4 IS PER-COMMIT and WHY ADDED LINES ONLY above.
-  hits=$(git log -p --no-color --format='' "${rspec[@]}" 2>/dev/null \
+  hits=$(git log -p --text --no-color --format='' "${rspec[@]}" 2>/dev/null \
            | grep -a '^+' | grep -aiE -f "$PAT" | head -5 || true)
   [ -n "$hits" ] && scrub_fail "content added by a pushed commit" "$hits"
 
   # 4c. Endpoint diff — the one thing 4b misses: content introduced BY a merge commit.
-  hits=$(git diff "$diff_base" "$lsha" 2>/dev/null \
+  hits=$(git diff --text "$diff_base" "$lsha" 2>/dev/null \
            | grep -a '^+' | grep -aiE -f "$PAT" | head -5 || true)
   [ -n "$hits" ] && scrub_fail "content present in the pushed tree" "$hits"
 
@@ -301,7 +312,7 @@ must never appear as an author."
     # blocks its own maintenance and its own test is a gate people learn to bypass. This
     # directory holds the gate and its test only; it ships no product code and vendors
     # nothing. Root-anchored (':/') so it does not depend on the hook's working directory.
-    licadd=$(git log -p --no-color --format='' "${rspec[@]}" -- ':/' ':!/.githooks/' 2>/dev/null \
+    licadd=$(git log -p --text --no-color --format='' "${rspec[@]}" -- ':/' ':!/.githooks/' 2>/dev/null \
              | grep -a '^+' | grep -aiE "$LICENCE_BODY" | head -3 || true)
     if [ -n "$vend" ] || [ -n "$licadd" ]; then
       touched=$(git log --name-only --format='' "${rspec[@]}" 2>/dev/null \
