@@ -355,6 +355,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JTAlert used to arm TX even after Stop TX, Esc or a TX watchdog trip, and cleared the trip. Now that Reply is ignored
   until you turn TX on yourself, and the watchdog trip stays until you do. A logger's free text with "send" no longer
   turns TX on either: as in WSJT-X, it goes out only if TX is already on. A logger's Halt TX still stops at once.
+- **Remote on a Linux station: Stop's own road survives Nexus being paused.** Stopping and continuing Nexus at a
+  Linux station (Ctrl+Z then `fg` in a terminal, or a debugger) ended the station's end of Stop's road and of the
+  audio road for good. A Stop from the second PC then had the command link alone, and presence could no longer be
+  renewed, so what was on the air stopped within about 5 s and starts from afar were refused; the audio went
+  quiet. The station now carries on reading both roads.
 - **Programs that listen to Nexus the way they listen to WSJT-X now see what you are transmitting.** GridTracker, JTAlert
   and the like got your decodes but not your TX message, and were always told TX was off. Nexus now reports the message
   on the air, whether TX is enabled, the report you are sending, the station's grid and a tripped TX watchdog, as
