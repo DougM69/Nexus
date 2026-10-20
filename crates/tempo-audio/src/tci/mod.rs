@@ -59,14 +59,19 @@
 //! transceiver's audio at the modem rate, which the radio loop takes in place of the sound card
 //! while the radio's TCI audio is on, and feeds to the waterfall and Remote Listen.
 //!
+//! ## The panadapter
+//! [`iq`]: the SDR program's IQ drawn in Nexus's RF scope while the radio's switch is on, on a
+//! thread of its own ([`TciDaemon::want_pan`]).
+//!
 //! ## Not yet
 //! The transmit tee (until it is installed, every key that takes Nexus's audio is refused), CW
-//! through the SDR program's keyer, its IQ panadapter and spots.
+//! through the SDR program's keyer, and spots.
 //!
 //! Nexus's own design, not a port: the protocol core it drives (`tempo_net::tci`) is written from
 //! Expert Electronics' TCI 2.0 specification.
 
 pub mod audio;
+pub mod iq;
 pub mod registry;
 pub mod shim;
 #[cfg(test)]
@@ -310,6 +315,8 @@ pub struct TciDaemon {
     clock: Clock,
     /// Nexus's own receive path, when the session was given it ([`Self::start_with_receive`]).
     receive: Option<Arc<audio::Receive>>,
+    /// The SDR program's panadapter ([`iq`]): dropped after the session's close, which stops its IQ.
+    pan: iq::Pan,
 }
 
 impl TciDaemon {
@@ -475,6 +482,7 @@ impl TciDaemon {
             tune_margin: options.tune_margin,
             clock: options.clock,
             receive: None,
+            pan: iq::Pan::default(),
         };
         match watch_thread {
             Ok(t) => daemon.watch_thread = Some(t),

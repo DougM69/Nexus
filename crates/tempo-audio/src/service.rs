@@ -8080,6 +8080,17 @@ impl RadioLoop {
             // capability — cheap (a key compare) unless it just gained/lost/changed a native scope.
             let (scope_model, scope_net) = (self.applied.rig_model, self.applied.is_network());
             self.reconcile_spectrum_source(engine, scope_model, scope_net);
+            // The TCI radio's own panadapter (its IQ): renewed for the active radio's client every
+            // tick, so a client a switch left behind lapses by itself (`crate::tci::iq`). Not on a
+            // switch the handoff has not seen (W0): `rigctld_proc` is the radio being left.
+            crate::tci::iq::reconcile(
+                self.rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::tci)
+                    .filter(|_| !self.switch_unhanded),
+                engine,
+                &self.spectrum_feed,
+            );
             self.reconcile_flex_client_audio(engine);
             self.take_tci_halts(engine);
             self.reconcile_tci_audio(engine, &*backend);
@@ -17408,6 +17419,7 @@ mod tests {
     mod split_overs;
     mod tci;
     mod tci_cw;
+    mod tci_pan;
     mod udp_requests;
     mod wfview;
     mod yaesu_alc;
