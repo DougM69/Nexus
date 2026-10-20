@@ -2946,6 +2946,7 @@ name = "tempo-net"
 version = "0.2.0"
 dependencies = [
  "libc",
+ "proptest",
  "serde",
  "serde_json",
  "socket2",
@@ -2974,6 +2975,13 @@ dependencies = [
  "windows 0.62.2",
  "windows-capture",
  "yuv",
+]
+
+[[package]]
+name = "tempo-tcisim"
+version = "0.1.0"
+dependencies = [
+ "tungstenite",
 ]
 
 [[package]]

@@ -58,3 +58,7 @@ flex-unbenched = []
 # The SmartSDR simulator, for the Flex session's fault suites (`flex::sim_tests`). Test support from
 # this workspace, std only; nothing outside the tests depends on it.
 tempo-flexsim = { path = "../tempo-flexsim" }
+# The TCI codecs' property and fuzz tests (`tci::wire`, `tci::frame`): no input a server sends may
+# panic a decoder. Already a dev-dependency of js8, tempo-core and tempo-sstv, at the same version,
+# so nothing new enters the lock.
+proptest = "1"
