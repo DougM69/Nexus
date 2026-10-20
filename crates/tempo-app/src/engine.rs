@@ -75,6 +75,9 @@ pub mod contest_unmerged;
 /// what it held, once and paced, and LoTW's automatic upload waits for it.
 #[cfg(test)]
 mod contest_upload_hold_tests;
+/// The Decode head's speed is offered only while it is fresh.
+#[cfg(test)]
+mod cw_decode_speed_tests;
 /// CW owns the transmitter until its word ends: every gate that asks the arbiter, and the hard end.
 #[cfg(test)]
 mod cw_keying_owner_tests;
@@ -4417,9 +4420,9 @@ pub struct Engine {
 const CW_WINDOW: usize = 72_000;
 /// The AI CW decoder's ring: 15 s at 12 kHz — exactly the DeepCW model's decode window.
 const AI_CW_WINDOW: usize = 180_000;
-/// CW speed match uses the decoder's speed only if a keyed element was heard this recently
-/// (seconds): long enough to span the pause before an answer, short enough that the speed is
-/// still the station just heard.
+/// CW speed match, and the Decode head's speed that a call chip's click sets the keyer to, use the
+/// decoder's speed only if a keyed element was heard this recently (seconds): long enough to span
+/// the pause before an answer, short enough that the speed is still the station just heard.
 const CW_SPEED_MATCH_FRESH_SECS: f32 = 10.0;
 /// How much of the newest CW copy CW speed match looks in for the call being answered.
 const CW_SPEED_MATCH_COPY_CHARS: usize = 200;
@@ -20359,7 +20362,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
             } else {
                 self.cw_stream.transcript().to_string()
             },
-            wpm: self.cw_stream.wpm(),
+            // Only while fresh, by CW speed match's own rule: an older reading may be the previous
+            // station's, and a call chip's click sets the keyer to the speed shown.
+            wpm: match self.cw_stream.secs_since_mark() {
+                Some(age) if age <= CW_SPEED_MATCH_FRESH_SECS => self.cw_stream.wpm(),
+                _ => 0,
+            },
         }
     }
 

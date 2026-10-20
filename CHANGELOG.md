@@ -378,6 +378,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **The speed beside the CW Decode pane's title no longer shows a station heard long ago.** The classic decoder
+  measures it, and clicking a call chip sets your keyer to it, but it stayed at the last speed measured however long
+  ago that was, so a click could send your next over at the previous station's speed. It now shows, and a chip click
+  now uses, only a speed from keying heard in the last 10 seconds, the rule CW speed match already had. With none,
+  no speed is shown and a chip click leaves your keyer speed alone.
 - **FT8 and FT4 no longer transmit on top of another program keying your radio through Nexus.** With "Other programs
   may key transmit" on, a program sharing the radio through Nexus's CAT broker (WSJT-X, VarAC) could key for a
   transmission of its own while your FT8 or FT4 CQ or QSO was armed, and at the start of your next period Nexus sent its
