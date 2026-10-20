@@ -867,7 +867,7 @@ impl Manager {
             }
             Err(err) => {
                 let why = bind_message(port, &err);
-                if !self.failed.as_ref().is_some_and(|f| f.port == port) {
+                if self.failed.as_ref().is_none_or(|f| f.port != port) {
                     tempo_core::applog::error("tci", &why);
                     conn_log(LANE, "error", why.clone());
                 }

@@ -152,13 +152,12 @@ fn program(handle: &Handle, port: u16) -> (Client, ClientId, Vec<String>) {
     (client, id, burst)
 }
 
-/// Whether this lane of the connection log has a line holding `needle`.
+/// Whether this lane of the connection log has a line holding `needle`, as the Connections panel
+/// reads the log.
 fn logged(needle: &str) -> bool {
-    crate::CONN_LOG
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+    crate::get_connection_log()
         .iter()
-        .any(|ev| ev.connector == LANE && ev.message.reveal_on_screen().contains(needle))
+        .any(|ev| ev.connector == LANE && ev.message.contains(needle))
 }
 
 /// Wait for `f` on the engine, or `WAIT`.
@@ -893,11 +892,9 @@ fn a_port_that_will_not_bind_is_reported_once_and_retried() {
         "{why}"
     );
     let said = |why: &str| {
-        crate::CONN_LOG
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        crate::get_connection_log()
             .iter()
-            .filter(|ev| ev.connector == LANE && ev.message.reveal_on_screen() == why)
+            .filter(|ev| ev.connector == LANE && ev.message == why)
             .count()
     };
     assert_eq!(said(&why), 1, "said in the connection log");
