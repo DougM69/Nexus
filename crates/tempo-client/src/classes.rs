@@ -537,6 +537,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("swap_vfo",                       RunsAtShack, "The shack's rig control."),
     ("sync_lotw_report",               RunsAtShack, "A report's text, reconciled into the shack's logbook."),
     ("sync_qrz",                       RunsAtShack, "A sync at the shack, with its stored credential."),
+    ("tci_probe",                      RefusedHere, "Connects from the shack to an address typed in the form; another computer may not make it reach into the station's network."),
     ("test_cat",                       RunsAtShack, "Tests the shack's rig connection."),
     ("tune_channel",                   RunsAtShack, "Tunes the shack's rig; keys nothing."),
     ("ui_state_load",                  RunsAtShack, "Operator data kept at the shack."),

@@ -1418,6 +1418,27 @@ fn a_radios_icom_network_password_is_set_at_the_shack_only() {
     }
 }
 
+#[test]
+fn find_tci_server_runs_from_the_shacks_own_screen_only() {
+    // Find TCI server dials whatever address the form holds, from the shack: from afar it would let
+    // another computer make the station reach into its own network. Refused at both ends, with the
+    // arguments it really takes.
+    let shack = shack();
+    let args = json!({ "host": "192.168.1.30", "port": 50001 });
+    assert_eq!(class_of("tci_probe"), Some(Class::RefusedHere));
+    assert_eq!(
+        route("tci_probe", &args),
+        Route::Refused(Refusal::ShackOnly),
+        "it is never sent"
+    );
+    let admission = shack.admit(&controller(), call(1, "tci_probe", args));
+    assert_eq!(
+        kind(&admission),
+        refused(Refusal::ShackOnly),
+        "at the shack"
+    );
+}
+
 /// From afar the Settings badges say whether each credential is saved, and a connector's Test
 /// runs at the shack with the key stored there: each is sent, and admitted, as a station command.
 /// What each answers carries no secret (`remote_credential_reply_tests` in `lib.rs`).

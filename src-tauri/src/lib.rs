@@ -16253,6 +16253,295 @@ async fn discover_flex() -> Result<Vec<FlexRadioDto>, String> {
         })
 }
 
+/// What Find TCI server found at one address: Settings ▸ Radio ▸ Rig & CAT's button on the TCI
+/// connection, and the setup wizard's look for an SDR program on this computer.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct TciProbeDto {
+    /// The address searched (blank searches this computer).
+    host: String,
+    /// False when this computer cannot find the address at all: nothing was tried.
+    resolved: bool,
+    /// Each port tried, in order, and what answered there.
+    tried: Vec<TciPortTriedDto>,
+    /// The first SDR program's TCI server that answered.
+    found: Option<TciServerDto>,
+}
+
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct TciPortTriedDto {
+    port: u16,
+    /// `found`, `nexus` (Nexus's own TCI server, skipped), `noAnswer`, `notTci` or `noReady`.
+    outcome: &'static str,
+}
+
+/// What the server said about itself before `ready;`, as sent, and how Nexus will read it.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct TciServerDto {
+    port: u16,
+    program: Option<String>,
+    version: Option<String>,
+    device: Option<String>,
+    trx_count: Option<u32>,
+    /// The dialect table's word for it, `unknown` for a program this build does not know.
+    dialect: &'static str,
+}
+
+/// How long Find TCI server gives one address on one port: connect, handshake and `ready;`.
+const TCI_PROBE_PORT_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The longest the whole search may take, the address's name lookup included.
+const TCI_PROBE_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The ports Find TCI server tries, in order and each once: the one the form holds, then the ports
+/// the SDR programs come set to (`TciDialect::default_port`: 50001, then piHPSDR's 40001).
+fn tci_probe_ports(port: u16) -> Vec<u16> {
+    let defaults = tempo_app::settings::TciDialect::ALL.map(|d| d.default_port());
+    let mut ports: Vec<u16> = Vec::new();
+    for p in std::iter::once(port).chain(defaults) {
+        if p != 0 && !ports.contains(&p) {
+            ports.push(p);
+        }
+    }
+    ports
+}
+
+/// The dialect a found server will be read in, as the UI names it: the dialect table's own entry,
+/// by its name, or `unknown`.
+fn tci_dialect_word(dialect: &tempo_net::tci::Dialect) -> &'static str {
+    use tempo_net::tci::{AETHERSDR, EXPERT_SDR2, EXPERT_SDR3, PIHPSDR, THETIS_NATIVE};
+    [
+        (EXPERT_SDR3, "expertsdr3"),
+        (EXPERT_SDR2, "expertsdr2"),
+        (THETIS_NATIVE, "thetis"),
+        (PIHPSDR, "pihpsdr"),
+        (AETHERSDR, "aethersdr"),
+    ]
+    .into_iter()
+    .find(|(known, _)| known.name == dialect.name)
+    .map_or("unknown", |(_, word)| word)
+}
+
+/// Find TCI server, blocking: look up `host` (blank: this computer), then try `ports` in turn
+/// ([`tci_probe_ports`]) until an SDR program's TCI server answers. An address that names several (`localhost`: `::1`
+/// and `127.0.0.1`) is tried at each until one takes the connection. Nexus's own TCI server is
+/// passed over and said so. Each try reads the server's handshake and closes, writing nothing to
+/// it (`tempo_net::tci::probe`).
+fn probe_tci_server(host: &str, ports: &[u16]) -> TciProbeDto {
+    use std::net::{SocketAddr, ToSocketAddrs};
+    use tempo_net::tci::probe::{probe, Miss};
+    let host = match host.trim() {
+        "" => tempo_app::settings::TCI_DEFAULT_HOST,
+        typed => typed,
+    }
+    .to_string();
+    let mut dto = TciProbeDto {
+        host: host.clone(),
+        resolved: false,
+        tried: Vec::new(),
+        found: None,
+    };
+    let mut ips: Vec<std::net::IpAddr> = Vec::new();
+    for addr in (host.as_str(), 0).to_socket_addrs().into_iter().flatten() {
+        if !ips.contains(&addr.ip()) {
+            ips.push(addr.ip());
+        }
+    }
+    if ips.is_empty() {
+        return dto;
+    }
+    dto.resolved = true;
+    for &port in ports {
+        let mut outcome = "noAnswer";
+        for ip in &ips {
+            match probe(SocketAddr::new(*ip, port), TCI_PROBE_PORT_BUDGET) {
+                Err(Miss::NoAnswer(_)) => continue,
+                Err(Miss::NotTci(_)) => outcome = "notTci",
+                Err(Miss::NoReady) => outcome = "noReady",
+                Ok(hello) if hello.is_nexus() => outcome = "nexus",
+                Ok(hello) => {
+                    outcome = "found";
+                    dto.found = Some(TciServerDto {
+                        port,
+                        dialect: tci_dialect_word(&hello.dialect),
+                        program: hello.program,
+                        version: hello.version,
+                        device: hello.device,
+                        trx_count: hello.trx_count,
+                    });
+                }
+            }
+            break;
+        }
+        dto.tried.push(TciPortTriedDto { port, outcome });
+        if dto.found.is_some() {
+            break;
+        }
+    }
+    dto
+}
+
+/// Look for an SDR program's TCI server: the Settings button and the setup wizard. It never keys
+/// and never changes the radio: each try only reads what the server says about itself and closes.
+/// Bounded: [`TCI_PROBE_PORT_BUDGET`] an address and a port, and [`TCI_PROBE_LIMIT`] in all. Only
+/// from the shack's own screen (`tempo_client::classes`).
+#[tauri::command]
+async fn tci_probe(host: String, port: u16) -> Result<TciProbeDto, String> {
+    let search = tauri::async_runtime::spawn_blocking(move || {
+        probe_tci_server(&host, &tci_probe_ports(port))
+    });
+    match tokio::time::timeout(TCI_PROBE_LIMIT, search).await {
+        Ok(done) => done.map_err(|e| e.to_string()),
+        Err(_) => Err(format!("no answer within {} s", TCI_PROBE_LIMIT.as_secs())),
+    }
+}
+
+#[cfg(test)]
+mod tci_probe_tests {
+    //! Find TCI server's search, against listeners on loopback: which ports it tries and in what
+    //! order, where it stops, and what it says each port answered. What one probe reads, that it
+    //! writes nothing and how long it may take are `tempo_net::tci::probe`'s, tested there against
+    //! the simulated SDR programs.
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use tokio_tungstenite::tungstenite::{self, Message};
+
+    /// A port nothing listens on.
+    fn closed_port() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+        listener.local_addr().expect("its address").port()
+    }
+
+    /// A TCI server on loopback that sends `burst` to each client and then holds the connection.
+    fn tci_server(burst: &'static str) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+        let port = listener.local_addr().expect("its address").port();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming().flatten() {
+                if let Ok(mut ws) = tungstenite::accept(stream) {
+                    let _ = ws.send(Message::text(burst));
+                    held.push(ws);
+                }
+            }
+        });
+        port
+    }
+
+    /// A listener on loopback that answers each connection with `reply` and holds it: not TCI.
+    fn plain_listener(reply: &'static [u8]) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+        let port = listener.local_addr().expect("its address").port();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for mut stream in listener.incoming().flatten() {
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                let _ = stream.write_all(reply);
+                held.push(stream);
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn the_form_port_comes_first_then_each_program_port_once() {
+        assert_eq!(tci_probe_ports(50001), vec![50001, 40001]);
+        assert_eq!(tci_probe_ports(40001), vec![40001, 50001]);
+        assert_eq!(tci_probe_ports(12345), vec![12345, 50001, 40001]);
+        assert_eq!(
+            tci_probe_ports(0),
+            vec![50001, 40001],
+            "no port: the programs' own"
+        );
+    }
+
+    #[test]
+    fn each_dialect_has_its_own_word_and_a_program_nexus_does_not_know_is_unknown() {
+        use tempo_net::tci::dialect::UNKNOWN;
+        use tempo_net::tci::{Dialect, DriveForm, DIALECTS, EXPERT_SDR3};
+        let words: Vec<&str> = DIALECTS.iter().map(tci_dialect_word).collect();
+        assert!(!words.contains(&"unknown"), "{words:?}");
+        let mut unique = words.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), DIALECTS.len(), "{words:?}");
+        assert_eq!(tci_dialect_word(&UNKNOWN), "unknown");
+        // A server's drive form is learned from what it sends; the word follows the dialect.
+        let global = Dialect {
+            drive: DriveForm::Global,
+            ..EXPERT_SDR3
+        };
+        assert_eq!(tci_dialect_word(&global), "expertsdr3");
+    }
+
+    #[test]
+    fn a_server_is_found_on_the_first_port_that_has_one_and_said_as_it_said_it() {
+        let server = tci_server("protocol:ExpertSDR3,2.0;device:SunSDR2DX;trx_count:2;ready;");
+        let missing = closed_port();
+        let dto = probe_tci_server("127.0.0.1", &[missing, server, closed_port()]);
+        assert!(dto.resolved);
+        assert_eq!(dto.host, "127.0.0.1");
+        assert_eq!(
+            dto.tried,
+            vec![
+                TciPortTriedDto {
+                    port: missing,
+                    outcome: "noAnswer"
+                },
+                TciPortTriedDto {
+                    port: server,
+                    outcome: "found"
+                },
+            ],
+            "it stops at the server"
+        );
+        assert_eq!(
+            dto.found,
+            Some(TciServerDto {
+                port: server,
+                program: Some("ExpertSDR3".into()),
+                version: Some("2.0".into()),
+                device: Some("SunSDR2DX".into()),
+                trx_count: Some(2),
+                dialect: "expertsdr3",
+            })
+        );
+        // The names the UI reads (`TciProbeResult` in ui/src/api.ts).
+        let json = serde_json::to_value(&dto).expect("serialises");
+        assert_eq!(json["found"]["trxCount"], 2);
+        assert_eq!(json["tried"][1]["outcome"], "found");
+        assert_eq!(json["resolved"], true);
+    }
+
+    #[test]
+    fn nexus_own_server_and_something_that_is_not_tci_are_passed_over_and_said() {
+        let nexus = tci_server("protocol:ExpertSDR3,2.0;device:Nexus;trx_count:1;ready;");
+        let http = plain_listener(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+        let dto = probe_tci_server("127.0.0.1", &[nexus, http]);
+        assert_eq!(dto.found, None);
+        assert_eq!(
+            dto.tried.iter().map(|t| t.outcome).collect::<Vec<_>>(),
+            vec!["nexus", "notTci"]
+        );
+    }
+
+    #[test]
+    fn a_blank_address_searches_this_computer_and_one_that_cannot_be_looked_up_tries_nothing() {
+        let server = tci_server("protocol:Thetis,2.10.3.14;device:ANAN-G2;ready;");
+        let dto = probe_tci_server("  ", &[server]);
+        assert_eq!(dto.host, "127.0.0.1");
+        assert_eq!(dto.found.map(|f| f.dialect), Some("thetis"));
+        // A name with a NUL in it is refused before any lookup goes out.
+        let dto = probe_tci_server("sdr\0pc", &[server]);
+        assert!(!dto.resolved);
+        assert!(dto.tried.is_empty());
+    }
+}
+
 /// Stop the rotator immediately (rotctld `S`) — the control panel's STOP.
 #[tauri::command]
 async fn stop_rotator(state: State<'_, SharedEngine>) -> Result<(), String> {
@@ -37612,6 +37901,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         stop_rotator,
         set_log_form_grid,
         discover_flex,
+        tci_probe,
         get_sat_schedule,
         get_sat_pass_needs,
         get_sat_sked,
