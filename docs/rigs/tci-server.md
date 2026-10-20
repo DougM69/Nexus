@@ -67,9 +67,9 @@ Every one of these belongs to the station and is set only there.
 
 ### Programs connected
 
-While the server runs, each program connected is listed with its number (TCI
-carries no program name, so programs are numbered as they connect), the
-address it connects from, whether it is receiving audio or transmitting, and
+While the server runs, each program's connection is listed with its number
+(TCI carries no program name, so connections are numbered as they open), the
+address it comes from, whether it is receiving audio or transmitting, and
 the last thing Nexus refused it. **Disconnect** closes one program's
 connection; anything it is transmitting stops first. Disconnect is offered at
 the station only.

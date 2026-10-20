@@ -2382,7 +2382,7 @@
 "4","settings.transmit.tciServer.notYet","<b>Not ready yet:</b> a program's own transmit audio, CW macros and spots. Receive audio comes only from a sound card for now, so a Flex on DAX or the Icom network connection has none to send.","","<b> | CW | Flex | DAX | Icom",""
 "4","settings.transmit.tciServer.programs.label","Programs connected","","",""
 "4","settings.transmit.tciServer.programs.none","No program is connected.","","",""
-"4","settings.transmit.tciServer.program.name","Program {{id}}","","{{id}}","A program connected to Nexus, by its number: TCI carries no program name."
+"4","settings.transmit.tciServer.program.name","Connection {{id}}","","{{id}}","One program's connection to Nexus, by its number: TCI carries no program name."
 "4","settings.transmit.tciServer.program.audio","Receiving audio","","","Beside a connected program: Nexus is sending it receive audio."
 "4","settings.transmit.tciServer.program.keyed","Transmitting","","","Beside a connected program: it is transmitting now."
 "4","settings.transmit.tciServer.program.refused","Last refused: {{why}}","","{{why}}","{{why}} is Nexus's reason, in English, from the connection log."

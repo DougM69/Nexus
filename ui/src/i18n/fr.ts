@@ -7249,7 +7249,7 @@ export const FR: PartialCatalog = {
   "settings.transmit.tciServer.notYet": "<b>Pas encore prêt :</b> l'audio d'émission propre d'un programme, les macros CW et les spots. Pour l'instant, l'audio de réception ne vient que d'une carte son, donc un Flex en DAX ou la connexion réseau Icom n'en a aucun à envoyer.",
   "settings.transmit.tciServer.programs.label": "Programmes connectés",
   "settings.transmit.tciServer.programs.none": "Aucun programme n'est connecté.",
-  "settings.transmit.tciServer.program.name": "Programme {{id}}",
+  "settings.transmit.tciServer.program.name": "Connexion {{id}}",
   "settings.transmit.tciServer.program.audio": "Reçoit l'audio",
   "settings.transmit.tciServer.program.keyed": "En émission",
   "settings.transmit.tciServer.program.refused": "Dernier refus : {{why}}",

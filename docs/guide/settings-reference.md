@@ -894,9 +894,9 @@ full power on every mode.*
     yet.
   - **CW macros from programs** and **Spots from programs**: on by default, and
     not yet in effect.
-  - **Programs connected**: each program by number, with its address, whether it
-    is receiving audio or transmitting, the last thing Nexus refused it, and
-    **Disconnect**.
+  - **Programs connected**: each connection by number, with its address,
+    whether it is receiving audio or transmitting, the last thing Nexus
+    refused it, and **Disconnect**.
 
   See [Share by TCI](../rigs/tci-server.md).
 

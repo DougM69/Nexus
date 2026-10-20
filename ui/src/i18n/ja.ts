@@ -4884,7 +4884,7 @@ export const JA: PartialCatalog = {
   "settings.transmit.tciServer.notYet": "<b>まだ対応していないもの:</b> プログラム自身の送信音声、CWマクロ、スポット。受信音声は今のところサウンドカードからのみのため、DAXのFlexやIcomネットワーク接続では送る音声がありません。",
   "settings.transmit.tciServer.programs.label": "接続中のプログラム",
   "settings.transmit.tciServer.programs.none": "接続中のプログラムはありません。",
-  "settings.transmit.tciServer.program.name": "プログラム {{id}}",
+  "settings.transmit.tciServer.program.name": "接続 {{id}}",
   "settings.transmit.tciServer.program.audio": "音声を受信中",
   "settings.transmit.tciServer.program.keyed": "送信中",
   "settings.transmit.tciServer.program.refused": "最後に拒否された内容: {{why}}",

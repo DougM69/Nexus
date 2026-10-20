@@ -7670,9 +7670,9 @@ export const EN = {
     "<b>Not ready yet:</b> a program's own transmit audio, CW macros and spots. Receive audio comes only from a sound card for now, so a Flex on DAX or the Icom network connection has none to send.",
   'settings.transmit.tciServer.programs.label': 'Programs connected',
   'settings.transmit.tciServer.programs.none': 'No program is connected.',
-  // `{{id}}` is the program's number, from 1 in the order programs connected: TCI carries no
-  // program name.
-  'settings.transmit.tciServer.program.name': 'Program {{id}}',
+  // One program's connection, by its number: `{{id}}` counts from 1 in the order programs connected,
+  // because TCI carries no program name.
+  'settings.transmit.tciServer.program.name': 'Connection {{id}}',
   'settings.transmit.tciServer.program.audio': 'Receiving audio',
   'settings.transmit.tciServer.program.keyed': 'Transmitting',
   // `{{why}}` is the station's own words from the connection log, shown as they come.
