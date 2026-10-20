@@ -66,9 +66,9 @@ impl SelectionConnection {
                 .as_ref()
                 .filter(|connection| !connection.transport.rig_differs(&transport))
                 .map_or(0, |connection| connection.open_failures);
-            // A Flex client is read for its alarms until it goes (`raise_flex_alarm`).
+            // A client of Nexus's own is read for its alarms until it goes (`raise_client_alarm`).
             if let Some(stale) = lease.connection.take() {
-                super::raise_flex_alarm(stale.rigctld_proc.as_ref(), stale.id, engine);
+                super::raise_client_alarm(stale.rigctld_proc.as_ref(), stale.id, engine);
             }
             permission.check(Instant::now())?;
             let (rig, daemon, _) = open(&transport);

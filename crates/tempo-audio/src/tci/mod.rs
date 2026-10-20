@@ -54,13 +54,19 @@
 //! and whether a key of ours may be on the air ([`TciDaemon::keyed`]). Each key's timing goes to
 //! the diagnostic log for the bench (plan U3, U11).
 //!
+//! ## Receive audio
+//! [`TciDaemon::start_with_receive`] gives the session Nexus's own receive path ([`audio`]): the
+//! transceiver's audio at the modem rate, which the radio loop takes in place of the sound card
+//! while the radio's TCI audio is on, and feeds to the waterfall and Remote Listen.
+//!
 //! ## Not yet
-//! The audio itself (the receive path and the transmit tee: until then the caller hands the
-//! session its [`Streams`]), CW through the SDR program's keyer, its IQ panadapter and spots.
+//! The transmit tee (until it is installed, every key that takes Nexus's audio is refused), CW
+//! through the SDR program's keyer, its IQ panadapter and spots.
 //!
 //! Nexus's own design, not a port: the protocol core it drives (`tempo_net::tci`) is written from
 //! Expert Electronics' TCI 2.0 specification.
 
+pub mod audio;
 pub mod registry;
 pub mod shim;
 #[cfg(test)]
@@ -302,6 +308,8 @@ pub struct TciDaemon {
     unkey_wait: Duration,
     tune_margin: Duration,
     clock: Clock,
+    /// Nexus's own receive path, when the session was given it ([`Self::start_with_receive`]).
+    receive: Option<Arc<audio::Receive>>,
 }
 
 impl TciDaemon {
@@ -311,6 +319,24 @@ impl TciDaemon {
     /// handshake and the server's `ready;` (about 12 s).
     pub fn start(target: &Target, streams: Box<dyn Streams>) -> Result<TciDaemon, StartError> {
         Self::start_with(target, streams, Options::default())
+    }
+
+    /// [`Self::start`] with Nexus's own receive path as the session's streams ([`audio`]): what
+    /// the radio loop starts.
+    pub fn start_with_receive(target: &Target) -> Result<TciDaemon, StartError> {
+        Self::start_receiving(target, Options::default())
+    }
+
+    /// [`Self::start_with_receive`] with the tests' waits and clock.
+    pub(crate) fn start_receiving(
+        target: &Target,
+        options: Options,
+    ) -> Result<TciDaemon, StartError> {
+        let receive = Arc::new(audio::Receive::default());
+        let streams = Box::new(audio::SessionAudio::new(receive.clone()));
+        let mut daemon = Self::start_with(target, streams, options)?;
+        daemon.receive = Some(receive);
+        Ok(daemon)
     }
 
     /// [`Self::start`] with the tests' waits and clock.
@@ -448,6 +474,7 @@ impl TciDaemon {
             unkey_wait: options.unkey_wait,
             tune_margin: options.tune_margin,
             clock: options.clock,
+            receive: None,
         };
         match watch_thread {
             Ok(t) => daemon.watch_thread = Some(t),
@@ -507,6 +534,32 @@ impl TciDaemon {
     /// for the bench, the counts of what was refused.
     pub fn snapshot(&self) -> Snapshot {
         self.conn().snapshot()
+    }
+
+    /// Who answered, in the words Test CAT shows: the program and the radio as the server named
+    /// them, and the transceiver, counted from 1 as Settings counts it.
+    pub fn status(&self) -> String {
+        let s = self.snapshot();
+        let program = match (&s.evidence.program, &s.evidence.version) {
+            (Some(p), Some(v)) => format!("{p} {v}"),
+            (Some(p), None) => p.clone(),
+            _ => "an SDR program".to_string(),
+        };
+        let device = s
+            .model
+            .device
+            .known()
+            .map_or(String::new(), |d| format!(" on {}", d.as_str()));
+        format!(
+            "TCI: {program}{device}, transceiver {}.",
+            s.trx.get().saturating_add(1)
+        )
+    }
+
+    /// Nexus's own receive path, when this daemon was started with it
+    /// ([`Self::start_with_receive`]).
+    pub fn receive(&self) -> Option<&Arc<audio::Receive>> {
+        self.receive.as_ref()
     }
 
     /// Tell the shim whether Nexus itself is transmitting, so the broker's disconnect fail-safe

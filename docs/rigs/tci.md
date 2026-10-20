@@ -107,8 +107,9 @@ the port and **Find TCI server**.
   a WebSocket server and stopped there, such as a program still starting up.
   Wait a moment and try again.
 - **"Port … is Nexus's own TCI server, not an SDR program."** Nexus can serve
-  TCI to other programs too, and that is what answered on that port. Point the
-  connection at the SDR program's port instead.
+  TCI to other programs too ([Share by TCI](tci-server.md)), and that is what
+  answered on that port. Point the connection at the SDR program's port
+  instead.
 - **"This computer cannot find …"** The address is not one this computer can
   look up. Check **SDR program address**.
 
@@ -126,6 +127,8 @@ internet.
 
 - [Hermes Lite 2 and SDR Program Setup](sdr-programs.md): the CAT server route
   for Thetis and piHPSDR, which carries transmit and audio today.
+- [Share by TCI](tci-server.md): the other direction, Nexus as the TCI server
+  for programs such as WSJT-X on this computer.
 - [Rig Setup Guides](index.md): the connection types, and Test CAT.
 - [Settings reference ▸ Rig & CAT](../guide/settings-reference.md#rig--cat):
   every field in that section.

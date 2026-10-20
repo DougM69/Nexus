@@ -3085,6 +3085,13 @@ export async function tciProbe(host: string, port: number): Promise<TciProbeResu
   return invoke('tci_probe', { host, port })
 }
 
+/** "Share by TCI": the operator's Disconnect for program `id` (its number in
+ *  `radio.tciServer.programs`). What the program keyed ends first, then its connection closes. A
+ *  number no connected program has does nothing. At the shack only. */
+export async function tciServerDisconnect(id: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('tci_server_disconnect', { id })
+}
+
 /** Stop the rotator immediately (rotctld S). */
 export async function stopRotator(): Promise<void> {
   return invoke('stop_rotator')

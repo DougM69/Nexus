@@ -17,6 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **SDR program (TCI)** choice. For now the connection carries the dial and mode only: Nexus does not transmit on it
   yet, and audio, the program's panadapter and spots over TCI come in a later update (their switches are in Settings
   already and are kept with the radio). The SDR-program setup guide no longer says Nexus cannot use TCI.
+- **Share by TCI: programs on this computer can use the radio through Nexus.** Settings ▸ Radio ▸ Transmit limits
+  & sharing has a new switch, **Share by TCI**, below **Share this radio with other programs**. It is off as it
+  comes. Turned on and saved, it makes Nexus a TCI server on this computer: WSJT-X, JTDX, MSHV, Log4OM and other
+  programs that speak TCI connect to the address it shows (127.0.0.1:40001, with a Copy button) and use whichever
+  radio Nexus runs. They follow and set the dial, switch the sideband, may lower the power but never raise it, and
+  get the receive audio from a sound card. Only programs on this computer can connect, never another computer or
+  a web page. **Programs on TCI may transmit** is a separate switch, off as it comes and set at the station only:
+  with it on, a program can Tune and key the radio's microphone on the Phone screen, every Nexus transmit
+  safeguard still applies, and no program can turn TX on. FT8, FT4 and the other slot-timed modes may not transmit
+  through TCI yet, until the delay Nexus adds to a program's timing has been measured. A program's own transmit
+  audio, CW macros and spots are not ready yet. The programs connected are listed with what each is doing and the
+  last thing Nexus refused it, each with a **Disconnect**. Settings will not save the CAT sharing port and the TCI
+  server port as the same number. A new guide, Share by TCI, covers turning it on and setting up each program.
 - **Every contest log numbers its contacts 1, 2, 3…** The contest screen's log and the logger window's last
   contacts show each contact's number in a first column, in every contest. In a contest that sends a serial
   (Sweepstakes, CQ WPX) the number is the serial that contact was sent; in every other contest it counts the
@@ -587,6 +600,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a test service, and described the Remote page's own FT8/FT4 controls and Log QSO form, which the page no longer
   has. It now says that a browser streaming the station needs only station controls, and that the logging and FT8/FT4
   transmit permissions under Advanced are not used by the Remote page any more.
+- **Native Icom CI-V: closing the connection always tells the radio to stop transmitting.** When Nexus closes its own
+  CI-V connection to an Icom (CAT restarting, a radio switch, Nexus closing), on USB or over the Icom network
+  connection, it first sends the radio its transmit-off command and waits for it to go through. If the radio had
+  stopped answering, with commands piled up ahead of that one, the wait ran out (1.3 s on USB, 4.1 s on the network
+  connection) and the connection closed without the command ever being sent, so a radio that was transmitting stayed
+  on the air. The transmit-off command is now always sent once as the connection closes, and nothing else is sent
+  then. NEEDS-BENCH: an Icom on Native Icom CI-V into a dummy load, Nexus quit while Tune is keyed: the radio returns
+  to receive at once. With the CI-V diagnostic log on, each close (USB, and the Icom network connection) shows one
+  transmit-off and nothing after it.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
