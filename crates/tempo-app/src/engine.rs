@@ -13,6 +13,10 @@
 //!
 //! [`mode`]: Engine::set_mode
 
+/// A CAT-broker client's held key: an armed FT run plans no over under it, and keys its next free
+/// slot after the release.
+#[cfg(test)]
+mod broker_key_slot_tests;
 /// SPEC-2's C16: changes to one contact by its id.
 #[cfg(test)]
 mod by_id_tests;
@@ -26026,14 +26030,16 @@ contact yourself."
         // misses its overs until the repair ends, and keeps its arm for the ones after. Nor
         // while CW is sending ([`Self::cw_sending`], the CW ID after a 73): the slot is skipped
         // as for a tune, the sequence untouched, and the next free slot keys as normal. Nor while
-        // a TCI program's key owns the transmitter ([`Self::tci_holds_tx`]), the same way: an
-        // armed run must never key over a program's over.
+        // a TCI program's key owns the transmitter ([`Self::tci_holds_tx`]), or a CAT-broker
+        // client holds its key ([`Self::broker_ptt`]), the same way: an armed run must never key
+        // over another program's over, and keys its next free slot once the key is released.
         if !self.tx_enabled
             || self.tuning
             || self.cw_sending()
             || !self.tx_allowed()
             || self.clock_repair_holds_tx()
             || self.tci_holds_tx()
+            || self.broker_ptt
         {
             self.app.set_transmitting(false);
             return None;

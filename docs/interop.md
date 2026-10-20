@@ -138,6 +138,10 @@ you didn't mean to.
 - `cat_broker_ptt` is **off by default.** Nexus owns transmit.
 - Turn it on and a broker client may key PTT **only when Nexus itself is idle** —
   Nexus never lets an external key-down override an in-progress Nexus transmission.
+- The other way round holds too: **while a broker client holds PTT, Nexus's own FT8/FT4
+  (or other timed-mode) run sends no over.** It stays armed and transmits in its first
+  period after the client lets go, so one transmitter never carries two programs'
+  signals. Stop TX in Nexus drops the client's key as well.
 - This is on top of the license-class transmit lockout, which applies to every path:
   Nexus refuses to key outside your privileges regardless of who asked — the
 software guard covers every TX path, UDP-triggered included.
