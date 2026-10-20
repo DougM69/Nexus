@@ -117,6 +117,10 @@ mod sstv_scope_test;
 /// The optional street map's packs: sizing, download, removal, and the byte reads its renderer
 /// makes. Thin glue over `crates/street-map`.
 mod street_map;
+/// Nexus as a TCI server, the app's side: the engine's answers to programs on this computer, the
+/// manager that hot-applies the switch, the state and receive audio they are sent. Off by default.
+#[cfg(feature = "radio")]
+mod tci_server;
 mod window_state;
 
 use chains::{panel_key, panel_label, Instance};
@@ -19007,6 +19011,20 @@ fn dismiss_tx_alarm(state: State<'_, SharedEngine>, id: u64) -> Result<AppSnapsh
     Ok(eng.snapshot())
 }
 
+/// The operator's Disconnect beside a program connected to the TCI server: whatever that program
+/// keyed ends, then it is closed. `id` is the program's number in the snapshot's
+/// `radio.tciServer.programs`; a number no connected program has is not an error.
+#[tauri::command(async)]
+fn tci_server_disconnect(state: State<'_, SharedEngine>, id: u64) -> Result<AppSnapshot, String> {
+    // Never under the engine lock: the server ends the program's transmissions through its
+    // backend, which takes that lock (tempo_net::tci::server's lock rule).
+    #[cfg(feature = "radio")]
+    tci_server::disconnect(id);
+    #[cfg(not(feature = "radio"))]
+    let _ = id;
+    Ok(engine_lock(&state).snapshot())
+}
+
 /// Result of a "Test CAT" probe (WSJT-X-style): whether the rig is reachable and
 /// a human-readable detail line (the read frequency, or a specific error).
 #[derive(serde::Serialize)]
@@ -33826,6 +33844,57 @@ fn clear_refusal(slot: &Mutex<Option<String>>) {
     *slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
+/// A program sharing the radio retunes it: the CAT broker's `F` and a TCI program's `vfo` alike
+/// (`tci_server.rs`), so the two shares can never disagree about what a retune does. It is the
+/// operator's own QSY verb, with the band read from the frequency and the sideband left as it is.
+#[cfg(feature = "radio")]
+fn shared_retune(e: &mut Engine, hz: u64) {
+    let mhz = hz as f64 / 1_000_000.0;
+    // Derive the band label from the freq; keep the current band if off-plan.
+    let band = propagation::model::Band::from_mhz(mhz)
+        .map(|b| b.label().to_string())
+        .unwrap_or_else(|| e.settings().band.clone());
+    let mode = {
+        let m = e.settings().sideband.clone();
+        if m.is_empty() {
+            "USB".to_string()
+        } else {
+            m
+        }
+    };
+    e.set_frequency(mhz, &band, &mode);
+}
+
+/// A program sharing the radio asks for a mode: the rule `EngineRig::set_mode` documents (#140),
+/// for the CAT broker's `M` and a TCI program's `modulation` alike. `Err` carries the mode the
+/// radio is in, for the refusal's words; the caller says it, in its own connection-log lane.
+#[cfg(feature = "radio")]
+fn shared_mode_change(e: &mut Engine, mode: &str) -> Result<(), String> {
+    let commanded = e.rig_mode_effective();
+    if let (Some(req), Some(cur)) = (parse_cat_mode(mode), parse_cat_mode(&commanded)) {
+        if req.satisfied_by(cur) {
+            return Ok(());
+        }
+        // A side flip WITHIN the family the section is already in — the one thing that is
+        // the broker's to change.
+        if req.family == cur.family {
+            if let Some(sb) = req.sideband_word() {
+                let (mhz, band) = {
+                    let s = e.settings();
+                    (s.dial_mhz, s.band.clone())
+                };
+                e.set_frequency(mhz, &band, sb);
+                let now = e.rig_mode_effective();
+                if parse_cat_mode(&now).is_some_and(|n| req.satisfied_by(n)) {
+                    return Ok(());
+                }
+                return Err(now);
+            }
+        }
+    }
+    Err(commanded)
+}
+
 /// Bridges the CAT broker (rigctld server) to Nexus's live engine: other apps read
 /// the dial/mode/PTT and can retune Nexus. CAT-sharing (freq/mode) is always on;
 /// foreign PTT is ARBITRATED (Engine::broker_ptt): allowed only behind the
@@ -33933,21 +34002,7 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         engine_lock(&self.engine).on_air()
     }
     fn set_freq(&self, hz: u64) -> bool {
-        let mut e = engine_lock(&self.engine);
-        let mhz = hz as f64 / 1_000_000.0;
-        // Derive the band label from the freq; keep the current band if off-plan.
-        let band = propagation::model::Band::from_mhz(mhz)
-            .map(|b| b.label().to_string())
-            .unwrap_or_else(|| e.settings().band.clone());
-        let mode = {
-            let m = e.settings().sideband.clone();
-            if m.is_empty() {
-                "USB".to_string()
-            } else {
-                m
-            }
-        };
-        e.set_frequency(mhz, &band, &mode);
+        shared_retune(&mut engine_lock(&self.engine), hz);
         true
     }
     /// Set the mode a foreign client asked for — or say honestly that we did not (#140).
@@ -33978,37 +34033,18 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
     /// APRS park and with an SSTV image in flight must each name the mode the rig is really
     /// in — those three are exactly where the old answer diverged.
     fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
-        let mut e = engine_lock(&self.engine);
-        let commanded = e.rig_mode_effective();
-        if let (Some(req), Some(cur)) = (parse_cat_mode(mode), parse_cat_mode(&commanded)) {
-            if req.satisfied_by(cur) {
-                drop(e);
+        // Decided under the engine lock, said after it is released.
+        let decided = shared_mode_change(&mut engine_lock(&self.engine), mode);
+        match decided {
+            Ok(()) => {
                 clear_refusal(&self.last_mode_refusal);
-                return true;
+                true
             }
-            // A side flip WITHIN the family the section is already in — the one thing that is
-            // the broker's to change.
-            if req.family == cur.family {
-                if let Some(sb) = req.sideband_word() {
-                    let (mhz, band) = {
-                        let s = e.settings();
-                        (s.dial_mhz, s.band.clone())
-                    };
-                    e.set_frequency(mhz, &band, sb);
-                    let now = e.rig_mode_effective();
-                    drop(e);
-                    if parse_cat_mode(&now).is_some_and(|n| req.satisfied_by(n)) {
-                        clear_refusal(&self.last_mode_refusal);
-                        return true;
-                    }
-                    self.refuse_mode(mode, &now);
-                    return false;
-                }
+            Err(now) => {
+                self.refuse_mode(mode, &now);
+                false
             }
         }
-        drop(e);
-        self.refuse_mode(mode, &commanded);
-        false
     }
     fn set_ptt(&self, on: bool) -> bool {
         // v2 arbitration: a foreign app may key ONLY when the operator opted in
@@ -35906,6 +35942,9 @@ fn start_on_the_logbook(
         #[cfg(feature = "radio")]
         radio_cfg,
     } = rest;
+    // The TCI server's own copy of the receive audio, taken before the radio thread owns the tap.
+    #[cfg(feature = "radio")]
+    let tci_receive_audio = radio_cfg.rx_tap.tci_audio();
     let engine = d.engine.clone();
     let fd_board_state = d.fd_board.clone();
     let prop_cache = d.prop_cache.clone();
@@ -36795,6 +36834,12 @@ fn start_on_the_logbook(
             }
         });
     }
+
+    // Nexus as a TCI server, for the programs on this computer that drive an SDR program over TCI
+    // (WSJT-X, JTDX, MSHV, loggers, amplifier and tuner controllers): one manager thread in the
+    // CAT-broker mold above, on 127.0.0.1 and ::1 only. Off by default — see tci_server.rs.
+    #[cfg(feature = "radio")]
+    tci_server::spawn(engine.clone(), tci_receive_audio, d.meter_feed.clone());
 
     // JS8Call's API for other programs on this computer, read-only: one manager thread in the
     // CAT-broker mold above, hot-applying the TCP and UDP switches. Off by default — nothing is
@@ -37809,6 +37854,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         atu_tune,
         halt_tx,
         dismiss_tx_alarm,
+        tci_server_disconnect,
         test_cat,
         repair_clock,
         club_firewall_status,
