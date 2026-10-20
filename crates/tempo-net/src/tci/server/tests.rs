@@ -1468,27 +1468,28 @@ fn a_lost_socket_ends_the_programs_transmissions() {
     assert!(b.handle.programs().is_empty());
 }
 
-/// Design §3.4: stopping ends every key first, then `trx:0,false;`, then the close.
+/// Design §3.4: stopping ends every key first, then `trx:0,false;`, then the close. The order is
+/// read where it shows: when a program hears `trx:0,false;`, its transmissions have already ended.
 #[test]
 fn stopping_ends_keys_then_tells_trx_false_then_closes() {
     let mut b = Bench::new();
     let mut c = keyed(&b);
     let mut other = b.client();
     let server = b.server.take().expect("running");
-    server.stop();
-    assert_eq!(
-        b.mock
-            .calls()
-            .iter()
-            .filter(|c| matches!(c, Call::Disconnected(_)))
-            .count(),
-        2
-    );
-    for client in [&mut c, &mut other] {
+    let stopper = std::thread::spawn(move || server.stop());
+    for (client, id) in [(&mut c, b.id(1)), (&mut other, b.id(2))] {
         let mut last = None;
         let code = loop {
             match client.next(WAIT) {
-                Some(Message::Text(t)) => last = Some(t.as_str().to_string()),
+                Some(Message::Text(t)) => {
+                    if t.as_str() == "trx:0,false;" {
+                        assert!(
+                            b.mock.calls().contains(&Call::Disconnected(id)),
+                            "{id}: told trx:0,false; before its transmissions ended"
+                        );
+                    }
+                    last = Some(t.as_str().to_string());
+                }
                 Some(Message::Close(f)) => break f.map(|f| u16::from(f.code)),
                 Some(_) => {}
                 None => break None,
@@ -1497,6 +1498,15 @@ fn stopping_ends_keys_then_tells_trx_false_then_closes() {
         assert_eq!(last.as_deref(), Some("trx:0,false;"));
         assert_eq!(code, Some(1001));
     }
+    stopper.join().expect("stopped");
+    assert_eq!(
+        b.mock
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, Call::Disconnected(_)))
+            .count(),
+        2
+    );
     // The port is free.
     assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, b.port)).is_ok());
 }
