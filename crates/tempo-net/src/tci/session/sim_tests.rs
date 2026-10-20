@@ -1047,3 +1047,69 @@ fn a_close_on_purpose_mid_over_stops_before_the_close_frame() {
     assert!(stop < closed);
     assert!(!s.radio().trx[0].transmitting());
 }
+
+/// One block as the panadapter's tap was handed it: its rate, channels and frames, and its centre.
+type Handed = (u32, crate::tci::frame::Channels, usize, Option<i64>);
+
+/// What the panadapter's tap was handed.
+#[derive(Default)]
+struct IqBlocks {
+    got: std::sync::Mutex<Vec<Handed>>,
+}
+
+impl IqTap for IqBlocks {
+    fn iq(&self, block: &Block<'_>, centre: Option<Hz>) {
+        self.got.lock().unwrap().push((
+            block.header.sample_rate,
+            block.header.channels,
+            block.frames(),
+            centre.map(Hz::get),
+        ));
+    }
+}
+
+/// ⭐ THE SDR PROGRAM'S IQ REACHES THE PANADAPTER'S TAP, CENTRED WHERE THE PROGRAM SAYS, AND A CLOSE
+/// STOPS IT: after `iq_start` the simulated program's IQ blocks for our transceiver arrive with two
+/// channels at its IQ rate and the centre its burst reported, and closing the connection sends
+/// `iq_stop` after the transmitter's stop and before the close frame.
+#[test]
+fn the_programs_iq_reaches_the_tap_and_a_close_stops_it() {
+    let s = sim(SimDialect::expert_sdr3(), []);
+    let conn = connect(&s, Config::new(trx0()));
+    ready(&conn, true);
+    let tap = std::sync::Arc::new(IqBlocks::default());
+    assert!(conn.set_iq_tap(Some(tap.clone())));
+    conn.send(Command::Stream(StreamSetting::IqStart(trx0())))
+        .expect("sent");
+    let deadline = Instant::now() + WAIT;
+    while tap.got.lock().unwrap().len() < 5 {
+        assert!(Instant::now() < deadline, "no IQ reached the tap");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let dds = i64::try_from(s.radio().trx[0].dds).expect("a frequency");
+    for (rate, channels, frames, centre) in tap.got.lock().unwrap().iter() {
+        assert_eq!(
+            (*rate, *channels, *centre),
+            (48_000, crate::tci::frame::Channels::Two, Some(dds))
+        );
+        assert!(*frames > 0);
+    }
+    conn.close();
+    wait_log(&s, "the close", |log| {
+        log.iter()
+            .any(|l| matches!(l.event, SimEvent::Closed { .. }))
+    });
+    let log = s.log();
+    let at = |what: &str| {
+        log.iter()
+            .position(|l| matches!(&l.event, SimEvent::Command { text, .. } if text == what))
+            .unwrap_or_else(|| panic!("no {what}"))
+    };
+    // The connection's end, however the simulator saw it: it writes what is due before it reads,
+    // so a close frame followed at once by the socket's close can read as a drop there.
+    let closed = log
+        .iter()
+        .position(|l| matches!(l.event, SimEvent::Closed { .. }))
+        .expect("the connection's end");
+    assert!(at("trx:0,false") < at("iq_stop:0") && at("iq_stop:0") < closed);
+}
