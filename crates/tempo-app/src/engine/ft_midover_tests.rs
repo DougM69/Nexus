@@ -1246,3 +1246,98 @@ fn a_picked_contest_contact_closed_mid_over_turns_tx_off_once() {
         assert!(!e.take_pending_tx_disable(), "picked {picked}: once");
     }
 }
+
+/// What a logger's WSJT-X Status says is being sent: its Tx Message ([`Engine::wsjtx_tx_status`]).
+fn reported(e: &Engine) -> String {
+    e.wsjtx_tx_status().tx_message
+}
+
+/// The Tx Message WSJT-X reports for `text` on FT8: `msgsent`, blank-padded to 37 characters.
+fn msgsent(text: &str) -> String {
+    format!("{text:<37}")
+}
+
+/// ⭐ A LOGGER IS TOLD THE REST OF THE OVER, NOT THE MESSAGE IT STARTED AS. WSJT-X regenerates
+/// `msgsent` for the restart (`widgets/mainwindow.cpp:7880`), sets its Tx Message from it and sends
+/// a Status when that changed (`m_currentMessage = QString::fromLatin1 (msgsent)`, :8072-8077).
+/// Every way an over switches mid-air reports the new message as a key reports it: a decode, a
+/// Tx-slot click, the 73 a run owes the caller's roger to our RRR (ruling 544), our RRR answered
+/// with 73 while the run still holds the contact, the CQ after the partner's 73 to our RRR (Tx6)
+/// and a contest contact. A route that cannot replace its audio sends the over as keyed, and the
+/// Status goes on saying so.
+#[test]
+fn the_wsjtx_status_reports_the_message_an_over_switched_to() {
+    let (mut got, mut want) = (Vec::new(), Vec::new());
+    let mut switch = |what: &'static str, mut e: Engine, slot: u64, from: &str, to: &str| {
+        assert_eq!(reported(&e), msgsent(from), "premise: {what}: as keyed");
+        let mut route = Route::new(80_000);
+        route.clicked = e.take_ft_restart();
+        assert_eq!(
+            route.switch(&mut e, slot, at(slot, 1_000.0)),
+            switched(from, to),
+            "premise: {what}"
+        );
+        got.push((what, reported(&e)));
+        want.push((what, msgsent(to)));
+    };
+
+    let mut e = station();
+    work(&mut e, "KD9TAW W1AW FN31", -10, 100);
+    key(&mut e, 100);
+    key(&mut e, 102);
+    hear(&mut e, RR73_TO_US, -21, 102);
+    switch("a decode", e, 102, TX2, BYE73);
+
+    let mut e = station();
+    work(&mut e, "KD9TAW W1AW FN31", -10, 100);
+    key(&mut e, 100);
+    e.override_next_tx("W1AW", Some("FN31"), RR73);
+    switch("a Tx-slot click", e, 100, TX2, RR73);
+
+    let mut e = run_back_on_cq_after_our_rrr();
+    key(&mut e, 106);
+    hear(&mut e, RR73_TO_US, -21, 106);
+    switch("the 73 a run owes", e, 106, CQ, BYE73);
+
+    let mut e = run_holding_our_switched_rrr();
+    key(&mut e, 106);
+    hear(&mut e, RR73_TO_US, -21, 106);
+    switch("our RRR, the run holding the contact", e, 106, RRR, BYE73);
+
+    let mut e = rogering_with_rrr();
+    hear(&mut e, BYE73_TO_US, -10, 100);
+    switch("Tx6 after the partner's 73", e, 100, RRR, CQ);
+
+    let mut e = contest("arrlfd");
+    e.set_mode("fieldday-run").expect("the run starts");
+    key(&mut e, 0);
+    hear(&mut e, "K1ABC W9XYZ 1D WI", -12, 2);
+    key(&mut e, 2);
+    key(&mut e, 4);
+    hear(&mut e, "K1ABC W9XYZ RR73", -12, 4);
+    let exch = "W9XYZ K1ABC R 2B EMA";
+    switch("a contest contact", e, 4, exch, "W9XYZ K1ABC 73");
+
+    assert_eq!(got, want);
+
+    let mut e = station();
+    work(&mut e, "KD9TAW W1AW FN31", -10, 100);
+    key(&mut e, 100);
+    key(&mut e, 102);
+    hear(&mut e, RR73_TO_US, -21, 102);
+    let mut route = Route::new(80_000);
+    route.takes = false;
+    assert_eq!(
+        route.switch(&mut e, 102, at(102, 1_000.0)),
+        Some(FtSwitch::NotReplaced {
+            from: TX2.into(),
+            to: BYE73.into()
+        }),
+        "premise"
+    );
+    assert_eq!(
+        reported(&e),
+        msgsent(TX2),
+        "a route that cannot replace its audio: the over goes out as keyed"
+    );
+}

@@ -63,6 +63,58 @@ struct Qso<B: AudioBackend> {
     period_ms: f64,
     /// Hands the loop a decode as its worker does.
     worker: Option<std::sync::mpsc::Sender<DecodeResult>>,
+    /// A logger on the WSJT-X UDP feed, when the scene has one.
+    logger: Option<Logger>,
+}
+
+/// A logger on the loop's WSJT-X UDP feed (GridTracker, JTAlert), and the station sinks the loop
+/// keeps the last Status in, kept from step to step as `run_radio` keeps them: a Status between
+/// boundaries is told against the one sent before it.
+pub(super) struct Logger {
+    pub(super) server: WsjtxServer,
+    socket: std::net::UdpSocket,
+    pub(super) station: StationSinks,
+}
+
+impl Logger {
+    pub(super) fn new() -> Logger {
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_millis(200)))
+            .unwrap();
+        let server =
+            WsjtxServer::new("127.0.0.1:0".parse().unwrap(), socket.local_addr().unwrap()).unwrap();
+        Logger {
+            server,
+            socket,
+            station: StationSinks::new(),
+        }
+    }
+
+    /// The Tx Message of each Status the logger got while the loop was transmitting, in order and
+    /// without repeats: what it was told is on the air.
+    pub(super) fn told_on_the_air(&self) -> Vec<String> {
+        let mut told: Vec<String> = Vec::new();
+        let mut buf = [0u8; 4096];
+        while let Ok((n, _)) = self.socket.recv_from(&mut buf) {
+            let mut r = tempo_net::qds::QdsReader::new(&buf[..n]);
+            r.read_u32();
+            r.read_u32();
+            if r.read_u32() != Some(1) {
+                continue;
+            }
+            let f = wsjtx_status_fields(&buf[..n]);
+            if f[7] == "true" && told.last() != Some(&f[21]) {
+                told.push(f[21].clone());
+            }
+        }
+        told
+    }
+}
+
+/// The Tx Message WSJT-X reports for `text` on FT8 and FT4: `msgsent`, blank-padded to 37.
+pub(super) fn msgsent(text: &str) -> String {
+    format!("{text:<37}")
 }
 
 impl<B: AudioBackend + Default> Qso<B> {
@@ -120,6 +172,7 @@ impl<B: AudioBackend + Default> Qso<B> {
             t0,
             period_ms,
             worker: None,
+            logger: None,
         }
     }
 
@@ -130,9 +183,19 @@ impl<B: AudioBackend + Default> Qso<B> {
 
     /// Step the loop to `until` ms from `t0`, a 20 ms tick at a time.
     fn run_to(&mut self, until: f64) {
-        let (sinks, mut rr) = (no_sinks(), mock_reopen_rig());
+        let mut rr = mock_reopen_rig();
         let mut ra = |_t: &Transport| Ok(B::default());
-        let mut station = StationSinks::new();
+        let mut fresh = StationSinks::new();
+        let (sinks, station) = match &mut self.logger {
+            Some(l) => (
+                Sinks {
+                    wsjtx: Some(&l.server),
+                    ..no_sinks()
+                },
+                &mut l.station,
+            ),
+            None => (no_sinks(), &mut fresh),
+        };
         let end = self.t0 + until;
         while self.t <= end {
             self.state
@@ -144,7 +207,7 @@ impl<B: AudioBackend + Default> Qso<B> {
                     self.t,
                     &mut ra,
                     &mut rr,
-                    &mut station,
+                    station,
                 )
                 .unwrap();
             self.t += 20.0;
@@ -430,10 +493,12 @@ fn a_route_that_cannot_replace_its_audio_sends_the_over_as_first_chosen() {
 }
 
 /// A Tx-slot click during the over (WSJT-X's `on_txb4_clicked`, `:8784`) switches it to the clicked
-/// message on the next tick.
+/// message on the next tick, and a logger on the WSJT-X feed is told so in that tick: WSJT-X sends
+/// a Status when its Tx Message changes (`widgets/mainwindow.cpp:8072-8077`).
 #[test]
 fn a_tx_slot_click_during_the_over_switches_it_on_the_next_tick() {
     let mut s = Qso::new(Tier::Ft8, MockBackend::new());
+    s.logger = Some(Logger::new());
     s.run_to(4_980.0);
     let keyed = s.backend.played.clone();
     s.played_for(5_000.0);
@@ -455,6 +520,11 @@ fn a_tx_slot_click_during_the_over_switches_it_on_the_next_tick() {
         "what played stays the report's"
     );
     assert_eq!(s.backend.retunes, 1);
+    assert_eq!(
+        s.logger.as_ref().unwrap().told_on_the_air(),
+        [msgsent(TX2), msgsent(RR73)],
+        "the logger is told the report as keyed, then the RR73"
+    );
 }
 
 /// The loop's decode worker, held by the test: a job the loop dispatches waits here, and its
@@ -502,10 +572,11 @@ const BYE73: &str = "W1AW KD9TAW 73";
 /// nothing), so only the full pass finds it. The loop runs that pass at WSJT-X's `m_hsymStop`
 /// (FT8 14.40 s, FT4 6.048 s), and it is still running at `t0`: the boundary keys the report again,
 /// on time (WSJT-X keys at t = 0 whatever its decoder is doing), and the pass lands `land_ms` into
-/// that over, the card having played that much of it. Returns the scene after that tick and the
-/// over as keyed.
+/// that over, the card having played that much of it. A logger listens on the WSJT-X feed. Returns
+/// the scene after that tick and the over as keyed.
 fn rr73_found_only_by_the_late_full_pass(tier: Tier, land_ms: f64) -> (Qso<MockBackend>, Vec<f32>) {
     let mut s = Qso::heard_before(tier, MockBackend::new(), 2);
+    s.logger = Some(Logger::new());
     let period = s.period_ms;
     let worker = HeldWorker::install(&mut s.state);
     let rx_slot = s.slot() - 1;
@@ -578,6 +649,8 @@ fn copied(tier: Tier, played: &[f32]) -> Vec<String> {
 /// 73, not the report again. The over keeps its length and its PTT end, a second Tx row says what
 /// went out, TX goes off after it ("Disable Tx after sending 73"), and nothing more is sent (the
 /// engine's `rr73_folded_while_the_report_is_on_the_air_switches_the_rest_to_73` holds the log).
+/// The logger was told the report as keyed, then the 73 (WSJT-X sends a Status when its Tx
+/// Message changes, `widgets/mainwindow.cpp:8072-8077`).
 fn the_over_on_the_air_is_the_73(mut s: Qso<MockBackend>, keyed: Vec<f32>, at: usize) {
     let tier = s.tier;
     let bye = over_of(tier, BYE73);
@@ -628,6 +701,11 @@ fn the_over_on_the_air_is_the_73(mut s: Qso<MockBackend>, keyed: Vec<f32>, at: u
         e.snapshot().qso.and_then(|q| q.tx_now),
         None,
         "the 73 went once: nothing left to send"
+    );
+    assert_eq!(
+        s.logger.as_ref().unwrap().told_on_the_air(),
+        [msgsent(TX2), msgsent(BYE73)],
+        "the logger is told the report as keyed, then the 73"
     );
 }
 

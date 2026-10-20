@@ -264,7 +264,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FT8/FT4: a late reply changes the over already on the air, as in WSJT-X.** When your partner's reply is
   decoded after your over has started (a weak R-report or RR73 that only the full decode finds), Nexus used to send
   the old message to the end of the over and the right one an over later. It now switches the rest of the over to the
-  new message, as WSJT-X does: the over keeps its start and end, and ALL.TXT gets a second Tx line for it. A Tx button
+  new message, as WSJT-X does: the over keeps its start and end, and ALL.TXT gets a second Tx line for it. Programs
+  that listen on the WSJT-X UDP feed (GridTracker, JTAlert) are told the new message as the over switches. A Tx button
   clicked during an over switches it the same way. NEEDS-BENCH: FT8 and FT4 into a dummy load, then on the air with
   a weak station.
 - **Flex native audio (Beta): the late-reply switch works on DAX too.** With Nexus's own Flex client sending the

@@ -73,6 +73,8 @@ struct FlexScene {
     /// Each step's clock, and whether the loop held an over to a deadline after it: an over's
     /// length as Nexus scheduled it, on its own clock.
     held: Vec<(f64, bool)>,
+    /// A logger on the WSJT-X UDP feed, when the scene has one.
+    logger: Option<super::ft_midover::Logger>,
 }
 
 impl FlexScene {
@@ -178,12 +180,22 @@ impl FlexScene {
             rebuilt: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             replace_on_rebuild: false,
             held: Vec::new(),
+            logger: None,
         }
     }
 
     fn step(&mut self, now: f64) {
-        let sinks = no_sinks();
-        let mut station = StationSinks::new();
+        let mut fresh = StationSinks::new();
+        let (sinks, station) = match &mut self.logger {
+            Some(l) => (
+                Sinks {
+                    wsjtx: Some(&l.server),
+                    ..no_sinks()
+                },
+                &mut l.station,
+            ),
+            None => (no_sinks(), &mut fresh),
+        };
         let backend = self.backend.clone();
         let mut reopen_audio = move |_t: &Transport| Ok::<_, String>(backend.clone());
         let rebuilt = self.rebuilt.clone();
@@ -217,7 +229,7 @@ impl FlexScene {
                 now,
                 &mut reopen_audio,
                 &mut reopen_rig,
-                &mut station,
+                station,
             )
             .unwrap();
         self.held.push((now, self.state.tx_until_ms.is_some()));
@@ -4174,14 +4186,16 @@ fn on_dax_as(over: &[f32]) -> Vec<f32> {
 /// over goes to the radio over DAX, paced in real time; the pass lands once 0.75 s of it has gone,
 /// inside the first 1.4 s where every FT8 message is the same Costas sync, and the rest, still in
 /// Nexus, is replaced before it is sent. What the radio got is the 73's over, sample for sample,
-/// as long as the report's: W1AW copies the 73, and TX goes off after it.
+/// as long as the report's: W1AW copies the 73, and TX goes off after it. A logger on the WSJT-X
+/// feed was told the report as keyed, then the 73 (`widgets/mainwindow.cpp:8072-8077`).
 #[test]
 fn on_dax_an_rr73_only_the_late_full_pass_finds_turns_the_report_on_the_air_into_73() {
-    use super::ft_midover::{capture_of, over_of, HeldWorker};
+    use super::ft_midover::{capture_of, msgsent, over_of, HeldWorker, Logger};
     const TX2: &str = "W1AW W9XYZ -10";
     const RR73_TO_US: &str = "W9XYZ W1AW RR73";
     const BYE73: &str = "W1AW W9XYZ 73";
     let mut s = on_dax_without_receive_audio();
+    s.logger = Some(Logger::new());
     let deadline = Instant::now() + Duration::from_secs(10);
     while s.state.last_mode != "PKTUSB" || s.state.decode_in_flight {
         assert!(Instant::now() < deadline, "settle: the slice on PKTUSB");
@@ -4294,5 +4308,10 @@ fn on_dax_an_rr73_only_the_late_full_pass_finds_turns_the_report_on_the_air_into
     assert!(
         !s.engine.lock().unwrap().tx_enabled(),
         "TX off after the 73"
+    );
+    assert_eq!(
+        s.logger.as_ref().unwrap().told_on_the_air(),
+        [msgsent(TX2), msgsent(BYE73)],
+        "the logger is told the report as keyed, then the 73"
     );
 }

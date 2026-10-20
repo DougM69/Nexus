@@ -10,7 +10,8 @@
 //!   :8751, :8768, :8776, :8784, :8802, :8816). `m_transmitting` runs from PTT (:8214) to the
 //!   stop at the window's end (:8569).
 //! - **What.** The next GUI tick regenerates the tones and the wave for the new `m_ntx` (:7880,
-//!   FT8 :7952-7962, FT4 :7988-7997) and writes a second `Tx` row to ALL.TXT and the display
+//!   FT8 :7952-7962, FT4 :7988-7997), sets the Tx Message its UDP Status reports from them and
+//!   sends a Status (:8072-8077), and writes a second `Tx` row to ALL.TXT and the display
 //!   (:8087-8091), stamped with the wall clock (`write_all`, :15252). The Modulator is not
 //!   restarted: it reads the new wave from the sample it had reached (`foxcom_.wave[m_ic]`,
 //!   `Modulator/Modulator.cpp:329`), so the over keeps its start and its end.
@@ -153,7 +154,8 @@ impl Engine {
     /// those samples of the new over). The over is slot-positioned and the new one is as long, so
     /// it keeps its start, its end and its PTT. When `retune` takes it, the rest of the over is
     /// sent as the sequencer sends an over at its key, with a second `Tx` row in ALL.TXT stamped
-    /// `now_ms`; when it cannot, nothing is touched and the new message waits for the next over.
+    /// `now_ms` and the new message as the WSJT-X Status's Tx Message; when it cannot, nothing is
+    /// touched and the new message waits for the next over.
     ///
     /// Only while every reason not to transmit at all, which `plan_tx` checks before it picks an
     /// over, still passes, the live slot is still this station's, and the dial, sideband, TX
@@ -207,12 +209,12 @@ impl Engine {
             return None;
         }
         let from = on.text.clone();
-        let wave = TxWaveform::Native {
+        let waveform = TxWaveform::Native {
             kind: on.kind,
             text: to.clone(),
             f0: on.f0,
-        }
-        .build();
+        };
+        let wave = waveform.build();
         if wave.is_empty() || wave.len() != on.wave_len {
             tempo_core::applog::info(
                 "tx",
@@ -278,6 +280,10 @@ impl Engine {
         if let Some(on) = self.ft_on_air.as_mut() {
             on.text = to.clone();
         }
+        // WSJT-X's Tx Message is the regenerated `msgsent` (`m_currentMessage`, :8072-8077), so the
+        // next Status a logger gets says what the rest of the over carries, as at a key
+        // (`commit_tx`). Output only: nothing keys, refuses or stops on it.
+        self.tx_message = super::wsjtx_msgsent(tier, &waveform);
         Some(FtSwitch::Switched { from, to })
     }
 
