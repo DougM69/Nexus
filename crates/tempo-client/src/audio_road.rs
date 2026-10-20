@@ -660,6 +660,18 @@ mod tests {
             heard
         }
 
+        /// Waits for the road's first word, so the station knows where the road is: its thread
+        /// says `listen` at its next turn, which a loaded machine can wake late.
+        fn met(&mut self) {
+            assert!(
+                until(|| {
+                    let _ = self.heard(TICK);
+                    self.peer.is_some()
+                }),
+                "the road never spoke"
+            );
+        }
+
         /// One frame of receive audio to the computer.
         fn send(&self, down: &Down) {
             let datagram = self.keys.send.seal(down.kind(), &down.body()).unwrap();
@@ -719,12 +731,8 @@ mod tests {
             .collect()
     }
 
-    fn settle() {
-        std::thread::sleep(Duration::from_millis(60));
-    }
-
     /// Waits for `done` as long as a loaded machine may take to get there: whether it did.
-    fn until(done: impl Fn() -> bool) -> bool {
+    fn until(mut done: impl FnMut() -> bool) -> bool {
         let deadline = Instant::now() + Duration::from_secs(2);
         while !done() {
             if Instant::now() >= deadline {
@@ -789,20 +797,21 @@ mod tests {
     fn the_stations_frames_play_in_order_and_a_known_gap_plays_the_bed() {
         let (road, mut station, headset, _) = road();
         road.lease(Some(LEASE.to_string()));
-        let _ = station.heard(Duration::from_millis(100));
+        station.met();
         let frames = band();
         let rings = &headset.rings;
         let frame = PLAY_FRAME_SAMPLES;
         for each in &frames[..4] {
             station.send(each);
         }
-        settle();
+        until(|| rings.waiting() == 4 * frame);
         assert_eq!(rings.waiting(), 4 * frame);
+        // The road reads one datagram a turn.
         station.send(&frames[1]);
-        settle();
+        turned(&road);
         assert_eq!(rings.waiting(), 4 * frame, "an older frame played");
         station.send(&frames[6]);
-        settle();
+        turned(&road);
         assert_eq!(rings.waiting(), 7 * frame, "the gap's length");
         let mut cushion = Cushion::new(48_000);
         cushion.begin(rings);
@@ -828,7 +837,7 @@ mod tests {
     fn the_stations_audio_is_muted_while_the_over_may_be_on_the_air() {
         let (road, mut station, headset, on_air) = road();
         road.lease(Some(LEASE.to_string()));
-        let _ = station.heard(Duration::from_millis(100));
+        station.met();
         let (frames, rings) = (band(), &headset.rings);
         let mutes: [fn(&OnAir); 2] = [
             |on_air| on_air.pressing(Some(1)),
@@ -836,22 +845,25 @@ mod tests {
         ];
         for (n, mute) in mutes.iter().enumerate() {
             mute(&on_air);
-            settle();
+            turned(&road);
             assert!(rings.muted(), "case {n}: not muted");
             for frame in &frames[10 * n..10 * n + 5] {
                 station.send(frame);
             }
-            settle();
+            // The road reads one datagram a turn.
+            for _ in 0..5 {
+                turned(&road);
+            }
             assert_eq!(rings.waiting(), 0, "case {n}: queued while muted");
             on_air.pressing(None);
             on_air.rig(Some(false));
         }
-        settle();
+        turned(&road);
         assert!(!rings.muted());
         for frame in &frames[30..35] {
             station.send(frame);
         }
-        settle();
+        until(|| rings.waiting() == 5 * PLAY_FRAME_SAMPLES);
         assert_eq!(rings.waiting(), 5 * PLAY_FRAME_SAMPLES, "control: it plays");
     }
 
