@@ -652,6 +652,11 @@ mod tests {
         for (what, setup, call, hz, why) in cases {
             let mut e = at("tci", "phone", 14.250);
             setup(&mut e);
+            assert_eq!(
+                e.on_air(),
+                why == SPOT_ON_AIR,
+                "premise: {what} puts something on the air, or nothing"
+            );
             let dial = e.settings.dial_mhz;
             let r = e.tci_spot_clicked(call, hz);
             if r != Err(why) || e.settings.dial_mhz != dial {
