@@ -14,7 +14,10 @@
 //!   modes refused until the loop bench, the operator's ruling of 2026-10-19). A refusal is told as
 //!   TCI tells any key that did not take (`trx:0,false;`, `tune:0,false;`), and each program's
 //!   `tx_enable` is the same verdict. Nothing a program sends arms transmit, lets go of the
-//!   operator's Stop or a watchdog trip, or raises the power. CW is not offered yet (task S7).
+//!   operator's Stop or a watchdog trip, or raises the power.
+//! - **A program's CW** (`cw_macros`, `cw_msg`) is the engine's verdict too, in the CW section only,
+//!   then the engine's text filter; Nexus's own CW keyer sends it at the programs' speed, which a
+//!   program sets inside the keyer's range and which is never the operator's own.
 //! - **A program's over** is armed by its key, fed by its transmit audio (read here into 12 kHz
 //!   mono with the engine lock released, and taken by the engine only from the over's owner), keyed
 //!   and re-gated by the radio loop on every tick, and asked for its audio by TX_CHRONO.
@@ -52,15 +55,15 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use tempo_app::dto::{TciProgramStatus, TciServerStatus};
-use tempo_app::engine::{engine_lock, Engine, MeterFeed, TxOwner};
+use tempo_app::engine::{engine_lock, Engine, MeterFeed};
 use tempo_audio::receive_audio::{ReceiveAudioFeed, ReceiveAudioReader};
 use tempo_audio::tci_audio::{Format, FromProgram, Stream, ToProgram, TxHeader};
 use tempo_net::tci::frame::{
     self, BlockHeader, BlockKind, Chrono, LengthMeaning, RawHeader, HEADER_LEN,
 };
 use tempo_net::tci::server::{
-    AudioFormat, ClientId, Closed, Config, Cw, Event, Handle, HandshakeRefusal, KeyKind, Limits,
-    Program, Refusal, Server, Snapshot, TciBackend, UNKNOWN_LIMITS,
+    AudioFormat, ClientId, Closed, Config, Cw, CwSpeed, Event, Handle, HandshakeRefusal, KeyKind,
+    Limits, Program, Refusal, Server, Snapshot, TciBackend, UNKNOWN_LIMITS,
 };
 use tempo_net::tci::wire::{Hz, Word, MAX_HZ};
 use tempo_net::tci::Trx;
@@ -203,7 +206,8 @@ fn station(e: &Engine, programs: &[Program], smeter_db: Option<i32>) -> Snapshot
             .iter()
             .map(|p| (p.id, e.tci_tx_enable(p.id.get(), p.audio)))
             .collect(),
-        cw_speed: e.cw_wpm(),
+        // What programs' CW keys at: a program's own speed, else the operator's (never moved by one).
+        cw_speed: e.tci_cw_wpm(),
         tx_buffering_ms: TX_BUFFERING_MS,
         rx_dbm: smeter_db.map(|db| rx_dbm(dial, db)),
         // Nexus reads its power and SWR only while keyed, has no engine accessor for them, and
@@ -534,21 +538,21 @@ impl TciBackend for EngineTci {
         // The pump stops sending when the program's stream reads stopped.
     }
 
-    fn cw(&self, _client: ClientId, _cw: Cw) -> Result<(), Refusal> {
-        // ⛔ Not offered until task S7 gives the engine's verdict a CW key; the station's switch
-        // still answers first, as it does for every key.
-        if !engine_lock(&self.engine).tci_transmit() {
-            return Err(Refusal::Switch);
-        }
-        Err(Refusal::Tier)
+    fn cw(&self, client: ClientId, cw: Cw) -> Result<(), Refusal> {
+        // ⛔ THE ENGINE'S VERDICT AND TEXT FILTER AND NOTHING ELSE (design §3.5): the switch and
+        // the CW tier, every station gate, one owner, the CW section, then only text Nexus's keyer
+        // can send; `Ok` queues it for Nexus's own CW keyer at the programs' speed. It never arms.
+        engine_lock(&self.engine).tci_cw(client.get(), &cw)
     }
 
-    fn cw_stop(&self, _client: ClientId) {
-        // From any origin (design §3.5), and CW only: `stop_cw` also cuts a slot over in flight.
-        let mut e = engine_lock(&self.engine);
-        if e.tx_owner() == Some(TxOwner::Cw) {
-            e.stop_cw();
-        }
+    fn cw_stop(&self, client: ClientId) {
+        // From any origin (design §3.5), and CW only: the CW stop also cuts a slot over in flight.
+        engine_lock(&self.engine).tci_cw_stop(client.get());
+    }
+
+    fn cw_speed(&self, _client: ClientId, speed: CwSpeed) -> Result<u32, Refusal> {
+        // The programs' own speed, inside the keyer's range; never the operator's.
+        engine_lock(&self.engine).tci_cw_speed(speed)
     }
 }
 

@@ -4,6 +4,7 @@
 
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 
+use tempo_app::engine::TxOwner;
 use tempo_app::mic::MicTick;
 use tempo_app::settings::{OperatingMode, Settings};
 use tempo_audio::receive_audio::ReceiveSource;
@@ -1705,5 +1706,135 @@ fn slot_timed_modes_stay_refused_through_the_server() {
         engine_lock(&engine).tci_owner(),
         Some(a_id.get()),
         "control: Phone admits it"
+    );
+}
+
+/// A station in the CW section on 40 m with every privilege, transmit armed by the operator after
+/// the move from 20 m (a band change holds programs' keys until that arm), the operator's own CW at
+/// 20 WPM, and "Programs on TCI may transmit" on.
+fn cw_station() -> SharedEngine {
+    let mut e = Engine::with_settings(Settings {
+        mycall: "KD9TAW".into(),
+        mygrid: "EN52".into(),
+        tci_server_tx: true,
+        ..Settings::default()
+    });
+    e.set_license_class("extra");
+    e.set_operating_mode("cw", false);
+    e.set_frequency(7.030, "40m", "CW");
+    e.set_tx_enabled_by_operator(true);
+    // The band change's halt left its one-shot cuts; taken, as the radio loop's next tick would,
+    // so a cut a test sees is its own.
+    let _ = (e.take_cw_abort(), e.take_slot_tx_abort());
+    e.set_cw_wpm(20);
+    assert!(
+        e.tx_enabled() && e.tci_transmit() && !e.on_air(),
+        "premise: CW armed on 7.030, programs may transmit, nothing on the air"
+    );
+    Arc::new(Mutex::new(e))
+}
+
+/// The radio loop takes the next CW word and reports the keyer sending it, for a minute: the
+/// arbiter holds it on the air until something ends it. The word and its speed.
+fn cw_word_on_the_air(engine: &SharedEngine) -> (String, u32) {
+    let mut e = engine_lock(engine);
+    let (word, wpm, _) = e.poll_cw_word().expect("premise: a CW word to key");
+    e.observe_cw_keying(Some(60_000.0));
+    (word, wpm)
+}
+
+/// Every CW word the radio loop would key from now on, with its speed.
+fn cw_words_left(engine: &SharedEngine) -> Vec<(String, u32)> {
+    let mut e = engine_lock(engine);
+    std::iter::from_fn(|| e.poll_cw_word().map(|(word, wpm, _)| (word, wpm))).collect()
+}
+
+/// ⛔ A PROGRAM'S CW THROUGH THE SERVER, on the wire against a real engine: in the CW
+/// section with the switch on, `cw_macros_speed:30;` is answered and sets the programs' speed only
+/// (the operator's stays 20, and another program reads 30); `cw_macros` goes to Nexus's CW keyer at
+/// that speed, as that program's CW, and programs are told `trx:0,true;` while it is on the air;
+/// another program's `cw_macros_stop;` cuts it mid-word; a text holding a `;` (sent as `*`) is
+/// refused whole and named in the log; a program's lost connection cuts its own CW mid-word.
+/// CONTROL: with the switch off, a macro queues nothing.
+#[test]
+fn a_programs_cw_goes_through_the_engine_at_its_own_speed_and_its_stops_cut_it() {
+    let engine = cw_station();
+    let (mut m, _feed) = serving(&engine);
+    let h = handle(&m);
+    let (mut a, a_id, _) = program(&h, port(&m));
+    let (mut b, _, _) = program(&h, port(&m));
+
+    a.send("cw_macros_speed:30;");
+    a.lines_until("cw_macros_speed:30;");
+    assert_eq!(
+        engine_lock(&engine).cw_wpm(),
+        20,
+        "the operator's speed moved"
+    );
+    m.publish();
+    b.send("cw_macros_speed;");
+    b.lines_until("cw_macros_speed:30;");
+
+    a.send("cw_macros:0,cq test de kd9taw;");
+    in_order(&mut a, "cw");
+    assert_eq!(
+        engine_lock(&engine).tci_owner(),
+        Some(a_id.get()),
+        "the program's CW is its own"
+    );
+    m.publish();
+    a.lines_until("trx:0,true;");
+    assert_eq!(cw_word_on_the_air(&engine), ("CQ".to_string(), 30));
+    b.send("cw_macros_stop;");
+    in_order(&mut b, "cw");
+    {
+        let mut e = engine_lock(&engine);
+        assert!(
+            e.take_cw_abort(),
+            "cw_macros_stop: the word on the air keys on"
+        );
+        assert_eq!(e.tx_owner(), None, "cw_macros_stop: still owned");
+    }
+    assert_eq!(cw_words_left(&engine), Vec::new(), "words still to go");
+
+    a.send("cw_macros:0,TEST*FA00007000000;");
+    in_order(&mut a, "cw");
+    assert_eq!(cw_words_left(&engine), Vec::new(), "a ; reached the keyer");
+    assert!(
+        logged(Refusal::CwText.text()),
+        "the refused text is not in the connection log"
+    );
+
+    a.send("cw_macros:0,CQ TEST;");
+    in_order(&mut a, "cw");
+    assert_eq!(cw_word_on_the_air(&engine), ("CQ".to_string(), 30));
+    drop(a);
+    // The server tells the backend of the loss before it frees the program's slot.
+    let until = Instant::now() + WAIT;
+    while h.programs().iter().any(|p| p.id == a_id) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    {
+        let mut e = engine_lock(&engine);
+        assert!(e.take_cw_abort(), "the lost program's word keys on");
+        assert_eq!(
+            e.tx_owner(),
+            None,
+            "the lost program's CW is still on the air"
+        );
+    }
+    assert_eq!(
+        cw_words_left(&engine),
+        Vec::new(),
+        "the lost program's words to go"
+    );
+
+    programs_may_transmit(&engine, false);
+    b.send("cw_macros:0,CQ;");
+    in_order(&mut b, "cw");
+    assert_eq!(
+        cw_words_left(&engine),
+        Vec::new(),
+        "control: the switch off"
     );
 }
