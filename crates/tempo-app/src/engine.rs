@@ -24020,18 +24020,18 @@ contact yourself."
 
     /// Why the active radio's CAT connection refuses a transmission judged as section `om`, when
     /// it does: the Icom network connection refuses every transmission, receive and control only
-    /// in this Beta ([`crate::settings::rig_conn_is_icom_lan`]); the TCI connection refuses the
-    /// Digital section, whose modes are all slot-timed, until their timing over TCI has been
-    /// benched ([`crate::settings::rig_conn_is_tci`], `engine/tci_connection.rs`). The section is
-    /// the one JUDGED, not the one the station is in, so [`Self::tx_allowed_as`] asked as Digital
-    /// from another section is refused, and asked as another section from Digital is not.
-    fn connection_tx_refusal_as(&self, om: crate::settings::OperatingMode) -> Option<&'static str> {
-        let conn = &self.settings.rig_conn;
-        if crate::settings::rig_conn_is_icom_lan(conn) {
-            return Some(crate::settings::ICOM_LAN_TX_REFUSED);
-        }
-        (crate::settings::rig_conn_is_tci(conn) && om == crate::settings::OperatingMode::Digital)
-            .then_some(tci_connection::TCI_SLOT_TIMED_TX_REFUSED)
+    /// in this Beta ([`crate::settings::rig_conn_is_icom_lan`]). The TCI connection refuses no
+    /// section: FT8, FT4, JS8 and the other slot-timed modes transmit on it as the other sections
+    /// do, behind every other gate (`engine/tci_connection.rs`). ⚠️ NEEDS-BENCH: FT over TCI has
+    /// met only the simulator. A rule for one section reads the section JUDGED, not the one the
+    /// station is in, so [`Self::tx_allowed_as`] asked as that section from another is refused,
+    /// and asked as another section from it is not; no rule reads it now.
+    fn connection_tx_refusal_as(
+        &self,
+        _om: crate::settings::OperatingMode,
+    ) -> Option<&'static str> {
+        crate::settings::rig_conn_is_icom_lan(&self.settings.rig_conn)
+            .then_some(crate::settings::ICOM_LAN_TX_REFUSED)
     }
 
     /// Is the licence lock the phone MODE alone? The Phone section is refused, upper sideband is

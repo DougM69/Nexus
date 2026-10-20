@@ -984,36 +984,36 @@ fn rows() -> Vec<Row> {
             phone_seg: None,
         },
         // ── An SDR program's radio on the TCI connection ───────────────────────────────
-        // The slot-timed modes wait for the TCI bench (`engine/tci_connection.rs`); every other
-        // section is judged as on any connection, the licence included.
+        // Every section is judged as on any connection, the licence included: the connection
+        // refuses none, the Digital section's slot-timed modes included (`engine/tci_connection.rs`).
         Row {
-            name: "TCI FT8 on 20 m, General: the slot-timed modes wait for the TCI bench",
+            name: "TCI FT8 on 20 m, General",
             build: || tci_station("general", "digital", 14.074, "20m", "USB"),
-            tx_allowed: false,
+            tx_allowed: true,
             emission_mhz: 14.074,
             phone_seg: Some((14.225, 14.350)),
         },
         Row {
-            name: "TCI FT4 on 20 m, General: the slot-timed modes wait for the TCI bench",
+            name: "TCI FT4 on 20 m, General",
             build: || {
                 let mut e = tci_station("general", "digital", 14.080, "20m", "USB");
                 e.set_tier(Tier::Ft4);
                 e.set_frequency(14.080, "20m", "USB");
                 e
             },
-            tx_allowed: false,
+            tx_allowed: true,
             emission_mhz: 14.080,
             phone_seg: Some((14.225, 14.350)),
         },
         Row {
-            name: "TCI JS8 on 20 m, General: the slot-timed modes wait for the TCI bench",
+            name: "TCI JS8 on 20 m, General",
             build: || {
                 let mut e = tci_station("general", "digital", 14.078, "20m", "USB");
                 e.set_tier(Tier::Js8);
                 e.set_frequency(14.078, "20m", "USB");
                 e
             },
-            tx_allowed: false,
+            tx_allowed: true,
             emission_mhz: 14.078,
             phone_seg: Some((14.225, 14.350)),
         },
@@ -1348,16 +1348,15 @@ fn a_tci_programs_passband_only_ever_refuses_more_than_the_gate() {
     );
 }
 
-/// ⛔ ON THE TCI CONNECTION ONLY THE DIGITAL JUDGEMENT IS REFUSED, WHATEVER SECTION THE STATION IS
-/// IN: the connection's refusal judges the section asked (`engine/tci_connection.rs`). Over every
-/// TCI row and every section, beside the row's serial twin: asked as Digital it is refused, asked
-/// as any other section it is the twin's answer. CONTROLS: some twin allows the Digital judgement
-/// the TCI row refuses, and some other judgement is allowed on a TCI row, so neither half is
-/// vacuous.
+/// ⛔ ON THE TCI CONNECTION EVERY JUDGEMENT IS THE LICENCE'S, FOR THE SECTION ASKED, WHATEVER
+/// SECTION THE STATION IS IN: the connection refuses no section (`engine/tci_connection.rs`). Over
+/// every TCI row and every section asked, the answer is the row's serial twin's, and some row's
+/// answer moves with the section asked, so the gate judges that section and not the station's.
+/// CONTROL: the Digital judgement is allowed on some TCI row, so the first half is not vacuous.
 #[test]
-fn on_the_tci_connection_only_the_digital_judgement_is_refused_from_every_section() {
+fn on_the_tci_connection_every_judgement_is_the_licences_for_the_section_asked() {
     use crate::settings::OperatingMode::{Cw, Digital, Keyboard, Phone, Rtty};
-    let (mut wrong, mut refused_by_tci, mut other_allowed) = (Vec::new(), 0, 0);
+    let (mut wrong, mut moved_by_section, mut digital_allowed) = (Vec::new(), 0, 0);
     for row in rows() {
         let e = (row.build)();
         if !crate::settings::rig_conn_is_tci(&e.settings.rig_conn) {
@@ -1366,24 +1365,27 @@ fn on_the_tci_connection_only_the_digital_judgement_is_refused_from_every_sectio
         let mut twin = (row.build)();
         twin.settings.rig_conn = "serial".to_string();
         twin.settings.sync_active_from_flat();
+        let in_force = e.tx_allowed_as(e.settings.operating_mode);
         for om in [Digital, Phone, Cw, Rtty, Keyboard] {
             let (tci, serial) = (e.tx_allowed_as(om), twin.tx_allowed_as(om));
-            let want = om != Digital && serial;
-            if tci != want {
-                wrong.push(format!("{}: asked as {om:?}: {tci}, want {want}", row.name));
+            if tci != serial {
+                wrong.push(format!(
+                    "{}: asked as {om:?}: {tci}, its serial twin {serial}",
+                    row.name
+                ));
             }
-            refused_by_tci += usize::from(om == Digital && serial);
-            other_allowed += usize::from(om != Digital && tci);
+            moved_by_section += usize::from(tci != in_force);
+            digital_allowed += usize::from(om == Digital && tci);
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     assert!(
-        refused_by_tci > 0,
-        "control: no serial twin allowed the Digital judgement"
+        moved_by_section > 0,
+        "no TCI row's answer moved with the section asked: the gate judged the station's section"
     );
     assert!(
-        other_allowed > 0,
-        "control: no other judgement was allowed on a TCI row"
+        digital_allowed > 0,
+        "control: no TCI row allowed the Digital judgement"
     );
 }
 

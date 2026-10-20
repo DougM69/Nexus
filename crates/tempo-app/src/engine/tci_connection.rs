@@ -4,31 +4,30 @@
 //! (`tempo_audio::tci`) refuse at the key everything the server cannot take: a key before
 //! `ready;`, while the program forbids transmit, above the drive Nexus set, a digital over on the
 //! program's microphone, Nexus's audio with no route for it. This module holds the station's side:
-//! what must be refused before an over is even planned, and what an outside program's click may
-//! never do.
+//! what the connection asks of the engine, and what an outside program's click may never do.
 //!
-//! ## What the connection refuses
+//! ## What the connection allows
 //!
-//! ⛔ THE SLOT-TIMED MODES WAIT FOR THE BENCH. Every tier of the Digital section (FT8, FT4, FT2,
-//! Tempo Fast and Deep, Q65, FST4, FST4W, MSK144, JT65, WSPR and JS8) is slot-timed, and on TCI an
-//! over's start is the program's: it keys, then pulls the audio when it is ready for it, so the
-//! over starts as late as the program's first pull, which nobody has measured yet; and the
-//! mid-over message switch needs the TCI route to replace what it still holds. So on the TCI
-//! connection the Digital section transmits nothing yet ([`TCI_SLOT_TIMED_TX_REFUSED`]). The
-//! refusal is [`Engine::connection_tx_refusal`]'s, so `tx_allowed` is false with it, every transmit
-//! path refuses before PTT exactly as it refuses a frequency outside the licence (nothing is
-//! planned, sequenced or written to ALL.TXT, which is why it changes no timing or sequencing), and
-//! the snapshot carries its words so the cockpit names the connection, not the licence. It judges
-//! the section ASKED (`connection_tx_refusal_as`): the gate asked as Digital from another section
-//! is refused too, and asked as another section from Digital is not. Allowing the Digital section
-//! is the one TCI arm of `connection_tx_refusal_as`, once the TCI route carries the switch and the
-//! bench has timed it.
+//! ⭐ EVERY SECTION TRANSMITS ON THE TCI CONNECTION, the Digital section's slot-timed modes (FT8,
+//! FT4, FT2, Tempo Fast and Deep, Q65, FST4, FST4W, MSK144, JT65, WSPR and JS8) included, behind
+//! every gate any connection has: TX armed, a Stop's hold, a watchdog trip, the licence on the
+//! emitted RF, identity at the keying boundary. The connection adds no refusal of its own
+//! ([`Engine::connection_tx_refusal`] is `None` on it, in every section). With Audio over TCI on, a
+//! slot over goes to the SDR program as Nexus's own audio, which the program pulls as it sends, so
+//! the mid-over message switch replaces only what it has not pulled yet; with Audio over TCI off,
+//! the over keys the program's own input and plays on the sound card, as on any CAT radio.
 //!
-//! The other sections are the session's to refuse: Phone at the shack keys the program's own
-//! microphone and Tune its own carrier; Nexus's audio (RTTY, PSK, SSTV, APRS, the voice keyer)
-//! waits for the TCI audio route; CW for the program's CW keyer. Nothing here repeats those rules,
-//! and nothing here admits what they refuse. Every other gate (TX armed, a Stop's hold, a watchdog
-//! trip, the licence) stands as on any other connection.
+//! ⚠️ NEEDS-BENCH. An over's start on TCI is the program's first pull after the key, which no bench
+//! has timed yet, and the switch on the TCI route has met only the simulator. The release waits for
+//! the operator's bench of FT8 and FT4 over TCI. Should the bench refuse it, holding the Digital
+//! section again is one arm of `connection_tx_refusal_as`, which already judges the section asked.
+//!
+//! The keys are the session's to refuse: Phone at the shack keys the program's own microphone and
+//! Tune its own carrier; with Audio over TCI on, Nexus's audio (the slot-timed modes, RTTY, PSK,
+//! SSTV, APRS, the voice keyer) goes out only once the program has taken Nexus's audio stream, and
+//! never on its microphone; CW through the program's own keyer is not built yet. Nothing here
+//! repeats those rules, and nothing here admits what they refuse. Programs' overs through Nexus's
+//! own TCI server are a separate rule (`engine/tci.rs`): their slot-timed modes stay refused there.
 //!
 //! ## A click on a spot in the program's panadapter
 //!
@@ -43,11 +42,6 @@
 //! nothing holds it. A band change it makes halts what a band change halts.
 
 use super::Engine;
-
-/// Why the TCI connection refuses the Digital section's transmissions, as the operator reads it: on
-/// the cockpit's TX state, in the JS8 cockpit and in the log.
-pub const TCI_SLOT_TIMED_TX_REFUSED: &str =
-    "FT8, FT4, JS8 and the other slot-timed modes do not transmit on the TCI connection yet (Beta)";
 
 /// What a click on a spot in the SDR program's panadapter could not do, for the connection log.
 const SPOT_NOT_ON_TCI: &str = "spot click ignored: the radio in use is not on the TCI connection";
@@ -149,16 +143,22 @@ mod tests {
         tempo_core::timing::now_unix_ms() as u64 / period_ms + 1
     }
 
-    /// ⛔ THE TCI CONNECTION HOLDS THE SLOT-TIMED MODES BEFORE PTT, IN ITS OWN WORDS. In the
-    /// Digital section FT8, FT4 and JS8 plan nothing to key, and the lock, the snapshot and Tune
-    /// say why: the TCI connection, not the licence. The control is the same radio on its serial
-    /// connection, where every one of the same paths goes ahead. Every path is measured before
+    /// ⭐ THE SLOT-TIMED MODES TRANSMIT ON THE TCI CONNECTION AS ON ANY OTHER (NEEDS-BENCH, the
+    /// module header). In the Digital section the verdict, the snapshot's lock and reason, Call CQ
+    /// on FT8 and FT4 (the slot plans the CQ), a JS8 message (its slot plans it) and Tune go ahead
+    /// on TCI exactly as on the same radio's serial connection. CONTROL: on the Icom network
+    /// connection every one of them is refused, in that connection's own words, so the paths
+    /// measured here are the ones a connection's refusal stops. Every path is measured before
     /// anything is asserted, so a red names them all.
     #[test]
-    fn the_tci_connection_holds_the_slot_timed_modes_before_ptt_and_names_itself() {
+    fn the_slot_timed_modes_transmit_on_the_tci_connection_as_on_serial() {
         let mut wrong = Vec::new();
-        for (conn, tci) in [("serial", false), ("tci", true)] {
-            let refused = tci.then(|| TCI_SLOT_TIMED_TX_REFUSED.to_string());
+        for (conn, refused) in [
+            ("serial", None),
+            ("tci", None),
+            ("icomlan", Some(ICOM_LAN_TX_REFUSED)),
+        ] {
+            let goes = refused.is_none();
             let mut check = |what: &str, got: String, want: String| {
                 if got != want {
                     wrong.push(format!("{conn}: {what}: got {got}, want {want}"));
@@ -169,13 +169,13 @@ mod tests {
             check(
                 "the verdict",
                 format!("{}", e.tx_allowed()),
-                format!("{}", !tci),
+                format!("{goes}"),
             );
             let radio = e.snapshot().radio;
             check(
                 "the snapshot's lock",
                 format!("{}", radio.tx_allowed),
-                format!("{}", !tci),
+                format!("{goes}"),
             );
             check(
                 "the snapshot's reason",
@@ -185,20 +185,20 @@ mod tests {
             check(
                 "the connection's reason",
                 format!("{:?}", e.connection_tx_refusal()),
-                format!("{:?}", tci.then_some(TCI_SLOT_TIMED_TX_REFUSED)),
+                format!("{refused:?}"),
             );
 
-            // FT8 and FT4: Call CQ arms, and the slot plans nothing to key.
+            // FT8 and FT4: Call CQ arms, and the slot plans the CQ.
             for tier in [Tier::Ft8, Tier::Ft4] {
                 let mut e = cq_run(conn, tier);
                 check(
                     &format!("{tier:?}: the CQ keys"),
                     format!("{}", !e.poll_tx(0).is_empty()),
-                    format!("{}", !tci),
+                    format!("{goes}"),
                 );
             }
 
-            // JS8: the message waits, unplanned.
+            // JS8: the message's slot plans it.
             let mut e = on(conn);
             e.js8_enter();
             e.set_tx_offset(1500.0);
@@ -208,7 +208,7 @@ mod tests {
             check(
                 "JS8: the slot keys",
                 format!("{}", e.plan_tx(slot).is_some()),
-                format!("{}", !tci),
+                format!("{goes}"),
             );
 
             // Tune in the Digital section.
@@ -217,7 +217,7 @@ mod tests {
             check(
                 "Digital: Tune",
                 format!("{}", e.tuning()),
-                format!("{}", !tci),
+                format!("{goes}"),
             );
         }
         assert!(
@@ -228,9 +228,10 @@ mod tests {
     }
 
     /// The JS8 cockpit's line, when its queue is dropped because the connection refuses the
-    /// section, names that connection, as CW's notice does: the TCI connection's words, and the
-    /// Icom network's own. CONTROLS: on a serial radio nothing is refused, and outside the licence
-    /// the line names the licence.
+    /// section, names that connection, as CW's notice does: the Icom network's words. The TCI
+    /// connection drops nothing, and outside the licence the line names the licence there, as on
+    /// any connection. CONTROLS: on a serial radio nothing is refused, and outside the licence the
+    /// line names it.
     #[test]
     fn the_js8_line_names_the_connection_not_the_licence() {
         let line = |conn: &str, mhz: f64| {
@@ -244,8 +245,9 @@ mod tests {
             e.js8_state().last_error
         };
         assert_eq!(
-            line("tci", 14.078).as_deref(),
-            Some(TCI_SLOT_TIMED_TX_REFUSED)
+            line("tci", 14.078),
+            None,
+            "the TCI connection drops nothing"
         );
         assert_eq!(
             line("icomlan", 14.078).as_deref(),
@@ -253,18 +255,20 @@ mod tests {
         );
         assert_eq!(line("serial", 14.078), None, "control: nothing refused");
         // A General's 20 m data starts at 14.025.
-        let outside = line("serial", 14.010).unwrap_or_default();
-        assert!(
-            outside.contains("license privileges"),
-            "control: outside the licence the line names it: {outside:?}"
-        );
+        for conn in ["serial", "tci"] {
+            let outside = line(conn, 14.010).unwrap_or_default();
+            assert!(
+                outside.contains("license privileges"),
+                "{conn}: outside the licence the line names it: {outside:?}"
+            );
+        }
     }
 
-    /// ⛔ ONLY THE DIGITAL SECTION: on the TCI connection every other section's transmit path goes
+    /// ⭐ AND EVERY OTHER SECTION: on the TCI connection every other section's transmit path goes
     /// ahead in the engine exactly as on the serial one (the TCI session refuses at the key what it
     /// cannot carry yet, in its own words), and nothing names the TCI connection there.
     #[test]
-    fn the_tci_connection_holds_no_other_section() {
+    fn every_other_section_transmits_on_the_tci_connection_as_on_serial() {
         let mut wrong = Vec::new();
         for conn in ["serial", "tci"] {
             let mut check = |what: &str, ok: bool| {
@@ -330,12 +334,61 @@ mod tests {
         );
     }
 
-    /// ⛔ NO GATE GIVES WAY TO THE TCI CONNECTION. On it, in Phone, the licence still refuses (in
-    /// the licence's words, not the connection's), TX Off still refuses, and a Stop's hold and a
-    /// watchdog trip still keep the section from arming; and the Icom network connection keeps its
-    /// own refusal, in every section. CONTROL: the same Phone station inside the licence keys.
+    /// ⛔ NO GATE GIVES WAY TO THE TCI CONNECTION. On it, FT8 in the Digital section keys nothing
+    /// after Stop TX, with TX Off, after a watchdog trip, outside the licence (in the licence's
+    /// words, not the connection's) or without the station's grid. In Phone the licence still
+    /// refuses, TX Off still refuses, and a Stop's hold and a watchdog trip still keep the section
+    /// from arming. The Icom network connection keeps its own refusal, in every section. CONTROLS:
+    /// the same CQ with nothing in the way keys, inside the licence and with the grid; the same
+    /// Phone station inside the licence keys.
     #[test]
-    fn every_other_gate_still_holds_on_the_tci_connection() {
+    fn every_gate_still_holds_on_the_tci_connection() {
+        type Gate = fn(&mut Engine);
+        let gates: [(&str, Gate, bool); 4] = [
+            ("nothing in the way", |_| {}, true),
+            ("Stop TX", |e| e.halt_tx(), false),
+            ("TX Off", |e| e.set_tx_enabled_by_operator(false), false),
+            ("a watchdog trip", |e| e.trip_tx_watchdog_for_test(), false),
+        ];
+        let mut wrong = Vec::new();
+        for (what, gate, keys) in gates {
+            let mut e = cq_run("tci", Tier::Ft8);
+            gate(&mut e);
+            if e.poll_tx(0).is_empty() == keys {
+                wrong.push(format!("FT8 on TCI, {what}: the CQ keys {}", !keys));
+            }
+        }
+        // The licence: a General's 20 m data starts at 14.025.
+        for (mhz, inside) in [(14.080, true), (14.010, false)] {
+            let mut e = on("tci");
+            e.set_tier(Tier::Ft8);
+            e.set_frequency(mhz, "20m", "USB");
+            e.set_mode("qso-run").expect("Call CQ");
+            assert!(
+                (e.settings.dial_mhz - mhz).abs() < 1e-9,
+                "premise: the dial at {mhz}"
+            );
+            let (allowed, refusal) = (e.tx_allowed(), e.snapshot().radio.tx_refusal);
+            let keyed = !e.poll_tx(0).is_empty();
+            if (allowed, keyed, refusal.as_deref()) != (inside, inside, None) {
+                wrong.push(format!(
+                    "FT8 on TCI at {mhz}: the verdict {allowed}, keyed {keyed}, a connection's \
+                     words {refusal:?}"
+                ));
+            }
+        }
+        // Identity at the keying boundary: no CQ without the station's grid.
+        for (grid, keys) in [("EN61", true), ("", false)] {
+            let mut e = on("tci");
+            e.set_tier(Tier::Ft8);
+            e.settings.mygrid = grid.into();
+            let keyed = e.set_mode("qso-run").is_ok() && !e.poll_tx(0).is_empty();
+            if keyed != keys {
+                wrong.push(format!("FT8 on TCI, grid {grid:?}: the CQ keys {keyed}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+
         let mut e = at("tci", "phone", 14.200);
         assert!(!e.tx_allowed(), "a General's phone below 14.225");
         assert_eq!(
@@ -378,11 +431,11 @@ mod tests {
         }
     }
 
-    /// The refusal reads the radio in use and the section the operator is in, now: it follows a
-    /// section change and a switch between a serial radio and a TCI one both ways, and so does the
-    /// snapshot's reason.
+    /// The refusal reads the radio in use, now: across a serial radio, a TCI one and one on the
+    /// Icom network, in Digital and in Phone, only the Icom network radio is refused, and a switch
+    /// away from it clears its words from the snapshot.
     #[test]
-    fn the_refusal_follows_the_section_and_the_radio_in_use() {
+    fn the_refusal_follows_the_radio_in_use() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         let radio = |id: u32, conn: &str| RadioProfile {
             id,
@@ -395,7 +448,7 @@ mod tests {
             mygrid: "EN61".into(),
             rig_model: 7,
             rig_conn: "serial".into(),
-            radios: vec![radio(0, "serial"), radio(1, "tci")],
+            radios: vec![radio(0, "serial"), radio(1, "tci"), radio(2, "icomlan")],
             active_radio: 0,
             ..Settings::default()
         });
@@ -409,48 +462,83 @@ mod tests {
         note(&e, "TCI, Digital");
         e.set_operating_mode("phone", false);
         note(&e, "TCI, Phone");
+        e.set_active_radio(2);
+        note(&e, "Icom network, Phone");
         e.set_operating_mode("digital", false);
+        note(&e, "Icom network, Digital");
+        e.set_active_radio(1);
         note(&e, "TCI, Digital again");
         e.set_active_radio(0);
         note(&e, "serial, Digital again");
         let want = [
             ("serial, Digital", false),
-            ("TCI, Digital", true),
+            ("TCI, Digital", false),
             ("TCI, Phone", false),
-            ("TCI, Digital again", true),
+            ("Icom network, Phone", true),
+            ("Icom network, Digital", true),
+            ("TCI, Digital again", false),
             ("serial, Digital again", false),
         ]
         .map(|(s, r)| (s.to_string(), r));
         assert_eq!(seen, want);
     }
 
-    /// ⛔ THE REFUSAL JUDGES THE SECTION ASKED, NOT THE ONE THE STATION IS IN. On a TCI radio in
-    /// Phone, the gate asked as Digital is refused as slot-timed; in Digital, the gate asked as
-    /// Phone or as CW is the licence's alone. CONTROLS: the same station on its serial connection
-    /// allows all three, so each answer on TCI is the connection's.
+    /// ⛔ THE GATE JUDGES THE SECTION ASKED, NOT THE ONE THE STATION IS IN, on the TCI connection
+    /// as on the serial one. A General in Phone at 14.074 asked as Digital gets the data carrier's
+    /// answer, and in Digital at 14.250 asked as Phone the phone answer: inside the privileges,
+    /// both. CONTROLS: the same stations asked as the section they are in are refused (a General's
+    /// phone starts at 14.225, its data ends at 14.150), so each answer is the section asked.
     #[test]
-    fn the_refusal_judges_the_section_asked_not_the_section_the_station_is_in() {
+    fn the_gate_judges_the_section_asked_not_the_section_the_station_is_in() {
         use crate::settings::OperatingMode::{Cw, Digital, Phone};
         let mut seen = Vec::new();
         for conn in ["serial", "tci"] {
             // A General's data carrier above 14.074 is inside the privileges, and so is CW there.
             let e = at(conn, "phone", 14.074);
             seen.push((conn, "in Phone, asked as Digital", e.tx_allowed_as(Digital)));
+            seen.push((conn, "in Phone, asked as Phone", e.tx_allowed_as(Phone)));
             let e = at(conn, "digital", 14.074);
             seen.push((conn, "in Digital, asked as CW", e.tx_allowed_as(Cw)));
             // A General's phone at 14.250 is inside the privileges.
             let e = at(conn, "digital", 14.250);
             seen.push((conn, "in Digital, asked as Phone", e.tx_allowed_as(Phone)));
+            seen.push((
+                conn,
+                "in Digital, asked as Digital",
+                e.tx_allowed_as(Digital),
+            ));
         }
         let want = [
             ("serial", "in Phone, asked as Digital", true),
+            ("serial", "in Phone, asked as Phone", false),
             ("serial", "in Digital, asked as CW", true),
             ("serial", "in Digital, asked as Phone", true),
-            ("tci", "in Phone, asked as Digital", false),
+            ("serial", "in Digital, asked as Digital", false),
+            ("tci", "in Phone, asked as Digital", true),
+            ("tci", "in Phone, asked as Phone", false),
             ("tci", "in Digital, asked as CW", true),
             ("tci", "in Digital, asked as Phone", true),
+            ("tci", "in Digital, asked as Digital", false),
         ];
         assert_eq!(seen, want);
+    }
+
+    /// ⛔ THE LIFT IS NEXUS'S OWN: with the station's radio on the TCI connection, in the Digital
+    /// section, a program's over through Nexus's own TCI server is still refused as slot-timed (the
+    /// server's rule, `engine/tci.rs`), and its `tx_enable` says so. CONTROL: the same program's
+    /// over in Phone is admitted.
+    #[test]
+    fn programs_slot_timed_overs_through_nexus_own_tci_server_stay_refused_on_a_tci_radio() {
+        use tempo_net::tci::server::{KeyKind, Refusal};
+        let mut e = at("tci", "digital", 14.074);
+        e.settings.tci_server_tx = true;
+        assert!(e.tx_allowed(), "premise: Nexus's own FT8 may transmit here");
+        assert_eq!(e.tci_key(1, KeyKind::Tci, true), Err(Refusal::SlotTimed));
+        assert!(!e.tci_tx_enable(1, true), "told tx_enable true");
+        assert!(!e.tci_over_armed(), "a program's over armed");
+        let mut e = at("tci", "phone", 14.250);
+        e.settings.tci_server_tx = true;
+        assert_eq!(e.tci_key(1, KeyKind::Tci, true), Ok(()), "control: Phone");
     }
 
     // ── A click on a spot in the SDR program's panadapter ─────────────────────────────────────

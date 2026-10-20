@@ -124,20 +124,40 @@ impl<B: AudioBackend + Default> Qso<B> {
 
     /// As [`Qso::new`], with W1AW's grid heard at the boundary `periods` before `t0`'s.
     fn heard_before(tier: Tier, backend: B, periods: u64) -> Qso<B> {
+        Qso::station(tier, backend, periods, |_| {})
+    }
+
+    /// As [`Qso::new`], the station's settings first changed by `settings` (its radio's
+    /// connection).
+    fn with_settings(
+        tier: Tier,
+        backend: B,
+        settings: impl FnOnce(&mut tempo_app::settings::Settings),
+    ) -> Qso<B> {
+        Qso::station(tier, backend, 0, settings)
+    }
+
+    /// [`Qso::heard_before`]'s scene, on the station's settings as `settings` leaves them.
+    fn station(
+        tier: Tier,
+        backend: B,
+        periods: u64,
+        settings: impl FnOnce(&mut tempo_app::settings::Settings),
+    ) -> Qso<B> {
         let peer = retuning_peer(14_074_000, "PKTUSB", |line, state| {
             (line == "T 1").then(|| {
                 state.keyed = true;
                 "RPRT 0\n".to_string()
             })
         });
-        let engine = Arc::new(Mutex::new(Engine::with_settings(
-            tempo_app::settings::Settings {
-                mycall: "KD9TAW".into(),
-                mygrid: "EN52".into(),
-                write_all_txt: true,
-                ..Default::default()
-            },
-        )));
+        let mut base = tempo_app::settings::Settings {
+            mycall: "KD9TAW".into(),
+            mygrid: "EN52".into(),
+            write_all_txt: true,
+            ..Default::default()
+        };
+        settings(&mut base);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(base)));
         let period_ms = {
             let mut e = engine.lock().unwrap();
             e.set_license_class("extra");
@@ -831,9 +851,9 @@ fn answers(sim: &tempo_tcisim::Simulator) -> usize {
 /// the rest is RR73's in place, spliced at one point as if the over had been built that way; the
 /// over is no longer; PTT's end is untouched (`trx:0,false` at the over's end); and a second Tx row
 /// says what went out. The key is Nexus's audio (`trx:0,true,tci`), and nothing is played on the
-/// sound card. The engine's connection here is the scene's own, not TCI: the slot-timed modes stay
-/// held on a TCI connection until the operator's bench of FT on TCI, and this is the route that
-/// bench needs.
+/// sound card. The station's radio is on the TCI connection, end to end: the engine plans the over
+/// under its rules for a TCI radio, and the loop keys it through the client. NEEDS-BENCH: the
+/// operator's bench of FT on TCI times what this simulator cannot.
 #[test]
 fn ft8_a_switch_on_the_tci_route_replaces_only_what_the_sdr_program_has_not_pulled() {
     let sim = tempo_tcisim::Simulator::start(tempo_tcisim::Config::dialect(
@@ -858,11 +878,28 @@ fn ft8_a_switch_on_the_tci_route_replaces_only_what_the_sdr_program_has_not_pull
                 && s.model.trx(trx).audio.is_true()),
         "premise: the SDR program took Nexus's audio stream"
     );
-    let mut s = Qso::new(Tier::Ft8, TeeCard::default());
+    let mut s = Qso::with_settings(Tier::Ft8, TeeCard::default(), |settings| {
+        settings.rig_model = 7;
+        settings.rig_conn = "tci".into();
+        settings.tci_host = "127.0.0.1".into();
+        settings.tci_port = sim.addr().port();
+        settings.ptt_method = "cat".into();
+    });
     let t0 = s.t0;
+    let applied = Transport::from_settings(s.engine.lock().unwrap().settings());
+    assert_eq!(
+        applied.tci_target().map(|t| t.port),
+        Some(target.port),
+        "premise: the engine's radio is the client's TCI server"
+    );
     s.rig = Rig::rigctld(&format!("127.0.0.1:{}", d.local_addr().port()));
     s.rig.set_slow_transport(true);
-    s.state.rigctld_proc = Some(CatDaemon::Tci(d));
+    let cfg = RadioConfig {
+        rig_model: 7,
+        ..RadioConfig::default()
+    };
+    // The loop's transport is the engine's own settings, so it never rebuilds the client.
+    s.state = RadioLoop::new(applied, Some(CatDaemon::Tci(d)), &cfg);
     // The loop settles the dial and the mode on the client before the boundary.
     s.t = t0 - 600.0;
     s.run_in_real_time_to(2_980.0);
