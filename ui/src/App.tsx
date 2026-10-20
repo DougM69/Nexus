@@ -453,6 +453,12 @@ function App() {
   // whole reasoning; do not merge these back together.
   const lastOpModeRef = useRef<RigMode>('digital')
   const lastHomedModeRef = useRef<RigMode>('digital')
+  // The cockpit a Work from afar opened, named by the work-hint follow below for the rig-mode effect
+  // alone. That Work (`workAfar`: a computer driving this station) entered its section WITHOUT
+  // arming Enable TX, and the effect's re-assert, from this screen, would arm the latch for Phone,
+  // CW, RTTY and PSK: the authority the Work withheld. Read and cleared on every run, so it holds
+  // back only the one entry it names.
+  const afarEntryRef = useRef<View | null>(null)
   // Guard refs for the rig-mode effect below. `opModeSeeded` is set once, by whichever comes
   // first: the persisted-operating-mode seed (that effect lives further down, where `settings`
   // is in scope) or a genuine view change — an operator's click outranks any seed, because the
@@ -484,6 +490,8 @@ function App() {
       return
     }
     opModeSeeded.current = true // an explicit view change outranks the booted-mode seed
+    const fromAfar = afarEntryRef.current === view
+    afarEntryRef.current = null
     // The map, the home-on-entry rule and the guard bookkeeping all live in
     // `rigModeForView.ts` — pure, so the SEQUENCE of views can be tested. That matters:
     // #143 was a sequence bug (CW → Tempo → FT left FT8 on the CW dial) and no single
@@ -499,6 +507,9 @@ function App() {
     lastHomedModeRef.current = nextHomed
     if (!mode) return
     lastOpModeRef.current = mode // every assert advances THIS one, including Tempo
+    // A cockpit a Work from afar opened is not re-asserted from here: that Work entered its section
+    // and left Enable TX as it was (`afarEntryRef`).
+    if (fromAfar) return
     void setOperatingMode(mode, followFreq)
       .then((s) => s && setSnap(s))
       .catch(() => {})
@@ -1154,6 +1165,9 @@ function App() {
     // holds the screen's RIG mode: PSK's is 'keyboard', JS8's is Digital's.
     lastOpModeRef.current = RIG_MODE_BY_VIEW[target] ?? 'digital'
     lastHomedModeRef.current = lastOpModeRef.current
+    // A Work from afar entered its section without arming Enable TX: open its cockpit, and let the
+    // rig-mode effect leave the section as that Work left it (`afarEntryRef`).
+    afarEntryRef.current = snap?.workAfar === true ? target : null
     setView(target)
     // Prefill the log Call from a work action fired in ANOTHER window (e.g. the pop-out band
     // map), matching the prefill an in-window click gets via handleWorkNeeded. Digital

@@ -135,6 +135,9 @@ mod tx_alarms;
 mod tx_frame_width_tests;
 #[cfg(test)]
 mod tx_gate_table;
+/// A spot worked from afar arms nothing at the shack, and its hint says where it came from.
+#[cfg(test)]
+mod work_from_afar_tests;
 
 /// A manual Remote log append awaiting storage confirmation. The caller must
 /// release its engine lock before syncing; connector delivery uses its existing pipeline.
@@ -3130,6 +3133,12 @@ pub struct Engine {
     /// The park or summit of the last worked spot, when a Needed row named one: the MAIN window's
     /// log line fills it with `work_call`. Cleared with `work_call`; never a hunt, never a tag.
     work_park: Option<crate::dto::WorkPark>,
+    /// The last worked spot's Work came from afar (a computer driving this station, or Remote's own
+    /// Work) and entered its section without arming Enable TX (`arm_manual` false). A window
+    /// following the hint opens that cockpit without re-asserting the section: from the station's
+    /// own screen that re-assert arms the latch for Phone, CW, RTTY and PSK, the authority the Work
+    /// withheld.
+    work_afar: bool,
     /// The signal report I last sent the current QSO's DX station (RST sent),
     /// captured from the sequencer's outgoing (R)Report. Reset per QSO.
     qso_report_sent: Option<i32>,
@@ -5993,6 +6002,7 @@ impl Engine {
             work_view: None,
             work_call: None,
             work_park: None,
+            work_afar: false,
             qso_report_sent: None,
             stalled_qso: None,
             recent_partner: None,
@@ -9342,6 +9352,9 @@ impl Engine {
         // like clearTick/uploadTick).
         self.work_tick += 1;
         self.work_view = Some(mode.to_string());
+        // …and whether this Work may arm: a window following the hint re-asserts the section only
+        // for a Work made at the station.
+        self.work_afar = !arm_manual;
         self.work_call = None; // the command that has the call sets it via note_work_call
         self.work_park = None; // …and the park, via note_work_park
     }
@@ -25835,6 +25848,7 @@ contact yourself."
         s.work_view = self.work_view.clone();
         s.work_call = self.work_call.clone();
         s.work_park = self.work_park.clone();
+        s.work_afar = self.work_afar;
         s.hunt = self
             .station
             .hunt_target() // TTL-filtered: an expired pend never shows a chip
