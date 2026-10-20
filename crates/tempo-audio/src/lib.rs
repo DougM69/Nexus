@@ -44,7 +44,7 @@ pub mod baud_ladder;
 // engine, so that the client core builds without this crate; named here as they always were.
 pub use tempo_codec::{
     capture_resample, mic_decode, mic_encode, receive_audio, receive_decode, receive_encode,
-    resample, voice,
+    resample, tci_audio, voice,
 };
 pub mod civ;
 /// Who owns this machine's clock, whether it is working, and whether anything

@@ -1789,6 +1789,11 @@ pub struct RadioStatus {
     /// exactly this, "is not where anyone looks".
     #[serde(default)]
     pub cat_share_error: Option<String>,
+    /// The TCI server ("Share by TCI"): where programs connect, why it is not serving, and the
+    /// programs connected. ABSENT while the server is switched off, so every snapshot without it
+    /// is byte-identical. Written by `src-tauri/src/tci_server.rs` on each of its ticks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tci_server: Option<TciServerStatus>,
     /// A problem with the RF SCOPE source, separate from `audio_error` on purpose: they have
     /// different cures and can be true at once. `None` = nothing to say.
     ///
@@ -2189,6 +2194,35 @@ impl From<tempo_core::logbook::UploadOutcome> for WrlPushResultDto {
             message: None,
         }
     }
+}
+
+/// The TCI server while it is switched on ([`RadioStatus::tci_server`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TciServerStatus {
+    /// The port programs connect to on this computer (`127.0.0.1` and `::1`), while it serves:
+    /// the operator's, or the next one when another Nexus window holds that.
+    pub port: Option<u16>,
+    /// Why it is not serving although switched on, in a sentence; `None` while it serves.
+    pub error: Option<String>,
+    /// The programs connected now, in the order they connected.
+    pub programs: Vec<TciProgramStatus>,
+}
+
+/// One program connected to the TCI server.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TciProgramStatus {
+    /// Its number, from 1 in the order programs connected; what a Disconnect names.
+    pub id: u64,
+    /// Where it connects from (`127.0.0.1:53412`). TCI carries no program name.
+    pub peer: String,
+    /// It is being sent receive audio.
+    pub audio: bool,
+    /// A key of its was admitted and has not ended.
+    pub keyed: bool,
+    /// The last thing Nexus refused it, in the connection log's words.
+    pub refused: Option<String>,
 }
 
 /// `ClubLogPushResultDto`/`HrdLogPushResultDto` already flatten their result enums.
