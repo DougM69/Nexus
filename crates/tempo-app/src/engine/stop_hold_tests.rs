@@ -181,6 +181,35 @@ fn the_cat_share_key_stays_refused_after_stop_tx_and_a_round_trip() {
     );
 }
 
+/// ⛔ A program on Nexus's TCI server is no operator: after Stop TX its key, its microphone and
+/// its tune are each refused, and the stop still holds at the next cockpit entry, until the
+/// operator's own act.
+#[test]
+fn a_tci_program_after_stop_tx_arms_nothing_and_the_stop_still_holds() {
+    use tempo_net::tci::server::{KeyKind, Mic, Refusal};
+    let mut e = station();
+    e.set_operating_mode("phone", true);
+    e.set_frequency(14.250, "20m", "USB");
+    e.set_tci_transmit(true);
+    assert_eq!(
+        e.tci_key(1, KeyKind::Mic(Mic::Selected), false),
+        Ok(()),
+        "control: with TX on a program keys"
+    );
+    e.halt_tx();
+    let refused = [
+        e.tci_key(1, KeyKind::Tci, true),
+        e.tci_key(2, KeyKind::Mic(Mic::Selected), false),
+        e.tci_tune_on(1),
+    ];
+    e.set_operating_mode("phone", false); // entry arms only where nothing holds
+    assert_eq!(
+        (refused, e.tx_enabled()),
+        ([Err(Refusal::StopHold); 3], false),
+        "(a program's over, its microphone and its tune; armed at Phone entry)"
+    );
+}
+
 /// RTTY with a one-minute watchdog whose clock started 61 s ago, and a message queued: the next
 /// poll trips it.
 fn rtty_watchdog_tripped(e: &mut Engine) {
@@ -470,6 +499,23 @@ fn a_band_change_neither_holds_nor_releases_tx() {
     e.set_frequency(7.200, "40m", "LSB");
     e.set_operating_mode("phone", false);
     assert!(!e.tx_enabled(), "a band change let go of Stop TX's hold");
+}
+
+/// ⛔ After a watchdog trip, a program on Nexus's TCI server is refused and the trip stands.
+#[test]
+fn a_tci_program_after_a_watchdog_trip_arms_nothing_and_leaves_the_trip() {
+    use tempo_net::tci::server::Refusal;
+    let mut e = Engine::new("K1ABC", "EN61", 0);
+    e.set_license_class("general");
+    rtty_watchdog_tripped(&mut e);
+    e.set_tci_transmit(true);
+    let r = e.tci_tune_on(1);
+    let radio = e.snapshot().radio;
+    assert_eq!(
+        (r, radio.tx_watchdog, radio.tx_enabled),
+        (Err(Refusal::WatchdogTrip), true, false),
+        "(a program's tune, watchdog tripped, TX armed)"
+    );
 }
 
 /// FT8 with K2ABC's CQ decoded, "double-click sets Tx" off: a logger's Reply arms TX whatever it
