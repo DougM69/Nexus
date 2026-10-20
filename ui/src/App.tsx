@@ -465,6 +465,9 @@ function App() {
   // click IS the intent.
   const opModeSeeded = useRef(false)
   const didMountOpMode = useRef(false)
+  // The screen being LEFT, for the one entry that depends on it: Phone from SSTV keeps the dial
+  // (`rigModeForView.ts`). Starts as the restored view, so the first click after launch knows it.
+  const prevViewRef = useRef(view)
 
   // Remember the section for next launch (read back in the `view` initializer above). One
   // effect rather than 16 `setView` call sites — every navigation path, present and future,
@@ -485,6 +488,8 @@ function App() {
     // This is a MOUNT guard, NOT the same-value guard the comment below rightly forbids —
     // every subsequent view change still re-asserts unconditionally. A re-assert after Stop TX,
     // Esc, TX Off or the watchdog leaves TX off: the engine arms only where nothing stopped it.
+    const from = prevViewRef.current
+    prevViewRef.current = view
     if (!didMountOpMode.current) {
       didMountOpMode.current = true
       return
@@ -503,14 +508,14 @@ function App() {
     // and the Needed click set the mode without going through here), which left the rig stuck
     // in the wrong mode while the VFO read-back kept working. The backend is idempotent and
     // re-arms an immediate retune, so re-asserting is cheap.
-    const { mode, followFreq, nextHomed } = rigModeTransition(view, lastHomedModeRef.current)
+    const { mode, followFreq, keepDial, nextHomed } = rigModeTransition(view, lastHomedModeRef.current, from)
     lastHomedModeRef.current = nextHomed
     if (!mode) return
     lastOpModeRef.current = mode // every assert advances THIS one, including Tempo
     // A cockpit a Work from afar opened is not re-asserted from here: that Work entered its section
     // and left Enable TX as it was (`afarEntryRef`).
     if (fromAfar) return
-    void setOperatingMode(mode, followFreq)
+    void setOperatingMode(mode, followFreq, keepDial)
       .then((s) => s && setSnap(s))
       .catch(() => {})
   }, [view])

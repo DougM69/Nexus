@@ -19972,15 +19972,24 @@ fn pick_band(
 /// `afar`: from a computer driving this station (the command lane writes it, never that
 /// computer). A manual section is then entered without arming Enable TX, as Remote's entry enters
 /// it: from afar only the wired starts arm, under the stream's transmit rules.
+///
+/// `keep_dial`, with `follow_freq`: the Phone tab pressed on the SSTV screen. The dial stays where
+/// it is when Phone may transmit there and homes when it may not
+/// (`Engine::set_operating_mode_keeping_dial`). Absent everywhere else.
 #[tauri::command(async)]
 fn set_operating_mode(
     state: State<'_, SharedEngine>,
     mode: String,
     follow_freq: bool,
     afar: Option<command_dispatch::Afar>,
+    keep_dial: Option<bool>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.set_operating_mode_with_arming(&mode, follow_freq, afar.is_none());
+    if follow_freq && keep_dial == Some(true) {
+        eng.set_operating_mode_keeping_dial(&mode, afar.is_none());
+    } else {
+        eng.set_operating_mode_with_arming(&mode, follow_freq, afar.is_none());
+    }
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist operating mode: {e}")
     });
@@ -53160,6 +53169,73 @@ mod tests {
             }
         }
         assert!(armed.is_empty(), "Enable TX armed from afar by {armed:?}");
+    }
+
+    /// The Phone tab pressed on the SSTV screen, through the shack's own runner with the arguments
+    /// the screen sends (`keepDial`). A General on 20 m FT8 tunes the rig's knob to the 14.230 image
+    /// channel (the SSTV screen claims no section, so the station is still in FT8's): Phone keeps
+    /// 14.230. CONTROLS: the same entry without `keepDial` homes to the 14.225 segment default as
+    /// every other Phone entry does, and FT8's own 14.074 is no phone frequency, so the SSTV screen's
+    /// entry homes it too.
+    #[test]
+    fn the_phone_tab_on_the_sstv_screen_keeps_a_phone_dial_at_the_wire() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::set_operating_mode;
+        use serde_json::{json, Value};
+        use tempo_app::settings::OperatingMode;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![set_operating_mode])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        for (case, knob_hz, keep, want) in [
+            ("the report", 14_230_000, true, 14.230),
+            ("CONTROL: no keepDial", 14_230_000, false, 14.225),
+            ("CONTROL: FT8's 14.074", 14_074_000, true, 14.225),
+        ] {
+            {
+                let mut e = engine_lock(&engine);
+                *e = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
+                e.set_license_class("general");
+                e.set_operating_mode("digital", false);
+                e.set_frequency(14.074, "20m", "USB");
+                e.seed_rig_dial(14_074_000);
+                e.observe_rig_freq(knob_hz);
+            }
+            let mut args = json!({"mode": "phone", "followFreq": true});
+            if keep {
+                args["keepDial"] = json!(true);
+            }
+            let ran = ask("set_operating_mode", args);
+            assert!(ran.is_ok(), "{case}: {ran:?}");
+            let e = engine_lock(&engine);
+            assert_eq!(e.settings().operating_mode, OperatingMode::Phone, "{case}");
+            let dial = e.settings().dial_mhz;
+            assert!(
+                (dial - want).abs() < 1e-9,
+                "{case}: the dial is {dial}, not {want}"
+            );
+        }
     }
 
     // ── a first LoTW download of a large account, a year at a time ─────────────────────────

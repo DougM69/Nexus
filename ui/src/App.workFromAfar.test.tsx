@@ -158,7 +158,7 @@ describe('a spot worked from afar: this window opens its cockpit and asserts not
     // has, so the recorder above was live and the hint was read.
     send({ workTick: ++tick, workView: 'cw', workCall: 'K1ABC' })
     await landedOn('cw')
-    expect(asserted()).toEqual([['cw', false]])
+    expect(asserted()).toEqual([['cw', false, false]])
   })
 
   it('the operator’s own rail clicks afterwards re-assert as before', async () => {
@@ -172,8 +172,8 @@ describe('a spot worked from afar: this window opens its cockpit and asserts not
     fireEvent.click(screen.getByRole('button', { name: RAIL.cw }))
     await landedOn('cw')
     expect(asserted()).toEqual([
-      ['phone', true],
-      ['cw', true],
+      ['phone', true, false],
+      ['cw', true, false],
     ])
   })
 
@@ -189,8 +189,8 @@ describe('a spot worked from afar: this window opens its cockpit and asserts not
     fireEvent.click(screen.getByRole('button', { name: RAIL.cw }))
     await landedOn('cw')
     expect(asserted()).toEqual([
-      ['phone', true],
-      ['cw', true],
+      ['phone', true, false],
+      ['cw', true, false],
     ])
   })
 })
@@ -204,10 +204,10 @@ describe('controls: a Work made at the station re-asserts exactly as before', ()
       await landedOn(SCREEN[section])
     }
     expect(asserted()).toEqual([
-      ['cw', false],
-      ['phone', false],
-      ['rtty', false],
-      ['keyboard', false],
+      ['cw', false, false],
+      ['phone', false, false],
+      ['rtty', false, false],
+      ['keyboard', false, false],
     ])
   })
 
@@ -221,6 +221,6 @@ describe('controls: a Work made at the station re-asserts exactly as before', ()
     fireEvent.click(row)
     await landedOn('cw')
     expect(vi.mocked(workSpot).mock.calls).toEqual([['cw', 14.025, '20m', 'K1CW', undefined]])
-    expect(asserted()).toEqual([['cw', false]])
+    expect(asserted()).toEqual([['cw', false, false]])
   })
 })

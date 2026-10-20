@@ -8996,12 +8996,48 @@ impl Engine {
         mode: &str,
         follow_freq: bool,
         arm_manual: bool,
-        mut reset: impl FnMut(),
+        reset: impl FnMut(),
     ) {
-        use crate::settings::OperatingMode;
         // Resolve the destination without changing the station. Remote radio
         // transactions need this same decision before attempting hardware I/O.
         let entry = self.prepare_mode_entry(mode, follow_freq);
+        self.enter_section_with_reset(entry, arm_manual, reset);
+    }
+
+    /// The Phone tab pressed on the SSTV screen: [`Self::set_operating_mode`] with `follow_freq`,
+    /// except that the dial stays where it is when Phone may transmit there, and homes as any
+    /// entry does when it may not ([`Self::prepare_mode_entry_keeping_dial`]). Arms exactly as
+    /// every entry arms: with `arm_manual`, and never behind a stop.
+    pub fn set_operating_mode_keeping_dial(&mut self, mode: &str, arm_manual: bool) {
+        let entry = self.prepare_mode_entry_keeping_dial(mode);
+        self.enter_section_with_reset(entry, arm_manual, reset_ft8_a7_without_waiting);
+    }
+
+    /// Enter the section `entry` names, at the destination it prepared.
+    fn enter_section_with_reset(
+        &mut self,
+        entry: mode_entry::ModeEntry,
+        arm_manual: bool,
+        mut reset: impl FnMut(),
+    ) {
+        use crate::settings::OperatingMode;
+        // A KEPT dial stays the operator's in the section entered: their residency on it is
+        // banked into the cell it was used in, as every entry banks it, and reopened in this
+        // section below, so leaving this section later remembers where they left it. Only THEIR
+        // residency on that very dial: the dial the app launched on, the CAT link's first word
+        // and a channel the app's machinery parked (the ISS downlink) have none, and keeping one
+        // must not make it theirs (`record_dial`).
+        let carried = if entry.kept_dial {
+            self.dial_residency
+                .as_ref()
+                .filter(|r| {
+                    r.band == self.settings.band
+                        && (r.dial_mhz - self.settings.dial_mhz).abs() < 1e-9
+                })
+                .map(|r| r.sideband.clone())
+        } else {
+            None
+        };
         // Bank the dial being LEFT into its (band, old-mode) memory cell FIRST — before
         // the hold flags (cleared just below) stop distinguishing an operator dial from
         // machinery, and before `settings.operating_mode` stops naming the mode this
@@ -9103,6 +9139,14 @@ impl Engine {
             let band = self.settings.band.clone();
             self.tune_dial_with_reset(dial, &band, &sideband, DialOrigin::Operator, &mut reset);
             re_homed = true;
+        }
+        if let Some(sideband) = carried {
+            self.dial_residency = Some(DialResidency {
+                band: self.settings.band.clone(),
+                mode: om,
+                dial_mhz: self.settings.dial_mhz,
+                sideband,
+            });
         }
         // ⭐ THE DIGITAL SECTION RE-DERIVES ITS SIDE EVEN WHEN IT DOES NOT QSY —
         // ISSUE #111 (ve3wej): "double-click puts the Flex in DIGL instead of DIGU".
