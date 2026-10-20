@@ -16,6 +16,12 @@ board on your desk, and **Connection** is **Network**, pointed at the
 program's CAT server. The receive audio is made inside the SDR program, so it
 reaches Nexus through a **virtual audio cable**.
 
+Thetis and piHPSDR also run a **TCI server**, and Nexus can connect to that
+instead, with **Connection ▸ TCI**: no Rig Model and no rigctld. That
+connection is Beta and carries the dial and mode only for now, so this page's
+CAT server route is still the one for transmitting and for audio. See
+[TCI: connect to an SDR program's TCI server](tci.md).
+
 ---
 
 ## The rig model entries
@@ -64,9 +70,10 @@ HL2. Its CAT and audio menus carry the same names as the ones below.
    Thetis comes, it is `127.0.0.1:13013`.
 3. Tick **TCP/IP CAT Server Running**.
 
-Use the TCP/IP CAT Server box, not the **TCI Server** box on the same tab
-(`127.0.0.1:50001` as Thetis comes). TCI is a different protocol, and the
-Hamlib inside Nexus has no driver for it.
+This section uses the TCP/IP CAT Server box. The **TCI Server** box on the
+same tab (`127.0.0.1:50001` as Thetis comes) is a different protocol, and it
+is not a Network Address: for it, choose **Connection ▸ TCI** instead, as
+[the TCI page](tci.md) describes.
 
 ### Send Thetis's audio through the cables
 
@@ -129,7 +136,8 @@ the simpler of the two.
 2. On the **TCP** row, read the port number. As piHPSDR comes, it is `19090`.
 3. Tick **Enable** on that row.
 
-The **TCI** row is a different protocol, and Nexus cannot use it.
+The **TCI** row is a different protocol, and it is not a Network Address: for
+it, choose **Connection ▸ TCI** instead, as [the TCI page](tci.md) describes.
 
 ### Connect Nexus to piHPSDR
 
@@ -206,8 +214,10 @@ Nexus at it as **NET rigctl**, as described under
 - **Detect my radio never offers these entries.** An SDR program is not a USB
   device, so Detect and the serial port Auto-test never suggest one. You pick
   the entry yourself.
-- **TCI is not an option.** The Hamlib that ships inside Nexus has no TCI
-  driver, so a TCI server port does not work as a Network Address.
+- **A TCI server port is not a Network Address.** Network goes through
+  rigctld, which does not speak TCI. Nexus speaks TCI itself, through
+  **Connection ▸ TCI** ([TCI](tci.md)); that connection is Beta, with the dial
+  and mode only for now.
 - **Linux sound devices.** On Linux the audio pickers list the computer's ALSA
   devices. A loopback cable made with the ALSA loopback module shows up there
   as a sound card. A PulseAudio or PipeWire virtual sink has no entry of its
@@ -218,6 +228,8 @@ Nexus at it as **NET rigctl**, as described under
 
 ## Related guides
 
+- [TCI: connect to an SDR program's TCI server](tci.md): the other way in to
+  Thetis and piHPSDR, and to ExpertSDR3.
 - [FlexRadio Setup](flexradio.md): the same idea for a Flex, with SmartSDR CAT
   serving CAT and DAX carrying the audio.
 - [Rig Setup Guides](index.md): the connection types, and Test CAT.

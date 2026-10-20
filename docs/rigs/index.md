@@ -22,6 +22,7 @@ picker; the definitive list for your installed Hamlib version is always
 | **Icom** | [icom.md](icom.md) | IC-9700 incl. 23 cm; IC-7300-class single-USB |
 | **FlexRadio** | [flexradio.md](flexradio.md) | LAN discovery verified on a FLEX-6400M; CAT chain in final verification |
 | **Hermes Lite 2 and other SDRs** | [sdr-programs.md](sdr-programs.md) | Through Thetis or piHPSDR; **not yet field-verified** |
+| **SunSDR (ExpertSDR3) and other TCI programs** | [tci.md](tci.md) | The TCI connection, Beta: dial and mode only; **not yet field-verified** |
 | **Xiegu** | [xiegu.md](xiegu.md) | Supported but **not yet field-verified** |
 | **Sound-card interfaces** | [interfaces.md](interfaces.md) | Digirig / RIGblaster; **not yet field-verified** |
 | **Rotators** | [rotators.md](rotators.md) | Dummy-verified; real az/el hardware pending |
@@ -79,6 +80,17 @@ and control only**: nothing transmits on this connection yet, and it carries no
 audio. You set the **Radio address**, the **Network user** and its **Network
 password** (kept in the computer's keychain), and the **Control port** if you
 moved it from 50001. See [the Icom guide](icom.md#nexuss-own-network-connection-beta).
+
+### TCI (SDR program) — Beta
+
+For an SDR program's own **TCI server**: ExpertSDR3 (SunSDR2, MB1, Colibri),
+Thetis 2.10.3.14 and later, or piHPSDR. Nexus talks to the program directly,
+with no Rig Model, no rigctld and no virtual COM port. You set the **SDR
+program address** (`127.0.0.1` when it runs on this computer) and the **TCI
+port**, and **Find TCI server** looks for it there. It is **Beta, and the dial
+and mode only for now**: nothing transmits on this connection yet, and the
+audio still comes from the sound card under Audio. See
+[TCI: connect to an SDR program's TCI server](tci.md).
 
 ### OmniRig (Windows only)
 

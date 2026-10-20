@@ -159,7 +159,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // The Icom network connection (Beta), under the words an operator brings from the radio's
       // own menus and from the programs that reach it over the network today.
       'icom network', 'lan', 'wi-fi', 'wifi', 'ip address', 'network control', 'network user',
-      'rs-ba1', 'wfview', 'vpn', 'ic-7760', 'ic-7300mk2'],
+      'rs-ba1', 'wfview', 'vpn', 'ic-7760', 'ic-7300mk2',
+      // The TCI connection (Beta), under the protocol's name and the programs and radios that
+      // serve it: an SDR owner searches for the program they run, or for the box in its settings.
+      'tci', 'tci server', 'find tci server', 'expertsdr', 'expertsdr3', 'sunsdr', 'thetis',
+      'pihpsdr', 'anan', 'hermes lite', 'sdr program', 'websocket', '50001', '40001'],
   },
   {
     id: 'rig-advanced',

@@ -369,6 +369,9 @@ const MIGRATED = [
   'components/RadioPicker.tsx',
   'components/RadioSwitcher.tsx',
   'rigFormChecks.ts',
+  // The TCI connection's screen helpers (2026-10-20): the status line Find TCI server writes, and
+  // the dialect choices, whose labels are the programs' and radios' own names.
+  'tci.ts',
   // Batch 13 (2026-08-19) — Settings ▸ Radio's audio half (Audio, Headphone monitor,
   // Satellite Doppler, Orbital elements, Rotator) and the SETUP WIZARD, migrated together
   // because the wizard's steps ARE those settings: two surfaces asking the same question in

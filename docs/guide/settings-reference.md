@@ -454,6 +454,16 @@ Baud continue across to the right.*
   **Network password** (stored in the keychain, write-only) and **Control port
   (UDP)** in place of Serial Port and Baud. See the
   [Icom guide](../rigs/icom.md#nexuss-own-network-connection-beta).
+  For an SDR program's own TCI server (ExpertSDR3, Thetis, piHPSDR) there is
+  **TCI (SDR program) — Beta**, offered for every radio: the dial and mode only
+  for now, and nothing transmits on it yet. It puts the **SDR program address**,
+  the **TCI port**, **Find TCI server**, the **Transceiver** and the **SDR
+  program** in place of Rig Model, Serial Port and Baud, with three switches
+  that take effect in a later update (**Audio over TCI**, **SDR panadapter in
+  the scope**, **Spots on the SDR panadapter**). **Find TCI server** reads what
+  the server at that address says about itself and closes, the form's port first
+  and then 50001 and 40001; it never transmits. See
+  [TCI: connect to an SDR program's TCI server](../rigs/tci.md).
 - **Network Address** (Network only) — host:port. For a Flex, the WSJT-X-proven
   path is the SmartSDR CAT app on **this** PC: its default TCP port 5002 is
   directed at slice A, so `127.0.0.1:5002` with the FLEX-6xxx model works out of

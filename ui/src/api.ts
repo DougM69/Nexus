@@ -3051,6 +3051,40 @@ export async function discoverFlex(): Promise<{ model: string; nickname: string;
   return invoke('discover_flex')
 }
 
+/** What one port answered when Find TCI server tried it: an SDR program's TCI server
+ *  (`found`), Nexus's own TCI server (`nexus`, skipped), nothing (`noAnswer`), something that is
+ *  not a TCI server (`notTci`), or a WebSocket server that never finished the TCI handshake
+ *  (`noReady`). */
+export type TciPortOutcome = 'found' | 'nexus' | 'noAnswer' | 'notTci' | 'noReady'
+
+/** The SDR program's TCI server Find TCI server found: what it said about itself before `ready;`,
+ *  as sent. `dialect` is how Nexus will read it: 'expertsdr3', 'expertsdr2', 'thetis', or
+ *  'unknown' for a program this build does not know. */
+export interface TciServerFound {
+  port: number
+  program: string | null
+  version: string | null
+  device: string | null
+  trxCount: number | null
+  dialect: string
+}
+
+/** Find TCI server's answer for one address. `resolved` is false when this computer cannot find
+ *  the address at all (nothing was tried). */
+export interface TciProbeResult {
+  host: string
+  resolved: boolean
+  tried: { port: number; outcome: TciPortOutcome }[]
+  found: TciServerFound | null
+}
+
+/** Look for an SDR program's TCI server at `host`: `port` first, then 50001 and 40001, the ports
+ *  the programs come set to. It reads each server's handshake and closes, writing nothing to it: it
+ *  never keys and never changes the radio. A few seconds at most. At the shack only. */
+export async function tciProbe(host: string, port: number): Promise<TciProbeResult> {
+  return invoke('tci_probe', { host, port })
+}
+
 /** Stop the rotator immediately (rotctld S). */
 export async function stopRotator(): Promise<void> {
   return invoke('stop_rotator')

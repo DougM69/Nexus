@@ -98,11 +98,23 @@ import {
   type RadioProfilePatch,
   testCat,
   probeCatPorts,
+  tciProbe,
   qrzTestConnection,
   syncQrz,
   n3fjpTestConnection,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+import {
+  TCI_DEFAULT_HOST,
+  TCI_DEFAULT_PORT,
+  TCI_DIALECTS,
+  TCI_RIG_MODEL,
+  TCI_RIG_MODEL_NAME,
+  tciDialectShown,
+  tciPortForDialect,
+  tciProbeMessage,
+  tciTrxChoices,
+} from '../tci'
 // What reads the catalog today: the panel SHELL (its chrome, the tab rail, Save, and the
 // toasts/confirms its handlers raise), the whole Appearance tab (Workspace + Features +
 // Accessibility), the Logging & Connectors sections above Confirmations (Connections,
@@ -1857,6 +1869,15 @@ export function SettingsPanel({
       live = false
     }
   }, [onIcomLan, icomLanRadioId, remote])
+  // Find TCI server (the TCI connection): whether a search runs, and the status line under its
+  // button. A line about one radio's address is cleared when the form moves to another radio or
+  // off the TCI connection, so it never describes a server this form is not pointed at.
+  const [tciFinding, setTciFinding] = useState(false)
+  const [tciFindNote, setTciFindNote] = useState('')
+  const onTci = form?.rigConn === 'tci'
+  useEffect(() => {
+    setTciFindNote('')
+  }, [onTci, editingRadioId])
   // In-progress MHz text for the override row being edited — committed only when
   // it parses as a positive number, so a half-typed "14." never corrupts the form.
   const [mhzDraft, setMhzDraft] = useState<{ idx: number; text: string } | null>(null)
@@ -2508,6 +2529,56 @@ export function SettingsPanel({
       const baud = baudForRig(modelNum, prev.baud)
       return { ...prev, rigModel: modelNum, rigModelName: findRigModelName(modelNum), ...(baud ? { baud } : {}) }
     })
+  }
+
+  // The Connection choice. TCI stores its own model number (`TCI_RIG_MODEL`): the SDR program
+  // drives whatever radio it runs, so there is no model to pick, and the picker is not shown. Leaving
+  // TCI takes that number back off, to "— None —", because the rigctld Nexus ships cannot load it: a
+  // Serial or Network radio left on it could never connect, so the model is asked for again.
+  const selectConn = (conn: string) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      if (conn === 'tci') {
+        return { ...prev, rigConn: conn, rigModel: TCI_RIG_MODEL, rigModelName: TCI_RIG_MODEL_NAME }
+      }
+      if (prev.rigModel === TCI_RIG_MODEL) return { ...prev, rigConn: conn, rigModel: 0, rigModelName: '' }
+      return { ...prev, rigConn: conn }
+    })
+  }
+
+  // The TCI program, as `tci_dialect` stores it. Naming a program fills in the port it comes set to
+  // (`tciPortForDialect`), over another program's port only.
+  const selectTciDialect = (dialect: string) => {
+    markDirty()
+    setForm((prev) =>
+      prev
+        ? { ...prev, tciDialect: dialect, tciPort: tciPortForDialect(prev.tciPort ?? TCI_DEFAULT_PORT, dialect) }
+        : prev,
+    )
+  }
+
+  // Find TCI server: the address in the form, its port first and then the ports the programs come
+  // set to. A server found on another port fills that port in, as Detect's "Use this" fills a found
+  // radio in; the operator saves it.
+  const onFindTci = () => {
+    if (!form) return
+    const host = (form.tciHost ?? '').trim() || TCI_DEFAULT_HOST
+    const port = form.tciPort ?? TCI_DEFAULT_PORT
+    setTciFinding(true)
+    setTciFindNote(t('settings.rigControl.tci.find.searching', { host }))
+    tciProbe(host, port)
+      .then((r) => {
+        const moved = r.found != null && r.found.port !== port
+        if (r.found && moved) updateNum('tciPort', r.found.port)
+        setTciFindNote(tciProbeMessage(r, moved))
+      })
+      .catch((e) =>
+        setTciFindNote(
+          t('settings.rigControl.tci.find.failed', { error: e instanceof Error ? e.message : String(e) }),
+        ),
+      )
+      .finally(() => setTciFinding(false))
   }
 
   // The rotator twin, and it exists because the rotator picker did NOT have one: picking a
@@ -5125,7 +5196,9 @@ export function SettingsPanel({
                               ? r.rigAddr || t('settings.radios.card.noAddress')
                               : r.rigConn === 'icomlan'
                                 ? r.icomLanHost || t('settings.radios.card.noAddress')
-                                : r.serialPort || t('settings.radios.card.noPort'),
+                                : r.rigConn === 'tci'
+                                  ? `${r.tciHost || TCI_DEFAULT_HOST}:${r.tciPort ?? TCI_DEFAULT_PORT}`
+                                  : r.serialPort || t('settings.radios.card.noPort'),
                         flex:
                           (r.flexRadioIp ?? '').trim() !== ''
                             ? t('settings.radios.card.meta.flex', { ip: r.flexRadioIp ?? '' })
@@ -5644,6 +5717,9 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.rigControl.detect.hint')}</span>
               </div>
 
+              {/* No model to pick on TCI: the SDR program drives whatever radio it runs, and the
+                  radio keeps TCI's own number (`selectConn`), which no entry here could show. */}
+              {form.rigConn !== 'tci' && (
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rigControl.rigModel.label')}</span>
                 {/* Type-to-find. It sits BEFORE the select, so it is what the wrapping label
@@ -5723,13 +5799,14 @@ export function SettingsPanel({
                 </span>
                 <span className="settings-hint">{t('settings.rigControl.rigModel.hint')}</span>
               </label>
+              )}
 
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rigControl.conn.label')}</span>
                 <select disabled={remote}
                   className="settings-input"
                   value={form.rigConn || 'serial'}
-                  onChange={(e) => update('rigConn', e.target.value)}
+                  onChange={(e) => selectConn(e.target.value)}
                 >
                   <option value="serial">{t('settings.rigControl.conn.serial')}</option>
                   <option value="network">{t('settings.rigControl.conn.network')}</option>
@@ -5746,6 +5823,8 @@ export function SettingsPanel({
                   {(ICOM_LAN_MODELS.includes(form.rigModel) || form.rigConn === 'icomlan') && (
                     <option value="icomlan">{t('settings.rigControl.conn.icomlan')}</option>
                   )}
+                  {/* Offered for every radio: TCI serves whatever radio the SDR program runs. */}
+                  <option value="tci">{t('settings.rigControl.conn.tci')}</option>
                 </select>
                 <span className="settings-hint">
                   <T k="settings.rigControl.conn.hint" tags={{ b: <strong /> }} />
@@ -5874,6 +5953,137 @@ export function SettingsPanel({
                 </>
               )}
 
+              {/* The TCI connection: the SDR program's own TCI server, one WebSocket. Find TCI
+                  server reads the server's handshake and closes, writing nothing to it. The three
+                  switches at the end are stored per radio now and take effect when audio, the
+                  panadapter and spots over TCI arrive; the hint above them says so. */}
+              {form.rigConn === 'tci' && (
+                <>
+                  {/* A note across the whole row, not one cell's hint: it says what is not ready yet,
+                      and the transmit sentence must not hide in a narrow column. */}
+                  <p className="settings-note" data-tci-hint>
+                    <T k="settings.rigControl.tci.hint" tags={{ b: <strong /> }} />
+                  </p>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.host.label')}</span>
+                    <input disabled={remote}
+                      className="settings-input"
+                      type="text"
+                      value={form.tciHost ?? TCI_DEFAULT_HOST}
+                      placeholder={TCI_DEFAULT_HOST}
+                      onChange={(e) => update('tciHost', e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <span className="settings-hint">
+                      <T k="settings.rigControl.tci.host.hint" tags={{ b: <strong /> }} />
+                    </span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.port.label')}</span>
+                    <input disabled={remote}
+                      className="settings-input"
+                      type="number"
+                      inputMode="numeric"
+                      min="1"
+                      max="65535"
+                      value={String(form.tciPort ?? TCI_DEFAULT_PORT)}
+                      placeholder={String(TCI_DEFAULT_PORT)}
+                      onChange={(e) => updateNum('tciPort', Number(e.target.value))}
+                      autoComplete="off"
+                    />
+                    <span className="settings-hint">
+                      <T k="settings.rigControl.tci.port.hint" tags={{ b: <strong /> }} />
+                    </span>
+                  </label>
+                  <div className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.find.label')}</span>
+                    <div className="settings-input-row">
+                      <button
+                        type="button"
+                        className="settings-refresh"
+                        onClick={onFindTci}
+                        disabled={remote || tciFinding}
+                        title={t('settings.rigControl.tci.find.title')}
+                      >
+                        {tciFinding
+                          ? t('settings.rigControl.tci.find.busy')
+                          : t('settings.rigControl.tci.find.action')}
+                      </button>
+                    </div>
+                    {/* Mounted while the section shows and empty until there is something to say,
+                        as the rig filter's count is, so a screen reader hears each answer. */}
+                    <span className="settings-hint" role="status" data-tci-find-status>
+                      {tciFindNote}
+                    </span>
+                  </div>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.trx.label')}</span>
+                    <select disabled={remote}
+                      className="settings-input"
+                      value={String(form.tciTrx ?? 0)}
+                      onChange={(e) => updateNum('tciTrx', Number(e.target.value))}
+                    >
+                      {/* TCI numbers its transceivers from 0; the programs show them from 1. */}
+                      {tciTrxChoices(form.tciTrx ?? 0).map((n) => (
+                        <option key={n} value={String(n)}>
+                          {n + 1}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="settings-hint">{t('settings.rigControl.tci.trx.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.dialect.label')}</span>
+                    <select disabled={remote}
+                      className="settings-input"
+                      value={tciDialectShown(form.tciDialect)}
+                      onChange={(e) => selectTciDialect(e.target.value)}
+                    >
+                      {TCI_DIALECTS.map((d) => (
+                        <option key={d.value} value={d.value}>
+                          {d.label ?? t('settings.rigControl.tci.dialect.auto')}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="settings-hint">{t('settings.rigControl.tci.dialect.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.audio.label')}</span>
+                    <span className="settings-input-row">
+                      <input disabled={remote}
+                        type="checkbox"
+                        checked={form.tciAudio ?? true}
+                        onChange={(e) => updateBool('tciAudio', e.target.checked)}
+                      />
+                    </span>
+                    <span className="settings-hint">{t('settings.rigControl.tci.audio.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.pan.label')}</span>
+                    <span className="settings-input-row">
+                      <input disabled={remote}
+                        type="checkbox"
+                        checked={form.tciPan ?? false}
+                        onChange={(e) => updateBool('tciPan', e.target.checked)}
+                      />
+                    </span>
+                    <span className="settings-hint">{t('settings.rigControl.tci.pan.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.spots.label')}</span>
+                    <span className="settings-input-row">
+                      <input disabled={remote}
+                        type="checkbox"
+                        checked={form.tciSpots ?? false}
+                        onChange={(e) => updateBool('tciSpots', e.target.checked)}
+                      />
+                    </span>
+                    <span className="settings-hint">{t('settings.rigControl.tci.spots.hint')}</span>
+                  </label>
+                </>
+              )}
+
               {form.rigConn === 'network' && (
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.rigControl.netAddr.label')}</span>
@@ -5934,7 +6144,11 @@ export function SettingsPanel({
                       at it was pointing them at a daemon that refuses to start.
 
                       The check that settles this class is one command: start rigctld on the
-                      model and see whether it does. Do not infer a backend from a grep. */}
+                      model and see whether it does. Do not infer a backend from a grep.
+
+                      The TCI Server box now has a home of its own: Nexus's TCI client, the TCI
+                      Connection choice, which never goes through rigctld. So the sentence sends a
+                      TCI port there, and this field keeps the CAT server's. */}
                   <span className="settings-hint">
                     <T k="settings.rigControl.netAddr.sdrPorts" tags={{ b: <strong />, em: <em /> }} />
                   </span>
@@ -5944,8 +6158,9 @@ export function SettingsPanel({
               {/* Serial Port + Baud belong to whoever OPENS the port. With Network that is
                   rigctld over TCP; with OmniRig it is OmniRig itself, which owns the rig type,
                   the port and the baud — so asking for them here would be asking the operator
-                  to configure the same radio twice and get it wrong once. */}
-              {form.rigConn !== 'network' && form.rigConn !== 'omnirig' && form.rigConn !== 'icomlan' && (
+                  to configure the same radio twice and get it wrong once. TCI has no serial port:
+                  the SDR program is reached over its own network server. */}
+              {form.rigConn !== 'network' && form.rigConn !== 'omnirig' && form.rigConn !== 'icomlan' && form.rigConn !== 'tci' && (
                 <>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rigControl.serialPort.label')}</span>
