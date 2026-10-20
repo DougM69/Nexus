@@ -230,6 +230,8 @@ Nexus at it as **NET rigctl**, as described under
 
 - [TCI: connect to an SDR program's TCI server](tci.md): the other way in to
   Thetis and piHPSDR, and to ExpertSDR3.
+- [Share by TCI](tci-server.md): Nexus as a TCI server, so WSJT-X, JTDX, MSHV
+  and loggers on this computer use the radio through Nexus.
 - [FlexRadio Setup](flexradio.md): the same idea for a Flex, with SmartSDR CAT
   serving CAT and DAX carrying the audio.
 - [Rig Setup Guides](index.md): the connection types, and Test CAT.

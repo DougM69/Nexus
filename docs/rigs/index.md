@@ -92,6 +92,10 @@ and mode only for now**: nothing transmits on this connection yet, and the
 audio still comes from the sound card under Audio. See
 [TCI: connect to an SDR program's TCI server](tci.md).
 
+The other way round, Nexus can be the TCI server for programs on this
+computer, such as WSJT-X, JTDX, MSHV and Log4OM, whatever radio Nexus runs.
+See [Share by TCI](tci-server.md).
+
 ### OmniRig (Windows only)
 
 **OmniRig** is VE3NEA's rig-control server — the one a lot of Windows logging

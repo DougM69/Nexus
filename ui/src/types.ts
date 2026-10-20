@@ -1638,6 +1638,9 @@ export interface RadioStatus {
    *  renders this INSTEAD of the address, because with the bind refused that address is one
    *  nothing is listening on. */
   catShareError?: string | null
+  /** "Share by TCI" as the station runs it: where programs connect, why it is not serving, and the
+   *  programs connected. Absent while the server is off (mirror of the Rust TciServerStatus). */
+  tciServer?: TciServerStatus | null
   /**
    * What is wrong with the RF SCOPE source, separate from `audioError` — different problem, different
    * cure, and both can be true at once.
@@ -5511,6 +5514,33 @@ export type AudioErrorKind =
   | 'voiceMic'
   | 'recording'
   | 'decodeCrash'
+
+/** The TCI server while it is switched on (mirror of the Rust TciServerStatus,
+ *  `RadioStatus.tciServer`). */
+export interface TciServerStatus {
+  /** The port programs connect to on the station's computer (127.0.0.1 and ::1) while it serves:
+   *  the one asked for, or the next one when another Nexus window holds that. Null while it cannot
+   *  serve. */
+  port: number | null
+  /** Why it is not serving although switched on, in the station's words; null while it serves. */
+  error: string | null
+  /** The programs connected now, in the order they connected. */
+  programs: TciProgramStatus[]
+}
+
+/** One program connected to the TCI server (mirror of the Rust TciProgramStatus). */
+export interface TciProgramStatus {
+  /** Its number, from 1 in the order programs connected; what a Disconnect names. */
+  id: number
+  /** Where it connects from (`127.0.0.1:53412`). TCI carries no program name. */
+  peer: string
+  /** It is being sent receive audio. */
+  audio: boolean
+  /** A key of its was admitted and has not ended. */
+  keyed: boolean
+  /** The last thing Nexus refused it, in the station's connection-log words; null when nothing. */
+  refused: string | null
+}
 
 /** What is shown beside the ATU while Nexus's Flex client runs a FlexRadio's own tuner (mirror of
  *  the Rust FlexAtu, `RadioStatus.flexAtu`). Read and shown; Nexus writes none of it. */

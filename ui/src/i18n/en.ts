@@ -6465,6 +6465,9 @@ export const EN = {
     '{{group}} is a group that cannot be joined. Take it out of Groups under JS8 on the Digital tab before saving.',
   'settings.save.js8CqText':
     'The JS8 CQ message must start with CQ or hold your callsign, as in JS8Call. Change it under JS8 on the Digital tab before saving.',
+  // `{{port}}` is a port number. The two names are the switches' own labels on the Radio tab.
+  'settings.save.tciServerPortClash':
+    'Share this radio with other programs and Share by TCI both use port {{port}}, and only one of them can have it. Give one of them another port.',
   'settings.save.checkRadio': 'Check the radio settings.',
   'settings.save.failed': 'Could not save settings.',
 
@@ -7633,6 +7636,51 @@ export const EN = {
   'settings.transmit.foreignPtt.label': 'Other programs may key transmit',
   'settings.transmit.foreignPtt.hint':
     'On: a shared program (WSJT-X, VarAC) can key the rig, exactly as it could when it owned the CAT cable — every Nexus transmit safeguard still applies. Off: shared programs tune and read but never transmit.',
+
+  // "Share by TCI": Nexus as a TCI server for programs on this computer (TciServerSettings.tsx).
+  // The programs' own names (WSJT-X, JTDX, MSHV, Log4OM, 5MContest), WSJT-X's rig name
+  // `TCI Client RX1`, the protocol's name TCI and the mode names are tokens, never translated;
+  // the call site supplies the emphasis.
+  'settings.transmit.tciServer.label': 'Share by TCI',
+  'settings.transmit.tciServer.hint.off':
+    'Off. Turn it on and programs on this computer that speak TCI, such as <b>WSJT-X</b>, <b>JTDX</b>, <b>MSHV</b> and <b>Log4OM</b>, can use the radio through Nexus at the address that appears here.',
+  'settings.transmit.tciServer.hint.on':
+    "Programs on this computer connect to this address as they would to an SDR program's TCI server. In WSJT-X and JTDX, pick the rig <em>TCI Client RX1</em> and give it this address as its TCI server. They follow whichever radio is active: they can tune it, switch its sideband and lower its power (never raise it), and they get its receive audio. Only programs on this computer can connect, never another computer and never a web page. Takes effect when you save.",
+  // While the switch is on and the station reports no server yet: just turned on and not saved,
+  // or saved a moment ago.
+  'settings.transmit.tciServer.waiting':
+    'Not listening yet. The address appears here once programs can connect. If you just turned this on, save first.',
+  'settings.transmit.tciServer.port.label': 'TCI server port',
+  'settings.transmit.tciServer.port.hint':
+    'WSJT-X, JTDX and MSHV look for 40001. A second Nexus window uses the next port, and the address above always shows the one in use. Change it only if another program on this computer already has it.',
+  'settings.transmit.tciServer.tx.label': 'Programs on TCI may transmit',
+  'settings.transmit.tciServer.tx.hint':
+    "Off: programs tune and read but never transmit. On: a program may key the radio with its own audio or the radio's microphone while Nexus is on its Phone screen, send CW macros on the CW screen, and Tune. Every Nexus transmit safeguard still applies: TX must be on in Nexus, Stop TX wins and holds, and nothing goes past your licence or your power limits. A program never turns TX on. Set at the station only.",
+  // ⛔ Said beside the transmit switch, at the station and from afar alike: the engine refuses a
+  // program's digital overs until the delay Nexus adds to their timing is measured.
+  'settings.transmit.tciServer.tx.slotTimed':
+    "FT8, FT4 and other slot-timed modes may not transmit through TCI yet. Nexus refuses a program's digital transmissions until the delay it adds to their timing has been measured.",
+  'settings.transmit.tciServer.cw.label': 'CW macros from programs',
+  'settings.transmit.tciServer.cw.hint':
+    "A logger's TCI keyer (Log4OM, 5MContest) sends its CW macros through Nexus, on the CW screen only, and only while programs may transmit. Any program can stop the CW.",
+  'settings.transmit.tciServer.spots.label': 'Spots from programs',
+  'settings.transmit.tciServer.spots.hint':
+    "Spots a program sends show on Nexus's band map, and a click on a spot in Nexus is passed back to the programs. A spot or a click never transmits.",
+  'settings.transmit.tciServer.notYet':
+    "<b>Not ready yet:</b> a program's own transmit audio, CW macros and spots. Receive audio comes only from a sound card for now, so a Flex on DAX or the Icom network connection has none to send.",
+  'settings.transmit.tciServer.programs.label': 'Programs connected',
+  'settings.transmit.tciServer.programs.none': 'No program is connected.',
+  // `{{id}}` is the program's number, from 1 in the order programs connected: TCI carries no
+  // program name.
+  'settings.transmit.tciServer.program.name': 'Program {{id}}',
+  'settings.transmit.tciServer.program.audio': 'Receiving audio',
+  'settings.transmit.tciServer.program.keyed': 'Transmitting',
+  // `{{why}}` is the station's own words from the connection log, shown as they come.
+  'settings.transmit.tciServer.program.refused': 'Last refused: {{why}}',
+  'settings.transmit.tciServer.disconnect.action': 'Disconnect',
+  'settings.transmit.tciServer.disconnect.title':
+    "Close this program's connection. Anything it is transmitting stops first.",
+  'settings.transmit.tciServer.disconnect.failed': 'Nexus could not disconnect the program',
 
   // ── Settings ▸ Digital (FT8/FT4) ────────────────────────────────────────────────────
   //

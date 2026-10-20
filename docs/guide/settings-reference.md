@@ -878,6 +878,27 @@ full power on every mode.*
     beside the other port settings, and appears only once sharing is on. Hamlib
     NET rigctl default 4532; change it only if something else on this computer
     already owns the port.
+- **Share by TCI**: off by default. It runs Nexus as a TCI server for programs on
+  this computer (WSJT-X, JTDX, MSHV, Log4OM and others), beside the CAT broker
+  above; both may be on, though not on the same port. Once saved, it shows the
+  address programs connect to, `127.0.0.1:40001` (the next port in a second
+  Nexus window), with **Copy**; if the port is taken, the reason takes the
+  address's place. Only programs on this computer can connect, never another
+  computer or a web page. When it is on:
+  - **TCI server port**: 40001 unless something else on this computer already
+    has it.
+  - **Programs on TCI may transmit**: off by default, shown and set at the
+    station only. On, a program can Tune and key the radio's microphone on the
+    Phone screen, behind every Nexus transmit safeguard, and no program can turn
+    TX on. FT8, FT4 and the other slot-timed modes may not transmit through TCI
+    yet.
+  - **CW macros from programs** and **Spots from programs**: on by default, and
+    not yet in effect.
+  - **Programs connected**: each program by number, with its address, whether it
+    is receiving audio or transmitting, the last thing Nexus refused it, and
+    **Disconnect**.
+
+  See [Share by TCI](../rigs/tci-server.md).
 
 ---
 

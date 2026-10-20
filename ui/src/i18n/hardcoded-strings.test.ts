@@ -674,6 +674,9 @@ const MIGRATED = [
   'components/Js8ListsSettings.tsx',
   // Settings ▸ Digital ▸ JS8's JS8Call API switches and ports — migrated from birth.
   'components/Js8ApiSettings.tsx',
+  // Settings ▸ Radio ▸ Transmit limits & sharing ▸ Share by TCI: the TCI server's switches, port
+  // and connected programs. Migrated from birth; the addresses it shows are data.
+  'components/TciServerSettings.tsx',
   // The voice keyer's Delete and its Undo window — migrated from birth.
   'features/voiceDelete.ts',
 ]

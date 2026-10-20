@@ -262,7 +262,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // section's own SWR read-out, and one term cannot land the operator on two sections.
       'high swr', 'swr cutoff', 'stop on swr', 'antenna fault',
       // Parsec presence mode: the words an operator running the shack over Parsec reaches for.
-      'parsec', 'remote desktop', 'dropped session', 'lost connection', 'stuck ptt'],
+      'parsec', 'remote desktop', 'dropped session', 'lost connection', 'stuck ptt',
+      // "Share by TCI", under its own name and the programs that connect to it. Not the bare
+      // 'tci' or 'tci server': those are Rig & CAT's, for an SDR program's own server.
+      'share by tci', 'nexus tci server', 'programs on tci', 'tci client rx1', 'jtdx', 'mshv',
+      'log4om', 'macloggerdx', 'rf2k', 'tci keyer', 'tci spots'],
   },
 
   // ---- Modes -------------------------------------------------------------------
