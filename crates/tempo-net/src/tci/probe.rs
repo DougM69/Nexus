@@ -11,12 +11,15 @@
 //! audio stream, the meter pushes), and every close of one sends `trx:<trx>,false;`, which on a
 //! server with no notion of an owner (ExpertSDR3, by the spec) ends another program's over.
 //!
-//! **Bounded.** The TCP connect, the WebSocket handshake and the read up to `ready;` each wait at
-//! most until the probe's deadline, so a server that accepts and then says nothing costs the budget
-//! and no more; the close frame then gets [`CLOSE_WRITE`]. What the server sends is read under the
-//! session's bounds ([`MAX_WS_MESSAGE`], then the codec's).
+//! **Bounded.** The TCP connect waits at most until the probe's deadline, and so does every read
+//! and write after it ([`Deadlined`]): each is given only the time left, and none starts once it
+//! has run out. A timeout on each read alone would bound one read, not the probe: the WebSocket
+//! layer reads on until a handshake answer or a message is whole, so a server sending a byte just
+//! inside each read's timeout could hold the probe for as long as it liked. So a server that says
+//! nothing, or trickles, costs the budget and no more; the close frame then gets [`CLOSE_WRITE`].
+//! What the server sends is read under the session's bounds ([`MAX_WS_MESSAGE`], then the codec's).
 
-use std::io::{self, ErrorKind};
+use std::io::{self, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
@@ -69,27 +72,63 @@ pub enum Miss {
 /// [`CLOSE_WRITE`] for the close frame).
 pub fn probe(addr: SocketAddr, budget: Duration) -> Result<Hello, Miss> {
     let deadline = Instant::now() + budget;
-    let no_answer = |e: io::Error| Miss::NoAnswer(e.to_string());
     let wait = left(deadline)
         .map(|left| left.min(CONNECT_TIMEOUT))
         .ok_or_else(|| Miss::NoAnswer("no time to connect".into()))?;
-    let tcp = TcpStream::connect_timeout(&addr, wait).map_err(no_answer)?;
-    // The handshake's request out and the server's answer in, both before the deadline.
-    let wait = left(deadline).ok_or_else(|| Miss::NotTci("no time for the handshake".into()))?;
-    tcp.set_read_timeout(Some(wait)).map_err(no_answer)?;
-    tcp.set_write_timeout(Some(wait)).map_err(no_answer)?;
+    let tcp = TcpStream::connect_timeout(&addr, wait).map_err(|e| Miss::NoAnswer(e.to_string()))?;
     let limits = WebSocketConfig::default()
         .max_message_size(Some(MAX_WS_MESSAGE))
         .max_frame_size(Some(MAX_WS_MESSAGE));
     let url = format!("ws://{addr}/");
-    let (mut ws, _) = tungstenite::client::client_with_config(url.as_str(), tcp, Some(limits))
+    // The handshake's request out and the server's answer in, and every read after them, before
+    // the deadline.
+    let stream = Deadlined { tcp, deadline };
+    let (mut ws, _) = tungstenite::client::client_with_config(url.as_str(), stream, Some(limits))
         .map_err(|e| Miss::NotTci(e.to_string()))?;
-    let hello = read_to_ready(&mut ws, deadline);
-    // The close frame, and nothing before it.
-    let _ = ws.get_ref().set_write_timeout(Some(CLOSE_WRITE));
+    let hello = read_to_ready(&mut ws);
+    // The close frame, and nothing before it, in an allowance of its own.
+    ws.get_mut().deadline = Instant::now() + CLOSE_WRITE;
     let _ = ws.close(None);
     let _ = ws.flush();
     hello
+}
+
+/// The probe's socket as the WebSocket layer sees it: every read and write is given only the time
+/// left before `deadline`, and none starts once it has run out. A socket timeout bounds one read,
+/// and tungstenite reads on until a handshake answer or a message is whole (it gives up on a
+/// handshake only after 512 reads or 64 KiB, sooner for tiny reads, and on a message at the
+/// 1 MiB cap), so a timeout set once would let a server that trickles bytes, each inside it, hold
+/// the probe far past its deadline. The TCI server reads its handshake against its deadline the
+/// same way (`server::conn::Wire`).
+struct Deadlined {
+    tcp: TcpStream,
+    deadline: Instant,
+}
+
+impl Deadlined {
+    /// The time left before the deadline, or `TimedOut` once none is.
+    fn time_left(&self) -> io::Result<Duration> {
+        left(self.deadline)
+            .ok_or_else(|| io::Error::new(ErrorKind::TimedOut, "the probe's time is up"))
+    }
+}
+
+impl Read for Deadlined {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.tcp.set_read_timeout(Some(self.time_left()?))?;
+        self.tcp.read(buf)
+    }
+}
+
+impl Write for Deadlined {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.tcp.set_write_timeout(Some(self.time_left()?))?;
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
 }
 
 /// The time before `deadline`, if any is left: a socket timeout of zero is refused.
@@ -100,15 +139,14 @@ fn left(deadline: Instant) -> Option<Duration> {
 
 /// Read the server's messages until `ready;`, each on its own as the session reads them (a command
 /// cut at the end of one message is refused, never joined to the next: piHPSDR's unterminated burst
-/// lines), into the model and the dialect evidence.
-fn read_to_ready(ws: &mut WebSocket<TcpStream>, deadline: Instant) -> Result<Hello, Miss> {
+/// lines), into the model and the dialect evidence, until the deadline.
+fn read_to_ready(ws: &mut WebSocket<Deadlined>) -> Result<Hello, Miss> {
     let mut evidence = Evidence::default();
     let mut model = Model::new();
     loop {
-        let wait = left(deadline).ok_or(Miss::NoReady)?;
-        ws.get_ref()
-            .set_read_timeout(Some(wait))
-            .map_err(|_| Miss::NoReady)?;
+        if left(ws.get_ref().deadline).is_none() {
+            return Err(Miss::NoReady);
+        }
         match ws.read() {
             Ok(Message::Text(text)) => {
                 for notice in wire::notices(text.as_str()).flatten() {
@@ -128,7 +166,7 @@ fn read_to_ready(ws: &mut WebSocket<TcpStream>, deadline: Instant) -> Result<Hel
             Ok(Message::Close(_)) => return Err(Miss::NoReady),
             // A frame, a ping (the WebSocket layer answers it), a pong.
             Ok(Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => {}
-            // The read timed out: the loop's deadline decides.
+            // A read timed out, or the time ran out: the loop's deadline decides.
             Err(tungstenite::Error::Io(e))
                 if matches!(
                     e.kind(),
@@ -283,8 +321,10 @@ mod tests {
 
     #[test]
     fn the_probe_writes_nothing_and_closes_cleanly() {
-        // The positive control first: a session on the same kind of server writes (its audio
-        // stream and meters at `ready;`, its stop at the close), and the simulator's log shows it.
+        // The positive control first: a session on the same kind of server writes as soon as the
+        // server says `ready;` (its audio stream and meter pushes), and the simulator's log shows
+        // it. Read before the session closes: a close with the server's audio still arriving can
+        // end in a reset that loses the session's last frames, which is not what this shows.
         let control = sim(SimDialect::expert_sdr3(), []);
         let session = Connection::connect(
             control.addr(),
@@ -292,19 +332,14 @@ mod tests {
             Box::new(NoStreams),
         )
         .expect("the session connects");
-        assert!(
-            session.wait_until(WAIT, |s| s.phase == crate::tci::session::Phase::Ready),
-            "control: the session reached ready"
-        );
-        session.close();
-        assert_eq!(
-            closed(&control, 0),
-            Some(Closer::Client),
-            "control: the session closed"
-        );
+        let wrote = control.wait_for(WAIT, |log| {
+            log.iter()
+                .any(|l| matches!(&l.event, SimEvent::TextIn { conn: 0, .. }))
+        });
         let control_wrote = written_by(&control, 0);
+        session.close();
         assert!(
-            control_wrote.iter().any(|t| t.contains("trx:0,false;")),
+            wrote,
             "control: the log shows what a client writes: {control_wrote:?}"
         );
 
@@ -454,6 +489,81 @@ mod tests {
         assert!(
             took < budget + Duration::from_millis(1_500),
             "it overran its budget: {took:?}"
+        );
+    }
+
+    /// The budget the trickle tests give the probe, the gap between the bytes their servers
+    /// trickle (well inside any one read's timeout), and how far past its deadline the probe may
+    /// return: the close frame's own allowance and a margin for a loaded box.
+    const TRICKLE_BUDGET: Duration = Duration::from_millis(600);
+    const TRICKLE_GAP: Duration = Duration::from_millis(150);
+    const PAST_THE_DEADLINE: Duration = Duration::from_millis(500);
+
+    /// Send `head` at once, then one byte every [`TRICKLE_GAP`] for as long as the client stays.
+    fn trickle(out: &mut impl Write, head: &[u8]) {
+        if out.write_all(head).is_err() {
+            return;
+        }
+        loop {
+            thread::sleep(TRICKLE_GAP);
+            if out.write_all(b"a").and_then(|()| out.flush()).is_err() {
+                return;
+            }
+        }
+    }
+
+    /// A server on loopback that trickles each client: its HTTP answer (`websocket` false: a
+    /// status line, then a header that never ends), or, after a real WebSocket handshake, one text
+    /// message whose 200 bytes come one at a time.
+    fn trickler(websocket: bool) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+        let addr = listener.local_addr().expect("its address");
+        thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                thread::spawn(move || {
+                    if websocket {
+                        let Ok(mut ws) = tungstenite::accept(stream) else {
+                            return;
+                        };
+                        // FIN + text, unmasked (a server's), a 16-bit length of 200.
+                        trickle(ws.get_mut(), &[0x81, 126, 0x00, 200]);
+                    } else {
+                        let mut request = [0u8; 1024];
+                        let _ = stream.read(&mut request);
+                        trickle(
+                            &mut stream,
+                            b"HTTP/1.1 101 Switching Protocols\r\nX-Trickle: ",
+                        );
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    #[test]
+    fn a_server_that_trickles_its_handshake_cannot_hold_the_probe_past_its_deadline() {
+        // Each byte comes well inside one read's timeout, so only a deadline over the whole
+        // handshake, not a timeout on each read, ends it in time.
+        let (found, took) = probe_within(trickler(false), TRICKLE_BUDGET, WAIT);
+        assert!(matches!(found, Err(Miss::NotTci(_))), "{found:?}");
+        assert!(took >= TRICKLE_BUDGET, "it gave up early: {took:?}");
+        assert!(
+            took < TRICKLE_BUDGET + PAST_THE_DEADLINE,
+            "it overran its deadline: {took:?}"
+        );
+    }
+
+    #[test]
+    fn a_server_that_trickles_a_message_cannot_hold_the_probe_past_its_deadline() {
+        // The handshake completes; then one message arrives a byte at a time, each well inside
+        // one read's timeout, and the WebSocket layer reads on until the message is whole.
+        let (found, took) = probe_within(trickler(true), TRICKLE_BUDGET, WAIT);
+        assert_eq!(found, Err(Miss::NoReady));
+        assert!(took >= TRICKLE_BUDGET, "it gave up early: {took:?}");
+        assert!(
+            took < TRICKLE_BUDGET + PAST_THE_DEADLINE,
+            "it overran its deadline: {took:?}"
         );
     }
 }
