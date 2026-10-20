@@ -1427,11 +1427,11 @@ mod tests {
             None
         };
         assert_eq!(run(280), None, "a 280 ms pause ended a TCI over");
+        // By value: the design's 300 ms, not whatever the constant says.
         assert_eq!(
             run(400),
-            Some((1_000 + TCI_OVER.gap_ms, MicDrop::AudioGap)),
-            "the gap did not end the TCI over at {} ms",
-            TCI_OVER.gap_ms
+            Some((1_300, MicDrop::AudioGap)),
+            "the gap did not end the TCI over at 300 ms"
         );
     }
 
@@ -1494,16 +1494,13 @@ mod tests {
         );
         let (at, why) = dropped.expect("a released over never ended");
         assert_eq!(why, MicDrop::Drained, "the release did not end as drained");
-        assert!(
-            at < 200 + TCI_OVER.gap_ms,
-            "drained only at {at} ms, as late as the gap"
-        );
+        assert!(at < 500, "drained only at {at} ms, as late as the gap");
         // CONTROL: unreleased, the same audio plays and the gap ends it.
         let (out, dropped) = fed(false);
         assert!(out.contains(&marker));
         assert_eq!(
             dropped,
-            Some((200 + TCI_OVER.gap_ms, MicDrop::AudioGap)),
+            Some((500, MicDrop::AudioGap)),
             "control: an unreleased over ends on its gap"
         );
     }

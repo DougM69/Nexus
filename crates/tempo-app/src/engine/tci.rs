@@ -1277,9 +1277,9 @@ mod tests {
 
     // ── The over's own ends ──────────────────────────────────────────────────────────────────
 
-    /// The over's gap is [`TCI_OVER`]'s 300 ms, from the arrival of its last audio: audio stops
-    /// at 1000 ms, every tick to 1280 ms keeps the over (the control), and the tick at 1300 ms
-    /// ends it, with the abort.
+    /// The over's gap is the design's 300 ms (by value, not read from [`TCI_OVER`]), from the
+    /// arrival of its last audio: audio stops at 1000 ms, every tick to 1280 ms keeps the over
+    /// (the control), and the tick at 1300 ms ends it, with the abort.
     #[test]
     fn a_program_over_ends_300_ms_after_its_audio_stops() {
         let mut s = Scene::new(phone());
@@ -1289,11 +1289,7 @@ mod tests {
         for n in (1_020..1_300).step_by(TICK as usize) {
             assert_ne!(s.tick(n), MicTick::Idle, "control: ended at {n} ms");
         }
-        assert_eq!(
-            s.tick(1_000 + TCI_OVER.gap_ms),
-            MicTick::Idle,
-            "the gap's end"
-        );
+        assert_eq!(s.tick(1_300), MicTick::Idle, "the gap's end");
         assert!(
             s.e.take_tci_abort(),
             "the gap ended the over without its abort"
@@ -1301,10 +1297,11 @@ mod tests {
     }
 
     /// The 10-minute ceiling, which no setting raises, ends a keyed over and a microphone key
-    /// counted from its key. CONTROL: a minute short of it, both go on.
+    /// counted from its key: ten minutes by value, not read from [`TCI_OVER`]. CONTROL: a minute
+    /// short of it, both go on.
     #[test]
     fn a_program_over_and_microphone_key_end_at_ten_minutes() {
-        let ceiling = TCI_OVER.max_latch_ms;
+        let ceiling = 10 * 60 * 1000;
         let mut s = Scene::new(phone());
         s.keyed();
         s.audio(P1, 20, 0.5);
@@ -1430,10 +1427,7 @@ mod tests {
             out.contains(&marker),
             "the over's last frame never went out"
         );
-        assert!(
-            ended.is_some_and(|n| n < 220 + TCI_OVER.gap_ms),
-            "ended at {ended:?}"
-        );
+        assert!(ended.is_some_and(|n| n < 220 + 300), "ended at {ended:?}");
         assert!(!s.e.take_tci_abort(), "the release flushed what was queued");
         assert_eq!(s.e.tci_owner(), None, "still the owner after it played out");
         assert!(
