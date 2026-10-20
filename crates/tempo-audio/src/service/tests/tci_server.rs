@@ -1,12 +1,12 @@
 //! A program's audio over through Nexus's TCI server on the real radio loop (`RadioLoop::step`): it
 //! keys on the program's first audio with Nexus's own key and plays that audio and no other, plays
 //! out its tail on its owner's release, and ends hard (unkeyed, its queued audio flushed) within a
-//! tick of every stop, its 300 ms gap and its program's loss; a CAT rebuild under it unkeys it
-//! through both links; a loop rebuilt under it plays none of it; and programs' slot-timed overs stay
-//! refused. The program is the engine's own API as the server's backend calls it (`tci_key`,
-//! `tci_tx_audio`, `tci_release`, `tci_end_own`, `tci_disconnected`); the server and its wire are
-//! the app's, tested there. The loop's monotonic clock is the test's (`mono_origin`), so a
-//! program's audio arrives at the test's moments.
+//! tick of every stop, its 300 ms gap, its 10-minute ceiling and its program's loss; a CAT rebuild
+//! under it unkeys it through both links; a loop rebuilt under it plays none of it; and programs'
+//! slot-timed overs stay refused. The program is the engine's own API as the server's backend calls
+//! it (`tci_key`, `tci_tx_audio`, `tci_release`, `tci_end_own`, `tci_disconnected`); the server and
+//! its wire are the app's, tested there. The loop's monotonic clock is the test's (`mono_origin`),
+//! so a program's audio arrives at the test's moments.
 
 use super::cw_stop::logging_rigctld;
 use super::udp_requests::halt_tx_datagram;
@@ -280,6 +280,51 @@ fn a_programs_over_ends_300_ms_after_its_audio_stops_and_a_pause_does_not() {
         assert!(s.rig.keyed, "an 80 ms pause unkeyed the rig (at {t} ms)");
         t += TICK;
     }
+}
+
+/// ⛔ THE 10-MINUTE CEILING ENDS A PROGRAM'S OVER WITHIN A TICK, its audio still arriving on every
+/// tick: aged to 9 minutes 50 seconds from its key it goes on (CONTROL), and on the first tick past
+/// 10 minutes (by value) the rig is unkeyed, what was queued is flushed, the over is gone, and
+/// nothing keys or plays after it. The age comes from the engine's test hook, which moves only the
+/// over's key time back (`Engine::age_tci_over_for_test`); the ceiling and its clock are the real
+/// ones.
+#[test]
+fn a_programs_over_ends_at_its_ten_minute_ceiling_within_a_tick() {
+    let mut s = Scene::new().keyed(600.0);
+    s.engine().age_tci_over_for_test(590_000);
+    let mut t = 620.0;
+    for _ in 0..5 {
+        s.tick(t, Some(0.5));
+        assert!(
+            s.rig.keyed,
+            "control: the over ended at 9 minutes 50 seconds (at {t} ms)"
+        );
+        t += TICK;
+    }
+    s.backend.flush_calls = 0;
+    s.engine().age_tci_over_for_test(10_000);
+    s.tick(t, Some(0.5));
+    assert!(!s.rig.keyed, "still keyed a tick past 10 minutes");
+    assert!(
+        s.backend.flush_calls > 0,
+        "the queued audio was not flushed"
+    );
+    assert!(s.state.tx_until_ms.is_none(), "the PTT hold survived");
+    assert!(
+        !s.engine().tci_over_armed(),
+        "the over survived its ceiling"
+    );
+    let played = s.backend.played.len();
+    for _ in 0..20 {
+        t += TICK;
+        s.tick(t, Some(0.5));
+        assert!(!s.rig.keyed, "keyed again at {t} ms");
+    }
+    assert_eq!(
+        s.backend.played.len(),
+        played,
+        "audio fed after the ceiling"
+    );
 }
 
 /// ⛔ A WEDGED LOOP UNKEYS: on every tick of a long over the audio fed is never more than 40 ms

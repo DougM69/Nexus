@@ -655,6 +655,15 @@ impl Engine {
         self.tci.over.keyed()
     }
 
+    /// For tests outside this crate (the radio loop's): a program's keyed over aged `by_ms`, its
+    /// key moved that much earlier ([`MicLatch::age_for_test`]), so the radio loop can be shown its
+    /// 10-minute ceiling without waiting ten minutes. It moves the over's key time and nothing
+    /// else: no rule, clock or guard.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn age_tci_over_for_test(&mut self, by_ms: u64) {
+        self.tci.over.age_for_test(by_ms);
+    }
+
     // ── Dial, mode and power ─────────────────────────────────────────────────────────────────
 
     /// Why a program's `vfo` or `modulation` change is refused now, before the CAT broker's own

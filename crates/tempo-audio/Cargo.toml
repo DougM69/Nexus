@@ -179,3 +179,7 @@ tempo-tcisim = { path = "../tempo-tcisim" }
 # door the Flex client's tests use to run its CW path, which admission refuses in every build that
 # ships (a release build will not compile with it).
 tempo-net = { path = "../tempo-net", features = ["icom-sim", "flex-unbenched"] }
+# TEST-ONLY: tempo-app's `test-util` hooks for this crate's tests: the radio loop's test of a TCI
+# program's 10-minute ceiling ages the over with `Engine::age_tci_over_for_test`. Not a new
+# dependency: tempo-app is already one, and a dev-dependency's feature is never on in a shipped build.
+tempo-app = { path = "../tempo-app", features = ["test-util"] }
