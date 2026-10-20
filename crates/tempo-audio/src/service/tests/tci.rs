@@ -2,8 +2,10 @@
 //! it, that every key goes through the client whatever PTT method is stored, that it never dials
 //! Nexus's own TCI server, that it rebuilds on its own fields only, that the SDR program's receive
 //! audio takes the sound card's place (the decoders, the waterfall, Remote Listen) with the receive
-//! floor behind it, that no over of Nexus's goes out until its transmit route is up and none on the
-//! SDR program's microphone, and what the client tells the operator about the transmitter.
+//! floor behind it, that Nexus's overs go out on its own audio once the SDR program has taken its
+//! stream (the transmit tee: one route, never both) and none on the program's microphone, that a
+//! Stop or a route lost part way through ends them, and what the client tells the operator about
+//! the transmitter.
 //!
 //! The SDR program is the TCI simulator (`tempo-tcisim`) on loopback; the loop is the real
 //! `RadioLoop::step`, driving the real `Rig` into the client's rigctld shim, as `run_radio` does.
@@ -318,12 +320,14 @@ fn a_failed_tci_open_waits_on_the_clients_reconnect_ladder() {
 // ── The radio loop on a simulated SDR program ────────────────────────────────────────────────
 
 /// The scene's sound card: it captures silence, which the SDR program's audio is told from, and
-/// keeps what is played on it.
+/// keeps what is played on it. As the sound card does, it hands an over to an installed transmit
+/// tee instead, and a Stop's flush and a mid-over switch go to the tee too.
 #[derive(Clone)]
 struct Card {
     played: Arc<Mutex<Vec<f32>>>,
     /// The card's own ring on the receive tap.
     ring: Arc<crate::monitor::SpscRing>,
+    tee: Arc<Mutex<Option<crate::backend::TxTeeHandle>>>,
 }
 
 impl Default for Card {
@@ -331,6 +335,7 @@ impl Default for Card {
         Card {
             played: Arc::default(),
             ring: Arc::new(crate::monitor::SpscRing::new(1 << 14)),
+            tee: Arc::default(),
         }
     }
 }
@@ -340,10 +345,26 @@ impl AudioBackend for Card {
         vec![0.0; 240]
     }
     fn play(&mut self, samples: &[f32]) {
-        self.played.lock().unwrap().extend_from_slice(samples);
+        match self.tee.lock().unwrap().as_ref() {
+            Some(tee) => tee.feed(samples),
+            None => self.played.lock().unwrap().extend_from_slice(samples),
+        }
     }
     fn spectrum_tap(&self) -> Option<(Arc<crate::monitor::SpscRing>, u32)> {
         Some((self.ring.clone(), 48_000))
+    }
+    fn set_tx_tee(&mut self, tee: Option<crate::backend::TxTeeHandle>) {
+        *self.tee.lock().unwrap() = tee;
+    }
+    fn flush_output(&mut self) -> usize {
+        self.tee.lock().unwrap().as_ref().map_or(0, |t| t.flush())
+    }
+    fn retune_tx(&mut self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
+        self.tee
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|t| t.retune(tail))
     }
 }
 
@@ -743,7 +764,7 @@ fn receive_audio_that_stops_under_our_own_over_is_not_given_up_on() {
     });
 }
 
-// ── Transmit: nothing of Nexus's before its route, never the SDR's microphone ───────────────
+// ── Transmit: Nexus's audio on its own route, never the SDR's microphone ────────────────────
 
 /// An engine set up for a scene.
 type Setup = fn(&mut Engine);
@@ -756,14 +777,52 @@ fn ft8_cq_at_the_boundary(e: &mut Engine) {
     let _ = e.take_immediate_tx();
 }
 
-/// ⛔⭐ NO OVER OF NEXUS'S GOES OUT BEFORE ITS TRANSMIT ROUTE IS UP, AND NONE ON THE SDR PROGRAM'S
-/// MICROPHONE. Until Nexus's transmit audio reaches the TCI session, every over whose audio Nexus
-/// plays is kept off the air by the client (nothing keys, nothing is played, the slot over halts
-/// TX): an FT8 over in a data mode, and a voice-keyer message and an APRS frame in a voice mode,
-/// where an unmarked key would take the SDR program's own microphone. The operator's own PTT, the
-/// control, keys that microphone, as the Flex client's ruling has it.
+impl TciScene {
+    /// Wait until the SDR program has taken Nexus's audio stream and its receive audio flows: the
+    /// session's transmit route is ready, and a key of Nexus's audio would be admitted.
+    fn routed(&self, what: &str) {
+        assert!(
+            self.daemon()
+                .session()
+                .wait_until(WAIT, |snap| snap.rx_audio_fresh
+                    && snap.model.trx(trx0()).audio.is_true()),
+            "{what}: the SDR program never took Nexus's audio stream"
+        );
+        assert!(
+            self.daemon().tx_route_ready(),
+            "{what}: premise: the route is ready"
+        );
+    }
+
+    /// Wait until some of Nexus's audio (a sample that is not silence) has reached the SDR program.
+    fn audio_reached(&self, what: &str) {
+        let deadline = Instant::now() + WAIT;
+        while !self.sim.tx_audio(0).iter().any(|s| *s != 0.0) {
+            assert!(
+                Instant::now() < deadline,
+                "{what}: none of Nexus's audio reached the SDR program"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// The client's transmit route.
+    fn route(&self) -> Arc<crate::tci::audio::TciTx> {
+        self.daemon().tx().expect("the transmit route").clone()
+    }
+}
+
+/// ⛔⭐ EVERY OVER OF NEXUS'S GOES OUT ON ITS OWN AUDIO, AND NONE ON THE SDR PROGRAM'S MICROPHONE.
+/// Once the SDR program has taken Nexus's audio stream, the loop installs the client's transmit tee:
+/// an FT8 over in a data mode, and a voice-keyer message and an APRS frame in a voice mode (where an
+/// unmarked key would take the program's own microphone), each key `trx:0,true,tci` once, their
+/// audio reaches the program as it pulls it, and none of it is played on the sound card (one route,
+/// never both). A program that never takes the stream (it does not acknowledge `audio_start`) gives
+/// no route: each over is kept off the air instead, nothing is played anywhere, and the slot over's
+/// refusal halts TX, as WSJT-X halts on a key the rig refuses. The operator's own PTT, the control,
+/// keys that microphone, as the Flex client's ruling has it.
 #[test]
-fn no_over_of_nexus_goes_out_before_its_route_and_none_on_the_sdr_microphone() {
+fn every_over_of_nexus_goes_out_on_its_own_audio_and_none_on_the_sdr_microphone() {
     let overs: [(&str, Setup); 3] = [
         ("an FT8 over", ft8_cq_at_the_boundary),
         ("a voice-keyer message", |e| {
@@ -778,12 +837,39 @@ fn no_over_of_nexus_goes_out_before_its_route_and_none_on_the_sdr_microphone() {
     ];
     for (what, setup) in overs {
         let mut s = TciScene::new([], waits(), setup).on_a_made_up_clock();
-        // The receive stream up first, so nothing but the route can keep the key off.
+        s.routed(what);
+        for _ in 0..50 {
+            s.step();
+        }
+        s.audio_reached(what);
+        assert_eq!(
+            s.keys(),
+            [(Keyer::Client(0), SimSource::Tci)],
+            "{what}: keyed on Nexus's audio"
+        );
+        assert_eq!(s.sent(0, "trx:0,true,tci"), 1, "{what}");
         assert!(
-            s.daemon()
+            s.card.played.lock().unwrap().is_empty(),
+            "{what}: played on the sound card as well"
+        );
+        // No route: the program never takes the stream.
+        let mut s = TciScene::new([Fault::NoAudioAck], waits(), setup).on_a_made_up_clock();
+        assert!(
+            s.sim.wait_for(WAIT, |log| log.iter().any(|l| matches!(
+                &l.event,
+                SimEvent::Command { conn: 0, text, .. } if text == "audio_start:0"
+            ))),
+            "{what}: premise: the stream asked for"
+        );
+        assert!(
+            !s.daemon()
                 .session()
-                .wait_until(WAIT, |snap| snap.rx_audio_fresh),
-            "{what}: receive audio never flowed"
+                .wait_until(Duration::from_millis(300), |snap| snap
+                    .model
+                    .trx(trx0())
+                    .audio
+                    .is_true()),
+            "{what}: premise: never taken"
         );
         for _ in 0..50 {
             s.step();
@@ -796,14 +882,12 @@ fn no_over_of_nexus_goes_out_before_its_route_and_none_on_the_sdr_microphone() {
         );
         assert!(s.keys().is_empty(), "{what}: the radio keyed");
         assert!(s.card.played.lock().unwrap().is_empty(), "{what}: played");
+        assert!(s.sim.tx_audio(0).is_empty(), "{what}: sent");
+        if what == "an FT8 over" {
+            assert!(!s.engine().tx_enabled(), "TX is still on");
+            assert!(s.engine().snapshot().radio.slot_key_refused.is_some());
+        }
     }
-    // The FT8 over's refusal halts TX, as WSJT-X halts on a key the rig refuses.
-    let mut s = TciScene::new([], waits(), ft8_cq_at_the_boundary).on_a_made_up_clock();
-    for _ in 0..20 {
-        s.step();
-    }
-    assert!(!s.engine().tx_enabled(), "TX is still on");
-    assert!(s.engine().snapshot().radio.slot_key_refused.is_some());
     // The control: the operator's own PTT in Phone keys the SDR program's microphone.
     let mut s = TciScene::new([], waits(), phone);
     s.run(300);
@@ -820,10 +904,11 @@ fn no_over_of_nexus_goes_out_before_its_route_and_none_on_the_sdr_microphone() {
     });
 }
 
-/// ⛔ A SLOT OVER IS NEXUS'S AUDIO EVEN ON A SERVER THAT OFFERS NO DATA MODE. There the loop's
-/// PKTUSB is refused and the SDR program stays in USB, a voice mode, where an unmarked key takes the
-/// SDR program's microphone: an FT8 over, at its boundary and as a late start, is kept off the air
-/// instead (its route is not up), nothing is played, and the refusal halts TX.
+/// ⛔ A SLOT OVER IS NEXUS'S AUDIO EVEN ON A SERVER THAT OFFERS NO DATA MODE. There the loop's PKTUSB
+/// is refused and the SDR program stays in USB, a voice mode, where an unmarked key takes the SDR
+/// program's microphone: an FT8 over, at its boundary and as a late start, keys Nexus's audio
+/// instead (`trx:0,true,tci`), its audio reaches the program, and nothing is played on the sound
+/// card.
 #[test]
 fn a_slot_over_never_keys_the_sdr_microphone_on_a_server_with_no_data_mode() {
     let no_data_mode = || {
@@ -831,45 +916,310 @@ fn a_slot_over_never_keys_the_sdr_microphone_on_a_server_with_no_data_mode() {
         d.modulations.retain(|m| m != "DIGU" && m != "DIGL");
         d
     };
-    let refused = |s: &mut TciScene, what: &str| {
+    let on_its_own_audio = |s: &mut TciScene, what: &str| {
         for _ in 0..50 {
             s.step();
         }
-        std::thread::sleep(Duration::from_millis(300));
-        assert!(
-            !s.any_key_asked(),
-            "{what}: keyed {:?}",
-            s.sim.commands_from(0)
+        s.audio_reached(what);
+        assert_eq!(
+            s.keys(),
+            [(Keyer::Client(0), SimSource::Tci)],
+            "{what}: keyed on Nexus's audio, not the microphone"
         );
-        assert!(s.keys().is_empty(), "{what}: the radio keyed");
+        assert_eq!(
+            s.sim.radio().trx[0].modulation,
+            "USB",
+            "{what}: premise: a voice mode"
+        );
         assert!(s.card.played.lock().unwrap().is_empty(), "{what}: played");
-        assert!(
-            s.engine().snapshot().radio.slot_key_refused.is_some(),
-            "{what}: premise, the key was asked for and refused"
-        );
-    };
-    let receiving = |s: &TciScene| {
-        assert!(
-            s.daemon()
-                .session()
-                .wait_until(WAIT, |snap| snap.rx_audio_fresh),
-            "receive audio never flowed"
-        );
     };
     let mut s = TciScene::on_dialect(no_data_mode(), [], waits(), ft8_cq_at_the_boundary)
         .on_a_made_up_clock();
-    receiving(&s);
-    refused(&mut s, "at the boundary");
+    s.routed("at the boundary");
+    on_its_own_audio(&mut s, "at the boundary");
     // A late start: slot 0's boundary consumed first, as a running station's is.
     let mut s = TciScene::on_dialect(no_data_mode(), [], waits(), |e| e.set_tier(Tier::Ft8))
         .on_a_made_up_clock();
-    receiving(&s);
+    s.routed("a late start");
     for _ in 0..2 {
         s.step();
     }
     assert_eq!(s.state.last_slot, Some(0), "scene guard: slot 0's boundary");
     ft8_cq(&mut s.engine());
-    refused(&mut s, "a late start");
+    on_its_own_audio(&mut s, "a late start");
+}
+
+/// ⭐ WITH AUDIO OVER TCI OFF, A TCI RADIO KEYS LIKE ANY CAT RADIO (the operator's rule): an over of
+/// Nexus's keys the SDR program's own input, which the operator routes from Nexus's sound card (a
+/// virtual cable), and Nexus plays it to the sound card. No transmit tee goes in, no audio stream is
+/// asked for, and nothing of it reaches the program over TCI: one route.
+#[test]
+fn with_audio_over_tci_off_an_over_keys_the_programs_input_and_plays_on_the_sound_card() {
+    let message = vec![0.05; 12_000];
+    let mut s = TciScene::new([], waits(), |e| {
+        let mut settings = e.settings().clone();
+        settings.tci_audio = false;
+        e.apply_settings(settings);
+        phone(e);
+        e.send_voice(vec![0.05; 12_000]).unwrap();
+    });
+    s.run_until("the message never keyed", |s| !s.keys().is_empty());
+    s.run(300);
+    assert_eq!(
+        s.keys(),
+        [(Keyer::Client(0), SimSource::Mic(Mic::Selected))],
+        "the program's own input"
+    );
+    assert_eq!(
+        *s.card.played.lock().unwrap(),
+        message,
+        "the message on the sound card"
+    );
+    assert_eq!(s.state.dax_tee_id, None, "no transmit tee");
+    assert!(!s.daemon().tx_route_ready());
+    assert!(
+        !s.sim
+            .commands_from(0)
+            .iter()
+            .any(|c| c.starts_with("audio_start")),
+        "no stream asked for"
+    );
+    assert!(s.sim.tx_audio(0).is_empty(), "nothing over TCI");
+}
+
+/// ⭐ AND AN FT8 OVER, WITH AUDIO OVER TCI OFF (NEEDS-BENCH): the slot over keys the SDR program's
+/// own input at its boundary, as any CAT radio's does, and the whole over plays on the sound card,
+/// which the operator routes to that input. No transmit tee goes in, no audio stream is asked for,
+/// and nothing of it reaches the program over TCI: one route.
+#[test]
+fn with_audio_over_tci_off_an_ft8_over_keys_the_programs_input_and_plays_on_the_sound_card() {
+    let mut s = TciScene::new([], waits(), |e| {
+        let mut settings = e.settings().clone();
+        settings.tci_audio = false;
+        e.apply_settings(settings);
+        ft8_cq_at_the_boundary(e);
+    })
+    .on_a_made_up_clock();
+    assert!(
+        s.daemon().session().wait_until(WAIT, |snap| snap.phase
+            == tempo_net::tci::session::Phase::Ready),
+        "premise: the SDR program is ready"
+    );
+    for _ in 0..50 {
+        s.step();
+    }
+    assert!(
+        s.sim.wait_for(WAIT, |log| !keys(log).is_empty()),
+        "the FT8 over never keyed: {:?}",
+        s.sim.commands_from(0)
+    );
+    assert_eq!(
+        s.keys(),
+        [(Keyer::Client(0), SimSource::Mic(Mic::Selected))],
+        "the program's own input"
+    );
+    assert_eq!(s.sent(0, "trx:0,true"), 1);
+    let played = s.card.played.lock().unwrap().clone();
+    assert!(
+        played.len() > 12 * 12_000 && peak(&played) > 0.0,
+        "the over on the sound card: {} samples, peak {}",
+        played.len(),
+        peak(&played)
+    );
+    assert_eq!(s.state.dax_tee_id, None, "no transmit tee");
+    assert!(!s.daemon().tx_route_ready());
+    assert!(
+        !s.sim
+            .commands_from(0)
+            .iter()
+            .any(|c| c.starts_with("audio_start")),
+        "no stream asked for"
+    );
+    assert!(s.sim.tx_audio(0).is_empty(), "nothing over TCI");
+}
+
+/// ⛔ STOP TX MID-OVER ON TCI SENDS NO MORE OF IT (M10 in the loop). A voice-keyer message going out
+/// on Nexus's audio is stopped part way: the loop's hard stop empties the transmit route, so nothing
+/// of the message is left to send, and the over ends. Here the SDR program does not confirm the
+/// unkey and goes on pulling: what it gets after our stop is silence. None of the message goes to
+/// the sound card.
+#[test]
+fn stop_tx_mid_over_on_tci_sends_no_more_of_it() {
+    let mut s = TciScene::new([Fault::StuckTrx], patient(), phone);
+    s.routed("the scene");
+    s.run(100);
+    let tone: Vec<f32> = (0..36_000)
+        .map(|i| 0.5 * (std::f32::consts::TAU * 1_000.0 * i as f32 / 12_000.0).sin())
+        .collect();
+    s.engine().send_voice(tone).unwrap();
+    s.run_until("the message never keyed", |s| !s.keys().is_empty());
+    s.audio_reached("the message");
+    s.run(300);
+    s.engine().halt_tx();
+    s.run_until("the stop never reached the SDR program", |s| {
+        s.sent(0, "trx:0,false") >= 1
+    });
+    assert_eq!(s.route().queued(), 0, "the rest of the message left queued");
+    assert_eq!(s.state.tx_until_ms, None, "the over goes on");
+    let stop = s
+        .sim
+        .log()
+        .iter()
+        .find_map(|l| match &l.event {
+            SimEvent::Command { conn: 0, text, .. } if text == "trx:0,false" => Some(l.at),
+            _ => None,
+        })
+        .expect("our stop");
+    let answered = |s: &TciScene, before: Duration| {
+        s.sim
+            .log()
+            .iter()
+            .filter(|l| l.at < before && matches!(l.event, SimEvent::FrameIn { conn: 0, .. }))
+            .count()
+    };
+    let before = answered(&s, stop);
+    s.run_until("ten answers after the stop", |s| {
+        answered(s, Duration::MAX) >= before + 10
+    });
+    let sent = s.sim.tx_audio(0);
+    assert!(
+        sent[before * 1_024..].iter().all(|v| *v == 0.0),
+        "the message after the stop"
+    );
+    assert!(s.card.played.lock().unwrap().is_empty(), "played");
+}
+
+/// ⭐⭐ NEVER A SILENT OVER, PART WAY THROUGH EITHER, ON TCI. The SDR program stops pulling Nexus's
+/// audio part way through a voice-keyer message and stays keyed: the client ends the over, and the
+/// loop halts transmit with the reason on the CAT line, as it does for the session's own halts. The
+/// rest of the message goes, none of it to the sound card.
+#[test]
+fn a_tci_over_the_sdr_program_stops_pulling_is_ended_and_says_why() {
+    let mut s = TciScene::new(
+        [Fault::ChronoStall {
+            after: Duration::from_millis(400),
+        }],
+        patient(),
+        phone,
+    );
+    s.routed("the scene");
+    s.run(100);
+    s.engine().send_voice(vec![0.05; 36_000]).unwrap();
+    s.run_until("the message never keyed", |s| !s.keys().is_empty());
+    s.run_until("the halt never reached the engine", |s| {
+        s.engine().snapshot().radio.cat_detail
+            == "TCI: the SDR program stopped taking Nexus's audio part way through the over, so \
+                Nexus ended it."
+    });
+    s.run_until("the over goes on", |s| s.state.tx_until_ms.is_none());
+    assert!(s.sent(0, "trx:0,false") >= 1, "our stop");
+    assert_eq!(s.route().queued(), 0, "the rest of the message left queued");
+    assert!(!s.engine().tx_enabled(), "TX is still on");
+    assert!(s.card.played.lock().unwrap().is_empty(), "played");
+    s.run(500);
+    assert_eq!(s.sent(0, "trx:0,true,tci"), 1, "keyed again by itself");
+}
+
+/// ⭐ THE TRANSMIT TEE GOES WITH ITS SESSION, AND AN OVER IT CARRIED ENDS: the SDR program's
+/// connection drops part way through a voice-keyer message on Nexus's audio. The loop takes the tee
+/// out, the message ends there and does not come back on the next session (whose first command is
+/// the unkey), and none of it goes to the sound card.
+#[test]
+fn a_tci_route_lost_mid_message_ends_the_message() {
+    let mut s = TciScene::new(
+        [Fault::DisconnectMidOver {
+            after: Duration::from_millis(400),
+            radio_stays_keyed: false,
+        }],
+        waits(),
+        phone,
+    );
+    let key = s.daemon().key();
+    s.reopen = Reopen::Client;
+    s.routed("the scene");
+    s.run(100);
+    s.engine().send_voice(vec![0.05; 36_000]).unwrap();
+    s.run_until("the message never keyed", |s| !s.keys().is_empty());
+    assert!(s.state.dax_tee_id.is_some(), "premise: on the tee");
+    s.run_until("no next session", |s| !s.sim.commands_from(1).is_empty());
+    s.run_until("the message goes on", |s| s.state.tx_until_ms.is_none());
+    assert_eq!(
+        s.sim.commands_from(1)[0],
+        "trx:0,false",
+        "the next session's first command"
+    );
+    s.run(1_000);
+    assert!(
+        !s.sim
+            .commands_from(1)
+            .iter()
+            .any(|c| c.starts_with("trx:0,true")),
+        "the message came back on the next session"
+    );
+    assert!(s.card.played.lock().unwrap().is_empty(), "played");
+    registry::forget(key);
+}
+
+/// The TCI radio a switch hands to the monitor leaves the loop's transmit tee behind, so its client
+/// keys none of Nexus's audio from there: a stray key in a data mode is refused, and says the route
+/// is not connected. While it was the loop's, the same key went out (the control).
+#[test]
+fn a_tci_radio_handed_to_the_monitor_keys_none_of_nexus_audio() {
+    let mut s = TciScene::new([], waits(), phone);
+    s.routed("the scene");
+    s.run(200);
+    assert!(s.state.dax_tee_id.is_some(), "premise: the tee in");
+    let probe = |d: &TciDaemon| {
+        use std::io::{BufRead, Write};
+        let mut writer = std::net::TcpStream::connect(d.local_addr()).unwrap();
+        writer.set_read_timeout(Some(WAIT)).unwrap();
+        let mut reader = std::io::BufReader::new(writer.try_clone().unwrap());
+        let mut ask = |verb: &str| {
+            writeln!(writer, "{verb}").unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            line
+        };
+        assert_eq!(ask("M PKTUSB 0"), "RPRT 0\n");
+        let asked = Instant::now();
+        let keyed = ask("T 1");
+        let why = d.key_refused_since(asked);
+        assert_eq!(ask("T 0"), "RPRT 0\n");
+        (keyed, why)
+    };
+    let (keyed, why) = probe(s.daemon());
+    assert_eq!((keyed.as_str(), why), ("RPRT 0\n", None), "control: keyed");
+    s.run_until("the unkey never reported", |s| !s.daemon().keyed());
+    let incoming = MonitorConn {
+        id: 9,
+        transport: cat_transport(4600, None),
+        rig: Rig::vox(),
+        rigctld_proc: None,
+        last_poll: 0.0,
+        ticks: 0,
+        smeter_supported: None,
+        freq_misses: 0,
+        open_failures: 0,
+        retry_after_ms: 0.0,
+    };
+    let want = incoming.transport.clone();
+    let demoted = s
+        .state
+        .install_handoff_connection(&mut s.rig, incoming, &want, 2);
+    let d = demoted
+        .rigctld_proc
+        .as_ref()
+        .and_then(CatDaemon::tci)
+        .expect("the TCI client in the monitor");
+    let (keyed, why) = probe(d);
+    assert_eq!(
+        keyed, "RPRT -1\n",
+        "a key of Nexus's audio from the monitor"
+    );
+    assert!(
+        why.is_some_and(|w| w.contains("transmit audio is not connected")),
+        "the route is not up there"
+    );
 }
 
 /// An FT8 CQ, armed in the Digital section the way Call CQ arms it.

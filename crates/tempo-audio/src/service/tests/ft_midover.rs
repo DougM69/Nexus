@@ -124,20 +124,40 @@ impl<B: AudioBackend + Default> Qso<B> {
 
     /// As [`Qso::new`], with W1AW's grid heard at the boundary `periods` before `t0`'s.
     fn heard_before(tier: Tier, backend: B, periods: u64) -> Qso<B> {
+        Qso::station(tier, backend, periods, |_| {})
+    }
+
+    /// As [`Qso::new`], the station's settings first changed by `settings` (its radio's
+    /// connection).
+    fn with_settings(
+        tier: Tier,
+        backend: B,
+        settings: impl FnOnce(&mut tempo_app::settings::Settings),
+    ) -> Qso<B> {
+        Qso::station(tier, backend, 0, settings)
+    }
+
+    /// [`Qso::heard_before`]'s scene, on the station's settings as `settings` leaves them.
+    fn station(
+        tier: Tier,
+        backend: B,
+        periods: u64,
+        settings: impl FnOnce(&mut tempo_app::settings::Settings),
+    ) -> Qso<B> {
         let peer = retuning_peer(14_074_000, "PKTUSB", |line, state| {
             (line == "T 1").then(|| {
                 state.keyed = true;
                 "RPRT 0\n".to_string()
             })
         });
-        let engine = Arc::new(Mutex::new(Engine::with_settings(
-            tempo_app::settings::Settings {
-                mycall: "KD9TAW".into(),
-                mygrid: "EN52".into(),
-                write_all_txt: true,
-                ..Default::default()
-            },
-        )));
+        let mut base = tempo_app::settings::Settings {
+            mycall: "KD9TAW".into(),
+            mygrid: "EN52".into(),
+            write_all_txt: true,
+            ..Default::default()
+        };
+        settings(&mut base);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(base)));
         let period_ms = {
             let mut e = engine.lock().unwrap();
             e.set_license_class("extra");
@@ -727,4 +747,239 @@ fn ft4_an_rr73_only_the_late_full_pass_finds_turns_the_report_on_the_air_into_73
     let until = s.state.tx_until_ms;
     assert_eq!(until, Some(s.t0 + 6_240.0), "PTT's end untouched");
     the_over_on_the_air_is_the_73(s, keyed, 4_800);
+}
+
+// ── The TCI route ────────────────────────────────────────────────────────────────────────────
+
+/// A sound card with a transmit tee, as the loop installs Nexus's TCI client's: an over goes to the
+/// tee instead of the card, and a Stop's flush and a mid-over switch go to it too.
+#[derive(Default)]
+struct TeeCard {
+    tee: Option<crate::backend::TxTeeHandle>,
+    played: Vec<f32>,
+    /// What was handed to the tee.
+    teed: Vec<f32>,
+    retunes: usize,
+}
+
+impl AudioBackend for TeeCard {
+    fn capture(&mut self) -> Vec<f32> {
+        Vec::new()
+    }
+    fn play(&mut self, samples: &[f32]) {
+        match &self.tee {
+            Some(tee) => {
+                self.teed.extend_from_slice(samples);
+                tee.feed(samples);
+            }
+            None => self.played.extend_from_slice(samples),
+        }
+    }
+    fn set_tx_tee(&mut self, tee: Option<crate::backend::TxTeeHandle>) {
+        self.tee = tee;
+    }
+    fn flush_output(&mut self) -> usize {
+        self.tee.as_ref().map_or(0, |t| t.flush())
+    }
+    fn retune_tx(&mut self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
+        let switched = self.tee.as_ref().is_some_and(|t| t.retune(tail));
+        self.retunes += usize::from(switched);
+        switched
+    }
+}
+
+impl Qso<TeeCard> {
+    /// Step the loop to `until` ms from `t0`, a 20 ms tick at a time on the scene's grid, each tick
+    /// no sooner than the real clock reaches it: the SDR program pulls the over in real time, so
+    /// the loop runs at its pace.
+    fn run_in_real_time_to(&mut self, until: f64) {
+        let mut rr = mock_reopen_rig();
+        let mut ra = |_t: &Transport| Ok(TeeCard::default());
+        let mut station = StationSinks::new();
+        let (from, w0) = (self.t, Instant::now());
+        while self.t <= self.t0 + until {
+            let due = w0 + Duration::from_secs_f64((self.t - from) / 1000.0);
+            if let Some(wait) = due.checked_duration_since(Instant::now()) {
+                std::thread::sleep(wait);
+            }
+            self.state
+                .step(
+                    &self.engine,
+                    &mut self.backend,
+                    &mut self.rig,
+                    &no_sinks(),
+                    self.t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            self.t += 20.0;
+        }
+    }
+}
+
+/// One TX_CHRONO's ask at the simulated ExpertSDR3's stream: 1024 frames at 48 kHz.
+const CHRONO_FRAMES: usize = 1_024;
+
+/// What the TCI route makes of the modem-rate `over` for a server at 48 kHz, from its start, at
+/// full scale.
+fn tci_48k(over: &[f32]) -> Vec<f32> {
+    crate::capture_resample::CaptureResampler::new(12_000, 48_000)
+        .process(over)
+        .into_iter()
+        .map(|v| v.clamp(-1.0, 1.0))
+        .collect()
+}
+
+/// Where `a` and `b` first differ by more than float noise, or `None`.
+fn first_difference(a: &[f32], b: &[f32]) -> Option<usize> {
+    a.iter().zip(b).position(|(x, y)| (x - y).abs() > 1e-6)
+}
+
+/// How many transmit frames the simulated SDR program has read from its first client.
+fn answers(sim: &tempo_tcisim::Simulator) -> usize {
+    sim.log()
+        .iter()
+        .filter(|l| matches!(l.event, tempo_tcisim::Event::FrameIn { conn: 0, .. }))
+        .count()
+}
+
+/// ⭐⭐ THE REPORTED CASE ON THE TCI ROUTE, FT8: Nexus's TCI client carries the over to a simulated
+/// SDR program, which pulls it in real time, and R-12 decoded 3 s into the report switches the rest
+/// to RR73 there. What the program pulled before the switch stays the report's, sample for sample;
+/// the rest is RR73's in place, spliced at one point as if the over had been built that way; the
+/// over is no longer; PTT's end is untouched (`trx:0,false` at the over's end); and a second Tx row
+/// says what went out. The key is Nexus's audio (`trx:0,true,tci`), and nothing is played on the
+/// sound card. The station's radio is on the TCI connection, end to end: the engine plans the over
+/// under its rules for a TCI radio, and the loop keys it through the client. NEEDS-BENCH: the
+/// operator's bench of FT on TCI times what this simulator cannot.
+#[test]
+fn ft8_a_switch_on_the_tci_route_replaces_only_what_the_sdr_program_has_not_pulled() {
+    let sim = tempo_tcisim::Simulator::start(tempo_tcisim::Config::dialect(
+        tempo_tcisim::Dialect::expert_sdr3(),
+    ))
+    .expect("the simulator starts");
+    let trx = tempo_net::tci::Trx::new(0).unwrap();
+    crate::tci::registry::forget((sim.addr(), trx));
+    let target = crate::tci::Target {
+        host: "127.0.0.1".into(),
+        port: sim.addr().port(),
+        trx: 0,
+        dialect: tempo_app::settings::TciDialect::Auto,
+        audio: true,
+        rigctld_port: 0,
+    };
+    let d = crate::tci::TciDaemon::start_receiving(&target, crate::tci::Options::default())
+        .expect("the client starts");
+    assert!(
+        d.session()
+            .wait_until(Duration::from_secs(10), |s| s.rx_audio_fresh
+                && s.model.trx(trx).audio.is_true()),
+        "premise: the SDR program took Nexus's audio stream"
+    );
+    let mut s = Qso::with_settings(Tier::Ft8, TeeCard::default(), |settings| {
+        settings.rig_model = 7;
+        settings.rig_conn = "tci".into();
+        settings.tci_host = "127.0.0.1".into();
+        settings.tci_port = sim.addr().port();
+        settings.ptt_method = "cat".into();
+    });
+    let t0 = s.t0;
+    let applied = Transport::from_settings(s.engine.lock().unwrap().settings());
+    assert_eq!(
+        applied.tci_target().map(|t| t.port),
+        Some(target.port),
+        "premise: the engine's radio is the client's TCI server"
+    );
+    s.rig = Rig::rigctld(&format!("127.0.0.1:{}", d.local_addr().port()));
+    s.rig.set_slow_transport(true);
+    let cfg = RadioConfig {
+        rig_model: 7,
+        ..RadioConfig::default()
+    };
+    // The loop's transport is the engine's own settings, so it never rebuilds the client.
+    s.state = RadioLoop::new(applied, Some(CatDaemon::Tci(d)), &cfg);
+    // The loop settles the dial and the mode on the client before the boundary.
+    s.t = t0 - 600.0;
+    s.run_in_real_time_to(2_980.0);
+    assert!(
+        s.backend.tee.is_some(),
+        "premise: the loop installed the TCI tee"
+    );
+    let until = s.state.tx_until_ms;
+    assert_eq!(until, Some(t0 + 13_840.0), "premise: WSJT-X's PTT off");
+    assert_eq!(s.tx_rows().len(), 1, "premise: the report's Tx row");
+    assert_eq!(
+        same_audio(&s.backend.teed, &over_of(Tier::Ft8, TX2)),
+        Ok(()),
+        "premise: the report, keyed at t0, handed to the TCI route whole"
+    );
+    let pulled_then = answers(&sim);
+    s.decoded("KD9TAW W1AW R-12", s.slot());
+    s.run_in_real_time_to(3_100.0);
+    assert_eq!(
+        s.backend.retunes, 1,
+        "the rest handed to the TCI route once"
+    );
+    assert_eq!(s.state.tx_until_ms, until, "PTT's end untouched");
+    let rows = s.tx_rows();
+    assert_eq!(rows.len(), 1, "a second Tx row: {rows:?}");
+    assert!(rows[0].ends_with(RR73), "{}", rows[0]);
+    s.run_in_real_time_to(14_400.0);
+    assert_eq!(s.state.tx_until_ms, None, "the over ended");
+    assert_eq!(s.backend.retunes, 1, "one switch");
+    assert!(s.backend.played.is_empty(), "played on the sound card");
+    let keys: Vec<String> = sim
+        .commands_from(0)
+        .into_iter()
+        .filter(|c| c.starts_with("trx:"))
+        .collect();
+    assert_eq!(
+        keys,
+        ["trx:0,true,tci", "trx:0,false"],
+        "the key and its end"
+    );
+    // What the SDR program pulled.
+    let sent = sim.tx_audio(0);
+    let keyed = over_of(Tier::Ft8, TX2);
+    let rr73 = over_of(Tier::Ft8, RR73);
+    let unswitched = tci_48k(&keyed);
+    // Where the over starts in what was pulled: its first tone after its silent lead-in.
+    let lead = unswitched
+        .iter()
+        .position(|v| *v != 0.0)
+        .expect("tones in the over");
+    let k = sent
+        .iter()
+        .position(|v| *v != 0.0)
+        .expect("the over reached the SDR program")
+        - lead;
+    assert!(sent.len() >= k + unswitched.len(), "the whole over pulled");
+    let over = &sent[k..k + unswitched.len()];
+    assert!(
+        sent[k + unswitched.len()..].iter().all(|v| *v == 0.0),
+        "the over is no longer"
+    );
+    let pulled_before = (pulled_then - k / CHRONO_FRAMES) * CHRONO_FRAMES / 4;
+    let splice = first_difference(over, &unswitched).expect("the over was switched");
+    assert!(
+        splice >= pulled_before * 4,
+        "what was pulled before the decode stays the report's: first change at {splice}, {} \
+         pulled",
+        pulled_before * 4
+    );
+    let at = (splice / 4).saturating_sub(64)..splice / 4 + 160;
+    let j = at
+        .clone()
+        .find(|&j| {
+            let mut spliced = keyed[..j].to_vec();
+            spliced.extend_from_slice(&rr73[j..]);
+            first_difference(over, &tci_48k(&spliced)).is_none()
+        })
+        .unwrap_or_else(|| panic!("no single splice in {at:?} makes what was pulled"));
+    assert!(
+        j >= pulled_before,
+        "spliced after what was pulled: {j} < {pulled_before}"
+    );
 }

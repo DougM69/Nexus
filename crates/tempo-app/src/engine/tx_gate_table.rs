@@ -103,6 +103,14 @@ pub(super) fn station(
     e
 }
 
+/// [`station`] on an SDR program's TCI connection, with the connection's own model (7).
+fn tci_station(class: &str, section: &str, mhz: f64, band: &str, sideband: &str) -> Engine {
+    let mut e = station(7, class, section, mhz, band, sideband);
+    e.settings.rig_conn = "tci".to_string();
+    e.settings.sync_active_from_flat();
+    e
+}
+
 /// A satellite pass on `model`, the way the Satellites view and the radio loop build one:
 /// Main = downlink / Sub = uplink confirmed for every radio, the native CI-V daemon serving,
 /// the transponder picked, the nominal legs queued. The section is set FIRST because a section
@@ -975,6 +983,61 @@ fn rows() -> Vec<Row> {
             emission_mhz: 5.3715,
             phone_seg: None,
         },
+        // ── An SDR program's radio on the TCI connection ───────────────────────────────
+        // Every section is judged as on any connection, the licence included: the connection
+        // refuses none, the Digital section's slot-timed modes included (`engine/tci_connection.rs`).
+        Row {
+            name: "TCI FT8 on 20 m, General",
+            build: || tci_station("general", "digital", 14.074, "20m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 14.074,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "TCI FT4 on 20 m, General",
+            build: || {
+                let mut e = tci_station("general", "digital", 14.080, "20m", "USB");
+                e.set_tier(Tier::Ft4);
+                e.set_frequency(14.080, "20m", "USB");
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 14.080,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "TCI JS8 on 20 m, General",
+            build: || {
+                let mut e = tci_station("general", "digital", 14.078, "20m", "USB");
+                e.set_tier(Tier::Js8);
+                e.set_frequency(14.078, "20m", "USB");
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 14.078,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "TCI phone 14.250, General",
+            build: || tci_station("general", "phone", 14.250, "20m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 14.250,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "TCI phone 14.200, below the General phone floor",
+            build: || tci_station("general", "phone", 14.200, "20m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 14.200,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "TCI CW 14.030, General",
+            build: || tci_station("general", "cw", 14.030, "20m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 14.030,
+            phone_seg: Some((14.225, 14.350)),
+        },
         // ── Dual-receiver radios, normal operation ─────────────────────────────────────
         Row {
             name: "IC-7610 phone 14.250, General",
@@ -1282,6 +1345,47 @@ fn a_tci_programs_passband_only_ever_refuses_more_than_the_gate() {
     assert!(
         !parted.is_empty(),
         "control: the passband never parted from the gate"
+    );
+}
+
+/// ⛔ ON THE TCI CONNECTION EVERY JUDGEMENT IS THE LICENCE'S, FOR THE SECTION ASKED, WHATEVER
+/// SECTION THE STATION IS IN: the connection refuses no section (`engine/tci_connection.rs`). Over
+/// every TCI row and every section asked, the answer is the row's serial twin's, and some row's
+/// answer moves with the section asked, so the gate judges that section and not the station's.
+/// CONTROL: the Digital judgement is allowed on some TCI row, so the first half is not vacuous.
+#[test]
+fn on_the_tci_connection_every_judgement_is_the_licences_for_the_section_asked() {
+    use crate::settings::OperatingMode::{Cw, Digital, Keyboard, Phone, Rtty};
+    let (mut wrong, mut moved_by_section, mut digital_allowed) = (Vec::new(), 0, 0);
+    for row in rows() {
+        let e = (row.build)();
+        if !crate::settings::rig_conn_is_tci(&e.settings.rig_conn) {
+            continue;
+        }
+        let mut twin = (row.build)();
+        twin.settings.rig_conn = "serial".to_string();
+        twin.settings.sync_active_from_flat();
+        let in_force = e.tx_allowed_as(e.settings.operating_mode);
+        for om in [Digital, Phone, Cw, Rtty, Keyboard] {
+            let (tci, serial) = (e.tx_allowed_as(om), twin.tx_allowed_as(om));
+            if tci != serial {
+                wrong.push(format!(
+                    "{}: asked as {om:?}: {tci}, its serial twin {serial}",
+                    row.name
+                ));
+            }
+            moved_by_section += usize::from(tci != in_force);
+            digital_allowed += usize::from(om == Digital && tci);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    assert!(
+        moved_by_section > 0,
+        "no TCI row's answer moved with the section asked: the gate judged the station's section"
+    );
+    assert!(
+        digital_allowed > 0,
+        "control: no TCI row allowed the Digital judgement"
     );
 }
 
