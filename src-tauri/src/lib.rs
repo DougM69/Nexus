@@ -52185,6 +52185,101 @@ mod tests {
         );
     }
 
+    /// ⛔ CW TYPED ON A COMPUTER DRIVING THE STATION MEETS THE RADIO'S KEYER RULE, ON THE WIRE. The
+    /// text goes through the station's own runner, as the command lane runs it, into `send_cw` and
+    /// the engine's one CW queue; each word the queue gives is handed to the radio's keyer as the
+    /// radio loop's CAT keyer hands it (`Rig::send_morse`), here to a rigctld that records every
+    /// line. Kenwood, Yaesu and Elecraft radios end a command at `;`, so the word holding one is
+    /// refused, says why, and never reaches rigctld. CONTROL: every other word from afar reaches
+    /// it as typed.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn cw_typed_from_afar_never_reaches_the_radios_keyer_with_a_semicolon() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use serde_json::{json, Value};
+        use std::io::{BufRead, BufReader, Write};
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        {
+            let mut e = engine_lock(&engine);
+            e.set_license_class("extra");
+            e.set_cw_keyer("cat", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+        }
+        let (app, _main) = shack_app_for_starts_from_afar(engine.clone());
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        // A rigctld that records every line it is sent, answering each `RPRT 0`.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let wire = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = wire.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let Ok(read) = stream.try_clone() else {
+                    continue;
+                };
+                for line in BufReader::new(read).lines() {
+                    let Ok(line) = line else { break };
+                    log.lock().unwrap().push(line);
+                    if stream.write_all(b"RPRT 0\n").is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        let mut rig = tempo_audio::rig::Rig::rigctld(&addr);
+        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let sent = ask(
+            "send_cw",
+            json!({"text": "CQ TEST;FA00007000000 DE KD9TAW", "afar": {"standDown": now}}),
+        );
+        assert!(sent.is_ok(), "premise: the start from afar ran: {sent:?}");
+        let mut refused = Vec::new();
+        loop {
+            let Some((word, _, _)) = engine_lock(&engine).poll_cw_word() else {
+                break;
+            };
+            if let Err(e) = rig.send_morse(&word) {
+                refused.push((word, e.to_string()));
+            }
+        }
+        let wire = wire.lock().unwrap().clone();
+        assert!(
+            !wire.iter().any(|l| l.contains("FA00007000000")),
+            "the word with the `;` from afar reached rigctld: {wire:?}"
+        );
+        assert_eq!(
+            refused.len(),
+            1,
+            "the word with the `;` is refused, and only it: {refused:?}"
+        );
+        assert!(
+            refused[0].1.starts_with("CW not sent: \";\""),
+            "the refusal says why: {refused:?}"
+        );
+        assert_eq!(
+            wire,
+            ["b CQ", "b DE", "b KD9TAW"],
+            "CONTROL: every other word from afar reaches the radio's keyer as typed"
+        );
+    }
+
     /// ★ The tune carrier, the rig's tuner, and the RTTY and PSK starts (a send, continuous TX
     /// switched on and typed into, the RTTY auto-sequencer's CQ and answer) run from afar only under
     /// the stand-down the command lane read them under, as the FT buttons do. Called through the

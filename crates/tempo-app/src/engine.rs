@@ -10294,10 +10294,15 @@ impl Engine {
     /// macro tokens. Pushed by the frontend when a callbook lookup resolves; `call` keys it to
     /// the contact so a stale lookup never keys the wrong name (see `expand_cw`). Empty
     /// `call` clears it (the operator cleared the log field).
+    ///
+    /// ⛔ The name and the state are the worked station's own callbook text, and a macro keys
+    /// them, so each keeps only what Nexus's keyers may be handed
+    /// ([`tempo_core::cw::sendable_text`]): a `;`, a control character or a character with no
+    /// Morse is taken out here, and the rest of the name still keys.
     pub fn set_cw_peer_info(&mut self, call: String, name: String, state: String) {
         self.cw_peer_call = call.trim().to_string();
-        self.cw_peer_name = name.trim().to_string();
-        self.cw_peer_state = state.trim().to_string();
+        self.cw_peer_name = tempo_core::cw::sendable_text(&name);
+        self.cw_peer_state = tempo_core::cw::sendable_text(&state);
     }
 
     /// #293: remember the name a callbook lookup returned for `call`, replacing any earlier
