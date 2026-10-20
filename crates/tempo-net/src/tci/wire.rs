@@ -2709,11 +2709,18 @@ mod tests {
 
     #[test]
     fn a_command_over_max_command_is_refused() {
-        let long = format!("device:{};", "a".repeat(MAX_COMMAND));
+        // Five arguments, each within MAX_ARG, together past MAX_COMMAND: no command that long is
+        // handed on, whatever its parts.
+        let long = format!("x:{};", vec!["a".repeat(1000); 5].join(","));
         assert_eq!(
             split(&long).next(),
-            Some(Err(WireError::CommandTooLong(MAX_COMMAND + 7)))
+            Some(Err(WireError::CommandTooLong(5006)))
         );
+        let at = format!("x:{};", "a".repeat(MAX_COMMAND - 2));
+        assert!(matches!(
+            split(&at).next(),
+            Some(Err(WireError::Command { .. }))
+        ));
         // The next command still reads.
         let got: Vec<_> = notices(&(long + "ready;")).collect();
         assert_eq!(got[1], Ok(Notice::Ready));
@@ -2732,6 +2739,14 @@ mod tests {
 
     #[test]
     fn more_than_max_args_are_refused() {
+        // No command with more than MAX_ARGS arguments is handed on (nor its slices collected).
+        let at = format!("x:{};", ",".repeat(MAX_ARGS - 1));
+        assert_eq!(split(&at).next().unwrap().unwrap().args().len(), MAX_ARGS);
+        let over = format!("x:{};", ",".repeat(MAX_ARGS));
+        assert_eq!(
+            split(&over).next(),
+            Some(Err(fault("x", Fault::TooManyArgs(MAX_ARGS + 1))))
+        );
         let modes = vec!["usb"; MAX_ARGS].join(",");
         let at = format!("modulations_list:{modes};");
         match one_notice(&at) {
@@ -2756,6 +2771,12 @@ mod tests {
         assert_eq!(
             one_request(&over, &EXPERT_SDR3),
             Err(fault("cw_macros", Fault::ArgTooLong(1)))
+        );
+        // No argument longer than MAX_ARG is handed on, whatever the command.
+        let over = format!("x:{};", "a".repeat(MAX_ARG + 1));
+        assert_eq!(
+            split(&over).next(),
+            Some(Err(fault("x", Fault::ArgTooLong(0))))
         );
     }
 
@@ -3544,6 +3565,13 @@ mod tests {
 
     /// Read every way there is, and check what comes out.
     fn read_all(text: &str) -> Result<(), TestCaseError> {
+        for raw in split(text).flatten() {
+            prop_assert!((1..=MAX_NAME).contains(&raw.name().len()));
+            prop_assert!(raw.args().len() <= MAX_ARGS);
+            prop_assert!(raw.args().iter().all(|a| a.len() <= MAX_ARG));
+            let length = raw.name().len() + raw.args().iter().map(|a| a.len() + 1).sum::<usize>();
+            prop_assert!(length <= MAX_COMMAND);
+        }
         let read: Vec<_> = notices(text).collect();
         prop_assert!(read.len() <= MAX_COMMANDS + 1);
         for n in read.iter().flatten() {
