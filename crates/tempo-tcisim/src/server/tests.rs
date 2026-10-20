@@ -1245,3 +1245,72 @@ fn the_drop_returns_while_a_thread_cannot_end_and_the_thread_ends_once_it_can() 
         "a thread it left never ended"
     );
 }
+
+#[test]
+fn frames_go_out_at_their_time_and_answers_are_read_as_they_arrive() {
+    // The connection's thread waits for its socket and its outbox at once: a frame due now is
+    // written now, not when a read's timeout next ends (a 2 ms timeout lasts about 8 ms on a
+    // 250 Hz kernel), and a client's answer is read as it arrives.
+    let sim = start(Dialect::expert_sdr3(), Vec::new());
+    let mut c = Client::ready(&sim);
+    c.send("audio_start:0;trx:0,true,tci;");
+    let mut phase = 0;
+    let mut rx = 0;
+    while rx < 40 {
+        match c.until(|m| matches!(m, Incoming::Binary(_))) {
+            Some(Incoming::Binary(b)) => {
+                let h = Header::decode(&b).unwrap();
+                if h.kind == kind::TX_CHRONO {
+                    c.peer
+                        .send_binary(answer(h.length, 700.0, &mut phase))
+                        .unwrap();
+                } else if h.kind == kind::RX_AUDIO {
+                    rx += 1;
+                }
+            }
+            _ => panic!("the streams stopped"),
+        }
+    }
+    let log = sim.log();
+    let first = |want: &dyn Fn(&Event) -> bool| log.iter().find(|l| want(&l.event)).unwrap().at;
+    let started = first(&|e| matches!(e, Event::Command { name, .. } if name == "audio_start"));
+    let keyed = first(&|e| matches!(e, Event::Keyed { .. }));
+    // 2048 values a frame, two channels: 21.333 ms. Receive frame k is due k + 1 periods after
+    // the stream started, chrono n n periods after the key.
+    let period = Duration::from_secs_f64(1024.0 / 48_000.0);
+    let late = |times: &[Duration], first_due: Duration| -> Vec<Duration> {
+        let mut late: Vec<Duration> = (0u32..)
+            .zip(times)
+            .map(|(k, at)| at.saturating_sub(first_due + period * k))
+            .collect();
+        late.sort_unstable();
+        late
+    };
+    let chronos = sent_frames(&sim, 0, kind::TX_CHRONO);
+    let answers: Vec<Duration> = log
+        .iter()
+        .filter(|l| matches!(l.event, Event::FrameIn { .. }))
+        .map(|l| l.at)
+        .collect();
+    let mut read: Vec<Duration> = chronos
+        .iter()
+        .zip(&answers)
+        .map(|(sent, back)| back.saturating_sub(*sent))
+        .collect();
+    read.sort_unstable();
+    // The median, within 2 ms: about 0.3 ms here, against 3 to 7 ms while writes waited for a
+    // read's timeout. A loaded machine delays a few, by as much as the test's own threads taking
+    // turns on one core (up to 18 ms measured), so no tail is asserted. An answer's time includes
+    // this test's own thread answering.
+    for (what, times) in [
+        (
+            "receive frames",
+            late(&sent_frames(&sim, 0, kind::RX_AUDIO), started + period),
+        ),
+        ("chronos", late(&chronos, keyed)),
+        ("answers read", read),
+    ] {
+        assert!(times.len() >= 30, "{what}: {times:?}");
+        assert!(times[times.len() / 2] < ms(2), "{what}: {times:?}");
+    }
+}

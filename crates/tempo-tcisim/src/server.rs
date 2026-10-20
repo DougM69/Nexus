@@ -1,12 +1,16 @@
 //! The simulated SDR program: a TCI server on 127.0.0.1, on an ephemeral port read back from the
 //! socket, serving the [`crate::radio`] model to every connection.
 //!
-//! **Threads.** One accepts connections. One per connection does the WebSocket handshake and then
-//! all of that connection's I/O: it writes what is due from the connection's outbox and reads with
-//! a short timeout in between (tungstenite's socket cannot be read and written from two threads).
-//! One more runs the radio's timers: frames, TX_CHRONO, sensor pushes, delayed echoes, faults. The
-//! radio's state is behind one lock, which every thread takes only to call the model and carry out
-//! its effects, never while writing to a socket.
+//! **Threads.** One accepts connections. Two serve each connection: a reader that only moves the
+//! bytes its socket gives into the connection's link, and the connection's own thread, which
+//! does the WebSocket handshake and then all of the protocol (tungstenite's WebSocket cannot be read
+//! and written from two threads, so only this one uses it). That thread waits on one condvar for
+//! whichever comes first, bytes from the socket or the next message due out, so a frame goes out at
+//! its time and a client's message is read as it arrives. (Waiting in a read instead held a due
+//! frame until the read's timeout ended, and a 250 Hz kernel stretches a 2 ms timeout to about
+//! 8 ms.) One more thread runs the radio's timers: frames, TX_CHRONO, sensor pushes, delayed echoes,
+//! faults. The radio's state is behind one lock, which every thread takes only to call the model
+//! and carry out its effects, never while writing to a socket.
 //!
 //! **A radio too slow for its streams** (a process starved of CPU) still serves its clients and
 //! stops. The timer thread works in passes: a pass runs the timers due when it began, once each,
@@ -30,7 +34,7 @@
 //! The simulator is test support. It binds 127.0.0.1 only and never talks to a radio.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -38,7 +42,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use tungstenite::protocol::WebSocketConfig;
-use tungstenite::{Bytes, Message, WebSocket};
+use tungstenite::{Bytes, HandshakeError, Message, WebSocket};
 
 use crate::dialect::Dialect;
 use crate::event::{Closer, Event, Logged};
@@ -47,9 +51,7 @@ use crate::frame::Header;
 use crate::radio::{Action, Effect, Meters, Radio, Snapshot, To};
 use crate::synth::Receive;
 
-/// The longest a connection's thread waits on a read before it looks at its outbox again.
-const POLL: Duration = Duration::from_millis(2);
-/// The longest the timer thread sleeps with nothing due.
+/// The longest a thread sleeps with nothing due before it looks at the stop flag again.
 const IDLE: Duration = Duration::from_millis(50);
 /// How long dropping the simulator waits for its threads to end. A thread still running then
 /// (starved of CPU, or waiting on a lock it cannot get) is left to end on its own: it holds only
@@ -137,11 +139,30 @@ struct Conn {
     id: usize,
     /// A clone of the socket, for shutting it down from any thread.
     tcp: TcpStream,
-    out: Mutex<VecDeque<Out>>,
+    /// Its outbox, and what its socket gave.
+    link: Arc<Link>,
     /// [`Fault::HalfOpen`] silenced it.
     silent: AtomicBool,
     /// [`Fault::SplitConcat`]'s cut has been made on this connection.
     cut_done: AtomicBool,
+}
+
+/// A connection's two directions in one place, so that its thread can wait for either.
+#[derive(Default)]
+struct Link {
+    queues: Mutex<Queues>,
+    /// Notified when a message is queued to send, bytes arrive, or the socket's reading ends.
+    ready: Condvar,
+}
+
+#[derive(Default)]
+struct Queues {
+    /// What is queued to send, in the order it is due.
+    out: VecDeque<Out>,
+    /// Bytes the socket gave that the WebSocket has not read yet.
+    inbox: VecDeque<u8>,
+    /// How the socket's reading ended: at the end of the stream (`None`) or with an error.
+    ended: Option<Option<io::ErrorKind>>,
 }
 
 struct Out {
@@ -163,20 +184,103 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Conn {
     /// Queue `what` at `due`, after everything due at the same time or earlier.
     fn push(&self, due: Instant, what: What) {
-        let mut out = lock(&self.out);
-        let at = out.partition_point(|o| o.due <= due);
-        out.insert(at, Out { due, what });
-    }
-
-    fn next_due(&self) -> Option<Instant> {
-        lock(&self.out).front().map(|o| o.due)
+        let mut q = lock(&self.link.queues);
+        let at = q.out.partition_point(|o| o.due <= due);
+        q.out.insert(at, Out { due, what });
+        drop(q);
+        self.link.ready.notify_all();
     }
 
     /// Everything due by `now`, in order.
     fn take_due(&self, now: Instant) -> Vec<What> {
-        let mut out = lock(&self.out);
-        let n = out.partition_point(|o| o.due <= now);
-        out.drain(..n).map(|o| o.what).collect()
+        let mut q = lock(&self.link.queues);
+        let n = q.out.partition_point(|o| o.due <= now);
+        q.out.drain(..n).map(|o| o.what).collect()
+    }
+}
+
+impl Link {
+    /// Wait until bytes arrive, the socket's reading ends, the first message queued is due, or
+    /// `until` passes. Whether one of the first three happened.
+    fn wait(&self, until: Instant) -> bool {
+        let mut q = lock(&self.queues);
+        loop {
+            let now = Instant::now();
+            let first = q.out.front().map(|o| o.due);
+            if !q.inbox.is_empty() || q.ended.is_some() || first.is_some_and(|due| due <= now) {
+                return true;
+            }
+            if now >= until {
+                return false;
+            }
+            let wake = first.map_or(until, |due| due.min(until));
+            q = self
+                .ready
+                .wait_timeout(q, wake - now)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+    }
+
+    /// Drop everything that arrived and everything queued; whether the socket's reading ended.
+    fn discard(&self) -> bool {
+        let mut q = lock(&self.queues);
+        q.inbox.clear();
+        q.out.clear();
+        q.ended.is_some()
+    }
+}
+
+/// The stream under a connection's WebSocket. Reading takes what the reader thread got from the
+/// socket and never waits (`WouldBlock` when nothing is there); writing goes to the socket.
+struct Wire {
+    tcp: TcpStream,
+    link: Arc<Link>,
+}
+
+impl Read for Wire {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let mut q = lock(&self.link.queues);
+        if !q.inbox.is_empty() {
+            return q.inbox.read(buf);
+        }
+        match q.ended {
+            None => Err(io::ErrorKind::WouldBlock.into()),
+            Some(None) => Ok(0),
+            Some(Some(kind)) => Err(kind.into()),
+        }
+    }
+}
+
+impl Write for Wire {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
+}
+
+/// A connection's reader: every byte its socket gives goes into the link, until the socket ends
+/// (the client closed it, or the simulator shut it down).
+fn read_loop(mut tcp: TcpStream, link: &Link) {
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let read = tcp.read(&mut buf);
+        let mut q = lock(&link.queues);
+        match read {
+            Ok(0) => q.ended = Some(None),
+            Ok(n) => q.inbox.extend(&buf[..n]),
+            Err(e) if would_block(&e) => continue,
+            Err(e) => q.ended = Some(Some(e.kind())),
+        }
+        let ended = q.ended.is_some();
+        drop(q);
+        link.ready.notify_all();
+        if ended {
+            return;
+        }
     }
 }
 
@@ -376,7 +480,7 @@ impl Drop for Simulator {
         self.shared.wake.notify_all();
         // Wake the accept loop: it looks at the flag after each accept.
         let _ = TcpStream::connect_timeout(&self.addr, Duration::from_secs(1));
-        // Every socket ends, and its connection's thread with it.
+        // Every socket's reader sees its end, and its connection's thread with it.
         for (_, tcp) in lock(&self.shared.sockets).iter() {
             let _ = tcp.shutdown(Shutdown::Both);
         }
@@ -470,7 +574,7 @@ fn carry_out(shared: &Shared, state: &mut State, fx: Vec<Effect>) {
             Effect::Silence(c) => {
                 if let Some(conn) = state.conns.get(&c) {
                     conn.silent.store(true, Ordering::SeqCst);
-                    lock(&conn.out).clear();
+                    lock(&conn.link.queues).out.clear();
                 }
             }
             Effect::Ping(c) => {
@@ -541,10 +645,10 @@ fn would_block(e: &io::Error) -> bool {
     )
 }
 
-/// A new socket: its connection, then its end.
+/// A new socket: its reader, then its connection, then its end.
 fn serve(shared: &Arc<Shared>, tcp: TcpStream) {
     let _ = tcp.set_nodelay(true);
-    let Ok(listed) = tcp.try_clone() else {
+    let (Ok(reading), Ok(listed)) = (tcp.try_clone(), tcp.try_clone()) else {
         return;
     };
     let token = {
@@ -560,8 +664,18 @@ fn serve(shared: &Arc<Shared>, tcp: TcpStream) {
         }
         sockets.push((token, listed));
     }
-    connection(shared, tcp);
-    // However the connection ended, its socket ends too.
+    let link = Arc::new(Link::default());
+    let reader = {
+        let link = Arc::clone(&link);
+        thread::Builder::new()
+            .name("tcisim-read".into())
+            .spawn(move || read_loop(reading, &link))
+    };
+    if let Ok(reader) = reader {
+        lock(&shared.workers).push(reader);
+        connection(shared, tcp, &link);
+    }
+    // However the connection ended, its socket ends too, and its reader with it.
     let mut sockets = lock(&shared.sockets);
     if let Some(at) = sockets.iter().position(|(t, _)| *t == token) {
         let _ = sockets.swap_remove(at).1.shutdown(Shutdown::Both);
@@ -569,21 +683,32 @@ fn serve(shared: &Arc<Shared>, tcp: TcpStream) {
 }
 
 /// A connection's thread: the WebSocket handshake (within [`HANDSHAKE`]), then all of its I/O.
-fn connection(shared: &Arc<Shared>, tcp: TcpStream) {
-    let _ = tcp.set_read_timeout(Some(HANDSHAKE));
+fn connection(shared: &Arc<Shared>, tcp: TcpStream, link: &Arc<Link>) {
     let Ok(shutdown) = tcp.try_clone() else {
         return;
     };
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_CLIENT_MESSAGE))
         .max_frame_size(Some(MAX_CLIENT_MESSAGE));
-    let mut ws = match tungstenite::accept_with_config(tcp, Some(config)) {
-        Ok(ws) => ws,
-        Err(e) => {
-            if !shared.stopping() {
-                shared.record(Event::Rejected { why: e.to_string() });
+    let deadline = Instant::now() + HANDSHAKE;
+    let wire = Wire {
+        tcp,
+        link: Arc::clone(link),
+    };
+    let mut handshake = tungstenite::accept_with_config(wire, Some(config));
+    let mut ws = loop {
+        match handshake {
+            Ok(ws) => break ws,
+            // The request is not all here yet.
+            Err(HandshakeError::Interrupted(mid)) if !shared.stopping() && link.wait(deadline) => {
+                handshake = mid.handshake();
             }
-            return;
+            Err(e) => {
+                if !shared.stopping() {
+                    shared.record(Event::Rejected { why: e.to_string() });
+                }
+                return;
+            }
         }
     };
     if shared.stopping() {
@@ -596,7 +721,7 @@ fn connection(shared: &Arc<Shared>, tcp: TcpStream) {
         let conn = Arc::new(Conn {
             id,
             tcp: shutdown,
-            out: Mutex::new(VecDeque::new()),
+            link: Arc::clone(link),
             silent: AtomicBool::new(false),
             cut_done: AtomicBool::new(false),
         });
@@ -621,21 +746,17 @@ fn connection(shared: &Arc<Shared>, tcp: TcpStream) {
 }
 
 /// A connection's I/O, until it ends; returns who ended it.
-fn run(shared: &Shared, conn: &Conn, ws: &mut WebSocket<TcpStream>) -> Closer {
-    let mut raw = [0u8; 4096];
+fn run(shared: &Shared, conn: &Conn, ws: &mut WebSocket<Wire>) -> Closer {
     loop {
         if shared.stopping() {
             return Closer::Stopped;
         }
         if conn.silent.load(Ordering::SeqCst) {
             // Half open: read and discard everything, answer nothing, not even a ping.
-            let _ = ws.get_mut().set_read_timeout(Some(POLL));
-            match ws.get_mut().read(&mut raw) {
-                Ok(0) => return Closer::Dropped,
-                Ok(_) => {}
-                Err(e) if would_block(&e) => {}
-                Err(_) => return Closer::Dropped,
+            if conn.link.discard() {
+                return Closer::Dropped;
             }
+            conn.link.wait(Instant::now() + IDLE);
             continue;
         }
         match write_due(shared, conn, ws) {
@@ -643,12 +764,6 @@ fn run(shared: &Shared, conn: &Conn, ws: &mut WebSocket<TcpStream>) -> Closer {
             Ok(false) => return Closer::Simulator,
             Err(_) => return Closer::Dropped,
         }
-        let now = Instant::now();
-        let wait = conn
-            .next_due()
-            .map_or(POLL, |due| due.saturating_duration_since(now))
-            .clamp(Duration::from_millis(1), POLL);
-        let _ = ws.get_mut().set_read_timeout(Some(wait));
         match ws.read() {
             Ok(Message::Text(text)) => {
                 let text = text.as_str().to_string();
@@ -672,7 +787,10 @@ fn run(shared: &Shared, conn: &Conn, ws: &mut WebSocket<TcpStream>) -> Closer {
                 return Closer::Client;
             }
             Ok(_) => {} // ping (answered by tungstenite), pong
-            Err(tungstenite::Error::Io(e)) if would_block(&e) => {}
+            // Nothing whole has arrived: wait for more bytes, or for the next message due out.
+            Err(tungstenite::Error::Io(e)) if would_block(&e) => {
+                conn.link.wait(Instant::now() + IDLE);
+            }
             Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
                 return Closer::Client
             }
@@ -682,11 +800,7 @@ fn run(shared: &Shared, conn: &Conn, ws: &mut WebSocket<TcpStream>) -> Closer {
 }
 
 /// Write everything due. `Ok(false)` when a fault or the test dropped the connection.
-fn write_due(
-    shared: &Shared,
-    conn: &Conn,
-    ws: &mut WebSocket<TcpStream>,
-) -> tungstenite::Result<bool> {
+fn write_due(shared: &Shared, conn: &Conn, ws: &mut WebSocket<Wire>) -> tungstenite::Result<bool> {
     loop {
         let due = conn.take_due(Instant::now());
         if due.is_empty() {
@@ -731,7 +845,7 @@ fn write_due(
 fn flush_texts(
     shared: &Shared,
     conn: &Conn,
-    ws: &mut WebSocket<TcpStream>,
+    ws: &mut WebSocket<Wire>,
     texts: &mut Vec<String>,
 ) -> tungstenite::Result<()> {
     if texts.is_empty() {
