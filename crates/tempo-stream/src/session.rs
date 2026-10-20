@@ -136,8 +136,10 @@ const WSAEMSGSIZE: i32 = 10040;
 const WSAENETRESET: i32 = 10052;
 
 /// Does this error, from a receive on the session's socket, end the session? A receive that waited
-/// out its timeout does not, and neither does a report about one datagram, which leaves the socket
-/// unharmed. On an unconnected UDP socket Windows makes three such reports:
+/// out its timeout does not, nor one that was interrupted (Linux interrupts a receive that has a
+/// timeout whenever the process is stopped and continued), and neither does a report about one
+/// datagram, which leaves the socket unharmed. On an unconnected UDP socket Windows makes three
+/// such reports:
 /// - `ConnectionReset` (WSAECONNRESET) passes on an ICMP "port unreachable" for an EARLIER
 ///   datagram: ICE sends checks to every candidate the page offered, and a destination that refuses
 ///   one (a NAT with no mapping for the station yet, a router that will not loop a packet back to
@@ -152,10 +154,10 @@ const WSAENETRESET: i32 = 10052;
 ///
 /// Any other error is the socket's own, and ends the session.
 pub fn receive_ends_session(error: &std::io::Error) -> bool {
-    use std::io::ErrorKind::{ConnectionReset, TimedOut, WouldBlock};
+    use std::io::ErrorKind::{ConnectionReset, Interrupted, TimedOut, WouldBlock};
     let one_datagram = error.kind() == ConnectionReset
         || (cfg!(windows) && matches!(error.raw_os_error(), Some(WSAEMSGSIZE | WSAENETRESET)));
-    !matches!(error.kind(), WouldBlock | TimedOut) && !one_datagram
+    !matches!(error.kind(), WouldBlock | TimedOut | Interrupted) && !one_datagram
 }
 
 /// The most of the page's candidates one session tries, from its offer and its trickle together.
@@ -857,6 +859,19 @@ mod tests {
         )));
         assert!(!receive_ends_session(&Error::from(ErrorKind::WouldBlock)));
         assert!(!receive_ends_session(&Error::from(ErrorKind::TimedOut)));
+        assert!(receive_ends_session(&Error::from(ErrorKind::NetworkDown)));
+    }
+
+    /// A receive interrupted before anything arrived is not the end of the session: nothing
+    /// happened to the socket. Linux interrupts a receive that has a timeout, as every loop that
+    /// asks this sets one, whenever the process is stopped and continued (`signal(7)`). Measured
+    /// 2026-10-19: one 20 ms stop and continue ended the shack's Stop road and audio road threads
+    /// for good, so a Stop on that road was never taken again and presence could not be renewed.
+    /// CONTROL: a socket whose network is gone still ends it.
+    #[test]
+    fn an_interrupted_receive_is_not_the_end_of_the_session() {
+        use std::io::{Error, ErrorKind};
+        assert!(!receive_ends_session(&Error::from(ErrorKind::Interrupted)));
         assert!(receive_ends_session(&Error::from(ErrorKind::NetworkDown)));
     }
 

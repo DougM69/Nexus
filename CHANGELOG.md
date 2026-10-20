@@ -309,6 +309,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **Remote on a Linux station: Stop's own road survives Nexus being paused.** Stopping and continuing Nexus at a
+  Linux station (Ctrl+Z then `fg` in a terminal, or a debugger) ended the station's end of Stop's road and of the
+  audio road for good. A Stop from the second PC then had the command link alone, and presence could no longer be
+  renewed, so what was on the air stopped within about 5 s and starts from afar were refused; the audio went
+  quiet. The station now carries on reading both roads.
 - **Programs that listen to Nexus the way they listen to WSJT-X now see what you are transmitting.** GridTracker, JTAlert
   and the like got your decodes but not your TX message, and were always told TX was off. Nexus now reports the message
   on the air, whether TX is enabled, the report you are sending, the station's grid and a tripped TX watchdog, as
