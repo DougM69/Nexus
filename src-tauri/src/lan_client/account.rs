@@ -12,7 +12,9 @@
 //! 2. **The sign-in** through the system browser to this build's own tenant and its Native
 //!    application (`crate::account_sign_in`: the issuer and the application are built in, never the
 //!    service's to name), its nonce the hash of both keys (`tempo_client::account::device_nonce`).
-//!    The issuer's ID token then names exactly them: this computer's proof.
+//!    The issuer's ID token then names exactly them: this computer's proof. It says who signed in
+//!    and the address the issuer verified (`Scope::Device`), which is how a station knows a person
+//!    it invited; the station and the service read it, and no one else.
 //! 3. **The account's stations** (`client/session`), each trusted only once the station's own proof
 //!    holds here, with the issuer's keys fetched from the issuer itself, for exactly the station key
 //!    and LAN key listed beside it (`tempo_client::account::listed_station`). A station the account
@@ -63,6 +65,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tempo_client::account::{self as proofs, KeySet, Listed, Role, Tenant};
 use tempo_client::id_token::Claims;
+use tempo_client::native::Scope;
 use tempo_stream::lan::{Lookup, Typed};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
@@ -247,6 +250,7 @@ async fn signed(
     let given = crate::account_sign_in::signed_in(
         env.account.http(),
         &sign,
+        Scope::Device,
         Some(&nonce),
         browser.listener,
         browser.wait,

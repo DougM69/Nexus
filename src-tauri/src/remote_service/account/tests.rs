@@ -287,6 +287,10 @@ async fn the_station_binds_with_a_proof_for_exactly_its_keys() {
     // The built-in application, not the one the service's config names.
     assert!(opened.contains("client_id=test-native-client&"), "{opened}");
     assert!(opened.contains("audience=https%3A%2F%2Fapi.test.invalid%2F"));
+    // Who signed in, and nothing more: the proof is listed to every computer of the account and
+    // of each person the station invites, so it carries no address and no name,
+    // nickname or picture.
+    assert!(opened.contains("&scope=openid&"), "{opened}");
     let seen = seen.lock().unwrap();
     let (body, authorization) = seen.station.clone().unwrap();
     assert_eq!(authorization, format!("Bearer {ACCESS}"));
@@ -358,6 +362,7 @@ async fn a_sign_in_that_asked_for_an_id_token_needs_one() {
         let signed = crate::account_sign_in::signed_in(
             &http,
             &sign,
+            Scope::Device,
             nonce,
             listener,
             Duration::from_secs(10),
@@ -649,19 +654,19 @@ fn each_list_sweeps_the_devices_kept_for_the_lan() {
 // ---- Signing in again ----------------------------------------------------------------------------
 
 /// Proves the station bound as `STATION` again, with the station's keys `station` and `lan`
-/// (fixture names), the store keeping `kept` as its owner: the result, whether the browser was
-/// opened, and what the stand-in saw.
+/// (fixture names), the store keeping `kept` as its owner: the result, the address the browser was
+/// sent to (empty when it was never opened), and what the stand-in saw.
 async fn reprove_with(
     id_token: &str,
     lan: &str,
     kept: Option<Owner>,
     store: &Store,
-) -> (Result<(), &'static str>, bool, Arc<Mutex<Seen>>) {
+) -> (Result<(), &'static str>, String, Arc<Mutex<Seen>>) {
     *store.owner.lock().unwrap() = kept;
     let (at, seen) = stand_in(id_token.to_string()).await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let local = listener.local_addr().unwrap();
-    let opened = Arc::new(Mutex::new(false));
+    let opened = Arc::new(Mutex::new(String::new()));
     let was = opened.clone();
     let (station_key, lan_key) = (key("station"), key(lan));
     let result = reprove_on(
@@ -677,7 +682,7 @@ async fn reprove_with(
         listener,
         Duration::from_secs(10),
         move |url| {
-            *was.lock().unwrap() = true;
+            *was.lock().unwrap() = url.to_string();
             let state = url
                 .split(['?', '&'])
                 .find_map(|pair| pair.strip_prefix("state="))
@@ -691,7 +696,7 @@ async fn reprove_with(
         now(),
     )
     .await;
-    let opened = *opened.lock().unwrap();
+    let opened = opened.lock().unwrap().clone();
     (result, opened, seen)
 }
 
@@ -706,9 +711,11 @@ async fn signing_in_again_replaces_the_stations_proof() {
         proof_issued_at: 1,
         ..owner("test-retired")
     };
-    let (result, _, seen) =
+    let (result, opened, seen) =
         reprove_with(&token("station"), "stationLan", Some(retired), &store).await;
     assert_eq!(result, Ok(()));
+    // The new proof is listed as the old one was: who signed in, and nothing more (rulings 547, 548).
+    assert!(opened.contains("&scope=openid&"), "{opened}");
     // Nothing kept holds a secret: neither the access token, the proof, its signature nor the
     // credential. CONTROL: the stand-in was sent the last three.
     let kept = serde_json::to_string(&store.owner().unwrap()).unwrap();
@@ -761,7 +768,7 @@ async fn signing_in_again_takes_only_the_owners_proof_for_the_stations_keys() {
         let (result, opened, seen) =
             reprove_with(&token("station"), lan, Some(kept.clone()), &store).await;
         assert_eq!(result, Err(refusal), "{refusal}");
-        assert!(opened);
+        assert!(!opened.is_empty());
         assert_eq!(seen.lock().unwrap().proof, None, "{refusal}: sent");
         assert_eq!(store.owner().unwrap(), Some(kept), "{refusal}: kept");
     }
@@ -773,7 +780,7 @@ async fn signing_in_again_takes_only_the_owners_proof_for_the_stations_keys() {
         let store = Store::default();
         let (result, opened, _) = reprove_with(&token("station"), "stationLan", kept, &store).await;
         assert_eq!(result, Err("stationNotPaired"));
-        assert!(!opened, "the browser was opened");
+        assert!(opened.is_empty(), "the browser was opened");
     }
 }
 

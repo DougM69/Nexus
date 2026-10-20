@@ -7,7 +7,9 @@
 //! Settings ▸ Remote access ▸ Sign in to Nexus Remote. The station's two keys exist first (its
 //! signing key and its LAN key); their hash is the sign-in's nonce. The operator signs in through
 //! the system browser to the built-in tenant's Native application (`crate::account_sign_in`), and
-//! the issuer's ID token comes back naming exactly those keys. The station checks that proof itself
+//! the issuer's ID token comes back naming exactly those keys and who signed in, and nothing more
+//! (`Scope::Station`): the service lists this proof to every computer of the account and of each
+//! person the station invites, so it carries no address. The station checks that proof itself
 //! with the issuer's key set ([`Owner::proven`]) before it sends it anywhere, then sends it with the
 //! keys and the station credential to the service (`client/station`), which writes the station for
 //! the token's account. Kept: the owner (no token). The access token and the proof are dropped when
@@ -38,7 +40,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use tempo_client::account::{self, DeviceCache, KeySet, Owner, Tenant, Vouched};
-use tempo_client::native::SignIn;
+use tempo_client::native::{Scope, SignIn};
 use tokio::net::TcpListener;
 
 use super::vault::{AccountKeys, AccountVault};
@@ -342,9 +344,16 @@ async fn proven(
     // The built-in issuer, asked at its own address (the same, outside a test).
     let sign = service.native_sign_in().await?;
     let nonce = account::station_nonce(&station_key, &lan_key);
-    let signed =
-        crate::account_sign_in::signed_in(&service.http, &sign, Some(&nonce), listener, wait, open)
-            .await?;
+    let signed = crate::account_sign_in::signed_in(
+        &service.http,
+        &sign,
+        Scope::Station,
+        Some(&nonce),
+        listener,
+        wait,
+        open,
+    )
+    .await?;
     let proof = signed.id_token.ok_or("signInFailed")?;
     let held = keys(service, vault, account::kid_of(&proof).as_deref(), now_s).await?;
     let owner = Owner::proven("", &proof, &held.set, tenant, &station_key, &lan_key, now_s)?;

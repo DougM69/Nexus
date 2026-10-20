@@ -7,11 +7,12 @@
 //! A sign-in may carry a `nonce`, the hash of the keys it vouches for (`tempo_client::account`).
 //! The issuer's answer then carries an ID token with that nonce, which is kept beside the access
 //! token for the caller to check and forward. Neither is ever written to a log or kept past the
-//! exchange that needs it.
+//! exchange that needs it. What the token says about whoever signed in is the caller's [`Scope`]:
+//! the shack's asks only who, a computer's also the address the issuer verified.
 use std::time::Duration;
 
 use serde_json::Value;
-use tempo_client::native::{self, Pkce, SignIn};
+use tempo_client::native::{self, Pkce, Scope, SignIn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -30,15 +31,17 @@ pub(crate) struct Signed {
     pub(crate) id_token: Option<String>,
 }
 
-/// One sign-in through the system browser to `sign`'s issuer and application, on `listener`, this
-/// computer's loopback port, already bound for the redirect (each caller binds [`SIGN_IN_PORT`]
-/// first, so a port that is taken is `signInPortBusy` before any browser opens): the browser sent
-/// to the issuer by `open`, and the code it brings back within `wait` exchanged for tokens over
-/// `http`. With a `nonce`, an answer with no ID token is `signInFailed`: whoever asked for one
-/// cannot go on without it. `signInTimedOut` after `wait`, `signInRefused` when the issuer said no.
+/// One sign-in through the system browser to `sign`'s issuer and application, asking for `scope`,
+/// on `listener`, this computer's loopback port, already bound for the redirect (each caller binds
+/// [`SIGN_IN_PORT`] first, so a port that is taken is `signInPortBusy` before any browser opens):
+/// the browser sent to the issuer by `open`, and the code it brings back within `wait` exchanged
+/// for tokens over `http`. With a `nonce`, an answer with no ID token is `signInFailed`: whoever
+/// asked for one cannot go on without it. `signInTimedOut` after `wait`, `signInRefused` when the
+/// issuer said no.
 pub(crate) async fn signed_in(
     http: &reqwest::Client,
     sign: &SignIn,
+    scope: Scope,
     nonce: Option<&str>,
     listener: TcpListener,
     wait: Duration,
@@ -47,7 +50,8 @@ pub(crate) async fn signed_in(
     let port = listener.local_addr().map_err(|_| "signInFailed")?.port();
     let redirect = format!("http://127.0.0.1:{port}{}", native::CALLBACK_PATH);
     let pkce = Pkce::new().ok_or("signInFailed")?;
-    open(&native::authorize_url(sign, &redirect, &pkce, nonce)).map_err(|_| "signInFailed")?;
+    open(&native::authorize_url(sign, &redirect, &pkce, scope, nonce))
+        .map_err(|_| "signInFailed")?;
     let code = tokio::time::timeout(wait, redirected(&listener, &pkce.state))
         .await
         .map_err(|_| "signInTimedOut")??;

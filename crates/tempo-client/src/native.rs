@@ -23,8 +23,29 @@ use crate::{hex, ComputerKey};
 pub const NATIVE_REQUEST: &str = "nexus-native-request/1";
 /// The path this computer's loopback listener takes the browser's redirect on.
 pub const CALLBACK_PATH: &str = "/callback";
-/// What the first sign-in asks for: who the operator is, and the Remote service's API.
-const SCOPE: &str = "openid profile email";
+
+/// What a sign-in asks the issuer to say about whoever signs in: its `scope`. Never `profile`, so no
+/// proof carries a name, a nickname or a picture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    /// The shack binding its station, or proving it again: who signed in, and nothing more. Its
+    /// proof is listed to every computer of the account and of each person the station invites, so
+    /// it carries no address.
+    Station,
+    /// A computer's or a phone's: who signed in, and the address the issuer verified, which is how
+    /// a station knows a person it invited.
+    Device,
+}
+
+impl Scope {
+    /// The `scope` the authorize address carries.
+    fn value(self) -> &'static str {
+        match self {
+            Self::Station => "openid",
+            Self::Device => "openid email",
+        }
+    }
+}
 
 /// What a native request's signature covers: the label, the challenge, the method, the path, and
 /// SHA-256 of the body exactly as sent, lowercase hex, one to a line.
@@ -174,15 +195,21 @@ impl SignIn {
 }
 
 /// The address the system browser opens for the first sign-in: the issuer's authorize endpoint,
-/// with the code returned to `redirect` (this computer's loopback listener) under `pkce`. With a
-/// `nonce` (what the sign-in vouches for, `crate::account`), the ID token the issuer gives back
-/// carries it; without one the address is exactly what it always was.
-pub fn authorize_url(sign_in: &SignIn, redirect: &str, pkce: &Pkce, nonce: Option<&str>) -> String {
+/// asking for `scope`, with the code returned to `redirect` (this computer's loopback listener)
+/// under `pkce`. With a `nonce` (what the sign-in vouches for, `crate::account`), the ID token the
+/// issuer gives back carries it; without one the address has no nonce.
+pub fn authorize_url(
+    sign_in: &SignIn,
+    redirect: &str,
+    pkce: &Pkce,
+    scope: Scope,
+    nonce: Option<&str>,
+) -> String {
     let query = [
         ("response_type", "code"),
         ("client_id", &sign_in.client_id),
         ("redirect_uri", redirect),
-        ("scope", SCOPE),
+        ("scope", scope.value()),
         ("audience", &sign_in.audience),
         ("code_challenge", &pkce.challenge),
         ("code_challenge_method", "S256"),
@@ -485,13 +512,19 @@ mod tests {
         }))
         .unwrap();
         let pkce = Pkce::of("verifier-verifier-verifier-verifier-verifi", "st".into());
-        let url = authorize_url(&sign_in, "http://127.0.0.1:5123/callback", &pkce, None);
+        let url = authorize_url(
+            &sign_in,
+            "http://127.0.0.1:5123/callback",
+            &pkce,
+            Scope::Device,
+            None,
+        );
         assert!(url.starts_with(
             "https://login.example/authorize?response_type=code&client_id=native-id&"
         ));
         assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A5123%2Fcallback"));
         assert!(url.contains("audience=https%3A%2F%2Fapi.example%2Fremote"));
-        assert!(url.contains("scope=openid%20profile%20email"));
+        assert!(url.contains("&scope=openid%20email&"));
         assert!(url.contains(&format!("code_challenge={}", pkce.challenge)));
         assert!(url.contains("code_challenge_method=S256&state=st"));
         assert!(!url.contains("spa-id"));
@@ -545,8 +578,7 @@ mod tests {
         assert_eq!(answer("a.b.c", "Bearer", 0), None);
     }
 
-    /// The authorize address carries a nonce only when the sign-in has one, and is otherwise exactly
-    /// what it was before nonces existed.
+    /// The authorize address carries a nonce only when the sign-in has one, and is otherwise the same.
     #[test]
     fn the_authorize_address_carries_the_nonce_it_is_given() {
         let sign = SignIn {
@@ -555,24 +587,43 @@ mod tests {
             audience: "https://api.example/".into(),
         };
         let pkce = Pkce::of("verifier", "state-1".into());
-        let plain = authorize_url(&sign, "http://127.0.0.1:42078/callback", &pkce, None);
+        let redirect = "http://127.0.0.1:42078/callback";
+        let plain = authorize_url(&sign, redirect, &pkce, Scope::Device, None);
         assert_eq!(
             plain,
             format!(
                 "https://login.example/authorize?response_type=code&client_id=native&redirect_uri=\
-                 http%3A%2F%2F127.0.0.1%3A42078%2Fcallback&scope=openid%20profile%20email&audience=\
+                 http%3A%2F%2F127.0.0.1%3A42078%2Fcallback&scope=openid%20email&audience=\
                  https%3A%2F%2Fapi.example%2F&code_challenge={}&code_challenge_method=S256&\
                  state=state-1",
                 pkce.challenge
             )
         );
-        let with = authorize_url(
-            &sign,
-            "http://127.0.0.1:42078/callback",
-            &pkce,
-            Some("n-1_x"),
-        );
+        let with = authorize_url(&sign, redirect, &pkce, Scope::Device, Some("n-1_x"));
         assert_eq!(with, format!("{plain}&nonce=n-1_x"));
+    }
+
+    /// ★ Rulings 547 and 548: no sign-in asks for the profile (a name, a nickname, a picture), and the
+    /// station's asks for no address either, since its proof is listed to every computer of the
+    /// account and of each person the station invites. A device's asks for the address the issuer
+    /// verified: how a station knows a person it invited. Each read off the address by value.
+    #[test]
+    fn a_station_asks_only_who_signed_in_and_a_device_its_address_too() {
+        let sign = SignIn {
+            issuer: "https://login.example/".into(),
+            client_id: "native".into(),
+            audience: "https://api.example/".into(),
+        };
+        let pkce = Pkce::of("verifier", "state-1".into());
+        let scope_of = |scope: Scope| {
+            let url = authorize_url(&sign, "http://127.0.0.1:42078/callback", &pkce, scope, None);
+            url.split(['?', '&'])
+                .filter_map(|pair| pair.strip_prefix("scope="))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(scope_of(Scope::Station), ["openid"]);
+        assert_eq!(scope_of(Scope::Device), ["openid%20email"]);
     }
 
     /// The ID token is taken only in a token's shape; nothing about it is trusted here.

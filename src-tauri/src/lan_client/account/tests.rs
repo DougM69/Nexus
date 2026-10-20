@@ -588,6 +588,9 @@ async fn the_sign_in_names_exactly_this_computers_two_keys() {
         assert!(opened.ends_with(&format!("&nonce={nonce}")), "{opened}");
         assert!(opened.contains(&format!("client_id={NATIVE}&")), "{opened}");
         assert!(opened.contains("audience=https%3A%2F%2Fapi.test.invalid%2F"));
+        // Who signed in, and the address the issuer verified: how a station knows a person it
+        // invited. Never a name, a nickname or a picture.
+        assert!(opened.contains("&scope=openid%20email&"), "{opened}");
         let paths = cloud.seen.lock().unwrap().paths();
         if wrong {
             assert_eq!(signed, Err("signInFailed"));
