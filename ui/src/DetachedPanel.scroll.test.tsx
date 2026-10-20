@@ -385,7 +385,7 @@ describe('every pop-out the shell can host', () => {
   // has an arm for each. Kept whole rather than sampled: this bug reached a shipped beta
   // because one arm was reasoned about in isolation.
   const PANELS = [
-    'needed', 'memories', 'connect', 'dxped', 'sats', 'pota', 'fieldday', 'fdclub', 'contestlog',
+    'needed', 'spots', 'memories', 'connect', 'dxped', 'sats', 'pota', 'fieldday', 'fdclub', 'contestlog',
     'contestscreen', 'operate', 'operatemap', 'bandmapPhone', 'bandmapCw', 'waterfall',
   ]
 
