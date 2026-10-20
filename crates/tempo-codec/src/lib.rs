@@ -24,4 +24,5 @@ pub mod receive_encode;
 pub mod resample;
 /// The wait-free ring a realtime callback shares.
 pub mod ring;
+pub mod tci_audio;
 pub mod voice;
