@@ -134,10 +134,6 @@ pub struct Station {
     /// (`widgets/mainwindow.cpp:9216-9231`); the engine reads this to do the same with the rest
     /// of an over still on the air. Nothing is queued for a later over.
     pub signed_off_with_73: bool,
-    /// The engine is running CQ (its `cq_running`), set before every [`Self::observe`]. A run
-    /// logs the contact and calls CQ again once our roger has gone out, without waiting for the
-    /// partner, so the 73 that answers the partner's roger to our RRR is sent outside a run only.
-    pub cq_running: bool,
     /// Human-readable event log.
     pub transcript: Vec<String>,
 }
@@ -192,7 +188,6 @@ impl Station {
             advanced_on_air: false,
             keyed_on_air: false,
             signed_off_with_73: false,
-            cq_running: false,
             transcript: Vec::new(),
         }
     }
@@ -218,7 +213,6 @@ impl Station {
             advanced_on_air: false,
             keyed_on_air: false,
             signed_off_with_73: false,
-            cq_running: false,
             transcript: Vec::new(),
         }
     }
@@ -423,7 +417,6 @@ impl Station {
             advanced_on_air: false,
             keyed_on_air: false,
             signed_off_with_73: false,
-            cq_running: false,
             transcript: vec![log_line],
         };
         // The resume table above names the Tx we queue; only now, with both calls in
@@ -913,16 +906,15 @@ impl Station {
                 // because an RRR is not a 73 message (`message_is_73`, :315-321), so its key left
                 // Enable Tx on (:8105-8139). "Our RRR" is the over we put on the air, so a roger
                 // the packer had to render as RRR counts too. Never as a Hound (the Fox's RR73
-                // ends the QSO in silence; a 73 would land in its segment), and not in a CQ run,
-                // which logs the contact and calls CQ once our roger is out, without waiting for
-                // this answer.
+                // ends the QSO in silence; a 73 would land in its segment). A CQ run that still
+                // holds the contact answers it too (ruling 544): the run calls CQ only once the 73
+                // has gone (`done()`), so an RRR still on the air becomes the 73, never the CQ.
                 (State::Confirming, Msg::Rr73 { to, de })
                 | (State::Confirming, Msg::Rrr { to, de })
                     if crate::message::same_call(to, &self.mycall)
                         && self.from_dx(de)
                         && matches!(self.outgoing(), Some(Msg::Rrr { .. }))
-                        && !self.quiet_finish
-                        && !self.cq_running =>
+                        && !self.quiet_finish =>
                 {
                     self.pending = Some(Msg::Bye73 {
                         to: de.clone(),
@@ -936,7 +928,7 @@ impl Station {
                 // we owe nothing: it is a 73 message, at its key WSJT-X turns Enable Tx off
                 // (:8105-8139), and a partner who answers it with a roger of their own has
                 // confirmed the contact; re-sending ours at them forever is not a courtesy. (A
-                // roger to our RRR is answered by the arm above, except as a Hound or in a run.)
+                // roger to our RRR is answered by the arm above, except as a Hound.)
                 (State::Confirming, Msg::Bye73 { to, de })
                 | (State::Confirming, Msg::Rr73 { to, de })
                 | (State::Confirming, Msg::Rrr { to, de })
@@ -2019,10 +2011,9 @@ mod start_context_tests {
 
     /// No 73 as a Hound: the pair has no room for a number, so our roger went out as RRR, and the
     /// Fox's RR73 ends the QSO in silence, as every Hound QSO ends (a 73 would land in the Fox's
-    /// segment). Nor in a CQ run, which logs and calls CQ once our roger is out: the partner's
-    /// roger closes the QSO with nothing queued, as before.
+    /// segment). (A CQ run answers it, ruling 544: the engine's run scenes.)
     #[test]
-    fn a_hound_or_a_cq_run_closes_on_the_roger_to_our_rrr_without_a_73() {
+    fn a_hound_closes_on_the_roger_to_our_rrr_without_a_73() {
         let mut hound = Station::answering("KD9TAW/P", MY_GRID, "F4CYH/R");
         hound.quiet_finish = true;
         hound.observe(&[dec("<KD9TAW/P> F4CYH/R", -7)]);
@@ -2033,16 +2024,9 @@ mod start_context_tests {
             "premise"
         );
         hound.after_tx();
-        let mut run = rogered_with_rrr();
-        run.cq_running = true;
-        for (what, mut s, closing) in [
-            ("a Hound", hound, "<KD9TAW/P> F4CYH/R RR73"),
-            ("a CQ run", run, "KD9TAW W9XYZ RR73"),
-        ] {
-            s.observe(&[dec(closing, -7)]);
-            assert_eq!(s.state, State::Done, "{what}");
-            assert_eq!(s.pending_text(), None, "{what}: no 73");
-        }
+        hound.observe(&[dec("<KD9TAW/P> F4CYH/R RR73", -7)]);
+        assert_eq!(hound.state, State::Done);
+        assert_eq!(hound.pending_text(), None, "no 73");
     }
 
     #[test]
