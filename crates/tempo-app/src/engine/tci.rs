@@ -1089,8 +1089,10 @@ mod tests {
         ]
     }
 
+    type State = (&'static str, fn() -> Engine);
+
     /// The station states a program can find.
-    fn states() -> Vec<(&'static str, fn() -> Engine)> {
+    fn states() -> Vec<State> {
         vec![
             ("launch, TX off", || {
                 let mut e = Engine::new("KD9TAW", "EN52", 0);
