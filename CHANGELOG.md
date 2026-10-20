@@ -373,6 +373,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **Moving from SSTV to the Phone cockpit no longer retunes the radio.** If you reached an SSTV frequency on the
+  radio's own knob, or Nexus opened on the SSTV screen, clicking Phone moved the radio to the phone segment's default
+  frequency or your last phone frequency. It now stays on the SSTV frequency until you move it: by tuning, a band or
+  memory pick, or a spot. Leave Phone and come back, and you return to where you left it. A frequency your licence
+  may not use for phone (7.171 MHz for a General, 28.680 MHz for a Technician) still moves you to a legal phone
+  frequency, as before.
 - **FT8 and FT4 no longer transmit on top of another program keying your radio through Nexus.** With "Other programs
   may key transmit" on, a program sharing the radio through Nexus's CAT broker (WSJT-X, VarAC) could key for a
   transmission of its own while your FT8 or FT4 CQ or QSO was armed, and at the start of your next period Nexus sent its

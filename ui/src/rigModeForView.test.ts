@@ -92,3 +92,30 @@ describe('what must NOT change', () => {
     expect(rigModeTransition('operate', 'digital').followFreq).toBe(false)
   })
 })
+
+describe('SSTV → Phone keeps the dial (the operator, 2026-10-20)', () => {
+  it('the Phone tab pressed on the SSTV screen follows and asks to keep the dial', () => {
+    // Still a follow, so a dial Phone may not transmit on is homed: the engine decides which.
+    expect(rigModeTransition('phone', 'digital', 'sstv')).toEqual({
+      mode: 'phone',
+      followFreq: true,
+      keepDial: true,
+      nextHomed: 'phone',
+    })
+  })
+
+  it('asks only when leaving the SSTV screen, and only for Phone', () => {
+    for (const from of ['operate', 'cw', 'rtty', 'psk', 'js8', 'chat', 'aprs', 'sats', 'map', 'logbook', undefined]) {
+      expect(rigModeTransition('phone', 'digital', from).keepDial, `Phone from ${from}`).toBeFalsy()
+    }
+    for (const view of ['operate', 'cw', 'rtty', 'psk', 'js8', 'chat']) {
+      expect(rigModeTransition(view, 'phone', 'sstv').keepDial, `SSTV → ${view}`).toBeFalsy()
+    }
+  })
+
+  it('with Phone already the mode homed for, nothing follows and nothing is asked', () => {
+    const t = rigModeTransition('phone', 'phone', 'sstv')
+    expect(t.followFreq).toBe(false)
+    expect(t.keepDial).toBeFalsy()
+  })
+})
