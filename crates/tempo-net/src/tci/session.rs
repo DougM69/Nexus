@@ -38,7 +38,11 @@
 //! - *TX_CHRONO* for our transceiver is answered at once with exactly the frames it asks for, read
 //!   with the dialect's `length` meaning: Nexus's audio from [`Streams::transmit`] while the over is
 //!   open, silence after our stop (until the server reports the unkey), and nothing at all when no
-//!   key of ours is on the air: another program's over gets none of our samples (item 5).
+//!   key of ours is on the air: another program's over gets none of our samples (item 5). A chrono
+//!   whose answer would not fit one frame is dropped and counted before anything is sized by it.
+//! - *Nexus's audio stream* stays up for the whole over (item 3): a server report that it stopped
+//!   ends the over at once ([`Halt::AudioStopped`]), and [`Session::send`] will not stop or reshape
+//!   it while a key of ours that takes it may be up ([`SendError::AudioInUse`]).
 //! - *The chrono window*: a key that takes Nexus's audio with no TX_CHRONO within
 //!   [`Config::chrono_window_ms`] of its write is ended at once ([`Halt::NoChrono`]): the server is
 //!   not taking Nexus's audio, and may be transmitting its microphone (item 3, M2).
@@ -86,7 +90,7 @@ use tungstenite::{Bytes, Message, WebSocket};
 
 use super::admission::{self, Facts, Refusal, TxStart, RX_FRESH_MS};
 use super::dialect::{Evidence, Preference};
-use super::frame::{Block, BlockKind, Chrono, Frame, Tally};
+use super::frame::{Block, BlockKind, Chrono, Frame, Tally, MAX_PAYLOAD};
 use super::model::Model;
 use super::wire::{
     self, Call, ClientText, Command, Hz, Notice, Query, Setting, Source, Stop, StreamSetting,
@@ -298,6 +302,9 @@ pub enum Halt {
     ServerEnded,
     /// The server says the over takes a source other than Nexus's audio.
     WrongSource(Source),
+    /// Nexus's audio stream stopped under the over (`audio_stop`, or a report of it that could not
+    /// be read): the SDR would take its microphone.
+    AudioStopped,
 }
 
 /// What the session reports, in order.
@@ -338,6 +345,9 @@ pub enum SendError {
     NotReady,
     /// The connection is closed.
     Closed,
+    /// It would stop or reshape Nexus's audio stream while a key of ours that takes that audio
+    /// may be up: the SDR would take its microphone.
+    AudioInUse,
 }
 
 /// What a stop did.
@@ -387,6 +397,8 @@ pub struct Snapshot {
     pub last_text_error: Option<WireError>,
     /// TX_CHRONO that arrived with no over of ours to answer: answered with nothing.
     pub chronos_not_ours: u64,
+    /// TX_CHRONO of ours asking for more than one frame can carry: dropped, unanswered.
+    pub chronos_refused: u64,
     pub timing: Timing,
 }
 
@@ -431,6 +443,7 @@ pub struct Session {
     text_refused: u64,
     last_text_error: Option<WireError>,
     chronos_not_ours: u64,
+    chronos_refused: u64,
     timing: Timing,
     /// Why the session is closing, and when the close frame goes regardless.
     closing: Option<(End, u64)>,
@@ -468,6 +481,7 @@ impl Session {
             text_refused: 0,
             last_text_error: None,
             chronos_not_ours: 0,
+            chronos_refused: 0,
             timing: Timing::default(),
             closing: None,
             events: VecDeque::new(),
@@ -528,6 +542,7 @@ impl Session {
             text_refused: self.text_refused,
             last_text_error: self.last_text_error.clone(),
             chronos_not_ours: self.chronos_not_ours,
+            chronos_refused: self.chronos_refused,
             timing: self.timing,
         }
     }
@@ -568,8 +583,8 @@ impl Session {
     }
 
     /// Send a command that cannot key the transmitter: CAT writes and reads, stream control,
-    /// spots, meters. A drive or tune drive written for our transceiver becomes the ceiling a key's
-    /// readback is held to ([`super::admission`]).
+    /// spots, meters ([`Self::may_send`] says which, and when). A drive or tune drive written for
+    /// our transceiver becomes the ceiling a key's readback is held to ([`super::admission`]).
     pub fn send(
         &mut self,
         out: &mut dyn Outbox,
@@ -581,6 +596,7 @@ impl Session {
             Phase::AwaitReady | Phase::Closing => return Err(SendError::NotReady),
             Phase::Closed => return Err(SendError::Closed),
         }
+        self.may_send(command)?;
         match command {
             Command::Set(Setting::Drive { trx, level })
                 if trx.is_none_or(|t| t == self.config.trx) =>
@@ -596,6 +612,51 @@ impl Session {
             Ok(())
         } else {
             Err(SendError::Closed)
+        }
+    }
+
+    /// What [`Self::send`] lets out, named variant by variant, so a command added to [`Command`]
+    /// does not compile until it is placed here. Nothing a [`Command`] renders keys the
+    /// transmitter: a key, a tune, a CW macro or message, CW terminal mode and a key-down are
+    /// [`super::wire::Start`]s, rendered only through admission ([`Self::key`]). What is refused is
+    /// the one way a command changes what an over carries: stopping or reshaping Nexus's audio
+    /// stream while a key of ours that takes it may be up, which would give the SDR its microphone
+    /// (TCI 2.0 §4.2, TRX).
+    fn may_send(&self, command: &Command) -> Result<(), SendError> {
+        let audio_key = self.keyed.filter(|k| k.kind == TxStart::Audio);
+        match command {
+            Command::RadioStart
+            | Command::RadioStop
+            | Command::Set(_)
+            | Command::Read(_)
+            | Command::Spot { .. }
+            | Command::SpotDelete(_)
+            | Command::SpotClear
+            | Command::RxSensorsEnable { .. }
+            | Command::TxSensorsEnable { .. }
+            | Command::CwMacrosSpeedUp(_)
+            | Command::CwMacrosSpeedDown(_)
+            | Command::SetInFocus => Ok(()),
+            Command::Stream(stream) => match stream {
+                StreamSetting::AudioStart(_)
+                | StreamSetting::IqStart(_)
+                | StreamSetting::IqStop(_)
+                | StreamSetting::LineOutStart(_)
+                | StreamSetting::LineOutStop(_)
+                | StreamSetting::IqSampleRate(_) => Ok(()),
+                StreamSetting::AudioStop(trx) => match audio_key {
+                    Some(k) if k.trx == *trx => Err(SendError::AudioInUse),
+                    _ => Ok(()),
+                },
+                StreamSetting::AudioSampleRate(_)
+                | StreamSetting::AudioSampleType(_)
+                | StreamSetting::AudioChannels(_)
+                | StreamSetting::AudioSamples(_)
+                | StreamSetting::TxAudioBuffering(_) => match audio_key {
+                    Some(_) => Err(SendError::AudioInUse),
+                    None => Ok(()),
+                },
+            },
         }
     }
 
@@ -716,6 +777,23 @@ impl Session {
             if self.phase == Phase::Closed {
                 return;
             }
+            self.check_audio(out, now);
+        }
+    }
+
+    /// Our own open over of Nexus's audio, keyed on this connection, whose stream the server no
+    /// longer reports running (`audio_stop`, or a report of it that could not be read): ended at
+    /// once, since the SDR would take its microphone (§6.1 item 3 holds for the whole over).
+    fn check_audio(&mut self, out: &mut dyn Outbox, now: u64) {
+        let lost = self.phase == Phase::Ready
+            && self.keyed.is_some_and(|k| {
+                k.kind == TxStart::Audio
+                    && k.sent_ms.is_some()
+                    && k.stop_ms.is_none()
+                    && !self.model.trx(k.trx).audio.is_true()
+            });
+        if lost {
+            self.halt(out, Halt::AudioStopped, now);
         }
     }
 
@@ -921,15 +999,26 @@ impl Session {
             self.chronos_not_ours = self.chronos_not_ours.saturating_add(1);
             return;
         };
+        let meaning = self.dialect.chrono_length;
+        let frames = chrono.frames(meaning);
+        let channels = chrono.channels.count();
+        // The decoder refuses a `length` past MAX_CHRONO_LENGTH; whatever that bound is, nothing is
+        // sized by the server's number until its answer is known to fit one frame. An answer that
+        // cannot be sent is dropped and counted, never answered in part.
+        let fits = frames
+            .checked_mul(channels)
+            .and_then(|values| values.checked_mul(chrono.format.bytes()))
+            .is_some_and(|bytes| bytes <= MAX_PAYLOAD);
+        if !fits {
+            self.chronos_refused = self.chronos_refused.saturating_add(1);
+            return;
+        }
         if !k.chrono_seen {
             if let Some(key) = self.keyed.as_mut() {
                 key.chrono_seen = true;
             }
             self.timing.first_chrono_ms = k.sent_ms.map(|sent| now.saturating_sub(sent));
         }
-        let meaning = self.dialect.chrono_length;
-        let frames = chrono.frames(meaning);
-        let channels = chrono.channels.count();
         let mut mono = vec![0.0f32; frames];
         if k.stop_ms.is_none() {
             streams.transmit(chrono.sample_rate, &mut mono);

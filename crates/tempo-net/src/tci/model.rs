@@ -82,8 +82,8 @@ pub struct TrxModel {
     pub modulation: Reading<Word>,
     /// The receive filter's edges, relative to the carrier.
     pub filter: Reading<(Hz, Hz)>,
-    /// `drive:<trx>,<v>;`. A server that writes the 1.x form reports [`Model::drive_global`]
-    /// instead; [`Model::drive`] reads either.
+    /// The drive as last reported in either form: `drive:<trx>,<v>;`, or the 1.x `drive:<v>;`,
+    /// which sets every receiver. The newer report wins, so an older one never hides a newer one.
     pub drive: Reading<u32>,
     pub tune_drive: Reading<u32>,
     pub split: Reading<bool>,
@@ -128,8 +128,6 @@ pub struct Model {
     /// The SDR program runs (`start;`) or is stopped (`stop;`).
     pub running: Reading<bool>,
     pub tx_frequency: Reading<Hz>,
-    /// `drive:<v>;`, the 1.x form, which sets every receiver.
-    pub drive_global: Reading<u32>,
     /// `tx_power` and `tx_swr` (not in the spec; older servers).
     pub tx_power: Reading<Real>,
     pub tx_swr: Reading<Real>,
@@ -150,7 +148,6 @@ impl Default for Model {
             ready: false,
             running: Reading::NotReported,
             tx_frequency: Reading::NotReported,
-            drive_global: Reading::NotReported,
             tx_power: Reading::NotReported,
             tx_swr: Reading::NotReported,
             trx: std::array::from_fn(|_| TrxModel::default()),
@@ -172,13 +169,9 @@ impl Model {
         &mut self.trx[trx.index()]
     }
 
-    /// A receiver's drive, in whichever form the server reports it: its own `drive:<trx>,<v>`
-    /// when it has one, else the 1.x `drive:<v>`.
+    /// A receiver's drive, as last reported in either form ([`TrxModel::drive`]).
     pub fn drive(&self, trx: Trx) -> &Reading<u32> {
-        match &self.trx(trx).drive {
-            Reading::NotReported => &self.drive_global,
-            own => own,
-        }
+        &self.trx(trx).drive
     }
 
     /// Fold one notice in.
@@ -259,7 +252,12 @@ impl Model {
                 trx: Some(trx),
                 level,
             } => self.trx_mut(*trx).drive = Reading::Known(*level),
-            Setting::Drive { trx: None, level } => self.drive_global = Reading::Known(*level),
+            // The 1.x form sets every receiver's drive: newer than what each last reported.
+            Setting::Drive { trx: None, level } => {
+                for t in &mut self.trx {
+                    t.drive = Reading::Known(*level);
+                }
+            }
             Setting::TuneDrive { trx, level } => {
                 self.trx_mut(*trx).tune_drive = Reading::Known(*level);
             }
@@ -306,7 +304,6 @@ impl Model {
             return;
         }
         match name {
-            "drive" => self.drive_global = Reading::Unreadable,
             "tx_frequency" => self.tx_frequency = Reading::Unreadable,
             "tx_power" => self.tx_power = Reading::Unreadable,
             "tx_swr" => self.tx_swr = Reading::Unreadable,
@@ -565,5 +562,24 @@ mod tests {
         let t = m.trx(trx(0));
         assert!(t.audio.is_false());
         assert_eq!(t.source, None);
+    }
+
+    #[test]
+    fn a_newer_report_of_the_drive_wins_whichever_form_it_takes() {
+        // The review's finding: a receiver's older `drive:<trx>,<v>` hid a newer 1.x
+        // `drive:<v>`, which sets every receiver.
+        let mut m = Model::new();
+        fold(&mut m, "drive:0,30;");
+        fold(&mut m, "drive:100;");
+        assert_eq!(
+            m.drive(trx(0)),
+            &Reading::Known(100),
+            "the newer global report"
+        );
+        assert_eq!(m.drive(trx(1)), &Reading::Known(100));
+        // And a receiver's own report after it is newer still, for that receiver alone.
+        fold(&mut m, "drive:1,20;");
+        assert_eq!(m.drive(trx(1)), &Reading::Known(20));
+        assert_eq!(m.drive(trx(0)), &Reading::Known(100));
     }
 }

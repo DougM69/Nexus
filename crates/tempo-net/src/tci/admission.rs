@@ -552,4 +552,21 @@ mod tests {
             assert!(!text.is_empty() && !text.ends_with('.'), "{r:?}: {text}");
         }
     }
+
+    #[test]
+    fn a_global_drive_after_a_receivers_own_is_held_to_the_ceiling() {
+        // READY reports `drive:0,30;`; a 1.x `drive:100;` after it sets the transmitter to 100.
+        let m = model(&format!("{READY}drive:100;"));
+        for start in [TxStart::Audio, TxStart::Microphone] {
+            assert_eq!(
+                admit(&m, &facts(), start).err(),
+                Some(Refusal::DriveAboveCeiling {
+                    drive: 100,
+                    ceiling: 30,
+                    tune: false
+                }),
+                "{start:?}"
+            );
+        }
+    }
 }

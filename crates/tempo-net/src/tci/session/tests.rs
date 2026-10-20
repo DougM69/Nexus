@@ -80,6 +80,8 @@ struct Level {
     transmits: usize,
     received: usize,
     iq: usize,
+    /// The most samples it was ever asked for at once.
+    longest: usize,
 }
 
 const LEVEL: f32 = 0.25;
@@ -96,6 +98,7 @@ impl Streams for Level {
     fn transmit(&mut self, rate: u32, out: &mut [f32]) -> usize {
         assert_eq!(rate, 48_000);
         self.transmits += 1;
+        self.longest = self.longest.max(out.len());
         out.fill(LEVEL);
         out.len()
     }
@@ -953,4 +956,233 @@ fn receive_audio_must_be_fresh_for_a_digital_key() {
         Err(Refusal::NoReceiveAudio)
     );
     assert_eq!(b.key(TxStart::Microphone), Ok(()));
+}
+
+// ── The security review's three findings (2026-10-20) ──────────────────────────────────────────
+
+#[test]
+fn a_chrono_asking_for_more_than_a_frame_can_carry_is_dropped_before_audio_is_sized_by_it() {
+    use crate::tci::frame::{MAX_CHRONO_LENGTH, MAX_PAYLOAD};
+    let mut b = Bench::ready(Config::new(trx(0)));
+    b.at(10).key(TxStart::Audio).expect("admitted");
+    b.wire.take();
+    // From the wire the decoder refuses a `length` past MAX_CHRONO_LENGTH: refused and counted.
+    for length in [MAX_CHRONO_LENGTH + 1, u32::MAX] {
+        let mut bytes = chrono(0);
+        bytes[20..24].copy_from_slice(&length.to_le_bytes());
+        b.at(11).binary(&bytes);
+    }
+    assert!(b.wire.take().is_empty());
+    assert_eq!(b.s.snapshot().frames.refused, 2);
+    // The session holds its own bound, whatever the decoder's: a chrono whose answer would not fit
+    // one frame is dropped before anything is sized by it, and Nexus's audio is never asked for it.
+    let most = MAX_PAYLOAD / 4;
+    let too_big = Chrono {
+        trx: trx(0),
+        sample_rate: 48_000,
+        format: SampleFormat::Float32,
+        channels: Channels::One,
+        length: u32::try_from(most + 1).expect("fits"),
+    };
+    b.s.on_chrono(&mut b.wire, &mut b.streams, too_big, 12);
+    assert!(
+        b.streams.longest <= most,
+        "Nexus's audio was asked for {} samples",
+        b.streams.longest
+    );
+    assert!(b.wire.take().is_empty(), "no answer");
+    assert_eq!(b.s.snapshot().chronos_refused, 1, "counted");
+    // The largest answer one frame carries still goes out.
+    let fits = Chrono {
+        length: u32::try_from(most).expect("fits"),
+        ..too_big
+    };
+    b.s.on_chrono(&mut b.wire, &mut b.streams, fits, 13);
+    assert_eq!(b.streams.longest, most);
+    assert_eq!(b.wire.take().len(), 1, "answered");
+}
+
+/// One command of every kind [`Command`] has, and every stream setting. The match names every
+/// variant, so a new one does not compile until it is classified here too.
+fn every_command(t: Trx) -> Vec<Command> {
+    use crate::tci::frame::{AudioRate, IqRate};
+    use crate::tci::wire::{Call, Text, Token};
+    let hz = |v: i64| Hz::new(v).expect("hz");
+    let call = || Call::new("K1ABC").expect("call");
+    let mut list = vec![
+        Command::RadioStart,
+        Command::RadioStop,
+        Command::Set(Setting::Vfo {
+            trx: t,
+            channel: Channel::A,
+            hz: hz(14_074_000),
+        }),
+        Command::Set(Setting::drive(t, 30, &EXPERT_SDR3)),
+        Command::Set(Setting::drive(t, 30, &EXPERT_SDR2)),
+        Command::Set(Setting::TuneDrive { trx: t, level: 10 }),
+        Command::Read(Query::Trx(t)),
+        Command::Read(Query::Tune(t)),
+        Command::Spot {
+            call: call(),
+            mode: Token::new("FT8").expect("mode"),
+            hz: hz(14_074_000),
+            argb: 0xFF00_FF00,
+            text: Text::new("cq dx").expect("text"),
+        },
+        Command::SpotDelete(call()),
+        Command::SpotClear,
+        Command::RxSensorsEnable {
+            on: true,
+            interval_ms: Some(200),
+        },
+        Command::TxSensorsEnable {
+            on: false,
+            interval_ms: None,
+        },
+        Command::CwMacrosSpeedUp(2),
+        Command::CwMacrosSpeedDown(2),
+        Command::SetInFocus,
+    ];
+    for stream in [
+        StreamSetting::AudioStart(t),
+        StreamSetting::AudioStop(t),
+        StreamSetting::IqStart(t),
+        StreamSetting::IqStop(t),
+        StreamSetting::LineOutStart(t),
+        StreamSetting::LineOutStop(t),
+        StreamSetting::AudioSampleRate(AudioRate::new(24_000).expect("rate")),
+        StreamSetting::IqSampleRate(IqRate::new(96_000).expect("rate")),
+        StreamSetting::AudioSampleType(SampleFormat::Int16),
+        StreamSetting::AudioChannels(Channels::One),
+        StreamSetting::AudioSamples(1024),
+        StreamSetting::TxAudioBuffering(100),
+    ] {
+        match stream {
+            StreamSetting::AudioStart(_)
+            | StreamSetting::AudioStop(_)
+            | StreamSetting::IqStart(_)
+            | StreamSetting::IqStop(_)
+            | StreamSetting::LineOutStart(_)
+            | StreamSetting::LineOutStop(_)
+            | StreamSetting::AudioSampleRate(_)
+            | StreamSetting::IqSampleRate(_)
+            | StreamSetting::AudioSampleType(_)
+            | StreamSetting::AudioChannels(_)
+            | StreamSetting::AudioSamples(_)
+            | StreamSetting::TxAudioBuffering(_) => list.push(Command::Stream(stream)),
+        }
+    }
+    for c in &list {
+        match c {
+            Command::RadioStart
+            | Command::RadioStop
+            | Command::Set(_)
+            | Command::Read(_)
+            | Command::Stream(_)
+            | Command::Spot { .. }
+            | Command::SpotDelete(_)
+            | Command::SpotClear
+            | Command::RxSensorsEnable { .. }
+            | Command::TxSensorsEnable { .. }
+            | Command::CwMacrosSpeedUp(_)
+            | Command::CwMacrosSpeedDown(_)
+            | Command::SetInFocus => {}
+        }
+    }
+    list
+}
+
+#[test]
+fn nothing_send_writes_is_read_by_a_server_as_a_key() {
+    // The review's hypothesis: `send` could carry a CW macro, a CW message or a key past
+    // admission. `Command` cannot express one (a key, a CW macro, a CW message, terminal mode and
+    // a key-down are `Start`s, rendered only through admission); here every kind of command goes
+    // through `send`, and every server dialect reads what went out.
+    let mut b = Bench::ready(Config::new(trx(0)));
+    for command in every_command(trx(0)) {
+        assert_eq!(b.s.send(&mut b.wire, &command, 10), Ok(()), "{command:?}");
+    }
+    let texts = b.wire.texts();
+    assert_eq!(texts.len(), every_command(trx(0)).len());
+    for text in &texts {
+        for dialect in crate::tci::DIALECTS {
+            for read in wire::requests(text, &dialect) {
+                assert!(
+                    !matches!(read, Ok(wire::Request::Start(_))),
+                    "{text} reads as a key in {}",
+                    dialect.name
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn nexus_audio_cannot_be_stopped_or_reshaped_under_an_over_of_ours() {
+    // Taken from under a `tci` key, Nexus's audio stream gives the SDR its microphone (TCI 2.0
+    // §4.2, TRX: "otherwise the microphone signal is taken").
+    use crate::tci::frame::AudioRate;
+    let reshape = [
+        StreamSetting::AudioStop(trx(0)),
+        StreamSetting::AudioSampleRate(AudioRate::new(24_000).expect("rate")),
+        StreamSetting::AudioSampleType(SampleFormat::Int16),
+        StreamSetting::AudioChannels(Channels::One),
+        StreamSetting::AudioSamples(1024),
+        StreamSetting::TxAudioBuffering(100),
+    ];
+    let mut b = Bench::ready(Config::new(trx(0)));
+    b.at(10).key(TxStart::Audio).expect("admitted");
+    b.wire.take();
+    for stream in reshape {
+        assert_eq!(
+            b.s.send(&mut b.wire, &Command::Stream(stream), 11),
+            Err(SendError::AudioInUse),
+            "{stream:?} under an over of ours"
+        );
+    }
+    assert!(b.wire.texts().is_empty(), "none of them went out");
+    // IQ, and another receiver's stream, are not this over's audio.
+    for stream in [
+        StreamSetting::IqStart(trx(0)),
+        StreamSetting::AudioStop(trx(1)),
+    ] {
+        assert_eq!(b.s.send(&mut b.wire, &Command::Stream(stream), 12), Ok(()));
+    }
+    // The over ended on the server's word: all of it may go out again.
+    b.end_ours();
+    b.at(13).text("trx:0,false;");
+    for stream in reshape {
+        assert_eq!(b.s.send(&mut b.wire, &Command::Stream(stream), 14), Ok(()));
+    }
+    // A microphone key does not use the stream.
+    let mut b = Bench::ready(Config::new(trx(0)));
+    b.at(10).key(TxStart::Microphone).expect("admitted");
+    let stop = Command::Stream(StreamSetting::AudioStop(trx(0)));
+    assert_eq!(b.s.send(&mut b.wire, &stop, 11), Ok(()));
+}
+
+#[test]
+fn the_server_stopping_nexus_audio_mid_over_halts_it() {
+    for report in ["audio_stop:0;", "audio_stop:x;"] {
+        let mut b = Bench::ready(Config::new(trx(0)));
+        b.at(10).key(TxStart::Audio).expect("admitted");
+        b.at(11).chrono(0);
+        b.text("trx:0,true;");
+        b.events();
+        b.wire.take();
+        b.at(20).text(report);
+        assert_eq!(
+            b.events(),
+            [Event::Halted(Halt::AudioStopped)],
+            "{report}: not halted"
+        );
+        assert_eq!(b.wire.texts(), ["trx:0,false;"], "{report}");
+    }
+    // A microphone key does not use the stream.
+    let mut b = Bench::ready(Config::new(trx(0)));
+    b.at(10).key(TxStart::Microphone).expect("admitted");
+    b.at(11).text("trx:0,true;");
+    b.events();
+    b.at(20).text("audio_stop:0;");
+    assert!(b.events().is_empty());
 }
