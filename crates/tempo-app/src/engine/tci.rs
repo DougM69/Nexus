@@ -1296,12 +1296,15 @@ mod tests {
         );
     }
 
-    /// The 10-minute ceiling, which no setting raises, ends a keyed over and a microphone key
-    /// counted from its key: ten minutes by value, not read from [`TCI_OVER`]. CONTROL: a minute
-    /// short of it, both go on.
+    /// The 10-minute ceiling, which no setting raises: ten minutes by value, not read from
+    /// [`TCI_OVER`].
+    const TEN_MINUTES: u64 = 10 * 60 * 1000;
+
+    /// A keyed over ends at the ceiling, counted from its key, with its abort. CONTROL: a minute
+    /// short of it, it goes on.
     #[test]
-    fn a_program_over_and_microphone_key_end_at_ten_minutes() {
-        let ceiling = 10 * 60 * 1000;
+    fn a_program_over_ends_at_ten_minutes() {
+        let ceiling = TEN_MINUTES;
         let mut s = Scene::new(phone());
         s.keyed();
         s.audio(P1, 20, 0.5);
@@ -1322,7 +1325,13 @@ mod tests {
             s.e.take_tci_abort(),
             "the ceiling ended the over without its abort"
         );
+    }
 
+    /// A microphone key ends at the same ceiling, counted from its admission. CONTROL: a minute
+    /// short of it, it is held.
+    #[test]
+    fn a_programs_microphone_key_ends_at_ten_minutes() {
+        let ceiling = TEN_MINUTES;
         let mut s = Scene::new(phone());
         assert_eq!(try_key(&mut s.e, P1, Try::Mic), Ok(()));
         let (now, ms0) = (s.at(20), s.ms0);

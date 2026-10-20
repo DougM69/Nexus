@@ -1435,6 +1435,27 @@ mod tests {
         );
     }
 
+    /// ⛔ The TCI over's look-ahead is the design's 40 ms, by value: however often a stalled loop
+    /// asks, nothing is fed further ahead of real time, which is what bounds a stuck carrier.
+    /// CONTROL: something is fed.
+    #[test]
+    fn a_tci_over_never_feeds_more_than_40_ms_ahead() {
+        let t0 = Instant::now();
+        let mut latch = keyed_as(TCI_OVER, t0);
+        let now = t0 + ms(TCI_OVER.lead_in_ms + 100);
+        let mut fed = 0u64;
+        for _ in 0..50 {
+            if let MicTick::Samples(s) = latch.tick(up(now), Vec::new(), PLENTY).tick {
+                fed += s.len() as u64;
+            }
+        }
+        assert!(fed > 0, "control: nothing was fed at all");
+        assert!(
+            fed <= 12_000 * 40 / 1000,
+            "fed {fed} samples ahead of a stalled clock; 40 ms is 480"
+        );
+    }
+
     /// Everything the latch feeds from `from` until it drops, ticking every 20 ms with no new
     /// audio, and the drop.
     fn play_out(
