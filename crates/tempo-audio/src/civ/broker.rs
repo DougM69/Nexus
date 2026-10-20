@@ -1923,6 +1923,8 @@ impl Drop for CivDaemon {
         // send a best-effort key-up FIRST, while the serial engine is still alive.
         // Idempotent (an already-RX radio just acks); one choke point covers every
         // native teardown path: rig rebuilds, monitor recycles, handoff drops, app exit.
+        // When the wait for it runs out (the engine held behind requests the radio never
+        // answered), the engine still writes it once as it stops: see `engine_loop`'s end.
         if self.engine.is_alive() {
             super::diag::note("CivDaemon::Drop — safety key-up (a daemon is being torn down)");
             let _ = self
@@ -1956,7 +1958,7 @@ mod tests {
         );
     }
 
-    use super::super::engine::tests_support::FakeRadio;
+    use super::super::engine::tests_support::{FakeRadio, Held};
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpStream;
@@ -5262,6 +5264,68 @@ mod tests {
                 deadline: std::time::Duration::from_millis(300),
                 keying: KeyingPolicy::Allowed,
             }
+        );
+    }
+
+    // ── THE TEARDOWN KEY-UP from an engine held past the teardown's wait ──────────────────────
+
+    /// Drops a daemon on `link` whose engine is HELD (see `Held`) until the teardown has given up
+    /// waiting for its key-up and stops it. Returns what reached the radio once the hold began, and
+    /// how long the teardown took.
+    fn teardown_held(link: Link) -> (Vec<(u8, Vec<u8>)>, Duration) {
+        let model = IcomModel::Ic7610;
+        let addr = model.default_civ_addr();
+        let (radio, _push) = FakeRadio::new(addr);
+        let regs = radio.regs();
+        let (radio, hold) = Held::new(radio);
+        let daemon =
+            CivDaemon::start_with_link(Box::new(radio), addr, 0, 1, Some(model), link).unwrap();
+        hold.until(daemon.engine.stop_flag());
+        hold.wait_held();
+        let before = regs.lock().unwrap().log.len();
+        let t0 = std::time::Instant::now();
+        drop(daemon);
+        (wire_since(&regs, before), t0.elapsed())
+    }
+
+    /// ⛔ THE TEARDOWN'S KEY-UP REACHES THE RADIO EVEN WHEN THE ENGINE CANNOT GET TO IT IN TIME.
+    /// Drop queues the key-up and waits 4 × the link's deadline + 100 ms for it, 1.3 s on a serial
+    /// bus. An engine held past that (requests ahead of it the radio never answered, a stalled
+    /// thread) was then stopped with the key-up still queued, and the key-up never went out: a
+    /// keyed radio stayed keyed. Now the engine writes it once on its way out, and nothing else.
+    #[test]
+    fn the_teardown_key_up_reaches_the_radio_from_an_engine_held_past_the_wait() {
+        let (wire, took) = teardown_held(Link::serial());
+        assert!(
+            took >= Duration::from_millis(1_200),
+            "the wait ran out first: {took:?}"
+        );
+        assert_eq!(
+            wire,
+            vec![(0x1C, vec![0x00, 0x00])],
+            "the key-up, once, and nothing else"
+        );
+    }
+
+    /// The same on the link the radio's network connection starts its daemon with (`icomlan`): a
+    /// 1 s deadline, so a 4.1 s wait, and keying refused, which never refuses an unkey. The
+    /// transport here is the fake radio; the network session's own delivery of the teardown
+    /// key-up is `icomlan`'s `dropping_the_daemon_unkeys_then_gives_the_token_back_then_disconnects`.
+    #[cfg(feature = "device")]
+    #[test]
+    fn on_the_network_link_too_the_teardown_key_up_reaches_the_radio_from_a_held_engine() {
+        let (wire, took) = teardown_held(Link {
+            deadline: crate::icomlan::LAN_DEADLINE,
+            keying: KeyingPolicy::Refused(crate::icomlan::KEYING_REFUSED),
+        });
+        assert!(
+            took >= Duration::from_millis(4_000),
+            "the wait ran out first: {took:?}"
+        );
+        assert_eq!(
+            wire,
+            vec![(0x1C, vec![0x00, 0x00])],
+            "the key-up, once, and nothing else"
         );
     }
 }

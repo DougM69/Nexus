@@ -132,7 +132,8 @@ impl CivHandle {
     }
 }
 
-/// The running engine. Dropping it stops the thread (and the port closes with it).
+/// The running engine. Dropping it stops the thread (and the port closes with it); a key-up still
+/// queued then goes out once first (see the end of `engine_loop`).
 pub struct CivEngine {
     handle: CivHandle,
     scope_row: Arc<Mutex<Option<ScopeSweep>>>,
@@ -222,6 +223,12 @@ impl CivEngine {
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Relaxed)
     }
+
+    /// The flag Drop raises to stop the thread, so a test can hold the engine until it is raised.
+    #[cfg(test)]
+    pub(super) fn stop_flag(&self) -> Arc<AtomicBool> {
+        self.stop.clone()
+    }
 }
 
 impl Drop for CivEngine {
@@ -304,8 +311,10 @@ fn engine_loop(
     let mut internal: std::collections::VecDeque<CivRequest> = std::collections::VecDeque::new();
     let mut scope_sent: Option<bool> = None; // last commanded waveform-output state
     let mut buf = [0u8; 512];
+    let mut stopped = false; // left because the owner stopped us, not because the port died
     loop {
         if stop.load(Ordering::Relaxed) {
+            stopped = true;
             break;
         }
         // Keep the radio's waveform-output state in sync with the wanted flag.
@@ -416,7 +425,23 @@ fn engine_loop(
     if let Some((req, _)) = pending.take() {
         req.resolve(Err(CivError::Gone));
     }
+    // ⛔ TX SAFETY: STOPPED WITH A KEY-UP STILL QUEUED, WRITE IT ONCE ON THE WAY OUT. A daemon's
+    // teardown queues its safety key-up and waits for it (`CivDaemon`'s Drop: 4 × the deadline +
+    // 100 ms); when the engine is held past that wait (requests ahead of it the radio never
+    // answered, a stalled thread) the owner stops it with the key-up still here, and it used to be
+    // answered `Gone` and never written: a keyed radio left keyed, at the moment CAT is struggling.
+    // Only that exact frame, only once, ONE attempt bounded by the port's own timeout, and no reply
+    // awaited. Everything else queued is answered `Gone` unwritten, as before, so nothing on the
+    // way out can key the radio or wait on it.
+    let mut key_up = stopped.then(|| super::commands::set_ptt(radio_addr, false));
     while let Ok(req) = rx.try_recv() {
+        if key_up.as_ref() == Some(&req.frame) {
+            key_up = None;
+            super::diag::note("CivEngine stopped, key-up still queued: sending it on the way out");
+            let bytes = req.frame.to_bytes();
+            super::diag::log(super::diag::Dir::Tx, &bytes);
+            let _ = io.write_all(&bytes).and_then(|_| io.flush());
+        }
         req.resolve(Err(CivError::Gone));
     }
     alive.store(false, Ordering::Relaxed);
@@ -429,6 +454,7 @@ pub(crate) mod tests_support {
     use super::super::frame::{bcd_to_freq, freq_to_bcd, Frame, CONTROLLER};
     use std::collections::VecDeque;
     use std::io::{self, Read, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -1238,13 +1264,107 @@ pub(crate) mod tests_support {
             Ok(n)
         }
     }
+
+    /// A [`FakeRadio`] whose engine thread a test can HOLD, the way a starved or stalled engine
+    /// thread is held: once [`Hold::until`] names a flag, the engine's next read blocks until that
+    /// flag is raised. [`Hold::wait_held`] returns once the engine is inside the hold, so nothing
+    /// it writes can land between the test's look at the log and the flag.
+    pub struct Held {
+        inner: FakeRadio,
+        hold: Arc<Hold>,
+    }
+
+    /// The test's side of a [`Held`] radio.
+    #[derive(Default)]
+    pub struct Hold {
+        until: Mutex<Option<Arc<AtomicBool>>>,
+        inside: AtomicBool,
+        released: AtomicBool,
+        /// Once released, every write times out before it reaches the radio.
+        refuse_writes: AtomicBool,
+        /// What the engine did with the port once released, in order: `"read"` or `"write"`.
+        after: Mutex<Vec<&'static str>>,
+    }
+
+    impl Held {
+        pub fn new(inner: FakeRadio) -> (Held, Arc<Hold>) {
+            let hold = Arc::new(Hold::default());
+            let held = Held {
+                inner,
+                hold: hold.clone(),
+            };
+            (held, hold)
+        }
+    }
+
+    impl Hold {
+        /// Hold the engine at its next read until `flag` is raised.
+        pub fn until(&self, flag: Arc<AtomicBool>) {
+            *self.until.lock().unwrap() = Some(flag);
+        }
+
+        /// Returns once the engine is inside the hold (10 s at most: a bound on "never", not a
+        /// measurement, so a loaded box cannot fail it).
+        pub fn wait_held(&self) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while !self.inside.load(Ordering::SeqCst) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the engine never reached the hold"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+
+        /// Every write after the release times out, as a port that cannot take it does.
+        pub fn refuse_writes(&self) {
+            self.refuse_writes.store(true, Ordering::SeqCst);
+        }
+
+        /// What the engine did with the port after the release.
+        pub fn after(&self) -> Vec<&'static str> {
+            self.after.lock().unwrap().clone()
+        }
+    }
+
+    impl Write for Held {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.hold.released.load(Ordering::SeqCst) {
+                self.hold.after.lock().unwrap().push("write");
+                if self.hold.refuse_writes.load(Ordering::SeqCst) {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "refused"));
+                }
+            }
+            self.inner.write(buf)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.inner.flush()
+        }
+    }
+
+    impl Read for Held {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.hold.released.load(Ordering::SeqCst) {
+                self.hold.after.lock().unwrap().push("read");
+            }
+            let until = self.hold.until.lock().unwrap().clone();
+            if let Some(flag) = until {
+                while !flag.load(Ordering::SeqCst) {
+                    self.hold.inside.store(true, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                self.hold.released.store(true, Ordering::SeqCst);
+            }
+            self.inner.read(buf)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::commands::{read_freq, read_smeter, set_freq};
+    use super::super::commands::{read_freq, read_smeter, set_freq, set_ptt};
     use super::super::frame::{freq_to_bcd, Frame};
-    use super::tests_support::FakeRadio;
+    use super::tests_support::{FakeRadio, Held};
     use super::*;
 
     /// A radio whose replies take `delay` to arrive after each command.
@@ -1506,5 +1626,107 @@ mod tests {
             .handle()
             .transact(super::super::commands::set_ptt(0xA2, true), Expect::Ack);
         assert_eq!(r.unwrap_err(), CivError::Nak);
+    }
+
+    // ── THE WAY OUT: a key-up still queued when the engine is stopped ────────────────────────
+
+    /// What reached the radio once the hold began, what the engine did with the port once released,
+    /// and each queued caller's answer.
+    type WayOut = (
+        Vec<(u8, Vec<u8>)>,
+        Vec<&'static str>,
+        Vec<Result<Frame, CivError>>,
+    );
+
+    /// Stops an engine HELD (see [`Held`]) with `queued` waiting behind it, as a daemon's teardown
+    /// stops one whose key-up it gave up waiting for. `refuse_writes`: the port times out every
+    /// write once the engine is released.
+    fn stop_held(queued: &[Frame], refuse_writes: bool) -> WayOut {
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let regs = radio.regs();
+        let (io, hold) = Held::new(radio);
+        let eng = CivEngine::start(Box::new(io), 0xA2, None);
+        hold.until(eng.stop_flag());
+        hold.wait_held();
+        if refuse_writes {
+            hold.refuse_writes();
+        }
+        let before = regs.lock().unwrap().log.len();
+        // Queued as `transact` queues them, without waiting for the answers.
+        let answers: Vec<_> = queued
+            .iter()
+            .map(|frame| {
+                let (tx, rx) = mpsc::sync_channel(1);
+                let req = CivRequest {
+                    frame: frame.clone(),
+                    expect: Expect::Ack,
+                    reply_to: Some(tx),
+                };
+                eng.handle.tx.send(req).unwrap();
+                rx
+            })
+            .collect();
+        drop(eng); // raises the flag, which ends the hold, and joins the thread
+        let wire = regs.lock().unwrap().log[before..].to_vec();
+        let answers = answers
+            .iter()
+            .map(|rx| rx.try_recv().expect("every caller is answered"))
+            .collect();
+        (wire, hold.after(), answers)
+    }
+
+    /// ⛔ STOPPED WITH THE KEY-UP STILL QUEUED, the engine writes it on its way out: only that frame
+    /// (not the read, the dial or the KEY queued with it), only once (two were queued), and nothing
+    /// awaited after it. Every caller is still answered `Gone`.
+    #[test]
+    fn a_stopped_engine_writes_a_queued_key_up_once_and_nothing_else() {
+        let (wire, after, answers) = stop_held(
+            &[
+                read_freq(0xA2),
+                set_ptt(0xA2, true),
+                set_ptt(0xA2, false),
+                set_freq(0xA2, 144_200_000, None),
+                set_ptt(0xA2, false),
+            ],
+            false,
+        );
+        assert_eq!(
+            wire,
+            vec![(0x1C, vec![0x00, 0x00])],
+            "the key-up, once, alone"
+        );
+        assert_eq!(after, vec!["write"], "one write, and no answer awaited");
+        assert_eq!(answers, vec![Err(CivError::Gone); 5]);
+    }
+
+    /// The control: with no key-up queued, nothing at all goes out on the way out, the queued KEY
+    /// least of all.
+    #[test]
+    fn a_stopped_engine_with_no_key_up_queued_writes_nothing() {
+        let (wire, after, answers) = stop_held(
+            &[
+                set_ptt(0xA2, true),
+                read_freq(0xA2),
+                set_freq(0xA2, 144_200_000, None),
+            ],
+            false,
+        );
+        assert_eq!(wire, Vec::<(u8, Vec<u8>)>::new(), "nothing went out");
+        assert_eq!(after, Vec::<&str>::new());
+        assert_eq!(answers, vec![Err(CivError::Gone); 3]);
+    }
+
+    /// The way out is bounded: ONE attempt at the key-up, with the port's own timeout. A port that
+    /// times it out is not tried again, and nothing waits after it.
+    #[test]
+    fn the_key_up_on_the_way_out_is_one_attempt() {
+        let (wire, after, answers) = stop_held(&[set_ptt(0xA2, false)], true);
+        assert_eq!(after, vec!["write"], "one attempt, no retry");
+        assert_eq!(
+            wire,
+            Vec::<(u8, Vec<u8>)>::new(),
+            "the port took none of it"
+        );
+        assert_eq!(answers, vec![Err(CivError::Gone)]);
     }
 }

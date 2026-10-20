@@ -582,6 +582,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a test service, and described the Remote page's own FT8/FT4 controls and Log QSO form, which the page no longer
   has. It now says that a browser streaming the station needs only station controls, and that the logging and FT8/FT4
   transmit permissions under Advanced are not used by the Remote page any more.
+- **Native Icom CI-V: closing the connection always tells the radio to stop transmitting.** When Nexus closes its own
+  CI-V connection to an Icom (CAT restarting, a radio switch, Nexus closing), on USB or over the Icom network
+  connection, it first sends the radio its transmit-off command and waits for it to go through. If the radio had
+  stopped answering, with commands piled up ahead of that one, the wait ran out (1.3 s on USB, 4.1 s on the network
+  connection) and the connection closed without the command ever being sent, so a radio that was transmitting stayed
+  on the air. The transmit-off command is now always sent once as the connection closes, and nothing else is sent
+  then. NEEDS-BENCH: an Icom on Native Icom CI-V into a dummy load, Nexus quit while Tune is keyed: the radio returns
+  to receive at once. With the CI-V diagnostic log on, each close (USB, and the Icom network connection) shows one
+  transmit-off and nothing after it.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
