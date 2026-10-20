@@ -1307,7 +1307,7 @@ fn stop_on_the_lan_channel_stops_the_station_without_waiting() {
 // ----- The listener, on this box's own private address -----
 
 /// This box's own private IPv4 address, the one its route to the internet leaves by, or `None`.
-fn own_private_address() -> Option<Ipv4Addr> {
+pub(crate) fn own_private_address() -> Option<Ipv4Addr> {
     let probe = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     probe.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
     match probe.local_addr().ok()?.ip() {

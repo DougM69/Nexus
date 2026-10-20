@@ -18,9 +18,12 @@
 //!    shack sends HMAC(k, "station" ‖ T) first; the computer checks it before it says anything
 //!    else, then sends HMAC(k, "client" ‖ T).
 //! 4. **The shack checks the computer's proof** (`Book::check`). Right: the window closes for good,
-//!    the computer's key is kept in the credential store and admitted (`Book::add`), and the shack
-//!    tells it the device id it gave it. Wrong: it is told so and closed, and the third wrong proof
-//!    closes the window.
+//!    the computer's key is kept in the credential store and admitted (`Book::add`), a computer
+//!    that had enrolled on its own sign-in is taken out of the LAN's device cache so that its
+//!    proof's age holds it no longer (`super::enrol`), and the shack tells it the device id it gave
+//!    it. A cache that will not let it go refuses the pairing as `unavailable`, and the computer
+//!    stays held to that age. Wrong: it is told so and closed, and the third wrong proof closes the
+//!    window.
 //!
 //! The computer then connects again, on a connection of its own with the shack's key pinned, as
 //! any paired computer does.
@@ -305,9 +308,16 @@ where
         Checked::Wrong => refuse(socket, "wrongCode", Outcome::Failed).await,
         Checked::Right => {
             let (book, pin, name) = (desk.book.clone(), tls::pin(&asked.key), asked.name);
-            let under = desk.station_id.clone();
-            // The store can block: off this connection's thread.
-            match tokio::task::spawn_blocking(move || book.add(pin, &name, &under)).await {
+            let (enrolment, under) = (desk.enrolment.clone(), desk.station_id.clone());
+            // The store can block: off this connection's thread. The book first: the cache lets a
+            // computer go only once the book keeps its pairing, so a pairing that fails part-way
+            // leaves it held to its proof's age, never the reverse.
+            let paired = tokio::task::spawn_blocking(move || -> Result<String, &'static str> {
+                let device = book.add(pin, &name, &under)?;
+                enrolment.paired_by_code(&pin)?;
+                Ok(device)
+            });
+            match paired.await {
                 Ok(Ok(device)) => {
                     say(
                         socket,

@@ -24,7 +24,11 @@
 //! vouches for it. [`Enrolment::bounded`] holds every admission to that age: TLS, the hello, and the
 //! check each session makes at every status tick, so one that passes it mid-session ends; and one
 //! past it is taken out of the book at launch and after each list (`super::Lan::expire`). A computer
-//! paired by code is not enrolled and is not held to it.
+//! paired by code is not enrolled and is not held to it, and neither is one enrolled before and
+//! then paired again with a code at the shack: the pairing takes it out of the device cache
+//! ([`Enrolment::paired_by_code`]), so a code pairing at the shack outranks a sign-in's age. It then
+//! stays until it is removed at the shack, and a removal on the web no longer reaches it here: the
+//! service's list reaches the LAN only through that cache.
 //!
 //! Nothing here writes a log line, and no proof is kept: the cache holds the key's pin, the role
 //! and the proof's signing time.
@@ -159,6 +163,26 @@ impl Enrolment {
             let _ = vault.save_device_cache(&cache);
         }
         self.reread();
+    }
+
+    /// The computer with `pin` was just paired with a code at the shack, and the book keeps that
+    /// pairing: it is taken out of the device cache, so no sign-in's age holds it from now on, as
+    /// for every computer paired by code (see the header). A cache that cannot be read, or will not
+    /// keep the change, leaves it held to its proof's age: `unavailable`, which the pairing says.
+    pub(super) fn paired_by_code(&self, pin: &[u8; 32]) -> Result<(), &'static str> {
+        let Some(Kept { vault, .. }) = &self.kept else {
+            return Ok(());
+        };
+        let pin = tempo_client::hex(pin);
+        let taken = vault.device_cache().and_then(|cache| match cache {
+            Some(mut cache) if cache.find(&pin).is_some() => {
+                cache.forget(&pin);
+                vault.save_device_cache(&cache)
+            }
+            _ => Ok(()),
+        });
+        self.reread();
+        taken.map_err(|_| "unavailable")
     }
 
     /// `paired` (who the book admits), held to [`Enrolment::admits`]: what the LAN's TLS and its

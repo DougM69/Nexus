@@ -5,10 +5,13 @@
 //! The proofs are tempo-client's account fixture, minted once for public keys whose private halves
 //! were never kept. So the admission itself is driven directly ([`lan_enrol::admit`], what the session
 //! runs), and over TLS a fresh key shows that a valid proof for another key is refused.
+//!
+//! A computer paired again with a code at the shack is held to no proof's age from then on: there a
+//! fresh key stands for an enrolled computer, kept in the device cache as an enrolment keeps it.
 use super::super::enrol as lan_enrol;
 use super::*;
 use crate::remote_service::tests::MemoryVault;
-use crate::remote_service::vault::AccountVault;
+use crate::remote_service::vault::{AccountKeys, AccountVault, People, Revokes, Uninvites};
 use std::sync::atomic::AtomicU64;
 use tempo_client::account::{
     mailbox, CachedDevice, DeviceCache, Invite, KeySet, Owner, Role, Tenant, PROOF_MAX_AGE_S,
@@ -561,4 +564,263 @@ async fn the_lans_listener_holds_an_enrolled_computer_to_its_proofs_age() {
         Err(refused) => json!({ "refused": refused }),
     };
     assert_ne!(again["type"], "welcome", "{again}");
+}
+
+// ---- Paired again with a code at the shack -------------------------------------------------------
+
+/// ★ A computer enrolled on its own sign-in and then paired again with a code at the shack, within
+/// its proof's thirty days, is held to that age no longer: on its proof's thirtieth day the
+/// listener still welcomes it, a list (`Lan::expire`) leaves it in the book, and the station
+/// started again that day reads it as admitted, as every computer paired by code is, until it is
+/// removed at the shack. CONTROL: a computer enrolled at the same time and never paired by code
+/// leaves that day, as before. Skipped, saying so, on a box with no private address of its own.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_paired_again_with_a_code_outlasts_its_proofs_age() {
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return;
+    };
+    let port = std::net::TcpListener::bind((address, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let network = Network::new(address, 32).unwrap();
+    let signed = 1_000_000;
+    let (station_key, again, other) = (fixture_key(), Computer::new(), Computer::new());
+    let store = LanStore::holding(
+        &station_key,
+        STATION,
+        &[(&again.pin, "DESKTOP-7Q"), (&other.pin, "Other PC")],
+    );
+    let s = shack_with(network, station_key, again.clone(), store);
+    let vault = caching(vec![
+        kept(&again.pin, false, signed),
+        kept(&other.pin, false, signed),
+    ]);
+    CLOCK.store(signed + 86_400, Ordering::SeqCst);
+    let scratch = Scratch::new();
+    let enrolment = Arc::new(lan_enrol::Enrolment::kept_in(
+        Arc::new(vault.clone()),
+        clock,
+    ));
+    let lan = lan_enrolled(&s, &scratch, network, book_on(&s.store), enrolment.clone());
+    lan.turn_on(None, Some(port)).unwrap();
+    let at = SocketAddr::new(address.into(), port);
+    eventually(&lan, "never listened", |st| {
+        st.listening.as_deref() == Some(at.to_string().as_str())
+    })
+    .await;
+
+    // Paired again with the code the shack shows, by the key it enrolled with.
+    lan.pair().unwrap();
+    let shown = lan.status().pairing.unwrap().code;
+    let code: [u8; 8] = tempo_stream::protocol::hex_bytes(&shown)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let stream = tokio::net::TcpStream::connect(at).await.unwrap();
+    let mut pairing = super::ceremony::open_pairing(stream, &again.key)
+        .await
+        .unwrap();
+    assert_eq!(
+        super::ceremony::prove_code(&mut pairing, &again, &code, "DESKTOP-7Q").await,
+        json!({"type":"paired","deviceId":again.device,"stationId":STATION})
+    );
+
+    // Its proof's thirtieth day, and the station's list.
+    CLOCK.store(signed + PROOF_MAX_AGE_S, Ordering::SeqCst);
+    lan.expire();
+    let names: Vec<String> = lan.status().devices.into_iter().map(|d| d.name).collect();
+    assert_eq!(
+        names,
+        vec!["DESKTOP-7Q"],
+        "after a list on its proof's thirtieth day"
+    );
+    let dial_at = |key: &str| {
+        let (key, station, lan) = (key.to_string(), s.public_key.clone(), &lan);
+        async move {
+            // Nothing else open from here first: a refusal is then the handshake's, not the gate's.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while lan.open_from(address.into()) > 0 {
+                assert!(
+                    Instant::now() < deadline,
+                    "a connection from here stayed open"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            let stream = tokio::net::TcpStream::connect(at).await.unwrap();
+            match open(stream, &key, &station).await {
+                Ok(mut socket) => hello(&mut socket, VERSIONS).await,
+                Err(refused) => json!({ "refused": refused }),
+            }
+        }
+    };
+    let welcome = dial_at(&again.key).await;
+    assert_eq!(
+        welcome["type"], "welcome",
+        "paired again by code: {welcome}"
+    );
+    assert_eq!(welcome["deviceId"], again.device);
+    let control = dial_at(&other.key).await;
+    assert_ne!(
+        control["type"], "welcome",
+        "never paired by code: {control}"
+    );
+    assert_eq!(vault.device_cache().unwrap().unwrap().devices, Vec::new());
+    // The station started again that day reads the same from the store.
+    let restarted = lan_enrol::Enrolment::kept_in(Arc::new(vault.clone()), clock);
+    restarted.load();
+    assert!(restarted.admits(&again.pin), "at launch");
+    assert_eq!(restarted.expired(), Vec::<[u8; 32]>::new());
+
+    // Removed at the shack: out at once.
+    lan.revoke(&again.device).unwrap();
+    let removed = dial_at(&again.key).await;
+    assert_ne!(
+        removed["type"], "welcome",
+        "removed at the shack: {removed}"
+    );
+}
+
+/// The station's account entries in `inner`, its device cache refused as a credential store that
+/// will not answer refuses it: the read while `reads` is set, the write while `saves` is.
+#[derive(Clone, Default)]
+struct Refusing {
+    inner: MemoryVault,
+    reads: Arc<AtomicBool>,
+    saves: Arc<AtomicBool>,
+}
+impl AccountVault for Refusing {
+    fn owner(&self) -> Result<Option<Owner>, &'static str> {
+        self.inner.owner()
+    }
+    fn save_owner(&self, owner: &Owner) -> Result<(), &'static str> {
+        self.inner.save_owner(owner)
+    }
+    fn account_keys(&self) -> Result<Option<AccountKeys>, &'static str> {
+        self.inner.account_keys()
+    }
+    fn save_account_keys(&self, keys: &AccountKeys) -> Result<(), &'static str> {
+        self.inner.save_account_keys(keys)
+    }
+    fn device_cache(&self) -> Result<Option<DeviceCache>, &'static str> {
+        if self.reads.load(Ordering::SeqCst) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.inner.device_cache()
+    }
+    fn save_device_cache(&self, cache: &DeviceCache) -> Result<(), &'static str> {
+        if self.saves.load(Ordering::SeqCst) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.inner.save_device_cache(cache)
+    }
+    fn people(&self) -> Result<Option<People>, &'static str> {
+        self.inner.people()
+    }
+    fn save_people(&self, people: &People) -> Result<(), &'static str> {
+        self.inner.save_people(people)
+    }
+    fn revokes(&self) -> Result<Option<Revokes>, &'static str> {
+        self.inner.revokes()
+    }
+    fn save_revokes(&self, revokes: &Revokes) -> Result<(), &'static str> {
+        self.inner.save_revokes(revokes)
+    }
+    fn uninvites(&self) -> Result<Option<Uninvites>, &'static str> {
+        self.inner.uninvites()
+    }
+    fn save_uninvites(&self, uninvites: &Uninvites) -> Result<(), &'static str> {
+        self.inner.save_uninvites(uninvites)
+    }
+}
+
+/// `computer` paired again at the shack `s`, a window opened for it with the code then shown: the
+/// shack's last word.
+async fn paired_again(
+    s: &Shack,
+    computer: &Computer,
+    peer: &str,
+    stop: watch::Receiver<bool>,
+) -> Value {
+    let book = s.shared.desk.as_ref().unwrap().book.clone();
+    book.open(Instant::now(), 0).unwrap();
+    let code = super::ceremony::shown_code(&book);
+    let (_task, pairing) = super::ceremony::dial_pairing(s, &computer.key, peer, stop).await;
+    super::ceremony::prove_code(&mut pairing.unwrap(), computer, &code, "Shack laptop").await
+}
+
+/// ★ Fails closed: a code pairing whose computer the LAN's device cache will not let go of, because
+/// the store will not keep the change or will not be read, is refused as `unavailable`, and the
+/// computer stays held to its proof's age, out on its thirtieth day as before. So does one whose
+/// pairing the book will not keep, with the cache untouched: it changes only once the book keeps the
+/// pairing. CONTROL: once the stores answer, the same computer is paired and held to no age.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_code_pairing_the_cache_will_not_take_leaves_the_computer_held() {
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    let signed = 1_000_000;
+    let (_tx, stop) = watch::channel(false);
+    let mut s = shack(home());
+    let computer = s.computer.clone();
+    let vault = Refusing::default();
+    let mut cache = DeviceCache::new(SERVICE_STATION);
+    cache.keep(kept(&computer.pin, false, signed)).unwrap();
+    vault.inner.save_device_cache(&cache).unwrap();
+    let enrolment = Arc::new(lan_enrol::Enrolment::kept_in(
+        Arc::new(vault.clone()),
+        clock,
+    ));
+    CLOCK.store(signed + 86_400, Ordering::SeqCst);
+    enrolment.load();
+    enrolling(&mut s, enrolment.clone());
+    let held = |when: &str| {
+        CLOCK.store(signed + PROOF_MAX_AGE_S, Ordering::SeqCst);
+        assert!(
+            !enrolment.admits(&computer.pin),
+            "{when}: admitted on day 30"
+        );
+        assert_eq!(enrolment.expired(), vec![computer.pin], "{when}");
+        CLOCK.store(signed + 86_400, Ordering::SeqCst);
+    };
+    let refused = json!({"type":"refused","reason":"unavailable"});
+
+    vault.saves.store(true, Ordering::SeqCst);
+    let answer = paired_again(&s, &computer, "192.168.1.40:50000", stop.clone()).await;
+    assert_eq!(answer, refused, "the cache would not keep the change");
+    vault.saves.store(false, Ordering::SeqCst);
+    held("the cache would not keep the change");
+
+    vault.reads.store(true, Ordering::SeqCst);
+    let answer = paired_again(&s, &computer, "192.168.1.41:50000", stop.clone()).await;
+    assert_eq!(answer, refused, "the cache would not be read");
+    vault.reads.store(false, Ordering::SeqCst);
+    held("the cache would not be read");
+
+    s.store.locked.store(true, Ordering::SeqCst);
+    let answer = paired_again(&s, &computer, "192.168.1.42:50000", stop.clone()).await;
+    assert_eq!(answer, refused, "the book would not keep the pairing");
+    s.store.locked.store(false, Ordering::SeqCst);
+    held("the book would not keep the pairing");
+    assert_eq!(
+        vault.device_cache().unwrap().unwrap().devices,
+        vec![kept(&computer.pin, false, signed)],
+        "the cache untouched"
+    );
+
+    let answer = paired_again(&s, &computer, "192.168.1.43:50000", stop).await;
+    assert_eq!(
+        answer,
+        json!({"type":"paired","deviceId":computer.device,"stationId":STATION})
+    );
+    CLOCK.store(signed + PROOF_MAX_AGE_S, Ordering::SeqCst);
+    assert!(enrolment.admits(&computer.pin), "paired by code: no age");
+    assert_eq!(enrolment.expired(), Vec::<[u8; 32]>::new());
 }

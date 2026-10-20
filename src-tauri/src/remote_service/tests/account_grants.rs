@@ -804,6 +804,168 @@ async fn a_computer_past_its_proofs_age_leaves_the_lan_at_the_next_list() {
     assert_eq!(vault.device_cache().unwrap().unwrap().devices, Vec::new());
 }
 
+/// ★ A computer kept for the LAN on its proof, then paired again with a code at the shack, is the
+/// shack's to remove from then on, as every computer paired by code is: a removal on the web (the
+/// service lists it, no longer approved) leaves it on the LAN and still welcomed there, and Remove
+/// at the shack takes it out. CONTROL: a computer kept on its proof and never paired by code leaves
+/// the LAN at that same list, as before. Skipped, saying so, on a box with no private address of
+/// its own.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_paired_again_with_a_code_is_removed_at_the_shack_not_on_the_web() {
+    use crate::lan_client::{code, pairing, road, ComputerKey};
+    use crate::remote_service::lan::tests::{only, own_private_address, LanStore, Scratch};
+    use crate::remote_service::vault::PairedStation;
+    const LAN_STATION: &str = "60000000-0000-4000-8000-0000000000aa";
+    const LAPTOP: &str = "10000000-0000-4000-8000-00000000000e";
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return;
+    };
+    let port = std::net::TcpListener::bind((address, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let network = tempo_stream::lan::Network::new(address, 32).unwrap();
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let pin_of = |spki: &str| -> [u8; 32] {
+        tempo_stream::protocol::hex_bytes(&sha256(spki))
+            .unwrap()
+            .try_into()
+            .unwrap()
+    };
+    // The fixture's computer, kept on its proof and never paired by code.
+    let enrolled = pin_of(&key("computerLan"));
+    // A laptop with keys made for this run, kept on its proof and then paired again with a code.
+    let (laptop, laptop_pkcs8) = ComputerKey::generate().unwrap();
+    let (laptop_road, _) = ComputerKey::generate().unwrap();
+    let laptop_pin = pin_of(laptop.public_key());
+    let paired: [u8; 32] = [7; 32];
+    let (_, station) = station_key::Signer::generate().unwrap();
+    let store = LanStore::holding(
+        &station,
+        LAN_STATION,
+        &[
+            (&paired, "Den PC"),
+            (&enrolled, "DESKTOP-7Q"),
+            (&laptop_pin, "Laptop"),
+        ],
+    );
+    let mut cache = tempo_client::account::DeviceCache::new(STATION);
+    for pin in [sha256(&key("computerLan")), sha256(laptop.public_key())] {
+        cache
+            .keep(CachedDevice {
+                pin,
+                role: Role::Operate,
+                guest: false,
+                issued_at: cases()["issuedAt"].as_u64().unwrap(),
+                confirmed_at: 0,
+            })
+            .unwrap();
+    }
+    vault.save_device_cache(&cache).unwrap();
+    let scratch = Scratch::new();
+    let engine = engine();
+    let service = launch_owned(&cloud, &vault).with_lan(
+        scratch.path(),
+        engine.clone(),
+        transport::Feeds {
+            monitor: crate::remote_monitor::Publisher::default(),
+            #[cfg(feature = "radio")]
+            audio: None,
+            stream: stream::Host::default(),
+        },
+        Arc::new(lan::Book::new(Arc::new(store.clone()))),
+        Arc::new(move |_| only(Ok(network))),
+        lan::commands::Commands::default(),
+    );
+    let names = |status: &Status| -> Vec<String> {
+        let mut names: Vec<String> = status
+            .lan
+            .as_ref()
+            .map(|lan| lan.devices.iter().map(|d| d.name.clone()).collect())
+            .unwrap_or_default();
+        names.sort();
+        names
+    };
+    eventually(&service, "the book read", |s| names(s).len() == 3).await;
+    service
+        .action(Action::LanOn {
+            address: None,
+            port: Some(port),
+        })
+        .await
+        .unwrap();
+    let at = std::net::SocketAddrV4::new(address, port);
+    eventually(&service, "never listened", |s| {
+        s.lan.as_ref().and_then(|lan| lan.listening.clone()) == Some(at.to_string())
+    })
+    .await;
+    let laptop_row = json!({"id": LAPTOP, "name": "Laptop", "approved": 1,
+        "expiresAt": APPROVED_UNTIL, "generation": 4, "renewsUntil": null,
+        "publicKey": laptop_road.public_key(), "kind": "computer", "platform": "windows",
+        "untilRemoved": 1, "role": "operate", "addedBy": "account", "proof": null,
+        "lanKey": laptop.public_key()});
+    let rows = vec![computer_row(&token("computer"), "operate"), laptop_row];
+    let status = listed(&service, &cloud, rows.clone()).await;
+    assert_eq!(names(&status), vec!["DESKTOP-7Q", "Den PC", "Laptop"]);
+
+    // Paired again at the shack, with the code it shows, by the laptop's own key.
+    let status = service.action(Action::LanPair {}).await.unwrap();
+    let shown = status.lan.unwrap().pairing.unwrap().code;
+    let known = PairedStation {
+        station_id: LAN_STATION.into(),
+        device_id: lan::device_id(&laptop_pin),
+        station_key: lan::tls::Identity::new(&station, LAN_STATION.into())
+            .unwrap()
+            .public_key()
+            .to_string(),
+        pkcs8: laptop_pkcs8.clone(),
+        addresses: vec![at.to_string()],
+    };
+    let again = pairing::pair(at, code(&shown).unwrap(), "Laptop", &[known])
+        .await
+        .unwrap();
+    assert_eq!(again.pkcs8, laptop_pkcs8, "paired again with its own key");
+
+    // Removed on the web: both listed, neither approved now.
+    let removed: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|mut row| {
+            row["approved"] = 0.into();
+            row
+        })
+        .collect();
+    *cloud.devices.lock().unwrap() = json!({ "devices": removed }).to_string();
+    let status = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        names(&status),
+        vec!["Den PC", "Laptop"],
+        "removed on the web"
+    );
+    let (welcomed, _) = road::connect(&again, Some(at))
+        .await
+        .expect("still welcomed on the LAN");
+    assert_eq!(welcomed.ids.device, again.device_id);
+    drop(welcomed);
+
+    // Removed at the shack: out.
+    let status = service
+        .action(Action::LanRevoke {
+            device_id: again.device_id.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(names(&status), vec!["Den PC"]);
+    // The station's own refusal of its key, which nothing in front of the station gives.
+    assert_eq!(
+        road::connect(&again, Some(at)).await.err(),
+        Some("notPaired"),
+        "removed at the shack"
+    );
+}
+
 // ---- Removals made offline -----------------------------------------------------------------------
 
 /// ★ A device removed at the shack while the service cannot be told: out at the station at once, as
