@@ -265,12 +265,12 @@ cockpit is on screen and its macro editor is closed, as CW's do; Phone's voice-k
 
 ## Windows you can tear off
 
-Fourteen panels open in their own OS window for a multi-monitor shack. The
+Fifteen panels open in their own OS window for a multi-monitor shack. The
 control sits on the panel's own header — **⧉ Pop out** in most places, **↗ Pop
 out** on Memories, **⧉ Pop out board** on the club band board, and a bare **⧉**
 on Operate and Satellites. Where a panel has no such control, it does not
 detach, and **most sections do not**: there is no pop-out for the logbook,
-awards, stats, Spots, Repeaters, Settings, chat, or the Phone, CW, RTTY, PSK,
+awards, stats, Repeaters, Settings, chat, or the Phone, CW, RTTY, PSK,
 SSTV, APRS and JS8 cockpits.
 
 | Panel | Control | Notes |
@@ -280,6 +280,7 @@ SSTV, APRS and JS8 cockpits.
 | Map | **Map** in the Operate header | Opens with the Parks layer on, independent of the Conditions map's layer picks. |
 | Conditions | ⧉ Pop out, Conditions header | The globe with its own pane grid. |
 | Needed board | ⧉ Pop out, Needed header | A header checkbox, **open at launch**, force-opens it every start. |
+| Spots board | ⧉ Pop out, Spots header | Its filters are its own and last while the window is open: it starts on the board's defaults, not on the main window's picks. |
 | DXpeditions | ⧉ Pop out, DXpeditions header | |
 | Satellites | ⧉ in the Satellites header | |
 | Memories | ↗ Pop out, Memories toolbar | |

@@ -21,7 +21,8 @@ or off any time. It describes itself there as "Every cluster/RBN spot on the air
 second count reading "of *N*" — so you always know how much of the firehose you
 are looking at. Beside it sit the hint "every spot on the air — single-click to
 work it", the search box, and the **Filter** button, which reads **Filtered**
-while any chip filter is set.
+while any chip filter is set. **⧉ Pop out**, at the end, opens the board in a
+window of its own for a second monitor.
 
 **What feeds it.** Two RBN skimmer firehoses — CW and digital — plus the human
 DX-cluster nodes you are connected to — the two Nexus picks, or every node in your
@@ -106,6 +107,9 @@ displayed but not searched.
 Filters, search text, sort column and the drawer's open state all survive leaving
 the section and coming back — they are held for the life of the app run and go
 when you quit.
+The popped-out window keeps a set of its own for as long as it is open: it starts
+on the defaults, and nothing set in it moves the main window's board, or the other
+way round.
 
 ## Core workflows
 
@@ -217,8 +221,9 @@ arrive."
 - **Filters are for this run of the app.** They survive leaving the section and
   coming back, and they are gone at exit — unlike the Needed board's, which persist
   across restarts.
-- **Spots doesn't tear off.** There is no ⧉ pop-out for this board; the Needed
-  board, Conditions and the cockpit band maps detach, this one doesn't.
+- **A popped-out board forgets its filters when you close it.** The window's
+  filters, search and sort are its own and go with the window; the next one opens
+  on the defaults.
 - **Twenty minutes, and nothing before that.** No history, no export, no "what did
   I miss while I was away".
 - **Declaring an unassisted entry empties the board.** The switch stops cluster/RBN

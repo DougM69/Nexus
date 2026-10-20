@@ -3384,7 +3384,9 @@ function App() {
       )
       break
     case 'spots':
-      workspace = <SpotsPanel spots={allSpots} {...spotsBoard} />
+      workspace = (
+        <SpotsPanel spots={allSpots} {...spotsBoard} onPopOut={() => void openPanelWindow('spots')} />
+      )
       break
     case 'awards':
       // Awards + Journey combined: one section, tabbed (Journey + Official Awards).

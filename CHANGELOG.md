@@ -281,6 +281,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shares the contact with your entry, and Enter in either logs it once. **Entry only** on that window's bar switches
   between the entry alone and the whole window. NEEDS-BENCH: Windows, the window pinned over a full-screen program and reopened after a monitor is
   unplugged.
+- **Spots pops out into its own window.** **⧉ Pop out** in the Spots header opens the board in a window of its own,
+  for a second monitor, as the Needed board's does. It is the whole board: the search, the filters, Hide worked and
+  Spot me. Clicking a row tunes the radio to the spot and the main window opens the matching screen, as from the
+  Needed window. The window's filters are its own: it opens with the board's defaults, and closing it forgets them.
+  The Spots box in the popped-out Conditions window now has Spot me too, as it has in the main window.
 
 ### Changed
 - **FT8/FT4: a late reply changes the over already on the air, as in WSJT-X.** When your partner's reply is

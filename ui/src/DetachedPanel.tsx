@@ -85,6 +85,7 @@ import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
 import { MemoriesView } from './components/MemoriesView'
 import { NeededPanel } from './components/NeededPanel'
+import { SpotsPanel } from './components/SpotsPanel'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
 import { BandMap } from './components/BandMap'
 import { ConnectView } from './components/ConnectView'
@@ -362,8 +363,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   }, [settings?.popupNotifications])
 
   // Band-map pop-out: poll the live spot feed. (The worked set follows the log above.) The
-  // dashboard window polls it too, at the main window's 15 s, for its Spots box: the board's feed.
-  const pollsSpots = isBandMap || panel === 'connect'
+  // dashboard window polls it too, at the main window's 15 s, for its Spots box: the board's feed;
+  // and so does the Spots window, for the board itself.
+  const pollsSpots = isBandMap || panel === 'connect' || panel === 'spots'
   useEffect(() => {
     if (!pollsSpots) return
     let live = true
@@ -715,6 +717,32 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     )
   }
 
+  // THIS WINDOW'S SPOTS BOARD, one object for the Spots window below and the dashboard window's
+  // Spots box, as `neededBoard` is shared: a box can never be wired differently from its board. A
+  // row works a spot as a need through this window's Needed work, as App's handleWorkSpot does;
+  // Hide worked's rescue asks the band-scoped board needs App hands its own Spots board; and Spot me
+  // names the station this window follows, once there is a snapshot to read it from (one spot per
+  // press, as everywhere).
+  const spotsBoard = {
+    bandPlan,
+    selectedCall: selected,
+    myGrid: snap?.mygrid ?? '',
+    onSelect,
+    onWork: (s: SpotRow) => void workNeed(spotNeed(s)),
+    needAlerts: boardAlerts,
+    spotMe: snap
+      ? { section: snap.radio.operatingMode, sideband: snap.radio.sideband, tier: snap.link.tier }
+      : undefined,
+  }
+
+  if (panel === 'spots') {
+    return (
+      <DetachedShell>
+        <SpotsPanel spots={allSpots} {...spotsBoard} />
+      </DetachedShell>
+    )
+  }
+
   if (panel === 'memories') {
     // Memories, torn off. The bank lives in localStorage and the store already syncs
     // across windows via the 'storage' event, so edits here appear in the main window
@@ -784,22 +812,10 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
           fieldDay={snap?.fieldDay ?? null}
-          // The Spots, POTA/SOTA and Needed boxes, with THIS window's board paths (`workNeed`,
-          // `huntOta`, its Needed board above): the Spots box a spot as a need, as App's
-          // handleWorkSpot does, and the board's own feeds — the spot poll above, and the same
-          // band-scoped needs App hands its Spots board for Hide worked's rescue. The POTA/SOTA box
-          // waits for the first snapshot, as this window's POTA/SOTA arm does.
-          spotsFeed={{
-            rows: allSpots,
-            board: {
-              bandPlan,
-              selectedCall: selected,
-              myGrid: snap?.mygrid ?? '',
-              onSelect,
-              onWork: (s: SpotRow) => void workNeed(spotNeed(s)),
-              needAlerts: boardAlerts,
-            },
-          }}
+          // The Spots, POTA/SOTA and Needed boxes, with THIS window's boards (its Spots and
+          // Needed boards above, `huntOta`) and the board's own feed, the spot poll above. The
+          // POTA/SOTA box waits for the first snapshot, as this window's POTA/SOTA arm does.
+          spotsFeed={{ rows: allSpots, board: spotsBoard }}
           otaBoard={snap ? { snap, onHunt: huntOta, onSnap: setSnap } : undefined}
           neededBoard={neededBoard}
           // A slot's tabs may rotate here, the dashboard window, and on the TV page — never in the

@@ -21244,6 +21244,9 @@ fn panel_default_inner(slug: &str) -> (f64, f64) {
         // The club band board is set in glance type (it is watched across the tent, not
         // read at the keyboard), so it opens wider and shorter than the generic default.
         "fdclub" => (860.0, 620.0),
+        // The Spots board: its nine columns need 740 CSS px (`PANEL_NATURAL`), so it opens wider
+        // than the generic 760, leaving the comment column room, at the generic height.
+        "spots" => (960.0, 660.0),
         "waterfall" => (900.0, 300.0), // a wide, short monitoring strip
         // The received-picture viewer. Opens big enough to show the widest raster Nexus
         // decodes (PD-290 is 800×616) at 1:1 with its details strip beside the picture,
@@ -21263,6 +21266,11 @@ fn panel_min_inner(slug: &str) -> (f64, f64) {
         // zoom floor that window could only ever show a 646 px box, and the board's
         // natural is 820. 560 raises the ceiling above it.
         "fdclub" => (560.0, 400.0),
+        // The Spots board's nine columns do not survive the generic 420 wide either: at the 65%
+        // zoom floor that window could only ever show a 646 px box, and the columns need 740
+        // (measured in Chrome, `browser-probe --desktop spots`). 490 shows a 754 px box; the
+        // height stays the generic one.
+        "spots" => (490.0, 360.0),
         // Small enough to drop in a corner beside another program (and pin in front): the call,
         // the exchange boxes, Log, the dupe warning and the newest contact, the boxes wrapping to a
         // second row, at the 65% zoom floor. Measured in Chrome (`browser-probe --desktop contestlog`).
@@ -21322,6 +21330,7 @@ async fn open_panel_window(
         "connect" => "Nexus — Conditions (formerly Connect)".to_string(),
         "dxped" => "Nexus — DXpeditions".to_string(),
         "needed" => "Nexus — Needed".to_string(),
+        "spots" => "Nexus — Spots".to_string(),
         "operate" => "Nexus — Operate".to_string(),
         // The contest screen's scoreboard, for whichever contest is picked.
         "fieldday" => "Nexus — Contest".to_string(),
@@ -40414,6 +40423,29 @@ mod tests {
             crate::panel_min_inner(crate::CONTEST_LOGGER_SLUG),
             crate::panel_min_inner("")
         );
+    }
+
+    /// The Spots window (the Spots board popped out, `?panel=spots`): its own name in the title bar
+    /// and the taskbar, and sizes of its own. The size tables name the slug literally (the UI's
+    /// natural-footprint guard parses them); on the generic arms the window would drag down to 420
+    /// wide, where the board's nine columns do not fit even at the 65% zoom floor.
+    #[test]
+    fn the_spots_window_has_its_own_title_and_sizes() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("\nasync fn open_panel_window(")
+            .expect("open_panel_window is defined");
+        let rest = &src[start + 1..];
+        let open = &rest[..rest.find("\n}\n").expect("the end of the function")];
+        assert!(
+            open.contains("\"spots\" => \"Nexus — Spots\".to_string(),"),
+            "the Spots window says what it is in its title bar"
+        );
+        assert_ne!(
+            crate::panel_default_inner("spots"),
+            crate::panel_default_inner("")
+        );
+        assert_ne!(crate::panel_min_inner("spots"), crate::panel_min_inner(""));
     }
 
     /// ⭐ Removing the newest contest contact, clearing every one, and editing one, reach the app
