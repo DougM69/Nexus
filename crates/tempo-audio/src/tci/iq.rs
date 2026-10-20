@@ -1977,11 +1977,11 @@ mod tests {
         assert_eq!(d.pan.status().rows, rows, "no row once left behind");
     }
 
-    /// ⭐ THE SESSION'S END STOPS THE IQ AND EMPTIES THE SCOPE: the client goes while drawing; its
-    /// close sends `iq_stop` after the transmitter's stop and before the close frame, and the RF
-    /// slot is empty at once rather than holding the last row for three seconds.
+    /// ⭐ THE SESSION'S END EMPTIES THE SCOPE AT ONCE: the client goes while drawing, and the RF slot
+    /// is empty straight away rather than holding the last row for three seconds. Its close sends
+    /// `iq_stop` after the transmitter's stop (the session's own test pins that order, as written).
     #[test]
-    fn the_sessions_end_stops_the_iq_and_empties_the_scope() {
+    fn the_sessions_end_empties_the_scope_at_once() {
         let sim = sim_with(SimDialect::expert_sdr3(), &[14_086_000]);
         let d = client(&sim);
         let feed = SpectrumFeed::default();
@@ -1994,19 +1994,6 @@ mod tests {
         assert!(sim.wait_for(WAIT, |log| log
             .iter()
             .any(|l| matches!(l.event, SimEvent::Closed { .. }))));
-        let log = sim.log();
-        let at = |what: &str| {
-            log.iter()
-                .position(|l| matches!(&l.event, SimEvent::Command { text, .. } if text == what))
-                .unwrap_or_else(|| panic!("no {what}"))
-        };
-        // The connection's end, however the simulator saw it: it writes what is due before it
-        // reads, so a close frame followed at once by the socket's close can read as a drop.
-        let closed = log
-            .iter()
-            .position(|l| matches!(l.event, SimEvent::Closed { .. }))
-            .expect("the connection's end");
-        assert!(at("trx:0,false") < at("iq_stop:0") && at("iq_stop:0") < closed);
     }
 
     /// ⭐ IQ THAT STOPS UNDER THE PAN IS SAID AND EMPTIES THE SCOPE; IQ THAT COMES BACK IS DRAWN

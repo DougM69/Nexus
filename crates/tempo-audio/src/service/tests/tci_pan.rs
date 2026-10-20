@@ -191,6 +191,7 @@ fn a_switch_the_handoff_has_not_seen_renews_no_panadapter() {
     });
     let active = s.engine.lock().unwrap().settings().active_radio;
     s.state.handed_over = Some(active + 1);
+    let left = Instant::now();
     s.step();
     assert!(
         s.state.switch_unhanded,
@@ -199,6 +200,17 @@ fn a_switch_the_handoff_has_not_seen_renews_no_panadapter() {
     s.run_until("the panadapter kept drawing", |s| {
         !s.daemon().pan().status().drawing
     });
+    // At the word's time (half a second), long before its IQ stops two seconds after that.
+    assert!(
+        left.elapsed() < Duration::from_millis(1_500),
+        "drawn for {:?} after the switch",
+        left.elapsed()
+    );
+    assert_eq!(
+        s.sent("iq_stop:0"),
+        0,
+        "the IQ is still up: only the drawing stopped"
+    );
     let rows = s.daemon().pan().status().rows;
     s.run(300);
     assert_eq!(

@@ -1068,12 +1068,17 @@ impl IqTap for IqBlocks {
     }
 }
 
-/// ⭐ THE SDR PROGRAM'S IQ REACHES THE PANADAPTER'S TAP, CENTRED WHERE THE PROGRAM SAYS, AND A CLOSE
-/// STOPS IT: after `iq_start` the simulated program's IQ blocks for our transceiver arrive with two
-/// channels at its IQ rate and the centre its burst reported, and closing the connection sends
-/// `iq_stop` after the transmitter's stop and before the close frame.
+/// ⭐ THE SDR PROGRAM'S IQ REACHES THE PANADAPTER'S TAP, CENTRED WHERE THE PROGRAM SAYS: after
+/// `iq_start` the simulated program's IQ blocks for our transceiver arrive with two channels at its
+/// IQ rate and the centre its burst reported.
+///
+/// The close's `iq_stop` is pinned on the manual clock, as written
+/// (`a_close_stops_the_iq_stream_this_session_started_after_the_stops`), not here: the session
+/// drops its socket straight after the close frame, while the program's frames are still arriving
+/// unread, so the socket closes with a reset, and the simulator, which writes before it reads, can
+/// end there without reading the last lines sent.
 #[test]
-fn the_programs_iq_reaches_the_tap_and_a_close_stops_it() {
+fn the_programs_iq_reaches_the_tap_centred_where_the_program_says() {
     let s = sim(SimDialect::expert_sdr3(), []);
     let conn = connect(&s, Config::new(trx0()));
     ready(&conn, true);
@@ -1094,22 +1099,12 @@ fn the_programs_iq_reaches_the_tap_and_a_close_stops_it() {
         );
         assert!(*frames > 0);
     }
-    conn.close();
-    wait_log(&s, "the close", |log| {
-        log.iter()
-            .any(|l| matches!(l.event, SimEvent::Closed { .. }))
-    });
-    let log = s.log();
-    let at = |what: &str| {
-        log.iter()
-            .position(|l| matches!(&l.event, SimEvent::Command { text, .. } if text == what))
-            .unwrap_or_else(|| panic!("no {what}"))
-    };
-    // The connection's end, however the simulator saw it: it writes what is due before it reads,
-    // so a close frame followed at once by the socket's close can read as a drop there.
-    let closed = log
-        .iter()
-        .position(|l| matches!(l.event, SimEvent::Closed { .. }))
-        .expect("the connection's end");
-    assert!(at("trx:0,false") < at("iq_stop:0") && at("iq_stop:0") < closed);
+    assert!(conn.set_iq_tap(None));
+    let handed = tap.got.lock().unwrap().len();
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        tap.got.lock().unwrap().len(),
+        handed,
+        "no tap: nothing handed"
+    );
 }
