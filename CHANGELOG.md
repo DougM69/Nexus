@@ -229,6 +229,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row there once: the station is then on the PC on its network too, with the same keys and no second device at
   Nexus Remote, and from then on it signs in again every 30 days as any other. NEEDS-BENCH: a laptop on a phone hotspot
   that has never been on the shack's network, then the same laptop at home.
+- **Nexus Remote: a signed-in PC paired again with a code stays on the station's network (Beta, test builds).** A PC
+  added by signing in is taken on the station's own network for 30 days from its sign-in, and signing in again needs
+  Nexus Remote. If Nexus Remote cannot be reached, pair that PC again with a code: **Pair a computer** at the shack,
+  then **Pair with a code instead…** on the PC. It then stays on the station's network until you remove it at the
+  shack, like any PC paired with a code, with the internet up or down: its row in Stations on this network no longer
+  asks you to sign in again by a date, and **Operate from this computer** no longer signs in again by itself. Remove
+  such a PC at the shack: removing it on the Nexus Remote web page no longer takes it off the station's network.
+  Signing in from its row later puts it back on the 30 days. If the shack cannot keep the change in its credential
+  store, the pairing is refused and the PC keeps its 30 days. NEEDS-BENCH: a second PC on the shack's network.
 - **Nexus Remote from a second PC: every JS8 switch, and satellite tracks that end when the second PC goes.** HB, Relay,
   HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
