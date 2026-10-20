@@ -269,8 +269,11 @@ fn every_record_fits_the_credential_store() {
         "192.168.100.202:65535",
         "192.168.100.203:65535",
     ];
-    for n in 0..MAX_STATIONS as u8 {
-        stations.keep(&record(&id(n), &widest)).unwrap();
+    let kept: Vec<PairedStation> = (0..MAX_STATIONS as u8)
+        .map(|n| record(&id(n), &widest))
+        .collect();
+    for record in &kept {
+        stations.keep(record).unwrap();
     }
     for n in 0..MAX_STATIONS as u8 {
         let text = store.raw(&format!("lan-station-{}", id(n))).unwrap();
@@ -287,8 +290,14 @@ fn every_record_fits_the_credential_store() {
         writes,
         "a write for the ninth"
     );
-    // The same station paired again replaces its record, with room or without.
-    stations.keep(&record(&id(3), &["10.0.0.3"])).unwrap();
+    // The same station paired again (its id and its key) replaces its record, with room or
+    // without.
+    stations
+        .keep(&PairedStation {
+            addresses: vec!["10.0.0.3".into()],
+            ..copy_of(&kept[3])
+        })
+        .unwrap();
     assert_eq!(stations.list().unwrap().len(), MAX_STATIONS);
     assert_eq!(
         stations.get(&id(3)).unwrap().unwrap().addresses,
@@ -532,6 +541,154 @@ fn reached_on_its_network_a_station_kept_away_is_kept_in_its_place() {
     assert!(store.raw(&format!("lan-away-{AWAY}")).is_none());
     assert!(stations.list_away().unwrap().is_empty());
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The same record, as the store would read it back: a copy (records have no `Clone`).
+fn copy_of(record: &PairedStation) -> PairedStation {
+    PairedStation {
+        station_id: record.station_id.clone(),
+        device_id: record.device_id.clone(),
+        station_key: record.station_key.clone(),
+        pkcs8: record.pkcs8.clone(),
+        addresses: record.addresses.clone(),
+    }
+}
+
+/// ★ No stored station is ever replaced by another (security review, 2026-10-20): a record with
+/// another station key never takes the place of one stored under the same id, whoever names the
+/// id: the station (the id it says while pairing or enrolling: [`Stations::keep`], and at first
+/// contact for one kept away: [`Stations::fold`]) or the service (the id it lists a station by:
+/// [`Stations::keep_away`]). Each is refused, and nothing stored changes, not a record, a key, a
+/// road or the list. A station kept away is folded only as the station whose LAN key was pinned
+/// when it was kept (`notThisStation`), and never over a record on this network, its own included
+/// (`alreadyHere`: it is on this computer already). CONTROL: the same station again, with the same
+/// keys, is kept as before.
+#[test]
+fn no_stored_station_is_replaced_by_one_with_another_key() {
+    let (dir, _) = typed_file("replaced");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json"));
+    // B on this network with its road; A kept by its service id; C on this network with A's key
+    // (paired with a code as well).
+    let b = record(&id(1), &["10.0.0.1"]);
+    stations.keep(&b).unwrap();
+    let b_road = road_to("20000000-0000-4000-8000-0000000000b0");
+    stations.keep_internet(&id(1), &b_road).unwrap();
+    let a = away_record(AWAY, "Shack");
+    let a_road = road_to(AWAY);
+    stations.keep_away(&a, &a_road).unwrap();
+    let c = PairedStation {
+        station_key: a.station_key.clone(),
+        ..record(&id(3), &["10.0.0.3"])
+    };
+    stations.keep(&c).unwrap();
+    let before = store.entries.lock().unwrap().clone();
+    let reached = |station: &str, key: &str| PairedStation {
+        station_id: station.into(),
+        device_id: DEVICE.into(),
+        station_key: key.into(),
+        pkcs8: a.pkcs8.clone(),
+        addresses: vec!["192.168.1.20:42075".into()],
+    };
+    // The station names B's id with another key, or A's service id.
+    let impostor = record(&id(1), &["10.0.0.9"]);
+    assert_eq!(stations.keep(&impostor), Err("notStation"), "B's id");
+    assert_eq!(
+        stations.keep(&record(AWAY, &["10.0.0.9"])),
+        Err("notStation"),
+        "A's id"
+    );
+    // At first contact for A: B's id; A's own service id; a key other than the one pinned for A;
+    // and C's id, which holds A's own key.
+    assert_eq!(
+        stations.fold(AWAY, &reached(&id(1), &a.station_key), 1),
+        Err("notStation"),
+        "fold into B"
+    );
+    assert_eq!(
+        stations.fold(AWAY, &reached(AWAY, &a.station_key), 1),
+        Err("notStation"),
+        "fold into its own service id"
+    );
+    assert_eq!(
+        stations.fold(AWAY, &reached(&id(4), &impostor.station_key), 1),
+        Err("notThisStation"),
+        "another key than A's"
+    );
+    assert_eq!(
+        stations.fold(AWAY, &reached(&id(3), &a.station_key), 1),
+        Err("alreadyHere"),
+        "fold over C"
+    );
+    assert_eq!(
+        *store.entries.lock().unwrap(),
+        before,
+        "a stored station changed (the station's word)"
+    );
+    // A road left under an id with no station kept by it (one a crash left behind).
+    let left = road_to(&id(5));
+    StationVault::save_internet_road(&store, &id(5), &left).unwrap();
+    let before = store.entries.lock().unwrap().clone();
+    assert_eq!(
+        stations.fold(AWAY, &reached(&id(5), &a.station_key), 1),
+        Err("notStation"),
+        "fold over another station's road"
+    );
+    // The service lists a station by B's id (another key), by C's id (C's own key), or by A's
+    // id (another station, or A's station with another road).
+    let listed_as = |station: &str, key: &str| AwayStation {
+        station_id: station.into(),
+        name: "Listed".into(),
+        station_key: key.into(),
+        pkcs8: a.pkcs8.clone(),
+    };
+    assert_eq!(
+        stations.keep_away(&listed_as(&id(1), &a.station_key), &road_to(&id(1))),
+        Err("notStation"),
+        "B's id"
+    );
+    assert_eq!(
+        stations.keep_away(&listed_as(&id(3), &a.station_key), &road_to(&id(3))),
+        Err("alreadyHere"),
+        "C's id, C's key"
+    );
+    assert_eq!(
+        stations.keep_away(&away_record(AWAY, "Club"), &road_to(AWAY)),
+        Err("notStation"),
+        "A's id, another station"
+    );
+    assert_eq!(
+        stations.keep_away(&listed_as(AWAY, &a.station_key), &road_to(AWAY)),
+        Err("notStation"),
+        "A's id, another road"
+    );
+    assert_eq!(
+        *store.entries.lock().unwrap(),
+        before,
+        "a stored station changed"
+    );
+    // CONTROL: the same stations again, with the same keys.
+    stations
+        .keep(&PairedStation {
+            addresses: vec!["10.0.0.5".into()],
+            ..copy_of(&b)
+        })
+        .unwrap();
+    let same_road = InternetRoad {
+        station_id: AWAY.into(),
+        device_id: a_road.device_id.clone(),
+        station_key: a_road.station_key.clone(),
+        pkcs8: a_road.pkcs8.clone(),
+    };
+    stations
+        .keep_away(&listed_as(AWAY, &a.station_key), &same_road)
+        .unwrap();
+    assert_eq!(
+        stations.get(&id(1)).unwrap().unwrap().addresses,
+        ["10.0.0.5"]
+    );
+    // Made only by a fold that went through, which none here may.
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// ★ Forgetting a station kept by its service id removes its record, its road and its place on the

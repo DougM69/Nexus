@@ -32,6 +32,10 @@
 //!   station's LAN key as its own proof vouched for it and this computer's key for that network,
 //!   until this computer first reaches it there ([`Stations::fold`]); then it is kept as any other.
 //!   Until then Operate drives it over the internet road alone (`crate::client_mode`).
+//! - **No station takes another's place.** The id a station says (pairing, enrolling) and the id
+//!   the service lists a station by are their word, not a proof: a record is never written in place
+//!   of one stored under the same id with another key, nor of a station kept by its service id, nor
+//!   of another station's road ([`Stations::keep`], [`Stations::keep_away`], [`Stations::fold`]).
 //! - **No engine, no radio and no operations authority.** This computer's own station, if it has
 //!   one, is out of reach: nothing here names the engine, and the window's page reaches no Nexus
 //!   command (the loopback origin, below).
@@ -241,6 +245,15 @@ fn sound_away(record: &AwayStation) -> bool {
         && ComputerKey::restore(&record.pkcs8).is_some()
 }
 
+/// What is stored under an id that a new record under it could replace, by the key each names: the
+/// station's LAN key of the record on this network and of the record kept by the service's id, and
+/// the station key the internet road was pinned to. An entry that reads as none here is none.
+struct Held {
+    lan: Option<String>,
+    away: Option<String>,
+    road: Option<String>,
+}
+
 /// A station kept by its service id, as the page shows it: that id, its name as the account listed
 /// it, and its LAN key's fingerprint (SHA-256 of the key, lowercase hex), as a station on this
 /// network is shown. Never this computer's key.
@@ -344,10 +357,21 @@ impl Stations {
             .filter(|record| record.station_id == id && sound(record)))
     }
 
+    /// What is stored under `id`, by the key each entry names ([`Held`]).
+    fn held(&self, id: &str) -> Result<Held, &'static str> {
+        Ok(Held {
+            lan: self.get(id)?.map(|record| record.station_key),
+            away: self.away(id)?.map(|record| record.station_key),
+            road: self.internet(id)?.map(|road| road.station_key),
+        })
+    }
+
     /// Keep a station's record: a new pairing, or the same station paired again (its record is
     /// replaced). The record first, then the list, so a crash between them leaves a record nobody
     /// lists, never a listed station with no record. `stationsFull` with [`MAX_STATIONS`] paired
-    /// already, or a record that would not fit one entry.
+    /// already, or a record that would not fit one entry. `notStation` for a record under the id of
+    /// another station kept here (another key, or one kept by its service id): the id is the
+    /// station's own word, and never replaces a station this computer holds.
     pub(crate) fn keep(&self, record: &PairedStation) -> Result<(), &'static str> {
         let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
         if !sound(record) {
@@ -355,6 +379,10 @@ impl Stations {
         }
         if !fits(record) {
             return Err("stationsFull");
+        }
+        let held = self.held(&record.station_id)?;
+        if held.lan.is_some_and(|key| key != record.station_key) || held.away.is_some() {
+            return Err("notStation");
         }
         let mut ids = self.ids()?;
         ids.retain(|id| *id != record.station_id);
@@ -608,7 +636,10 @@ impl Stations {
     /// it there ([`Stations::fold`]). The record and the road first, then the list, as
     /// [`Stations::keep`]. `stationsFull` with [`MAX_STATIONS`] on this computer already, or a record
     /// that would not fit one entry; `notStation` for a record or a road this module could not have
-    /// written, or a road to another station.
+    /// written, or a road to another station. The id is the service's word (a station's proof
+    /// vouches for its keys, not for the id it is listed by), so it never replaces a station kept
+    /// here: `notStation` under the id of one with another key or another road, `alreadyHere` under
+    /// the id of the same station on this network.
     pub(crate) fn keep_away(
         &self,
         record: &AwayStation,
@@ -620,6 +651,19 @@ impl Stations {
         }
         if !fits(record) || !fits(road) {
             return Err("stationsFull");
+        }
+        let held = self.held(&record.station_id)?;
+        if let Some(key) = held.lan {
+            return Err(if key == record.station_key {
+                "alreadyHere"
+            } else {
+                "notStation"
+            });
+        }
+        if held.away.is_some_and(|key| key != record.station_key)
+            || held.road.is_some_and(|key| key != road.station_key)
+        {
+            return Err("notStation");
         }
         let mut ids = self.ids()?;
         ids.retain(|id| *id != record.station_id);
@@ -649,6 +693,11 @@ impl Stations {
     /// where the network's id takes the away one's place (the station is kept the new way from that
     /// write on); then the away entries. A crash before the list leaves the station as it was; one
     /// after it, away entries that no list names.
+    ///
+    /// Only the station kept away, by the LAN key pinned when it was kept (`notThisStation`), and
+    /// never over a station stored under the id its network gave, which is that station's own word:
+    /// a record on this network (`alreadyHere` for its own: it is here already, paired with a code;
+    /// `notStation` for another's), a station kept by its service id, or another station's road.
     pub(crate) fn fold(
         &self,
         away: &str,
@@ -662,12 +711,28 @@ impl Stations {
         if !fits(record) {
             return Err("stationsFull");
         }
+        let kept = self.away(away)?.ok_or("unknownStation")?;
+        if kept.station_key != record.station_key {
+            return Err("notThisStation");
+        }
         let road = self
             .vault
             .internet_road(away)
             .map_err(|_| "storeUnavailable")?
             .filter(sound_road)
             .ok_or("unknownStation")?;
+        // Its own service id included: the station kept away is held there.
+        let held = self.held(&record.station_id)?;
+        if let Some(key) = held.lan {
+            return Err(if key == record.station_key {
+                "alreadyHere"
+            } else {
+                "notStation"
+            });
+        }
+        if held.away.is_some() || held.road.is_some_and(|key| key != road.station_key) {
+            return Err("notStation");
+        }
         let mut ids = self.ids()?;
         ids.retain(|id| *id != record.station_id);
         let place = ids

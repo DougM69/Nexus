@@ -910,6 +910,60 @@ async fn a_code_paired_station_whose_owner_never_signed_in_gets_its_internet_roa
     }
 }
 
+/// ★ Security review (2026-10-20): the service may list a station whose own proof holds under any
+/// id it likes, since the proof vouches for the station's keys and not for the service's id. Listed
+/// under the id of a station this computer holds on its network (another key), the station found
+/// nowhere here is not kept (`notStation`), and the station held under that id keeps its record,
+/// its keys and its road as they were; nothing is kept under that id. CONTROL: the same station
+/// listed under an id of its own is kept by it (`a_station_found_nowhere_here_is_kept_by_…`).
+#[tokio::test]
+async fn a_station_listed_under_another_stations_id_replaces_nothing() {
+    let (lan_key, _) = ComputerKey::generate().unwrap();
+    let (cloud, scratch, store) = (
+        Cloud::start().await,
+        Scratch::new(),
+        StationStore::default(),
+    );
+    let kept = stations(&store, &scratch.0);
+    let (held_key, _) = ComputerKey::generate().unwrap();
+    let (_, held_pkcs8) = ComputerKey::generate().unwrap();
+    kept.keep(&PairedStation {
+        station_id: LAN_STATION.into(),
+        device_id: device_at(7),
+        station_key: held_key.public_key().into(),
+        pkcs8: held_pkcs8,
+        addresses: vec!["192.168.1.99:42075".into()],
+    })
+    .unwrap();
+    kept.keep_internet(
+        LAN_STATION,
+        &crate::lan_client::tests::road_to("20000000-0000-4000-8000-0000000000b0"),
+    )
+    .unwrap();
+    let held = |store: &StationStore| {
+        (
+            store.raw(&format!("lan-station-{LAN_STATION}")),
+            store.raw(&format!("lan-internet-{LAN_STATION}")),
+            store.raw("lan-stations"),
+        )
+    };
+    let before = held(&store);
+    let mut listed = row(
+        &fixture_key("station"),
+        lan_key.public_key(),
+        Some("p"),
+        "owner",
+    );
+    listed["id"] = json!(LAN_STATION);
+    cloud.lists(json!([listed]));
+    let env = env(&cloud, kept.clone(), finding(Vec::new()).0, trusting);
+    let (signed, _) = signing_in(&env, &cloud, None, no_pick(), answering(Vec::new()).0).await;
+    assert_eq!(signed, Err("notStation"));
+    assert_eq!(held(&store), before, "the station held changed");
+    assert!(store.raw(&format!("lan-away-{LAN_STATION}")).is_none());
+    assert!(kept.list_away().unwrap().is_empty());
+}
+
 /// A station on this computer it does not know is no sign-in: the browser is never opened.
 #[tokio::test]
 async fn an_unknown_station_signs_in_nothing() {

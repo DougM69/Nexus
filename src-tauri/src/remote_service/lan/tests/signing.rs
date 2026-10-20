@@ -844,3 +844,101 @@ async fn signing_in_again_proves_the_same_keys_and_tells_only_the_station() {
         }
     }
 }
+
+/// ★ Security review (2026-10-20): a station that says, on first contact, the id of another station
+/// this computer holds (with another key) takes nothing of it. Adding it (`Stations::keep`) and,
+/// for a station kept by its service id, first contact on its network (`Stations::fold`) are each
+/// refused as no station's answer (`notStation`), and the station held under that id keeps its
+/// record, its keys and its road exactly as they were, and the station kept away stays as it was.
+/// CONTROL: the same steps with the station answering under an id of its own add it and fold it
+/// (`one_sign_in_adds_the_station_on_its_network_and_over_the_internet`,
+/// `first_contact_on_its_network_keeps_a_station_kept_away_in_place`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_station_saying_another_stations_id_replaces_nothing() {
+    let Some(station) = standing(LAN_STATION, None).await else {
+        return;
+    };
+    let (cloud, scratch, store) = (
+        Cloud::start().await,
+        Scratch::new(),
+        StationStore::default(),
+    );
+    let kept = stations(&store, &scratch.0);
+    // Another station already on this computer under LAN_STATION, with its road.
+    let (held_key, _) = ComputerKey::generate().unwrap();
+    let (_, held_pkcs8) = ComputerKey::generate().unwrap();
+    kept.keep(&PairedStation {
+        station_id: LAN_STATION.into(),
+        device_id: device_at(7),
+        station_key: held_key.public_key().into(),
+        pkcs8: held_pkcs8,
+        addresses: vec!["192.168.1.99:42075".into()],
+    })
+    .unwrap();
+    let (held_signing, _) = ComputerKey::generate().unwrap();
+    let (_, held_road) = ComputerKey::generate().unwrap();
+    kept.keep_internet(
+        LAN_STATION,
+        &InternetRoad {
+            station_id: "20000000-0000-4000-8000-0000000000b0".into(),
+            device_id: device_at(8),
+            station_key: held_signing.public_key().into(),
+            pkcs8: held_road,
+        },
+    )
+    .unwrap();
+    let held = |store: &StationStore| {
+        (
+            store.raw(&format!("lan-station-{LAN_STATION}")),
+            store.raw(&format!("lan-internet-{LAN_STATION}")),
+        )
+    };
+    let before = held(&store);
+    let (signing_key, _) = ComputerKey::generate().unwrap();
+    cloud.lists(json!([row(
+        signing_key.public_key(),
+        &station.key,
+        Some("p"),
+        "owner"
+    )]));
+    // Adding it: found by name, it says LAN_STATION.
+    let adding = env(
+        &cloud,
+        kept.clone(),
+        finding(vec![advert(station.at, &station.key)]).0,
+        trusting,
+    );
+    let (signed, _) = signing_in(&adding, &cloud, None, no_pick(), answering(Vec::new()).0).await;
+    assert_eq!(signed, Err("notStation"), "adding");
+    assert_eq!(held(&store), before, "adding replaced the station held");
+    assert_eq!(station.heard.lock().unwrap().len(), 1, "premise: enrolled");
+    // Kept by its service id from elsewhere, then first contact: it says LAN_STATION again.
+    let elsewhere = env(&cloud, kept.clone(), finding(Vec::new()).0, trusting);
+    let (signed, _) =
+        signing_in(&elsewhere, &cloud, None, no_pick(), answering(Vec::new()).0).await;
+    assert!(signed.is_ok_and(|signed| signed.away), "premise: kept away");
+    let home = env(
+        &cloud,
+        kept.clone(),
+        finding(vec![advert(station.at, &station.key)]).0,
+        trusting,
+    );
+    let (signed, _) = signing_in(
+        &home,
+        &cloud,
+        Some(SERVICE_STATION.into()),
+        no_pick(),
+        answering(Vec::new()).0,
+    )
+    .await;
+    assert_eq!(signed, Err("notStation"), "first contact");
+    assert_eq!(
+        held(&store),
+        before,
+        "first contact replaced the station held"
+    );
+    assert!(
+        kept.away(SERVICE_STATION).unwrap().is_some(),
+        "kept away as it was"
+    );
+}
