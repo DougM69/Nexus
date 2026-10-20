@@ -197,7 +197,9 @@ fn main() {
             if want.is_empty() {
                 println!("\nREFUSED: {} has no audio {kind} device set.", p.name);
                 refused = true;
-            } else if let Some(i) = list.iter().position(|d| d.name == want) {
+            } else if let Some(i) = list.iter().position(|d| d.name.trim() == want) {
+                // `want` is trimmed, so the listed name is too: macOS can offer a codec as
+                // `USB Audio CODEC `, and the open path finds it whatever the ends of either name.
                 println!("\n{} audio {kind}: {want:?} → device [{i}]", p.name);
             } else {
                 println!(
