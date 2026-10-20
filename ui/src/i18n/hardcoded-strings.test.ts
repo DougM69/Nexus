@@ -261,6 +261,7 @@ const MIGRATED = [
   'components/SpotLegend.tsx',
   'components/BandMap.tsx',
   'components/ContestSpotMe.tsx',
+  'components/SpotsSpotMe.tsx',
   'features/freqMarkers.ts',
   'components/PounceBanner.tsx',
   'components/WatchlistPanel.tsx',

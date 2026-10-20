@@ -21,6 +21,7 @@ import { t } from '../i18n'
 import { spotMarkWords, spotMultTag, useContestSpotMarker } from '../features/contestSpotMarks'
 import { useWatchMatch } from '../watchlist'
 import { WatchTile } from './WatchTile'
+import { SpotsSpotMe, type SpotMeStation } from './SpotsSpotMe'
 
 type SortKey = 'age' | 'call' | 'entity' | 'state' | 'band' | 'freq' | 'mode'
 
@@ -113,6 +114,10 @@ export interface SpotsPanelProps {
    *  and dimmed and says DUPE, a row that would be a new multiplier says MULT
    *  (`features/contestSpotMarks.ts`). Absent = no marks. */
   fieldDay?: FieldDayStatus | null
+  /** The station, for the Spot me in the board's head (SpotsSpotMe.tsx: one cluster spot of the
+   *  operator's own call per press, its comment "CQ <mode>"). App gives it to every host of the board;
+   *  absent = no Spot me. */
+  spotMe?: SpotMeStation
 }
 
 /**
@@ -177,7 +182,7 @@ function useSessionState<T>(
   return [v, setV]
 }
 
-export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, canWork, onPopOut, myGrid = '', needAlerts, pane, fieldDay }: SpotsPanelProps) {
+export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, canWork, onPopOut, myGrid = '', needAlerts, pane, fieldDay, spotMe }: SpotsPanelProps) {
   const control = useStationControl()
   const marker = useContestSpotMarker(fieldDay)
   // Entity centres — the only geometry the firehose carries (a spot has no grid).
@@ -473,6 +478,9 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
           </svg>{' '}
           {hasActiveFilters ? t('spots.filter.toggle.active') : t('spots.filter.toggle.idle')}
         </button>
+        {/* Spot me: one cluster spot of this station per press (SpotsSpotMe.tsx). Not on a page that
+            only watches. */}
+        {control && spotMe && <SpotsSpotMe {...spotMe} />}
         {control && onPopOut && (
           <button type="button" className="np-popout" onClick={onPopOut} title={t('spots.popOut.title')}>
             {t('spots.popOut.label')}
