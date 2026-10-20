@@ -61,7 +61,7 @@
 //!   ([`Engine::tci_release`]).
 //! - The radio loop's tick: every station gate, Nexus's own key (a tune or the operator's PTT takes
 //!   the transmitter), the switch, the section, the ceiling and the gap ([`Engine::poll_tci`]).
-//! - Turning "Programs on TCI may transmit" off ([`Engine::set_tci_transmit`]).
+//! - A settings save turning "Programs on TCI may transmit" off ([`Engine::apply_settings`]).
 //!
 //! ## One owner
 //!
@@ -111,8 +111,6 @@ struct Key {
 
 /// The TCI server's programs as the engine holds them.
 pub(super) struct TciState {
-    /// "Programs on TCI may transmit".
-    switch: bool,
     /// The program's key that owns the transmitter.
     key: Option<Key>,
     /// The program whose tune carrier is up, while one is.
@@ -132,7 +130,6 @@ pub(super) struct TciState {
 impl Default for TciState {
     fn default() -> Self {
         Self {
-            switch: false,
             key: None,
             tune_by: None,
             over: MicLatch::new(TCI_OVER),
@@ -148,18 +145,12 @@ impl Default for TciState {
 impl Engine {
     // ── The switch ───────────────────────────────────────────────────────────────────────────
 
-    /// "Programs on TCI may transmit": off until the app sets it from the station's setting, which
-    /// only the shack can change. Turning it off ends every program's key, over and tune at once.
-    pub fn set_tci_transmit(&mut self, on: bool) {
-        self.tci.switch = on;
-        if !on {
-            self.drop_tci_all();
-        }
-    }
-
-    /// Whether programs on TCI may transmit.
+    /// Whether programs on TCI may transmit: the station's own setting, "Programs on TCI may
+    /// transmit" (`Settings::tci_server_tx`), off by default and changed only at the shack. One
+    /// copy, read at every verdict and every tick; a save that turns it off ends every program's
+    /// key, over and tune at once ([`Self::apply_settings`]).
     pub fn tci_transmit(&self) -> bool {
-        self.tci.switch
+        self.settings.tci_server_tx
     }
 
     // ── The verdict, the keys and their ends ─────────────────────────────────────────────────
@@ -167,7 +158,7 @@ impl Engine {
     /// ⛔ THE VERDICT (§3.2): may `program` transmit `ask` now? `Ok`, or the first gate that fails,
     /// in the order of the module header's table.
     fn tci_verdict(&self, program: u64, ask: Ask, audio_started: bool) -> Result<(), Refusal> {
-        if !self.tci.switch {
+        if !self.tci_transmit() {
             return Err(Refusal::Switch);
         }
         if self.tx_stop_hold {
@@ -236,7 +227,7 @@ impl Engine {
     /// The station's own gates on a program's key, re-checked on every tick: the switch, TX armed,
     /// no Stop held, no watchdog trip, no context hold.
     fn tci_may_transmit(&self) -> bool {
-        self.tci.switch
+        self.tci_transmit()
             && self.tx_enabled
             && !self.tx_stop_hold
             && !self.tx_watchdog
@@ -308,8 +299,8 @@ impl Engine {
     /// what its over has accepted plays out, and the loop's deadline unkeys after it; a microphone
     /// key ends now. From any other program: whatever is on the air stops, as WSJT-X's UDP HaltTx
     /// stops it ([`Self::halt_tx`], which holds until the operator's arm); with nothing on the air,
-    /// nothing. Never gated.
-    pub fn tci_release(&mut self, program: u64) {
+    /// nothing. Never gated. `true` when it halted what was on the air, for the connection log.
+    pub fn tci_release(&mut self, program: u64) -> bool {
         match self.tci.key {
             Some(k) if k.program == program => {
                 if k.mic {
@@ -317,16 +308,22 @@ impl Engine {
                 } else {
                     self.release_tci_over();
                 }
+                false
             }
-            _ if self.tuning && self.tci.tune_by == Some(program) => self.set_tune(false),
+            _ if self.tuning && self.tci.tune_by == Some(program) => {
+                self.set_tune(false);
+                false
+            }
             _ => {
-                if self.on_air() {
-                    tempo_core::applog::info(
-                        "tx",
-                        &format!("TCI program {program} released a key it did not hold: halting"),
-                    );
-                    self.halt_tx();
+                if !self.on_air() {
+                    return false;
                 }
+                tempo_core::applog::info(
+                    "tx",
+                    &format!("TCI program {program} released a key it did not hold: halting"),
+                );
+                self.halt_tx();
+                true
             }
         }
     }
@@ -673,7 +670,7 @@ mod tests {
         e.set_license_class("extra");
         e.set_operating_mode("phone", false);
         e.set_frequency(14.250, "20m", "USB");
-        e.set_tci_transmit(true);
+        e.settings.tci_server_tx = true;
         assert!(e.tx_enabled(), "premise: entering Phone arms TX");
         e
     }
@@ -692,6 +689,13 @@ mod tests {
     fn trip(e: &mut Engine) {
         e.tx_watchdog = true;
         e.tx_enabled = false;
+    }
+
+    /// The operator's settings save with "Programs on TCI may transmit" set to `on`.
+    fn save_tci_transmit(e: &mut Engine, on: bool) {
+        let mut s = e.settings().clone();
+        s.tci_server_tx = on;
+        e.apply_settings(s);
     }
 
     /// An engine, the radio loop's monotonic clock and the wall clock the loop reads.
@@ -806,7 +810,7 @@ mod tests {
             ),
             (
                 "the transmit switch is off",
-                |e| e.set_tci_transmit(false),
+                |e| e.settings.tci_server_tx = false,
                 Try::Over(true),
                 Err(Refusal::Switch),
             ),
@@ -1068,8 +1072,12 @@ mod tests {
             ("P1 tx_enable", |s| {
                 let _ = s.e.tci_tx_enable(P1, true);
             }),
-            ("P1 release", |s| s.e.tci_release(P1)),
-            ("P2 release", |s| s.e.tci_release(P2)),
+            ("P1 release", |s| {
+                s.e.tci_release(P1);
+            }),
+            ("P2 release", |s| {
+                s.e.tci_release(P2);
+            }),
             ("P1 stop;", |s| s.e.tci_end_own(P1)),
             ("P2 lost", |s| s.e.tci_disconnected(P2)),
             ("P1 tune on", |s| {
@@ -1096,7 +1104,7 @@ mod tests {
             ("launch, TX off", || {
                 let mut e = Engine::new("KD9TAW", "EN52", 0);
                 e.set_license_class("extra");
-                e.set_tci_transmit(true);
+                e.settings.tci_server_tx = true;
                 e
             }),
             ("Phone, armed", phone),
@@ -1184,7 +1192,7 @@ mod tests {
             ),
             (
                 "the switch off",
-                |e| e.set_tci_transmit(false),
+                |e| save_tci_transmit(e, false),
                 Refusal::Switch,
             ),
         ];
@@ -1206,7 +1214,7 @@ mod tests {
                 "{name}: a key after it"
             );
             if refusal == Refusal::Switch {
-                s.e.set_tci_transmit(true);
+                save_tci_transmit(&mut s.e, true);
             } else {
                 s.e.set_tx_enabled_by_operator(true);
             }
@@ -1216,6 +1224,48 @@ mod tests {
                 "{name}: control, after the operator's arm"
             );
         }
+    }
+
+    /// ⛔ THE SWITCH IS THE STATION'S SETTING ("Programs on TCI may transmit", off on a fresh
+    /// station), and the operator's save that turns it off ends every program's over, microphone
+    /// key and tune at once, hard. CONTROL: a save that leaves it on ends nothing.
+    #[test]
+    fn the_transmit_switch_is_the_stations_setting_and_a_save_turning_it_off_ends_every_key() {
+        assert!(
+            !Engine::new("KD9TAW", "EN52", 0).tci_transmit(),
+            "programs may transmit on a fresh station"
+        );
+        let mut e = phone();
+        assert!(e.tci_transmit(), "the switch is not the station's setting");
+        e.settings.tci_server_tx = false;
+        assert!(!e.tci_transmit(), "the switch is not the station's setting");
+
+        let mut s = Scene::new(phone());
+        s.keyed();
+        let mut other = s.e.settings().clone();
+        other.tx_watchdog_min += 1;
+        s.e.apply_settings(other);
+        assert!(
+            s.e.tci_over_keyed() && !s.e.take_tci_abort(),
+            "control: a save that left the switch on ended the over"
+        );
+        save_tci_transmit(&mut s.e, false);
+        assert!(!s.e.tci_over_armed(), "the save left the over on");
+        assert!(s.e.take_tci_abort(), "no abort to flush and unkey");
+        assert_eq!(s.e.tci_owner(), None);
+
+        let mut e = phone();
+        assert_eq!(try_key(&mut e, P1, Try::Mic), Ok(()));
+        assert!(e.manual_ptt(), "premise: the microphone is keyed");
+        save_tci_transmit(&mut e, false);
+        assert!(!e.manual_ptt(), "the save left the microphone keyed");
+        assert_eq!(e.tci_owner(), None, "the save left the microphone's key");
+
+        let mut e = phone();
+        assert_eq!(try_key(&mut e, P1, Try::Tune), Ok(()));
+        save_tci_transmit(&mut e, false);
+        assert!(!e.tuning(), "the save left the program's tune up");
+        assert_eq!(e.tci_owner(), None);
     }
 
     /// A stop ends a program's microphone key and its tune as well, at once.
@@ -1427,7 +1477,7 @@ mod tests {
         s.keyed();
         let (mut out, dropped) = s.play(20, 220, marker);
         assert_eq!(dropped, None);
-        s.e.tci_release(P1);
+        assert!(!s.e.tci_release(P1), "the owner's release said it halted");
         assert!(s.e.tci_over_keyed(), "the release cut the over at once");
         let (rest, ended) = s.drain(220);
         out.extend(rest);
@@ -1457,7 +1507,7 @@ mod tests {
     fn another_programs_release_stops_what_is_on_the_air() {
         let mut s = Scene::new(phone());
         s.keyed();
-        s.e.tci_release(P2);
+        assert!(s.e.tci_release(P2), "said it halted nothing");
         assert!(!s.e.tci_over_armed(), "P1's over went on");
         assert!(s.e.take_tci_abort(), "no abort");
         assert!(
@@ -1467,16 +1517,16 @@ mod tests {
 
         let mut e = phone();
         assert_eq!(try_key(&mut e, P1, Try::Mic), Ok(()));
-        e.tci_release(P2);
+        assert!(e.tci_release(P2), "said it halted nothing");
         assert!(!e.manual_ptt(), "P1's microphone key went on");
 
         let mut e = phone();
         e.app.radio.transmitting = true; // Nexus's own over
-        e.tci_release(P2);
+        assert!(e.tci_release(P2), "said it halted nothing");
         assert!(!e.tx_enabled(), "Nexus's own over went on");
 
         let mut e = phone();
-        e.tci_release(P2);
+        assert!(!e.tci_release(P2), "control: said it halted");
         assert!(
             e.tx_enabled() && !e.tx_stop_hold,
             "control: with nothing on the air a release stopped the station"

@@ -6512,6 +6512,9 @@ impl Engine {
         // Whether contest mode was on before this save: the save that turns it off sends what
         // it held ([`Self::release_contest_uploads`]).
         let contest_was_on = self.settings.fd_active;
+        // Whether programs on TCI could transmit before this save: the save that turns it off ends
+        // every program's key, over and tune at once (`engine/tci.rs`).
+        let tci_tx_was_on = self.tci_transmit();
         // Rebind identity IN PLACE (not a fresh AppState) so editing the callsign or
         // grid in Settings — or a GPS/UDP grid update routed through a save — does
         // NOT wipe conversation history, the `*` band feed, or the roster.
@@ -6957,6 +6960,11 @@ impl Engine {
         let scope_now = self.settings.yaesu_rf_scope;
         if scope_was_on && !scope_now {
             self.clear_scope_state();
+        }
+        // "Programs on TCI may transmit" going off is a stop for every program: what one keyed ends
+        // here, hard, not at the radio loop's next look at the switch.
+        if tci_tx_was_on && !self.tci_transmit() {
+            self.drop_tci_all();
         }
         // Another join address (or hosting switched on or off): what the link line knew was
         // about another host.
@@ -24808,6 +24816,14 @@ contact yourself."
         }
         self.tx_watchdog = false;
         self.tx_watchdog_start = None;
+    }
+
+    /// For tests outside this crate: a watchdog trip as the transmit paths make one (`plan_tx`,
+    /// `poll_rtty_one`), tripped and TX off. Their clock counts in minutes, which no test waits out.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn trip_tx_watchdog_for_test(&mut self) {
+        self.tx_watchdog = true;
+        self.tx_enabled = false;
     }
 
     /// T/R slot length (seconds) for the active tier: DX1 = 15 s; the native

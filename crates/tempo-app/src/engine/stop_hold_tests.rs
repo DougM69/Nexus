@@ -190,7 +190,7 @@ fn a_tci_program_after_stop_tx_arms_nothing_and_the_stop_still_holds() {
     let mut e = station();
     e.set_operating_mode("phone", true);
     e.set_frequency(14.250, "20m", "USB");
-    e.set_tci_transmit(true);
+    e.settings.tci_server_tx = true;
     assert_eq!(
         e.tci_key(1, KeyKind::Mic(Mic::Selected), false),
         Ok(()),
@@ -508,7 +508,7 @@ fn a_tci_program_after_a_watchdog_trip_arms_nothing_and_leaves_the_trip() {
     let mut e = Engine::new("K1ABC", "EN61", 0);
     e.set_license_class("general");
     rtty_watchdog_tripped(&mut e);
-    e.set_tci_transmit(true);
+    e.settings.tci_server_tx = true;
     let r = e.tci_tune_on(1);
     let radio = e.snapshot().radio;
     assert_eq!(
