@@ -38,6 +38,7 @@
 import type { SerialPortInfo } from './api'
 import type { AudioDevices } from './types'
 import { t } from './i18n'
+import { TCI_DEFAULT_HOST, TCI_DEFAULT_PORT } from './tci'
 
 export type RigCheck = { level: 'error' | 'warning'; message: string }
 
@@ -50,6 +51,9 @@ export interface RigFormFacts {
   /** The Icom network connection's radio address and network user. */
   icomLanHost?: string
   icomLanUser?: string
+  /** The TCI connection's server address and port. */
+  tciHost?: string
+  tciPort?: number
   /** Chosen sound-card device NAMES, for the same-radio check. Absent = nothing chosen yet. */
   audioIn?: string
   audioOut?: string
@@ -99,6 +103,8 @@ export function checkRigForm(
   if (form.rigConn === 'network') return out
   // Nor does the Icom network connection: it has its own facts to check.
   if (form.rigConn === 'icomlan') return checkIcomLan(form, icomLanPasswordSaved)
+  // Nor does TCI: no serial port and no Hamlib model, an SDR program's server instead.
+  if (form.rigConn === 'tci') return checkTci(form)
   // Nor does an OmniRig one, and for a stronger reason: OmniRig owns the rig type, the COM
   // port and the baud, so every field these checks read belongs to another program. Blocking a
   // save on "no serial port chosen" would make a correct OmniRig configuration unsaveable —
@@ -243,6 +249,27 @@ function checkIcomLan(form: RigFormFacts, passwordSaved?: boolean | null): RigCh
   }
   if (passwordSaved === false) {
     out.push({ level: 'warning', message: t('settings.radio.check.icomLanPassword') })
+  }
+  return out
+}
+
+/**
+ * The TCI connection's checks: an address and a port, because without either Nexus has nowhere to
+ * connect (`tci_reachable` in the settings asks the same two things). An address with a scheme, a
+ * path or a space in it is not one: the port has its own box. Nothing here asks about the model,
+ * which the connection sets itself.
+ */
+function checkTci(form: RigFormFacts): RigCheck[] {
+  const out: RigCheck[] = []
+  // An absent field is what the form shows for it, the default: only a cleared one is missing.
+  const host = (form.tciHost ?? TCI_DEFAULT_HOST).trim()
+  if (host === '' || /[\s/]/.test(host)) {
+    // The example is an invariant token: an address, never catalog text.
+    out.push({ level: 'error', message: t('settings.radio.check.tciHost', { example: '127.0.0.1' }) })
+  }
+  const port = form.tciPort ?? TCI_DEFAULT_PORT
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    out.push({ level: 'error', message: t('settings.radio.check.tciPort', { example: 50001 }) })
   }
   return out
 }

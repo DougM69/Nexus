@@ -4481,8 +4481,10 @@ export interface Settings {
    *  exactly as `baud` is. Full scale for the Phone cockpit's analog PO arc. */
   ratedWatts?: number
   /** Rig connection: "serial" (default), "network" (rigctld → rigAddr over TCP, e.g. a
-   * FlexRadio via SmartSDR), or "omnirig" (VE3NEA's Windows COM rig-control server drives the
-   * radio; Nexus serves the rigctld protocol over it — Windows only). */
+   * FlexRadio via SmartSDR), "omnirig" (VE3NEA's Windows COM rig-control server drives the
+   * radio; Nexus serves the rigctld protocol over it — Windows only), "icomlan" (the Icom
+   * network connection), or "tci" (an SDR program's TCI server at tciHost:tciPort; the radio
+   * stores TCI's own model, `TCI_RIG_MODEL` in tci.ts). */
   rigConn: string
   /** Network rig address host:port when rigConn === "network" (e.g. "192.168.1.50:4992"). */
   rigAddr: string

@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **TCI connection (Beta): Nexus can talk to an SDR program's own TCI server.** In Settings ▸ Radio ▸ Rig & CAT,
+  Connection has a new choice, **TCI (SDR program) — Beta**, for ExpertSDR3 (SunSDR), Thetis 2.10.3.14 and later,
+  and piHPSDR. You set the program's address and TCI port; there is no Rig Model, rigctld or virtual COM port to set
+  up. **Find TCI server** looks for the program at that address (the port you typed, then 50001 and 40001) and says
+  what answered, such as the program's version and the radio it drives; it only reads, and never transmits or
+  changes the radio. The setup wizard looks for a TCI server on this computer when it opens and offers it, and has an
+  **SDR program (TCI)** choice. For now the connection carries the dial and mode only: Nexus does not transmit on it
+  yet, and audio, the program's panadapter and spots over TCI come in a later update (their switches are in Settings
+  already and are kept with the radio). The SDR-program setup guide no longer says Nexus cannot use TCI.
 - **Every contest log numbers its contacts 1, 2, 3…** The contest screen's log and the logger window's last
   contacts show each contact's number in a first column, in every contest. In a contest that sends a serial
   (Sweepstakes, CQ WPX) the number is the serial that contact was sent; in every other contest it counts the

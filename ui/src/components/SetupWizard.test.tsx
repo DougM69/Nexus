@@ -11,6 +11,7 @@ vi.mock('../api', () => ({
   importAdif: vi.fn(),
   detectRigs: vi.fn(() => Promise.resolve([])),
   discoverFlex: vi.fn(() => Promise.resolve([])),
+  tciProbe: vi.fn(() => Promise.resolve({ host: '127.0.0.1', resolved: true, tried: [], found: null })),
   getAudioDevices: vi.fn(() => Promise.resolve({ input: [], output: [] })),
   getRigModels: vi.fn(() => Promise.resolve([])),
   getAllRigModels: vi.fn(() => Promise.resolve([])),

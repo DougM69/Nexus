@@ -29,6 +29,7 @@
 //! | [`dialect`] | which [`Dialect`] a server speaks, learned from its init burst and pinned at `ready;` |
 //! | [`admission`] | the server-side checks a key must pass, and the only value a key renders from |
 //! | [`session`] | one connection: handshake to `ready;`, the model, keys and their readback, stops, keepalive, the close |
+//! | [`probe`] | "Find TCI server": one connection that reads a server's handshake to `ready;` and closes, writing nothing |
 //! | [`reconnect`] | what to do when a connection fails or a session ends |
 //!
 //! # The transmit rule
@@ -54,6 +55,7 @@ pub mod admission;
 pub mod dialect;
 pub mod frame;
 pub mod model;
+pub mod probe;
 pub mod reconnect;
 pub mod server;
 pub mod session;

@@ -6855,11 +6855,61 @@ export const EN = {
     "Enter the radio's IPv4 address, for example {{example}}.",
   'settings.radio.check.icomLanUser': 'No network user is set, so the radio will refuse the login.',
   'settings.radio.check.icomLanPassword': 'No network password is saved for this radio yet: type it and press Set.',
+  // The TCI connection (an SDR program's own TCI server). Program, radio and protocol names
+  // (ExpertSDR3, Thetis, piHPSDR, SunSDR, TCI, rigctld), addresses and port numbers are tokens.
+  // `{{server}}` is what the server said about itself, as sent; `{{address}}` is host:port.
+  'settings.rigControl.conn.tci': 'TCI (SDR program) — Beta',
+  'settings.rigControl.tci.hint':
+    "<b>Beta.</b> Nexus connects to the SDR program's own TCI server and reads and sets the dial and mode through it, with no rigctld and no virtual COM port. <b>Not ready yet:</b> receive audio, transmitting, the panadapter and spots over TCI. Until they are, Nexus does not transmit on this connection, its audio comes from the sound card under Audio, and the three switches at the end are kept for later. Turn the TCI server on in the program first.",
+  'settings.rigControl.tci.host.label': 'SDR program address',
+  'settings.rigControl.tci.host.hint':
+    'The computer the SDR program runs on: <b>127.0.0.1</b> is this one. TCI has no password and no encryption, so reach another computer only on your own network.',
+  'settings.rigControl.tci.port.label': 'TCI port',
+  'settings.rigControl.tci.port.hint':
+    "The port in the program's TCI settings: 50001 in ExpertSDR3 and Thetis as they come, 40001 in piHPSDR. <b>Find TCI server</b> tries both.",
+  'settings.rigControl.tci.find.label': 'TCI server',
+  'settings.rigControl.tci.find.action': 'Find TCI server',
+  'settings.rigControl.tci.find.busy': 'Looking…',
+  'settings.rigControl.tci.find.title':
+    "Look for the SDR program's TCI server at this address: this port first, then 50001 and 40001. It only reads what the server says about itself; it never transmits and never changes the radio.",
+  'settings.rigControl.tci.find.searching': 'Looking for a TCI server at {{host}}…',
+  'settings.rigControl.tci.find.found': 'Found a TCI server at {{address}}: {{server}}.',
+  'settings.rigControl.tci.find.unnamed': 'it does not give its name',
+  'settings.rigControl.tci.find.trxCount': {
+    one: 'It has {{count}} transceiver.',
+    other: 'It has {{count}} transceivers.',
+  },
+  'settings.rigControl.tci.find.unknownProgram':
+    'Nexus does not know this program yet, so it treats it as a plain TCI server.',
+  'settings.rigControl.tci.find.portSet': 'TCI port is now {{port}}: Save to keep it.',
+  'settings.rigControl.tci.find.nexus': "Port {{port}} is Nexus's own TCI server, not an SDR program.",
+  'settings.rigControl.tci.find.notTci': 'Something answered on port {{port}}, but it is not a TCI server.',
+  'settings.rigControl.tci.find.noReady': 'Port {{port}} answered but did not finish the TCI handshake.',
+  'settings.rigControl.tci.find.none':
+    'No TCI server answered at {{host}} (ports tried: {{ports}}). Start the SDR program, turn its TCI server on, and try again.',
+  'settings.rigControl.tci.find.badHost': 'This computer cannot find {{host}}. Check the SDR program address.',
+  'settings.rigControl.tci.find.failed': 'Could not look for a TCI server: {{error}}',
+  'settings.rigControl.tci.trx.label': 'Transceiver',
+  'settings.rigControl.tci.trx.hint': "Which of the program's transceivers this radio is. 1 is the first; most stations use 1.",
+  'settings.rigControl.tci.dialect.label': 'SDR program',
+  'settings.rigControl.tci.dialect.auto': 'Automatic (recommended)',
+  'settings.rigControl.tci.dialect.hint':
+    'Leave it on Automatic: Nexus learns the program from what it does. Name the program only if Nexus reads it wrongly; naming one fills in the port it comes set to.',
+  'settings.rigControl.tci.audio.label': 'Audio over TCI',
+  'settings.rigControl.tci.audio.hint':
+    "Receive audio from the program, and Nexus's transmit audio to it, over TCI instead of a virtual audio cable.",
+  'settings.rigControl.tci.pan.label': 'SDR panadapter in the scope',
+  'settings.rigControl.tci.pan.hint': "Show the SDR program's own spectrum in Nexus's scope and waterfall.",
+  'settings.rigControl.tci.spots.label': 'Spots on the SDR panadapter',
+  'settings.rigControl.tci.spots.hint':
+    "Mark the stations you still need on the program's panadapter, 100 at most. Clicking one there tunes Nexus to it; it never transmits.",
+  'settings.radio.check.tciHost': "Enter the SDR program's address on its own, such as {{example}} when it runs on this computer.",
+  'settings.radio.check.tciPort': 'Enter the TCI port, a number from 1 to 65535: {{example}} as ExpertSDR3 and Thetis come.',
   'operate.strip.state.connectionNoTx': 'No TX on this connection',
   'settings.rigControl.conn.omnirig': 'OmniRig (the radio is set up in OmniRig)',
   'settings.rigControl.conn.omnirig.unavailable': 'OmniRig — Windows only',
   'settings.rigControl.conn.hint':
-    'Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld. The <b>Rig Model</b> still picks which CAT dialect is spoken — for an SDR, choose the program you launched, not the board inside the radio. An Icom on its <b>LAN port</b> needs a program in between, because Icom\'s network protocol is its own: with wfview, turn on its rigctld server and point Nexus at it with Network and Rig Model <b>NET rigctl</b>; with RS-BA1, choose Serial, your Icom\'s own model and the virtual COM port RS-BA1 creates.',
+    'Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld. TCI for an SDR program\'s own TCI server (ExpertSDR3, Thetis, piHPSDR), with no Rig Model to pick. The <b>Rig Model</b> still picks which CAT dialect is spoken — for an SDR, choose the program you launched, not the board inside the radio. An Icom on its <b>LAN port</b> needs a program in between, because Icom\'s network protocol is its own: with wfview, turn on its rigctld server and point Nexus at it with Network and Rig Model <b>NET rigctl</b>; with RS-BA1, choose Serial, your Icom\'s own model and the virtual COM port RS-BA1 creates.',
   'settings.rigControl.conn.omnirig.hint':
     "<b>OmniRig</b> hands rig control to VE3NEA's OmniRig server, the one most Windows logging and contest programs already use. Set the radio up <em>in OmniRig</em> — rig type, COM port, baud — and Nexus talks to it there, so the Rig Model, Serial Port and Baud above are not used. {{availability}}",
   'settings.rigControl.conn.omnirig.unavailable.why':
@@ -6883,7 +6933,7 @@ export const EN = {
   'settings.rigControl.netAddr.hint':
     "host:port. For a Flex: the WSJT-X-proven path is the SmartSDR CAT app on THIS PC — its DEFAULT TCP port 5002 is directed at slice A, so 127.0.0.1:5002 with the FLEX-6xxx / 8xxx model works out of the box; audio rides DAX. Multi-slice: SmartSDR CAT's per-slice ports are B=60001, C=60002, D=60003 — Nexus drives ONE slice, so enter the port of the slice you run digital on. (Direct-to-radio :4992 needs Hamlib's experimental native model and failed on real hardware.) Other rigs: a remote rigctld's host:port with their normal model.",
   'settings.rigControl.netAddr.sdrPorts':
-    'Running an SDR program? Read the port out of the program, don\'t guess it: <b>Thetis</b> → Setup ▸ Serial/Network/Midi CAT ▸ <em>TCP/IP CAT Server</em> (its own box, factory 13013 — not the <em>TCI Server</em> box beside it, factory 50001; TCI is a different protocol and the Hamlib we ship has no backend for it, so pick a CAT profile such as "Thetis" and use the CAT server port); <b>SmartSDR CAT</b> → 5002; <b>piHPSDR</b> → 19090. Whatever it shows, type that.',
+    'Running an SDR program? Read the port out of the program, don\'t guess it: <b>Thetis</b> → Setup ▸ Serial/Network/Midi CAT ▸ <em>TCP/IP CAT Server</em> (its own box, factory 13013); <b>SmartSDR CAT</b> → 5002; <b>piHPSDR</b> → 19090. Whatever it shows, type that. The <em>TCI Server</em> box beside Thetis\'s CAT server (factory 50001) is a different protocol: for it, choose Connection ▸ <b>TCI</b> instead.',
 
   // The serial port and its two rig-specific notes. Each note is ONE sentence per platform,
   // because what it says is a different answer, not a different ending; the Xiegu COM-number
@@ -7327,20 +7377,24 @@ export const EN = {
   // each is appended to a line the caller built.
   'setup.rig.title': 'How does the radio connect?',
   'setup.rig.sub':
-    'One detect finds everything — USB rigs and FlexRadios on the network. Skippable; Settings ▸ Radio ▸ Rig & CAT has all of this later (including Test CAT).',
+    'One detect finds everything — USB rigs, FlexRadios on the network and an SDR program\'s TCI server on this computer. Skippable; Settings ▸ Radio ▸ Rig & CAT has all of this later (including Test CAT).',
   'setup.rig.detect.action': '🔍 Detect my radio',
   'setup.rig.detect.busy': 'Detecting…',
   'setup.rig.detect.failed':
     'Detection hit an error: {{error}}. You can still pick your rig by hand below, or skip and set it up later.',
   'setup.rig.detect.empty':
-    'Nothing found — USB: plug in + power on; Flex: must be on this network. Or skip and set it up later.',
+    'Nothing found — USB: plug in + power on; Flex: must be on this network; SDR program: turn its TCI server on. Or skip and set it up later.',
   // The two halves of one scan can fail independently; each is a whole sentence, and the
   // panel joins whichever failed with " · " before the sentence above quotes the lot.
   'setup.rig.detect.usbFailed': 'USB scan failed: {{error}}',
   'setup.rig.detect.flexFailed': 'Flex network scan failed: {{error}}',
+  'setup.rig.detect.tciFailed': 'TCI server search failed: {{error}}',
   'setup.rig.detect.flex.row': '<b>{{radio}}</b> on the network ({{ip}})',
   'setup.rig.detect.flex.via': ' · via SmartSDR CAT',
   'setup.rig.detect.rig.row': '<b>{{radio}}</b> on {{port}}',
+  // `{{server}}` is what the SDR program's TCI server said about itself (program, version, radio).
+  'setup.rig.detect.tci.row': '<b>{{server}}</b> on this computer (TCI, port {{port}})',
+  'setup.rig.detect.tci.via': ' · over its TCI server',
   'setup.rig.flexNote.windows':
     '{{radio}} at {{ip}} — CAT set via SmartSDR CAT (slice A, port 5002; a second slice uses 60001), radio address saved for the native panadapter/DAX. Test CAT below.',
   'setup.rig.flexNote.other':
@@ -7373,6 +7427,10 @@ export const EN = {
   'setup.rig.conn.serial.blurb': 'Most rigs — one cable',
   'setup.rig.conn.network.label': 'Network',
   'setup.rig.conn.network.blurb': 'SDR software, or a remote rig',
+  'setup.rig.conn.tci.label': 'SDR program (TCI)',
+  'setup.rig.conn.tci.blurb': 'ExpertSDR3, Thetis or piHPSDR, over its TCI server',
+  'setup.rig.tci.hint':
+    'Turn the TCI server on in the SDR program first: ExpertSDR3 and Thetis come set to port 50001, piHPSDR to 40001. Beta: Nexus controls the radio over TCI, but does not transmit on this connection yet.',
   'setup.rig.address.label': 'Address',
   'setup.rig.network.hint':
     'A found Flex configures the WSJT-X-proven path: CAT through the SmartSDR CAT app on this PC — its default TCP port 5002 drives slice A (per-slice ports: B=60001, C=60002) — and audio through DAX. Other network rigs: pick their model later in Settings ▸ Radio ▸ Rig & CAT.',

@@ -24,7 +24,9 @@ import {
   getSettings,
   importAdif,
   probeCatPorts,
+  tciProbe,
   updateRadioProfile,
+  type TciServerFound,
 } from '../api'
 import { baudForRig, radioPatch, RIG_EXAMPLES } from './SettingsPanel'
 import { NO_CAT_PTT_MODELS, NO_CAT_PTT_TRANSCEIVERS } from '../rigFormChecks'
@@ -34,6 +36,7 @@ import { IS_MAC, IS_WINDOWS } from '../platform'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { STARTER_PACKS, importPack } from '../features/packs'
 import { memoriesStore } from '../features/memories'
+import { TCI_DEFAULT_HOST, TCI_DEFAULT_PORT, TCI_RIG_MODEL, TCI_RIG_MODEL_NAME, tciProbeMessage, tciServerName } from '../tci'
 
 /** What the wizard collects beyond the goal profiles: station identity + rig.
  * Only the fields the operator actually touched are set — App merges this into
@@ -52,6 +55,10 @@ export interface WizardDraft {
   flexRadioIp?: string
   serialPort?: string
   baud?: number
+  /** The TCI connection's server address and port (Settings ▸ Radio ▸ Rig & CAT ▸ TCI), when the
+   * radio is set up on TCI here. */
+  tciHost?: string
+  tciPort?: number
   pttMethod?: string
   /** The port an RTS/DTR keying line is on, as Settings' PTT Serial Port: blank = the CAT port.
    * Asked only beside the keying choice (a radio Hamlib cannot key over CAT). */
@@ -241,6 +248,13 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
   const [detectedFlex, setDetectedFlex] = useState<{ model: string; nickname: string; ip: string }[]>([])
   const [detecting, setDetecting] = useState(false)
   const [detectError, setDetectError] = useState<string | null>(null)
+  // The TCI connection: an SDR program's TCI server, found on this computer by the detect pass or
+  // by Find TCI server, which reads the server's handshake and writes nothing to it.
+  const [detectedTci, setDetectedTci] = useState<TciServerFound | null>(null)
+  const [tciHost, setTciHost] = useState(() => settings?.tciHost ?? TCI_DEFAULT_HOST)
+  const [tciPort, setTciPort] = useState(() => settings?.tciPort ?? TCI_DEFAULT_PORT)
+  const [tciFinding, setTciFinding] = useState(false)
+  const [tciNote, setTciNote] = useState('')
   const [flexNote, setFlexNote] = useState<string | null>(null)
   const [catResult, setCatResult] = useState<CatTestResult | null>(null)
   const [catTesting, setCatTesting] = useState(false)
@@ -526,6 +540,10 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       d.rigModelName = rigModelName ?? ''
     }
     if (serialPort !== (settings?.serialPort ?? '')) d.serialPort = serialPort
+    if (rigConn === 'tci') {
+      if (tciHost.trim() !== (settings?.tciHost ?? TCI_DEFAULT_HOST)) d.tciHost = tciHost.trim()
+      if (tciPort !== (settings?.tciPort ?? TCI_DEFAULT_PORT)) d.tciPort = tciPort
+    }
     if (baud !== (settings?.baud ?? 38400)) d.baud = baud
     if (pttMethod !== (settings?.pttMethod ?? 'vox')) d.pttMethod = pttMethod
     if (pttSerialPort !== (settings?.pttSerialPort ?? '')) d.pttSerialPort = pttSerialPort.trim()
@@ -564,7 +582,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     // One scan, every radio kind: USB enumeration + Flex LAN discovery run together; either probe
     // may fail without killing the other's results. Failures are SURFACED (not swallowed to an
     // empty list that reads as "no radios found") so a newcomer isn't left staring at nothing.
-    Promise.allSettled([detectRigs(), discoverFlex()]).then(([rigsR, flexR]) => {
+    Promise.allSettled([detectRigs(), discoverFlex(), tciProbe(TCI_DEFAULT_HOST, TCI_DEFAULT_PORT)]).then(([rigsR, flexR, tciR]) => {
       const errs: string[] = []
       if (rigsR.status === 'fulfilled') setDetected(rigsR.value)
       else {
@@ -576,11 +594,18 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
         setDetectedFlex([])
         errs.push(t('setup.rig.detect.flexFailed', { error: String(flexR.reason) }))
       }
+      if (tciR.status === 'fulfilled') setDetectedTci(tciR.value.found ?? null)
+      else {
+        setDetectedTci(null)
+        errs.push(t('setup.rig.detect.tciFailed', { error: String(tciR.reason) }))
+      }
       setDetectError(errs.length ? errs.join(' · ') : null)
       setDetecting(false)
     })
   }
   const applyDetected = (r: DetectedRig) => {
+    // Serial first, so a model it finds lands after TCI's number comes off (`pickConn`).
+    pickConn('serial')
     if (r.suggestedModel != null) {
       setRigModel(r.suggestedModel)
       setRigModelName(r.suggestedModelName ?? '')
@@ -590,7 +615,6 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       if (fixed != null) setBaud(fixed)
     }
     setSerialPort(r.portName)
-    setRigConn('serial')
     // PTT: a recognised interface cable names its keying line; a model-named rig
     // gets CAT keying (killing the silent-VOX default that made the wizard's own
     // Test CAT report "✗ VOX — no CAT"), unless Hamlib cannot key it over CAT. An
@@ -641,6 +665,44 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
         ? t('setup.rig.flexNote.windows', { radio: named, ip: f.ip })
         : t('setup.rig.flexNote.other', { radio: named, ip: f.ip }),
     )
+  }
+  // The connection choice. TCI stores its own model number and asks no model; leaving it takes that
+  // number off again, to "pick your rig", because the rigctld Nexus ships cannot load it (the
+  // Settings twin, `SettingsPanel.selectConn`). The number may be the one already saved.
+  const pickConn = (conn: string) => {
+    setRigConn(conn)
+    if (conn === 'tci') {
+      setRigModel(TCI_RIG_MODEL)
+      setRigModelName(TCI_RIG_MODEL_NAME)
+      setModelSeeded(false)
+    } else if ((rigModel ?? settings?.rigModel) === TCI_RIG_MODEL) {
+      setRigModel(0)
+      setRigModelName('')
+    }
+  }
+  const applyDetectedTci = (found: TciServerFound) => {
+    pickConn('tci')
+    setTciHost(TCI_DEFAULT_HOST)
+    setTciPort(found.port)
+  }
+  // Find TCI server at the address typed here: its port first, then the programs' own ports. A
+  // server found on another port fills that port in, as Settings' button does.
+  const runFindTci = () => {
+    const host = tciHost.trim() || TCI_DEFAULT_HOST
+    setTciFinding(true)
+    setTciNote(t('settings.rigControl.tci.find.searching', { host }))
+    tciProbe(host, tciPort)
+      .then((r) => {
+        const moved = r.found != null && r.found.port !== tciPort
+        if (r.found && moved) setTciPort(r.found.port)
+        setTciNote(tciProbeMessage(r, moved))
+      })
+      .catch((e) =>
+        setTciNote(
+          t('settings.rigControl.tci.find.failed', { error: e instanceof Error ? e.message : String(e) }),
+        ),
+      )
+      .finally(() => setTciFinding(false))
   }
   const runCatTest = (andThen?: () => void) => {
     setCatTesting(true)
@@ -784,7 +846,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 {t('setup.rig.detect.failed', { error: detectError })}
               </span>
             )}
-            {!detectError && detected != null && detected.length === 0 && detectedFlex.length === 0 && (
+            {!detectError && detected != null && detected.length === 0 && detectedFlex.length === 0 && !detectedTci && (
               <span className="wizard-field-hint">{t('setup.rig.detect.empty')}</span>
             )}
             {detectedFlex.map((f) => (
@@ -806,6 +868,21 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 <span className="wizard-field-hint">{t('setup.rig.detect.flex.via')}</span>
               </button>
             ))}
+            {detectedTci && (
+              <button
+                type="button"
+                className={`wizard-detect-row${rigConn === 'tci' ? ' sel' : ''}`}
+                onClick={() => applyDetectedTci(detectedTci)}
+              >
+                {/* What the server said about itself is one token: program, version, radio. */}
+                <T
+                  k="setup.rig.detect.tci.row"
+                  tags={{ b: <b /> }}
+                  vals={{ server: tciServerName(detectedTci), port: String(detectedTci.port) }}
+                />
+                <span className="wizard-field-hint">{t('setup.rig.detect.tci.via')}</span>
+              </button>
+            )}
             {(detected ?? []).map((r) => (
               <button
                 key={r.portName}
@@ -994,7 +1071,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               type="button"
               className={`wizard-mode${rigConn === 'serial' ? ' sel' : ''}`}
               aria-pressed={rigConn === 'serial'}
-              onClick={() => setRigConn('serial')}
+              onClick={() => pickConn('serial')}
             >
               <span className="wizard-mode-label">{t('setup.rig.conn.serial.label')}</span>
               <span className="wizard-mode-blurb">{t('setup.rig.conn.serial.blurb')}</span>
@@ -1003,12 +1080,65 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               type="button"
               className={`wizard-mode${rigConn === 'network' ? ' sel' : ''}`}
               aria-pressed={rigConn === 'network'}
-              onClick={() => setRigConn('network')}
+              onClick={() => pickConn('network')}
             >
               <span className="wizard-mode-label">{t('setup.rig.conn.network.label')}</span>
               <span className="wizard-mode-blurb">{t('setup.rig.conn.network.blurb')}</span>
             </button>
+            <button
+              type="button"
+              className={`wizard-mode${rigConn === 'tci' ? ' sel' : ''}`}
+              aria-pressed={rigConn === 'tci'}
+              onClick={() => pickConn('tci')}
+            >
+              <span className="wizard-mode-label">{t('setup.rig.conn.tci.label')}</span>
+              <span className="wizard-mode-blurb">{t('setup.rig.conn.tci.blurb')}</span>
+            </button>
           </div>
+
+          {/* The TCI connection's two facts and the search for them. The labels and the search's
+              words are Settings' own, so the two surfaces say the same thing. */}
+          {rigConn === 'tci' && (
+            <div className="wizard-detect">
+              <label className="wizard-field">
+                <span>{t('settings.rigControl.tci.host.label')}</span>
+                <input
+                  type="text"
+                  value={tciHost}
+                  placeholder={TCI_DEFAULT_HOST}
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(e) => setTciHost(e.target.value)}
+                />
+              </label>
+              <label className="wizard-field">
+                <span>{t('settings.rigControl.tci.port.label')}</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  max="65535"
+                  value={String(tciPort)}
+                  placeholder={String(TCI_DEFAULT_PORT)}
+                  autoComplete="off"
+                  onChange={(e) => setTciPort(Number(e.target.value))}
+                />
+              </label>
+              <span className="wizard-field-hint">{t('setup.rig.tci.hint')}</span>
+              <button
+                type="button"
+                className="wizard-btn"
+                disabled={tciFinding}
+                onClick={runFindTci}
+                title={t('settings.rigControl.tci.find.title')}
+              >
+                {tciFinding ? t('settings.rigControl.tci.find.busy') : t('settings.rigControl.tci.find.action')}
+              </button>
+              <span className="wizard-field-hint" role="status">
+                {tciNote}
+              </span>
+            </div>
+          )}
 
           {rigConn === 'network' && (
             <div className="wizard-detect">
