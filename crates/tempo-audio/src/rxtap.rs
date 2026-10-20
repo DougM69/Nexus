@@ -59,6 +59,11 @@ pub struct RxTap {
     card: Mutex<Option<RxSource>>,
     epoch_seq: AtomicU64,
     audio: Arc<ReceiveAudioFeed>,
+    /// A second bounded copy of the same audio, for the programs on this computer that connect to
+    /// Nexus's TCI server. A feed has one reader, and Remote Listen holds the first; with its own
+    /// the two never refuse or wait on each other. Same lifecycle as `audio`, and as idle: it
+    /// copies nothing while no program listens.
+    tci_audio: Arc<ReceiveAudioFeed>,
 }
 
 impl RxTap {
@@ -92,6 +97,8 @@ impl RxTap {
             *g = Some(RxSource { ring, rate, epoch });
             self.audio
                 .replace_source_with_origin(Some(ReceiveSource { epoch, rate }), origin);
+            self.tci_audio
+                .replace_source(Some(ReceiveSource { epoch, rate }));
         }
     }
 
@@ -100,14 +107,16 @@ impl RxTap {
         if let Ok(mut g) = self.card.lock() {
             *g = None;
             self.audio.replace_source(None);
+            self.tci_audio.replace_source(None);
         }
     }
 
-    /// Retire only the optional media copy before capture teardown. Display and
+    /// Retire only the optional media copies before capture teardown. Display and
     /// decode consumers keep their established lifecycle. Publishing a newly
-    /// opened ring is the only way to make this media source available again.
+    /// opened ring is the only way to make these media sources available again.
     pub fn retire_receive_audio(&self) {
         self.audio.replace_source(None);
+        self.tci_audio.replace_source(None);
     }
 
     /// The source to drain right now, if any.
@@ -122,15 +131,20 @@ impl RxTap {
         self.audio.clone()
     }
 
+    /// The TCI server's copy: the same audio as [`Self::receive_audio`], through its own feed and
+    /// its own single reader. Like that one it authorizes nothing by itself.
+    pub fn tci_audio(&self) -> Arc<ReceiveAudioFeed> {
+        self.tci_audio.clone()
+    }
+
     pub(crate) fn publish_audio(&self, source: &RxSource, samples: &[f32]) {
-        self.audio.publish(
-            ReceiveSource {
-                epoch: source.epoch,
-                rate: source.rate,
-            },
-            std::time::Instant::now(),
-            samples,
-        );
+        let source = ReceiveSource {
+            epoch: source.epoch,
+            rate: source.rate,
+        };
+        let at = std::time::Instant::now();
+        self.audio.publish(source, at, samples);
+        self.tci_audio.publish(source, at, samples);
     }
 }
 
@@ -173,6 +187,52 @@ mod tests {
         let new = feed.subscribe(feed.source().unwrap()).unwrap();
         drop(reader);
         assert!(new.read(std::time::Instant::now()).is_ok());
+    }
+
+    /// The TCI server's copy is a feed of its own beside Remote Listen's: both readers hold at
+    /// once (a feed takes one), both hear the same audio, and both end with the capture, by either
+    /// road it ends.
+    #[test]
+    fn the_tci_copy_is_a_second_reader_beside_remote_listens() {
+        use crate::receive_audio::{ReceiveAudioReader, ReceiveError};
+        let tap = RxTap::new();
+        let readers = |tap: &RxTap| {
+            let (remote, tci) = (tap.receive_audio(), tap.tci_audio());
+            let remote = remote.subscribe(remote.source().unwrap()).unwrap();
+            let source = tci.source().expect("the TCI copy has the capture's source");
+            let tci = tci
+                .subscribe(source)
+                .expect("the TCI copy has a reader of its own beside Remote Listen's");
+            (remote, tci)
+        };
+        let ended = |r: &ReceiveAudioReader| {
+            matches!(r.read(std::time::Instant::now()), Err(ReceiveError::Ended))
+        };
+        for retire in [false, true] {
+            tap.publish_card(Arc::new(SpscRing::new(4096)), 48_000);
+            let (remote, tci) = readers(&tap);
+            let display = tap.current().unwrap();
+            // A subscription discards the first batch it sees (receive_audio.rs).
+            tap.publish_audio(&display, &[0.1; 480]);
+            tap.publish_audio(&display, &[0.25; 480]);
+            let heard = |r: &ReceiveAudioReader| {
+                r.read(std::time::Instant::now())
+                    .unwrap()
+                    .map(|block| block.samples)
+            };
+            assert_eq!(heard(&remote), Some(vec![0.25; 480]), "Remote Listen");
+            assert_eq!(heard(&tci), Some(vec![0.25; 480]), "the TCI copy");
+            if retire {
+                tap.retire_receive_audio();
+            } else {
+                tap.clear_card();
+            }
+            assert!(
+                ended(&remote),
+                "retire {retire}: Remote Listen's reader ended"
+            );
+            assert!(ended(&tci), "retire {retire}: the TCI reader ended");
+        }
     }
 
     #[test]
