@@ -1011,7 +1011,9 @@ fn stop_tx_unkeys_again_while_the_sdr_program_has_not_confirmed_our_unkey() {
 
 /// ⭐ A REBUILD WHILE THE SDR PROGRAM HAS NOT CONFIRMED OUR UNKEY CARRIES THE KEYED BELIEF onto the
 /// fresh rig (the stuck-TX invariant), so the idle self-heal keeps sending the unkey where the new
-/// channel did not take it. And the old session sends its stop before its close.
+/// channel did not take it. And the old session is sent a stop of the teardown's own before its
+/// close: the loop's unkey through the still-live rig, the daemon's stops, or both; the release's
+/// earlier stop does not count.
 #[test]
 fn a_rebuild_while_our_unkey_is_unconfirmed_carries_the_keyed_belief() {
     let mut s = TciScene::new([Fault::StuckTrx], patient(), phone);
@@ -1032,6 +1034,7 @@ fn a_rebuild_while_our_unkey_is_unconfirmed_carries_the_keyed_belief() {
     // A saved change to the connection, and a new channel that does not take the unkey.
     let (addr, _log) = refusing_unkey_rigctld();
     s.reopen = Reopen::Rigctld(addr);
+    let stops_before = s.sent(0, "trx:0,false");
     {
         let mut e = s.engine();
         let mut settings = e.settings().clone();
@@ -1044,7 +1047,7 @@ fn a_rebuild_while_our_unkey_is_unconfirmed_carries_the_keyed_belief() {
         s.rig.keyed,
         "the fresh rig forgot a transmitter the SDR program never reported unkeyed"
     );
-    // The old session: its stop before its close.
+    // The old session: a stop of the teardown's own before its close.
     assert!(
         s.sim.wait_for(WAIT, |log| log
             .iter()
@@ -1052,14 +1055,6 @@ fn a_rebuild_while_our_unkey_is_unconfirmed_carries_the_keyed_belief() {
         "the old session never closed"
     );
     let log = s.sim.log();
-    let last_stop = log
-        .iter()
-        .rev()
-        .find(|l| {
-            matches!(&l.event, SimEvent::Command { conn: 0, text, .. } if text == "trx:0,false")
-        })
-        .map(|l| l.at)
-        .expect("a stop");
     let closed = log
         .iter()
         .find_map(|l| match l.event {
@@ -1067,7 +1062,18 @@ fn a_rebuild_while_our_unkey_is_unconfirmed_carries_the_keyed_belief() {
             _ => None,
         })
         .expect("the close");
-    assert!(last_stop < closed, "the stop before the close");
+    let stops = log
+        .iter()
+        .filter(|l| {
+            l.at < closed
+                && matches!(&l.event, SimEvent::Command { conn: 0, text, .. } if text == "trx:0,false")
+        })
+        .count();
+    assert!(
+        stops > stops_before,
+        "no stop between the change and the close ({stops} before the close, {stops_before} before \
+         the change)"
+    );
     registry::forget(key);
 }
 
