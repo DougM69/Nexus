@@ -99,6 +99,7 @@ import {
   testCat,
   probeCatPorts,
   tciProbe,
+  tciServerDisconnect,
   qrzTestConnection,
   syncQrz,
   n3fjpTestConnection,
@@ -220,6 +221,7 @@ import { SettingsStation } from './SettingsStation'
 import { SettingsClusterNodes } from './SettingsClusterNodes'
 import { SettingsStreetMaps } from './SettingsStreetMaps'
 import { Js8ApiSettings } from './Js8ApiSettings'
+import { TciServerSettings, sharePortClash } from './TciServerSettings'
 import { getClusterNodes } from '../api'
 import type { ClusterNodes } from '../types'
 import { SetupHealth } from './SetupHealth'
@@ -3708,6 +3710,17 @@ export function SettingsPanel({
     if (js8CqTextRefused(form.js8CqText ?? '', form.mycall ?? '')) {
       setTab('digital')
       setError(t('settings.save.js8CqText'))
+      return
+    }
+    // "Share this radio with other programs" and "Share by TCI" on one port: whichever starts
+    // second cannot have it, and the operator would find out from a refusal in the log. Refused ON
+    // THE CHANGE, as the position name is: a station that already holds the two on one port (an
+    // older file, or a computer driving the station, where both are the station's) still saves
+    // everything else.
+    const portClash = sharePortClash(form)
+    if (portClash !== null && portClash !== sharePortClash(savedRef.current)) {
+      setTab('radio')
+      setError(t('settings.save.tciServerPortClash', { port: portClash }))
       return
     }
     // Check the RADIO before saving it. Until now the callsign was the only validated field, so
@@ -7973,7 +7986,25 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.transmit.foreignPtt.hint')}</span>
                 </div>
               )}
-            </div>          </fieldset>
+            </div>
+
+            {/* "Share by TCI": the other way to share this radio, for programs that speak TCI. Its
+                own switch beside the CAT broker's; both may be on. */}
+            <TciServerSettings
+              form={form}
+              status={radio?.tciServer}
+              onSwitch={updateBool}
+              onPort={(port) => updateNum('tciServerPort', port)}
+              onDisconnect={(id) => {
+                void withErrorToast(
+                  () => tciServerDisconnect(id),
+                  t('settings.transmit.tciServer.disconnect.failed'),
+                )
+              }}
+              locked={locked}
+              setAtStation={setAtStation}
+            />
+          </fieldset>
           </>
           )}
 
