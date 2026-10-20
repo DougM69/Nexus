@@ -988,18 +988,21 @@ fn a_tci_server_programs_over_goes_out_as_nexus_audio_never_on_the_sdr_microphon
         Ok(()),
         "premise: the program's key is admitted"
     );
-    s.run_with_program_audio(
-        0.25,
-        "the program's audio never reached the SDR program",
-        |s| s.sim.tx_audio(0).iter().any(|x| *x != 0.0),
-    );
+    s.run_with_program_audio(0.25, "the program's over never keyed", |s| {
+        !s.keys().is_empty()
+    });
+    assert_eq!(s.sent(0, "trx:0,true"), 0, "the SDR program's microphone");
     assert_eq!(
         s.keys(),
         [(Keyer::Client(0), SimSource::Tci)],
         "keyed on Nexus's audio"
     );
+    s.run_with_program_audio(
+        0.25,
+        "the program's audio never reached the SDR program",
+        |s| s.sim.tx_audio(0).iter().any(|x| *x != 0.0),
+    );
     assert_eq!(s.sent(0, "trx:0,true,tci"), 1);
-    assert_eq!(s.sent(0, "trx:0,true"), 0, "the SDR program's microphone");
     assert!(
         s.card.played.lock().unwrap().is_empty(),
         "played on the sound card as well"

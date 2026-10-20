@@ -332,13 +332,13 @@ fn no_other_programs_audio_reaches_the_transmitter() {
         s.tick(t, Some(0.5));
         t += TICK;
     }
-    assert!(s.rig.keyed, "premise: P1's over went on");
     assert!(
         !s.backend.played.contains(&0.9),
         "P2's audio reached the transmitter"
     );
-    assert!(s.backend.played.contains(&0.5), "control: P1's audio did");
     assert!(taken.is_empty(), "the engine took P2's audio at {taken:?}");
+    assert!(s.rig.keyed, "premise: P1's over went on");
+    assert!(s.backend.played.contains(&0.5), "control: P1's audio did");
 }
 
 /// ⛔ EVERY STOP ENDS A PROGRAM'S OVER HARD, WITHIN A TICK: on the loop's next tick the rig is
@@ -703,17 +703,21 @@ fn a_programs_slot_timed_over_stays_refused_and_keys_nothing() {
         e.set_tx_enabled_by_operator(true);
         assert!(e.tx_enabled(), "premise: the operator armed Digital");
     }
-    assert_eq!(s.key(P1), Err(Refusal::SlotTimed), "the key");
-    let mut taken = false;
+    let key = s.key(P1);
+    let (mut taken, mut keyed_at) = (false, None);
     let mut t = 0.0;
     while t <= 2_000.0 {
         taken |= s.audio(P1, t, 0.5);
         s.step(t);
-        assert!(!s.rig.keyed, "keyed at {t} ms");
+        if s.rig.keyed && keyed_at.is_none() {
+            keyed_at = Some(t);
+        }
         t += TICK;
     }
+    assert_eq!(keyed_at, None, "the program's over keyed the rig");
     assert!(s.backend.played.is_empty(), "its audio was played");
     assert!(!taken, "its audio was taken");
+    assert_eq!(key, Err(Refusal::SlotTimed), "the key");
     let s = Scene::new().keyed(200.0);
     assert!(
         s.backend.played.contains(&0.5),
