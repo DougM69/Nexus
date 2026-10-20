@@ -2946,6 +2946,7 @@ name = "tempo-net"
 version = "0.2.0"
 dependencies = [
  "libc",
+ "proptest",
  "serde",
  "serde_json",
  "socket2",
