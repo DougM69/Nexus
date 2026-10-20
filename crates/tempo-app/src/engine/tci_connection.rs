@@ -18,9 +18,11 @@
 //! refusal is [`Engine::connection_tx_refusal`]'s, so `tx_allowed` is false with it, every transmit
 //! path refuses before PTT exactly as it refuses a frequency outside the licence (nothing is
 //! planned, sequenced or written to ALL.TXT, which is why it changes no timing or sequencing), and
-//! the snapshot carries its words so the cockpit names the connection, not the licence. Allowing
-//! the Digital section is the one TCI arm of `connection_tx_refusal`, once the TCI route carries
-//! the switch and the bench has timed it.
+//! the snapshot carries its words so the cockpit names the connection, not the licence. It judges
+//! the section ASKED (`connection_tx_refusal_as`): the gate asked as Digital from another section
+//! is refused too, and asked as another section from Digital is not. Allowing the Digital section
+//! is the one TCI arm of `connection_tx_refusal_as`, once the TCI route carries the switch and the
+//! bench has timed it.
 //!
 //! The other sections are the session's to refuse: Phone at the shack keys the program's own
 //! microphone and Tune its own carrier; Nexus's audio (RTTY, PSK, SSTV, APRS, the voice keyer)
@@ -419,6 +421,35 @@ mod tests {
             ("serial, Digital again", false),
         ]
         .map(|(s, r)| (s.to_string(), r));
+        assert_eq!(seen, want);
+    }
+
+    /// ⛔ THE REFUSAL JUDGES THE SECTION ASKED, NOT THE ONE THE STATION IS IN. On a TCI radio in
+    /// Phone, the gate asked as Digital is refused as slot-timed; in Digital, the gate asked as
+    /// Phone or as CW is the licence's alone. CONTROLS: the same station on its serial connection
+    /// allows all three, so each answer on TCI is the connection's.
+    #[test]
+    fn the_refusal_judges_the_section_asked_not_the_section_the_station_is_in() {
+        use crate::settings::OperatingMode::{Cw, Digital, Phone};
+        let mut seen = Vec::new();
+        for conn in ["serial", "tci"] {
+            // A General's data carrier above 14.074 is inside the privileges, and so is CW there.
+            let e = at(conn, "phone", 14.074);
+            seen.push((conn, "in Phone, asked as Digital", e.tx_allowed_as(Digital)));
+            let e = at(conn, "digital", 14.074);
+            seen.push((conn, "in Digital, asked as CW", e.tx_allowed_as(Cw)));
+            // A General's phone at 14.250 is inside the privileges.
+            let e = at(conn, "digital", 14.250);
+            seen.push((conn, "in Digital, asked as Phone", e.tx_allowed_as(Phone)));
+        }
+        let want = [
+            ("serial", "in Phone, asked as Digital", true),
+            ("serial", "in Digital, asked as CW", true),
+            ("serial", "in Digital, asked as Phone", true),
+            ("tci", "in Phone, asked as Digital", false),
+            ("tci", "in Digital, asked as CW", true),
+            ("tci", "in Digital, asked as Phone", true),
+        ];
         assert_eq!(seen, want);
     }
 

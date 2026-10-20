@@ -23978,22 +23978,29 @@ contact yourself."
     }
 
     /// Why the active radio's CAT connection refuses transmitting in the section the operator is
-    /// in, when it does: the Icom network connection refuses every transmission, receive and
-    /// control only in this Beta ([`crate::settings::rig_conn_is_icom_lan`]); the TCI connection
-    /// refuses the Digital section, whose modes are all slot-timed, until their timing over TCI
-    /// has been benched ([`crate::settings::rig_conn_is_tci`], `engine/tci_connection.rs`).
-    /// ANDed into [`Self::tx_allowed`] and [`Self::tx_allowed_as`], so every transmit path refuses
-    /// before PTT exactly as it refuses a frequency outside the licence, which is why this changes
-    /// no timing or sequencing; carried in the snapshot so the cockpit names the connection, not
-    /// the licence. The network daemon refuses the keying verbs again on its own side, and the
-    /// TCI session refuses at the key whatever the SDR program cannot take.
+    /// in, when it does: [`Self::connection_tx_refusal_as`] that section. ANDed into
+    /// [`Self::tx_allowed`], so every transmit path refuses before PTT exactly as it refuses a
+    /// frequency outside the licence, which is why this changes no timing or sequencing; carried
+    /// in the snapshot so the cockpit names the connection, not the licence. The network daemon
+    /// refuses the keying verbs again on its own side, and the TCI session refuses at the key
+    /// whatever the SDR program cannot take.
     pub fn connection_tx_refusal(&self) -> Option<&'static str> {
+        self.connection_tx_refusal_as(self.settings.operating_mode)
+    }
+
+    /// Why the active radio's CAT connection refuses a transmission judged as section `om`, when
+    /// it does: the Icom network connection refuses every transmission, receive and control only
+    /// in this Beta ([`crate::settings::rig_conn_is_icom_lan`]); the TCI connection refuses the
+    /// Digital section, whose modes are all slot-timed, until their timing over TCI has been
+    /// benched ([`crate::settings::rig_conn_is_tci`], `engine/tci_connection.rs`). The section is
+    /// the one JUDGED, not the one the station is in, so [`Self::tx_allowed_as`] asked as Digital
+    /// from another section is refused, and asked as another section from Digital is not.
+    fn connection_tx_refusal_as(&self, om: crate::settings::OperatingMode) -> Option<&'static str> {
         let conn = &self.settings.rig_conn;
         if crate::settings::rig_conn_is_icom_lan(conn) {
             return Some(crate::settings::ICOM_LAN_TX_REFUSED);
         }
-        (crate::settings::rig_conn_is_tci(conn)
-            && self.settings.operating_mode == crate::settings::OperatingMode::Digital)
+        (crate::settings::rig_conn_is_tci(conn) && om == crate::settings::OperatingMode::Digital)
             .then_some(tci_connection::TCI_SLOT_TIMED_TX_REFUSED)
     }
 
@@ -24016,7 +24023,9 @@ contact yourself."
             && !self.tx_allowed()
             // The gate with a USB pick: the band convention is USB on 60 m too, so the one
             // phone model asked of USB is the whole of what it would judge.
-            && self.every_tx_frequency(|mhz| self.phone_emission_allowed(mhz, "USB"))
+            && self.every_tx_frequency(OperatingMode::Phone, |mhz| {
+                self.phone_emission_allowed(mhz, "USB")
+            })
     }
 
     /// The words for a licence refusal: [`PHONE_USB_ONLY`] when the phone mode is the whole reason
@@ -24047,14 +24056,20 @@ contact yourself."
 
     /// [`Self::tx_allowed_as`] with a data over keyed as `frame` ([`Self::tx_allowed_for`]).
     fn tx_allowed_as_for(&self, om: crate::settings::OperatingMode, frame: DataFrame) -> bool {
-        self.every_tx_frequency(|mhz| self.emission_in_use_allowed_as(om, mhz, frame))
+        self.every_tx_frequency(om, |mhz| self.emission_in_use_allowed_as(om, mhz, frame))
     }
 
-    /// Does `judge` pass every frequency the next over is emitted on? The frame of
-    /// [`Self::tx_allowed_as`], which asks it of the emission in use; [`Self::phone_mode_refused`]
-    /// asks it of a USB pick, so the two never disagree about which frequencies count.
-    fn every_tx_frequency(&self, judge: impl Fn(f64) -> bool) -> bool {
-        if self.connection_tx_refusal().is_some() {
+    /// Does `judge` pass every frequency the next over is emitted on, for a transmission judged
+    /// as section `om`, whose connection refusal it applies ([`Self::connection_tx_refusal_as`])?
+    /// The frame of [`Self::tx_allowed_as`], which asks it of the emission in use;
+    /// [`Self::phone_mode_refused`] asks it of a USB pick, so the two never disagree about which
+    /// frequencies count.
+    fn every_tx_frequency(
+        &self,
+        om: crate::settings::OperatingMode,
+        judge: impl Fn(f64) -> bool,
+    ) -> bool {
+        if self.connection_tx_refusal_as(om).is_some() {
             return false;
         }
         // The rig says split and we cannot say where it transmits — refuse rather than judge
