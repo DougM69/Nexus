@@ -664,7 +664,15 @@ async fn pair(
     let record = pairing::pair(at, code, name, &known).await?;
     let view = StationView::of(&record).ok_or("notStation")?;
     let kept = reach.stations.clone();
-    store(move || kept.keep(&record)).await?;
+    store(move || {
+        kept.keep(&record)?;
+        // Paired at the station, which takes this computer until it is removed there: no day to
+        // sign in again by stays with it. The pairing stands if the file will not take that; the
+        // row then keeps its day, as before.
+        let _ = kept.drop_signed(&record.station_id);
+        Ok(())
+    })
+    .await?;
     Ok(view)
 }
 

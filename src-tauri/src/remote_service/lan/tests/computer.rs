@@ -1549,3 +1549,120 @@ async fn pairing_again_with_a_known_station_keeps_this_computers_key() {
         "another station's key, or this one's, was used"
     );
 }
+
+/// ★ Pairing again with a code, for a station this computer was added to with the account: the
+/// station takes this computer until it is removed there, so the window names no day to sign in
+/// again by on its row, and Operate's launch does not sign in again for it. CONTROL: a pairing the
+/// station did not finish (the code typed wrong) leaves the day as it was, and another station's
+/// day stays through both. Skipped, saying so, on a box with no private address of its own.
+#[tokio::test]
+async fn pairing_again_with_a_code_leaves_no_day_to_sign_in_again_by() {
+    use crate::client_mode::sign_in_again_by;
+    use tempo_client::account::{PROOF_MAX_AGE_S, RENEW_BEFORE_S};
+    const NOW: u64 = 1_800_000_000;
+    const ELSEWHERE: &str = "70000000-0000-4000-8000-000000000001";
+    let Some(private) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own");
+        return;
+    };
+    let s = shack(home());
+    let scratch = Scratch::new();
+    let lan = lan_on(&s, &scratch);
+    let (_stop, stop) = watch::channel(false);
+    let at = behind_a_port_on(&s, private, stop).await;
+    let (dir, _) = crate::lan_client::tests::typed_file("paired-again");
+    let stations = Arc::new(
+        Stations::new(Arc::new(StationStore::default())).signed_in(dir.join("lan-account.json")),
+    );
+    // Added with the account: this computer's record for the station, and when it signed in, the
+    // last week of its thirty days now.
+    let issued_at = NOW - PROOF_MAX_AGE_S + RENEW_BEFORE_S;
+    stations.keep(&paired_record(&s, at)).unwrap();
+    stations
+        .keep(&record(ELSEWHERE, &["192.168.1.21:42075"]))
+        .unwrap();
+    stations.keep_signed(STATION, issued_at).unwrap();
+    stations.keep_signed(ELSEWHERE, issued_at).unwrap();
+    let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
+        assets: Arc::new(|_: &str| None),
+        stations: stations.clone(),
+        find: Arc::new(|_| Ok(Vec::new())),
+        name: "Den PC".into(),
+        operate: Arc::new(|_, _| {}),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+        now_s: || NOW,
+        forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
+    })
+    .unwrap();
+    let mut page = page_socket(&origin).await;
+    // What the window is told of each station added with the account: its id, until when it takes
+    // this computer, and whether to sign in again now.
+    async fn days(page: &mut Client2) -> Vec<(String, u64, bool)> {
+        page.send(Message::Text(json!({"type":"stations"}).to_string().into()))
+            .await
+            .unwrap();
+        let listed = told(page).await;
+        let mut days: Vec<(String, u64, bool)> = listed["account"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|day| {
+                let id = day["stationId"].as_str().unwrap().to_string();
+                (id, day["until"].as_u64().unwrap(), day["renew"] == true)
+            })
+            .collect();
+        days.sort();
+        days
+    }
+    let until = NOW + RENEW_BEFORE_S;
+    let both = vec![
+        (STATION.to_string(), until, true),
+        (ELSEWHERE.to_string(), until, true),
+    ];
+    assert_eq!(days(&mut page).await, both, "premise: the last week");
+    let until = Some(until);
+    assert_eq!(sign_in_again_by(&stations, STATION, NOW), until);
+
+    lan.pair().unwrap();
+    let shown = lan.status().pairing.unwrap().code;
+    let wrong = format!(
+        "{}{}",
+        &shown[..15],
+        if shown.ends_with('0') { '1' } else { '0' }
+    );
+    let pair =
+        |code: &str| json!({"type":"pair","address":at.to_string(),"code":code,"name":"Den PC"});
+    page.send(Message::Text(pair(&wrong).to_string().into()))
+        .await
+        .unwrap();
+    let refused = told(&mut page).await;
+    assert_eq!(refused["type"], "pairRefused", "{refused}");
+    assert_eq!(
+        days(&mut page).await,
+        both,
+        "a pairing the station did not finish"
+    );
+    assert_eq!(sign_in_again_by(&stations, STATION, NOW), until);
+
+    page.send(Message::Text(pair(&shown).to_string().into()))
+        .await
+        .unwrap();
+    let paired = told(&mut page).await;
+    assert_eq!(paired["type"], "paired", "{paired}");
+    assert_eq!(
+        days(&mut page).await,
+        vec![(ELSEWHERE.to_string(), NOW + RENEW_BEFORE_S, true)],
+        "the station's row still names a day to sign in again by"
+    );
+    assert_eq!(
+        sign_in_again_by(&stations, STATION, NOW),
+        None,
+        "Operate's launch signs in again"
+    );
+    assert_eq!(sign_in_again_by(&stations, ELSEWHERE, NOW), until);
+    assert_eq!(stations.signed(STATION), None);
+    let kept = stations.get(STATION).unwrap().unwrap();
+    assert_eq!(kept.pkcs8, s.computer.key, "paired again with its own key");
+    std::fs::remove_dir_all(dir).unwrap();
+}

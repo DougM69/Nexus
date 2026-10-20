@@ -24,6 +24,8 @@
 //! - **When this computer signed in for each station** ([`Stations::signed`]): for a station added
 //!   with the account ([`account`]), the time its proof was signed, from which the station admits
 //!   it on its network for thirty days. Not a secret either: a file of its own ([`signed_path`]).
+//!   Pairing with a code drops it ([`Stations::drop_signed`]): the station then admits this
+//!   computer until it is removed there.
 //! - **The keys for the next station signed in to** ([`Stations::staged`]): made before that
 //!   sign-in, and kept in the credential store until a station is kept with them.
 //! - **A station signed in to from elsewhere** ([`Stations::keep_away`]): one this computer signed
@@ -532,6 +534,18 @@ impl Stations {
         let mut file = self.signed_file();
         file.insert(id.to_string(), issued_at);
         file.retain(|kept, _| ids.contains(kept));
+        self.write_signed(&file)
+    }
+
+    /// Station `id` was paired with a code here: it admits this computer until it is removed there,
+    /// whatever a sign-in said before, so its line goes from the signed file, and with it the day
+    /// its row names and Operate's launch signing in again for it. No line, nothing written.
+    pub(crate) fn drop_signed(&self, id: &str) -> Result<(), &'static str> {
+        let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
+        let mut file = self.signed_file();
+        if file.remove(id).is_none() {
+            return Ok(());
+        }
         self.write_signed(&file)
     }
 

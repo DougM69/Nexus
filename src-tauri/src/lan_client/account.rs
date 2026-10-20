@@ -60,6 +60,10 @@
 //! at the shack is listed with no proof: then, as "Add the internet road" did, the internet road
 //! alone is registered, for the station the operator picks, and waits for Approve at the station.
 //!
+//! A station added with the account and then paired again here with a code is one of these from
+//! then on: the pairing drops its sign-in time (`Stations::drop_signed`), since the station keeps
+//! this computer until it is removed there, so signing in from its row links it the same way.
+//!
 //! ## Signing in again
 //!
 //! A station admits a computer on its network for `tempo_client::account::PROOF_MAX_AGE_S` from its
