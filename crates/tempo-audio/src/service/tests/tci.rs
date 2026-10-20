@@ -229,6 +229,57 @@ fn the_tci_client_never_dials_nexus_own_tci_server() {
     assert!(!serial_on.rig_differs(&serial_off), "a radio not on TCI");
 }
 
+/// The launch dials the TCI server the settings name, with the port of Nexus's own TCI server known,
+/// and so does every radio the monitor holds: neither waits a tick for the settings' rebuild, whose
+/// first open would have dialled a default (and its close sent `trx:0,false;` to whatever listens
+/// there).
+#[test]
+fn the_launch_and_the_monitor_dial_the_tci_server_the_settings_name() {
+    let mut s = Settings {
+        rig_model: 7,
+        rig_conn: "tci".into(),
+        tci_host: "192.0.2.40".into(),
+        tci_port: 40001,
+        tci_trx: 1,
+        tci_server: true,
+        tci_server_port: 40002,
+        ..Settings::default()
+    };
+    let cfg = RadioConfig {
+        rig_model: 7,
+        rig_conn: "tci".into(),
+        ..RadioConfig::default()
+    };
+    let launch = launch_transport(&cfg, &s);
+    let want = Transport::from_settings(&s);
+    assert!(launch.tci_target().is_some());
+    assert_eq!(
+        launch.tci_target(),
+        want.tci_target(),
+        "the launch dials elsewhere"
+    );
+    assert_eq!(launch.tci_server_self_port, Some(40002));
+    // A radio the monitor holds.
+    s.radios.push(tempo_app::settings::RadioProfile {
+        id: 9,
+        rig_model: 7,
+        rig_conn: "tci".into(),
+        tci_host: "192.0.2.41".into(),
+        tci_port: 50001,
+        ..tempo_app::settings::RadioProfile::default()
+    });
+    let (_, pool) = monitor_want(&s);
+    let (_, t) = pool
+        .iter()
+        .find(|(id, _)| *id == 9)
+        .expect("the monitor holds it");
+    assert_eq!(
+        t.tci_target().map(|t| (t.host, t.port)),
+        Some(("192.0.2.41".to_string(), 50001))
+    );
+    assert_eq!(t.tci_server_self_port, Some(40002));
+}
+
 /// A TCI radio whose open failed is tried again when the client's reconnect ladder allows, never
 /// while it waits for the operator, and on the ordinary backoff when the ladder has nothing to say.
 #[test]
@@ -242,9 +293,10 @@ fn a_failed_tci_open_waits_on_the_clients_reconnect_ladder() {
         None,
         crate::tci::now_ms(),
     );
+    // The ladder's first wait, 1 s, less what has run of it since.
     let at = tci_reopen_at(key, 5_000.0, 99.0);
     assert!(
-        (5_900.0..=6_000.0).contains(&at),
+        at > 5_000.0 && at <= 6_000.0,
         "the ladder's first wait: {at}"
     );
     // Three refusals in a row (not a TCI server) wait for the operator.
@@ -856,6 +908,31 @@ fn the_loops_own_link_dropping_under_its_over_does_not_unkey_it() {
     s.run_until("the release never unkeyed", |s| {
         s.sent(0, "trx:0,false") >= 1
     });
+}
+
+/// ⛔ THE LOOP'S OWN KEYS ARE HELD TO THE SDR PROGRAM'S ADMISSION: on a server that does not let this
+/// transmitter transmit (`tx_enable:0,false`), the operator's PTT and Tune put nothing on the wire
+/// that keys, and the PTT line says the key was refused. No key of the loop's reaches the SDR
+/// program but through the TCI client's admission.
+#[test]
+fn the_loops_keys_are_held_to_the_sdr_programs_admission() {
+    let mut s = TciScene::new([Fault::TxEnableFalse], waits(), phone);
+    s.run(300);
+    s.engine().set_ptt(true);
+    s.run(500);
+    assert_eq!(s.sent(0, "trx:0,true"), 0, "the PTT keyed");
+    assert!(
+        s.engine().snapshot().radio.audio_error.is_some(),
+        "the PTT line said nothing"
+    );
+    s.engine().set_ptt(false);
+    s.run(200);
+    s.engine().set_tune(true);
+    s.run(500);
+    assert_eq!(s.sent(0, "tune:0,true"), 0, "the tune keyed");
+    let line = s.engine().snapshot().radio.audio_error.unwrap_or_default();
+    assert!(line.starts_with("Tune not keyed:"), "{line}");
+    assert!(s.keys().is_empty(), "the radio keyed");
 }
 
 /// ⭐ THE OPERATOR'S PTT KEYS THE SDR PROGRAM'S MICROPHONE, AND ITS TRANSMIT METERS REACH THE ENGINE:
