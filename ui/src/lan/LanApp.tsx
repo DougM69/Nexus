@@ -9,8 +9,11 @@ import { t } from '../i18n'
 import { useViewport } from '../useViewport'
 import { StreamView } from '../remote-web/StreamView'
 import type { StreamEnvironment } from '../remote-web/stream-link'
+// A key as the shack shows one (its approval question, Remote access, Remote over this network), so the
+// operator compares the two screens by eye.
+import { shortFingerprint } from '../remote-web/stream-protocol'
 import { LanConnection, lanStream } from './connection'
-import { codeShaped, groupedKey, readTold, socketUrl, type ClosedReason, type ConnectReason, type InternetReason, type LanChoice, type LanFound, type LanStation, type PairReason } from './protocol'
+import { codeShaped, readTold, socketUrl, type ClosedReason, type ConnectReason, type InternetReason, type LanChoice, type LanFound, type LanInternet, type LanStation, type PairReason } from './protocol'
 import { lanFindLine, lanReachLine, lanUnreached } from '../remote-native/lanReach'
 import '../remote-monitor/monitor.css'
 import '../remote-web/remote.css'
@@ -125,7 +128,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const socket = useRef<PageSocket | null>(null)
   const [phase, setPhase] = useState<'opening' | 'open' | 'lost'>('opening')
   const [stations, setStations] = useState<LanStation[]>([])
-  const [internet, setInternet] = useState<string[]>([])
+  const [internet, setInternet] = useState<LanInternet[]>([])
   const [computer, setComputer] = useState('')
   const [storeFailed, setStoreFailed] = useState(false)
   const [pairing, setPairing] = useState(false)
@@ -223,7 +226,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           return
         case 'internetAdded':
           setBusy(null); setChoosing(null)
-          setSaid({ text: told.waiting ? t('lanWindow.internet.waiting') : t('lanWindow.internet.ready'), alert: false })
+          setSaid({ text: told.waiting ? t('lanWindow.internet.waiting', { key: shortFingerprint(told.key) }) : t('lanWindow.internet.ready'), alert: false })
           say({ type: 'stations' })
           return
         case 'internetRefused':
@@ -317,9 +320,10 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
       <section className="rm-card remote-section">
         <h2>{t('lanWindow.paired')}</h2>
         {stations.length === 0 && <p>{t('lanWindow.none')}</p>}
-        {stations.map(station => <div key={station.id} className="remote-station lan-station">
+        {stations.map(station => { const internetKey = internet.find(added => added.id === station.id)?.key
+          return <div key={station.id} className="remote-station lan-station">
           <p><strong>{t('lanWindow.stationAt', { address: station.addresses[0] })}</strong></p>
-          <p className="remote-site-status">{t('lanWindow.stationKey', { key: groupedKey(station.key) })}</p>
+          <p className="remote-site-status">{t('lanWindow.stationKey', { key: shortFingerprint(station.key) })}</p>
           {forgetting === station.id ? <>
             <p className="remote-warning">{t('lanWindow.forgetConfirm')}</p>
             <div className="remote-actions">
@@ -346,8 +350,13 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
             </div>
             <p className="settings-hint">{t('lanWindow.choiceHint')}</p>
           </>}
-          {internet.includes(station.id)
-            ? <p className="remote-site-status">{t('lanWindow.internet.added')}</p>
+          {/* With the road added, this computer's key for it: the station shows the same one when it
+              asks to approve this computer, and under Remote access ▸ Your computers. */}
+          {internetKey !== undefined
+            ? <>
+              <p className="remote-site-status">{t('lanWindow.internet.added')}</p>
+              <p className="remote-site-status">{t('lanWindow.internet.computerKey', { key: shortFingerprint(internetKey) })}</p>
+            </>
             : forgetting !== station.id && operating !== station.id && <div className="remote-actions">
               <button type="button" className="remote-button remote-button--quiet" disabled={!!busy || phase !== 'open'} title={t('lanWindow.internet.hint')}
                 onClick={() => { setBusy(`internet:${station.id}`); setSaid(null); say({ type: 'addInternet', stationId: station.id }) }}>
@@ -390,7 +399,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
                 onClick={() => connect(station.id, another.address.trim())}>{t('lanWindow.stream')}</button>
             </div>
           </form>}
-        </div>)}
+        </div> })}
         {!pairing && <div className="remote-actions">
           <button type="button" className="remote-button" disabled={phase !== 'open'} onClick={() => { setPairing(true); setSaid(null); look() }}>{t('lanWindow.pair')}</button>
         </div>}

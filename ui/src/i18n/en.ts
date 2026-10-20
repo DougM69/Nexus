@@ -526,7 +526,7 @@ export const EN = {
   "lanWindow.pairSubmit": "Pair",
   "lanWindow.pairing": "Pairing…",
   "lanWindow.cancel": "Cancel",
-  "lanWindow.pairedNow": "Paired. Press Stream to operate the station.",
+  "lanWindow.pairedNow": "Paired. Press Operate from this computer to work the station from here.",
   "lanWindow.disconnected": "Disconnected from the station.",
   "lanWindow.reason.badAddress": "That is not a station’s address. Type it as the station shows it, on this network.",
   "lanWindow.reason.badCode": "The code is sixteen characters, 0 to 9 and a to f. Check it against the station’s screen.",
@@ -569,7 +569,10 @@ export const EN = {
   "lanWindow.internet.added": "Internet road added (Beta): Operate from this computer uses it when this station is not on this network.",
   "lanWindow.internet.hint": "Sign in to Nexus Remote in your web browser, so Operate from this computer can reach this station over the internet when it is not on this network.",
   "lanWindow.internet.signingIn": "Finish signing in to Nexus Remote in your web browser, then come back here.",
-  "lanWindow.internet.waiting": "Internet road added. Approve this computer at the station, under Remote access, before you use it.",
+  // {{key}}: this computer's key for the road, in the eight groups the station shows it in when it asks
+  // to approve this computer ("Approve it only if this key matches the one Nexus shows on that computer").
+  "lanWindow.internet.waiting": "Internet road added. Approve this computer at the station, under Remote access, before you use it, and only if the station shows this computer’s key: {{key}}.",
+  "lanWindow.internet.computerKey": "This computer’s key for the internet road: {{key}}",
   "lanWindow.internet.ready": "Internet road added. Operate from this computer uses it when this station is not on this network.",
   "lanWindow.internet.reason.internetNotIncluded": "The internet road is part of Nexus Remote’s paid service, and your account does not include it now. Operating on this network stays free.",
   "lanWindow.internet.reason.internetNotReady": "Nexus Remote does not take sign-ins from Nexus yet. Try again after an update.",

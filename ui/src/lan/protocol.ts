@@ -16,6 +16,10 @@ export type LanStation = { id: string; addresses: string[]; key: string; typedAd
 export type LanFound = { name: string; address: string; protocol: number; key: string }
 /** One of the Remote account's stations, offered while the internet road is added. */
 export type LanChoice = { id: string; name: string }
+/** A station the internet road has been added to, by its LAN station id, and this computer's key for
+ *  that road: its fingerprint (SHA-256 of the key, lowercase hex), the one the station shows when it
+ *  asks to approve this computer. Never the private key. */
+export type LanInternet = { id: string; key: string }
 
 /** The road, open: the ids the station stamped and the key this computer pinned for it. */
 export type LanRoad = { stationId: string; deviceId: string; sessionId: string; stationKey: string; address: string }
@@ -54,9 +58,10 @@ export type InternetReason = (typeof INTERNET_REASONS)[number]
 const STATION_MESSAGES = ['operationResponse', 'streamSignal', 'streamState', 'status'] as const
 
 export type Told =
-  /** `internet`: the stations the internet road has been added to. `forgetUnreached`: after a
-   *  forget, why Nexus Remote could not be told to end this computer's approval there. */
-  | { type: 'stations'; stations: LanStation[]; internet: string[]; computer: string; error: string | null; forgetUnreached: string | null }
+  /** `internet`: the stations the internet road has been added to, each with this computer's key
+   *  for it. `forgetUnreached`: after a forget, why Nexus Remote could not be told to end this
+   *  computer's approval there. */
+  | { type: 'stations'; stations: LanStation[]; internet: LanInternet[]; computer: string; error: string | null; forgetUnreached: string | null }
   | { type: 'found'; shacks: LanFound[]; available: boolean }
   | { type: 'paired'; station: LanStation }
   | { type: 'pairRefused'; reason: PairReason }
@@ -68,8 +73,9 @@ export type Told =
   | { type: 'operating' }
   /** Adding the internet road: the sign-in waits in the system browser. */
   | { type: 'signingIn' }
-  /** The internet road was added to a station; `waiting` while the station has not approved it. */
-  | { type: 'internetAdded'; stationId: string; waiting: boolean }
+  /** The internet road was added to a station; `waiting` while the station has not approved it, and
+   *  `key`, this computer's key for the road, which the station shows when it asks. */
+  | { type: 'internetAdded'; stationId: string; waiting: boolean; key: string }
   | { type: 'internetRefused'; reason: InternetReason }
   /** Adding the internet road: the account has more than one station, and the operator picks this one. */
   | { type: 'chooseStation'; stations: LanChoice[] }
@@ -108,6 +114,10 @@ function station(raw: unknown): LanStation {
   const shown: LanStation = { id: text(value.id, UUID), addresses: value.addresses.map(a => text(a, /^[0-9.]+:[0-9]+$/, 21)), key: text(value.key, HEX64) }
   return typed.length ? { ...shown, typedAddress: text(value.typedAddress, TYPED, 259) } : shown
 }
+function internetRoad(raw: unknown): LanInternet {
+  const value = fields(raw, ['id', 'key'])
+  return { id: text(value.id, UUID), key: text(value.key, HEX64) }
+}
 function choice(raw: unknown): LanChoice {
   const value = fields(raw, ['id', 'name'])
   return { id: text(value.id, UUID), name: text(value.name, undefined, 96) }
@@ -129,7 +139,7 @@ export function readTold(raw: unknown): Told {
       if (!Array.isArray(value.stations) || value.stations.length > 8) throw Error('invalidLanMessage')
       const internet = value.internet === undefined ? [] : value.internet
       if (!Array.isArray(internet) || internet.length > 8) throw Error('invalidLanMessage')
-      return { type, stations: value.stations.map(station), internet: internet.map(id => text(id, UUID)),
+      return { type, stations: value.stations.map(station), internet: internet.map(internetRoad),
         computer: text(value.computer, undefined, 64), error: value.error === undefined ? null : text(value.error),
         forgetUnreached: value.forgetUnreached === undefined ? null : text(value.forgetUnreached) }
     }
@@ -151,9 +161,9 @@ export function readTold(raw: unknown): Told {
     case 'operating': fields(raw, ['type']); return { type }
     case 'signingIn': fields(raw, ['type']); return { type }
     case 'internetAdded': {
-      const value = fields(raw, ['type', 'stationId', 'waiting'])
+      const value = fields(raw, ['type', 'stationId', 'waiting', 'key'])
       if (typeof value.waiting !== 'boolean') throw Error('invalidLanMessage')
-      return { type, stationId: text(value.stationId, UUID), waiting: value.waiting }
+      return { type, stationId: text(value.stationId, UUID), waiting: value.waiting, key: text(value.key, HEX64) }
     }
     case 'internetRefused': return { type, reason: oneOf(INTERNET_REASONS, fields(raw, ['type', 'reason']).reason) }
     case 'chooseStation': {
@@ -170,11 +180,6 @@ export function readTold(raw: unknown): Told {
  *  whether Pair is worth pressing. */
 export function codeShaped(typed: string): boolean {
   return /^[0-9a-f]{16}$/i.test(typed.replace(/\s+/g, ''))
-}
-
-/** The first 128 bits of a key's fingerprint, in eight groups of four, as the station shows its own. */
-export function groupedKey(key: string): string {
-  return (key.slice(0, 32).match(/.{4}/g) ?? []).join(' ')
 }
 
 /** The socket on this page's own origin: the same path as the page, the launch secret in it. */

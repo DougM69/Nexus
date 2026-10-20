@@ -1164,13 +1164,82 @@ async fn forgetting_a_station_ends_its_internet_road_at_the_service_first() {
     }
 }
 
+/// A P-256 key's private half, out of the PKCS#8 document ring writes (lowercase hex): the 32 bytes
+/// after its `02 01 01 04 20`. Held to that shape, so a document laid out otherwise fails here instead
+/// of a search for the private half finding nothing.
+fn private_half(pkcs8: &str) -> &str {
+    assert_eq!(
+        pkcs8.len(),
+        276,
+        "a P-256 PKCS#8 document as ring writes one"
+    );
+    assert_eq!(
+        &pkcs8[62..72],
+        "0201010420",
+        "where its private half starts"
+    );
+    &pkcs8[72..136]
+}
+
+/// ★ The station asks the operator to approve this computer only if the key it shows matches the one
+/// Nexus shows here, so `stations` tells the page, for each station the internet road has been added
+/// to, this computer's key for that road as the station shows it: SHA-256 of the road key's public
+/// half (SPKI), lowercase hex. Never a private key, the road's or the LAN road's, whole or its private
+/// half alone, in either case. CONTROL: a station with no internet road is not listed there.
+#[tokio::test]
+async fn the_page_is_shown_this_computers_key_for_each_internet_road_never_a_private_key() {
+    const OTHER: &str = "60000000-0000-4000-8000-000000000002";
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    let paired = record(STATION, &["192.168.1.20:42075"]);
+    stations.keep(&paired).unwrap();
+    stations
+        .keep(&record(OTHER, &["192.168.1.21:42075"]))
+        .unwrap();
+    let (station_key, _) = ComputerKey::generate().unwrap();
+    let (_, pkcs8) = ComputerKey::generate().unwrap();
+    let road = InternetRoad {
+        station_id: "20000000-0000-4000-8000-000000000001".into(),
+        device_id: "30000000-0000-4000-8000-000000000002".into(),
+        station_key: station_key.public_key().to_string(),
+        pkcs8,
+    };
+    stations.keep_internet(STATION, &road).unwrap();
+    let origin = Origin::start(reach(store)).unwrap();
+    let mut socket = page_socket(&origin).await;
+    let told = said(&mut socket, json!({"type":"stations"})).await;
+    let text = told.to_string();
+    for (whose, pkcs8) in [
+        ("the road's", &road.pkcs8),
+        ("the LAN road's", &paired.pkcs8),
+    ] {
+        let private = private_half(pkcs8);
+        assert!(
+            !text.contains(pkcs8.as_str())
+                && !text.contains(private)
+                && !text.contains(&private.to_ascii_uppercase()),
+            "{whose} private key told to the page: {text}"
+        );
+    }
+    let public = ComputerKey::restore(&road.pkcs8).unwrap();
+    let spki = protocol::hex_bytes(public.public_key()).unwrap();
+    let shown = hex(ring::digest::digest(&ring::digest::SHA256, &spki).as_ref());
+    assert_eq!(
+        told["internet"],
+        json!([{"id":STATION,"key":shown}]),
+        "this computer's key for the road, as the station shows it: {text}"
+    );
+}
+
 /// ★ Adding the internet road for an account with two stations: the page is offered each one
 /// (`chooseStation`), and the one the operator picks goes back to the add, which then says it was
-/// added. CONTROL: cancelled (no station), the add is told none was picked.
+/// added, with this computer's key for the road as the station shows it. CONTROL: cancelled (no
+/// station), the add is told none was picked.
 #[tokio::test]
 async fn the_page_picks_the_station_while_the_internet_road_is_added() {
     use super::internet::Choice;
     const CLUB: &str = "20000000-0000-4000-8000-0000000000c1";
+    const ROAD_KEY: &str = "9f8e7d6c5b4a39289f8e7d6c5b4a39289f8e7d6c5b4a39289f8e7d6c5b4a3928";
     for pick in [Some(STATION), None] {
         let picked: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
         let kept = picked.clone();
@@ -1191,7 +1260,9 @@ async fn the_page_picks_the_station_while_the_internet_road_is_added() {
                     ];
                     let answer = choose(offered).await;
                     kept.lock().unwrap().push(answer.clone());
-                    answer.map(|_| true).ok_or("stationNotChosen")
+                    answer
+                        .map(|_| (true, ROAD_KEY.to_string()))
+                        .ok_or("stationNotChosen")
                 })
             }),
             ..reach(StationStore::default())
@@ -1239,7 +1310,7 @@ async fn the_page_picks_the_station_while_the_internet_road_is_added() {
         match pick {
             Some(_) => assert_eq!(
                 told,
-                json!({"type":"internetAdded","stationId":STATION,"waiting":true})
+                json!({"type":"internetAdded","stationId":STATION,"waiting":true,"key":ROAD_KEY})
             ),
             None => assert_eq!(
                 told,

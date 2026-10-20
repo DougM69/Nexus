@@ -154,8 +154,9 @@ fn tunnel_identity(pkcs8: &str, binding: &Binding) -> Option<Arc<lan::tls::Ident
     lan::tls::Identity::new(pkcs8, binding.station_id.clone()).map(Arc::new)
 }
 /// SHA-256 of a device key's SPKI, lowercase hex in and out: its pin (A5). The station's own key is
-/// shown the same way (S3-L1). `None` for anything that is not the shape of a P-256 key.
-fn fingerprint(public_key: &str) -> Option<String> {
+/// shown the same way (S3-L1), and so is a computer's key for its internet road on that computer
+/// (`lan_client::internet::shown_key`). `None` for anything that is not the shape of a P-256 key.
+pub(crate) fn fingerprint(public_key: &str) -> Option<String> {
     if !tempo_stream::protocol::device_key(public_key) {
         return None;
     }

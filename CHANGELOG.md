@@ -561,6 +561,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   AFSK transmit tones as well as the decoder, so a click while transmitting slid the signal you were sending to
   wherever you clicked. While an over is on the air or queued, continuous TX is on or Tune is keyed, a click now does
   nothing, and the waterfall's hint says tuning is held.
+- **Nexus Remote: the second PC shows its own key, so you can check it before you approve it at the shack.** After
+  **Add the internet road**, the shack asks "Let … operate this station?" and says to approve only if the key matches
+  the one Nexus shows on that computer, but the second PC showed no key of its own. **Stations on this network** now
+  shows **This computer's key for the internet road** on that station's row, and the line after **Add the internet
+  road** shows it too, in the same eight groups of four as the shack. The station's own key there is now written in
+  capitals, as the shack writes it.
+- **Stations on this network: after pairing, the line names the button that is there.** It said to press Stream, but a
+  paired station's row leads with **Operate from this computer**. The line now says to press that.
+- **The built-in guide's Remote access section matches Remote as it is now.** It still called Remote an early pilot
+  on a test service, and described the Remote page's own FT8/FT4 controls and Log QSO form, which the page no longer
+  has. It now says that a browser streaming the station needs only station controls, and that the logging and FT8/FT4
+  transmit permissions under Advanced are not used by the Remote page any more.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
