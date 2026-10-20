@@ -10624,6 +10624,17 @@ impl RadioLoop {
                         if cw_err.is_none() {
                             self.cw_keying_until = self.cw_busy_until;
                         }
+                        // ⛔ A WORD THE RADIO'S OWN KEYER IS NEVER HANDED (a `;`, a control
+                        // character, a character with no Morse: `rig::cw_text_refusal`) was refused
+                        // before anything was sent, so nothing waits on it, and the rest of the
+                        // message is dropped with it, as a refused key drops it: never keyed part
+                        // way with a word missing. The CW screen says which character, once.
+                        let unsendable = cw_err
+                            .as_ref()
+                            .and_then(|_| crate::rig::cw_text_refusal(&text));
+                        if unsendable.is_some() {
+                            self.cw_busy_until = 0.0;
+                        }
                         // Nexus's own Flex client says why it sent nothing (the slice not in CW,
                         // break-in off, ...), in place of the Hamlib advice, which would be wrong
                         // there. Its refusal drops the rest of the message, as a refused key does,
@@ -10635,7 +10646,7 @@ impl RadioLoop {
                             .map(|(why, _)| why);
                         {
                             let mut eng = engine_lock(engine);
-                            if let Some(why) = flex_why {
+                            if let Some(why) = unsendable.or(flex_why) {
                                 tempo_core::applog::info(
                                     "tx",
                                     &format!("CW not keyed: {why} (dropped)"),
@@ -17386,6 +17397,7 @@ mod tests {
     mod clock_repair_tests;
     mod contest_reply;
     mod contest_status;
+    mod cw_cat_text;
     mod cw_speed_match;
     mod cw_stop;
     mod decode_in_flight;

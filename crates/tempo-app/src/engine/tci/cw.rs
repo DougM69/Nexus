@@ -10,7 +10,8 @@
 //!   clock repair, and the CW section. ⛔ A program never arms: its CW is queued as Enter Sends
 //!   Message queues (`send_cw_armed`), never as an F-key, which is the operator's act and turns TX
 //!   on. Nothing here writes the latch, a hold, a trip or the watchdog clock.
-//! - **The text filter** ([`cw_plan`]): only characters every one of Nexus's keyers sends, or the
+//! - **The text filter** ([`cw_plan`]): only characters every one of Nexus's keyers sends, by the
+//!   one rule Nexus's own CW keeps on the radio's keyer too ([`tempo_core::cw::sendable`]), or the
 //!   whole command is refused ([`Refusal::CwText`]) and nothing is queued; never a `;`, which would
 //!   carry a second command to a Kenwood, Yaesu or Elecraft radio inside the rig keyer's own one.
 //! - **The programs' speed** ([`Engine::tci_cw_wpm`]): what a program set (`cw_macros_speed`,
@@ -297,8 +298,9 @@ impl Engine {
 
 /// ⛔ THE TEXT FILTER: a program's CW command as Nexus keys it, runs of words at their speed in the
 /// order they go out, or [`Refusal::CwText`], refused whole and never sent changed:
-/// - only characters every one of Nexus's keyers sends ([`tempo_core::cw::morse_code`]: the
-///   letters in either case, the digits and `. , ? / = + - ( ) : @`), with spaces between words;
+/// - only characters every one of Nexus's keyers sends ([`tempo_core::cw::sendable`], the rule
+///   Nexus's own CW keeps on the radio's keyer too: the letters in either case, the digits and
+///   `. , ? / = + - ( ) : @`), with spaces between words;
 /// - ⛔ never `;`, which has Morse but ends a CAT command on Kenwood, Yaesu and Elecraft radios: in
 ///   a word the radio's own keyer sends (`KY TEST;FA00007000000;`) it carries a second command to
 ///   the radio, here a retune;
@@ -344,8 +346,7 @@ fn cw_plan(cw: &Cw, wpm: u32) -> Result<Vec<(String, u32)>, Refusal> {
                 '>' => wpm = wpm_in_range(wpm.saturating_add(CW_MARK_WPM)),
                 '<' => wpm = wpm_in_range(wpm.saturating_sub(CW_MARK_WPM)),
                 '|' => {}
-                ';' => return Err(Refusal::CwText),
-                c if tempo_core::cw::morse_code(c).is_some() => word.push(c.to_ascii_uppercase()),
+                c if tempo_core::cw::sendable(c) => word.push(c.to_ascii_uppercase()),
                 _ => return Err(Refusal::CwText),
             }
             if word.is_empty() {

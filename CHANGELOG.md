@@ -635,6 +635,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   then. NEEDS-BENCH: an Icom on Native Icom CI-V into a dummy load, Nexus quit while Tune is keyed: the radio returns
   to receive at once. With the CI-V diagnostic log on, each close (USB, and the Icom network connection) shows one
   transmit-off and nothing after it.
+- **CW sent through the radio's own keyer no longer passes a `;` to Kenwood, Yaesu and Elecraft radios, where it would
+  be read as a radio command.** With the CAT keyer (Settings ▸ CW ▸ Keyer backend: CAT), a word holding a `;`, a
+  control character or a character Nexus has no Morse for (an apostrophe, `!`, an accented letter) is no longer
+  handed to the radio on any radio: the CW screen says which character, the words before it go out as before, and
+  the rest of that message is not sent. Typed CW, F-key macros, Enter Sends Message and CW sent from a computer
+  driving the station all keep to this, by the same rule that TCI programs' CW already kept. A callbook name or
+  state that `{HISNAME}` and `{HISSTATE}` key keeps only the characters the keyer can send, so the rest of it still
+  goes out. The WinKeyer, the serial key line and the soundcard keyer key exactly as before. NEEDS-BENCH: on a
+  Kenwood or Elecraft and on an FTDX10, each on the CAT keyer into a dummy load, an F-key macro `CQ TEST;X` keys
+  `CQ`, stops with the warning and leaves the dial where it was; `CQ TEST K` keys in full.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
