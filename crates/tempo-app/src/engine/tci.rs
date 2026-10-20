@@ -18,13 +18,13 @@
 //!
 //! | # | Gate | Refusal |
 //! |---|---|---|
-//! | 2 | "Programs on TCI may transmit" is on | `Switch` |
+//! | 2 | "Programs on TCI may transmit" is on; for CW, the CW tier as well | `Switch`, `Tier` |
 //! | 3 | no Stop held, no watchdog trip, TX armed, no context hold | `StopHold`, `WatchdogTrip`, `Disarmed`, `ContextHold` |
 //! | 4 | the radio's connection can transmit | `Connection` |
-//! | 5 | the licence: a `tci` over across its whole passband, a microphone key as Nexus's own, Tune at its carrier | `Licence` |
-//! | 6 | nothing else owns the transmitter (a program re-asserting its own key passes) | `Owner` |
-//! | 7 | no clock repair holds transmit (nor drops a key already held) | `ClockRepair` |
-//! | 8 | the section: a `tci` over or a microphone key in Phone, Tune in any; a `tci` over in Digital not yet | `Section`, `SlotTimed` |
+//! | 5 | the licence: a `tci` over across its whole passband, a microphone key as Nexus's own, Tune at its carrier, CW as Nexus's own CW | `Licence` |
+//! | 6 | nothing else owns the transmitter (a program re-asserting its own key passes, and its CW queues behind its own) | `Owner` |
+//! | 7 | no clock repair holds transmit (nor drops a key already held; CW is never admitted under one) | `ClockRepair` |
+//! | 8 | the section: a `tci` over or a microphone key in Phone, CW in CW, Tune in any; a `tci` over in Digital not yet | `Section`, `SlotTimed` |
 //! | 9 | a `tci` over has the program's audio stream started | `AudioStream` |
 //!
 //! Item 1, receiver 0, is the server's. The verdict for a `tci` key is also what each program is
@@ -48,32 +48,41 @@
 //!   owner's release, a lost socket, any stop and the same ceiling.
 //! - **Tune** (`tune:0,true`): Nexus's own tune carrier, with its licence rule and its timeout, and
 //!   not the operator's act, so it never restarts the watchdog clock.
+//! - **CW** (`cw_macros`, `cw_msg`): a logger's CW text, keyed by Nexus's own CW keyer in the CW
+//!   section, filtered to what that keyer can send and at the programs' own speed
+//!   (`engine/tci/cw.rs`, which has the detail).
 //!
 //! ## Where each stop reaches a program
 //!
-//! - `halt_tx` and TX Off end every program's key, over and tune, hard ([`Engine::drop_tci_all`]):
-//!   the over's feed closes, its abort is armed when it had keyed (the loop flushes and unkeys), and
-//!   the stop holds, so no key is admitted until the operator's own arm. A band or radio change
-//!   halts through `halt_tx`, and its context hold then refuses programs' keys until that arm.
+//! - `halt_tx` and TX Off end every program's key, over, tune and CW, hard
+//!   ([`Engine::drop_tci_all`]): the over's feed closes, its abort is armed when it had keyed (the
+//!   loop flushes and unkeys), and the stop holds, so no key is admitted until the operator's own
+//!   arm. A band or radio change halts through `halt_tx`, and its context hold then refuses
+//!   programs' keys until that arm.
 //! - A program's lost socket ([`Engine::tci_disconnected`]) and its `stop;` ([`Engine::tci_end_own`])
-//!   end what THAT program holds, hard, now.
+//!   end what THAT program holds, hard, now, its CW included.
+//! - `cw_macros_stop` from any program stops CW from any origin ([`Engine::tci_cw_stop`]).
 //! - Another program's `trx:0,false` stops whatever is on the air, as WSJT-X's UDP HaltTx does
 //!   ([`Engine::tci_release`]).
 //! - The radio loop's tick: every station gate, Nexus's own key (a tune or the operator's PTT takes
 //!   the transmitter), the switch, the section, the ceiling and the gap ([`Engine::poll_tci`]).
-//! - A settings save turning "Programs on TCI may transmit" off ([`Engine::apply_settings`]).
+//! - A settings save turning "Programs on TCI may transmit" off, or the CW tier for programs' CW
+//!   ([`Engine::apply_settings`]).
 //!
 //! ## One owner
 //!
 //! From its admission a program owns the transmitter ([`super::TxOwner::Tci`]): every source that
 //! consults the arbiter refuses while it does, the CAT broker's clients and the other programs
 //! included, and the slot planner plans no over ([`Engine::plan_tx`]). A program is refused while
-//! anything else owns it.
+//! anything else owns it. A program's CW owns it as Nexus's own CW does ([`super::TxOwner::Cw`]),
+//! through the one CW queue.
 use super::{now_unix_millis, reset_ft8_a7_without_waiting, DataFrame, Engine};
 use crate::mic::{MicDrop, MicFeed, MicFrame, MicGates, MicLatch, MicTick, TCI_OVER};
 use crate::settings::OperatingMode;
 use std::time::Instant;
 use tempo_net::tci::server::{KeyKind, Refusal};
+
+mod cw;
 
 /// What a program's audio over is judged as (§3.6): the whole transmit passband, 0 to 3 kHz of
 /// audio on the sideband's side of the carrier. In Phone the gate judges its own phone passband.
@@ -95,6 +104,8 @@ enum Ask {
     Mic,
     /// `tune:0,true`.
     Tune,
+    /// `cw_macros`, `cw_msg`: CW text, keyed by Nexus's CW keyer.
+    Cw,
 }
 
 /// A program's key, which owns the transmitter.
@@ -125,6 +136,8 @@ pub(super) struct TciState {
     media: u64,
     /// One-shot: the radio loop flushes the output ring and unkeys (an over's hard end).
     abort: bool,
+    /// Programs' CW: their speed, and whose word the keyer was handed last.
+    cw: cw::TciCw,
 }
 
 impl Default for TciState {
@@ -138,6 +151,7 @@ impl Default for TciState {
             seq: 0,
             media: 0,
             abort: false,
+            cw: cw::TciCw::default(),
         }
     }
 }
@@ -161,6 +175,10 @@ impl Engine {
         if !self.tci_transmit() {
             return Err(Refusal::Switch);
         }
+        // CW is the server's CW tier as well (`Settings::tci_server_cw`): off, it is not offered.
+        if ask == Ask::Cw && !self.settings.tci_server_cw {
+            return Err(Refusal::Tier);
+        }
         if self.tx_stop_hold {
             return Err(Refusal::StopHold);
         }
@@ -180,6 +198,9 @@ impl Engine {
             Ask::Over => self.tci_over_licensed(),
             Ask::Mic => self.tx_allowed(),
             Ask::Tune => self.tune_allowed(),
+            // As Nexus's own CW asks before it queues (`send_cw_armed`): at the dial, and as CW
+            // where the keyer puts it, which in the CW section are the one judgement.
+            Ask::Cw => self.tx_allowed() && self.tx_allowed_as(OperatingMode::Cw),
         };
         if !licensed {
             return Err(Refusal::Licence);
@@ -188,11 +209,15 @@ impl Engine {
         if !again && self.tx_owner().is_some() {
             return Err(Refusal::Owner);
         }
-        if !again && self.clock_repair_holds_tx() {
+        // A key already held is not dropped by a clock repair, but every CW word is while one
+        // lasts (`poll_cw_word`), so a program's CW is never queued under one, its own included.
+        if (!again || ask == Ask::Cw) && self.clock_repair_holds_tx() {
             return Err(Refusal::ClockRepair);
         }
         match (ask, self.settings.operating_mode) {
-            (Ask::Over | Ask::Mic, OperatingMode::Phone) | (Ask::Tune, _) => {}
+            (Ask::Over | Ask::Mic, OperatingMode::Phone)
+            | (Ask::Cw, OperatingMode::Cw)
+            | (Ask::Tune, _) => {}
             // The slot-timed modes wait for the loop bench (module header).
             (Ask::Over, OperatingMode::Digital) => return Err(Refusal::SlotTimed),
             _ => return Err(Refusal::Section),
@@ -215,6 +240,8 @@ impl Engine {
             }
             Ask::Mic => self.tci.key.is_some_and(|k| k.program == program && k.mic),
             Ask::Tune => self.tuning && self.tci.tune_by == Some(program),
+            // TCI's macros queue behind the one being sent: only behind the program's own.
+            Ask::Cw => self.tci_cw_extends(program),
         }
     }
 
@@ -287,12 +314,13 @@ impl Engine {
         self.tci_verdict(program, Ask::Over, audio_started).is_ok()
     }
 
-    /// The program that owns the transmitter, by any kind of key or its tune, or `None`.
+    /// The program that owns the transmitter, by any kind of key, its tune or its CW, or `None`.
     pub fn tci_owner(&self) -> Option<u64> {
         self.tci
             .key
             .map(|k| k.program)
             .or(self.tci.tune_by.filter(|_| self.tuning))
+            .or_else(|| self.tci_cw_on_air())
     }
 
     /// `trx:0,false…` from `program` (§3.4). From the program that holds the key, the GRACEFUL end:
@@ -361,12 +389,15 @@ impl Engine {
         if self.tci.tune_by == Some(program) {
             self.end_tci_tune(why);
         }
+        self.end_tci_cw(|from| from == Some(program), why);
     }
 
-    /// Every program's key, over and tune, hard: the stops' hook (`halt_tx`, TX Off, the switch).
+    /// Every program's key, over, tune and CW, hard: the stops' hook (`halt_tx`, TX Off, the
+    /// switch).
     pub(super) fn drop_tci_all(&mut self) {
         self.drop_tci_key("a stop");
         self.end_tci_tune("a stop");
+        self.end_programs_cw("a stop");
     }
 
     /// ⛔ THE ONE KILL PATH for a program's key, hard: the over's feed closes first (its epoch
@@ -652,7 +683,8 @@ mod tests {
     use crate::dto::Tier;
     use crate::engine::{now_unix_secs, TxOwner};
     use std::time::Duration;
-    use tempo_net::tci::server::Mic;
+    use tempo_net::tci::server::{Cw, CwSpeed, Mic};
+    use tempo_net::tci::wire::Text;
 
     const P1: u64 = 1;
     const P2: u64 = 2;
@@ -682,6 +714,15 @@ mod tests {
         e.set_frequency(14.074, "20m", "USB");
         e.set_tx_enabled_by_operator(true);
         assert!(e.tx_enabled(), "premise: the operator armed Digital");
+        e
+    }
+
+    /// The same station in the CW section, on 20 m's CW segment, TX armed as entering CW arms it.
+    fn cw_section() -> Engine {
+        let mut e = phone();
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "CW");
+        assert!(e.tx_enabled(), "premise: entering CW arms TX");
         e
     }
 
@@ -1093,6 +1134,30 @@ mod tests {
             ("P1 retune", |s| {
                 let _ = s.e.tci_retune_refusal();
             }),
+            ("P1 cw_macros", |s| {
+                let text = Text::new("CQ TEST").expect("printable");
+                let _ = s.e.tci_cw(P1, &Cw::Macro(text));
+            }),
+            ("P2 cw_msg", |s| {
+                let t = |p: &str| Text::new(p).expect("printable");
+                let _ = s.e.tci_cw(
+                    P2,
+                    &Cw::Message {
+                        prefix: t("TU"),
+                        call: t("K1ABC$2"),
+                        suffix: t("5NN"),
+                    },
+                );
+            }),
+            ("P1 cw_macros_speed 99", |s| {
+                let _ = s.e.tci_cw_speed(CwSpeed::Set(99));
+            }),
+            ("the loop keys a CW word", |s| {
+                if let Some((_, wpm, _)) = s.e.poll_cw_word() {
+                    s.e.observe_cw_keying(Some(f64::from(12_000 / wpm)));
+                }
+            }),
+            ("P2 cw_macros_stop", |s| s.e.tci_cw_stop(P2)),
         ]
     }
 
@@ -1129,6 +1194,12 @@ mod tests {
                 e
             }),
             ("Digital, armed", digital),
+            ("CW, armed", cw_section),
+            ("CW, after Stop TX", || {
+                let mut e = cw_section();
+                e.halt_tx();
+                e
+            }),
         ]
     }
 

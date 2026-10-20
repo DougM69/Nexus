@@ -119,6 +119,9 @@ pub enum Refusal {
     SlotTimed,
     /// A `tci` key with no audio stream started (item 9).
     AudioStream,
+    /// CW text Nexus will not key (§3.5 `cw_macros`): a character its keyer cannot send, a `;`,
+    /// over 256 characters, or more than Nexus queues for programs at once. Refused whole.
+    CwText,
     /// A dial or mode change while anything is on the air (§2.4).
     OnAir,
     /// Within 200 ms of the operator's own change (§2.4).
@@ -153,6 +156,10 @@ impl Refusal {
                 "FT8, FT4 and other slot-timed modes may not transmit through TCI yet"
             }
             Refusal::AudioStream => "no TCI audio stream",
+            Refusal::CwText => {
+                "CW Nexus will not send: a character with no Morse, a semicolon, over 256 \
+                 characters, or too much already waiting"
+            }
             Refusal::OnAir => "not while transmitting",
             Refusal::OperatorChange => "the operator just changed it",
             Refusal::Limits => "outside the radio's range",

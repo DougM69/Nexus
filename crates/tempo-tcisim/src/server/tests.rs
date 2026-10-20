@@ -592,6 +592,11 @@ fn chrono_late_holds_the_first_chrono_back_by_its_delay() {
     let mut c = Client::ready(&sim);
     c.send("audio_start:0;trx:0,true,tci;");
     c.frame(kind::TX_CHRONO).unwrap();
+    // The simulator logs a write once it has made it, so the chrono can reach us before its
+    // entry: wait for the entry.
+    assert!(sim.wait_for(WAIT, |log| log.iter().any(
+        |l| matches!(&l.event, Event::FrameOut { header: Some(h), .. } if h.kind == kind::TX_CHRONO)
+    )));
     // Measured from the radio's decision to key (the echo goes out with it, the dialect having no
     // echo delay); a write is stamped no earlier than it was due.
     let keyed = sim
@@ -1024,6 +1029,11 @@ fn slow_holds_every_text_back_by_its_delay_and_not_the_frames() {
     assert!(first >= connected + ms(250), "{connected:?} then {first:?}");
     c.send("audio_start:0;vfo:0,0,7074000;");
     c.text_until(|t| t == "vfo:0,0,7074000;").unwrap();
+    // The echo's entry is logged once the write is made, after it can reach us: wait for it. The
+    // acknowledgement went out first, so its entry is already there.
+    assert!(sim.wait_for(WAIT, |log| log.iter().any(
+        |l| matches!(&l.event, Event::TextOut { text, .. } if text == "vfo:0,0,7074000;")
+    )));
     let log = sim.log();
     let command = log
         .iter()
