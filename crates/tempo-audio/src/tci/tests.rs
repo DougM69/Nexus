@@ -1050,16 +1050,17 @@ fn first_audio(sent: &[f32], from: usize) -> Option<usize> {
 }
 
 /// The transmit frames the server read from `conn`, in order: when, whether it held our key then,
-/// and how each fit the TX_CHRONO it answered.
-fn frames_in(log: &[Logged], conn: usize) -> Vec<(Duration, bool, Option<Fit>)> {
+/// how each fit the TX_CHRONO it answered, and its size in bytes.
+fn frames_in(log: &[Logged], conn: usize) -> Vec<(Duration, bool, Option<Fit>, usize)> {
     log.iter()
         .filter_map(|l| match &l.event {
             SimEvent::FrameIn {
                 conn: c,
                 ours,
                 asked,
+                bytes,
                 ..
-            } if *c == conn => Some((l.at, *ours, *asked)),
+            } if *c == conn => Some((l.at, *ours, *asked, *bytes)),
             _ => None,
         })
         .collect()
@@ -1103,6 +1104,11 @@ fn nexus_audio_goes_out_as_the_sdr_program_pulls_it_with_silence_around_it() {
         });
         assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
         wait_unkeyed(&d);
+        // Each chrono answered once, never more (the last answers may still be on their way).
+        assert!(
+            sim.wait_for(WAIT, |log| frames_in(log, 0).len() == chronos_to(log, 0)),
+            "{what}: each chrono answered once"
+        );
         let log = sim.log();
         let sent = sim.tx_audio(0);
         let want = at_48k(&over, 0.8);
@@ -1117,24 +1123,24 @@ fn nexus_audio_goes_out_as_the_sdr_program_pulls_it_with_silence_around_it() {
             "{what}: silence after it"
         );
         let frames = frames_in(&log, 0);
+        assert!(
+            frames
+                .iter()
+                .all(|(.., bytes)| *bytes == tempo_tcisim::frame::HEADER_LEN + 2 * FRAMES * 4),
+            "{what}: every answer exactly its chrono's ask, 2048 float32 values: {frames:?}"
+        );
         assert_eq!(
             sent.len(),
             frames.len() * FRAMES,
-            "{what}: every answer exactly its chrono's ask"
+            "{what}: channel 0 of each"
         );
         let stop = command_at(&log, 0, "trx:0,false").expect("our stop");
         assert!(
             frames
                 .iter()
                 .filter(|(at, ..)| *at < stop)
-                .all(|(_, ours, fit)| *ours && *fit == Some(Fit::Values)),
+                .all(|(_, ours, fit, _)| *ours && *fit == Some(Fit::Values)),
             "{what}: each answer for our key, in the chrono's own size: {frames:?}"
-        );
-        let chronos = chronos_to(&log, 0);
-        assert!(
-            frames.len() <= chronos && frames.len() + 2 >= chronos,
-            "{what}: {} answers to {chronos} chronos",
-            frames.len()
         );
     }
 }
