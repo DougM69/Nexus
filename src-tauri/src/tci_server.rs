@@ -6,14 +6,26 @@
 //! a socket, and nothing here can make the server listen anywhere but `127.0.0.1` and `::1`.
 //!
 //! WHAT A PROGRAM MAY DO, AND WHAT IT MAY NOT (design §2.4, §3):
-//! - **Nothing a program sends transmits yet.** ⛔ Every key, Tune and CW is refused here
-//!   ([`transmit_verdict`]): the engine's TCI rules (the program as an owner of the transmitter,
-//!   its verdict, the passband judgement, the TCI over) are task S3's, and until they exist the
-//!   answer is closed. A program is told as TCI tells any key that did not take (`trx:0,false;`),
-//!   and its `tx_enable` reads false, from the same function. Its transmit audio is dropped.
-//! - **Every stop a program sends is honoured, ungated.** `trx:0,false` from a program that keyed
-//!   nothing stops whatever is on the air, as WSJT-X's UDP Halt Tx does (design Q8 A); `tune:0,false`
-//!   ends Tune whoever started it; `cw_macros_stop` ends CW from any origin.
+//! - **A program transmits only through the engine's TCI rules** (`tempo_app`'s `engine/tci.rs`).
+//!   ⛔ Its key and its Tune are the engine's verdict and nothing else: "Programs on TCI may
+//!   transmit" (the station's setting, off by default, changed only at the shack), then every gate
+//!   in front of Nexus's own transmissions, then one owner of the transmitter, then the section
+//!   (Phone for an over of its audio or the radio's microphone; FT8, FT4 and the other slot-timed
+//!   modes refused until the loop bench, the operator's ruling of 2026-10-19). A refusal is told as
+//!   TCI tells any key that did not take (`trx:0,false;`, `tune:0,false;`), and each program's
+//!   `tx_enable` is the same verdict. Nothing a program sends arms transmit, lets go of the
+//!   operator's Stop or a watchdog trip, or raises the power. CW is not offered yet (task S7).
+//! - **A program's over** is armed by its key, fed by its transmit audio (read here into 12 kHz
+//!   mono with the engine lock released, and taken by the engine only from the over's owner), keyed
+//!   and re-gated by the radio loop on every tick, and asked for its audio by TX_CHRONO.
+//! - **Every stop wins.** Stop TX, TX Off and the switch going off end a program's key in the
+//!   engine; the next publish tells the server the program owns nothing, so it takes no more of
+//!   its audio. A program's lost connection ends what it held at once, hard.
+//! - **Every stop a program sends is honoured, ungated.** `trx:0,false` from the key's owner ends
+//!   its over gracefully (what it sent plays out); from a program that keyed nothing it stops
+//!   whatever is on the air, as WSJT-X's UDP Halt Tx does (design Q8 A); `stop;` ends the
+//!   program's own key and Tune; `tune:0,false` ends Tune whoever started it; `cw_macros_stop`
+//!   ends CW from any origin.
 //! - **The dial and the mode go through the CAT broker's own rules** (`shared_retune`,
 //!   `shared_mode_change` in `lib.rs`): refused while anything is on the air (Q9 A), and the dial
 //!   for 200 ms after a change no program made (the spec's §3.5: the radio program's own change
@@ -42,11 +54,13 @@ use std::time::{Duration, Instant};
 use tempo_app::dto::{TciProgramStatus, TciServerStatus};
 use tempo_app::engine::{engine_lock, Engine, MeterFeed, TxOwner};
 use tempo_audio::receive_audio::{ReceiveAudioFeed, ReceiveAudioReader};
-use tempo_audio::tci_audio::{Format, Stream, ToProgram};
-use tempo_net::tci::frame::{self, BlockHeader, BlockKind, Chrono, LengthMeaning};
+use tempo_audio::tci_audio::{Format, FromProgram, Stream, ToProgram, TxHeader};
+use tempo_net::tci::frame::{
+    self, BlockHeader, BlockKind, Chrono, LengthMeaning, RawHeader, HEADER_LEN,
+};
 use tempo_net::tci::server::{
     AudioFormat, ClientId, Closed, Config, Cw, Event, Handle, HandshakeRefusal, KeyKind, Limits,
-    Program, Refusal, Server, Snapshot, TciBackend, DEFAULT_PORT, UNKNOWN_LIMITS,
+    Program, Refusal, Server, Snapshot, TciBackend, UNKNOWN_LIMITS,
 };
 use tempo_net::tci::wire::{Hz, Word, MAX_HZ};
 use tempo_net::tci::Trx;
@@ -72,44 +86,30 @@ const TX_BUFFERING_MS: u32 = 100;
 /// What an armed over asks for ahead of real time: the same buffering.
 const LEAD: Duration = Duration::from_millis(TX_BUFFERING_MS as u64);
 
-/// ⚠️ THE SWITCH IS NOT ON THIS BRANCH YET. `Settings::tci_server` and `tci_server_port` are task
-/// S4's, on another branch. Until they land here the switch reads as this constant, off, and the
-/// server never starts, whatever else is built.
-const TCI_SERVER_SWITCH: bool = false;
-
-/// ⚠️ "Programs on TCI may transmit" (`Settings::tci_server_tx`, task S4) is not on this branch
-/// either: it reads as off, its default.
-const PROGRAMS_MAY_TRANSMIT: bool = false;
-
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The port the operator asked the server to serve on, or `None` while it is switched off. With
-/// S4's settings this reads `tci_server` and `tci_server_port`.
-fn wanted(_e: &Engine) -> Option<u16> {
-    TCI_SERVER_SWITCH.then_some(DEFAULT_PORT)
+/// The port the operator asked the server to serve on (`Settings::tci_server_port`), or `None`
+/// while "Share by TCI" (`Settings::tci_server`) is off, its default.
+fn wanted(e: &Engine) -> Option<u16> {
+    let s = e.settings();
+    s.tci_server.then_some(s.tci_server_port)
 }
 
-/// The verdict for anything a program asks to transmit: a key, Tune, CW (design §3.2), and the
-/// `tx_enable` each program is told, so the two can never disagree.
-///
-/// ⛔ CLOSED UNTIL TASK S3. The design's first gate here is the station's switch (§3.2 item 2),
-/// which reads off. Past it, the engine's own TCI verdict (`Engine::tci_tx_verdict`: every Nexus
-/// gate, then the program's ownership of the transmitter and the passband) does not exist yet, so
-/// a key that passed the switch would still be refused as not offered. Never `Ok` before S3 lands
-/// that verdict and the TCI over that would carry the program's audio.
-fn transmit_verdict(_e: &Engine) -> Result<(), Refusal> {
-    if !PROGRAMS_MAY_TRANSMIT {
-        return Err(Refusal::Switch);
+/// The connected program the engine names by its number (`ClientId::get`), if it is connected.
+fn program_id(programs: &[Program], n: Option<u64>) -> Option<ClientId> {
+    let n = n?;
+    programs.iter().map(|p| p.id).find(|id| id.get() == n)
+}
+
+/// The program whose TCI over is armed, keyed or playing out: the one the pump asks for transmit
+/// audio. A microphone key or a program's Tune has no over to feed.
+fn armed_over(e: &Engine, programs: &[Program]) -> Option<ClientId> {
+    if !e.tci_over_armed() {
+        return None;
     }
-    Err(Refusal::Tier)
-}
-
-/// The program whose TCI over is armed: the one the pump asks for transmit audio. ⛔ None until
-/// task S3, since no program's key is ever admitted here ([`transmit_verdict`]).
-fn armed_over(_e: &Engine) -> Option<ClientId> {
-    None
+    program_id(programs, e.tci_owner())
 }
 
 /// The dial in Hz.
@@ -181,7 +181,6 @@ fn rx_dbm(dial: i64, over_s9_db: i32) -> f64 {
 /// The station as programs are told it, read from the engine; the caller holds the engine lock.
 fn station(e: &Engine, programs: &[Program], smeter_db: Option<i32>) -> Snapshot {
     let dial = dial_hz(e);
-    let verdict = transmit_verdict(e).is_ok();
     Snapshot {
         radio: u64::from(e.settings().active_radio),
         // Nexus has the radio's own range only as a yes or no per frequency (`rig_covers_mhz`,
@@ -192,17 +191,23 @@ fn station(e: &Engine, programs: &[Program], smeter_db: Option<i32>) -> Snapshot
         mode: tci_mode(e),
         drive: drive(e),
         tune_drive: tune_drive(e),
-        // S3: or a program's key admitted and its over armed (tempo-net's contract 2).
+        // A program's key counts from its admission, armed or keyed: the engine's arbiter holds it
+        // (tempo-net's contract 2).
         trx: e.on_air(),
         tune: e.tuning(),
-        // S3: the program whose key owns the transmitter (contract 3).
-        owner: None,
-        tx_enable: programs.iter().map(|p| (p.id, verdict)).collect(),
+        // ⛔ The program whose key or Tune owns the transmitter, as the engine holds it (contract
+        // 3): once a stop has ended it, the server takes no more of its audio.
+        owner: program_id(programs, e.tci_owner()),
+        // The engine's verdict for a `tci` key from each program, the one its key gets (contract 4).
+        tx_enable: programs
+            .iter()
+            .map(|p| (p.id, e.tci_tx_enable(p.id.get(), p.audio)))
+            .collect(),
         cw_speed: e.cw_wpm(),
         tx_buffering_ms: TX_BUFFERING_MS,
         rx_dbm: smeter_db.map(|db| rx_dbm(dial, db)),
-        // Nexus reads its power and SWR only while keyed, has no engine accessor for them on this
-        // branch, and reads no microphone level, which `tx_sensors` needs: S3, beside the over.
+        // Nexus reads its power and SWR only while keyed, has no engine accessor for them, and
+        // reads no microphone level, which `tx_sensors` needs: not told yet.
         tx: None,
     }
 }
@@ -250,7 +255,11 @@ pub(crate) struct EngineTci {
     /// The last line this lane wrote, so a line is never written twice in a row (the broker's
     /// rule, `refusal_is_new`).
     last_line: Mutex<Option<String>>,
-    /// Transmit-audio frames dropped because no over of the sender's is armed.
+    /// Each program's transmit audio as tempo-codec reads it: its filter and its budget, kept
+    /// across its overs, the filter started afresh at each.
+    from_programs: Mutex<HashMap<ClientId, FromProgram>>,
+    /// Transmit-audio frames dropped: refused as bad or over budget, or not for an over the
+    /// sender owns.
     tx_dropped: AtomicU64,
 }
 
@@ -262,8 +271,35 @@ impl EngineTci {
             dial: Mutex::new(DialWatch::default()),
             refused: Mutex::new(HashMap::new()),
             last_line: Mutex::new(None),
+            from_programs: Mutex::new(HashMap::new()),
             tx_dropped: AtomicU64::new(0),
         }
+    }
+
+    /// One transmit frame (its header, then the values it claims) as 12 kHz mono, read with the
+    /// program's own stream; `None` when tempo-codec refuses it.
+    fn read_tx(
+        &self,
+        client: ClientId,
+        format: AudioFormat,
+        frame: &[u8],
+        now: Instant,
+    ) -> Option<Vec<f32>> {
+        let stream = stream_of(format)?;
+        let head = RawHeader::read(frame)?;
+        let header = TxHeader {
+            receiver: head.receiver,
+            sample_rate: head.sample_rate,
+            format: head.format,
+            codec: head.codec,
+            length: head.length,
+        };
+        let payload = frame.get(HEADER_LEN..)?;
+        let mut from = lock(&self.from_programs);
+        from.entry(client)
+            .or_default()
+            .accept(stream, header, payload, now)
+            .ok()
     }
 
     fn log(&self, level: &'static str, line: String) {
@@ -341,8 +377,12 @@ fn describe(event: &Event) -> (&'static str, String) {
 
 impl TciBackend for EngineTci {
     fn disconnected(&self, client: ClientId) {
-        // ⛔ Until S3 a program keys nothing ([`transmit_verdict`]), so it has nothing of its own
-        // on the air to end. S3 ends its over, microphone key, Tune and CW here, hard (design §3.4).
+        // ⛔ A LOST PROGRAM ENDS WHAT IT HELD, HARD, NOW (design §3.1 item 4): its over drops with
+        // the abort armed in this call, so the radio loop flushes and unkeys on its next tick; its
+        // microphone key and its Tune end at once. The server calls this after the program's
+        // transmit calls in flight have returned and never makes another for it.
+        engine_lock(&self.engine).tci_disconnected(client.get());
+        lock(&self.from_programs).remove(&client);
         lock(&self.refused).remove(&client);
     }
 
@@ -368,9 +408,10 @@ impl TciBackend for EngineTci {
         let now = Instant::now();
         let mut watch = lock(&self.dial);
         watch.look(dial_hz(&e), now);
-        // Never under an over: a retune mid-over halts it (design Q9 A).
-        if e.on_air() {
-            return Err(Refusal::OnAir);
+        // Never under an over: a retune mid-over halts it (design Q9 A). Asked and applied under
+        // this one hold of the engine lock, so no key comes between the two.
+        if let Some(refusal) = e.tci_retune_refusal() {
+            return Err(refusal);
         }
         if watch.holds(now) {
             return Err(Refusal::OperatorChange);
@@ -387,25 +428,17 @@ impl TciBackend for EngineTci {
 
     fn set_mode(&self, _client: ClientId, mode: &Word) -> Result<Word, Refusal> {
         let mut e = engine_lock(&self.engine);
-        if e.on_air() {
-            return Err(Refusal::OnAir);
+        if let Some(refusal) = e.tci_retune_refusal() {
+            return Err(refusal);
         }
         crate::shared_mode_change(&mut e, mode.as_str()).map_err(|_| Refusal::Family)?;
         Ok(tci_mode(&e))
     }
 
     fn set_drive(&self, _client: ClientId, level: u32) -> Result<u32, Refusal> {
-        let mut e = engine_lock(&self.engine);
-        // Down only (design Q10 A). A level Nexus does not know cannot be shown to be lower.
-        let now = e.effective_rf_power().map(percent).ok_or(Refusal::Raise)?;
-        if level > now {
-            return Err(Refusal::Raise);
-        }
-        if level < now {
-            // Through the one chokepoint, so the operator's ceiling still binds.
-            e.set_rf_power(level as f32 / 100.0);
-        }
-        Ok(drive(&e))
+        // Down only (design Q10 A), through `set_rf_power`, so the operator's ceiling still binds.
+        // A level Nexus does not know cannot be shown to be lower.
+        engine_lock(&self.engine).tci_set_drive(level)
     }
 
     fn set_tune_drive(&self, _client: ClientId, level: u32) -> Result<u32, Refusal> {
@@ -414,24 +447,38 @@ impl TciBackend for EngineTci {
         match level.cmp(&now) {
             std::cmp::Ordering::Equal => Ok(now),
             std::cmp::Ordering::Greater => Err(Refusal::Raise),
-            // Lower would rewrite the operator's own Tune power setting. A program's Tune, and the
-            // level it keys at, are S3's: not offered until then.
+            // Lower would rewrite the operator's own Tune power setting, and a program's Tune keys
+            // at the station's: not offered.
             std::cmp::Ordering::Less => Err(Refusal::Tier),
         }
     }
 
-    fn key(&self, _client: ClientId, _kind: KeyKind, _audio_started: bool) -> Result<(), Refusal> {
-        transmit_verdict(&engine_lock(&self.engine))
+    fn key(&self, client: ClientId, kind: KeyKind, audio_started: bool) -> Result<(), Refusal> {
+        // ⛔ THE ENGINE'S VERDICT AND NOTHING ELSE (design §3.2): `Ok` arms an over of the
+        // program's audio or holds the radio's microphone for it; a refusal names the first gate
+        // that failed. A re-assert of the key it holds changes nothing.
+        let program = client.get();
+        let (verdict, fresh) = {
+            let mut e = engine_lock(&self.engine);
+            let held = e.tci_over_armed() && e.tci_owner() == Some(program);
+            (e.tci_key(program, kind, audio_started), !held)
+        };
+        if verdict.is_ok() && kind == KeyKind::Tci && fresh {
+            // A new over: what the filter holds of the program's last one is not this one's. Its
+            // transmit audio comes from this same reader thread, so none is in flight now.
+            if let Some(from) = lock(&self.from_programs).get_mut(&client) {
+                from.reset();
+            }
+        }
+        verdict
     }
 
     fn release(&self, client: ClientId) {
-        // S3: from the program that owns the transmitter, a graceful end of its own over (§3.4).
-        // From any other program, and until S3 that is every program: what is on the air stops,
-        // as for WSJT-X's Halt Tx, and holds until the operator arms (design Q8 A).
-        let mut e = engine_lock(&self.engine);
-        if e.on_air() {
-            e.halt_tx();
-            drop(e);
+        // From the key's owner, the graceful end of its own over (what it sent plays out) or of
+        // its microphone key or Tune (design §3.4). From any other program: what is on the air
+        // stops, as for WSJT-X's Halt Tx, and holds until the operator arms (design Q8 A).
+        let halted = engine_lock(&self.engine).tci_release(client.get());
+        if halted {
             self.log(
                 "info",
                 format!("{client} sent trx:0,false: Nexus stopped transmitting, as for Halt Tx"),
@@ -439,30 +486,37 @@ impl TciBackend for EngineTci {
         }
     }
 
-    fn tune_on(&self, _client: ClientId) -> Result<(), Refusal> {
-        transmit_verdict(&engine_lock(&self.engine))
+    fn tune_on(&self, client: ClientId) -> Result<(), Refusal> {
+        // The engine's verdict, the licence judged at the carrier; Nexus's tune timeout bounds it,
+        // and it never starts or restarts the watchdog clock.
+        engine_lock(&self.engine).tci_tune_on(client.get())
     }
 
-    fn tune_off(&self, _client: ClientId) {
+    fn tune_off(&self, client: ClientId) {
         // Whoever started it (design §3.5). Nothing when nothing tunes: a release with nothing to
         // release still invalidates the over Nexus has planned.
-        let mut e = engine_lock(&self.engine);
-        if e.tuning() || e.tx_owner() == Some(TxOwner::Tune) {
-            e.set_tune(false);
+        engine_lock(&self.engine).tci_tune_off(client.get());
+    }
+
+    fn end_own(&self, client: ClientId) {
+        // `stop;`: the program's own key, over and Tune, hard, and nothing else.
+        engine_lock(&self.engine).tci_end_own(client.get());
+    }
+
+    fn tx_audio(&self, client: ClientId, format: AudioFormat, frame: &[u8]) {
+        // ⛔ AUDIO ONLY FOR OUR KEY (design §3.1 item 8): read with the engine lock released, then
+        // offered to the engine, which takes it only for the over this program owns and has not
+        // let go (tempo-net's contract 6: the over can end between the server's check and this).
+        // Anything else is dropped, never kept for a later key.
+        let arrived = Instant::now();
+        let taken = self
+            .read_tx(client, format, frame, arrived)
+            .is_some_and(|mono| {
+                engine_lock(&self.engine).tci_tx_audio(client.get(), &mono, arrived)
+            });
+        if !taken {
+            self.tx_dropped.fetch_add(1, Ordering::Relaxed);
         }
-    }
-
-    fn end_own(&self, _client: ClientId) {
-        // `stop;`: the program's own key, Tune and CW, and nothing else. ⛔ Until S3 a program owns
-        // none of them, so there is nothing to end.
-    }
-
-    fn tx_audio(&self, _client: ClientId, _format: AudioFormat, _frame: &[u8]) {
-        // ⛔ Until S3 no program's over can be armed ([`transmit_verdict`] admits no key), so a frame
-        // that got here is dropped, never kept for a later key (design §3.1 item 8). S3 checks the
-        // owner again here (tempo-net's contract 6) and feeds its over through
-        // `tci_audio::FromProgram`.
-        self.tx_dropped.fetch_add(1, Ordering::Relaxed);
     }
 
     fn audio_start(&self, _client: ClientId, _format: AudioFormat) -> Result<(), Refusal> {
@@ -481,7 +535,12 @@ impl TciBackend for EngineTci {
     }
 
     fn cw(&self, _client: ClientId, _cw: Cw) -> Result<(), Refusal> {
-        transmit_verdict(&engine_lock(&self.engine))
+        // ⛔ Not offered until task S7 gives the engine's verdict a CW key; the station's switch
+        // still answers first, as it does for every key.
+        if !engine_lock(&self.engine).tci_transmit() {
+            return Err(Refusal::Switch);
+        }
+        Err(Refusal::Tier)
     }
 
     fn cw_stop(&self, _client: ClientId) {
@@ -529,8 +588,7 @@ fn program_frames(
 
 /// TX_CHRONO for one armed over: at the arm, the over's lead asked for at once; then one request
 /// per frame's worth of real time. A turn that comes late asks for the lead again rather than for
-/// the time it missed, so a program is never asked for more than the lead ahead of real time. S3
-/// may pace by the over's feed instead of the clock.
+/// the time it missed, so a program is never asked for more than the lead ahead of real time.
 struct Pacer {
     client: ClientId,
     format: AudioFormat,
@@ -904,7 +962,7 @@ impl Manager {
                 let programs = handle.programs();
                 lock(&self.backend.dial).look(dial_hz(&e), Instant::now());
                 handle.publish(station(&e, &programs, self.meters.smeter_db()));
-                *lock(&self.armed) = armed_over(&e);
+                *lock(&self.armed) = armed_over(&e, &programs);
                 let refused = lock(&self.backend.refused);
                 Some(TciServerStatus {
                     port: Some(running.server.port()),

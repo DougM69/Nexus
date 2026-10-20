@@ -4,9 +4,10 @@
 
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 
+use tempo_app::mic::MicTick;
 use tempo_app::settings::{OperatingMode, Settings};
 use tempo_audio::receive_audio::ReceiveSource;
-use tempo_net::tci::frame::{RawHeader, SampleFormat, HEADER_LEN};
+use tempo_net::tci::frame::{Channels, RawHeader, SampleFormat, HEADER_LEN};
 use tokio_tungstenite::tungstenite::{self, Message, WebSocket};
 
 use super::*;
@@ -76,6 +77,10 @@ impl Client {
 
     fn send(&mut self, line: &str) {
         self.ws.send(Message::text(line)).expect("sent");
+    }
+
+    fn send_binary(&mut self, bytes: Vec<u8>) {
+        self.ws.send(Message::binary(bytes)).expect("sent");
     }
 
     /// The next message, if one comes within `within`.
@@ -172,13 +177,14 @@ fn eventually(engine: &SharedEngine, f: impl Fn(&Engine) -> bool) -> bool {
     false
 }
 
-/// ⛔ THE CLOSED DEFAULT. With every Nexus gate open (armed, allowed, nothing on the air), every way
-/// a program can ask to transmit is refused, on the wire as TCI refuses a key and at the backend as
-/// the station's switch; `tx_enable` says false from the same verdict; and nothing in the engine
-/// moves. CONTROL: the transmit latch is still up afterwards, so nothing here disarmed the station
-/// to get its refusals.
+/// ⛔ THE CLOSED DEFAULT: "Programs on TCI may transmit" is off on a station that never turned it
+/// on. With every Nexus gate open (armed, allowed, nothing on the air), every way a program can ask
+/// to transmit is refused, on the wire as TCI refuses a key and at the backend as the station's
+/// switch; `tx_enable` says false from the same verdict; and nothing in the engine moves. CONTROL:
+/// the transmit latch is still up afterwards, so nothing here disarmed the station to get its
+/// refusals.
 #[test]
-fn every_transmit_a_program_asks_for_is_refused_until_the_engine_has_tci_rules() {
+fn with_the_transmit_switch_at_its_default_every_transmit_a_program_asks_for_is_refused() {
     let engine = armed();
     let (mut m, _feed) = serving(&engine);
     let h = handle(&m);
@@ -214,7 +220,7 @@ fn every_transmit_a_program_asks_for_is_refused_until_the_engine_has_tci_rules()
     ] {
         assert!(
             !all.iter().any(|l| l == keyed),
-            "a program was told {keyed} though the engine has no TCI rules: {all:?}"
+            "a program was told {keyed} though programs may not transmit: {all:?}"
         );
     }
     assert_eq!(
@@ -378,7 +384,7 @@ fn a_program_s_dial_waits_out_200_ms_after_the_operator_moves_it() {
 
 /// Power only down (design Q10 A), through the one chokepoint, so the operator's ceiling holds. A
 /// level Nexus does not know cannot be shown lower and is refused. Tune power: never up; down is
-/// not offered until S3.
+/// not offered.
 #[test]
 fn a_program_may_lower_power_and_never_raise_it() {
     let engine = armed();
@@ -965,4 +971,739 @@ fn a_web_page_s_connection_is_refused_and_named_in_the_log() {
     assert!(eventually(&engine, |_| logged(&format!(
         "refused a web page ({origin})"
     ))));
+}
+
+// ── Programs' transmit requests through the engine's TCI rules ─────────────────────────────────
+
+/// A station in Phone on 20 m with every privilege, transmit armed as entering Phone arms it, and
+/// "Programs on TCI may transmit" on: every gate in front of a program's over or microphone key is
+/// open, so whatever refuses one is the rule a test is about.
+fn phone() -> SharedEngine {
+    let mut e = Engine::with_settings(Settings {
+        mycall: "KD9TAW".into(),
+        mygrid: "EN52".into(),
+        tci_server_tx: true,
+        ..Settings::default()
+    });
+    e.set_license_class("extra");
+    e.set_operating_mode("phone", false);
+    e.set_frequency(14.250, "20m", "USB");
+    assert!(
+        e.tx_enabled() && e.tx_allowed() && e.tci_transmit() && !e.on_air(),
+        "premise: Phone armed and allowed on 14.250, programs may transmit, nothing on the air"
+    );
+    Arc::new(Mutex::new(e))
+}
+
+/// The operator's settings save turning "Programs on TCI may transmit" on or off.
+fn programs_may_transmit(engine: &SharedEngine, on: bool) {
+    let mut e = engine_lock(engine);
+    let mut s = e.settings().clone();
+    s.tci_server_tx = on;
+    e.apply_settings(s);
+}
+
+/// The manager serving with a receive source, so a program's `audio_start` is taken.
+fn serving_with_audio(engine: &SharedEngine) -> (Manager, Arc<ReceiveAudioFeed>) {
+    let (m, feed) = serving(engine);
+    feed.replace_source(Some(ReceiveSource {
+        epoch: 1,
+        rate: 48_000,
+    }));
+    (m, feed)
+}
+
+/// A program connected and greeted, its audio started as WSJT-X starts it: a `tci` key needs its
+/// stream (design §3.2 item 9).
+fn listening(h: &Handle, port: u16) -> (Client, ClientId) {
+    let (mut client, id, _) = program(h, port);
+    client.send("audio_start:0;");
+    client.lines_until("audio_start:0;");
+    (client, id)
+}
+
+/// One transmit frame in a program's default stream (48 kHz float32 stereo): `frames` frames of
+/// `level` on both channels, its `length` in values.
+fn tx_frame(frames: usize, level: f32) -> Vec<u8> {
+    let header = BlockHeader {
+        trx: Trx::new(0).expect("receiver 0"),
+        kind: BlockKind::TxAudio,
+        sample_rate: 48_000,
+        format: SampleFormat::Float32,
+        channels: Channels::Two,
+    };
+    frame::encode_block(&header, LengthMeaning::Values, &vec![level; frames * 2])
+        .expect("a transmit frame")
+}
+
+/// The radio loop's tick for programs' overs, as task S5's block will make it: what the loop is
+/// told to do. The transmit route never changes here.
+fn loop_tick(engine: &SharedEngine) -> MicTick {
+    engine_lock(engine).poll_tci(Instant::now(), 40.0, 1)
+}
+
+/// `client`'s over: its key admitted and the station published (as the manager publishes it every
+/// 50 ms), one frame of its audio sent, and the radio loop's tick keying on it.
+fn key_over(engine: &SharedEngine, m: &mut Manager, client: &mut Client) {
+    client.send("trx:0,true,tci;");
+    client.lines_until("trx:0,true;");
+    m.publish();
+    // 2048 frames at 48 kHz: past what the resampler keeps back, at least one 20 ms frame of the
+    // over's at 12 kHz.
+    client.send_binary(tx_frame(2048, 0.5));
+    let until = Instant::now() + WAIT;
+    loop {
+        match loop_tick(engine) {
+            MicTick::Key => return,
+            MicTick::Armed if Instant::now() < until => {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            other => {
+                panic!("premise: the program's first audio keys its over; the loop: {other:?}")
+            }
+        }
+    }
+}
+
+/// Program `id` as the server lists it.
+fn listed(h: &Handle, id: ClientId) -> Program {
+    h.programs()
+        .into_iter()
+        .find(|p| p.id == id)
+        .expect("the program is connected")
+}
+
+/// What the station tells program `id` as `tx_enable`, from the engine now.
+fn told_tx_enable(engine: &SharedEngine, h: &Handle, id: ClientId) -> bool {
+    station(&engine_lock(engine), &h.programs(), None)
+        .tx_enable
+        .into_iter()
+        .any(|(c, on)| c == id && on)
+}
+
+/// A read the server answers in order: everything `client` sent before it has been run.
+fn in_order(client: &mut Client, mode: &str) {
+    client.send("modulation:0;");
+    client.lines_until(&format!("modulation:0,{mode};"));
+}
+
+/// ⛔ A PROGRAM'S KEY IS THE ENGINE'S VERDICT, AND ITS OVER IS ITS OWN. In Phone with the switch on,
+/// a program whose audio is started is told `tx_enable:0,true;`, its key is admitted (`trx:0,true;`),
+/// it owns the transmitter in the engine and in the server (which keeps its key through the
+/// manager's publish), TX_CHRONO asks it for its audio, and its first frame keys the over. Another
+/// program is refused while it holds it, as TCI tells a key that did not take, and told
+/// `tx_enable:0,false;`. The owner's own `trx:0,false` lets its over play out: nothing halted, and
+/// nothing flushed.
+#[test]
+fn a_programs_key_is_the_engines_verdict_and_its_over_is_its_own() {
+    let engine = phone();
+    let (mut m, _feed) = serving_with_audio(&engine);
+    let h = handle(&m);
+    let (mut a, a_id) = listening(&h, port(&m));
+    let (mut b, b_id, _) = program(&h, port(&m));
+    m.publish();
+    a.lines_until("tx_enable:0,true;");
+    assert!(
+        !told_tx_enable(&engine, &h, b_id),
+        "a program with no audio stream told it may transmit"
+    );
+
+    key_over(&engine, &mut m, &mut a);
+    {
+        let e = engine_lock(&engine);
+        assert_eq!(e.tci_owner(), Some(a_id.get()), "the engine's owner");
+        assert_eq!(e.tx_owner(), Some(TxOwner::Tci));
+        assert!(e.tci_over_keyed(), "the over keyed on its audio");
+    }
+    assert_eq!(
+        listed(&h, a_id).key,
+        Some(KeyKind::Tci),
+        "the server let go of the key the engine holds"
+    );
+    assert_eq!(*lock(&m.armed), Some(a_id), "the pump's armed over");
+    let asked = chronos(&mut a, Duration::from_millis(300));
+    assert!(
+        !asked.is_empty(),
+        "no TX_CHRONO asked the over's owner for audio"
+    );
+    assert!(asked
+        .iter()
+        .all(|c| (c.receiver, c.sample_rate, c.length) == (0, 48_000, 2048)));
+
+    b.send("trx:0,true;");
+    b.lines_until("trx:0,false;");
+    assert_eq!(
+        m.backend.key(
+            b_id,
+            KeyKind::Mic(tempo_net::tci::server::Mic::Selected),
+            false
+        ),
+        Err(Refusal::Owner),
+        "another program keyed under the over"
+    );
+    assert!(logged(&format!(
+        "refused {b_id}: {}",
+        Refusal::Owner.text()
+    )));
+    assert!(!told_tx_enable(&engine, &h, b_id));
+    assert!(
+        told_tx_enable(&engine, &h, a_id),
+        "the owner's re-assert would pass"
+    );
+
+    a.send("trx:0,false;");
+    in_order(&mut a, "usb");
+    {
+        let mut e = engine_lock(&engine);
+        assert!(e.tx_enabled(), "the owner's release halted transmit");
+        assert!(
+            e.tci_over_keyed(),
+            "the owner's release cut its over at once"
+        );
+        assert!(!e.take_tci_abort(), "the owner's release flushed its over");
+    }
+    let until = Instant::now() + WAIT;
+    while loop_tick(&engine) != MicTick::Idle {
+        assert!(Instant::now() < until, "the released over never played out");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let mut e = engine_lock(&engine);
+    assert!(
+        !e.take_tci_abort() && e.tci_owner().is_none() && e.tx_enabled(),
+        "the over did not play out to its graceful end"
+    );
+}
+
+/// ⛔ NOTHING A PROGRAM SENDS ARMS TRANSMIT, LETS GO OF THE OPERATOR'S STOP OR A WATCHDOG TRIP,
+/// RAISES THE POWER, OR KEYS OUTSIDE THE LICENCE (design §3.1 items 1, 2 and 6), through the backend
+/// the server calls: every call a program's commands make, in a row, from every station state a
+/// program can find, each checked against the one before. CONTROL: from the open station a key is
+/// admitted and the power goes down, so the sweep is not vacuous.
+#[test]
+fn nothing_a_program_sends_arms_lets_go_of_a_stop_or_trip_raises_power_or_keys_outside_the_licence()
+{
+    use tempo_net::tci::server::Mic;
+    use tempo_net::tci::wire::Text;
+    type Step = (&'static str, fn(&EngineTci, ClientId, ClientId));
+    let steps: Vec<Step> = vec![
+        ("A's tci key", |t, a, _| {
+            let _ = t.key(a, KeyKind::Tci, true);
+        }),
+        ("A's audio", |t, a, _| {
+            t.tx_audio(a, AudioFormat::default(), &tx_frame(1024, 0.5));
+        }),
+        ("B's microphone key", |t, _, b| {
+            let _ = t.key(b, KeyKind::Mic(Mic::Mic1), false);
+        }),
+        ("A's microphone key", |t, a, _| {
+            let _ = t.key(a, KeyKind::Mic(Mic::Selected), false);
+        }),
+        ("A's tune", |t, a, _| {
+            let _ = t.tune_on(a);
+        }),
+        ("B's tune", |t, _, b| {
+            let _ = t.tune_on(b);
+        }),
+        ("A's drive 100", |t, a, _| {
+            let _ = t.set_drive(a, 100);
+        }),
+        ("A's tune drive 100", |t, a, _| {
+            let _ = t.set_tune_drive(a, 100);
+        }),
+        ("A's drive 10", |t, a, _| {
+            let _ = t.set_drive(a, 10);
+        }),
+        ("A's dial on the band", |t, a, _| {
+            let _ = t.set_dial(a, hz(14_230_000));
+        }),
+        ("A's dial to 40 m", |t, a, _| {
+            let _ = t.set_dial(a, hz(7_150_000));
+        }),
+        ("A's mode", |t, a, _| {
+            let _ = t.set_mode(a, &Word::new("lsb").expect("a mode word"));
+        }),
+        ("A's CW", |t, a, _| {
+            let _ = t.cw(a, Cw::Macro(Text::new("CQ").expect("a CW text")));
+        }),
+        ("A's audio stopped and started", |t, a, _| {
+            t.audio_stop(a);
+            let _ = t.audio_start(a, AudioFormat::default());
+        }),
+        ("B's trx:0,false", |t, _, b| t.release(b)),
+        ("A's trx:0,false", |t, a, _| t.release(a)),
+        ("B's tune:0,false", |t, _, b| t.tune_off(b)),
+        ("A's cw_macros_stop", |t, a, _| t.cw_stop(a)),
+        ("A's stop;", |t, a, _| t.end_own(a)),
+        ("B lost", |t, _, b| t.disconnected(b)),
+    ];
+    type Build = fn() -> SharedEngine;
+    let states: Vec<(&str, Build)> = vec![
+        ("at launch: Digital, transmit off", || {
+            Arc::new(Mutex::new(Engine::with_settings(Settings {
+                mycall: "KD9TAW".into(),
+                mygrid: "EN52".into(),
+                tci_server_tx: true,
+                ..Settings::default()
+            })))
+        }),
+        ("after Stop TX", || {
+            let s = phone();
+            engine_lock(&s).halt_tx();
+            s
+        }),
+        ("after TX Off", || {
+            let s = phone();
+            engine_lock(&s).set_tx_enabled_by_operator(false);
+            s
+        }),
+        ("after a watchdog trip", || {
+            let s = phone();
+            engine_lock(&s).trip_tx_watchdog_for_test();
+            s
+        }),
+        ("after a band change", || {
+            let s = phone();
+            engine_lock(&s).set_frequency(7.200, "40m", "LSB");
+            s
+        }),
+        ("outside the licence", || {
+            let s = phone();
+            engine_lock(&s).set_frequency(14.349, "20m", "USB");
+            s
+        }),
+        ("open, at half power", || {
+            let s = phone();
+            engine_lock(&s).set_rf_power(0.5);
+            s
+        }),
+    ];
+    // What no step may move upward.
+    let seen = |e: &Engine| {
+        (
+            e.tx_enabled(),
+            e.snapshot().radio.tx_watchdog,
+            e.effective_rf_power(),
+        )
+    };
+    let (mut wrong, mut admitted, mut lowered) = (Vec::new(), 0, 0);
+    for (state, build) in states {
+        let engine = build();
+        let (m, _feed) = serving_with_audio(&engine);
+        let h = handle(&m);
+        let (_a, a) = listening(&h, port(&m));
+        let (_b, b, _) = program(&h, port(&m));
+        let tci = m.backend.clone();
+        for (name, step) in &steps {
+            let before = seen(&engine_lock(&engine));
+            step(&tci, a, b);
+            let e = engine_lock(&engine);
+            let after = seen(&e);
+            if !before.0 && after.0 {
+                wrong.push(format!("{state}: {name} armed transmit"));
+            }
+            if before.1 && !after.1 {
+                wrong.push(format!("{state}: {name} let go of the watchdog trip"));
+            }
+            if after.2.unwrap_or(0.0) > before.2.unwrap_or(0.0) {
+                wrong.push(format!(
+                    "{state}: {name} raised the power: {before:?} -> {after:?}"
+                ));
+            }
+            let keyed =
+                e.manual_ptt() || e.tuning() || e.tci_over_armed() || e.tci_owner().is_some();
+            if !e.tx_allowed() && keyed {
+                wrong.push(format!(
+                    "{state}: {name} left a program keyed outside the licence"
+                ));
+            }
+            admitted += usize::from(e.tci_owner().is_some());
+            lowered += usize::from(after.2 < before.2);
+        }
+        let mut e = engine_lock(&engine);
+        match state {
+            "after Stop TX" | "after TX Off" => {
+                e.set_operating_mode("phone", false);
+                if e.tx_enabled() {
+                    wrong.push(format!("{state}: the operator's Stop no longer holds"));
+                }
+            }
+            "after a band change" => {
+                drop(e);
+                let probe = tci.key(a, KeyKind::Tci, true);
+                if probe != Err(Refusal::ContextHold) {
+                    wrong.push(format!("{state}: the band change's hold let go: {probe:?}"));
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "a program moved them:\n{}",
+        wrong.join("\n")
+    );
+    assert!(admitted > 0, "control: no program's key was ever admitted");
+    assert!(lowered > 0, "control: no program ever lowered the power");
+}
+
+/// ⛔ STOP IN NEXUS ALWAYS WINS (design §3.1 item 3). Stop TX, TX Off and the switch going off
+/// each end a program's keyed over at once (the abort armed, so the loop flushes and unkeys); at
+/// the manager's next publish the server lets go of its key, tells it `trx:0,false;`, takes no more
+/// of its audio and asks for none; its next key is refused, as TCI tells a key that did not take,
+/// until the operator's own arm, which then admits it.
+#[test]
+fn every_stop_in_nexus_ends_a_programs_over_and_the_server_takes_no_more_of_its_audio() {
+    type Stop = fn(&SharedEngine);
+    type Arm = fn(&SharedEngine);
+    let stops: [(&str, Stop, Refusal, Arm); 3] = [
+        (
+            "Stop TX",
+            |s| engine_lock(s).halt_tx(),
+            Refusal::StopHold,
+            |s| engine_lock(s).set_tx_enabled_by_operator(true),
+        ),
+        (
+            "TX Off",
+            |s| engine_lock(s).set_tx_enabled_by_operator(false),
+            Refusal::StopHold,
+            |s| engine_lock(s).set_tx_enabled_by_operator(true),
+        ),
+        (
+            "the switch off",
+            |s| programs_may_transmit(s, false),
+            Refusal::Switch,
+            |s| programs_may_transmit(s, true),
+        ),
+    ];
+    for (name, stop, refusal, arm) in stops {
+        let engine = phone();
+        let (mut m, _feed) = serving_with_audio(&engine);
+        let h = handle(&m);
+        let (mut a, a_id) = listening(&h, port(&m));
+        key_over(&engine, &mut m, &mut a);
+        stop(&engine);
+        {
+            let mut e = engine_lock(&engine);
+            assert!(!e.tci_over_armed(), "{name}: the over survived");
+            assert!(e.take_tci_abort(), "{name}: no abort to flush and unkey");
+            assert_eq!(e.tci_owner(), None, "{name}: still the owner");
+        }
+        m.publish();
+        assert_eq!(
+            listed(&h, a_id).key,
+            None,
+            "{name}: the server still holds the program's key"
+        );
+        assert_eq!(
+            *lock(&m.armed),
+            None,
+            "{name}: the pump still asks for audio"
+        );
+        a.lines_until("trx:0,false;");
+        let before = listed(&h, a_id).counts;
+        a.send_binary(tx_frame(1024, 0.5));
+        in_order(&mut a, "usb");
+        let after = listed(&h, a_id).counts;
+        assert_eq!(
+            (after.tx_frames, after.tx_dropped),
+            (before.tx_frames, before.tx_dropped + 1),
+            "{name}: the server took the program's audio after the stop"
+        );
+        assert_eq!(loop_tick(&engine), MicTick::Idle, "{name}: something keyed");
+        let _ = chronos(&mut a, Duration::from_millis(100));
+        assert!(
+            chronos(&mut a, Duration::from_millis(200)).is_empty(),
+            "{name}: TX_CHRONO went on after the stop"
+        );
+
+        a.send("trx:0,true,tci;");
+        a.lines_until("trx:0,false;");
+        assert_eq!(
+            m.backend.key(a_id, KeyKind::Tci, true),
+            Err(refusal),
+            "{name}: a key after it"
+        );
+        assert!(
+            !engine_lock(&engine).tci_over_armed(),
+            "{name}: a key after the stop armed an over"
+        );
+        arm(&engine);
+        a.send("trx:0,true,tci;");
+        a.lines_until("trx:0,true;");
+        assert_eq!(
+            engine_lock(&engine).tci_owner(),
+            Some(a_id.get()),
+            "{name}: control, after the operator's own arm"
+        );
+    }
+}
+
+/// ⛔ A PROGRAM'S LOST CONNECTION ENDS WHAT IT HELD BEFORE THE RADIO LOOP'S NEXT TICK (design §3.1
+/// item 4): its keyed over is gone with the abort armed by the server's own report of the loss,
+/// so that tick flushes and unkeys; a lost program's microphone key is down at once. CONTROL:
+/// another program's loss leaves the over on the air.
+#[test]
+fn a_programs_lost_connection_ends_what_it_held_before_the_next_tick() {
+    let engine = phone();
+    let (mut m, _feed) = serving_with_audio(&engine);
+    let h = handle(&m);
+    let (mut a, _) = listening(&h, port(&m));
+    let (other, other_id, _) = program(&h, port(&m));
+    key_over(&engine, &mut m, &mut a);
+    drop(other);
+    let until = Instant::now() + WAIT;
+    while h.programs().iter().any(|p| p.id == other_id) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    {
+        let mut e = engine_lock(&engine);
+        assert!(
+            e.tci_over_keyed() && !e.take_tci_abort(),
+            "control: another program's loss ended the over"
+        );
+    }
+    drop(a);
+    assert!(
+        eventually(&engine, |e| e.tci_owner().is_none()),
+        "the lost program's over was not ended"
+    );
+    {
+        let mut e = engine_lock(&engine);
+        assert!(
+            !e.tci_over_armed(),
+            "the lost program's over is still armed"
+        );
+        assert!(e.take_tci_abort(), "no abort for the loop's next tick");
+    }
+    assert_eq!(loop_tick(&engine), MicTick::Idle, "the next tick keyed");
+
+    let (mut c, _) = listening(&h, port(&m));
+    c.send("trx:0,true;");
+    c.lines_until("trx:0,true;");
+    assert!(
+        engine_lock(&engine).manual_ptt(),
+        "premise: its microphone keys the radio"
+    );
+    drop(c);
+    assert!(
+        eventually(&engine, |e| !e.manual_ptt() && e.tci_owner().is_none()),
+        "the lost program's microphone key is still held"
+    );
+}
+
+/// A program's Tune is Nexus's own tune carrier, through the engine's verdict: told `tune:0,true;`,
+/// the program owns it; `tune:0,false;` from any program ends it, and so does the program's own
+/// `stop;`. Refused (the switch off), it is told as TCI tells a Tune that did not take.
+#[test]
+fn a_programs_tune_is_nexus_tune_through_the_engines_verdict() {
+    let engine = phone();
+    let (mut m, _feed) = serving_with_audio(&engine);
+    let h = handle(&m);
+    let (mut a, a_id) = listening(&h, port(&m));
+    let (mut b, _, _) = program(&h, port(&m));
+    a.send("tune:0,true;");
+    a.lines_until("tune:0,true;");
+    {
+        let e = engine_lock(&engine);
+        assert!(e.tuning(), "the program's Tune is not up");
+        assert_eq!(e.tci_owner(), Some(a_id.get()), "not the program's Tune");
+    }
+    b.send("tune:0,false;");
+    in_order(&mut b, "usb");
+    assert!(
+        !engine_lock(&engine).tuning(),
+        "another program's tune:0,false left it up"
+    );
+    m.publish();
+    a.lines_until("tune:0,false;");
+    a.send("tune:0,true;");
+    a.lines_until("tune:0,true;");
+    a.send("stop;");
+    in_order(&mut a, "usb");
+    assert!(!engine_lock(&engine).tuning(), "its own stop; left it up");
+    m.publish();
+    a.lines_until("tune:0,false;");
+
+    programs_may_transmit(&engine, false);
+    a.send("tune:0,true;");
+    a.lines_until("tune:0,false;");
+    let e = engine_lock(&engine);
+    assert!(
+        !e.tuning() && e.tci_owner().is_none(),
+        "switched off, a program's Tune went up"
+    );
+}
+
+/// `stop;` ends the sender's own key and nothing else (the spec's §4.2): another program's `stop;`
+/// leaves a program's microphone key held; its own ends it at once.
+#[test]
+fn a_programs_stop_ends_its_own_key_and_no_other() {
+    let engine = phone();
+    let (m, _feed) = serving_with_audio(&engine);
+    let h = handle(&m);
+    let (mut a, a_id) = listening(&h, port(&m));
+    let (mut b, _, _) = program(&h, port(&m));
+    a.send("trx:0,true;");
+    a.lines_until("trx:0,true;");
+    b.send("stop;");
+    in_order(&mut b, "usb");
+    assert_eq!(
+        engine_lock(&engine).tci_owner(),
+        Some(a_id.get()),
+        "control: another program's stop; ended the key"
+    );
+    a.send("stop;");
+    in_order(&mut a, "usb");
+    let e = engine_lock(&engine);
+    assert_eq!(e.tci_owner(), None, "its own stop; left its key");
+    assert!(!e.manual_ptt(), "its own stop; left the radio keyed");
+    assert!(
+        e.tx_enabled(),
+        "a program's stop; is not the station's Stop"
+    );
+}
+
+/// Run `f` on its own thread: its answer, or `None` if it has not answered within `bound` (it is
+/// left running: a wait on a lock its own caller holds never ends).
+fn within<T: Send + 'static>(bound: Duration, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(bound).ok()
+}
+
+/// ⛔ THE LOCK RULE (tempo-net's): the server's stop and the operator's Disconnect each end a
+/// program's transmissions through this backend, which takes the engine lock, so neither may run
+/// under it. The manager's tick that finds "Share by TCI" off stops the server, and the operator's
+/// Disconnect closes a program, each while a program holds a key: each returns, and the key is
+/// ended. A stop under the engine lock would wait on itself for ever.
+#[test]
+fn the_servers_stop_and_the_disconnect_end_a_key_without_the_engine_lock() {
+    let engine = phone();
+    let (m, _feed) = serving_with_audio(&engine);
+    let h = handle(&m);
+    let (mut a, a_id) = listening(&h, port(&m));
+    a.send("trx:0,true;");
+    a.lines_until("trx:0,true;");
+    let serving = m.serving.clone();
+    assert_eq!(
+        within(WAIT, move || serving.disconnect(a_id.get())),
+        Some(true),
+        "the operator's Disconnect did not return"
+    );
+    assert_eq!(
+        engine_lock(&engine).tci_owner(),
+        None,
+        "the Disconnect left the program's key"
+    );
+
+    let engine = phone();
+    assert!(
+        !engine_lock(&engine).settings().tci_server,
+        "premise: Share by TCI is off"
+    );
+    let (m, _feed) = serving_with_audio(&engine);
+    let h = handle(&m);
+    let (mut a, a_id) = listening(&h, port(&m));
+    a.send("trx:0,true;");
+    a.lines_until("trx:0,true;");
+    assert_eq!(
+        engine_lock(&engine).tci_owner(),
+        Some(a_id.get()),
+        "premise"
+    );
+    let mut m = m;
+    assert_eq!(
+        within(WAIT, move || m.tick()),
+        Some(false),
+        "the manager's stop did not return, or left the server running"
+    );
+    assert_eq!(
+        engine_lock(&engine).tci_owner(),
+        None,
+        "the server's stop left the program's key"
+    );
+}
+
+/// "Share by TCI" and its port are the station's settings: off (its default) the manager serves
+/// nothing; on, it serves on the port asked; off again, it stops.
+#[test]
+fn the_server_follows_share_by_tci_and_its_port_in_the_settings() {
+    let engine = armed();
+    let mut m = Manager::new(
+        engine.clone(),
+        Arc::new(ReceiveAudioFeed::default()),
+        MeterFeed::default(),
+    );
+    assert!(!m.tick(), "a station that never turned it on serves");
+    let quiet = crate::lan_client::tests::listener_below_the_ephemeral_range(Ipv4Addr::LOCALHOST);
+    let asked = quiet.local_addr().expect("a port").port();
+    drop(quiet);
+    let share = |on: bool| {
+        let mut e = engine_lock(&engine);
+        let mut s = e.settings().clone();
+        s.tci_server = on;
+        s.tci_server_port = asked;
+        e.apply_settings(s);
+    };
+    share(true);
+    assert!(m.tick(), "switched on, it does not serve");
+    let at = port(&m);
+    assert!(
+        at == asked || at == asked + 1,
+        "the port asked, or the next: {at}"
+    );
+    share(false);
+    assert!(!m.tick(), "switched off, it serves");
+    assert!(
+        TcpStream::connect((Ipv4Addr::LOCALHOST, at)).is_err(),
+        "switched off, something listens"
+    );
+}
+
+/// ⛔ THE OPERATOR'S RULING OF 2026-10-19, THROUGH THE SERVER: FT8, FT4 and the other slot-timed
+/// modes stay refused until the loop bench. In Digital on FT8, armed, with the switch on, a
+/// program's over is answered `trx:0,false;`, the log says why, its `tx_enable` stays false and
+/// nothing is armed. CONTROL: the same program in Phone is admitted.
+#[test]
+fn slot_timed_modes_stay_refused_through_the_server() {
+    let engine = armed();
+    programs_may_transmit(&engine, true);
+    let (m, _feed) = serving_with_audio(&engine);
+    let h = handle(&m);
+    let (mut a, a_id) = listening(&h, port(&m));
+    a.send("trx:0,true,tci;");
+    a.lines_until("trx:0,false;");
+    assert_eq!(
+        m.backend.key(a_id, KeyKind::Tci, true),
+        Err(Refusal::SlotTimed)
+    );
+    assert!(logged(&format!(
+        "refused {a_id}: {}",
+        Refusal::SlotTimed.text()
+    )));
+    assert!(
+        !told_tx_enable(&engine, &h, a_id),
+        "told it may transmit FT8"
+    );
+    {
+        let e = engine_lock(&engine);
+        assert!(
+            !e.tci_over_armed() && e.tx_owner().is_none(),
+            "an FT8 over armed"
+        );
+    }
+    {
+        let mut e = engine_lock(&engine);
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+    }
+    a.send("trx:0,true,tci;");
+    a.lines_until("trx:0,true;");
+    assert_eq!(
+        engine_lock(&engine).tci_owner(),
+        Some(a_id.get()),
+        "control: Phone admits it"
+    );
 }
