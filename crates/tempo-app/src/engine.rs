@@ -129,6 +129,9 @@ pub mod slices;
 mod stop_hold_tests;
 pub mod sub_controls;
 mod tci;
+/// A radio on the TCI connection: what Nexus may transmit through an SDR program, and a spot
+/// clicked in its panadapter.
+mod tci_connection;
 mod tx_alarms;
 /// A data frame judged across its whole width, and where it keys.
 #[cfg(test)]
@@ -23974,16 +23977,24 @@ contact yourself."
         }
     }
 
-    /// Why the active radio's CAT connection refuses every transmission, when it does: the Icom
-    /// network connection is receive and control only in this Beta
-    /// ([`crate::settings::rig_conn_is_icom_lan`]). ANDed into [`Self::tx_allowed`] and
-    /// [`Self::tx_allowed_as`], so every transmit path refuses before PTT exactly as it refuses a
-    /// frequency outside the licence, which is why this changes no timing or sequencing; carried
-    /// in the snapshot so the cockpit names the connection, not the licence. The network daemon
-    /// refuses the keying verbs again on its own side.
+    /// Why the active radio's CAT connection refuses transmitting in the section the operator is
+    /// in, when it does: the Icom network connection refuses every transmission, receive and
+    /// control only in this Beta ([`crate::settings::rig_conn_is_icom_lan`]); the TCI connection
+    /// refuses the Digital section, whose modes are all slot-timed, until their timing over TCI
+    /// has been benched ([`crate::settings::rig_conn_is_tci`], `engine/tci_connection.rs`).
+    /// ANDed into [`Self::tx_allowed`] and [`Self::tx_allowed_as`], so every transmit path refuses
+    /// before PTT exactly as it refuses a frequency outside the licence, which is why this changes
+    /// no timing or sequencing; carried in the snapshot so the cockpit names the connection, not
+    /// the licence. The network daemon refuses the keying verbs again on its own side, and the
+    /// TCI session refuses at the key whatever the SDR program cannot take.
     pub fn connection_tx_refusal(&self) -> Option<&'static str> {
-        crate::settings::rig_conn_is_icom_lan(&self.settings.rig_conn)
-            .then_some(crate::settings::ICOM_LAN_TX_REFUSED)
+        let conn = &self.settings.rig_conn;
+        if crate::settings::rig_conn_is_icom_lan(conn) {
+            return Some(crate::settings::ICOM_LAN_TX_REFUSED);
+        }
+        (crate::settings::rig_conn_is_tci(conn)
+            && self.settings.operating_mode == crate::settings::OperatingMode::Digital)
+            .then_some(tci_connection::TCI_SLOT_TIMED_TX_REFUSED)
     }
 
     /// Is the licence lock the phone MODE alone? The Phone section is refused, upper sideband is

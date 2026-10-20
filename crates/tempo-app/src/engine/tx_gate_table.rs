@@ -103,6 +103,14 @@ pub(super) fn station(
     e
 }
 
+/// [`station`] on an SDR program's TCI connection, with the connection's own model (7).
+fn tci_station(class: &str, section: &str, mhz: f64, band: &str, sideband: &str) -> Engine {
+    let mut e = station(7, class, section, mhz, band, sideband);
+    e.settings.rig_conn = "tci".to_string();
+    e.settings.sync_active_from_flat();
+    e
+}
+
 /// A satellite pass on `model`, the way the Satellites view and the radio loop build one:
 /// Main = downlink / Sub = uplink confirmed for every radio, the native CI-V daemon serving,
 /// the transponder picked, the nominal legs queued. The section is set FIRST because a section
@@ -974,6 +982,61 @@ fn rows() -> Vec<Row> {
             tx_allowed: true,
             emission_mhz: 5.3715,
             phone_seg: None,
+        },
+        // ── An SDR program's radio on the TCI connection ───────────────────────────────
+        // The slot-timed modes wait for the TCI bench (`engine/tci_connection.rs`); every other
+        // section is judged as on any connection, the licence included.
+        Row {
+            name: "TCI FT8 on 20 m, General: the slot-timed modes wait for the TCI bench",
+            build: || tci_station("general", "digital", 14.074, "20m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 14.074,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "TCI FT4 on 20 m, General: the slot-timed modes wait for the TCI bench",
+            build: || {
+                let mut e = tci_station("general", "digital", 14.080, "20m", "USB");
+                e.set_tier(Tier::Ft4);
+                e.set_frequency(14.080, "20m", "USB");
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 14.080,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "TCI JS8 on 20 m, General: the slot-timed modes wait for the TCI bench",
+            build: || {
+                let mut e = tci_station("general", "digital", 14.078, "20m", "USB");
+                e.set_tier(Tier::Js8);
+                e.set_frequency(14.078, "20m", "USB");
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 14.078,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "TCI phone 14.250, General",
+            build: || tci_station("general", "phone", 14.250, "20m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 14.250,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "TCI phone 14.200, below the General phone floor",
+            build: || tci_station("general", "phone", 14.200, "20m", "USB"),
+            tx_allowed: false,
+            emission_mhz: 14.200,
+            phone_seg: Some((14.225, 14.350)),
+        },
+        Row {
+            name: "TCI CW 14.030, General",
+            build: || tci_station("general", "cw", 14.030, "20m", "USB"),
+            tx_allowed: true,
+            emission_mhz: 14.030,
+            phone_seg: Some((14.225, 14.350)),
         },
         // ── Dual-receiver radios, normal operation ─────────────────────────────────────
         Row {
