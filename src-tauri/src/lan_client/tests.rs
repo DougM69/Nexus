@@ -1488,10 +1488,11 @@ async fn forgetting_a_station_ends_its_internet_road_at_the_service_first() {
     }
 }
 
-/// ★ The window and a station kept by its service id: `stations` lists it apart (`away`: its id,
-/// its name and its LAN key's fingerprint, never this computer's key), Operate from this computer
-/// starts Nexus driving it by that id, and Forget ends its internet road at the service with the
-/// road's own key and then forgets it here. CONTROL: a station on this network is listed as before.
+/// ★ The window and a station kept by its service id: a sign-in that keeps one says so (`signedIn`
+/// with `away`), `stations` lists it apart (`away`: its id, its name and its LAN key's fingerprint,
+/// never this computer's key), Operate from this computer starts Nexus driving it by that id, and
+/// Forget ends its internet road at the service with the road's own key and then forgets it here.
+/// CONTROL: a station on this network is listed as before.
 #[tokio::test]
 async fn the_window_lists_operates_and_forgets_a_station_kept_away() {
     let store = StationStore::default();
@@ -1516,10 +1517,27 @@ async fn the_window_lists_operates_and_forgets_a_station_kept_away() {
                 Box::pin(async { Ok(()) })
             })
         },
+        sign_in: Arc::new(|_, _, _| {
+            Box::pin(async {
+                Ok(super::account::Signed {
+                    station: AWAY.into(),
+                    waiting: false,
+                    away: true,
+                })
+            })
+        }),
         ..reach(store.clone())
     })
     .unwrap();
     let mut socket = page_socket(&origin).await;
+    assert_eq!(
+        said(&mut socket, json!({"type":"signIn","stationId":null})).await,
+        json!({"type":"signingIn"})
+    );
+    assert_eq!(
+        heard_from(&mut socket).await,
+        json!({"type":"signedIn","stationId":AWAY,"waiting":false,"away":true})
+    );
     let told = said(&mut socket, json!({"type":"stations"})).await;
     assert_eq!(told["stations"][0]["id"], STATION, "{told}");
     assert_eq!(told["stations"].as_array().unwrap().len(), 1, "{told}");

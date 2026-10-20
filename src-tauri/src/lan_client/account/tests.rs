@@ -588,8 +588,9 @@ async fn a_station_whose_proof_does_not_hold_is_neither_registered_nor_looked_fo
 /// network, its road kept under that id for Operate, and this computer's two keys with it; no time
 /// is kept, since no admission on the station's network rests on this sign-in. A second sign-in
 /// for the account finds it here (`alreadyHere`) and registers nothing: one device at the service.
-/// A guest invited to operate is kept the same way; one invited only to listen is not kept. CONTROL:
-/// a road the service has not approved yet is said to wait.
+/// A guest invited to operate is kept the same way; one invited only to listen is not kept; and a
+/// computer holding eight stations, one of them kept this way, adds no ninth: refused before the
+/// browser opens. CONTROL: a road the service has not approved yet is said to wait.
 #[tokio::test]
 async fn a_station_found_nowhere_here_is_kept_by_its_service_id_for_the_internet_road() {
     let (lan_key, _) = ComputerKey::generate().unwrap();
@@ -653,6 +654,42 @@ async fn a_station_found_nowhere_here_is_kept_by_its_service_id_for_the_internet
         assert_eq!(cloud.seen.lock().unwrap().devices.len(), 1, "{role}");
         assert_eq!(cloud.seen.lock().unwrap().keys.len(), 1, "{role}");
     }
+    // Eight on this computer, one of them kept by its service id: a ninth is refused before
+    // anything is registered.
+    let (cloud, scratch, store) = (
+        Cloud::start().await,
+        Scratch::new(),
+        StationStore::default(),
+    );
+    cloud.lists(json!([row(
+        &station,
+        lan_key.public_key(),
+        Some("p"),
+        "owner"
+    )]));
+    let kept = stations(&store, &scratch.0);
+    for n in 0..7u8 {
+        let (_, pkcs8) = ComputerKey::generate().unwrap();
+        let (station_key, _) = ComputerKey::generate().unwrap();
+        kept.keep(&PairedStation {
+            station_id: format!("60000000-0000-4000-8000-0000000000{n:02x}"),
+            device_id: device_at(9),
+            station_key: station_key.public_key().into(),
+            pkcs8,
+            addresses: vec![format!("192.168.1.{}:42075", 20 + n)],
+        })
+        .unwrap();
+    }
+    let elsewhere =
+        crate::lan_client::tests::away_record("20000000-0000-4000-8000-0000000000a9", "Club");
+    let road = crate::lan_client::tests::road_to("20000000-0000-4000-8000-0000000000a9");
+    kept.keep_away(&elsewhere, &road).unwrap();
+    let full = env(&cloud, kept.clone(), finding(Vec::new()).0, trusting);
+    let (signed, opened) =
+        signing_in(&full, &cloud, None, no_pick(), answering(Vec::new()).0).await;
+    assert_eq!(signed, Err("stationsFull"));
+    assert_eq!(opened, "", "the browser opened");
+    assert!(cloud.seen.lock().unwrap().devices.is_empty());
     // Invited only to listen: not registered, not kept.
     let (cloud, scratch, store) = (
         Cloud::start().await,
