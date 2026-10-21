@@ -4420,9 +4420,12 @@ impl FieldDayStation {
         }
         for d in decodes {
             // ⭐ A message naming a call the decoder could not resolve is passed by, as WSJT-X's
-            // Field Day activity passes it by: `processMessage` returns at once for one that
-            // carries `<...>` (mainwindow.cpp 9097-9099). The run would answer that caller as
-            // `<...>` and log `...`; S&P would answer a CQ from it.
+            // Field Day activity passes it by: for a message to this station, `processMessage`
+            // returns at once where it carries `<...>` (mainwindow.cpp 9097-9099, inside the
+            // branch for a message to it that opens at 9050); for a CQ from such a call, only a
+            // callsign goes into the DX call box (`Radio::is_callsign`, 9402), so no message is
+            // built to it. The run would answer that caller as `<...>` and log `...`; S&P would
+            // answer a CQ from it.
             if d.message.contains("<...>") {
                 continue;
             }
@@ -7388,9 +7391,9 @@ mod tests {
     /// activity does: `processMessage` returns at once for a message that carries `<...>`
     /// (mainwindow.cpp 9097-9099). Running, a caller heard as `<...>` gets no answer and no row,
     /// whether it sends its exchange or rogers first, and the run keeps calling CQ. The same
-    /// station's next message, its call resolved, is worked as any other's and logged bare. The
-    /// same line keeps S&P from answering a CQ that names such a call, `CQ FD <...> EN37`: WSJT-X
-    /// answers a CQ only through `processMessage`.
+    /// station's next message, its call resolved, is worked as any other's and logged bare. S&P
+    /// does not answer a CQ that names such a call, `CQ FD <...> EN37`, either: WSJT-X puts only a
+    /// callsign into its DX call box (`Radio::is_callsign`, 9402), so it builds no message to one.
     #[test]
     fn field_days_run_passes_by_a_caller_the_decoder_could_not_resolve() {
         for heard in ["K1ABC <...> 1D WI", "K1ABC <...> R 1D WI"] {
