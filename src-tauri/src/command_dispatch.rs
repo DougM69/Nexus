@@ -753,9 +753,10 @@ impl Stores for ShackStores {
 /// ⛔ The saved config profiles, one of the station's keys: each a whole Settings, its stored keys
 /// ([`SECRET_SETTINGS`]) and every setting set at the station only ([`STATION_ONLY_SETTINGS`])
 /// included, and the shack's own screen applies what a profile holds when it is loaded there. A
-/// read from afar blanks the stored keys ([`station_answer`]), and a save from afar keeps the
-/// shack's own of both ([`merged_save`]), as the settings themselves do, or is refused where the
-/// list does not read here.
+/// read from afar blanks the stored keys, and leaves out a list that does not read here
+/// ([`station_answer`]). A save from afar keeps the shack's own of both, as the settings themselves
+/// do, leaves the shack's list as it is when it carries none, and is refused where a list does not
+/// read here ([`merged_save`]).
 const PROFILES: &str = "nexus.profiles";
 
 /// The saved profiles `text` with each stored key a profile carries put to `kept(profile, key)`.
@@ -837,22 +838,25 @@ fn profile_secrets(text: Option<&String>) -> BTreeMap<(String, String), String> 
 }
 
 /// The station's part of a `ui_state_load` answer, which is all the shack sends; a malformed answer
-/// sends nothing. The saved profiles go without their stored keys.
+/// sends nothing. The saved profiles go without their stored keys, and a list that does not read
+/// here, whose keys cannot be blanked, does not go at all.
 fn station_answer(value: Value) -> Value {
     let map: BTreeMap<String, String> = serde_json::from_value(value).unwrap_or_default();
     let mut station = split_ui_state(map).0;
-    if let Some(text) = station.get_mut(PROFILES) {
-        if let Some(blanked) = profiles_with_secrets(text, |_, _| String::new()) {
-            *text = blanked;
+    if let Some(text) = station.remove(PROFILES) {
+        if let Some(blanked) = profiles_with_secrets(&text, |_, _| String::new()) {
+            station.insert(PROFILES.into(), blanked);
         }
     }
     serde_json::to_value(station).unwrap_or_else(|_| Value::Object(Default::default()))
 }
 
 /// What a `ui_state_save` from afar writes at the shack: the shack's own keys as they are, and the
-/// station's keys as the other computer sent them, so a key it removed is removed. A saved profile's
-/// stored keys stay the shack's: never changed, blanked or planted from afar. ⛔ So does each setting
-/// set at the station only, which a profile loaded at the shack would apply as if typed there
+/// station's keys as the other computer sent them, so a key it removed is removed; but a save that
+/// carries no saved profiles keeps the shack's as they are, since a read from afar leaves out a
+/// list that does not read here ([`station_answer`]). A saved profile's stored keys stay the
+/// shack's: never changed, blanked or planted from afar. ⛔ So does each setting set at the station
+/// only, which a profile loaded at the shack would apply as if typed there
 /// ([`profiles_with_station_settings`]). The shack's own list sent back as it is goes as it is.
 /// `None` when the arguments carry no map of strings, or carry another profile list where that list
 /// or the shack's own does not read here: the keeps cannot run, so the whole save is refused.
@@ -861,6 +865,9 @@ fn merged_save(shack: BTreeMap<String, String>, args: &Value) -> Option<Value> {
         serde_json::from_value(args.get("state")?.clone()).ok()?;
     let own = shack.get(PROFILES);
     let held = profile_secrets(own);
+    if let Some(own) = own {
+        sent.entry(PROFILES.into()).or_insert_with(|| own.clone());
+    }
     if let Some(text) = sent.get_mut(PROFILES).filter(|text| Some(&**text) != own) {
         let kept = |profile: &str, key: &str| {
             held.get(&(profile.to_string(), key.to_string()))

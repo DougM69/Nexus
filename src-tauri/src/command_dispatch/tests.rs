@@ -3563,6 +3563,56 @@ fn a_shack_profile_list_the_station_cannot_read_is_not_replaced_from_afar() {
     }
 }
 
+/// ⛔ A saved profile list the station cannot read stays at the shack: its stored keys cannot be
+/// blanked, so a read from afar answers without it. CONTROL: the station's other keys are read.
+#[test]
+fn a_profile_list_the_station_cannot_read_is_not_sent_afar() {
+    for (shape, pad) in values_only_the_screen_reads() {
+        let own = profile_list_with(&pad, &json!({ "clublogApiKey": "FAKE-HOME-KEY-0005" }));
+        let shack = map(&[("nexus.profiles", own.as_str()), ("nexus.watchlist", "old")]);
+        let read = station_answer(serde_json::to_value(&shack).unwrap());
+        assert!(
+            !read.to_string().contains("FAKE-HOME-KEY-0005"),
+            "{shape}: {read}"
+        );
+        assert_eq!(
+            read,
+            json!({ "nexus.watchlist": "old" }),
+            "CONTROL, {shape}"
+        );
+    }
+}
+
+/// ⛔ …and a save from afar made from that read, which then carries no profile list, leaves the
+/// shack's as it is, byte for byte: the other computer never had it, so its save can neither remove
+/// nor rewrite it. CONTROL: the rest of the save is the other computer's.
+#[test]
+fn a_save_from_afar_keeps_a_profile_list_its_read_left_out() {
+    for (shape, pad) in values_only_the_screen_reads() {
+        let shack = shack();
+        let own = profile_list_with(&pad, &json!({ "clublogApiKey": "FAKE-HOME-KEY-0006" }));
+        ui_now(
+            &shack,
+            &[("nexus.profiles", own.as_str()), ("nexus.watchlist", "old")],
+        );
+        let base = shack.inner.stores.revision(Store::UiState).unwrap();
+        let mut sent =
+            station_answer(serde_json::to_value(lock(&shack.inner.stores.ui).clone()).unwrap());
+        sent["nexus.watchlist"] = json!("new");
+        match shack.admit(
+            &controller(),
+            save(1, "ui_state_save", json!({ "state": sent }), base.as_str()),
+        ) {
+            Admission::Run { args, .. } => assert_eq!(
+                args,
+                json!({ "state": { "nexus.profiles": own, "nexus.watchlist": "new" } }),
+                "{shape}"
+            ),
+            other => panic!("{shape}: {}", kind(&other)),
+        }
+    }
+}
+
 /// Each setting a whole save from afar keeps as the shack has it, found by trying them all: every
 /// setting the shack's file carries is changed alone in a save from afar, and it is kept when it
 /// comes back as the shack's. Also what could not be changed alone (a list or a table).
