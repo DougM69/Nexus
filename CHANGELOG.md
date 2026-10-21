@@ -440,6 +440,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   count any technology that identifies a callsign or multiplier, and CQ WW names a CW decoder. The line now says
   what keeps feeding the Needed board in an unassisted entry, your radio's own digital decodes such as FT8 and FT4,
   that neither ruleset sets them apart, and not to use the board to find stations if your contest counts them.
+- **In an unassisted entry the CW Copilot pane says why it is empty.** It said "Decoded calls appear here…", but no
+  CW is decoded then. It now shows the Decode pane's line: "Unassisted entry: the CW decoder is off. CQ WW counts it
+  as assistance."
 - **FT8 and FT4 no longer transmit on top of another program keying your radio through Nexus.** With "Other programs
   may key transmit" on, a program sharing the radio through Nexus's CAT broker (WSJT-X, VarAC) could key for a
   transmission of its own while your FT8 or FT4 CQ or QSO was armed, and at the start of your next period Nexus sent its

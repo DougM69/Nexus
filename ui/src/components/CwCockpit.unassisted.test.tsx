@@ -4,7 +4,8 @@
 // CW decoder as QSO-finding assistance, so with an unassisted entry declared the station decodes
 // nothing (`Settings::cw_decoder_active`): its read carries no copy, no speed, no calls, no report
 // or name, and says `unassisted`. The pane shows one line saying why in place of the copy, where a
-// screen reader reads it too. An assisted station, and one outside a contest, read as before.
+// screen reader reads it too, and the Copilot pane shows the same line where it promised decoded
+// calls. An assisted station, and one outside a contest, read as before.
 import type { ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, screen } from '@testing-library/react'
@@ -70,6 +71,7 @@ const nextPoll = async () => {
   })
 }
 const decodePane = () => document.querySelector('[data-pane="decode"]') as HTMLElement
+const copilotPane = () => document.querySelector('[data-pane="copilot"]') as HTMLElement
 const hisCall = () => screen.getByRole('textbox', { name: EN['cw.hisCall.label'] }) as HTMLInputElement
 
 describe('an unassisted contest entry on the CW screen', () => {
@@ -122,5 +124,22 @@ describe('an unassisted contest entry on the CW screen', () => {
     render(<CwCockpit snap={snap} theme="dark" onWorkSpot={() => {}} spots={[]} />)
     await nextPoll()
     expect(hisCall().value).toBe('K1ABC')
+  })
+
+  it('the Copilot pane says why too, where it promised decoded calls', async () => {
+    read = { unassisted: true }
+    render(<CwCockpit snap={snap} theme="dark" onWorkSpot={() => {}} spots={[]} />)
+    await nextPoll()
+    const pane = copilotPane()
+    expect(pane.textContent, 'no calls are decoded to appear').not.toContain(EN['cw.copilot.empty'])
+    expect(pane.textContent).toContain(EN['cw.decode.unassisted'])
+  })
+
+  it('control: outside a contest, the Copilot pane still promises decoded calls', async () => {
+    render(<CwCockpit snap={snap} theme="dark" onWorkSpot={() => {}} spots={[]} />)
+    await nextPoll()
+    const pane = copilotPane()
+    expect(pane.textContent).toContain(EN['cw.copilot.empty'])
+    expect(pane.textContent).not.toContain(EN['cw.decode.unassisted'])
   })
 })
