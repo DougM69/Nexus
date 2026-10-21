@@ -905,10 +905,10 @@ fn teardown_while_keyed_stops_first_and_closes_with_nothing_carried() {
     let stop = command_at(&log, 0, "trx:0,false").expect("our stop");
     let (closed, by) = closed_at(&log, 0).expect("the close");
     assert!(stop < closed, "the stop before the close");
-    // Nexus's side ended it. The session sends its close frame and lets the socket go without
-    // waiting for the server's own close frame, so a server writing audio just then can see the
-    // socket go before it reads the frame: the simulator reports either, and both are ours.
-    assert!(matches!(by, Closer::Client | Closer::Dropped), "{by:?}");
+    // Nexus's side ended it with its close frame, and the program read it: the session reads on
+    // after the frame until the program's answer, so the socket does not go while the program is
+    // still writing audio to it.
+    assert_eq!(by, Closer::Client, "the close frame was never read");
     assert_eq!(unkeys(&log), 1, "the radio unkeyed");
     assert_eq!(registry::carried(key), None, "confirmed: nothing carried");
     drop(c);

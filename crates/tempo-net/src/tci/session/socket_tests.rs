@@ -1,8 +1,8 @@
 //! The driver over sockets no simulated program makes, each scripted here on loopback for one
-//! connection: a server that trickles its bytes, one that never answers the close or holds the
-//! connection open after its own, and a close's end of the TCP connection as the server reads it.
-//! Every wait is bounded, and a driver that does not keep to its bound fails its test rather than
-//! hanging the suite.
+//! connection: a server that trickles its bytes, one that reads what it is sent a few bytes at a
+//! time, one that never answers the close or holds the connection open after its own, and a
+//! close's end of the TCP connection as the server reads it. Every wait is bounded, and a driver
+//! that does not keep to its bound fails its test rather than hanging the suite.
 
 use std::net::TcpListener;
 use std::thread;
@@ -158,7 +158,14 @@ impl Peer {
 /// A server on loopback for one connection: the WebSocket handshake, then `script` on a thread of
 /// its own. Its address, and the client's texts as the script reads them.
 fn scripted(script: impl FnOnce(Peer) + Send + 'static) -> (SocketAddr, Heard) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+    serve(
+        TcpListener::bind("127.0.0.1:0").expect("a free port"),
+        script,
+    )
+}
+
+/// [`scripted`], on `listener`.
+fn serve(listener: TcpListener, script: impl FnOnce(Peer) + Send + 'static) -> (SocketAddr, Heard) {
     let addr = listener.local_addr().expect("its address");
     let heard = Heard::default();
     let peer_heard = Arc::clone(&heard);
@@ -466,6 +473,254 @@ fn a_close_while_the_server_streams_ends_with_a_fin_not_a_reset() {
             end,
             Ok(()),
             "close {close}: the connection did not end with a FIN"
+        );
+    }
+}
+
+/// The write side: a server that reads what Nexus sends a few bytes at a time, and the control,
+/// one that reads it at once through the same buffers. Linux only: they make the client's send
+/// buffer small through the kernel's own sizing of it ([`SMALL_MSS`]), which other systems do
+/// their own way.
+#[cfg(target_os = "linux")]
+mod slow_readers {
+    use std::os::fd::AsRawFd;
+
+    use super::*;
+    use crate::tci::frame::MAX_CHRONO_LENGTH;
+
+    /// The MSS a server with small buffers announces. Linux sizes the client's send buffer from
+    /// it, about 25 KB here where loopback's own MSS gives it megabytes, so one answer to a
+    /// TX_CHRONO (32 KiB) fills the buffers between Nexus and a server that does not read it, as
+    /// a few answers do on a LAN.
+    const SMALL_MSS: libc::c_int = 384;
+
+    /// How much of what the client sends a slow server reads at a time, every [`SLOW_GAP`]: in a
+    /// whole [`WRITE_TIMEOUT`], about a sixth of one answer to a TX_CHRONO, yet something every
+    /// time, so a write it holds goes on a little long before a timeout on each write would end
+    /// it.
+    const SLOW_READ: usize = 200;
+
+    /// The gap between a slow server's reads.
+    const SLOW_GAP: Duration = Duration::from_millis(100);
+
+    /// How many of the largest TX_CHRONOs a slow server asks for at once: more answers than the
+    /// buffers between Nexus and it hold, however the kernel sizes them.
+    const CHRONOS: usize = 4;
+
+    /// How many TX_CHRONOs the control's server asks for, one every 20 ms: past [`WRITE_TIMEOUT`],
+    /// so a deadline that was not each message's own would end the session inside them.
+    const CONTROL_ROUNDS: usize = 150;
+
+    /// A listener whose connections have small buffers: [`SMALL_MSS`], and the server's receive
+    /// buffer the smallest the kernel allows.
+    fn small_buffers() -> TcpListener {
+        let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
+            .expect("a socket");
+        socket
+            .set_recv_buffer_size(2048)
+            .expect("a small receive buffer");
+        let mss = SMALL_MSS;
+        // SAFETY: the option's value is a c_int that outlives the call, and its length is given.
+        let set = unsafe {
+            libc::setsockopt(
+                socket.as_raw_fd(),
+                libc::IPPROTO_TCP,
+                libc::TCP_MAXSEG,
+                (&mss as *const libc::c_int).cast(),
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(set, 0, "TCP_MAXSEG: {}", io::Error::last_os_error());
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        socket.bind(&addr.into()).expect("a free port");
+        socket.listen(1).expect("listening");
+        socket.into()
+    }
+
+    /// The largest TX_CHRONO a server sends: receiver 0's 8,192 values, an answer of 32 KiB.
+    fn big_chrono() -> Vec<u8> {
+        Chrono {
+            trx: trx0(),
+            sample_rate: 48_000,
+            format: SampleFormat::Float32,
+            channels: Channels::Two,
+            length: MAX_CHRONO_LENGTH,
+        }
+        .encode()
+        .expect("a chrono")
+    }
+
+    /// A connection keyed for an over of Nexus's audio, as soon as the server lets it.
+    fn keyed_for_audio(addr: SocketAddr) -> Connection {
+        let conn = connect(addr, Config::new(trx0()));
+        assert!(
+            conn.wait_until(WAIT, |s| s.phase == Phase::Ready
+                && s.rx_audio_fresh
+                && s.model.trx(trx0()).audio.is_true()),
+            "never ready for a key that takes Nexus's audio"
+        );
+        conn.key(TxStart::Audio).expect("admitted");
+        conn
+    }
+
+    impl Peer {
+        /// An over of Nexus's audio as an ExpertSDR3 server sees it, to its echo: `ready;`, the
+        /// audio stream acknowledged, receive audio until the key, and the key echoed. `false`
+        /// once the client has gone.
+        fn audio_over(&mut self) -> bool {
+            if !self.send(READY) || !self.wait_for("audio_start:0;") || !self.send("audio_start:0;")
+            {
+                return false;
+            }
+            while !lock(&self.heard).iter().any(|t| t == "trx:0,true,tci;") {
+                let block = self.ws.send(Message::binary(rx_block()));
+                if block.is_err() || !self.listen(Duration::from_millis(20)) {
+                    return false;
+                }
+            }
+            self.send("trx:0,true,tci;")
+        }
+
+        /// Read until the client's next binary message, an answer to a TX_CHRONO, keeping its
+        /// texts on the way; whether one came within [`WAIT`].
+        fn answer(&mut self) -> bool {
+            let until = Instant::now() + WAIT;
+            let _ = self
+                .ws
+                .get_ref()
+                .set_read_timeout(Some(Duration::from_millis(10)));
+            while Instant::now() < until {
+                match self.ws.read() {
+                    Ok(Message::Binary(_)) => return true,
+                    Ok(Message::Text(text)) => lock(&self.heard).push(text.as_str().to_string()),
+                    Ok(Message::Close(_)) => return false,
+                    Ok(_) => {}
+                    Err(tungstenite::Error::Io(e)) if retryable(&e) => {}
+                    Err(_) => return false,
+                }
+            }
+            false
+        }
+
+        /// The rest of the connection as a program that reads slowly: at most [`SLOW_READ`] bytes
+        /// of what the client sends every [`SLOW_GAP`], with a line of its own each time, as a
+        /// program streaming its meters sends, until the client goes or [`TRICKLE_FOR`] passes.
+        fn read_slowly(mut self) {
+            let mut buf = [0u8; SLOW_READ];
+            let until = Instant::now() + TRICKLE_FOR;
+            while Instant::now() < until && self.send("rx_smeter:0,0,-100;") {
+                let tcp = self.ws.get_mut();
+                let _ = tcp.set_read_timeout(Some(SLOW_GAP));
+                match tcp.read(&mut buf) {
+                    Ok(0) => return,
+                    Ok(_) => {}
+                    Err(e) if retryable(&e) => {}
+                    Err(_) => return,
+                }
+                thread::sleep(SLOW_GAP);
+            }
+        }
+    }
+
+    /// ⭐ A SERVER THAT READS SLOWLY CANNOT HOLD A STOP: an over of Nexus's audio through small
+    /// buffers; the server asks for the largest answers, more than the buffers hold, then reads
+    /// [`SLOW_READ`] bytes of them every [`SLOW_GAP`]. Each write of the socket goes on a little
+    /// before a timeout on it would end it, so with a timeout on each write alone one answer
+    /// lasted as long as the server's slow read, and a caller's stop waited in the queue behind
+    /// it. Each message has [`WRITE_TIMEOUT`] in all: the answer is cut off there, the session
+    /// ends lost with the key carried, so the next one sends the stop first, and the session's
+    /// thread is done within the drain after it.
+    #[test]
+    fn a_server_that_reads_slowly_cannot_hold_a_stop() {
+        let (asked_tx, asked) = mpsc::channel();
+        let (addr, _) = serve(small_buffers(), move |mut peer| {
+            if !peer.audio_over() {
+                return;
+            }
+            for _ in 0..CHRONOS {
+                if peer.ws.send(Message::binary(big_chrono())).is_err() {
+                    return;
+                }
+            }
+            let _ = asked_tx.send(());
+            peer.read_slowly();
+        });
+        let conn = Arc::new(keyed_for_audio(addr));
+        asked
+            .recv_timeout(WAIT)
+            .expect("the server asked for its audio");
+        // Time for the driver to be inside an answer: a stop asked now comes behind its write.
+        thread::sleep(Duration::from_millis(300));
+        let caller = Arc::clone(&conn);
+        let (stopped, took) = within("the stop", WAIT, move || caller.end_ours());
+        assert!(
+            took < WRITE_TIMEOUT + PAST_DUE,
+            "the stop waited {took:?} behind a write"
+        );
+        assert_eq!(
+            stopped,
+            StopOutcome::NotConnected,
+            "the answer was not cut off"
+        );
+        let ours = OurKey {
+            trx: trx0(),
+            kind: TxStart::Audio,
+        };
+        let seen = expect(&conn, "the end", |e| matches!(e, Event::Closed { .. }));
+        assert_eq!(
+            seen.last(),
+            Some(&Event::Closed {
+                end: End::Lost,
+                carried: Some(ours)
+            }),
+            "{seen:?}"
+        );
+        assert!(conn.ours_on_air(), "the key is carried to the next session");
+        // The stop's caller let its handle go with its call: this one is the last.
+        let conn = Arc::into_inner(conn).expect("the last handle");
+        let (_, ending) = within("the session's end", WAIT, move || conn.close());
+        assert!(
+            ending < CLOSE_DRAIN + PAST_THE_DEADLINE,
+            "the session's end took {ending:?}"
+        );
+    }
+
+    /// The control: a server with the same small buffers that reads what it is sent at once takes
+    /// an answer to every TX_CHRONO it asks for, the largest, one every 20 ms, for longer than
+    /// [`WRITE_TIMEOUT`], and the stop after them goes out at once. The deadline is each message's
+    /// own, so a session whose writes go out is never cut off by it.
+    #[test]
+    fn a_server_that_keeps_up_takes_every_answer_and_the_stop() {
+        let (done_tx, done) = mpsc::channel();
+        let (addr, heard) = serve(small_buffers(), move |mut peer| {
+            if !peer.audio_over() {
+                return;
+            }
+            let started = Instant::now();
+            let mut answers = 0;
+            for _ in 0..CONTROL_ROUNDS {
+                if peer.ws.send(Message::binary(big_chrono())).is_err() || !peer.answer() {
+                    break;
+                }
+                answers += 1;
+                thread::sleep(Duration::from_millis(20));
+            }
+            let _ = done_tx.send((answers, started.elapsed()));
+            let _ = peer.wait_for("trx:0,false;");
+        });
+        let conn = keyed_for_audio(addr);
+        let (answers, took) = done
+            .recv_timeout(WAIT * 4)
+            .expect("the server's audio ran its course");
+        assert_eq!(answers, CONTROL_ROUNDS, "an answer to every TX_CHRONO");
+        assert!(took > WRITE_TIMEOUT, "the audio ran only {took:?}");
+        let asked = Instant::now();
+        assert_eq!(conn.end_ours(), StopOutcome::Sent(vec![Stop::Trx(trx0())]));
+        let took = asked.elapsed();
+        assert!(took < PAST_DUE, "the stop took {took:?}");
+        assert!(
+            reached(&heard, "trx:0,false;", 1),
+            "the stop never reached the server"
         );
     }
 }

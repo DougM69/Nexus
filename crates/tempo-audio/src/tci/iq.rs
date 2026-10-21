@@ -1030,7 +1030,7 @@ mod tests {
         MAX_FRAME,
     };
     use tempo_tcisim::{
-        Carrier, Config as SimConfig, Dialect as SimDialect, Event as SimEvent, Keyer,
+        Carrier, Closer, Config as SimConfig, Dialect as SimDialect, Event as SimEvent, Keyer,
         Receive as SimReceive, Simulator, Source as SimSource,
     };
 
@@ -1979,7 +1979,8 @@ mod tests {
 
     /// ⭐ THE SESSION'S END EMPTIES THE SCOPE AT ONCE: the client goes while drawing, and the RF slot
     /// is empty straight away rather than holding the last row for three seconds. Its close sends
-    /// `iq_stop` after the transmitter's stop (the session's own test pins that order, as written).
+    /// `iq_stop` after the transmitter's stop, and the program, still sending IQ, reads both and
+    /// then the close frame.
     #[test]
     fn the_sessions_end_empties_the_scope_at_once() {
         let sim = sim_with(SimDialect::expert_sdr3(), &[14_086_000]);
@@ -1994,6 +1995,20 @@ mod tests {
         assert!(sim.wait_for(WAIT, |log| log
             .iter()
             .any(|l| matches!(l.event, SimEvent::Closed { .. }))));
+        let log = sim.log();
+        let read_at = |text: &str| {
+            log.iter().position(
+                |l| matches!(&l.event, SimEvent::Command { conn: 0, text: t, .. } if t == text),
+            )
+        };
+        let stop = read_at("trx:0,false").expect("the program never read the stop");
+        let iq_stop = read_at("iq_stop:0").expect("the program never read iq_stop");
+        assert!(stop < iq_stop, "iq_stop before the transmitter's stop");
+        let by = log.iter().find_map(|l| match l.event {
+            SimEvent::Closed { conn: 0, by } => Some(by),
+            _ => None,
+        });
+        assert_eq!(by, Some(Closer::Client), "the close frame was never read");
     }
 
     /// ⭐ IQ THAT STOPS UNDER THE PAN IS SAID AND EMPTIES THE SCOPE; IQ THAT COMES BACK IS DRAWN

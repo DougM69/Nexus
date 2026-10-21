@@ -487,12 +487,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection ends cleanly and the program has read everything sent before. NEEDS-BENCH: ExpertSDR3 and Thetis with
   Audio over TCI and the panadapter on: change the radio's Connection and save, then quit Nexus; the program shows a
   clean disconnect and stops sending to Nexus.
-- **TCI (Beta): a stop can no longer wait behind an SDR program that sends slowly.** Nexus read each message from the
-  program until it was whole, so a program sending one a byte at a time, the bytes under 20 ms apart, held Nexus in
-  that one read. Stop, and Nexus's own checks that end an over the program is not taking Nexus's audio for or has not
-  confirmed it ended, waited until the message was done, which could take hours. Each read now gives up after 20 ms
-  and carries on with the message next time, so a stop and those checks come on time whatever the program sends.
-  Connecting gives up after 3 s however slowly the program answers, rather than after minutes.
+- **TCI (Beta): a stop can no longer wait behind an SDR program that sends or reads slowly.** Nexus read each message
+  from the program until it was whole, so a program sending one a byte at a time, the bytes under 20 ms apart, held
+  Nexus in that one read. Stop, and Nexus's own checks that end an over the program is not taking Nexus's audio for or
+  has not confirmed it ended, waited until the message was done, which could take hours. Each read now gives up after
+  20 ms and carries on with the message next time, so a stop and those checks come on time whatever the program sends.
+  Connecting gives up after 3 s however slowly the program answers, rather than after minutes. Writing was the same
+  the other way: each piece of a message to the program had 2 s, so a program reading a few bytes at a time could hold
+  one message, such as a block of Nexus's transmit audio, and a stop behind it, for as long as it kept reading. Each
+  message now has 2 s in all. A program that takes longer is treated as a lost connection: if Nexus was transmitting
+  it says the radio may still be transmitting, then connects again and sends its stop first.
 - **A logger can no longer turn TX back on after you stop it.** With the WSJT-X UDP feed on, a Reply from GridTracker or
   JTAlert used to arm TX even after Stop TX, Esc or a TX watchdog trip, and cleared the trip. Now that Reply is ignored
   until you turn TX on yourself, and the watchdog trip stays until you do. A logger's free text with "send" no longer

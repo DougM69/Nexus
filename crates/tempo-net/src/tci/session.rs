@@ -10,8 +10,10 @@
 //!   handshake within [`HANDSHAKE_TIMEOUT`]. The WebSocket layer refuses a message over
 //!   [`MAX_WS_MESSAGE`], and the codecs refuse much less ([`super::wire::MAX_MESSAGE`],
 //!   [`super::frame::MAX_FRAME`]), so nothing a server sends is held without a bound, and nothing
-//!   is waited for without one either: the handshake ends at its deadline, and each read of the
-//!   driver within [`READ_POLL`], however the server's bytes trickle in.
+//!   is waited for without one either: the handshake ends at its deadline, each read of the
+//!   driver within [`READ_POLL`], however the server's bytes trickle in, and each message the
+//!   session writes within [`WRITE_TIMEOUT`], however slowly the server reads it. A message that
+//!   runs out of time ends the session as a lost link ([`End::Lost`]), its key carried to the next.
 //! - *The handshake to `ready`* (TCI 2.0 §4.1): the init burst is folded into the model
 //!   ([`super::model`]) and the dialect learned from it ([`super::dialect`]). At `ready;` the
 //!   dialect is pinned and the session's own setup goes out, in this order: the stops an earlier
@@ -160,7 +162,9 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// off here, not at a timeout on each read.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// How long one write may block before the connection counts as gone.
+/// How long one message may take to write, all of it, before the connection counts as gone: a
+/// server that reads it a few bytes at a time is cut off here, not at a timeout on each write of
+/// the socket.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How long a close reads on after its close frame, waiting for the server's own, before it lets
@@ -1445,46 +1449,57 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The session's writes through the WebSocket.
-struct WsOut<'a, S: Read + Write>(&'a mut WebSocket<S>);
+/// The session's writes through the WebSocket: each message whole within [`WRITE_TIMEOUT`], or a
+/// failed write.
+struct WsOut<'a>(&'a mut WebSocket<Socket>);
 
-impl<S: Read + Write> Outbox for WsOut<'_, S> {
+impl WsOut<'_> {
+    fn send(&mut self, message: Message) -> bool {
+        self.0.get_mut().deadline = Instant::now() + WRITE_TIMEOUT;
+        self.0.send(message).is_ok()
+    }
+}
+
+impl Outbox for WsOut<'_> {
     fn text(&mut self, text: &ClientText) -> bool {
-        self.0.send(Message::text(text.as_str())).is_ok()
+        self.send(Message::text(text.as_str()))
     }
 
     fn binary(&mut self, frame: Vec<u8>) -> bool {
-        self.0.send(Message::binary(frame)).is_ok()
+        self.send(Message::binary(frame))
     }
 
     fn ping(&mut self) -> bool {
-        self.0.send(Message::Ping(Bytes::new())).is_ok()
+        self.send(Message::Ping(Bytes::new()))
     }
 
     fn close(&mut self) {
+        self.0.get_mut().deadline = Instant::now() + WRITE_TIMEOUT;
         let _ = self.0.close(None);
         let _ = self.0.flush();
     }
 }
 
-/// The socket under the session's WebSocket. Each read gets only the time left before `read_by`,
-/// and none starts once that has run out. A timeout on each read would bound one read and no
-/// more: the WebSocket layer reads on until a handshake answer or a frame is whole, so a server
-/// sending a byte just inside each read's timeout could hold the handshake for minutes, and one
-/// read of the driver for hours (a frame may be up to [`MAX_WS_MESSAGE`]), while stops, windows
-/// and deadlines waited. `read_by` is the handshake's deadline, then the end of each read of the
-/// driver ([`READ_POLL`]), then the end of the close's drain ([`CLOSE_DRAIN`]); a frame a read
-/// leaves partway is kept by the WebSocket layer, and the next read goes on with it. Writes keep
-/// the socket's own timeout, [`WRITE_TIMEOUT`] each. The probe ([`super::probe`]) and the TCI
-/// server's handshake read the same way.
+/// The socket under the session's WebSocket. Each read and each write gets only the time left
+/// before `deadline`, and none starts once that has run out. A timeout on each would bound one
+/// read or write and no more: the WebSocket layer reads on until a handshake answer or a frame is
+/// whole, and writes on until a message is out, so a server sending a byte just inside each
+/// read's timeout could hold the handshake for minutes, and one read of the driver for hours (a
+/// frame may be up to [`MAX_WS_MESSAGE`]), and a server reading a few bytes inside each write's
+/// timeout could hold one message as long, while stops, windows and deadlines waited. `deadline`
+/// is the handshake's, then the end of each read of the driver ([`READ_POLL`]; an answer the
+/// WebSocket layer writes inside a read, such as a pong, goes in the read's time), of each message
+/// the session writes ([`WRITE_TIMEOUT`]), and of the close's drain ([`CLOSE_DRAIN`]). A frame a
+/// read leaves partway is kept by the WebSocket layer, and the next read goes on with it. The
+/// probe ([`super::probe`]) and the TCI server's handshake read the same way.
 struct Socket {
     tcp: TcpStream,
-    read_by: Instant,
+    deadline: Instant,
 }
 
 impl Read for Socket {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let left = self.read_by.saturating_duration_since(Instant::now());
+        let left = self.deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
             return Err(io::Error::new(ErrorKind::TimedOut, "the read's time is up"));
         }
@@ -1495,6 +1510,14 @@ impl Read for Socket {
 
 impl Write for Socket {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(
+                ErrorKind::TimedOut,
+                "the write's time is up",
+            ));
+        }
+        self.tcp.set_write_timeout(Some(left))?;
         self.tcp.write(buf)
     }
 
@@ -1504,8 +1527,9 @@ impl Write for Socket {
 }
 
 /// A [`Session`] running on its own thread over one WebSocket. `Sync`, so one connection serves
-/// several callers at once: each request waits on its own answer, and a stop never queues behind
-/// another caller's request for longer than one read ([`READ_POLL`]).
+/// several callers at once: each request waits on its own answer, and a stop waits only for the
+/// read under way ([`READ_POLL`]) and for what the driver writes before it, each message within
+/// [`WRITE_TIMEOUT`] or the session ends.
 pub struct Connection {
     requests: Sender<Request>,
     /// Behind a lock only so the connection is `Sync`; one reader drains it.
@@ -1524,16 +1548,15 @@ impl Connection {
         let unreachable = |e: io::Error| ConnectError::Unreachable(e.to_string());
         let tcp = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map_err(unreachable)?;
         tcp.set_nodelay(true).map_err(unreachable)?;
-        tcp.set_write_timeout(Some(WRITE_TIMEOUT))
-            .map_err(unreachable)?;
         let limits = WebSocketConfig::default()
             .max_message_size(Some(MAX_WS_MESSAGE))
             .max_frame_size(Some(MAX_WS_MESSAGE));
         let url = format!("ws://{addr}/");
-        // The whole handshake inside its deadline, however the server's answer trickles in.
+        // The whole handshake inside its deadline, our request as well as the server's answer,
+        // however that answer trickles in.
         let socket = Socket {
             tcp,
-            read_by: Instant::now() + HANDSHAKE_TIMEOUT,
+            deadline: Instant::now() + HANDSHAKE_TIMEOUT,
         };
         let (ws, _) = tungstenite::client::client_with_config(url.as_str(), socket, Some(limits))
             .map_err(|e| ConnectError::Handshake(e.to_string()))?;
@@ -1735,7 +1758,7 @@ fn drive(
         if !session.is_closed() {
             // One read, however the server's bytes trickle in: a frame it leaves partway is read
             // on the next time round, after requests and time.
-            ws.get_mut().read_by = Instant::now() + READ_POLL;
+            ws.get_mut().deadline = Instant::now() + READ_POLL;
             let read = ws.read();
             let mut out = WsOut(&mut ws);
             match read {
@@ -1779,11 +1802,12 @@ fn drive(
 /// socket let go with the server's frames still unread ends in a reset rather than a FIN, and a
 /// server that writes before it reads, or whose system drops unread data on a reset, then never
 /// reads what went out just before: the stops, `iq_stop`, the close frame. A link already gone
-/// ends it at the first read.
+/// ends it at the first read. What is still to write (a message cut off at its deadline, the
+/// answer to the server's own close frame) goes first, in the same time.
 fn drain(ws: &mut WebSocket<Socket>) {
-    let _ = ws.flush();
     let until = Instant::now() + CLOSE_DRAIN;
-    ws.get_mut().read_by = until;
+    ws.get_mut().deadline = until;
+    let _ = ws.flush();
     loop {
         match ws.read() {
             Ok(Message::Close(_)) => return,
