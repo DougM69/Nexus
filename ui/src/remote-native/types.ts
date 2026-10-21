@@ -10,7 +10,9 @@ export type RemoteStationStatus = {
    *  approval that lasts until it is removed here (every approval since 2026-10-10); absent from an older
    *  station or service. */
   devices: { id: string; name: string; approved: number; expiresAt: number; generation?: number | null; renewsUntil?: number | null
-    key?: string | null; kind?: DeviceKind; platform?: DevicePlatform | null; untilRemoved?: number }[]
+    key?: string | null; kind?: DeviceKind; platform?: DevicePlatform | null; untilRemoved?: number
+    /** Listed to a station that checks proofs itself: what the device may do, and how it was added. */
+    role?: AccountRole | null; addedBy?: 'shack' | 'account' | null }[]
   loggingPermissions?: string[]
   stationPermissions?: string[]
   transmitPermissions?: string[]
@@ -27,6 +29,8 @@ export type RemoteStationStatus = {
   error: string | null
   /** Remote over this network: absent only from a build without it. */
   lan?: LanStatus
+  /** The station's account: signing in at the shack, and the devices it granted on their own proof. */
+  account?: AccountStatus
 }
 /** Remote over this network (`Status.lan`): the shack's own listener, its paired computers and its
  *  pairing window. `reason`: why it went off by itself, or why it is on and not listening
@@ -54,6 +58,21 @@ export type LanStatus = {
   devices: { id: string; name: string; key: string }[]
 }
 /** A device's kind and a native device's platform, as the station lists them (the service's own values). */
+export type AccountRole = 'operate' | 'listen'
+export type AccountStatus = {
+  signingIn: boolean
+  /** The key that signed the station's own proof was retired: sign in again to keep adding devices. */
+  reproof?: boolean
+  /** Devices granted on their own proof since Nexus started, until dismissed: the notice at the shack. */
+  added: { deviceId: string; name: string; kind: DeviceKind; platform?: DevicePlatform | null; key?: string | null
+    role: AccountRole; guest: boolean }[]
+  /** Devices the service approved on a proof the station could not confirm, each with why. */
+  unconfirmed: Record<string, string>
+  /** Devices removed here that the service has not heard of yet. */
+  removals: string[]
+  /** The people invited: each address as the service matches it, and a role. */
+  people: { mailbox: string; role: AccountRole }[]
+}
 export type DeviceKind = 'browser' | 'computer' | 'phone'
 export type DevicePlatform = 'windows' | 'macos' | 'linux' | 'ios' | 'android'
 /** The platforms by name: proper nouns, the same in every language. */
@@ -77,3 +96,12 @@ export type RemoteStationAction =
   | { type: 'lanAddress'; address?: string }
   | { type: 'lanOff' | 'lanPair' | 'lanCancel' | 'lanReset' }
   | { type: 'lanRevoke'; deviceId: string }
+  /** Sign in to Nexus Remote at the shack: binds the station named `name` to the account, with no code. */
+  | { type: 'signIn'; name: string }
+  /** Sign in again, for a station bound already: its proof is replaced, so devices can check it again. */
+  | { type: 'signInAgain' }
+  /** End signing in again; unlike `cancel`, which is a stop, it leaves Remote as it was. */
+  | { type: 'cancelSignInAgain' }
+  | { type: 'dismissAdded'; deviceId: string }
+  | { type: 'invite'; email: string; role: AccountRole }
+  | { type: 'uninvite'; email: string }

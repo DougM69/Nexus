@@ -55,6 +55,7 @@ use super::super::stream::{Station, StreamLane};
 use super::super::transport::{identifier, random_secret, Feeds};
 use super::commands::{Commands, Lane, Opening, OUTCOMES, WATCH};
 use super::datagram;
+use super::enrol;
 use super::gate::Gate;
 use super::outbox::Outbox;
 use super::pairing::{self, Asked, Desk, Outcome};
@@ -283,6 +284,18 @@ enum FromComputer {
         name: String,
         nonce: String,
     },
+    /// A computer enrolling by its own sign-in to the station's account (`super::enrol`): the
+    /// first message only, and it never reaches the lane.
+    Enrol {
+        protocol: u8,
+        stream: u8,
+        operation: u8,
+        name: String,
+        kind: String,
+        #[serde(rename = "publicKey")]
+        public_key: String,
+        proof: String,
+    },
     OperationRequest {
         request: Box<Request>,
     },
@@ -444,6 +457,17 @@ pub(super) async fn connection<S>(
                 }
             }
         }
+        Ok(Ok(Opened::Enrol(socket, asked))) => {
+            // As a pairing: this connection holds the desk and nothing else.
+            let (gate, desk, deadline) =
+                (shared.gate.clone(), shared.desk.clone(), shared.handshake);
+            drop(shared);
+            if let Some(desk) = desk {
+                if enrol::session(socket, asked, desk, deadline, stop).await == Outcome::Failed {
+                    gate.failed(peer.ip(), Instant::now());
+                }
+            }
+        }
         // Refused for its version, and told which side to update: not counted.
         Ok(Ok(Opened::Told)) => {}
         Ok(Err(())) | Err(_) => shared.gate.failed(peer.ip(), Instant::now()),
@@ -472,6 +496,8 @@ enum Opened<S> {
     Session(Socket<S>, [u8; 32], String),
     /// A computer asking to pair, for a pairing-only connection.
     Pairing(Socket<S>, Asked),
+    /// A computer asking to enrol, for an enrol-only connection.
+    Enrol(Socket<S>, enrol::Asked),
     /// Refused for its version, and already told which side to update.
     Told,
 }
@@ -548,6 +574,23 @@ where
             None => Ok(Opened::Pairing(
                 socket,
                 Asked::new(&name, &nonce, key, exporter).ok_or(())?,
+            )),
+        },
+        // Nor does anything enrol through it.
+        Ok(FromComputer::Enrol { .. }) if shared.desk.is_none() => Err(()),
+        Ok(FromComputer::Enrol {
+            protocol,
+            stream,
+            operation,
+            name,
+            kind,
+            public_key,
+            proof,
+        }) => match refusal((protocol, stream, operation)) {
+            Some(reason) => told(socket, reason).await,
+            None => Ok(Opened::Enrol(
+                socket,
+                enrol::Asked::new(&name, &kind, &public_key, &proof, key).ok_or(())?,
             )),
         },
         _ => Err(()),
@@ -761,7 +804,7 @@ async fn session<S>(
                     break StreamReason::StreamClosed;
                 }
                 match message {
-                    FromComputer::Hello { .. } | FromComputer::Pair { .. } => break StreamReason::StreamClosed,
+                    FromComputer::Hello { .. } | FromComputer::Pair { .. } | FromComputer::Enrol { .. } => break StreamReason::StreamClosed,
                     FromComputer::Open { profile, app, contract, run, roads } => {
                         if lane.is_some() || run == 0 { break StreamReason::StreamClosed }
                         let profile = Profile::named(&profile);

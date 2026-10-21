@@ -90,7 +90,9 @@
 //! and only when none answers (or another key does) where a look by name finds it, as the
 //! stations window does. When the link drops, the screens keep the shack's last state ("Not live"), and it
 //! connects again by itself. A call cut off by a drop is never sent again: the next link asks the
-//! shack what became of it.
+//! shack what became of it. A station kept by its service id (signed in to from elsewhere, ruling
+//! 556) has no record on this network, so its internet road is its only road until this computer
+//! first reaches it there and signs in on its row; the banner's status says so (`away`).
 //!
 //! ## A test build's road switch
 //!
@@ -99,6 +101,14 @@
 //! each road alone. Every link [`Client::drive`] opens is opened under it, and the banner's status
 //! says where it is. Nothing in this module decides anything by it: the rules above meet a blocked
 //! road as they would meet a firewall on this computer.
+//!
+//! ## Signing in again
+//!
+//! A station added with the account takes this computer on its network for thirty days from the
+//! sign-in that added it (`crate::lan_client::account`). In the last week of them, Operate's launch
+//! signs in again by itself ([`sign_in_again_by`]): the browser opens for it while the link runs,
+//! and the new proof goes to the station on a connection of its own, so the link is never closed for
+//! it. The banner says so, and, when it did not happen, by what day to sign in again.
 //!
 //! ## What a refusal says
 //!
@@ -672,6 +682,14 @@ pub(crate) struct Status {
     /// The station's Nexus version, as its last welcome said it, the link opened or refused for
     /// another build: `None` until a welcome has said it.
     pub(crate) station_build: Option<String>,
+    /// The day the station stops taking this computer on its network, seconds since 1970, while
+    /// that is within a week and this computer has not signed in again ([`sign_in_again_by`]).
+    pub(crate) sign_in_by: Option<u64>,
+    /// Operate's launch is signing in again for the station: the sign-in waits in the browser.
+    pub(crate) signing_again: bool,
+    /// The station is kept by its service id until this computer first reaches it on its network
+    /// (`crate::lan_client::Stations::keep_away`): the internet road is its only road from here.
+    pub(crate) away: bool,
 }
 
 /// This computer's PTT between the screen's re-assertions.
@@ -784,6 +802,9 @@ impl Client {
                 bench: Default::default(),
                 computer_build: tempo_client::wire::APP,
                 station_build: None,
+                sign_in_by: None,
+                signing_again: false,
+                away: false,
             }),
             station_id,
             shack: Mutex::new(None),
@@ -911,6 +932,14 @@ impl Client {
             bench: self.road_switch.position(),
             ..lock(&self.status).clone()
         }
+    }
+
+    /// Signing in again for the station: the day the station stops taking this computer on its
+    /// network while that is still to be done (`by`), and whether the sign-in is under way.
+    pub(crate) fn signing_again(&self, by: Option<u64>, under_way: bool) {
+        let mut status = lock(&self.status);
+        status.sign_in_by = by;
+        status.signing_again = under_way;
     }
 
     /// A test build's road switch.
@@ -1585,7 +1614,10 @@ impl Client {
                 .await
                 .unwrap_or(Err("storeUnavailable"));
             let record = match record {
-                Ok(Some(record)) => record,
+                Ok(Some(record)) => Some(record),
+                // Kept by its service id until this computer first reaches it on its network:
+                // no record of it here, so its internet road alone.
+                Ok(None) if self.road_kept().await => None,
                 Ok(None) => {
                     // Forgotten here, or never paired: nothing will change that but the operator.
                     self.set(Phase::Refused, Some("unknownStation"));
@@ -1597,7 +1629,8 @@ impl Client {
                     continue;
                 }
             };
-            if let Some(first) = record.addresses.first() {
+            lock(&self.status).away = record.is_none();
+            if let Some(first) = record.as_ref().and_then(|record| record.addresses.first()) {
                 self.at(first.clone());
             }
             // What the operator typed for this launch, or else what was kept for the station when
@@ -1615,13 +1648,20 @@ impl Client {
             let typing = typed.clone().or(kept);
             let typed_at = self.typed_at(typing.clone()).await;
             let unresolved = typing.is_some() && typed_at.is_none();
-            let connecting = self.connect(&record, typed_at, &look);
+            let connecting = record
+                .as_ref()
+                .map(|record| self.connect(record, typed_at, &look));
             // In a test build, what this link opens is under the road switch.
             #[cfg(feature = "bench-road-switch")]
-            let connecting = self.road_switch.over(connecting);
+            let connecting = connecting.map(|connecting| self.road_switch.over(connecting));
             let probed = self.lan_backoff.load(Ordering::SeqCst) > 1;
             // The station's version, heard from its welcome on either road, for a refusal to name.
             let (reached, heard) = crate::lan_client::link::hearing_build(async {
+                let Some(connecting) = connecting else {
+                    // No record of it on this network to try.
+                    let internet = self.over_the_internet("unknownStation").await;
+                    return internet.map(|link| (link, None));
+                };
                 match connecting.await {
                     Ok((link, at)) => Ok((link, Some(at))),
                     // Not on this network (nothing answered, or not the station): the internet
@@ -1736,15 +1776,23 @@ impl Client {
         let Some(afar) = self.afar.get().cloned() else {
             return Err(why);
         };
-        let (asked, id) = (Arc::clone(&afar), self.station_id.clone());
-        let kept = tokio::task::spawn_blocking(move || asked.has_road(&id))
-            .await
-            .unwrap_or(false);
-        if !kept {
+        if !self.road_kept().await {
             return Err(why);
         }
         let headset = self.link_headset();
         afar.open(self.station_id.clone(), headset).await
+    }
+
+    /// Whether an internet road is kept for this station, asked off the async threads (the store
+    /// can block). Never without the internet road ([`Client::reach_afar`]).
+    async fn road_kept(&self) -> bool {
+        let Some(afar) = self.afar.get().cloned() else {
+            return false;
+        };
+        let id = self.station_id.clone();
+        tokio::task::spawn_blocking(move || afar.has_road(&id))
+            .await
+            .unwrap_or(false)
     }
 
     /// One link, open, until it ends: the lease, the feeds, the events, and the calls the last
@@ -2343,6 +2391,58 @@ pub(crate) fn start_driving<R: Runtime>(
     tauri::async_runtime::spawn(client.drive(app, find, look, typed))
 }
 
+/// When Operate's launch signs in again for station `id`: the day the station stops taking this
+/// computer on its network, once that is within `tempo_client::account::RENEW_BEFORE_S` or past, for
+/// a station added with the account. `None` for one paired with a code, or signed in to lately.
+pub(crate) fn sign_in_again_by(
+    stations: &crate::lan_client::Stations,
+    id: &str,
+    now_s: u64,
+) -> Option<u64> {
+    let issued_at = stations.signed(id)?;
+    tempo_client::account::renew_due(issued_at, now_s)
+        .then(|| tempo_client::account::admitted_until(issued_at))
+}
+
+/// Signs in again for the station `client` drives, through the system browser
+/// (`lan_client::account::sign_in`), saying so on the banner; `by` stays there when it did not
+/// happen. Nothing is picked and nobody is asked where the station is: it is the one this launch
+/// drives, at the addresses it is known at.
+fn sign_in_again<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    client: Arc<Client>,
+    stations: Arc<crate::lan_client::Stations>,
+    by: u64,
+) {
+    use crate::lan_client::account::{Ask, Env};
+    client.signing_again(Some(by), true);
+    tauri::async_runtime::spawn(async move {
+        use tauri_plugin_opener::OpenerExt;
+        let env = Env::new(
+            stations,
+            Arc::new(tempo_stream::lan::dnssd::find),
+            Arc::new(tempo_stream::lan::lookup),
+            crate::lan_client::computer_name(),
+        );
+        let signed = match env {
+            Ok(env) => {
+                let open = |url: &str| {
+                    app.opener()
+                        .open_url(url, None::<&str>)
+                        .map_err(|e| e.to_string())
+                };
+                let choose: crate::lan_client::internet::Choose =
+                    Arc::new(|_| Box::pin(async { None }));
+                let ask: Ask = Arc::new(|_, _| Box::pin(async { None }));
+                let id = client.station_id.clone();
+                crate::lan_client::account::sign_in(&env, Some(id), open, choose, ask).await
+            }
+            Err(why) => Err(why),
+        };
+        client.signing_again(signed.is_err().then_some(by), false);
+    });
+}
+
 pub(crate) fn run(station: String) {
     tempo_core::applog::info(
         "startup",
@@ -2402,8 +2502,23 @@ pub(crate) fn run(station: String) {
                 crate::lan_client::Stations::new(Arc::new(
                     crate::remote_service::vault::SystemVault,
                 ))
-                .typed_in(crate::lan_client::typed_path()),
+                .typed_in(crate::lan_client::typed_path())
+                .signed_in(crate::lan_client::signed_path()),
             );
+            // In the last week before the station stops taking this computer on its network, this
+            // launch signs in again by itself (see the header).
+            let now_s = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            if let Some(by) = sign_in_again_by(&stations, &driving.station_id, now_s) {
+                sign_in_again(
+                    app.handle().clone(),
+                    Arc::clone(&driving),
+                    Arc::clone(&stations),
+                    by,
+                );
+            }
             match crate::lan_client::internet::Roads::new(Arc::clone(&stations)) {
                 Ok(roads) => driving.reach_afar(Arc::new(roads)),
                 Err(why) => tempo_core::applog::warn(

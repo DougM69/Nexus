@@ -141,9 +141,11 @@ export class BrowserClient {
     if (!config.ready) return null
     const issuer = new URL(config.issuer)
     if (issuer.protocol !== 'https:' || issuer.username || issuer.password || issuer.search || issuer.hash) throw new RemoteError(503)
+    // The sign-in asks who signed in and the address the service verified, which is how a station
+    // knows a person it invited; never the profile, so no name, nickname or picture.
     const auth = new Auth0Client({ domain: issuer.host, clientId: config.clientId,
       cacheLocation: 'memory', useRefreshTokens: false, httpTimeoutInSeconds: 10,
-      authorizationParams: { audience: config.audience, redirect_uri: window.location.origin, scope: 'openid profile email' } })
+      authorizationParams: { audience: config.audience, redirect_uri: window.location.origin, scope: 'openid email' } })
     const query = new URLSearchParams(window.location.search)
     let signInRefusal: SignInRefusal | null = null
     if (query.has('code') || query.has('error')) {

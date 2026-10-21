@@ -40,13 +40,37 @@
 //! ([`lan_entry`]): no key is made over it and the list is never written over or deleted on its
 //! own; the station has no key, or admits nobody, until the operator resets its network identity.
 //!
+//! Four more belong to the station's account (`remote_service::account`), and are each their own
+//! entry so no older Nexus ever reads them: who owns the station (the service's id for it, the
+//! issuer and the owner's subject, and the key id and signing time of its proof: no token), the
+//! issuer's key set, the devices kept for the LAN (each the SHA-256 of its key, its role and two
+//! times), and the people invited (each an address as the service matches it, and a role). A fifth
+//! holds the removals made at the shack that the service has not heard yet (device ids), so a
+//! device removed offline is never granted again on its proof before the service hears of it; a
+//! sixth, the invitations taken back at the shack that the service has not heard yet (each address
+//! as it was typed), so the service still removes that person's devices once it is reached. None
+//! holds a secret: a key set is public, and a pin is a hash. Like the LAN entries they read past a
+//! field they do not know, and one that does not read at all is never taken for none: the station
+//! then admits no device on a proof until it signs in again. The devices kept for the LAN have
+//! several writers, and each holds that entry from its read to its save ([`DevicesHeld`]).
+//!
 //! The rest belong to the other end of Remote over this network, the computer an operator works
 //! from (`crate::lan_client`). One entry for each station it is paired with: its own key for that
 //! station (the design's second key, approved on 2026-10-04 and handled as the station key is:
 //! never logged, shown or sent), the station's key as it presented it while pairing, the two ids
 //! and the addresses it answered at. Each fits the smallest credential blob on its own; a last
 //! entry lists them, since a credential store cannot be asked what it holds. Neither is ever read
-//! by the shack's side, nor the shack's entries by these.
+//! by the shack's side, nor the shack's entries by these. One more holds the two keys this computer
+//! made for the next station it signs in to with the account (`crate::lan_client::account`), kept
+//! until a station is kept with them so a sign-in tried again names the same keys: handled as the
+//! others (never logged, shown or sent), its own entry so no older Nexus reads it, and read past a
+//! field it does not know. And one for each station this computer signed in to with the account
+//! but has not yet reached on the station's network (a laptop away from home, a guest who lives
+//! elsewhere): kept by the service's id for it until it does, with its name, the station's LAN key
+//! as the station's own proof vouched for it (pinned from then on) and this computer's own key for
+//! that network, which its sign-in named. Handled as the others, its own entry so no older Nexus
+//! reads it, and read past a field it does not know. Its internet road is the station's road entry
+//! under the same id, and its id is on the list with the rest.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -62,6 +86,16 @@ const PAIRED_STATIONS: &str = "lan-stations";
 const PAIRED_STATION: &str = "lan-station-";
 /// One paired station's internet road: this, then its LAN station id.
 const INTERNET_ROAD: &str = "lan-internet-";
+/// The two keys made for the next station this computer signs in to with the account.
+const STAGED_KEYS: &str = "lan-account-staged";
+/// A station signed in to but not yet reached on its network: this, then the service's id for it.
+const AWAY_STATION: &str = "lan-away-";
+const ACCOUNT_OWNER: &str = "account-owner";
+const ACCOUNT_KEYS: &str = "account-keys";
+const ACCOUNT_DEVICES: &str = "account-devices";
+const ACCOUNT_PEOPLE: &str = "account-people";
+const ACCOUNT_REVOKES: &str = "account-revokes";
+const ACCOUNT_UNINVITES: &str = "account-uninvites";
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -188,6 +222,33 @@ pub struct InternetRoad {
     pub pkcs8: String,
 }
 
+/// The two keys this computer made for the next station it signs in to with the account
+/// (`crate::lan_client::account`): one for the internet road and one for the station's network,
+/// each PKCS#8 as lowercase hex. No `Debug` and no `Clone`: they are private keys. Read past a field
+/// it does not know (see the header).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedKeys {
+    pub road: String,
+    pub lan: String,
+}
+
+/// A station this computer signed in to with the account and has not reached on its network yet
+/// (`crate::lan_client::account`), kept by the service's id for it until it does: its name as the
+/// account listed it; the station's LAN key, SPKI as lowercase hex, exactly as the station's own
+/// proof vouched for it at that sign-in (pinned from then on); and this computer's own key for the
+/// station's network, PKCS#8 as lowercase hex, which the sign-in's proof named. Its internet road is
+/// kept under the same id ([`InternetRoad`]). No `Debug` and no `Clone`: it holds a private key.
+/// Read past a field it does not know (see the header).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AwayStation {
+    pub station_id: String,
+    pub name: String,
+    pub station_key: String,
+    pub pkcs8: String,
+}
+
 /// The computer's side of Remote over this network: its entries, kept apart from the shack's and
 /// from [`Vault`]'s, so no test of either reaches them, nor they it.
 pub trait StationVault: Send + Sync {
@@ -200,6 +261,15 @@ pub trait StationVault: Send + Sync {
     fn internet_road(&self, id: &str) -> Result<Option<InternetRoad>, &'static str>;
     fn save_internet_road(&self, id: &str, road: &InternetRoad) -> Result<(), &'static str>;
     fn remove_internet_road(&self, id: &str) -> Result<(), &'static str>;
+    /// The keys made for the next station this computer signs in to, if any are kept.
+    fn staged_keys(&self) -> Result<Option<StagedKeys>, &'static str>;
+    fn save_staged_keys(&self, keys: &StagedKeys) -> Result<(), &'static str>;
+    fn remove_staged_keys(&self) -> Result<(), &'static str>;
+    /// The station kept by the service's id `id` until this computer reaches it on its network, if
+    /// any.
+    fn away_station(&self, id: &str) -> Result<Option<AwayStation>, &'static str>;
+    fn save_away_station(&self, station: &AwayStation) -> Result<(), &'static str>;
+    fn remove_away_station(&self, id: &str) -> Result<(), &'static str>;
 }
 
 /// Remote over this network's two entries, kept apart from [`Vault`]'s: a test of the hosted
@@ -210,6 +280,93 @@ pub trait LanVault: Send + Sync {
     fn lan_devices(&self) -> Result<Option<LanDevices>, &'static str>;
     fn save_lan_devices(&self, devices: &LanDevices) -> Result<(), &'static str>;
     fn remove_lan_devices(&self) -> Result<(), &'static str>;
+}
+
+/// The issuer's key set as the station keeps it, for the issuer it was fetched from: a set kept for
+/// another issuer checks nothing.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountKeys {
+    pub issuer: String,
+    pub keys: tempo_client::account::KeySet,
+}
+
+/// The people invited to the station the service knows as `station_id`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct People {
+    pub station_id: String,
+    pub invites: Vec<tempo_client::account::Invite>,
+}
+
+/// The removals made at the station that the service known as `station_id` has not heard yet: the
+/// ids it lists those devices under.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Revokes {
+    pub station_id: String,
+    pub devices: Vec<String>,
+}
+
+/// The invitations taken back at the station that the service known as `station_id` has not heard
+/// yet: each address as it was typed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Uninvites {
+    pub station_id: String,
+    pub people: Vec<String>,
+}
+
+/// The station's account entries (see the header), kept apart from [`Vault`]'s and the LAN's.
+pub trait AccountVault: Send + Sync {
+    fn owner(&self) -> Result<Option<tempo_client::account::Owner>, &'static str>;
+    fn save_owner(&self, owner: &tempo_client::account::Owner) -> Result<(), &'static str>;
+    fn account_keys(&self) -> Result<Option<AccountKeys>, &'static str>;
+    fn save_account_keys(&self, keys: &AccountKeys) -> Result<(), &'static str>;
+    fn device_cache(&self) -> Result<Option<tempo_client::account::DeviceCache>, &'static str>;
+    /// Only while the cache is held ([`DevicesHeld`]).
+    fn save_device_cache(
+        &self,
+        held: &DevicesHeld<'_>,
+        cache: &tempo_client::account::DeviceCache,
+    ) -> Result<(), &'static str>;
+    /// The lock [`DevicesHeld`] takes: one for each store, so every writer of its device cache waits
+    /// for the others.
+    fn devices_lock(&self) -> &std::sync::Mutex<()>;
+    fn people(&self) -> Result<Option<People>, &'static str>;
+    fn save_people(&self, people: &People) -> Result<(), &'static str>;
+    fn revokes(&self) -> Result<Option<Revokes>, &'static str>;
+    fn save_revokes(&self, revokes: &Revokes) -> Result<(), &'static str>;
+    fn uninvites(&self) -> Result<Option<Uninvites>, &'static str>;
+    fn save_uninvites(&self, uninvites: &Uninvites) -> Result<(), &'static str>;
+}
+
+/// The LAN's device cache (`account-devices`) held by one writer from its read to its save. It has
+/// several: an enrolment adding its computer, each list the station hears (its sweep, and its
+/// keeping of a device it vouched for), an expiry, a code pairing, and the station's copy of the
+/// cache in memory, which every admission on the LAN reads (`super::lan::enrol`). Two that each read
+/// it and saved what they made of it lost one change to the other's save; when the change lost was
+/// an enrolment's entry, its computer stayed in the book with no proof's age held to it. A save asks
+/// for this, so no writer saves without it.
+///
+/// Taken before the book's own lock (`super::lan::book`): an enrolment takes the book's while it
+/// holds this one, and nothing that holds the book's takes this one (an expiry and a code pairing
+/// write the book first and let its lock go).
+pub struct DevicesHeld<'a> {
+    _held: std::sync::MutexGuard<'a, ()>,
+}
+
+impl<'a> DevicesHeld<'a> {
+    /// Waits for the device cache in `vault`, then holds it until dropped.
+    pub fn take(vault: &'a dyn AccountVault) -> Self {
+        // It guards no value of its own (the store is what it guards, and each save is whole), so a
+        // writer that panicked holding it left the cache as a crash there would: no reason to stop
+        // every writer after it.
+        let held = vault.devices_lock().lock();
+        Self {
+            _held: held.unwrap_or_else(std::sync::PoisonError::into_inner),
+        }
+    }
 }
 
 pub trait Vault: Send + Sync {
@@ -459,6 +616,117 @@ impl StationVault for SystemVault {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err("credentialStoreUnavailable"),
         }
+    }
+    fn staged_keys(&self) -> Result<Option<StagedKeys>, &'static str> {
+        match entry(STAGED_KEYS)?.get_password() {
+            // Unreadable is none: new keys are made, and nothing was kept with those.
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_staged_keys(&self, keys: &StagedKeys) -> Result<(), &'static str> {
+        let value = serde_json::to_string(keys).map_err(|_| "credentialStoreUnavailable")?;
+        entry(STAGED_KEYS)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
+    }
+    fn remove_staged_keys(&self) -> Result<(), &'static str> {
+        match entry(STAGED_KEYS)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn away_station(&self, id: &str) -> Result<Option<AwayStation>, &'static str> {
+        match away_entry(id)?.get_password() {
+            // Unreadable is none, as a paired station's is: that station is signed in to again.
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_away_station(&self, station: &AwayStation) -> Result<(), &'static str> {
+        let value = serde_json::to_string(station).map_err(|_| "credentialStoreUnavailable")?;
+        away_entry(&station.station_id)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
+    }
+    fn remove_away_station(&self, id: &str) -> Result<(), &'static str> {
+        match away_entry(id)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+}
+
+/// A station's entry while it is kept by the service's id ([`AwayStation`]): only an id names one,
+/// as for a paired station.
+fn away_entry(id: &str) -> Result<keyring::Entry, &'static str> {
+    if !tempo_stream::protocol::identifier(id) {
+        return Err("credentialStoreUnavailable");
+    }
+    entry(&format!("{AWAY_STATION}{id}"))
+}
+
+/// One of the account's entries, as the store gave it: read as the LAN's are ([`lan_entry`]).
+fn account_entry<T: serde::de::DeserializeOwned>(name: &str) -> Result<Option<T>, &'static str> {
+    match entry(name)?.get_password() {
+        Ok(value) => lan_entry(&value),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Err("credentialStoreUnavailable"),
+    }
+}
+fn save_account_entry<T: Serialize>(name: &str, value: &T) -> Result<(), &'static str> {
+    let value = serde_json::to_string(value).map_err(|_| "credentialStoreUnavailable")?;
+    entry(name)?
+        .set_password(&value)
+        .map_err(|_| "credentialStoreUnavailable")
+}
+impl AccountVault for SystemVault {
+    fn owner(&self) -> Result<Option<tempo_client::account::Owner>, &'static str> {
+        account_entry(ACCOUNT_OWNER)
+    }
+    fn save_owner(&self, owner: &tempo_client::account::Owner) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_OWNER, owner)
+    }
+    fn account_keys(&self) -> Result<Option<AccountKeys>, &'static str> {
+        account_entry(ACCOUNT_KEYS)
+    }
+    fn save_account_keys(&self, keys: &AccountKeys) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_KEYS, keys)
+    }
+    fn device_cache(&self) -> Result<Option<tempo_client::account::DeviceCache>, &'static str> {
+        account_entry(ACCOUNT_DEVICES)
+    }
+    fn save_device_cache(
+        &self,
+        _held: &DevicesHeld<'_>,
+        cache: &tempo_client::account::DeviceCache,
+    ) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_DEVICES, cache)
+    }
+    fn devices_lock(&self) -> &std::sync::Mutex<()> {
+        // One for the process: every `SystemVault` is the same credential store.
+        static DEVICES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        &DEVICES
+    }
+    fn people(&self) -> Result<Option<People>, &'static str> {
+        account_entry(ACCOUNT_PEOPLE)
+    }
+    fn save_people(&self, people: &People) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_PEOPLE, people)
+    }
+    fn revokes(&self) -> Result<Option<Revokes>, &'static str> {
+        account_entry(ACCOUNT_REVOKES)
+    }
+    fn save_revokes(&self, revokes: &Revokes) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_REVOKES, revokes)
+    }
+    fn uninvites(&self) -> Result<Option<Uninvites>, &'static str> {
+        account_entry(ACCOUNT_UNINVITES)
+    }
+    fn save_uninvites(&self, uninvites: &Uninvites) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_UNINVITES, uninvites)
     }
 }
 

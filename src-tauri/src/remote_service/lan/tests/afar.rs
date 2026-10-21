@@ -207,6 +207,12 @@ impl Afield {
 
     /// The same, with an internet road kept for the station or none.
     fn kept(label: &str, udp: bool, timing: Timing, kept: bool) -> Self {
+        Self::with(label, udp, timing, kept, true)
+    }
+
+    /// The same, with this network's record of the station kept or none: none for a station kept by
+    /// its service id, which this computer has never reached on its network.
+    fn with(label: &str, udp: bool, timing: Timing, kept: bool, on_this_network: bool) -> Self {
         let app = App::new();
         let s = running(&app);
         // The tunnel grants no control of its own: the shack gives it, as to any computer.
@@ -246,7 +252,7 @@ impl Afield {
                 s.device.clone(),
             );
             Arc::new(move |_| {
-                Ok(Some(PairedStation {
+                Ok(on_this_network.then(|| PairedStation {
                     station_id: STATION.into(),
                     device_id: device.clone(),
                     station_key: key.clone(),
@@ -362,6 +368,35 @@ fn off_this_network_client_mode_drives_the_station_over_the_internet() {
         !status.internet && status.phase != Phase::Live,
         "{status:?}"
     );
+    t.end();
+}
+
+/// ★ Signed in from elsewhere: a station kept by its service id (this computer has no record of it on this
+/// network, never having reached it there) is driven over the internet road from the first try, as
+/// a station off this network is: control taken through the room, the shack's snapshot answering
+/// the screens' poll, the banner told the internet is the station's only road. Operate needs no
+/// LAN record for it. CONTROL: with no internet road kept either, the station is unknown here and
+/// nothing is opened.
+#[test]
+fn a_station_kept_by_its_service_id_is_driven_over_the_internet_road() {
+    let _alone = alone();
+    let t = Afield::with("afar-away", true, quick(), true, false);
+    t.live_over_the_internet();
+    eventually("the shack's snapshot here", || {
+        ask(&t.screens.main, "get_snapshot", json!({})).is_ok_and(|s| s["n"].is_u64())
+    });
+    let status = t.client.status();
+    assert!(status.away, "{status:?}");
+    assert_eq!(t.service.opens.load(Ordering::SeqCst), 1);
+    t.end();
+
+    let t = Afield::with("afar-away-none", true, quick(), false, false);
+    eventually("said to be unknown here", || {
+        t.client.status().reason.as_deref() == Some("unknownStation")
+    });
+    let status = t.client.status();
+    assert!(!status.away && status.phase == Phase::Refused, "{status:?}");
+    assert_eq!(t.service.opens.load(Ordering::SeqCst), 0);
     t.end();
 }
 

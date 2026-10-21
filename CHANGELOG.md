@@ -303,6 +303,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers. Receive audio waits 120 ms before playing over the internet (60 ms on your own network) to ride out the
   internet's jitter. NEEDS-BENCH: the shack on one network and the second PC on another (a phone hotspot), the radio
   into a dummy load.
+- **Nexus Remote: add your station to a second PC by signing in, with no code (Beta, test builds).** In **Stations on
+  this network** on the second PC, press **Sign in** and sign in to Nexus Remote in your web browser with the account
+  your station is linked to, or one its owner invited to operate it. The station is then on that PC, on its own
+  network and over the internet, in one step: no code to type and nothing to press at the shack. Nexus finds the
+  station on the network by name, or asks for its address, and before it connects it checks that the station Nexus
+  Remote lists is the one its owner signed in for at the shack; the shack checks the PC's sign-in itself in turn. The
+  station must be signed in to Nexus Remote at the shack first (Settings → Station → Remote access). A PC already paired
+  with a code has **Sign in** on its row in place of **Add the internet road**: it links that pairing to your account
+  and adds the internet road; for a station not yet signed in at the shack the road waits for Approve there, as
+  before. **Pair with a code instead** stays for such a station. A PC invited only to listen is not added; listen in
+  your web browser instead.
+- **Nexus Remote: a signed-in PC keeps its place on the station's network by signing in again every 30 days.** The
+  station takes a PC on its own network for 30 days from that PC's sign-in, with the internet up or down. In the last
+  week the PC's row in Stations on this network says by what day to sign in again and offers **Sign in again**, and
+  **Operate from this computer** signs in again by itself, opening the browser while you operate, so the link is
+  never dropped for it. NEEDS-BENCH: a second PC on the shack's network, signed in, then the internet off; a phone
+  hotspot.
+- **Nexus Remote: signing in shares less about you.** The Remote web page's sign-in no longer asks your account for
+  your name, nickname or picture, and neither does any sign-in in Nexus. The shack's own sign-in (Settings → Station →
+  Remote access → Sign in to Nexus Remote) does not ask for your email address either: Nexus Remote passes that
+  sign-in on to every computer that you, or someone you invite, signs in on, so a guest's computer never receives
+  your address. A second PC's sign-in carries its verified email address, which is how your shack recognises a person
+  you invited.
+- **Nexus Remote: add your station from a PC that has never been on its network (Beta, test builds).** A laptop away
+  from home, or a friend you invited who lives elsewhere, can now sign in from **Stations on this network** and keep
+  the station: when Nexus does not find it on the network the PC is on, press **Not on this network** and the station
+  is added over the internet. **Operate from this computer** then drives it over the internet road (part of Nexus
+  Remote's paid service). The first time that PC is on the station's own network, press **Sign in** on the station's
+  row there once: the station is then on the PC on its network too, with the same keys and no second device at
+  Nexus Remote, and from then on it signs in again every 30 days as any other. NEEDS-BENCH: a laptop on a phone hotspot
+  that has never been on the shack's network, then the same laptop at home.
+- **Nexus Remote: a signed-in PC paired again with a code stays on the station's network (Beta, test builds).** A PC
+  added by signing in is taken on the station's own network for 30 days from its sign-in, and signing in again needs
+  Nexus Remote. If Nexus Remote cannot be reached, pair that PC again with a code: **Pair a computer** at the shack,
+  then **Pair with a code instead…** on the PC. It then stays on the station's network until you remove it at the
+  shack, like any PC paired with a code, with the internet up or down: its row in Stations on this network no longer
+  asks you to sign in again by a date, and **Operate from this computer** no longer signs in again by itself. Remove
+  such a PC at the shack: removing it on the Nexus Remote web page no longer takes it off the station's network.
+  Signing in from its row later puts it back on the 30 days. If the shack cannot keep the change in its credential
+  store, the pairing is refused and the PC keeps its 30 days. NEEDS-BENCH: a second PC on the shack's network.
 - **Nexus Remote from a second PC: every JS8 switch, and satellite tracks that end when the second PC goes.** HB, Relay,
   HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
@@ -828,12 +868,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   AFSK transmit tones as well as the decoder, so a click while transmitting slid the signal you were sending to
   wherever you clicked. While an over is on the air or queued, continuous TX is on or Tune is keyed, a click now does
   nothing, and the waterfall's hint says tuning is held.
-- **Nexus Remote: the second PC shows its own key, so you can check it before you approve it at the shack.** After
-  **Add the internet road**, the shack asks "Let … operate this station?" and says to approve only if the key matches
-  the one Nexus shows on that computer, but the second PC showed no key of its own. **Stations on this network** now
-  shows **This computer's key for the internet road** on that station's row, and the line after **Add the internet
-  road** shows it too, in the same eight groups of four as the shack. The station's own key there is now written in
-  capitals, as the shack writes it.
+- **Nexus Remote: a PC that signs in while the shack reads its device list keeps its 30 days (Beta, test builds).**
+  The shack keeps one list of the PCs added by signing in, and four things change it: a PC signing in on the
+  station's network, each device list the shack hears from Nexus Remote, a PC paired again with a code, and a PC
+  leaving after its 30 days. Two of them at the same moment could lose one change. At worst a PC that had just signed
+  in stayed on the station's network with no 30-day limit, and removing it on the Nexus Remote web page did not take
+  it off. The shack now makes these changes one at a time.
+- **Nexus Remote: the second PC shows its own key, so you can check it before you approve it at the shack.** When the
+  internet road waits for Approve at the shack, the shack asks "Let … operate this station?" and says to approve only
+  if the key matches the one Nexus shows on that computer, but the second PC showed no key of its own. **Stations on
+  this network** now shows **This computer's key for the internet road** on that station's row, and the line after
+  **Sign in** shows it too while the road waits for Approve, in the same eight groups of four as the shack. The
+  station's own key there is now written in capitals, as the shack writes it.
 - **Stations on this network: after pairing, the line names the button that is there.** It said to press Stream, but a
   paired station's row leads with **Operate from this computer**. The line now says to press that.
 - **The built-in guide's Remote access section matches Remote as it is now.** It still called Remote an early pilot

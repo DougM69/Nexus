@@ -18,8 +18,12 @@ mod client;
 mod commands;
 mod computer;
 mod drops;
+/// A computer enrolling by its own sign-in to the station's account.
+mod enrol;
 mod hostile;
 mod link;
+/// A computer signing in with the station's account (`crate::lan_client::account`).
+mod signing;
 mod stop_road;
 mod tunnel;
 
@@ -227,7 +231,7 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
         },
         tls: tls::server(&identity, paired, pairing).unwrap(),
         roster: channel::Roster::lan(&book),
-        desk: Some(super::pairing::Desk::new(book, &identity).unwrap()),
+        desk: Some(super::pairing::Desk::new(book, &identity, Arc::default()).unwrap()),
         identity: Arc::new(identity),
         network: Some(network),
         port: DEFAULT_PORT,
@@ -1303,7 +1307,7 @@ fn stop_on_the_lan_channel_stops_the_station_without_waiting() {
 // ----- The listener, on this box's own private address -----
 
 /// This box's own private IPv4 address, the one its route to the internet leaves by, or `None`.
-fn own_private_address() -> Option<Ipv4Addr> {
+pub(crate) fn own_private_address() -> Option<Ipv4Addr> {
     let probe = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     probe.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
     match probe.local_addr().ok()?.ip() {
@@ -1358,6 +1362,7 @@ fn switch_with(
             engine: s.shared.engine.clone(),
             feeds: s.shared.feeds.clone(),
             book,
+            enrolment: Arc::default(),
             resolve,
             advertise,
             firewall,

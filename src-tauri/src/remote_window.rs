@@ -322,10 +322,14 @@ pub struct LanOrigin(Mutex<Option<Origin>>);
 /// What the window's page can reach: the app's own embedded files (the same the main window
 /// loads, so nothing is read from disk and nothing can differ from the shipped page), this
 /// computer's paired stations in the OS credential store, and the stations Windows' own DNS-SD
-/// finds by name; and adding the internet road to one of them, through the system browser.
+/// finds by name; and signing in with the station's account, through the system browser.
 fn reach(app: &tauri::AppHandle) -> Reach {
     let files = app.clone();
-    let stations = Arc::new(Stations::new(Arc::new(SystemVault)).typed_in(typed_path()));
+    let stations = Arc::new(
+        Stations::new(Arc::new(SystemVault))
+            .typed_in(typed_path())
+            .signed_in(crate::lan_client::signed_path()),
+    );
     Reach {
         assets: Arc::new(move |path: &str| {
             let resolver = files.asset_resolver();
@@ -347,27 +351,24 @@ fn reach(app: &tauri::AppHandle) -> Reach {
                 )
             })
         },
-        add_internet: {
+        sign_in: {
             let app = app.clone();
-            Arc::new(move |station: String, choose| {
+            Arc::new(move |station: Option<String>, choose, ask| {
                 let (app, stations) = (app.clone(), Arc::clone(&stations));
                 Box::pin(async move {
                     use tauri_plugin_opener::OpenerExt;
-                    let service = crate::lan_client::internet::Service::new(REMOTE_ORIGIN)?;
+                    let env = crate::lan_client::account::Env::new(
+                        stations,
+                        Arc::new(tempo_stream::lan::dnssd::find),
+                        Arc::new(tempo_stream::lan::lookup),
+                        computer_name(),
+                    )?;
                     let open = |url: &str| {
                         app.opener()
                             .open_url(url, None::<&str>)
                             .map_err(|e| e.to_string())
                     };
-                    crate::lan_client::internet::add(
-                        &service,
-                        stations,
-                        station,
-                        computer_name(),
-                        open,
-                        choose,
-                    )
-                    .await
+                    crate::lan_client::account::sign_in(&env, station, open, choose, ask).await
                 })
             })
         },
@@ -378,6 +379,12 @@ fn reach(app: &tauri::AppHandle) -> Reach {
                     .await
             })
         }),
+        now_s: || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        },
     }
 }
 

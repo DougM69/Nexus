@@ -1,5 +1,8 @@
 //! Local approval and the Remote background task. Engine access is restricted to
 //! bounded observation, the stream, the lease and Stop, and the separately approved FT gestures.
+/// The station's account: binding it to its owner by a sign-in at the shack, the issuer's keys,
+/// and the checks a listed device's proof must pass.
+pub(crate) mod account;
 /// Receive audio for a listening browser. Gated with the radio feature because the
 /// encoder lives in tempo-audio, which a build without it does not have at all.
 #[cfg(feature = "radio")]
@@ -68,6 +71,45 @@ pub struct Status {
     /// Absent only from a build of the service without it.
     #[serde(skip_serializing_if = "Option::is_none")]
     lan: Option<lan::LanStatus>,
+    /// The station's account (`account`): signing in at the shack, and the devices it granted on
+    /// their own proof.
+    account: AccountStatus,
+}
+/// The station's account, as the shack shows it.
+#[derive(Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountStatus {
+    /// A sign-in at the shack is waiting for the browser.
+    signing_in: bool,
+    /// The key that signed the station's own proof has left the issuer's set, so devices can no
+    /// longer check it: the operator signs in again to keep adding devices.
+    reproof: bool,
+    /// The devices the station granted on their own proof since Nexus started, for the notice at
+    /// the shack, each until the operator dismisses it.
+    added: Vec<Added>,
+    /// The devices the service approved on a proof the station could not confirm, each with why:
+    /// granted nothing, and shown with the prompt a device added at the station gets.
+    unconfirmed: BTreeMap<String, &'static str>,
+    /// Devices removed here while the service could not be reached: out at the station already,
+    /// and told to the service before the station's next list.
+    removals: Vec<String>,
+    /// The people invited to this station, as it keeps them: each address as the service matches
+    /// it, and a role.
+    people: Vec<tempo_client::account::Invite>,
+}
+/// A device the station granted on its own proof: what the notice says of it.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Added {
+    device_id: String,
+    name: String,
+    kind: Kind,
+    platform: Option<Platform>,
+    /// Its pin's fingerprint, shown shortened.
+    key: Option<String>,
+    role: tempo_client::account::Role,
+    /// Someone the station invited, not its owner.
+    guest: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -106,6 +148,21 @@ struct Device {
     /// never decided on: every list is still held to `expires_at`.
     #[serde(default)]
     until_removed: u8,
+    /// What the device may do: listed only to a Nexus that checks proofs itself
+    /// (`transport::Client::post` asks), as are the three fields after it. None from a service
+    /// before roles: every device it lists operates.
+    #[serde(default)]
+    role: Option<tempo_client::account::Role>,
+    /// How it was added: at the station (`shack`), or on its own proof (`account`).
+    #[serde(default)]
+    added_by: Option<String>,
+    /// The proof it registered with: the issuer's ID token for exactly its keys. Checked here
+    /// (`account::vouch`) before anything is granted on it, and never shown.
+    #[serde(default, skip_serializing)]
+    proof: Option<String>,
+    /// A computer's LAN key, SPKI as lowercase hex, which its proof names beside its own key.
+    #[serde(default, skip_serializing)]
+    lan_key: Option<String>,
 }
 /// A device's kind, held to the service's own values: a browser, or Nexus itself on another
 /// computer or a phone (the native client). Approving a native device grants nothing on the
@@ -212,6 +269,12 @@ impl Device {
     /// The pin approving it as it is listed makes: a browser's key's fingerprint, or a computer's or
     /// phone's [`native_pin`]. `None` with no key, and for a computer or phone with no approval
     /// generation, which pins nothing.
+    /// What its proof is checked against (`account::vouch_listed`): its kind, its keys, and the
+    /// proof itself.
+    fn proof_row(&self) -> serde_json::Value {
+        json!({"kind": self.kind, "publicKey": self.public_key, "lanKey": self.lan_key,
+            "proof": self.proof})
+    }
     fn pin(&self) -> Option<String> {
         let key = self.key.as_deref()?;
         match self.kind {
@@ -330,6 +393,35 @@ pub enum Action {
     /// Reset this station's network identity, at the shack: a new LAN key, and every paired
     /// computer removed.
     LanReset {},
+    /// Sign in to Nexus Remote, at the shack: the station named `name` is bound to the account the
+    /// operator signs in to through the system browser, with no code (`account`). Remote turns on
+    /// once it is bound, as approving a pairing turns it on.
+    SignIn {
+        name: String,
+    },
+    /// Sign in again, at the shack, for a station bound already: its proof is replaced at the
+    /// service, so devices can check it again once the issuer has retired the key that signed the
+    /// old one. Nothing else about the station changes.
+    SignInAgain {},
+    /// End signing in again while the browser is still open: the station stays as it was, on or
+    /// off (Cancel is a stop, and turns Remote off).
+    CancelSignInAgain {},
+    /// Invite someone to this station by their address, to operate it or only to listen: their
+    /// devices are then approved when they sign in with that address, verified.
+    Invite {
+        email: String,
+        role: tempo_client::account::Role,
+    },
+    /// Take an invitation back: none of that person's proofs is taken here from now on, and the
+    /// service removes their devices.
+    Uninvite {
+        email: String,
+    },
+    /// The operator has seen the notice of a device the station granted on its own proof.
+    DismissAdded {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+    },
 }
 type Reply = oneshot::Sender<Result<(), &'static str>>;
 /// The most browsers a restart remembers grants for. The service lists at most eight per station,
@@ -585,6 +677,9 @@ struct Control {
     /// own lock, for the tunnel's computers' station control (`Authority::hold_tunnel_devices`).
     /// Cleared before every stop's invalidation, set only by [`Control::start`].
     hosted: Arc<std::sync::atomic::AtomicBool>,
+    /// What a computer enrolling on the LAN by its own sign-in is checked against, armed by the
+    /// controller while the station is bound to its owner ([`Controller::arm_enrolment`]).
+    enrolment: Arc<lan::enrol::Enrolment>,
 }
 impl Control {
     fn stop(&mut self) {
@@ -730,11 +825,23 @@ pub(super) fn phase(status: &Arc<Mutex<Status>>, value: &str, error: Option<&'st
         status.error = error;
     }
 }
+/// The wall clock in seconds, as proofs are read.
+fn now_s() -> u64 {
+    now_ms() / 1000
+}
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+/// An address one could invite: something before and after an `@`, no space, at most 254 characters.
+fn invitable(address: &str) -> bool {
+    address.len() <= 254
+        && !address.chars().any(|c| c.is_whitespace() || c.is_control())
+        && address
+            .find('@')
+            .is_some_and(|at| at > 0 && at + 1 < address.len())
 }
 fn valid_name(name: &str) -> bool {
     !name.trim().is_empty() && name.chars().count() <= 48 && !name.chars().any(char::is_control)
@@ -750,6 +857,8 @@ impl Service {
         stream: stream::Host,
         // How a paired computer's calls run at the shack, and the events that cross to it.
         commands: lan::commands::Commands,
+        // Opens the system browser, for signing in to Nexus Remote at the shack.
+        open: account::Opener,
     ) -> Self {
         tempo_app::engine::engine_lock(&engine)
             .configure_remote_settings_store(crate::settings_path());
@@ -765,6 +874,7 @@ impl Service {
             Box::new(SystemVault),
             engine.clone(),
             feeds.clone(),
+            Accounts::system(open),
         );
         // Its LAN key and paired computers are in the OS credential store, read on its own thread.
         service.with_lan(
@@ -788,8 +898,12 @@ impl Service {
         resolve: lan::Resolve,
         commands: lan::commands::Commands,
     ) -> Self {
-        let authority = self.control.lock().ok().map(|c| c.operations.clone());
-        if let Some(authority) = authority {
+        let held = self
+            .control
+            .lock()
+            .ok()
+            .map(|c| (c.operations.clone(), c.enrolment.clone()));
+        if let Some((authority, enrolment)) = held {
             let dispatcher =
                 crate::command_dispatch::Dispatcher::new(crate::command_dispatch::ShackStores {
                     engine: engine.clone(),
@@ -811,6 +925,7 @@ impl Service {
                     engine,
                     feeds,
                     book,
+                    enrolment,
                     resolve,
                     advertise: lan::advertise(),
                     firewall: lan::firewall_says(),
@@ -832,6 +947,16 @@ impl Service {
         engine: crate::SharedEngine,
         publisher: crate::remote_monitor::Publisher,
     ) -> Self {
+        Self::with_accounts(origin, vault, engine, publisher, Accounts::not_ready())
+    }
+    #[cfg(test)]
+    fn with_accounts(
+        origin: String,
+        vault: Box<dyn Vault>,
+        engine: crate::SharedEngine,
+        publisher: crate::remote_monitor::Publisher,
+        accounts: Accounts,
+    ) -> Self {
         Self::start(
             origin,
             vault,
@@ -842,6 +967,7 @@ impl Service {
                 audio: None,
                 stream: stream::Host::default(),
             },
+            accounts,
         )
     }
     /// `feeds` arrives whole rather than as four parameters. They were four until the audio
@@ -852,6 +978,7 @@ impl Service {
         vault: Box<dyn Vault>,
         engine: crate::SharedEngine,
         feeds: transport::Feeds,
+        mut accounts: Accounts,
     ) -> Self {
         let vault: Arc<dyn Vault> = Arc::from(vault);
         let status = Arc::new(Mutex::new(Status {
@@ -886,6 +1013,10 @@ impl Service {
         let control = Arc::new(Mutex::new(Control {
             operations,
             vault_writer,
+            enrolment: Arc::new(lan::enrol::Enrolment::kept_in(
+                accounts.vault.clone(),
+                accounts.now_s,
+            )),
             ..Default::default()
         }));
         // The tunnel's approved computers hold station control while hosted Remote is on, as the
@@ -899,6 +1030,14 @@ impl Service {
                 } else {
                     Vec::new()
                 }
+            }));
+        }
+        // A binding names the LAN's own key, once the LAN has started beside this service.
+        if accounts.lan_key.is_none() {
+            let held = Arc::downgrade(&control);
+            accounts.lan_key = Some(Arc::new(move || {
+                let lan = held.upgrade()?.lock().ok()?.lan.clone()?;
+                lan.public_key()
             }));
         }
         let (commands, receiver) = mpsc::channel(1);
@@ -923,6 +1062,11 @@ impl Service {
                             engine,
                             feeds,
                             restore: None,
+                            accounts,
+                            signing: None,
+                            staged: None,
+                            removals: Some(Vec::new()),
+                            uninvites: Some(Vec::new()),
                         }
                         .run(receiver),
                     ),
@@ -1179,6 +1323,77 @@ struct Controller {
     engine: crate::SharedEngine,
     feeds: transport::Feeds,
     restore: Option<Restore>,
+    accounts: Accounts,
+    signing: Option<Signing>,
+    staged: Option<Staged>,
+    /// The removals made here that the service has not heard yet ([`Controller::queue_removal`]).
+    /// `None` when they could not be read: then no device is granted on its proof, since one of
+    /// them may have been removed here.
+    removals: Option<Vec<String>>,
+    /// The invitations taken back here that the service has not heard yet, each address as it was
+    /// typed ([`Controller::queue_uninvite`]). `None` when they could not be read.
+    uninvites: Option<Vec<String>>,
+}
+/// The station's account, as the controller reaches it (`account`): its entries in the credential
+/// store, the service's account side, how a sign-in binds, the LAN key a binding names, and the
+/// clock proofs are read by.
+pub(crate) struct Accounts {
+    vault: Arc<dyn vault::AccountVault>,
+    /// `accountNotReady` while this build has no configured sign-in for its service.
+    service: Result<Arc<account::Service>, &'static str>,
+    bind: account::Binder,
+    /// The LAN key's public half, SPKI as lowercase hex (made now if there is none): `None` while
+    /// the store will not give one up. `None` here: the LAN's own, once the service has started.
+    lan_key: Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>,
+    now_s: fn() -> u64,
+}
+impl Accounts {
+    /// The account of the service this build is made for, in the OS credential store, signing in
+    /// through `open`'s browser.
+    fn system(open: account::Opener) -> Self {
+        let vault: Arc<dyn vault::AccountVault> = Arc::new(SystemVault);
+        let service = account::Service::new(REMOTE_ORIGIN).map(Arc::new);
+        Self {
+            bind: account::binder(service.clone(), vault.clone(), open, now_s),
+            vault,
+            service,
+            lan_key: None,
+            now_s,
+        }
+    }
+    /// No account sign-in: this build's own tenant is not a test's service.
+    #[cfg(test)]
+    fn not_ready() -> Self {
+        Self {
+            vault: Arc::new(tests::MemoryVault::default()),
+            service: Err("accountNotReady"),
+            bind: Arc::new(|_| Box::pin(async { Err("accountNotReady") })),
+            lan_key: None,
+            now_s,
+        }
+    }
+}
+/// A sign-in at the shack, running on a task of its own while the operator is in the browser, and
+/// the Remote generation it was asked under: a later Turn off or Cancel wins.
+struct Signing {
+    task: tokio::task::JoinHandle<Result<account::Bound, &'static str>>,
+    generation: u64,
+    /// Proving a bound station again (`Action::SignInAgain`): nothing is installed when it ends.
+    again: bool,
+}
+/// The keys and credential a sign-in binds with: made once and kept until the station is bound, so a
+/// sign-in tried again names the same keys and the service finds the station it already made for
+/// them. No `Debug`: the signing key and the credential are secrets.
+struct Staged {
+    pkcs8: String,
+    public_key: String,
+    credential: String,
+}
+/// What the controller waits on next.
+enum Next {
+    Command(Option<Command>),
+    Retry,
+    Signed(Result<Result<account::Bound, &'static str>, tokio::task::JoinError>),
 }
 /// Remote came on with grants remembered; they wait for the service's browser list.
 struct Restore {
@@ -1204,9 +1419,27 @@ impl Controller {
         }
         loop {
             let retry = self.restore.as_ref().map(|r| r.at);
-            tokio::select! {
-                next = receiver.recv() => {
-                    let Some((action, generation, epoch, reply)) = next else { break };
+            let signing = self.signing.as_mut().map(|s| &mut s.task);
+            let next = tokio::select! {
+                next = receiver.recv() => Next::Command(next),
+                _ = async {
+                    match retry {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                } => Next::Retry,
+                done = async {
+                    match signing {
+                        Some(task) => task.await,
+                        None => std::future::pending().await,
+                    }
+                } => Next::Signed(done),
+            };
+            match next {
+                Next::Command(next) => {
+                    let Some((action, generation, epoch, reply)) = next else {
+                        break;
+                    };
                     let result = self.handle(action, generation, epoch).await;
                     if let Err(error) = result {
                         if let Ok(mut status) = self.status.lock() {
@@ -1215,13 +1448,12 @@ impl Controller {
                     }
                     let _ = reply.send(result);
                 }
-                _ = async {
-                    match retry {
-                        Some(at) => tokio::time::sleep_until(at).await,
-                        None => std::future::pending().await,
-                    }
-                } => self.retry_restore().await,
+                Next::Retry => self.retry_restore().await,
+                Next::Signed(done) => self.signed(done),
             }
+        }
+        if let Some(signing) = self.signing.take() {
+            signing.task.abort();
         }
         if let Ok(mut control) = self.control.lock() {
             control.stop();
@@ -1233,6 +1465,19 @@ impl Controller {
     /// browsers. A locked or unreadable store, a record written for another pairing, or a record
     /// that says off all leave it off.
     async fn resume(&mut self, binding: Binding) {
+        self.arm_enrolment();
+        self.removals = match self.accounts.vault.revokes() {
+            Ok(Some(kept)) if kept.station_id == binding.station_id => Some(kept.devices),
+            Ok(_) => Some(Vec::new()),
+            Err(_) => None,
+        };
+        self.uninvites = match self.accounts.vault.uninvites() {
+            Ok(Some(kept)) if kept.station_id == binding.station_id => Some(kept.people),
+            Ok(_) => Some(Vec::new()),
+            Err(_) => None,
+        };
+        self.reflect_removals();
+        self.reflect_people();
         let remembered = match self.vault.state() {
             Ok(state) => state.filter(|s| {
                 s.binding == binding
@@ -1299,10 +1544,18 @@ impl Controller {
             self.restore = None;
             return;
         }
-        match self.devices().await {
+        match self.list().await {
             Ok(devices) => {
                 self.apply_restore(&devices);
                 self.listed(&devices);
+                let at = self
+                    .control
+                    .lock()
+                    .ok()
+                    .map(|c| (c.generation, c.operations.epoch()));
+                if let Some(at) = at {
+                    self.vouch(&devices, at).await;
+                }
                 if let Ok(mut status) = self.status.lock() {
                     status.devices = devices;
                 }
@@ -1377,6 +1630,165 @@ impl Controller {
     fn listed(&self, devices: &[Device]) {
         if let Ok(mut control) = self.control.lock() {
             control.listed(devices);
+        }
+    }
+    /// The service's list, read after it has been told of every removal made here offline; a
+    /// removal it no longer lists as approved is one it has heard.
+    async fn list(&mut self) -> Result<Vec<Device>, &'static str> {
+        self.send_uninvites().await;
+        self.send_removals().await;
+        let devices = self.devices().await?;
+        let now = now_ms();
+        if let Some(removals) = &self.removals {
+            let heard: Vec<String> = removals
+                .iter()
+                .filter(|id| {
+                    !devices
+                        .iter()
+                        .any(|d| d.id == **id && d.approved == 1 && d.expires_at > now)
+                })
+                .cloned()
+                .collect();
+            if !heard.is_empty() {
+                // A store that will not keep the shorter list leaves it held here for this run.
+                let _ = self.keep_removals(|removals| removals.retain(|id| !heard.contains(id)));
+            }
+        }
+        Ok(devices)
+    }
+    /// Tells the service of each removal made here while it could not be reached, in order, until
+    /// one cannot be sent. Each it answers is no longer waiting.
+    async fn send_removals(&mut self) {
+        let Some(waiting) = self.removals.clone().filter(|w| !w.is_empty()) else {
+            return;
+        };
+        let Ok((binding, token)) = self.bound() else {
+            return;
+        };
+        for device_id in waiting {
+            let sent = self
+                .client
+                .post(
+                    &station_path(&binding, "revoke-device"),
+                    Some(&token),
+                    json!({ "deviceId": device_id }),
+                )
+                .await;
+            if matches!(sent, Err("serviceUnavailable" | "tryLater")) {
+                break;
+            }
+            let _ = self.keep_removals(|removals| removals.retain(|id| *id != device_id));
+        }
+    }
+    /// Tells the service of each invitation taken back here while it could not be reached, in order,
+    /// until one cannot be sent. Each it answers is no longer waiting.
+    async fn send_uninvites(&mut self) {
+        let Some(waiting) = self.uninvites.clone().filter(|w| !w.is_empty()) else {
+            return;
+        };
+        let Ok((binding, token)) = self.bound() else {
+            return;
+        };
+        for address in waiting {
+            let sent = self
+                .client
+                .post(
+                    &station_path(&binding, "uninvite"),
+                    Some(&token),
+                    json!({ "email": address }),
+                )
+                .await;
+            if matches!(sent, Err("serviceUnavailable" | "tryLater")) {
+                break;
+            }
+            let _ = self.keep_uninvites(|people| people.retain(|a| *a != address));
+        }
+    }
+    /// Changes the invitations taken back and waiting, and keeps them in the store. One the store
+    /// will not keep is still held here for this run.
+    fn keep_uninvites(
+        &mut self,
+        change: impl FnOnce(&mut Vec<String>),
+    ) -> Result<(), &'static str> {
+        let (Some(people), Some(binding)) = (self.uninvites.as_mut(), self.binding.as_ref()) else {
+            return Err("stationNotPaired");
+        };
+        change(people);
+        self.accounts.vault.save_uninvites(&vault::Uninvites {
+            station_id: binding.station_id.clone(),
+            people: people.clone(),
+        })
+    }
+    /// A removal made here that the service could not be told of: kept, so it is sent before the
+    /// next list and no proof grants the device again meanwhile.
+    fn queue_removal(&mut self, device_id: String) -> Result<(), &'static str> {
+        if self.removals.is_none() {
+            return Err("credentialStoreUnavailable");
+        }
+        self.keep_removals(|removals| {
+            if !removals.contains(&device_id) {
+                removals.push(device_id);
+            }
+        })
+    }
+    /// Changes the removals waiting, and keeps them in the store. One the store will not keep is
+    /// still held here for this run.
+    fn keep_removals(&mut self, change: impl FnOnce(&mut Vec<String>)) -> Result<(), &'static str> {
+        let (Some(removals), Some(binding)) = (self.removals.as_mut(), self.binding.as_ref())
+        else {
+            return Err("stationNotPaired");
+        };
+        change(removals);
+        let kept = vault::Revokes {
+            station_id: binding.station_id.clone(),
+            devices: removals.clone(),
+        };
+        let saved = self.accounts.vault.save_revokes(&kept);
+        self.reflect_removals();
+        saved
+    }
+    /// Changes the people invited to this station, and keeps them in the store, before anything
+    /// takes them in: an entry that does not read is never written over.
+    fn keep_people(
+        &self,
+        change: impl FnOnce(&mut Vec<tempo_client::account::Invite>),
+    ) -> Result<(), &'static str> {
+        let binding = self.binding.as_ref().ok_or("stationNotPaired")?;
+        let vault = &self.accounts.vault;
+        let mut people = vault
+            .people()?
+            .filter(|people| people.station_id == binding.station_id)
+            .unwrap_or_else(|| vault::People {
+                station_id: binding.station_id.clone(),
+                invites: Vec::new(),
+            });
+        change(&mut people.invites);
+        let saved = vault.save_people(&people);
+        self.reflect_people();
+        self.arm_enrolment();
+        saved
+    }
+    fn reflect_people(&self) {
+        let people = self
+            .binding
+            .as_ref()
+            .and_then(|binding| {
+                self.accounts
+                    .vault
+                    .people()
+                    .ok()
+                    .flatten()
+                    .filter(|people| people.station_id == binding.station_id)
+            })
+            .map(|people| people.invites)
+            .unwrap_or_default();
+        if let Ok(mut status) = self.status.lock() {
+            status.account.people = people;
+        }
+    }
+    fn reflect_removals(&self) {
+        if let Ok(mut status) = self.status.lock() {
+            status.account.removals = self.removals.clone().unwrap_or_default();
         }
     }
     async fn devices(&self) -> Result<Vec<Device>, &'static str> {
@@ -1542,6 +1954,362 @@ impl Controller {
         });
         Ok(())
     }
+    /// The keys and credential this station binds with: those staged for it already, or new ones,
+    /// staged now. The credential store is asked to take the credential first, as for a pairing, so
+    /// the service never makes a station the shack cannot keep.
+    fn staged(&mut self) -> Result<&Staged, &'static str> {
+        if self.staged.is_none() {
+            let (signer, pkcs8) =
+                station_key::Signer::generate().ok_or("credentialStoreUnavailable")?;
+            let credential = transport::random_secret()?;
+            let unbound = Binding {
+                origin: self.client.origin().into(),
+                station_id: String::new(),
+                account_id: String::new(),
+            };
+            self.vault.stage(&unbound, &credential)?;
+            self.staged = Some(Staged {
+                public_key: signer.public_key().to_string(),
+                pkcs8,
+                credential,
+            });
+        }
+        self.staged.as_ref().ok_or("credentialStoreUnavailable")
+    }
+    /// The sign-in at the shack has ended: bound, or why not. Kept staged on a failure, so trying
+    /// again names the same keys.
+    fn signed(
+        &mut self,
+        done: Result<Result<account::Bound, &'static str>, tokio::task::JoinError>,
+    ) {
+        let Some(signing) = self.signing.take() else {
+            return;
+        };
+        // Said ended before the station is bound, so nothing shows it bound and still signing in.
+        self.reflect_account();
+        let result = done.unwrap_or(Err("signInFailed")).and_then(|bound| {
+            if signing.again {
+                self.proven_again();
+                Ok(())
+            } else {
+                self.install(bound, signing.generation)
+            }
+        });
+        if let Err(error) = result {
+            if let Ok(mut status) = self.status.lock() {
+                status.error = Some(error);
+            }
+        }
+    }
+    /// The station's proof was replaced: devices can check it again, with the owner kept now.
+    fn proven_again(&self) {
+        if let Ok(mut status) = self.status.lock() {
+            status.account.reproof = false;
+            status.error = None;
+        }
+        self.arm_enrolment();
+    }
+    /// The station is bound to the account: its credential and its signing key are kept under the
+    /// binding the service gave (the key first: the service already holds its public half, so a key
+    /// made later would be refused), and Remote turns on as approving a pairing turns it on: a
+    /// fresh authority, the TX-enable latch untouched, nothing remembered. A Turn off or Cancel
+    /// since the sign-in started moved the generation, and wins.
+    fn install(&mut self, bound: account::Bound, generation: u64) -> Result<(), &'static str> {
+        let staged = self.staged.as_ref().ok_or("signInFailed")?;
+        let binding = Binding {
+            origin: self.client.origin().into(),
+            station_id: bound.station_id,
+            account_id: bound.account_id,
+        };
+        self.vault.save_station_key(&vault::StationKey {
+            binding: binding.clone(),
+            pkcs8: staged.pkcs8.clone(),
+        })?;
+        self.vault.save(&binding, &staged.credential)?;
+        let key = station_key::Signer::restore(&staged.pkcs8).map(Arc::new);
+        let identity = tunnel_identity(&staged.pkcs8, &binding);
+        self.staged = None;
+        if let Ok(mut control) = self.control.lock() {
+            control.station_key = key;
+            control.station_identity = identity;
+            control.key_refused = false;
+            control.remember(Persist::Bound(binding.clone(), None, None));
+        }
+        self.binding = Some(binding);
+        self.pending = None;
+        self.removals = Some(Vec::new());
+        self.uninvites = Some(Vec::new());
+        self.reflect_removals();
+        self.reflect_people();
+        self.arm_enrolment();
+        self.reflect("disabled");
+        let turned_on = self.control.lock().ok().and_then(|mut control| {
+            (control.generation == generation).then(|| {
+                control.start();
+                control.generation
+            })
+        });
+        if let Some(generation) = turned_on {
+            self.enable(generation)?;
+        }
+        Ok(())
+    }
+    /// Arms the LAN's enrolment with what the station keeps of its account (`lan::enrol`): its owner,
+    /// the issuer's keys and the people invited, read now. Disarmed while the station is not bound
+    /// to an owner of its own, while either is not kept, or while one of the three does not read.
+    fn arm_enrolment(&self) {
+        let vault = &self.accounts.vault;
+        let ready = self.accounts.service.as_ref().ok().and_then(|service| {
+            let station_id = &self.binding.as_ref()?.station_id;
+            let owner = vault
+                .owner()
+                .ok()
+                .flatten()
+                .filter(|owner| owner.station_id == *station_id)?;
+            let tenant = service.tenant();
+            let keys = vault
+                .account_keys()
+                .ok()
+                .flatten()
+                .filter(|kept| kept.issuer == tenant.issuer)?
+                .keys;
+            let invites = match vault.people().ok()? {
+                Some(people) if people.station_id == *station_id => people.invites,
+                _ => Vec::new(),
+            };
+            Some(lan::enrol::Ready {
+                tenant,
+                owner,
+                keys,
+                invites,
+                vault: vault.clone(),
+                now_s: self.accounts.now_s,
+            })
+        });
+        if let Ok(control) = self.control.lock() {
+            control.enrolment.arm(ready);
+        }
+    }
+    /// The service's list, heard: every device the station keeps for the LAN on a proof that the
+    /// service no longer lists as approved is taken out of that keeping (`account::sweep`), and out
+    /// of the LAN at once, as a removal at the shack takes it out.
+    fn sweep(&self, devices: &[Device], now_s: u64) {
+        let Some(binding) = &self.binding else {
+            return;
+        };
+        let now = now_ms();
+        let rows: Vec<serde_json::Value> = devices
+            .iter()
+            .map(|d| {
+                let mut row = d.proof_row();
+                row["approved"] = u8::from(d.approved == 1 && d.expires_at > now).into();
+                row
+            })
+            .collect();
+        let Ok(gone) = account::sweep(&rows, &*self.accounts.vault, &binding.station_id, now_s)
+        else {
+            return;
+        };
+        let lan = self.control.lock().ok().and_then(|c| c.lan.clone());
+        for pin in gone {
+            let pin = lan::pairing::hex32(&pin);
+            if let (Some(lan), Some(pin)) = (&lan, pin) {
+                // Not every kept device is in the LAN's book (a browser never is).
+                let _ = lan.revoke(&lan::device_id(&pin));
+            }
+        }
+    }
+    fn reflect_account(&self) {
+        if let Ok(mut status) = self.status.lock() {
+            status.account.signing_in = self.signing.is_some();
+        }
+    }
+    /// Each device the service lists as approved on its own proof, and not pinned here at that
+    /// approval yet, is checked by the station itself (`account::vouch`) before anything is granted
+    /// on it. One whose proof holds is granted as its role says, as an Approve press grants
+    /// ([`Controller::grant_vouched`]), kept for the LAN, and named in the notice at the shack. One
+    /// whose proof does not hold is granted nothing and shown with why, beside the prompt a device
+    /// added at the station gets. Once pinned, a device is left to the operator's own decisions.
+    async fn vouch(&self, devices: &[Device], at: (u64, u64)) {
+        let now = now_ms();
+        let waiting: Vec<&Device> = {
+            let Ok(control) = self.control.lock() else {
+                return;
+            };
+            devices
+                .iter()
+                .filter(|d| d.proof.is_some() && d.approved == 1 && d.expires_at > now)
+                .filter(|d| {
+                    d.pin()
+                        .is_none_or(|pin| control.remembered.pins.get(&d.id) != Some(&pin))
+                })
+                // Removed here, and the service not told yet: never granted again meanwhile.
+                .filter(|d| {
+                    self.removals
+                        .as_ref()
+                        .is_none_or(|removals| !removals.contains(&d.id))
+                })
+                .collect()
+        };
+        let mut unconfirmed = BTreeMap::new();
+        let mut reproof = None;
+        let now_s = (self.accounts.now_s)();
+        if !waiting.is_empty() {
+            let rows: Vec<serde_json::Value> = waiting.iter().map(|d| d.proof_row()).collect();
+            let station_id = self
+                .binding
+                .as_ref()
+                .map(|b| b.station_id.clone())
+                .unwrap_or_default();
+            let results = match &self.accounts.service {
+                _ if self.removals.is_none() => rows
+                    .iter()
+                    .map(|_| Err("credentialStoreUnavailable"))
+                    .collect(),
+                Ok(service) => {
+                    let (results, again) =
+                        account::vouch(service, &*self.accounts.vault, &station_id, &rows, now_s)
+                            .await;
+                    reproof = Some(again);
+                    results
+                }
+                Err(reason) => rows.iter().map(|_| Err(*reason)).collect(),
+            };
+            let approved: Vec<String> = devices
+                .iter()
+                .filter(|d| d.approved == 1 && d.expires_at > now)
+                .map(|d| d.id.clone())
+                .collect();
+            for (device, result) in waiting.into_iter().zip(results) {
+                match result.and_then(|(vouched, lan)| {
+                    let granted = self.grant_vouched(device, &vouched, &approved, at)?;
+                    Ok(granted.then_some((vouched, lan)))
+                }) {
+                    Ok(Some((vouched, lan))) => {
+                        // The LAN's entry for it. One the store will not take leaves it out of the
+                        // LAN with the internet down, which is where a refusal belongs.
+                        let vault = &*self.accounts.vault;
+                        let _ = Self::keep_for_lan(vault, &station_id, &vouched, lan, now_s);
+                        self.added(device, &vouched);
+                    }
+                    // A local decision since the list was asked for: the next list asks again.
+                    Ok(None) => {}
+                    Err(reason) => {
+                        unconfirmed.insert(device.id.clone(), reason);
+                    }
+                }
+            }
+        }
+        self.sweep(devices, now_s);
+        // And every computer enrolled on the LAN on a proof past the offline age.
+        if let Some(lan) = self.control.lock().ok().and_then(|c| c.lan.clone()) {
+            lan.expire();
+        }
+        // The issuer's keys may be new, and the owner or the people may have changed.
+        self.arm_enrolment();
+        if let Ok(mut status) = self.status.lock() {
+            status.account.unconfirmed = unconfirmed;
+            // Known only when the issuer's keys were read for this list.
+            if let Some(reproof) = reproof {
+                status.account.reproof = reproof;
+            }
+        }
+    }
+    /// What an Approve press grants a device the operator was shown, for one the station vouched
+    /// for on its own proof, by its role: a browser that operates gets station control and logging,
+    /// one that listens gets neither, and neither gets FT8/FT4 transmit (that stays a tick at the
+    /// shack); every device gets its pin ([`Device::pin`]). With Remote on the grants take effect at
+    /// once; with it off they wait in the record for Turn on. `false`, granting nothing, when a
+    /// local decision (Turn off or on, take over) was made after the list was asked for.
+    ///
+    /// A computer or phone that would only listen is refused (`listenNative`): its pin alone holds
+    /// station control on the room's tunnel whenever Remote is on (`Control::sync_approved`), so it
+    /// cannot be pinned as a listener. The operator can still approve it at the shack to operate.
+    fn grant_vouched(
+        &self,
+        device: &Device,
+        vouched: &tempo_client::account::Vouched,
+        approved: &[String],
+        (generation, epoch): (u64, u64),
+    ) -> Result<bool, &'static str> {
+        let pin = device.pin().ok_or("deviceKey")?;
+        let operate = vouched.role == tempo_client::account::Role::Operate;
+        let browser = device.kind == Kind::Browser;
+        if !browser && !operate {
+            return Err("listenNative");
+        }
+        let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
+        if control.generation != generation || control.operations.epoch() != epoch {
+            return Ok(false);
+        }
+        if control.enabled && browser {
+            let operations = control.operations.clone();
+            operations.permit(&device.id, operate)?;
+            operations.permit_station(&device.id, operate)?;
+            operations.permit_transmit(&device.id, false)?;
+        }
+        if browser {
+            control.remember(Persist::Browser {
+                device_id: device.id.clone(),
+                approval: Some(device.approval()),
+                logging: Some(operate),
+                control: Some(operate),
+                transmit: Some(false),
+            });
+        }
+        control.remember(Persist::Listed(approved.to_vec()));
+        control.remember(Persist::Pin {
+            device_id: device.id.clone(),
+            key: Some(pin),
+        });
+        Ok(true)
+    }
+    /// Keeps a device the station vouched for in the LAN's entry in `vault`, by the pin the LAN
+    /// admits it by, the entry held from its read to its save (`vault::DevicesHeld`). An entry that
+    /// does not read is never written over.
+    fn keep_for_lan(
+        vault: &dyn vault::AccountVault,
+        station_id: &str,
+        vouched: &tempo_client::account::Vouched,
+        pin: String,
+        now_s: u64,
+    ) -> Result<(), &'static str> {
+        let held = vault::DevicesHeld::take(vault);
+        let mut cache = vault
+            .device_cache()?
+            .filter(|cache| cache.station_id == station_id)
+            .unwrap_or_else(|| tempo_client::account::DeviceCache::new(station_id));
+        cache.keep(tempo_client::account::CachedDevice {
+            pin,
+            role: vouched.role,
+            guest: vouched.guest,
+            issued_at: vouched.issued_at,
+            confirmed_at: now_s,
+        })?;
+        vault.save_device_cache(&held, &cache)
+    }
+    /// The notice of a device the station granted on its own proof, once.
+    fn added(&self, device: &Device, vouched: &tempo_client::account::Vouched) {
+        if let Ok(mut status) = self.status.lock() {
+            if status
+                .account
+                .added
+                .iter()
+                .any(|a| a.device_id == device.id)
+            {
+                return;
+            }
+            status.account.added.push(Added {
+                device_id: device.id.clone(),
+                name: device.name.clone(),
+                kind: device.kind,
+                platform: device.platform,
+                key: device.key.clone(),
+                role: vouched.role,
+                guest: vouched.guest,
+            });
+        }
+    }
     /// Connect under `generation`, which the caller has already made enabled with a fresh
     /// authority (Turn on Remote, a launch that remembers being on, or approving the pairing).
     fn enable(&mut self, generation: u64) -> Result<(), &'static str> {
@@ -1609,7 +2377,11 @@ impl Controller {
             | Action::LanRevoke { .. }
             | Action::LanReset {} => return Err("invalidRequest"),
             Action::Begin { name } => {
-                if self.binding.is_some() || self.pending.is_some() || !valid_name(&name) {
+                if self.binding.is_some()
+                    || self.pending.is_some()
+                    || self.signing.is_some()
+                    || !valid_name(&name)
+                {
                     return Err("invalidRequest");
                 }
                 let value = self
@@ -1644,7 +2416,17 @@ impl Controller {
                 });
                 self.reflect("pairing");
             }
+            Action::CancelSignInAgain {} => {
+                if let Some(signing) = self.signing.take_if(|signing| signing.again) {
+                    signing.task.abort();
+                }
+                self.reflect_account();
+            }
             Action::Cancel {} => {
+                if let Some(signing) = self.signing.take() {
+                    signing.task.abort();
+                }
+                self.reflect_account();
                 self.pending = None;
                 self.reflect(if self.binding.is_some() {
                     "disabled"
@@ -1700,10 +2482,11 @@ impl Controller {
                         },
                     );
                 } else if self.binding.is_some() {
-                    let devices = self.devices().await?;
+                    let devices = self.list().await?;
                     // A fresh list is also what a restore after a restart is waiting for.
                     self.apply_restore(&devices);
                     self.listed(&devices);
+                    self.vouch(&devices, (generation, epoch)).await;
                     if let Ok(mut status) = self.status.lock() {
                         status.devices = devices;
                         status.error = None;
@@ -1822,6 +2605,144 @@ impl Controller {
                     self.enable(generation)?;
                 }
             }
+            Action::SignIn { name } => {
+                if self.binding.is_some()
+                    || self.pending.is_some()
+                    || self.signing.is_some()
+                    || !valid_name(&name)
+                {
+                    return Err("invalidRequest");
+                }
+                // Not ready: no key is made and nothing is staged.
+                self.accounts.service.as_ref().map_err(|reason| *reason)?;
+                let lan_key = self
+                    .accounts
+                    .lan_key
+                    .as_ref()
+                    .and_then(|lan_key| lan_key())
+                    .ok_or("noKey")?;
+                let staged = self.staged()?;
+                let binds = account::Binds {
+                    name: name.trim().to_string(),
+                    station_key: staged.public_key.clone(),
+                    lan_key,
+                    credential: staged.credential.clone(),
+                    again: None,
+                };
+                self.signing = Some(Signing {
+                    task: tokio::spawn((self.accounts.bind)(binds)),
+                    generation,
+                    again: false,
+                });
+                self.reflect_account();
+            }
+            Action::SignInAgain {} => {
+                if self.pending.is_some() || self.signing.is_some() {
+                    return Err("invalidRequest");
+                }
+                self.accounts.service.as_ref().map_err(|reason| *reason)?;
+                let (binding, credential) = self.bound()?;
+                let station_key = self
+                    .control
+                    .lock()
+                    .map_err(|_| "serviceUnavailable")?
+                    .station_key
+                    .as_ref()
+                    .map(|key| key.public_key().to_string())
+                    .ok_or("noKey")?;
+                // The LAN key as it is now: one reset since the station was bound is proven too.
+                let lan_key = self
+                    .accounts
+                    .lan_key
+                    .as_ref()
+                    .and_then(|lan_key| lan_key())
+                    .ok_or("noKey")?;
+                let binds = account::Binds {
+                    name: String::new(),
+                    station_key,
+                    lan_key,
+                    credential,
+                    again: Some(account::Bound {
+                        station_id: binding.station_id,
+                        account_id: binding.account_id,
+                    }),
+                };
+                self.signing = Some(Signing {
+                    task: tokio::spawn((self.accounts.bind)(binds)),
+                    generation,
+                    again: true,
+                });
+                self.reflect_account();
+            }
+            Action::Invite { email, role } => {
+                let address = email.trim();
+                if !invitable(address) {
+                    return Err("invalidRequest");
+                }
+                let (binding, token) = self.bound()?;
+                self.client
+                    .post(
+                        &station_path(&binding, "invite"),
+                        Some(&token),
+                        json!({ "email": address, "role": role }),
+                    )
+                    .await?;
+                let mailbox = tempo_client::account::mailbox(address);
+                // The service holds this invitation now: one taken back offline and not heard yet
+                // must not take it back when it is sent.
+                let same = |a: &String| tempo_client::account::mailbox(a) == mailbox;
+                if self.uninvites.as_ref().is_some_and(|w| w.iter().any(same)) {
+                    let _ = self.keep_uninvites(|people| people.retain(|a| !same(a)));
+                }
+                self.keep_people(|invites| {
+                    invites.retain(|invite| invite.mailbox != mailbox);
+                    invites.push(tempo_client::account::Invite { mailbox, role });
+                })?;
+            }
+            Action::Uninvite { email } => {
+                let address = email.trim();
+                if !invitable(address) {
+                    return Err("invalidRequest");
+                }
+                let (binding, token) = self.bound()?;
+                // Out here first: from now on no proof of theirs is taken at this station, whether
+                // or not the service can be told.
+                let mailbox = tempo_client::account::mailbox(address);
+                self.keep_people(|invites| invites.retain(|invite| invite.mailbox != mailbox))?;
+                let sent = self
+                    .client
+                    .post(
+                        &station_path(&binding, "uninvite"),
+                        Some(&token),
+                        json!({ "email": address }),
+                    )
+                    .await;
+                match sent {
+                    Ok(_) => {}
+                    // Out here already; the service is told before the station's next list, and
+                    // then removes their devices.
+                    Err("serviceUnavailable" | "tryLater") => {
+                        if self.uninvites.is_none() {
+                            return Err("credentialStoreUnavailable");
+                        }
+                        let address = address.to_string();
+                        self.keep_uninvites(|people| {
+                            if !people.contains(&address) {
+                                people.push(address);
+                            }
+                        })?;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Action::DismissAdded { device_id } => {
+                if let Ok(mut status) = self.status.lock() {
+                    status
+                        .account
+                        .added
+                        .retain(|added| added.device_id != device_id);
+                }
+            }
             Action::Enable {} => self.enable(generation)?,
             Action::Disable {} => {
                 self.reflect(if self.binding.is_some() {
@@ -1845,6 +2766,11 @@ impl Controller {
                     control.remember(Persist::Removed);
                 }
                 self.binding = None;
+                self.removals = Some(Vec::new());
+                self.uninvites = Some(Vec::new());
+                self.reflect_removals();
+                self.reflect_people();
+                self.arm_enrolment();
                 self.pending = None;
                 self.reflect("unpaired");
             }
@@ -1867,7 +2793,8 @@ impl Controller {
                     }
                 }
                 let (binding, token) = self.bound()?;
-                self.client
+                let sent = self
+                    .client
                     .post(
                         &station_path(
                             &binding,
@@ -1880,13 +2807,21 @@ impl Controller {
                         Some(&token),
                         json!({ "deviceId": device_id }),
                     )
-                    .await?;
+                    .await;
+                match sent {
+                    Ok(_) => {}
+                    // Removed here already; the service is told before the station's next list.
+                    Err("serviceUnavailable" | "tryLater") if !approve => {
+                        return self.queue_removal(device_id);
+                    }
+                    Err(error) => return Err(error),
+                }
                 if let Ok(mut status) = self.status.lock() {
                     status.devices.clear();
                 }
                 if approve {
                     // The list names the approval the service just wrote; the grant binds to it.
-                    let devices = self.devices().await?;
+                    let devices = self.list().await?;
                     let granted = self.grant_approved(
                         &devices,
                         device_id,
@@ -1896,6 +2831,7 @@ impl Controller {
                         (generation, epoch),
                     );
                     self.listed(&devices);
+                    self.vouch(&devices, (generation, epoch)).await;
                     if let Ok(mut status) = self.status.lock() {
                         status.devices = devices;
                     }

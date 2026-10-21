@@ -229,14 +229,26 @@ closed in full screen reopens at its last size. The page in this window can reac
 Nexus, exactly as in a browser. On Linux and macOS, use Remote in a browser for now.
 
 **Stations on this network…** is the other end of **Remote over this network**. On a Windows
-computer you operate from, it opens a Nexus window of its own for the stations this computer is
-paired with over your own network, with no internet at all. To add one, choose **Pair with a
-station…**: the window looks for stations by name on your network and offers each one it finds
-("Nexus" and the first characters of its key, as the station's card shows it). Press one to use
-its address, or type the address the station shows, then the code it shows under **Pair a
-computer** (capitals or not, spaces or not). This computer makes a key of its own for that station and keeps
-it in this computer's password store, with the station's key, the station's address and nothing
-else. **Stream** connects and opens the station's stream as the Remote page does, with the same
+computer you operate from, it opens a Nexus window of its own for the stations on this computer.
+To add one, press **Sign in…** and sign in to Nexus Remote in your web browser with the account
+the station is linked to, or one its owner invited to operate it: the window finds the station on
+your network by name (or asks for its address), checks that it is the station its owner signed in
+for, and the station is then on this computer on its own network and over the internet, with no
+code. The station takes this computer on its network for 30 days from that sign-in; in the last
+week the window offers **Sign in again**. If Nexus Remote cannot be reached, pair such a computer
+again with a code (**Pair with a code instead…**, below): the station then keeps it until you
+remove it there, with no 30 days to count, and removing it on the Nexus Remote web page no longer
+takes it off the station's network. Signing in from somewhere else (a laptop away from home,
+a friend you invited at their own house), press **Not on this network** when the window asks
+where the station is: the station is then on this computer by its name, over the internet only,
+until you press **Sign in** on its row once while this computer is on the station's network.
+For a station whose owner has not signed in to Nexus
+Remote at the station, choose **Pair with a code instead…**: the window looks for stations by
+name on your network and offers each one it finds ("Nexus" and the first characters of its key,
+as the station's card shows it). Press one to use its address, or type the address the station
+shows, then the code it shows under **Pair a computer** (capitals or not, spaces or not). Either
+way this computer makes keys of its own for that station and keeps them in this computer's
+password store, with the station's keys, the station's address and nothing else. **Stream** connects and opens the station's stream as the Remote page does, with the same
 **Stop TX**, **Esc** and **F11**. It tries the address that worked last first; if the station is
 not there any more (a new address from the router, say), the window looks for it by name and
 connects where it is found. If the station's key ever changes (Nexus reinstalled there, or
