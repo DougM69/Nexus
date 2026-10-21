@@ -994,7 +994,7 @@ fn watch_session(
                 "the SDR program stopped"
             }),
             // Selecting or tuning to a clicked spot is the panorama's later change; never a key.
-            Event::SpotClicked { call, hz } => log(&format!(
+            Event::SpotClicked { call, hz, .. } => log(&format!(
                 "spot {} at {} Hz clicked on the SDR program's panorama",
                 call.as_str(),
                 hz.get()

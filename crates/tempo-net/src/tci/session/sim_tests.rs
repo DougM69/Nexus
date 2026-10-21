@@ -837,6 +837,60 @@ fn commands_split_and_concatenated_are_read_one_by_one() {
     an_over(&conn2, &s2, TxStart::Audio);
 }
 
+/// ONE CLICK ON THE SDR PROGRAM'S PANORAMA IS HEARD ONCE, ON EVERY DIALECT THAT SENDS CLICKS:
+/// ExpertSDR3 and AetherSDR send each click in both spellings, back to back, and are heard once,
+/// with the channel; their click on another transceiver's panorama is not ours. ExpertSDR2 sends
+/// only the legacy spelling, which names no transceiver: each of its clicks is heard once, after
+/// its wait. A click writes nothing and keys nothing.
+#[test]
+fn a_click_on_the_sdr_panorama_is_heard_once_on_every_dialect() {
+    let cases = [
+        (SimDialect::expert_sdr3(), vec!["K1ABC 14025000 Some(0)"]),
+        (SimDialect::aether_sdr(), vec!["K1ABC 14025000 Some(0)"]),
+        (
+            SimDialect::expert_sdr2(),
+            vec!["W1AW 7030000 None", "K1ABC 14025000 None"],
+        ),
+    ];
+    for (dialect, want) in cases {
+        let name = dialect.name.clone();
+        let s = sim(dialect, []);
+        let conn = connect(
+            &s,
+            Config {
+                audio: false,
+                ..Config::new(trx0())
+            },
+        );
+        ready(&conn, false);
+        s.click_spot_on(1, 0, "W1AW", 7_030_000);
+        s.click_spot("K1ABC", 14_025_000);
+        let mut seen = expect(
+            &conn,
+            "the click on our panorama",
+            |e| matches!(e, Event::SpotClicked { call, .. } if call.as_str() == "K1ABC"),
+        );
+        seen.extend(drain(&conn, Duration::from_millis(2 * CLICK_PAIR_MS)));
+        let heard: Vec<String> = seen
+            .iter()
+            .filter_map(|e| match e {
+                Event::SpotClicked { call, hz, channel } => Some(format!(
+                    "{} {} {:?}",
+                    call.as_str(),
+                    hz.get(),
+                    channel.map(Channel::get)
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(heard, want, "{name}");
+        assert!(
+            keyed_in_sim(&s.log()).is_empty(),
+            "{name}: a click keys nothing"
+        );
+    }
+}
+
 #[test]
 fn oversized_and_garbage_messages_are_refused_and_the_session_goes_on() {
     for fault in [
