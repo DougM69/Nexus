@@ -512,7 +512,7 @@ describe('RTTY: the macro editor never stands between the operator and a stop', 
 
 // ── ESC, NAMED ON EVERY SCREEN ─────────────────────────────────────────────────────────────────
 // Esc is the stop the keyboard holds, on every screen the operator transmits from and on
-// Satellites (N71, 2026-10-01; N66 measured it missing on Tempo, SSTV and APRS, Phone's stopping
+// Satellites (2026-10-01; a measurement found it missing on Tempo, SSTV and APRS, Phone's stopping
 // only its voice keyer, and Satellites with no stop at all). This file cannot press it: it finds
 // controls by accessible name, and five of these screens' Esc is bound by App, which no
 // cockpit-level render contains. So each screen is NAMED here with what binds its Esc, and the

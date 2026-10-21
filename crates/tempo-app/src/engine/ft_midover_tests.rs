@@ -471,7 +471,7 @@ fn in_a_cq_run_rr73_folded_during_the_report_closes_with_73_and_the_run_calls_cq
     );
 }
 
-/// ⛔ #236 (`reference-ft8-wrong-73-fabricated-sender`) still holds now that a QSO awaiting the
+/// ⛔ #236 still holds now that a QSO awaiting the
 /// roger answers RR73 with 73: a bystander Fox's multiplex whose sender-less first half is
 /// addressed to us never closes the contact or keys a 73, mid-over or at the next key.
 #[test]
@@ -655,7 +655,7 @@ fn after_our_rr73_the_partners_73_rr73_or_rrr_changes_nothing() {
     }
 }
 
-/// ⛔ #236 (`reference-ft8-wrong-73-fabricated-sender`): only W1AW's own roger to us answers our
+/// ⛔ #236: only W1AW's own roger to us answers our
 /// RRR with 73. A bystander's RR73 to us, W1AW's RR73 to another station and a Fox's multiplex
 /// whose sender-less first half is addressed to us never key a 73, mid-over or at the next key.
 #[test]
@@ -756,7 +756,7 @@ fn a_cq_run_answers_the_callers_roger_to_our_rrr_with_one_73_then_calls_cq() {
 }
 
 /// The same roger, weak: only the full pass finds it, 2.5 s into the CQ the run keyed. The switch
-/// for an over owed to a partner the run has left (RX94) makes the rest of that CQ the 73, in place,
+/// for an over owed to a partner the run has left makes the rest of that CQ the 73, in place,
 /// with a second Tx row (WSJT-X restarts the over, :9446). The 73 is spent, TX stays on, and the
 /// next over is the CQ. Only the over keyed in the live slot is switched, and Stop TX ends the 73
 /// before it goes.
@@ -929,7 +929,7 @@ fn a_cq_run_with_auto_log_off_sends_the_73_then_waits_for_log_qso() {
     assert_eq!(e.stored_log().len(), 1, "logged once");
 }
 
-/// ⛔ #236 (`reference-ft8-wrong-73-fabricated-sender`) in a CQ run after our RRR: only W1AW's own
+/// ⛔ #236 in a CQ run after our RRR: only W1AW's own
 /// roger to us earns the 73. A bystander's RR73 or RRR to us, W1AW's RR73 to another station and a
 /// Fox's multiplex whose sender-less first half is addressed to us change nothing. With the run back
 /// on CQ, the CQ goes out and is not switched; with the run still holding the contact, our RRR plays
@@ -1261,7 +1261,7 @@ fn msgsent(text: &str) -> String {
 /// `msgsent` for the restart (`widgets/mainwindow.cpp:7880`), sets its Tx Message from it and sends
 /// a Status when that changed (`m_currentMessage = QString::fromLatin1 (msgsent)`, :8072-8077).
 /// Every way an over switches mid-air reports the new message as a key reports it: a decode, a
-/// Tx-slot click, the 73 a run owes the caller's roger to our RRR (ruling 544), our RRR answered
+/// Tx-slot click, the 73 a run owes the caller's roger to our RRR, our RRR answered
 /// with 73 while the run still holds the contact, the CQ after the partner's 73 to our RRR (Tx6)
 /// and a contest contact. A route that cannot replace its audio sends the over as keyed, and the
 /// Status goes on saying so.

@@ -1,5 +1,5 @@
 //! One program's connection, after its handshake: two threads, an outbox between them, and every
-//! bound design §4.4 puts on a program.
+//! bound the server puts on a program.
 //!
 //! # Threads
 //!
@@ -16,7 +16,7 @@
 //! formats a frame, then writes its buffer in one call), so the writer stays the socket's only
 //! writer and a pong never lands inside another frame.
 //!
-//! # The outbox (design §4.4)
+//! # The outbox
 //!
 //! Control frames first, then TX_CHRONO, then text, then receive audio. At most
 //! [`Limits::outbox`] bytes a program: receive audio goes first when it is full. A text backlog
@@ -34,7 +34,7 @@
 //! row that hold nothing the codec could even split ([`Limits::garbage`]) close it too.
 //!
 //! Transmit audio is taken only from the program holding an admitted `tci` key; every other
-//! binary frame is dropped and counted, never queued for a later key (design §3.1 item 8). A frame
+//! binary frame is dropped and counted, never queued for a later key. A frame
 //! must claim at least one whole frame, carry all it claims in whole samples, and carry no more
 //! than twice it (WSJT-X sends twice and fills the first half): otherwise its claim and its payload
 //! disagree, and it is refused as bad. The backend is handed the claimed values alone, and they are
@@ -309,7 +309,7 @@ impl Read for Wire {
         let Some(deadline) = self.deadline else {
             return self.tcp.read(buf);
         };
-        // The whole handshake inside the deadline, however the bytes trickle in (design §4.4).
+        // The whole handshake inside the deadline, however the bytes trickle in.
         let timed_out = || io::Error::new(io::ErrorKind::TimedOut, "handshake deadline");
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
@@ -657,7 +657,7 @@ impl Bucket {
     }
 }
 
-/// The command rate (design §4.4): a bucket, the run of seconds over it, and the stops that get
+/// The command rate: a bucket, the run of seconds over it, and the stops that get
 /// through anyway.
 #[derive(Debug)]
 pub(super) struct Limiter {

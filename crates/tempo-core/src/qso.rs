@@ -907,7 +907,7 @@ impl Station {
                 // Enable Tx on (:8105-8139). "Our RRR" is the over we put on the air, so a roger
                 // the packer had to render as RRR counts too. Never as a Hound (the Fox's RR73
                 // ends the QSO in silence; a 73 would land in its segment). A CQ run that still
-                // holds the contact answers it too (ruling 544): the run calls CQ only once the 73
+                // holds the contact answers it too: the run calls CQ only once the 73
                 // has gone (`done()`), so an RRR still on the air becomes the 73, never the CQ.
                 (State::Confirming, Msg::Rr73 { to, de })
                 | (State::Confirming, Msg::Rrr { to, de })
@@ -2011,7 +2011,7 @@ mod start_context_tests {
 
     /// No 73 as a Hound: the pair has no room for a number, so our roger went out as RRR, and the
     /// Fox's RR73 ends the QSO in silence, as every Hound QSO ends (a 73 would land in the Fox's
-    /// segment). (A CQ run answers it, ruling 544: the engine's run scenes.)
+    /// segment). (A CQ run answers it, by the operator's rule: the engine's run scenes.)
     #[test]
     fn a_hound_closes_on_the_roger_to_our_rrr_without_a_73() {
         let mut hound = Station::answering("KD9TAW/P", MY_GRID, "F4CYH/R");

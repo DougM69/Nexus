@@ -1321,7 +1321,7 @@ fn the_gate_table_is_not_uniform() {
 }
 
 /// ⛔ A TCI PROGRAM'S OVER IS JUDGED ACROSS ITS WHOLE TRANSMIT PASSBAND, AND THAT CAN ONLY EVER
-/// REFUSE MORE than the gate does (the TCI server design, §3.6: Nexus cannot know where in the
+/// REFUSE MORE than the gate does (Nexus cannot know where in the
 /// passband a program puts its audio). Over every station state of the table, the passband's
 /// verdict allows only where the gate allows. CONTROL: it parts from the gate somewhere (a Digital
 /// row by a segment edge), or the passband would be no more than the gate's own frame.

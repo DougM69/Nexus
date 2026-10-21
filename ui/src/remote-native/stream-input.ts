@@ -16,14 +16,14 @@
 // a `<select>` chosen (its native list is a separate window the stream never shows, so a small
 // in-page list stands in for it). Handlers written for pointer capture get it too, for the
 // synthetic pointer only. What it does not reproduce is named in the WB report and measured on the
-// bench (plan §1.4, gesture coverage): HTML drag-and-drop, text selection by dragging, IME
+// bench (gesture coverage): HTML drag-and-drop, text selection by dragging, IME
 // composition, and the browser's own shortcuts.
 //
 // ⚠️ WHAT GOES DOWN COMES UP. A key or button held here when a stream ends would stay held: Space is
 // the Phone cockpit's push-to-talk key. `reset` - which the station sends when a stream ends or its
 // transmit presence lapses - releases everything this module is holding.
 //
-// ⛔ AND IT COMES UP WITHIN 200 MS OF THE PAGE GOING QUIET (the lead's dead-man ruling). A key or a
+// ⛔ AND IT COMES UP WITHIN 200 MS OF THE PAGE GOING QUIET (the dead-man rule). A key or a
 // button held over the stream is a STATE the page re-asserts every 100 ms (`held`, on the stream's
 // unreliable `ptt` channel), never a down/up pair trusted to complete: whatever is held here and
 // not re-asserted for STREAM_HELD_GAP_MS comes up, with its key-up or pointer-up and no click, as

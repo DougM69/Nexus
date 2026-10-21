@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// SPOTS AND NEEDED ON THE CW SCREEN (plan piece H8) — Phone's two feeds (#345), in CW.
+// SPOTS AND NEEDED ON THE CW SCREEN — Phone's two feeds (#345), in CW.
 //
 // The operator's pick: "CW gets Phone's Spots/Needed panes", hidden by default exactly as in
 // Phone — default-removed, one click in ⊞ Panels — and an existing CW layout loads unchanged.

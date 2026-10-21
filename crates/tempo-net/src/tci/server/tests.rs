@@ -455,7 +455,7 @@ fn refused(mock: &Mock, f: impl Fn(&HandshakeRefusal) -> bool) -> bool {
 
 // ── Where it listens ─────────────────────────────────────────────────────────────────────────
 
-/// S-M3: never a wildcard, never a LAN address.
+/// Never a wildcard, never a LAN address.
 #[test]
 fn the_listeners_are_loopback_only_on_one_port() {
     let b = Bench::new();
@@ -492,7 +492,7 @@ fn a_program_reaches_the_server_over_ipv6_loopback() {
 }
 
 /// A port below the ephemeral range, free on both loopback addresses, with the one after it
-/// free too (reference-test-port-races: never one an ephemeral bind can be handed).
+/// free too (never one an ephemeral bind can be handed).
 fn two_free_ports() -> u16 {
     let v6 = TcpListener::bind(("::1", 0)).is_ok();
     for p in (20_000u16..30_000).step_by(37) {
@@ -557,7 +557,7 @@ fn http_status(e: &tungstenite::Error) -> Option<u16> {
     }
 }
 
-/// S-M1: a web page's handshake (it must send `Origin`) is refused, 403, and logged once.
+/// A web page's handshake (it must send `Origin`) is refused, 403, and logged once.
 #[test]
 fn a_handshake_carrying_origin_is_refused_403() {
     let b = Bench::new();
@@ -587,7 +587,7 @@ fn a_handshake_carrying_origin_is_refused_403() {
     assert!(!b.mock.calls().iter().any(|c| matches!(c, Call::Key(..))));
 }
 
-/// S-M2: DNS rebinding. `Host` must name this computer's loopback and the port, once.
+/// DNS rebinding. `Host` must name this computer's loopback and the port, once.
 #[test]
 fn a_handshake_whose_host_is_not_loopback_is_refused_403() {
     let b = Bench::new();
@@ -669,7 +669,7 @@ fn a_request_that_is_not_a_websocket_handshake_is_answered_400() {
     assert!(Client::connect(b.port).is_ok(), "the server still serves");
 }
 
-/// S-M32: the whole handshake must arrive within the deadline, however it trickles in.
+/// The whole handshake must arrive within the deadline, however it trickles in.
 #[test]
 fn a_silent_connection_is_closed_at_the_handshake_deadline() {
     let b = Bench::with(quick());
@@ -716,7 +716,7 @@ fn a_trickled_handshake_is_closed_at_the_deadline() {
     assert!(Client::connect(b.port).is_ok());
 }
 
-/// S-M5: eight programs at once; the ninth is told to come back later.
+/// Eight programs at once; the ninth is told to come back later.
 #[test]
 fn a_ninth_program_is_refused_503() {
     let b = Bench::new();
@@ -738,7 +738,7 @@ fn a_ninth_program_is_refused_503() {
 
 // ── Message bounds ───────────────────────────────────────────────────────────────────────────
 
-/// S-M6: a text message over 16 KiB, and any message over tungstenite's cap, close with 1009.
+/// A text message over 16 KiB, and any message over tungstenite's cap, close with 1009.
 #[test]
 fn a_text_message_over_the_cap_closes_with_1009() {
     let b = Bench::new();
@@ -798,7 +798,7 @@ fn slow(rate: u32, burst: u32) -> Limits {
     }
 }
 
-/// S-M33: commands past the bucket are dropped and counted.
+/// Commands past the bucket are dropped and counted.
 #[test]
 fn commands_over_the_rate_are_dropped_and_counted() {
     let b = Bench::with(slow(20, 10));
@@ -1195,10 +1195,10 @@ const BURST: [&str; 31] = [
     "start;",
 ];
 
-/// S-M27: design §5, line for line, each line its own WebSocket message, each one the strict
+/// The init burst, line for line, each line its own WebSocket message, each one the strict
 /// validator (eesdr-tci's rules) takes.
 #[test]
-fn the_init_burst_is_design_5_one_command_a_message() {
+fn the_init_burst_is_one_command_a_message() {
     let b = Bench::new();
     let mut c = Client::connect(b.port).expect("handshake");
     let mut got = Vec::new();
@@ -1288,7 +1288,7 @@ fn the_sender_always_gets_its_echo_and_the_others_only_a_change() {
     assert!(b.mock.calls().contains(&Call::SetDial(b.id(1), 14_075_000)));
 }
 
-/// S-M28 at the server: every power and SWR value has a decimal point, even a whole one.
+/// At the server: every power and SWR value has a decimal point, even a whole one.
 #[test]
 fn power_and_swr_carry_a_decimal_point() {
     let b = Bench::new();
@@ -1484,7 +1484,7 @@ fn keyed(b: &Bench) -> Client {
     c
 }
 
-/// S-M26: a short frame is refused and counted; nothing reaches the backend; the program goes on.
+/// A short frame is refused and counted; nothing reaches the backend; the program goes on.
 #[test]
 fn a_short_binary_frame_is_refused_counted_and_harmless() {
     let b = Bench::new();
@@ -1507,7 +1507,7 @@ fn a_short_binary_frame_is_refused_counted_and_harmless() {
         .is_some());
 }
 
-/// Design §3.1 item 8: transmit audio only from the key holder; others' dropped, never queued.
+/// Transmit audio only from the key holder; others' dropped, never queued.
 #[test]
 fn transmit_audio_from_a_program_without_the_key_is_dropped() {
     let b = Bench::new();
@@ -1615,7 +1615,7 @@ fn chrono() -> Chrono {
     }
 }
 
-/// S-M34 at the server: TX_CHRONO only to the program holding an admitted `tci` key.
+/// At the server: TX_CHRONO only to the program holding an admitted `tci` key.
 #[test]
 fn a_chrono_goes_only_to_the_tci_key_holder() {
     let b = Bench::new();
@@ -1697,7 +1697,7 @@ fn a_program_that_does_not_read_loses_audio_first_and_never_blocks_the_publisher
 
 // ── Ending ───────────────────────────────────────────────────────────────────────────────────
 
-/// Design §3.4: a lost socket ends the program's transmissions, first.
+/// A lost socket ends the program's transmissions, first.
 #[test]
 fn a_lost_socket_ends_the_programs_transmissions() {
     let b = Bench::new();
@@ -1727,7 +1727,7 @@ fn a_lost_socket_ends_the_programs_transmissions() {
     assert!(b.handle.programs().is_empty());
 }
 
-/// Design §3.4: stopping ends every key first, then `trx:0,false;`, then the close. The order is
+/// Stopping ends every key first, then `trx:0,false;`, then the close. The order is
 /// read where it shows: when a program hears `trx:0,false;`, its transmissions have already ended.
 #[test]
 fn stopping_ends_keys_then_tells_trx_false_then_closes() {
@@ -1815,7 +1815,7 @@ fn transmit_after_end(b: &Bench, client: ClientId) -> Vec<Call> {
 
 /// The operator's Disconnect while one of the program's messages is still running: nothing later
 /// in that message reaches the backend, so nothing it sends can transmit once its end began
-/// (security review finding 1).
+/// (found in a security review).
 #[test]
 fn nothing_after_the_operators_disconnect_can_transmit() {
     let b = Bench::new();
@@ -2082,7 +2082,7 @@ fn claimed(length: u32, payload: usize) -> Vec<u8> {
     f
 }
 
-/// Security review finding 2: a frame whose `length` and payload disagree is refused, counted, and
+/// Found in a security review: a frame whose `length` and payload disagree is refused, counted, and
 /// never reaches the backend. A claim of 0 (or one too small for its payload) used to pay nothing.
 #[test]
 fn a_transmit_frame_whose_length_and_payload_disagree_is_refused() {
@@ -2158,7 +2158,7 @@ fn the_backend_gets_only_the_values_that_were_paid_for() {
     assert_eq!(got, Some(Call::TxAudio(b.id(1), HEADER_LEN + 2048 * 4)));
 }
 
-// ── S-M23, S-M24: refused outright ──────────────────────────────────────────────────────────
+// ── Refused outright ─────────────────────────────────────────────────────────────────────────
 
 /// A unique directory under the system's temporary one, removed at the end.
 struct TempDir(std::path::PathBuf);
@@ -2302,7 +2302,7 @@ const ARMS: [&str; 23] = [
     "Ignore",
 ];
 
-/// One command per row: what it is (design §3.5), what the backend is asked, and what the program
+/// One command per row: what it is, what the backend is asked, and what the program
 /// that sent it is told. Every arm of the table, each by a command a real client sends.
 struct Row {
     text: &'static str,
@@ -2920,7 +2920,7 @@ fn run_one(text: &str, mock: &Mock) -> (Action, Vec<String>, Vec<String>) {
 }
 
 #[test]
-fn every_arm_of_the_table_does_what_design_3_5_says() {
+fn every_arm_of_the_table_does_what_the_table_says() {
     let mut covered = std::collections::BTreeSet::new();
     for row in ROWS {
         let mock = Mock::default();
@@ -2945,7 +2945,7 @@ fn every_arm_of_the_table_does_what_design_3_5_says() {
 }
 
 /// A refusal from the backend reaches the program as the command's own answer, with the value in
-/// force (design §3.5), and the log names the gate.
+/// force, and the log names the gate.
 #[test]
 fn a_backend_refusal_is_answered_with_the_value_in_force() {
     for (text, set, want) in [

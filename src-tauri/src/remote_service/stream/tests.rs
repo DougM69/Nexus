@@ -943,7 +943,7 @@ fn the_page_is_told_what_the_microphone_over_does() {
 }
 
 /// Every way an over ends reaches the page under its own name: the page's caption for each is
-/// different (the audio design's §7), so two ends told as one would say the wrong thing.
+/// different, so two ends told as one would say the wrong thing.
 #[test]
 fn every_end_of_an_over_reaches_the_page_under_its_own_name() {
     use tempo_app::mic::MicEnded as Engine;

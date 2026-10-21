@@ -12,8 +12,7 @@
 #
 # SCOPE: this publishes to GitHub. SourceForge FRS upload and the version.json update
 # endpoint are a deliberate fast-follow (each needs its own secret + external system);
-# the SF *git* mirror is scripts/mirror-to-sourceforge.sh. See
-# nexus-notes/single-repo-pipeline-plan.md.
+# the SF *git* mirror is scripts/mirror-to-sourceforge.sh.
 #
 # WHY THE GATES: on 2026-07-20 a fully-green build shipped a .deb with the AI CW model
 # silently absent (14 MB light, no error anywhere). "Automatic on tag" here does NOT mean
@@ -468,8 +467,7 @@ jobs:
         # compiles every crates.io crate and runs the UI build. Only referenced in this
         # tag/dispatch-triggered workflow — NEVER in a pull_request job — so a fork PR cannot
         # reach it. The key is extractable from any shipped binary regardless (it is a
-        # read-only ClubLog most-wanted token); the proper fix is a proxy — see
-        # nexus-notes/clublog-key-proxy-plan.md.
+        # read-only ClubLog most-wanted token); the proper fix is a proxy.
         env:
           CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
         run: bash scripts/build-windows-cross.sh

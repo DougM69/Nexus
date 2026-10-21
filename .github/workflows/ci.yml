@@ -715,6 +715,15 @@ jobs:
       - name: release-prep refuses before it changes anything, and its re-run goes through
         run: bash scripts/release-prep.test.sh
 
+      # The repository is public and its working notes are not. A comment, test name or doc that
+      # cites one of them (a ruling, task, agent or batch number, a private document's section, a
+      # file under tasks/) leaks the shape of the private tree and tells a reader nothing. A
+      # push-time scrub sees only what a push adds; this reads the whole tree on every commit.
+      # Hermetic (~3 s, no network); it runs its own planted controls first and fails closed, and
+      # its header lists the false positives it allows and why.
+      - name: The tree cites no private notes, rulings or task ids
+        run: bash scripts/check-internal-refs.sh
+
       # The two doc generators, in --check mode: they write nothing, they exit 1
       # when the committed page is behind the source it is derived from.
       #

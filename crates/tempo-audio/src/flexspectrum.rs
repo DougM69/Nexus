@@ -404,7 +404,7 @@ pub fn fft_is_ours(packet_stream: Option<u32>, pan_id: Option<u32>) -> bool {
 ///
 /// - **Each value is its row's place in the pan's window**, 1 at `max_dbm` and 0 at `min_dbm`
 ///   ([`FftFrame::levels`]): a bin is a pixel row counted from the top of a display `y_pixels`
-///   rows tall (A, port plan §4.7). Until 2026-10 this read `bin / 65535`, which put a carrier at
+///   rows tall (A). Until 2026-10 this read `bin / 65535`, which put a carrier at
 ///   the floor and the floor at the top, squashed into the bottom percent of the scale.
 /// - **The scale stays RELATIVE.** The values are exact fractions of the window, so a dBm axis is
 ///   one label away; that label also needs the window the radio encoded each frame with, which
@@ -1209,7 +1209,7 @@ mod tests {
         assert_eq!(second.seq, first.seq + 1, "one sweep, one step");
     }
 
-    // ── The shipped path's display defects (port plan §4.8) ─────────────────────────────────
+    // ── The shipped path's display defects ──────────────────────────────────────────────────
     //
     // Each test below was first run against the code it replaces, reached through thin adapters,
     // and failed there on the defect it names.

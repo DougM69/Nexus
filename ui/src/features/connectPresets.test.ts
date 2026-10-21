@@ -100,7 +100,7 @@ describe('the presets are well formed', () => {
   })
 })
 
-// FRAME + BAR — the default view to try (the operator's batch 60, 2026-10-01: "A: Frame + bar"; release
+// FRAME + BAR — the default view to try (the operator's pick, 2026-10-01: "A: Frame + bar"; release
 // step 4: a layout to pick, NOT yet the default). The default-view survey's candidate A as the
 // side-by-side renders measured it: Frame's shape with Bands for you over Openings on the left and Chase
 // over Getting Out on the right, the clock-and-indices bar across the top, and the tab plan behind every

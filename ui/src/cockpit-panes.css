@@ -442,7 +442,7 @@
    STICKY ON BOTH EDGES, and that is what it is for. When the shell's deficit valve scrolls (a
    150–175 % pin on a laptop), the strip parks at the top of the scrollport, or just above the
    sticky dock, instead of leaving the window: the header Stop TX it replaced sat UNDER the dock at
-   those pins — present, enabled and unclickable (N66, measured). The bottom offset is the dock's
+   those pins — present, enabled and unclickable (measured). The bottom offset is the dock's
    height, written by the strip as a placement input (`--cockpit-txstrip-bottom`), because CSS
    cannot read a sibling's box. It must be a DIRECT shell child: a sticky box never leaves its
    containing block, so inside a wrapper it could not leave that wrapper's box. `flex: 0 0 auto`

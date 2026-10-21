@@ -1125,7 +1125,7 @@ fn with_audio_over_tci_off_an_ft8_over_keys_the_programs_input_and_plays_on_the_
     assert!(s.sim.tx_audio(0).is_empty(), "nothing over TCI");
 }
 
-/// ⛔ STOP TX MID-OVER ON TCI SENDS NO MORE OF IT (M10 in the loop). A voice-keyer message going out
+/// ⛔ STOP TX MID-OVER ON TCI SENDS NO MORE OF IT. A voice-keyer message going out
 /// on Nexus's audio is stopped part way: the loop's hard stop empties the transmit route, so nothing
 /// of the message is left to send, and the over ends. Here the SDR program does not confirm the
 /// unkey and goes on pulling: what it gets after our stop is silence. None of the message goes to

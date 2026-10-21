@@ -331,7 +331,7 @@ interface Props {
  *  box" and its own ✕, never a tick (Phone's rule). */
 const CW_MENU = CW_PANEL_IDS.filter((id) => !isBoxId(id))
 
-/** CW's Spots pane: CW spots on the radio's band, Phone's pane with CW for voice (#345, plan H8).
+/** CW's Spots pane: CW spots on the radio's band, Phone's pane with CW for voice (#345).
  *  `mode` is the backend's frequency-derived class and `submode` a skimmer's token (see Phone's
  *  twin), and the board filters on `submode ?? mode`: a human spot in a CW segment ('CW') and a
  *  skimmer's CW decode ('CW') both show; a skimmer's RTTY or FT8 decode in a CW segment does not.
@@ -1440,7 +1440,7 @@ export function CwCockpit({
   const hasSubRow = subRowHere && shown('rxdsp')
   const hasBandPane = shown('bandActivity') && onWorkSpot != null
   const hasCopilotPane = shown('copilot')
-  // THE TWO FEEDS (Phone's #345, plan H8): the Spots and Needed boards. Each needs its board's wiring
+  // THE TWO FEEDS (Phone's #345): the Spots and Needed boards. Each needs its board's wiring
   // from the host as well as the tick — Band Activity's `onWorkSpot` rule — and ships unticked
   // (CW_PANELS.defaultRemoved), so a stock CW screen is exactly what it was.
   const hasSpotsPane = spotsBoard != null && shown('spots')
@@ -1993,7 +1993,7 @@ export function CwCockpit({
     </CockpitPaneFrame>
   )
 
-  // ── THE SPOTS AND NEEDED FEEDS (Phone's #345 in CW, plan H8) ──────────────────────────────────
+  // ── THE SPOTS AND NEEDED FEEDS (Phone's #345 in CW) ───────────────────────────────────────────
   // The REAL boards (SpotsPanel / NeededPanel) with the wiring App gives their views, hosted as FILL
   // panes — a list stretches to what it is given — exactly as Phone hosts them: Spots at the foot of
   // the leading (Decode's) column, Needed at the foot of the middle one at three tracks, and below

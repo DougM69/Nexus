@@ -2810,7 +2810,7 @@ enum LateAnswer {
     /// #170 — the contact COMPLETED and our closing roger went out. A repeated report means
     /// they never copied it, so the only useful thing we can do is send it again.
     Roger,
-    /// Ruling 544 — as [`Self::Roger`], where that roger was RRR, which carries no 73: a
+    /// As [`Self::Roger`], where that roger was RRR, which carries no 73: a
     /// repeated report re-sends it, and their RR73/RRR to it earns the 73 WSJT-X sends
     /// (`widgets/mainwindow.cpp:9210-9214`). Whichever comes first is the one over.
     RogerOrBye73,
@@ -5464,7 +5464,7 @@ pub enum TxWaveform {
     /// `Js8Mode::encode` is the lab's "<12 sixbit> <i3>" form, not the engine's
     /// wire (a sentinel text form would make consumers guess). `f0` is the plan's
     /// audio offset: the operator's TX offset, or the 500–1000 Hz heartbeat
-    /// sub-band slot the station picked — NEVER a dial move (spec invariant 9).
+    /// sub-band slot the station picked — NEVER a dial move.
     Js8 {
         speed: modes::Js8Speed,
         word: ::js8::Word87,
@@ -11426,7 +11426,7 @@ impl Engine {
     /// NOTIFY, NEVER ACT. This raises a flag and nothing else: it never clamps, raises or
     /// commands power, and it never withholds an over. Driving an amplifier's input at a hair
     /// above zero is a legitimate way to operate and the app does not know better than the
-    /// operator — see `feedback-alerts-notify-never-act`.
+    /// operator: an alert notifies, it never acts.
     ///
     /// Two conditions, and both matter:
     ///
@@ -26626,7 +26626,7 @@ contact yourself."
         // runs the identity gate itself. Everything ABOVE this line is a reason not to
         // transmit at all and applies unchanged; everything BELOW is the FT/Tempo
         // machinery that does not apply. The wall-clock watchdog lives in the mode-match
-        // tail this route skips, so `plan_js8_tx` re-applies it (spec invariant 3).
+        // tail this route skips, so `plan_js8_tx` re-applies it.
         if self.app.tier() == Tier::Js8 {
             return self.plan_js8_tx(slot);
         }
@@ -28271,7 +28271,7 @@ contact yourself."
                     })
                 }
                 // #153 — the station the run gave up on came back and closed. Answer with the
-                // 73 that closes it back, and nothing else. Ruling 544 — likewise the partner's
+                // 73 that closes it back, and nothing else. Likewise the partner's
                 // roger to our RRR: one 73, then the run's CQ.
                 Msg::Rr73 { to, de } | Msg::Rrr { to, de }
                     if matches!(answer, LateAnswer::Bye73 | LateAnswer::RogerOrBye73)
@@ -32784,7 +32784,7 @@ mod tests {
     ///
     /// Both directions, because the clear is half the contract: an operator who moves their own
     /// rigctld off 4532 must not be left reading the complaint about it.
-    /// ⚠️ **THE WIRE KEY, READ THROUGH THE JSON.** `reference-settings-plumbing`'s oldest trap:
+    /// ⚠️ **THE WIRE KEY, READ THROUGH THE JSON.** The settings plumbing's oldest trap:
     /// a hand-written TS key that does not match what serde emits fails SILENTLY — no error, no
     /// warning, the field simply never arrives and the control does nothing. `ui/src/types.ts`
     /// hand-writes `catShareError`, so that is what is asserted, on the serialized document
@@ -35288,7 +35288,7 @@ mod tests {
 
     /// ⛔ A picture the radio loop cut short on the air is left as Stop leaves it, and the SSTV
     /// cockpit is told why, in words that tell the latch going down under it from another stop
-    /// ending its transmission (N57, 2026-09-30). The reason stands until the next picture keys,
+    /// ending its transmission. The reason stands until the next picture keys,
     /// as a drop's does.
     #[test]
     fn a_picture_the_loop_cut_short_is_left_as_stop_leaves_it_and_says_why() {
@@ -57218,7 +57218,7 @@ mod tests {
     /// The same scene asserted on the FREQUENCY rather than the verdict, as its own test on
     /// purpose: a red control reports only the FIRST assertion that fires, so a gate claim and
     /// the emission value it rests on cannot share one test body without one of them going
-    /// unproven. ([[feedback-read-which-assertion-the-control-reported]].)
+    /// unproven.
     #[test]
     fn a_repeater_input_is_the_emission_the_gate_judges() {
         let e = stale_shift_after_a_knob_qsy();
@@ -58468,7 +58468,7 @@ mod tests {
 
     // ===== Native JS8 — Batch B7 (OPERATOR GATE → TX) engine tests =====
 
-    /// Spec invariant 6 (bounded airtime): every JS8 wave is SLOT-POSITIONED — `delay_ms` of
+    /// Bounded airtime: every JS8 wave is SLOT-POSITIONED — `delay_ms` of
     /// silence, then 79 symbols — and strictly shorter than its period at every speed, so
     /// `tempo_audio::slot::tx_deadline_ms`'s clamp never truncates a frame and PTT always drops
     /// before the next period. The typed word never round-trips through text.
@@ -58602,7 +58602,7 @@ mod tests {
         );
     }
 
-    /// Spec invariant 3: the tier route returns ABOVE the mode-match tail that holds the
+    /// The tier route returns ABOVE the mode-match tail that holds the
     /// wall-clock watchdog, so the route carries its own copy. This pins the copy to the
     /// original's three outcomes: (1) the first over after an operator act STARTS the clock
     /// and does not trip; (2) real elapsed time ≥ the limit trips — disarm, flag, one-shot
@@ -58702,7 +58702,7 @@ mod tests {
         );
     }
 
-    /// The route ORDER is the design (judge.md): JS8 keys every period, so it must sit ABOVE
+    /// The route ORDER is the design: JS8 keys every period, so it must sit ABOVE
     /// the FT parity gate; it speaks JS8Call's wire, so it must sit ABOVE the Tempo ACK drain;
     /// and it is a transmitter, so it must sit BELOW every "do not transmit at all" guard —
     /// right after the beacon route. Pinned on the source because no runtime probe can tell
@@ -58794,7 +58794,7 @@ mod tests {
         })
     }
 
-    /// Spec invariant 9 + G2: a heartbeat's f0 is a random free 50 Hz slot in 500–1000 Hz,
+    /// A heartbeat's f0 is a random free 50 Hz slot in 500–1000 Hz,
     /// chosen for the PLAN only — the operator's TX offset and the dial never move — and the
     /// plan is flagged `beacon` so `commit_tx` applies the (approved) watchdog exemption.
     #[test]
@@ -59159,7 +59159,7 @@ mod tests {
         );
     }
 
-    /// Spec invariant 3: an operator frame planned after the limit elapsed trips exactly like
+    /// An operator frame planned after the limit elapsed trips exactly like
     /// an FT8 over — disarm + one-shot abort + nothing keyed, nothing booked.
     #[test]
     fn the_wall_clock_watchdog_is_re_applied_to_js8_operator_traffic() {
@@ -59203,7 +59203,7 @@ mod tests {
 
     // ===== B7.6 halt tests =====
 
-    /// Spec invariant 7 — halt is TOTAL: Stop TX drops the JS8 outbox, the pending autoreply
+    /// Halt is TOTAL: Stop TX drops the JS8 outbox, the pending autoreply
     /// and the heartbeat schedule, on top of everything `halt_tx` already kills. A halt that
     /// left a queued frame behind would key it the moment the operator re-armed.
     #[test]
@@ -59408,7 +59408,7 @@ mod tests {
         }
     }
 
-    /// HALT IS TOTAL for the repeat schedule too (spec invariant 7), through all three
+    /// HALT IS TOTAL for the repeat schedule too, through all three
     /// clearing paths — Stop TX, leaving the tier, and a mode change — and re-arming the
     /// latch afterwards must not resurrect it.
     #[test]
@@ -59609,7 +59609,7 @@ mod tests {
 
     // ===== B7.8 operator-verb tests =====
 
-    /// §97.119 airtime cap (spec invariant 6): a message whose frames × period would exceed
+    /// §97.119 airtime cap: a message whose frames × period would exceed
     /// ten minutes is REFUSED with the reason, not silently truncated or sent. Slow is the
     /// tightest (19 frames × 30 s); the same text fits at Turbo (99 frames × 6 s).
     #[test]
@@ -59718,7 +59718,7 @@ mod tests {
         assert!(!e.snapshot().recent_decodes.iter().any(|d| d.mine));
     }
 
-    /// `commit_tx`'s stale-plan refusal applies to JS8 unchanged (spec invariant 5): tier
+    /// `commit_tx`'s stale-plan refusal applies to JS8 unchanged: tier
     /// moved, slot rolled over, Stop TX between plan and commit — each refuses on its own.
     #[test]
     fn commit_tx_refuses_a_stale_js8_plan() {

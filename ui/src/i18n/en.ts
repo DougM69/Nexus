@@ -7751,7 +7751,7 @@ export const EN = {
 
   // Station Housekeeping. ⚠️ The beacon toggle is a CONFIGURATION control, not a transmit
   // control — it chooses whether the station announces itself, and it can neither key nor
-  // unkey anything. Same reading as Tx Power's drive slider in batch 13; nothing here is on
+  // unkey anything. Same reading as Tx Power's drive slider; nothing here is on
   // any cockpit's stop-line census. The watts placeholder ("e.g. 100") is a power value and
   // stays in the component, as the example addresses in Rig & CAT do.
   'settings.digital.housekeeping.title': 'Station Housekeeping',
@@ -10138,7 +10138,7 @@ export const EN = {
     'Calling CQ {{dir}} — a DIRECTED call. He is asking for {{dir}} only, so answering from anywhere else will usually be ignored.',
   'operate.roster.state.title': '{{call}} is in {{state}}',
   // The Age column. The unit letter rides inside the message with its number, so a
-  // translation can never separate the two (the Now-Bar's rule, batch 15).
+  // translation can never separate the two (the Now-Bar's rule).
   'operate.roster.age.now': 'now',
   'operate.roster.age.slots': '{{count}} sl',
   'operate.roster.age.minutes': '{{minutes}}m',
@@ -11127,7 +11127,7 @@ export const EN = {
   'cw.panel.copilot': 'CW Copilot',
   'cw.panel.decode': 'CW Decode',
   'cw.panel.sent': 'Sent Echo',
-  // Phone's two feeds (#345) in CW (plan H8), named as the views they come from, as in Phone.
+  // Phone's two feeds (#345) in CW, named as the views they come from, as in Phone.
   'cw.panel.spots': 'Spots',
   'cw.panel.needed': 'Needed',
   'cw.pane.decode.title': 'Decode',
@@ -12736,7 +12736,7 @@ export const EN = {
   // three plates, which are the passive rendering of that same latch.
   //
   // What is here is the rest: the wheel-tune tooltips, the runaway-guard toast, the power
-  // slider (a CONFIGURATION control on the transmit path — batch 13) and the CAT pill.
+  // slider (a CONFIGURATION control on the transmit path) and the CAT pill.
   'cockpit.header.readout.wheelTune.title': 'Scroll to tune',
   'cockpit.header.readout.digitTune.title': 'Scroll a digit to tune it',
   // Two WHOLE sentences, one per direction — the band name and the edge frequency are invariant

@@ -705,7 +705,7 @@ describe('the RF scope pane ships hidden in the five digital cockpits (operator,
   })
 })
 
-describe("CW ships Phone's two feeds hidden too (plan H8)", () => {
+describe("CW ships Phone's two feeds hidden too", () => {
   // The operator's pick: "CW gets Phone's Spots/Needed panes", hidden by default exactly as in Phone.
   // Each case drives one reader of an absent state, as Phone's do, against CW's own record.
   const CW_KEY = panelStorageKey('cw')

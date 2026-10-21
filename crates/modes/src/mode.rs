@@ -2060,7 +2060,7 @@ impl Mode for WsprMode {
 /// speed. **Transmit-capable since B7 (operator gate G1)**: the engine's tier-routed
 /// planner is the only TX path; the encoder here serves the lab.
 ///
-/// `structured_identity: true` — the FAIL-CLOSED default kept deliberately (judge.md ruling):
+/// `structured_identity: true` — the FAIL-CLOSED default kept deliberately:
 /// JS8 frames carry the callsign, so a blank MYCALL must refuse to build a frame; the JS8
 /// TX planner will call `structured_tx_ready(false)` itself and `compose` refuses a
 /// non-packable call on top. `early_decode: true` only documents that the tier decodes

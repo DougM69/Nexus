@@ -132,7 +132,7 @@ const SLOT_WHERE: Record<SlotId, () => string> = {
 }
 
 /** What the Layout picker offers: Standard first — every pane open at the usual widths, applied by a tap
- * like any layout's and undone the same way (the operator's batch 63), so trying a layout and going back
+ * like any layout's and undone the same way (the operator's pick), so trying a layout and going back
  * is one tap each way — then, when the one-time switch to Frame + bar kept one, the operator's own
  * earlier layout (`kept`, below), then the presets (features/connectPresets). */
 type LayoutChoice = ConnectPresetId | 'standard' | 'kept'

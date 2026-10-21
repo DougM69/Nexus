@@ -265,7 +265,7 @@ pub struct Feeds {
     ///
     /// Holding this grants nothing: it is a read of already-captured receive audio, and
     /// while nobody is listening it copies nothing. It is the station's ONE encoder, shared by
-    /// the Listen lane here and every stream's `audio` channel (plan P5).
+    /// the Listen lane here and every stream's `audio` channel.
     #[cfg(feature = "radio")]
     pub audio: Option<std::sync::Arc<super::audio::ReceiveFanout>>,
     /// What a streamed session needs from the application: the window its input goes to, and

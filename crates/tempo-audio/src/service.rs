@@ -10664,7 +10664,7 @@ impl RadioLoop {
                         // the way the WinKeyer's moved. The rig's keyer speed is only
                         // observable while the rig is keying, and this shares the CAT link
                         // with the dial/mode/meter traffic that a slow serial rig already
-                        // struggles to keep up with (`reference-cat-slow-serial-deadline`)
+                        // struggles to keep up with
                         // — one slider drag is ~45 distinct values, which is 45 `KEYSPD`
                         // commands queued ahead of the next poll for no visible gain. At
                         // send time is soon enough here; the hardware keyer, which HOLDS a
@@ -27814,7 +27814,7 @@ mod tests {
     /// Measured for the 2026-09 FT-710 report ("it tuned but selected DATA-U, not CW-U") as the
     /// BEFORE half of a proposed narrowing of the soundcard keyer's DATA submode to the keyed
     /// window — receive in `CW`/`CWR`, command `PKTUSB`/`PKTLSB` only while keying. That
-    /// narrowing was investigated and NOT built (`tasks/cw-data-window.md`): Nexus carries ONE
+    /// narrowing was investigated and NOT built: Nexus carries ONE
     /// dial number, a frequency written over CAT is a number in the CURRENT mode's convention,
     /// and on a Yaesu with CW FREQ DISPLAY = PITCH OFFSET the CW convention differs from the
     /// SSB/DATA one by the rig's CW pitch (the ±650 Hz field report the mode-before-dial fix
@@ -32396,7 +32396,7 @@ mod tests {
         );
     }
 
-    /// What the SSTV view reads to say how a picture ended (N57b, 2026-09-30: "finished" only for
+    /// What the SSTV view reads to say how a picture ended ("finished" only for
     /// one that played out). A picture that played out still has its whole key-down elapsed when
     /// it stops sending; every early end leaves it short of that. The view says "finished" on the
     /// first and "stopped", or shows the warning line, on the rest, from the progress the Remote
@@ -40129,7 +40129,7 @@ mod tests {
         // leaves the rig in USB would decode nothing while looking perfectly tuned.
         //
         // ⚠️ SCOPE: this proves what we SEND, not what a rig accepts — a rigctld dummy accepts
-        // bogus mode tokens (see reference-build-verify-limits), so only the radio can confirm
+        // bogus mode tokens, so only the radio can confirm
         // the far end. KD9TAW confirmed on the real IC-9700 that APRS Tune sets FM.
         let modes: Vec<String> = log
             .lock()

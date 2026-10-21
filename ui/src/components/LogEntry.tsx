@@ -626,7 +626,7 @@ export function LogEntry({
   // (it was): a render can land ahead of a write still pending from a passive effect, and syncing
   // from it put the box back to what that render saw. After a hunted log, the spent hunt's refill
   // was such a write; the hunt's end rendered first, the prefill judged an empty box, and the
-  // refill then landed with nothing left to take it out (#383, N26).
+  // refill then landed with nothing left to take it out (#383).
   const parkBoxRef = useRef(kept?.parkRef ?? '')
   const setPark = (value: string) => {
     parkBoxRef.current = value
