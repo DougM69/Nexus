@@ -4443,16 +4443,19 @@ impl FieldDayStation {
                 // in hand from the CallingCq step). Happy-path callers send RR73,
                 // so the added Bye73 alternative never fires on the normal flow.
                 //
+                // ⭐ Only the caller's, by its call, as WSJT-X acts only on its QSO partner's
+                // message (`processMessage`, mainwindow.cpp 9107-9110: the sender must be the
+                // DX call). An RR73, RRR or 73 to us from anyone else logs nothing and sends
+                // nothing back, and the caller keeps getting our R and exchange.
+                //
                 // ⭐ Where the caller runs WSJT-X's Field Day activity, its RR73 or RRR is
                 // answered with 73, as WSJT-X's runner answers it (Tx5, mainwindow.cpp
-                // 9210-9215); the 73 goes once and the run calls CQ again. Only the caller's,
-                // by its call: a 73 must never answer a confirmation the station being worked
-                // did not send. A bare 73, a confirmation from anyone else, and every other
-                // Field Day station close as they always have, with nothing sent back.
-                (FdState::AwaitConfirm, Msg::Rr73 { to, .. })
-                | (FdState::AwaitConfirm, Msg::Rrr { to, .. })
-                | (FdState::AwaitConfirm, Msg::Bye73 { to, .. })
-                    if self.to_my_call(to) =>
+                // 9210-9215); the 73 goes once and the run calls CQ again. A bare 73, and every
+                // other Field Day station, close as they always have, with nothing sent back.
+                (FdState::AwaitConfirm, Msg::Rr73 { to, de })
+                | (FdState::AwaitConfirm, Msg::Rrr { to, de })
+                | (FdState::AwaitConfirm, Msg::Bye73 { to, de })
+                    if self.to_my_call(to) && self.from_dx(de) =>
                 {
                     if let Some((call, class, section)) = self.peer_exch.take() {
                         self.log.log(&call, &class, &section, slot);
@@ -4460,9 +4463,7 @@ impl FieldDayStation {
                             .push(format!("logged {call} {class} {section}"));
                     }
                     self.pending = match &m {
-                        Msg::Rr73 { de, .. } | Msg::Rrr { de, .. }
-                            if self.wsjtx_field_day && self.from_dx(de) =>
-                        {
+                        Msg::Rr73 { de, .. } | Msg::Rrr { de, .. } if self.wsjtx_field_day => {
                             Some(self.bye73(de))
                         }
                         _ => None,
@@ -6284,8 +6285,11 @@ mod tests {
 
     /// ⭐ Field Day's runner, where the caller runs WSJT-X's Field Day activity: the caller's
     /// RR73 or RRR is logged and answered with 73 (Tx5), which goes once; then the station is
-    /// done. A bare 73, a confirmation from anyone else, and a runner whose caller does not run
-    /// WSJT-X's Field Day close as they always have: logged, nothing sent back.
+    /// done. A bare 73 from the caller, and a runner whose caller does not run WSJT-X's Field
+    /// Day, close as they always have: logged, nothing sent back. A confirmation from anyone else
+    /// closes nothing, as WSJT-X acts only on its QSO partner's (`processMessage`,
+    /// mainwindow.cpp 9107-9110): nothing is logged, nothing goes to that station, the caller
+    /// still gets the rogered exchange, and the caller's own RR73 then closes the contact.
     #[test]
     fn field_days_runner_answers_its_callers_rr73_with_73_in_wsjtx_field_day() {
         let runner = |wsjtx: bool| {
@@ -6312,7 +6316,6 @@ mod tests {
         }
         for (wsjtx, closing) in [
             (true, "W9XYZ K2DEF 73"),
-            (true, "W9XYZ N0ABC RR73"),
             (false, "W9XYZ K2DEF RR73"),
             (false, "W9XYZ K2DEF RRR"),
         ] {
@@ -6320,6 +6323,33 @@ mod tests {
             run.observe(&[dec(closing)], 1);
             assert_eq!(run.log.qso_count(), 1, "{wsjtx} {closing}: logged");
             assert!(run.done(), "{wsjtx} {closing}: done, nothing sent back");
+        }
+        // Each row as its call, class and section.
+        let rows = |run: &FieldDayStation| -> Vec<String> {
+            let row = |q: &LoggedQso| format!("{} {} {}", q.call, q.class(), q.section());
+            run.log.qsos().iter().map(row).collect()
+        };
+        for wsjtx in [true, false] {
+            for closing in ["W9XYZ N0ABC RR73", "W9XYZ N0ABC RRR", "W9XYZ N0ABC 73"] {
+                let what = format!("{wsjtx} {closing}");
+                let mut run = runner(wsjtx);
+                run.observe(&[dec(closing)], 1);
+                assert_eq!(rows(&run), Vec::<String>::new(), "{what}: nothing logged");
+                assert_eq!(run.state, FdState::AwaitConfirm, "{what}: still K2DEF's");
+                assert_eq!(
+                    next(&run),
+                    "K2DEF W9XYZ R 3A WI",
+                    "{what}: nothing to N0ABC"
+                );
+                run.observe(&[dec("W9XYZ K2DEF RR73")], 3);
+                assert_eq!(
+                    rows(&run),
+                    ["K2DEF 2A IL"],
+                    "{what}: K2DEF's own RR73 logs it"
+                );
+                let close = if wsjtx { "K2DEF W9XYZ 73" } else { "" };
+                assert_eq!(next(&run), close, "{what}: and closes as before");
+            }
         }
     }
 

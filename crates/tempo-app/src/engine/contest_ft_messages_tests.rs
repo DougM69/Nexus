@@ -1065,8 +1065,9 @@ fn an_ft8_grid_contact_dupes_and_journals_like_a_typed_one() {
 
 /// Field Day's runner answers the caller's RR73 or RRR with 73 and then calls CQ, in ARRL Field
 /// Day on FT8 and FT4, as WSJT-X's Field Day activity does (Tx5, mainwindow.cpp 9210-9215). A
-/// bare 73 from the caller, and a confirmation from anyone else, are answered with nothing, as
-/// before; and FT1 and Winter Field Day close as they always have. One row each time.
+/// bare 73 from the caller is answered with nothing, as before, and FT1 and Winter Field Day
+/// close as they always have: one row each time. A confirmation from anyone else closes nothing
+/// ([`only_the_callers_own_confirmation_closes_a_contest_contact`]).
 #[test]
 fn a_field_day_runner_answers_the_callers_rr73_and_rrr_with_73() {
     let rows = |e: &Engine| match &e.mode {
@@ -1099,7 +1100,6 @@ fn a_field_day_runner_answers_the_callers_rr73_and_rrr_with_73() {
     // Nothing goes back where it never did.
     for (contest, tier, closing) in [
         ("arrlfd", Tier::Ft8, "K1ABC W9XYZ 73"),
-        ("arrlfd", Tier::Ft8, "K1ABC K2DEF RR73"),
         ("arrlfd", Tier::TempoFast, "K1ABC W9XYZ RR73"),
         ("wfd", Tier::Ft8, "K1ABC W9XYZ RR73"),
     ] {
@@ -1111,6 +1111,172 @@ fn a_field_day_runner_answers_the_callers_rr73_and_rrr_with_73() {
             "{what}: straight back to CQ"
         );
         assert_eq!(logged, 1, "{what}");
+    }
+    // Another station's RR73 closes nothing: the caller still gets the rogered exchange.
+    let (_, after, next, logged) = run("arrlfd", Tier::Ft8, "K1ABC K2DEF RR73");
+    assert_eq!(
+        after.as_deref(),
+        Some("W9XYZ K1ABC R 2B EMA"),
+        "K2DEF's RR73"
+    );
+    assert_eq!(after, next, "K2DEF's RR73: and again");
+    assert_eq!(logged, 0, "K2DEF's RR73: nothing logged");
+}
+
+/// The contest's rows, each as its call and the exchange it sent.
+fn rows_of(e: &Engine) -> Vec<String> {
+    match &e.mode {
+        Mode::FieldDay { station, .. } => station
+            .log
+            .qsos()
+            .iter()
+            .map(|q| format!("{} {}", q.call, fields(&q.rx)))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// ⭐ ONLY THE CALLER'S OWN CONFIRMATION CLOSES A CONTEST CONTACT, as WSJT-X acts only on its QSO
+/// partner's message: `processMessage` (mainwindow.cpp 9107-9110) needs the sender to be the DX
+/// call, and answers another station's RR73 with nothing (9315, 9336-9338). With W9XYZ's
+/// exchange in hand and our roger on the air, K2DEF's RR73, RRR or 73 to us logs nothing and
+/// sends K2DEF nothing: the next over is W9XYZ's again. W9XYZ's own RR73 then logs W9XYZ and
+/// closes as before: with 73 in ARRL Field Day on FT8 and FT4, where W9XYZ runs WSJT-X's Field
+/// Day activity, and with nothing on FT1 and in Winter Field Day; then the run calls CQ. Heard in
+/// the same period as W9XYZ's, K2DEF's costs W9XYZ nothing. The ARRL VHF contests' runner and
+/// the standard messages' S&P, which took only their partner's already, are the control.
+#[test]
+fn only_the_callers_own_confirmation_closes_a_contest_contact() {
+    let strangers = ["K1ABC K2DEF RR73", "K1ABC K2DEF RRR", "K1ABC K2DEF 73"];
+    let fd = "W9XYZ CLASS=1D,SECTION=WI";
+    // (contest, tier, W9XYZ's answer to our CQ, our roger, its row, our answer to its RR73)
+    let runs = [
+        (
+            "arrlfd",
+            Tier::Ft8,
+            "K1ABC W9XYZ 1D WI",
+            "W9XYZ K1ABC R 2B EMA",
+            fd,
+            Some("W9XYZ K1ABC 73"),
+        ),
+        (
+            "arrlfd",
+            Tier::Ft4,
+            "K1ABC W9XYZ 1D WI",
+            "W9XYZ K1ABC R 2B EMA",
+            fd,
+            Some("W9XYZ K1ABC 73"),
+        ),
+        (
+            "arrlfd",
+            Tier::TempoFast,
+            "K1ABC W9XYZ 1D WI",
+            "W9XYZ K1ABC R 2B EMA",
+            fd,
+            None,
+        ),
+        (
+            "wfd",
+            Tier::Ft8,
+            "K1ABC W9XYZ 1H WI",
+            "W9XYZ K1ABC R 1H EMA",
+            "W9XYZ CLASS=1H,SECTION=WI",
+            None,
+        ),
+        (
+            "arrlvhf_jan",
+            Tier::Ft8,
+            "K1ABC W9XYZ EN37",
+            "W9XYZ K1ABC R FN42",
+            "W9XYZ GRID=EN37",
+            Some("W9XYZ K1ABC 73"),
+        ),
+    ];
+    for (contest, tier, call, roger, row, answer) in runs {
+        for stranger in strangers {
+            let what = format!("{contest:?} {} {stranger:?}", tier_name(tier));
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(tier);
+            e.set_mode("fieldday-run").expect("the run starts");
+            let cq = keyed(&mut e, 0).expect("the CQ");
+            e.ingest_decodes_for_test(&[heard(call)], 2);
+            assert_eq!(keyed(&mut e, 2).as_deref(), Some(roger), "{what}");
+            e.ingest_decodes_for_test(&[heard(stranger)], 4);
+            assert_eq!(rows_of(&e), Vec::<String>::new(), "{what}: nothing logged");
+            assert_eq!(
+                keyed(&mut e, 4).as_deref(),
+                Some(roger),
+                "{what}: W9XYZ's again, nothing to K2DEF"
+            );
+            e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ RR73")], 6);
+            assert_eq!(rows_of(&e), [row], "{what}: W9XYZ's own RR73 logs W9XYZ");
+            assert_eq!(
+                keyed(&mut e, 6).as_deref(),
+                Some(answer.unwrap_or(&cq)),
+                "{what}: and closes as before"
+            );
+            e.ingest_decodes_for_test(&[], 8);
+            assert_eq!(keyed(&mut e, 8), Some(cq), "{what}: then CQ");
+            assert_eq!(rows_of(&e), [row], "{what}: once");
+        }
+    }
+    // K2DEF's RR73 in the same period as W9XYZ's, before it or after it.
+    let stranger = modes::Decode {
+        freq: 1720.0,
+        ..heard("K1ABC K2DEF RR73")
+    };
+    let own = heard("K1ABC W9XYZ RR73");
+    for (order, both) in [
+        ("K2DEF's first", [stranger.clone(), own.clone()]),
+        ("W9XYZ's first", [own, stranger]),
+    ] {
+        let mut e = engine_for("arrlfd", MY_GRID);
+        e.set_tier(Tier::Ft8);
+        e.set_mode("fieldday-run").expect("the run starts");
+        keyed(&mut e, 0).expect("the CQ");
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ 1D WI")], 2);
+        keyed(&mut e, 2).expect("the roger");
+        e.ingest_decodes_for_test(&both, 4);
+        assert_eq!(rows_of(&e), [fd], "{order}");
+        assert_eq!(
+            keyed(&mut e, 4).as_deref(),
+            Some("W9XYZ K1ABC 73"),
+            "{order}: W9XYZ still gets its 73"
+        );
+    }
+    // The standard messages' S&P, after its R and report.
+    for stranger in strangers {
+        let what = format!("\"txqp\" S&P {stranger:?}");
+        let mut e = engine_for("txqp", MY_GRID);
+        e.set_tier(Tier::Ft8);
+        e.set_mode("fieldday-sp").expect("S&P starts");
+        e.set_tx_enabled(true);
+        e.ingest_decodes_for_test(&[heard("CQ W9XYZ EN37")], 2);
+        assert_eq!(
+            keyed(&mut e, 2).as_deref(),
+            Some("W9XYZ K1ABC FN42"),
+            "{what}"
+        );
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ -07")], 4);
+        assert_eq!(
+            keyed(&mut e, 4).as_deref(),
+            Some("W9XYZ K1ABC R-12"),
+            "{what}"
+        );
+        e.ingest_decodes_for_test(&[heard(stranger)], 6);
+        assert_eq!(rows_of(&e), Vec::<String>::new(), "{what}: nothing logged");
+        assert_eq!(
+            keyed(&mut e, 6).as_deref(),
+            Some("W9XYZ K1ABC R-12"),
+            "{what}: W9XYZ's again"
+        );
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ RR73")], 8);
+        assert_eq!(rows_of(&e), ["W9XYZ "], "{what}: W9XYZ logged");
+        assert_eq!(
+            keyed(&mut e, 8).as_deref(),
+            Some("W9XYZ K1ABC 73"),
+            "{what}"
+        );
     }
 }
 
