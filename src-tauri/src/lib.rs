@@ -125,6 +125,9 @@ mod tci_server;
 /// need, handed to the engine while the radio's "Spots on the SDR panadapter" is on.
 #[cfg(feature = "radio")]
 mod tci_spots;
+/// Test builds only: no test reads or writes the operator's own Nexus folders.
+#[cfg(test)]
+mod test_dirs;
 mod window_state;
 
 use chains::{panel_key, panel_label, Instance};
@@ -2056,6 +2059,7 @@ static LAST_XRAY: Mutex<Option<(std::time::Instant, f32, i64)>> = Mutex::new(Non
 
 /// The base config root: `%APPDATA%` on Windows, `$XDG_CONFIG_HOME`/`~/.config` on Unix,
 /// else the CWD. The `tempo[-<profile>]` app directory hangs off this.
+#[cfg(not(test))]
 fn config_base() -> PathBuf {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
@@ -2065,6 +2069,13 @@ fn config_base() -> PathBuf {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
     };
     base.unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// The test twin of `config_base`: the running test's own folder, never the operator's (see
+/// `test_dirs`). Everything in the config folder hangs off this one function.
+#[cfg(test)]
+fn config_base() -> PathBuf {
+    test_dirs::root().join("config")
 }
 
 /// Accept only a filesystem-safe profile name — `[A-Za-z0-9_-]`, 1..=32 chars. Anything
@@ -2465,6 +2476,7 @@ mod single_radio_tests {
 /// Default = `<base>/tempo` (the default profile's dir — i.e. the pre-profile location, so an
 /// existing `log.adi` stays put and simply becomes the shared one, no migration). Override
 /// with `NEXUS_DATA_DIR` to place the shared log on a NAS/Drive-synced folder (a multi-PC shack).
+#[cfg(not(test))]
 fn shared_data_dir() -> PathBuf {
     // ⚠️ RESOLVED ONCE PER PROCESS (#289). The operator can choose this folder in Settings, and a
     // change must reach the app at the NEXT launch only: the logbook handle is opened from this
@@ -2480,6 +2492,19 @@ fn shared_data_dir() -> PathBuf {
             },
         )
         .clone()
+}
+
+/// The test twin of `shared_data_dir`: the same rule inside the running test's own folder (see
+/// `test_dirs`), resolved once per test as the shipped one is once per launch, and blind to
+/// `NEXUS_DATA_DIR`: a contributor whose shack keeps its log on a share would otherwise have every
+/// test write beside that log.
+#[cfg(test)]
+fn shared_data_dir() -> PathBuf {
+    thread_local! {
+        static RESOLVED: PathBuf = read_data_dir_pointer_in(&config_dir_for(None))
+            .unwrap_or_else(|| config_base().join("tempo"));
+    }
+    RESOLVED.with(PathBuf::clone)
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────
@@ -6026,6 +6051,7 @@ fn parks_cache_path() -> PathBuf {
 /// diagnostic log below can be "beside the crash log" and "in the app data dir" at once, and
 /// it is worth knowing before anyone moves either of them. (Splitting install from data is
 /// real work with a migration behind it; it is not this change.)
+#[cfg(not(test))]
 fn local_data_dir() -> PathBuf {
     let base = if cfg!(windows) {
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
@@ -6035,6 +6061,13 @@ fn local_data_dir() -> PathBuf {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
     };
     base.unwrap_or_else(|| PathBuf::from(".")).join("Nexus")
+}
+
+/// The test twin of `local_data_dir`: inside the running test's own folder, never the
+/// operator's (see `test_dirs`).
+#[cfg(test)]
+fn local_data_dir() -> PathBuf {
+    test_dirs::root().join("data").join("Nexus")
 }
 
 /// The WSJT-X-format decode log (`ALL.TXT`), in the app's LOCAL data dir — the same class of
