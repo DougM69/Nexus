@@ -19,6 +19,12 @@
 // that picker). Away from SSTV and Satellites the pass is announced, once, and
 // nothing moves: an alert notifies, it never acts.
 //
+// A satellite pass the operator is working has the radio too, on any screen.
+// While a transponder is held, Doppler steers the dial back to that bird within
+// seconds, so a park on 145.800 is taken straight back. The ISS pass is
+// announced as it is elsewhere, and the auto-arm arms if the hold ends while
+// the ISS is still up.
+//
 // Where NO radio here can receive 145.800 (the station's only enabled radio, its
 // probed coverage leaving 2 m out: an FT-710 alone), the auto-arm cannot work on
 // any screen, and a tune could only be refused. It says so once a session, with
@@ -148,7 +154,9 @@ function unwind(radio: IssRadio | undefined, deps: IssArmDeps, reason: string): 
  * saved dial. Idempotent under the repeating tick: the `weArmedIt` guard means a
  * second tick inside the same pass does nothing. `soleRadio` = `radio` is the
  * station's only enabled radio; with its coverage leaving 145.800 out, nothing is
- * tuned on any screen and the notice is said once a session.
+ * tuned on any screen and the notice is said once a session. `passHoldsDial` = a
+ * satellite pass holds the dial (a transponder is held); the pass is then announced
+ * on every screen, as on a screen that does not work the ISS.
  */
 export function tickIssAutoArm(
   pass: SatPass | null,
@@ -158,6 +166,7 @@ export function tickIssAutoArm(
   nowSecs: number,
   screen: View,
   soleRadio = false,
+  passHoldsDial = false,
 ): void {
   // Opt-in OFF: unwind an arm still in flight (so turning it off mid-pass puts
   // the dial back), then stay completely inert.
@@ -189,9 +198,10 @@ export function tickIssAutoArm(
       }
       return
     }
-    // …and only on a screen that works the ISS. Elsewhere the radio is in use:
-    // say so once, move nothing, and arm if they come to SSTV or Satellites.
-    if (!ISS_SCREENS.has(screen)) {
+    // …and only on a screen that works the ISS, with no satellite pass holding the
+    // dial. Elsewhere, or under a held pass, the radio is in use: say so once, move
+    // nothing, and arm if they come to SSTV or Satellites, or the hold ends.
+    if (!ISS_SCREENS.has(screen) || passHoldsDial) {
       if (toldAos !== pass.aosUnix) {
         toldAos = pass.aosUnix
         pushToast(

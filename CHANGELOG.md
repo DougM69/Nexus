@@ -490,6 +490,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   radio and 2 m SSB to another, picking 145.800 or 144.500 MHz FM on the SSTV screen (or a frequency you set to FM
   there) went to the SSB radio and put it in FM. It now goes to the radio set up for 2 m FM, as the ISS auto-arm and
   a repeater tune do.
+- **The ISS SSTV auto-arm leaves a satellite you are working alone.** With a transponder picked on the Satellites
+  screen, an ISS pass made the auto-arm retune to 145.800 MHz, and Doppler tuning pulled the radio straight back to
+  your satellite. While a satellite holds the radio, the auto-arm now only tells you the ISS is up, as it does on
+  other screens, and arms if you release the satellite while the ISS is still up.
 - **An unassisted contest entry now stops all CW decoding, not only the AI decoder.** With Settings ▸ Contesting ▸
   Unassisted entry on, the classic decoder still copied CW into the Decode pane, offered the calls it heard as chips
   and filled His Call with its best guess. CQ WW's rules count a CW decoder as QSO-finding assistance, which an

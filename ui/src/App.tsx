@@ -135,6 +135,7 @@ import {
   clickTciSpot,
   getSatSchedule,
   getSatTrackStatus,
+  getSatTransponder,
   getIssPass,
   getTleStatus,
   sstvArm,
@@ -914,8 +915,10 @@ function App() {
               (r) => r.enabled && r.id !== snapRef.current?.activeRadioId,
             )
           if (settingsRef.current?.issSstvAutoArm === true) {
-            getIssPass()
-              .then((issPass) =>
+            // A satellite pass holding the dial (a transponder held) has the radio as another
+            // screen has it: the tick only announces the ISS. A failed read is no hold, as before.
+            Promise.all([getIssPass(), getSatTransponder().catch(() => null)])
+              .then(([issPass, held]) =>
                 tickIssAutoArm(
                   issPass,
                   snapRef.current?.radio,
@@ -924,6 +927,7 @@ function App() {
                   Date.now() / 1000,
                   viewRef.current,
                   soleRadio(),
+                  held != null,
                 ),
               )
               // Rejection is a ROUTINE state (elements past 30 d make
