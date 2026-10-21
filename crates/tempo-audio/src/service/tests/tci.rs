@@ -949,12 +949,16 @@ fn a_slot_over_never_keys_the_sdr_microphone_on_a_server_with_no_data_mode() {
     on_its_own_audio(&mut s, "a late start");
 }
 
-/// Phone on 20 m with "Programs on TCI may transmit" on: a program on Nexus's own TCI server may key.
+/// Phone on 20 m with "Programs on TCI may transmit" on, and program 1 on Nexus's own TCI server a
+/// program that asked `usb` (a program's own audio goes out only after it asks a voice mode): it
+/// may key.
 fn programs_may_transmit(e: &mut Engine) {
     let mut settings = e.settings().clone();
     settings.tci_server_tx = true;
     e.apply_settings(settings);
     phone(e);
+    let usb = tempo_net::tci::wire::Word::new("usb").expect("a mode word");
+    e.tci_note_modulation(1, &usb);
 }
 
 impl TciScene {
