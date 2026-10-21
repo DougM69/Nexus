@@ -531,6 +531,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   AFSK transmit tones as well as the decoder, so a click while transmitting slid the signal you were sending to
   wherever you clicked. While an over is on the air or queued, continuous TX is on or Tune is keyed, a click now does
   nothing, and the waterfall's hint says tuning is held.
+- **Nexus Remote: a PC that signs in while the shack reads its device list keeps its 30 days (Beta, test builds).**
+  The shack keeps one list of the PCs added by signing in, and four things change it: a PC signing in on the
+  station's network, each device list the shack hears from Nexus Remote, a PC paired again with a code, and a PC
+  leaving after its 30 days. Two of them at the same moment could lose one change. At worst a PC that had just signed
+  in stayed on the station's network with no 30-day limit, and removing it on the Nexus Remote web page did not take
+  it off. The shack now makes these changes one at a time.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
