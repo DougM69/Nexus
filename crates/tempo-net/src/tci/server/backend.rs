@@ -30,8 +30,9 @@
 //!
 //! A program's [`TciBackend::disconnected`] waits for that program's calls in flight that can
 //! transmit ([`TciBackend::key`], [`TciBackend::tune_on`], [`TciBackend::cw`],
-//! [`TciBackend::tx_audio`]), and none of them is made for it afterwards: what such a call admitted
-//! just before the end is ended by it, and nothing the program sends transmits after it. So the
+//! [`TciBackend::tx_audio`]), and for a [`TciBackend::spot`] in flight, and none of them is made
+//! for it afterwards: what such a call admitted just before the end is ended by it, nothing the
+//! program sends transmits after it, and no spot of its outlives it. So the
 //! app must never call [`Handle::disconnect`](super::Handle::disconnect) or
 //! [`Server::stop`](super::Server::stop) while holding the lock its backend takes, nor from inside
 //! a backend call.
@@ -139,6 +140,8 @@ pub enum Refusal {
     Family,
     /// The tier is off or not offered (CW, spots).
     Tier,
+    /// A spot whose callsign is not one: 1 to 16 letters, digits and `/`, shaped like a callsign.
+    SpotCall,
     /// No receive source for programs' audio (§3.5 `audio_start`).
     NoSource,
 }
@@ -173,6 +176,7 @@ impl Refusal {
             Refusal::Raise => "programs may lower power, not raise it",
             Refusal::Family => "not this section's mode",
             Refusal::Tier => "not offered",
+            Refusal::SpotCall => "a spot whose callsign is not one",
             Refusal::NoSource => "no receive audio to send",
         }
     }
@@ -414,9 +418,9 @@ pub trait TciBackend: Send + Sync {
     /// The program is gone: it closed, the connection failed or went silent, or the server or the
     /// operator ended it. Anything it keyed, tuned or sent as CW ends hard now (design §3.4, a lost
     /// socket unkeys within one radio-loop tick). Called once a program, before its slot is freed,
-    /// after its transmit calls in flight have returned, and never followed by another of them. No
-    /// lock of the server's is held but that program's transmit gate, which only its transmit calls
-    /// take.
+    /// after its transmit calls and its spot in flight have returned, and never followed by another
+    /// of them. No lock of the server's is held but that program's transmit gate, which only its
+    /// transmit calls and its spots take.
     fn disconnected(&self, client: ClientId);
 
     /// A line for the connection log.
@@ -489,7 +493,9 @@ pub trait TciBackend: Send + Sync {
     }
 
     /// A spot from a program (design §3.7). It never tunes and never keys. Not offered unless
-    /// implemented.
+    /// implemented. Asked through the program's gate, as a transmit call is: never once its end has
+    /// begun, and its end waits for one in flight, so the spots it drops at
+    /// [`TciBackend::disconnected`] never come back.
     fn spot(&self, _client: ClientId, _spot: Spot) -> Result<(), Refusal> {
         Err(Refusal::Tier)
     }

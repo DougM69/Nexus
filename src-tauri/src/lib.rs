@@ -22550,6 +22550,12 @@ struct SpotRow {
     /// already lists. Empty, and off the wire, with no file, no entry, or call history off.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     contest_predicted: Vec<SpotPredictedMult>,
+    /// The program on Nexus's TCI server that sent this spot, by its connection's number (the
+    /// number Settings lists it by), when a program did ([`get_tci_spots`]). A click on such a
+    /// spot only tunes ([`click_tci_spot`]). `None`, and off the wire, for every cluster and
+    /// skimmer spot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tci: Option<u64>,
 }
 
 /// One multiplier the call history predicts for a spotted station (`SpotRow.contest_predicted`).
@@ -22602,6 +22608,100 @@ fn spot_worked(last_unix: Option<u64>, now: i64) -> (Option<i64>, bool) {
 #[tauri::command(async)]
 fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) -> Vec<SpotRow> {
     read_all_spots(&spots, &state, false).unwrap_or_default()
+}
+
+/// The spots programs on Nexus's TCI server sent, for the band map: each a [`SpotRow`] as a
+/// cluster spot is, its `tci` naming the program, newest first. None while programs' spots are
+/// off (`Engine::tci_server_spots_on`). Kept apart from the cluster's ([`get_all_spots`]), and
+/// asked only when the server's status says they changed.
+#[tauri::command(async)]
+fn get_tci_spots(state: State<'_, SharedEngine>) -> Vec<SpotRow> {
+    let now = now_unix();
+    let (class, spots) = {
+        let e = engine_lock(&state);
+        (e.settings().license_class, e.tci_program_spots(now))
+    };
+    let mut rows: Vec<SpotRow> = spots
+        .into_iter()
+        .map(|p| program_spot_row(p, class, now))
+        .collect();
+    rows.sort_by_key(|r| r.age_secs);
+    rows
+}
+
+/// One program's spot as a [`SpotRow`]: its band, mode class (from its frequency, as a cluster
+/// spot's: the program's own mode word is free text) and licence read the way a cluster spot's
+/// are, its text as the comment, no spotter (the program is its source, in `tci`).
+fn program_spot_row(
+    p: tempo_app::engine::tci_spots::ProgramSpot,
+    class: tempo_app::settings::LicenseClass,
+    now: i64,
+) -> SpotRow {
+    use tempo_app::settings::OperatingMode;
+    let spot = p.spot;
+    let freq = spot.hz as f64 / 1_000_000.0;
+    let band = propagation::Band::from_mhz(freq)
+        .map(|b| b.label().to_string())
+        .unwrap_or_default();
+    let (entity, zone) = propagation::dxcc::resolve(&spot.call)
+        .map(|i| (i.entity.to_string(), i.cq_zone))
+        .unwrap_or_default();
+    let mode_label = propagation::classify_spot_mode(freq).label();
+    let licensed = tempo_app::privileges::tx_allowed(
+        class,
+        freq,
+        match mode_label {
+            "Phone" => OperatingMode::Phone,
+            "CW" => OperatingMode::Cw,
+            _ => OperatingMode::Digital,
+        },
+    );
+    SpotRow {
+        beacon: propagation::beacons::classify(&spot.call, freq),
+        call: spot.call,
+        entity,
+        zone,
+        state: None,
+        grid: None,
+        band,
+        freq_mhz: freq,
+        mode: mode_label.to_string(),
+        submode: None,
+        spotter: String::new(),
+        corroborators: Vec::new(),
+        age_secs: (now - spot.heard_unix).max(0),
+        comment: spot.text,
+        licensed,
+        // A program is no voice on a continent: never hidden by the locality filter.
+        spotter_local: true,
+        spotter_conts: Vec::new(),
+        spotter_entities: Vec::new(),
+        worked_ago_secs: None,
+        worked_today_utc: false,
+        contest_mults: Vec::new(),
+        contest_predicted: Vec::new(),
+        tci: Some(p.program),
+    }
+}
+
+/// ⛔ A click on a program's spot on the band map: tune to it, at its own frequency, and have every
+/// program on Nexus's TCI server told. Nothing else: never a section change, an arm, a QSO, a Stop
+/// let go, or a cockpit opened (`Engine::tci_program_spot_clicked`). Refused while anything is on
+/// the air, as a click in an SDR program's panadapter is. Persists the dial, returns the snapshot.
+#[tauri::command(async)]
+fn click_tci_spot(
+    state: State<'_, SharedEngine>,
+    call: String,
+    freq_mhz: f64,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let hz = (freq_mhz * 1_000_000.0).round() as i64;
+    eng.tci_program_spot_clicked(&call, hz)
+        .map_err(str::to_string)?;
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist frequency: {e}")
+    });
+    Ok(eng.snapshot())
 }
 
 /// #174: where the voices for one spot are — `(continent codes, DXCC entities)` of the spotter
@@ -22863,6 +22963,7 @@ fn read_spots_with(
                 worked_today_utc,
                 contest_mults,
                 contest_predicted,
+                tci: None,
             }
         })
         .collect();
@@ -38375,6 +38476,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         cancel_confirmation_check,
         get_need_alerts,
         get_all_spots,
+        get_tci_spots,
+        click_tci_spot,
         get_propagation,
         get_path_outlook,
         get_band_outlook,

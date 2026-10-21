@@ -34,6 +34,13 @@
 //!   for 200 ms after a change no program made (the spec's §3.5: the radio program's own change
 //!   holds the parameter that long).
 //! - **Power only down** (Q10 A), through `set_rf_power`, so the operator's ceiling still holds.
+//! - **A program's spots are marks on Nexus's band map, and nothing more** (`tempo_app`'s
+//!   `engine/tci_spots.rs`): kept with the program that sent them while "Spots from programs" is
+//!   on, bounded and aged there, gone with the program, the switch or the server. ⛔ A click on any
+//!   spot in Nexus is queued by the engine, and the manager tells every program of it
+//!   (`clicked_on_spot` and `rx_clicked_on_spot`, [`tell_click`]), which is all it does here; a
+//!   click on a program's spot only tunes (`Engine::tci_program_spot_clicked`): never a section
+//!   change, an arm, a QSO, or a Stop let go.
 //!
 //! THREADS AND LOCKS:
 //! - The manager (`tci-server`) reads the switch, starts and stops the server, and while it serves
@@ -63,9 +70,9 @@ use tempo_net::tci::frame::{
 };
 use tempo_net::tci::server::{
     AudioFormat, ClientId, Closed, Config, Cw, CwSpeed, Event, Handle, HandshakeRefusal, KeyKind,
-    Limits, Program, Refusal, Server, Snapshot, TciBackend, UNKNOWN_LIMITS,
+    Limits, Program, Refusal, Server, Snapshot, Spot, TciBackend, UNKNOWN_LIMITS,
 };
-use tempo_net::tci::wire::{Hz, Word, MAX_HZ};
+use tempo_net::tci::wire::{Call, Hz, Word, MAX_HZ};
 use tempo_net::tci::Trx;
 
 use crate::{conn_log, SharedEngine};
@@ -385,7 +392,12 @@ impl TciBackend for EngineTci {
         // the abort armed in this call, so the radio loop flushes and unkeys on its next tick; its
         // microphone key and its Tune end at once. The server calls this after the program's
         // transmit calls in flight have returned and never makes another for it.
-        engine_lock(&self.engine).tci_disconnected(client.get());
+        // Its spots go with it, under the same hold of the engine lock.
+        {
+            let mut e = engine_lock(&self.engine);
+            e.tci_disconnected(client.get());
+            e.tci_program_spot_clear(client.get());
+        }
         lock(&self.from_programs).remove(&client);
         lock(&self.refused).remove(&client);
     }
@@ -556,6 +568,23 @@ impl TciBackend for EngineTci {
     fn cw_speed(&self, _client: ClientId, speed: CwSpeed) -> Result<u32, Refusal> {
         // The programs' own speed, inside the keyer's range; never the operator's.
         engine_lock(&self.engine).tci_cw_speed(speed)
+    }
+
+    fn spot(&self, client: ClientId, spot: Spot) -> Result<(), Refusal> {
+        // A mark on the band map with the program that sent it, and nothing else: it never tunes
+        // and never keys. Refused while programs' spots are off, and outside the range programs are
+        // told (`station`'s `vfo_limits`).
+        engine_lock(&self.engine).tci_program_spot(client.get(), &spot, UNKNOWN_LIMITS)
+    }
+
+    fn spot_delete(&self, client: ClientId, call: &Call) {
+        // The sender's own spot only.
+        engine_lock(&self.engine).tci_program_spot_delete(client.get(), call.as_str());
+    }
+
+    fn spot_clear(&self, client: ClientId) {
+        // The sender's own spots only.
+        engine_lock(&self.engine).tci_program_spot_clear(client.get());
     }
 }
 
@@ -815,6 +844,18 @@ pub(crate) fn disconnect(id: u64) -> bool {
     SERVING.get().is_some_and(|serving| serving.disconnect(id))
 }
 
+/// ⛔ Tell every program of the operator's click on a spot in Nexus, `call` at `hz` (the spot's
+/// own frequency), in both spellings (`clicked_on_spot:<call>,<hz>;` and
+/// `rx_clicked_on_spot:0,0,<call>,<hz>;`), and do nothing else: telling never tunes, arms or keys,
+/// and never reaches the backend, so the manager tells under the engine lock as it publishes.
+/// The engine queued the click only while programs' spots are on and only for a callsign
+/// (`Engine::take_tci_spot_clicks`).
+fn tell_click(handle: &Handle, call: &str, hz: i64) {
+    if let (Some(call), Some(hz)) = (Call::new(call), Hz::new(hz)) {
+        handle.spot_clicked(&call, hz);
+    }
+}
+
 /// A running server: the port the operator asked for (it may be serving on the next one), the
 /// server, its pump.
 struct Running {
@@ -878,7 +919,12 @@ impl Manager {
 
     /// One look: the switch, then the station. Whether the server is running.
     fn tick(&mut self) -> bool {
-        let want = wanted(&engine_lock(&self.engine));
+        let want = {
+            let mut e = engine_lock(&self.engine);
+            // Programs' spots age out, and all go while they are off, the clicks waiting with them.
+            e.tci_program_spots_tick(crate::now_unix());
+            wanted(&e)
+        };
         self.apply(want);
         self.publish();
         self.running.is_some()
@@ -950,6 +996,7 @@ impl Manager {
     fn stop(&mut self, running: Running) {
         *lock(&self.serving.0) = None;
         running.pump.stop();
+        // Each program's end takes its spots with it (`EngineTci::disconnected`).
         running.server.stop();
         *lock(&self.armed) = None;
         conn_log(
@@ -969,11 +1016,16 @@ impl Manager {
                 let programs = handle.programs();
                 lock(&self.backend.dial).look(dial_hz(&e), Instant::now());
                 handle.publish(station(&e, &programs, self.meters.smeter_db()));
+                // The operator's clicks on spots since the last tick, to every program.
+                for (call, hz) in e.take_tci_spot_clicks() {
+                    tell_click(&handle, &call, hz);
+                }
                 *lock(&self.armed) = armed_over(&e, &programs);
                 let refused = lock(&self.backend.refused);
                 Some(TciServerStatus {
                     port: Some(running.server.port()),
                     error: None,
+                    spots: e.tci_program_spot_store().generation(),
                     programs: programs
                         .iter()
                         .map(|p| TciProgramStatus {
@@ -986,11 +1038,16 @@ impl Manager {
                         .collect(),
                 })
             }
-            None => self.failed.as_ref().map(|f| TciServerStatus {
-                port: None,
-                error: Some(f.why.clone()),
-                programs: Vec::new(),
-            }),
+            None => {
+                // No server to tell: a click made now is not told later.
+                e.take_tci_spot_clicks();
+                self.failed.as_ref().map(|f| TciServerStatus {
+                    port: None,
+                    error: Some(f.why.clone()),
+                    spots: 0,
+                    programs: Vec::new(),
+                })
+            }
         };
         e.set_tci_server_status(status);
     }

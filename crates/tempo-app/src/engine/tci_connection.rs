@@ -61,6 +61,19 @@ impl Engine {
         if !crate::settings::rig_conn_is_tci(&self.settings.rig_conn) {
             return Err(SPOT_NOT_ON_TCI);
         }
+        self.tune_to_clicked_spot(call, hz, "a spot clicked in the SDR program")
+    }
+
+    /// Tune to the spot `call` at `hz` that the operator clicked, where Nexus's own spot click
+    /// places the dial, and do nothing else (the module header's list); `what` names the click for
+    /// the log. A program's spot clicked on Nexus's band map comes here too
+    /// (`Engine::tci_program_spot_clicked`).
+    pub(super) fn tune_to_clicked_spot(
+        &mut self,
+        call: &str,
+        hz: i64,
+        what: &str,
+    ) -> Result<(), &'static str> {
         if self.on_air() {
             return Err(SPOT_ON_AIR);
         }
@@ -70,16 +83,15 @@ impl Engine {
         }
         let spot_mhz = hz as f64 / 1e6;
         let band = crate::bandplan::band_for_dial(spot_mhz).ok_or(SPOT_OFF_BAND)?;
-        // The radio whose panadapter it is: the band's routing never hands the click to another.
+        // The radio in use, whose panadapter or band map it is: the band's routing never hands the
+        // click to another.
         self.route_target = Some(None);
         // A soundcard CW keyer radiates a pitch off its dial: the dial sits a pitch off the spot.
         let dial = spot_mhz - self.soundcard_cw_pitch_offset_mhz(spot_mhz);
         self.set_frequency(dial, band, "USB");
         tempo_core::applog::info(
             "cat",
-            &format!(
-                "TCI: tuned to {call} at {spot_mhz:.6} MHz, a spot clicked in the SDR program"
-            ),
+            &format!("TCI: tuned to {call} at {spot_mhz:.6} MHz, {what}"),
         );
         Ok(())
     }
@@ -572,40 +584,97 @@ mod tests {
             || before.watchdog_start != after.watchdog_start
     }
 
-    type State = (&'static str, fn() -> Engine);
+    type State = (&'static str, Box<dyn Fn() -> Engine>);
 
-    /// The states a click can find a TCI radio in.
-    fn states() -> Vec<State> {
+    /// The states a click can find a radio on `conn` in.
+    fn states(conn: &'static str) -> Vec<State> {
         vec![
-            ("launch, TX off", || on("tci")),
-            ("Digital, a CQ run armed", || cq_run("tci", Tier::Ft8)),
-            ("Phone, armed", || at("tci", "phone", 14.250)),
-            ("Phone, armed, the watchdog clock running", || {
-                let mut e = at("tci", "phone", 14.250);
-                e.tx_watchdog_start = Some(now_unix_secs() - 30);
-                e
-            }),
-            ("after Stop TX", || {
-                let mut e = at("tci", "phone", 14.250);
-                e.halt_tx();
-                e
-            }),
-            ("after a watchdog trip", || {
-                let mut e = at("tci", "phone", 14.250);
-                e.trip_tx_watchdog_for_test();
-                e
-            }),
-            ("after a band change", || {
-                let mut e = at("tci", "phone", 14.250);
-                e.set_frequency(7.200, "40m", "LSB");
-                e
-            }),
-            ("CW, armed", || at("tci", "cw", 14.030)),
+            ("launch, TX off", Box::new(move || on(conn))),
+            (
+                "Digital, a CQ run armed",
+                Box::new(move || cq_run(conn, Tier::Ft8)),
+            ),
+            ("Phone, armed", Box::new(move || at(conn, "phone", 14.250))),
+            (
+                "Phone, armed, the watchdog clock running",
+                Box::new(move || {
+                    let mut e = at(conn, "phone", 14.250);
+                    e.tx_watchdog_start = Some(now_unix_secs() - 30);
+                    e
+                }),
+            ),
+            (
+                "after Stop TX",
+                Box::new(move || {
+                    let mut e = at(conn, "phone", 14.250);
+                    e.halt_tx();
+                    e
+                }),
+            ),
+            (
+                "after a watchdog trip",
+                Box::new(move || {
+                    let mut e = at(conn, "phone", 14.250);
+                    e.trip_tx_watchdog_for_test();
+                    e
+                }),
+            ),
+            (
+                "after a band change",
+                Box::new(move || {
+                    let mut e = at(conn, "phone", 14.250);
+                    e.set_frequency(7.200, "40m", "LSB");
+                    e
+                }),
+            ),
+            ("CW, armed", Box::new(move || at(conn, "cw", 14.030))),
         ]
     }
 
     /// The clicks: on the band the radio is on, and on another.
     const CLICKS: [(&str, i64); 2] = [("K1ABC", 14_025_000), ("VP2V/K1ABC", 7_030_000)];
+
+    /// A click, as a verb on the engine.
+    type Click = fn(&mut Engine, &str, i64) -> Result<(), &'static str>;
+
+    /// Every click from every state of a radio on each of `conns`: what each moved that a click
+    /// may not move, and how many of how many tuned to their spot.
+    fn census(conns: &[&'static str], click: Click) -> (Vec<String>, usize, usize) {
+        let mut moved = Vec::new();
+        let (mut tuned, mut clicks) = (0, 0);
+        for &conn in conns {
+            for (state, build) in states(conn) {
+                for (call, hz) in CLICKS {
+                    clicks += 1;
+                    let mut e = build();
+                    let (before, section, tick) =
+                        (holds(&e), e.settings.operating_mode, e.snapshot().work_tick);
+                    let r = click(&mut e, call, hz);
+                    let after = holds(&e);
+                    let what = format!("{conn}, {state}: {call} at {hz} Hz ({r:?})");
+                    if arms_or_clears(before, after) {
+                        moved.push(format!("{what}: {before:?} -> {after:?}"));
+                    }
+                    if let Some(dx) = e.qso_dxcall() {
+                        moved.push(format!("{what}: a QSO with {dx} started"));
+                    }
+                    if e.settings.operating_mode != section {
+                        moved.push(format!(
+                            "{what}: the section moved to {:?}",
+                            e.settings.operating_mode
+                        ));
+                    }
+                    if e.snapshot().work_tick != tick {
+                        moved.push(format!("{what}: the window was asked to open a cockpit"));
+                    }
+                    tuned += usize::from(
+                        r.is_ok() && (e.settings.dial_mhz - hz as f64 / 1e6).abs() < 1e-9,
+                    );
+                }
+            }
+        }
+        (moved, tuned, clicks)
+    }
 
     /// ⛔ A CLICK ON A SPOT TUNES AND NEVER TRANSMITS. From every state and for every click: no QSO
     /// starts, TX is never armed, no Stop's hold, watchdog trip or band change's hold is cleared,
@@ -613,44 +682,92 @@ mod tests {
     /// cockpit. CONTROL: the click did tune, every time, to the spot.
     #[test]
     fn a_click_on_a_spot_in_the_sdr_panadapter_tunes_and_never_transmits() {
-        let mut moved = Vec::new();
-        let mut tuned = 0;
-        for (state, build) in states() {
-            for (call, hz) in CLICKS {
-                let mut e = build();
-                let (before, section, tick) =
-                    (holds(&e), e.settings.operating_mode, e.snapshot().work_tick);
-                let r = e.tci_spot_clicked(call, hz);
-                let after = holds(&e);
-                let what = format!("{state}: {call} at {hz} Hz ({r:?})");
-                if arms_or_clears(before, after) {
-                    moved.push(format!("{what}: {before:?} -> {after:?}"));
-                }
-                if let Some(dx) = e.qso_dxcall() {
-                    moved.push(format!("{what}: a QSO with {dx} started"));
-                }
-                if e.settings.operating_mode != section {
-                    moved.push(format!(
-                        "{what}: the section moved to {:?}",
-                        e.settings.operating_mode
-                    ));
-                }
-                if e.snapshot().work_tick != tick {
-                    moved.push(format!("{what}: the window was asked to open a cockpit"));
-                }
-                tuned +=
-                    usize::from(r.is_ok() && (e.settings.dial_mhz - hz as f64 / 1e6).abs() < 1e-9);
-            }
-        }
+        let (moved, tuned, clicks) = census(&["tci"], Engine::tci_spot_clicked);
         assert!(
             moved.is_empty(),
             "a spot click moved them:\n{}",
             moved.join("\n")
         );
+        assert_eq!(tuned, clicks, "control: every click tuned to its spot");
+    }
+
+    /// A click on a program's spot, with programs' spots on so the programs are told of it: told
+    /// once when it tuned, never when it was refused.
+    fn program_click(e: &mut Engine, call: &str, hz: i64) -> Result<(), &'static str> {
+        e.settings.tci_server = true;
+        e.settings.tci_server_spots = true;
+        let r = e.tci_program_spot_clicked(call, hz);
         assert_eq!(
-            tuned,
-            states().len() * CLICKS.len(),
-            "control: every click tuned to its spot"
+            e.take_tci_spot_clicks().len(),
+            usize::from(r.is_ok()),
+            "{call}: told once it tuned ({r:?})"
+        );
+        r
+    }
+
+    /// ⛔ A CLICK ON A PROGRAM'S SPOT ON NEXUS'S BAND MAP ONLY TUNES, the same census, on a radio
+    /// on any connection: Nexus's own TCI server serves whichever radio is in use. It never calls
+    /// the station, arms, starts a QSO, clears a hold, moves the section or opens a cockpit, and
+    /// telling the programs of it changes none of that. CONTROL: every click tuned to its spot.
+    #[test]
+    fn a_click_on_a_programs_spot_on_the_band_map_only_tunes() {
+        let (moved, tuned, clicks) = census(&["tci", "serial"], program_click);
+        assert!(
+            moved.is_empty(),
+            "a click on a program's spot moved them:\n{}",
+            moved.join("\n")
+        );
+        assert_eq!(tuned, clicks, "control: every click tuned to its spot");
+        assert_eq!(clicks, 32, "control: 8 states, 2 clicks, 2 connections");
+    }
+
+    /// ⛔ NOT WHILE ANYTHING IS ON THE AIR, NOT OFF THE BANDS, NOT WITHOUT A CALLSIGN: a click on a
+    /// program's spot is refused as a click in an SDR program's panadapter is, and the dial stays.
+    /// CONTROL: the same click with nothing in the way tunes.
+    #[test]
+    fn a_click_on_a_programs_spot_is_refused_where_a_panadapter_click_is() {
+        type Setup = fn(&mut Engine);
+        let cases: [(&str, Setup, &str, i64, &str); 4] = [
+            (
+                "PTT held",
+                |e| e.set_ptt(true),
+                "K1ABC",
+                14_025_000,
+                SPOT_ON_AIR,
+            ),
+            (
+                "tuning",
+                |e| e.set_tune(true),
+                "K1ABC",
+                14_025_000,
+                SPOT_ON_AIR,
+            ),
+            ("off the bands", |_| {}, "K1ABC", 15_000_000, SPOT_OFF_BAND),
+            ("not a call", |_| {}, "HELLO", 14_025_000, SPOT_NO_CALL),
+        ];
+        let mut wrong = Vec::new();
+        for (what, setup, call, hz, why) in cases {
+            let mut e = at("serial", "phone", 14.250);
+            setup(&mut e);
+            let dial = e.settings.dial_mhz;
+            let r = e.tci_program_spot_clicked(call, hz);
+            if r != Err(why) || e.settings.dial_mhz != dial {
+                wrong.push(format!(
+                    "{what}: {r:?}, the dial {dial} -> {}",
+                    e.settings.dial_mhz
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+        let mut e = at("serial", "phone", 14.250);
+        assert_eq!(
+            e.tci_program_spot_clicked("k1abc", 14_225_000),
+            Ok(()),
+            "control"
+        );
+        assert!(
+            (e.settings.dial_mhz - 14.225).abs() < 1e-9,
+            "control: tuned"
         );
     }
 

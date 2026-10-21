@@ -2924,6 +2924,10 @@ export interface SpotRow {
    *  counted by the same scoring). Never one `contestMults` lists. Absent with no file, no entry,
    *  call history off, outside a contest, and from an older station. */
   contestPredicted?: SpotPredictedMult[]
+  /** The program on Nexus's TCI server that sent this spot, by its connection's number (as Settings
+   *  ▸ Share by TCI lists it), when a program did (`getTciSpots`). ⛔ A click on such a spot only
+   *  tunes (`clickTciSpot`), never a Work. Absent on every cluster and skimmer spot. */
+  tci?: number | null
 }
 
 /** One multiplier the call history predicts for a spotted station (`SpotRow.contestPredicted`). */
@@ -5534,6 +5538,9 @@ export interface TciServerStatus {
   error: string | null
   /** The programs connected now, in the order they connected. */
   programs: TciProgramStatus[]
+  /** Moves on with every change to the spots programs sent, so a window asks for them
+   *  (`getTciSpots`) only when they changed; 0 until the first. Absent from an older station. */
+  spots?: number
 }
 
 /** One program connected to the TCI server (mirror of the Rust TciProgramStatus). */
