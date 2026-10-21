@@ -8,6 +8,7 @@
 //! to modes only through this interface.
 
 use crate::decode::Decode;
+use crate::source::DecodeSink;
 
 /// The JS8 speed enum — owned by `crates/js8`, re-exported by this crate's `lib.rs` so
 /// `tempo-app`/`tempo-audio` write `modes::Js8Speed` without naming the modem crate.
@@ -573,6 +574,48 @@ pub trait Mode: Send + Sync {
             ap_cq_only,
         )
     }
+
+    /// [`decode_frame_a7`](Mode::decode_frame_a7), telling `sink` of each decode the moment the
+    /// decoder finds it and, for FT8, asking it after every sync candidate whether to stop
+    /// ([`DecodeSink`]). FT8 and FT4 stream, as WSJT-X's decoders do; every other mode hands its
+    /// decodes over only in the returned list, and this default tells `sink` nothing.
+    #[allow(clippy::too_many_arguments)] // mirrors the modem decode ABI
+    fn decode_frame_streaming(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        nfqso: i32,
+        nftx: i32,
+        frame_time_ms: i64,
+        a7_final: bool,
+        partial: bool,
+        ap: bool,
+        ap_cq_only: bool,
+        sink: &mut dyn DecodeSink,
+    ) -> Vec<Decode> {
+        let _ = sink;
+        self.decode_frame_a7(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+            nftx,
+            frame_time_ms,
+            a7_final,
+            partial,
+            ap,
+            ap_cq_only,
+        )
+    }
 }
 
 /// Build a boxed [`Mode`] from its [`ModeKind`].
@@ -734,6 +777,53 @@ impl Mode for Ft8Mode {
         .map(Into::into)
         .collect()
     }
+    fn decode_frame_streaming(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        nfqso: i32,
+        nftx: i32,
+        frame_time_ms: i64,
+        a7_final: bool,
+        partial: bool,
+        ap: bool,
+        ap_cq_only: bool,
+        sink: &mut dyn DecodeSink,
+    ) -> Vec<Decode> {
+        // The same slot key as `decode_frame_a7`.
+        let nutc = (frame_time_ms / 1000).rem_euclid(86_400) as i32;
+        ft8::decode_frame_a7_streaming(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+            nftx,
+            nutc,
+            a7_final,
+            partial,
+            ap,
+            ap_cq_only,
+            &mut |progress| match progress {
+                ft8::Progress::Found(d) => {
+                    sink.found(&d.clone().into());
+                    false
+                }
+                ft8::Progress::Candidate => sink.give_up(),
+            },
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
+    }
 }
 
 /// Standard WSJT-X **FT4** — 7.5 s T/R, 4-GFSK, the fast contest sibling.
@@ -807,6 +897,41 @@ impl Mode for Ft4Mode {
             nqso_progress,
             nfqso,
             ap_cq_only,
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
+    }
+    fn decode_frame_streaming(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        nfqso: i32,
+        _nftx: i32,
+        _frame_time_ms: i64,
+        _a7_final: bool,
+        _partial: bool,
+        _ap: bool,
+        ap_cq_only: bool,
+        sink: &mut dyn DecodeSink,
+    ) -> Vec<Decode> {
+        // The arguments `decode_frame` reads, and nothing more (see there).
+        ft4::decode_frame_streaming(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+            ap_cq_only,
+            &mut |d| sink.found(&d.clone().into()),
         )
         .into_iter()
         .map(Into::into)

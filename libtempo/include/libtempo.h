@@ -273,6 +273,33 @@ int ft8_decode_frame(const int16_t *iwave /*[FT8_NMAX]*/,
                      ft8_decode_t *out, int max_out);
 
 /*
+ * What ft8_decode_frame_cb / ft4_decode_frame_cb call while a pass runs. `rec` points at a copy
+ * of a decode the pass has just accepted (the same record `out` holds), or is NULL after each FT8
+ * sync candidate is tried. A nonzero answer to a NULL `rec` stops the pass there; the answer to a
+ * decode is ignored. Runs on the decoding thread with the modem busy: it must not call back into
+ * the modem.
+ */
+typedef int (*tempo_decode_cb)(void *user, const ft8_decode_t *rec);
+
+/*
+ * ft8_decode_frame, handing each decode to `cb` the moment the pass accepts it, as WSJT-X's
+ * decoder hands each to its callback (ft8_decode.f90:233-238) for jt9 to write and flush at once.
+ * The decodes come in the pass's own order: the sync candidates within 10 Hz of nfqso first
+ * (sync8.f90:155-163), then by sync; the a7 replay's after the passes. After every sync candidate
+ * of the direct passes `cb` is asked (with NULL) whether to stop, where WSJT-X asks its early
+ * pass's give-up (ft8_decode.f90:240-242); stopping skips the remaining candidates, passes and the
+ * a7 replay, and `out` holds what was found. `cb` NULL is exactly ft8_decode_frame.
+ */
+int ft8_decode_frame_cb(const int16_t *iwave /*[FT8_NMAX]*/,
+                        int nfa, int nfb, int ndepth,
+                        const char *mycall, const char *hiscall,
+                        int nqso_progress, int nfqso, int nftx, int nzhsym,
+                        int nutc, int la7final,
+                        int lft8apon, int lapcqonly,
+                        ft8_decode_t *out, int max_out,
+                        tempo_decode_cb cb, void *user);
+
+/*
  * Clear the a7 cross-cycle decode table (prior-slot call pairs + slot tracker).
  * Call on band change / QSO change so stale prior-cycle pairs are not replayed
  * as AP hypotheses against the new band's audio. Mirrors ft1_harq_reset.
@@ -349,6 +376,21 @@ int ft4_decode_frame(const int16_t *iwave /*[FT4_NMAX]*/,
                      int nqso_progress, int nfqso,
                      int lapcqonly,
                      ft4_decode_t *out, int max_out);
+
+/*
+ * ft4_decode_frame, handing each decode to `cb` the moment the decoder finds it, as WSJT-X's FT4
+ * decoder hands each to its callback (ft4_decode.f90:456). The candidates within 20 Hz of nfqso
+ * are tried first (getcandidates4.f90:70-81). `cb` is never called with NULL (FT4 has no
+ * give-up) and its answer is ignored; ft4_decode_t has ft8_decode_t's layout. `cb` NULL is
+ * exactly ft4_decode_frame.
+ */
+int ft4_decode_frame_cb(const int16_t *iwave /*[FT4_NMAX]*/,
+                        int nfa, int nfb, int ndepth,
+                        const char *mycall, const char *hiscall,
+                        int nqso_progress, int nfqso,
+                        int lapcqonly,
+                        ft4_decode_t *out, int max_out,
+                        tempo_decode_cb cb, void *user);
 
 /*===========================================================================
  * FST4: WSJT-X slow weak-signal mode. Decode, and transmit (see below).

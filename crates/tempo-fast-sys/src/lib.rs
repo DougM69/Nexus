@@ -307,6 +307,13 @@ impl Default for Ft8DecodeT {
 /// FT4 decode record — byte-identical C-ABI layout to [`Ft8DecodeT`].
 pub type Ft4DecodeT = Ft8DecodeT;
 
+/// What [`ft8_decode_frame_cb`] and [`ft4_decode_frame_cb`] call while a pass runs (`tempo_decode_cb`
+/// in `libtempo.h`). `rec` points at a copy of a decode the pass has just accepted, the same record
+/// the call's `out` holds, or is null after each FT8 sync candidate is tried. A nonzero answer to a
+/// null `rec` stops the pass there; the answer to a decode is ignored. It runs on the decoding
+/// thread inside the modem: it must not call back into the modem, and must not unwind.
+pub type DecodeCallback = unsafe extern "C" fn(user: *mut c_void, rec: *const Ft8DecodeT) -> c_int;
+
 /// FST4 decode record — byte-identical C-ABI layout to [`Ft8DecodeT`].
 pub type Fst4DecodeT = Ft8DecodeT;
 
@@ -726,6 +733,30 @@ extern "C" {
         max_out: c_int,
     ) -> c_int;
 
+    /// [`ft8_decode_frame`], handing each decode to `cb` the moment the pass accepts it, and
+    /// asking `cb` (with a null record) after every sync candidate whether to stop there — see
+    /// [`DecodeCallback`]. A `None` callback is exactly [`ft8_decode_frame`].
+    pub fn ft8_decode_frame_cb(
+        iwave: *const i16, // [FT8_NMAX]
+        nfa: c_int,
+        nfb: c_int,
+        ndepth: c_int,
+        mycall: *const c_char,
+        hiscall: *const c_char,
+        nqso_progress: c_int,
+        nfqso: c_int,
+        nftx: c_int,
+        nzhsym: c_int,
+        nutc: c_int,
+        la7final: c_int,
+        lft8apon: c_int,
+        lapcqonly: c_int,
+        out: *mut Ft8DecodeT,
+        max_out: c_int,
+        cb: Option<DecodeCallback>,
+        user: *mut c_void,
+    ) -> c_int;
+
     /// Clear the FT8 a7 cross-cycle decode table (prior-slot call pairs + slot
     /// tracker). Call on band/QSO change so stale prior-cycle pairs are not
     /// replayed as AP hypotheses. Mirrors [`ft1_harq_reset`].
@@ -768,6 +799,25 @@ extern "C" {
         lapcqonly: c_int, // nonzero = AP restricted to CQ (no AP on/off exists for FT4)
         out: *mut Ft4DecodeT,
         max_out: c_int,
+    ) -> c_int;
+
+    /// [`ft4_decode_frame`], handing each decode to `cb` the moment the decoder finds it. Never
+    /// called with a null record; its answer is ignored. A `None` callback is exactly
+    /// [`ft4_decode_frame`].
+    pub fn ft4_decode_frame_cb(
+        iwave: *const i16, // [FT4_NMAX]
+        nfa: c_int,
+        nfb: c_int,
+        ndepth: c_int,
+        mycall: *const c_char,
+        hiscall: *const c_char,
+        nqso_progress: c_int,
+        nfqso: c_int,
+        lapcqonly: c_int,
+        out: *mut Ft4DecodeT,
+        max_out: c_int,
+        cb: Option<DecodeCallback>,
+        user: *mut c_void,
     ) -> c_int;
 
     /// Encode a message into the 160 FST4 channel symbols (values 0..3).
