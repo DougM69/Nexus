@@ -569,8 +569,11 @@ async fn an_invited_guests_computer_waits_for_approve_at_the_station() {
 
 /// ★ With sign-in grants on ([`launch_granting_on_sign_in`]), a browser signed in as the station's
 /// owner: the service approved it, and the station, having checked its proof itself, grants it what
-/// an Approve press grants (station control and logging, never FT8/FT4 transmit) and pins its key,
-/// with no press; the notice names it, and the LAN keeps it under its key's pin.
+/// an Approve press grants and pins its key, with no press; the notice names it, and the LAN keeps
+/// it under its key's pin. What it grants is station control and logging, with the Remote page's
+/// own FT8/FT4 transmit off. That tick gates only that page's FT8/FT4 actions: station control and
+/// the pin are what a stream needs, and a streaming browser uses the station's own window,
+/// transmit included.
 #[tokio::test(flavor = "multi_thread")]
 async fn granting_on_sign_in_a_browser_signed_in_as_the_owner_is_granted_with_no_press() {
     let cloud = fake_cloud().await;
@@ -587,9 +590,17 @@ async fn granting_on_sign_in_a_browser_signed_in_as_the_owner_is_granted_with_no
         "CONTROL: the row itself is shown"
     );
     assert_eq!(status.logging_permissions, vec![BROWSER.to_string()]);
-    assert_eq!(status.transmit_permissions, Vec::<String>::new());
-    assert_eq!(status.pinned_devices, vec![BROWSER.to_string()]);
-    // What a restart restores is the same: never transmit.
+    assert_eq!(
+        status.transmit_permissions,
+        Vec::<String>::new(),
+        "the Remote page's own FT8/FT4 transmit"
+    );
+    assert_eq!(
+        status.pinned_devices,
+        vec![BROWSER.to_string()],
+        "with station control, all a stream needs"
+    );
+    // What a restart restores is the same: control and logging, the page's FT8/FT4 transmit off.
     let mut remembered = None;
     for _ in 0..100 {
         remembered = vault.state().unwrap().map(|state| state.grants);
@@ -603,7 +614,11 @@ async fn granting_on_sign_in_a_browser_signed_in_as_the_owner_is_granted_with_no
         .iter()
         .map(|g| (g.device_id.clone(), g.logging, g.control, g.transmit))
         .collect();
-    assert_eq!(remembered, vec![(BROWSER.to_string(), true, true, false)]);
+    assert_eq!(
+        remembered,
+        vec![(BROWSER.to_string(), true, true, false)],
+        "logging, control, the page's FT8/FT4 transmit"
+    );
     let added: Vec<_> = status
         .account
         .added

@@ -2226,8 +2226,12 @@ impl Controller {
     }
     /// What an Approve press grants a device the operator was shown, for one the station vouched
     /// for on its own proof, by its role: a browser that operates gets station control and logging,
-    /// one that listens gets neither, and neither gets FT8/FT4 transmit (that stays a tick at the
-    /// shack); every device gets its pin ([`Device::pin`]). With Remote on the grants take effect at
+    /// one that listens gets neither, and every device gets its pin ([`Device::pin`]). Neither gets
+    /// the Remote page's own FT8/FT4 transmit (`Authority::permit_transmit`), which only that page's
+    /// FT8/FT4 capabilities and actions read. It is not what keeps a browser off the air: station
+    /// control and the pin are all a stream needs (`Authority::stream_admitted`), and a streaming
+    /// browser uses the station's own window, transmit included, as any browser approved here does.
+    /// With Remote on the grants take effect at
     /// once; with it off they wait in the record for Turn on. `false`, granting nothing, when a
     /// local decision (Turn off or on, take over) was made after the list was asked for.
     ///
@@ -2262,6 +2266,8 @@ impl Controller {
             let operations = control.operations.clone();
             operations.permit(&device.id, operate)?;
             operations.permit_station(&device.id, operate)?;
+            // The Remote page's own FT8/FT4 transmit, off: only that page's FT8/FT4 actions read
+            // it. The stream needs station control alone, and in it a click is the operator's own.
             operations.permit_transmit(&device.id, false)?;
         }
         if browser {
