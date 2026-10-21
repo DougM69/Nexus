@@ -58,6 +58,11 @@ fn busy_slot_audio(
 /// ⭐ THE STREAM, ON THE REAL DECODER. K1ABC's RR73 is on the RX frequency of a busy period; the
 /// full pass finds it among its first candidates and goes on decoding the rest of the band. The
 /// sequencer has the RR73 while the pass is still running, and the boundary keys the 73.
+///
+/// Eight other stations: enough to outlast a loop tick, and few enough to be a good neighbour.
+/// Every test in this binary decodes behind one process-wide modem lock and one a7 table, which a
+/// full pass fills with each pair it decodes and later passes replay: a busier frame here held
+/// other tests' decodes past their own deadlines.
 #[test]
 fn ft8_a_reply_on_the_rx_frequency_reaches_the_sequencer_while_its_pass_is_still_decoding() {
     use tempo_core::modes::ModeKind;
@@ -74,7 +79,7 @@ fn ft8_a_reply_on_the_rx_frequency_reaches_the_sequencer_while_its_pass_is_still
     backend.queue_capture(busy_slot_audio(
         ModeKind::Ft8,
         "W9XYZ K1ABC RR73",
-        45,
+        8,
         172_800,
     ));
     state.early_done_slot = Some(1);
@@ -248,9 +253,13 @@ fn a_period_with_no_reply_keys_the_same_over_as_before() {
     assert_eq!(b.retunes, 0, "nothing switched");
 }
 
-/// The loop's own worker, with each early-pass sync candidate slowed by 300 ms: a decoder far
+/// When each slowed early-pass candidate was tried, by the one worker below.
+static SLOW_CANDIDATES: Mutex<Vec<std::time::Instant>> = Mutex::new(Vec::new());
+
+/// The loop's own worker, with each early-pass sync candidate slowed by 150 ms: a decoder far
 /// slower than this box, as on the laptops that drop a period's full decode today. Run to its end,
-/// such a pass takes well over 8 s.
+/// such a pass takes seconds. (It holds the process-wide modem lock while it sleeps, as a slow
+/// decoder would, so the scene below keeps it short for the other tests in this run.)
 fn run_with_a_slow_early_pass(job: WorkerJob, out: &mut dyn FnMut(WorkerOut)) {
     struct Slowed<'a>(&'a mut dyn FnMut(WorkerOut), bool);
     impl tempo_app::engine::DecodeProgress for Slowed<'_> {
@@ -259,7 +268,11 @@ fn run_with_a_slow_early_pass(job: WorkerJob, out: &mut dyn FnMut(WorkerOut)) {
         }
         fn candidate(&mut self) {
             if self.1 {
-                std::thread::sleep(std::time::Duration::from_millis(300));
+                SLOW_CANDIDATES
+                    .lock()
+                    .unwrap()
+                    .push(std::time::Instant::now());
+                std::thread::sleep(std::time::Duration::from_millis(150));
             }
         }
     }
@@ -278,7 +291,9 @@ fn run_with_a_slow_early_pass(job: WorkerJob, out: &mut dyn FnMut(WorkerOut)) {
 /// pass far too slow for this period stops at 13.4 s, so the decoder is free at 14.40 s: the full
 /// pass runs, finds K1ABC's RR73, and the boundary keys the 73. Without the give-up the slow pass
 /// would hold the decoder through the full pass's moment and the boundary, which then drops the
-/// period's decode and repeats the R-report.
+/// period's decode and repeats the R-report. The loop first ticks in this period at 13.2 s (as
+/// after a stall), so the early pass starts there, 0.2 s before its give-up: past that moment it
+/// tries at most one more candidate (one, too, if the modem was busy until after it).
 #[test]
 fn ft8_a_slow_early_pass_gives_up_at_13_4_s_and_the_full_pass_runs() {
     use tempo_core::modes::ModeKind;
@@ -295,34 +310,40 @@ fn ft8_a_slow_early_pass_gives_up_at_13_4_s_and_the_full_pass_runs() {
     backend.queue_capture(busy_slot_audio(
         ModeKind::Ft8,
         "W9XYZ K1ABC RR73",
-        45,
+        8,
         172_800,
     ));
     let (b, r, s) = (&mut backend, &mut rig, &mut station);
-    // The early pass, at 11.808 s: 1.592 s before its give-up.
-    tick(&mut state, &engine, b, r, s, 26_808.0);
+    // The early pass, due since 11.808 s, starts at the first tick in the period: 13.2 s. Its
+    // give-up is 0.2 s after the loop dispatches it, so no earlier than this.
+    SLOW_CANDIDATES.lock().unwrap().clear();
+    let give_up = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    tick(&mut state, &engine, b, r, s, 28_200.0);
     assert!(
         state.decode_in_flight && state.early_done_slot == Some(1),
         "the early pass dispatched"
     );
     let dispatched = std::time::Instant::now();
-    let mut now = 26_809.0;
+    let mut now = 28_201.0;
     while state.decode_in_flight && dispatched.elapsed() < std::time::Duration::from_secs(8) {
         std::thread::sleep(std::time::Duration::from_millis(20));
         tick(&mut state, &engine, b, r, s, now);
         now += 1.0;
     }
-    let took = dispatched.elapsed();
     assert!(
         !state.decode_in_flight,
         "the slow early pass ended (gave up) within 8 s"
     );
-    // 13.4 s into the period is 1.592 s after it started; it stops at the first candidate after
-    // that, and other decodes in this test run can hold the modem when it starts.
+    let tried = SLOW_CANDIDATES.lock().unwrap().clone();
     assert!(
-        took >= std::time::Duration::from_millis(1_500)
-            && took < std::time::Duration::from_millis(4_500),
-        "it gave up at 13.4 s into the period, 1.592 s after it started: took {took:?}"
+        !tried.is_empty(),
+        "premise: the early pass tried candidates"
+    );
+    let after = tried.iter().filter(|t| **t > give_up).count();
+    assert!(
+        after <= 1,
+        "it gave up at 13.4 s into the period: {after} of its {} candidates were tried after it",
+        tried.len()
     );
     // The full pass's moment: the decoder is free.
     tick(&mut state, &engine, b, r, s, 29_400.0);
