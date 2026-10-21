@@ -4341,12 +4341,12 @@ pub struct Engine {
     /// APRS — so FM never follows them onto another band/mode.
     aprs_fm: bool,
     /// The rig is parked on an FM CHANNEL — a repeater or FM simplex frequency (session-only, never
-    /// persisted). Set by [`Engine::repeater_tune`]; makes `rig_mode_effective` command FM and
-    /// `route_mode` answer Fm, for the same reason `aprs_fm` above exists: the Program section is a
-    /// workbench, not a Phone/Digital operating section, so a tune from it can't ride the Phone-FM
-    /// override and would otherwise inherit the rig mode of whichever section the operator last
-    /// operated — demodulating a repeater as packet-USB. UNLIKE `aprs_fm` it does NOT force simplex:
-    /// carrying the machine's shift and tone is the whole point.
+    /// persisted). Set by [`Engine::repeater_tune`]; makes `rig_mode_effective` command FM, for the
+    /// same reason `aprs_fm` above exists: the Program section is a workbench, not a Phone/Digital
+    /// operating section, so a tune from it can't ride the Phone-FM override and would otherwise
+    /// inherit the rig mode of whichever section the operator last operated — demodulating a
+    /// repeater as packet-USB. UNLIKE `aprs_fm` it does NOT force simplex: carrying the machine's
+    /// shift and tone is the whole point.
     ///
     /// Cleared by every QSY, section change and radio switch, exactly like `aprs_fm`, and gated at
     /// read time on the dial still being at/above 29 MHz — the same threshold `Settings::rig_mode`
@@ -10101,6 +10101,13 @@ impl Engine {
     /// time the routed rig is commanded a mode, the hold this would have answered for is gone.
     /// A mirror would instead route a repeater click made DURING a pass on SSB, which is the
     /// disagreement the invariant is about, pointing the other way.
+    ///
+    /// The FM-CHANNEL hold (`fm_channel`) has no mirror either, for the same reason: every caller
+    /// asks on the way into a QSY that ends it (`tune_dial` clears it before the routed rig is
+    /// commanded, and Remote names the radio of that same QSY). Its mirror sent a band pick or a
+    /// typed frequency made on the channel to the FM radio, which was then commanded the
+    /// section's own mode. A tune that holds an FM channel afterwards names the FM class itself
+    /// (`route_intent`, as `repeater_tune` does).
     pub fn route_mode(&self, band: &str, dial_mhz: f64) -> crate::settings::RouteMode {
         self.route_mode_for(band, dial_mhz, self.settings.operating_mode)
     }
@@ -10115,14 +10122,10 @@ impl Engine {
         if self.aprs_fm && band.eq_ignore_ascii_case("2m") {
             return RouteMode::Fm;
         }
-        // Mirrors the `fm_channel` arm of `rig_mode_effective` (see the invariant in this doc
-        // comment): a rig held on an FM channel routes on FM.
-        if self.fm_channel && dial_mhz >= 29.0 {
-            return RouteMode::Fm;
-        }
-        // …and the `sat_fm` arm, for the same invariant: a rig held on an FM bird routes on FM.
-        // (The satellite pick names its class explicitly via `route_intent`, so this arm answers
-        // for the QSYs that follow it rather than for the pick itself.)
+        // Mirrors the `sat_fm` arm of `rig_mode_effective` (see the invariant in this doc
+        // comment): a rig held on an FM bird routes on FM. (The satellite pick names its class
+        // explicitly via `route_intent`, so this arm answers for the QSYs that follow it rather
+        // than for the pick itself.)
         if self.sat_fm() && dial_mhz >= 29.0 {
             return RouteMode::Fm;
         }
@@ -10161,12 +10164,11 @@ impl Engine {
     /// The FM flags stay as a second, coarser term, and they are the reason this is not a bare
     /// `machinery_park` read. They survive a knob QSY on purpose
     /// (`fm_does_not_follow_the_operator_down_to_hf`): the rig is still IN FM, so
-    /// [`Engine::rig_mode_effective`] and [`Engine::route_mode`] still treat it as a channel
-    /// context, and the same gates are used here so all three answer alike. Their gates are
-    /// coarser than a band — APRS counts on 2 m, the FM-channel and FM-bird holds at/above
-    /// 29 MHz — so while one is set a knob move anywhere on VHF/UHF is the machinery's. That is
-    /// the disclosed cost of not clearing them: the alternative, clearing a hold on a knob QSY,
-    /// breaks the FM rule above.
+    /// [`Engine::rig_mode_effective`] still treats it as a channel context, and the same gates are
+    /// used here so the two answer alike. Their gates are coarser than a band — APRS counts on
+    /// 2 m, the FM-channel and FM-bird holds at/above 29 MHz — so while one is set a knob move
+    /// anywhere on VHF/UHF is the machinery's. That is the disclosed cost of not clearing them:
+    /// the alternative, clearing a hold on a knob QSY, breaks the FM rule above.
     ///
     /// NOT a bank-time provenance test: banking still reads only the residency. This runs at a
     /// WRITE, which is where provenance is allowed to be decided.
@@ -62194,6 +62196,105 @@ mod tests {
             assert_eq!(e.settings.active_radio, ic9700, "{how}: Phone's SSB radio");
             assert_eq!(e.rig_mode_effective(), "USB", "{how}: Phone's own mode");
         }
+    }
+
+    /// The active radio's name, so a routing assertion reads by value.
+    fn active_radio_name(e: &Engine) -> String {
+        e.settings
+            .radios
+            .iter()
+            .find(|p| p.id == e.settings.active_radio)
+            .map(|p| p.name.clone())
+            .unwrap_or_default()
+    }
+
+    /// [`three_radio_engine`] with a 2 m / 70 cm SSB rule beside its FM one: 2 m FM goes to the
+    /// FT-991A, 2 m SSB and 2 m digital to the IC-9700.
+    fn fm_and_ssb_radios_on_2m() -> Engine {
+        let (mut e, ic9700, _) = three_radio_engine();
+        let mut rules = e.settings().routing_rules.clone();
+        rules.insert(
+            0,
+            crate::settings::RoutingRule {
+                bands: vec!["2m".into(), "70cm".into()],
+                mode: Some(crate::settings::RouteMode::Ssb),
+                context: None,
+                radio: ic9700,
+            },
+        );
+        e.set_routing_rules(rules);
+        e
+    }
+
+    #[test]
+    fn a_qsy_made_while_an_fm_channel_is_held_routes_on_the_mode_it_is_commanded_in() {
+        // The QSY that leaves an FM channel ends its hold before the radio it routed to is
+        // commanded, so it is commanded the section's own mode, and has to be routed on that mode:
+        // the IC-9700 here, not the FM radio left in USB or DATA-U. A memory or spot pick enters
+        // its section first, which ended the hold before routing already; that row is the control.
+        let on_the_sstv_fm_channel = || {
+            let mut e = fm_and_ssb_radios_on_2m();
+            e.sstv_tune(144.500, "2m", "FM");
+            assert_eq!(
+                e.rig_mode_effective(),
+                "FM",
+                "premise: the channel holds FM"
+            );
+            e
+        };
+        let mut got = Vec::new();
+        let mut e = on_the_sstv_fm_channel();
+        e.pick_band("70cm", Some("phone"));
+        got.push((
+            "SSTV FM channel, then a band pick",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let mut e = on_the_sstv_fm_channel();
+        // Remote names the radio of a retune by the same question (`None` = stay on the active
+        // radio), so the two cannot disagree.
+        let remote = e
+            .remote_frequency_route(144.200, "2m")
+            .unwrap_or(e.settings.active_radio);
+        e.set_frequency(144.200, "2m", "USB");
+        assert_eq!(
+            remote, e.settings.active_radio,
+            "Remote's radio for the typed frequency is the one the station tuned"
+        );
+        got.push((
+            "SSTV FM channel, then a typed frequency",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let mut e = on_the_sstv_fm_channel();
+        e.work_spot("phone", 144.205, "2m");
+        got.push((
+            "SSTV FM channel, then a memory or spot pick",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let mut e = fm_and_ssb_radios_on_2m();
+        e.set_operating_mode("digital", false);
+        e.repeater_tune(146.940, "minus", 600_000, 103.5).unwrap();
+        e.set_frequency(144.174, "2m", "USB");
+        got.push((
+            "a repeater tuned from FT8, then FT8's 2 m frequency typed",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let want = |how, mode: &str| (how, "IC-9700".to_string(), mode.to_string());
+        assert_eq!(
+            got,
+            vec![
+                want("SSTV FM channel, then a band pick", "USB"),
+                want("SSTV FM channel, then a typed frequency", "USB"),
+                want("SSTV FM channel, then a memory or spot pick", "USB"),
+                want(
+                    "a repeater tuned from FT8, then FT8's 2 m frequency typed",
+                    "PKTUSB"
+                ),
+            ]
+        );
     }
 
     #[test]

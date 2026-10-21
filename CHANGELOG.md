@@ -447,6 +447,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   channel from Nexus (a typed frequency, a band, memory or spot pick), go to another mode, or pick a mode on Phone's
   mode buttons. Looking at another screen and coming back to Phone keeps it too. Phone reached any other way still
   follows your phone mode setting.
+- **With two radios, a frequency you pick right after an FM channel goes to the radio meant for it.** With 2 m FM
+  set to go to one radio and 2 m SSB or FT8 to another, a band pick or a typed frequency made while the radio sat on
+  an FM channel (an SSTV image channel such as 144.500 MHz, or a repeater Nexus tuned) went to the FM radio, which
+  was then put in USB or DATA-U. It now goes to the radio set up for the mode it is tuned in. Memory and spot picks
+  already did.
 - **An unassisted contest entry now stops all CW decoding, not only the AI decoder.** With Settings ▸ Contesting ▸
   Unassisted entry on, the classic decoder still copied CW into the Decode pane, offered the calls it heard as chips
   and filled His Call with its best guess. CQ WW's rules count a CW decoder as QSO-finding assistance, which an
