@@ -3539,6 +3539,10 @@ export const EN = {
   // `{{detail}}` is the spot line — call, frequency, age, badges, spotter and comment —
   // assembled from data by the call site.
   'bandMap.spot.title': '{{detail}} — click to work',
+  // A program's spot (Share by TCI), whose click only tunes. `{{id}}` is the program's connection
+  // number, as Settings ▸ Share by TCI lists it; TCI is the protocol's name, a token.
+  'bandMap.spot.tci.title': '{{detail}} — click to tune',
+  'bandMap.spot.tci.from': 'from TCI connection {{id}}',
   'bandMap.age.secs': '{{secs}}s ago',
   'bandMap.age.mins': '{{mins}}m ago',
   'bandMap.age.hours': '{{hours}}h ago',
@@ -6352,6 +6356,10 @@ export const EN = {
   'bandStrip.shade.title': 'Your licensed phone segment on this band',
   // `{{detail}}` is the spot line — call, frequency, age, badges, spotter and comment.
   'bandStrip.spot.title': '{{detail}} — click to work',
+  // A program's spot (Share by TCI), whose click only tunes. `{{id}}` is the program's connection
+  // number, as Settings ▸ Share by TCI lists it; TCI is the protocol's name, a token.
+  'bandStrip.spot.tci.title': '{{detail}} — click to tune',
+  'bandStrip.spot.tci.from': 'from TCI connection {{id}}',
   'contestSpot.dupe': 'dupe',
   'contestSpot.mult': 'new mult: {{rule}} {{value}}',
   'contestSpot.tag.dupe': 'DUPE',
@@ -6867,7 +6875,7 @@ export const EN = {
   // `{{server}}` is what the server said about itself, as sent; `{{address}}` is host:port.
   'settings.rigControl.conn.tci': 'TCI (SDR program) — Beta',
   'settings.rigControl.tci.hint':
-    "<b>Beta.</b> Nexus connects to the SDR program's own TCI server, with no rigctld and no virtual COM port. It reads and sets the dial and mode and transmits through the program. With <b>Audio over TCI</b> on, the receive audio and Nexus's own transmit audio go over TCI too. <b>Not ready yet:</b> CW through the program's own keyer (use the Soundcard keyer) and spots on its panadapter. Turn the TCI server on in the program first.",
+    "<b>Beta.</b> Nexus connects to the SDR program's own TCI server, with no rigctld and no virtual COM port. It reads and sets the dial and mode and transmits through the program. With <b>Audio over TCI</b> on, the receive audio and Nexus's own transmit audio go over TCI too. <b>Not ready yet:</b> CW through the program's own keyer (use the Soundcard keyer). Turn the TCI server on in the program first.",
   'settings.rigControl.tci.host.label': 'SDR program address',
   'settings.rigControl.tci.host.hint':
     'The computer the SDR program runs on: <b>127.0.0.1</b> is this one. TCI has no password and no encryption, so reach another computer only on your own network.',
@@ -7659,7 +7667,7 @@ export const EN = {
     'WSJT-X, JTDX and MSHV look for 40001. A second Nexus window uses the next port, and the address above always shows the one in use. Change it only if another program on this computer already has it.',
   'settings.transmit.tciServer.tx.label': 'Programs on TCI may transmit',
   'settings.transmit.tciServer.tx.hint':
-    "Off: programs tune and read but never transmit. On: a program may key the radio with its own audio or the radio's microphone while Nexus is on its Phone screen, send CW macros on the CW screen, and Tune. Every Nexus transmit safeguard still applies: TX must be on in Nexus, Stop TX wins and holds, and nothing goes past your licence or your power limits. A program never turns TX on. Set at the station only.",
+    "Off: programs tune and read but never transmit. On: a program may key the radio with its own audio or the radio's microphone while Nexus is on its Phone screen, send CW macros on the CW screen, and Tune. Its own audio goes out only once it has asked for a voice mode (USB, LSB, AM or FM). WSJT-X and JTDX ask for a mode only when it differs from Nexus's, so set to USB while Nexus is already in USB they ask for nothing and are refused. Every Nexus transmit safeguard still applies: TX must be on in Nexus, Stop TX wins and holds, and nothing goes past your licence or your power limits. A program never turns TX on. Set at the station only.",
   // ⛔ Said beside the transmit switch, at the station and from afar alike: the engine refuses a
   // program's digital overs until the delay Nexus adds to their timing is measured.
   'settings.transmit.tciServer.tx.slotTimed':
@@ -7669,9 +7677,7 @@ export const EN = {
     "A logger's TCI keyer (Log4OM, 5MContest) sends its CW macros through Nexus, on the CW screen only, and only while programs may transmit. Any program can stop the CW.",
   'settings.transmit.tciServer.spots.label': 'Spots from programs',
   'settings.transmit.tciServer.spots.hint':
-    "Spots a program sends show on Nexus's band map, and a click on a spot in Nexus is passed back to the programs. A spot or a click never transmits.",
-  'settings.transmit.tciServer.notYet':
-    "<b>Not ready yet:</b> a program's own transmit audio, spots, and a Flex's DAX audio for programs: with Flex native DAX audio on, they hear the sound card under Audio instead.",
+    "Spots a program sends show on Nexus's band map and in the Phone and CW screens' band activity. A click on one only tunes Nexus, and a click on a spot in Nexus is passed back to the programs. A spot or a click never transmits.",
   'settings.transmit.tciServer.programs.label': 'Programs connected',
   'settings.transmit.tciServer.programs.none': 'No program is connected.',
   // One program's connection, by its number: `{{id}}` counts from 1 in the order programs connected,

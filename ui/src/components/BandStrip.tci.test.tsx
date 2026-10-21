@@ -2,7 +2,8 @@
 // PROGRAMS' SPOTS ON THE COCKPITS' BAND STRIP (Share by TCI).
 //
 // The strip draws a program's spot as it draws a cluster spot, its tick dotted, its source ("TCI 1")
-// beside the call in the hover label and in the tooltip, the program's text as text. ⛔ A click on
+// beside the call in the hover label, a tooltip of its own ("from TCI connection 1", and "click to
+// tune" where a cluster spot's says "click to work"), the program's text as text. ⛔ A click on
 // it goes to `onTciSpot`, which only tunes, never to `onWorkSpot`; with no `onTciSpot` it does
 // nothing. The cluster spot beside it is the control throughout.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -59,11 +60,14 @@ describe("a program's spot on the band strip", () => {
     const ours = flag(container, 'K1ABC')!
     expect(ours.className).toContain('from-tci')
     expect(ours.querySelector('.bandstrip-spot-call .spot-type-badge.type-tci')?.textContent).toBe('TCI 1')
-    expect(ours.title).toContain('TCI · Connection 1')
+    // Its tooltip names the source in one phrase and says the click only tunes.
+    expect(ours.title).toContain('from TCI connection 1')
+    expect(ours.title).toMatch(/ — click to tune$/)
     const cluster = flag(container, 'W1AW')!
     expect(cluster.className).not.toContain('from-tci')
     expect(cluster.querySelector('.type-tci')).toBeNull()
     expect(cluster.title).not.toContain('TCI')
+    expect(cluster.title).toMatch(/ — click to work$/)
   })
 
   it("shows the program's text as text: no element is made of it", () => {
