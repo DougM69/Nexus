@@ -15754,6 +15754,42 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   padding: 0 2px;
   font-weight: 700;
 }
+/* A spot a program on Nexus's TCI server sent: drawn as a cluster spot is, but dotted, with its
+ * source ("TCI 2", the program's connection number) beside the call. Outlined and muted as the
+ * beacon badge is: it says where the spot came from, never why it is worth working. */
+.spot-type-badge.type-tci {
+  background: transparent;
+  border: 1px solid var(--text-dim);
+  color: var(--text-dim);
+  width: auto;
+  min-width: 12px;
+  padding: 0 2px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+/* In the strip's hover label (ink on the text colour), in the label's own ink. */
+.bandstrip-spot-call .spot-type-badge.type-tci {
+  margin-left: var(--space-1);
+  border-color: currentColor;
+  color: inherit;
+}
+.bandstrip-spot.from-tci .bandstrip-tick {
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--need-color, var(--accent)) 0 3px,
+    transparent 3px 5px
+  );
+}
+.bandmap-tick.from-tci {
+  background: repeating-linear-gradient(
+    to right,
+    var(--need-color, var(--accent)) 0 3px,
+    transparent 3px 5px
+  );
+}
+.bandmap-spot.from-tci {
+  border-left-style: dotted;
+}
 /* The shared colour + type key. Compact, wraps, small — a reference row, not chrome. */
 .spot-legend {
   display: flex;

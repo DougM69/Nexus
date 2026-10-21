@@ -132,6 +132,7 @@ import {
   getNeedAlerts,
   setWatchList,
   getAllSpots,
+  clickTciSpot,
   getSatSchedule,
   getSatTrackStatus,
   getIssPass,
@@ -192,6 +193,7 @@ import { voiceDroppedLane } from './features/voiceDropped'
 import { clockRepairHoldLane } from './features/clockRepairHold'
 import { audioErrorLane } from './features/audioError'
 import { askAgainWhileSaving } from './features/notAnswered'
+import { useTciSpots } from './features/tciSpots'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt } from './types'
@@ -1109,6 +1111,9 @@ function App() {
   // Raw spot firehose for the Spots panel (ungated, all modes). Polled faster than needs
   // since it's a live "what's on the air" view; the backend command just reads the buffer.
   const [allSpots, setAllSpots] = useState<SpotRow[]>([])
+  // The spots programs on the station's TCI server sent, for the cockpits' band strips: asked when
+  // the station says they changed. A click on one only tunes (`handleTciSpot`).
+  const tciSpots = useTciSpots(snap?.radio.tciServer?.spots)
   useEffect(() => {
     let live = true
     const load = () =>
@@ -2398,6 +2403,18 @@ function App() {
     [],
   )
   const workSpotHerePhone = useMemo(() => handleWorkSpotHere('phone'), [handleWorkSpotHere])
+  // ⛔ A click on a program's spot (Share by TCI) in a cockpit's band strip: the station tunes there
+  // and tells every program, and that is all. Never the Work above, whose section entry arms.
+  const handleTciSpot = useCallback((s: SpotRow) => {
+    void withErrorToast(
+      () => clickTciSpot(s.call, s.freqMhz),
+      t('shell.pounce.qsy.failed', { call: s.call }),
+    ).then((next) => {
+      if (!next) return
+      setSnap(next)
+      pushToast(t('shell.work.here', { call: s.call, band: s.band, freq: s.freqMhz.toFixed(3) }), 'success', 3000)
+    })
+  }, [])
   const workSpotHereCw = useMemo(() => handleWorkSpotHere('cw'), [handleWorkSpotHere])
 
   const handleWorkSpot = useCallback(
@@ -3214,6 +3231,8 @@ function App() {
       onSnap={setSnap}
       fieldDay={snap.fieldDay}
       spots={allSpots}
+      tciSpots={tciSpots}
+      onTciSpot={handleTciSpot}
       needByCall={needByCall}
       typeByCall={typeByCall}
       onWorkSpot={workSpotHereCw}
@@ -3242,6 +3261,8 @@ function App() {
       phoneMode={settings?.phoneMode}
       wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
       spots={allSpots}
+      tciSpots={tciSpots}
+      onTciSpot={handleTciSpot}
       needByCall={needByCall}
       typeByCall={typeByCall}
       onWorkSpot={workSpotHerePhone}

@@ -274,6 +274,7 @@ impl TciBackend for Mock {
 
     fn spot(&self, client: ClientId, spot: Spot) -> Result<(), Refusal> {
         self.record(Call::Spot(client, spot.call.as_str().to_string()));
+        self.hold("spot");
         Ok(())
     }
 

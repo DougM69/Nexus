@@ -383,9 +383,10 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Ask the backend something that can transmit, through the program's gate: only while its end has
-/// not begun, and holding that end off until the call returns. `None`: the end has begun, nothing
-/// reached the backend, and nothing is answered (the program is being closed).
+/// Ask the backend something that can transmit, or a spot that must not outlive the program,
+/// through the program's gate: only while its end has not begun, and holding that end off until
+/// the call returns. `None`: the end has begun, nothing reached the backend, and nothing is
+/// answered (the program is being closed).
 fn gated<T>(cx: &Cx<'_>, call: impl FnOnce() -> T) -> Option<T> {
     let ended = lock(cx.gate);
     (!*ended).then(call)
@@ -597,8 +598,10 @@ pub(super) fn run(action: Action, cx: &Cx<'_>) -> Effects {
             };
             fx.say(cx, Notice::State(Setting::CwMacrosSpeed(wpm)).render());
         }
+        // Through the gate: a spot is never kept for a program whose end has begun, and the end
+        // waits for one in flight, then takes it away with the program's others.
         Action::Spot(spot) => {
-            if let Err(r) = cx.backend.spot(cx.client, spot) {
+            if let Some(Err(r)) = gated(cx, || cx.backend.spot(cx.client, spot)) {
                 fx.refusal(cx, r);
             }
         }

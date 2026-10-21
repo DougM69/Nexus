@@ -1973,3 +1973,428 @@ fn a_programs_cw_goes_through_the_engine_at_its_own_speed_and_its_stops_cut_it()
         "control: the switch off"
     );
 }
+
+// ── Programs' spots, and the operator's clicks told to programs ─────────────────────────────
+
+/// A station sharing by TCI with "Spots from programs" on (as it comes) and TX off, as at launch,
+/// on 20 m. Its port is the one `serving` asks for (any free one), so the manager's tick keeps the
+/// server where it is.
+fn spotting() -> SharedEngine {
+    let e = Engine::with_settings(Settings {
+        mycall: "KD9TAW".into(),
+        mygrid: "EN52".into(),
+        operating_mode: OperatingMode::Digital,
+        band: "20m".into(),
+        dial_mhz: 14.074,
+        sideband: "USB".into(),
+        tci_server: true,
+        tci_server_port: 0,
+        ..Settings::default()
+    });
+    assert!(
+        e.tci_server_spots_on() && !e.tx_enabled(),
+        "premise: programs' spots on as they come, TX off"
+    );
+    Arc::new(Mutex::new(e))
+}
+
+/// Everything the program sent before this has run: a program's commands run in order.
+fn settled(client: &mut Client) {
+    client.send("trx:0;");
+    client.lines_until("trx:0,false;");
+}
+
+/// `(program, call, Hz, text)` of each program's spot the band map reads, in that order.
+fn on_the_map(engine: &SharedEngine) -> Vec<(u64, String, i64, String)> {
+    let mut spots: Vec<_> = engine_lock(engine)
+        .tci_program_spots(crate::now_unix())
+        .into_iter()
+        .map(|p| (p.program, p.spot.call, p.spot.hz, p.spot.text))
+        .collect();
+    spots.sort();
+    spots
+}
+
+/// Change the station's settings as a save does.
+fn set(engine: &SharedEngine, f: impl FnOnce(&mut Settings)) {
+    let mut e = engine_lock(engine);
+    let mut s = e.settings().clone();
+    f(&mut s);
+    e.apply_settings(s);
+}
+
+/// The last thing the station refused program `id`, as the server's line in the snapshot says it
+/// once published.
+fn last_refused(engine: &SharedEngine, m: &mut Manager, id: ClientId) -> Option<String> {
+    m.publish();
+    engine_lock(engine)
+        .snapshot()
+        .radio
+        .tci_server
+        .and_then(|s| s.programs.into_iter().find(|p| p.id == id.get()))
+        .and_then(|p| p.refused)
+}
+
+/// The server's generation for programs' spots, as the snapshot carries it once published.
+fn spots_generation(engine: &SharedEngine, m: &mut Manager) -> u64 {
+    m.publish();
+    engine_lock(engine)
+        .snapshot()
+        .radio
+        .tci_server
+        .expect("serving")
+        .spots
+}
+
+/// ⛔ A PROGRAM'S SPOTS ARE MARKS ON NEXUS'S BAND MAP WITH THE PROGRAM THAT SENT THEM, and nothing
+/// more: the band map reads each with its program's number, as a spot row whose `tci` names it
+/// (`get_tci_spots`), its text as the comment, kept as the characters it is; the snapshot's
+/// generation moves on so a window asks again; nothing tuned, nothing armed. CONTROL: before them
+/// the band map reads none.
+#[test]
+fn programs_spots_reach_the_band_map_with_the_program_that_sent_them() {
+    let engine = spotting();
+    let (mut m, _feed) = serving(&engine);
+    let h = handle(&m);
+    let (mut a, a_id, _) = program(&h, port(&m));
+    let (mut b, b_id, _) = program(&h, port(&m));
+    let before = spots_generation(&engine, &mut m);
+    assert!(on_the_map(&engine).is_empty(), "control: none yet");
+    a.send("spot:K1ABC,CW,14025000,4294901760,CQ NA up 2;");
+    a.send("spot:W1AW,CW,7030000,4278190335,<b>QST</b> <img src=x onerror=alert(1)>;");
+    b.send("spot:k1abc,CW,14025500,4278255360,from the skimmer;");
+    settled(&mut a);
+    settled(&mut b);
+    let (a_n, b_n) = (a_id.get(), b_id.get());
+    assert_eq!(
+        on_the_map(&engine),
+        [
+            (a_n, "K1ABC".into(), 14_025_000, "CQ NA up 2".into()),
+            (
+                a_n,
+                "W1AW".into(),
+                7_030_000,
+                "<b>QST</b> <img src=x onerror=alert(1)>".into()
+            ),
+            (b_n, "K1ABC".into(), 14_025_500, "from the skimmer".into()),
+        ]
+    );
+    assert!(
+        spots_generation(&engine, &mut m) > before,
+        "the snapshot says they changed"
+    );
+    let now = crate::now_unix();
+    let rows: Vec<serde_json::Value> = engine_lock(&engine)
+        .tci_program_spots(now)
+        .into_iter()
+        .filter(|p| p.program == a_n && p.spot.call == "K1ABC")
+        .map(|p| {
+            serde_json::to_value(crate::program_spot_row(
+                p,
+                tempo_app::settings::LicenseClass::Open,
+                now,
+            ))
+            .expect("a row")
+        })
+        .collect();
+    let [row] = &rows[..] else {
+        panic!("one row: {rows:?}");
+    };
+    for (key, want) in [
+        ("tci", serde_json::json!(a_n)),
+        ("call", serde_json::json!("K1ABC")),
+        ("band", serde_json::json!("20m")),
+        ("freqMhz", serde_json::json!(14.025)),
+        ("mode", serde_json::json!("CW")),
+        ("comment", serde_json::json!("CQ NA up 2")),
+        ("spotter", serde_json::json!("")),
+    ] {
+        assert_eq!(row[key], want, "{key} in {row}");
+    }
+    let e = engine_lock(&engine);
+    assert!(
+        (e.settings().dial_mhz - 14.074).abs() < 1e-9 && !e.tx_enabled() && !e.on_air(),
+        "a spot tuned or armed"
+    );
+}
+
+/// ⛔ `spot_delete` AND `spot_clear` ARE THE SENDER'S OWN: another program's delete of the same
+/// callsign and its clear leave a program's spots on the map. CONTROL: the program's own delete
+/// takes its own.
+#[test]
+fn another_programs_delete_and_clear_leave_a_programs_spots() {
+    let engine = spotting();
+    let (m, _feed) = serving(&engine);
+    let h = handle(&m);
+    let (mut a, a_id, _) = program(&h, port(&m));
+    let (mut b, b_id, _) = program(&h, port(&m));
+    for client in [&mut a, &mut b] {
+        client.send("spot:K1ABC,CW,14025000,1,a;");
+        client.send("spot:W1AW,CW,14030000,1,b;");
+        settled(client);
+    }
+    assert_eq!(on_the_map(&engine).len(), 4, "premise: two each");
+    b.send("spot_delete:K1ABC;");
+    settled(&mut b);
+    let calls = |n: u64| -> Vec<String> {
+        on_the_map(&engine)
+            .into_iter()
+            .filter(|s| s.0 == n)
+            .map(|s| s.1)
+            .collect()
+    };
+    assert_eq!(calls(a_id.get()), ["K1ABC", "W1AW"], "B's delete took A's");
+    assert_eq!(calls(b_id.get()), ["W1AW"]);
+    b.send("spot_clear;");
+    settled(&mut b);
+    assert_eq!(calls(a_id.get()), ["K1ABC", "W1AW"], "B's clear took A's");
+    assert!(calls(b_id.get()).is_empty());
+    a.send("spot_delete:W1AW;");
+    settled(&mut a);
+    assert_eq!(calls(a_id.get()), ["K1ABC"], "control: A's own delete");
+}
+
+/// ⛔ A PROGRAM'S SPOTS GO WHEN IT GOES, whether its connection is lost or the operator disconnects
+/// it, and another program's stay.
+#[test]
+fn a_programs_spots_go_when_it_disconnects_and_the_others_stay() {
+    let engine = spotting();
+    let (m, _feed) = serving(&engine);
+    let h = handle(&m);
+    let (mut a, a_id, _) = program(&h, port(&m));
+    let (mut b, b_id, _) = program(&h, port(&m));
+    let (mut c, c_id, _) = program(&h, port(&m));
+    for client in [&mut a, &mut b, &mut c] {
+        client.send("spot:K1ABC,CW,14025000,1,x;");
+        settled(client);
+    }
+    assert_eq!(on_the_map(&engine).len(), 3, "premise");
+    drop(a);
+    let gone = |n: u64| {
+        eventually(&engine, |e| {
+            e.tci_program_spots(crate::now_unix())
+                .iter()
+                .all(|s| s.program != n)
+        })
+    };
+    assert!(gone(a_id.get()), "the lost program's spot stayed");
+    assert!(m.serving.disconnect(b_id.get()));
+    assert!(gone(b_id.get()), "the disconnected program's spot stayed");
+    assert_eq!(
+        on_the_map(&engine),
+        [(c_id.get(), "K1ABC".into(), 14_025_000, "x".into())],
+        "the program still connected keeps its spot"
+    );
+    settled(&mut c);
+}
+
+/// ⛔ EVERY PROGRAM'S SPOTS GO WITH THE SWITCH AND WITH THE SERVER: "Spots from programs" off takes
+/// them from the map at once and from the store at the manager's next tick, and refuses the next
+/// one as not offered, as the program's last refusal says; on again, a program's spot is kept
+/// again; the server stopping takes them all.
+#[test]
+fn every_programs_spots_go_with_the_switch_and_with_the_server() {
+    let engine = spotting();
+    let (mut m, _feed) = serving(&engine);
+    let h = handle(&m);
+    let (mut a, a_id, _) = program(&h, port(&m));
+    a.send("spot:K1ABC,CW,14025000,1,x;");
+    settled(&mut a);
+    assert_eq!(on_the_map(&engine).len(), 1, "premise");
+    set(&engine, |s| s.tci_server_spots = false);
+    assert!(on_the_map(&engine).is_empty(), "the map reads none at once");
+    assert!(m.tick(), "the server keeps serving");
+    assert_eq!(
+        engine_lock(&engine).tci_program_spot_store().iter().count(),
+        0,
+        "the tick took them"
+    );
+    a.send("spot:W1AW,CW,14030000,1,y;");
+    settled(&mut a);
+    assert!(on_the_map(&engine).is_empty(), "refused while off");
+    assert_eq!(
+        last_refused(&engine, &mut m, a_id).as_deref(),
+        Some("not offered"),
+        "the station says why"
+    );
+    set(&engine, |s| s.tci_server_spots = true);
+    a.send("spot:W1AW,CW,14030000,1,y;");
+    settled(&mut a);
+    assert_eq!(on_the_map(&engine).len(), 1, "on again, kept");
+    m.apply(None);
+    assert_eq!(
+        engine_lock(&engine).tci_program_spot_store().iter().count(),
+        0,
+        "the server's stop took them, the switches still on"
+    );
+}
+
+/// ⛔ WHAT A PROGRAM SENDS IS DATA, CHECKED AND COUNTED: a callsign that is not one and a frequency
+/// outside the range programs are told are refused, each said as the program's last refusal, and
+/// counted; a text past 64 characters is cut and counted; a control character fails TCI's own
+/// reading, so the command never arrives and the server counts it unreadable.
+#[test]
+fn a_spot_that_is_not_one_is_refused_counted_and_said() {
+    let engine = spotting();
+    let (mut m, _feed) = serving(&engine);
+    let h = handle(&m);
+    let (mut a, a_id, _) = program(&h, port(&m));
+    let unreadable = |h: &Handle| {
+        h.programs()
+            .iter()
+            .find(|p| p.id == a_id)
+            .map(|p| p.counts.unreadable)
+            .unwrap_or_default()
+    };
+    let before = unreadable(&h);
+    a.send("spot:HELLO,CW,14025000,1,x;");
+    settled(&mut a);
+    assert_eq!(
+        last_refused(&engine, &mut m, a_id).as_deref(),
+        Some("a spot whose callsign is not one")
+    );
+    a.send("spot:K1ABC,CW,20000,1,x;");
+    settled(&mut a);
+    assert_eq!(
+        last_refused(&engine, &mut m, a_id).as_deref(),
+        Some("outside the radio's range")
+    );
+    a.send(&format!("spot:K2ABC,CW,14026000,1,{};", "X".repeat(100)));
+    a.send("spot:K3ABC,CW,14027000,1,bell\u{7}here;");
+    settled(&mut a);
+    assert_eq!(
+        on_the_map(&engine),
+        [(a_id.get(), "K2ABC".into(), 14_026_000, "X".repeat(64))],
+        "only the long text, cut"
+    );
+    let e = engine_lock(&engine);
+    let store = e.tci_program_spot_store();
+    assert_eq!(
+        (store.refused(), store.cut()),
+        (2, 1),
+        "refused and cut, counted"
+    );
+    drop(e);
+    assert_eq!(unreadable(&h), before + 1, "the control character, counted");
+}
+
+/// Every program's lines up to `rx_clicked_on_spot:0,0,<call>,<hz>;`.
+fn told_click(client: &mut Client, call: &str, hz: i64) -> Vec<String> {
+    client.lines_until(&format!("rx_clicked_on_spot:0,0,{call},{hz};"))
+}
+
+/// ⛔ A CLICK ON ANY SPOT IN NEXUS IS TOLD TO EVERY PROGRAM IN BOTH SPELLINGS, and nothing else
+/// happens for it: a cluster spot worked (the Work's own section entry is the station's, not the
+/// click's) and a program's spot clicked, each told at the manager's next tick as
+/// `clicked_on_spot:<call>,<hz>;` and `rx_clicked_on_spot:0,0,<call>,<hz>;` at the spot's own
+/// frequency. The program's spot's click tunes and arms nothing, starts no QSO and leaves the
+/// section. CONTROL: with programs' spots off nothing is told, and a refused click tells nothing.
+#[test]
+fn a_click_on_any_spot_is_told_to_every_program_and_arms_nothing() {
+    let engine = spotting();
+    let (mut m, _feed) = serving(&engine);
+    let h = handle(&m);
+    let (mut a, _, _) = program(&h, port(&m));
+    let (mut b, _, _) = program(&h, port(&m));
+    {
+        let mut e = engine_lock(&engine);
+        e.work_spot_tiered(None, "digital", 14.074, "20m", None);
+        e.note_work_call(Some("W1AW".into()));
+    }
+    m.publish();
+    for client in [&mut a, &mut b] {
+        let lines = told_click(client, "W1AW", 14_074_000);
+        assert!(
+            lines.contains(&"clicked_on_spot:W1AW,14074000;".to_string()),
+            "both spellings: {lines:?}"
+        );
+    }
+    let (tick, section) = {
+        let e = engine_lock(&engine);
+        (e.snapshot().work_tick, e.settings().operating_mode)
+    };
+    assert_eq!(
+        engine_lock(&engine).tci_program_spot_clicked("K1ABC", 14_025_000),
+        Ok(())
+    );
+    m.publish();
+    for client in [&mut a, &mut b] {
+        let lines = told_click(client, "K1ABC", 14_025_000);
+        assert!(
+            lines.contains(&"clicked_on_spot:K1ABC,14025000;".to_string()),
+            "both spellings: {lines:?}"
+        );
+    }
+    {
+        let e = engine_lock(&engine);
+        assert!(
+            (e.settings().dial_mhz - 14.025).abs() < 1e-9,
+            "control: tuned"
+        );
+        assert!(!e.tx_enabled() && !e.on_air(), "armed or keyed");
+        assert_eq!(e.qso_dxcall(), None, "a QSO started");
+        assert_eq!(e.settings().operating_mode, section, "the section moved");
+        assert_eq!(e.snapshot().work_tick, tick, "a cockpit was asked to open");
+    }
+    assert!(
+        engine_lock(&engine)
+            .tci_program_spot_clicked("K1ABC", 15_000_000)
+            .is_err(),
+        "premise: off the bands"
+    );
+    set(&engine, |s| s.tci_server_spots = false);
+    {
+        let mut e = engine_lock(&engine);
+        e.work_spot_tiered(None, "digital", 14.074, "20m", None);
+        e.note_work_call(Some("W1AW".into()));
+        assert_eq!(e.tci_program_spot_clicked("K1ABC", 14_026_000), Ok(()));
+    }
+    m.publish();
+    for client in [&mut a, &mut b] {
+        let told = client.drain(Duration::from_millis(300));
+        assert!(
+            !told
+                .iter()
+                .any(|g| matches!(g, Got::Text(t) if t.contains("clicked_on_spot"))),
+            "control: told with spots off or refused: {told:?}"
+        );
+    }
+}
+
+/// A click made while no server runs (switched on, its port not bound yet) is dropped at the
+/// manager's tick, never told to the programs that connect later. CONTROL: a click made once it
+/// serves is told.
+#[test]
+fn a_click_made_while_no_server_runs_is_never_told_later() {
+    let engine = spotting();
+    let mut m = Manager::new(
+        engine.clone(),
+        Arc::new(ReceiveAudioFeed::default()),
+        MeterFeed::default(),
+    );
+    let work = |call: &str| {
+        let mut e = engine_lock(&engine);
+        e.work_spot_tiered(None, "digital", 14.074, "20m", None);
+        e.note_work_call(Some(call.into()));
+    };
+    work("W1AW");
+    m.publish();
+    m.apply(Some(0));
+    let h = handle(&m);
+    let (mut a, _, _) = program(&h, port(&m));
+    m.publish();
+    let told = a.drain(Duration::from_millis(300));
+    assert!(
+        !told
+            .iter()
+            .any(|g| matches!(g, Got::Text(t) if t.contains("clicked_on_spot"))),
+        "a click made before the server ran was told: {told:?}"
+    );
+    work("K1ABC");
+    m.publish();
+    let lines = told_click(&mut a, "K1ABC", 14_074_000);
+    assert!(
+        lines.contains(&"clicked_on_spot:K1ABC,14074000;".to_string()),
+        "control: {lines:?}"
+    );
+}

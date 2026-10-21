@@ -48,8 +48,9 @@
 //! The end ([`Conn::end_transmit`], from the program's own reader, the operator's Disconnect or
 //! the server's stop) takes the same gate to mark it begun and tell the backend. So a call in
 //! flight finishes first and its end ends what it admitted, and nothing the program sends can
-//! transmit after its end began. The reader also stops running a message the moment its program's
-//! end or close has begun.
+//! transmit after its end began. Its spots pass the same gate, so none is kept for a program whose
+//! end began: the end takes away what it had. The reader also stops running a message the moment
+//! its program's end or close has begun.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};

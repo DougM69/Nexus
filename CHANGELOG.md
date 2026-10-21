@@ -58,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with it on, a program can Tune, key the radio's microphone on the Phone screen and send a logger's CW macros on
   the CW screen, which Nexus's own CW keyer sends at the program's speed; every Nexus transmit safeguard still
   applies, and no program can turn TX on. FT8, FT4 and the other slot-timed modes may not transmit through TCI
-  yet, until the delay Nexus adds to a program's timing has been measured. Spots from programs are not ready yet.
+  yet, until the delay Nexus adds to a program's timing has been measured.
   The programs connected are listed with what each is doing and the last thing Nexus refused it, each with a
   **Disconnect**. Settings will not save the CAT sharing port and the TCI server port as
   the same number. A new guide, Share by TCI, covers turning it on and setting up each program.
@@ -89,6 +89,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to set the program's Radio mode or to use Nexus for FT8. NEEDS-BENCH: a program's voice audio through Share by
   TCI into a dummy load, on a sound-card radio and on a Flex: the key on its first audio, its tail on its release,
   and each stop; and WSJT-X, JTDX and MSHV refused with their Radio mode at None and at Data/Pkt.
+- **Share by TCI: spots from programs on Nexus's band map (Beta).** With **Spots from programs** on, as it comes,
+  the spots a program on this computer sends over TCI (a logger's cluster spots, Log4OM's for one, or a skimmer's)
+  show on the band map and on the Phone and CW screens' band activity, beside the cluster's and kept apart from
+  them. Each shows where it came from: **TCI 2** is the program Settings lists as Connection 2, and its mark is
+  dotted. Nexus keeps at most 200 from one program and 500 in all, the oldest going first, and each goes 30
+  minutes after it was sent. A program can take back its own spots and no other program's. They all go when the
+  program disconnects, when you turn Spots from programs or Share by TCI off, and in an Unassisted contest entry,
+  where Nexus shows no spots at all. A program's callsign, mode and text are shown as plain text. A click on one
+  of these spots tunes Nexus there and does nothing else: it never changes the screen, turns TX on or starts a
+  contact, and while anything is on the air it changes nothing. Every click on a spot in Nexus, a cluster spot
+  worked as much as a program's spot tuned, is passed back to the programs as an SDR program passes it on, so a
+  logger can pick up the station. A spot or a click never transmits. NEEDS-BENCH: Log4OM 2 connected by TCI, its
+  cluster spots on Nexus's band map, and a click on one in Nexus selecting that station in Log4OM.
 - **Every contest log numbers its contacts 1, 2, 3…** The contest screen's log and the logger window's last
   contacts show each contact's number in a first column, in every contest. In a contest that sends a serial
   (Sweepstakes, CQ WPX) the number is the serial that contact was sent; in every other contest it counts the

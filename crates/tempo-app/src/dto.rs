@@ -2212,6 +2212,10 @@ pub struct TciServerStatus {
     pub error: Option<String>,
     /// The programs connected now, in the order they connected.
     pub programs: Vec<TciProgramStatus>,
+    /// Moves on with every change to the spots programs sent, so a window asks for them
+    /// (`get_tci_spots`) only when they changed; 0 until the first, and from an older station.
+    #[serde(default)]
+    pub spots: u64,
 }
 
 /// One program connected to the TCI server.

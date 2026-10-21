@@ -1661,6 +1661,42 @@ fn a_disconnect_waits_for_a_key_in_flight_and_then_ends_it() {
     assert_eq!(transmit_after_end(&b, id), []);
 }
 
+/// A spot the backend is keeping when the program's end begins: the end waits for the call, so
+/// the backend drops the program's spots after it and none outlives the program; and a spot
+/// behind it is never asked once the end began.
+#[test]
+fn a_disconnect_waits_for_a_spot_in_flight_and_no_spot_comes_after_it() {
+    let b = Bench::new();
+    let mut c = b.client();
+    b.mock.pause_at("spot");
+    c.send("spot:K1ABC,CW,14025000,4294901760,CQ;");
+    assert!(b
+        .mock
+        .wait_call(WAIT, |call| matches!(call, Call::Spot(..)))
+        .is_some());
+    let handle = b.handle.clone();
+    let id = b.id(1);
+    let ender = std::thread::spawn(move || handle.disconnect(id));
+    let early = b.mock.wait_call(Duration::from_millis(500), |call| {
+        *call == Call::Disconnected(id)
+    });
+    // Another spot behind it: it may not reach the backend once the end began.
+    c.send("spot:W1AW,CW,14030000,4294901760,QST;");
+    b.mock.release();
+    ender.join().expect("disconnected");
+    assert_eq!(early, None, "ended while its spot was in flight");
+    let calls = b.mock.calls();
+    let spot = calls.iter().position(|c| matches!(c, Call::Spot(..)));
+    let ended = calls.iter().position(|c| *c == Call::Disconnected(id));
+    assert!(spot < ended && ended.is_some(), "{calls:?}");
+    wait_gone(&b);
+    assert_eq!(
+        after_end(&b, id),
+        [],
+        "nothing reaches the backend after the end"
+    );
+}
+
 /// Transmit audio the backend is taking when the program's end begins: the same.
 #[test]
 fn a_disconnect_waits_for_transmit_audio_in_flight() {

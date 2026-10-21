@@ -1981,6 +1981,20 @@ export async function getAllSpots(): Promise<import('./types').SpotRow[]> {
   return invoke<import('./types').SpotRow[]>('get_all_spots')
 }
 
+/** The spots programs on Nexus's TCI server sent ("Share by TCI"), for the band map: each a spot
+ *  row whose `tci` names the program. Kept apart from the cluster's (`getAllSpots`), and asked only
+ *  when `radio.tciServer.spots` says they changed (`features/tciSpots.ts`). */
+export async function getTciSpots(): Promise<import('./types').SpotRow[]> {
+  return invoke<import('./types').SpotRow[]>('get_tci_spots')
+}
+
+/** A click on a program's spot on the band map: the station tunes there and tells every program
+ *  on its TCI server, and does nothing else (never a section change, an arm, a QSO). Rejects with
+ *  the station's reason, refused while anything is on the air. */
+export async function clickTciSpot(call: string, freqMhz: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('click_tci_spot', { call, freqMhz })
+}
+
 /** Check the release feed (hamradiotools.io, SourceForge as fallback) for a newer Nexus
  * release (Phase 1 update check). Rejects offline / on a
  * fetch error — callers treat that as a silent no-op. */

@@ -3151,6 +3151,10 @@ pub struct Engine {
     /// The park or summit of the last worked spot, when a Needed row named one: the MAIN window's
     /// log line fills it with `work_call`. Cleared with `work_call`; never a hunt, never a tag.
     work_park: Option<crate::dto::WorkPark>,
+    /// The last worked spot's own frequency in Hz, set by the Work and taken by
+    /// [`Self::note_work_call`], which tells the programs on Nexus's TCI server of the click with
+    /// the call it records ([`tci_spots`]).
+    work_spot_hz: Option<i64>,
     /// The last worked spot's Work came from afar (a computer driving this station, or Remote's own
     /// Work) and entered its section without arming Enable TX (`arm_manual` false). A window
     /// following the hint opens that cockpit without re-asserting the section: from the station's
@@ -4104,6 +4108,8 @@ pub struct Engine {
     /// Nexus's spots for the SDR program's panadapter, as the station last chose them. See
     /// [`tci_spots`].
     tci_spots: tci_spots::PanadapterSpots,
+    /// The spots programs on Nexus's TCI server sent, for the band map. See [`tci_spots`].
+    tci_program_spots: tci_spots::ProgramSpots,
     scope_error: Option<String>,
     /// See `RadioStatus::scope_span_refused`.
     scope_span_refused: Option<String>,
@@ -6038,6 +6044,7 @@ impl Engine {
             work_view: None,
             work_call: None,
             work_park: None,
+            work_spot_hz: None,
             work_afar: false,
             qso_report_sent: None,
             stalled_qso: None,
@@ -6278,6 +6285,7 @@ impl Engine {
             cat_share_error: None,
             tci_server: None,
             tci_spots: tci_spots::PanadapterSpots::default(),
+            tci_program_spots: tci_spots::ProgramSpots::default(),
             scope_error: None,
             scope_span_refused: None,
             scope_mode_code: None,
@@ -9473,6 +9481,8 @@ impl Engine {
         // …and whether this Work may arm: a window following the hint re-asserts the section only
         // for a Work made at the station.
         self.work_afar = !arm_manual;
+        // The spot's own frequency, which note_work_call tells programs with the call it records.
+        self.work_spot_hz = Some((freq_mhz * 1_000_000.0).round() as i64);
         self.work_call = None; // the command that has the call sets it via note_work_call
         self.work_park = None; // …and the park, via note_work_park
     }
@@ -9559,6 +9569,10 @@ impl Engine {
     /// window's log directly, so the call rides the snapshot and the main window prefills from it.
     pub fn note_work_call(&mut self, call: Option<String>) {
         self.work_call = call.filter(|c| !c.trim().is_empty());
+        // A click on a spot in Nexus: the programs on its TCI server are told, and that is all.
+        if let (Some(call), Some(hz)) = (self.work_call.clone(), self.work_spot_hz.take()) {
+            self.note_tci_spot_click(&call, hz);
+        }
     }
 
     /// Record the park or summit of the just-worked Needed row, after [`Self::note_work_call`]
