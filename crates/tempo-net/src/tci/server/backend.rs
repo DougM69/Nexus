@@ -118,7 +118,9 @@ pub enum Refusal {
     /// A `tci` key in the Digital section (item 8): FT8, FT4 and the other slot-timed modes go out
     /// through the server only once the loop bench has measured Nexus's added delay at or under
     /// 0.2 s and the recorded overs decode (the operator's ruling of 2026-10-19). Until then the
-    /// section refuses them.
+    /// section refuses them. Also a `tci` key in any section from a program whose last
+    /// `modulation:` asked a data mode: a data-mode over from a program is held like FT8 (the
+    /// operator's ruling of 2026-10-20).
     SlotTimed,
     /// A `tci` key with no audio stream started (item 9).
     AudioStream,
@@ -157,7 +159,8 @@ impl Refusal {
             Refusal::ClockRepair => "the clock is being repaired",
             Refusal::Section => "not in this section",
             Refusal::SlotTimed => {
-                "FT8, FT4 and other slot-timed modes may not transmit through TCI yet"
+                "FT8, FT4 and other slot-timed modes may not transmit through TCI yet, and a \
+                 data-mode over from a program is held like FT8"
             }
             Refusal::AudioStream => "no TCI audio stream",
             Refusal::CwText => {

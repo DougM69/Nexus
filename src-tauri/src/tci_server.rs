@@ -430,8 +430,10 @@ impl TciBackend for EngineTci {
         Ok(hz(dial))
     }
 
-    fn set_mode(&self, _client: ClientId, mode: &Word) -> Result<Word, Refusal> {
+    fn set_mode(&self, client: ClientId, mode: &Word) -> Result<Word, Refusal> {
         let mut e = engine_lock(&self.engine);
+        // What the program asked, whatever comes of it: a data mode holds its overs like FT8.
+        e.tci_note_modulation(client.get(), mode);
         if let Some(refusal) = e.tci_retune_refusal() {
             return Err(refusal);
         }

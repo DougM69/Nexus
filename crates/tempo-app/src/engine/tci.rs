@@ -24,7 +24,7 @@
 //! | 5 | the licence: a `tci` over across its whole passband, a microphone key as Nexus's own, Tune at its carrier, CW as Nexus's own CW | `Licence` |
 //! | 6 | nothing else owns the transmitter (a program re-asserting its own key passes, and its CW queues behind its own) | `Owner` |
 //! | 7 | no clock repair holds transmit (nor drops a key already held; CW is never admitted under one) | `ClockRepair` |
-//! | 8 | the section: a `tci` over or a microphone key in Phone, CW in CW, Tune in any; a `tci` over in Digital not yet | `Section`, `SlotTimed` |
+//! | 8 | the section: a `tci` over or a microphone key in Phone, CW in CW, Tune in any; a `tci` over in Digital not yet, nor in any section from a program whose last `modulation:` asked a data mode | `Section`, `SlotTimed` |
 //! | 9 | a `tci` over has the program's audio stream started | `AudioStream` |
 //!
 //! Item 1, receiver 0, is the server's. The verdict for a `tci` key is also what each program is
@@ -35,6 +35,13 @@
 //! bench has measured Nexus's added delay at or under 0.2 s and the recorded overs decode. Every
 //! tier of the Digital section is slot-timed, so until then a `tci` over in Digital is refused as
 //! `SlotTimed`. Allowing it is the one arm of the section rule in [`Engine::tci_verdict`].
+//!
+//! ⛔ AND A DATA-MODE OVER FROM A PROGRAM IS HELD LIKE FT8 (the operator's ruling of 2026-10-20), in
+//! whatever section Nexus is: a program whose last `modulation:` asked a data mode (`digu`, `digl`),
+//! as WSJT-X asks before its FT8 keys, has its `tci` overs refused as `SlotTimed` until it asks
+//! another mode, and an over it holds ends on the tick after it asks one
+//! ([`Engine::tci_note_modulation`]). Without it, FT8 from a program on the Phone screen went out
+//! wherever the licence let a phone emission through (every frequency, for the Open class).
 //!
 //! ## The three kinds of key
 //!
@@ -79,8 +86,10 @@
 use super::{now_unix_millis, reset_ft8_a7_without_waiting, DataFrame, Engine};
 use crate::mic::{MicDrop, MicFeed, MicFrame, MicGates, MicLatch, MicTick, TCI_OVER};
 use crate::settings::OperatingMode;
+use std::collections::HashSet;
 use std::time::Instant;
 use tempo_net::tci::server::{KeyKind, Refusal};
+use tempo_net::tci::wire::Word;
 
 mod cw;
 
@@ -138,6 +147,8 @@ pub(super) struct TciState {
     abort: bool,
     /// Programs' CW: their speed, and whose word the keyer was handed last.
     cw: cw::TciCw,
+    /// The programs whose last `modulation:` asked a data mode: their overs are held like FT8.
+    data_mode: HashSet<u64>,
 }
 
 impl Default for TciState {
@@ -152,6 +163,7 @@ impl Default for TciState {
             media: 0,
             abort: false,
             cw: cw::TciCw::default(),
+            data_mode: HashSet::new(),
         }
     }
 }
@@ -216,6 +228,10 @@ impl Engine {
         // lasts (`poll_cw_word`), so a program's CW is never queued under one, its own included.
         if (!again || ask == Ask::Cw) && self.clock_repair_holds_tx() {
             return Err(Refusal::ClockRepair);
+        }
+        // A data-mode over from a program is held like FT8, in any section (module header).
+        if ask == Ask::Over && self.tci.data_mode.contains(&program) {
+            return Err(Refusal::SlotTimed);
         }
         match (ask, self.settings.operating_mode) {
             (Ask::Over | Ask::Mic, OperatingMode::Phone)
@@ -393,6 +409,19 @@ impl Engine {
     /// the radio loop flushes and unkeys on its next tick (§3.1 item 4).
     pub fn tci_disconnected(&mut self, program: u64) {
         self.end_tci_program(program, "its connection ended");
+        self.tci.data_mode.remove(&program);
+    }
+
+    /// `modulation:0,<mode>` from `program`, whatever comes of the change itself (the CAT broker's
+    /// mode rule judges it after, and may refuse it): whether it asked a data mode (`digu`,
+    /// `digl`). From that ask until the program asks another mode, its audio overs are held like
+    /// FT8 (`SlotTimed`, in any section), and an over it holds ends on the radio loop's next tick.
+    pub fn tci_note_modulation(&mut self, program: u64, mode: &Word) {
+        if matches!(mode.as_str(), "digu" | "digl") {
+            self.tci.data_mode.insert(program);
+        } else {
+            self.tci.data_mode.remove(&program);
+        }
     }
 
     fn end_tci_program(&mut self, program: u64, why: &str) {
@@ -587,7 +616,12 @@ impl Engine {
             tx_allowed: self.tci_over_licensed() && self.tci_over_routed(),
             // Nexus's own key wins (§2.4): a tune, or the operator's own PTT, takes the transmitter.
             tuning: self.tuning || self.manual_ptt,
-            in_section: key.is_some_and(|k| k.section == self.settings.operating_mode),
+            // G4: the section it was admitted in, and its program has asked no data mode since
+            // (a data-mode over is held like FT8).
+            in_section: key.is_some_and(|k| {
+                k.section == self.settings.operating_mode
+                    && !self.tci.data_mode.contains(&k.program)
+            }),
             // G5: still its owner's. The socket is the server's: a lost one ends the key at once
             // (`tci_disconnected`).
             presence: key.is_some_and(|k| !k.mic),
@@ -846,6 +880,11 @@ mod tests {
         Tune,
     }
 
+    /// A `modulation:` word, as the server hands it over.
+    fn word(w: &str) -> Word {
+        Word::new(w).expect("a mode word")
+    }
+
     fn try_key(e: &mut Engine, program: u64, t: Try) -> Result<(), Refusal> {
         match t {
             Try::Over(started) => e.tci_key(program, KeyKind::Tci, started),
@@ -1009,6 +1048,18 @@ mod tests {
                 |e| *e = digital(),
                 Try::Over(true),
                 Err(Refusal::SlotTimed),
+            ),
+            (
+                "an over in Phone from a program that asked a data mode",
+                |e| e.tci_note_modulation(P1, &word("digu")),
+                Try::Over(true),
+                Err(Refusal::SlotTimed),
+            ),
+            (
+                "control: a microphone key from a program that asked a data mode",
+                |e| e.tci_note_modulation(P1, &word("digu")),
+                Try::Mic,
+                Ok(()),
             ),
             (
                 "an over with no audio stream",
@@ -1733,6 +1784,70 @@ mod tests {
         );
         s.tick(20);
         assert_eq!(s.e.tci_owner(), None, "the program kept its key");
+    }
+
+    /// ⛔ A DATA-MODE OVER FROM A PROGRAM IS HELD LIKE FT8, IN ANY SECTION (the operator's ruling of
+    /// 2026-10-20). WSJT-X's shape on the Phone screen at 14.074 with the licence class Open, where
+    /// no other gate refuses a phone emission: `modulation:0,digu` and then `trx:0,true,tci` is
+    /// refused as slot-timed, told `tx_enable` false, and arms nothing; `digl` the same. CONTROLS:
+    /// another program that asked `usb` is admitted (one program's ask holds only that program), and
+    /// the first one's later `usb` lets its next over in. A lost connection forgets its ask. An over
+    /// keyed before its program asks a data mode ends with its abort on the next tick.
+    #[test]
+    fn a_programs_data_mode_over_is_held_like_ft8_in_any_section() {
+        let mut e = phone();
+        e.set_license_class("open");
+        e.set_frequency(14.074, "20m", "USB");
+        assert!(
+            e.tx_allowed() && e.tci_over_licensed(),
+            "premise: the Open class lets a phone emission out at 14.074"
+        );
+        e.tci_note_modulation(P1, &word("digu"));
+        assert_eq!(
+            e.tci_key(P1, KeyKind::Tci, true),
+            Err(Refusal::SlotTimed),
+            "WSJT-X's shape"
+        );
+        assert!(!e.tci_tx_enable(P1, true), "told it may transmit");
+        assert!(!e.tci_over_armed(), "an over was armed");
+        e.tci_note_modulation(P2, &word("usb"));
+        assert_eq!(
+            e.tci_key(P2, KeyKind::Tci, true),
+            Ok(()),
+            "control: a program that asked usb"
+        );
+        e.tci_release(P2);
+        e.tci_note_modulation(P1, &word("digl"));
+        assert_eq!(
+            e.tci_key(P1, KeyKind::Tci, true),
+            Err(Refusal::SlotTimed),
+            "digl"
+        );
+        e.tci_note_modulation(P1, &word("usb"));
+        assert_eq!(
+            e.tci_key(P1, KeyKind::Tci, true),
+            Ok(()),
+            "control: after its usb"
+        );
+        e.tci_release(P1);
+        e.tci_note_modulation(P2, &word("digu"));
+        e.tci_disconnected(P2);
+        assert_eq!(
+            e.tci_key(P2, KeyKind::Tci, true),
+            Ok(()),
+            "a lost program's ask outlived it"
+        );
+        // Asked part way through an over: it ends with its abort on the next tick.
+        let mut s = Scene::new(phone());
+        s.keyed();
+        s.e.tci_note_modulation(P1, &word("digu"));
+        s.audio(P1, 20, 0.5);
+        assert_eq!(
+            s.tick(20),
+            MicTick::Idle,
+            "the over went on after its program asked digu"
+        );
+        assert!(s.e.take_tci_abort(), "no abort");
     }
 
     /// ⛔ A PROGRAM'S OVER NEVER GOES OUT ON THE RADIO'S OWN MICROPHONE. With Nexus's own Flex client

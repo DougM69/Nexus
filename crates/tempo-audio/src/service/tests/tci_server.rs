@@ -3,16 +3,18 @@
 //! out its tail on its owner's release, and ends hard (unkeyed, its queued audio flushed) within a
 //! tick of every stop, its 300 ms gap, its 10-minute ceiling and its program's loss; a CAT rebuild
 //! under it unkeys it through both links; a loop rebuilt under it plays none of it; and programs'
-//! slot-timed overs stay refused. The program is the engine's own API as the server's backend calls
-//! it (`tci_key`, `tci_tx_audio`, `tci_release`, `tci_end_own`, `tci_disconnected`); the server and
-//! its wire are the app's, tested there. The loop's monotonic clock is the test's (`mono_origin`),
-//! so a program's audio arrives at the test's moments.
+//! slot-timed overs stay refused, a program's data-mode over with them on any screen. The program is
+//! the engine's own API as the server's backend calls it (`tci_key`, `tci_tx_audio`, `tci_release`,
+//! `tci_end_own`, `tci_disconnected`, `tci_note_modulation`); the server and its wire are the app's,
+//! tested there. The loop's monotonic clock is the test's (`mono_origin`), so a program's audio
+//! arrives at the test's moments.
 
 use super::cw_stop::logging_rigctld;
 use super::udp_requests::halt_tx_datagram;
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempo_net::tci::server::{KeyKind, Mic, Refusal};
+use tempo_net::tci::wire::Word;
 
 /// The program that keys, and another one.
 const P1: u64 = 1;
@@ -767,6 +769,48 @@ fn a_programs_slot_timed_over_stays_refused_and_keys_nothing() {
     assert!(
         s.backend.played.contains(&0.5),
         "control: in Phone it plays"
+    );
+}
+
+/// ⛔ A DATA-MODE OVER FROM A PROGRAM IS HELD LIKE FT8 ON THE PHONE SCREEN TOO (the operator's ruling
+/// of 2026-10-20): at 14.074 with the licence class Open, where no other gate refuses it, a program
+/// whose last `modulation:` asked `digu` (WSJT-X's shape before its FT8) is refused as slot-timed,
+/// and two seconds of its audio key nothing, play nothing and are not taken. CONTROL: once the same
+/// program asks `usb`, its voice over keys and plays.
+#[test]
+fn a_programs_data_mode_over_on_the_phone_screen_keys_nothing() {
+    let word = |w: &str| Word::new(w).expect("a mode word");
+    let mut s = Scene::new();
+    {
+        let mut e = s.engine();
+        e.set_license_class("open");
+        e.set_frequency(14.074, "20m", "USB");
+        e.tci_note_modulation(P1, &word("digu"));
+    }
+    let key = s.key(P1);
+    let (mut taken, mut keyed_at) = (false, None);
+    let mut t = 0.0;
+    while t <= 2_000.0 {
+        taken |= s.audio(P1, t, 0.5);
+        s.step(t);
+        if s.rig.keyed && keyed_at.is_none() {
+            keyed_at = Some(t);
+        }
+        t += TICK;
+    }
+    assert_eq!(keyed_at, None, "the program's data-mode over keyed the rig");
+    assert!(s.backend.played.is_empty(), "its audio was played");
+    assert!(!taken, "its audio was taken");
+    assert_eq!(key, Err(Refusal::SlotTimed), "the key");
+    s.engine().tci_note_modulation(P1, &word("usb"));
+    assert_eq!(s.key(P1), Ok(()), "control: its key after usb");
+    while t <= 2_600.0 {
+        s.tick(t, Some(0.5));
+        t += TICK;
+    }
+    assert!(
+        s.rig.keyed && s.backend.played.contains(&0.5),
+        "control: after usb its voice over keys and plays"
     );
 }
 

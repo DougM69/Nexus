@@ -55,9 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the high-SWR cutoff, a band or radio change, the switch turned off, the program's own stop or its lost
   connection, 0.3 seconds with no audio from it, and 10 minutes on the air. Programs on a Flex's native connection
   now hear the radio's own receive audio (DAX) instead of the sound card's; the Icom network connection carries no
-  audio, so there they hear the sound card. FT8, FT4 and the other slot-timed modes from programs stay refused.
-  NEEDS-BENCH: a program's voice audio through Share by TCI into a dummy load, on a sound-card radio and on a Flex:
-  the key on its first audio, its tail on its release, and each stop.
+  audio, so there they hear the sound card. FT8, FT4 and the other slot-timed modes from programs stay refused, and
+  so does any over from a program whose last mode request was a data mode (DIGU or DIGL), on whatever screen Nexus
+  is: WSJT-X asking for DIGU and then keying is held like FT8 even on the Phone screen. NEEDS-BENCH: a program's
+  voice audio through Share by TCI into a dummy load, on a sound-card radio and on a Flex: the key on its first
+  audio, its tail on its release, and each stop; and that WSJT-X, JTDX and MSHV each ask for DIGU or DIGL before
+  they key.
 - **Every contest log numbers its contacts 1, 2, 3…** The contest screen's log and the logger window's last
   contacts show each contact's number in a first column, in every contest. In a contest that sends a serial
   (Sweepstakes, CQ WPX) the number is the serial that contact was sent; in every other contest it counts the

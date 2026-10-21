@@ -1709,6 +1709,74 @@ fn slot_timed_modes_stay_refused_through_the_server() {
     );
 }
 
+/// ⛔ THE OPERATOR'S RULING OF 2026-10-20, THROUGH THE SERVER: a data-mode over from a program is
+/// held like FT8, in any section. WSJT-X's shape, `modulation:0,digu;` and then `trx:0,true,tci;`,
+/// with Nexus on the Phone screen at 14.074 and the licence class Open, where no other gate
+/// refuses a phone emission: answered `trx:0,false;`, the program's last refusal is the slot-timed
+/// one, it is not told it may transmit, and nothing is armed. CONTROLS: another program that asked
+/// `modulation:0,usb;` keys as before; and the first program's later `modulation:0,usb;` lets its
+/// next voice over key.
+#[test]
+fn a_programs_data_mode_over_is_held_like_ft8_through_the_server() {
+    let engine = phone();
+    {
+        let mut e = engine_lock(&engine);
+        e.set_license_class("open");
+        e.set_frequency(14.074, "20m", "USB");
+        assert!(
+            e.tx_allowed(),
+            "premise: the Open class keys on 14.074 in Phone"
+        );
+    }
+    let (mut m, _feed) = serving_with_audio(&engine);
+    let h = handle(&m);
+    let (mut a, a_id) = listening(&h, port(&m));
+    // The server runs a program's commands in order: its key is judged after its modulation.
+    a.send("modulation:0,digu;");
+    a.send("trx:0,true,tci;");
+    a.lines_until("trx:0,false;");
+    m.publish();
+    let refused = engine_lock(&engine)
+        .snapshot()
+        .radio
+        .tci_server
+        .and_then(|s| s.programs.into_iter().find(|p| p.id == a_id.get()))
+        .and_then(|p| p.refused);
+    assert_eq!(
+        refused.as_deref(),
+        Some(Refusal::SlotTimed.text()),
+        "the program's last refusal"
+    );
+    assert!(
+        !told_tx_enable(&engine, &h, a_id),
+        "told it may transmit a data-mode over"
+    );
+    assert!(
+        !engine_lock(&engine).tci_over_armed(),
+        "a data-mode over armed"
+    );
+    // CONTROL: another program that asked usb keys as before.
+    let (mut b, b_id) = listening(&h, port(&m));
+    b.send("modulation:0,usb;");
+    b.send("trx:0,true,tci;");
+    assert!(
+        eventually(&engine, |e| e.tci_owner() == Some(b_id.get())),
+        "control: a program that asked usb was not admitted"
+    );
+    b.send("trx:0,false;");
+    assert!(
+        eventually(&engine, |e| e.tci_owner().is_none()),
+        "premise: B let go"
+    );
+    // CONTROL: the first program's later usb lets its next voice over key.
+    a.send("modulation:0,usb;");
+    a.send("trx:0,true,tci;");
+    assert!(
+        eventually(&engine, |e| e.tci_owner() == Some(a_id.get())),
+        "control: after its usb, its voice over was not admitted"
+    );
+}
+
 /// A station in the CW section on 40 m with every privilege, transmit armed by the operator after
 /// the move from 20 m (a band change holds programs' keys until that arm), the operator's own CW at
 /// 20 WPM, and "Programs on TCI may transmit" on.
