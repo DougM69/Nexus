@@ -4536,8 +4536,13 @@ impl FieldDayStation {
             let m = Msg::parse(&d.message);
             match (self.state, &m) {
                 // S&P: a CQ that carries a grid → my grid. (A CQ without one is from a
-                // station whose call the grid message cannot carry.)
-                (FdState::Listening, Msg::Cq { de, grid, .. }) if !grid.is_empty() => {
+                // station whose call the grid message cannot carry.) A CQ from a call the
+                // decoder could not resolve, `<...>`, names nobody and is passed by: WSJT-X puts
+                // only a callsign into its DX call box (`Radio::is_callsign`, mainwindow.cpp
+                // 9402), so it builds no message to one.
+                (FdState::Listening, Msg::Cq { de, grid, .. })
+                    if !grid.is_empty() && !de.contains("<...>") =>
+                {
                     if self.worked_before(de, Some(grid)) {
                         self.transcript.push(format!("skip dupe {de}"));
                         continue;
@@ -4594,8 +4599,11 @@ impl FieldDayStation {
             let m = Msg::parse(&d.message);
             let rpt = d.snr.clamp(-30, 49);
             match (self.state, &m) {
-                // S&P: a CQ that carries a grid → my grid.
-                (FdState::Listening, Msg::Cq { de, grid, .. }) if !grid.is_empty() => {
+                // S&P: a CQ that carries a grid → my grid. Not a CQ from `<...>`, as in the ARRL
+                // VHF contests.
+                (FdState::Listening, Msg::Cq { de, grid, .. })
+                    if !grid.is_empty() && !de.contains("<...>") =>
+                {
                     if self.worked_before(de, Some(grid)) {
                         self.transcript.push(format!("skip dupe {de}"));
                         continue;
@@ -6642,6 +6650,34 @@ mod tests {
             1,
             "the partner's RR73 still closes it"
         );
+    }
+
+    /// ⛔ The ARRL VHF and standard messages' S&P passes by a CQ from a call the decoder could not
+    /// resolve, as WSJT-X builds no message to one: it takes a CQ's call from the word after it
+    /// (`deCallAndGrid`, decodedtext.cpp 212-224), which `...` cannot be, and puts only a
+    /// callsign into its DX call box (`Radio::is_callsign`, mainwindow.cpp 9402). The station's
+    /// next CQ, its call resolved, is answered as before.
+    #[test]
+    fn vhf_and_standard_sp_pass_by_a_cq_from_an_unresolved_call() {
+        for (event, cq) in [
+            ("arrlvhf_jan", "CQ TEST"),
+            ("txqp", "CQ TEST"),
+            ("txqp", "CQ QP"),
+        ] {
+            let mut sp = ft8_station(event, "FN42", false);
+            sp.observe(&[dec(&format!("{cq} <...> EN37"))], 1);
+            assert_eq!(
+                (sp.state, next(&sp)),
+                (FdState::Listening, String::new()),
+                "{event} {cq}: passed by"
+            );
+            sp.observe(&[dec(&format!("{cq} <K9QQQ/M> EN37"))], 3);
+            assert_eq!(
+                (sp.state, next(&sp)),
+                (FdState::AwaitExchange, "<K9QQQ/M> K1ABC FN42".to_string()),
+                "{event} {cq}: its next CQ, resolved, is answered"
+            );
+        }
     }
 
     #[test]

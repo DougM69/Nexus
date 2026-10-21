@@ -772,6 +772,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds when your own call ends in /P or /R too. Your grid, report and roger are unchanged; so is the RRR you send in
   place of RR73 when you prefer it, and everything when your own call has another suffix or a prefix. NEEDS-BENCH:
   FT8 and FT4, a station signing /M or /QRP that runs WSJT-X, answering its CQ and answered by it.
+- **ARRL VHF contests and contests with the standard messages: S&P no longer answers a CQ from `<...>`.** With TX
+  on in the Contest screen's S&P, a station whose call has a suffix or a prefix can show as `CQ TEST <...> EN37`
+  until Nexus has decoded its call in full. S&P answered that CQ, sending your grid to `<...>`, a call no one could
+  read. It now passes such a CQ by, as Field Day's S&P already did and as WSJT-X answers no `<...>`, and answers the
+  station's next CQ once its call shows. NEEDS-BENCH: an ARRL VHF contest on FT8, S&P with TX on, a station signing
+  /M or /QRP whose call Nexus has not decoded in full calling `CQ TEST` with its call hashed.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.

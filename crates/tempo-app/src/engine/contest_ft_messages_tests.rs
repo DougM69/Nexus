@@ -1888,6 +1888,43 @@ fn a_double_click_on_a_cq_from_a_resolved_hashed_call_works_as_before() {
     }
 }
 
+/// ⛔ THE CONTEST'S S&P PASSES BY A CQ FROM A CALL THE DECODER COULD NOT RESOLVE, with TX on, in
+/// every set of messages, as WSJT-X builds no message to `<...>`: it takes a CQ's call from the
+/// word after it (`deCallAndGrid`, decodedtext.cpp 212-224), which `...` cannot be, and puts only
+/// a callsign into its DX call box (`Radio::is_callsign`, mainwindow.cpp 9402). In ARRL Field Day
+/// (which passed it by already), an ARRL VHF contest and a contest with the standard messages, on
+/// FT8 and FT4, `CQ … <...> EN37` queues nothing and keys nothing; the station's next CQ, its
+/// call resolved, is answered as before.
+#[test]
+fn the_contests_sp_passes_by_a_cq_from_an_unresolved_call() {
+    let print = |b: &[i8]| tempo_fast::unpack77(b).unwrap_or_default();
+    for (contest, cq, answer) in HASHED_CQS {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            let what = format!("{contest:?} {}", tier_name(tier));
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(tier);
+            e.set_mode("fieldday-sp").expect("S&P starts");
+            e.set_tx_enabled(true);
+            let (sent, unknown) = hashed_cq(cq);
+            let unresolved = print(&unknown);
+            assert_eq!(unresolved, format!("{cq} <...> EN37"), "{what}: unresolved");
+            e.ingest_decodes_for_test(&[heard(&unresolved)], 2);
+            assert_eq!(
+                (queued(&e), keyed(&mut e, 2)),
+                (None, None),
+                "{what}: passed by"
+            );
+            assert!(listening(&e), "{what}: still listening");
+            e.ingest_decodes_for_test(&[heard(&print(&sent))], 4);
+            assert_eq!(
+                keyed(&mut e, 4).as_deref(),
+                Some(answer),
+                "{what}: its next CQ, resolved, is answered"
+            );
+        }
+    }
+}
+
 /// The cockpit's other clicks, and every click where the contest's own FT8/FT4 messages do not
 /// apply, work the station as they always have: a double-click on a station calling you, a
 /// roster click, a double-click with the contest switch off, on FT2, and on your own CQ.
