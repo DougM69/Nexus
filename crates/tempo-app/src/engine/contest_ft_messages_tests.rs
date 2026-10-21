@@ -1360,7 +1360,8 @@ fn the_contests_sp_completes_a_field_day_contact_only_with_the_station_it_called
 /// message fills with the brackets dropped (decodedtext.cpp 66). W9XYZ/M's call is nonstandard, so
 /// its Field Day exchange names it hashed: `K1ABC <W9XYZ/M> R 1D WI` to S&P, `K1ABC <W9XYZ/M> 1D
 /// WI` to the run. In ARRL Field Day on FT8 and FT4 and in Winter Field Day, S&P and Running, the
-/// row and the exported ADIF's CALL are `W9XYZ/M`, and every over is what it was.
+/// row and the exported ADIF's CALL are `W9XYZ/M`, and every over is what it was, but RR73 and 73,
+/// which go as WSJT-X writes them (`rr73_and_73_to_a_nonstandard_call_are_wsjtxs_bit_for_bit`).
 #[test]
 fn the_contest_logs_a_hashed_call_without_its_brackets() {
     // The rows, and every CALL the exported ADIF writes.
@@ -1402,7 +1403,7 @@ fn the_contest_logs_a_hashed_call_without_its_brackets() {
         e.ingest_decodes_for_test(&[heard(&format!("K1ABC <W9XYZ/M> R {theirs} WI"))], 4);
         assert_eq!(
             keyed(&mut e, 4).as_deref(),
-            Some("<W9XYZ/M> K1ABC RR73"),
+            Some("W9XYZ/M <K1ABC> RR73"),
             "{what}: RR73"
         );
         assert_eq!(logged(&e), row(), "{what}: logged");
@@ -1421,11 +1422,59 @@ fn the_contest_logs_a_hashed_call_without_its_brackets() {
         e.ingest_decodes_for_test(&[heard("K1ABC <W9XYZ/M> RR73")], 4);
         // ARRL Field Day's runner answers RR73 with 73; Winter Field Day's goes back to CQ.
         let close = match contest {
-            "arrlfd" => "<W9XYZ/M> K1ABC 73".to_string(),
+            "arrlfd" => "W9XYZ/M <K1ABC> 73".to_string(),
             _ => cq,
         };
         assert_eq!(keyed(&mut e, 4), Some(close), "{what}: the close");
         assert_eq!(logged(&e), row(), "{what}: logged");
+    }
+}
+
+/// ⭐ RR73 AND 73 TO A NONSTANDARD CALL ARE WSJT-X 3.0.2'S, BIT FOR BIT. In ARRL Field Day on FT8
+/// and FT4, S&P working a runner signing W9XYZ/M and the run working such a caller: each over
+/// this station keys packs to the 77 bits of the over WSJT-X writes in its place, and on FT4 to
+/// the same tones (`genStdMsgs`, mainwindow.cpp: Tx2 and Tx3 `t0a` and the exchange, 9596,
+/// 9629-9631, 9655-9657; Tx4 and Tx5 `hisCall <my_callsign>`, 9701 and 9709). RR73 and 73 are
+/// type 4 messages. The FT8 encoder is the one the radio loop keys with: WSJT-X's packer,
+/// ported, held to the vendored one by `crates/modes/tests/wsjt77_golden.rs`.
+#[test]
+fn rr73_and_73_to_a_nonstandard_call_are_wsjtxs_bit_for_bit() {
+    let bits = |t: &str| bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(t));
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        let mut e = engine_for("arrlfd", MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-sp").expect("S&P starts");
+        e.set_tx_enabled(true);
+        e.ingest_decodes_for_test(&[heard("CQ W9XYZ/M")], 2);
+        let tx2 = keyed(&mut e, 2).expect("S&P's answer");
+        e.ingest_decodes_for_test(&[heard("K1ABC <W9XYZ/M> R 1D WI")], 4);
+        let tx4 = keyed(&mut e, 4).expect("S&P's RR73");
+
+        let mut e = engine_for("arrlfd", MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-run").expect("the run starts");
+        keyed(&mut e, 0).expect("the CQ");
+        e.ingest_decodes_for_test(&[heard("K1ABC <W9XYZ/M> 1D WI")], 2);
+        let tx3 = keyed(&mut e, 2).expect("the run's R and exchange");
+        e.ingest_decodes_for_test(&[heard("K1ABC <W9XYZ/M> RR73")], 4);
+        let tx5 = keyed(&mut e, 4).expect("the run's 73");
+
+        // (the over, this station's, WSJT-X's, its 77-bit type)
+        for (over, ours, wsjtx, kind) in [
+            ("Tx2", tx2, "<W9XYZ/M> K1ABC 2B EMA", "i3=0 n3=3"),
+            ("Tx3", tx3, "<W9XYZ/M> K1ABC R 2B EMA", "i3=0 n3=3"),
+            ("Tx4", tx4, "W9XYZ/M <K1ABC> RR73", "i3=4"),
+            ("Tx5", tx5, "W9XYZ/M <K1ABC> 73", "i3=4"),
+        ] {
+            let what = format!("{} {over} {ours:?}", tier_name(tier));
+            assert_eq!(air_form(wsjtx).0, kind, "{what}: WSJT-X's packs");
+            assert_eq!(bits(&ours), bits(wsjtx), "{what}: WSJT-X's 77 bits");
+            assert_eq!(
+                tones_of(modes::ModeKind::Ft4, &ours),
+                tones_of(modes::ModeKind::Ft4, wsjtx),
+                "{what}: WSJT-X's FT4 tones"
+            );
+        }
     }
 }
 

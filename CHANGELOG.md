@@ -724,6 +724,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the contests with the standard messages already log it and as WSJT-X does, so that station's next CQ is a dupe
   like any other. What you send on the air during the contact is unchanged. NEEDS-BENCH: ARRL Field Day on FT8, S&P
   on a station signing /M or /QRP.
+- **Field Day: your RR73 and 73 to a station signing W9XYZ/M are the ones WSJT-X sends.** In the Contest screen on
+  Field Day's messages, closing a contact with a station whose call has a suffix such as /M, /4 or /QRP, or a prefix
+  such as PJ4/, sent `<W9XYZ/M> K1ABC RR73`, a different message from the one WSJT-X sends. Nexus now sends WSJT-X's,
+  `W9XYZ/M <K1ABC> RR73` and `W9XYZ/M <K1ABC> 73`: that station's call in full and yours in angle brackets, the same
+  message bit for bit. Your exchange and your roger to that station are unchanged, and so is everything when your
+  own call has a suffix or a prefix. NEEDS-BENCH: ARRL Field Day on FT8, S&P and Running with a station signing /M
+  or /QRP that runs WSJT-X.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.
