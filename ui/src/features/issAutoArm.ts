@@ -32,7 +32,7 @@
 
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The
-// three notices come from the catalog; the DIAL and the MODE are interpolated
+// notices come from the catalog; the DIAL and the MODE are interpolated
 // from the constants below and never become text, because a decimal comma
 // reaching 145.800 is an operating fault rather than a cosmetic one.
 
@@ -204,8 +204,12 @@ export function tickIssAutoArm(
     if (!ISS_SCREENS.has(screen) || passHoldsDial) {
       if (toldAos !== pass.aosUnix) {
         toldAos = pass.aosUnix
+        // On the SSTV screen only a held pass gets here, so the notice says that, and does not ask
+        // the operator to open the screen they are on.
         pushToast(
-          t('sat.iss.overhead', { dial: ISS_DIAL_MHZ.toFixed(3), mode: ISS_MODE }),
+          screen === 'sstv'
+            ? t('sat.iss.overhead.onSstv', { dial: ISS_DIAL_MHZ.toFixed(3), mode: ISS_MODE })
+            : t('sat.iss.overhead', { dial: ISS_DIAL_MHZ.toFixed(3), mode: ISS_MODE }),
           'info',
           12000,
           { prominent: true },

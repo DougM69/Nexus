@@ -5194,6 +5194,7 @@ export const EN = {
   'sat.iss.armed': 'ISS overhead — tuned {{dial}} {{mode}}, SSTV armed',
   // The same pass seen from any screen but SSTV or Satellites: nothing was touched.
   'sat.iss.overhead': 'ISS overhead — SSTV on {{dial}} {{mode}}. Open SSTV to receive it; your radio was not retuned.',
+  'sat.iss.overhead.onSstv': 'ISS overhead: SSTV on {{dial}} {{mode}}. A satellite pass has the radio, so it was not retuned.',
   // The same pass where no radio here can receive the downlink: said once a session, and nothing
   // is tuned on any screen. The path names the switch where the Settings panel shows it.
   'sat.iss.cannotReceive':
@@ -11428,6 +11429,7 @@ export const EN = {
   'cw.turn.closing.bare': 'Log it',
   'cw.turn.noReply': 'No reply · {{key}}',
   'cw.turn.noReply.bare': 'No reply',
+  'cw.turn.fiveNnTu': 'Your turn · send 5NN TU',
   'cw.turn.fiveNnTu.title': 'Send 5NN TU. The Reply key would send a whole ragchew over.',
   'cw.turn.say.yourTurn': 'Your turn: {{key}}.',
   'cw.turn.say.yourTurn.bare': 'Your turn.',

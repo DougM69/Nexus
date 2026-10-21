@@ -130,7 +130,9 @@ export function lamp(turn: CwTurn, keys: readonly string[], esm: boolean): Lamp 
       glow = 'now'
       if (turn.hint === 'type') label = t('cw.turn.type')
       else if (turn.hint === 'fiveNnTu') {
-        label = t('cw.turn.yourTurn.bare')
+        // A DX coming back in a pileup. No key fits, so the lamp says what to send: nobody hovers
+        // in a pileup. The tooltip says why the Reply key does not fit.
+        label = t('cw.turn.fiveNnTu')
         title = `${t('cw.turn.fiveNnTu.title')}\n${base}`
       } else if (turn.hint === 'partial') {
         label = key ? t('cw.turn.partial', { key }) : t('cw.turn.partial.bare')

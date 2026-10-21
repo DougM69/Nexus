@@ -232,7 +232,12 @@ describe('tickIssAutoArm under a held satellite pass', () => {
   const now = 1_900_000_000
 
   it('on SSTV or Satellites announces the pass once and touches nothing', () => {
-    for (const screen of ['sstv', 'sats'] as const) {
+    // With SSTV already open, the notice says why the radio stayed rather than asking for SSTV.
+    const onSstv = 'ISS overhead: SSTV on 145.800 FM. A satellite pass has the radio, so it was not retuned.'
+    for (const [screen, notice] of [
+      ['sstv', onSstv],
+      ['sats', overhead()],
+    ] as const) {
       resetIssAutoArm()
       toasts.mockClear()
       const d = deps()
@@ -247,7 +252,7 @@ describe('tickIssAutoArm under a held satellite pass', () => {
         restored: d.setFrequency.mock.calls,
         disarmed: d.sstvAutoDisarm.mock.calls.length,
         notices: toasts.mock.calls.map((c) => c[0]),
-      }).toEqual({ screen, tuned: [], armed: [], restored: [], disarmed: 0, notices: [overhead()] })
+      }).toEqual({ screen, tuned: [], armed: [], restored: [], disarmed: 0, notices: [notice] })
     }
   })
 

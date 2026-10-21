@@ -218,7 +218,11 @@ describe('the ISS SSTV auto-arm under a held satellite pass', () => {
     // The stored opt-in reached the pass tick: without this the silence below proves nothing.
     expect(sent.map((c) => c.cmd)).toContain('get_iss_pass')
     expect(sent.filter((c) => MOVES_THE_RADIO.has(c.cmd))).toEqual([])
-    expect(document.body.textContent).toContain(t('sat.iss.overhead', { dial: '145.800', mode: 'FM' }))
+    // SSTV is already open: the notice says why the radio stayed, not to open SSTV.
+    expect(document.body.textContent).toContain(
+      'ISS overhead: SSTV on 145.800 FM. A satellite pass has the radio, so it was not retuned.',
+    )
+    expect(document.body.textContent).not.toContain(t('sat.iss.overhead', { dial: '145.800', mode: 'FM' }))
     expect(document.body.textContent).not.toContain(t('sat.iss.armed', { dial: '145.800', mode: 'FM' }))
   })
 })

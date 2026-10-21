@@ -406,7 +406,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   glows again: F2 to answer a CQ, F3 when a station comes back to you, F4 when they sign. "Your turn" waits for the
   other station to stop AND end its over (K, KN, BK, QRZ, part of your call with "?", a CQ), so a pause alone only
   says "Not sure"; your own over heard back through the radio never counts as theirs. When a DX comes back to you
-  in a pileup no key glows, and the lamp's tooltip says to send 5NN TU. The Decode pane's speed now reads
+  in a pileup no key glows, and the lamp says `Your turn · send 5NN TU`. The Decode pane's speed now reads
   `them 18 · you 25 WPM`, and a click sends at their speed for this contact. It never transmits: every send is still
   your own key press. It shows with the AI decoder on and the Decode pane shown, never in an unassisted contest
   entry, and unticking Turn Cue in ⊞ Panels hides it for good. A screen reader hears "Your turn" and "Hold" once
@@ -557,7 +557,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The ISS SSTV auto-arm leaves a satellite you are working alone.** With a transponder picked on the Satellites
   screen, an ISS pass made the auto-arm retune to 145.800 MHz, and Doppler tuning pulled the radio straight back to
   your satellite. While a satellite holds the radio, the auto-arm now only tells you the ISS is up, as it does on
-  other screens, and arms if you release the satellite while the ISS is still up.
+  other screens, and arms if you release the satellite while the ISS is still up. On the SSTV screen that notice
+  says the satellite pass has the radio, instead of asking you to open SSTV.
 - **RTTY's band channels now put your signal on the RTTY frequency with AFSK keying.** Picking a channel in the RTTY
   cockpit, entering RTTY on a band, or picking a band for RTTY tuned the radio to the channel's frequency as if it
   were the signal. With AFSK (the default) the signal sits a mark tone (2.125 kHz) below the dial, so on 20 m it went
