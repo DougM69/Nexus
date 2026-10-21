@@ -667,6 +667,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logs the contact, with your 73 in ARRL Field Day on FT8 and FT4 as before. The ARRL VHF contests and the
   contests with the standard messages already worked this way. NEEDS-BENCH: ARRL Field Day on FT8 and FT4, a
   station that calls you and a second station that sends you RR73.
+- **Field Day S&P: only the station you called completes the contact.** In the Contest screen's S&P on Field
+  Day's messages (ARRL Field Day, Winter Field Day, and FT1, DX1 or FT2 in any contest), once you had answered a
+  station's CQ, a rogered exchange sent to you by a different station logged that station and sent it your RR73,
+  and the station you had called then never got its RR73 or a place in your log. Now, as in WSJT-X, that exchange
+  is ignored: nothing is logged or sent to it, and your exchange keeps going to the station you called until its
+  own rogered exchange logs the contact and gets your RR73. The ARRL VHF contests and the contests with the
+  standard messages already worked this way. NEEDS-BENCH: ARRL Field Day on FT8 and FT4, a station whose CQ you
+  answer and a second station that sends you a rogered exchange.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.

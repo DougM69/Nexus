@@ -1280,6 +1280,81 @@ fn only_the_callers_own_confirmation_closes_a_contest_contact() {
     }
 }
 
+/// ⭐ THE CONTEST'S S&P COMPLETES A FIELD DAY CONTACT ONLY WITH THE STATION IT CALLED, as WSJT-X
+/// acts only on its QSO partner's message: `auto_sequence` passes a message to us on to
+/// `processMessage` only when its sender holds the DX call (mainwindow.cpp 7546-7549), and
+/// `processMessage` acts only on its partner's (9107-9110). With W9XYZ's CQ FD answered, N0ABC's
+/// rogered exchange to us logs nothing and sends N0ABC nothing: our exchange goes to W9XYZ again.
+/// W9XYZ's own then logs W9XYZ and is closed with RR73, as before: in ARRL Field Day on FT8, FT4
+/// and FT1, and in Winter Field Day. Heard in the same period as W9XYZ's, N0ABC's costs W9XYZ
+/// nothing.
+#[test]
+fn the_contests_sp_completes_a_field_day_contact_only_with_the_station_it_called() {
+    // The contest's S&P on `tier`, W9XYZ's CQ FD heard and answered with our exchange, `exch`.
+    let answered = |contest: &str, tier: Tier, exch: &str| {
+        let mut e = engine_for(contest, MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-sp").expect("S&P starts");
+        e.set_tx_enabled(true);
+        e.ingest_decodes_for_test(&[heard("CQ FD W9XYZ EN37")], 2);
+        let what = format!("{contest:?} {}", tier_name(tier));
+        assert_eq!(
+            keyed(&mut e, 2).as_deref(),
+            Some(exch),
+            "{what}: the answer"
+        );
+        e
+    };
+    // (contest, tier, our exchange to W9XYZ, the class W9XYZ and N0ABC send)
+    for (contest, tier, exch, class) in [
+        ("arrlfd", Tier::Ft8, "W9XYZ K1ABC 2B EMA", "1D"),
+        ("arrlfd", Tier::Ft4, "W9XYZ K1ABC 2B EMA", "1D"),
+        ("arrlfd", Tier::TempoFast, "W9XYZ K1ABC 2B EMA", "1D"),
+        ("wfd", Tier::Ft8, "W9XYZ K1ABC 1H EMA", "1H"),
+    ] {
+        let what = format!("{contest:?} {}", tier_name(tier));
+        let mut e = answered(contest, tier, exch);
+        e.ingest_decodes_for_test(&[heard(&format!("K1ABC N0ABC R {class} WI"))], 4);
+        assert_eq!(
+            rows_of(&e),
+            Vec::<String>::new(),
+            "{what}: N0ABC's logs nothing"
+        );
+        assert_eq!(
+            keyed(&mut e, 4).as_deref(),
+            Some(exch),
+            "{what}: W9XYZ's again, nothing to N0ABC"
+        );
+        e.ingest_decodes_for_test(&[heard(&format!("K1ABC W9XYZ R {class} WI"))], 6);
+        let row = format!("W9XYZ CLASS={class},SECTION=WI");
+        assert_eq!(rows_of(&e), [row], "{what}: W9XYZ's own logs W9XYZ");
+        assert_eq!(
+            keyed(&mut e, 6).as_deref(),
+            Some("W9XYZ K1ABC RR73"),
+            "{what}: and gets RR73"
+        );
+    }
+    // N0ABC's rogered exchange in the same period as W9XYZ's, before it or after it.
+    let stranger = modes::Decode {
+        freq: 1720.0,
+        ..heard("K1ABC N0ABC R 1D WI")
+    };
+    let own = heard("K1ABC W9XYZ R 1D WI");
+    for (order, both) in [
+        ("N0ABC's first", [stranger.clone(), own.clone()]),
+        ("W9XYZ's first", [own, stranger]),
+    ] {
+        let mut e = answered("arrlfd", Tier::Ft8, "W9XYZ K1ABC 2B EMA");
+        e.ingest_decodes_for_test(&both, 4);
+        assert_eq!(rows_of(&e), ["W9XYZ CLASS=1D,SECTION=WI"], "{order}");
+        assert_eq!(
+            keyed(&mut e, 4).as_deref(),
+            Some("W9XYZ K1ABC RR73"),
+            "{order}: W9XYZ gets its RR73"
+        );
+    }
+}
+
 /// Whether the station is in the contest's S&P, listening, with nothing to send.
 fn listening(e: &Engine) -> bool {
     matches!(&e.mode, Mode::FieldDay { station, running: false }

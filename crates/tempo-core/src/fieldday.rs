@@ -4421,6 +4421,12 @@ impl FieldDayStation {
                     ));
                 }
                 // S&P: the runner rogered + sent their exchange → log + RR73.
+                //
+                // ⭐ Only the station called, by its call, as WSJT-X acts only on its QSO
+                // partner's message (`auto_sequence`, mainwindow.cpp 7546-7549, and
+                // `processMessage`, 9107-9110: the sender must be the DX call). A rogered exchange
+                // to us from anyone else logs nothing and sends nothing back, and the station
+                // called keeps getting our exchange.
                 (
                     FdState::AwaitExchange,
                     Msg::FieldDay {
@@ -4430,7 +4436,7 @@ impl FieldDayStation {
                         class,
                         section,
                     },
-                ) if self.to_my_call(to) => {
+                ) if self.to_my_call(to) && self.from_dx(de) => {
                     self.log.log(de, class, section, slot);
                     self.pending = Some(self.rr73(de));
                     self.state = FdState::Done;
@@ -6351,6 +6357,109 @@ mod tests {
                 assert_eq!(next(&run), close, "{what}: and closes as before");
             }
         }
+    }
+
+    /// ⭐ Field Day's S&P completes a contact only with the station it called, as WSJT-X acts only
+    /// on its QSO partner's message: `auto_sequence` passes a message to us on to
+    /// `processMessage` only when its sender holds the DX call (mainwindow.cpp 7546-7549), and
+    /// `processMessage` acts only on its partner's (9107-9110). With W9XYZ called, by S&P's own
+    /// pounce on its CQ or by the operator's double-click, a rogered exchange to us from N0ABC, or
+    /// from a call the decoder could not resolve (`<...>`), logs nothing and sends that station
+    /// nothing: my exchange goes to W9XYZ again. W9XYZ's own then logs W9XYZ and is closed with
+    /// RR73, as before. So in ARRL Field Day on FT8 and FT4, where the station runs WSJT-X's Field
+    /// Day activity, on FT1, and in Winter Field Day. Heard in the same period, N0ABC's costs W9XYZ
+    /// nothing; a nonstandard call of mine, which the exchanges name hashed, changes none of it;
+    /// and W9XYZ's call hashed is still W9XYZ's, by its base call.
+    #[test]
+    fn field_days_sp_completes_a_contact_only_with_the_station_it_called() {
+        // Each row as its call, class and section.
+        let rows = |st: &FieldDayStation| -> Vec<String> {
+            let row = |q: &LoggedQso| format!("{} {} {}", q.call, q.class(), q.section());
+            st.log.qsos().iter().map(row).collect()
+        };
+        // W9XYZ called by `me`, on its CQ or by a double-click (`picked`), and my exchange to it
+        // gone out.
+        let called = |me: &str, event: FdEvent, class: &str, wsjtx: bool, picked: bool| {
+            let session = ContestSession::field_day(event, class, "EMA");
+            let mut sp = FieldDayStation::search_and_pounce(me, "FN42", session, "20M");
+            sp.set_wsjtx_field_day(wsjtx);
+            if picked {
+                sp.answer_cq("W9XYZ", "EN37");
+            } else {
+                sp.observe(&[dec("CQ FD W9XYZ EN37")], 0);
+            }
+            sp.after_tx();
+            sp
+        };
+        // (where, its event, my class, W9XYZ's and N0ABC's, the station runs WSJT-X's Field Day)
+        for (place, event, mine, theirs, wsjtx) in [
+            ("ARRL Field Day FT8/FT4", FdEvent::ArrlFd, "2B", "1D", true),
+            ("ARRL Field Day FT1", FdEvent::ArrlFd, "2B", "1D", false),
+            ("Winter Field Day", FdEvent::WinterFd, "1H", "1H", false),
+        ] {
+            let exch = format!("W9XYZ K1ABC {mine} EMA");
+            let own = format!("K1ABC W9XYZ R {theirs} WI");
+            let row = format!("W9XYZ {theirs} WI");
+            for picked in [false, true] {
+                let mut sp = called("K1ABC", event, mine, wsjtx, picked);
+                for other in ["N0ABC", "<...>"] {
+                    let what = format!("{place} picked={picked}, {other}'s");
+                    sp.observe(&[dec(&format!("K1ABC {other} R {theirs} WI"))], 1);
+                    assert_eq!(rows(&sp), Vec::<String>::new(), "{what}: nothing logged");
+                    assert_eq!(sp.state, FdState::AwaitExchange, "{what}: still W9XYZ's");
+                    assert_eq!(next(&sp), exch, "{what}: nothing to {other}");
+                    sp.after_tx();
+                }
+                let what = format!("{place} picked={picked}");
+                sp.observe(&[dec(&own)], 3);
+                assert_eq!(rows(&sp), [row.as_str()], "{what}: W9XYZ's own logs W9XYZ");
+                assert_eq!(next(&sp), "W9XYZ K1ABC RR73", "{what}: and gets RR73");
+                sp.after_tx();
+                assert!(sp.done(), "{what}: once");
+            }
+            // N0ABC's and W9XYZ's in the same period, either order.
+            let stranger = dec(&format!("K1ABC N0ABC R {theirs} WI"));
+            for (order, both) in [
+                ("N0ABC's first", [stranger.clone(), dec(&own)]),
+                ("W9XYZ's first", [dec(&own), stranger]),
+            ] {
+                let mut sp = called("K1ABC", event, mine, wsjtx, false);
+                sp.observe(&both, 1);
+                assert_eq!(rows(&sp), [row.as_str()], "{place}, {order}: W9XYZ logged");
+                assert_eq!(next(&sp), "W9XYZ K1ABC RR73", "{place}, {order}: its RR73");
+            }
+        }
+        // A nonstandard call of mine, which the rogered exchanges to me name hashed.
+        let mut sp = called("PJ4/K1ABC", FdEvent::ArrlFd, "2B", true, false);
+        sp.observe(&[dec("<PJ4/K1ABC> N0ABC R 1D WI")], 1);
+        assert_eq!(
+            rows(&sp),
+            Vec::<String>::new(),
+            "PJ4/K1ABC, N0ABC's: nothing logged"
+        );
+        assert_eq!(
+            next(&sp),
+            "W9XYZ PJ4/K1ABC 2B EMA",
+            "PJ4/K1ABC, N0ABC's: W9XYZ's again"
+        );
+        sp.after_tx();
+        sp.observe(&[dec("<PJ4/K1ABC> W9XYZ R 1D WI")], 3);
+        assert_eq!(
+            rows(&sp),
+            ["W9XYZ 1D WI"],
+            "PJ4/K1ABC: W9XYZ's own logs W9XYZ"
+        );
+        assert_eq!(
+            next(&sp),
+            "<W9XYZ> PJ4/K1ABC RR73",
+            "PJ4/K1ABC: and gets RR73"
+        );
+        // W9XYZ's call hashed is W9XYZ's, by its base call: the contact closes as it always has,
+        // the row and the RR73 naming the call as the decoder printed it.
+        let mut sp = called("K1ABC", FdEvent::ArrlFd, "2B", true, false);
+        sp.observe(&[dec("K1ABC <W9XYZ> R 1D WI")], 1);
+        assert_eq!(rows(&sp), ["<W9XYZ> 1D WI"], "<W9XYZ>'s: logged as before");
+        assert_eq!(next(&sp), "<W9XYZ> K1ABC RR73", "<W9XYZ>'s: RR73 as before");
     }
 
     /// The control: a station starts on Field Day's messages, and naming them again moves
