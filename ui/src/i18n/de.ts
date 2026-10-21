@@ -6746,6 +6746,7 @@ export const DE: PartialCatalog = {
   "cw.turn.closing.bare": "Loggen",
   "cw.turn.noReply": "Keine Antwort · {{key}}",
   "cw.turn.noReply.bare": "Keine Antwort",
+  "cw.turn.fiveNnTu": "Sie sind dran · 5NN TU",
   "cw.turn.fiveNnTu.title": "5NN TU senden. Die Taste Antwort würde einen ganzen Plauder-Durchgang senden.",
   "cw.turn.say.yourTurn": "Sie sind dran: {{key}}.",
   "cw.turn.say.yourTurn.bare": "Sie sind dran.",

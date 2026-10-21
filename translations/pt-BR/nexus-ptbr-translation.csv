@@ -3208,6 +3208,7 @@
 "5","cw.turn.closing.bare","Log it","","","Turn lamp, in a contest: the contact is complete."
 "5","cw.turn.noReply","No reply · {{key}}","","{{key}}","Turn lamp: nobody answered your over; {{key}} sends it again."
 "5","cw.turn.noReply.bare","No reply","","",""
+"5","cw.turn.fiveNnTu","Your turn · send 5NN TU","","5NN TU | 5NN | TU","Turn lamp: a DX station came back to you in a pileup (""KD9TAW 5NN""). No F-key fits, so the lamp says what to send. The lamp is short: keep it about this length."
 "5","cw.turn.fiveNnTu.title","Send 5NN TU. The Reply key would send a whole ragchew over.","","5NN TU | 5NN | TU","Tooltip: a DX station came back to you in a pileup. ""Reply"" is the F3 key's caption (cw.macro.reply.label)."
 "5","cw.turn.say.yourTurn","Your turn: {{key}}.","","{{key}}","Spoken by a screen reader."
 "5","cw.turn.say.yourTurn.bare","Your turn.","","","Spoken by a screen reader."

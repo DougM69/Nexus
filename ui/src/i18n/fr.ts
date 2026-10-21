@@ -1616,6 +1616,7 @@ export const FR: PartialCatalog = {
   "cw.turn.closing.bare": "À loguer",
   "cw.turn.noReply": "Pas de réponse · {{key}}",
   "cw.turn.noReply.bare": "Pas de réponse",
+  "cw.turn.fiveNnTu": "À vous · envoyez 5NN TU",
   "cw.turn.fiveNnTu.title": "Envoyez 5NN TU. La touche Réponse enverrait tout un passage de causette.",
   "cw.turn.say.yourTurn": "À vous : {{key}}.",
   "cw.turn.say.yourTurn.bare": "À vous.",

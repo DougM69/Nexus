@@ -99,11 +99,11 @@ describe('the lamp', () => {
     }
   })
 
-  it('a DX coming back in a pileup: no key, and the tooltip says to send 5NN TU', () => {
+  it('a DX coming back in a pileup: the lamp itself says to send 5NN TU, and no key is lit', () => {
     const l = lamp(turn({ state: 'yourTurn', hint: 'fiveNnTu', call: 'VP8A' }), [], false)
-    expect([l.label, l.keys, l.glow]).toEqual([EN['cw.turn.yourTurn.bare'], [], null])
-    expect(l.title.split('\n'), 'the line, what to send, what the lamp is').toEqual([
-      EN['cw.turn.yourTurn.bare'],
+    expect([l.label, l.keys, l.glow]).toEqual(['Your turn · send 5NN TU', [], null])
+    expect(l.title.split('\n'), 'the line, why not the Reply key, what the lamp is').toEqual([
+      'Your turn · send 5NN TU',
       EN['cw.turn.fiveNnTu.title'],
       EN['cw.turn.title'],
     ])

@@ -11428,6 +11428,7 @@ export const EN = {
   'cw.turn.closing.bare': 'Log it',
   'cw.turn.noReply': 'No reply · {{key}}',
   'cw.turn.noReply.bare': 'No reply',
+  'cw.turn.fiveNnTu': 'Your turn · send 5NN TU',
   'cw.turn.fiveNnTu.title': 'Send 5NN TU. The Reply key would send a whole ragchew over.',
   'cw.turn.say.yourTurn': 'Your turn: {{key}}.',
   'cw.turn.say.yourTurn.bare': 'Your turn.',

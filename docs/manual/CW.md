@@ -262,7 +262,7 @@ classic decoder hears keying again at your pitch. Your own over is never read as
 heard while you are keying (a radio that feeds its sidetone back) are ignored.
 
 When a DX station comes back to you in a pileup (`KD9TAW 5NN`), no key glows: F3 would send a whole
-ragchew reply. The lamp's tooltip says to send `5NN TU`. In a contest the keys are the contest set's
+ragchew reply. The lamp says `Your turn · send 5NN TU`. In a contest the keys are the contest set's
 (F4 your call, F6 your exchange, F3 TU), and with **Enter Sends Message** on, ESM lights its own
 keys and the lamp says `Your turn · Enter`.
 

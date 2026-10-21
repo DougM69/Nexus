@@ -154,13 +154,30 @@ describe('the turn cue on the CW screen', () => {
       [turn({ state: 'unsure', role: 'again', call: 'W1ABC', over: 1 }), 'Not sure · F7', ['F7:maybe']],
       [turn({ state: 'hold', call: 'W2XYZ', over: 2 }), 'Hold · W2XYZ', []],
       [turn({ state: 'closing', role: 'close', call: 'W1ABC', over: 3 }), EN['cw.turn.closing'], ['F4:now']],
-      [turn({ state: 'yourTurn', hint: 'fiveNnTu', call: 'VP8A', over: 4 }), EN['cw.turn.yourTurn.bare'], []],
+      [turn({ state: 'yourTurn', hint: 'fiveNnTu', call: 'VP8A', over: 4 }), 'Your turn · send 5NN TU', []],
     ] as [CwTurn, string, string[]][]) {
       read = { turn: t }
       await nextPoll()
       expect([lampEl()?.querySelector('.cw-turn-label')?.textContent, cued()], t.state).toEqual([label, lit])
     }
-    expect(lampEl()!.title, 'the DX coming back: the tooltip says what to send').toContain('Send 5NN TU')
+    expect(lampEl()!.title, 'the DX coming back: the tooltip says why not the Reply key').toContain('Send 5NN TU')
+  })
+
+  it('a DX coming back in a pileup: the lamp says to send 5NN TU, no key glows, and nothing is sent', async () => {
+    read = { turn: turn({ state: 'yourTurn', hint: 'fiveNnTu', call: 'VP8A', over: 4 }), wpm: 18 }
+    render(cockpit())
+    await nextPoll()
+    await nextPoll()
+    await settle()
+    expect({
+      label: lampEl()?.querySelector('.cw-turn-label')?.textContent,
+      lit: cued(),
+      sent: sends(),
+    }).toEqual({ label: 'Your turn · send 5NN TU', lit: [], sent: [] })
+    // Control: the Reply key still sends when pressed, as without the cue.
+    fireEvent.click(key('F3'))
+    await settle()
+    expect(api.get('sendCw').mock.calls.length).toBe(1)
   })
 
   it('shows only with the Decode pane shown and the AI decoder on, never unassisted, and its ⊞ tick hides it', async () => {

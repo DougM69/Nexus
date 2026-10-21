@@ -7348,6 +7348,7 @@ export const JA: PartialCatalog = {
   "cw.turn.closing.bare": "ログへ",
   "cw.turn.noReply": "応答なし · {{key}}",
   "cw.turn.noReply.bare": "応答なし",
+  "cw.turn.fiveNnTu": "あなたの番 · 5NN TU を送信",
   "cw.turn.fiveNnTu.title": "5NN TU を送ってください。応答キーではラグチュー向けの長い送信になります。",
   "cw.turn.say.yourTurn": "あなたの番です。{{key}}。",
   "cw.turn.say.yourTurn.bare": "あなたの番です。",

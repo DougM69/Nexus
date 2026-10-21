@@ -406,7 +406,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   glows again: F2 to answer a CQ, F3 when a station comes back to you, F4 when they sign. "Your turn" waits for the
   other station to stop AND end its over (K, KN, BK, QRZ, part of your call with "?", a CQ), so a pause alone only
   says "Not sure"; your own over heard back through the radio never counts as theirs. When a DX comes back to you
-  in a pileup no key glows, and the lamp's tooltip says to send 5NN TU. The Decode pane's speed now reads
+  in a pileup no key glows, and the lamp says `Your turn · send 5NN TU`. The Decode pane's speed now reads
   `them 18 · you 25 WPM`, and a click sends at their speed for this contact. It never transmits: every send is still
   your own key press. It shows with the AI decoder on and the Decode pane shown, never in an unassisted contest
   entry, and unticking Turn Cue in ⊞ Panels hides it for good. A screen reader hears "Your turn" and "Hold" once
