@@ -767,8 +767,9 @@ export function CwCockpit({
     name: null,
   })
   // An unassisted contest entry at the station: it decodes no CW, so its read carries no copy,
-  // speed, calls, report or name, and the Decode pane says why in place of the copy. Anything drawn
-  // from the read (a turn cue, when one is built) has nothing to show then either.
+  // speed, calls, report or name, and the Decode pane says why in place of the copy (the Copilot
+  // pane too, where it would promise decoded calls). Anything drawn from the read (a turn cue,
+  // when one is built) has nothing to show then either.
   const [unassisted, setUnassisted] = useState(false)
   // True once the operator sets WPM by hand → stop auto-matching to the decoded speed.
   const wpmTouched = useRef(false)
@@ -1837,6 +1838,10 @@ export function CwCockpit({
                 <span className="cw-copilot-label">{t('cw.copilot.working.label')}</span>
               ) : cand.length > 0 ? (
                 <span className="cw-copilot-label">{t('cw.copilot.heard.label')}</span>
+              ) : unassisted ? (
+                // No calls are decoded to appear in an unassisted entry: the Decode pane's line says
+                // why, as that pane draws it (a sentence, not the small italic placeholder it replaces).
+                <span className="cw-decode-off">{t('cw.decode.unassisted')}</span>
               ) : (
                 <span className="cw-copilot-label dim">{t('cw.copilot.empty')}</span>
               )}

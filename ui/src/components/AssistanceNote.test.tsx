@@ -21,9 +21,11 @@ describe('AssistanceNote', () => {
   it('names every suppressed source, so the switch cannot over-claim', () => {
     const { container } = render(<AssistanceNote unassisted />)
     const line = container.querySelector('.assist-note-line')?.textContent ?? ''
-    for (const src of ['AI CW decoder', 'DX cluster / RBN', 'PSK Reporter', 'Super Check Partial', 'call history']) {
+    for (const src of ['CW decoder', 'DX cluster / RBN', 'PSK Reporter', 'Super Check Partial', 'call history']) {
       expect(line).toContain(src)
     }
+    // The CW decoder, the classic one included: CQ WW names "a CW decoder", not only an AI one.
+    expect(line).not.toContain('AI CW decoder')
     // It must NOT claim that ALL assistance is off: POTA/SOTA activator spots keep arriving,
     // and a universal claim would be false. The gap is named in the details instead.
     expect(line).not.toMatch(/no .*assistance is running/i)
@@ -63,6 +65,19 @@ describe('AssistanceNote', () => {
     const why = container.querySelector('.assist-note-why')?.textContent ?? ''
     expect(why).toContain('multi-channel')
     expect(why).toContain('one signal at a time')
+  })
+
+  it("does not call the station's own decodes exempt", () => {
+    // CQ WW VIII.2 counts "any technology or other source that provides callsign or multiplier
+    // identification of a signal", local decoding included, and names "a CW decoder"; ARRL's
+    // glossary opens the same way. Neither sets a station's own decodes apart. What keeps feeding
+    // the Needed board in unassisted mode is the radio's digital decodes, and the note says so.
+    const { container } = render(<AssistanceNote unassisted />)
+    const why = container.querySelector('.assist-note-why')?.textContent ?? ''
+    expect(why).not.toMatch(/not assistance under either ruleset/i)
+    expect(why).toContain('digital decodes')
+    expect(why).toContain('FT8')
+    expect(why).toContain('Needed board')
   })
 
   it('tells the operator to check their own contest, and does not rule on a category', () => {

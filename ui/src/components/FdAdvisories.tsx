@@ -38,7 +38,7 @@ import { t } from '../i18n'
  * Cluster restriction maps to the cluster/RBN feed; a spotting restriction
  * covers both spot-consuming feeds (ARRL's glossary files PSK Reporter's
  * inbound reports under "Spotting/QSO Finding Assistance" — see
- * `pskr_evidence_active`). The AI CW decoder is decoding assistance, not
+ * `pskr_evidence_active`). The CW decoder is decoding assistance, not
  * spotting, so neither flag matches it.
  */
 const CLUSTER_SOURCES = ['DX cluster / RBN']

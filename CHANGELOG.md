@@ -436,6 +436,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the keys themselves are greyed out there and say "Set at the station", with the station's own value. A save
   from that computer already left them as the station had them; before, the form let you edit them and quietly put
   them back. At the station itself nothing changes.
+- **The assistance record and the contest-category note name the CW decoder, not the AI CW decoder.** An unassisted
+  entry turns off the classic decoder as well as the AI one, and CQ WW's rule names "a CW decoder". With the AI
+  switch off, the classic decoder still copies CW, while the record (Settings ▸ Contesting ▸ Your entry) showed the
+  AI CW decoder as off. The source is now the CW decoder, on whenever any CW decoding runs, which is everywhere but
+  an unassisted entry. Rows recorded before keep the name they were written with.
+- **Declaring NON-ASSISTED offers the Unassisted entry switch.** In Settings ▸ Contesting ▸ Your entry, picking
+  NON-ASSISTED under Spotting assistance writes it into your Cabrillo log but turns nothing off: the CW decoder, the
+  spots, Super Check Partial and call history stay on until you switch Unassisted entry on. While the switch is
+  off, a line beside the picker now says so, with a button that turns it on. Nothing turns it on unless you click.
 
 ### Added
 - **Every save of the contest log now keeps backup copies beside it.** The contest log
@@ -491,6 +500,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ago that was, so a click could send your next over at the previous station's speed. It now shows, and a chip click
   now uses, only a speed from keying heard in the last 10 seconds, the rule CW speed match already had. With none,
   no speed is shown and a chip click leaves your keyer speed alone.
+- **Clicking a spot or tuning to another frequency forgets the CW speed with the copy.** A spot clicked within 10
+  seconds of the last station showed that station's speed beside the Decode pane's title, and a call chip's click
+  set your keyer to it. The decoder now starts afresh at the new frequency: the speed shows once the new station is
+  heard, timed from its own keying, and CW speed match times it the same way.
+- **The contest-category note no longer calls your own radio's decodes exempt.** Under "What this means for your
+  contest category" it said your radio's own decodes are not assistance under either CQ WW's or ARRL's rules. Both
+  count any technology that identifies a callsign or multiplier, and CQ WW names a CW decoder. The line now says
+  what keeps feeding the Needed board in an unassisted entry, your radio's own digital decodes such as FT8 and FT4,
+  that neither ruleset sets them apart, and not to use the board to find stations if your contest counts them.
+- **In an unassisted entry the CW Copilot pane says why it is empty.** It said "Decoded calls appear here…", but no
+  CW is decoded then. It now shows the Decode pane's line: "Unassisted entry: the CW decoder is off. CQ WW counts it
+  as assistance."
 - **FT8 and FT4 no longer transmit on top of another program keying your radio through Nexus.** With "Other programs
   may key transmit" on, a program sharing the radio through Nexus's CAT broker (WSJT-X, VarAC) could key for a
   transmission of its own while your FT8 or FT4 CQ or QSO was armed, and at the start of your next period Nexus sent its

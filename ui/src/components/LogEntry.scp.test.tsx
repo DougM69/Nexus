@@ -51,7 +51,7 @@ const fdStatus = (over: Partial<FieldDayStatus> = {}): FieldDayStatus =>
       { key: 'CLASS', raw: '3A' },
       { key: 'SECTION', raw: 'WI', domain: 'fd_sections' },
     ],
-    assistanceOn: ['AI CW decoder', 'Super Check Partial', 'Call history'],
+    assistanceOn: ['CW decoder', 'Super Check Partial', 'Call history'],
     ...over,
   }) as unknown as FieldDayStatus
 

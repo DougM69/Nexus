@@ -64,3 +64,29 @@ fn a_stale_speed_is_not_offered() {
         "the next station heard offers its own speed, not the last one's: {wpm}"
     );
 }
+
+/// A QSY lands on another signal, so the speed goes with the copy: a spot clicked, or the dial
+/// moved, within ten seconds of the last station does not offer that station's speed.
+#[test]
+fn a_qsy_forgets_the_speed() {
+    let mut e = station();
+    hear(&mut e, "TEST W1AW", 30, 1.0);
+    assert!(
+        (28..=32).contains(&e.cw_decode().wpm),
+        "control: the speed is offered while fresh"
+    );
+    e.work_spot("CW", 7.025, "40m");
+    assert_eq!(
+        e.cw_decode().wpm,
+        0,
+        "a spot clicked a second after the last station: that station's speed is not this one's"
+    );
+    hear(&mut e, "TEST K1ABC", 20, 1.0);
+    let wpm = e.cw_decode().wpm;
+    assert!(
+        (16..=24).contains(&wpm),
+        "control: the station on the spot offers its own speed: {wpm}"
+    );
+    e.set_frequency(7.028, "40m", "CW");
+    assert_eq!(e.cw_decode().wpm, 0, "a dial change forgets it too");
+}
