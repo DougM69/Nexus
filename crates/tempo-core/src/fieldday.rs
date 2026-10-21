@@ -4333,6 +4333,16 @@ impl FieldDayStation {
             .push(format!("logged {call} {}", grid.unwrap_or_default()));
     }
 
+    /// Log the contact with `call`, who sent `class` and `section` in Field Day's exchange. A
+    /// call that came hashed is logged without the brackets, as [`log_worked`](Self::log_worked)
+    /// logs it: a nonstandard call packs its Field Day exchange with the call hashed (`pack28`),
+    /// `K1ABC <W9XYZ/M> R 1D WI`, and WSJT-X logs the call in its DX call box, which the decoded
+    /// message fills with the brackets dropped (`DecodedText`, decodedtext.cpp 66).
+    fn log_field_day(&mut self, call: &str, class: &str, section: &str, slot: u64) {
+        let call = crate::message::unhash_call(call);
+        self.log.log(call, class, section, slot);
+    }
+
     /// My Field Day exchange to `to`, rogered or not (WSJT-X's Tx3 and Tx2).
     ///
     /// ⚠️ **A nonstandard call goes in whole, not as WSJT-X writes it.** Field Day's packer
@@ -4413,7 +4423,7 @@ impl FieldDayStation {
                     },
                 ) if self.to_my_call(to) => {
                     self.dxcall = Some(de.clone());
-                    self.log.log(de, class, section, slot);
+                    self.log_field_day(de, class, section, slot);
                     self.pending = Some(self.rr73(de));
                     self.state = FdState::Done;
                     self.transcript.push(format!(
@@ -4437,7 +4447,7 @@ impl FieldDayStation {
                         section,
                     },
                 ) if self.to_my_call(to) && self.from_dx(de) => {
-                    self.log.log(de, class, section, slot);
+                    self.log_field_day(de, class, section, slot);
                     self.pending = Some(self.rr73(de));
                     self.state = FdState::Done;
                     self.transcript
@@ -4464,7 +4474,7 @@ impl FieldDayStation {
                     if self.to_my_call(to) && self.from_dx(de) =>
                 {
                     if let Some((call, class, section)) = self.peer_exch.take() {
-                        self.log.log(&call, &class, &section, slot);
+                        self.log_field_day(&call, &class, &section, slot);
                         self.transcript
                             .push(format!("logged {call} {class} {section}"));
                     }
@@ -6455,10 +6465,10 @@ mod tests {
             "PJ4/K1ABC: and gets RR73"
         );
         // W9XYZ's call hashed is W9XYZ's, by its base call: the contact closes as it always has,
-        // the row and the RR73 naming the call as the decoder printed it.
+        // the RR73 naming the call as the decoder printed it and the row without the brackets.
         let mut sp = called("K1ABC", FdEvent::ArrlFd, "2B", true, false);
         sp.observe(&[dec("K1ABC <W9XYZ> R 1D WI")], 1);
-        assert_eq!(rows(&sp), ["<W9XYZ> 1D WI"], "<W9XYZ>'s: logged as before");
+        assert_eq!(rows(&sp), ["W9XYZ 1D WI"], "<W9XYZ>'s: logged bare");
         assert_eq!(next(&sp), "<W9XYZ> K1ABC RR73", "<W9XYZ>'s: RR73 as before");
     }
 
@@ -6874,6 +6884,111 @@ mod tests {
             (FdState::CallingCq, "CQ FD K1ABC FN42".to_string()),
             "a standard call's hashed form is not taken"
         );
+    }
+
+    /// Every CALL an ADIF export writes, in order.
+    fn adif_calls(adif: &str) -> Vec<String> {
+        adif.split("<CALL:")
+            .skip(1)
+            .filter_map(|r| {
+                let (len, rest) = r.split_once('>')?;
+                rest.get(..len.parse().ok()?).map(str::to_string)
+            })
+            .collect()
+    }
+
+    /// ⭐ Field Day's messages log a call that came hashed without its brackets, as the ARRL VHF
+    /// and standard messages do ([`FieldDayStation::log_worked`]) and as WSJT-X logs the call in
+    /// its DX call box, which a decoded message fills with the brackets dropped (`DecodedText`,
+    /// decodedtext.cpp 66). A nonstandard call (any suffix but `/P` and `/R`) packs its Field Day
+    /// exchange with the call hashed, so a runner on one rogers S&P's exchange as
+    /// `K1ABC <W9XYZ/M> R 1D WI`, and a caller on one sends the run `K1ABC <W9XYZ/M> 1D WI`. In
+    /// S&P, in the run closed by RR73 or 73, and where the caller rogers first, the rows are the
+    /// rows the same contact logs with the call heard whole (the call, the entity and prefix
+    /// resolved from it, the exchange, the dupe mark), the submitted ADIF and the journal write
+    /// the call, and S&P passes the station's next CQ by as a contact already in the log. What
+    /// goes on the air is what it was. The call heard whole is the control.
+    #[test]
+    fn field_days_messages_log_a_hashed_call_without_its_brackets() {
+        // The rows, the time set aside, and the calls the submitted ADIF and the journal write.
+        let logged = |st: &FieldDayStation| {
+            let mut rows = st.log.qsos().to_vec();
+            for q in &mut rows {
+                q.when_unix = 0;
+            }
+            let calls = |adif: String| adif_calls(&adif);
+            (
+                rows,
+                calls(st.log.submission_adif()),
+                calls(st.log.journal_adif()),
+            )
+        };
+        // The same for `call` logged whole off the same exchange, in the same slot.
+        let whole = |call: &str, running: bool, slot: u64| {
+            let mut st = contest_station("K1ABC", "arrlfd", running);
+            st.log.log(call, "1D", "WI", slot);
+            logged(&st)
+        };
+        // (the call, as the exchanges name it)
+        for (call, heard) in [
+            ("W9XYZ", "W9XYZ"),
+            ("W9XYZ", "<W9XYZ>"),
+            ("W9XYZ/M", "<W9XYZ/M>"),
+            ("W9XYZ/4", "<W9XYZ/4>"),
+            ("W9XYZ/QRP", "<W9XYZ/QRP>"),
+        ] {
+            // S&P, on the CQ the call sends: a nonstandard call's carries no grid.
+            let cq = if crate::message::is_std_call(call) {
+                format!("CQ FD {call} EN37")
+            } else {
+                format!("CQ {call}")
+            };
+            let what = format!("{heard} S&P");
+            let mut sp = contest_station("K1ABC", "arrlfd", false);
+            sp.observe(&[dec(&cq)], 0);
+            assert_eq!(
+                next(&sp),
+                format!("{call} K1ABC 2B EMA"),
+                "{what}: the answer"
+            );
+            sp.after_tx();
+            sp.observe(&[dec(&format!("K1ABC {heard} R 1D WI"))], 2);
+            assert_eq!(next(&sp), format!("{heard} K1ABC RR73"), "{what}: RR73");
+            assert_eq!(logged(&sp), whole(call, false, 2), "{what}: logged");
+            sp.after_tx();
+            sp.rearm(false);
+            sp.observe(&[dec(&cq)], 4);
+            assert_eq!(
+                (sp.state, next(&sp)),
+                (FdState::Listening, String::new()),
+                "{what}: its next CQ is in the log"
+            );
+            // Running: the caller's exchange, then its RR73 or 73.
+            for close in ["RR73", "73"] {
+                let what = format!("{heard} Running, {close}");
+                let mut run = contest_station("K1ABC", "arrlfd", true);
+                run.observe(&[dec(&format!("K1ABC {heard} 1D WI"))], 1);
+                assert_eq!(
+                    next(&run),
+                    format!("{heard} K1ABC R 2B EMA"),
+                    "{what}: R and mine"
+                );
+                run.after_tx();
+                run.observe(&[dec(&format!("K1ABC {heard} {close}"))], 3);
+                let bye = match close {
+                    "RR73" => format!("{heard} K1ABC 73"),
+                    _ => String::new(),
+                };
+                assert_eq!(next(&run), bye, "{what}: the close");
+                assert_eq!(logged(&run), whole(call, true, 3), "{what}: logged");
+            }
+            // Running: a caller that rogers its exchange first.
+            let what = format!("{heard} Running, rogered first");
+            let mut run = contest_station("K1ABC", "arrlfd", true);
+            run.observe(&[dec(&format!("K1ABC {heard} R 1D WI"))], 1);
+            assert_eq!(next(&run), format!("{heard} K1ABC RR73"), "{what}: RR73");
+            assert_eq!(logged(&run), whole(call, true, 1), "{what}: logged");
+        }
     }
 
     /// The direction reaches a running station's CQ at once, and every CQ after; S&P calls none.
