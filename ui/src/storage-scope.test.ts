@@ -85,7 +85,7 @@ export const PER_SURFACE = [
   // under another name, for the same reason: what THIS board shows. Never that key — a chip in
   // the pane and one on the Needed view must not move each other.
   'nexus.phone.neededFilters',
-  // …and the CW cockpit's (plan H8: CW gains Phone's two feeds), for the same reason and apart
+  // …and the CW cockpit's (CW gains Phone's two feeds), for the same reason and apart
   // from both of the above.
   'nexus.cw.neededFilters',
   'nexus.decodes.hideB4',
@@ -469,7 +469,7 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.contest.recent',
   ],
   // The Needed board's filter record: its own key as the view and the pop-out, or the key the
-  // host of a PANE of it passes (NeededPane — the Phone and CW cockpits', #345 and plan H8, and the
+  // host of a PANE of it passes (NeededPane — the Phone and CW cockpits', #345, and the
   // Conditions and rail box's, connect/NeededBox).
   'components/NeededPanel.tsx:key': [
     'neededFilters',

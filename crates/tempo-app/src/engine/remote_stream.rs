@@ -418,7 +418,7 @@ mod tests {
         stopped(&mut e, Kind::PhonePtt);
     }
 
-    /// ★ S8 (a), the lead's ruling: a local arm in the middle of the session (Call CQ's own arm, the
+    /// ★ A local arm in the middle of the session (Call CQ's own arm, the
     /// one every streamed click is) leaves EVERY kind of transmission covered. For each kind:
     /// presence is attached, the operator arms locally a second in, starts the transmission, and
     /// the heartbeats stop; the station halts at the deadline, up at 4.999 s and down at 5.000 s.

@@ -15,7 +15,7 @@
 //! the real feed, with the control that a started lane does produce bytes on the same
 //! instrument.
 //!
-//! ## One encoder, every listener (plan P5)
+//! ## One encoder, every listener
 //!
 //! A browser Listening on the relay's lane and a streamed page's `audio` channel hear the
 //! station at once. The feed still has one reader, and it belongs to [`ReceiveFanout`]: the
@@ -85,7 +85,7 @@ const RECHECK: Duration = Duration::from_secs(1);
 /// kind of claim that stays true until it quietly does not.
 pub const MAX_MESSAGE_BYTES: usize = 1024;
 
-/// The station's one receive-audio encoder, shared by every listener (plan P5): the relay's
+/// The station's one receive-audio encoder, shared by every listener: the relay's
 /// Listen lane and each stream's `audio` channel. One per station, built beside the feed.
 pub struct ReceiveFanout {
     feed: Arc<ReceiveAudioFeed>,

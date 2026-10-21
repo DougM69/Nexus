@@ -38,7 +38,7 @@
 //                which ends the tune carrier and only that. · the Space bar (window keyup) →
 //                the same setPtt(false) as PTT-release, and ONLY while `lock` is off: both
 //                Space handlers early-return in Lock (hands-free) mode. · Esc (App's window
-//                keydown while Phone is shown, N71) → the same halt_tx as Stop TX; the voice
+//                keydown while Phone is shown) → the same halt_tx as Stop TX; the voice
 //                keyer's own Esc still stops its playback.
 //     · CW     — Stop TX (CockpitHeader) → stopCw + haltTx. · Tune → set_tune (the carrier
 //                only). · Esc (window keydown) → the same abort() Stop TX calls.
@@ -76,11 +76,11 @@
 //                a real stop here for the same reason as RTTY: set_tx_enabled(false) drops
 //                sstv_tx and arms sstv_abort (engine.rs ~7124), which service.rs ~4174 turns
 //                into feed dropped + output flushed + unkey while an image is in flight.
-//                · Esc (App's window keydown while SSTV is shown, N71) → halt_tx, the halt the
+//                · Esc (App's window keydown while SSTV is shown) → halt_tx, the halt the
 //                TX strip's Stop TX sends.
 //     · APRS   — a sixth cockpit with NO vocabulary at all: no ⊞ menu, nothing hideable, so
 //                the rule holds there by construction. Its one stop control is the TX On/Off
-//                latch, and from N71 Esc (App's window keydown while APRS is shown → halt_tx)
+//                latch, and Esc (App's window keydown while APRS is shown → halt_tx)
 //                is a stop there too. set_tx_enabled(false) arms no APRS abort, but the radio loop's TX-off
 //                cut (service.rs `tx_off_cut`) unkeys and flushes a beacon on the air once the
 //                latch is down (measured 2026-09-30), and set_tx_enabled(false) also drops
@@ -1344,7 +1344,7 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
  *  the rig's own panadapter, in the region below), and both keep their own box.
  *
  *  `spots` AND `needed` are Phone's two feeds (#345) in CW, the same boards with the same wiring
- *  (plan piece H8, operator's pick "CW gets Phone's Spots/Needed panes"), and they ship the same
+ *  (operator's pick "CW gets Phone's Spots/Needed panes"), and they ship the same
  *  way: HIDDEN (`defaultRemoved`), one tick in ⊞ Panels, so nobody's CW screen changes on update.
  *  Under THE STOP LINE they are Phone's plainest entries again: neither holds a stop control,
  *  neither sends (a row QSYs through the board's own handler and keys nothing), and a hide ends

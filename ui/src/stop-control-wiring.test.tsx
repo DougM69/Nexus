@@ -49,21 +49,21 @@
 // covered below; the third is not, and stays uncovered:
 //   · KEYBOARD-ONLY STOPS — COVERED. Phone's Space and every screen's Esc are `window` listeners,
 //     and a real App mount has a real `window`: Operate's, CW's, RTTY's, PSK's and JS8's are the
-//     cockpits' own; Tempo's, Phone's, SSTV's, APRS's and Satellites' are App's (N71). They are
+//     cockpits' own; Tempo's, Phone's, SSTV's, APRS's and Satellites' are App's. They are
 //     census-only for stop-line.test.tsx because that file finds BUTTONS BY ACCESSIBLE NAME;
 //     nothing about them resists a bridge-level check, and the Esc census near the end of this
 //     file presses Esc on every section in the registry.
 //   · CONDITIONALLY RENDERED — COVERED. RTTY's sequencer Abort renders only inside
 //     `{auto && seqState !== 'idle'}`; both flags come from the `get_rtty_state` poll, so the
 //     bridge fixture puts the cockpit in that state and the button is on screen.
-//   · SSTV's keyboard stop is App's Esc (N71); the only Escape in SstvView itself is a React
+//   · SSTV's keyboard stop is App's Esc; the only Escape in SstvView itself is a React
 //     `onKeyDown` on the preview that deselects an overlay item, and it still does.
 // Genuinely out of reach: nothing on the census. Two deliberate omissions, both OFF it: APRS
-// renders no stop BUTTON (its stops are the TX latch and, from N71, Esc), and the header's ATU —
+// renders no stop BUTTON (its stops are the TX latch and Esc), and the header's ATU —
 // which keys the RIG's own tuning carrier, bounded by the rig — is not a stop control and renders
 // only when `radio.atu != null`, which this fixture does not set.
 // What this file still does NOT prove is what the BACKEND does with the command — `halt_tx`
-// reaching the bridge is not `halt_tx` unkeying a rig. That is `reference-tx-safety-invariants`
+// reaching the bridge is not `halt_tx` unkeying a rig. That is the transmit-safety invariants'
 // territory and belongs to the Rust suites.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, waitFor, fireEvent, screen, within } from '@testing-library/react'
@@ -453,7 +453,7 @@ describe('Phone', () => {
   // Space does everywhere else in a browser: ⊞ Arrange is a grid of buttons, with Undo and Reset
   // beside it. ONLY THE PRESS is exempt. The release still asks one question, "are we keyed?", so
   // an over keyed from outside the menu unkeys wherever focus has gone by the release
-  // (reference-tx-safety-invariants: an unkey a guard can swallow is a stuck transmitter).
+  // (an unkey a guard can swallow is a stuck transmitter).
   describe('Space inside the ⊞ menu presses the menu, never the transmitter', () => {
     it('an Arrange move, Undo and Reset each act, and nothing reaches the transmit path', async () => {
       const pop = await openPanels()
@@ -695,7 +695,7 @@ describe('JS8', () => {
 //
 // Remote as a stream: a streamed operator's input reaches this window as DOM events that the input
 // bridge dispatches (remote-native/stream-input.ts), fed here through the Tauri event the station
-// emits. Held against the REAL cockpit and the real api module, the lead's rules for it: a key or a
+// emits. Held against the REAL cockpit and the real api module, the rules for it: a key or a
 // click travels as itself and the cockpit decides what it means (a Space outside a field is PTT, in
 // a field it types); and whatever the stream holds down is a re-asserted state that comes up
 // within 200 ms of the page going quiet (the dead-man), with the station's `reset` as the backstop.
@@ -813,7 +813,7 @@ describe('Phone, over the stream', () => {
 
 // ── Esc stops transmit on every operating screen and on Satellites ─────────────────────────
 //
-// Measured with real keys in a real browser (N66, 2026-09-28): Esc stopped transmit on FT, CW,
+// Measured with real keys in a real browser (2026-09-28): Esc stopped transmit on FT, CW,
 // RTTY, PSK and JS8, each of which binds its own Esc while it is on show. It did NOTHING on Tempo,
 // SSTV and APRS; on Phone it stopped only the voice keyer; and on Satellites, where App hides the
 // top bar's transmit controls, there was no stop of any kind, by key or by button. On those five
@@ -865,7 +865,7 @@ const ESC_SCREENS: EscScreen[] = [
   { view: 'sstv', area: 'dx', drawn: () => shown('.sstv-tx-bar'), esc: ['halt_tx'] },
   { view: 'aprs', area: 'dx', drawn: () => shown('main.aprs-cockpit'), esc: ['halt_tx'] },
   { view: 'sats', area: 'dx', drawn: () => shown('.sats-view'), esc: ['halt_tx'] },
-  // Connect draws no top bar, so no Stop TX of its own (N65): App's halt is its stop.
+  // Connect draws no top bar, so no Stop TX of its own: App's halt is its stop.
   { view: 'connect', area: 'dx', drawn: () => shown('main .connect-shell'), esc: ['halt_tx'] },
 ]
 

@@ -24,7 +24,7 @@ const bridge = () => (dispatcher = new StreamInputDispatcher(window))
 const pointer = (action: string, extra: Record<string, unknown> = {}) =>
   ({ type: 'pointer', action, x: 0.5, y: 0.5, button: action === 'move' ? -1 : 0, buttons: action === 'down' || action === 'move' ? 1 : 0, modifiers: 0, pointerType: 'mouse', clicks: action === 'move' ? 0 : 1, ...extra })
 const key = (action: 'down' | 'up', keyValue: string, code: string, modifiers = 0) => ({ type: 'key', action, key: keyValue, code, modifiers, repeat: false })
-/** The page's re-assertion of what it holds down over the picture (the lead's dead-man ruling). */
+/** The page's re-assertion of what it holds down over the picture (the dead-man rule). */
 const held = (keys: string[], buttons: number, seq: number) => ({ type: 'held', keys, buttons, seq })
 const SPACE_DOWN = "key down, Space (an ordinary key: the window's own handlers decide what it does)", SPACE_UP = 'key up, Space'
 const click = (d: StreamInputDispatcher, extra: Record<string, unknown> = {}) => { d.handle(pointer('down', extra)); d.handle(pointer('up', extra)) }
@@ -280,7 +280,7 @@ it('reset releases what the stream was holding: Space comes up, the button comes
   } finally { window.removeEventListener('keydown', listen); window.removeEventListener('keyup', listen) }
 })
 
-// THE DEAD-MAN (the lead's ruling): whatever the stream holds down here is a re-asserted state. The
+// THE DEAD-MAN: whatever the stream holds down here is a re-asserted state. The
 // page re-asserts the held set every 100 ms; anything not re-asserted for 200 ms comes up, as `reset`
 // would let it go. So a Space held over the stream in Phone - which keys PTT through the cockpit's own
 // window handler - cannot outlive a dead link by more than 200 ms.

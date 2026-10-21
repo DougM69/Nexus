@@ -2273,7 +2273,7 @@ export function SettingsPanel({
   // The Guided copilot recommends the next F-key by ROLE (CQ → answer → report → 73):
   // customization changes the TEXT each key sends, never the key's job — so the
   // recommended-key highlight and the auto call fill (!) keep working for everyone.
-  // The ROLE table moved to the catalog with the CW tab's editor (batch 17), as the comment
+  // The ROLE table moved to the catalog with the CW tab's editor, as the comment
   // that stood here said it would. A role says what the key is FOR, which is prose — except
   // F1's, which is the Q-code the key sends and stays a token beside `MACRO_SET_QSO`.
   //

@@ -1229,7 +1229,7 @@ function PassTimeline({
           ? t('sat.state.inPass', { mins: minsLeft })
           : t('sat.timeline.nextPass', { countdown: countdown(pass, nowSecs) })}
       </div>
-      {/* Phase 2's visual home (sat-visual-design §3.4): what the pass is WORTH
+      {/* Phase 2's visual home: what the pass is WORTH
           — the needed grids its footprint crosses — on the timeline itself, not
           buried in a sort order. Sample names print (backend caps at 8), the
           remainder is said honestly, and a pass that earns nothing has no lane. */}

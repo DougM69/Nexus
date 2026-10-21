@@ -2331,7 +2331,7 @@ pub struct Settings {
     /// Opt-in: run two radios at the SAME TIME, one per app window. When true AND ≥2 radios are
     /// configured, launching Nexus shows a "which radio?" picker (each window drives one radio,
     /// sharing one logbook). Off by default, so a single-radio station — or one with two radios
-    /// it never runs together — is never bothered with the picker. See [[reference-multiradio-architecture]].
+    /// it never runs together — is never bothered with the picker.
     #[serde(default)]
     pub simultaneous_radios: bool,
     /// Band+mode → radio routing rules, FIRST-MATCH-WINS (see [`RoutingRule`]). Lets a station
@@ -9739,7 +9739,7 @@ mod tests {
     }
 
     /// The preference has to SURVIVE A RESTART, and the seam it crosses is the one
-    /// `reference-settings-plumbing` warns about: a serde default turns a loud failure into a
+    /// where a serde default turns a loud failure into a
     /// silent reset. An operator who ticks this once and finds it off every launch is worse off
     /// than before the setting existed, because now they think they have fixed it.
     ///
@@ -11669,7 +11669,7 @@ mod tests {
     /// exact camelCase wire keys, an upgrader's file, and the TS mirror — read from
     /// `ui/src/types.ts` itself, the `the_typescript_patch_carries_every_field_the_rust_patch_does`
     /// cure, because a hand-written key that disagrees compiles clean on both sides and the
-    /// control silently does nothing (reference-settings-plumbing).
+    /// control silently does nothing.
     #[test]
     fn js8_settings_defaults_wire_keys_and_ts_mirror() {
         let s = Settings::default();

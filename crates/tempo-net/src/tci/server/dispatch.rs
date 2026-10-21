@@ -1,4 +1,4 @@
-//! What the server does with each command a program sends (design §3.5), as a closed table.
+//! What the server does with each command a program sends, as a closed table.
 //!
 //! [`classify`] turns every [`Inbound`] the codec can read into exactly one [`Action`], with
 //! exhaustive matches and no wildcard arm: a command the codec learns to read does not compile
@@ -12,8 +12,8 @@
 //! program's transmit gate (`conn.rs`): never once the program's end has begun, and never while
 //! that end is being told. So is [`Action::Mode`]: the backend keys a program's own audio only after
 //! that program asked a voice mode, so the ask must not outlive the program. The server's own part
-//! is to refuse more: receiver 0 only, sources it knows, the forms §3.5 refuses outright. A program
-//! is never told a key took that the backend did not admit.
+//! is to refuse more: receiver 0 only, sources it knows, the forms this table refuses outright. A
+//! program is never told a key took that the backend did not admit.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -28,7 +28,7 @@ use super::backend::{
 };
 use super::state::{FormatSet, Out, Session, Snapshot, Value, MODULATIONS};
 
-/// One command's disposition (design §3.5).
+/// One command's disposition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Action {
     // ── Accepted: nothing changes on the radio ──
@@ -123,7 +123,7 @@ pub(super) fn classify(inbound: Inbound) -> Action {
 fn command(c: Command) -> Action {
     match c {
         Command::RadioStart => Action::Answer(Value::Start),
-        // The radio keeps running; only the program's own transmissions end (design §3.5).
+        // The radio keeps running; only the program's own transmissions end.
         Command::RadioStop => Action::EndOwn,
         Command::Set(s) => setting(s),
         Command::Read(q) => query(q),
@@ -525,7 +525,7 @@ pub(super) fn run(action: Action, cx: &Cx<'_>) -> Effects {
                 Some(Ok(())) => {
                     lock(cx.session).admitted(kind);
                     // At admission, not when the radio keys: WSJT-X fails a key whose echo takes
-                    // over a second, and a slow serial rig can take longer (design §3.5).
+                    // over a second, and a slow serial rig can take longer.
                     fx.all.push(Out::Trx(true));
                 }
                 Some(Err(r)) => {
@@ -576,7 +576,7 @@ pub(super) fn run(action: Action, cx: &Cx<'_>) -> Effects {
                         Notice::Stream(StreamSetting::AudioStart(trx0())).render(),
                     );
                 }
-                // No echo: WSJT-X waits for one, and reports the failure (design §3.5).
+                // No echo: WSJT-X waits for one, and reports the failure.
                 Err(r) => fx.refusal(cx, r),
             }
         }

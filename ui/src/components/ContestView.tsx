@@ -2675,7 +2675,7 @@ function useNowUnix(): number {
 }
 
 /**
- * ⭐ **THE RATE METER (batch 12)** — contacts per hour, on the scoreboard beside the
+ * ⭐ **THE RATE METER** — contacts per hour, on the scoreboard beside the
  * score tiles, for every contest the picker offers including both Field Day events. A
  * Field Day operator watches rate as closely as a contester does.
  *

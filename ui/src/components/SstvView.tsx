@@ -1574,7 +1574,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   }
 
   // ⛔ HOW A PICTURE ENDED, SAID ONCE as it stops sending: "finished" only for a picture that
-  // played out (N57b, 2026-09-30: one that did not was never finished).
+  // played out (one that did not was never finished).
   //  • This dock's Stop has already said "stopped", the moment it fired.
   //  • A picture the engine dropped or cut short shows its warning line, an alert that says why.
   //  • A picture that played out still shows its whole key-down elapsed: the radio loop stamps

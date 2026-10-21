@@ -5,7 +5,7 @@
 // screens").
 //
 // It replaced #287's rule, which pinned Tune beside the band picker in the cockpit HEADER. That
-// header wrapped, and everything in it moved with the wrap: N66 measured Stop TX in four places
+// header wrapped, and everything in it moved with the wrap: Stop TX was measured in four places
 // on the eight operating screens, Tune in seven, and the header Stop TX under the dock at the
 // 150–175 % pins. Now the header draws no transmit control at all and the strip draws them all.
 //

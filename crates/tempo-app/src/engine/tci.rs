@@ -1,5 +1,5 @@
 //! Programs on Nexus's TCI server, on the engine: what a program may key, the over that carries its
-//! audio, and every stop that ends it (the TCI server design, §3; the operator's rulings of
+//! audio, and every stop that ends it (the operator's rulings of
 //! 2026-10-19). The server (`tempo_net::tci::server`) refuses outright what it can on its own; every
 //! command that could put the transmitter on the air reaches the engine as a verdict
 //! ([`Engine::tci_key`], [`Engine::tci_tune_on`]), called by the app's backend under the engine
@@ -12,9 +12,9 @@
 //! passes every station gate first and TCI's own terms after, and a program never arms, as a WSJT-X
 //! UDP request never does. No program raises the power, moves the section, retunes while anything
 //! is on the air, or keys outside the licence, which judges the whole transmit passband of a
-//! program's audio, because Nexus cannot know where in it the program puts its signal (§3.6).
+//! program's audio, because Nexus cannot know where in it the program puts its signal.
 //!
-//! ## The verdict, in order (§3.2)
+//! ## The verdict, in order
 //!
 //! | # | Gate | Refusal |
 //! |---|---|---|
@@ -103,7 +103,7 @@ use tempo_net::tci::wire::Word;
 
 mod cw;
 
-/// What a program's audio over is judged as (§3.6): the whole transmit passband, 0 to 3 kHz of
+/// What a program's audio over is judged as: the whole transmit passband, 0 to 3 kHz of
 /// audio on the sideband's side of the carrier. In Phone the gate judges its own phone passband.
 const PASSBAND: DataFrame = DataFrame {
     f0_hz: 0.0,
@@ -216,7 +216,7 @@ impl Engine {
 
     // ── The verdict, the keys and their ends ─────────────────────────────────────────────────
 
-    /// ⛔ THE VERDICT (§3.2): may `program` transmit `ask` now? `Ok`, or the first gate that fails,
+    /// ⛔ THE VERDICT: may `program` transmit `ask` now? `Ok`, or the first gate that fails,
     /// in the order of the module header's table.
     fn tci_verdict(&self, program: u64, ask: Ask, audio_started: bool) -> Result<(), Refusal> {
         if !self.tci_transmit() {
@@ -389,7 +389,7 @@ impl Engine {
         Ok(())
     }
 
-    /// What `program` is told as `tx_enable` (§3.5): the verdict for a `tci` key, now.
+    /// What `program` is told as `tx_enable`: the verdict for a `tci` key, now.
     pub fn tci_tx_enable(&self, program: u64, audio_started: bool) -> bool {
         self.tci_verdict(program, Ask::Over, audio_started).is_ok()
     }
@@ -403,7 +403,7 @@ impl Engine {
             .or_else(|| self.tci_cw_on_air())
     }
 
-    /// `trx:0,false…` from `program` (§3.4). From the program that holds the key, the GRACEFUL end:
+    /// `trx:0,false…` from `program`. From the program that holds the key, the GRACEFUL end:
     /// what its over has accepted plays out, and the loop's deadline unkeys after it; a microphone
     /// key ends now. From any other program: whatever is on the air stops, as WSJT-X's UDP HaltTx
     /// stops it ([`Self::halt_tx`], which holds until the operator's arm); with nothing on the air,
@@ -457,7 +457,7 @@ impl Engine {
 
     /// `program`'s connection ended: it closed, failed or went silent, or the server or the
     /// operator ended it. ⛔ Everything it holds ends hard, NOW: the over's abort is armed here, so
-    /// the radio loop flushes and unkeys on its next tick (§3.1 item 4). What it asked as its mode
+    /// the radio loop flushes and unkeys on its next tick. What it asked as its mode
     /// is forgotten with it.
     pub fn tci_disconnected(&mut self, program: u64) {
         self.end_tci_program(program, "its connection ended");
@@ -591,9 +591,9 @@ impl Engine {
 
     /// One frame of `program`'s transmit audio, decoded to the route's 12 kHz mono, as it arrived.
     ///
-    /// ⛔ AUDIO ONLY FOR OUR KEY (§3.1 item 8): taken only from the program whose `tci` key holds an
+    /// ⛔ AUDIO ONLY FOR OUR KEY: taken only from the program whose `tci` key holds an
     /// armed or keyed over it has not let go. Anything else is dropped (`false`), never kept for a
-    /// later key. Sanitised here as well (§3.1 item 9): a sample that is not finite is silence, and
+    /// later key. Sanitised here as well: a sample that is not finite is silence, and
     /// none passes full scale. Re-cut into 20 ms frames, so a program's small frames cannot fill the
     /// feed between two ticks.
     pub fn tci_tx_audio(&mut self, program: u64, samples: &[f32], arrived: Instant) -> bool {
@@ -636,7 +636,7 @@ impl Engine {
     // ── The radio loop ───────────────────────────────────────────────────────────────────────
 
     /// One radio-loop tick of the programs' keys: the ONLY path from a program's audio to the
-    /// transmitter, and the per-tick predicate of its over ([`MicLatch::tick`], §3.3). The loop
+    /// transmitter, and the per-tick predicate of its over ([`MicLatch::tick`]). The loop
     /// keys, plays and unkeys what this answers, as it does the Remote microphone's.
     ///
     /// `budget_ms` is how much audio the output ring can take this tick (clamped to the push cap
@@ -664,7 +664,7 @@ impl Engine {
             tx_enabled: self.tci_may_transmit(),
             // G2: the passband in the licence, and a radio that takes the audio Nexus plays.
             tx_allowed: self.tci_over_licensed() && self.tci_over_routed(),
-            // Nexus's own key wins (§2.4): a tune, or the operator's own PTT, takes the transmitter.
+            // Nexus's own key wins: a tune, or the operator's own PTT, takes the transmitter.
             tuning: self.tuning || self.manual_ptt,
             // G4: the section it was admitted in, and its program's last ask still a voice mode
             // (a data mode is held like FT8; any other carries no audio over).
@@ -678,7 +678,7 @@ impl Engine {
             now,
             now_ms,
             now_secs: now_ms / 1000,
-            // ⛔ C2 OFF: a program's over never starts or restarts the watchdog clock (design Q4);
+            // ⛔ C2 OFF: a program's over never starts or restarts the watchdog clock;
             // a standing trip ends it through G1, which reads the trip.
             watchdog_limit_secs: 0,
             watchdog_start_secs: None,
@@ -750,7 +750,7 @@ impl Engine {
     // ── Dial, mode and power ─────────────────────────────────────────────────────────────────
 
     /// Why a program's `vfo` or `modulation` change is refused now, before the CAT broker's own
-    /// dial and mode rules judge it: not while anything is on the air (design Q9; the program is
+    /// dial and mode rules judge it: not while anything is on the air (the program is
     /// told the dial in force). The app must ask this and make the change under ONE hold of the
     /// engine lock, or a key can come between the two.
     pub fn tci_retune_refusal(&self) -> Option<Refusal> {
@@ -765,7 +765,7 @@ impl Engine {
             .map(|p| (p * 100.0).round() as u32)
     }
 
-    /// `drive:0,<percent>` from a program: it may LOWER the power, never raise it (design Q10),
+    /// `drive:0,<percent>` from a program: it may LOWER the power, never raise it,
     /// through [`Self::set_rf_power`], so the operator's ceiling still holds. `Ok` with the power
     /// now in force. The level it asks is judged against [`Self::tci_drive`]: above it, or with no
     /// power known to lower from, it is refused; at it, nothing is written.
@@ -950,7 +950,7 @@ mod tests {
 
     // ── The verdict ──────────────────────────────────────────────────────────────────────────
 
-    /// ⛔ THE VERDICT NAMES THE FIRST GATE THAT FAILS (§3.2), one row a gate, each row breaking
+    /// ⛔ THE VERDICT NAMES THE FIRST GATE THAT FAILS, one row a gate, each row breaking
     /// that gate alone from a station that admits everything, by value. CONTROLS: the station
     /// admits each kind of key, and Tune in CW.
     #[test]
@@ -1177,7 +1177,7 @@ mod tests {
         assert!(wrong.is_empty(), "the verdict:\n{}", wrong.join("\n"));
     }
 
-    /// ⛔ A PROGRAM'S OVER IS JUDGED ACROSS ITS WHOLE PASSBAND (§3.6), not as Nexus's own next
+    /// ⛔ A PROGRAM'S OVER IS JUDGED ACROSS ITS WHOLE PASSBAND, not as Nexus's own next
     /// frame: a General in Digital at 14.148 MHz, where the frame at the TX offset is inside the
     /// 20 m data segment and the passband reaches past its top at 14.150, is refused for the
     /// licence. CONTROL: at 14.140 the passband fits, and only the slot-timed rule refuses.
@@ -1399,7 +1399,7 @@ mod tests {
     }
 
     /// ⛔ NO COMMAND, IN ANY STATE, ARMS TX, CLEARS A STOP'S HOLD, A WATCHDOG TRIP OR THE CONTEXT
-    /// HOLD, OR STARTS OR RESTARTS THE WATCHDOG CLOCK (§3.1 item 2): every command alone from
+    /// HOLD, OR STARTS OR RESTARTS THE WATCHDOG CLOCK: every command alone from
     /// every state, then all of them in a row from every state. CONTROL: the sweep is not
     /// vacuous: keys are admitted, and a stop does lower TX, in states where they should be.
     #[test]
@@ -1442,7 +1442,7 @@ mod tests {
 
     // ── Stop in Nexus always wins ────────────────────────────────────────────────────────────
 
-    /// ⛔ STOP WINS (§3.1 item 3): Stop TX, the operator's TX Off and the transmit switch going off
+    /// ⛔ STOP WINS: Stop TX, the operator's TX Off and the transmit switch going off
     /// each end a program's keyed over at once, with the abort that flushes and unkeys; its audio
     /// is refused from then; and a key after it is refused until the operator's own arm (or the
     /// switch, for the switch), which then admits it.
@@ -1557,7 +1557,7 @@ mod tests {
 
     // ── A lost socket ────────────────────────────────────────────────────────────────────────
 
-    /// ⛔ A PROGRAM'S LOST SOCKET ENDS WHAT IT HOLDS AT ONCE (§3.1 item 4): its keyed over is
+    /// ⛔ A PROGRAM'S LOST SOCKET ENDS WHAT IT HOLDS AT ONCE: its keyed over is
     /// dropped and the abort armed in the same call, so the radio loop's next tick flushes and
     /// unkeys; a microphone key and a tune are down at once. CONTROL: another program's loss
     /// changes nothing.
@@ -1667,7 +1667,7 @@ mod tests {
 
     // ── Audio only for our key ───────────────────────────────────────────────────────────────
 
-    /// ⛔ AUDIO ONLY FOR OUR KEY (§3.1 item 8): another program's audio is refused and keys
+    /// ⛔ AUDIO ONLY FOR OUR KEY: another program's audio is refused and keys
     /// nothing; with no over, or after the owner let go, nothing is taken. CONTROL: the owner's
     /// own audio is taken and keys its over.
     #[test]
@@ -1733,7 +1733,7 @@ mod tests {
 
     // ── The owner's release, another's ───────────────────────────────────────────────────────
 
-    /// ⛔ THE OWNER'S RELEASE IS GRACEFUL (§3.4): what its over accepted plays out, the last
+    /// ⛔ THE OWNER'S RELEASE IS GRACEFUL: what its over accepted plays out, the last
     /// frame included, and the over ends with no abort, nothing halted and nothing held. CONTROL:
     /// Stop TX at the same moment arms the abort that flushes it.
     #[test]
@@ -1801,7 +1801,7 @@ mod tests {
 
     // ── One owner ────────────────────────────────────────────────────────────────────────────
 
-    /// ⛔ ONE OWNER (§3.1 item 5): a program's admitted key owns the transmitter and is on the
+    /// ⛔ ONE OWNER: a program's admitted key owns the transmitter and is on the
     /// air from its admission; nothing else that asks the arbiter keys under it, the CAT broker's
     /// clients and the other programs included, and its own re-assert changes nothing. The other
     /// way round, it is refused while the broker holds the key.
@@ -1860,7 +1860,7 @@ mod tests {
         );
     }
 
-    /// ⛔ NEXUS'S OWN KEY WINS (§2.4): the operator's PTT or Tune during a program's over takes
+    /// ⛔ NEXUS'S OWN KEY WINS: the operator's PTT or Tune during a program's over takes
     /// the transmitter, and the next tick ends the over with its abort. A program's microphone
     /// key goes down at once.
     #[test]
@@ -2121,7 +2121,7 @@ mod tests {
         assert!(!s.e.tci_over_armed());
     }
 
-    /// ⛔ AN ARMED FT RUN PLANS NO OVER WHILE A PROGRAM'S KEY OWNS THE TRANSMITTER (design §2.3):
+    /// ⛔ AN ARMED FT RUN PLANS NO OVER WHILE A PROGRAM'S KEY OWNS THE TRANSMITTER:
     /// the slot is skipped as for a tune, the run stays armed and its next free slot plans as
     /// usual. A program's over in Digital waits for the bench, so it is set up here as one will
     /// stand once allowed.
@@ -2172,7 +2172,7 @@ mod tests {
         assert!(s.e.take_tci_abort());
     }
 
-    /// ⛔ AFTER A BAND CHANGE A PROGRAM WAITS FOR THE OPERATOR'S ARM (design Q13; the CAT
+    /// ⛔ AFTER A BAND CHANGE A PROGRAM WAITS FOR THE OPERATOR'S ARM (the CAT
     /// broker's rule): the change ends a program's key, a new one is refused under the context
     /// hold in Phone and as disarmed in Digital, and the operator's TX On admits it.
     #[test]
@@ -2201,7 +2201,7 @@ mod tests {
         );
     }
 
-    /// ⛔ A PROGRAM NEVER STARTS OR RESTARTS THE WATCHDOG CLOCK (design Q4): its over, played for
+    /// ⛔ A PROGRAM NEVER STARTS OR RESTARTS THE WATCHDOG CLOCK: its over, played for
     /// two seconds, and its tune leave the clock as it was, stopped or running. A trip mid-over
     /// ends the over on the next tick. CONTROL: the operator's Tune restarts the clock.
     #[test]
@@ -2276,7 +2276,7 @@ mod tests {
 
     // ── Dial and power ───────────────────────────────────────────────────────────────────────
 
-    /// ⛔ NO RETUNE ON THE AIR (design Q9): a program's dial or mode change is refused while
+    /// ⛔ NO RETUNE ON THE AIR: a program's dial or mode change is refused while
     /// anything is on the air, a program's admitted key included. CONTROL: idle, it is not.
     #[test]
     fn a_program_may_not_retune_while_anything_is_on_the_air() {
@@ -2304,7 +2304,7 @@ mod tests {
         );
     }
 
-    /// ⛔ A PROGRAM MAY LOWER THE POWER, NEVER RAISE IT (design Q10): above the level in force,
+    /// ⛔ A PROGRAM MAY LOWER THE POWER, NEVER RAISE IT: above the level in force,
     /// or with none known, it is refused and nothing moves; at it, nothing is written; below it,
     /// the level lands through the operator's ceiling.
     #[test]

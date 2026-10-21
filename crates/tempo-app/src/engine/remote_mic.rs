@@ -1,7 +1,7 @@
 //! A streamed Remote operator's microphone, on the engine: the over's latch ([`crate::mic`]),
 //! ARMED by their held PTT, KEYED by their audio, and ended by every stop the station has.
 //!
-//! ## M1 with S7: the hold arms, audio keys, either gap unkeys
+//! ## M1: the hold arms, audio keys, either gap unkeys
 //!
 //! The page's held PTT ([`crate::remote_control::ptt_hold::PttHold`]) used to key the station on
 //! the hold alone, through the desktop's own PTT verb. Under M1 it ARMS a microphone over instead
@@ -25,9 +25,9 @@
 //! the latch is dropped, and the one-shot abort is armed when the rig was keyed, which the radio
 //! loop turns into `flush_output(); rig.ptt(false)`, as it does the voice keyer's.
 //! - `halt_tx`, the universal stop (the desktop's Stop TX, the stream's own Stop, WSJT-X's HaltTx,
-//!   a lapse of the stream's presence): unchanged, and it drops the over (M10).
+//!   a lapse of the stream's presence): unchanged, and it drops the over.
 //! - `set_tx_enabled(false)`: TX Off ends a microphone over in flight, as it does RTTY and SSTV
-//!   (M10, the design's one deliberate change to what a shipped button does).
+//!   (the one deliberate change to what a shipped button does).
 //! - The per-tick predicate ([`Engine::poll_mic`]): every gate, the ceiling, the watchdog, presence
 //!   for THIS over, the transmit route, and the audio gap.
 //! - The radio loop, when it does not own the operator's radio (`may_key`).
@@ -339,7 +339,7 @@ mod tests {
         }
     }
 
-    // ── M1 with S7 ────────────────────────────────────────────────────────────────────────────
+    // ── M1 ────────────────────────────────────────────────────────────────────────────────────
 
     /// ★ M1: the held PTT arms, and only the page's audio keys. `arming_without_audio_never_asserts_ptt`
     /// at the engine: a hundred ticks of a held PTT with no audio key nothing.
@@ -490,9 +490,9 @@ mod tests {
         );
     }
 
-    // ── M7: a lease lapse mid-over ends it ────────────────────────────────────────────────────
+    // ── A lease lapse mid-over ends it ────────────────────────────────────────────────────────
 
-    /// ★ M7: presence lapses mid-over (the page's heartbeats stopped). The next radio-loop poll
+    /// ★ Presence lapses mid-over (the page's heartbeats stopped). The next radio-loop poll
     /// ends the over and arms the abort. CONTROL: a tick before the deadline it is still keyed.
     #[test]
     fn a_lapse_of_presence_mid_over_unkeys_on_the_next_tick() {
@@ -533,7 +533,7 @@ mod tests {
         }
     }
 
-    // ── M10: the existing stops, unchanged ────────────────────────────────────────────────────
+    // ── The existing stops, unchanged ─────────────────────────────────────────────────────────
 
     /// `halt_tx` (Stop TX, a Stop from the stream, HaltTx) and TX Off each end a keyed over, arm
     /// the abort, and close the feed.
@@ -597,7 +597,7 @@ mod tests {
         );
     }
 
-    /// And `Armed` only while the armed over OWNS the transmitter (the lead's Q1 ruling,
+    /// And `Armed` only while the armed over OWNS the transmitter (decided
     /// 2026-09-29): the header's ON AIR sign waits on it for every over, the page's own Hold PTT
     /// included. Anything the arbiter puts in front of it is on the air (a key at the shack, an FT
     /// over, the tune carrier), and then the over is not reported armed, so the sign lights.
@@ -774,7 +774,7 @@ mod tests {
     // ── What the page is shown (micState) ─────────────────────────────────────────────────────
 
     /// The over as the page is shown it: armed, then keyed by the voice, then its end and why.
-    /// Each end names its own cause, so the page can say the right thing (design §7).
+    /// Each end names its own cause, so the page can say the right thing.
     #[test]
     fn the_page_is_shown_the_over_and_why_it_ended() {
         use crate::mic::{MicEnded, MicStatus};

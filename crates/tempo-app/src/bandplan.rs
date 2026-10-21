@@ -207,7 +207,7 @@ pub fn ft8_band_plan() -> Vec<BandChannel> {
         // 70.154 is inside DL's 70.150–70.210 by 4 kHz and OUTSIDE CT, I and LY
         // altogether — and the US has NO 4 m allocation at any class. The dial is
         // WSJT-X's own R1 default (`models/FrequencyList.cpp`, flagged `preferred`;
-        // it is row 52 of `paritylab/wsjtx_freqs.txt`, the table this plan is
+        // it is row 52 of that default table, the one this plan is
         // generated from, and was simply dropped in transcription — the other three
         // 4 m rows from that file ship in the MSK144/JT65/WSPR plans below). The note
         // is the tooltip an operator reads before keying, so it says so.
@@ -328,7 +328,7 @@ pub fn sstv_band_plan() -> Vec<BandChannel> {
 ///   * JT65 is 14.076 on 20 m, not 14.074.
 ///
 /// The per-mode plans below are GENERATED from WSJT-X's own frequency table —
-/// see `paritylab/parse_wsjtx_freqs.py`, which reads the FrequenciesForRegionModes
+/// by a script that reads the FrequenciesForRegionModes
 /// blob out of a real WSJT-X.ini — rather than typed from memory. Roughly ninety
 /// amateur frequencies is exactly the volume where one transposed digit hides in
 /// a table and looks authoritative.
@@ -750,7 +750,7 @@ mod tests {
                 .map(|c| c.dial_mhz)
         };
         // The four WSJT-X modes with a 70 MHz row in their default table, and only
-        // those four (WSJT-X `models/FrequencyList.cpp`; `paritylab/wsjtx_freqs.txt`).
+        // those four (WSJT-X `models/FrequencyList.cpp`).
         assert_eq!(dial(Tier::Ft8), Some(70.154));
         assert_eq!(dial(Tier::Jt65), Some(70.102));
         assert_eq!(dial(Tier::Msk144), Some(70.230));

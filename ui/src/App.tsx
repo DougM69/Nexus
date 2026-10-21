@@ -298,7 +298,7 @@ const OPERATE_TIERS: Tier[] = [
 /** The screens whose Esc App binds to the top bar's halt while one is on show (see the listener in
  *  App). The other operating screens bind their own Esc; stop-control-wiring.test.tsx presses Esc
  *  on every section in the registry and holds each to what it sends. Connect is here because it draws
- *  no top bar, so no Stop TX of its own (N65, the operator's 2026-10-01 ruling). */
+ *  no top bar, so no Stop TX of its own (the operator's 2026-10-01 ruling). */
 const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'sstv', 'aprs', 'sats', 'connect'])
 function App() {
   const [theme, setTheme, themeChoice] = useTheme()
@@ -2837,7 +2837,7 @@ function App() {
   // one of them is on show, on the shared listener the cockpits' own Esc rides too (useEscStop:
   // capture phase, never preventDefault, stop authority only). So on the same press a menu or dialog
   // still closes, Satellites still closes the bird detail, and the voice keyer still stops itself.
-  // CONNECT TOO (N65, the operator's ruling 2026-10-01: "remove all radio control from connect, reclaim that space"): the
+  // CONNECT TOO (the operator's ruling 2026-10-01: "remove all radio control from connect, reclaim that space"): the
   // top bar is not drawn on Connect, so its Stop TX went with it; without this nothing there could cut an over that Operate's
   // background sequence is still keying. 'connect' is in ESC_HALT_VIEWS, so it is this same call, stop authority included.
   // THE CONTEST SCREEN TOO, WHILE ITS ENTRY SHOWS (2026-10-11). With a contest running the screen
@@ -3865,7 +3865,7 @@ function App() {
           defers a retune while a slot is actively transmitting (rigs reject VFO/mode changes
           mid-TX), so a click during our own over is applied at the next safe moment rather than
           keying across it. This removes a UI refusal, not a TX-path guard.
-          Still notify-never-act ([[feedback-alerts-notify-never-act]]): Nexus does not move the
+          Still notify-never-act: Nexus does not move the
           radio on its own here — this is a button the operator presses. */}
       <PounceBanner alert={pounceAlert} onDismiss={dismissPounce} onWork={handlePounceWork} myGrid={snap.mygrid} />
 
