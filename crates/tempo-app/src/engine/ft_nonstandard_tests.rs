@@ -424,3 +424,57 @@ fn no_click_works_a_call_the_decoder_could_not_resolve() {
         }
     }
 }
+
+/// ⭐ FREE TEXT IN A CONTACT WITH A STATION SIGNING W9XYZ/M GOES OUT AS WSJT-X'S MESSAGE FOR THE
+/// TWO CALLS. Typed `73` went out as `W9XYZ/M K1ABC 73`, which the packer sends as `W9XYZ K1ABC 73`:
+/// another station. Where exactly one call is nonstandard, WSJT-X writes that call whole and the
+/// other hashed (`genStdMsgs`, mainwindow.cpp: RR73 or RRR and 73, 9701-9702 and 9709-9710; a
+/// report, `t0a` 9596 and 9629-9631 or `t0b` 9597 and 9625-9626, then 9655-9656); each typed text
+/// packs to the 77 bits and FT4 tones of WSJT-X's message. With both calls standard, or both
+/// nonstandard, WSJT-X's message is `t0` (9591, 9595), which the text as typed already packs to;
+/// and text that is no standard message goes as typed.
+#[test]
+fn free_text_goes_out_as_wsjtxs_message_for_the_two_calls() {
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        for (me, cq, typed, wsjtx) in [
+            ("K1ABC", "CQ W9XYZ/M", "73", "W9XYZ/M <K1ABC> 73"),
+            ("K1ABC", "CQ W9XYZ/M", "RR73", "W9XYZ/M <K1ABC> RR73"),
+            ("K1ABC", "CQ W9XYZ/M", "RRR", "W9XYZ/M <K1ABC> RRR"),
+            ("K1ABC", "CQ W9XYZ/M", "-12", "<W9XYZ/M> K1ABC -12"),
+            ("K1ABC", "CQ W9XYZ/M", "R-12", "<W9XYZ/M> K1ABC R-12"),
+            ("K1ABC", "CQ PJ4/W9XYZ", "73", "PJ4/W9XYZ <K1ABC> 73"),
+            ("K1ABC", "CQ YW18FIFA", "73", "YW18FIFA <K1ABC> 73"),
+            ("K1ABC/P", "CQ W9XYZ/M", "73", "W9XYZ/M <K1ABC/P> 73"),
+            ("K1ABC/QRP", "CQ W9XYZ EN37", "73", "<W9XYZ> K1ABC/QRP 73"),
+            ("K1ABC/QRP", "CQ W9XYZ EN37", "-12", "W9XYZ <K1ABC/QRP> -12"),
+            // As typed: WSJT-X's already.
+            ("K1ABC", "CQ W9XYZ EN37", "73", "W9XYZ K1ABC 73"),
+            ("K1ABC", "CQ W9XYZ/P EN37", "73", "W9XYZ/P K1ABC 73"),
+            ("K1ABC/P", "CQ F4CYH/R JN18", "73", "F4CYH/R K1ABC/P 73"),
+            ("PJ4/K1ABC", "CQ W9XYZ/M", "73", "W9XYZ K1ABC 73"),
+        ] {
+            let what = format!("{} {me} {cq:?} {typed:?}", tier_name(tier));
+            let mut e = Engine::new(me, MY_GRID, 0);
+            e.set_tier(tier);
+            let cq = off_air(cq);
+            e.ingest_decodes_for_test(&[heard(&cq)], 2);
+            let Msg::Cq { de, .. } = Msg::parse(&cq) else {
+                panic!("{what}: a CQ")
+            };
+            e.work_station(&de, None, Some(&cq), Some(SNR), None)
+                .expect("the double-click is taken");
+            e.qso_freetext(typed);
+            let sent = keyed(&mut e, 4).expect("the free text");
+            assert_eq!(air(&sent), air(wsjtx), "{what}: WSJT-X's on the air");
+        }
+        // Not a standard message: as typed.
+        let mut e = answering_its_cq(tier);
+        e.qso_freetext("TNX");
+        assert_eq!(
+            keyed(&mut e, 4).as_deref(),
+            Some("W9XYZ/M K1ABC TNX"),
+            "{}: free text",
+            tier_name(tier)
+        );
+    }
+}

@@ -828,6 +828,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in full, it is answered and worked as usual. Field Day already passed such a caller by. NEEDS-BENCH: FT8, Call CQ
   and then an ARRL VHF contest's Running, called by a station signing /M that runs WSJT-X, whose call Nexus has not
   decoded in full.
+- **FT8/FT4: typing 73 to a station signing W9XYZ/M no longer sends it to W9XYZ.** In a contact with a station
+  whose call has a suffix such as /M or /QRP, a prefix such as PJ4/, or a shape such as YW18FIFA, the free text you
+  type for the next message (`73`, `RR73`, `RRR` or a report) went out as `W9XYZ/M K1ABC 73`, which goes on the air
+  as `W9XYZ K1ABC 73`: another station's call (with YW18FIFA, a cut-off `YW18FIFA K1AB`). The same happened to your
+  own call when it has a suffix or a prefix. Nexus now sends the message WSJT-X sends for the two calls, such as
+  `W9XYZ/M <K1ABC> 73` (your call in angle brackets) or `<W9XYZ> K1ABC/QRP 73`, the same message bit for bit and
+  the same one Nexus's own 73 is. Other free text, and contacts where both calls are plain or both have a suffix or
+  a prefix, go out as before. NEEDS-BENCH: FT8, working a station signing /M that runs WSJT-X, type 73 as the next
+  message: WSJT-X shows `W9XYZ/M <you> 73` and logs.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.
