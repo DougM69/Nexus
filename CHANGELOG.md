@@ -408,6 +408,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   memory pick, or a spot. Leave Phone and come back, and you return to where you left it. A frequency your licence
   may not use for phone (7.171 MHz for a General, 28.680 MHz for a Technician) still moves you to a legal phone
   frequency, as before.
+- **An unassisted contest entry now stops all CW decoding, not only the AI decoder.** With Settings ▸ Contesting ▸
+  Unassisted entry on, the classic decoder still copied CW into the Decode pane, offered the calls it heard as chips
+  and filled His Call with its best guess. CQ WW's rules count a CW decoder as QSO-finding assistance, which an
+  unassisted entry may not use. Now neither decoder runs: no copy, call chips or His Call guess, no report or name
+  for the log strip and no speed, and the Decode pane says why. CW speed match sends at your own speed. A call you
+  type is still the one the F-keys send. Ending the entry brings the decoder back as you had it, with nothing from
+  before or during the entry. Assisted entries and everyday operating are unchanged.
+- **The speed beside the CW Decode pane's title no longer shows a station heard long ago.** The classic decoder
+  measures it, and clicking a call chip sets your keyer to it, but it stayed at the last speed measured however long
+  ago that was, so a click could send your next over at the previous station's speed. It now shows, and a chip click
+  now uses, only a speed from keying heard in the last 10 seconds, the rule CW speed match already had. With none,
+  no speed is shown and a chip click leaves your keyer speed alone.
 - **FT8 and FT4 no longer transmit on top of another program keying your radio through Nexus.** With "Other programs
   may key transmit" on, a program sharing the radio through Nexus's CAT broker (WSJT-X, VarAC) could key for a
   transmission of its own while your FT8 or FT4 CQ or QSO was armed, and at the start of your next period Nexus sent its

@@ -4732,7 +4732,7 @@ export const EN = {
   'settings.contestCategory.unassisted.aria.declare': 'Declare an unassisted contest entry',
   'settings.contestCategory.unassisted.aria.end': 'End an unassisted contest entry',
   'settings.contestCategory.unassisted.hint':
-    'Turns off the AI CW decoder, DX cluster / RBN spots, the PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp. Takes effect at once. Your own settings for each of those are left alone and come back when you switch this off.',
+    'Turns off the CW decoder (AI and classic), DX cluster / RBN spots, the PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp. Takes effect at once. Your own settings for each of those are left alone and come back when you switch this off.',
   // The journal. Each entry's own note and the source names in it are the engine's words,
   // printed as they arrive; the UNASSISTED / assisted state and the empty stand-in are ours.
   'settings.contestCategory.journal.label': 'Assistance record',
@@ -11276,6 +11276,8 @@ export const EN = {
     'Live CW decode — the AI (neural-net) decoder reads the whole {{window}} Hz window, far better weak-signal copy than a pitch-tracking decoder. Turn AI off to fall back to the classic decoder.',
   'cw.decode.log.aria': 'Decoded CW',
   'cw.decode.listening': 'listening…',
+  // In place of the copy while an unassisted contest entry is declared. `CQ WW` is the contest's name.
+  'cw.decode.unassisted': 'Unassisted entry: the CW decoder is off. CQ WW counts it as assistance.',
   'cw.sent.title': "What you've transmitted (F-key macros expanded to the real text)",
 
   // ── CW ▸ the copilot chips ──────────────────────────────────────────────────────────

@@ -17318,6 +17318,11 @@ struct CwDecodeResult {
     recommended: Option<String>,
     /// The operator-confirmed worked callsign (the active peer), if any.
     worked_call: Option<String>,
+    /// An unassisted contest entry is declared: no CW decoder runs
+    /// (`Settings::cw_decoder_active`), so every field above that the decoder fills is empty,
+    /// the guidance included, and the Decode pane says why. A turn cue drawn from this read
+    /// shows nothing then either.
+    unassisted: bool,
 }
 
 /// Decode CW from the recent RX audio at the operator's pitch — a live readout for the
@@ -17341,11 +17346,19 @@ fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
     let sent = eng.cw_sent();
     let worked = eng.active_peer();
     let mycall = eng.settings().mycall.clone();
+    // An unassisted entry gets nothing the decoder would give it. The engine has no copy for it,
+    // and the copilot does not run on the call the operator chose either: no call chips (the
+    // best of which fills His Call), no report or name for the log strip, and no guidance.
+    let unassisted = !eng.settings().cw_decoder_active();
     // Parse the decode into copilot context. The DXCC resolver (src-tauri has it; tempo-core
     // doesn't) supplies the real-prefix check that filters CW misdecodes out of the chips.
-    let assist = tempo_core::cw_parse::analyze(&d.text, &sent, &mycall, worked.as_deref(), |b| {
-        propagation::dxcc::resolve(b).is_some()
-    });
+    let assist = if unassisted {
+        tempo_core::cw_parse::CwAssist::default()
+    } else {
+        tempo_core::cw_parse::analyze(&d.text, &sent, &mycall, worked.as_deref(), |b| {
+            propagation::dxcc::resolve(b).is_some()
+        })
+    };
     CwDecodeResult {
         text: d.text,
         pending: eng.cw_decode_pending(),
@@ -17368,6 +17381,7 @@ fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
         prompt: assist.guidance.prompt,
         recommended: assist.guidance.recommended,
         worked_call: worked,
+        unassisted,
     }
 }
 
@@ -39226,6 +39240,66 @@ mod tests {
         assert!(r.rst.is_some(), "control: confirmed, the report is read");
         assert!(r.name.is_some(), "control: confirmed, the name is read");
         assert_eq!(r.pending, "");
+    }
+
+    /// An unassisted contest entry gets nothing the CW decoder would give it: CQ WW's rules count
+    /// a CW decoder as QSO-finding assistance. No copy and no speed, so no call chips (the best of
+    /// which fills His Call), no report or name for the log strip, and no guidance (what a turn
+    /// cue would be drawn from). The call the operator chose to work is theirs, and stays.
+    #[test]
+    fn an_unassisted_entry_gets_no_cw_copy_chips_report_or_guidance() {
+        // K9ABC calling W9XYZ, keyed at 25 WPM on the operator's pitch: 12 kHz is the engine's
+        // RX-audio rate (tempo_fast::SAMPLE_RATE).
+        let hear = |e: &mut tempo_app::engine::Engine| {
+            let mut audio = vec![0.0f32; 2_400];
+            audio.extend(tempo_core::cw::morse_samples(
+                "W9XYZ DE K9ABC K9ABC UR 599 NAME BOB",
+                25,
+                e.settings().cw_pitch_hz,
+                12_000,
+            ));
+            audio.extend(vec![0.0f32; 12_000]);
+            for chunk in audio.chunks(1200) {
+                e.feed_rx_audio(chunk);
+            }
+        };
+        let station = || {
+            let mut e = tempo_app::engine::Engine::new("W9XYZ", "EN61", 0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+            e
+        };
+        // Control: assisted (the AI decoder off, so the classic decoder's copy is the copy).
+        let mut e = station();
+        e.set_ai_cw_enabled(false);
+        hear(&mut e);
+        let r = super::read_cw_state(&e);
+        let calls: Vec<&str> = r.candidates.iter().map(|c| c.call.as_str()).collect();
+        assert!(r.text.contains("K9ABC"), "control: the copy: {:?}", r.text);
+        assert!(calls.contains(&"K9ABC"), "control: a chip: {calls:?}");
+        assert_eq!(r.rst.as_deref(), Some("599"), "control: the report");
+        assert!(r.wpm > 0, "control: the speed");
+        assert!(!r.unassisted, "control: nothing to explain");
+
+        // Unassisted, with the AI decoder's switch left on as it ships.
+        let mut e = station();
+        e.set_unassisted_mode(true);
+        e.select_peer("K9ABC");
+        hear(&mut e);
+        let r = super::read_cw_state(&e);
+        assert_eq!(r.text, "", "no copy");
+        assert_eq!(r.pending, "", "no unconfirmed tail");
+        assert_eq!(r.wpm, 0, "no speed");
+        let calls: Vec<&str> = r.candidates.iter().map(|c| c.call.as_str()).collect();
+        assert!(calls.is_empty(), "no call chips: {calls:?}");
+        assert_eq!((r.rst, r.name), (None, None), "no report or name");
+        assert_eq!(r.recommended, None, "no guidance");
+        assert_eq!(
+            r.worked_call.as_deref(),
+            Some("K9ABC"),
+            "the call the operator chose stays"
+        );
+        assert!(r.unassisted, "the Decode pane is told why");
     }
 
     /// The settings backup's stated contract is that it CARRIES NO SECRETS, and

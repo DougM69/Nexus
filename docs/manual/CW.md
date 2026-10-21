@@ -319,18 +319,24 @@ If the rig has a split TX frequency set (`splitTxMhz` in the radio snapshot), a 
 
 ## Limits / Not Yet
 
-- **No ESM auto-sequencer:** CW is manual-only. The FT8 seven-state sequencer is explicitly excluded from CW.
+- **No auto-sequencer:** every CW transmission starts with your own key press. In a contest,
+  [Enter Sends Message](Field-Day.md#enter-sends-message-esm) sends the contact's next message each
+  time you press Enter in the log strip (off until you turn it on), and never sends on its own. The
+  FT8 seven-state sequencer is not used for CW.
 - **No paddle/iambic input through the app:** the only input paths are F-key macros and typed text. For live paddle feel, connect paddles to the rig or to the WinKeyer directly.
 - **AI decoder (the default):** CW copy is powered by a neural-network decoder (the
   DeepCW model by e04, AGPL-3.0 — see NOTICE) reading the whole 400–1200 Hz window:
-  dramatically better weak-signal copy than pitch-tracking decoders, updating every few
-  seconds as a flowing transcript. The **Clear** button wipes it; the AI toggle in the
+  dramatically better weak-signal copy than pitch-tracking decoders, as a flowing transcript.
+  Letters land about a second after they are sent (a little later on a slow computer); the last
+  few, which the decoder may still correct, show at once in a dimmer color. The **Clear** button wipes it; the AI toggle in the
   DECODE header falls back to the classic pitch decoder (also used automatically if the
   model file is missing). Fused prosigns (<AR>, <BT>) aren't in the model's alphabet and
   can appear as letter fragments.
+- **Off in an unassisted contest entry:** with Settings → Contesting ▸ Unassisted entry on, neither
+  decoder runs (CQ WW counts a CW decoder as assistance): no copy, call chips, His Call guess or
+  speed, and the Decode pane says why.
 - **Not a full-band skimmer:** the decode follows the audio passband, not every signal on
   the band at once; the WPM readout is estimated by the classic decoder underneath.
-- **Macros not user-editable:** the 8 slots and their text are compiled in; no UI for custom macro text in this version.
 - **CAT abort reliability:** `\stop_morse` varies by Hamlib version and rig manufacturer; older builds and some rigs may not halt mid-element.
 - **Soundcard PTT tail:** 250 ms, fixed; not configurable.
 - **Desktop-only:** Tauri v2; no web or mobile build.

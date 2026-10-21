@@ -9803,6 +9803,13 @@ input.cw-pitch::-webkit-inner-spin-button {
   color: var(--text-faint);
   font-style: italic;
 }
+/* An unassisted contest entry: the one line the Decode pane holds in place of the copy, saying why
+   there is none (CwCockpit). */
+.cw-decode-off {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--text-dim);
+}
 /* The AI decoder's unconfirmed tail, replaced by its next pass (confirmed copy is --text). */
 .cw-decode-unconfirmed {
   color: var(--cw-unconfirmed);
