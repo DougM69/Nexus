@@ -8103,6 +8103,16 @@ impl RadioLoop {
             self.reconcile_flex_client_audio(engine);
             self.take_tci_halts(engine);
             self.reconcile_tci_audio(engine, &*backend);
+            // Nexus's spots on the TCI radio's own panadapter, and the clicks on them: renewed for
+            // the active radio's client every tick, so a client a switch left behind lapses by
+            // itself (`crate::tci::spots`). Not while `rigctld_proc` is a radio being left.
+            crate::tci::spots::tick(
+                self.rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::tci)
+                    .filter(|_| !self.handoff_deferred && !self.switch_unhanded),
+                engine,
+            );
             // FORK-LOCAL: the FT-710's own spectrum over its internal FT4222 bridge. No-op on every
             // other radio, and on this one too until the operator opts in. Not on a switch the
             // handoff has not seen (W0): `rig` is the radio being left, and the span and scope-mode
@@ -17440,6 +17450,7 @@ mod tests {
     mod split_overs;
     mod tci;
     mod tci_cw;
+    mod tci_spots;
     mod udp_requests;
     mod wfview;
     mod yaesu_alc;

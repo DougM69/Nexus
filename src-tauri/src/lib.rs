@@ -121,6 +121,10 @@ mod street_map;
 /// manager that hot-applies the switch, the state and receive audio they are sent. Off by default.
 #[cfg(feature = "radio")]
 mod tci_server;
+/// Nexus's needed spots for a TCI radio's own panadapter: the Needed board's list, coloured by
+/// need, handed to the engine while the radio's "Spots on the SDR panadapter" is on.
+#[cfg(feature = "radio")]
+mod tci_spots;
 mod window_state;
 
 use chains::{panel_key, panel_label, Instance};
@@ -37646,6 +37650,17 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
             );
         }
     }
+    // Nexus's needed spots for a TCI radio's own panadapter: read from the Needed board's list
+    // while the radio in use has its "Spots on the SDR panadapter" on (`tci_spots`).
+    #[cfg(feature = "radio")]
+    tci_spots::spawn(
+        d.engine.clone(),
+        handle.state::<LogTallies>().needs.clone(),
+        d.live_paths.clone(),
+        d.region_paths.clone(),
+        d.spots.clone(),
+        d.ota_spots.clone(),
+    );
     // AI CW decoder (beta): resolve the DeepCW model from the app's cross-platform
     // RESOURCE dir (where Tauri bundles `resources/deepcw/*`) — next to the exe on
     // Windows, under usr/lib/<app>/resources on a Linux .deb/AppImage. The prior

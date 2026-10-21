@@ -136,6 +136,8 @@ mod tci;
 /// A radio on the TCI connection: what Nexus may transmit through an SDR program, and a spot
 /// clicked in its panadapter.
 mod tci_connection;
+/// Nexus's spots for the SDR program's panadapter, handed from the app shell to the radio loop.
+pub mod tci_spots;
 mod tx_alarms;
 /// A data frame judged across its whole width, and where it keys.
 #[cfg(test)]
@@ -4090,6 +4092,9 @@ pub struct Engine {
     /// The TCI server as its manager last saw it; `None` while it is switched off. See
     /// [`crate::dto::RadioStatus::tci_server`].
     tci_server: Option<crate::dto::TciServerStatus>,
+    /// Nexus's spots for the SDR program's panadapter, as the station last chose them. See
+    /// [`tci_spots`].
+    tci_spots: tci_spots::PanadapterSpots,
     scope_error: Option<String>,
     /// See `RadioStatus::scope_span_refused`.
     scope_span_refused: Option<String>,
@@ -6251,6 +6256,7 @@ impl Engine {
             audio_error: None,
             cat_share_error: None,
             tci_server: None,
+            tci_spots: tci_spots::PanadapterSpots::default(),
             scope_error: None,
             scope_span_refused: None,
             scope_mode_code: None,
