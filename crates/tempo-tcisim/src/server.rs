@@ -453,6 +453,12 @@ impl Simulator {
         self.with_radio(|radio, now| radio.click(call, hz, now));
     }
 
+    /// The SDR's operator clicks a spot at `hz` on transceiver `trx`'s panorama, in its receive
+    /// channel `channel` (0 = A, 1 = B), in each spelling the dialect sends.
+    pub fn click_spot_on(&self, trx: u32, channel: u32, call: &str, hz: u64) {
+        self.with_radio(|radio, now| radio.click_on(trx, channel, call, hz, now));
+    }
+
     /// Set what the meters read from now on.
     pub fn set_meters(&self, meters: Meters) {
         self.with_radio(|radio, _| radio.set_meters(meters));

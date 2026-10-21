@@ -750,6 +750,12 @@ impl Radio {
 
     /// The SDR's operator clicks a spot on the panorama.
     pub(crate) fn click(&mut self, call: &str, hz: u64, now: Instant) {
+        self.click_on(0, 0, call, hz, now);
+    }
+
+    /// The SDR's operator clicks a spot on transceiver `trx`'s panorama, in its receive channel
+    /// `channel` (0 = A, 1 = B). The receiver-qualified spelling names both; the legacy one neither.
+    pub(crate) fn click_on(&mut self, trx: u32, channel: u32, call: &str, hz: u64, now: Instant) {
         self.now = now;
         for form in self.dialect.spot_click.clone() {
             let line = match form {
@@ -757,8 +763,8 @@ impl Radio {
                 ClickForm::Receiver => notice(
                     "rx_clicked_on_spot",
                     [
-                        "0".to_string(),
-                        "0".to_string(),
+                        trx.to_string(),
+                        channel.to_string(),
                         call.to_string(),
                         hz.to_string(),
                     ],

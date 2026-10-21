@@ -790,6 +790,29 @@ fn spots_are_kept_replaced_deleted_and_cleared_and_a_click_is_sent_in_the_dialec
 }
 
 #[test]
+fn a_click_names_its_transceiver_and_channel_only_in_the_receiver_spelling() {
+    let mut b = Bench::new(Dialect::expert_sdr3(), Vec::new());
+    b.connect(0);
+    let m = b.mark();
+    b.r.click_on(1, 1, "W2X", 7_030_000, b.now);
+    b.absorb();
+    assert_eq!(
+        b.texts(0, m),
+        [
+            "clicked_on_spot:W2X,7030000;",
+            "rx_clicked_on_spot:1,1,W2X,7030000;"
+        ]
+    );
+    // A server that speaks only the legacy spelling names neither.
+    let mut b = Bench::new(Dialect::expert_sdr2(), Vec::new());
+    b.connect(0);
+    let m = b.mark();
+    b.r.click_on(1, 1, "W2X", 7_030_000, b.now);
+    b.absorb();
+    assert_eq!(b.texts(0, m), ["clicked_on_spot:W2X,7030000;"]);
+}
+
+#[test]
 fn stream_settings_are_answered_shape_the_frames_and_pihpsdr_refuses_its_unusual_ones() {
     let mut b = Bench::new(Dialect::expert_sdr3(), Vec::new());
     b.connect(0);
