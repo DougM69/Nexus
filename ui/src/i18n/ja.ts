@@ -358,6 +358,7 @@ export const JA: PartialCatalog = {
   "remote.account.role": "役割",
   "remote.account.role.operate": "操作",
   "remote.account.role.listen": "受信のみ",
+  "remote.account.operateIsYours": "「操作」で招待した人は、あなたが別のコンピューターからできることをすべて行えます。あなたのコールサインでの送信、ログブックの編集・エクスポート・削除、保存済みのログイン情報でのアップロード（LoTW はあなたの証明書で署名）、あなたのコールサインでのスポット、Winlink メールボックスの閲覧などです。シャックを任せられる人だけを「操作」で招待してください。",
   "remote.account.invite": "招待",
   "remote.account.uninvite": "削除",
   "remote.account.inviteLimit": "この局はこれ以上招待できません。先に誰かを削除してください。",

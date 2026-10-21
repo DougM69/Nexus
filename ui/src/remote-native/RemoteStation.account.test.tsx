@@ -110,6 +110,17 @@ it('shows a device added by signing in as asking, with Approve, until it is appr
   await waitFor(() => expect(actions).toEqual([{ type: 'device', deviceId: computer, approve: true, transmit: false, key, kind: 'computer' }]))
 })
 
+// Someone invited to operate holds what the owner's own other computer holds. The form says so where Operate is offered,
+// so the owner invites to operate only someone they would hand the shack to.
+it('says what Operate gives where it is offered, and not for Listen', async () => {
+  shack(bound({}))
+  const role = await screen.findByLabelText(EN['remote.account.role']) as HTMLSelectElement
+  expect(role.value, 'Operate is offered first').toBe('operate')
+  expect(screen.getByText(EN['remote.account.operateIsYours'])).toBeTruthy()
+  fireEvent.change(role, { target: { value: 'listen' } })
+  expect(screen.queryByText(EN['remote.account.operateIsYours']), 'CONTROL: Listen').toBeNull()
+})
+
 it('invites someone with a role, lists the people invited, and takes an invitation back', async () => {
   const actions = shack(bound({ people: [{ mailbox: 'k9.guest@example.test', role: 'listen' }] }))
   const person = await screen.findByText('k9.guest@example.test')

@@ -268,6 +268,9 @@ export function RemoteStation() {
         <option value="operate">{t('remote.account.role.operate')}</option>
         <option value="listen">{t('remote.account.role.listen')}</option>
       </select></label>
+      {/* Someone invited to operate holds what the owner's own other computer holds: said where Operate is offered,
+          so the owner invites to operate only someone they would hand the shack to. */}
+      {inviteRole === 'operate' && <p className="remote-warning">{t('remote.account.operateIsYours')}</p>}
       <div className="remote-actions">
         <button type="button" className="remote-button" disabled={busy || !inviteEmail.trim()}
           onClick={() => void act({ type: 'invite', email: inviteEmail.trim(), role: inviteRole })}>{t('remote.account.invite')}</button>

@@ -417,6 +417,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a CQ, tight in a contest, and too slow to win a pileup, where it tells you when not to call.
 
 ### Changed
+- **Nexus Remote: inviting someone to operate says what that gives them.** Under Settings ▸ Station ▸ Remote access ▸
+  People, with **Operate** chosen, the form now says that someone invited to operate can do all you can from another
+  computer: transmit under your callsign, edit, export or delete your log, upload with your saved logins (LoTW signed
+  with your certificate), spot under your call and read your Winlink mail. Invite to operate only someone you would
+  hand the shack to; **Listen** gives none of that.
 - **FT8/FT4: a late reply changes the over already on the air, as in WSJT-X.** When your partner's reply is
   decoded after your over has started (a weak R-report or RR73 that only the full decode finds), Nexus used to send
   the old message to the end of the over and the right one an over later. It now switches the rest of the over to the
