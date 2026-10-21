@@ -39,6 +39,7 @@ use tempo_app::mic::MicFeed;
 use tempo_app::remote_control::ptt_hold::{HoldEnd, PttHold};
 use tempo_audio::mic_encode::{MicEncoder, MIC_FRAME_SAMPLES};
 use tempo_audio::receive_encode::DetachedFeed;
+use tempo_client::stop_road::HEARTBEAT;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// The bench's road switch on this roadside, end to end (test builds only).
@@ -632,14 +633,38 @@ impl Seat {
         self.road.say(&Up::Heartbeat { lease, state }).await;
     }
 
-    /// Presence renewed on the road by a fresh echo, and the deadline the shack gave.
+    /// The newest snapshot here: the next one, then any that waited in the socket behind it (the
+    /// lane pushes one every 300 ms, so one that comes within 50 ms was waiting).
+    async fn newest_snapshot(&mut self) -> (u64, Instant) {
+        let mut newest = self.fresh_snapshot().await;
+        while let Ok(Some(Ok(message))) =
+            tokio::time::timeout(Duration::from_millis(50), self.socket.next()).await
+        {
+            if let Message::Binary(frame) = message {
+                self.feed(&frame);
+                newest = self.snapshot.unwrap_or(newest);
+            }
+        }
+        newest
+    }
+
+    /// Presence renewed on the road by a fresh echo, and the deadline the shack gave. As this
+    /// computer's road keeps it: a heartbeat naming the newest snapshot here, and another every
+    /// [`HEARTBEAT`] until the shack answers, for as long as presence lasts. One heartbeat can go
+    /// unanswered (the shack's authority busy that moment, or a snapshot too old to count after it
+    /// waited in this socket while the test seated another computer); the shack takes the next,
+    /// as it does from the real road.
     async fn renewed(&mut self) -> u32 {
-        let (state, _) = self.fresh_snapshot().await;
-        self.heartbeat(state).await;
-        self.road
-            .presence(Duration::from_secs(2))
-            .await
-            .expect("a fresh echo renews presence")
+        let deadline = Instant::now() + PRESENCE;
+        loop {
+            let (state, _) = self.newest_snapshot().await;
+            self.heartbeat(state).await;
+            let wait = HEARTBEAT.min(deadline.saturating_duration_since(Instant::now()));
+            if let Some(left_ms) = self.road.presence(wait).await {
+                return left_ms;
+            }
+            assert!(Instant::now() < deadline, "a fresh echo renews presence");
+        }
     }
 
     /// One call on the command link, and its answer, whatever comes before it.
