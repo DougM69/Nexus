@@ -5375,6 +5375,7 @@ export const ES: PartialCatalog = {
   "sat.inverting.title": "Transpondedor lineal inversor: si subes en la bajada, tu subida BAJA, y las bandas laterales se intercambian (LSB arriba, USB abajo).",
   "sat.iss.armed": "ISS por encima — sintonizado {{dial}} {{mode}}, SSTV armado",
   "sat.iss.overhead": "ISS por encima — SSTV en {{dial}} {{mode}}. Abre SSTV para recibirla; tu radio no se ha resintonizado.",
+  "sat.iss.overhead.onSstv": "ISS por encima: SSTV en {{dial}} {{mode}}. Una pasada de satélite ocupa la radio, así que no se ha resintonizado.",
   "sat.iss.cannotReceive": "ISS por encima — tu radio no puede recibir {{dial}} MHz, así que el autoarmado de SSTV de la ISS no puede usarla. Puedes desactivarlo en Ajustes ▸ Digital ▸ SSTV.",
   "sat.iss.los": "LOS de la ISS — SSTV desarmado, dial restaurado",
   "sat.iss.optOut": "Autoarmado de la ISS desactivado — SSTV desarmado, dial restaurado",

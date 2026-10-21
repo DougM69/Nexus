@@ -2035,6 +2035,7 @@ export const DE: PartialCatalog = {
   "sat.iss.los": "ISS LOS — SSTV entschärft, Frequenz wiederhergestellt",
   "sat.iss.armed": "ISS über uns — auf {{dial}} {{mode}} abgestimmt, SSTV scharf",
   "sat.iss.overhead": "ISS über uns — SSTV auf {{dial}} {{mode}}. Öffnen Sie SSTV, um es zu empfangen; Ihr Funkgerät wurde nicht umgestimmt.",
+  "sat.iss.overhead.onSstv": "ISS über uns: SSTV auf {{dial}} {{mode}}. Ein Satellitenüberflug belegt das Funkgerät, daher wurde es nicht umgestimmt.",
   "sat.iss.cannotReceive": "ISS über uns — Ihr Funkgerät kann {{dial}} MHz nicht empfangen, daher kann die ISS-SSTV-Automatik es nicht nutzen. Sie können sie unter Einstellungen ▸ Digital ▸ SSTV ausschalten.",
   "sat.refresh.mirrorDown": "Mirror nicht erreichbar — von Celestrak geholt: {{count}} Satelliten",
   "sat.refresh.ok": "Bahnelemente aktualisiert — {{count}} Satelliten ({{source}})",

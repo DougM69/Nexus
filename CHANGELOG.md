@@ -557,7 +557,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The ISS SSTV auto-arm leaves a satellite you are working alone.** With a transponder picked on the Satellites
   screen, an ISS pass made the auto-arm retune to 145.800 MHz, and Doppler tuning pulled the radio straight back to
   your satellite. While a satellite holds the radio, the auto-arm now only tells you the ISS is up, as it does on
-  other screens, and arms if you release the satellite while the ISS is still up.
+  other screens, and arms if you release the satellite while the ISS is still up. On the SSTV screen that notice
+  says the satellite pass has the radio, instead of asking you to open SSTV.
 - **RTTY's band channels now put your signal on the RTTY frequency with AFSK keying.** Picking a channel in the RTTY
   cockpit, entering RTTY on a band, or picking a band for RTTY tuned the radio to the channel's frequency as if it
   were the signal. With AFSK (the default) the signal sits a mark tone (2.125 kHz) below the dial, so on 20 m it went

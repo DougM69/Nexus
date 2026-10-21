@@ -3468,6 +3468,7 @@ export const JA: PartialCatalog = {
   "sat.iss.los": "ISS LOS — SSTVを解除し、ダイヤルを元に戻しました",
   "sat.iss.armed": "ISSが上空です — {{dial}} {{mode}} に同調し、SSTVをアームしました",
   "sat.iss.overhead": "ISSが上空です — SSTVは {{dial}} {{mode}} です。受信するにはSSTVを開いてください。無線機の周波数は変更していません。",
+  "sat.iss.overhead.onSstv": "ISSが上空です。SSTVは {{dial}} {{mode}} です。衛星パスで無線機を使用中のため、周波数は変更していません。",
   "sat.iss.cannotReceive": "ISSが上空です — 無線機は {{dial}} MHz を受信できないため、ISS SSTV自動アームは使えません。設定 ▸ デジタル ▸ SSTV でオフにできます。",
   "sat.refresh.mirrorDown": "ミラーに到達できません — Celestrakから取得: {{count}}機",
   "sat.refresh.ok": "軌道要素を更新しました — {{count}}機（{{source}}）",
