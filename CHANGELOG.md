@@ -701,7 +701,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transmit-off and nothing after it.
 - **CW sent through the radio's own keyer no longer passes a `;` to Kenwood, Yaesu and Elecraft radios, where it would
   be read as a radio command.** With the CAT keyer (Settings ▸ CW ▸ Keyer backend: CAT), a word holding a `;`, a
-  control character or a character Nexus has no Morse for (an apostrophe, `!`, an accented letter) is no longer
+  control character or a character Nexus has no Morse for (an apostrophe, `"`, an accented letter) is no longer
   handed to the radio on any radio: the CW screen says which character, the whole message is refused before anything
   keys, and Enter Sends Message logs nothing. Typed CW, F-key macros, Enter Sends Message and CW sent from a computer
   driving the station all keep to this, by the same rule that TCI programs' CW already kept. A callbook name or
