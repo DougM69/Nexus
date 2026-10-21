@@ -452,6 +452,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an FM channel (an SSTV image channel such as 144.500 MHz, or a repeater Nexus tuned) went to the FM radio, which
   was then put in USB or DATA-U. It now goes to the radio set up for the mode it is tuned in. Memory and spot picks
   already did.
+- **ISS SSTV auto-arm now puts the radio in FM.** At the start of an ISS pass, with the SSTV or Satellites screen
+  open, the auto-arm tuned 145.800 MHz but left the radio in the last mode you used (DATA-U after FT8, USB after
+  Phone), so no picture could come through. It now holds 145.800 MHz in FM, as picking that channel on the SSTV
+  screen does, and with two radios it uses the one set up for 2 m FM. After RTTY it also tuned 2.125 kHz high and
+  then did not put your frequency back at the end of the pass; it now tunes 145.800 MHz exactly. At the end of the
+  pass your own frequency comes back on its own radio, in its own mode. A satellite you are working keeps its mode.
 - **An unassisted contest entry now stops all CW decoding, not only the AI decoder.** With Settings ▸ Contesting ▸
   Unassisted entry on, the classic decoder still copied CW into the Decode pane, offered the calls it heard as chips
   and filled His Call with its best guess. CQ WW's rules count a CW decoder as QSO-finding assistance, which an

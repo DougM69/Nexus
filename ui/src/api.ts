@@ -2339,10 +2339,11 @@ export async function sstvTune(
 }
 
 /** Park the dial on one of the APP's OWN fixed channels (the ISS SSTV auto-arm's 145.800 FM).
- * Identical to setFrequency on the radio; it differs only in what the per-(band, mode) dial
- * memory makes of it — an app-driven auto-tune is not the operator's dial in that mode, so it
- * is never remembered, and the dial it displaces is banked. Restoring the operator's OWN saved
- * dial afterwards uses setFrequency, because that one IS theirs. */
+ * An FM channel is held in FM, as the SSTV strip's pick of it is, and routed on FM, as a
+ * repeater tune is (neither while a satellite pass owns the dial). The per-(band, mode) dial
+ * memory never takes it — an app-driven auto-tune is not the operator's dial in that mode, so
+ * it is never remembered, and the dial it displaces is banked. Restoring the operator's OWN
+ * saved dial afterwards uses setFrequency, because that one IS theirs. */
 export async function tuneChannel(
   dialMhz: number,
   band: string,

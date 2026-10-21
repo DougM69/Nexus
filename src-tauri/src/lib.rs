@@ -19938,11 +19938,12 @@ fn sstv_tune(
 }
 
 /// Park the dial on one of the APP's OWN fixed channels — the ISS SSTV auto-arm's 145.800 FM.
-/// Identical to `set_frequency` on the radio; it differs only in what the per-(band, mode)
-/// dial memory makes of it. An app-driven auto-tune is not the operator's dial in that mode,
-/// so it is never remembered — and the operator dial it displaces is banked on the way in
-/// (the auto-arm restores their own dial through `set_frequency` at LOS, because that one IS
-/// theirs). Persists, retunes, returns the snapshot.
+/// An FM channel is held in FM, as the SSTV strip's pick of it is, and routed on FM, as a
+/// repeater tune is (`Engine::tune_channel`; neither while a satellite pass owns the dial). The
+/// per-(band, mode) dial memory never takes it: an app-driven auto-tune is not the operator's
+/// dial in that mode, so it is never remembered — and the operator dial it displaces is banked
+/// on the way in (the auto-arm restores their own dial through `set_frequency` at LOS, because
+/// that one IS theirs). Persists, retunes, returns the snapshot.
 #[tauri::command(async)]
 fn tune_channel(
     state: State<'_, SharedEngine>,
