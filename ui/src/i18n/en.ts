@@ -556,7 +556,7 @@ export const EN = {
   "lanWindow.pairSubmit": "Pair",
   "lanWindow.pairing": "Pairing…",
   "lanWindow.cancel": "Cancel",
-  "lanWindow.pairedNow": "Paired. Press Stream to operate the station.",
+  "lanWindow.pairedNow": "Paired. Press Operate from this computer to work the station from here.",
   "lanWindow.disconnected": "Disconnected from the station.",
   "lanWindow.reason.badAddress": "That is not a station’s address. Type it as the station shows it, on this network.",
   "lanWindow.reason.badCode": "The code is sixteen characters, 0 to 9 and a to f. Check it against the station’s screen.",
@@ -598,7 +598,10 @@ export const EN = {
   "lanWindow.internet.added": "Internet road added (Beta): Operate from this computer uses it when this station is not on this network.",
   "lanWindow.internet.hint": "Sign in to Nexus Remote in your web browser, so Operate from this computer can reach this station over the internet when it is not on this network.",
   "lanWindow.internet.signingIn": "Finish signing in to Nexus Remote in your web browser, then come back here.",
-  "lanWindow.internet.waiting": "Internet road added. Approve this computer at the station, under Remote access, before you use it.",
+  // {{key}}: this computer's key for the road, in the eight groups the station shows it in when it asks
+  // to approve this computer ("Approve it only if this key matches the one Nexus shows on that computer").
+  "lanWindow.internet.waiting": "Internet road added. Approve this computer at the station, under Remote access, before you use it, and only if the station shows this computer’s key: {{key}}.",
+  "lanWindow.internet.computerKey": "This computer’s key for the internet road: {{key}}",
   "lanWindow.internet.reason.internetNotIncluded": "The internet road is part of Nexus Remote’s paid service, and your account does not include it now. Operating on this network stays free.",
   "lanWindow.internet.reason.internetNotReady": "Nexus Remote does not take sign-ins from Nexus yet. Try again after an update.",
   "lanWindow.internet.reason.signInPortBusy": "Another program is using port 42078, which Nexus signs in through. Close it, then try again.",
@@ -1093,13 +1096,13 @@ export const EN = {
   // Four whole sentences rather than a stem plus a " since HH:MMZ" fragment: the stamp lands
   // in a different place in different languages. `{{since}}` is a UTC time stamp — invariant.
   'assist.sources.off':
-    'Assistance sources off: AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
+    'Assistance sources off: CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
   'assist.sources.offSince':
-    'Assistance sources off since {{since}}: AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
+    'Assistance sources off since {{since}}: CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
   'assist.sources.on':
-    'AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help.',
+    'CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help.',
   'assist.sources.onSince':
-    'AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help since {{since}}.',
+    'CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help since {{since}}.',
   'assist.toggle.declare': 'Declare unassisted entry',
   'assist.toggle.end': 'End unassisted entry',
   'assist.why.summary': 'What this means for your contest category',
@@ -1108,7 +1111,7 @@ export const EN = {
   'assist.why.arrl':
     '<b>ARRL</b> contests call it spotting assistance and name “PSKReporter, Telnet, DX spotting websites or bulletin board systems, automated multi-channel decoders”. Single Operator may not use it (HCAT.1.1: “Use of spotting assistance is not permitted.”). <b>Single Operator Unlimited</b> may (HCAT.2.1). ARRL’s glossary defines a multi-channel decoder as software that “displays multiple decoded signals at the same time”. Nexus decodes one signal at a time, so that definition does not describe its CW decoder. It does describe the cluster, RBN and PSK Reporter feeds.',
   'assist.why.ownDecodes':
-    'Your <b>own radio’s decodes</b> are not assistance under either ruleset, so they keep feeding the Needed board in unassisted mode. Your outbound PSK Reporter uploads also keep running, because ARRL says “Generating spotting information for use by other stations is not considered to be spotting assistance.”',
+    'Your radio’s own <b>digital decodes</b>, FT8 and FT4 among them, keep feeding the Needed board in unassisted mode. Neither ruleset sets them apart: both count any technology that identifies a callsign or multiplier as assistance, so do not use the Needed board to find stations if your contest counts them. Your outbound PSK Reporter uploads also keep running, because ARRL says “Generating spotting information for use by other stations is not considered to be spotting assistance.”',
   'assist.why.notCovered':
     '<b>What this switch does not cover:</b> POTA and SOTA activator spots still arrive. Neither ruleset names those feeds, but both define assistance broadly enough to include them, so switch off the POTA/SOTA features by hand if you are entering a contest that counts them.',
   'assist.why.checkRules':
@@ -3594,6 +3597,10 @@ export const EN = {
   // `{{detail}}` is the spot line — call, frequency, age, badges, spotter and comment —
   // assembled from data by the call site.
   'bandMap.spot.title': '{{detail}} — click to work',
+  // A program's spot (Share by TCI), whose click only tunes. `{{id}}` is the program's connection
+  // number, as Settings ▸ Share by TCI lists it; TCI is the protocol's name, a token.
+  'bandMap.spot.tci.title': '{{detail}} — click to tune',
+  'bandMap.spot.tci.from': 'from TCI connection {{id}}',
   'bandMap.age.secs': '{{secs}}s ago',
   'bandMap.age.mins': '{{mins}}m ago',
   'bandMap.age.hours': '{{hours}}h ago',
@@ -4733,6 +4740,10 @@ export const EN = {
   'settings.contestPick.power.aria': 'Which power category you are entering',
   'settings.contestPick.assisted.label': 'Spotting assistance',
   'settings.contestPick.assisted.aria': 'Whether your entry uses spotting assistance',
+  // Beside that picker while NON-ASSISTED is declared and the Unassisted entry switch is off.
+  // `NON-ASSISTED` is the Cabrillo token, invariant; "Unassisted entry" is the switch's own label.
+  'settings.contestPick.assisted.offer': 'Your log declares NON-ASSISTED, but Unassisted entry is off.',
+  'settings.contestPick.assisted.offer.action': 'Turn on Unassisted entry',
   'settings.contestPick.station.label': 'Station type',
   'settings.contestPick.station.aria': 'Whether this is a school club station',
   'settings.contestPick.entryAxes.unset': 'Not set',
@@ -4787,7 +4798,7 @@ export const EN = {
   'settings.contestCategory.unassisted.aria.declare': 'Declare an unassisted contest entry',
   'settings.contestCategory.unassisted.aria.end': 'End an unassisted contest entry',
   'settings.contestCategory.unassisted.hint':
-    'Turns off the AI CW decoder, DX cluster / RBN spots, the PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp. Takes effect at once. Your own settings for each of those are left alone and come back when you switch this off.',
+    'Turns off the CW decoder (AI and classic), DX cluster / RBN spots, the PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp. Takes effect at once. Your own settings for each of those are left alone and come back when you switch this off.',
   // The journal. Each entry's own note and the source names in it are the engine's words,
   // printed as they arrive; the UNASSISTED / assisted state and the empty stand-in are ours.
   'settings.contestCategory.journal.label': 'Assistance record',
@@ -6403,6 +6414,10 @@ export const EN = {
   'bandStrip.shade.title': 'Your licensed phone segment on this band',
   // `{{detail}}` is the spot line — call, frequency, age, badges, spotter and comment.
   'bandStrip.spot.title': '{{detail}} — click to work',
+  // A program's spot (Share by TCI), whose click only tunes. `{{id}}` is the program's connection
+  // number, as Settings ▸ Share by TCI lists it; TCI is the protocol's name, a token.
+  'bandStrip.spot.tci.title': '{{detail}} — click to tune',
+  'bandStrip.spot.tci.from': 'from TCI connection {{id}}',
   'contestSpot.dupe': 'dupe',
   'contestSpot.mult': 'new mult: {{rule}} {{value}}',
   'contestSpot.tag.dupe': 'DUPE',
@@ -6520,6 +6535,9 @@ export const EN = {
     '{{group}} is a group that cannot be joined. Take it out of Groups under JS8 on the Digital tab before saving.',
   'settings.save.js8CqText':
     'The JS8 CQ message must start with CQ or hold your callsign, as in JS8Call. Change it under JS8 on the Digital tab before saving.',
+  // `{{port}}` is a port number. The two names are the switches' own labels on the Radio tab.
+  'settings.save.tciServerPortClash':
+    'Share this radio with other programs and Share by TCI both use port {{port}}, and only one of them can have it. Give one of them another port.',
   'settings.save.checkRadio': 'Check the radio settings.',
   'settings.save.failed': 'Could not save settings.',
 
@@ -6910,11 +6928,61 @@ export const EN = {
     "Enter the radio's IPv4 address, for example {{example}}.",
   'settings.radio.check.icomLanUser': 'No network user is set, so the radio will refuse the login.',
   'settings.radio.check.icomLanPassword': 'No network password is saved for this radio yet: type it and press Set.',
+  // The TCI connection (an SDR program's own TCI server). Program, radio and protocol names
+  // (ExpertSDR3, Thetis, piHPSDR, SunSDR, TCI, rigctld), addresses and port numbers are tokens.
+  // `{{server}}` is what the server said about itself, as sent; `{{address}}` is host:port.
+  'settings.rigControl.conn.tci': 'TCI (SDR program) — Beta',
+  'settings.rigControl.tci.hint':
+    "<b>Beta.</b> Nexus connects to the SDR program's own TCI server, with no rigctld and no virtual COM port. It reads and sets the dial and mode and transmits through the program. With <b>Audio over TCI</b> on, the receive audio and Nexus's own transmit audio go over TCI too. <b>Not ready yet:</b> CW through the program's own keyer (use the Soundcard keyer). Turn the TCI server on in the program first.",
+  'settings.rigControl.tci.host.label': 'SDR program address',
+  'settings.rigControl.tci.host.hint':
+    'The computer the SDR program runs on: <b>127.0.0.1</b> is this one. TCI has no password and no encryption, so reach another computer only on your own network.',
+  'settings.rigControl.tci.port.label': 'TCI port',
+  'settings.rigControl.tci.port.hint':
+    "The port in the program's TCI settings: 50001 in ExpertSDR3 and Thetis as they come, 40001 in piHPSDR. <b>Find TCI server</b> tries both.",
+  'settings.rigControl.tci.find.label': 'TCI server',
+  'settings.rigControl.tci.find.action': 'Find TCI server',
+  'settings.rigControl.tci.find.busy': 'Looking…',
+  'settings.rigControl.tci.find.title':
+    "Look for the SDR program's TCI server at this address: this port first, then 50001 and 40001. It only reads what the server says about itself; it never transmits and never changes the radio.",
+  'settings.rigControl.tci.find.searching': 'Looking for a TCI server at {{host}}…',
+  'settings.rigControl.tci.find.found': 'Found a TCI server at {{address}}: {{server}}.',
+  'settings.rigControl.tci.find.unnamed': 'it does not give its name',
+  'settings.rigControl.tci.find.trxCount': {
+    one: 'It has {{count}} transceiver.',
+    other: 'It has {{count}} transceivers.',
+  },
+  'settings.rigControl.tci.find.unknownProgram':
+    'Nexus does not know this program yet, so it treats it as a plain TCI server.',
+  'settings.rigControl.tci.find.portSet': 'TCI port is now {{port}}: Save to keep it.',
+  'settings.rigControl.tci.find.nexus': "Port {{port}} is Nexus's own TCI server, not an SDR program.",
+  'settings.rigControl.tci.find.notTci': 'Something answered on port {{port}}, but it is not a TCI server.',
+  'settings.rigControl.tci.find.noReady': 'Port {{port}} answered but did not finish the TCI handshake.',
+  'settings.rigControl.tci.find.none':
+    'No TCI server answered at {{host}} (ports tried: {{ports}}). Start the SDR program, turn its TCI server on, and try again.',
+  'settings.rigControl.tci.find.badHost': 'This computer cannot find {{host}}. Check the SDR program address.',
+  'settings.rigControl.tci.find.failed': 'Could not look for a TCI server: {{error}}',
+  'settings.rigControl.tci.trx.label': 'Transceiver',
+  'settings.rigControl.tci.trx.hint': "Which of the program's transceivers this radio is. 1 is the first; most stations use 1.",
+  'settings.rigControl.tci.dialect.label': 'SDR program',
+  'settings.rigControl.tci.dialect.auto': 'Automatic (recommended)',
+  'settings.rigControl.tci.dialect.hint':
+    'Leave it on Automatic: Nexus learns the program from what it does. Name the program only if Nexus reads it wrongly; naming one fills in the port it comes set to.',
+  'settings.rigControl.tci.audio.label': 'Audio over TCI',
+  'settings.rigControl.tci.audio.hint':
+    "Receive audio from the program, and Nexus's transmit audio to it, over TCI instead of a virtual audio cable.",
+  'settings.rigControl.tci.pan.label': 'SDR panadapter in the scope',
+  'settings.rigControl.tci.pan.hint': "Show the SDR program's own spectrum in Nexus's scope and waterfall.",
+  'settings.rigControl.tci.spots.label': 'Spots on the SDR panadapter',
+  'settings.rigControl.tci.spots.hint':
+    "Mark the stations you still need on the program's panadapter, 100 at most. Clicking one there tunes Nexus to it; it never transmits.",
+  'settings.radio.check.tciHost': "Enter the SDR program's address on its own, such as {{example}} when it runs on this computer.",
+  'settings.radio.check.tciPort': 'Enter the TCI port, a number from 1 to 65535: {{example}} as ExpertSDR3 and Thetis come.',
   'operate.strip.state.connectionNoTx': 'No TX on this connection',
   'settings.rigControl.conn.omnirig': 'OmniRig (the radio is set up in OmniRig)',
   'settings.rigControl.conn.omnirig.unavailable': 'OmniRig — Windows only',
   'settings.rigControl.conn.hint':
-    'Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld. The <b>Rig Model</b> still picks which CAT dialect is spoken — for an SDR, choose the program you launched, not the board inside the radio. An Icom on its <b>LAN port</b> needs a program in between, because Icom\'s network protocol is its own: with wfview, turn on its rigctld server and point Nexus at it with Network and Rig Model <b>NET rigctl</b>; with RS-BA1, choose Serial, your Icom\'s own model and the virtual COM port RS-BA1 creates.',
+    'Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld. TCI for an SDR program\'s own TCI server (ExpertSDR3, Thetis, piHPSDR), with no Rig Model to pick. The <b>Rig Model</b> still picks which CAT dialect is spoken — for an SDR, choose the program you launched, not the board inside the radio. An Icom on its <b>LAN port</b> needs a program in between, because Icom\'s network protocol is its own: with wfview, turn on its rigctld server and point Nexus at it with Network and Rig Model <b>NET rigctl</b>; with RS-BA1, choose Serial, your Icom\'s own model and the virtual COM port RS-BA1 creates.',
   'settings.rigControl.conn.omnirig.hint':
     "<b>OmniRig</b> hands rig control to VE3NEA's OmniRig server, the one most Windows logging and contest programs already use. Set the radio up <em>in OmniRig</em> — rig type, COM port, baud — and Nexus talks to it there, so the Rig Model, Serial Port and Baud above are not used. {{availability}}",
   'settings.rigControl.conn.omnirig.unavailable.why':
@@ -6938,7 +7006,7 @@ export const EN = {
   'settings.rigControl.netAddr.hint':
     "host:port. For a Flex: the WSJT-X-proven path is the SmartSDR CAT app on THIS PC — its DEFAULT TCP port 5002 is directed at slice A, so 127.0.0.1:5002 with the FLEX-6xxx / 8xxx model works out of the box; audio rides DAX. Multi-slice: SmartSDR CAT's per-slice ports are B=60001, C=60002, D=60003 — Nexus drives ONE slice, so enter the port of the slice you run digital on. (Direct-to-radio :4992 needs Hamlib's experimental native model and failed on real hardware.) Other rigs: a remote rigctld's host:port with their normal model.",
   'settings.rigControl.netAddr.sdrPorts':
-    'Running an SDR program? Read the port out of the program, don\'t guess it: <b>Thetis</b> → Setup ▸ Serial/Network/Midi CAT ▸ <em>TCP/IP CAT Server</em> (its own box, factory 13013 — not the <em>TCI Server</em> box beside it, factory 50001; TCI is a different protocol and the Hamlib we ship has no backend for it, so pick a CAT profile such as "Thetis" and use the CAT server port); <b>SmartSDR CAT</b> → 5002; <b>piHPSDR</b> → 19090. Whatever it shows, type that.',
+    'Running an SDR program? Read the port out of the program, don\'t guess it: <b>Thetis</b> → Setup ▸ Serial/Network/Midi CAT ▸ <em>TCP/IP CAT Server</em> (its own box, factory 13013); <b>SmartSDR CAT</b> → 5002; <b>piHPSDR</b> → 19090. Whatever it shows, type that. The <em>TCI Server</em> box beside Thetis\'s CAT server (factory 50001) is a different protocol: for it, choose Connection ▸ <b>TCI</b> instead.',
 
   // The serial port and its two rig-specific notes. Each note is ONE sentence per platform,
   // because what it says is a different answer, not a different ending; the Xiegu COM-number
@@ -7382,20 +7450,24 @@ export const EN = {
   // each is appended to a line the caller built.
   'setup.rig.title': 'How does the radio connect?',
   'setup.rig.sub':
-    'One detect finds everything — USB rigs and FlexRadios on the network. Skippable; Settings ▸ Radio ▸ Rig & CAT has all of this later (including Test CAT).',
+    'One detect finds everything — USB rigs, FlexRadios on the network and an SDR program\'s TCI server on this computer. Skippable; Settings ▸ Radio ▸ Rig & CAT has all of this later (including Test CAT).',
   'setup.rig.detect.action': '🔍 Detect my radio',
   'setup.rig.detect.busy': 'Detecting…',
   'setup.rig.detect.failed':
     'Detection hit an error: {{error}}. You can still pick your rig by hand below, or skip and set it up later.',
   'setup.rig.detect.empty':
-    'Nothing found — USB: plug in + power on; Flex: must be on this network. Or skip and set it up later.',
+    'Nothing found — USB: plug in + power on; Flex: must be on this network; SDR program: turn its TCI server on. Or skip and set it up later.',
   // The two halves of one scan can fail independently; each is a whole sentence, and the
   // panel joins whichever failed with " · " before the sentence above quotes the lot.
   'setup.rig.detect.usbFailed': 'USB scan failed: {{error}}',
   'setup.rig.detect.flexFailed': 'Flex network scan failed: {{error}}',
+  'setup.rig.detect.tciFailed': 'TCI server search failed: {{error}}',
   'setup.rig.detect.flex.row': '<b>{{radio}}</b> on the network ({{ip}})',
   'setup.rig.detect.flex.via': ' · via SmartSDR CAT',
   'setup.rig.detect.rig.row': '<b>{{radio}}</b> on {{port}}',
+  // `{{server}}` is what the SDR program's TCI server said about itself (program, version, radio).
+  'setup.rig.detect.tci.row': '<b>{{server}}</b> on this computer (TCI, port {{port}})',
+  'setup.rig.detect.tci.via': ' · over its TCI server',
   'setup.rig.flexNote.windows':
     '{{radio}} at {{ip}} — CAT set via SmartSDR CAT (slice A, port 5002; a second slice uses 60001), radio address saved for the native panadapter/DAX. Test CAT below.',
   'setup.rig.flexNote.other':
@@ -7428,6 +7500,10 @@ export const EN = {
   'setup.rig.conn.serial.blurb': 'Most rigs — one cable',
   'setup.rig.conn.network.label': 'Network',
   'setup.rig.conn.network.blurb': 'SDR software, or a remote rig',
+  'setup.rig.conn.tci.label': 'SDR program (TCI)',
+  'setup.rig.conn.tci.blurb': 'ExpertSDR3, Thetis or piHPSDR, over its TCI server',
+  'setup.rig.tci.hint':
+    'Turn the TCI server on in the SDR program first: ExpertSDR3 and Thetis come set to port 50001, piHPSDR to 40001. Beta: Nexus controls the radio and transmits over TCI, and the audio goes over TCI too, with no virtual audio cable.',
   'setup.rig.address.label': 'Address',
   'setup.rig.network.hint':
     'A found Flex configures the WSJT-X-proven path: CAT through the SmartSDR CAT app on this PC — its default TCP port 5002 drives slice A (per-slice ports: B=60001, C=60002) — and audio through DAX. Other network rigs: pick their model later in Settings ▸ Radio ▸ Rig & CAT.',
@@ -7630,6 +7706,49 @@ export const EN = {
   'settings.transmit.foreignPtt.label': 'Other programs may key transmit',
   'settings.transmit.foreignPtt.hint':
     'On: a shared program (WSJT-X, VarAC) can key the rig, exactly as it could when it owned the CAT cable — every Nexus transmit safeguard still applies. Off: shared programs tune and read but never transmit.',
+
+  // "Share by TCI": Nexus as a TCI server for programs on this computer (TciServerSettings.tsx).
+  // The programs' own names (WSJT-X, JTDX, MSHV, Log4OM, 5MContest), WSJT-X's rig name
+  // `TCI Client RX1`, the protocol's name TCI and the mode names are tokens, never translated;
+  // the call site supplies the emphasis.
+  'settings.transmit.tciServer.label': 'Share by TCI',
+  'settings.transmit.tciServer.hint.off':
+    'Off. Turn it on and programs on this computer that speak TCI, such as <b>WSJT-X</b>, <b>JTDX</b>, <b>MSHV</b> and <b>Log4OM</b>, can use the radio through Nexus at the address that appears here.',
+  'settings.transmit.tciServer.hint.on':
+    "Programs on this computer connect to this address as they would to an SDR program's TCI server. In WSJT-X and JTDX, pick the rig <em>TCI Client RX1</em> and give it this address as its TCI server. They follow whichever radio is active: they can tune it, switch its sideband and lower its power (never raise it), and they get its receive audio. Only programs on this computer can connect, never another computer and never a web page. Takes effect when you save.",
+  // While the switch is on and the station reports no server yet: just turned on and not saved,
+  // or saved a moment ago.
+  'settings.transmit.tciServer.waiting':
+    'Not listening yet. The address appears here once programs can connect. If you just turned this on, save first.',
+  'settings.transmit.tciServer.port.label': 'TCI server port',
+  'settings.transmit.tciServer.port.hint':
+    'WSJT-X, JTDX and MSHV look for 40001. A second Nexus window uses the next port, and the address above always shows the one in use. Change it only if another program on this computer already has it.',
+  'settings.transmit.tciServer.tx.label': 'Programs on TCI may transmit',
+  'settings.transmit.tciServer.tx.hint':
+    "Off: programs tune and read but never transmit. On: a program may key the radio with its own audio or the radio's microphone while Nexus is on its Phone screen, send CW macros on the CW screen, and Tune. Its own audio goes out only once it has asked for a voice mode (USB, LSB, AM or FM). WSJT-X and JTDX ask for a mode only when it differs from Nexus's, so set to USB while Nexus is already in USB they ask for nothing and are refused. Every Nexus transmit safeguard still applies: TX must be on in Nexus, Stop TX wins and holds, and nothing goes past your licence or your power limits. A program never turns TX on. Set at the station only.",
+  // ⛔ Said beside the transmit switch, at the station and from afar alike: the engine refuses a
+  // program's digital overs until the delay Nexus adds to their timing is measured.
+  'settings.transmit.tciServer.tx.slotTimed':
+    "FT8, FT4 and other slot-timed modes may not transmit through TCI yet. Nexus refuses a program's digital transmissions until the delay it adds to their timing has been measured.",
+  'settings.transmit.tciServer.cw.label': 'CW macros from programs',
+  'settings.transmit.tciServer.cw.hint':
+    "A logger's TCI keyer (Log4OM, 5MContest) sends its CW macros through Nexus, on the CW screen only, and only while programs may transmit. Any program can stop the CW.",
+  'settings.transmit.tciServer.spots.label': 'Spots from programs',
+  'settings.transmit.tciServer.spots.hint':
+    "Spots a program sends show on Nexus's band map and in the Phone and CW screens' band activity. A click on one only tunes Nexus, and a click on a spot in Nexus is passed back to the programs. A spot or a click never transmits.",
+  'settings.transmit.tciServer.programs.label': 'Programs connected',
+  'settings.transmit.tciServer.programs.none': 'No program is connected.',
+  // One program's connection, by its number: `{{id}}` counts from 1 in the order programs connected,
+  // because TCI carries no program name.
+  'settings.transmit.tciServer.program.name': 'Connection {{id}}',
+  'settings.transmit.tciServer.program.audio': 'Receiving audio',
+  'settings.transmit.tciServer.program.keyed': 'Transmitting',
+  // `{{why}}` is the station's own words from the connection log, shown as they come.
+  'settings.transmit.tciServer.program.refused': 'Last refused: {{why}}',
+  'settings.transmit.tciServer.disconnect.action': 'Disconnect',
+  'settings.transmit.tciServer.disconnect.title':
+    "Close this program's connection. Anything it is transmitting stops first.",
+  'settings.transmit.tciServer.disconnect.failed': 'Nexus could not disconnect the program',
 
   // ── Settings ▸ Digital (FT8/FT4) ────────────────────────────────────────────────────
   //
@@ -9090,6 +9209,8 @@ export const EN = {
   'settings.accessibility.decodeTick.label': 'Decode-batch tick',
   'settings.accessibility.decodeTick.hint':
     "A soft tick each cycle new signals are decoded — the band's rhythm, eyes-free.",
+  'settings.accessibility.cwTurnSound.label': 'CW turn sound',
+  'settings.accessibility.cwTurnSound.hint': 'A short rising chirp when the CW turn cue says it is your turn to send. Never while you transmit.',
 
   // ── Connect — the board, its pane grid, and the one-line pane projections ───────────
   // ⚠️ THE UNITS RULE OWNS THIS SURFACE. Band and mode names, bearings (`~47°`), MUF and
@@ -11078,6 +11199,8 @@ export const EN = {
   'cw.panel.scopeCtl': 'Scope Controls',
   'cw.panel.dsp': 'DSP Toggles',
   'cw.panel.txmeters': 'TX Meters',
+  'cw.panel.turnCue': 'Turn Cue',
+  'cw.panel.turnCue.note': 'shows with the AI decoder on and the CW Decode pane shown, outside an unassisted entry',
   'cw.panel.rxdsp': 'RX DSP Levels',
   'cw.panel.bandActivity': 'Band Activity',
   'cw.panel.copilot': 'CW Copilot',
@@ -11225,6 +11348,8 @@ export const EN = {
     'Live CW decode — the AI (neural-net) decoder reads the whole {{window}} Hz window, far better weak-signal copy than a pitch-tracking decoder. Turn AI off to fall back to the classic decoder.',
   'cw.decode.log.aria': 'Decoded CW',
   'cw.decode.listening': 'listening…',
+  // In place of the copy while an unassisted contest entry is declared. `CQ WW` is the contest's name.
+  'cw.decode.unassisted': 'Unassisted entry: the CW decoder is off. CQ WW counts it as assistance.',
   'cw.sent.title': "What you've transmitted (F-key macros expanded to the real text)",
 
   // ── CW ▸ the copilot chips ──────────────────────────────────────────────────────────
@@ -11278,6 +11403,43 @@ export const EN = {
   'cw.speedMatch.short': 'Match WPM',
   'cw.speedMatch.title': 'CW speed match: an answer to a station (your call, your exchange) is sent at the speed Nexus measured for that station, within the slowest and fastest set in Settings ▸ CW. A CQ is sent at your own speed, and so is everything once the answer has gone. Without a recent measurement of the station you are working, your own speed.',
   'cw.speedMatch.failed': 'CW speed match was not saved, so the switch is as it was.',
+  'cw.turn.title': "Whose turn it is, read from the decoder's copy. It never sends: you press the key.",
+  'cw.turn.suggested': 'Suggested now',
+  'cw.turn.key.enter': 'Enter',
+  'cw.turn.idle': 'Listening',
+  'cw.turn.theySend': '{{call}} sending',
+  'cw.turn.theySend.bare': 'Station sending',
+  'cw.turn.finishing': '{{call}} finishing…',
+  'cw.turn.finishing.bare': 'Finishing…',
+  'cw.turn.yourTurn': 'Your turn · {{key}}',
+  'cw.turn.yourTurn.bare': 'Your turn',
+  'cw.turn.type': 'Your turn · type',
+  'cw.turn.partial': 'Probably you · {{key}} once',
+  'cw.turn.partial.bare': 'Probably you',
+  'cw.turn.hold': 'Hold · {{call}}',
+  'cw.turn.hold.bare': 'Hold',
+  'cw.turn.splitOff': 'UP · split off',
+  'cw.turn.unsure': 'Not sure · {{key}}',
+  'cw.turn.unsure.bare': 'Not sure',
+  'cw.turn.youSend': "You're sending",
+  'cw.turn.listen': 'Listening for a reply',
+  'cw.turn.late': 'They may go on · listen',
+  'cw.turn.closing': '73 · log it',
+  'cw.turn.closing.bare': 'Log it',
+  'cw.turn.noReply': 'No reply · {{key}}',
+  'cw.turn.noReply.bare': 'No reply',
+  'cw.turn.fiveNnTu.title': 'Send 5NN TU. The Reply key would send a whole ragchew over.',
+  'cw.turn.say.yourTurn': 'Your turn: {{key}}.',
+  'cw.turn.say.yourTurn.bare': 'Your turn.',
+  'cw.turn.say.fiveNnTu': 'Your turn: send 5NN TU.',
+  'cw.turn.say.hold': "Hold: it is {{call}}'s turn.",
+  'cw.turn.say.hold.bare': 'Hold.',
+  'cw.turn.say.splitOff': 'Hold: they listen up, and split is off.',
+  'cw.turn.say.unsure': 'Not sure whose turn it is.',
+  'cw.turn.say.noReply': 'No reply.',
+  'cw.turn.say.closing': 'They are signing.',
+  'cw.pace.label': 'them {{them}} · you {{you}}',
+  'cw.pace.title': 'Their speed beside yours. Click to send at {{them}} WPM for this contact; your saved speed stays as it is.',
   'settings.cw.speedMatch.label': 'Answer at the station’s speed',
   'settings.cw.speedMatch.hint': 'CW speed match: a message answering a station is sent at the speed the decoder measured for it, held between the two speeds below. A CQ, and everything after the answer, goes at your own speed. Off by default; the contest strip has the same switch.',
   'settings.cw.speedMatch.min.label': 'Speed match: slowest (WPM)',
@@ -11772,13 +11934,13 @@ export const EN = {
   'shell.lane.slotUnkeyFailed.message': 'PTT OFF FAILED — TX STOPPED',
   'shell.lane.slotUnkeyFailed.detail':
     'The radio did not accept PTT off at {{time}} UTC ({{why}}), so TX was turned off. It may still be transmitting: check the radio now. Nexus keeps sending PTT off until the radio accepts it. Turn TX on again once the radio is receiving.',
-  // A slot over whose audio stopped reaching the radio part way through (Flex native DAX audio went
-  // off under it, or its DAX transmit route went): the station ended it there rather than leave the
-  // radio keyed and silent for the rest of it, and halted TX; the lane keeps this until TX is turned
-  // on again.
+  // A slot over whose audio stopped reaching the radio part way through (the route carrying it
+  // went: Flex native DAX audio, or Nexus's transmit audio over TCI): the station ended it there
+  // rather than leave the radio keyed and silent for the rest of it, and halted TX; the lane keeps
+  // this until TX is turned on again.
   'shell.lane.slotAudioLost.message': 'OVER ENDED — TX STOPPED',
   'shell.lane.slotAudioLost.detail':
-    'Flex native DAX audio went off at {{time}} UTC in the middle of an over, so the rest of that over would have gone out silent. Nexus ended the over there and turned TX off. Turn TX on again to carry on.',
+    "The route carrying an over's audio to the radio (Flex DAX or TCI) stopped at {{time}} UTC in the middle of the over, so the rest of it would have gone out silent. Nexus ended the over there and turned TX off. Turn TX on again to carry on.",
   // An FT8 or FT4 over the radio keyed only after this station's period had ended, in the other
   // station's (a slow CAT link: Split operation's commands before the key, and the key itself): Nexus
   // unkeyed it at once, sent nothing and left TX on for the next over, as WSJT-X does. A warning, in

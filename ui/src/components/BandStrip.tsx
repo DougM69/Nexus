@@ -2,9 +2,10 @@ import { useStationControl, useStationCapability } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT: the band and mode names (`modeLabel` is CW or
 // SSB), the scale's edge frequencies, the dial reading, and every value in a spot's tooltip —
-// `detail` is the spot line assembled from cluster data, and `de <spotter>` is the cluster's own
-// shorthand. The need and badge WORDS arrive already translated from `needVisuals.ts` and
-// `SpotLegend.tsx`, whose tables resolve through getters.
+// `detail` is the spot line assembled from cluster data, `de <spotter>` is the cluster's own
+// shorthand, and `TCI` with a program's connection number is a program's spot's source. The need
+// and badge WORDS arrive already translated from `needVisuals.ts` and `SpotLegend.tsx`, whose
+// tables resolve through getters.
 //
 // The dial marker reads `txAllowed` to say the engine is blocking transmit here. It is a readout;
 // this surface has no transmit control and is on no cockpit's stop-line census.
@@ -30,6 +31,12 @@ interface Props {
   phoneSegHi?: number | null
   /** All live cluster spots (unfiltered); the strip picks the ones matching `spotMode` on this band. */
   spots: SpotRow[]
+  /** The spots programs on Nexus's TCI server sent (`features/tciSpots.ts`), drawn as cluster spots
+   *  are but dotted, with their source beside the call. Each names its program (`tci`). */
+  tciSpots?: SpotRow[]
+  /** ⛔ A click on a program's spot: it only tunes (`clickTciSpot`). Never `onWorkSpot`, which can
+   *  change the section and arm; without this a program's spot does nothing when clicked. */
+  onTciSpot?: (s: SpotRow) => void
   /** Which spot mode to plot — 'Phone' (SSB, default) for the Phone cockpit, 'CW' for the CW one. */
   spotMode?: 'Phone' | 'CW'
   /** Top need tag per heard call (UPPERCASE) — colours the tick by why it's worth working. */
@@ -66,6 +73,14 @@ interface Props {
  * MHz is MHz in every language, and the guard is told so by this constant. */
 const MHZ_UNIT = 'MHz'
 
+/** The protocol's name, beside a program's spot: a token, the same in every language. */
+const TCI = 'TCI'
+
+/** A program's spot's source, beside its call: the protocol and the program's connection number. */
+function tciSource(program: number): string {
+  return `${TCI} ${program}`
+}
+
 /** Compact "how long ago" for a spot tooltip. The unit letter rides inside the message with its
  * number, so a translation can never separate the two. */
 function ageLabel(secs: number): string {
@@ -89,6 +104,8 @@ export function BandStrip({
   phoneSegLo,
   phoneSegHi,
   spots,
+  tciSpots,
+  onTciSpot,
   spotMode = 'Phone',
   needByCall,
   typeByCall,
@@ -170,7 +187,7 @@ export function BandStrip({
     )
   }
 
-  const phone = spots
+  const phone = [...spots, ...(tciSpots ?? [])]
     .filter((s) => s.mode === spotMode && s.band === band)
     .sort((a, b) => a.freqMhz - b.freqMhz)
 
@@ -247,7 +264,9 @@ export function BandStrip({
           />
         )}
         {phone.map((s) => {
-          const key = `${s.call}-${s.freqMhz}`
+          // A program's spot: its source, the connection Settings ▸ Share by TCI lists it by.
+          const program = s.tci ?? null
+          const key = program != null ? `${TCI}${program}-${s.call}-${s.freqMhz}` : `${s.call}-${s.freqMhz}`
           const repeat = seen.get(key) ?? 0
           seen.set(key, repeat + 1)
           // Fade older spots so density + freshness read at a glance (fresh ≈ opaque, ~30 min → faint).
@@ -289,21 +308,29 @@ export function BandStrip({
             s.state,
             `${s.freqMhz.toFixed(3)} MHz`,
             ageLabel(s.ageSecs),
+            program != null && t('bandStrip.spot.tci.from', { id: program }),
             s.spotter && `de ${s.spotter}`,
             s.comment,
           ]
             .filter(Boolean)
             .join(' · ')
+          // A program's spot only tunes, and its tooltip says so.
+          const tip = program != null ? t('bandStrip.spot.tci.title', { detail }) : t('bandStrip.spot.title', { detail })
           return (
             <button
               key={repeat ? `${key}#${repeat}` : key}
               type="button"
-              className={`bandstrip-spot${mark?.dupe ? ' contest-dupe' : ''}`}
+              className={`bandstrip-spot${program != null ? ' from-tci' : ''}${mark?.dupe ? ' contest-dupe' : ''}`}
               style={{ left: `${pct(s.freqMhz)}%`, opacity }}
-              title={workAllowed ? t('bandStrip.spot.title', { detail }) : detail}
+              title={workAllowed ? tip : detail}
               aria-label={mark ? [s.call, ...markWords].join(' · ') : undefined}
               disabled={!workAllowed}
-              onClick={() => { if (workAllowed) onWorkSpot(s) }}
+              // ⛔ A program's spot only tunes: never the Work, whatever it names.
+              onClick={() => {
+                if (!workAllowed) return
+                if (program != null) onTciSpot?.(s)
+                else onWorkSpot(s)
+              }}
             >
               {beacon && (
                 <span className={`bandstrip-type spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>
@@ -319,7 +346,10 @@ export function BandStrip({
                   {multTag === 'predicted' ? t('contestSpot.tag.predicted') : t('contestSpot.tag.mult')}
                 </span>
               )}
-              <span className="bandstrip-spot-call mono">{s.call}</span>
+              <span className="bandstrip-spot-call mono">
+                {s.call}
+                {program != null && <span className="spot-type-badge type-tci">{tciSource(program)}</span>}
+              </span>
             </button>
           )
         })}

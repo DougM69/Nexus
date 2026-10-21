@@ -354,6 +354,9 @@ struct State {
     on: AtomicBool,
     status: Mutex<LanStatus>,
     path: PathBuf,
+    /// Held while the switch is written to `path`, so presses in a row are written in turn and the
+    /// newest is the one left on disk.
+    saving: Mutex<()>,
     wake: Notify,
     closed: AtomicBool,
     authority: Arc<Authority>,
@@ -369,18 +372,22 @@ impl State {
         self.switch.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
-    /// Change the switch, keep it, and wake the listener's thread. Said at once, so a status read
-    /// straight after a press shows it; the listener then says where it listens.
+    /// Change the switch, wake the listener's thread, and then keep it. Said at once, so a status
+    /// read straight after a press shows it; the listener then says where it listens.
     ///
     /// Off, however it went off: the pairing window closes, and no paired computer keeps station
     /// control. The authority stops reading them (`on`) before they are revoked, so the revoke
     /// stands.
+    ///
+    /// ⛔ OFF NEVER WAITS FOR THE DISK. The switch's file is written last, outside the switch's
+    /// lock, once the listener has been told and the paired computers revoked: written first, under
+    /// that lock, a write the disk held up (a busy disk, a scanner opening the file) kept the port
+    /// open, every session running and whatever it kept on the air going until it was through, and
+    /// a status read waited with it. Each write is of the switch as it stands then, one at a time,
+    /// so the newest press is the one left on disk.
     fn decide(&self, change: impl FnOnce(&mut Switch)) {
         if let Ok(mut switch) = self.switch.lock() {
             change(&mut switch);
-            if switch.save(&self.path).is_err() {
-                tempo_core::applog::warn("remote", "on this network: the switch was not saved");
-            }
             self.on.store(switch.on, Ordering::SeqCst);
             // The networks stay listed while it is on, so a pick does not take the picker away.
             let networks = match (switch.on, self.status.lock()) {
@@ -400,6 +407,16 @@ impl State {
             release(&self.authority, &self.book.ids());
         }
         self.wake.notify_one();
+        let _saving = self
+            .saving
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Ok(switch) = self.switch.lock().map(|switch| switch.clone()) else {
+            return;
+        };
+        if switch.save(&self.path).is_err() {
+            tempo_core::applog::warn("remote", "on this network: the switch was not saved");
+        }
     }
 
     fn report(&self, status: LanStatus) {
@@ -427,6 +444,7 @@ impl Lan {
             switch: Mutex::new(switch),
             status: Mutex::new(LanStatus::default()),
             path,
+            saving: Mutex::new(()),
             wake: Notify::new(),
             closed: AtomicBool::new(false),
             authority: deps.authority.clone(),

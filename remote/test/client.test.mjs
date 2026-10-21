@@ -321,10 +321,12 @@ test('revoked as a browser is: at the shack, or by the computer itself; either w
 test('the station key over the signed-in API: the account\'s own stations, each with the key it recorded', async () => {
   const pair = await app.paired(), native = await nativeCaller(pair)
   const station = async () => (await native.post('client/session')).value.stations
-  assert.deepEqual(await station(), [{ id: pair.stationId, name: 'Synthetic test station', stationKey: null }], 'none recorded yet')
+  // A station paired by code has no LAN key or station proof listed (test/account.test.mjs binds one that has).
+  const listed = stationKey => [{ id: pair.stationId, name: 'Synthetic test station', stationKey, lanKey: null, proof: null, role: 'owner' }]
+  assert.deepEqual(await station(), listed(null), 'none recorded yet')
   const key = await deviceKey()
   await pair.native.post(`stations/${pair.stationId}/native/key`, { publicKey: key.publicKey })
-  assert.deepEqual(await station(), [{ id: pair.stationId, name: 'Synthetic test station', stationKey: key.publicKey }])
+  assert.deepEqual(await station(), listed(key.publicKey))
   // Another account's station is never listed, and a revoked one goes from the list.
   await app.paired()
   await pair.browser.post(`stations/${pair.stationId}/revoke`)

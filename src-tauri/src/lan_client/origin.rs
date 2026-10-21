@@ -25,18 +25,21 @@
 //! operator typed, if any), `keepAddress` (`stationId`, and the `address` Operate tries first, or
 //! none to clear it), `chooseStation` (`stationId`, or none to cancel), `stationAddress` (where the
 //! station is, or none to cancel), and on an open road the station's own `operationRequest` and
-//! `streamSignal`. To the page: `stations` (`stations`, `computer`, `internet`, `account`: for each
-//! station added with the account, until when it admits this computer on its network and whether
-//! to sign in again now; `away`: each station kept by its service id until this computer first
-//! reaches it on its network, its `id`, `name` and LAN key's fingerprint `key`; and after a forget
-//! the service could not be told of, `forgetUnreached`), `signingIn`, `chooseStation` (`stations`:
-//! each `id` and `name`), `stationAddress` (`name`, and the `reason` the last address did not take
-//! this computer, if one was tried), `signedIn` (`stationId`, `waiting`, and `away` for a station
-//! kept by its service id) or `signInRefused`, `found` (`shacks`, `available`), `paired`
-//! (`station`) or `pairRefused`, `connected` (`stationId`, `deviceId`, `sessionId`, `stationKey`,
-//! `address`) or `connectRefused`, `closed` (`stationLeft`, `connectionLost`), `answerRefused`, and
-//! the station's own `operationResponse`, `streamSignal`, `streamState` and `status`. Every
-//! refusal is a code the page says in a sentence. Anything else from the page ends the session.
+//! `streamSignal`. To the page: `stations` (`stations`, `computer`, `internet`: each station the
+//! internet road has been added to, by `id`, with this computer's `key` for the road as the station
+//! shows it; `account`: for each station added with the account, until when it admits this
+//! computer on its network and whether to sign in again now; `away`: each station kept by its
+//! service id until this computer first reaches it on its network, its `id`, `name` and LAN key's
+//! fingerprint `key`; and after a forget the service could not be told of, `forgetUnreached`),
+//! `signingIn`, `chooseStation` (`stations`: each `id` and `name`), `stationAddress` (`name`, and
+//! the `reason` the last address did not take this computer, if one was tried), `signedIn`
+//! (`stationId`, `waiting`, `away` for a station kept by its service id, and this computer's `key`
+//! for the station's internet road as the station shows it) or `signInRefused`, `found` (`shacks`,
+//! `available`), `paired` (`station`) or `pairRefused`, `connected` (`stationId`, `deviceId`,
+//! `sessionId`, `stationKey`, `address`) or `connectRefused`, `closed` (`stationLeft`,
+//! `connectionLost`), `answerRefused`, and the station's own `operationResponse`, `streamSignal`,
+//! `streamState` and `status`. Every refusal is a code the page says in a sentence. Anything else
+//! from the page ends the session.
 //!
 //! **A typed address** is a station's address as it shows it, or the name its computer goes by
 //! (`tempo_stream::lan::Typed`), looked up when it is tried: a name that resolves to no address on
@@ -586,9 +589,10 @@ async fn store<T: Send + 'static>(
         .unwrap_or(Err("storeUnavailable"))
 }
 
-/// The stations, as the page shows them, which of them have the internet road, for each added with
-/// the account until when it admits this computer on its network, and those kept by their service
-/// id until this computer first reaches them there.
+/// The stations, as the page shows them, which of them have the internet road (each with this
+/// computer's key for it as the station shows it, `internet::shown_key`: its public half only), for
+/// each added with the account until when it admits this computer on its network, and those kept by
+/// their service id until this computer first reaches them there.
 async fn stations(reach: &Reach) -> String {
     listed(reach).await.to_string()
 }
@@ -597,10 +601,12 @@ async fn listed(reach: &Reach) -> serde_json::Value {
     let kept = reach.stations.clone();
     let listed = store(move || {
         let list = kept.list()?;
-        let internet: Vec<String> = list
+        let internet: Vec<serde_json::Value> = list
             .iter()
-            .filter(|station| matches!(kept.internet(&station.id), Ok(Some(_))))
-            .map(|station| station.id.clone())
+            .filter_map(|station| {
+                let road = kept.internet(&station.id).ok().flatten()?;
+                Some(json!({"id":station.id,"key":super::internet::shown_key(&road)?}))
+            })
             .collect();
         let signed: Vec<(String, u64)> = list
             .iter()
@@ -730,9 +736,9 @@ async fn page(
                 signing = None;
                 (choosing, placing) = (None, None);
                 match done {
-                    Ok(Ok(Signed { station, waiting, away })) => {
+                    Ok(Ok(Signed { station, waiting, away, key })) => {
                         json!({"type":"signedIn","stationId":station,"waiting":waiting,
-                            "away":away})
+                            "away":away,"key":key})
                     }
                     Ok(Err(reason)) => json!({"type":"signInRefused","reason":reason}),
                     Err(_) => json!({"type":"signInRefused","reason":"signInFailed"}),

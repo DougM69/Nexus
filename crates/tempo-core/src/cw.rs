@@ -1,5 +1,6 @@
 //! CW keyer text: F-key macro expansion + cut numbers, shared by the keyer back-ends
-//! (CAT `send_morse`, soundcard, WinKeyer). Pure + deterministic.
+//! (CAT `send_morse`, soundcard, WinKeyer), and the one rule for which characters text may hand
+//! a keyer ([`sendable`]). Pure + deterministic.
 //! Casual/ragchew vocabulary (no contest serial/exchange).
 
 /// The substitutions available to a CW macro. All borrowed; empty fields expand to "".
@@ -130,6 +131,51 @@ pub fn morse_code(ch: char) -> Option<&'static str> {
         '@' => ".--.-.",
         _ => return None,
     })
+}
+
+/// ⛔ THE ONE RULE FOR THE CHARACTERS TEXT MAY HAND A CW KEYER: one with Morse in [`morse_code`]'s
+/// table, and never `;`. The radio's own keyer takes the text inside a CAT command (Hamlib's
+/// `send_morse`: `KY <text>;` to a Kenwood or an Elecraft, `KM1<text>;` to a newer Yaesu), and
+/// those radios end a command at the first `;`: one in the text would end the keyer's command
+/// early, and the radio would read the rest as a command of its own. No control character and
+/// nothing without Morse either; a space is a word gap, not a character. Nexus's CAT keyer
+/// (`tempo_audio::rig::cw_text_refusal`), a message that keyer would key, refused whole before
+/// anything keys (`Engine::send_cw`), a TCI program's CW and the callbook's name and state
+/// ([`sendable_text`]) all keep to this one rule, so they cannot drift apart.
+pub fn sendable(ch: char) -> bool {
+    ch != ';' && morse_code(ch).is_some()
+}
+
+/// Why the radio's own keyer is never handed `c`, a character [`sendable`] refuses, in the CW
+/// screen's words: the one sentence the CAT keyer's own check and a message refused whole before
+/// anything keys both say.
+pub fn keyer_refusal(c: char) -> String {
+    if c == ';' {
+        "CW not sent: \";\" is never handed to the radio's own keyer, because Kenwood, Yaesu and \
+         Elecraft radios read it as the end of a command. Take it out of the message."
+            .to_string()
+    } else {
+        let shown = if c.is_control() {
+            c.escape_default().to_string()
+        } else {
+            c.to_string()
+        };
+        format!(
+            "CW not sent: Nexus has no Morse for \"{shown}\", so it is never handed to the \
+             radio's own keyer. Take it out of the message."
+        )
+    }
+}
+
+/// `text` from outside Nexus that a macro keys (a callbook's name or state), with every character
+/// [`sendable`] refuses taken out and the rest kept: `BOB;SMITH` keys `BOBSMITH`, never the `;`
+/// and never nothing. Words stay apart by one space; trimmed.
+pub fn sendable_text(text: &str) -> String {
+    text.split_whitespace()
+        .map(|word| word.chars().filter(|c| sendable(*c)).collect::<String>())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The key-down / key-up schedule for `text` as Morse — the timing the **serial
@@ -405,6 +451,47 @@ mod tests {
         assert_eq!(morse_code('?'), Some("..--.."));
         assert_eq!(morse_code(' '), None); // spaces are word gaps, not a glyph
         assert_eq!(morse_code('#'), None);
+    }
+
+    /// ⛔ WHAT TEXT MAY HAND A KEYER, BY VALUE: the letters in either case, the digits and
+    /// `. , ? / = + - ( ) : @`, and nothing else. Never `;`, which has Morse in the table but ends
+    /// a command on a Kenwood, Yaesu or Elecraft radio; no control character (a line break ends
+    /// rigctld's own command), no space, nothing outside ASCII.
+    #[test]
+    fn sendable_is_the_morse_table_without_the_semicolon_and_nothing_else() {
+        assert_eq!(morse_code(';'), Some("-.-.-."), "premise: `;` has Morse");
+        let sendable_below_256: String = (0u32..256)
+            .filter_map(char::from_u32)
+            .filter(|c| sendable(*c))
+            .collect();
+        assert_eq!(
+            sendable_below_256,
+            "()+,-./0123456789:=?@ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        );
+        // A line separator, a dotless i, the Kelvin sign, a full-width A, 0 and `;`.
+        for c in [
+            '\u{2028}', '\u{131}', '\u{212A}', '\u{FF21}', '\u{FF10}', '\u{FF1B}',
+        ] {
+            assert!(!sendable(c), "{c:?}");
+        }
+    }
+
+    /// A callbook name or state keeps what the keyers send and loses the rest, so it still keys:
+    /// a `;`, a control character, a character with no Morse (an apostrophe, an accented letter)
+    /// is taken out, never the whole text. CONTROL: text the keyers send comes back as it was.
+    #[test]
+    fn sendable_text_drops_what_no_keyer_may_be_handed_and_keeps_the_rest() {
+        assert_eq!(sendable_text("BOB;FA00007000000"), "BOBFA00007000000");
+        assert_eq!(sendable_text("O;H"), "OH");
+        assert_eq!(sendable_text("O'Brien"), "OBrien");
+        assert_eq!(sendable_text("José"), "Jos");
+        assert_eq!(sendable_text("\u{1b}[2J;Al"), "2JAl");
+        assert_eq!(sendable_text("  Mary \t Ann\n"), "Mary Ann");
+        assert_eq!(sendable_text("; ;"), "");
+        // CONTROL: text every keyer sends is kept as it was.
+        assert_eq!(sendable_text("Bob"), "Bob");
+        assert_eq!(sendable_text("Jean-Luc (JL)"), "Jean-Luc (JL)");
+        assert_eq!(sendable_text("OH"), "OH");
     }
 
     #[test]

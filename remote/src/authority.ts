@@ -1,6 +1,6 @@
 // Only this adapter turns provider claims and credential digests into authority.
 // ObservationRelay never receives identity data taken directly from a socket.
-import { createRemoteJWKSet, jwtVerify } from 'jose'
+import { createRemoteJWKSet, decodeJwt, jwtVerify } from 'jose'
 import { OBSERVER_LEASE_MS, type Entitlement, type Identity, type StationAccess } from '../../ui/src/remote-monitor/relay'
 
 export interface RemoteEnv {
@@ -139,6 +139,13 @@ export function mailbox(address: string): string {
 }
 
 let jwks: { issuer: string; keys: ReturnType<typeof createRemoteJWKSet> } | undefined
+/** The provider's signing keys, fetched from the configured issuer and cached for this isolate. */
+function keySet(env: RemoteEnv): ReturnType<typeof createRemoteJWKSet> {
+  if (jwks?.issuer !== env.AUTH0_ISSUER) {
+    jwks = { issuer: env.AUTH0_ISSUER, keys: createRemoteJWKSet(new URL('.well-known/jwks.json', env.AUTH0_ISSUER)) }
+  }
+  return jwks.keys
+}
 /** The namespace an Auth0 login Action must use to put the email claims on the access token.
  *  Hardcoded rather than configured because it has to match the Action byte for byte, and a second
  *  place to set it is a second place for it to drift - a drift that fails SILENTLY, by simply never
@@ -167,12 +174,9 @@ export async function nativeAccount(request: Request, env: RemoteEnv, now: numbe
 async function signedIn(request: Request, env: RemoteEnv, now: number, clientId: string): Promise<Identity & { subject: string; verified: boolean }> {
   requireValue(env.AUTH0_ISSUER.startsWith('https://') && env.AUTH0_ISSUER.endsWith('/') &&
     clientId !== 'unconfigured', 'serviceNotConfigured', 503)
-  if (jwks?.issuer !== env.AUTH0_ISSUER) {
-    jwks = { issuer: env.AUTH0_ISSUER, keys: createRemoteJWKSet(new URL('.well-known/jwks.json', env.AUTH0_ISSUER)) }
-  }
   let subject: string, until: number, email: string | null = null
   try {
-    const { payload } = await jwtVerify(bearer(request), jwks.keys, {
+    const { payload } = await jwtVerify(bearer(request), keySet(env), {
       issuer: env.AUTH0_ISSUER, audience: env.AUTH0_AUDIENCE, algorithms: ['RS256'],
       requiredClaims: ['sub', 'exp', 'iat'], currentDate: new Date(now), clockTolerance: 0,
     })
@@ -221,6 +225,72 @@ async function signedIn(request: Request, env: RemoteEnv, now: number, clientId:
   // it never reaches the object that index.ts spreads into the browser identity and on into relay
   // socket state - the provider subject is not something the wire needs to carry.
   return { accountId: row.id, expiresAt: until, subject, verified: email !== null }
+}
+
+/** How long after its sign-in a proof is taken, and how far ahead of this service's clock its signing
+ *  time may be. A proof is bounded by when it was signed (`iat`), never by the token's `exp`: the
+ *  provider's ID tokens last ten hours by default, and a proof is only ever presented just after the
+ *  sign-in that made it. */
+export const PROOF_FRESH_MS = 10 * 60000
+export const PROOF_SKEW_MS = 60000
+
+/** What a sign-in vouches for: SHA-256, in base64url, of a label naming what is vouched for, a zero byte,
+ *  for a device its kind and a zero byte, then each key's SPKI DER in order. DER is self-delimiting and
+ *  the kinds are a fixed set, so no two lists of keys hash the same bytes; the zero bytes make that plain.
+ *  The station's keys are its signing key and its LAN key, in that order; a computer's its road key and
+ *  its LAN key, a phone's and a browser's their one key. Nexus and the page put this in the sign-in as its
+ *  nonce, so the token the provider signs names exactly these keys. */
+async function nonceOf(label: string, kind: string | null, keys: string[]): Promise<string> {
+  const parts = [new TextEncoder().encode(label), new Uint8Array([0]),
+    ...(kind === null ? [] : [new TextEncoder().encode(kind), new Uint8Array([0])]), ...keys.map(fromHex)]
+  const bytes = new Uint8Array(parts.reduce((n, part) => n + part.length, 0))
+  parts.reduce((at, part) => { bytes.set(part, at); return at + part.length }, 0)
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+  return btoa(String.fromCharCode(...hash)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+export const stationNonce = (stationKey: string, lanKey: string) => nonceOf('nexus-station/1', null, [stationKey, lanKey])
+export const deviceNonce = (kind: string, keys: string[]) => nonceOf('nexus-device/1', kind, keys)
+
+/** A proof: an ID token from `subject`'s sign-in to the application `clientId`, carrying `nonce`, signed
+ *  by the provider within the last ten minutes. Answers its verified address, if it carries one.
+ *
+ *  Checked as the shack will check it, so the service never stores what the shack would refuse: RS256
+ *  by a key the issuer publishes, the exact issuer, the audience (a list only with `azp` naming the
+ *  application, and any `azp` naming it), the subject, the nonce, and the signing time. The token's
+ *  own `exp` is read only as a token's (it is after its `iat`): the age bound is `iat`'s. */
+export async function verifyProof(env: RemoteEnv, value: unknown, clientId: string, subject: string, nonce: string, now: number): Promise<{ email: string | null }> {
+  requireValue(typeof value === 'string' && value.length <= 4096, 'invalidRequest', 400)
+  try {
+    const issued = decodeJwt(value).iat
+    requireValue(typeof issued === 'number' && Number.isFinite(issued))
+    const { payload } = await jwtVerify(value, keySet(env), {
+      issuer: env.AUTH0_ISSUER, audience: clientId, algorithms: ['RS256'],
+      requiredClaims: ['sub', 'iat', 'nonce'], currentDate: new Date(issued * 1000), clockTolerance: 0,
+    })
+    requireValue(payload.iat === issued && issued * 1000 <= now + PROOF_SKEW_MS && issued * 1000 >= now - PROOF_FRESH_MS)
+    requireValue(payload.sub === subject && subject.length > 0 && payload.nonce === nonce)
+    requireValue(!Array.isArray(payload.aud) || payload.azp === clientId)
+    requireValue(payload.azp === undefined || payload.azp === clientId)
+    const email = payload.email_verified === true && typeof payload.email === 'string' && payload.email.length > 0 &&
+      payload.email.length <= 320 ? payload.email.trim().toLowerCase() : null
+    return { email }
+  } catch { throw new Refusal('proofInvalid', 403) }
+}
+
+/** Who an account is at a station: its owner, a person invited there with a role, or nobody (null). An
+ *  invite is matched on the mailbox of the account's verified address (`mailbox_hash`, written only from
+ *  a verified address at sign-in), and only while it has not been removed. */
+export type Role = 'owner' | 'operate' | 'listen'
+export async function memberRole(env: RemoteEnv, row: StationRow, accountId: string): Promise<Role | null> {
+  if (row.account_id === accountId) return 'owner'
+  const invite = await env.DB.prepare(`SELECT i.role FROM invites i JOIN accounts a ON a.mailbox_hash=i.mailbox_hash
+    WHERE i.station_id=? AND a.id=? AND i.removed_at IS NULL`).bind(row.id, accountId).first<{ role: 'operate' | 'listen' }>()
+  return invite?.role ?? null
+}
+/** The hash an invite keeps of an address: the mailbox it delivers to, as `signedIn` keeps an account's. */
+export async function mailboxHash(address: unknown): Promise<string> {
+  requireValue(typeof address === 'string' && address.length <= 320 && /^[^\s@]+@[^\s@]+$/.test(address.trim()), 'invalidRequest', 400)
+  return digest(`email:${mailbox(address.trim().toLowerCase())}`)
 }
 
 /** Only the pinned provider subject may administer trials.

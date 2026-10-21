@@ -15,6 +15,10 @@
 //! gave, the station key (pinned from then on) and the road's key. No account credential is ever
 //! kept.
 //!
+//! The station asks the operator to approve this computer only if the key it shows matches the one
+//! Nexus shows on this computer, so the window shows this computer's key for each road too
+//! ([`shown_key`]): the public half's fingerprint, as the station shows it, never the private key.
+//!
 //! ## Opening it ([`Service::pipe`], [`Service::turn`], [`Service::renew`])
 //!
 //! With no sign-in: every request names the device, and is signed by its key over a challenge the
@@ -386,6 +390,14 @@ pub(crate) fn lasting(reason: &str) -> bool {
             | "internetNotReady"
             | "accessDenied"
     )
+}
+
+/// This computer's key for `road` as the station shows it when it asks to approve this computer,
+/// and under Remote access ▸ Your computers: the station's own fingerprint
+/// (`remote_service::fingerprint`) of the key this computer registered, its public half. The
+/// private half is never shown, sent or logged. `None` for a record with no key in it.
+pub(crate) fn shown_key(road: &InternetRoad) -> Option<String> {
+    crate::remote_service::fingerprint(ComputerKey::restore(&road.pkcs8)?.public_key())
 }
 
 /// For a road registered without a proof (see the header), from the account's `session`: the

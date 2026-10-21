@@ -278,6 +278,10 @@ fn an_illinois_qso_party_club_merges_dupes_late_joins_drops_and_a_host_restart()
     );
 
     // --- the CW tent drops off, logs offline, and catches up ---------------------
+    // Its earlier contacts' acks must have arrived, or they still count as queued below.
+    wait_until("the CW tent is synced", 10, || {
+        engine_lock(&p2).fd_sync_state() == tempo_app::fdevent::SyncState::Synced
+    });
     p2_sd.store(true, Ordering::Relaxed);
     wait_until("the CW tent's link is down", 10, || {
         !engine_lock(&p2).fd_mirror_mut().connected

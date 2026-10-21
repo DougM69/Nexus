@@ -34,6 +34,12 @@ interface Props {
   phoneSegHi?: number | null
   /** All live cluster spots (unfiltered); the map picks the ones matching `spotMode` on this band. */
   spots: SpotRow[]
+  /** The spots programs on Nexus's TCI server sent (`features/tciSpots.ts`), drawn as cluster spots
+   *  are, with their source beside the call. Each names its program (`tci`). */
+  tciSpots?: SpotRow[]
+  /** ⛔ A click on a program's spot: it only tunes (`clickTciSpot`). Never `onWorkSpot`, which can
+   *  change the section and arm; without this a program's spot does nothing when clicked. */
+  onTciSpot?: (s: SpotRow) => void
   /** Which spot mode to plot — 'Phone' (SSB, default) or 'CW'. */
   spotMode?: 'Phone' | 'CW'
   /** Work a spotted station — QSY to its exact freq + prefill the log. */
@@ -84,6 +90,14 @@ interface Props {
   onMarkHere?: () => void
 }
 
+/** The protocol's name, beside a program's spot: a token, the same in every language. */
+const TCI = 'TCI'
+
+/** A program's spot's source, beside its call: the protocol and the program's connection number. */
+function tciSource(program: number): string {
+  return `${TCI} ${program}`
+}
+
 /** Compact "how long ago" for a spot tooltip. The unit letter rides inside the message with
  * its number, so a translation can never separate the two. */
 function ageLabel(secs: number): string {
@@ -97,7 +111,8 @@ function ageLabel(secs: number): string {
  * ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
  * string comes from the catalog. What does NOT: the band and mode names, the gridline and dial
  * frequencies, and every value in a spot's tooltip — `modeLabel` is CW/SSB, `detail` is the
- * spot line assembled from data, and `de <spotter>` is the cluster's own shorthand.
+ * spot line assembled from data, `de <spotter>` is the cluster's own shorthand, and `TCI` with a
+ * program's connection number is its source.
  *
  * Vertical band map — the same live cluster spots as `BandStrip`, on a vertical
  * frequency axis (high freq at top) with a labeled gridline scale, COLORED by need/worked exactly
@@ -114,6 +129,8 @@ export function BandMap({
   phoneSegLo,
   phoneSegHi,
   spots,
+  tciSpots,
+  onTciSpot,
   spotMode = 'Phone',
   onWorkSpot,
   needByCall,
@@ -172,10 +189,10 @@ export function BandMap({
 
   const inBand = useMemo(
     () =>
-      spots
+      [...spots, ...(tciSpots ?? [])]
         .filter((s) => s.mode === spotMode && s.band === band)
         .sort((a, b) => b.freqMhz - a.freqMhz),
-    [spots, spotMode, band],
+    [spots, tciSpots, spotMode, band],
   )
 
   const bandMarkers = useMemo(
@@ -410,6 +427,8 @@ export function BandMap({
           const mark = beacon ? null : (marker?.(s) ?? null)
           const markWords = spotMarkWords(mark)
           const multTag = spotMultTag(mark)
+          // A program's spot: its source, the connection Settings ▸ Share by TCI lists it by.
+          const program = s.tci ?? null
           const detail = [
             s.call,
             ...markWords,
@@ -418,27 +437,34 @@ export function BandMap({
             beacon?.word,
             chip?.label,
             badge?.word,
+            program != null && t('bandMap.spot.tci.from', { id: program }),
             s.spotter && `de ${s.spotter}`,
             s.comment,
           ]
             .filter(Boolean)
             .join(' · ')
+          // A program's spot only tunes, and its tooltip says so.
+          const tip = program != null ? t('bandMap.spot.tci.title', { detail }) : t('bandMap.spot.title', { detail })
           const needCls = chip ? ` need-${chip.cls}` : ''
           // The dim POTA colour, by BandStrip's rule: a POTA activator no need colours, read off
           // the P's own entry (operator, 2026-10-03: "Dim POTA color for all").
           const dimCls = !chip && !beacon && type === 'Pota' ? ' pota-dim' : ''
+          // A program's spot is drawn dotted, with its source before the call.
+          const tciCls = program != null ? ' from-tci' : ''
           return (
-            <span key={`${s.call}-${s.freqMhz}-${i}`}>
+            <span key={`${program ?? ''}-${s.call}-${s.freqMhz}-${i}`}>
               {/* tick at the TRUE frequency; the clickable label is de-collided nearby */}
-              <span className={`bandmap-tick${needCls}${dimCls}`} style={{ top: `${freqY}%` }} />
+              <span className={`bandmap-tick${needCls}${dimCls}${tciCls}`} style={{ top: `${freqY}%` }} />
               <button
                 type="button"
-                className={`bandmap-spot${needCls}${dimCls}${worked ? ' worked' : ''}${mark?.dupe ? ' contest-dupe' : ''}`}
+                className={`bandmap-spot${needCls}${dimCls}${tciCls}${worked ? ' worked' : ''}${mark?.dupe ? ' contest-dupe' : ''}`}
                 style={{ top: `${labelY}%`, opacity }}
-                title={t('bandMap.spot.title', { detail })}
+                title={tip}
                 aria-label={mark ? [s.call, ...markWords].join(' · ') : undefined}
-                onClick={() => onWorkSpot(s)}
+                // ⛔ A program's spot only tunes: never the Work, whatever it names.
+                onClick={() => (program != null ? onTciSpot?.(s) : onWorkSpot(s))}
               >
+                {program != null && <span className="spot-type-badge type-tci">{tciSource(program)}</span>}
                 {beacon && <span className={`spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>}
                 {badge && <span className={`spot-type-badge ${badge.cls}`}>{badge.ch}</span>}
                 {multTag && (

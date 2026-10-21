@@ -1180,12 +1180,22 @@ impl Drop for RoadEnd {
     }
 }
 
+/// A road's tag that no other road in this run has, as the shack names its roads from a random
+/// start. These tests' roads share their key material, and a road outlives its test (the mock app
+/// keeps its client, and an unacknowledged Stop is sent again for five seconds): under one tag for
+/// all, a road an earlier test left running spoke on a later test's road whenever that test's end
+/// was handed the same port. Its datagrams verified there: they drew the end's answers to the
+/// wrong road, and could carry its replay window past the later road's own.
+fn a_tag_of_its_own() -> crate::remote_service::lan::datagram::Tag {
+    crate::remote_service::lan::stop_road::first_tag().to_be_bytes()
+}
+
 /// A shack with a Stop road to an end of the test's own.
 fn shack_with_a_road() -> (Arc<FakeShack>, RoadEnd) {
     use crate::remote_service::lan::datagram::{End, Keys, EXPORTED};
     use crate::remote_service::lan::stop_road::Up;
     let exported = [5; EXPORTED];
-    let tag = [2; 8];
+    let tag = a_tag_of_its_own();
     let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     socket.set_nonblocking(true).unwrap();
     let road =
@@ -1497,15 +1507,11 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
     use crate::remote_service::lan::stop_road::Up;
     let on_air = Arc::new(OnAir::default());
     let exported = [5; EXPORTED];
+    let tag = a_tag_of_its_own();
     let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     socket.set_nonblocking(true).unwrap();
-    let road = StopRoad::open(
-        socket.local_addr().unwrap(),
-        [2; 8],
-        &exported,
-        on_air.clone(),
-    )
-    .unwrap();
+    let road =
+        StopRoad::open(socket.local_addr().unwrap(), tag, &exported, on_air.clone()).unwrap();
     let station = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     let _audio = AudioRoad::open(
         station.local_addr().unwrap(),
@@ -1518,7 +1524,7 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
     let shack = FakeShack::new();
     *lock(&shack.road) = Some(road);
     shack.hold();
-    let mut keys = Keys::new(&exported, [2; 8], End::Shack).unwrap();
+    let mut keys = Keys::new(&exported, tag, End::Shack).unwrap();
     let dir = scratch("road-stop-audio");
     let client = client_in(&dir, &shack);
     let screens = screens(&client);

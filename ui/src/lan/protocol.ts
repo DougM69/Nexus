@@ -16,6 +16,10 @@ export type LanStation = { id: string; addresses: string[]; key: string; typedAd
 export type LanFound = { name: string; address: string; protocol: number; key: string }
 /** One of the Remote account's stations, offered while signing in. */
 export type LanChoice = { id: string; name: string }
+/** A station the internet road has been added to, by its LAN station id, and this computer's key for
+ *  that road: its fingerprint (SHA-256 of the key, lowercase hex), the one the station shows when it
+ *  asks to approve this computer. Never the private key. */
+export type LanInternet = { id: string; key: string }
 
 /** A station added with the account: until when it takes this computer on its network (seconds
  *  since 1970), and whether to sign in again for it now (`lan_client::account`). */
@@ -73,11 +77,11 @@ export type WhereReason = (typeof WHERE_REASONS)[number]
 const STATION_MESSAGES = ['operationResponse', 'streamSignal', 'streamState', 'status'] as const
 
 export type Told =
-  /** `internet`: the stations the internet road has been added to. `account`: the stations added
-   *  with the account. `away`: the stations kept by their service id until this computer first
-   *  reaches them on their network. `forgetUnreached`: after a forget, why Nexus Remote could not be
-   *  told to end this computer's approval there. */
-  | { type: 'stations'; stations: LanStation[]; internet: string[]; account: LanSigned[]; away: LanAway[]; computer: string; error: string | null; forgetUnreached: string | null }
+  /** `internet`: the stations the internet road has been added to, each with this computer's key
+   *  for it. `account`: the stations added with the account. `away`: the stations kept by their
+   *  service id until this computer first reaches them on their network. `forgetUnreached`: after a
+   *  forget, why Nexus Remote could not be told to end this computer's approval there. */
+  | { type: 'stations'; stations: LanStation[]; internet: LanInternet[]; account: LanSigned[]; away: LanAway[]; computer: string; error: string | null; forgetUnreached: string | null }
   | { type: 'found'; shacks: LanFound[]; available: boolean }
   | { type: 'paired'; station: LanStation }
   | { type: 'pairRefused'; reason: PairReason }
@@ -90,8 +94,9 @@ export type Told =
   /** Signing in: the sign-in waits in the system browser. */
   | { type: 'signingIn' }
   /** Signed in for a station; `waiting` while its internet road waits for Approve at the station;
-   *  `away` when it was found nowhere on this network and is kept by its service id. */
-  | { type: 'signedIn'; stationId: string; waiting: boolean; away: boolean }
+   *  `away` when it was found nowhere on this network and is kept by its service id; `key`, this
+   *  computer's key for the station's internet road, which the station shows when it asks. */
+  | { type: 'signedIn'; stationId: string; waiting: boolean; away: boolean; key: string }
   | { type: 'signInRefused'; reason: SignInReason }
   /** Signing in: the account has more than one station, and the operator picks one. */
   | { type: 'chooseStation'; stations: LanChoice[] }
@@ -134,6 +139,10 @@ function station(raw: unknown): LanStation {
   const shown: LanStation = { id: text(value.id, UUID), addresses: value.addresses.map(a => text(a, /^[0-9.]+:[0-9]+$/, 21)), key: text(value.key, HEX64) }
   return typed.length ? { ...shown, typedAddress: text(value.typedAddress, TYPED, 259) } : shown
 }
+function internetRoad(raw: unknown): LanInternet {
+  const value = fields(raw, ['id', 'key'])
+  return { id: text(value.id, UUID), key: text(value.key, HEX64) }
+}
 function signed(raw: unknown): LanSigned {
   const value = fields(raw, ['stationId', 'until', 'renew'])
   if (typeof value.until !== 'number' || !Number.isInteger(value.until) || value.until < 0 || typeof value.renew !== 'boolean') throw Error('invalidLanMessage')
@@ -168,7 +177,7 @@ export function readTold(raw: unknown): Told {
       if (!Array.isArray(account) || account.length > 8) throw Error('invalidLanMessage')
       const kept = value.away === undefined ? [] : value.away
       if (!Array.isArray(kept) || kept.length > 8) throw Error('invalidLanMessage')
-      return { type, stations: value.stations.map(station), internet: internet.map(id => text(id, UUID)),
+      return { type, stations: value.stations.map(station), internet: internet.map(internetRoad),
         account: account.map(signed), away: kept.map(away), computer: text(value.computer, undefined, 64),
         error: value.error === undefined ? null : text(value.error),
         forgetUnreached: value.forgetUnreached === undefined ? null : text(value.forgetUnreached) }
@@ -191,9 +200,9 @@ export function readTold(raw: unknown): Told {
     case 'operating': fields(raw, ['type']); return { type }
     case 'signingIn': fields(raw, ['type']); return { type }
     case 'signedIn': {
-      const value = fields(raw, ['type', 'stationId', 'waiting', 'away'])
+      const value = fields(raw, ['type', 'stationId', 'waiting', 'away', 'key'])
       if (typeof value.waiting !== 'boolean' || typeof value.away !== 'boolean') throw Error('invalidLanMessage')
-      return { type, stationId: text(value.stationId, UUID), waiting: value.waiting, away: value.away }
+      return { type, stationId: text(value.stationId, UUID), waiting: value.waiting, away: value.away, key: text(value.key, HEX64) }
     }
     case 'signInRefused': {
       const reason = text(fields(raw, ['type', 'reason']).reason)
@@ -218,11 +227,6 @@ export function readTold(raw: unknown): Told {
  *  whether Pair is worth pressing. */
 export function codeShaped(typed: string): boolean {
   return /^[0-9a-f]{16}$/i.test(typed.replace(/\s+/g, ''))
-}
-
-/** The first 128 bits of a key's fingerprint, in eight groups of four, as the station shows its own. */
-export function groupedKey(key: string): string {
-  return (key.slice(0, 32).match(/.{4}/g) ?? []).join(' ')
 }
 
 /** The socket on this page's own origin: the same path as the page, the launch secret in it. */

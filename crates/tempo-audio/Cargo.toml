@@ -169,9 +169,17 @@ propagation = { path = "../propagation" }
 # TEST-ONLY: the SmartSDR simulator the Flex daemon's tests (`src/flex/tests.rs`) run against.
 # In-workspace, pure std and test-scoped, so the shipped dependency graph is unchanged.
 tempo-flexsim = { path = "../tempo-flexsim" }
+# TEST-ONLY: the TCI server simulator the TCI daemon's tests (`src/tci/tests.rs`) run against.
+# In-workspace and test-scoped (its one dependency, tungstenite, is already tempo-net's), so the
+# shipped dependency graph is unchanged.
+tempo-tcisim = { path = "../tempo-tcisim" }
 # TEST-ONLY: the simulated network Icom the Icom network daemon's tests (`src/icomlan/tests.rs`,
 # `tests/icomlan_leak.rs`) run against: tempo-net's `icom-sim` feature, which only test builds turn
 # on. Not a new dependency: tempo-net is already one, behind `device`. And `flex-unbenched`, the
 # door the Flex client's tests use to run its CW path, which admission refuses in every build that
 # ships (a release build will not compile with it).
 tempo-net = { path = "../tempo-net", features = ["icom-sim", "flex-unbenched"] }
+# TEST-ONLY: tempo-app's `test-util` hooks for this crate's tests: the radio loop's test of a TCI
+# program's 10-minute ceiling ages the over with `Engine::age_tci_over_for_test`. Not a new
+# dependency: tempo-app is already one, and a dev-dependency's feature is never on in a shipped build.
+tempo-app = { path = "../tempo-app", features = ["test-util"] }

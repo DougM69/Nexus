@@ -12,8 +12,11 @@ import { t } from '../i18n'
 import { useViewport } from '../useViewport'
 import { StreamView } from '../remote-web/StreamView'
 import type { StreamEnvironment } from '../remote-web/stream-link'
+// A key as the shack shows one (its approval question, Remote access, Remote over this network), so the
+// operator compares the two screens by eye.
+import { shortFingerprint } from '../remote-web/stream-protocol'
 import { LanConnection, lanStream } from './connection'
-import { codeShaped, groupedKey, readTold, socketUrl, type ClosedReason, type ConnectReason, type LanAway, type LanChoice, type LanFound, type LanSigned, type LanStation, type PairReason, type SignInReason, type WhereReason } from './protocol'
+import { codeShaped, readTold, socketUrl, type ClosedReason, type ConnectReason, type LanAway, type LanChoice, type LanFound, type LanInternet, type LanSigned, type LanStation, type PairReason, type SignInReason, type WhereReason } from './protocol'
 import { lanFindLine, lanReachLine, lanUnreached } from '../remote-native/lanReach'
 import '../remote-monitor/monitor.css'
 import '../remote-web/remote.css'
@@ -159,7 +162,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const socket = useRef<PageSocket | null>(null)
   const [phase, setPhase] = useState<'opening' | 'open' | 'lost'>('opening')
   const [stations, setStations] = useState<LanStation[]>([])
-  const [internet, setInternet] = useState<string[]>([])
+  const [internet, setInternet] = useState<LanInternet[]>([])
   const [account, setAccount] = useState<LanSigned[]>([])
   // The stations signed in to from elsewhere: kept by their service id until a sign-in here, on
   // their network, adds them there.
@@ -279,7 +282,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           // over the internet when found nowhere here), or linked.
           const again = signingFor.current !== null && renewing.current.has(signingFor.current)
           setBusy(null); setChoosing(null); setWhere(null)
-          setSaid({ text: told.waiting ? t('lanWindow.internet.waiting') : told.away ? t('lanWindow.away.added')
+          setSaid({ text: told.waiting ? t('lanWindow.internet.waiting', { key: shortFingerprint(told.key) }) : told.away ? t('lanWindow.away.added')
             : again ? t('lanWindow.signIn.renewed') : t('lanWindow.signIn.done'), alert: false })
           say({ type: 'stations' })
           return
@@ -408,9 +411,10 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
       <section className="rm-card remote-section">
         <h2>{t('lanWindow.paired')}</h2>
         {stations.length === 0 && away.length === 0 && <p>{t('lanWindow.none')}</p>}
-        {stations.map(station => <div key={station.id} className="remote-station lan-station">
+        {stations.map(station => { const internetKey = internet.find(added => added.id === station.id)?.key
+          return <div key={station.id} className="remote-station lan-station">
           <p><strong>{t('lanWindow.stationAt', { address: station.addresses[0] })}</strong></p>
-          <p className="remote-site-status">{t('lanWindow.stationKey', { key: groupedKey(station.key) })}</p>
+          <p className="remote-site-status">{t('lanWindow.stationKey', { key: shortFingerprint(station.key) })}</p>
           {forgetting === station.id ? <>
             <p className="remote-warning">{t('lanWindow.forgetConfirm')}</p>
             <div className="remote-actions">
@@ -440,20 +444,29 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           {(() => {
             const signed = account.find(entry => entry.stationId === station.id)
             const settled = forgetting !== station.id && operating !== station.id
+            // With the road added, this computer's key for it: the station shows the same one when it
+            // asks to approve this computer, and under Remote access ▸ Your computers.
+            const computerKey = internetKey !== undefined
+              && <p className="remote-site-status">{t('lanWindow.internet.computerKey', { key: shortFingerprint(internetKey) })}</p>
             // Added with the account: until when the station takes this computer on its network, and
             // in the last week before that, signing in again.
             if (signed) return signed.renew
               ? <>
                 <p className="remote-warning">{t('lanWindow.signIn.renew', { date: day(signed.until) })}</p>
+                {computerKey}
                 {settled && <div className="remote-actions">
                   <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'} onClick={() => signIn(station.id)}>
                     {busy === 'signIn' && signingFor.current === station.id ? t('lanWindow.internet.adding') : t('remote.account.signInAgain')}</button>
                 </div>}
               </>
-              : <p className="remote-site-status">{t('lanWindow.signIn.until', { date: day(signed.until) })}</p>
+              : <>
+                <p className="remote-site-status">{t('lanWindow.signIn.until', { date: day(signed.until) })}</p>
+                {computerKey}
+              </>
             // Paired with a code: signing in links it to the account, or adds its internet road.
             return <>
-              {internet.includes(station.id) && <p className="remote-site-status">{t('lanWindow.internet.added')}</p>}
+              {internetKey !== undefined && <p className="remote-site-status">{t('lanWindow.internet.added')}</p>}
+              {computerKey}
               {settled && <div className="remote-actions">
                 <button type="button" className="remote-button remote-button--quiet" disabled={!!busy || phase !== 'open'} title={t('lanWindow.internet.hint')}
                   onClick={() => signIn(station.id)}>
@@ -498,12 +511,12 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
                 onClick={() => connect(station.id, another.address.trim())}>{t('lanWindow.stream')}</button>
             </div>
           </form>}
-        </div>)}
+        </div> })}
         {/* Signed in to from elsewhere: by its name, Operate over the internet, and Sign in on its row
             once on its network to add it there. No stream: that is this network's road alone. */}
         {away.map(station => <div key={station.id} className="remote-station lan-station">
           {station.name && <p><strong>{station.name}</strong></p>}
-          <p className="remote-site-status">{t('lanWindow.stationKey', { key: groupedKey(station.key) })}</p>
+          <p className="remote-site-status">{t('lanWindow.stationKey', { key: shortFingerprint(station.key) })}</p>
           {forgetting === station.id ? <>
             <p className="remote-warning">{t('lanWindow.forgetConfirm')}</p>
             <div className="remote-actions">

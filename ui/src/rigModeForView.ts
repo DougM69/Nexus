@@ -30,6 +30,20 @@
 // So the guard now tracks question 2 ONLY, and advances only when a re-home actually happened.
 // Asserting a mode without homing leaves it alone, which is what makes the later FT visit
 // still count as a change.
+//
+// ── SSTV → PHONE KEEPS THE DIAL ───────────────────────────────────────────────────────────
+//
+// SSTV owns no rig mode on entry (RX-first: it decodes wherever you are tuned), but its
+// pictures go out in the phone segment, so it RIDES Phone. The operator (2026-10-20): "when on
+// sstv and changing to phone, it should not switch to phone frequency until I tell it to". So
+// the Phone tab pressed on the SSTV screen still follows (`followFreq`, so a dial Phone may
+// not transmit on is homed as before) and asks the engine to keep the dial wherever Phone may
+// transmit there (`keepDial`). The ENGINE judges that, with the licence and the real dial
+// under its lock; this module only says which screen the operator came from.
+//
+// It asks with Phone already the mode homed for too, where nothing follows and the dial stays
+// anyway: the ask is also what carries the FM channel the SSTV screen holds (144.500 on 2 m) into
+// Phone. The rule: a kept FM channel keeps commanding FM in Phone.
 
 /** The rig modes a section can own. */
 export type RigMode = 'cw' | 'phone' | 'rtty' | 'keyboard' | 'digital'
@@ -55,25 +69,36 @@ export const RIG_MODE_BY_VIEW: Partial<Record<string, RigMode>> = {
  *  frequency, and that gap is what #143 was made of. */
 const VIEWS_THAT_HOME = new Set(['operate', 'cw', 'phone', 'rtty', 'psk', 'js8'])
 
+/** The RX-first views that ride a section's frequencies without asserting it on entry. Leaving
+ *  one straight into the section it rides keeps the dial where that section may transmit. */
+const RIDES: Partial<Record<string, RigMode>> = {
+  sstv: 'phone', // SSTV images go out in the phone segment
+}
+
 export interface RigModeTransition {
   /** The mode to assert, or undefined for a view that owns none (Map, Logbook, Settings…). */
   mode?: RigMode
   /** Re-home the dial to this mode's frequency. */
   followFreq: boolean
+  /** Leaving the screen this mode rides for it: keep the dial (with `followFreq`, where the engine
+   *  finds this mode may transmit) and the FM channel it is held on. */
+  keepDial?: boolean
   /** What the caller's "last re-homed mode" guard should hold after this. */
   nextHomed: RigMode
 }
 
 /**
- * What entering `view` should do to the rig, given the mode we last re-homed for.
+ * What entering `view` from the view `from` should do to the rig, given the mode we last
+ * re-homed for.
  *
  * A view with no rig mode returns `nextHomed` unchanged: glancing at the map mid-QSO must
  * not touch the VFO AND must not advance the guard, so a later Operate click still homes.
  */
-export function rigModeTransition(view: string, lastHomed: RigMode): RigModeTransition {
+export function rigModeTransition(view: string, lastHomed: RigMode, from?: string): RigModeTransition {
   const mode = RIG_MODE_BY_VIEW[view]
   if (!mode) return { followFreq: false, nextHomed: lastHomed }
   const followFreq = mode !== lastHomed && VIEWS_THAT_HOME.has(view)
+  const keepDial = from !== undefined && RIDES[from] === mode
   // ONLY a real re-home advances the guard. This one line is the fix.
-  return { mode, followFreq, nextHomed: followFreq ? mode : lastHomed }
+  return { mode, followFreq, keepDial, nextHomed: followFreq ? mode : lastHomed }
 }

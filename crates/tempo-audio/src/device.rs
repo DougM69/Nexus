@@ -793,6 +793,10 @@ impl NamedDevice for (String, u32) {
 /// the generic "USB Audio CODEC" name resolve to DIFFERENT codecs (else `find()` always
 /// returns the first).
 ///
+/// Names match as in [`resolve_configured`]: exactly as saved first, then by [`same_name`].
+/// In ONE pass here, because this takes an iterator rather than a factory, so the first
+/// [`same_name`] match is held until the list has run out without an exact one.
+///
 /// ⚠️ The silent `default` fallback is right for exactly one caller — the voice mic, which
 /// passes `default = None` and so gets no fallback at all. Anything resolving a device the
 /// operator explicitly CHOSE must use [`resolve_configured`] instead.
@@ -801,20 +805,44 @@ pub(crate) fn pick_device<D: NamedDevice>(
     name: Option<&str>,
     default: Option<D>,
 ) -> Option<D> {
-    let wanted = name.map(str::trim).filter(|n| !n.is_empty());
+    let wanted = name.filter(|n| !n.trim().is_empty());
     if let (Some(wanted), Some(devs)) = (wanted, devices) {
         let (base, ordinal) = split_device_ordinal(wanted);
-        let mut seen = 0usize;
+        let (trimmed, trimmed_ordinal) = split_device_ordinal(wanted.trim());
+        let (mut seen, mut seen_trimmed, mut by_trimmed) = (0usize, 0usize, None);
         for d in devs {
-            if d.device_name().as_deref() == Some(base) {
+            let Some(n) = d.device_name() else { continue };
+            if n == base {
                 seen += 1;
                 if seen == ordinal {
                     return Some(d);
                 }
             }
+            if same_name(&n, trimmed) {
+                seen_trimmed += 1;
+                if seen_trimmed == trimmed_ordinal {
+                    by_trimmed = Some(d);
+                }
+            }
+        }
+        if by_trimmed.is_some() {
+            return by_trimmed;
         }
     }
     default
+}
+
+/// Whether two device names are the same name once the whitespace at their ENDS is ignored —
+/// never inside a name, so the " #N" ordinal and every interior space still count.
+///
+/// macOS reports some USB codecs with a space at the end of the name: an IC-7300's codec is
+/// offered as `USB Audio CODEC ` (field report, 2026-10). The picker saves that string as
+/// offered, so the exact match finds it; this is for a name whose ends differ from the
+/// device's (saved without the space, or edited by hand). Resolution tries it only AFTER the
+/// exact match, so two devices whose names differ only at their ends each still open
+/// themselves.
+fn same_name(a: &str, b: &str) -> bool {
+    a.trim() == b.trim()
 }
 
 /// The ALSA `CARD=<id>` token of a device name, e.g. `plughw:CARD=Device,DEV=0` →
@@ -844,12 +872,12 @@ fn alsa_card_token(name: &str) -> Option<&str> {
 /// another application is holding is listed by us and unresolvable here. The message names
 /// both possibilities rather than guessing.
 ///
-/// **`mk_devices` is a factory, not an iterator, because resolution takes TWO independent
-/// lazy passes** (exact name, then the card-identity fallback below) and each MUST start from
-/// a fresh enumeration — reusing pass 1's iterator, or retaining its devices to re-scan, would
-/// hold the ALSA handles that the lazy drop exists to release (see pass 1). Pass 2 runs only
-/// on the error path, so the second enumeration is paid only when the exact name already
-/// missed.
+/// **`mk_devices` is a factory, not an iterator, because resolution takes up to THREE
+/// independent lazy passes** (the name exactly as saved, then by [`same_name`], then the
+/// card-identity fallback below) and each MUST start from a fresh enumeration — reusing pass
+/// 1's iterator, or retaining its devices to re-scan, would hold the ALSA handles that the lazy
+/// drop exists to release (see pass 1). A later pass runs only when the earlier ones missed, so
+/// its enumeration is paid only then.
 /// Whether this host's `Device` addresses the whole CARD (both directions — ALSA,
 /// CoreAudio: one AudioDeviceID carries capture and render) or a single-direction
 /// ENDPOINT (WASAPI: `input_devices()` yields only eCapture endpoints, and asking one
@@ -873,6 +901,9 @@ pub(crate) const HOST_GRAIN: DeviceGrain = if cfg!(target_os = "windows") {
 /// endpoint-grained host two directions NEVER share a device, however alike their
 /// names — a shared Windows friendly name is the NORMAL presentation of a USB rig
 /// interface, not evidence of a shared handle (#99, #104).
+///
+/// Names compare by [`same_name`]: the input's own name can end in a space (macOS), and the
+/// output can be saved with or without it.
 pub(crate) fn shares_one_device(grain: DeviceGrain, out_name: Option<&str>, in_name: &str) -> bool {
     if grain == DeviceGrain::Endpoint {
         return false;
@@ -882,9 +913,9 @@ pub(crate) fn shares_one_device(grain: DeviceGrain, out_name: Option<&str>, in_n
         .filter(|n| !n.is_empty())
         .is_some_and(|want| {
             let want_base = split_device_ordinal(want).0;
-            want_base == in_name
+            same_name(want_base, in_name)
                 || matches!(
-                    (alsa_card_token(want_base), alsa_card_token(in_name)),
+                    (alsa_card_token(want_base.trim()), alsa_card_token(in_name.trim())),
                     (Some(w), Some(h)) if w == h
                 )
         })
@@ -901,7 +932,7 @@ where
     I: Iterator<Item = D>,
     F: Fn() -> Option<I>,
 {
-    match name.map(str::trim).filter(|n| !n.is_empty()) {
+    match name.filter(|n| !n.trim().is_empty()) {
         None => default.ok_or_else(|| format!("this system has no default {what} device")),
         Some(wanted) => {
             // ⚠️ CPAL 0.18 UPDATE: this is now belt-and-braces on Linux rather than load-bearing.
@@ -924,6 +955,13 @@ where
             //
             // The ordinal handling (" #N" for identically-named codecs) mirrors
             // `pick_device`; the dropped devices' names still feed the failure message.
+            //
+            // ⭐ THE NAME EXACTLY AS SAVED, whitespace and all. The picker saves the backend's
+            // own string, and macOS reports some USB codecs with a space at the end: an
+            // IC-7300's codec is offered as `USB Audio CODEC ` (field report, 2026-10). This pass
+            // used to trim the saved name first, so that device never matched and the radio had
+            // no audio in either direction — the error read "USB Audio CODEC" is not available
+            // while listing `USB Audio CODEC ` among the devices offered.
             let (base, ordinal) = split_device_ordinal(wanted);
             let mut seen: Vec<String> = Vec::new();
             let mut matched = 0usize;
@@ -942,6 +980,22 @@ where
                     // `d` drops HERE, before the next probe — load-bearing, see above.
                 }
             }
+            // ⭐ THEN BY [`same_name`], for a name saved with different whitespace at its ends
+            // from the device's — saved without the space, or edited by hand. A FRESH lazy pass,
+            // run only when the exact one missed, so an exact match always wins.
+            let (trimmed, trimmed_ordinal) = split_device_ordinal(wanted.trim());
+            if let Some(devs) = mk_devices() {
+                let mut matched = 0usize;
+                for d in devs {
+                    if d.device_name().is_some_and(|n| same_name(&n, trimmed)) {
+                        matched += 1;
+                        if matched == trimmed_ordinal {
+                            return Ok(d);
+                        }
+                    }
+                    // `d` drops HERE before the next probe — same reason as pass 1.
+                }
+            }
             // ⭐ CARD-IDENTITY FALLBACK — #8 (mw0cqu, FT-847 on a CM108/CODEC card). The
             // menu stores the card's `plughw:CARD=<id>` hint (audiodev prefers plughw for
             // its rate/format conversion), but cpal's own enumerator can surface the SAME
@@ -953,11 +1007,15 @@ where
             // this cannot cross to a different rig). A FRESH lazy pass, so the drop-between-
             // probes guarantee from pass 1 still holds. Confined to ALSA by construction: a
             // Windows/Pulse/JACK name has no CARD= token, so this never fires there.
-            if let Some(card) = alsa_card_token(base) {
+            if let Some(card) = alsa_card_token(trimmed) {
                 if let Some(devs) = mk_devices() {
                     for d in devs {
-                        let is_mate =
-                            d.device_name().as_deref().and_then(alsa_card_token) == Some(card);
+                        let is_mate = d
+                            .device_name()
+                            .as_deref()
+                            .map(str::trim)
+                            .and_then(alsa_card_token)
+                            == Some(card);
                         if is_mate {
                             return Ok(d);
                         }
@@ -1959,9 +2017,9 @@ impl CpalBackend {
     /// A ring too full to take the start of the rebuild beside what it must drop (the first
     /// seconds of a Slow frame, which is longer than the ring) keeps what it holds: only the part
     /// still parked at the modem rate is played anew, the resampler running on into it, so the
-    /// move lands where the ring's audio ends. Not on the DAX route (`tee`): its queue holds two
-    /// rates, and the over plays on there as it was. Nor with nothing left to play: `false`, and
-    /// nothing is touched.
+    /// move lands where the ring's audio ends. On the DAX route (`tee`) the over is the tee's,
+    /// not the card's, so the tee replaces it ([`crate::backend::TxTee::retune`]) and the ring is
+    /// left alone. With nothing left to play: `false`, and nothing is touched.
     fn retune_route(
         tee: Option<&crate::backend::TxTeeHandle>,
         tx_rs: &mut CaptureResampler,
@@ -1970,8 +2028,8 @@ impl CpalBackend {
         draining: bool,
         tail: &mut dyn FnMut(usize, usize) -> Vec<f32>,
     ) -> bool {
-        if tee.is_some() {
-            return false;
+        if let Some(tee) = tee {
+            return tee.retune(tail);
         }
         let card_rate = match tx_rs.out_rate() {
             0 => u64::from(MODEM_RATE),
@@ -3184,7 +3242,7 @@ mod tx_route_tests {
                 Vec::new()
             }
         ));
-        assert!(!asked, "the DAX route: nothing asked for");
+        assert!(!asked, "a DAX route that cannot replace: nothing asked for");
         assert_eq!(ring.len(), 1_000, "and the over left as it was");
         while ring.pop().is_some() {}
         assert!(!CpalBackend::retune_route(
@@ -3199,6 +3257,53 @@ mod tx_route_tests {
             }
         ));
         assert!(!asked, "nothing left to play: nothing asked for");
+    }
+
+    /// A tee that replaces the rest of the over, recording what it was asked.
+    #[derive(Default)]
+    struct ReplacingTee {
+        asked: Mutex<Vec<(usize, usize)>>,
+    }
+
+    impl TxTee for ReplacingTee {
+        fn feed(&self, _samples: &[f32]) {}
+        fn set_level(&self, _level: f32) {}
+        fn flush(&self) -> usize {
+            0
+        }
+        fn retune(&self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
+            let rest = tail(500, 0);
+            self.asked.lock().unwrap().push((500, rest.len()));
+            true
+        }
+    }
+
+    /// ⭐ With the Flex DAX route installed the over is the tee's, so a mid-over switch is the
+    /// tee's to make: the backend hands it the request, and the card's ring (which may still hold
+    /// audio from before the tee) is not touched.
+    #[test]
+    fn a_retune_on_the_dax_route_is_the_tees_and_leaves_the_card_alone() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
+        let ring = tx_ring();
+        let mut pending = VecDeque::new();
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &[0.5; 1_000]);
+        let tee = Arc::new(ReplacingTee::default());
+        let handle: TxTeeHandle = tee.clone();
+        assert!(CpalBackend::retune_route(
+            Some(&handle),
+            &mut tx_rs,
+            &ring,
+            &mut pending,
+            false,
+            &mut |left, before| vec![0.25; left + before]
+        ));
+        assert_eq!(
+            *tee.asked.lock().unwrap(),
+            vec![(500, 500)],
+            "the tee was asked"
+        );
+        assert_eq!(ring.len(), 1_000, "the card's ring left as it was");
+        assert!(pending.is_empty());
     }
 }
 
@@ -3994,6 +4099,167 @@ mod tests {
         );
     }
 
+    /// ⭐ macOS reports some USB codecs with WHITESPACE AT THE END of the name. A field report
+    /// (IC-7300, 2026-10) listed the radio's codec as `USB Audio CODEC ` — "offered: USB Audio
+    /// CODEC , …". The picker offers and saves that string exactly as the backend gives it, and
+    /// the open path trimmed the SAVED name before an exact comparison, so the codec on the list
+    /// never matched: no receive audio, and no transmit audio either, since the output resolves
+    /// the same way. Stand-ins in that shape, plus a leading space and two of the same codec.
+    fn mac_inputs() -> Vec<(String, u32)> {
+        vec![
+            ("USB Audio CODEC ".to_string(), 1),
+            ("Laptop Microphone".to_string(), 2),
+            (" Phone Microphone".to_string(), 3),
+            ("USB Audio CODEC ".to_string(), 4),
+        ]
+    }
+    fn mac_outputs() -> Vec<(String, u32)> {
+        vec![
+            ("Laptop Speakers".to_string(), 5),
+            ("USB Audio CODEC ".to_string(), 6),
+            ("USB Audio CODEC ".to_string(), 7),
+        ]
+    }
+
+    /// The round trip the picker promises: every name it OFFERS opens the device it was offered
+    /// for — input, output and the voice mic. The second of two identical codecs is offered as
+    /// `USB Audio CODEC  #2` (its own space, then the ordinal) and must still open the second.
+    #[test]
+    fn every_offered_name_opens_its_device_when_names_carry_end_whitespace() {
+        for (what, host) in [("input", mac_inputs()), ("output", mac_outputs())] {
+            let names = host.iter().map(|(n, _)| n.clone()).collect();
+            let offered = crate::audiodev::devices_from_cpal_names(names);
+            for (entry, dev) in offered.iter().zip(&host) {
+                assert_eq!(
+                    resolve_configured(
+                        || Some(host.clone().into_iter()),
+                        Some(entry.name.as_str()),
+                        None,
+                        what
+                    ),
+                    Ok(dev.clone()),
+                    "{what} offered as {:?}",
+                    entry.name
+                );
+                if what == "input" {
+                    assert_eq!(
+                        pick_device(
+                            Some(host.clone().into_iter()),
+                            Some(entry.name.as_str()),
+                            None
+                        ),
+                        Some(dev.clone()),
+                        "voice mic offered as {:?}",
+                        entry.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// The same devices with the name saved WITHOUT the device's whitespace, or with stray
+    /// whitespace of its own (a setting edited by hand). Nothing in the picker saves one, but it
+    /// must open the same device with no action from the operator — ordinal included.
+    #[test]
+    fn a_name_saved_without_the_devices_end_whitespace_still_opens_it() {
+        let input = |saved: &str| {
+            resolve_configured(
+                || Some(mac_inputs().into_iter()),
+                Some(saved),
+                None,
+                "input",
+            )
+            .map(|d| d.1)
+        };
+        let output = |saved: &str| {
+            resolve_configured(
+                || Some(mac_outputs().into_iter()),
+                Some(saved),
+                None,
+                "output",
+            )
+            .map(|d| d.1)
+        };
+        let mic = |saved: &str| pick_device(Some(mac_inputs().into_iter()), Some(saved), None);
+        assert_eq!(input("USB Audio CODEC"), Ok(1));
+        assert_eq!(output("USB Audio CODEC"), Ok(6));
+        assert_eq!(mic("USB Audio CODEC").map(|d| d.1), Some(1));
+        assert_eq!(input("USB Audio CODEC #2"), Ok(4));
+        assert_eq!(output("USB Audio CODEC #2"), Ok(7));
+        assert_eq!(mic("USB Audio CODEC #2").map(|d| d.1), Some(4));
+        assert_eq!(input("Phone Microphone"), Ok(3));
+        assert_eq!(input(" USB Audio CODEC  "), Ok(1));
+        assert_eq!(output("USB Audio CODEC #2 "), Ok(7));
+    }
+
+    /// Two devices whose names differ ONLY by whitespace at an end — implausible, but where both
+    /// exist each must keep opening ITSELF. The saved name is matched exactly as saved first, and
+    /// the whitespace-blind match is only the fallback, so neither can be taken for the other in
+    /// either enumeration order — for the voice mic's single-pass picker too.
+    #[test]
+    fn an_exact_name_beats_a_twin_that_differs_only_by_end_whitespace() {
+        for host in [
+            vec![("Rig Codec ".to_string(), 1), ("Rig Codec".to_string(), 2)],
+            vec![("Rig Codec".to_string(), 2), ("Rig Codec ".to_string(), 1)],
+        ] {
+            for (saved, id) in [("Rig Codec ", 1), ("Rig Codec", 2)] {
+                assert_eq!(
+                    resolve_configured(
+                        || Some(host.clone().into_iter()),
+                        Some(saved),
+                        None,
+                        "output"
+                    )
+                    .map(|d| d.1),
+                    Ok(id),
+                    "{saved:?} in {host:?}"
+                );
+                assert_eq!(
+                    pick_device(Some(host.clone().into_iter()), Some(saved), None).map(|d| d.1),
+                    Some(id),
+                    "voice mic: {saved:?} in {host:?}"
+                );
+            }
+        }
+    }
+
+    /// ONE CARD FOR BOTH DIRECTIONS compares names the same way. On a card-grained host (macOS)
+    /// an output saved as the picker offered `USB Audio CODEC `, or without the space, IS the
+    /// input codec the open just resolved, so the output shares that card.
+    #[test]
+    fn one_card_for_both_directions_ignores_end_whitespace() {
+        use super::{shares_one_device, DeviceGrain};
+        let codec = "USB Audio CODEC ";
+        assert!(shares_one_device(DeviceGrain::Card, Some(codec), codec));
+        assert!(shares_one_device(
+            DeviceGrain::Card,
+            Some("USB Audio CODEC"),
+            codec
+        ));
+        assert!(shares_one_device(
+            DeviceGrain::Card,
+            Some("USB Audio CODEC  #2"),
+            codec
+        ));
+        assert!(!shares_one_device(
+            DeviceGrain::Card,
+            Some("Laptop Speakers"),
+            codec
+        ));
+        // Never on an endpoint-grained host (Windows), whatever the names.
+        assert!(!shares_one_device(
+            DeviceGrain::Endpoint,
+            Some(codec),
+            codec
+        ));
+        // The ALSA card arm too: a name that ends at its card id, then a space.
+        assert!(shares_one_device(
+            DeviceGrain::Card,
+            Some("plughw:CARD=Device,DEV=0"),
+            "sysdefault:CARD=Device "
+        ));
+    }
+
     /// The label is NOT an address. A Linux operator's stored value is the ALSA PCM name,
     /// and resolving what he READS ("USB AUDIO CODEC") must not accidentally work — if it
     /// ever did, something would be persisting labels.
@@ -4203,6 +4469,20 @@ mod resolve_diagnostics {
             "input",
         );
         assert_eq!(got.ok(), Some("plughw:CARD=Device,DEV=0"));
+    }
+
+    /// The card-identity fallback reads a name's card id with the whitespace at the name's ends
+    /// ignored, like every other comparison of a configured name: a name that ENDS at its card
+    /// id (`sysdefault:CARD=Device`) and then carries a space is still that card.
+    #[test]
+    fn the_card_fallback_ignores_end_whitespace() {
+        let got = resolve_configured(
+            || Some(["default:CARD=PCH", "sysdefault:CARD=Device "].into_iter()),
+            Some("plughw:CARD=Device,DEV=0"),
+            None,
+            "input",
+        );
+        assert_eq!(got.ok(), Some("sysdefault:CARD=Device "));
     }
 
     /// The Linux capture buffer: ~100 ms of slack against scheduling hiccups (field

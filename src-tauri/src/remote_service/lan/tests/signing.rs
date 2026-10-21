@@ -6,8 +6,8 @@
 //! check itself is the station's (`lan::enrol`) and tempo-client's.
 use super::*;
 use crate::lan_client::account::tests::{
-    answering, device_at, env, finding, no_pick, nonce_for, row, signing_in, stations, trusting,
-    unsigned_token, Cloud, Scratch, LAN_STATION, SERVICE_STATION,
+    answering, device_at, env, finding, no_pick, nonce_for, row, shown, signing_in, stations,
+    trusting, unsigned_token, Cloud, Scratch, LAN_STATION, SERVICE_STATION,
 };
 use crate::lan_client::account::Signed;
 use crate::lan_client::tests::{where_nothing_listens, StationStore};
@@ -125,6 +125,16 @@ fn enrolment(road: &str, proof: &str) -> Value {
         "name":"Den PC","kind":"computer","publicKey":road,"proof":proof})
 }
 
+/// This computer's key for its road as the station shows it, for the device the service last
+/// registered: empty when none was, which the `Signed` it is compared in then shows.
+fn last_shown(cloud: &Cloud) -> String {
+    let seen = cloud.seen.lock().unwrap();
+    seen.devices
+        .last()
+        .map(|(body, _)| shown(body))
+        .unwrap_or_default()
+}
+
 /// The proof the stand-in issuer gave the last sign-in.
 fn proof_given(cloud: &Cloud) -> String {
     let seen = cloud.seen.lock().unwrap();
@@ -168,7 +178,8 @@ async fn one_sign_in_adds_the_station_on_its_network_and_over_the_internet() {
         Ok(Signed {
             station: LAN_STATION.into(),
             waiting: false,
-            away: false
+            away: false,
+            key: last_shown(&cloud)
         })
     );
     assert_eq!(looked.load(Ordering::SeqCst), 1);
@@ -382,7 +393,8 @@ async fn another_machine_at_the_stations_address_never_hears_the_proof() {
         Ok(Signed {
             station: SERVICE_STATION.into(),
             waiting: false,
-            away: true
+            away: true,
+            key: last_shown(&cloud)
         })
     );
     assert!(
@@ -481,7 +493,8 @@ async fn first_contact_on_its_network_keeps_a_station_kept_away_in_place() {
         Ok(Signed {
             station: LAN_STATION.into(),
             waiting: false,
-            away: false
+            away: false,
+            key: last_shown(&cloud)
         })
     );
     assert_eq!(looked.load(Ordering::SeqCst), 1);
@@ -658,7 +671,8 @@ async fn a_station_paired_with_a_code_is_linked_in_place() {
         Ok(Signed {
             station: LAN_STATION.into(),
             waiting: false,
-            away: false
+            away: false,
+            key: last_shown(&cloud)
         })
     );
     assert_eq!(
@@ -744,7 +758,8 @@ async fn a_code_paired_station_with_an_old_road_is_linked_with_a_new_road_key() 
         Ok(Signed {
             station: LAN_STATION.into(),
             waiting: false,
-            away: false
+            away: false,
+            key: last_shown(&cloud)
         })
     );
     let road = kept.internet(LAN_STATION).unwrap().unwrap();
@@ -834,7 +849,8 @@ async fn signing_in_again_proves_the_same_keys_and_tells_only_the_station() {
                 Ok(Signed {
                     station: LAN_STATION.into(),
                     waiting: false,
-                    away: false
+                    away: false,
+                    key: crate::remote_service::fingerprint(&public(&road_pkcs8)).unwrap()
                 })
             );
             assert_eq!(

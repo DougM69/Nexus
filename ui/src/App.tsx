@@ -132,8 +132,10 @@ import {
   getNeedAlerts,
   setWatchList,
   getAllSpots,
+  clickTciSpot,
   getSatSchedule,
   getSatTrackStatus,
+  getSatTransponder,
   getIssPass,
   getTleStatus,
   sstvArm,
@@ -192,6 +194,7 @@ import { voiceDroppedLane } from './features/voiceDropped'
 import { clockRepairHoldLane } from './features/clockRepairHold'
 import { audioErrorLane } from './features/audioError'
 import { askAgainWhileSaving } from './features/notAnswered'
+import { useTciSpots } from './features/tciSpots'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt } from './types'
@@ -453,12 +456,21 @@ function App() {
   // whole reasoning; do not merge these back together.
   const lastOpModeRef = useRef<RigMode>('digital')
   const lastHomedModeRef = useRef<RigMode>('digital')
+  // The cockpit a Work from afar opened, named by the work-hint follow below for the rig-mode effect
+  // alone. That Work (`workAfar`: a computer driving this station) entered its section WITHOUT
+  // arming Enable TX, and the effect's re-assert, from this screen, would arm the latch for Phone,
+  // CW, RTTY and PSK: the authority the Work withheld. Read and cleared on every run, so it holds
+  // back only the one entry it names.
+  const afarEntryRef = useRef<View | null>(null)
   // Guard refs for the rig-mode effect below. `opModeSeeded` is set once, by whichever comes
   // first: the persisted-operating-mode seed (that effect lives further down, where `settings`
   // is in scope) or a genuine view change — an operator's click outranks any seed, because the
   // click IS the intent.
   const opModeSeeded = useRef(false)
   const didMountOpMode = useRef(false)
+  // The screen being LEFT, for the one entry that depends on it: Phone from SSTV keeps the dial
+  // (`rigModeForView.ts`). Starts as the restored view, so the first click after launch knows it.
+  const prevViewRef = useRef(view)
 
   // Remember the section for next launch (read back in the `view` initializer above). One
   // effect rather than 16 `setView` call sites — every navigation path, present and future,
@@ -479,11 +491,15 @@ function App() {
     // This is a MOUNT guard, NOT the same-value guard the comment below rightly forbids —
     // every subsequent view change still re-asserts unconditionally. A re-assert after Stop TX,
     // Esc, TX Off or the watchdog leaves TX off: the engine arms only where nothing stopped it.
+    const from = prevViewRef.current
+    prevViewRef.current = view
     if (!didMountOpMode.current) {
       didMountOpMode.current = true
       return
     }
     opModeSeeded.current = true // an explicit view change outranks the booted-mode seed
+    const fromAfar = afarEntryRef.current === view
+    afarEntryRef.current = null
     // The map, the home-on-entry rule and the guard bookkeeping all live in
     // `rigModeForView.ts` — pure, so the SEQUENCE of views can be tested. That matters:
     // #143 was a sequence bug (CW → Tempo → FT left FT8 on the CW dial) and no single
@@ -495,11 +511,14 @@ function App() {
     // and the Needed click set the mode without going through here), which left the rig stuck
     // in the wrong mode while the VFO read-back kept working. The backend is idempotent and
     // re-arms an immediate retune, so re-asserting is cheap.
-    const { mode, followFreq, nextHomed } = rigModeTransition(view, lastHomedModeRef.current)
+    const { mode, followFreq, keepDial, nextHomed } = rigModeTransition(view, lastHomedModeRef.current, from)
     lastHomedModeRef.current = nextHomed
     if (!mode) return
     lastOpModeRef.current = mode // every assert advances THIS one, including Tempo
-    void setOperatingMode(mode, followFreq)
+    // A cockpit a Work from afar opened is not re-asserted from here: that Work entered its section
+    // and left Enable TX as it was (`afarEntryRef`).
+    if (fromAfar) return
+    void setOperatingMode(mode, followFreq, keepDial)
       .then((s) => s && setSnap(s))
       .catch(() => {})
   }, [view])
@@ -714,9 +733,9 @@ function App() {
     setStatus('slotUnkeyFailed', slotUnkeyFailedLane(snap?.radio.slotUnkeyFailed))
   }, [snap?.radio.slotUnkeyFailed?.at, snap?.radio.slotUnkeyFailed?.why])
 
-  // …and one the station ended part way through because its audio stopped reaching the radio (Flex
-  // native DAX audio went off under it): TX halted the same way, and the lane says so until TX is
-  // turned on again; not on the Remote page either.
+  // …and one the station ended part way through because its audio stopped reaching the radio (the
+  // route carrying it, Flex native DAX or TCI, went): TX halted the same way, and the lane says so
+  // until TX is turned on again; not on the Remote page either.
   useEffect(() => {
     setStatus('slotAudioLost', slotAudioLostLane(snap?.radio.slotAudioLost))
   }, [snap?.radio.slotAudioLost?.at])
@@ -896,8 +915,10 @@ function App() {
               (r) => r.enabled && r.id !== snapRef.current?.activeRadioId,
             )
           if (settingsRef.current?.issSstvAutoArm === true) {
-            getIssPass()
-              .then((issPass) =>
+            // A satellite pass holding the dial (a transponder held) has the radio as another
+            // screen has it: the tick only announces the ISS. A failed read is no hold, as before.
+            Promise.all([getIssPass(), getSatTransponder().catch(() => null)])
+              .then(([issPass, held]) =>
                 tickIssAutoArm(
                   issPass,
                   snapRef.current?.radio,
@@ -906,6 +927,7 @@ function App() {
                   Date.now() / 1000,
                   viewRef.current,
                   soleRadio(),
+                  held != null,
                 ),
               )
               // Rejection is a ROUTINE state (elements past 30 d make
@@ -1093,6 +1115,9 @@ function App() {
   // Raw spot firehose for the Spots panel (ungated, all modes). Polled faster than needs
   // since it's a live "what's on the air" view; the backend command just reads the buffer.
   const [allSpots, setAllSpots] = useState<SpotRow[]>([])
+  // The spots programs on the station's TCI server sent, for the cockpits' band strips: asked when
+  // the station says they changed. A click on one only tunes (`handleTciSpot`).
+  const tciSpots = useTciSpots(snap?.radio.tciServer?.spots)
   useEffect(() => {
     let live = true
     const load = () =>
@@ -1154,6 +1179,9 @@ function App() {
     // holds the screen's RIG mode: PSK's is 'keyboard', JS8's is Digital's.
     lastOpModeRef.current = RIG_MODE_BY_VIEW[target] ?? 'digital'
     lastHomedModeRef.current = lastOpModeRef.current
+    // A Work from afar entered its section without arming Enable TX: open its cockpit, and let the
+    // rig-mode effect leave the section as that Work left it (`afarEntryRef`).
+    afarEntryRef.current = snap?.workAfar === true ? target : null
     setView(target)
     // Prefill the log Call from a work action fired in ANOTHER window (e.g. the pop-out band
     // map), matching the prefill an in-window click gets via handleWorkNeeded. Digital
@@ -2379,6 +2407,18 @@ function App() {
     [],
   )
   const workSpotHerePhone = useMemo(() => handleWorkSpotHere('phone'), [handleWorkSpotHere])
+  // ⛔ A click on a program's spot (Share by TCI) in a cockpit's band strip: the station tunes there
+  // and tells every program, and that is all. Never the Work above, whose section entry arms.
+  const handleTciSpot = useCallback((s: SpotRow) => {
+    void withErrorToast(
+      () => clickTciSpot(s.call, s.freqMhz),
+      t('shell.pounce.qsy.failed', { call: s.call }),
+    ).then((next) => {
+      if (!next) return
+      setSnap(next)
+      pushToast(t('shell.work.here', { call: s.call, band: s.band, freq: s.freqMhz.toFixed(3) }), 'success', 3000)
+    })
+  }, [])
   const workSpotHereCw = useMemo(() => handleWorkSpotHere('cw'), [handleWorkSpotHere])
 
   const handleWorkSpot = useCallback(
@@ -3021,6 +3061,8 @@ function App() {
     // it exactly what the Needed board would say: is this station still needed on the band
     // and mode it is spotted on? If so, Hide worked leaves it alone.
     needAlerts: boardAlerts,
+    // The Spot me in the board's head (SpotsSpotMe): the station's mode, which its comment names.
+    spotMe: { section: snap.radio.operatingMode, sideband: snap.radio.sideband, tier },
   }
   const neededBoard = {
     // Un-gated by MODE FEATURE — the board's own per-mode toggles decide what shows,
@@ -3181,6 +3223,8 @@ function App() {
     <CwCockpit
       esmSetting={esmSettingFor('cw')}
       speedMatch={cwSpeedMatch}
+      turnSound={settings?.soundCwTurn === true}
+      announceVerbosity={settings?.announceVerbosity ?? 'needed'}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.cw}
@@ -3193,6 +3237,8 @@ function App() {
       onSnap={setSnap}
       fieldDay={snap.fieldDay}
       spots={allSpots}
+      tciSpots={tciSpots}
+      onTciSpot={handleTciSpot}
       needByCall={needByCall}
       typeByCall={typeByCall}
       onWorkSpot={workSpotHereCw}
@@ -3221,6 +3267,8 @@ function App() {
       phoneMode={settings?.phoneMode}
       wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
       spots={allSpots}
+      tciSpots={tciSpots}
+      onTciSpot={handleTciSpot}
       needByCall={needByCall}
       typeByCall={typeByCall}
       onWorkSpot={workSpotHerePhone}
@@ -3382,7 +3430,9 @@ function App() {
       )
       break
     case 'spots':
-      workspace = <SpotsPanel spots={allSpots} {...spotsBoard} />
+      workspace = (
+        <SpotsPanel spots={allSpots} {...spotsBoard} onPopOut={() => void openPanelWindow('spots')} />
+      )
       break
     case 'awards':
       // Awards + Journey combined: one section, tabbed (Journey + Official Awards).

@@ -1648,6 +1648,11 @@ pub struct RadioStatus {
     /// when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub phone_mode_refused: bool,
+    /// The rig is held on an FM channel at or above 29 MHz (`Engine::fm_channel`), so FM is
+    /// commanded whatever the section's own policy says: in Phone, the FM channel kept from the
+    /// SSTV screen. The Phone cockpit's AUTO reads FM from it. Skipped when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fm_channel: bool,
     /// Whether the operator is holding a steady tune carrier (for ATU / amp
     /// tuning). While true the radio plays a continuous f0 sine instead of slots.
     #[serde(default)]
@@ -1693,10 +1698,10 @@ pub struct RadioStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_unkey_failed: Option<SlotUnkeyFailed>,
     /// A slot over (FT8, FT4, JS8 and the other timed-slot modes) lost its audio part way through:
-    /// Flex native DAX audio went off under it (the operator, or the receive floor giving up on
-    /// DAX), or its DAX transmit route went. Nexus ended the over there, rather than leave the
-    /// radio keyed and silent for the rest of it, and halted transmit. Cleared by re-enabling TX.
-    /// ABSENT until it happens, so every snapshot before one is byte-identical.
+    /// the route carrying it went (Flex native DAX audio switched off or given up on by the receive
+    /// floor, or the DAX or TCI transmit route lost). Nexus ended the over there, rather than leave
+    /// the radio keyed and silent for the rest of it, and halted transmit. Cleared by re-enabling
+    /// TX. ABSENT until it happens, so every snapshot before one is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_audio_lost: Option<SlotAudioLost>,
     /// The last FT8 or FT4 over Nexus dropped because the radio keyed it only after its period had
@@ -1789,6 +1794,11 @@ pub struct RadioStatus {
     /// exactly this, "is not where anyone looks".
     #[serde(default)]
     pub cat_share_error: Option<String>,
+    /// The TCI server ("Share by TCI"): where programs connect, why it is not serving, and the
+    /// programs connected. ABSENT while the server is switched off, so every snapshot without it
+    /// is byte-identical. Written by `src-tauri/src/tci_server.rs` on each of its ticks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tci_server: Option<TciServerStatus>,
     /// A problem with the RF SCOPE source, separate from `audio_error` on purpose: they have
     /// different cures and can be true at once. `None` = nothing to say.
     ///
@@ -2189,6 +2199,39 @@ impl From<tempo_core::logbook::UploadOutcome> for WrlPushResultDto {
             message: None,
         }
     }
+}
+
+/// The TCI server while it is switched on ([`RadioStatus::tci_server`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TciServerStatus {
+    /// The port programs connect to on this computer (`127.0.0.1` and `::1`), while it serves:
+    /// the operator's, or the next one when another Nexus window holds that.
+    pub port: Option<u16>,
+    /// Why it is not serving although switched on, in a sentence; `None` while it serves.
+    pub error: Option<String>,
+    /// The programs connected now, in the order they connected.
+    pub programs: Vec<TciProgramStatus>,
+    /// Moves on with every change to the spots programs sent, so a window asks for them
+    /// (`get_tci_spots`) only when they changed; 0 until the first, and from an older station.
+    #[serde(default)]
+    pub spots: u64,
+}
+
+/// One program connected to the TCI server.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TciProgramStatus {
+    /// Its number, from 1 in the order programs connected; what a Disconnect names.
+    pub id: u64,
+    /// Where it connects from (`127.0.0.1:53412`). TCI carries no program name.
+    pub peer: String,
+    /// It is being sent receive audio.
+    pub audio: bool,
+    /// A key of its was admitted and has not ended.
+    pub keyed: bool,
+    /// The last thing Nexus refused it, in the connection log's words.
+    pub refused: Option<String>,
 }
 
 /// `ClubLogPushResultDto`/`HrdLogPushResultDto` already flatten their result enums.
@@ -4553,6 +4596,12 @@ pub struct AppSnapshot {
     /// Cleared on every work; absent from the wire when there is none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_park: Option<WorkPark>,
+    /// The last worked spot's Work came from afar (a computer driving this station, or Remote's own
+    /// Work) and entered its section without arming Enable TX. A window following the hint opens the
+    /// cockpit without re-asserting the section, which from the station's own screen would arm the
+    /// latch that Work withheld. Absent from the wire for a Work made at the station.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub work_afar: bool,
     /// Bumped by an inbound UDP Clear — the UI erases its panes on change.
     #[serde(default)]
     pub clear_tick: u32,

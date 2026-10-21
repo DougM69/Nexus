@@ -44,7 +44,7 @@ pub mod baud_ladder;
 // engine, so that the client core builds without this crate; named here as they always were.
 pub use tempo_codec::{
     capture_resample, mic_decode, mic_encode, receive_audio, receive_decode, receive_encode,
-    resample, voice,
+    resample, tci_audio, voice,
 };
 pub mod civ;
 /// Who owns this machine's clock, whether it is working, and whether anything
@@ -120,6 +120,11 @@ pub mod sstv_store;
 /// RX ONLY — no TX path.
 #[cfg(feature = "device")]
 pub mod sstvrx;
+/// Nexus's TCI client as a CAT daemon: one session to an SDR program's TCI server, served to the
+/// radio loop as rigctld on the radio's own port. Needs tempo-net, so it rides the `device`
+/// feature like the Flex and Icom network clients.
+#[cfg(feature = "device")]
+pub mod tci;
 pub mod usbrig;
 /// Which rig a sound card or serial port belongs to, from USB topology (macOS).
 pub mod usbtopo;

@@ -120,6 +120,17 @@ mod sstv_scope_test;
 /// The optional street map's packs: sizing, download, removal, and the byte reads its renderer
 /// makes. Thin glue over `crates/street-map`.
 mod street_map;
+/// Nexus as a TCI server, the app's side: the engine's answers to programs on this computer, the
+/// manager that hot-applies the switch, the state and receive audio they are sent. Off by default.
+#[cfg(feature = "radio")]
+mod tci_server;
+/// Nexus's needed spots for a TCI radio's own panadapter: the Needed board's list, coloured by
+/// need, handed to the engine while the radio's "Spots on the SDR panadapter" is on.
+#[cfg(feature = "radio")]
+mod tci_spots;
+/// Test builds only: no test reads or writes the operator's own Nexus folders.
+#[cfg(test)]
+mod test_dirs;
 mod window_state;
 
 use chains::{panel_key, panel_label, Instance};
@@ -2051,6 +2062,7 @@ static LAST_XRAY: Mutex<Option<(std::time::Instant, f32, i64)>> = Mutex::new(Non
 
 /// The base config root: `%APPDATA%` on Windows, `$XDG_CONFIG_HOME`/`~/.config` on Unix,
 /// else the CWD. The `tempo[-<profile>]` app directory hangs off this.
+#[cfg(not(test))]
 fn config_base() -> PathBuf {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
@@ -2060,6 +2072,13 @@ fn config_base() -> PathBuf {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
     };
     base.unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// The test twin of `config_base`: the running test's own folder, never the operator's (see
+/// `test_dirs`). Everything in the config folder hangs off this one function.
+#[cfg(test)]
+fn config_base() -> PathBuf {
+    test_dirs::root().join("config")
 }
 
 /// Accept only a filesystem-safe profile name — `[A-Za-z0-9_-]`, 1..=32 chars. Anything
@@ -2460,6 +2479,7 @@ mod single_radio_tests {
 /// Default = `<base>/tempo` (the default profile's dir — i.e. the pre-profile location, so an
 /// existing `log.adi` stays put and simply becomes the shared one, no migration). Override
 /// with `NEXUS_DATA_DIR` to place the shared log on a NAS/Drive-synced folder (a multi-PC shack).
+#[cfg(not(test))]
 fn shared_data_dir() -> PathBuf {
     // ⚠️ RESOLVED ONCE PER PROCESS (#289). The operator can choose this folder in Settings, and a
     // change must reach the app at the NEXT launch only: the logbook handle is opened from this
@@ -2475,6 +2495,19 @@ fn shared_data_dir() -> PathBuf {
             },
         )
         .clone()
+}
+
+/// The test twin of `shared_data_dir`: the same rule inside the running test's own folder (see
+/// `test_dirs`), resolved once per test as the shipped one is once per launch, and blind to
+/// `NEXUS_DATA_DIR`: a contributor whose shack keeps its log on a share would otherwise have every
+/// test write beside that log.
+#[cfg(test)]
+fn shared_data_dir() -> PathBuf {
+    thread_local! {
+        static RESOLVED: PathBuf = read_data_dir_pointer_in(&config_dir_for(None))
+            .unwrap_or_else(|| config_base().join("tempo"));
+    }
+    RESOLVED.with(PathBuf::clone)
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────
@@ -6021,6 +6054,7 @@ fn parks_cache_path() -> PathBuf {
 /// diagnostic log below can be "beside the crash log" and "in the app data dir" at once, and
 /// it is worth knowing before anyone moves either of them. (Splitting install from data is
 /// real work with a migration behind it; it is not this change.)
+#[cfg(not(test))]
 fn local_data_dir() -> PathBuf {
     let base = if cfg!(windows) {
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
@@ -6030,6 +6064,13 @@ fn local_data_dir() -> PathBuf {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
     };
     base.unwrap_or_else(|| PathBuf::from(".")).join("Nexus")
+}
+
+/// The test twin of `local_data_dir`: inside the running test's own folder, never the
+/// operator's (see `test_dirs`).
+#[cfg(test)]
+fn local_data_dir() -> PathBuf {
+    test_dirs::root().join("data").join("Nexus")
 }
 
 /// The WSJT-X-format decode log (`ALL.TXT`), in the app's LOCAL data dir — the same class of
@@ -16256,6 +16297,295 @@ async fn discover_flex() -> Result<Vec<FlexRadioDto>, String> {
         })
 }
 
+/// What Find TCI server found at one address: Settings ▸ Radio ▸ Rig & CAT's button on the TCI
+/// connection, and the setup wizard's look for an SDR program on this computer.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct TciProbeDto {
+    /// The address searched (blank searches this computer).
+    host: String,
+    /// False when this computer cannot find the address at all: nothing was tried.
+    resolved: bool,
+    /// Each port tried, in order, and what answered there.
+    tried: Vec<TciPortTriedDto>,
+    /// The first SDR program's TCI server that answered.
+    found: Option<TciServerDto>,
+}
+
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct TciPortTriedDto {
+    port: u16,
+    /// `found`, `nexus` (Nexus's own TCI server, skipped), `noAnswer`, `notTci` or `noReady`.
+    outcome: &'static str,
+}
+
+/// What the server said about itself before `ready;`, as sent, and how Nexus will read it.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct TciServerDto {
+    port: u16,
+    program: Option<String>,
+    version: Option<String>,
+    device: Option<String>,
+    trx_count: Option<u32>,
+    /// The dialect table's word for it, `unknown` for a program this build does not know.
+    dialect: &'static str,
+}
+
+/// How long Find TCI server gives one address on one port: connect, handshake and `ready;`.
+const TCI_PROBE_PORT_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The longest the whole search may take, the address's name lookup included.
+const TCI_PROBE_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The ports Find TCI server tries, in order and each once: the one the form holds, then the ports
+/// the SDR programs come set to (`TciDialect::default_port`: 50001, then piHPSDR's 40001).
+fn tci_probe_ports(port: u16) -> Vec<u16> {
+    let defaults = tempo_app::settings::TciDialect::ALL.map(|d| d.default_port());
+    let mut ports: Vec<u16> = Vec::new();
+    for p in std::iter::once(port).chain(defaults) {
+        if p != 0 && !ports.contains(&p) {
+            ports.push(p);
+        }
+    }
+    ports
+}
+
+/// The dialect a found server will be read in, as the UI names it: the dialect table's own entry,
+/// by its name, or `unknown`.
+fn tci_dialect_word(dialect: &tempo_net::tci::Dialect) -> &'static str {
+    use tempo_net::tci::{AETHERSDR, EXPERT_SDR2, EXPERT_SDR3, PIHPSDR, THETIS_NATIVE};
+    [
+        (EXPERT_SDR3, "expertsdr3"),
+        (EXPERT_SDR2, "expertsdr2"),
+        (THETIS_NATIVE, "thetis"),
+        (PIHPSDR, "pihpsdr"),
+        (AETHERSDR, "aethersdr"),
+    ]
+    .into_iter()
+    .find(|(known, _)| known.name == dialect.name)
+    .map_or("unknown", |(_, word)| word)
+}
+
+/// Find TCI server, blocking: look up `host` (blank: this computer), then try `ports` in turn
+/// ([`tci_probe_ports`]) until an SDR program's TCI server answers. An address that names several (`localhost`: `::1`
+/// and `127.0.0.1`) is tried at each until one takes the connection. Nexus's own TCI server is
+/// passed over and said so. Each try reads the server's handshake and closes, writing nothing to
+/// it (`tempo_net::tci::probe`).
+fn probe_tci_server(host: &str, ports: &[u16]) -> TciProbeDto {
+    use std::net::{SocketAddr, ToSocketAddrs};
+    use tempo_net::tci::probe::{probe, Miss};
+    let host = match host.trim() {
+        "" => tempo_app::settings::TCI_DEFAULT_HOST,
+        typed => typed,
+    }
+    .to_string();
+    let mut dto = TciProbeDto {
+        host: host.clone(),
+        resolved: false,
+        tried: Vec::new(),
+        found: None,
+    };
+    let mut ips: Vec<std::net::IpAddr> = Vec::new();
+    for addr in (host.as_str(), 0).to_socket_addrs().into_iter().flatten() {
+        if !ips.contains(&addr.ip()) {
+            ips.push(addr.ip());
+        }
+    }
+    if ips.is_empty() {
+        return dto;
+    }
+    dto.resolved = true;
+    for &port in ports {
+        let mut outcome = "noAnswer";
+        for ip in &ips {
+            match probe(SocketAddr::new(*ip, port), TCI_PROBE_PORT_BUDGET) {
+                Err(Miss::NoAnswer(_)) => continue,
+                Err(Miss::NotTci(_)) => outcome = "notTci",
+                Err(Miss::NoReady) => outcome = "noReady",
+                Ok(hello) if hello.is_nexus() => outcome = "nexus",
+                Ok(hello) => {
+                    outcome = "found";
+                    dto.found = Some(TciServerDto {
+                        port,
+                        dialect: tci_dialect_word(&hello.dialect),
+                        program: hello.program,
+                        version: hello.version,
+                        device: hello.device,
+                        trx_count: hello.trx_count,
+                    });
+                }
+            }
+            break;
+        }
+        dto.tried.push(TciPortTriedDto { port, outcome });
+        if dto.found.is_some() {
+            break;
+        }
+    }
+    dto
+}
+
+/// Look for an SDR program's TCI server: the Settings button and the setup wizard. It never keys
+/// and never changes the radio: each try only reads what the server says about itself and closes.
+/// Bounded: [`TCI_PROBE_PORT_BUDGET`] an address and a port, and [`TCI_PROBE_LIMIT`] in all. Only
+/// from the shack's own screen (`tempo_client::classes`).
+#[tauri::command]
+async fn tci_probe(host: String, port: u16) -> Result<TciProbeDto, String> {
+    let search = tauri::async_runtime::spawn_blocking(move || {
+        probe_tci_server(&host, &tci_probe_ports(port))
+    });
+    match tokio::time::timeout(TCI_PROBE_LIMIT, search).await {
+        Ok(done) => done.map_err(|e| e.to_string()),
+        Err(_) => Err(format!("no answer within {} s", TCI_PROBE_LIMIT.as_secs())),
+    }
+}
+
+#[cfg(test)]
+mod tci_probe_tests {
+    //! Find TCI server's search, against listeners on loopback: which ports it tries and in what
+    //! order, where it stops, and what it says each port answered. What one probe reads, that it
+    //! writes nothing and how long it may take are `tempo_net::tci::probe`'s, tested there against
+    //! the simulated SDR programs.
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use tokio_tungstenite::tungstenite::{self, Message};
+
+    /// A port nothing listens on.
+    fn closed_port() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+        listener.local_addr().expect("its address").port()
+    }
+
+    /// A TCI server on loopback that sends `burst` to each client and then holds the connection.
+    fn tci_server(burst: &'static str) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+        let port = listener.local_addr().expect("its address").port();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming().flatten() {
+                if let Ok(mut ws) = tungstenite::accept(stream) {
+                    let _ = ws.send(Message::text(burst));
+                    held.push(ws);
+                }
+            }
+        });
+        port
+    }
+
+    /// A listener on loopback that answers each connection with `reply` and holds it: not TCI.
+    fn plain_listener(reply: &'static [u8]) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+        let port = listener.local_addr().expect("its address").port();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for mut stream in listener.incoming().flatten() {
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                let _ = stream.write_all(reply);
+                held.push(stream);
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn the_form_port_comes_first_then_each_program_port_once() {
+        assert_eq!(tci_probe_ports(50001), vec![50001, 40001]);
+        assert_eq!(tci_probe_ports(40001), vec![40001, 50001]);
+        assert_eq!(tci_probe_ports(12345), vec![12345, 50001, 40001]);
+        assert_eq!(
+            tci_probe_ports(0),
+            vec![50001, 40001],
+            "no port: the programs' own"
+        );
+    }
+
+    #[test]
+    fn each_dialect_has_its_own_word_and_a_program_nexus_does_not_know_is_unknown() {
+        use tempo_net::tci::dialect::UNKNOWN;
+        use tempo_net::tci::{Dialect, DriveForm, DIALECTS, EXPERT_SDR3};
+        let words: Vec<&str> = DIALECTS.iter().map(tci_dialect_word).collect();
+        assert!(!words.contains(&"unknown"), "{words:?}");
+        let mut unique = words.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), DIALECTS.len(), "{words:?}");
+        assert_eq!(tci_dialect_word(&UNKNOWN), "unknown");
+        // A server's drive form is learned from what it sends; the word follows the dialect.
+        let global = Dialect {
+            drive: DriveForm::Global,
+            ..EXPERT_SDR3
+        };
+        assert_eq!(tci_dialect_word(&global), "expertsdr3");
+    }
+
+    #[test]
+    fn a_server_is_found_on_the_first_port_that_has_one_and_said_as_it_said_it() {
+        let server = tci_server("protocol:ExpertSDR3,2.0;device:SunSDR2DX;trx_count:2;ready;");
+        let missing = closed_port();
+        let dto = probe_tci_server("127.0.0.1", &[missing, server, closed_port()]);
+        assert!(dto.resolved);
+        assert_eq!(dto.host, "127.0.0.1");
+        assert_eq!(
+            dto.tried,
+            vec![
+                TciPortTriedDto {
+                    port: missing,
+                    outcome: "noAnswer"
+                },
+                TciPortTriedDto {
+                    port: server,
+                    outcome: "found"
+                },
+            ],
+            "it stops at the server"
+        );
+        assert_eq!(
+            dto.found,
+            Some(TciServerDto {
+                port: server,
+                program: Some("ExpertSDR3".into()),
+                version: Some("2.0".into()),
+                device: Some("SunSDR2DX".into()),
+                trx_count: Some(2),
+                dialect: "expertsdr3",
+            })
+        );
+        // The names the UI reads (`TciProbeResult` in ui/src/api.ts).
+        let json = serde_json::to_value(&dto).expect("serialises");
+        assert_eq!(json["found"]["trxCount"], 2);
+        assert_eq!(json["tried"][1]["outcome"], "found");
+        assert_eq!(json["resolved"], true);
+    }
+
+    #[test]
+    fn nexus_own_server_and_something_that_is_not_tci_are_passed_over_and_said() {
+        let nexus = tci_server("protocol:ExpertSDR3,2.0;device:Nexus;trx_count:1;ready;");
+        let http = plain_listener(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+        let dto = probe_tci_server("127.0.0.1", &[nexus, http]);
+        assert_eq!(dto.found, None);
+        assert_eq!(
+            dto.tried.iter().map(|t| t.outcome).collect::<Vec<_>>(),
+            vec!["nexus", "notTci"]
+        );
+    }
+
+    #[test]
+    fn a_blank_address_searches_this_computer_and_one_that_cannot_be_looked_up_tries_nothing() {
+        let server = tci_server("protocol:Thetis,2.10.3.14;device:ANAN-G2;ready;");
+        let dto = probe_tci_server("  ", &[server]);
+        assert_eq!(dto.host, "127.0.0.1");
+        assert_eq!(dto.found.map(|f| f.dialect), Some("thetis"));
+        // A name with a NUL in it is refused before any lookup goes out.
+        let dto = probe_tci_server("sdr\0pc", &[server]);
+        assert!(!dto.resolved);
+        assert!(dto.tried.is_empty());
+    }
+}
+
 /// Stop the rotator immediately (rotctld `S`) — the control panel's STOP.
 #[tauri::command]
 async fn stop_rotator(state: State<'_, SharedEngine>) -> Result<(), String> {
@@ -17018,16 +17348,15 @@ struct CwDecodeResult {
     rst: Option<String>,
     /// The other station's name, read from the decode (e.g. "BOB"), else null.
     name: Option<String>,
-    /// Guided QSO-state tag: "listening" | "cq" | "answered" | "report" | "73".
-    state: String,
-    /// Plain-English state, e.g. "W1ABC is calling CQ".
-    headline: String,
-    /// The guided instruction, e.g. "Press Answer (F2) to call them".
-    prompt: String,
-    /// Recommended action id to highlight: "F2" | "F3" | "log", or null.
-    recommended: Option<String>,
+    /// Whose turn it is and what fits, for the cockpit's turn cue (`tempo_core::cw_turn`): null
+    /// unless the AI decoder is on and keeping up. It never sends; the cockpit lights a key.
+    turn: Option<tempo_core::cw_turn::Turn>,
     /// The operator-confirmed worked callsign (the active peer), if any.
     worked_call: Option<String>,
+    /// An unassisted contest entry is declared: no CW decoder runs
+    /// (`Settings::cw_decoder_active`), so every field above that the decoder fills is empty,
+    /// the turn cue included, and the Decode pane says why.
+    unassisted: bool,
 }
 
 /// Decode CW from the recent RX audio at the operator's pitch — a live readout for the
@@ -17051,11 +17380,30 @@ fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
     let sent = eng.cw_sent();
     let worked = eng.active_peer();
     let mycall = eng.settings().mycall.clone();
+    // An unassisted entry gets nothing the decoder would give it. The engine has no copy for it,
+    // and the copilot does not run on the call the operator chose either: no call chips (the
+    // best of which fills His Call), no report or name for the log strip, and no turn cue.
+    let unassisted = !eng.settings().cw_decoder_active();
     // Parse the decode into copilot context. The DXCC resolver (src-tauri has it; tempo-core
     // doesn't) supplies the real-prefix check that filters CW misdecodes out of the chips.
-    let assist = tempo_core::cw_parse::analyze(&d.text, &sent, &mycall, worked.as_deref(), |b| {
-        propagation::dxcc::resolve(b).is_some()
+    let assist = if unassisted {
+        tempo_core::cw_parse::CwAssist::default()
+    } else {
+        tempo_core::cw_parse::analyze(&d.text, &mycall, |b| {
+            propagation::dxcc::resolve(b).is_some()
+        })
+    };
+    // Whose turn it is: none in an unassisted entry either (`Engine::cw_turn`). The call the
+    // F-keys' `!` sends is the station worked, else the decoder's best guess, which the cockpit
+    // puts in His Call.
+    let his_call = worked.clone().or_else(|| {
+        assist
+            .candidates
+            .iter()
+            .find(|c| c.best)
+            .map(|c| c.call.clone())
     });
+    let turn = eng.cw_turn(his_call.as_deref());
     CwDecodeResult {
         text: d.text,
         pending: eng.cw_decode_pending(),
@@ -17073,11 +17421,9 @@ fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
             .collect(),
         rst: assist.exchange.rst,
         name: assist.exchange.name,
-        state: assist.guidance.state,
-        headline: assist.guidance.headline,
-        prompt: assist.guidance.prompt,
-        recommended: assist.guidance.recommended,
+        turn,
         worked_call: worked,
+        unassisted,
     }
 }
 
@@ -17089,8 +17435,8 @@ fn set_ai_cw(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, St
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist ai-cw toggle: {e}")
     });
-    // The AI decoder is one of the assistance sources, so its state belongs in the record.
-    journal_assistance(eng.settings(), "AI CW decoder toggled", false);
+    // Nothing for the assistance record: its source is the CW decoder, which the classic decoder
+    // keeps running with the AI off (`Settings::assistance_sources`).
     Ok(eng.snapshot())
 }
 
@@ -19010,6 +19356,20 @@ fn dismiss_tx_alarm(state: State<'_, SharedEngine>, id: u64) -> Result<AppSnapsh
     Ok(eng.snapshot())
 }
 
+/// The operator's Disconnect beside a program connected to the TCI server: whatever that program
+/// keyed ends, then it is closed. `id` is the program's number in the snapshot's
+/// `radio.tciServer.programs`; a number no connected program has is not an error.
+#[tauri::command(async)]
+fn tci_server_disconnect(state: State<'_, SharedEngine>, id: u64) -> Result<AppSnapshot, String> {
+    // Never under the engine lock: the server ends the program's transmissions through its
+    // backend, which takes that lock (tempo_net::tci::server's lock rule).
+    #[cfg(feature = "radio")]
+    tci_server::disconnect(id);
+    #[cfg(not(feature = "radio"))]
+    let _ = id;
+    Ok(engine_lock(&state).snapshot())
+}
+
 /// Result of a "Test CAT" probe (WSJT-X-style): whether the rig is reachable and
 /// a human-readable detail line (the read frequency, or a specific error).
 #[derive(serde::Serialize)]
@@ -19533,14 +19893,12 @@ fn get_licensed_band_plan(
     // per-mode dials), license-filtered per band — a Technician sees only the
     // bands their class can key there (RTTY, PSK and JS8 ride data privileges, SSTV
     // rides phone). JS8's list is JS8Call's FrequencyList defaults (bandplan::js8_band_plan),
-    // or the operator's own (bandplan::js8_plan_from).
+    // or the operator's own (bandplan::js8_plan_from). RTTY's rows come at the dial this
+    // station's keying backend tunes for them (Engine::rtty_channel_plan).
     let lower = mode.to_ascii_lowercase();
     if lower == "rtty" || lower == "sstv" || lower == "psk" || lower == "js8" {
         let (plan, priv_mode) = if lower == "rtty" {
-            (
-                tempo_app::bandplan::rtty_band_plan(),
-                OperatingMode::Digital,
-            )
+            (eng.rtty_channel_plan(), OperatingMode::Digital)
         } else if lower == "psk" {
             (
                 tempo_app::bandplan::psk_band_plan(),
@@ -19616,11 +19974,12 @@ fn sstv_tune(
 }
 
 /// Park the dial on one of the APP's OWN fixed channels — the ISS SSTV auto-arm's 145.800 FM.
-/// Identical to `set_frequency` on the radio; it differs only in what the per-(band, mode)
-/// dial memory makes of it. An app-driven auto-tune is not the operator's dial in that mode,
-/// so it is never remembered — and the operator dial it displaces is banked on the way in
-/// (the auto-arm restores their own dial through `set_frequency` at LOS, because that one IS
-/// theirs). Persists, retunes, returns the snapshot.
+/// An FM channel is held in FM, as the SSTV strip's pick of it is, and routed on FM, as a
+/// repeater tune is (`Engine::tune_channel`; neither while a satellite pass owns the dial). The
+/// per-(band, mode) dial memory never takes it: an app-driven auto-tune is not the operator's
+/// dial in that mode, so it is never remembered — and the operator dial it displaces is banked
+/// on the way in (the auto-arm restores their own dial through `set_frequency` at LOS, because
+/// that one IS theirs). Persists, retunes, returns the snapshot.
 #[tauri::command(async)]
 fn tune_channel(
     state: State<'_, SharedEngine>,
@@ -19668,15 +20027,25 @@ fn pick_band(
 /// `afar`: from a computer driving this station (the command lane writes it, never that
 /// computer). A manual section is then entered without arming Enable TX, as Remote's entry enters
 /// it: from afar only the wired starts arm, under the stream's transmit rules.
+///
+/// `keep_dial`: the Phone tab pressed on the SSTV screen. With `follow_freq` the dial stays where
+/// it is when Phone may transmit there and homes when it may not; without, nothing homes. Either
+/// way an FM channel the SSTV screen holds stays FM in Phone
+/// (`Engine::set_operating_mode_keeping_dial`). Absent everywhere else.
 #[tauri::command(async)]
 fn set_operating_mode(
     state: State<'_, SharedEngine>,
     mode: String,
     follow_freq: bool,
     afar: Option<command_dispatch::Afar>,
+    keep_dial: Option<bool>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.set_operating_mode_with_arming(&mode, follow_freq, afar.is_none());
+    if keep_dial == Some(true) {
+        eng.set_operating_mode_keeping_dial(&mode, follow_freq, afar.is_none());
+    } else {
+        eng.set_operating_mode_with_arming(&mode, follow_freq, afar.is_none());
+    }
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist operating mode: {e}")
     });
@@ -20940,6 +21309,9 @@ fn panel_default_inner(slug: &str) -> (f64, f64) {
         // The club band board is set in glance type (it is watched across the tent, not
         // read at the keyboard), so it opens wider and shorter than the generic default.
         "fdclub" => (860.0, 620.0),
+        // The Spots board: its nine columns need 740 CSS px (`PANEL_NATURAL`), so it opens wider
+        // than the generic 760, leaving the comment column room, at the generic height.
+        "spots" => (960.0, 660.0),
         "waterfall" => (900.0, 300.0), // a wide, short monitoring strip
         // The received-picture viewer. Opens big enough to show the widest raster Nexus
         // decodes (PD-290 is 800×616) at 1:1 with its details strip beside the picture,
@@ -20959,6 +21331,11 @@ fn panel_min_inner(slug: &str) -> (f64, f64) {
         // zoom floor that window could only ever show a 646 px box, and the board's
         // natural is 820. 560 raises the ceiling above it.
         "fdclub" => (560.0, 400.0),
+        // The Spots board's nine columns do not survive the generic 420 wide either: at the 65%
+        // zoom floor that window could only ever show a 646 px box, and the columns need 740
+        // (measured in Chrome, `browser-probe --desktop spots`). 490 shows a 754 px box; the
+        // height stays the generic one.
+        "spots" => (490.0, 360.0),
         // Small enough to drop in a corner beside another program (and pin in front): the call,
         // the exchange boxes, Log, the dupe warning and the newest contact, the boxes wrapping to a
         // second row, at the 65% zoom floor. Measured in Chrome (`browser-probe --desktop contestlog`).
@@ -21018,6 +21395,7 @@ async fn open_panel_window(
         "connect" => "Nexus — Conditions (formerly Connect)".to_string(),
         "dxped" => "Nexus — DXpeditions".to_string(),
         "needed" => "Nexus — Needed".to_string(),
+        "spots" => "Nexus — Spots".to_string(),
         "operate" => "Nexus — Operate".to_string(),
         // The contest screen's scoreboard, for whichever contest is picked.
         "fieldday" => "Nexus — Contest".to_string(),
@@ -22210,6 +22588,12 @@ struct SpotRow {
     /// already lists. Empty, and off the wire, with no file, no entry, or call history off.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     contest_predicted: Vec<SpotPredictedMult>,
+    /// The program on Nexus's TCI server that sent this spot, by its connection's number (the
+    /// number Settings lists it by), when a program did ([`get_tci_spots`]). A click on such a
+    /// spot only tunes ([`click_tci_spot`]). `None`, and off the wire, for every cluster and
+    /// skimmer spot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tci: Option<u64>,
 }
 
 /// One multiplier the call history predicts for a spotted station (`SpotRow.contest_predicted`).
@@ -22262,6 +22646,100 @@ fn spot_worked(last_unix: Option<u64>, now: i64) -> (Option<i64>, bool) {
 #[tauri::command(async)]
 fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) -> Vec<SpotRow> {
     read_all_spots(&spots, &state, false).unwrap_or_default()
+}
+
+/// The spots programs on Nexus's TCI server sent, for the band map: each a [`SpotRow`] as a
+/// cluster spot is, its `tci` naming the program, newest first. None while programs' spots are
+/// off (`Engine::tci_server_spots_on`). Kept apart from the cluster's ([`get_all_spots`]), and
+/// asked only when the server's status says they changed.
+#[tauri::command(async)]
+fn get_tci_spots(state: State<'_, SharedEngine>) -> Vec<SpotRow> {
+    let now = now_unix();
+    let (class, spots) = {
+        let e = engine_lock(&state);
+        (e.settings().license_class, e.tci_program_spots(now))
+    };
+    let mut rows: Vec<SpotRow> = spots
+        .into_iter()
+        .map(|p| program_spot_row(p, class, now))
+        .collect();
+    rows.sort_by_key(|r| r.age_secs);
+    rows
+}
+
+/// One program's spot as a [`SpotRow`]: its band, mode class (from its frequency, as a cluster
+/// spot's: the program's own mode word is free text) and licence read the way a cluster spot's
+/// are, its text as the comment, no spotter (the program is its source, in `tci`).
+fn program_spot_row(
+    p: tempo_app::engine::tci_spots::ProgramSpot,
+    class: tempo_app::settings::LicenseClass,
+    now: i64,
+) -> SpotRow {
+    use tempo_app::settings::OperatingMode;
+    let spot = p.spot;
+    let freq = spot.hz as f64 / 1_000_000.0;
+    let band = propagation::Band::from_mhz(freq)
+        .map(|b| b.label().to_string())
+        .unwrap_or_default();
+    let (entity, zone) = propagation::dxcc::resolve(&spot.call)
+        .map(|i| (i.entity.to_string(), i.cq_zone))
+        .unwrap_or_default();
+    let mode_label = propagation::classify_spot_mode(freq).label();
+    let licensed = tempo_app::privileges::tx_allowed(
+        class,
+        freq,
+        match mode_label {
+            "Phone" => OperatingMode::Phone,
+            "CW" => OperatingMode::Cw,
+            _ => OperatingMode::Digital,
+        },
+    );
+    SpotRow {
+        beacon: propagation::beacons::classify(&spot.call, freq),
+        call: spot.call,
+        entity,
+        zone,
+        state: None,
+        grid: None,
+        band,
+        freq_mhz: freq,
+        mode: mode_label.to_string(),
+        submode: None,
+        spotter: String::new(),
+        corroborators: Vec::new(),
+        age_secs: (now - spot.heard_unix).max(0),
+        comment: spot.text,
+        licensed,
+        // A program is no voice on a continent: never hidden by the locality filter.
+        spotter_local: true,
+        spotter_conts: Vec::new(),
+        spotter_entities: Vec::new(),
+        worked_ago_secs: None,
+        worked_today_utc: false,
+        contest_mults: Vec::new(),
+        contest_predicted: Vec::new(),
+        tci: Some(p.program),
+    }
+}
+
+/// ⛔ A click on a program's spot on the band map: tune to it, at its own frequency, and have every
+/// program on Nexus's TCI server told. Nothing else: never a section change, an arm, a QSO, a Stop
+/// let go, or a cockpit opened (`Engine::tci_program_spot_clicked`). Refused while anything is on
+/// the air, as a click in an SDR program's panadapter is. Persists the dial, returns the snapshot.
+#[tauri::command(async)]
+fn click_tci_spot(
+    state: State<'_, SharedEngine>,
+    call: String,
+    freq_mhz: f64,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let hz = (freq_mhz * 1_000_000.0).round() as i64;
+    eng.tci_program_spot_clicked(&call, hz)
+        .map_err(str::to_string)?;
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist frequency: {e}")
+    });
+    Ok(eng.snapshot())
 }
 
 /// #174: where the voices for one spot are — `(continent codes, DXCC entities)` of the spotter
@@ -22523,6 +23001,7 @@ fn read_spots_with(
                 worked_today_utc,
                 contest_mults,
                 contest_predicted,
+                tci: None,
             }
         })
         .collect();
@@ -23945,9 +24424,9 @@ fn read_need_alerts(
     // keep running: the same glossary says "Generating spotting information for use by other
     // stations is not considered to be spotting assistance."
     //
-    // Own-radio decodes (assembled above) are NOT assistance under either ruleset — they are
-    // the operator's own receiver — so they stay, and remain the whole Needed board in an
-    // unassisted entry.
+    // Own-radio decodes (assembled above) stay, and are the whole Needed board in an unassisted
+    // entry. Neither ruleset sets them apart: CQ WW and ARRL both count any technology that
+    // identifies a callsign. The contest-assistance note says so (`assist.why.ownDecodes`).
     if !unassisted() {
         if let Ok(buf) = live_paths.lock() {
             let recent = buf.recent(now, 900);
@@ -33829,6 +34308,57 @@ fn clear_refusal(slot: &Mutex<Option<String>>) {
     *slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
+/// A program sharing the radio retunes it: the CAT broker's `F` and a TCI program's `vfo` alike
+/// (`tci_server.rs`), so the two shares can never disagree about what a retune does. It is the
+/// operator's own QSY verb, with the band read from the frequency and the sideband left as it is.
+#[cfg(feature = "radio")]
+fn shared_retune(e: &mut Engine, hz: u64) {
+    let mhz = hz as f64 / 1_000_000.0;
+    // Derive the band label from the freq; keep the current band if off-plan.
+    let band = propagation::model::Band::from_mhz(mhz)
+        .map(|b| b.label().to_string())
+        .unwrap_or_else(|| e.settings().band.clone());
+    let mode = {
+        let m = e.settings().sideband.clone();
+        if m.is_empty() {
+            "USB".to_string()
+        } else {
+            m
+        }
+    };
+    e.set_frequency(mhz, &band, &mode);
+}
+
+/// A program sharing the radio asks for a mode: the rule `EngineRig::set_mode` documents (#140),
+/// for the CAT broker's `M` and a TCI program's `modulation` alike. `Err` carries the mode the
+/// radio is in, for the refusal's words; the caller says it, in its own connection-log lane.
+#[cfg(feature = "radio")]
+fn shared_mode_change(e: &mut Engine, mode: &str) -> Result<(), String> {
+    let commanded = e.rig_mode_effective();
+    if let (Some(req), Some(cur)) = (parse_cat_mode(mode), parse_cat_mode(&commanded)) {
+        if req.satisfied_by(cur) {
+            return Ok(());
+        }
+        // A side flip WITHIN the family the section is already in — the one thing that is
+        // the broker's to change.
+        if req.family == cur.family {
+            if let Some(sb) = req.sideband_word() {
+                let (mhz, band) = {
+                    let s = e.settings();
+                    (s.dial_mhz, s.band.clone())
+                };
+                e.set_frequency(mhz, &band, sb);
+                let now = e.rig_mode_effective();
+                if parse_cat_mode(&now).is_some_and(|n| req.satisfied_by(n)) {
+                    return Ok(());
+                }
+                return Err(now);
+            }
+        }
+    }
+    Err(commanded)
+}
+
 /// Bridges the CAT broker (rigctld server) to Nexus's live engine: other apps read
 /// the dial/mode/PTT and can retune Nexus. CAT-sharing (freq/mode) is always on;
 /// foreign PTT is ARBITRATED (Engine::broker_ptt): allowed only behind the
@@ -33936,21 +34466,7 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         engine_lock(&self.engine).on_air()
     }
     fn set_freq(&self, hz: u64) -> bool {
-        let mut e = engine_lock(&self.engine);
-        let mhz = hz as f64 / 1_000_000.0;
-        // Derive the band label from the freq; keep the current band if off-plan.
-        let band = propagation::model::Band::from_mhz(mhz)
-            .map(|b| b.label().to_string())
-            .unwrap_or_else(|| e.settings().band.clone());
-        let mode = {
-            let m = e.settings().sideband.clone();
-            if m.is_empty() {
-                "USB".to_string()
-            } else {
-                m
-            }
-        };
-        e.set_frequency(mhz, &band, &mode);
+        shared_retune(&mut engine_lock(&self.engine), hz);
         true
     }
     /// Set the mode a foreign client asked for — or say honestly that we did not (#140).
@@ -33981,37 +34497,18 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
     /// APRS park and with an SSTV image in flight must each name the mode the rig is really
     /// in — those three are exactly where the old answer diverged.
     fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
-        let mut e = engine_lock(&self.engine);
-        let commanded = e.rig_mode_effective();
-        if let (Some(req), Some(cur)) = (parse_cat_mode(mode), parse_cat_mode(&commanded)) {
-            if req.satisfied_by(cur) {
-                drop(e);
+        // Decided under the engine lock, said after it is released.
+        let decided = shared_mode_change(&mut engine_lock(&self.engine), mode);
+        match decided {
+            Ok(()) => {
                 clear_refusal(&self.last_mode_refusal);
-                return true;
+                true
             }
-            // A side flip WITHIN the family the section is already in — the one thing that is
-            // the broker's to change.
-            if req.family == cur.family {
-                if let Some(sb) = req.sideband_word() {
-                    let (mhz, band) = {
-                        let s = e.settings();
-                        (s.dial_mhz, s.band.clone())
-                    };
-                    e.set_frequency(mhz, &band, sb);
-                    let now = e.rig_mode_effective();
-                    drop(e);
-                    if parse_cat_mode(&now).is_some_and(|n| req.satisfied_by(n)) {
-                        clear_refusal(&self.last_mode_refusal);
-                        return true;
-                    }
-                    self.refuse_mode(mode, &now);
-                    return false;
-                }
+            Err(now) => {
+                self.refuse_mode(mode, &now);
+                false
             }
         }
-        drop(e);
-        self.refuse_mode(mode, &commanded);
-        false
     }
     fn set_ptt(&self, on: bool) -> bool {
         // v2 arbitration: a foreign app may key ONLY when the operator opted in
@@ -35909,6 +36406,9 @@ fn start_on_the_logbook(
         #[cfg(feature = "radio")]
         radio_cfg,
     } = rest;
+    // The TCI server's own copy of the receive audio, taken before the radio thread owns the tap.
+    #[cfg(feature = "radio")]
+    let tci_receive_audio = radio_cfg.rx_tap.tci_audio();
     let engine = d.engine.clone();
     let fd_board_state = d.fd_board.clone();
     let prop_cache = d.prop_cache.clone();
@@ -36799,6 +37299,12 @@ fn start_on_the_logbook(
         });
     }
 
+    // Nexus as a TCI server, for the programs on this computer that drive an SDR program over TCI
+    // (WSJT-X, JTDX, MSHV, loggers, amplifier and tuner controllers): one manager thread in the
+    // CAT-broker mold above, on 127.0.0.1 and ::1 only. Off by default — see tci_server.rs.
+    #[cfg(feature = "radio")]
+    tci_server::spawn(engine.clone(), tci_receive_audio, d.meter_feed.clone());
+
     // JS8Call's API for other programs on this computer, read-only: one manager thread in the
     // CAT-broker mold above, hot-applying the TCP and UDP switches. Off by default — nothing is
     // bound or sent until the operator turns a side on.
@@ -37297,6 +37803,17 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
             );
         }
     }
+    // Nexus's needed spots for a TCI radio's own panadapter: read from the Needed board's list
+    // while the radio in use has its "Spots on the SDR panadapter" on (`tci_spots`).
+    #[cfg(feature = "radio")]
+    tci_spots::spawn(
+        d.engine.clone(),
+        handle.state::<LogTallies>().needs.clone(),
+        d.live_paths.clone(),
+        d.region_paths.clone(),
+        d.spots.clone(),
+        d.ota_spots.clone(),
+    );
     // AI CW decoder (beta): resolve the DeepCW model from the app's cross-platform
     // RESOURCE dir (where Tauri bundles `resources/deepcw/*`) — next to the exe on
     // Windows, under usr/lib/<app>/resources on a Linux .deb/AppImage. The prior
@@ -37615,6 +38132,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         stop_rotator,
         set_log_form_grid,
         discover_flex,
+        tci_probe,
         get_sat_schedule,
         get_sat_pass_needs,
         get_sat_sked,
@@ -37812,6 +38330,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         atu_tune,
         halt_tx,
         dismiss_tx_alarm,
+        tci_server_disconnect,
         test_cat,
         repair_clock,
         club_firewall_status,
@@ -37995,6 +38514,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         cancel_confirmation_check,
         get_need_alerts,
         get_all_spots,
+        get_tci_spots,
+        click_tci_spot,
         get_propagation,
         get_path_outlook,
         get_band_outlook,
@@ -38007,6 +38528,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         post_spot,
         self_spot_activation,
         contest_spot::contest_self_spot,
+        contest_spot::cluster_self_spot,
         freq_markers::get_freq_markers,
         freq_markers::add_freq_marker,
         freq_markers::remove_freq_marker,
@@ -38844,8 +39366,8 @@ fn winlink_disconnect() -> Result<(), String> {
 mod tests {
     use crate::remote_service::stored_log_tests::StoredLog;
 
-    /// The AI decoder's provisional tail is for the eye only. The copilot's callsign chips, the
-    /// report and name the log entry takes, and the guidance all read the CONFIRMED copy, so a
+    /// The AI decoder's provisional tail is for the eye only. The copilot's callsign chips and the
+    /// report and name the log entry takes all read the CONFIRMED copy, so a
     /// letter the next pass may still change never reaches a log, a macro or the entry.
     #[test]
     fn the_cw_copilot_reads_only_the_confirmed_ai_copy() {
@@ -38885,6 +39407,102 @@ mod tests {
         assert!(r.rst.is_some(), "control: confirmed, the report is read");
         assert!(r.name.is_some(), "control: confirmed, the name is read");
         assert_eq!(r.pending, "");
+    }
+
+    /// An unassisted contest entry gets nothing the CW decoder would give it: CQ WW's rules count
+    /// a CW decoder as QSO-finding assistance. No copy and no speed, so no call chips (the best of
+    /// which fills His Call), no report or name for the log strip, and no guidance (what a turn
+    /// cue would be drawn from). The call the operator chose to work is theirs, and stays.
+    #[test]
+    fn an_unassisted_entry_gets_no_cw_copy_chips_report_or_guidance() {
+        // K9ABC calling W9XYZ, keyed at 25 WPM on the operator's pitch: 12 kHz is the engine's
+        // RX-audio rate (tempo_fast::SAMPLE_RATE).
+        let hear = |e: &mut tempo_app::engine::Engine| {
+            let mut audio = vec![0.0f32; 2_400];
+            audio.extend(tempo_core::cw::morse_samples(
+                "W9XYZ DE K9ABC K9ABC UR 599 NAME BOB",
+                25,
+                e.settings().cw_pitch_hz,
+                12_000,
+            ));
+            audio.extend(vec![0.0f32; 12_000]);
+            for chunk in audio.chunks(1200) {
+                e.feed_rx_audio(chunk);
+            }
+        };
+        let station = || {
+            let mut e = tempo_app::engine::Engine::new("W9XYZ", "EN61", 0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+            e
+        };
+        // Control: assisted (the AI decoder off, so the classic decoder's copy is the copy).
+        let mut e = station();
+        e.set_ai_cw_enabled(false);
+        hear(&mut e);
+        let r = super::read_cw_state(&e);
+        let calls: Vec<&str> = r.candidates.iter().map(|c| c.call.as_str()).collect();
+        assert!(r.text.contains("K9ABC"), "control: the copy: {:?}", r.text);
+        assert!(calls.contains(&"K9ABC"), "control: a chip: {calls:?}");
+        assert_eq!(r.rst.as_deref(), Some("599"), "control: the report");
+        assert!(r.wpm > 0, "control: the speed");
+        assert!(!r.unassisted, "control: nothing to explain");
+
+        // Unassisted, with the AI decoder's switch left on as it ships.
+        let mut e = station();
+        e.set_unassisted_mode(true);
+        e.select_peer("K9ABC");
+        hear(&mut e);
+        let r = super::read_cw_state(&e);
+        assert_eq!(r.text, "", "no copy");
+        assert_eq!(r.pending, "", "no unconfirmed tail");
+        assert_eq!(r.wpm, 0, "no speed");
+        let calls: Vec<&str> = r.candidates.iter().map(|c| c.call.as_str()).collect();
+        assert!(calls.is_empty(), "no call chips: {calls:?}");
+        assert_eq!((r.rst, r.name), (None, None), "no report or name");
+        assert_eq!(r.turn, None, "no turn cue");
+        assert_eq!(
+            r.worked_call.as_deref(),
+            Some("K9ABC"),
+            "the call the operator chose stays"
+        );
+        assert!(r.unassisted, "the Decode pane is told why");
+    }
+
+    /// The turn cue rides the CW read, from the AI decoder's copy. With no station worked, the
+    /// call the F-keys send is the decoder's best guess, so an answer is suggested only for the
+    /// station heard calling. An unassisted entry gets no cue, as it gets nothing else a CW
+    /// decoder gives.
+    #[test]
+    fn the_turn_cue_rides_the_cw_read_and_never_an_unassisted_one() {
+        use tempo_core::cw_turn::{Role, State};
+        let mut e = tempo_app::engine::Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("cw", false);
+        e.set_frequency(7.03, "40m", "CW");
+        // 5.2 s of audio, then the AI's pass over it: K1ABC's CQ, a letter every 0.15 s from 1 s.
+        for _ in 0..52 {
+            e.feed_rx_audio(&[0.0; 1200]);
+        }
+        let (_, fed, g) = e.ai_cw_window().expect("the AI ring fills");
+        let text = "CQ CQ DE K1ABC K1ABC K";
+        let letters: Vec<(f64, char)> = text
+            .chars()
+            .enumerate()
+            .map(|(i, c)| (1.0 + i as f64 * 0.15, c))
+            .collect();
+        e.push_ai_cw_pass(g, text, "");
+        e.push_ai_cw_times(g, fed as f64 / 12_000.0, &letters, &[]);
+        let turn = super::read_cw_state(&e)
+            .turn
+            .expect("control: a turn is read");
+        assert_eq!(
+            (turn.state, turn.role, turn.call.as_deref()),
+            (State::YourTurn, Some(Role::Answer), Some("K1ABC"))
+        );
+        e.set_unassisted_mode(true);
+        let r = super::read_cw_state(&e);
+        assert_eq!(r.turn, None, "unassisted: no turn cue");
+        assert!(r.unassisted);
     }
 
     /// The settings backup's stated contract is that it CARRIES NO SECRETS, and
@@ -40091,6 +40709,29 @@ mod tests {
             crate::panel_min_inner(crate::CONTEST_LOGGER_SLUG),
             crate::panel_min_inner("")
         );
+    }
+
+    /// The Spots window (the Spots board popped out, `?panel=spots`): its own name in the title bar
+    /// and the taskbar, and sizes of its own. The size tables name the slug literally (the UI's
+    /// natural-footprint guard parses them); on the generic arms the window would drag down to 420
+    /// wide, where the board's nine columns do not fit even at the 65% zoom floor.
+    #[test]
+    fn the_spots_window_has_its_own_title_and_sizes() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("\nasync fn open_panel_window(")
+            .expect("open_panel_window is defined");
+        let rest = &src[start + 1..];
+        let open = &rest[..rest.find("\n}\n").expect("the end of the function")];
+        assert!(
+            open.contains("\"spots\" => \"Nexus — Spots\".to_string(),"),
+            "the Spots window says what it is in its title bar"
+        );
+        assert_ne!(
+            crate::panel_default_inner("spots"),
+            crate::panel_default_inner("")
+        );
+        assert_ne!(crate::panel_min_inner("spots"), crate::panel_min_inner(""));
     }
 
     /// ⭐ Removing the newest contest contact, clearing every one, and editing one, reach the app
@@ -45852,9 +46493,9 @@ mod tests {
     }
 
     /// The source list exactly as `Settings::assistance_sources` produces it.
-    fn posture(ai: bool, cluster: bool, pskr: bool) -> Vec<AssistanceSourceState> {
+    fn posture(cw: bool, cluster: bool, pskr: bool) -> Vec<AssistanceSourceState> {
         [
-            ("AI CW decoder", ai),
+            ("CW decoder", cw),
             ("DX cluster / RBN", cluster),
             ("PSK Reporter needs", pskr),
         ]
@@ -45888,12 +46529,12 @@ mod tests {
         // Declaring an unassisted entry must.
         assert!(assistance_posture_changed(&log, true, &silent));
         // So must ONE source changing while the unassisted flag stays put (e.g. the operator
-        // turning the AI decoder off by hand) — otherwise the record would claim the decoder
-        // was running when it was not.
+        // turning the cluster off by hand) — otherwise the record would claim the cluster was
+        // connected when it was not.
         assert!(assistance_posture_changed(
             &log,
             false,
-            &posture(false, true, true)
+            &posture(true, false, true)
         ));
     }
 
@@ -51063,6 +51704,63 @@ mod tests {
         assert_eq!(tech.len(), open.len());
     }
 
+    /// The RTTY cockpit's channel list is the RTTY plan as this station tunes it. AFSK's signal
+    /// sits a mark tone below its dial, so there each row comes a mark tone above the plan's FSK
+    /// dial and a pick puts the mark where the plan says, as on FSK, and on the dial RTTY's own
+    /// home tunes. The list served the plan's FSK dial on both backends, so the default AFSK's
+    /// 20 m pick keyed 14.0807–14.0809, inside FT4.
+    #[test]
+    fn the_rtty_channel_list_tunes_the_dial_each_backend_needs() {
+        use std::sync::{Arc, Mutex};
+        use tauri::Manager;
+        let mut got = Vec::new();
+        for backend in ["afsk", "fsk"] {
+            let settings = tempo_app::settings::Settings {
+                rtty_backend: backend.into(),
+                ..tempo_app::settings::Settings::default()
+            };
+            let engine: crate::SharedEngine = Arc::new(Mutex::new(
+                tempo_app::engine::Engine::with_settings(settings),
+            ));
+            let app = tauri::test::mock_builder()
+                .manage(Arc::clone(&engine))
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .expect("a mock app");
+            let row = |band: &str| {
+                super::get_licensed_band_plan(app.state::<crate::SharedEngine>(), "rtty".into())
+                    .expect("the RTTY list")
+                    .into_iter()
+                    .find(|c| c.band == band)
+                    .map(|c| format!("{:.6}", c.dial_mhz))
+            };
+            let (twenty, seventeen) = (row("20m"), row("17m"));
+            // RTTY entered on 20 m: the section's home, beside the list's row.
+            let home = {
+                let mut e = crate::engine_lock(&engine);
+                e.set_frequency(14.074, "20m", "USB");
+                e.set_operating_mode("rtty", true);
+                format!("{:.6}", e.settings().dial_mhz)
+            };
+            got.push((backend, twenty, seventeen, home));
+        }
+        let rows = |backend, twenty: &str, seventeen: &str| {
+            (
+                backend,
+                Some(twenty.to_string()),
+                Some(seventeen.to_string()),
+                twenty.to_string(),
+            )
+        };
+        assert_eq!(
+            got,
+            vec![
+                rows("afsk", "14.085125", "18.107125"),
+                rows("fsk", "14.083000", "18.105000"),
+            ],
+            "AFSK rows a mark tone above the plan, FSK on it, and the home on the list's row"
+        );
+    }
+
     /// A MID from the front end is a FILENAME fragment, so the traversal shapes are refused at
     /// the boundary the front end actually reaches -- before any path is built.
     ///
@@ -51859,6 +52557,131 @@ mod tests {
         assert!(
             said.is_ok() && !engine_lock(&engine).js8_state().queue.is_empty(),
             "CONTROL: the shack's own name for it: {said:?}"
+        );
+    }
+
+    /// ⛔ CW TYPED ON A COMPUTER DRIVING THE STATION MEETS THE RADIO'S KEYER RULE, ON THE WIRE. The
+    /// text goes through the station's own runner, as the command lane runs it, into `send_cw` and
+    /// the engine's one CW queue; each word the queue gives is handed to the radio's keyer as the
+    /// radio loop's CAT keyer hands it (`Rig::send_morse`), here to a rigctld that records every
+    /// line. Kenwood, Yaesu and Elecraft radios end a command at `;`, so a message holding one is
+    /// refused whole, says why, and nothing of it reaches rigctld; Enter Sends Message on that
+    /// computer is answered with the refusal, so its strip logs nothing. CONTROL: ordinary text
+    /// from afar reaches it as typed, and Enter's send takes it.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn cw_typed_from_afar_never_reaches_the_radios_keyer_with_a_semicolon() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use serde_json::{json, Value};
+        use std::io::{BufRead, BufReader, Write};
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        {
+            let mut e = engine_lock(&engine);
+            e.set_license_class("extra");
+            e.set_cw_keyer("cat", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+        }
+        let (app, _main) = shack_app_for_starts_from_afar(engine.clone());
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        // A rigctld that records every line it is sent, answering each `RPRT 0`.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let wire = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = wire.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let Ok(read) = stream.try_clone() else {
+                    continue;
+                };
+                for line in BufReader::new(read).lines() {
+                    let Ok(line) = line else { break };
+                    log.lock().unwrap().push(line);
+                    if stream.write_all(b"RPRT 0\n").is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        let mut rig = tempo_audio::rig::Rig::rigctld(&addr);
+        let mut key_what_is_queued = || loop {
+            let Some((word, _, _)) = engine_lock(&engine).poll_cw_word() else {
+                break;
+            };
+            let _ = rig.send_morse(&word);
+        };
+        let semicolon = "CW not sent: \";\" is never handed to the radio's own keyer, because \
+             Kenwood, Yaesu and Elecraft radios read it as the end of a command. Take it out of \
+             the message.";
+        let text = "CQ TEST;FA00007000000 DE KD9TAW";
+        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let sent = ask("send_cw", json!({"text": text, "afar": {"standDown": now}}));
+        assert!(sent.is_ok(), "premise: the start from afar ran: {sent:?}");
+        key_what_is_queued();
+        assert_eq!(
+            wire.lock().unwrap().clone(),
+            Vec::<String>::new(),
+            "nothing of the message from afar reached rigctld: it is refused whole"
+        );
+        assert_eq!(
+            engine_lock(&engine).cw_keyer_error().as_deref(),
+            Some(semicolon),
+            "the CW screen says why"
+        );
+        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let took = ask(
+            "send_cw_armed",
+            json!({"text": text, "afar": {"standDown": now}}),
+        );
+        assert_eq!(
+            took.map(|_| ()),
+            Err(semicolon.to_string()),
+            "Enter's send from afar is refused, with the character, so its strip logs nothing"
+        );
+        key_what_is_queued();
+        assert_eq!(
+            wire.lock().unwrap().clone(),
+            Vec::<String>::new(),
+            "nothing of Enter's message reached rigctld"
+        );
+        // CONTROL: ordinary text from afar reaches the radio's keyer as typed, and Enter's send
+        // takes it.
+        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let sent = ask(
+            "send_cw",
+            json!({"text": "CQ TEST DE KD9TAW", "afar": {"standDown": now}}),
+        );
+        assert!(sent.is_ok(), "CONTROL: {sent:?}");
+        key_what_is_queued();
+        assert_eq!(
+            wire.lock().unwrap().clone(),
+            ["b CQ", "b TEST", "b DE", "b KD9TAW"],
+            "CONTROL: ordinary text from afar reaches the radio's keyer as typed"
+        );
+        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let took = ask(
+            "send_cw_armed",
+            json!({"text": "TU", "afar": {"standDown": now}}),
+        );
+        assert!(
+            took.is_ok(),
+            "CONTROL: Enter's send from afar takes it: {took:?}"
         );
     }
 
@@ -52710,6 +53533,156 @@ mod tests {
             }
         }
         assert!(armed.is_empty(), "Enable TX armed from afar by {armed:?}");
+    }
+
+    /// The Phone tab pressed on the SSTV screen, through the shack's own runner with the arguments
+    /// the screen sends (`keepDial`). A General on 20 m FT8 tunes the rig's knob to the 14.230 image
+    /// channel (the SSTV screen claims no section, so the station is still in FT8's): Phone keeps
+    /// 14.230. CONTROLS: the same entry without `keepDial` homes to the 14.225 segment default as
+    /// every other Phone entry does, and FT8's own 14.074 is no phone frequency, so the SSTV screen's
+    /// entry homes it too.
+    #[test]
+    fn the_phone_tab_on_the_sstv_screen_keeps_a_phone_dial_at_the_wire() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::set_operating_mode;
+        use serde_json::{json, Value};
+        use tempo_app::settings::OperatingMode;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![set_operating_mode])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        for (case, knob_hz, keep, want) in [
+            ("the report", 14_230_000, true, 14.230),
+            ("CONTROL: no keepDial", 14_230_000, false, 14.225),
+            ("CONTROL: FT8's 14.074", 14_074_000, true, 14.225),
+        ] {
+            {
+                let mut e = engine_lock(&engine);
+                *e = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
+                e.set_license_class("general");
+                e.set_operating_mode("digital", false);
+                e.set_frequency(14.074, "20m", "USB");
+                e.seed_rig_dial(14_074_000);
+                e.observe_rig_freq(knob_hz);
+            }
+            let mut args = json!({"mode": "phone", "followFreq": true});
+            if keep {
+                args["keepDial"] = json!(true);
+            }
+            let ran = ask("set_operating_mode", args);
+            assert!(ran.is_ok(), "{case}: {ran:?}");
+            let e = engine_lock(&engine);
+            assert_eq!(e.settings().operating_mode, OperatingMode::Phone, "{case}");
+            let dial = e.settings().dial_mhz;
+            assert!(
+                (dial - want).abs() < 1e-9,
+                "{case}: the dial is {dial}, not {want}"
+            );
+        }
+    }
+
+    /// The Phone tab pressed on the SSTV screen while the 2 m FM image channel holds the rig in FM,
+    /// through the shack's own runner with the arguments the screen sends: Phone keeps the dial
+    /// AND commands FM there, whether it follows (`followFreq`) or Phone is already the section
+    /// homed for, and the snapshot it answers tells the Phone cockpit (`fmChannel`). CONTROLS:
+    /// Phone entered from another screen (no `keepDial`) uses the station's phone mode, USB here,
+    /// as it always has.
+    #[test]
+    fn the_phone_tab_on_the_sstv_screen_keeps_a_2m_fm_channel_in_fm_at_the_wire() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::set_operating_mode;
+        use serde_json::{json, Value};
+        use tempo_app::settings::OperatingMode;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![set_operating_mode])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        for (case, args, want) in [
+            (
+                "the report: Phone follows",
+                json!({"mode": "phone", "followFreq": true, "keepDial": true}),
+                "FM",
+            ),
+            (
+                "the report: Phone already homed",
+                json!({"mode": "phone", "followFreq": false, "keepDial": true}),
+                "FM",
+            ),
+            (
+                "CONTROL: another screen, Phone already homed",
+                json!({"mode": "phone", "followFreq": false}),
+                "USB",
+            ),
+            (
+                "CONTROL: another screen, Phone follows",
+                json!({"mode": "phone", "followFreq": true}),
+                "USB",
+            ),
+        ] {
+            {
+                let mut e = engine_lock(&engine);
+                *e = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
+                e.set_license_class("general");
+                e.set_operating_mode("digital", false);
+                e.set_frequency(14.074, "20m", "USB");
+                e.sstv_tune(144.500, "2m", "FM");
+                assert_eq!(e.rig_mode_effective(), "FM", "{case}: premise");
+            }
+            let ran = ask("set_operating_mode", args);
+            assert!(ran.is_ok(), "{case}: {ran:?}");
+            let e = engine_lock(&engine);
+            assert_eq!(e.settings().operating_mode, OperatingMode::Phone, "{case}");
+            let dial = e.settings().dial_mhz;
+            assert!((dial - 144.500).abs() < 1e-9, "{case}: the dial is {dial}");
+            assert_eq!(e.rig_mode_effective(), want, "{case}: the rig mode");
+            let told = ran
+                .as_ref()
+                .ok()
+                .map(|s| s["radio"]["fmChannel"] == json!(true));
+            assert_eq!(told, Some(want == "FM"), "{case}: what the cockpit is told");
+        }
     }
 
     // ── a first LoTW download of a large account, a year at a time ─────────────────────────

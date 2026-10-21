@@ -71,12 +71,11 @@ recommendations.*
 
 ### Remote access
 
-Remote lets you use this station from a web browser. It is an early pilot on a test
-service that may be reset. The shack PC keeps the radio and stays in charge: what
-you click and type in the browser goes to the station, the browser shows what the
-station reports back, and your log, settings and radio never leave this computer.
-Remote streaming is a beta feature, and access could be revoked at any time; the card says
-so beside its switch. The card holds the streaming switch, where the station stands with
+Remote lets you use this station from a web browser. Remote streaming is a beta feature,
+and access could be revoked at any time; the card says so beside its switch. The shack PC
+keeps the radio and stays in charge: what you click and type in the browser goes to the
+station, the browser shows what the station reports back, and your log, settings and radio
+never leave this computer. The card holds the streaming switch, where the station stands with
 the Remote service, and your browsers with their keys. The pairing's transmit option and
 the per-browser permissions are folded under **Advanced**.
 
@@ -84,10 +83,10 @@ the per-browser permissions are folded under **Advanced**.
 browser, sign in, enter the code and choose **Attach this station**. Back here,
 compare the account ID on both screens and choose **Approve this account pairing** —
 that starts the account's 14-day trial, turns Remote on, and approves the browser you
-paired from. Tick **Also allow FT8/FT4 transmit from the Remote page** (under **Advanced**)
-first if that browser should also send FT8/FT4 from the Remote page's own controls. A
-browser streaming this station does not need it: it uses Nexus as you would here, transmit
-included. Any other browser asks with the Remote site's **Stream** button,
+paired from. A browser streaming this station uses Nexus as you would here, transmit
+included, with this approval alone: leave **Also allow FT8/FT4 transmit from the Remote page**
+(under **Advanced**) unticked. It was for the Remote page's own FT8/FT4 controls, which the
+page no longer has. Any other browser asks with the Remote site's **Stream** button,
 and Nexus asks you wherever you are in it: **Let Chrome on Windows stream this station?**,
 with the browser's key. Approve it only if the key matches the one the browser shows.
 **Approve** there is **Approve browser** without the transmit tick; **Deny** refuses the
@@ -106,27 +105,24 @@ that is the **Start at sign-in** setting under Appearance, and it stays off unle
 say yes.
 
 **What a browser may do** is decided here at the station. Approving a browser gives it
-station controls and remote logging, and FT8/FT4 transmit too when the approval's transmit
-box is ticked. All of it is kept when Nexus restarts, until you revoke it, for as long as
-that browser stays approved: a browser whose approval was revoked, or given again, starts
-with nothing kept. The switches under each approved browser, under **Advanced**, limit it,
-or give a permission back. Without any of these it can watch the station but not change it.
-With streaming on, station controls alone let a browser stream this window and use Nexus as
-you would here, transmit included; the transmit box is only for the Remote page's own FT8/FT4.
+station controls, which is all a stream needs: with streaming on, they let a browser stream
+this window and use Nexus as you would here, transmit included. Approving also gives it
+remote logging, and FT8/FT4 transmit when the approval's transmit box is ticked; nothing on
+the Remote page uses either now (below). All of it is kept when Nexus restarts, until you
+revoke it, for as long as that browser stays approved: a browser whose approval was revoked,
+or given again, starts with nothing kept. The switches under each approved browser, under
+**Advanced**, limit it, or give a permission back. Without station controls a browser cannot
+stream this station.
 
 - **Allow station controls** — tuning, band and mode changes, receiver filters and
   DSP, RF power and mic gain, decoder settings, the amplifier, and which radio is
   active. One browser holds control at a time. Revoking them also ends that browser's stream.
-- **Allow remote logging** — the browser's Log QSO form writes to your logbook. Field
-  Day contacts still log at the station.
-- **Allow FT8/FT4 transmission from the Remote page** — calling CQ, answering and sending
-  FT8/FT4 messages with the Remote page's own controls. It also needs station controls, and
-  it goes through the normal TX switch and TX watchdog. Allowing it arms nothing: whenever
-  Nexus starts, the TX switch is off until the browser presses TX On. If the browser goes
-  away the station stops transmitting within five seconds, and
-  **Revoke FT8/FT4 transmission from the Remote page** stops it at once. Without the stream
-  below, no other mode transmits remotely. A browser streaming this station does not need
-  this permission: through the stream it transmits as you would here, in any mode.
+- **Allow remote logging** — was for the Remote page's own Log QSO form, which the page no
+  longer has. A browser streaming this station logs with Nexus's own log form, as you would
+  here, and does not need it.
+- **Allow FT8/FT4 transmission from the Remote page** — was for the Remote page's own FT8/FT4
+  controls, which the page no longer has. A browser streaming this station does not need
+  it: through the stream it transmits as you would here, in any mode.
 
 **Stream this station from my browser** is off by default, and on Windows only for
 now. With it on, a browser approved for station controls, while it holds control, can be
@@ -466,6 +462,20 @@ Baud continue across to the right.*
   **Network password** (stored in the keychain, write-only) and **Control port
   (UDP)** in place of Serial Port and Baud. See the
   [Icom guide](../rigs/icom.md#nexuss-own-network-connection-beta).
+  For an SDR program's own TCI server (ExpertSDR3, Thetis, piHPSDR) there is
+  **TCI (SDR program) — Beta**, offered for every radio: Nexus sets the dial and
+  mode and transmits through the program. It puts the **SDR program address**,
+  the **TCI port**, **Find TCI server**, the **Transceiver** and the **SDR
+  program** in place of Rig Model, Serial Port and Baud, with three switches:
+  **Audio over TCI**, on by default, carries the receive audio and Nexus's
+  transmit audio over TCI with no virtual audio cable; **SDR panadapter in the
+  scope**, off by default, draws the program's own spectrum in Nexus's scope;
+  **Spots on the SDR panadapter**, off by default, marks the stations you still
+  need on the program's panadapter; a click on one there only tunes Nexus.
+  **Find TCI server** reads what the server at that address says about itself
+  and closes, the form's port first and then 50001 and 40001; it never
+  transmits. See
+  [TCI: connect to an SDR program's TCI server](../rigs/tci.md).
 - **Network Address** (Network only) — host:port. For a Flex, the WSJT-X-proven
   path is the SmartSDR CAT app on **this** PC: its default TCP port 5002 is
   directed at slice A, so `127.0.0.1:5002` with the FLEX-6xxx model works out of
@@ -884,6 +894,32 @@ full power on every mode.*
     beside the other port settings, and appears only once sharing is on. Hamlib
     NET rigctl default 4532; change it only if something else on this computer
     already owns the port.
+- **Share by TCI**: off by default. It runs Nexus as a TCI server for programs on
+  this computer (WSJT-X, JTDX, MSHV, Log4OM and others), beside the CAT broker
+  above; both may be on, though not on the same port. Once saved, it shows the
+  address programs connect to, `127.0.0.1:40001` (the next port in a second
+  Nexus window), with **Copy**; if the port is taken, the reason takes the
+  address's place. Only programs on this computer can connect, never another
+  computer or a web page. When it is on:
+  - **TCI server port**: 40001 unless something else on this computer already
+    has it.
+  - **Programs on TCI may transmit**: off by default, shown and set at the
+    station only. On, a program can Tune, key the radio's microphone or send
+    its own audio on the Phone screen, and send CW macros on the CW screen,
+    behind every Nexus transmit safeguard, and no program can turn TX on. A
+    program's own audio goes out only once it has asked for a voice mode (USB,
+    LSB, AM or FM). FT8, FT4 and the other slot-timed modes may not transmit
+    through TCI yet.
+  - **CW macros from programs**: on by default. A logger's CW macros go out on
+    Nexus's own CW keyer, at the program's speed, while programs may transmit.
+  - **Spots from programs**: on by default. Programs' spots show on the band
+    map and in the Phone and CW screens' band activity; a click on one only
+    tunes Nexus, and clicks on spots are passed back to the programs.
+  - **Programs connected**: each connection by number, with its address,
+    whether it is receiving audio or transmitting, the last thing Nexus
+    refused it, and **Disconnect**.
+
+  See [Share by TCI](../rigs/tci-server.md).
 
 ---
 
@@ -2247,11 +2283,13 @@ What your Cabrillo log declares about the entry, and the switch that keeps the
   100 W PEP), and says so beside the picker: HIGH writes no CATEGORY-POWER line there.
   This is the one power your log declares: **Power sent** is what an exchange carries,
   and Field Day's power multiplier is its score.
-- **Unassisted entry** — "Turns off the AI CW decoder, DX cluster / RBN spots, the
+- **Unassisted entry** — "Turns off the CW decoder (AI and classic), DX cluster / RBN spots, the
   PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp.
   **Takes effect at once**" — its own command, not Save, because an operator
   flips it as an event starts. "Your own settings for each of those are left
-  alone and come back when you switch this off."
+  alone and come back when you switch this off." Picking `NON-ASSISTED` under
+  **Spotting assistance** does not turn it on: while the switch is off, a line
+  beside that picker says so, with a button that does.
 - **Assistance record** — the timestamped journal: a row per flip and a row each
   time Nexus starts, with which sources were active. Kept in `assistance_journal.json` beside your settings, so
   it survives restarts. Newest first.
@@ -2353,7 +2391,7 @@ claim right now; the record underneath is the evidence, kept across restarts.*
   and stays on this computer: it never goes to the club network or to Remote.
   **Clear** forgets it.
 
-Unassisted mode turns both off, as it does the cluster and the AI CW decoder, and
+Unassisted mode turns both off, as it does the cluster and the CW decoder, and
 the assistance record lists them.
 
 ### Enter Sends Message
@@ -2794,6 +2832,9 @@ be photographed, and were not exercised for this capture.*
   know your TX state by ear."
 - **Decode-batch tick** — "A soft tick each cycle new signals are decoded — the
   band's rhythm, eyes-free."
+- **CW turn sound** — "A short rising chirp when the CW turn cue says it is your
+  turn to send. Never while you transmit." Off as it comes. The cue itself is on
+  the CW screen ([Turn Cue](../manual/CW.md#turn-cue)).
 
 ---
 

@@ -179,7 +179,8 @@ describe('the Connection row tells an SDR operator it is for them', () => {
 
 describe('the port hint tells the truth about TCI', () => {
   // ⚠️ THIS HINT HAS BEEN WRONG TWICE, IN OPPOSITE DIRECTIONS. Both are pinned here so a
-  // third wording cannot revive either.
+  // third wording cannot revive either. Since 2026-10-20 there is a third truth, pinned last:
+  // Nexus speaks TCI itself, through the TCI Connection choice, never through rigctld.
   //
   //   1. It shipped saying the TCI Server box is "a WebSocket protocol Nexus can't drive".
   //      Too strong: Hamlib has a TCI backend, so the flat denial was false.
@@ -192,8 +193,8 @@ describe('the port hint tells the truth about TCI', () => {
   //      Model 7 was removed from the catalog on 2026-08-06. Pointing anyone at it was
   //      pointing them at a daemon that refuses to start.
   //
-  // What is true, and all this field needs to say: 50001 is Thetis's TCI Server port, this
-  // build cannot drive TCI, so the CAT server port (13013) is the number that belongs here.
+  // What is true, and all this field needs to say: 50001 is Thetis's TCI Server port, and the
+  // CAT server port (13013) is the number that belongs in this field.
   it('does not send the operator to a model this build cannot load', async () => {
     await openRadioTab(networkRadio(2054, 'Thetis (Hermes Lite 2 / ANAN / HPSDR)'))
     const text = screen.getByText(/Running an SDR program/).textContent ?? ''
@@ -205,6 +206,17 @@ describe('the port hint tells the truth about TCI', () => {
     // Still steers this field to the CAT port, and still names the box not to use.
     expect(text).toMatch(/13013/)
     expect(text).toMatch(/50001/)
+  })
+
+  // The new truth: the TCI Server box is the TCI Connection choice's, so the hint sends it there by
+  // that choice's own name, and the choice is there to take it.
+  it('sends a TCI port to the TCI Connection choice, which is offered', async () => {
+    await openRadioTab(networkRadio(2054, 'Thetis (Hermes Lite 2 / ANAN / HPSDR)'))
+    const text = screen.getByText(/Running an SDR program/).textContent ?? ''
+    expect(text).toMatch(/TCI Server box beside Thetis's CAT server \(factory 50001\) is a different protocol/)
+    expect(text).toMatch(/choose Connection ▸ TCI instead/)
+    const tci = screen.getByRole('option', { name: /^TCI/ }) as HTMLOptionElement
+    expect(tci.value).toBe('tci')
   })
 
   // The claim "beta in Hamlib" is not readable from the artifact we ship: `rig_caps.status`

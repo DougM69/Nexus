@@ -234,6 +234,21 @@ pub fn morse_line(text: &str) -> String {
         format!("b {text}\n")
     }
 }
+/// ⛔ Why the radio's own CW keyer is never handed `text` ([`Rig::send_morse`]), in the CW screen's
+/// words, or `None` when it may be. Hamlib puts the text inside a radio command (`KY <text>;` to a
+/// Kenwood or an Elecraft, `KM1<text>;` to a newer Yaesu), and those radios end a command at the
+/// first `;`, so a `;` in the text would end the keyer's command early and the radio would read
+/// the rest as a command of its own; a line break would end rigctld's own command. Only what
+/// [`tempo_core::cw::sendable`] keeps goes, with spaces between words: the rule a TCI program's
+/// CW keeps too. Nexus's own CW is refused whole by the same rule before any of it is queued
+/// (`Engine::send_cw`), so this is the backstop: a word reaches it only when the keyer was changed
+/// to this one under a message already queued, or from a caller outside the engine.
+pub fn cw_text_refusal(text: &str) -> Option<String> {
+    let c = text
+        .chars()
+        .find(|c| *c != ' ' && !tempo_core::cw::sendable(*c))?;
+    Some(tempo_core::cw::keyer_refusal(c))
+}
 /// Parse the S-meter reading (dB relative to S9) from a rigctld `l STRENGTH` reply.
 /// Hamlib reports STRENGTH as a signed integer dB value where S9 = 0 dB (S1 ≈ -48 dB,
 /// S9+20 = +20 dB) — NOT the 0.0–1.0 fraction `read_level` expects. Returns `None` when
@@ -1869,7 +1884,13 @@ impl Rig {
     /// Key CW from text via the rig's own keyer (Hamlib `send_morse`). Set the speed
     /// first with [`set_keyspd`](Self::set_keyspd). Best for canned/keyboard macros;
     /// CAT latency makes it poor for live paddle feel (use WinKeyer for that).
+    ///
+    /// ⛔ Text the radio's keyer may not be handed ([`cw_text_refusal`]) is refused before anything
+    /// is sent (`InvalidInput`, with the CW screen's words), whoever asks.
     pub fn send_morse(&mut self, text: &str) -> std::io::Result<()> {
+        if let Some(why) = cw_text_refusal(text) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, why));
+        }
         self.cat(&morse_line(text))
     }
     /// Abort CW in progress. Newer Hamlib exposes `\stop_morse`; older builds vary by
@@ -2049,6 +2070,67 @@ mod tests {
         // Multi-character words are untouched — the pad is not blanket rewriting.
         assert_eq!(morse_line("CQ"), "b CQ\n");
         assert_eq!(morse_line("VE3FMQ"), "b VE3FMQ\n");
+    }
+
+    /// ⛔ THE RADIO'S OWN KEYER IS NEVER HANDED A `;`, A LINE BREAK, ANOTHER CONTROL CHARACTER OR A
+    /// CHARACTER WITH NO MORSE. Hamlib puts `send_morse`'s text inside a radio command, and a
+    /// Kenwood, Yaesu or Elecraft radio ends a command at the first `;`: the TS-2000 backend wrote
+    /// `KY TEST;` and then `FA00007000000      ;` for `b TEST;FA00007000000` (rigctl 4.5.5), a
+    /// retune. A line break would end rigctld's own command and start another. Each such text is
+    /// refused, says which character, and NOTHING reaches rigctld. CONTROLS, by value: ordinary
+    /// text, a padded one-character word, several words, lower case and every punctuation mark in
+    /// Nexus's table go out exactly as before.
+    #[test]
+    fn the_cat_keyer_hands_rigctld_no_semicolon_line_break_or_character_without_morse() {
+        let (addr, log) = mock_rigctld(ok_reply(7_030_000));
+        let mut rig = Rig::rigctld(&addr);
+        // Each refused text, and the character the refusal names, as the CW screen shows it.
+        for (bad, named) in [
+            ("TEST;FA00007000000", r#"";""#),
+            ("K1ABC;", r#"";""#),
+            (";", r#"";""#),
+            ("TEST\nF 7000000", r#""\n""#),
+            ("TEST\r", r#""\r""#),
+            ("TEST\tDE", r#""\t""#),
+            ("\u{1b}[2J", r#""\u{1b}""#),
+            ("TEST\u{7f}", r#""\u{7f}""#),
+            ("A\0B", r#""\u{0}""#),
+            ("73!", r#""!""#),
+            ("QRL'", r#""'""#),
+            ("CAFÉ", r#""É""#),
+        ] {
+            let res = rig.send_morse(bad);
+            assert_eq!(
+                *log.lock().unwrap(),
+                Vec::<String>::new(),
+                "{bad:?} reached rigctld"
+            );
+            let Err(err) = res else {
+                panic!("{bad:?} must be refused")
+            };
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{bad:?}");
+            assert!(
+                err.to_string().contains(named),
+                "{bad:?}: the refusal names {named}: {err}"
+            );
+        }
+        for (text, wire) in [
+            ("TEST", "b TEST"),
+            ("K", "b K "),
+            ("?", "b ? "),
+            ("CQ CQ DE W9XYZ", "b CQ CQ DE W9XYZ"),
+            ("cq de w9xyz", "b cq de w9xyz"),
+            ("5NN/?=+-().,:@", "b 5NN/?=+-().,:@"),
+        ] {
+            let from = log.lock().unwrap().len();
+            rig.send_morse(text)
+                .unwrap_or_else(|e| panic!("control: {text:?} keys: {e}"));
+            assert_eq!(
+                log.lock().unwrap()[from..],
+                [wire.to_string()],
+                "control: {text:?} goes out exactly as before"
+            );
+        }
     }
 
     /// THE ATU BUTTON DID NOTHING — the wire form, pinned (operator 2026-08-15, FTDX10).

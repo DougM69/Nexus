@@ -362,6 +362,28 @@ async fn registering_is_signed_by_the_road_key_and_carries_the_proof_when_given(
     assert_eq!(seen.lock().unwrap().requests.len(), before);
 }
 
+/// ★ The road kept says this computer's key for it as the station shows that key when it asks to
+/// approve this computer: the shack's own fingerprint (`remote_service::fingerprint`) of the key the
+/// service registered for the device, which is what the service lists to the station. Whether the
+/// device still waits for that approval, and the road kept for the station, are the sign-in's
+/// (`super::account`). CONTROL: a record with no key in it shows none.
+#[tokio::test]
+async fn the_road_kept_says_this_computers_key_as_the_station_shows_it() {
+    let (origin, seen) = service().await;
+    let road = registered(&origin, &seen).await;
+    let listed = seen.lock().unwrap().device_key.clone().unwrap();
+    let shown = shown_key(&road);
+    assert!(shown.is_some(), "a key to show");
+    assert_eq!(
+        shown,
+        crate::remote_service::fingerprint(&listed),
+        "the key the station shows"
+    );
+    let mut broken = clone_road(&road);
+    broken.pkcs8 = "00".into();
+    assert_eq!(shown_key(&broken), None, "no key in it");
+}
+
 /// ★ A road registered without a proof is for the account's one station, or the one the operator
 /// picks: each station's id and name offered, and the one picked is the one listed. CONTROL: no
 /// pick (cancelled, or the window gone), or an id the service never listed, picks nothing

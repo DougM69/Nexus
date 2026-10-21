@@ -25,6 +25,8 @@ mod voice_keyer;
 struct TeeBackend {
     played: Arc<Mutex<Vec<Instant>>>,
     tee: Arc<Mutex<Option<crate::backend::TxTeeHandle>>>,
+    /// Every tee installed, in order: a rebuilt session's route follows the lost one's.
+    installed: Arc<Mutex<Vec<crate::backend::TxTeeHandle>>>,
 }
 
 impl AudioBackend for TeeBackend {
@@ -38,10 +40,22 @@ impl AudioBackend for TeeBackend {
         }
     }
     fn set_tx_tee(&mut self, tee: Option<crate::backend::TxTeeHandle>) {
+        if let Some(tee) = &tee {
+            self.installed.lock().unwrap().push(tee.clone());
+        }
         *self.tee.lock().unwrap() = tee;
     }
     fn flush_output(&mut self) -> usize {
         self.tee.lock().unwrap().as_ref().map_or(0, |t| t.flush())
+    }
+    /// A mid-over switch, as the sound card hands it to an installed tee (`retune_route`): the
+    /// over is the tee's, so the tee replaces what it still holds.
+    fn retune_tx(&mut self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
+        self.tee
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|t| t.retune(tail))
     }
 }
 
@@ -56,6 +70,11 @@ struct FlexScene {
     /// A rebuild of the CAT link starts a fresh client on the same radio, as `open_cat` does, in
     /// place of failing the test.
     replace_on_rebuild: bool,
+    /// Each step's clock, and whether the loop held an over to a deadline after it: an over's
+    /// length as Nexus scheduled it, on its own clock.
+    held: Vec<(f64, bool)>,
+    /// A logger on the WSJT-X UDP feed, when the scene has one.
+    logger: Option<super::ft_midover::Logger>,
 }
 
 impl FlexScene {
@@ -160,12 +179,23 @@ impl FlexScene {
             sim,
             rebuilt: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             replace_on_rebuild: false,
+            held: Vec::new(),
+            logger: None,
         }
     }
 
     fn step(&mut self, now: f64) {
-        let sinks = no_sinks();
-        let mut station = StationSinks::new();
+        let mut fresh = StationSinks::new();
+        let (sinks, station) = match &mut self.logger {
+            Some(l) => (
+                Sinks {
+                    wsjtx: Some(&l.server),
+                    ..no_sinks()
+                },
+                &mut l.station,
+            ),
+            None => (no_sinks(), &mut fresh),
+        };
         let backend = self.backend.clone();
         let mut reopen_audio = move |_t: &Transport| Ok::<_, String>(backend.clone());
         let rebuilt = self.rebuilt.clone();
@@ -199,9 +229,10 @@ impl FlexScene {
                 now,
                 &mut reopen_audio,
                 &mut reopen_rig,
-                &mut station,
+                station,
             )
             .unwrap();
+        self.held.push((now, self.state.tx_until_ms.is_some()));
         assert!(
             self.replace_on_rebuild || !self.rebuilt.load(std::sync::atomic::Ordering::Relaxed),
             "the loop rebuilt its transport: the client under test is gone"
@@ -933,6 +964,121 @@ fn aprs_and_sstv_key_while_the_radio_takes_dax() {
         .sstv_send(picture(), "Scottie 1".to_string())
         .unwrap();
     run_until(&mut s, "the picture never keyed", |s| keys(s) == 3);
+}
+
+/// The loop on the real clock for `ms`, a program on Nexus's TCI server sending 20 ms of its audio
+/// at `level` before each step, as the server hands it over.
+fn run_with_program_audio(s: &mut FlexScene, ms: u64, level: f32) {
+    let end = Instant::now() + Duration::from_millis(ms);
+    while Instant::now() < end {
+        let _ = s
+            .engine
+            .lock()
+            .unwrap()
+            .tci_tx_audio(1, &[level; 240], Instant::now());
+        s.step(now_unix_ms());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// ⛔ A TCI PROGRAM'S AUDIO OVER NEVER GOES OUT ON THE RADIO'S OWN MIC. Phone at the shack with native
+/// audio on, so the radio takes its transmit audio from its mic, and a program on Nexus's TCI server
+/// asks to send its own audio (`trx:0,true,tci`): it would leave over DAX, which the radio then
+/// ignores, and the mic would carry the over. Refused as APRS and SSTV are refused there, with its
+/// reason: none of its audio is taken, nothing keys and nothing plays. CONTROL: with native audio off
+/// the radio is the operator's again, and the same program's over keys it and plays. The program
+/// asked `usb`, as a program's own audio goes out only after it asks a voice mode.
+#[test]
+fn a_tci_programs_audio_over_refuses_while_the_radio_has_the_mic() {
+    use tempo_net::tci::server::{KeyKind, Refusal};
+    use tempo_net::tci::wire::Word;
+    let mut s = FlexScene::with_session(true, reports(&["USB"]));
+    {
+        let mut e = s.engine.lock().unwrap();
+        let mut settings = e.settings().clone();
+        settings.tci_server_tx = true;
+        e.apply_settings(settings);
+        e.set_operating_mode("phone", false); // arms TX
+        e.set_frequency(14.250, "20m", "USB");
+        e.tci_note_modulation(1, &Word::new("usb").expect("a mode word"));
+    }
+    run_until(&mut s, "the radio never had the mic", has_mic);
+    assert_eq!(
+        s.engine.lock().unwrap().tci_key(1, KeyKind::Tci, true),
+        Err(Refusal::RadioMic),
+        "the program's over"
+    );
+    run_with_program_audio(&mut s, 1_000, 0.5);
+    assert_eq!(keys(&s), 0, "the radio keyed");
+    assert!(
+        s.backend.played.lock().unwrap().is_empty(),
+        "the program's audio was played"
+    );
+    // CONTROL: native audio off.
+    s.set_native_audio(false);
+    run_until(&mut s, "the radio kept the mic for native audio", |s| {
+        !has_mic(s)
+    });
+    assert_eq!(
+        s.engine.lock().unwrap().tci_key(1, KeyKind::Tci, true),
+        Ok(()),
+        "control: the program's over"
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while keys(&s) == 0 || s.backend.played.lock().unwrap().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "control: the over never keyed and played"
+        );
+        run_with_program_audio(&mut s, 100, 0.5);
+    }
+}
+
+/// ⭐ PROGRAMS ON NEXUS'S TCI SERVER HEAR THE FLEX'S DAX AUDIO. With native audio on, the server's copy
+/// of the receive audio carries the DAX stream the decoders take, at its 12 kHz, in place of the
+/// sound card's: a program's reader hears the radio (the simulated slice's tone), not silence. With
+/// native audio off, that reader ends and the copy is the sound card's again (this scene's card
+/// publishes none).
+#[test]
+fn programs_on_the_tci_server_hear_the_flexs_dax_audio() {
+    let mut s = FlexScene::new(true);
+    run_until(
+        &mut s,
+        "DAX receive audio never reached the decoders",
+        |s| s.state.dax_last_audio.is_some(),
+    );
+    let feed = s.state.rx_tap.tci_audio();
+    let source = feed.source().expect("the TCI copy has a source");
+    assert_eq!(source.rate, 12_000, "the DAX stream's rate");
+    let reader = feed.subscribe(source).expect("a program's reader");
+    let mut heard: Vec<f32> = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while heard.len() < 6_000 {
+        assert!(Instant::now() < deadline, "the TCI copy carried no audio");
+        s.run(100);
+        while let Ok(Some(block)) = reader.read(Instant::now()) {
+            heard.extend(block.samples);
+        }
+    }
+    let peak = heard.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!(
+        peak > 0.01,
+        "the TCI copy carried silence, not the radio: peak {peak}"
+    );
+    // Native audio off: the DAX copy ends, and the sound card's (none here) is the copy's again.
+    s.set_native_audio(false);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while feed.source().is_some() {
+        assert!(Instant::now() < deadline, "the copy kept the DAX source");
+        s.run(100);
+    }
+    assert!(
+        matches!(
+            reader.read(Instant::now()),
+            Err(crate::receive_audio::ReceiveError::Ended)
+        ),
+        "the program's DAX reader went on"
+    );
 }
 
 // ── What the client must tell the operator about the transmitter ─────────────────────────────
@@ -4106,4 +4252,181 @@ fn rtty_afsk_follows_the_sideband_setting_on_a_flex_slice() {
             slice_mode(s).as_deref() == Some(want)
         });
     }
+}
+
+// ── The reported FT8 case on DAX, end to end ─────────────────────────────────────────────────
+
+/// One loop step at `now`, the receive floor kept fresh by hand (no DAX receive audio arrives).
+fn fresh_step(s: &mut FlexScene, now: f64) {
+    s.state.dax_last_audio = Some(Instant::now());
+    s.step(now);
+}
+
+/// The audio of every DAX TX packet the radio got, in order, at 24 kHz: each packet checked
+/// whole, the same audio on both sides.
+fn dax_tx_audio(s: &FlexScene) -> Vec<f32> {
+    let mut out = Vec::new();
+    for l in s.sim.log() {
+        let SimEvent::UdpIn { bytes, .. } = l.event else {
+            continue;
+        };
+        if bytes.len() <= 1 {
+            continue; // the registration datagram
+        }
+        let v = tempo_net::flexvita::parse_vita(&bytes).expect("a VITA-49 packet");
+        let stereo = tempo_net::flex::streams::decode_dax_audio(v.packet_class.unwrap(), v.payload)
+            .expect("whole float32 stereo frames");
+        for lr in stereo.chunks_exact(2) {
+            assert_eq!(lr[0], lr[1], "the same audio on both sides");
+            out.push(lr[0]);
+        }
+    }
+    out
+}
+
+/// The 24 kHz audio the DAX route makes of `over` from its start (the pacer's resampler, the
+/// device format's clamp after the unity level).
+fn on_dax_as(over: &[f32]) -> Vec<f32> {
+    crate::capture_resample::CaptureResampler::new(12_000, 24_000)
+        .process(over)
+        .into_iter()
+        .map(|s| s.clamp(-1.0, 1.0))
+        .collect()
+}
+
+/// ⭐⭐ THE REPORTED CASE ON FLEX NATIVE DAX, END TO END (FT8), as on the sound card
+/// (`ft_midover::ft8_an_rr73_only_the_late_full_pass_finds_turns_the_report_on_the_air_into_73`):
+/// W1AW's RR73 to our report is found only by the full pass at 14.40 s (the early pass ran and
+/// found nothing), and that pass is still running when the boundary keys the report again. The
+/// over goes to the radio over DAX, paced in real time; the pass lands once 0.75 s of it has gone,
+/// inside the first 1.4 s where every FT8 message is the same Costas sync, and the rest, still in
+/// Nexus, is replaced before it is sent. What the radio got is the 73's over, sample for sample,
+/// as long as the report's: W1AW copies the 73, and TX goes off after it. A logger on the WSJT-X
+/// feed was told the report as keyed, then the 73 (`widgets/mainwindow.cpp:8072-8077`).
+#[test]
+fn on_dax_an_rr73_only_the_late_full_pass_finds_turns_the_report_on_the_air_into_73() {
+    use super::ft_midover::{capture_of, msgsent, over_of, HeldWorker, Logger};
+    const TX2: &str = "W1AW W9XYZ -10";
+    const RR73_TO_US: &str = "W9XYZ W1AW RR73";
+    const BYE73: &str = "W1AW W9XYZ 73";
+    let mut s = on_dax_without_receive_audio();
+    s.logger = Some(Logger::new());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while s.state.last_mode != "PKTUSB" || s.state.decode_in_flight {
+        assert!(Instant::now() < deadline, "settle: the slice on PKTUSB");
+        s.state.dax_last_audio = Some(Instant::now());
+        s.run(100);
+    }
+    let worker = HeldWorker::install(&mut s.state);
+    let period = 15_000.0;
+    let t0 = first_boundary();
+    let slot = (t0 / period) as u64;
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_tx_offset(1500.0);
+        let line = "W9XYZ W1AW FN31";
+        assert!(
+            e.ingest(&capture_of(Tier::Ft8, line), slot - 2) >= 1,
+            "premise: W1AW's grid decoded"
+        );
+        e.call_station_ctx("W1AW", Some("FN31"), Some(line), Some(-10), None)
+            .expect("premise: W1AW worked");
+        let _ = e.take_immediate_tx();
+    }
+
+    // W1AW's period: the early pass found nothing; the full pass at 14.40 s decodes it from its
+    // start, the RR73 in it.
+    fresh_step(&mut s, t0 - period + 20.0);
+    s.state.early_done_slot = Some(slot - 1);
+    fresh_step(&mut s, t0 - 620.0);
+    s.state
+        .rx
+        .push(&capture_of(Tier::Ft8, RR73_TO_US)[..172_800]);
+    fresh_step(&mut s, t0 - 600.0);
+    assert!(
+        s.state.decode_in_flight && s.state.full_done_slot == Some(slot - 1),
+        "the full pass dispatched at 14.40 s"
+    );
+    let full = worker.decode();
+    assert!(
+        full.decodes()
+            .iter()
+            .any(|d| d.message.trim() == RR73_TO_US),
+        "premise: the full pass finds W1AW's RR73, got {:?}",
+        full.decodes()
+    );
+
+    // The boundary, the pass still running: the report keys on time.
+    let plays = s.backend.played.lock().unwrap().len();
+    fresh_step(&mut s, t0);
+    let key = Instant::now();
+    assert_eq!(
+        s.backend.played.lock().unwrap().len(),
+        plays + 1,
+        "the report keyed at t0"
+    );
+    assert!(s.state.decode_in_flight, "the full pass still running");
+    assert_eq!(s.state.tx_until_ms, Some(t0 + 13_840.0), "WSJT-X's PTT off");
+
+    // From the key the loop runs on the real clock, as the pacer does. The pass lands once 0.75 s
+    // of the over has gone to the radio.
+    let mut full = Some(full);
+    let mut sent_at_landing = 0;
+    loop {
+        std::thread::sleep(Duration::from_millis(20));
+        if full.is_some() {
+            let sent = dax_tx_audio(&s).len();
+            if sent >= 18_000 {
+                sent_at_landing = sent;
+                worker.land(full.take().unwrap());
+            }
+        }
+        let v = t0 + key.elapsed().as_secs_f64() * 1000.0;
+        fresh_step(&mut s, v);
+        if v > t0 + 14_200.0 {
+            break;
+        }
+        assert!(
+            full.is_none() || v < t0 + 5_000.0,
+            "the over never reached the radio"
+        );
+    }
+    eprintln!(
+        "dax: the pass landed with {sent_at_landing} samples (24 kHz) of the over sent to the radio"
+    );
+
+    let sent = dax_tx_audio(&s);
+    let bye = on_dax_as(&over_of(Tier::Ft8, BYE73));
+    let report = on_dax_as(&over_of(Tier::Ft8, TX2));
+    let at_12k: Vec<f32> = sent.iter().step_by(2).copied().collect();
+    assert_eq!(
+        wsjt_messages_played(tempo_core::modes::ModeKind::Ft8, &at_12k),
+        [BYE73],
+        "W1AW copies the 73"
+    );
+    assert_eq!(
+        sent.len() / 128,
+        bye.len() / 128,
+        "the over is as long as it was"
+    );
+    let first_difference = |a: &[f32], b: &[f32]| a.iter().zip(b).position(|(x, y)| x != y);
+    assert_eq!(
+        first_difference(&sent, &bye),
+        None,
+        "what the radio got is the 73's over, sample for sample"
+    );
+    assert!(
+        first_difference(&sent, &report).is_some(),
+        "control: the report's over is not what was sent"
+    );
+    assert_eq!(s.state.tx_until_ms, None, "the over ended");
+    assert!(
+        !s.engine.lock().unwrap().tx_enabled(),
+        "TX off after the 73"
+    );
+    assert_eq!(
+        s.logger.as_ref().unwrap().told_on_the_air(),
+        [msgsent(TX2), msgsent(BYE73)],
+        "the logger is told the report as keyed, then the 73"
+    );
 }

@@ -478,6 +478,12 @@ pub(crate) fn nonce_for(road_pkcs8: &str, lan_pkcs8: &str) -> String {
     proofs::device_nonce("computer", &[&spki(road_pkcs8), &spki(lan_pkcs8)])
 }
 
+/// This computer's key for its road as the station shows it: the station's own fingerprint of the
+/// road key a device registration (`client/device`) gave the service, which it lists to the station.
+pub(crate) fn shown(registered: &Value) -> String {
+    crate::remote_service::fingerprint(registered["publicKey"].as_str().unwrap()).unwrap()
+}
+
 /// A scratch directory for one test's files, gone with it.
 pub(crate) struct Scratch(pub(crate) std::path::PathBuf);
 impl Scratch {
@@ -540,12 +546,16 @@ async fn a_station_whose_proof_does_not_hold_is_neither_registered_nor_looked_fo
         if trusted {
             // Registered; then nowhere on this network, and the operator said nothing: kept by its
             // service id, the LAN key its proof vouched for pinned, its road beside it.
+            let key = (cloud.seen.lock().unwrap().devices.first())
+                .map(|(body, _)| shown(body))
+                .unwrap_or_default();
             assert_eq!(
                 signed,
                 Ok(Signed {
                     station: SERVICE_STATION.into(),
                     waiting: false,
-                    away: true
+                    away: true,
+                    key
                 }),
                 "{lan} {subject}"
             );
@@ -613,12 +623,16 @@ async fn a_station_found_nowhere_here_is_kept_by_its_service_id_for_the_internet
         let staged = kept.staged().unwrap();
         let (ask, asked) = answering(Vec::new());
         let (signed, _) = signing_in(&env, &cloud, None, no_pick(), ask).await;
+        let key = (cloud.seen.lock().unwrap().devices.first())
+            .map(|(body, _)| shown(body))
+            .unwrap_or_default();
         assert_eq!(
             signed,
             Ok(Signed {
                 station: SERVICE_STATION.into(),
                 waiting: !approve,
-                away: true
+                away: true,
+                key
             }),
             "{role}"
         );
@@ -869,12 +883,15 @@ async fn a_code_paired_station_whose_owner_never_signed_in_gets_its_internet_roa
         assert_eq!(stations.signed(LAN_STATION), None, "{case}");
         match case {
             "road" => {
+                // Waiting for Approve at the station, which shows this key when it asks.
+                let key = seen.devices.last().map(|(body, _)| shown(body));
                 assert_eq!(
                     signed,
                     Ok(Signed {
                         station: LAN_STATION.into(),
                         waiting: true,
-                        away: false
+                        away: false,
+                        key: key.unwrap_or_default()
                     })
                 );
                 let (body, authorization) = seen.devices.last().unwrap().clone();

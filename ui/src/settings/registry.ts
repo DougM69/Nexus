@@ -159,7 +159,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // The Icom network connection (Beta), under the words an operator brings from the radio's
       // own menus and from the programs that reach it over the network today.
       'icom network', 'lan', 'wi-fi', 'wifi', 'ip address', 'network control', 'network user',
-      'rs-ba1', 'wfview', 'vpn', 'ic-7760', 'ic-7300mk2'],
+      'rs-ba1', 'wfview', 'vpn', 'ic-7760', 'ic-7300mk2',
+      // The TCI connection (Beta), under the protocol's name and the programs and radios that
+      // serve it: an SDR owner searches for the program they run, or for the box in its settings.
+      'tci', 'tci server', 'find tci server', 'expertsdr', 'expertsdr3', 'sunsdr', 'thetis',
+      'pihpsdr', 'anan', 'hermes lite', 'sdr program', 'websocket', '50001', '40001'],
   },
   {
     id: 'rig-advanced',
@@ -258,7 +262,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // section's own SWR read-out, and one term cannot land the operator on two sections.
       'high swr', 'swr cutoff', 'stop on swr', 'antenna fault',
       // Parsec presence mode: the words an operator running the shack over Parsec reaches for.
-      'parsec', 'remote desktop', 'dropped session', 'lost connection', 'stuck ptt'],
+      'parsec', 'remote desktop', 'dropped session', 'lost connection', 'stuck ptt',
+      // "Share by TCI", under its own name and the programs that connect to it. Not the bare
+      // 'tci' or 'tci server': those are Rig & CAT's, for an SDR program's own server.
+      'share by tci', 'nexus tci server', 'programs on tci', 'tci client rx1', 'jtdx', 'mshv',
+      'log4om', 'macloggerdx', 'rf2k', 'tci keyer', 'tci spots'],
   },
 
   // ---- Modes -------------------------------------------------------------------
@@ -741,7 +749,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Accessibility & eyes-free',
     tab: 'appearance',
     keywords: ['screen reader', 'announce', 'blind', 'earcon', 'sound', 'a11y', 'speech',
-      'eyes free', 'tick'],
+      'eyes free', 'tick', 'turn cue', 'chirp'],
   },
 
   // ---- Config ------------------------------------------------------------------

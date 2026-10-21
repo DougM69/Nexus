@@ -26,6 +26,9 @@
 //!   Nothing in the app uses it yet; the shipped Flex path is [`flexcat`] / [`flexvita`].
 //! - [`icom`] — the Icom network (LAN / Wi-Fi) client's protocol core (the packets, the login,
 //!   sequence tracking and the session), ported from Hamlib. Nothing in the app uses it yet.
+//! - [`tci`] — the TCI client's protocol core (Expert Electronics' Transceiver Control Interface
+//!   to an SDR program over one WebSocket): the codecs, the session, the admission a key must
+//!   pass, the reconnect ladder. Written from the MIT-licensed spec. Nothing in the app uses it yet.
 //! - [`wl2k`] — the Winlink CMS telnet transport (`server.winlink.org:8772`). One
 //!   session per operator action, never a reconnect loop and never a poll; the B2F
 //!   protocol it carries lives in `tempo_core::winlink` and is joined to it through
@@ -58,6 +61,7 @@ pub mod pskreporter;
 pub mod qds;
 pub mod server;
 pub mod sntp;
+pub mod tci;
 pub mod wl2k;
 pub mod wsjtx;
 

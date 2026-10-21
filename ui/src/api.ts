@@ -1981,6 +1981,20 @@ export async function getAllSpots(): Promise<import('./types').SpotRow[]> {
   return invoke<import('./types').SpotRow[]>('get_all_spots')
 }
 
+/** The spots programs on Nexus's TCI server sent ("Share by TCI"), for the band map: each a spot
+ *  row whose `tci` names the program. Kept apart from the cluster's (`getAllSpots`), and asked only
+ *  when `radio.tciServer.spots` says they changed (`features/tciSpots.ts`). */
+export async function getTciSpots(): Promise<import('./types').SpotRow[]> {
+  return invoke<import('./types').SpotRow[]>('get_tci_spots')
+}
+
+/** A click on a program's spot on the band map: the station tunes there and tells every program
+ *  on its TCI server, and does nothing else (never a section change, an arm, a QSO). Rejects with
+ *  the station's reason, refused while anything is on the air. */
+export async function clickTciSpot(call: string, freqMhz: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('click_tci_spot', { call, freqMhz })
+}
+
 /** Check the release feed (hamradiotools.io, SourceForge as fallback) for a newer Nexus
  * release (Phase 1 update check). Rejects offline / on a
  * fetch error — callers treat that as a silent no-op. */
@@ -2339,10 +2353,11 @@ export async function sstvTune(
 }
 
 /** Park the dial on one of the APP's OWN fixed channels (the ISS SSTV auto-arm's 145.800 FM).
- * Identical to setFrequency on the radio; it differs only in what the per-(band, mode) dial
- * memory makes of it — an app-driven auto-tune is not the operator's dial in that mode, so it
- * is never remembered, and the dial it displaces is banked. Restoring the operator's OWN saved
- * dial afterwards uses setFrequency, because that one IS theirs. */
+ * An FM channel is held in FM, as the SSTV strip's pick of it is, and routed on FM, as a
+ * repeater tune is (neither while a satellite pass owns the dial). The per-(band, mode) dial
+ * memory never takes it — an app-driven auto-tune is not the operator's dial in that mode, so
+ * it is never remembered, and the dial it displaces is banked. Restoring the operator's OWN
+ * saved dial afterwards uses setFrequency, because that one IS theirs. */
 export async function tuneChannel(
   dialMhz: number,
   band: string,
@@ -2365,12 +2380,20 @@ export async function pickBand(band: string, mode?: string): Promise<AppSnapshot
  * "phone" forces USB/LSB by band, "cw" forces CW. `followFreq` = true when the operator
  * clicks an actual operating-section tab — then the rig QSYs to that mode's home frequency
  * on the current band (phone segment / CW segment / FT8 watering hole). Pass false for
- * incidental nav and the Needed click (which sets the spot's exact frequency itself). */
+ * incidental nav and the Needed click (which sets the spot's exact frequency itself).
+ * `keepDial`: the Phone tab pressed on the SSTV screen. With `followFreq` the engine keeps the
+ * dial where Phone may transmit there and homes it where it may not; without, nothing homes.
+ * Either way an FM channel the SSTV screen holds stays FM in Phone. Sent only when true, so every
+ * other entry's wire is unchanged. */
 export async function setOperatingMode(
   mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard',
   followFreq: boolean,
+  keepDial = false,
 ): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_operating_mode', { mode, followFreq })
+  return invoke<AppSnapshot>(
+    'set_operating_mode',
+    keepDial ? { mode, followFreq, keepDial } : { mode, followFreq },
+  )
 }
 
 /** Work a spotted station (the Needed click): set the operating mode AND QSY to the spot's
@@ -2940,6 +2963,18 @@ export interface RadioProfilePatch {
   icomLanHost: string
   icomLanUser: string
   icomLanPort: number
+  /** This radio's TCI connection (the "TCI" Connection choice): the SDR program's server address
+   *  and port, which of its transceivers (from 0), its dialect ('auto' | 'expertsdr3' | 'thetis' |
+   *  'pihpsdr'), Nexus's audio over it (both ways), its spectrum and its spots. Rust takes each as
+   *  optional and leaves a stored value alone when absent (a form from before them); this form
+   *  states every one. */
+  tciHost: string
+  tciPort: number
+  tciTrx: number
+  tciDialect: string
+  tciAudio: boolean
+  tciPan: boolean
+  tciSpots: boolean
 }
 
 /** Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio
@@ -3037,6 +3072,47 @@ export async function setLogFormGrid(call: string, grid: string): Promise<void> 
 /** Scan ~3s for FlexRadio LAN discovery broadcasts (the Find-my-Flex button). */
 export async function discoverFlex(): Promise<{ model: string; nickname: string; ip: string }[]> {
   return invoke('discover_flex')
+}
+
+/** What one port answered when Find TCI server tried it: an SDR program's TCI server
+ *  (`found`), Nexus's own TCI server (`nexus`, skipped), nothing (`noAnswer`), something that is
+ *  not a TCI server (`notTci`), or a WebSocket server that never finished the TCI handshake
+ *  (`noReady`). */
+export type TciPortOutcome = 'found' | 'nexus' | 'noAnswer' | 'notTci' | 'noReady'
+
+/** The SDR program's TCI server Find TCI server found: what it said about itself before `ready;`,
+ *  as sent. `dialect` is how Nexus will read it: 'expertsdr3', 'expertsdr2', 'thetis', or
+ *  'unknown' for a program this build does not know. */
+export interface TciServerFound {
+  port: number
+  program: string | null
+  version: string | null
+  device: string | null
+  trxCount: number | null
+  dialect: string
+}
+
+/** Find TCI server's answer for one address. `resolved` is false when this computer cannot find
+ *  the address at all (nothing was tried). */
+export interface TciProbeResult {
+  host: string
+  resolved: boolean
+  tried: { port: number; outcome: TciPortOutcome }[]
+  found: TciServerFound | null
+}
+
+/** Look for an SDR program's TCI server at `host`: `port` first, then 50001 and 40001, the ports
+ *  the programs come set to. It reads each server's handshake and closes, writing nothing to it: it
+ *  never keys and never changes the radio. A few seconds at most. At the shack only. */
+export async function tciProbe(host: string, port: number): Promise<TciProbeResult> {
+  return invoke('tci_probe', { host, port })
+}
+
+/** "Share by TCI": the operator's Disconnect for program `id` (its number in
+ *  `radio.tciServer.programs`). What the program keyed ends first, then its connection closes. A
+ *  number no connected program has does nothing. At the shack only. */
+export async function tciServerDisconnect(id: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('tci_server_disconnect', { id })
 }
 
 /** Stop the rotator immediately (rotctld S). */
@@ -4029,6 +4105,12 @@ export interface ContestSpotPosted {
  *  `spotSelfUnconfirmed` for a contest not known to allow self-spotting until `confirmed`. */
 export async function contestSelfSpot(comment: string, confirmed: boolean): Promise<ContestSpotPosted> {
   return invoke<ContestSpotPosted>('contest_self_spot', { comment, confirmed })
+}
+
+/** The Spots board's Spot me, in any cockpit: the contest screen's press and its ONE cooldown. Outside a
+ *  contest it posts on one press; with Contest mode on it rejects exactly as `contestSelfSpot` does. */
+export async function clusterSelfSpot(comment: string, confirmed: boolean): Promise<ContestSpotPosted> {
+  return invoke<ContestSpotPosted>('cluster_self_spot', { comment, confirmed })
 }
 
 /** A band map frequency marker (`freq_markers.rs`): local to the station, never posted. */

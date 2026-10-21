@@ -223,6 +223,10 @@ interface Props {
   wheelSensitivity?: number
   /** Live cluster spots (all bands/modes); the band-strip filters to SSB on the current band. */
   spots?: SpotRow[]
+  /** The spots programs on Nexus's TCI server sent, for the band strip with their source. */
+  tciSpots?: SpotRow[]
+  /** ⛔ A click on a program's spot in the band strip: it only tunes, never `onWorkSpot`. */
+  onTciSpot?: (s: SpotRow) => void
   /** Top need tag per heard call (UPPERCASE) — colours band-strip ticks by need tier. */
   needByCall?: Map<string, NeedTag>
   /** Activity type per heard call (UPPERCASE) — POTA/SOTA/DXped badges on the band strip. */
@@ -620,7 +624,7 @@ const FLEX_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
+export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const rotatorControl = useStationCapability('rotator')
   const control = useStationControl()
@@ -948,8 +952,10 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
 
   // AUTO sideband from the rig-mode policy — FM when the FM sub-mode is selected, else sideband
   // by band (LSB <10 MHz except 60 m, USB above). The operator can override this transiently (below).
+  // FM as well while the engine holds the rig on an FM channel (`fmChannel`): Phone entered from
+  // the SSTV screen on 144.500 goes on commanding FM there, which this copy of the policy cannot see.
   const sidebandAuto =
-    phoneMode?.toLowerCase() === 'fm' ? 'FM' : sidebandForMhz(snap.radio.dialMhz)
+    snap.radio.fmChannel || phoneMode?.toLowerCase() === 'fm' ? 'FM' : sidebandForMhz(snap.radio.dialMhz)
   // Transient operator override ("USB"/"LSB"/"FM") or null = AUTO. The COMMANDED mode (canonical
   // for TX/logging + what the rig is set to) is the override when set, else the band-auto sideband.
   const modeOverride = snap.radio.sidebandOverride ?? null
@@ -1907,6 +1913,8 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
           phoneSegLo={snap.radio.phoneSegLo}
           phoneSegHi={snap.radio.phoneSegHi}
           spots={spots ?? []}
+          tciSpots={tciSpots}
+          onTciSpot={onTciSpot}
           fieldDay={fieldDay}
           needByCall={needByCall}
           typeByCall={typeByCall}

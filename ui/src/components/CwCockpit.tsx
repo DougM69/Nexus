@@ -9,7 +9,7 @@ import { useEscStop } from '../useEscStop'
 // scope spans and reference levels, the macro TEXTS with their {MYCALL}/{RST}/{NAME}/{EXCH}
 // tokens and every <select> value are invariant tokens and stay in the code.
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import type { AppSnapshot, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
+import type { AppSnapshot, CwTurn, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { useSmeterDb } from './LiveMeters'
 import { TxMeters, TX_METERS_WHEN } from './TxMeters'
@@ -34,6 +34,10 @@ import {
 } from '../features/esmRoles'
 import { esmLitKeys, useEsmHost, type EsmMessage, type EsmSetting } from '../features/esmHost'
 import { EsmPlate } from './EsmPlate'
+import { CwTurnLamp, CW_TURN_SUGGEST_ID } from './CwTurnLamp'
+import { cueKeys, lamp as turnLamp, pace as paceOf } from '../features/cwTurn'
+import { announce } from '../announce'
+import { turnEarcon } from '../alerts'
 import { CwMacroButton, CwMacroEditor } from './CwMacroEditor'
 import type { MacroEditorFocus } from './MacroEditor'
 import { macroEditChordKey, type MacroKey, type MacroSlot } from '../features/macroSets'
@@ -271,6 +275,10 @@ interface Props {
   fieldDay?: FieldDayStatus | null
   /** Live cluster spots (all bands/modes); the band-strip filters to CW on the current band. */
   spots?: SpotRow[]
+  /** The spots programs on Nexus's TCI server sent, for the band strip with their source. */
+  tciSpots?: SpotRow[]
+  /** ⛔ A click on a program's spot in the band strip: it only tunes, never `onWorkSpot`. */
+  onTciSpot?: (s: SpotRow) => void
   /** Top need tag per heard call (UPPERCASE) — colours band-strip ticks by need tier. */
   needByCall?: Map<string, NeedTag>
   /** Activity type per heard call (UPPERCASE) — POTA/SOTA/DXped badges on the band strip. */
@@ -308,6 +316,12 @@ interface Props {
   /** CW speed match's switch (App, from Settings): an answer to a station keys at its measured
    *  speed. Shown in the contest strip; absent on the hosted page. */
   speedMatch?: { on: boolean; onSwitch: (on: boolean) => void }
+  /** The turn cue's sound (Settings `soundCwTurn`, off by default): a short chirp when it is your
+   *  turn. Absent on the hosted page. */
+  turnSound?: boolean
+  /** How much a screen reader hears (Settings `announceVerbosity`): the turn cue says "your turn"
+   *  and "hold" unless it is 'off', and "not sure" and "no reply" only at 'all'. */
+  announceVerbosity?: string
   /** Contest mode is on but this station is out of the contest (App's: the switch on, the session not):
    *  the log line says so, with Resume, which re-enters the contest in S&P. Absent otherwise. */
   onResumeContest?: () => void
@@ -340,6 +354,7 @@ const cwPanelLabels = (): Record<Exclude<CwPanelId, BoxId>, string> => ({
   scopeCtl: t('cw.panel.scopeCtl'),
   dsp: t('cw.panel.dsp'),
   txmeters: t('cw.panel.txmeters'),
+  turnCue: t('cw.panel.turnCue'),
   rxdsp: t('cw.panel.rxdsp'),
   bandActivity: t('cw.panel.bandActivity'),
   copilot: t('cw.panel.copilot'),
@@ -431,6 +446,8 @@ const CW_DSP_FUNCS = [
 export function CwCockpit({
   esmSetting,
   speedMatch,
+  turnSound = false,
+  announceVerbosity = 'needed',
   onResumeContest,
   active = true,
   snap,
@@ -442,6 +459,8 @@ export function CwCockpit({
   onSnap,
   fieldDay,
   spots,
+  tciSpots,
+  onTciSpot,
   needByCall,
   typeByCall,
   onWorkSpot,
@@ -715,6 +734,14 @@ export function CwCockpit({
   const labels = { ...cwPanelLabels(), ...boxLabels(entries) }
   // The Stats pane where the record says nothing: on where there is room (CallStatsPane `withStatsRoom`).
   const statsRoom = useStatsRoom()
+  // An unassisted contest entry at the station: it decodes no CW, so its read carries no copy,
+  // speed, calls, report or name, and the Decode pane says why in place of the copy (the Copilot
+  // pane too, where it would promise decoded calls). Nothing drawn from the read, the turn cue
+  // included, has anything to show then either.
+  const [unassisted, setUnassisted] = useState(false)
+  // Whether the turn cue can show at all: the AI decoder on, the Decode pane shown (the record read
+  // as the host below reads it) and no unassisted entry. Its ⊞ entry says so while it cannot.
+  const cueHere = (snap.aiCw?.enabled ?? false) && !unassisted && (!panels || panels.stateOf('decode') !== 'removed')
   const host = panels
     ? panelHost(withStatsRoom(panels, statsRoom), {
         menu: withRecent(withStats(CW_MENU)),
@@ -727,6 +754,7 @@ export function CwCockpit({
           rxdsp: canRxDsp || subRowHere ? undefined : NO_DSP_LEVELS_REASON,
           sent: sent.length > 0 ? undefined : NOTHING_SENT_REASON,
           txmeters: TX_METERS_WHEN,
+          turnCue: cueHere ? undefined : t('cw.panel.turnCue.note'),
         },
         // Spots and Needed ship unticked: the stock ⊞ button must not read "2 hidden" (Phone's rule).
         shipsHidden: CW_PANELS.defaultRemoved,
@@ -744,22 +772,16 @@ export function CwCockpit({
   //     removed to reclaim vertical space for the decode transcript (operator ask). ---
   const [cand, setCand] = useState<{ call: string; best: boolean }[]>([])
   const [guide, setGuide] = useState<{
-    state: string
-    headline: string
-    prompt: string
-    recommended: string | null
     workedCall: string | null
     rst: string | null
     name: string | null
   }>({
-    state: 'listening',
-    headline: '',
-    prompt: '',
-    recommended: null,
     workedCall: null,
     rst: null,
     name: null,
   })
+  // THE TURN CUE's read: whose turn it is and what fits, from the station (`turn` in the CW read).
+  const [turn, setTurn] = useState<CwTurn | null>(null)
   // True once the operator sets WPM by hand → stop auto-matching to the decoded speed.
   const wpmTouched = useRef(false)
   // F-key macros come from the ACTIVE named CW profile (Settings ▸ CW). A rotating
@@ -858,22 +880,22 @@ export function CwCockpit({
             setSent(d.sent)
             setKeyerError(d.keyerError)
             setPaddleTookOver(d.paddleTookOver === true)
+            setUnassisted(d.unassisted === true)
             setCand(d.candidates)
             setGuide({
-              state: d.state,
-              headline: d.headline,
-              prompt: d.prompt,
-              recommended: d.recommended,
               workedCall: d.workedCall,
               rst: d.rst,
               name: d.name,
             })
+            setTurn(d.turn ?? null)
           }
         })
         .catch(() => {
           if (owns() && !control) {
             setDecodeAvailable(false); setDecoded({ text: '', pending: '', wpm: 0 }); setSent([]); setCand([]); setKeyerError(null)
-            setGuide({ state: 'listening', headline: '', prompt: '', recommended: null, workedCall: null, rst: null, name: null })
+            setUnassisted(false)
+            setGuide({ workedCall: null, rst: null, name: null })
+            setTurn(null)
           }
         })
     // Poll the decoded transcript often — the Rust streaming decoder updates every ~20 ms, so a
@@ -1035,6 +1057,8 @@ export function CwCockpit({
     clearTimeout(wpmCommit.current)
     wpmCommit.current = setTimeout(() => void setCwWpm(v, true), 600)
   }
+  // The F-key last sent from here, for the turn cue's "send it again".
+  const lastKeyRef = useRef<string | null>(null)
   // Live snapshot ref so the keyboard handler (bound once, `[]` deps) reads the CURRENT
   // TX-allowed privilege state through send() — not whatever existed at mount.
   const snapRef = useRef(snap)
@@ -1096,6 +1120,8 @@ export function CwCockpit({
       pushToast(snapRef.current.radio.txRefusal ?? t('cw.send.txLocked'), 'info', 3500)
       return false
     }
+    // The turn cue's "send it again" names the key last sent (none after typed text).
+    lastKeyRef.current = key
     // #286: an edited His Call, or the decoder's guess in it, lands BEFORE the send that may
     // expand `!` to it.
     const committing = hisCallEditing.current || guessing.current ? commitHisCall() : null
@@ -1236,6 +1262,42 @@ export function CwCockpit({
   const editRef = useRef({ editorOpen: false, live: false, openEditor, closeEditor })
   editRef.current = { editorOpen: editing !== null, live, openEditor, closeEditor }
   const editingMacro = editing ? macros.find((m) => m.key === editing) : undefined
+
+  // ── THE TURN CUE ──────────────────────────────────────────────────────────────────────────
+  // For an operator who copies by the decoder: a lamp at the head of the send row saying whose turn
+  // it is, the F-key that fits lit, and their speed beside ours. Only where it can show (`cueHere`)
+  // and while its ⊞ entry is ticked: one tick hides it for good.
+  //
+  // ⛔ IT NEVER SENDS. It lights a key, and the key sends only when it is pressed, exactly as it
+  // always has; nothing is held back while the lamp says the other station is sending either. With
+  // Enter Sends Message running, ESM knows what comes next and lights its own keys, so the lamp says
+  // only when ("Your turn · Enter") and lights none.
+  const cueShown = cueHere && shown('turnCue')
+  const cue = cueShown ? turn : null
+  const esmRunning = !!esmSetting?.on && !!fieldDay && control
+  const cueLamp = cue
+    ? turnLamp(cue, cueKeys(cue.role, { slots: macros, contest: !!fieldDay, roles, lastKey: lastKeyRef.current }), esmRunning)
+    : null
+  const cueOn = (key: string) =>
+    cueLamp?.glow && cueLamp.keys.includes(key) ? { glow: cueLamp.glow, describedBy: CW_TURN_SUGGEST_ID } : undefined
+  const paceNow = cueShown ? paceOf(decoded.wpm, wpm) : null
+  // Its sound and its words for a screen reader: each once per over, and never while anything is
+  // keyed. The sound only when chosen in Settings; "not sure" and "no reply" only at the fullest
+  // announcement setting.
+  const keyedNow = live || snap.radio.rigKeyed === true
+  const spoken = useRef<{ over: number | null; said: Set<string> }>({ over: null, said: new Set() })
+  useEffect(() => {
+    if (!cue || !cueLamp) return
+    if (cue.state === 'youSend' || cue.over !== spoken.current.over) spoken.current = { over: cue.over, said: new Set() }
+    if (cue.state === 'youSend' || keyedNow) return
+    const id = `${cue.state}|${cue.hint ?? ''}`
+    if (spoken.current.said.has(id)) return
+    spoken.current.said.add(id)
+    if (cue.state === 'yourTurn' && turnSound) turnEarcon()
+    const say = cueLamp.speech
+    if (say && announceVerbosity !== 'off' && (say.at === 'needed' || announceVerbosity === 'all')) announce(say.text)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cue?.state, cue?.hint, cue?.over, keyedNow])
   // An editor is operator state for THIS station: a lost control hand closes it.
   useEffect(() => {
     if (!control) setEditing(null)
@@ -1499,10 +1561,24 @@ export function CwCockpit({
   const decodeActions = (
     <>
       <span className="cw-ai-beta">{t('cw.decode.ai.badge')}</span>
-      {decoded.wpm > 0 && (
-        <span className="cw-decode-wpm">
-          {decoded.wpm} {WPM}
-        </span>
+      {paceNow ? (
+        // The turn cue's pace hint: their speed beside ours. A click keys at theirs for this
+        // contact, the saved speed untouched (`changeWpm(…, false)`); it never sends.
+        <button
+          type="button"
+          className={`cw-pace${paceNow.fast ? ' fast' : ''}`}
+          disabled={!control}
+          onClick={() => changeWpm(decoded.wpm, false)}
+          title={t('cw.pace.title', { them: decoded.wpm })}
+        >
+          {paceNow.label}
+        </button>
+      ) : (
+        decoded.wpm > 0 && (
+          <span className="cw-decode-wpm">
+            {decoded.wpm} {WPM}
+          </span>
+        )
       )}
       <button disabled={!control && !aiCwControl}
         type="button"
@@ -1553,25 +1629,33 @@ export function CwCockpit({
   const decodePane = hasDecodePane ? (
     <CockpitPaneFrame title={t('cw.pane.decode.title')} paneId="decode" weight={3} actions={decodeActions} {...closeProps('decode')}>
       <div className="cw-decode panel" title={t('cw.decode.title', { window: AI_WINDOW_HZ })}>
-        {/* The visible transcript animates character-by-character (typewriter) —
-            aria-hidden so a screen reader doesn't announce every keystroke; the
-            hidden role=log mirror below receives whole batches instead (a log
-            region announces only ADDITIONS). */}
-        <div className="cw-decode-text" ref={decodePin.ref} onScroll={decodePin.onScroll} aria-hidden="true">
-          {decoded.text || decoded.pending ? (
-            <>
+        {unassisted ? (
+          // No transcript at all in an unassisted entry: the one line saying why, where a screen
+          // reader reads it too (the typed-out copy below is hidden from one).
+          <p className="cw-decode-off">{t('cw.decode.unassisted')}</p>
+        ) : (
+          <>
+            {/* The visible transcript animates character-by-character (typewriter) —
+                aria-hidden so a screen reader doesn't announce every keystroke; the
+                hidden role=log mirror below receives whole batches instead (a log
+                region announces only ADDITIONS). */}
+            <div className="cw-decode-text" ref={decodePin.ref} onScroll={decodePin.onScroll} aria-hidden="true">
+              {decoded.text || decoded.pending ? (
+                <>
+                  {decoded.text}
+                  {decoded.pending && <span className="cw-decode-unconfirmed">{decoded.pending}</span>}
+                </>
+              ) : (
+                <span className="cw-decode-idle">
+                  {!decodeAvailable ? t('remote.cwUnavailable') : (snap.aiCw?.enabled && snap.aiCw.status) || t('cw.decode.listening')}
+                </span>
+              )}
+            </div>
+            <div className="sr-only" role="log" aria-label={t('cw.decode.log.aria')}>
               {decoded.text}
-              {decoded.pending && <span className="cw-decode-unconfirmed">{decoded.pending}</span>}
-            </>
-          ) : (
-            <span className="cw-decode-idle">
-              {!decodeAvailable ? t('remote.cwUnavailable') : (snap.aiCw?.enabled && snap.aiCw.status) || t('cw.decode.listening')}
-            </span>
-          )}
-        </div>
-        <div className="sr-only" role="log" aria-label={t('cw.decode.log.aria')}>
-          {decoded.text}
-        </div>
+            </div>
+          </>
+        )}
       </div>
     </CockpitPaneFrame>
   ) : null
@@ -1788,6 +1872,8 @@ export function CwCockpit({
             dialMhz={snap.radio.dialMhz}
             txAllowed={snap.radio.txAllowed}
             spots={spots ?? []}
+            tciSpots={tciSpots}
+            onTciSpot={onTciSpot}
             fieldDay={fieldDay}
             spotMode="CW"
             needByCall={needByCall}
@@ -1815,6 +1901,10 @@ export function CwCockpit({
                 <span className="cw-copilot-label">{t('cw.copilot.working.label')}</span>
               ) : cand.length > 0 ? (
                 <span className="cw-copilot-label">{t('cw.copilot.heard.label')}</span>
+              ) : unassisted ? (
+                // No calls are decoded to appear in an unassisted entry: the Decode pane's line says
+                // why, as that pane draws it (a sentence, not the small italic placeholder it replaces).
+                <span className="cw-decode-off">{t('cw.decode.unassisted')}</span>
               ) : (
                 <span className="cw-copilot-label dim">{t('cw.copilot.empty')}</span>
               )}
@@ -2548,6 +2638,7 @@ export function CwCockpit({
               control={control}
               editing={editing === m.key}
               lit={esmLit.includes(m.key)}
+              cue={cueOn(m.key)}
               title={`${previews[m.key] || m.text}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`}
               onSend={() => sendMacro(m)}
               onEdit={(focus) => openEditor(m.key, focus)}
@@ -2573,6 +2664,9 @@ export function CwCockpit({
         )}
 
         <div className="cw-send">
+          {/* THE TURN CUE's lamp, first on the row in a slot of its own width, so what it says
+              never moves His Call or Send. A readout: no click, and it sends nothing. */}
+          {cueLamp && <CwTurnLamp lamp={cueLamp} window={cue?.window ?? null} />}
           {/* #286: His Call, on the send row so the dock does not grow a row. */}
           <label className="cw-hiscall" title={t('cw.hisCall.title')}>
             <span className="cw-hiscall-label">{t('cw.hisCall.label')}</span>

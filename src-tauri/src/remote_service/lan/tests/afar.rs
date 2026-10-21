@@ -594,6 +594,18 @@ fn off_after(ticks: &[(Instant, bool)], since: Instant) -> Option<Instant> {
 /// A press held on this computer's screen, as the screen holds one: the shack in Phone, the first
 /// press taken, then re-asserted every 100 ms until `done`, each answer kept, while the screen
 /// keeps reading the shack's state (presence wants it fresh); and the shack's loop.
+///
+/// The screen keeps its two timers apart, as the screen's are: the press is re-asserted every
+/// 100 ms from the last re-assertion's start, and the state is read every 300 ms on a thread of
+/// its own. So the time a call takes, the state's included, never lengthens the gap between two
+/// holds, which the shack ends a press at (200 ms, `ptt_hold::GAP`). Paced by a sleep after its
+/// calls, with the state read in line every third time, a loaded run stretched one gap past that
+/// and the shack, rightly, ended the press under a screen still holding it.
+///
+/// The first re-assertion is due 100 ms after the press that took was sent, as the screen's timer
+/// starts with the press itself. Timed from the screen thread's start instead, the first gap also
+/// held the press's answer on its way back and the thread starting, and a starved run stretched it
+/// past 200 ms the same way.
 struct Held {
     done: Arc<AtomicBool>,
     screen: std::thread::JoinHandle<Said>,
@@ -611,20 +623,36 @@ impl Held {
         }
         let done = Arc::new(AtomicBool::new(false));
         let shack = shack_loop(t.s.shared.engine.clone(), done.clone());
+        let mut pressed = Instant::now();
         eventually("presence live for a press", || {
             let _ = ask(&t.screens.main, "get_snapshot", json!({}));
+            pressed = Instant::now();
             ask(&t.screens.main, "set_ptt", json!({"on": true})).is_ok()
         });
         let (window, until) = (t.screens.main.clone(), done.clone());
+        let poll = {
+            let (window, until) = (window.clone(), until.clone());
+            std::thread::spawn(move || {
+                while !until.load(Ordering::SeqCst) {
+                    let _ = ask(&window, "get_snapshot", json!({}));
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+            })
+        };
         let screen = std::thread::spawn(move || {
             let mut said = Vec::new();
-            while !until.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(100));
-                if said.len() % 3 == 0 {
-                    let _ = ask(&window, "get_snapshot", json!({}));
+            let mut last = pressed;
+            loop {
+                std::thread::sleep(
+                    (last + Duration::from_millis(100)).saturating_duration_since(Instant::now()),
+                );
+                if until.load(Ordering::SeqCst) {
+                    break;
                 }
+                last = Instant::now();
                 said.push(ask(&window, "set_ptt", json!({"on": true})));
             }
+            poll.join().unwrap();
             said
         });
         eventually("the press armed at the shack", || {

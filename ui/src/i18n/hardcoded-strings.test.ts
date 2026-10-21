@@ -261,6 +261,7 @@ const MIGRATED = [
   'components/SpotLegend.tsx',
   'components/BandMap.tsx',
   'components/ContestSpotMe.tsx',
+  'components/SpotsSpotMe.tsx',
   'features/freqMarkers.ts',
   'components/PounceBanner.tsx',
   'components/WatchlistPanel.tsx',
@@ -368,6 +369,9 @@ const MIGRATED = [
   'components/RadioPicker.tsx',
   'components/RadioSwitcher.tsx',
   'rigFormChecks.ts',
+  // The TCI connection's screen helpers (2026-10-20): the status line Find TCI server writes, and
+  // the dialect choices, whose labels are the programs' and radios' own names.
+  'tci.ts',
   // Batch 13 (2026-08-19) — Settings ▸ Radio's audio half (Audio, Headphone monitor,
   // Satellite Doppler, Orbital elements, Rotator) and the SETUP WIZARD, migrated together
   // because the wizard's steps ARE those settings: two surfaces asking the same question in
@@ -529,6 +533,10 @@ const MIGRATED = [
   // word is the only entry, the same split the AI decoder's 400–1200 Hz window and the BW
   // nudge's ±50 Hz take inside their sentences.
   'components/CwCockpit.tsx',
+  // The CW turn cue (2026-10-21) — born migrated: the lamp's words, its pace hint and what a screen
+  // reader hears are all the catalog's (`cw.turn.*`, `cw.pace.*`); only its glyphs are in the code.
+  'components/CwTurnLamp.tsx',
+  'features/cwTurn.ts',
   // The CW zero-beat indicator (2026-08-28) — born migrated, so it never joins the
   // un-migrated backlog. Its only invariants are `Hz` and the signed offset it formats.
   'components/ZeroBeat.tsx',
@@ -670,6 +678,9 @@ const MIGRATED = [
   'components/Js8ListsSettings.tsx',
   // Settings ▸ Digital ▸ JS8's JS8Call API switches and ports — migrated from birth.
   'components/Js8ApiSettings.tsx',
+  // Settings ▸ Radio ▸ Transmit limits & sharing ▸ Share by TCI: the TCI server's switches, port
+  // and connected programs. Migrated from birth; the addresses it shows are data.
+  'components/TciServerSettings.tsx',
   // The voice keyer's Delete and its Undo window — migrated from birth.
   'features/voiceDelete.ts',
 ]

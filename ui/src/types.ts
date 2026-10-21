@@ -1549,6 +1549,10 @@ export interface RadioStatus {
   /** The licence lock is the phone MODE alone: LSB, AM or FM on 60 m, where a USB pick would key.
    *  Name that rule instead of the frequency. `txAllowed` is false with it. Absent when false. */
   phoneModeRefused?: boolean
+  /** The rig is held on an FM channel at or above 29 MHz, so FM is commanded whatever the
+   *  section's own policy says: in Phone, the FM channel kept from the SSTV screen. The Phone
+   *  cockpit's AUTO reads FM from it. Absent when false. */
+  fmChannel?: boolean
   /** Whether a tune carrier is currently keyed. */
   tuning: boolean
   /** ⭐ WHO HOLDS THE TRANSMITTER, or null/undefined when nobody does — the engine's
@@ -1576,8 +1580,9 @@ export interface RadioStatus {
    *  takes it. Kept until TX is turned on again; absent otherwise, and from a station older than
    *  it. */
   slotUnkeyFailed?: SlotUnkeyFailed | null
-  /** A slot over (FT8, FT4, JS8 …) lost its audio part way through: Flex native DAX audio went off
-   *  under it, or its DAX transmit route went, so the station ended it there and halted transmit.
+  /** A slot over (FT8, FT4, JS8 …) lost its audio part way through: the route carrying it (Flex
+   *  native DAX audio, or Nexus's transmit audio over TCI) went, so the station ended it there and
+   *  halted transmit.
    *  Kept until TX is turned on again; absent otherwise, and from a station older than it. */
   slotAudioLost?: SlotAudioLost | null
   /** The last FT8 or FT4 over the station dropped because the radio keyed it only after its period
@@ -1638,6 +1643,9 @@ export interface RadioStatus {
    *  renders this INSTEAD of the address, because with the bind refused that address is one
    *  nothing is listening on. */
   catShareError?: string | null
+  /** "Share by TCI" as the station runs it: where programs connect, why it is not serving, and the
+   *  programs connected. Absent while the server is off (mirror of the Rust TciServerStatus). */
+  tciServer?: TciServerStatus | null
   /**
    * What is wrong with the RF SCOPE source, separate from `audioError` — different problem, different
    * cure, and both can be true at once.
@@ -1752,16 +1760,45 @@ export interface CwDecodeResult {
   rst: string | null
   /** The other station's name, read from the decode (e.g. "BOB"), else null. */
   name: string | null
-  /** Guided QSO-state tag: "listening" | "cq" | "answered" | "report" | "73". */
-  state: string
-  /** Plain-English state, e.g. "W1ABC is calling CQ". */
-  headline: string
-  /** Guided instruction, e.g. "Press Answer (F2) to call them". */
-  prompt: string
-  /** Recommended action id to highlight: "F2" | "F3" | "log", or null. */
-  recommended: string | null
+  /** Whose turn it is and what fits, for the turn cue (`tempo_core::cw_turn`): null unless the
+   *  AI decoder is on and keeping up, and in an unassisted entry. Absent from an older station. */
+  turn?: CwTurn | null
   /** The operator-confirmed worked callsign (active peer), if any. */
   workedCall: string | null
+  /** An unassisted contest entry is declared at the station: no CW decoder runs, so every field the
+   *  decoder fills is empty, and the Decode pane says why. Absent from an older station. */
+  unassisted?: boolean
+}
+
+/** Where a CW contact stands, as the station reads it from the AI decoder's copy. */
+export type CwTurnState =
+  | 'idle'
+  | 'theySend'
+  | 'finishing'
+  | 'yourTurn'
+  | 'hold'
+  | 'unsure'
+  | 'youSend'
+  | 'listen'
+  | 'closing'
+
+/** The KIND of message that fits; the cockpit finds the key that sends it in the set in use. */
+export type CwTurnRole = 'cq' | 'answer' | 'reply' | 'myCall' | 'exchange' | 'tu' | 'close' | 'again' | 'repeat'
+
+/** What the lamp says beside the state. */
+export type CwTurnHint = 'type' | 'fiveNnTu' | 'partial' | 'splitOff' | 'noReply' | 'late'
+
+/** The CW turn read. It never sends: the cockpit lights a key, and the operator presses it. */
+export interface CwTurn {
+  state: CwTurnState
+  role: CwTurnRole | null
+  hint: CwTurnHint | null
+  /** The station the lamp names: the one sending, or the one the over was for. */
+  call: string | null
+  /** Which over: its first letter's stream time in ms. A turn is announced once per over. */
+  over: number | null
+  /** What the lamp counts down (seconds): our listening after a CQ or a call, or a race. */
+  window: { total: number; left: number } | null
 }
 
 /** One signal found by the wideband CW skimmer (audio pitch + text + WPM). */
@@ -2917,6 +2954,10 @@ export interface SpotRow {
    *  counted by the same scoring). Never one `contestMults` lists. Absent with no file, no entry,
    *  call history off, outside a contest, and from an older station. */
   contestPredicted?: SpotPredictedMult[]
+  /** The program on Nexus's TCI server that sent this spot, by its connection's number (as Settings
+   *  ▸ Share by TCI lists it), when a program did (`getTciSpots`). ⛔ A click on such a spot only
+   *  tunes (`clickTciSpot`), never a Work. Absent on every cluster and skimmer spot. */
+  tci?: number | null
 }
 
 /** One multiplier the call history predicts for a spotted station (`SpotRow.contestPredicted`). */
@@ -4481,8 +4522,10 @@ export interface Settings {
    *  exactly as `baud` is. Full scale for the Phone cockpit's analog PO arc. */
   ratedWatts?: number
   /** Rig connection: "serial" (default), "network" (rigctld → rigAddr over TCP, e.g. a
-   * FlexRadio via SmartSDR), or "omnirig" (VE3NEA's Windows COM rig-control server drives the
-   * radio; Nexus serves the rigctld protocol over it — Windows only). */
+   * FlexRadio via SmartSDR), "omnirig" (VE3NEA's Windows COM rig-control server drives the
+   * radio; Nexus serves the rigctld protocol over it — Windows only), "icomlan" (the Icom
+   * network connection), or "tci" (an SDR program's TCI server at tciHost:tciPort; the radio
+   * stores TCI's own model, `TCI_RIG_MODEL` in tci.ts). */
   rigConn: string
   /** Network rig address host:port when rigConn === "network" (e.g. "192.168.1.50:4992"). */
   rigAddr: string
@@ -4584,6 +4627,19 @@ export interface Settings {
   catBroker: boolean
   /** TCP port the CAT broker listens on (Hamlib NET rigctl default 4532). */
   catBrokerPort: number
+  /** Nexus as a TCI server for programs on this computer (127.0.0.1 and ::1 only). Off by default.
+   *  The station's, not a radio's, and set at the station only, as are the four after it. */
+  tciServer?: boolean
+  /** The TCP port the TCI server listens on: 40001 unless moved. */
+  tciServerPort?: number
+  /** "Programs on TCI may transmit". Off by default; every Nexus transmit gate still applies. */
+  tciServerTx?: boolean
+  /** Programs' CW macros, keyed by Nexus in the CW section only, and only while tciServerTx is on.
+   *  On by default. */
+  tciServerCw?: boolean
+  /** Programs' spots on the band map, and a click on a spot told back to them. On by default; a
+   *  spot or a click never transmits. */
+  tciServerSpots?: boolean
   /** The rig's serial HANDSHAKE as the operator DECLARES it (`cat_serial_handshake`):
    *  `auto` | `none` | `hardware` | `xonxoff`. `auto` (the default) is today's behaviour to the
    *  byte — Nexus infers it exactly as before. Anything else REPLACES that inference.
@@ -4619,6 +4675,18 @@ export interface Settings {
   icomLanUser?: string
   /** The radio's control port (UDP), 50001 unless moved on the radio. */
   icomLanPort?: number
+  /** The radio in use's TCI connection (the "TCI" Connection choice): the SDR program's server
+   *  address (127.0.0.1 unless moved) and port (50001), which of its transceivers (from 0), its
+   *  dialect ('auto' | 'expertsdr3' | 'thetis' | 'pihpsdr'), Nexus's audio over it, both ways (on
+   *  by default), the SDR program's spectrum in Nexus's scope and Nexus's spots on its panadapter
+   *  (both off). Per radio: see RadioProfile. */
+  tciHost?: string
+  tciPort?: number
+  tciTrx?: number
+  tciDialect?: string
+  tciAudio?: boolean
+  tciPan?: boolean
+  tciSpots?: boolean
   /** Let a broker client (WSJT-X/N1MM) key PTT when Nexus is idle. OFF by
    * default — Nexus owns TX unless the operator opts in. */
   catBrokerPtt?: boolean
@@ -5020,6 +5088,8 @@ export interface Settings {
   soundTxState?: boolean
   /** Soft tick when a decode batch lands. Off by default. */
   soundDecodeTick?: boolean
+  /** A short rising chirp when the CW turn cue says it is your turn. Off by default. */
+  soundCwTurn?: boolean
   // --- Auto-CQ caller selection (W1.4) ---
   /** When several stations answer your CQ, which to work first:
    *  'first' (stock), 'strongest', 'farthest', or 'cq_first'. */
@@ -5289,6 +5359,14 @@ export interface RadioProfile {
   icomLanHost?: string
   icomLanUser?: string
   icomLanPort?: number
+  /** This radio's TCI connection: see Settings.tciHost and the six after it. */
+  tciHost?: string
+  tciPort?: number
+  tciTrx?: number
+  tciDialect?: string
+  tciAudio?: boolean
+  tciPan?: boolean
+  tciSpots?: boolean
 }
 
 /** A compact per-radio summary for the multi-radio switcher (dual-radio). One per configured
@@ -5362,6 +5440,10 @@ export interface AppSnapshot {
   /** The park or summit of the last worked spot, when a Needed row named one: the log line fills it
    *  with `workCall`. Never a hunt. Absent when there is none. */
   workPark?: { program: string; reference: string } | null
+  /** The last Work came from afar (a computer driving this station) and entered its section without
+   *  arming Enable TX: App opens its cockpit without re-asserting the section, which from the
+   *  station's own screen would arm the latch. Absent for a Work made at the station. */
+  workAfar?: boolean
   /** Pending one-click POTA/SOTA hunt (next QSO with this call auto-tags). */
   /** `states`: where the hunted park or summit is ("US-ND"; two or more for a park on a state
    *  line), absent when the hunt could not place it. */
@@ -5476,6 +5558,36 @@ export type AudioErrorKind =
   | 'voiceMic'
   | 'recording'
   | 'decodeCrash'
+
+/** The TCI server while it is switched on (mirror of the Rust TciServerStatus,
+ *  `RadioStatus.tciServer`). */
+export interface TciServerStatus {
+  /** The port programs connect to on the station's computer (127.0.0.1 and ::1) while it serves:
+   *  the one asked for, or the next one when another Nexus window holds that. Null while it cannot
+   *  serve. */
+  port: number | null
+  /** Why it is not serving although switched on, in the station's words; null while it serves. */
+  error: string | null
+  /** The programs connected now, in the order they connected. */
+  programs: TciProgramStatus[]
+  /** Moves on with every change to the spots programs sent, so a window asks for them
+   *  (`getTciSpots`) only when they changed; 0 until the first. Absent from an older station. */
+  spots?: number
+}
+
+/** One program connected to the TCI server (mirror of the Rust TciProgramStatus). */
+export interface TciProgramStatus {
+  /** Its number, from 1 in the order programs connected; what a Disconnect names. */
+  id: number
+  /** Where it connects from (`127.0.0.1:53412`). TCI carries no program name. */
+  peer: string
+  /** It is being sent receive audio. */
+  audio: boolean
+  /** A key of its was admitted and has not ended. */
+  keyed: boolean
+  /** The last thing Nexus refused it, in the station's connection-log words; null when nothing. */
+  refused: string | null
+}
 
 /** What is shown beside the ATU while Nexus's Flex client runs a FlexRadio's own tuner (mirror of
  *  the Rust FlexAtu, `RadioStatus.flexAtu`). Read and shown; Nexus writes none of it. */

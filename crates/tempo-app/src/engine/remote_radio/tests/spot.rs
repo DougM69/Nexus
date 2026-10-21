@@ -77,6 +77,13 @@ fn spot_commit_matches_native_context_and_exact_frequency_without_arming() {
         );
         assert_eq!(s.engine.work_tick, tick + 1);
         assert_eq!(s.engine.work_view.as_deref(), Some(mode));
+        // The hint names where each Work came from: the station's own window follows this one into
+        // the cockpit without re-asserting the section, which from its screen would arm the latch.
+        assert!(s.engine.work_afar, "the browser's Work is from afar");
+        assert!(
+            !native.engine.work_afar,
+            "the desktop's Work is the station's own"
+        );
         assert_eq!(s.engine.work_call.as_deref(), Some("N2SPOT/P"));
         assert_eq!(s.engine.sideband_override, None);
         native.engine.settings.save(&native.path).unwrap();

@@ -1650,6 +1650,73 @@ async fn forgetting_a_station_ends_its_internet_road_at_the_service_first() {
     }
 }
 
+/// A P-256 key's private half, out of the PKCS#8 document ring writes (lowercase hex): the 32 bytes
+/// after its `02 01 01 04 20`. Held to that shape, so a document laid out otherwise fails here instead
+/// of a search for the private half finding nothing.
+fn private_half(pkcs8: &str) -> &str {
+    assert_eq!(
+        pkcs8.len(),
+        276,
+        "a P-256 PKCS#8 document as ring writes one"
+    );
+    assert_eq!(
+        &pkcs8[62..72],
+        "0201010420",
+        "where its private half starts"
+    );
+    &pkcs8[72..136]
+}
+
+/// ★ The station asks the operator to approve this computer only if the key it shows matches the one
+/// Nexus shows here, so `stations` tells the page, for each station the internet road has been added
+/// to, this computer's key for that road as the station shows it: SHA-256 of the road key's public
+/// half (SPKI), lowercase hex. Never a private key, the road's or the LAN road's, whole or its private
+/// half alone, in either case. CONTROL: a station with no internet road is not listed there.
+#[tokio::test]
+async fn the_page_is_shown_this_computers_key_for_each_internet_road_never_a_private_key() {
+    const OTHER: &str = "60000000-0000-4000-8000-000000000002";
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    let paired = record(STATION, &["192.168.1.20:42075"]);
+    stations.keep(&paired).unwrap();
+    stations
+        .keep(&record(OTHER, &["192.168.1.21:42075"]))
+        .unwrap();
+    let (station_key, _) = ComputerKey::generate().unwrap();
+    let (_, pkcs8) = ComputerKey::generate().unwrap();
+    let road = InternetRoad {
+        station_id: "20000000-0000-4000-8000-000000000001".into(),
+        device_id: "30000000-0000-4000-8000-000000000002".into(),
+        station_key: station_key.public_key().to_string(),
+        pkcs8,
+    };
+    stations.keep_internet(STATION, &road).unwrap();
+    let origin = Origin::start(reach(store)).unwrap();
+    let mut socket = page_socket(&origin).await;
+    let told = said(&mut socket, json!({"type":"stations"})).await;
+    let text = told.to_string();
+    for (whose, pkcs8) in [
+        ("the road's", &road.pkcs8),
+        ("the LAN road's", &paired.pkcs8),
+    ] {
+        let private = private_half(pkcs8);
+        assert!(
+            !text.contains(pkcs8.as_str())
+                && !text.contains(private)
+                && !text.contains(&private.to_ascii_uppercase()),
+            "{whose} private key told to the page: {text}"
+        );
+    }
+    let public = ComputerKey::restore(&road.pkcs8).unwrap();
+    let spki = protocol::hex_bytes(public.public_key()).unwrap();
+    let shown = hex(ring::digest::digest(&ring::digest::SHA256, &spki).as_ref());
+    assert_eq!(
+        told["internet"],
+        json!([{"id":STATION,"key":shown}]),
+        "this computer's key for the road, as the station shows it: {text}"
+    );
+}
+
 /// ★ The window and a station kept by its service id: a sign-in that keeps one says so (`signedIn`
 /// with `away`), `stations` lists it apart (`away`: its id, its name and its LAN key's fingerprint,
 /// never this computer's key), Operate from this computer starts Nexus driving it by that id, and
@@ -1665,6 +1732,7 @@ async fn the_window_lists_operates_and_forgets_a_station_kept_away() {
     let away = away_record(AWAY, "Shack");
     let road = road_to(AWAY);
     stations.keep_away(&away, &road).unwrap();
+    let key = super::internet::shown_key(&road).unwrap();
     let started = Arc::new(std::sync::Mutex::new(Vec::new()));
     let forgot: Arc<Mutex<Vec<String>>> = Arc::default();
     let origin = Origin::start(Reach {
@@ -1679,15 +1747,20 @@ async fn the_window_lists_operates_and_forgets_a_station_kept_away() {
                 Box::pin(async { Ok(()) })
             })
         },
-        sign_in: Arc::new(|_, _, _| {
-            Box::pin(async {
-                Ok(super::account::Signed {
-                    station: AWAY.into(),
-                    waiting: false,
-                    away: true,
+        sign_in: {
+            let key = key.clone();
+            Arc::new(move |_, _, _| {
+                let key = key.clone();
+                Box::pin(async move {
+                    Ok(super::account::Signed {
+                        station: AWAY.into(),
+                        waiting: false,
+                        away: true,
+                        key,
+                    })
                 })
             })
-        }),
+        },
         ..reach(store.clone())
     })
     .unwrap();
@@ -1698,7 +1771,7 @@ async fn the_window_lists_operates_and_forgets_a_station_kept_away() {
     );
     assert_eq!(
         heard_from(&mut socket).await,
-        json!({"type":"signedIn","stationId":AWAY,"waiting":false,"away":true})
+        json!({"type":"signedIn","stationId":AWAY,"waiting":false,"away":true,"key":key})
     );
     let told = said(&mut socket, json!({"type":"stations"})).await;
     assert_eq!(told["stations"][0]["id"], STATION, "{told}");
@@ -1740,13 +1813,15 @@ async fn heard_from(
 /// ★ Signing in with the account's two stations: the page is offered each one (`chooseStation`),
 /// the one the operator picks goes back to the sign-in; asked where that station is
 /// (`stationAddress`, with why the last address did not take this computer), the address the
-/// operator types goes back too; and the sign-in's end is said (`signedIn`). CONTROL: cancelled at
-/// the pick, the sign-in is told none was picked and says so (`signInRefused`); a second sign-in
-/// while one waits is refused (`signInUnderWay`).
+/// operator types goes back too; and the sign-in's end is said (`signedIn`, with this computer's
+/// key for the road as the station shows it). CONTROL: cancelled at the pick, the sign-in is told
+/// none was picked and says so (`signInRefused`); a second sign-in while one waits is refused
+/// (`signInUnderWay`).
 #[tokio::test]
 async fn the_page_picks_the_station_and_says_where_it_is_while_signing_in() {
     use super::internet::Choice;
     const CLUB: &str = "20000000-0000-4000-8000-0000000000c1";
+    const ROAD_KEY: &str = "9f8e7d6c5b4a39289f8e7d6c5b4a39289f8e7d6c5b4a39289f8e7d6c5b4a3928";
     for pick in [Some(STATION), None] {
         // What each sign-in was asked for, and what the operator picked and typed.
         type Told = Arc<Mutex<Vec<(Option<String>, Option<String>, Option<String>)>>>;
@@ -1778,6 +1853,7 @@ async fn the_page_picks_the_station_and_says_where_it_is_while_signing_in() {
                         station: STATION.into(),
                         waiting: false,
                         away: false,
+                        key: ROAD_KEY.into(),
                     })
                 })
             }),
@@ -1824,7 +1900,7 @@ async fn the_page_picks_the_station_and_says_where_it_is_while_signing_in() {
                 assert_eq!(
                     heard_from(&mut socket).await,
                     json!({"type":"signedIn","stationId":STATION,"waiting":false,
-                        "away":false})
+                        "away":false,"key":ROAD_KEY})
                 );
                 assert_eq!(
                     *told.lock().unwrap(),

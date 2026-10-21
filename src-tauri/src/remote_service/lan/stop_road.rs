@@ -100,6 +100,13 @@ pub(crate) const TICK: Duration = Duration::from_millis(20);
 /// Presses remembered as refused per road, so a refused press never keys later.
 const REFUSED_KEPT: usize = 64;
 
+/// Each Stop's acknowledgement as it left the shack, by its road's tag and its number, for the
+/// tests: a Stop's acknowledgement is timed here, never by when a test's own end of the road, its
+/// thread starved on a loaded machine, gets round to reading it. Noted after the answer has gone,
+/// so it holds up no Stop.
+#[cfg(test)]
+pub(crate) static ANSWERED: Mutex<Vec<(Tag, u64, Instant)>> = Mutex::new(Vec::new());
+
 // --- What a start on the command link needs ------------------------------------------------------
 
 /// One connection's road as its command lane reads it before a transmission starts from that
@@ -731,6 +738,11 @@ impl Thread {
                 road.ready.took_stop(stop);
                 self.powers.stop.stop();
                 answer(&self.carrier, road, &Down::Stopped { stop });
+                #[cfg(test)]
+                ANSWERED
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push((tag, stop, Instant::now()));
             }
             Up::Hold { press, stops } => {
                 if road.closed.is_some() {

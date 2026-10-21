@@ -339,6 +339,7 @@ impl AppState {
                 tx_emission_mhz: None,
                 phone_usb_only: false,
                 phone_mode_refused: false,
+                fm_channel: false,
                 tuning: false,
                 tx_watchdog: false,
                 slot_key_refused: None,
@@ -360,6 +361,7 @@ impl AppState {
                 audio_error: None,
                 audio_error_kind: None,
                 cat_share_error: None,
+                tci_server: None,
                 scope_error: None,
                 scope_span_refused: None,
                 scope_mode_code: None,
@@ -1012,6 +1014,7 @@ impl AppState {
             work_view: None,
             work_call: None,
             work_park: None,
+            work_afar: false,
             field_day: None,
             // The engine's club link (fills in snapshot()).
             club_link: None,

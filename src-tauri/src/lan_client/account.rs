@@ -168,12 +168,15 @@ fn now_s() -> u64 {
 
 /// What a sign-in did: the station's id on this computer, whether its internet road waits for
 /// Approve at the station (a station paired with a code whose owner has not signed in at the shack),
-/// and whether it is kept by its service id until this computer first reaches it on its network.
+/// whether it is kept by its service id until this computer first reaches it on its network, and
+/// this computer's key for its internet road as the station shows it (`internet::shown_key`), which
+/// the station asks the operator to compare before approving this computer.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Signed {
     pub(crate) station: String,
     pub(crate) waiting: bool,
     pub(crate) away: bool,
+    pub(crate) key: String,
 }
 
 /// Signs in through `open`'s browser, on the sign-in's own port: to add a station new to this
@@ -418,6 +421,7 @@ async fn add(
                 station_key: station.station_key,
                 pkcs8: staged.road,
             };
+            let key = internet::shown_key(&internet).ok_or("notStation")?;
             store(env, move |stations| {
                 stations.keep_away(&kept, &internet)?;
                 stations.drop_staged()
@@ -427,6 +431,7 @@ async fn add(
                 station: id,
                 waiting: !approved,
                 away: true,
+                key,
             });
         }
         reached => reached?,
@@ -444,6 +449,7 @@ async fn add(
         station_key: station.station_key,
         pkcs8: staged.road,
     };
+    let key = internet::shown_key(&internet).ok_or("notStation")?;
     let issued_at = proven.own.issued_at;
     let id = lan_id.clone();
     store(env, move |stations| {
@@ -457,6 +463,7 @@ async fn add(
         station: lan_id,
         waiting: !approved,
         away: false,
+        key,
     })
 }
 
@@ -540,6 +547,7 @@ async fn link(
             (internet, approved, None)
         }
     };
+    let key = internet::shown_key(&internet).ok_or("notStation")?;
     let kept = id.clone();
     store(env, move |stations| {
         stations.keep_internet(&kept, &internet)?;
@@ -558,6 +566,7 @@ async fn link(
         station: id,
         waiting: !approved,
         away: false,
+        key,
     })
 }
 
@@ -571,6 +580,7 @@ async fn again(
     ask: Ask,
 ) -> Result<Signed, &'static str> {
     let (lan, road_key) = (restore(&record.pkcs8)?, restore(&road.pkcs8)?);
+    let key = internet::shown_key(&road).ok_or("notStation")?;
     let proven = signed(env, &road_key, &lan, browser).await?;
     let order = order(env, &record).await;
     let (lan_id, lan_device, at) = reach(
@@ -595,6 +605,7 @@ async fn again(
         station: record.station_id,
         waiting: false,
         away: false,
+        key,
     })
 }
 
@@ -611,6 +622,7 @@ async fn arrive(
     ask: Ask,
 ) -> Result<Signed, &'static str> {
     let (lan, road_key) = (restore(&away.pkcs8)?, restore(&road.pkcs8)?);
+    let key = internet::shown_key(&road).ok_or("notStation")?;
     let proven = signed(env, &road_key, &lan, browser).await?;
     let (lan_id, lan_device, at) = reach(
         env,
@@ -634,6 +646,7 @@ async fn arrive(
         station: lan_id,
         waiting: false,
         away: false,
+        key,
     })
 }
 

@@ -150,7 +150,7 @@ All three surfaces apply the same admission gates. A station that fails the VHF 
 
 ## Pop-Out Window
 
-The Needed board can be detached into a standalone second-monitor window. The popped-out window polls independently at 15-second intervals. However, the `onWork` handler is omitted from the pop-out context: clicking a CW or Phone row in the pop-out window will QSY the rig's band but will not navigate to the exact spot frequency and will not prefill the log. Use the main-window board when you want the full atomic click-to-work behavior.
+The Needed board can be detached into a standalone second-monitor window. The popped-out window polls independently at 15-second intervals. Clicking a row there works the spot as the main-window board does: the same atomic `workSpot` call moves the rig to the spot's mode and exact frequency, and the main window follows to the matching cockpit, with the callsign prefilled on a CW or Phone row.
 
 ---
 
@@ -160,7 +160,6 @@ The Needed board can be detached into a standalone second-monitor window. The po
 - **CW and Phone rows come from cluster/RBN.** These feeds are on by default (cluster nodes chosen automatically, RBN auto-wired), so CW and Phone rows appear without setup — but they require internet, since PSK Reporter does not carry CW or Phone spots.
 - **VHF gates require a correct grid in Settings.** Without a grid set, haversine distance is undefined and no VHF near-me filtering is applied.
 - **POTA/SOTA chips require a fresh activator cache.** If the cache is older than 10 minutes, the chips do not appear on board rows.
-- **Pop-out window one-click work is partial.** The popped-out window QSYs band only; it does not navigate to the cockpit or prefill the callsign.
 - **Desktop-only** (Tauri v2); no mobile or web version.
 
 ---

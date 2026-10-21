@@ -161,7 +161,7 @@ describe('the event the advisory names', () => {
 })
 
 describe('the assistance advisory', () => {
-  const LIVE = ['AI CW decoder', 'DX cluster / RBN', 'PSK Reporter needs']
+  const LIVE = ['CW decoder', 'DX cluster / RBN', 'PSK Reporter needs']
 
   it('DORMANT (the shipped 2026 seed): everything allowed ⇒ invisible even with every source live', () => {
     render(<FdAdvisories fdActive ruleset={WFD} assistanceOn={LIVE} showAssistance />)

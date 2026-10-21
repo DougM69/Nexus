@@ -9803,6 +9803,13 @@ input.cw-pitch::-webkit-inner-spin-button {
   color: var(--text-faint);
   font-style: italic;
 }
+/* An unassisted contest entry: the one line the Decode pane holds in place of the copy, saying why
+   there is none (CwCockpit). */
+.cw-decode-off {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--text-dim);
+}
 /* The AI decoder's unconfirmed tail, replaced by its next pass (confirmed copy is --text). */
 .cw-decode-unconfirmed {
   color: var(--cw-unconfirmed);
@@ -9948,10 +9955,21 @@ input.cw-pitch::-webkit-inner-spin-button {
   border-color: var(--accent, #4ea1ff);
   cursor: default;
 }
-/* Guided mode: the single recommended next key glows so a non-CW op just follows it. */
-.cw-macro.recommended {
-  border-color: var(--accent, #4ea1ff);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #4ea1ff) 45%, transparent);
+/* THE TURN CUE on a CW F-key (CwCockpit): lit when it is your turn or they are signing, a dashed
+   outline while their over ends, dotted when it is only a suggestion. A colour, a shadow and an
+   outline, never a border width: the key keeps its size, so nothing in the dock moves as the cue
+   comes and goes, and keyboard focus keeps its own ring. */
+.cw-macro.turn-now {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.cw-macro.turn-soon:not(:focus-visible) {
+  outline: 2px dashed var(--accent);
+  outline-offset: 1px;
+}
+.cw-macro.turn-maybe:not(:focus-visible) {
+  outline: 2px dotted var(--accent);
+  outline-offset: 1px;
 }
 /* ENTER SENDS MESSAGE: the key or keys the next Enter in the contest strip sends glow — the CW
    and RTTY F-keys, and the voice keyer's slots. */
@@ -10084,6 +10102,101 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-family: var(--font-mono);
   font-weight: 700;
   text-transform: uppercase;
+}
+/* THE TURN LAMP (CwTurnLamp), first on the send row. Its slot is a share of the row, never the
+   width of its words, so what it says never moves His Call or Send; when the row is short of room
+   it gives way first, the words cut and the glyph kept (`min-width`, not a size @media), and its
+   tooltip leads with the whole line. 17em holds every English line and every language's main
+   states (measured in Chrome at 85%: the longest English, "Probably you · F5 once", needs 14.5em;
+   at 12em German's "Sie sind dran · F2" was cut). Every
+   state has its own glyph and words, and the colour and the border style only repeat them: the
+   accent filled for your turn, amber for the other station sending, dashed for hold, dotted for
+   not sure. The text is the theme's own ink, or the accent's ink on the accent. */
+.cw-turn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 1 17em;
+  min-width: 2.4em;
+  overflow: hidden;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.cw-turn-glyph {
+  flex: 0 0 auto;
+}
+.cw-turn-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cw-turn[data-turn='idle'],
+.cw-turn[data-turn='listen'] {
+  color: var(--text-dim);
+}
+.cw-turn[data-turn='theySend'],
+.cw-turn[data-turn='finishing'] {
+  border-color: var(--state-warn);
+}
+.cw-turn[data-turn='theySend'] .cw-turn-glyph,
+.cw-turn[data-turn='finishing'] .cw-turn-glyph {
+  color: var(--state-warn);
+}
+.cw-turn[data-turn='yourTurn'] {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.cw-turn[data-turn='closing'] {
+  border-color: var(--accent);
+}
+.cw-turn[data-turn='hold'] {
+  border-style: dashed;
+  border-color: var(--state-warn);
+}
+.cw-turn[data-turn='unsure'] {
+  border-style: dotted;
+  border-color: var(--accent);
+}
+/* The window the lamp counts down (our listening, or a race): a ring that empties as the read
+   steps; it never animates on its own. */
+.cw-turn-ring {
+  flex: 0 0 auto;
+  width: 0.9em;
+  height: 0.9em;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: conic-gradient(currentColor calc(var(--cw-turn-left, 0) * 360deg), transparent 0);
+}
+/* The turn cue's pace hint in the Decode head: their speed beside ours, a button that keys at
+   theirs for this contact. An amber border with the ⇣ when ours is 3 WPM or more faster; the
+   figures stay in the theme's ink, which amber text would not match for contrast on the light
+   theme. */
+.cw-pace {
+  padding: 0 var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  font-size: calc(11px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cw-pace:hover:not(:disabled) {
+  border-color: var(--border);
+  color: var(--text);
+}
+.cw-pace.fast {
+  border-color: var(--state-warn);
+  color: var(--text);
 }
 
 /* ---- Shared cockpit log strip (CW + Phone): rich entry — autofill, prior-QSO, notes ---- */
@@ -12516,6 +12629,45 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   min-height: 36px;
   font-weight: 700;
   white-space: nowrap;
+}
+/* Spot me in the Spots board's head (SpotsSpotMe.tsx): the same pair, drawn like the search box and
+   the funnel beside it. */
+.np-spot-me {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.np-spot-comment {
+  width: 13ch;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.73rem;
+  padding: 3px 6px;
+}
+.np-spot-comment:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.np-spot-btn {
+  font-size: 0.73rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  white-space: nowrap;
+}
+.np-spot-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.np-spot-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 /* Export buttons in the Field Day header (moved from deleted LogView), right after Running / S&P:
@@ -15707,6 +15859,42 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   min-width: 12px;
   padding: 0 2px;
   font-weight: 700;
+}
+/* A spot a program on Nexus's TCI server sent: drawn as a cluster spot is, but dotted, with its
+ * source ("TCI 2", the program's connection number) beside the call. Outlined and muted as the
+ * beacon badge is: it says where the spot came from, never why it is worth working. */
+.spot-type-badge.type-tci {
+  background: transparent;
+  border: 1px solid var(--text-dim);
+  color: var(--text-dim);
+  width: auto;
+  min-width: 12px;
+  padding: 0 2px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+/* In the strip's hover label (ink on the text colour), in the label's own ink. */
+.bandstrip-spot-call .spot-type-badge.type-tci {
+  margin-left: var(--space-1);
+  border-color: currentColor;
+  color: inherit;
+}
+.bandstrip-spot.from-tci .bandstrip-tick {
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--need-color, var(--accent)) 0 3px,
+    transparent 3px 5px
+  );
+}
+.bandmap-tick.from-tci {
+  background: repeating-linear-gradient(
+    to right,
+    var(--need-color, var(--accent)) 0 3px,
+    transparent 3px 5px
+  );
+}
+.bandmap-spot.from-tci {
+  border-left-style: dotted;
 }
 /* The shared colour + type key. Compact, wraps, small — a reference row, not chrome. */
 .spot-legend {

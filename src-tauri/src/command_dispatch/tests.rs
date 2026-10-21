@@ -731,6 +731,18 @@ const RUNS_A_PROGRAM: &[Change] = &[("tqsl_path", |s| {
     s.tqsl_path = r"C:\Users\Public\evil.exe".into()
 })];
 
+/// ⛔ The TCI server, the station's and set at the shack only: the server itself and its port,
+/// "Programs on TCI may transmit", and the CW and the spots it takes from programs.
+const THE_TCI_SERVER: &[Change] = &[
+    ("tci_server", |s| s.tci_server = !s.tci_server),
+    ("tci_server_port", |s| s.tci_server_port = 40002),
+    ("tci_server_tx", |s| s.tci_server_tx = !s.tci_server_tx),
+    ("tci_server_cw", |s| s.tci_server_cw = !s.tci_server_cw),
+    ("tci_server_spots", |s| {
+        s.tci_server_spots = !s.tci_server_spots
+    }),
+];
+
 /// What neither starts a transmission nor guards one, among them the fields beside the guards that
 /// read most like one: a save from afar takes each.
 const NEITHER: &[Change] = &[
@@ -766,9 +778,9 @@ fn moved(a: &tempo_app::settings::Settings, b: &tempo_app::settings::Settings) -
 }
 
 /// ⛔ A settings save from afar changes no setting that lets the station transmit by itself, none
-/// that guards a transmission and not the program the shack runs: for each, the save from afar
-/// comes out as the shack's settings exactly, and the same save from the shack's own screen takes
-/// it.
+/// that guards a transmission, not the program the shack runs and none of the TCI server's: for
+/// each, the save from afar comes out as the shack's settings exactly, and the same save from the
+/// shack's own screen takes it.
 #[test]
 fn a_settings_save_from_afar_keeps_every_transmit_setting_at_the_shacks_value() {
     let shack = tempo_app::settings::Settings::default();
@@ -777,6 +789,7 @@ fn a_settings_save_from_afar_keeps_every_transmit_setting_at_the_shacks_value() 
         .iter()
         .chain(TX_GUARDS)
         .chain(RUNS_A_PROGRAM)
+        .chain(THE_TCI_SERVER)
     {
         let mut asked = shack.clone();
         change(&mut asked);
@@ -895,6 +908,60 @@ fn a_radio_edit_from_afar_keeps_that_radios_ptt() {
     assert!(
         takes_afar("update_radio_profile"),
         "the lane says where it came from"
+    );
+}
+
+/// ⛔ "PROGRAMS ON TCI MAY TRANSMIT" IS SET AT THE SHACK ONLY. A whole save from afar neither
+/// turns it on nor off, nor the server under it; a radio's edit from afar cannot name it, since it
+/// is the station's and no radio's; and the read from afar says it is set at the station.
+/// CONTROL: the same save from the shack's own screen takes both, and a field beside them is taken
+/// from afar.
+#[test]
+fn a_save_from_afar_never_lets_programs_on_tci_transmit() {
+    let shack = two_radio_shack();
+    assert!(!shack.tci_server && !shack.tci_server_tx, "premise: off");
+    let afar = Afar { stand_down: 3 };
+    let on = |s: &tempo_app::settings::Settings| (s.tci_server, s.tci_server_tx);
+    let mut asked = shack.clone();
+    asked.tci_server = true;
+    asked.tci_server_tx = true;
+    asked.cw_wpm = 31;
+    let mut save = asked.clone();
+    keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+    assert_eq!(
+        on(&save),
+        (false, false),
+        "from afar, programs on TCI may transmit"
+    );
+    assert_eq!(save.cw_wpm, 31, "CONTROL: the rest of the save");
+    // …and off: a save from afar does not turn the shack's own off either.
+    let mut save = shack.clone();
+    keep_the_shacks_settings(&asked, &mut save, Some(&afar));
+    assert_eq!(on(&save), (true, true), "turned off from afar");
+    let mut save = asked.clone();
+    keep_the_shacks_settings(&shack, &mut save, None);
+    assert_eq!(on(&save), (true, true), "CONTROL: the shack's own form");
+
+    // A radio's edit from afar that names them anyway changes neither.
+    let mut patch = serde_json::to_value(&shack.radios[1]).unwrap();
+    patch["tciServer"] = json!(true);
+    patch["tciServerTx"] = json!(true);
+    let mut patch: tempo_app::settings::RadioProfilePatch =
+        serde_json::from_value(patch).expect("a radio's edit");
+    keep_the_shacks_radio_ptt(&shack, 1, &mut patch, Some(&afar));
+    keep_the_shacks_radio_icom_address(&shack, 1, &mut patch, Some(&afar));
+    let mut e = tempo_app::engine::Engine::with_settings(shack.clone());
+    e.update_radio_profile(1, patch).expect("the edit is taken");
+    assert_eq!(
+        on(e.settings()),
+        (false, false),
+        "a radio's edit from afar, naming them"
+    );
+
+    let flagged = station_only_settings(Some(&afar)).unwrap();
+    assert!(
+        flagged.contains(&"tciServerTx") && flagged.contains(&"tciServer"),
+        "the read from afar does not say they are set at the station: {flagged:?}"
     );
 }
 
@@ -1349,6 +1416,27 @@ fn a_radios_icom_network_password_is_set_at_the_shack_only() {
         let admission = shack.admit(&controller(), call(id as u64 + 1, name, args));
         assert_eq!(kind(&admission), "refused shackOnly", "{name} at the shack");
     }
+}
+
+#[test]
+fn find_tci_server_runs_from_the_shacks_own_screen_only() {
+    // Find TCI server dials whatever address the form holds, from the shack: from afar it would let
+    // another computer make the station reach into its own network. Refused at both ends, with the
+    // arguments it really takes.
+    let shack = shack();
+    let args = json!({ "host": "192.168.1.30", "port": 50001 });
+    assert_eq!(class_of("tci_probe"), Some(Class::RefusedHere));
+    assert_eq!(
+        route("tci_probe", &args),
+        Route::Refused(Refusal::ShackOnly),
+        "it is never sent"
+    );
+    let admission = shack.admit(&controller(), call(1, "tci_probe", args));
+    assert_eq!(
+        kind(&admission),
+        refused(Refusal::ShackOnly),
+        "at the shack"
+    );
 }
 
 /// From afar the Settings badges say whether each credential is saved, and a connector's Test

@@ -49,11 +49,11 @@ pub(super) fn said(answer: &Value) -> String {
 }
 
 /// ⛔ A start made before a Stop that the road delivered first never runs. The computer's first Stop
-/// (number 1) goes by the road and is taken; the operator arms TX again (a start made after that
-/// Stop, so it carries 1); then a start made before the Stop, when no Stop had been pressed (it
-/// carries 0), arrives on the link. It is refused `stopped` and never reaches the Engine, although TX
-/// is armed and presence live. CONTROL: the same start made after the Stop (carrying 1) runs, for
-/// each wired kind (a CQ, Enable TX, the voice keyer).
+/// (number 1) goes by the road and is taken, stopping what was on the air; the operator arms TX
+/// again (a start made after that Stop, so it carries 1); then a start made before the Stop, when
+/// no Stop had been pressed (it carries 0), arrives on the link. It is refused `stopped` and never
+/// reaches the Engine, although TX is armed and presence live. CONTROL: the same start made after
+/// the Stop (carrying 1) runs, for each wired kind (a CQ, Enable TX, the voice keyer).
 #[test]
 fn a_start_made_before_a_stop_the_road_delivered_first_never_runs() {
     let _alone = alone();
@@ -72,6 +72,10 @@ async fn a_start_made_before_a_stop_the_road_delivered_first_never_runs_on_a_run
         let record = on_the_engine(&mut r, gate(false));
         let mut seat = seated(&r).await;
         seat.renewed().await;
+        // On the air, so the Stop's verbs show when they have run: the road acknowledges the Stop
+        // at once and runs them once the Engine is free, and their halt voids a start read before
+        // then, even one made after the Stop.
+        key_the_mic(&r.s);
         assert!(
             seat.road
                 .road_stop(1, Duration::from_secs(2))
@@ -79,6 +83,7 @@ async fn a_start_made_before_a_stop_the_road_delivered_first_never_runs_on_a_run
                 .is_some(),
             "{start}: premise: the Stop taken"
         );
+        assert!(came_to_a_stop(&r.s).await, "{start}: premise: stopped");
         let armed = counted(
             &mut seat,
             1,
@@ -306,11 +311,15 @@ fn a_stop_is_taken_whatever_number_it_carries() {
         let _record = on_the_engine(&mut r, gate(false));
         let mut seat = seated(&r).await;
         let mut cases = Vec::new();
+        // Stop 5's verbs run once the Engine is free, after its acknowledgement: on the air first,
+        // so this waits for them rather than the first case meeting them on its own transmission.
+        key_the_mic(&r.s);
         assert!(seat
             .road
             .road_stop(5, Duration::from_secs(2))
             .await
             .is_some());
+        assert!(came_to_a_stop(&r.s).await, "Stop 5 stopped");
         for (stop, by) in [
             (2, "road"),
             (0, "road"),

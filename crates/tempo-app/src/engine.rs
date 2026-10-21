@@ -13,6 +13,10 @@
 //!
 //! [`mode`]: Engine::set_mode
 
+/// A CAT-broker client's held key: an armed FT run plans no over under it, and keys its next free
+/// slot after the release.
+#[cfg(test)]
+mod broker_key_slot_tests;
 /// SPEC-2's C16: changes to one contact by its id.
 #[cfg(test)]
 mod by_id_tests;
@@ -71,6 +75,9 @@ pub mod contest_unmerged;
 /// what it held, once and paced, and LoTW's automatic upload waits for it.
 #[cfg(test)]
 mod contest_upload_hold_tests;
+/// The Decode head's speed is offered only while it is fresh.
+#[cfg(test)]
+mod cw_decode_speed_tests;
 /// CW owns the transmitter until its word ends: every gate that asks the arbiter, and the hard end.
 #[cfg(test)]
 mod cw_keying_owner_tests;
@@ -80,7 +87,21 @@ mod cw_sending_gate_tests;
 /// CW speed match: an answer keys at the station's measured speed, a CQ at the operator's own.
 #[cfg(test)]
 mod cw_speed_match_tests;
+/// The CW turn cue's read: the AI copy and our keying on one clock, never unassisted.
+#[cfg(test)]
+mod cw_turn_tests;
+/// An unassisted contest entry decodes no CW at all.
+#[cfg(test)]
+mod cw_unassisted_tests;
+/// A CW message the radio's own keyer would not take is refused whole, before anything keys.
+#[cfg(test)]
+mod cw_whole_message_tests;
 mod field_day_display;
+/// WSJT-X's mid-over message switch for FT8 and FT4 (`m_restart`).
+pub mod ft_midover;
+/// …and its tests.
+#[cfg(test)]
+mod ft_midover_tests;
 /// Every contact held in one form: one band, one phone mode, whichever way it came in.
 #[cfg(test)]
 mod held_form_tests;
@@ -123,12 +144,21 @@ pub mod slices;
 #[cfg(test)]
 mod stop_hold_tests;
 pub mod sub_controls;
+mod tci;
+/// A radio on the TCI connection: what Nexus may transmit through an SDR program, and a spot
+/// clicked in its panadapter.
+mod tci_connection;
+/// Nexus's spots for the SDR program's panadapter, handed from the app shell to the radio loop.
+pub mod tci_spots;
 mod tx_alarms;
 /// A data frame judged across its whole width, and where it keys.
 #[cfg(test)]
 mod tx_frame_width_tests;
 #[cfg(test)]
 mod tx_gate_table;
+/// A spot worked from afar arms nothing at the shack, and its hint says where it came from.
+#[cfg(test)]
+mod work_from_afar_tests;
 
 /// A manual Remote log append awaiting storage confirmation. The caller must
 /// release its engine lock before syncing; connector delivery uses its existing pipeline.
@@ -2780,6 +2810,10 @@ enum LateAnswer {
     /// #170 — the contact COMPLETED and our closing roger went out. A repeated report means
     /// they never copied it, so the only useful thing we can do is send it again.
     Roger,
+    /// Ruling 544 — as [`Self::Roger`], where that roger was RRR, which carries no 73: a
+    /// repeated report re-sends it, and their RR73/RRR to it earns the 73 WSJT-X sends
+    /// (`widgets/mainwindow.cpp:9210-9214`). Whichever comes first is the one over.
+    RogerOrBye73,
     /// #153 — the run GAVE UP on them mid-exchange. A late RR73/RRR is them closing the
     /// contact, and it earns the 73 that closes it back.
     Bye73,
@@ -3032,6 +3066,11 @@ pub struct Engine {
     tuning: bool,
     /// Whether the transmit watchdog has tripped (auto-halted TX).
     tx_watchdog: bool,
+    /// The over on the air, or the last one sent: WSJT-X's `m_currentMessage`, the Tx Message
+    /// its UDP Status reports ([`Engine::wsjtx_tx_status`]). Set when an over is accepted for
+    /// keying (`commit_tx`) and to "TUNE" when the tune carrier goes up, and kept after the over
+    /// ends, as upstream keeps it. Read for that report only; nothing keys on it.
+    tx_message: String,
     /// The slot over whose key the radio did not accept, which halted TX
     /// ([`Engine::halt_tx_for_refused_key`]), or that Nexus would not key because the transmit
     /// audio output would not open ([`Engine::halt_tx_for_tx_audio`]). Kept until the operator
@@ -3115,6 +3154,16 @@ pub struct Engine {
     /// The park or summit of the last worked spot, when a Needed row named one: the MAIN window's
     /// log line fills it with `work_call`. Cleared with `work_call`; never a hunt, never a tag.
     work_park: Option<crate::dto::WorkPark>,
+    /// The last worked spot's own frequency in Hz, set by the Work and taken by
+    /// [`Self::note_work_call`], which tells the programs on Nexus's TCI server of the click with
+    /// the call it records ([`tci_spots`]).
+    work_spot_hz: Option<i64>,
+    /// The last worked spot's Work came from afar (a computer driving this station, or Remote's own
+    /// Work) and entered its section without arming Enable TX (`arm_manual` false). A window
+    /// following the hint opens that cockpit without re-asserting the section: from the station's
+    /// own screen that re-assert arms the latch for Phone, CW, RTTY and PSK, the authority the Work
+    /// withheld.
+    work_afar: bool,
     /// The signal report I last sent the current QSO's DX station (RST sent),
     /// captured from the sequencer's outgoing (R)Report. Reset per QSO.
     qso_report_sent: Option<i32>,
@@ -3320,6 +3369,17 @@ pub struct Engine {
     /// radio loop consumes it AFTER tx_until expires; disabling immediately
     /// would trip the hard-stop path and cut the 73 itself mid-over.
     pending_tx_disable: bool,
+    /// The FT8/FT4 over handed to the radio loop last, for WSJT-X's mid-over switch
+    /// ([`Engine::ft_midover_switch`]).
+    ft_on_air: Option<ft_midover::FtOnAir>,
+    /// WSJT-X's `m_restart` from a Tx-slot click ([`Engine::take_ft_restart`]).
+    ft_restart: bool,
+    /// The last fold moved the QSO or contest sequencer on a message (its next message or its
+    /// state changed), or owed an over to a partner the run left: WSJT-X's `processMessage`
+    /// reacting to a decode, the only decode that may switch an over on the air
+    /// ([`Engine::ft_midover_switch`]). Run bookkeeping after it (back to CQ, a silent caller
+    /// given up) is not.
+    ft_seq_moved: bool,
     /// Deferred WSJT-X-style CW ID (armed when the final 73 leaves; consumed
     /// by the service on TX-idle so the ID never keys over the over's audio).
     /// Never armed in FT8, FT4, FT2, FT1 or DX1 (WSJT-X sends none in FT8/FT4).
@@ -3437,6 +3497,9 @@ pub struct Engine {
     /// power out, or reported ~0 while the operator's voice was arriving.
     mic_rf_seen: bool,
     mic_zero_seen: bool,
+    /// Programs on Nexus's TCI server: their keys, and the over that carries their audio (see
+    /// `engine/tci.rs`).
+    tci: tci::TciState,
     /// The transponder the operator selected for the tracked bird, plus their
     /// position inside its passband and what was last written to the radio.
     /// `None` = no satellite tuning in force, which is every terrestrial path.
@@ -3639,11 +3702,11 @@ pub struct Engine {
     /// write ([`Engine::record_dial`] with [`DialOrigin::Machinery`]), cleared at the next
     /// operator write. The MARK the knob test needs: a hold plainly exists while the app is
     /// sitting on its own channel, but the FM flags only describe some of them. `aprs_tune`
-    /// and `repeater_tune` re-arm one after their tune; `tune_channel` (the ISS SSTV park)
-    /// arms none, and a LINEAR transponder sets no `sat_fm` at all — so a knob nudge inside
-    /// either was banked as the operator's dial for that band. Recording the park where
-    /// provenance is already declared costs one field and covers every machinery verb,
-    /// present and future, instead of another per-verb flag.
+    /// and `repeater_tune` re-arm one after their tune; `tune_channel` (the ISS SSTV park) arms
+    /// none while a satellite pass owns the dial, and a LINEAR transponder sets no `sat_fm` at
+    /// all — so a knob nudge inside either was banked as the operator's dial for that band.
+    /// Recording the park where provenance is already declared costs one field and covers every
+    /// machinery verb, present and future, instead of another per-verb flag.
     ///
     /// Holds the BAND, not a span: off that band the park says nothing and the knob is an
     /// ordinary QSY (which then clears it). Session-only, like the memory it guards.
@@ -3677,15 +3740,18 @@ pub struct Engine {
     /// is, every later knob move is the operator's exactly as before.
     rig_dial_seen: bool,
     /// CW transmit queue (CAT keyer path): expanded CW text the radio loop drains and
-    /// keys via `rig.send_morse`. Operator-initiated; gated by `tx_enabled` (Monitor) and the
-    /// privileges, and a word they refuse is dropped, never held (`poll_cw_one`).
+    /// keys via `rig.send_morse`. Operator-initiated, or a TCI program's CW behind every gate
+    /// (`engine/tci/cw.rs`); gated by `tx_enabled` (Monitor) and the privileges, and a word they
+    /// refuse is dropped, never held (`poll_cw_one`).
     cw_queue: VecDeque<String>,
     /// The messages in [`Self::cw_queue`], oldest first, as (words left, CW speed match's speed,
-    /// whether its first word has been taken): `None` keys at the operator's own speed. Words leave
-    /// the front as the loop takes them.
+    /// whether its first word has been taken, the TCI program that sent it): `None` keys at the
+    /// operator's own speed, and `None` for the sender is Nexus's own. Words leave the front as the
+    /// loop takes them.
     /// Only ever describes words still queued: every path that drops the queue drops all of it,
-    /// so an empty queue means these are spent ([`Self::queue_cw`] starts afresh then).
-    cw_messages: VecDeque<(usize, Option<u32>, bool)>,
+    /// or (a TCI program's CW ending) whole messages with their words, so an empty queue means
+    /// these are spent ([`Self::queue_cw_message`] starts afresh then).
+    cw_messages: VecDeque<(usize, Option<u32>, bool, Option<u64>)>,
     /// Recent EXPANDED CW transmissions (macros resolved) — a TX echo the cockpit shows
     /// so the operator sees exactly what went out. Capped; cleared with the RX transcript.
     cw_sent: VecDeque<String>,
@@ -3982,6 +4048,18 @@ pub struct Engine {
     ai_cw_epoch: u64,
     /// AI CW decoder status for the UI ("listening…", "model not installed", …).
     ai_cw_status: String,
+    /// The AI decoder's letters with the stream time it heard each at (seconds on the AI-CW
+    /// clock, `ai_cw_fed`), for the CW turn cue ([`Self::cw_turn`]): confirmed ones appended as
+    /// each pass gives them, the oldest dropped past [`CW_TURN_KEEP_SECS`]; the provisional
+    /// tail's replaced by every pass, as `ai_cw_pending` is.
+    cw_turn_letters: VecDeque<(f64, char)>,
+    cw_turn_pending: Vec<(f64, char)>,
+    /// The end of the newest window the AI decoder has listened to, on that clock; `None` until
+    /// its first pass over this stream.
+    cw_turn_heard: Option<f64>,
+    /// Our own CW transmissions on that clock (start, end; the end `None` while still keying),
+    /// so the cue knows where our overs were and drops our own sidetone from the copy.
+    cw_turn_keyed: VecDeque<(f64, Option<f64>)>,
     /// Streaming single-signal CW decoder at the operator's pitch. Fed incrementally so it
     /// accumulates a PERSISTENT transcript (the batch decoder re-read the ring each poll,
     /// so its text churned and the last characters vanished within seconds).
@@ -4039,6 +4117,14 @@ pub struct Engine {
     /// Why the CAT broker is not serving, when its bind was refused (#165). See
     /// [`crate::dto::RadioStatus::cat_share_error`].
     cat_share_error: Option<String>,
+    /// The TCI server as its manager last saw it; `None` while it is switched off. See
+    /// [`crate::dto::RadioStatus::tci_server`].
+    tci_server: Option<crate::dto::TciServerStatus>,
+    /// Nexus's spots for the SDR program's panadapter, as the station last chose them. See
+    /// [`tci_spots`].
+    tci_spots: tci_spots::PanadapterSpots,
+    /// The spots programs on Nexus's TCI server sent, for the band map. See [`tci_spots`].
+    tci_program_spots: tci_spots::ProgramSpots,
     scope_error: Option<String>,
     /// See `RadioStatus::scope_span_refused`.
     scope_span_refused: Option<String>,
@@ -4276,17 +4362,40 @@ pub struct Engine {
     /// APRS — so FM never follows them onto another band/mode.
     aprs_fm: bool,
     /// The rig is parked on an FM CHANNEL — a repeater or FM simplex frequency (session-only, never
-    /// persisted). Set by [`Engine::repeater_tune`]; makes `rig_mode_effective` command FM and
-    /// `route_mode` answer Fm, for the same reason `aprs_fm` above exists: the Program section is a
-    /// workbench, not a Phone/Digital operating section, so a tune from it can't ride the Phone-FM
-    /// override and would otherwise inherit the rig mode of whichever section the operator last
-    /// operated — demodulating a repeater as packet-USB. UNLIKE `aprs_fm` it does NOT force simplex:
-    /// carrying the machine's shift and tone is the whole point.
+    /// persisted). Set by [`Engine::repeater_tune`], the SSTV strip's FM rows (`sstv_tune`) and an
+    /// FM channel the app parks (`tune_channel`, the ISS downlink); makes `rig_mode_effective`
+    /// command FM, for the same reason `aprs_fm` above exists: the Program section is a workbench,
+    /// not a Phone/Digital operating section, so a tune from it can't ride the Phone-FM override
+    /// and would otherwise inherit the rig mode of whichever section the operator last operated —
+    /// demodulating a repeater as packet-USB. UNLIKE `aprs_fm` a repeater's hold does NOT force
+    /// simplex: carrying the machine's shift and tone is the whole point. The app's own channels
+    /// do (`fm_channel_simplex`, below).
     ///
     /// Cleared by every QSY, section change and radio switch, exactly like `aprs_fm`, and gated at
     /// read time on the dial still being at/above 29 MHz — the same threshold `Settings::rig_mode`
-    /// applies to Phone-FM, so a knob-QSY down to HF can never leave FM forced.
+    /// applies to Phone-FM, so a knob-QSY down to HF can never leave FM forced. One section entry
+    /// keeps it: Phone entered from the SSTV screen on the channel that screen tuned
+    /// (`fm_channel_kept`, below).
     fm_channel: bool,
+    /// The FM-channel hold above is one PHONE KEPT (the rule: a kept FM channel
+    /// keeps commanding FM in Phone). Phone entered from the SSTV screen leaves the dial where it
+    /// is (`ModeEntry::kept_dial`), and on the FM channel that screen tuned (`sstv_tune`) the hold
+    /// stays instead of ending with the section entry, so Phone goes on commanding FM there rather
+    /// than its own policy (USB for a station whose phone mode is SSB). While this is set, a later
+    /// Phone entry that moves nothing (a glance at the map and back) keeps the hold too. It ends
+    /// with the hold (a QSY, a radio switch, any other section) and with the operator's own pick
+    /// in the Phone cockpit's mode picker (`request_sideband_override`), which the hold would
+    /// otherwise outrank in `rig_mode_effective`.
+    fm_channel_kept: bool,
+    /// The FM channel held is one of the app's own SIMPLEX channels, not a repeater: an FM row of
+    /// the SSTV plan (the ISS downlink, the 144.500 calling channel) picked on the SSTV screen, or
+    /// the ISS auto-arm's park (`tune_channel`). It is worked simplex with no tone, as APRS is
+    /// (`fm_repeater_config`). A repeater tune writes its shift and tone to Settings and nothing
+    /// resets them, so without this the channel was worked through the last machine's: the radio
+    /// was commanded that shift and tone, and the transmitter keyed the machine's input while the
+    /// dial read the channel. Stated by each verb that arms the hold (`repeater_tune` clears it),
+    /// read only together with `fm_channel`, and kept with the hold when Phone keeps it.
+    fm_channel_simplex: bool,
     /// The FM channel a committed REMOTE repeater tune established: its dial and FM tuple. A
     /// browser's later retune may end that hold (as the desktop's own QSY does); a hold set at the
     /// station, or one whose dial or tuple has since changed, still refuses remote work.
@@ -4378,12 +4487,23 @@ pub struct Engine {
 const CW_WINDOW: usize = 72_000;
 /// The AI CW decoder's ring: 15 s at 12 kHz — exactly the DeepCW model's decode window.
 const AI_CW_WINDOW: usize = 180_000;
-/// CW speed match uses the decoder's speed only if a keyed element was heard this recently
-/// (seconds): long enough to span the pause before an answer, short enough that the speed is
-/// still the station just heard.
+/// CW speed match, and the Decode head's speed that a call chip's click sets the keyer to, use the
+/// decoder's speed only if a keyed element was heard this recently (seconds): long enough to span
+/// the pause before an answer, short enough that the speed is still the station just heard.
 const CW_SPEED_MATCH_FRESH_SECS: f32 = 10.0;
 /// How much of the newest CW copy CW speed match looks in for the call being answered.
 const CW_SPEED_MATCH_COPY_CHARS: usize = 200;
+/// The AI-CW stream clock: samples fed to the AI ring per second (the decode thread stitches on
+/// the same clock).
+const AI_CW_CLOCK_HZ: f64 = 12_000.0;
+/// How much of the AI decoder's timed copy the CW turn cue keeps (seconds): a long over and the
+/// one before it.
+const CW_TURN_KEEP_SECS: f64 = 90.0;
+/// How many of our own transmissions the cue remembers.
+const CW_TURN_KEEP_KEYED: usize = 16;
+/// The AI decoder has not listened this far behind the stream (seconds): it has stopped, failed
+/// or cannot keep up, and the cue shows nothing rather than a turn read from stale copy.
+const CW_TURN_STALL_SECS: f64 = 10.0;
 
 /// Whether the newest [`CW_SPEED_MATCH_COPY_CHARS`] of `copy` hold `call` (upper case) as a word,
 /// or as one part of a portable call (`W1AW/P`, `VE3/W1AW`).
@@ -5419,6 +5539,49 @@ pub struct TxPlan {
     stamp: TxGateStamp,
 }
 
+/// The transmit side of WSJT-X's UDP Status (type 1, `Network/NetworkMessage.hpp`), as
+/// `MainWindow::statusUpdate` fills it (`widgets/mainwindow.cpp:13979-13989`) — see
+/// [`Engine::wsjtx_tx_status`]. Output only: nothing keys, refuses or stops on it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WsjtxTxStatus {
+    /// "DX Call": `m_hisCall`, the station being worked.
+    pub dx_call: String,
+    /// "Report": `QString::number (ui->rptSpinBox->value ())`, the report sent to the DX.
+    pub report: String,
+    /// "Tx Enabled": `ui->autoButton->isChecked ()`, the Enable Tx latch.
+    pub tx_enabled: bool,
+    /// "Transmitting": `m_transmitting`.
+    pub transmitting: bool,
+    /// "DX grid": `m_hisGrid`.
+    pub dx_grid: String,
+    /// "Tx Watchdog": `m_tx_watchdog`, true while a tripped watchdog holds TX off.
+    pub tx_watchdog: bool,
+    /// "Tx Message": `m_currentMessage`, the over on the air or the last one sent.
+    pub tx_message: String,
+}
+
+/// The Tx Message WSJT-X reports for an over: `m_currentMessage = QString::fromLatin1 (msgsent)`
+/// (mainwindow.cpp:8072-8073), the generator's fixed-width Fortran string, blank-padded. The
+/// 77-bit modes' `msgsent` is `character*37` (lib/ft8/genft8.f90:7, lib/ft4/genft4.f90:22, and
+/// MSK144, FST4/FST4W and Q65 through the same 37-character call at mainwindow.cpp:7936-8038);
+/// JT65's and WSPR's is `character*22` (lib/gen65.f90:10, lib/genwspr.f90:4). The modes WSJT-X
+/// does not have (FT1, DX1, FT2) go unpadded, and a JS8 frame carries no message text of its own,
+/// so a JS8 over reports none.
+fn wsjtx_msgsent(tier: Tier, waveform: &TxWaveform) -> String {
+    let text = match waveform {
+        TxWaveform::Deep { text, .. }
+        | TxWaveform::Fast { text, .. }
+        | TxWaveform::Native { text, .. } => text.as_str(),
+        TxWaveform::Js8 { .. } => return String::new(),
+    };
+    let width = match tier {
+        Tier::Ft8 | Tier::Ft4 | Tier::Msk144 | Tier::Fst4 | Tier::Fst4w | Tier::Q65 => 37,
+        Tier::Jt65 | Tier::Wspr => 22,
+        _ => return text.to_string(),
+    };
+    format!("{text:<width$}")
+}
+
 /// A keying source that currently owns the transmitter — see [`Engine::tx_owner`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TxOwner {
@@ -5440,6 +5603,9 @@ pub enum TxOwner {
     Psk,
     /// An SSTV image is in flight.
     Sstv,
+    /// A program on Nexus's TCI server holds a key: an over of its audio, armed or keyed, or the
+    /// radio's microphone (`engine/tci.rs`).
+    Tci,
 }
 
 impl TxOwner {
@@ -5455,6 +5621,7 @@ impl TxOwner {
             TxOwner::Rtty => "RTTY is transmitting — stop it first",
             TxOwner::Psk => "PSK is transmitting — stop it first",
             TxOwner::Sstv => "An SSTV image is transmitting — stop it first",
+            TxOwner::Tci => "A program on TCI is transmitting — stop it first",
         }
         .to_string()
     }
@@ -5891,6 +6058,7 @@ impl Engine {
             skip_tx1: false,
             tuning: false,
             tx_watchdog: false,
+            tx_message: String::new(),
             slot_key_refused: None,
             slot_unkey_failed: None,
             slot_audio_lost: None,
@@ -5913,6 +6081,8 @@ impl Engine {
             work_view: None,
             work_call: None,
             work_park: None,
+            work_spot_hz: None,
+            work_afar: false,
             qso_report_sent: None,
             stalled_qso: None,
             recent_partner: None,
@@ -5963,6 +6133,9 @@ impl Engine {
             js8_on_air: None,
             js8_links: Default::default(),
             pending_tx_disable: false,
+            ft_on_air: None,
+            ft_restart: false,
+            ft_seq_moved: false,
             pending_cw_id: false,
             highlights: std::collections::HashMap::new(),
             highlight_seq: 0,
@@ -6000,6 +6173,7 @@ impl Engine {
             mic_ended: None,
             mic_rf_seen: false,
             mic_zero_seen: false,
+            tci: tci::TciState::default(),
             sat_tune: None,
             sat_last_worked: None,
             sat_dial_owner: None,
@@ -6129,6 +6303,10 @@ impl Engine {
             ai_cw_fed: 0,
             ai_cw_epoch: 0,
             ai_cw_status: String::new(),
+            cw_turn_letters: VecDeque::new(),
+            cw_turn_pending: Vec::new(),
+            cw_turn_heard: None,
+            cw_turn_keyed: VecDeque::new(),
             cw_stream: tempo_core::cw_decode::CwStreamDecoder::new(tempo_fast::SAMPLE_RATE, 600.0),
             qso_audio: Vec::new(),
             cat_status: (None, String::new()),
@@ -6146,6 +6324,9 @@ impl Engine {
             cat_reprobe: false,
             audio_error: None,
             cat_share_error: None,
+            tci_server: None,
+            tci_spots: tci_spots::PanadapterSpots::default(),
+            tci_program_spots: tci_spots::ProgramSpots::default(),
             scope_error: None,
             scope_span_refused: None,
             scope_mode_code: None,
@@ -6203,6 +6384,8 @@ impl Engine {
             aprs_msg_seq: 0,
             aprs_fm: false,
             fm_channel: false,
+            fm_channel_kept: false,
+            fm_channel_simplex: false,
             remote_fm_hold: None,
             remote_aprs_hold: None,
             sat_mode: None,
@@ -6427,6 +6610,11 @@ impl Engine {
         // Whether contest mode was on before this save: the save that turns it off sends what
         // it held ([`Self::release_contest_uploads`]).
         let contest_was_on = self.settings.fd_active;
+        // Whether programs on TCI could transmit before this save: the save that turns it off ends
+        // every program's key, over and tune at once (`engine/tci.rs`). The same for the CW tier
+        // and programs' CW (`engine/tci/cw.rs`).
+        let tci_tx_was_on = self.tci_transmit();
+        let tci_cw_was_on = self.settings.tci_server_cw;
         // Rebind identity IN PLACE (not a fresh AppState) so editing the callsign or
         // grid in Settings — or a GPS/UDP grid update routed through a save — does
         // NOT wipe conversation history, the `*` band feed, or the roster.
@@ -6872,6 +7060,14 @@ impl Engine {
         let scope_now = self.settings.yaesu_rf_scope;
         if scope_was_on && !scope_now {
             self.clear_scope_state();
+        }
+        // "Programs on TCI may transmit" going off is a stop for every program: what one keyed ends
+        // here, hard, not at the radio loop's next look at the switch.
+        if tci_tx_was_on && !self.tci_transmit() {
+            self.drop_tci_all();
+        }
+        if tci_cw_was_on && !self.settings.tci_server_cw {
+            self.end_programs_cw("the CW tier was switched off");
         }
         // Another join address (or hosting switched on or off): what the link line knew was
         // about another host.
@@ -7389,6 +7585,7 @@ impl Engine {
         // this clears the flag outright so it never lingers pointed at a different radio.
         self.aprs_fm = false;
         self.fm_channel = false;
+        self.fm_channel_kept = false;
         self.sat_mode = None;
         // Frequency coverage belongs to the RADIO, so it must not survive the switch. Dropping it to
         // "unknown" makes the window before the loop re-probes fail OPEN; keeping the old radio's
@@ -7697,11 +7894,41 @@ impl Engine {
     /// cannot tell 145.800 from a frequency the operator typed, and a mode switch inside an
     /// armed window banks the ISS downlink as their 2 m dial.
     ///
-    /// Identical to [`Self::set_frequency`] in every effect on the radio. It differs only in
-    /// what the per-(band, mode) dial memory makes of it: nothing is recorded, and the
-    /// operator residency it displaces is banked on the way in.
+    /// An FM channel is HELD in FM, as the SSTV strip's own pick of the same row holds it
+    /// (`sstv_tune`). The auto-arm parks from the SSTV or Satellites screen, and neither enters a
+    /// section, so without the hold the rig sat on the FM downlink in the mode of the section the
+    /// operator came from (DATA-U from FT8, USB from Phone) and decoded nothing. It is routed on
+    /// FM for the reason the repeater and APRS tunes are: the radio it lands on is the one then
+    /// commanded FM. And it lands on the channel itself, never on the RTTY plan's AFSK dial
+    /// ([`Self::rtty_channel_dial`]): that correction is for an RTTY emission, which an FM channel
+    /// is not.
+    ///
+    /// ⚠️ NOT WHILE A SATELLITE PASS OWNS THE DIAL. Doppler steers the dial back to the bird
+    /// within seconds, and the hold answers above the bird's mode in `rig_mode_effective`, so it
+    /// would hold a linear transponder in FM. There it holds nothing and routes on the section's
+    /// own mode, as it always did.
+    ///
+    /// The per-(band, mode) dial memory never takes it: nothing is recorded, and the operator
+    /// residency it displaces is banked on the way in.
     pub fn tune_channel(&mut self, dial_mhz: f64, band: &str, mode: &str) {
-        self.machinery_tune(self.rtty_channel_dial(dial_mhz), band, mode);
+        let fm = mode.eq_ignore_ascii_case("fm");
+        let hold_fm = fm && self.sat_dial_owner.is_none();
+        if hold_fm {
+            self.route_intent = Some(crate::settings::RouteMode::Fm);
+        }
+        let dial = if fm {
+            dial_mhz
+        } else {
+            self.rtty_channel_dial(dial_mhz)
+        };
+        self.machinery_tune(dial, band, mode);
+        if hold_fm {
+            self.fm_channel = true;
+            // One of the app's own channels: simplex, no tone (`fm_channel_simplex`).
+            self.fm_channel_simplex = true;
+            // The station's own hold, whatever channel a browser marked before.
+            self.remote_fm_hold = None;
+        }
     }
 
     /// The dial to actually tune for a band-plan pick, once the RTTY keying backend is taken
@@ -7719,20 +7946,45 @@ impl Engine {
     /// Subtracting the two spans gives the whole correction: the AFSK dial is the FSK dial plus
     /// the mark tone, and then both backends put the signal in the identical window. The stored
     /// number stays the FSK dial — the frequency the comments describe and operators quote —
-    /// and this is the one place the offset is applied, so no channel table can drift out of
-    /// step with it.
+    /// and [`Self::rtty_plan_dial`] is the one place the offset is applied, so no channel table
+    /// can drift out of step with it.
     ///
     /// Found in a triage sweep of #114 (ve3wej), who reported only the 20 m entry.
     fn rtty_channel_dial(&self, dial_mhz: f64) -> f64 {
         if self.settings.operating_mode != crate::settings::OperatingMode::Rtty {
             return dial_mhz;
         }
+        self.rtty_plan_dial(dial_mhz)
+    }
+
+    /// [`Self::rtty_channel_dial`]'s correction for a row of the RTTY plan, for the picks that
+    /// know they are RTTY ones whatever section the station is in now: the section's home, a
+    /// band pick naming RTTY and the RTTY cockpit's channel list ([`Self::rtty_channel_plan`]).
+    fn rtty_plan_dial(&self, dial_mhz: f64) -> f64 {
         if self.settings.rtty_backend.eq_ignore_ascii_case("fsk") {
             return dial_mhz;
         }
         // The SAME live mark the gate judges (`rtty_tx_mark_hz`) — a channel pick must land the
         // signal where the plan says regardless of where the operator has netted.
         dial_mhz + self.rtty_tx_mark_hz() / 1_000_000.0
+    }
+
+    /// The RTTY band plan as this station tunes it: each row at the dial its keying backend needs
+    /// ([`Self::rtty_plan_dial`]). Every RTTY channel pick reads the plan through this — the RTTY
+    /// cockpit's channel list (`get_licensed_band_plan`), the section's home and a band pick
+    /// naming RTTY — so each puts the signal where the plan says on either backend.
+    ///
+    /// ⚠️ The correction used to reach none of them. It was applied only in `tune_channel`, whose
+    /// one caller is the ISS auto-arm's FM park, so on the default AFSK every RTTY channel pick
+    /// tuned the plan's FSK dial: the 20 m pick keyed 14.0807–14.0809, inside FT4.
+    pub fn rtty_channel_plan(&self) -> Vec<crate::bandplan::BandChannel> {
+        crate::bandplan::rtty_band_plan()
+            .into_iter()
+            .map(|mut c| {
+                c.dial_mhz = self.rtty_plan_dial(c.dial_mhz);
+                c
+            })
+            .collect()
     }
 
     fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
@@ -7788,6 +8040,13 @@ impl Engine {
         // A fresh QSY request is a fresh attempt: drop any earlier refusal so a stale "the radio
         // refused 144.390" can't sit on screen next to a frequency that worked.
         self.rig_refused_dial_mhz = None;
+        // An FM channel Phone kept ends with a QSY, as the other holds do below, and FIRST: the
+        // dial is leaving the channel, so the radio the QSY routes to is the one Phone's own mode
+        // belongs on, not the FM radio the channel needed (a 2 m SSB spot clicked in Phone).
+        if self.fm_channel_kept {
+            self.fm_channel = false;
+            self.fm_channel_kept = false;
+        }
         // Auto radio routing on (BAND, MODE CLASS): a commanded band pick (dropdown / manual entry /
         // Needed click / APRS tune) hands off to the radio the operator mapped for that band+mode
         // FIRST, then the tune below lands it on the requested dial. Mode class — not band alone —
@@ -8252,7 +8511,8 @@ impl Engine {
     ///
     /// Pushed by the radio loop on the transition, from what the radio reports, never from the
     /// `flex_native_audio` setting (the same reasoning as [`Self::observe_flex_dax_tx`]). Only
-    /// the voice keyer, APRS and SSTV read it; nothing else is refused on it.
+    /// the voice keyer, APRS, SSTV and a TCI program's audio over (`engine/tci.rs`, refused as APRS
+    /// and SSTV are) read it; nothing else is refused on it.
     pub fn observe_flex_radio_has_mic(&mut self, on: bool) {
         self.flex_radio_has_mic = on;
     }
@@ -8528,7 +8788,8 @@ impl Engine {
                 }),
             // RTTY: park on the band's RTTY watering hole (the built-in plan the cockpit's
             // band selector serves) — only if the operator may key the RTTY emission there.
-            OperatingMode::Rtty => crate::bandplan::rtty_band_plan()
+            OperatingMode::Rtty => self
+                .rtty_channel_plan()
                 .into_iter()
                 .find(|c| c.band == band)
                 .filter(|c| self.rtty_emission_ok(c.dial_mhz))
@@ -8775,7 +9036,8 @@ impl Engine {
                 .into_iter()
                 .find(|c| c.band == band)
                 .map(|c| (c.dial_mhz, c.mode)),
-            OperatingMode::Rtty => crate::bandplan::rtty_band_plan()
+            OperatingMode::Rtty => self
+                .rtty_channel_plan()
                 .into_iter()
                 .find(|c| c.band == band)
                 .filter(|c| self.rtty_emission_ok(c.dial_mhz))
@@ -8878,12 +9140,55 @@ impl Engine {
         mode: &str,
         follow_freq: bool,
         arm_manual: bool,
-        mut reset: impl FnMut(),
+        reset: impl FnMut(),
     ) {
-        use crate::settings::OperatingMode;
         // Resolve the destination without changing the station. Remote radio
         // transactions need this same decision before attempting hardware I/O.
         let entry = self.prepare_mode_entry(mode, follow_freq);
+        self.enter_section_with_reset(entry, arm_manual, reset);
+    }
+
+    /// The Phone tab pressed on the SSTV screen: [`Self::set_operating_mode`], except that the
+    /// dial stays where it is. With `follow_freq` it stays when Phone may transmit there and homes
+    /// as any entry does when it may not ([`Self::prepare_mode_entry_keeping_dial`]); without, it
+    /// stays, as in every entry that does not follow. Either way an FM channel the SSTV screen
+    /// holds the dial on stays FM in Phone (`fm_channel_kept`). Arms exactly as every entry arms:
+    /// with `arm_manual`, and never behind a stop.
+    pub fn set_operating_mode_keeping_dial(
+        &mut self,
+        mode: &str,
+        follow_freq: bool,
+        arm_manual: bool,
+    ) {
+        let entry = self.prepare_mode_entry_keeping_dial(mode, follow_freq);
+        self.enter_section_with_reset(entry, arm_manual, reset_ft8_a7_without_waiting);
+    }
+
+    /// Enter the section `entry` names, at the destination it prepared.
+    fn enter_section_with_reset(
+        &mut self,
+        entry: mode_entry::ModeEntry,
+        arm_manual: bool,
+        mut reset: impl FnMut(),
+    ) {
+        use crate::settings::OperatingMode;
+        // A KEPT dial stays the operator's in the section entered: their residency on it is
+        // banked into the cell it was used in, as every entry banks it, and reopened in this
+        // section below, so leaving this section later remembers where they left it. Only THEIR
+        // residency on that very dial: the dial the app launched on, the CAT link's first word
+        // and a channel the app's machinery parked (the ISS downlink) have none, and keeping one
+        // must not make it theirs (`record_dial`).
+        let carried = if entry.kept_dial {
+            self.dial_residency
+                .as_ref()
+                .filter(|r| {
+                    r.band == self.settings.band
+                        && (r.dial_mhz - self.settings.dial_mhz).abs() < 1e-9
+                })
+                .map(|r| r.sideband.clone())
+        } else {
+            None
+        };
         // Bank the dial being LEFT into its (band, old-mode) memory cell FIRST — before
         // the hold flags (cleared just below) stop distinguishing an operator dial from
         // machinery, and before `settings.operating_mode` stops naming the mode this
@@ -8906,8 +9211,23 @@ impl Engine {
         // hold ends where it always did: with the bird for a linear transponder, with the dial
         // for an FM one (`sat_linear_mode`). A section change is neither. Where it also QSYs
         // (`follow_freq`), `tune_dial` clears it below exactly as any other QSY does.
+        //
+        // ⭐ AND NOT AN FM CHANNEL PHONE KEEPS (the rule: a kept FM channel keeps
+        // commanding FM in Phone). Phone entered from the SSTV screen leaves the dial where it is
+        // (`kept_dial`), and on the 2 m FM image channel that screen tuned, Phone's own policy is
+        // USB for a station whose phone mode is SSB: the rig went FM → USB on an FM channel. So
+        // the hold stays with the dial, and through later Phone entries (a glance at the map and
+        // back), until the dial moves (`tune_dial` ends it before routing the QSY), another
+        // section is entered, the radio is switched or the operator picks a mode in the Phone
+        // cockpit. Only a hold in force is kept (at/above 29 MHz, as `rig_mode_effective` reads
+        // it). APRS's simplex context ends as it always has.
         self.aprs_fm = false;
-        self.fm_channel = false;
+        let keeps_fm_channel = entry.mode == OperatingMode::Phone
+            && (entry.kept_dial || self.fm_channel_kept)
+            && self.fm_channel
+            && self.settings.dial_mhz >= 29.0;
+        self.fm_channel = keeps_fm_channel;
+        self.fm_channel_kept = keeps_fm_channel;
         let om = entry.mode;
         // A mode change invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
@@ -8985,6 +9305,14 @@ impl Engine {
             let band = self.settings.band.clone();
             self.tune_dial_with_reset(dial, &band, &sideband, DialOrigin::Operator, &mut reset);
             re_homed = true;
+        }
+        if let Some(sideband) = carried {
+            self.dial_residency = Some(DialResidency {
+                band: self.settings.band.clone(),
+                mode: om,
+                dial_mhz: self.settings.dial_mhz,
+                sideband,
+            });
         }
         // ⭐ THE DIGITAL SECTION RE-DERIVES ITS SIDE EVEN WHEN IT DOES NOT QSY —
         // ISSUE #111 (ve3wej): "double-click puts the Flex in DIGL instead of DIGU".
@@ -9249,6 +9577,11 @@ impl Engine {
         // like clearTick/uploadTick).
         self.work_tick += 1;
         self.work_view = Some(mode.to_string());
+        // …and whether this Work may arm: a window following the hint re-asserts the section only
+        // for a Work made at the station.
+        self.work_afar = !arm_manual;
+        // The spot's own frequency, which note_work_call tells programs with the call it records.
+        self.work_spot_hz = Some((freq_mhz * 1_000_000.0).round() as i64);
         self.work_call = None; // the command that has the call sets it via note_work_call
         self.work_park = None; // …and the park, via note_work_park
     }
@@ -9275,6 +9608,13 @@ impl Engine {
         arm_manual: bool,
     ) {
         self.set_operating_mode_with_arming("phone", false, arm_manual);
+        // An FM channel is held in FM below, so the pick routes on FM: the radio it lands on is
+        // the one then commanded FM, as a repeater tune's is. It routed on Phone's own class and,
+        // with two radios mapped, landed on the SSB one. Below 29 MHz the hold commands nothing
+        // (`rig_mode_effective`), so Phone's own class stands there.
+        if mode.eq_ignore_ascii_case("fm") && dial_mhz >= 29.0 {
+            self.route_intent = Some(crate::settings::RouteMode::Fm);
+        }
         self.set_frequency(dial_mhz, band, mode);
         // A cockpit sideband override describes the section being LEFT, not this channel
         // (work_spot's rule) — without this a stale Phone-cockpit FM pick would key FM
@@ -9286,6 +9626,13 @@ impl Engine {
         // `rig_mode_effective`, so it can never drag FM down to HF.
         if mode.eq_ignore_ascii_case("fm") {
             self.fm_channel = true;
+            // An FM row of the SSTV plan is one of the app's own channels, never a repeater:
+            // simplex, no tone (`fm_channel_simplex`). Any other dial picked in FM here (the
+            // strip's FM toggle on a dial of the operator's own, such as a local machine's
+            // output) carries the stored repeater shift and tone, as Phone's FM does.
+            self.fm_channel_simplex = crate::bandplan::sstv_band_plan()
+                .iter()
+                .any(|c| c.mode.eq_ignore_ascii_case("fm") && (c.dial_mhz - dial_mhz).abs() < 1e-6);
             // The station's own hold, whatever channel a browser marked before.
             self.remote_fm_hold = None;
         }
@@ -9335,6 +9682,10 @@ impl Engine {
     /// window's log directly, so the call rides the snapshot and the main window prefills from it.
     pub fn note_work_call(&mut self, call: Option<String>) {
         self.work_call = call.filter(|c| !c.trim().is_empty());
+        // A click on a spot in Nexus: the programs on its TCI server are told, and that is all.
+        if let (Some(call), Some(hz)) = (self.work_call.clone(), self.work_spot_hz.take()) {
+            self.note_tci_spot_click(&call, hz);
+        }
     }
 
     /// Record the park or summit of the just-worked Needed row, after [`Self::note_work_call`]
@@ -9584,6 +9935,13 @@ impl Engine {
         // pass in force is ordinary terrestrial operating and claims nothing.
         if self.sideband_override.is_some() && self.sat_dial_owner.is_some() {
             self.sat_mode_released = true;
+        }
+        // …and a pick on an FM channel Phone kept is the operator taking the mode too: that hold
+        // answers above this override in `rig_mode_effective`, so without this a USB pick there
+        // would change nothing. AUTO is no pick: on the kept channel it stays FM.
+        if self.sideband_override.is_some() && self.fm_channel_kept {
+            self.fm_channel = false;
+            self.fm_channel_kept = false;
         }
         self.immediate_retune = true;
     }
@@ -9870,6 +10228,13 @@ impl Engine {
     /// time the routed rig is commanded a mode, the hold this would have answered for is gone.
     /// A mirror would instead route a repeater click made DURING a pass on SSB, which is the
     /// disagreement the invariant is about, pointing the other way.
+    ///
+    /// The FM-CHANNEL hold (`fm_channel`) has no mirror either, for the same reason: every caller
+    /// asks on the way into a QSY that ends it (`tune_dial` clears it before the routed rig is
+    /// commanded, and Remote names the radio of that same QSY). Its mirror sent a band pick or a
+    /// typed frequency made on the channel to the FM radio, which was then commanded the
+    /// section's own mode. A tune that holds an FM channel afterwards names the FM class itself
+    /// (`route_intent`, as `repeater_tune`, `sstv_tune` and `tune_channel` do).
     pub fn route_mode(&self, band: &str, dial_mhz: f64) -> crate::settings::RouteMode {
         self.route_mode_for(band, dial_mhz, self.settings.operating_mode)
     }
@@ -9884,14 +10249,10 @@ impl Engine {
         if self.aprs_fm && band.eq_ignore_ascii_case("2m") {
             return RouteMode::Fm;
         }
-        // Mirrors the `fm_channel` arm of `rig_mode_effective` (see the invariant in this doc
-        // comment): a rig held on an FM channel routes on FM.
-        if self.fm_channel && dial_mhz >= 29.0 {
-            return RouteMode::Fm;
-        }
-        // …and the `sat_fm` arm, for the same invariant: a rig held on an FM bird routes on FM.
-        // (The satellite pick names its class explicitly via `route_intent`, so this arm answers
-        // for the QSYs that follow it rather than for the pick itself.)
+        // Mirrors the `sat_fm` arm of `rig_mode_effective` (see the invariant in this doc
+        // comment): a rig held on an FM bird routes on FM. (The satellite pick names its class
+        // explicitly via `route_intent`, so this arm answers for the QSYs that follow it rather
+        // than for the pick itself.)
         if self.sat_fm() && dial_mhz >= 29.0 {
             return RouteMode::Fm;
         }
@@ -9924,18 +10285,18 @@ impl Engine {
     ///
     /// `machinery_park` is the general answer, because it is set where provenance is declared —
     /// at the machinery write itself — so it covers every machinery verb rather than the ones
-    /// that happen to arm an FM flag afterwards (`tune_channel` arms none; a LINEAR transponder
-    /// sets no `sat_fm`). It is band-exact: off the parked band the park says nothing.
+    /// that happen to arm an FM flag afterwards (`tune_channel` arms none while a satellite pass
+    /// owns the dial; a LINEAR transponder sets no `sat_fm`). It is band-exact: off the parked
+    /// band the park says nothing.
     ///
     /// The FM flags stay as a second, coarser term, and they are the reason this is not a bare
     /// `machinery_park` read. They survive a knob QSY on purpose
     /// (`fm_does_not_follow_the_operator_down_to_hf`): the rig is still IN FM, so
-    /// [`Engine::rig_mode_effective`] and [`Engine::route_mode`] still treat it as a channel
-    /// context, and the same gates are used here so all three answer alike. Their gates are
-    /// coarser than a band — APRS counts on 2 m, the FM-channel and FM-bird holds at/above
-    /// 29 MHz — so while one is set a knob move anywhere on VHF/UHF is the machinery's. That is
-    /// the disclosed cost of not clearing them: the alternative, clearing a hold on a knob QSY,
-    /// breaks the FM rule above.
+    /// [`Engine::rig_mode_effective`] still treats it as a channel context, and the same gates are
+    /// used here so the two answer alike. Their gates are coarser than a band — APRS counts on
+    /// 2 m, the FM-channel and FM-bird holds at/above 29 MHz — so while one is set a knob move
+    /// anywhere on VHF/UHF is the machinery's. That is the disclosed cost of not clearing them:
+    /// the alternative, clearing a hold on a knob QSY, breaks the FM rule above.
     ///
     /// NOT a bank-time provenance test: banking still reads only the residency. This runs at a
     /// WRITE, which is where provenance is allowed to be decided.
@@ -9966,6 +10327,11 @@ impl Engine {
     /// the rig is in FM. APRS forces SIMPLEX / no tone so it never inherits the operator's
     /// Phone-section repeater shift (which would transmit the beacon off-frequency).
     ///
+    /// The app's own FM channels are APRS's case and take the same answer: an SSTV plan's FM row
+    /// picked on the SSTV screen, the ISS auto-arm's park, and Phone's keep of either
+    /// (`fm_channel_simplex`). Each is a simplex channel, and a stored repeater shift and tone
+    /// there keyed the last machine's input, with its tone, while the dial read the channel.
+    ///
     /// A satellite FM bird forces the same SHIFT, and for a sharper version of the same reason: a
     /// bird has no repeater shift at all — its uplink is the split TX dial (cross-band) or the one
     /// dial it shares with the downlink (simplex) — so a stale terrestrial shift would key it
@@ -9986,7 +10352,7 @@ impl Engine {
     /// names its VFO, which does not exist yet. Strictly better than 0.0 either way, and never
     /// worse.
     pub fn fm_repeater_config(&self) -> (String, i64, f32) {
-        if self.aprs_fm {
+        if self.aprs_fm || (self.fm_channel && self.fm_channel_simplex) {
             ("simplex".to_string(), 0, 0.0)
         } else if self.sat_fm() {
             ("simplex".to_string(), 0, self.sat_uplink_tone_hz())
@@ -10189,10 +10555,15 @@ impl Engine {
     /// macro tokens. Pushed by the frontend when a callbook lookup resolves; `call` keys it to
     /// the contact so a stale lookup never keys the wrong name (see `expand_cw`). Empty
     /// `call` clears it (the operator cleared the log field).
+    ///
+    /// ⛔ The name and the state are the worked station's own callbook text, and a macro keys
+    /// them, so each keeps only what Nexus's keyers may be handed
+    /// ([`tempo_core::cw::sendable_text`]): a `;`, a control character or a character with no
+    /// Morse is taken out here, and the rest of the name still keys.
     pub fn set_cw_peer_info(&mut self, call: String, name: String, state: String) {
         self.cw_peer_call = call.trim().to_string();
-        self.cw_peer_name = name.trim().to_string();
-        self.cw_peer_state = state.trim().to_string();
+        self.cw_peer_name = tempo_core::cw::sendable_text(&name);
+        self.cw_peer_state = tempo_core::cw::sendable_text(&state);
     }
 
     /// #293: remember the name a callbook lookup returned for `call`, replacing any earlier
@@ -10331,6 +10702,14 @@ impl Engine {
             self.cw_keyer_error = Some(CLOCK_REPAIR_DROPPED.to_string());
             return;
         }
+        // ⛔ So is a message the radio's own keyer would not take whole
+        // ([`Self::cw_message_refusal`]): nothing of it keys, nothing is armed and no pending stop
+        // is superseded, and the CW cockpit's warning line says which character.
+        if let Some(why) = self.cw_message_refusal(&expanded) {
+            tempo_core::applog::info("tx", &format!("CW not keyed: {why} (dropped)"));
+            self.cw_keyer_error = Some(why);
+            return;
+        }
         if !expanded.trim().is_empty() {
             // A deliberate CW send (F-key macro or typed text) IS the transmit action, so RE-ARM
             // TX. Without this, a prior Stop TX / halt_tx (which disables tx_enabled to stop the
@@ -10371,8 +10750,10 @@ impl Engine {
     /// message, and a refused send logs nothing. Every gate [`Self::poll_cw_one`] puts a word
     /// through is asked here first: the clock-repair hold, the latch, a connection that refuses
     /// TX, the licence privileges at the dial and as CW. So is the CW section, and a transmitter
-    /// another owner holds (a tune carrier). Taken, the message is queued exactly as an F-key's
-    /// is, and the poll checks every word again.
+    /// another owner holds (a tune carrier), and every word of the message the radio's own keyer
+    /// would not take ([`Self::cw_message_refusal`]), so a contact is never logged on an exchange
+    /// the keyer would stop part way. Taken, the message is queued exactly as an F-key's is, and
+    /// the poll checks every word again.
     ///
     /// ⛔ A PENDING STOP IS LEFT ALONE. `send_cw` clears `cw_abort` and `slot_tx_abort`, so the
     /// macro fired after a Stop TX is not flushed by it; nothing here touches either, so a stop
@@ -10414,10 +10795,33 @@ impl Engine {
         if expanded.trim().is_empty() {
             return Err(CW_ARMED_EMPTY.to_string());
         }
+        // Said in the strip's own line, so the CW cockpit's warning line does not say it twice.
+        if let Some(why) = self.cw_message_refusal(&expanded) {
+            return Err(why);
+        }
         tempo_core::applog::info("tx", &format!("CW over queued by Enter: {expanded:?}"));
         let wpm = if reply { self.cw_reply_wpm() } else { None };
         self.queue_cw(expanded, wpm);
         Ok(())
+    }
+
+    /// ⛔ Why an EXPANDED CW message is refused WHOLE before anything of it keys, in the CW
+    /// screen's words, or `None` when it may go. On the radio's own keyer ([`Self::cw_cat_keyer`]),
+    /// it is the first character of any of its words that keyer is never handed
+    /// ([`tempo_core::cw::sendable`]): the keyer refuses such a word only when its turn comes, after
+    /// the words before it have keyed, and by then Enter Sends Message has logged the contact with
+    /// its exchange cut short. So every word is asked here, before any is queued, and the keyer
+    /// still checks each word it is handed. The other keyers put no text inside a radio command,
+    /// and their messages go as before.
+    fn cw_message_refusal(&self, expanded: &str) -> Option<String> {
+        if !self.cw_cat_keyer() {
+            return None;
+        }
+        expanded
+            .split_whitespace()
+            .flat_map(str::chars)
+            .find(|c| !tempo_core::cw::sendable(*c))
+            .map(tempo_core::cw::keyer_refusal)
     }
 
     /// Queue an EXPANDED CW message for the radio loop, shared by [`Self::send_cw`] and
@@ -10425,13 +10829,32 @@ impl Engine {
     /// speed for the whole message (`None`: the operator's own); it is fixed here, before the
     /// message's first word is keyed, and never changes inside it.
     fn queue_cw(&mut self, expanded: String, wpm: Option<u32>) {
+        self.note_cw_send(&expanded);
+        if self.queue_cw_message(&expanded, wpm, None) > 0 {
+            if let Some(w) = wpm {
+                tempo_core::applog::info(
+                    "tx",
+                    &format!("CW speed match: this answer keys at {w} WPM"),
+                );
+            }
+        }
+    }
+
+    /// What every CW send does before its words are queued: the paddle's line is read, and the TX
+    /// echo shows what goes out. [`Self::queue_cw`]'s, and a TCI program's (`engine/tci/cw.rs`).
+    fn note_cw_send(&mut self, text: &str) {
         // A new send is the operator's next key: the paddle's line has been read.
         self.cw_paddle_took_over = false;
         // TX echo: show the operator what actually went out (tokens resolved).
-        self.cw_sent.push_back(expanded.clone());
+        self.cw_sent.push_back(text.to_string());
         while self.cw_sent.len() > 50 {
             self.cw_sent.pop_front();
         }
+    }
+
+    /// Queue `text`'s words as ONE message keyed at `wpm` (`None`: the operator's own speed), sent
+    /// by `from`: a TCI program, or `None` for Nexus's own. Answers the words queued.
+    fn queue_cw_message(&mut self, text: &str, wpm: Option<u32>, from: Option<u64>) -> usize {
         // Queue WORD-BY-WORD so the radio loop feeds the rig one word at a time. That
         // keeps at most one word in the rig's CW keyer buffer, so Stop TX (which clears
         // this queue) drops the rest of the macro instead of the rig playing it all out.
@@ -10439,19 +10862,14 @@ impl Engine {
             self.cw_messages.clear();
         }
         let before = self.cw_queue.len();
-        for word in expanded.split_whitespace() {
+        for word in text.split_whitespace() {
             self.cw_queue.push_back(word.to_string());
         }
         let words = self.cw_queue.len() - before;
         if words > 0 {
-            if let Some(w) = wpm {
-                tempo_core::applog::info(
-                    "tx",
-                    &format!("CW speed match: this answer keys at {w} WPM"),
-                );
-            }
-            self.cw_messages.push_back((words, wpm, false));
+            self.cw_messages.push_back((words, wpm, false, from));
         }
+        words
     }
 
     /// CW SPEED MATCH's speed for an answer to the station being worked, or `None` to key at the
@@ -10464,6 +10882,7 @@ impl Engine {
     ///   says nothing about whether the classic decoder's timing is that station's;
     /// - the classic decoder has a speed, from a keyed element heard within
     ///   [`CW_SPEED_MATCH_FRESH_SECS`] (an older one may be another station's, or none at all).
+    ///   It has none in an unassisted entry, where it does not run (`Settings::cw_decoder_active`).
     ///
     /// The speed is held to the operator's min/max. There is one estimate, the classic decoder's,
     /// at the operator's CW pitch: the signal the operator is tuned to, not one per station.
@@ -10528,7 +10947,7 @@ impl Engine {
             // A speed the operator chose (the control, or the radio's own knob followed) wins over
             // CW speed match for what is still queued: the rest keys at the new speed, and the
             // loop does not push the matched speed back over the operator's.
-            for (_, matched, _) in self.cw_messages.iter_mut() {
+            for (_, matched, _, _) in self.cw_messages.iter_mut() {
                 *matched = None;
             }
         }
@@ -10636,14 +11055,18 @@ impl Engine {
         let wpm = self.cw_next_wpm();
         let word = self.cw_queue.pop_front()?;
         let mut starts = true;
-        if let Some((left, _, started)) = self.cw_messages.front_mut() {
+        let mut from = None;
+        if let Some((left, _, started, sender)) = self.cw_messages.front_mut() {
             starts = !*started;
             *started = true;
             *left -= 1;
+            from = *sender;
             if *left == 0 {
                 self.cw_messages.pop_front();
             }
         }
+        // Whose word the keyer is handed: a TCI program's ends with that program's stops.
+        self.note_tci_cw_word(from, &word, wpm);
         Some((word, wpm, starts))
     }
 
@@ -10655,7 +11078,7 @@ impl Engine {
         }
         self.cw_messages
             .front()
-            .and_then(|(_, matched, _)| *matched)
+            .and_then(|(_, matched, _, _)| *matched)
             .unwrap_or(self.settings.cw_wpm)
     }
 
@@ -10711,6 +11134,15 @@ impl Engine {
             self.settings.cw_keyer,
             crate::settings::CwKeyerBackend::Soundcard
         )
+    }
+
+    /// True if CW keys on the RADIO'S OWN keyer (the CAT keyer, `rig.send_morse`): the keyer the
+    /// radio loop hands a word to when no other takes it, so a WinKeyer or a key line chosen with
+    /// no port set ([`Self::cw_winkeyer_port`], [`Self::cw_serial_key_port`]) keys there too.
+    fn cw_cat_keyer(&self) -> bool {
+        !self.cw_soundcard()
+            && self.cw_winkeyer_port().is_none()
+            && self.cw_serial_key_port().is_none()
     }
 
     /// The WinKeyer serial port when the CW keyer backend is WinKeyer and a port is set —
@@ -10782,9 +11214,13 @@ impl Engine {
 
     /// Whether the operator is holding manual PTT (live phone) — read by the loop. Also
     /// masks on read, so a key that became out-of-privilege (knob turned to a locked
-    /// segment while holding PTT) drops the next loop pass.
+    /// segment while holding PTT) drops the next loop pass. A program's microphone key on the TCI
+    /// server is held here as a CAT-broker client's is, masked by its own gates as well
+    /// (`engine/tci.rs`).
     pub fn manual_ptt(&self) -> bool {
-        (self.manual_ptt || self.broker_ptt) && self.tx_enabled && self.tx_allowed()
+        (self.manual_ptt || self.broker_ptt || self.tci_mic_keyed())
+            && self.tx_enabled
+            && self.tx_allowed()
     }
 
     /// PTT arbitration for a FOREIGN app on the CAT broker (WSJT-X/N1MM sharing
@@ -11840,6 +12276,14 @@ impl Engine {
                 "voice-keyer over refused: the Remote microphone is transmitting",
             );
             return Err(TxOwner::Mic.busy_reason());
+        }
+        // So does a TCI program's key, for the same reason (`engine/tci.rs`).
+        if self.tci_holds_tx() {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer over refused: a program on TCI is transmitting",
+            );
+            return Err(TxOwner::Tci.busy_reason());
         }
         if self.clock_repair_holds_tx() {
             tempo_core::applog::info(
@@ -14887,6 +15331,8 @@ impl Engine {
         // moved on — keeping it past that point risks the Log button reaching back to an old
         // abandoned exchange instead of saying there is nothing to log.
         self.stalled_qso = None;
+        // …and the CW contact the turn cue was following: the next over is the next contact's.
+        self.forget_cw_turn();
         // One line per contact — the event behind "my log is missing a QSO". Bounded by
         // contacts, which is bounded by the operator: a busy hour is a few dozen lines, and a
         // quiet one is none. Nothing here is on a timer.
@@ -16215,6 +16661,29 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.call_station_ctx(dxcall, dxgrid, reply_msg, reply_snr, dx_freq)
     }
 
+    /// A logger's WSJT-X UDP Reply (GridTracker, JTAlert): [`Self::work_station`] on the clicked
+    /// line, then TX armed whatever "double-click sets Tx" says, as before.
+    ///
+    /// ⛔ **Another program never overrides a stop.** While the operator's stop holds
+    /// (`tx_stop_hold`) or a watchdog trip stands, the Reply is refused whole: no station is
+    /// worked, nothing is armed, and neither flag comes down (working a contest CQ enters the
+    /// contest's S&P, whose entry restarts the watchdog clock). TX stays off until the operator's
+    /// own act turns it back on.
+    pub fn answer_udp_reply(
+        &mut self,
+        dxcall: &str,
+        message: &str,
+        snr: i32,
+        dx_freq: Option<f32>,
+    ) -> Result<(), String> {
+        if self.tx_stop_hold || self.tx_watchdog {
+            return Err("TX is stopped: turn TX on in Nexus before answering from a logger".into());
+        }
+        self.work_station(dxcall, None, Some(message), Some(snr), dx_freq)?;
+        self.set_tx_enabled(true);
+        Ok(())
+    }
+
     /// The CQ a click hands to the running contest's S&P ([`Self::work_station`]): the click's
     /// message is a CQ from the clicked station, not from you, while the contest's own FT8/FT4
     /// messages apply. Those messages, and the CQ's sender and grid.
@@ -16424,9 +16893,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
-    /// Clear the CW decode transcript + reset the stream decoder. A QSY (band change,
-    /// commanded retune, or working a spot) moves onto a different signal, so the old
-    /// CW copy is stale (operator report: the CW decode area lingered across a QSY).
+    /// Clear both decoders' CW copy and forget the classic decoder's speed. A QSY (band change,
+    /// commanded retune, or working a spot) moves onto a different signal, so the old CW copy
+    /// is stale (operator report: the CW decode area lingered across a QSY), and so is the
+    /// speed: kept, a spot clicked within ten seconds of the last station would offer that
+    /// station's speed beside the Decode title and to a call chip's click. The classic decoder
+    /// is reset, not just cleared, so the next station is timed from its own keying (CW speed
+    /// match's measurement included); its pitch and sensitivity are kept.
     fn clear_cw_decode(&mut self) {
         self.ai_cw_text.clear();
         self.ai_cw_pending.clear();
@@ -16438,7 +16911,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // A successful decode clears it (aicw.rs), which is the only state
         // that means "healthy".
         self.restart_ai_cw_stream();
-        self.cw_stream.clear();
+        self.cw_stream.reset();
     }
 
     /// Empty the AI-CW ring and restart its stream clock as a new generation.
@@ -16446,6 +16919,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.ai_cw_audio.clear();
         self.ai_cw_fed = 0;
         self.ai_cw_epoch = self.ai_cw_epoch.wrapping_add(1);
+        // The turn cue's times are on this clock: they go with it.
+        self.forget_cw_turn();
+        self.cw_turn_heard = None;
     }
 
     /// The best resume point from `dxcall` addressed to `mycall` in this slot, for
@@ -16828,8 +17304,34 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     pub fn broadcast(&mut self, text: &str) {
+        if self.queue_broadcast(text) {
+            // Broadcasting IS an explicit "put this on the air" action — arm TX so the
+            // canned band macros key on the next over without a separate Enable-Tx click.
+            self.reset_tx_watchdog();
+            self.arm_tx_now();
+        }
+    }
+
+    /// A logger's WSJT-X FreeText with "send" set (JTAlert, GridTracker). In WSJT-X it sets Tx5
+    /// and selects it as the next message (`on_txb5_clicked`), which goes out only if TX is
+    /// already enabled. So here the text is queued only while the operator has TX armed (a stop
+    /// and a watchdog trip both disarm), and this never arms TX, never restarts the watchdog
+    /// clock and never clears a stop: another program does not decide that the station transmits.
+    pub fn udp_free_text(&mut self, text: &str) -> Result<(), String> {
+        if !self.tx_enabled {
+            return Err(
+                "TX is off: turn TX on in Nexus before sending a logger's free text".into(),
+            );
+        }
+        self.queue_broadcast(text);
+        Ok(())
+    }
+
+    /// Queue `text` for the air and show it in band activity. Arms nothing. `false` when there
+    /// is nothing to send or nothing to send it on.
+    fn queue_broadcast(&mut self, text: &str) -> bool {
         if text.trim().is_empty() {
-            return; // nothing to say — never put a bare "DE <MYCALL>" carrier on the air
+            return false; // nothing to say — never put a bare "DE <MYCALL>" carrier on the air
         }
         // Receive-only tier: nothing to broadcast on. This is reachable WITHOUT any
         // Nexus UI action — a companion app's FreeText-with-send datagram (JTAlert,
@@ -16837,9 +17339,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // not only in the buttons. Without it the text is queued, echoed into the
         // band feed as if sent, and silently dropped at the wave builder.
         if self.tier_is_rx_only(self.app.tier()) {
-            return;
+            return false;
         }
-        self.reset_tx_watchdog();
         let mycall = self.settings.mycall.clone();
         let full = tempo_core::inbox::broadcast_text(&mycall, text);
         let sane = tempo_core::text::sanitize(&full);
@@ -16859,9 +17360,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         self.app.note_broadcast(text);
         self.record_own_tx(text.to_string()); // band activity shows the clean message
-                                              // Broadcasting IS an explicit "put this on the air" action — arm TX so the
-                                              // canned band macros key on the next over without a separate Enable-Tx click.
-        self.arm_tx_now();
+        true
     }
     /// The current worked/active peer — drives the `!` CW macro + logging. `None` if unset.
     pub fn active_peer(&self) -> Option<String> {
@@ -17390,6 +17889,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // …and a streamed operator's microphone over: dropped, its feed closed, and the abort
         // armed so the loop flushes and unkeys (M10: halt_tx is still the universal stop).
         self.drop_mic_latch();
+        // …and every TCI program's key, over and tune, the same way: Stop in Nexus always wins.
+        self.drop_tci_all();
         // A pending snappy-TX request dies with the halt — otherwise the loop
         // consumes it against a disabled TX and a later re-arm has lost it.
         self.immediate_tx = false;
@@ -17759,10 +18260,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Halt TX because the slot over on the air (FT8, FT4, JS8 and the other timed-slot modes)
     /// lost its audio part way through, and keep the reason on screen until the operator turns TX
     /// on again ([`Self::set_tx_enabled`]). Nexus's own Flex client carries an over to the radio
-    /// as DAX, all of it handed over at the key; native audio going off under it (the operator, or
-    /// the receive floor giving up on DAX) or its DAX transmit route going takes the rest with it,
-    /// and the radio would stay keyed with nothing to send until the over's own end. Operator
-    /// ruling, 2026-10-08, "End the over": the over ends there and TX turns off.
+    /// as DAX, and its own TCI client as TCI audio, all of it handed over at the key; that route
+    /// going under it (native audio switched off, the receive floor giving up on DAX, a transmit
+    /// route lost) takes the rest with it, and the radio would stay keyed with nothing to send
+    /// until the over's own end. Operator ruling, 2026-10-08, "End the over": the over ends there
+    /// and TX turns off.
     /// [`Self::halt_tx`] is that end, the Stop TX: its slot abort has the radio loop unkey and
     /// flush in the same tick.
     ///
@@ -17777,8 +18279,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         tempo_core::applog::info(
             "tx",
             &format!(
-                "{} over: its audio stopped reaching the radio part way through (Flex native DAX \
-                 audio went off), so it was ended; transmit halted",
+                "{} over: its audio stopped reaching the radio part way through (the route \
+                 carrying it, Flex native DAX or TCI, went), so it was ended; transmit halted",
                 self.tier().label()
             ),
         );
@@ -18051,6 +18553,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // The microphone over joins RTTY and SSTV (the audio design's M10): it is latched,
             // with no end of its own, so TX Off ends it in flight rather than letting it run.
             self.drop_mic_latch();
+            // So do TCI programs' keys, overs and tunes: TX Off is a stop for each.
+            self.drop_tci_all();
             // Same for SSTV: a disarm aborts the image in flight and drops the job.
             self.sstv_tx = None;
             self.sstv_abort = true;
@@ -18141,6 +18645,35 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Whether normal slot TX is currently enabled.
     pub fn tx_enabled(&self) -> bool {
         self.tx_enabled
+    }
+
+    /// The transmit side of the WSJT-X UDP Status ([`WsjtxTxStatus`]): what is being sent, to
+    /// whom, and whether TX is enabled. Cheap enough to read every radio-loop tick, which is how
+    /// the loop sends a Status on each change as WSJT-X does.
+    pub fn wsjtx_tx_status(&self) -> WsjtxTxStatus {
+        // The report is WSJT-X's Rpt box: the report the Tx2/Tx3 messages carry, so the one
+        // queued while a report over is next, else the last one sent this QSO.
+        let (dx_call, dx_grid, report) = match &self.mode {
+            Mode::Qso { station, .. } => (
+                station.dxcall.clone().unwrap_or_default(),
+                station
+                    .dxcall
+                    .as_deref()
+                    .and_then(|c| self.dx_grid_resolved(c, station.dxgrid.clone()))
+                    .unwrap_or_default(),
+                report_in(station.outgoing()).or(self.qso_report_sent),
+            ),
+            _ => (String::new(), String::new(), None),
+        };
+        WsjtxTxStatus {
+            dx_call,
+            report: report.map(|r| r.to_string()).unwrap_or_default(),
+            tx_enabled: self.tx_enabled,
+            transmitting: self.app.transmitting(),
+            dx_grid,
+            tx_watchdog: self.tx_watchdog,
+            tx_message: self.tx_message.clone(),
+        }
     }
 
     /// Whether the slot sequencer (FT8, FT4, JS8 and the other timed-slot modes) is armed to key:
@@ -19938,6 +20471,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     fn set_tune_with_reset(&mut self, on: bool, reset: impl FnOnce()) {
+        self.set_tune_for(on, reset, None);
+    }
+
+    /// [`Self::set_tune`] for whoever asked: the station (`None`), or a program on the TCI server
+    /// (`engine/tci.rs`), whose tune is not the operator's act.
+    fn set_tune_for(&mut self, on: bool, reset: impl FnOnce(), program: Option<u64>) {
         // A clock repair holds transmit: a new tune is refused and changes nothing, and a carrier
         // already up is never dropped by it ([`Self::hold_tx_for_clock_repair`]).
         if on && !self.tuning && self.clock_repair_holds_tx() {
@@ -19954,11 +20493,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // Tune is the one keying path that bypasses poll_tx (the loop keys PTT directly), so
         // the privilege lockout must gate it here: never arm a tune carrier outside privileges.
         self.tuning = on && self.tune_allowed();
+        self.note_tci_tune(program);
         if self.tuning {
             // Holding Tune is an operator action and restarts the idle clock — WSJT-X does the
             // same, though incidentally: any click or keystroke anywhere in its window zeroes
-            // `m_idleMinutes` (mainwindow.cpp:2823-2827), and the Tune button is a click.
-            self.reset_tx_watchdog();
+            // `m_idleMinutes` (mainwindow.cpp:2823-2827), and the Tune button is a click. A
+            // program's tune is no operator action: it never starts or restarts the clock.
+            if program.is_none() {
+                self.reset_tx_watchdog();
+            }
+            // WSJT-X reports a tune as the Tx Message "TUNE" (mainwindow.cpp:8083-8085).
+            self.tx_message = "TUNE".to_string();
             return;
         }
         if !was_tuning {
@@ -20044,11 +20589,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // loop: moving them would need an engine handle on that thread, and a contended lock
         // would start DROPPING CW/RTTY audio during exactly the stall this fixed.
         // Feed the longer CW-decode ring (the 2048-sample waterfall window is far too
-        // short for Morse — CW_WINDOW holds several seconds so a callsign fits).
-        self.cw_audio.extend_from_slice(samples);
-        if self.cw_audio.len() > CW_WINDOW {
-            let drop = self.cw_audio.len() - CW_WINDOW;
-            self.cw_audio.drain(0..drop);
+        // short for Morse — CW_WINDOW holds several seconds so a callsign fits). Not in an
+        // unassisted entry, which decodes no CW at all (`Settings::cw_decoder_active`): the
+        // first audio after one is declared, however it was, drops what the decoders held.
+        if self.settings.cw_decoder_active() {
+            self.cw_audio.extend_from_slice(samples);
+            if self.cw_audio.len() > CW_WINDOW {
+                let drop = self.cw_audio.len() - CW_WINDOW;
+                self.cw_audio.drain(0..drop);
+            }
+        } else if !self.cw_audio.is_empty() {
+            self.drop_cw_decoding();
         }
         // The AI CW decoder's longer ring (15 s — the model's window) fills only while
         // the feature is on, so everyone else pays nothing. `ai_cw_active` (not the raw
@@ -20060,6 +20611,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 let drop = self.ai_cw_audio.len() - AI_CW_WINDOW;
                 self.ai_cw_audio.drain(0..drop);
             }
+            self.note_cw_turn_keying();
         } else if !self.ai_cw_audio.is_empty() {
             self.restart_ai_cw_stream();
         }
@@ -20095,9 +20647,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
             }
         }
         // Feed the streaming CW decoder (retune first, cheaply, if the operator moved the
-        // marker pitch) — it keeps a persistent transcript across polls + window slides.
-        self.cw_stream.retune(self.settings.cw_pitch_hz);
-        self.cw_stream.push(samples);
+        // marker pitch) — it keeps a persistent transcript across polls + window slides. Not in
+        // an unassisted entry (above).
+        if self.settings.cw_decoder_active() {
+            self.cw_stream.retune(self.settings.cw_pitch_hz);
+            self.cw_stream.push(samples);
+        }
         // And the per-QSO WAV ring — the last ~60 s of RX, captured on log when enabled.
         self.qso_audio.extend_from_slice(samples);
         if self.qso_audio.len() > QSO_WAV_WINDOW {
@@ -20120,9 +20675,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// quietly underneath — it supplies the WPM estimate (the model doesn't measure speed)
     /// and the transcript fallback when the AI is off or its model is missing.
     ///
-    /// `ai_cw_active` folds in Unassisted mode, so an unassisted entry falls through to the
-    /// Goertzel transcript here: the operator keeps copying CW, without the model's help.
+    /// An unassisted entry gets nothing here, neither decoder's copy nor the speed
+    /// ([`crate::settings::Settings::cw_decoder_active`]), however it was declared.
     pub fn cw_decode(&self) -> tempo_core::cw_decode::CwDecode {
+        if !self.settings.cw_decoder_active() {
+            return tempo_core::cw_decode::CwDecode::default();
+        }
         let ai_live = self.settings.ai_cw_active()
             && (!self.ai_cw_text.is_empty() || self.ai_cw_status.is_empty());
         tempo_core::cw_decode::CwDecode {
@@ -20133,7 +20691,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
             } else {
                 self.cw_stream.transcript().to_string()
             },
-            wpm: self.cw_stream.wpm(),
+            // Only while fresh, by CW speed match's own rule: an older reading may be the previous
+            // station's, and a call chip's click sets the keyer to the speed shown.
+            wpm: match self.cw_stream.secs_since_mark() {
+                Some(age) if age <= CW_SPEED_MATCH_FRESH_SECS => self.cw_stream.wpm(),
+                _ => 0,
+            },
         }
     }
 
@@ -20179,6 +20742,103 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
+    /// One AI-CW pass's letters with the stream time each was heard at ([`Self::push_ai_cw_pass`]'s
+    /// text again, letter by letter), and the end of the window it listened to: what the CW turn
+    /// cue reads ([`Self::cw_turn`]). Kept as that text is: confirmed letters are appended, the
+    /// provisional ones replace the last pass's, and a pass over an older generation is dropped.
+    pub fn push_ai_cw_times(
+        &mut self,
+        epoch: u64,
+        heard_until: f64,
+        confirmed: &[(f64, char)],
+        pending: &[(f64, char)],
+    ) {
+        if epoch != self.ai_cw_epoch {
+            return;
+        }
+        self.cw_turn_heard = Some(heard_until);
+        self.cw_turn_letters.extend(confirmed.iter().copied());
+        self.cw_turn_pending = pending.to_vec();
+        let keep_from = heard_until - CW_TURN_KEEP_SECS;
+        while self
+            .cw_turn_letters
+            .front()
+            .is_some_and(|(t, _)| *t < keep_from)
+        {
+            self.cw_turn_letters.pop_front();
+        }
+    }
+
+    /// Our own CW keying on the AI-CW stream clock, for the turn cue: a transmission opens at the
+    /// first audio fed while CW is sending ([`Self::cw_sending`]) and closes at the first fed
+    /// after it stops. The radio loop feeds audio every tick, so the clock is the audio's own.
+    fn note_cw_turn_keying(&mut self) {
+        let now = self.ai_cw_fed as f64 / AI_CW_CLOCK_HZ;
+        let keying = self.cw_sending();
+        match self.cw_turn_keyed.back_mut() {
+            Some((_, end @ None)) => {
+                if !keying {
+                    *end = Some(now);
+                }
+            }
+            _ if keying => {
+                if self.cw_turn_keyed.len() >= CW_TURN_KEEP_KEYED {
+                    self.cw_turn_keyed.pop_front();
+                }
+                self.cw_turn_keyed.push_back((now, None));
+            }
+            _ => {}
+        }
+    }
+
+    /// Whose turn it is in the CW contact the operator is copying, read from the AI decoder's
+    /// copy and our own keying ([`tempo_core::cw_turn`]). `None` unless that decoder is on and
+    /// keeping up, and in an unassisted entry, which gets nothing from a CW decoder
+    /// ([`crate::settings::Settings::cw_decoder_active`]). `his_call` is the call the F-keys'
+    /// `!` sends: the station worked, else the decoder's best guess, which only the caller can
+    /// rank (it holds the DXCC tables).
+    ///
+    /// ⛔ A READ: `&self`, so nothing here can key, queue or arm anything.
+    pub fn cw_turn(&self, his_call: Option<&str>) -> Option<tempo_core::cw_turn::Turn> {
+        if !self.settings.cw_decoder_active() || !self.settings.ai_cw_active() {
+            return None;
+        }
+        let heard = self.cw_turn_heard?;
+        let now = self.ai_cw_fed as f64 / AI_CW_CLOCK_HZ;
+        if now - heard > CW_TURN_STALL_SECS {
+            return None;
+        }
+        let letters: Vec<(f64, char)> = self
+            .cw_turn_letters
+            .iter()
+            .chain(&self.cw_turn_pending)
+            .copied()
+            .collect();
+        let keyed: Vec<(f64, Option<f64>)> = self.cw_turn_keyed.iter().copied().collect();
+        let wpm = self.cw_decode().wpm;
+        Some(tempo_core::cw_turn::read(&tempo_core::cw_turn::Input {
+            letters: &letters,
+            keyed: &keyed,
+            heard_until: heard,
+            now,
+            mark_age: self.cw_stream.secs_since_mark().map(f64::from),
+            wpm: (wpm > 0).then_some(wpm),
+            mycall: &self.settings.mycall,
+            his_call,
+            last_sent: self.cw_sent.back().map(String::as_str),
+            contest: self.in_field_day(),
+            split: self.split_tx_mhz.is_some(),
+        }))
+    }
+
+    /// Forget the contact the CW turn cue was following: its letters and our transmissions. A
+    /// logged contact, the Clear button and a new stream each start the next one.
+    fn forget_cw_turn(&mut self) {
+        self.cw_turn_letters.clear();
+        self.cw_turn_pending.clear();
+        self.cw_turn_keyed.clear();
+    }
+
     /// The AI decoder's provisional tail, for DISPLAY beside [`Self::cw_decode`]'s text: empty
     /// unless the AI copy is what the cockpit shows and the decoder is healthy (a fault leaves
     /// no stale tail on screen). Never read it as data; [`Self::cw_decode`] is the copy.
@@ -20213,19 +20873,30 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// cluster settings. Those stay exactly as the operator left them and are overridden while
     /// this is on, so ending Unassisted mode restores their station with nothing to restore.
     ///
-    /// Declaring an unassisted entry drops any AI transcript already on screen — leaving the
-    /// model's copy visible after the model has been switched off would be stale text
-    /// presented as live decode.
+    /// Declaring an unassisted entry drops every CW copy already on screen, the classic
+    /// decoder's and its speed included — leaving copy visible after the decoders have been
+    /// switched off would be stale text presented as live decode — so nothing heard before the
+    /// entry comes back when it ends either.
     pub fn set_unassisted_mode(&mut self, on: bool) {
         let was = crate::settings::ContestBefore::of(&self.settings);
         self.settings.unassisted_mode = on;
         self.note_contest_before(was, self.settings.fd_active);
         if on {
-            self.ai_cw_text.clear();
-            self.ai_cw_pending.clear();
-            self.ai_cw_status.clear();
-            self.restart_ai_cw_stream();
+            self.drop_cw_decoding();
         }
+    }
+
+    /// Drop everything the CW decoders hold: the AI decoder's copy, its unconfirmed tail, its
+    /// status and its ring, and the classic decoder's copy, its timing and its ring. An
+    /// unassisted entry starts here ([`Self::set_unassisted_mode`], and the first audio after
+    /// any other way of declaring one, [`Self::feed_rx_audio`]).
+    fn drop_cw_decoding(&mut self) {
+        self.ai_cw_text.clear();
+        self.ai_cw_pending.clear();
+        self.ai_cw_status.clear();
+        self.restart_ai_cw_stream();
+        self.cw_audio.clear();
+        self.cw_stream.reset();
     }
 
     /// Clear the streaming CW decoder's accumulated transcript (the cockpit's Clear button).
@@ -20235,12 +20906,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.cw_sent.clear();
         self.ai_cw_text.clear();
         self.ai_cw_pending.clear();
+        self.forget_cw_turn();
     }
 
     /// Wideband CW skim of the recent receive audio: every distinct keyed signal across
     /// the 300–1500 Hz CW passband, each as (pitch, text, WPM). The multi-signal sibling
-    /// of [`Self::cw_decode`].
+    /// of [`Self::cw_decode`], and like it, nothing in an unassisted entry.
     pub fn cw_skim(&self) -> Vec<tempo_core::cw_decode::SkimHit> {
+        if !self.settings.cw_decoder_active() {
+            return Vec::new();
+        }
         tempo_core::cw_decode::skim_cw(&self.cw_audio, tempo_fast::SAMPLE_RATE, 300, 1500, 50)
     }
 
@@ -20919,6 +21594,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // machine's channel, and the dial it displaces is the operator's and banks here.
         self.machinery_tune(output_mhz, band, "FM");
         self.fm_channel = true;
+        // A machine's hold: its own shift and tone, written above.
+        self.fm_channel_simplex = false;
         // A channel this verb sets is the station's own, even on the identical machine a browser
         // tuned earlier; only a committed remote repeater tune re-marks it (see `remote_fm_hold`).
         self.remote_fm_hold = None;
@@ -21149,6 +21826,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // From the arm, before any audio: an armed over owns the transmitter the way a
             // latched RTTY stream does from its first tick, so nothing else can key under it.
             Some(TxOwner::Mic)
+        } else if self.tci_holds_tx() {
+            // The same from a program's admission: its over owns the transmitter before its audio.
+            Some(TxOwner::Tci)
         } else if voice {
             Some(TxOwner::Voice)
         } else if self.cw_sending() {
@@ -23581,6 +24261,12 @@ contact yourself."
         self.cat_share_error = err;
     }
 
+    /// Record the TCI server's state for the snapshot, or `None` once it is switched off. Written
+    /// by its manager on every tick, in both directions, as [`Self::set_cat_share_error`] is.
+    pub fn set_tci_server_status(&mut self, status: Option<crate::dto::TciServerStatus>) {
+        self.tci_server = status;
+    }
+
     /// Set the operator's TX-slot parity live. `true` = transmit on even/"1st"
     /// slots, `false` = odd/"2nd". Read by `poll_tx` each slot. Two stations must
     /// use OPPOSITE periods to complete a QSO.
@@ -23769,14 +24455,29 @@ contact yourself."
         }
     }
 
-    /// Why the active radio's CAT connection refuses every transmission, when it does: the Icom
-    /// network connection is receive and control only in this Beta
-    /// ([`crate::settings::rig_conn_is_icom_lan`]). ANDed into [`Self::tx_allowed`] and
-    /// [`Self::tx_allowed_as`], so every transmit path refuses before PTT exactly as it refuses a
+    /// Why the active radio's CAT connection refuses transmitting in the section the operator is
+    /// in, when it does: [`Self::connection_tx_refusal_as`] that section. ANDed into
+    /// [`Self::tx_allowed`], so every transmit path refuses before PTT exactly as it refuses a
     /// frequency outside the licence, which is why this changes no timing or sequencing; carried
     /// in the snapshot so the cockpit names the connection, not the licence. The network daemon
-    /// refuses the keying verbs again on its own side.
+    /// refuses the keying verbs again on its own side, and the TCI session refuses at the key
+    /// whatever the SDR program cannot take.
     pub fn connection_tx_refusal(&self) -> Option<&'static str> {
+        self.connection_tx_refusal_as(self.settings.operating_mode)
+    }
+
+    /// Why the active radio's CAT connection refuses a transmission judged as section `om`, when
+    /// it does: the Icom network connection refuses every transmission, receive and control only
+    /// in this Beta ([`crate::settings::rig_conn_is_icom_lan`]). The TCI connection refuses no
+    /// section: FT8, FT4, JS8 and the other slot-timed modes transmit on it as the other sections
+    /// do, behind every other gate (`engine/tci_connection.rs`). ⚠️ NEEDS-BENCH: FT over TCI has
+    /// met only the simulator. A rule for one section reads the section JUDGED, not the one the
+    /// station is in, so [`Self::tx_allowed_as`] asked as that section from another is refused,
+    /// and asked as another section from it is not; no rule reads it now.
+    fn connection_tx_refusal_as(
+        &self,
+        _om: crate::settings::OperatingMode,
+    ) -> Option<&'static str> {
         crate::settings::rig_conn_is_icom_lan(&self.settings.rig_conn)
             .then_some(crate::settings::ICOM_LAN_TX_REFUSED)
     }
@@ -23800,7 +24501,9 @@ contact yourself."
             && !self.tx_allowed()
             // The gate with a USB pick: the band convention is USB on 60 m too, so the one
             // phone model asked of USB is the whole of what it would judge.
-            && self.every_tx_frequency(|mhz| self.phone_emission_allowed(mhz, "USB"))
+            && self.every_tx_frequency(OperatingMode::Phone, |mhz| {
+                self.phone_emission_allowed(mhz, "USB")
+            })
     }
 
     /// The words for a licence refusal: [`PHONE_USB_ONLY`] when the phone mode is the whole reason
@@ -23831,14 +24534,20 @@ contact yourself."
 
     /// [`Self::tx_allowed_as`] with a data over keyed as `frame` ([`Self::tx_allowed_for`]).
     fn tx_allowed_as_for(&self, om: crate::settings::OperatingMode, frame: DataFrame) -> bool {
-        self.every_tx_frequency(|mhz| self.emission_in_use_allowed_as(om, mhz, frame))
+        self.every_tx_frequency(om, |mhz| self.emission_in_use_allowed_as(om, mhz, frame))
     }
 
-    /// Does `judge` pass every frequency the next over is emitted on? The frame of
-    /// [`Self::tx_allowed_as`], which asks it of the emission in use; [`Self::phone_mode_refused`]
-    /// asks it of a USB pick, so the two never disagree about which frequencies count.
-    fn every_tx_frequency(&self, judge: impl Fn(f64) -> bool) -> bool {
-        if self.connection_tx_refusal().is_some() {
+    /// Does `judge` pass every frequency the next over is emitted on, for a transmission judged
+    /// as section `om`, whose connection refusal it applies ([`Self::connection_tx_refusal_as`])?
+    /// The frame of [`Self::tx_allowed_as`], which asks it of the emission in use;
+    /// [`Self::phone_mode_refused`] asks it of a USB pick, so the two never disagree about which
+    /// frequencies count.
+    fn every_tx_frequency(
+        &self,
+        om: crate::settings::OperatingMode,
+        judge: impl Fn(f64) -> bool,
+    ) -> bool {
+        if self.connection_tx_refusal_as(om).is_some() {
             return false;
         }
         // The rig says split and we cannot say where it transmits — refuse rather than judge
@@ -23904,8 +24613,8 @@ contact yourself."
         // Ask the question the RADIO LOOP asks, not a second one that could drift from it: the
         // shift reaches the rig only when the mode policy resolves to FM (`service.rs` applies
         // `fm_repeater_config` under exactly that condition), and `fm_repeater_config` is the
-        // accessor it applies — already answering SIMPLEX for the two cases where a stored shift
-        // must not be used (an APRS beacon, an FM bird).
+        // accessor it applies — already answering SIMPLEX for the cases where a stored shift
+        // must not be used (an APRS beacon, the app's own FM channels, an FM bird).
         if !matches!(self.rig_mode_effective().as_str(), "FM" | "PKTFM") {
             return 0.0;
         }
@@ -24540,6 +25249,9 @@ contact yourself."
         }
         // Fire this period when it still fits (the snappy path).
         self.immediate_tx = true;
+        // …and, during an FT8/FT4 over, switch the rest of it to this message, as WSJT-X's Tx
+        // buttons do (`if(m_transmitting) m_restart=true;`, `widgets/mainwindow.cpp:8751-8816`).
+        self.ft_restart = true;
         Ok(())
     }
 
@@ -24608,6 +25320,14 @@ contact yourself."
         }
         self.tx_watchdog = false;
         self.tx_watchdog_start = None;
+    }
+
+    /// For tests outside this crate: a watchdog trip as the transmit paths make one (`plan_tx`,
+    /// `poll_rtty_one`), tripped and TX off. Their clock counts in minutes, which no test waits out.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn trip_tx_watchdog_for_test(&mut self) {
+        self.tx_watchdog = true;
+        self.tx_enabled = false;
     }
 
     /// T/R slot length (seconds) for the active tier: DX1 = 15 s; the native
@@ -24983,6 +25703,9 @@ contact yourself."
             self.tx_source_verdict().emission_mhz,
         );
         s.radio.phone_mode_refused = self.phone_mode_refused();
+        // The FM-channel hold as `rig_mode_effective` reads it, so the Phone cockpit's AUTO says
+        // what is commanded on a kept FM channel.
+        s.radio.fm_channel = self.fm_channel && self.settings.dial_mhz >= 29.0;
         s.radio.tuning = self.tuning;
         // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
         s.radio.tx_busy_reason = self.tx_owner().map(TxOwner::busy_reason);
@@ -25061,6 +25784,7 @@ contact yourself."
         s.radio.audio_error = self.audio_error.as_ref().map(|(_, line)| line.clone());
         s.radio.audio_error_kind = self.audio_error.as_ref().map(|(kind, _)| *kind);
         s.radio.cat_share_error = self.cat_share_error.clone();
+        s.radio.tci_server = self.tci_server.clone();
         // A map lookup and a clone: no I/O and no second lock. `Engine::snapshot` runs under
         // the engine mutex on the UI's 300 ms poll, and work done inside it has twice stalled
         // the radio loop.
@@ -25212,10 +25936,20 @@ contact yourself."
         // model), so `catOk`/`smeterDb` are None for them.
         s.active_radio_id = self.settings.active_radio;
         s.radio_pegged = self.settings.radio_pegged;
+        // No AI copy or status from an unassisted entry, however it was declared (`cw_decode`).
+        let decoding = self.settings.cw_decoder_active();
         s.ai_cw = crate::dto::AiCwStatus {
             enabled: self.settings.ai_cw_enabled,
-            status: self.ai_cw_status.clone(),
-            text: self.ai_cw_text.clone(),
+            status: if decoding {
+                self.ai_cw_status.clone()
+            } else {
+                String::new()
+            },
+            text: if decoding {
+                self.ai_cw_text.clone()
+            } else {
+                String::new()
+            },
         };
         if self.settings.radios.len() > 1 {
             s.radios = self
@@ -25618,6 +26352,7 @@ contact yourself."
         s.work_view = self.work_view.clone();
         s.work_call = self.work_call.clone();
         s.work_park = self.work_park.clone();
+        s.work_afar = self.work_afar;
         s.hunt = self
             .station
             .hunt_target() // TTL-filtered: an expired pend never shows a chip
@@ -25808,12 +26543,17 @@ contact yourself."
         // clock repair holds transmit ([`Self::hold_tx_for_clock_repair`]): an armed run
         // misses its overs until the repair ends, and keeps its arm for the ones after. Nor
         // while CW is sending ([`Self::cw_sending`], the CW ID after a 73): the slot is skipped
-        // as for a tune, the sequence untouched, and the next free slot keys as normal.
+        // as for a tune, the sequence untouched, and the next free slot keys as normal. Nor while
+        // a TCI program's key owns the transmitter ([`Self::tci_holds_tx`]), or a CAT-broker
+        // client holds its key ([`Self::broker_ptt`]), the same way: an armed run must never key
+        // over another program's over, and keys its next free slot once the key is released.
         if !self.tx_enabled
             || self.tuning
             || self.cw_sending()
             || !self.tx_allowed()
             || self.clock_repair_holds_tx()
+            || self.tci_holds_tx()
+            || self.broker_ptt
         {
             self.app.set_transmitting(false);
             return None;
@@ -26570,6 +27310,8 @@ contact yourself."
         // Kept, so the next over that is the same one (a CQ called again, a message repeated
         // while the reply is not yet heard) keys without being built again (`prebuilt_wave`).
         self.keep_prebuilt_wave(&plan.waveform, &wave);
+        self.note_ft_on_air(plan, wave.len());
+        self.tx_message = wsjtx_msgsent(plan.tier, &plan.waveform);
         vec![wave]
     }
 
@@ -27499,7 +28241,9 @@ contact yourself."
                 // `(CallingCq, Report)`, which locks on and re-works them — which is itself
                 // what WSJT-X's bare-report arm does, `mainwindow.cpp:6415-6440`.)
                 Msg::Report { to, de, .. } | Msg::RReport { to, de, .. }
-                    if answer == LateAnswer::Roger && same(&to, &mycall) && same(&de, &call) =>
+                    if matches!(answer, LateAnswer::Roger | LateAnswer::RogerOrBye73)
+                        && same(&to, &mycall)
+                        && same(&de, &call) =>
                 {
                     Some(if rrr {
                         Msg::Rrr {
@@ -27514,9 +28258,12 @@ contact yourself."
                     })
                 }
                 // #153 — the station the run gave up on came back and closed. Answer with the
-                // 73 that closes it back, and nothing else.
+                // 73 that closes it back, and nothing else. Ruling 544 — likewise the partner's
+                // roger to our RRR: one 73, then the run's CQ.
                 Msg::Rr73 { to, de } | Msg::Rrr { to, de }
-                    if answer == LateAnswer::Bye73 && same(&to, &mycall) && same(&de, &call) =>
+                    if matches!(answer, LateAnswer::Bye73 | LateAnswer::RogerOrBye73)
+                        && same(&to, &mycall)
+                        && same(&de, &call) =>
                 {
                     Some(Msg::Bye73 {
                         to: de,
@@ -27536,12 +28283,14 @@ contact yourself."
                 if let Some(p) = self.recent_partner.as_mut() {
                     p.owed = Some(m);
                 }
+                self.ft_seq_moved = true;
                 return;
             }
         }
     }
 
     fn observe_modes(&mut self, decodes: &[modes::Decode], slot: u64) {
+        self.ft_seq_moved = false;
         // The completed contact to auto-log, gathered while `self.mode` is
         // borrowed and committed after (so building the record doesn't conflict
         // with the mutable borrow of the sequencer).
@@ -27594,8 +28343,10 @@ contact yourself."
                 // it fixed once sent.
                 station.report_follows_latest_decode =
                     matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4 | Tier::Fst4);
+                let next_before = station.outgoing();
                 station.observe(observed);
                 sequence_advanced = station.state != state_before;
+                self.ft_seq_moved = sequence_advanced || station.outgoing() != next_before;
                 // Quiet-finish (hound) completion sends NOTHING after the Fox's
                 // RR73 — so the stock "disable TX after 73" one-shot in the TX
                 // path never fires. Arm it here instead: the service loop drops
@@ -27708,8 +28459,10 @@ contact yourself."
                 // contests do) writes a marked row that the count leaves out, and that row
                 // must reach the journal like any other.
                 let rows_before = station.log.qsos().len();
+                let next_before = station.outgoing();
                 station.observe(decodes, slot);
                 sequence_advanced = station.state != state_before;
+                self.ft_seq_moved = sequence_advanced || station.outgoing() != next_before;
                 // S&P (the role that listens) going from listening to awaiting the runner's
                 // exchange has just answered a CQ in these decodes.
                 fd_answered_cq = state_before == tempo_core::fieldday::FdState::Listening
@@ -27905,11 +28658,17 @@ contact yourself."
                         call: dx,
                         // `resume_cq` and `abandon_stalled` are mutually exclusive by
                         // construction (one needs `qso_logged`, the other `!qso_logged`), so
-                        // this reads the origin exactly rather than guessing at it.
-                        answer: if resume_cq {
-                            LateAnswer::Roger
-                        } else {
+                        // this reads the origin exactly rather than guessing at it. A run
+                        // resumes from `Confirming` with our roger still queued, as it went on
+                        // the air (an RRR the packer had to render counts, as in the
+                        // sequencer's own arm), or from `done()` with nothing queued: our 73
+                        // went, and nothing more is owed.
+                        answer: if !resume_cq {
                             LateAnswer::Bye73
+                        } else if matches!(station.outgoing(), Some(Msg::Rrr { .. })) {
+                            LateAnswer::RogerOrBye73
+                        } else {
+                            LateAnswer::Roger
                         },
                         confirm_with_rrr: station.confirm_with_rrr,
                         until_slot: slot.saturating_add(LATE_REPLY_SLOTS),
@@ -35787,6 +36546,7 @@ mod tests {
             "LSB",
             "precondition: the RTTY band plan is LSB"
         );
+        let rtty_dial = e.settings().dial_mhz;
         // …Tempo (chat): the Digital policy, no re-home…
         e.set_operating_mode("digital", false);
         // …then the FT cockpit, which is no longer a mode change.
@@ -35801,8 +36561,8 @@ mod tests {
         // …and it is the SIDE that is re-derived, never the dial: a section entry with
         // `follow_freq = false` must still leave the VFO exactly where it was.
         assert!(
-            (e.settings().dial_mhz - 14.083).abs() < 1e-9,
-            "the dial is untouched, got {}",
+            (e.settings().dial_mhz - rtty_dial).abs() < 1e-9,
+            "the dial is untouched at {rtty_dial}, got {}",
             e.settings().dial_mhz
         );
     }
@@ -36075,7 +36835,7 @@ mod tests {
         use crate::settings::OperatingMode;
         // The APP's own channel park is a hold like APRS's, and hand-chasing the ISS
         // downlink's ±3.5 kHz Doppler is routine on an SSTV pass. `aprs_tune` and
-        // `repeater_tune` each re-arm an FM flag after their tune; `tune_channel` arms none,
+        // `repeater_tune` each re-arm an FM flag after their tune; `tune_channel` armed none then,
         // so nothing marked the park and the nudge was banked as the operator's 2 m phone
         // dial — overwriting the 146.520 the park had just correctly saved, and parking a
         // later return to 2 m Phone on the ISS downlink.
@@ -40739,6 +41499,56 @@ mod tests {
         );
     }
 
+    /// The correction above reached no pick the operator makes: it was applied only in
+    /// `tune_channel`, whose one caller parks an FM channel. RTTY entered on a band and a band
+    /// pick naming RTTY tuned the plan's FSK dial on both backends, so on the default AFSK the
+    /// 20 m mark went out at 14.0809, inside FT4. They read the plan as this station tunes it now
+    /// (`rtty_channel_plan`), with the live mark, so a netted station lands on the plan too.
+    #[test]
+    fn an_rtty_channel_pick_lands_the_signal_on_the_plan_on_either_backend() {
+        let from_ft8 = |backend: &str| {
+            let mut e = Engine::new("K1ABC", "EN50", 0);
+            e.set_license_class("general");
+            e.settings.rtty_backend = backend.into();
+            e.set_operating_mode("digital", false);
+            e.set_frequency(14.074, "20m", "USB");
+            e
+        };
+        // Where the mark goes out, as the log writes a contact (`logged_signal_offset`).
+        let mark = |e: &Engine| {
+            let (offset, below) = e.logged_signal_offset();
+            let dial = e.settings().dial_mhz;
+            format!("{:.6}", if below { dial - offset } else { dial + offset })
+        };
+        let mut got = Vec::new();
+        for backend in ["afsk", "fsk"] {
+            let mut e = from_ft8(backend);
+            e.set_operating_mode("rtty", true);
+            got.push((backend, "RTTY entered on 20 m", mark(&e)));
+            let mut e = from_ft8(backend);
+            e.set_operating_mode("rtty", false);
+            e.set_frequency(7.080, "40m", "LSB");
+            e.pick_band("20m", Some("rtty"));
+            got.push((backend, "a band pick naming RTTY", mark(&e)));
+        }
+        let mut e = from_ft8("afsk");
+        e.rtty_net(1700.0).expect("unkeyed: the net is taken");
+        e.set_operating_mode("rtty", true);
+        got.push(("afsk", "netted to 1700 Hz, RTTY entered", mark(&e)));
+        let on_the_plan = |backend, how| (backend, how, "14.083000".to_string());
+        assert_eq!(
+            got,
+            vec![
+                on_the_plan("afsk", "RTTY entered on 20 m"),
+                on_the_plan("afsk", "a band pick naming RTTY"),
+                on_the_plan("fsk", "RTTY entered on 20 m"),
+                on_the_plan("fsk", "a band pick naming RTTY"),
+                on_the_plan("afsk", "netted to 1700 Hz, RTTY entered"),
+            ],
+            "the mark goes out on the plan's 14.083"
+        );
+    }
+
     #[test]
     fn hold_tx_freq_survives_a_restart() {
         let dir = std::env::temp_dir().join(format!("nexus-holdtx-{}", std::process::id()));
@@ -42208,6 +43018,46 @@ mod tests {
         r.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-05", -8)], 3);
         let _ = r.poll_tx(4); // RR73 → resume CQ
         assert!(!r.take_pending_tx_disable(), "a run never self-disarms");
+    }
+
+    /// The WSJT-X UDP Status's transmit side as `statusUpdate` fills it (mainwindow.cpp:13979-13989):
+    /// the over on the air and after it (`m_currentMessage`), the DX call and grid, the report sent,
+    /// the Enable Tx latch and a tripped watchdog. A CQ run answered by K1ABC, by value.
+    #[test]
+    fn the_wsjtx_tx_status_follows_the_qso_the_over_and_the_watchdog() {
+        let mut r = Engine::new("W9XYZ", "EN37", 0);
+        r.set_tier(Tier::Ft8);
+        let _ = r.take_slot_tx_abort();
+        r.set_mode("qso-run").unwrap();
+        assert_eq!(r.wsjtx_tx_status().tx_message, "", "nothing sent yet");
+        assert!(!r.poll_tx(0).is_empty(), "premise: the CQ keys");
+        let cq = r.wsjtx_tx_status();
+        assert_eq!(cq.tx_message, format!("{:<37}", "CQ W9XYZ EN37"));
+        assert_eq!((cq.dx_call.as_str(), cq.report.as_str()), ("", ""));
+        assert!(cq.tx_enabled);
+
+        r.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 1);
+        assert!(!r.poll_tx(2).is_empty(), "premise: the report keys");
+        let rpt = r.wsjtx_tx_status();
+        assert_eq!(rpt.tx_message, format!("{:<37}", "K1ABC W9XYZ -08"));
+        assert_eq!(rpt.dx_call, "K1ABC");
+        assert_eq!(rpt.dx_grid, "FN42");
+        assert_eq!(rpt.report, "-8", "QString::number of the report sent");
+        assert!(!rpt.tx_watchdog);
+
+        // A tripped watchdog: reported, TX disabled, and the last over still the Tx Message.
+        let mut s = r.settings().clone();
+        s.tx_watchdog_min = 1;
+        r.apply_settings(s);
+        r.tx_watchdog_start = Some(now_unix_secs().saturating_sub(61));
+        let _ = r.poll_tx(4);
+        let wd = r.wsjtx_tx_status();
+        assert!(wd.tx_watchdog, "the watchdog tripped");
+        assert!(!wd.tx_enabled, "a trip disables TX");
+        assert_eq!(
+            wd.tx_message, rpt.tx_message,
+            "kept after the over, as upstream keeps it"
+        );
     }
 
     #[test]
@@ -56481,6 +57331,132 @@ mod tests {
         );
     }
 
+    /// The app's own FM channels are worked simplex with no tone, as APRS is: the SSTV plan's FM
+    /// rows picked on the SSTV screen, the ISS auto-arm's park on 145.800, and the channel Phone
+    /// keeps from either. A repeater tune writes its shift and tone to Settings and nothing resets
+    /// them, so each of these was worked through the last machine's: the radio was commanded that
+    /// shift and tone, and the transmitter keyed the machine's input while the dial read the
+    /// channel.
+    #[test]
+    fn the_apps_own_fm_channels_are_worked_simplex_with_no_tone() {
+        // This morning's machine, then FT8 on 2 m: its shift and tone stay stored.
+        let after_a_repeater = || {
+            let mut e = Engine::new("K1ABC", "EN50", 0);
+            e.set_license_class("technician");
+            e.set_operating_mode("digital", false);
+            e.repeater_tune(146.940, "minus", 600_000, 103.5).unwrap();
+            e.set_frequency(144.174, "2m", "USB");
+            e
+        };
+        let mut got = Vec::new();
+        for (how, channel) in [
+            ("the SSTV screen's ISS downlink", 145.800),
+            ("the SSTV screen's calling channel", 144.500),
+            ("the ISS park", 145.800),
+            ("Phone kept from the calling channel", 144.500),
+            ("Phone kept from the ISS park", 145.800),
+        ] {
+            let mut e = after_a_repeater();
+            if how.ends_with("ISS park") {
+                e.tune_channel(channel, "2m", "FM");
+            } else {
+                e.sstv_tune(channel, "2m", "FM");
+            }
+            if how.starts_with("Phone kept") {
+                e.set_operating_mode_keeping_dial("phone", true, true);
+            }
+            assert!(
+                e.snapshot().radio.fm_channel && e.rig_mode_effective() == "FM",
+                "{how}: premise: the channel is held in FM"
+            );
+            got.push((
+                how,
+                e.fm_repeater_config(),
+                format!("{:.3}", e.tx_emission_mhz()),
+            ));
+        }
+        let simplex = |how, channel: f64| {
+            (
+                how,
+                ("simplex".to_string(), 0, 0.0),
+                format!("{channel:.3}"),
+            )
+        };
+        assert_eq!(
+            got,
+            vec![
+                simplex("the SSTV screen's ISS downlink", 145.800),
+                simplex("the SSTV screen's calling channel", 144.500),
+                simplex("the ISS park", 145.800),
+                simplex("Phone kept from the calling channel", 144.500),
+                simplex("Phone kept from the ISS park", 145.800),
+            ],
+            "simplex with no tone, so the emission is the channel"
+        );
+    }
+
+    /// The controls beside it: a machine still keys its own input with its tone wherever its hold
+    /// is reached from, a machine tuned after the SSTV channel gets its own back, APRS is simplex as
+    /// it always was, and a dial of the operator's own picked in FM on the SSTV screen (the strip's
+    /// FM toggle, there for a local machine) carries the stored machine as before.
+    #[test]
+    fn a_repeater_keeps_its_shift_and_tone_beside_the_apps_own_channels() {
+        let mut e = Engine::new("K1ABC", "EN50", 0);
+        e.set_license_class("technician");
+        e.set_operating_mode("digital", false);
+        let mut got = Vec::new();
+        let mut note = |how: &'static str, e: &Engine| {
+            got.push((
+                how,
+                e.fm_repeater_config(),
+                format!("{:.3}", e.tx_emission_mhz()),
+            ));
+        };
+        e.repeater_tune(146.940, "minus", 600_000, 103.5).unwrap();
+        note("a repeater tune", &e);
+        e.set_operating_mode_keeping_dial("phone", true, true);
+        assert!(e.snapshot().radio.fm_channel, "premise: Phone kept it");
+        note("Phone kept on the machine", &e);
+        e.sstv_tune(144.500, "2m", "FM");
+        e.repeater_tune(147.000, "plus", 0, 100.0).unwrap();
+        note("a machine tuned after the SSTV channel", &e);
+        e.sstv_tune(147.000, "2m", "FM");
+        note("the machine's output picked in FM on the SSTV screen", &e);
+        e.aprs_tune(144.390).unwrap();
+        note("APRS", &e);
+        let machine = |how, shift: &str, offset, tone, emission: &str| {
+            (how, (shift.to_string(), offset, tone), emission.to_string())
+        };
+        assert_eq!(
+            got,
+            vec![
+                machine("a repeater tune", "minus", 600_000, 103.5, "146.340"),
+                machine(
+                    "Phone kept on the machine",
+                    "minus",
+                    600_000,
+                    103.5,
+                    "146.340"
+                ),
+                machine(
+                    "a machine tuned after the SSTV channel",
+                    "plus",
+                    600_000,
+                    100.0,
+                    "147.600"
+                ),
+                machine(
+                    "the machine's output picked in FM on the SSTV screen",
+                    "plus",
+                    600_000,
+                    100.0,
+                    "147.600"
+                ),
+                machine("APRS", "simplex", 0, 0.0, "144.390"),
+            ]
+        );
+    }
+
     #[test]
     fn hf_actions_route_to_the_hf_radio_in_every_mode() {
         // "any HF action → FTdx10", from whichever VHF rig is active, in every mode class.
@@ -56833,6 +57809,13 @@ mod tests {
             icom_lan_host: p.icom_lan_host.clone(),
             icom_lan_user: p.icom_lan_user.clone(),
             icom_lan_port: p.icom_lan_port,
+            tci_host: None,
+            tci_port: None,
+            tci_trx: None,
+            tci_dialect: None,
+            tci_audio: None,
+            tci_pan: None,
+            tci_spots: None,
         };
 
         let mut e = Engine::new("KD9TAW", "EN52", 0);
@@ -61575,6 +62558,375 @@ mod tests {
             (e.settings.dial_mhz - dial).abs() > 1e-6,
             "no pass → the section QSY re-homes exactly as before"
         );
+    }
+
+    #[test]
+    fn the_phone_tab_on_the_sstv_screen_mid_pass_leaves_the_bird_its_mode() {
+        // Phone pressed on the SSTV screen keeps the dial, and keeps the FM channel that screen
+        // tuned. A pass is not that channel: the bird still names the mode, linear or FM.
+        let linear = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_965_000,
+            downlink_centre_hz: 435_640_000,
+            invert: false,
+            half_width_hz: 30_000,
+        };
+        let fm = tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000);
+        for (bird, transponder, class, want) in [
+            ("RS-44|linear", linear, SSB_BIRD, "USB"),
+            ("SO-50|FM repeater", fm, FM_BIRD, "FM"),
+        ] {
+            let (mut e, _, _) = sat_station();
+            e.set_sat_transponder(Some((bird.into(), 0, transponder)));
+            e.sat_tune_nominal(class, 1_000_000);
+            let dial = e.settings.dial_mhz;
+            assert_eq!(e.rig_mode_effective(), want, "{bird}: precondition");
+            e.set_operating_mode_keeping_dial("phone", true, true);
+            assert!(
+                (e.settings.dial_mhz - dial).abs() < 1e-9,
+                "{bird}: the pass keeps the dial"
+            );
+            assert_eq!(e.rig_mode_effective(), want, "{bird}: the bird's mode");
+            assert!(!e.snapshot().radio.fm_channel, "{bird}: no FM channel held");
+        }
+    }
+
+    #[test]
+    fn a_qsy_off_a_kept_fm_channel_routes_on_phones_own_mode() {
+        // The kept channel ends BEFORE the QSY is routed, so the radio the QSY lands on is the one
+        // Phone's own mode (SSB here) routes to, not the FM radio: the rig is then commanded USB,
+        // and the radio it routed to is the one meant for that. The SSB rule is what names that
+        // radio: with none, a 2 m SSB QSY stays on whichever 2 m radio it is on.
+        for how in [
+            "a 2 m SSB spot clicked in Phone",
+            "Phone entered again, following",
+        ] {
+            let mut e = fm_and_ssb_radios_on_2m();
+            e.sstv_tune(144.500, "2m", "FM");
+            assert_eq!(
+                active_radio_name(&e),
+                "FT-991A",
+                "{how}: premise: the pick routed on the FM class"
+            );
+            e.set_operating_mode_keeping_dial("phone", true, true);
+            assert_eq!(e.rig_mode_effective(), "FM", "{how}: premise: kept");
+            if how.starts_with("a 2 m SSB spot") {
+                e.work_spot("phone", 144.205, "2m");
+            } else {
+                e.set_operating_mode("phone", true);
+            }
+            assert_ne!(active_radio_name(&e), "FT-991A", "{how}: not the FM radio");
+            assert_eq!(active_radio_name(&e), "IC-9700", "{how}: Phone's SSB radio");
+            assert_eq!(e.rig_mode_effective(), "USB", "{how}: Phone's own mode");
+        }
+    }
+
+    /// The active radio's name, so a routing assertion reads by value.
+    fn active_radio_name(e: &Engine) -> String {
+        e.settings
+            .radios
+            .iter()
+            .find(|p| p.id == e.settings.active_radio)
+            .map(|p| p.name.clone())
+            .unwrap_or_default()
+    }
+
+    /// [`three_radio_engine`] with a 2 m / 70 cm SSB rule beside its FM one: 2 m FM goes to the
+    /// FT-991A, 2 m SSB and 2 m digital to the IC-9700.
+    fn fm_and_ssb_radios_on_2m() -> Engine {
+        let (mut e, ic9700, _) = three_radio_engine();
+        let mut rules = e.settings().routing_rules.clone();
+        rules.insert(
+            0,
+            crate::settings::RoutingRule {
+                bands: vec!["2m".into(), "70cm".into()],
+                mode: Some(crate::settings::RouteMode::Ssb),
+                context: None,
+                radio: ic9700,
+            },
+        );
+        e.set_routing_rules(rules);
+        e
+    }
+
+    #[test]
+    fn a_qsy_made_while_an_fm_channel_is_held_routes_on_the_mode_it_is_commanded_in() {
+        // The QSY that leaves an FM channel ends its hold before the radio it routed to is
+        // commanded, so it is commanded the section's own mode, and has to be routed on that mode:
+        // the IC-9700 here, not the FM radio left in USB or DATA-U. A memory or spot pick enters
+        // its section first, which ended the hold before routing already; that row is the control.
+        let on_the_sstv_fm_channel = || {
+            let mut e = fm_and_ssb_radios_on_2m();
+            e.sstv_tune(144.500, "2m", "FM");
+            assert_eq!(
+                e.rig_mode_effective(),
+                "FM",
+                "premise: the channel holds FM"
+            );
+            e
+        };
+        let mut got = Vec::new();
+        let mut e = on_the_sstv_fm_channel();
+        e.pick_band("70cm", Some("phone"));
+        got.push((
+            "SSTV FM channel, then a band pick",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let mut e = on_the_sstv_fm_channel();
+        // Remote names the radio of a retune by the same question (`None` = stay on the active
+        // radio), so the two cannot disagree.
+        let remote = e
+            .remote_frequency_route(144.200, "2m")
+            .unwrap_or(e.settings.active_radio);
+        e.set_frequency(144.200, "2m", "USB");
+        assert_eq!(
+            remote, e.settings.active_radio,
+            "Remote's radio for the typed frequency is the one the station tuned"
+        );
+        got.push((
+            "SSTV FM channel, then a typed frequency",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let mut e = on_the_sstv_fm_channel();
+        e.work_spot("phone", 144.205, "2m");
+        got.push((
+            "SSTV FM channel, then a memory or spot pick",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let mut e = fm_and_ssb_radios_on_2m();
+        e.set_operating_mode("digital", false);
+        e.repeater_tune(146.940, "minus", 600_000, 103.5).unwrap();
+        e.set_frequency(144.174, "2m", "USB");
+        got.push((
+            "a repeater tuned from FT8, then FT8's 2 m frequency typed",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let want = |how, mode: &str| (how, "IC-9700".to_string(), mode.to_string());
+        assert_eq!(
+            got,
+            vec![
+                want("SSTV FM channel, then a band pick", "USB"),
+                want("SSTV FM channel, then a typed frequency", "USB"),
+                want("SSTV FM channel, then a memory or spot pick", "USB"),
+                want(
+                    "a repeater tuned from FT8, then FT8's 2 m frequency typed",
+                    "PKTUSB"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_sstv_screens_fm_channels_go_to_the_fm_radio() {
+        // The SSTV screen holds its FM rows in FM (`sstv_tune`), so they route on FM, as the ISS
+        // park, a repeater and APRS do. With 2 m FM mapped to the FT-991A and 2 m SSB to the
+        // IC-9700, the pick routed on Phone's own class: it landed on the IC-9700 and commanded FM
+        // there. Its sideband channels, and an FM word below 29 MHz (which holds nothing), route on
+        // Phone's own class as before, with 10 m FM mapped to the FT-991A as well.
+        let mut got = Vec::new();
+        for (how, dial, band, mode) in [
+            ("the ISS downlink", 145.800, "2m", "FM"),
+            ("the 2 m calling channel", 144.500, "2m-call", "FM"),
+            ("the 20 m channel (control)", 14.230, "20m", "USB"),
+            ("an FM word at 28.680 (control)", 28.680, "10m", "FM"),
+            ("the 6 m channel (control)", 50.680, "6m", "USB"),
+        ] {
+            let mut e = fm_and_ssb_radios_on_2m();
+            let ft991a = e
+                .settings()
+                .radios
+                .iter()
+                .find(|p| p.name == "FT-991A")
+                .unwrap()
+                .id;
+            let mut rules = e.settings().routing_rules.clone();
+            rules.push(crate::settings::RoutingRule {
+                bands: vec!["10m".into()],
+                mode: Some(crate::settings::RouteMode::Fm),
+                context: None,
+                radio: ft991a,
+            });
+            e.set_routing_rules(rules);
+            e.set_operating_mode("digital", false); // FT8 on 20 m, on the FTdx10
+            e.sstv_tune(dial, band, mode);
+            got.push((how, active_radio_name(&e), e.rig_mode_effective()));
+        }
+        let mut e = fm_and_ssb_radios_on_2m();
+        e.tune_channel(145.800, "2m", "FM");
+        got.push((
+            "the ISS park (control)",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let want = |how, radio: &str, mode: &str| (how, radio.to_string(), mode.to_string());
+        assert_eq!(
+            got,
+            vec![
+                want("the ISS downlink", "FT-991A", "FM"),
+                want("the 2 m calling channel", "FT-991A", "FM"),
+                want("the 20 m channel (control)", "FTdx10", "USB"),
+                want("an FM word at 28.680 (control)", "FTdx10", "USB"),
+                want("the 6 m channel (control)", "FTdx10", "USB"),
+                want("the ISS park (control)", "FT-991A", "FM"),
+            ],
+            "an FM channel goes to the FM radio, and is commanded FM there"
+        );
+    }
+
+    #[test]
+    fn the_iss_park_holds_fm_as_the_strips_own_pick_does_from_any_section() {
+        // The ISS SSTV auto-arm parks the downlink (`tune_channel`, 145.800 FM) on the SSTV or
+        // Satellites screen, and neither screen enters a section: the rig parks in whatever section
+        // the operator came from. The SSTV strip's own pick of the same row holds FM (`sstv_tune`).
+        // The park held nothing, so the rig sat on an FM downlink in that section's mode.
+        let sections = ["digital", "phone", "cw", "rtty"];
+        let from = |section: &str| {
+            let mut e = Engine::new("K1ABC", "EN50", 0);
+            e.set_license_class("general");
+            e.set_operating_mode(section, false);
+            e.set_frequency(14.230, "20m", "USB");
+            e
+        };
+        let strip: Vec<_> = sections
+            .iter()
+            .map(|&s| {
+                let mut e = from(s);
+                e.sstv_tune(145.800, "2m", "FM");
+                (s, e.rig_mode_effective())
+            })
+            .collect();
+        assert_eq!(
+            strip,
+            sections.map(|s| (s, "FM".to_string())),
+            "the strip's own pick (control)"
+        );
+        let park: Vec<_> = sections
+            .iter()
+            .map(|&s| {
+                let mut e = from(s);
+                e.tune_channel(145.800, "2m", "FM");
+                (s, e.rig_mode_effective(), e.snapshot().radio.fm_channel)
+            })
+            .collect();
+        assert_eq!(
+            park,
+            sections.map(|s| (s, "FM".to_string(), true)),
+            "the ISS park: FM, and the snapshot says the rig is held on an FM channel"
+        );
+    }
+
+    #[test]
+    fn the_iss_park_from_rtty_lands_on_the_downlink_itself() {
+        // `tune_channel` applies the RTTY band plan's AFSK correction (the plan stores the emission,
+        // so an AFSK dial sits a mark tone above it). The ISS downlink is an FM channel, not an RTTY
+        // emission: from RTTY on the default AFSK keying the park landed a mark tone high, outside
+        // the 1 kHz the auto-arm checks before it puts the operator's dial back at LOS.
+        let parked = |backend: &str| {
+            let mut e = Engine::new("K1ABC", "EN50", 0);
+            e.set_license_class("general");
+            e.settings.rtty_backend = backend.into();
+            e.set_operating_mode("rtty", false);
+            e.tune_channel(145.800, "2m", "FM");
+            format!("{:.6}", e.settings().dial_mhz)
+        };
+        assert_eq!(
+            [parked("afsk"), parked("fsk")],
+            ["145.800000".to_string(), "145.800000".to_string()],
+            "AFSK, FSK: the downlink itself"
+        );
+    }
+
+    #[test]
+    fn the_iss_park_goes_to_the_fm_radio_and_los_returns_the_dial_to_its_own() {
+        // With 2 m FM routed to the FT-991A and 2 m digital to the IC-9700, the park is commanded
+        // FM, so it routes on FM, as the APRS and repeater tunes do. At LOS the auto-arm puts the
+        // operator's own dial back (`set_frequency`); that QSY ends the hold, so it routes on the
+        // section's own mode and lands back on the radio it came from.
+        for (from, dial, band, home) in [
+            ("FT8 on 2 m", 144.174, "2m", "IC-9700"),
+            ("FT8 on 20 m", 14.074, "20m", "FTdx10"),
+        ] {
+            let (mut e, _, _) = three_radio_engine();
+            e.work_spot("operate", dial, band);
+            assert_eq!(active_radio_name(&e), home, "{from}: premise");
+            e.tune_channel(145.800, "2m", "FM"); // ISS AOS
+            assert_eq!(
+                (active_radio_name(&e), e.rig_mode_effective()),
+                ("FT-991A".to_string(), "FM".to_string()),
+                "{from}: the park"
+            );
+            e.set_frequency(dial, band, "USB"); // LOS: the operator's own dial back
+            assert_eq!(
+                (active_radio_name(&e), e.rig_mode_effective()),
+                (home.to_string(), "PKTUSB".to_string()),
+                "{from}: LOS"
+            );
+        }
+    }
+
+    #[test]
+    fn an_iss_park_while_a_pass_owns_the_dial_leaves_no_fm_hold_over_the_bird() {
+        // A satellite pass owns the dial: Doppler steers it back to the bird every few seconds, and
+        // the bird names the mode. The park still takes the dial as it always has, but leaves no FM
+        // hold behind: that hold answers above a bird's mode, so once Doppler steered back it would
+        // hold a linear transponder in FM.
+        let (mut e, _, _) = sat_station();
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "premise: the bird's sideband"
+        );
+        e.tune_channel(145.800, "2m", "FM"); // an ISS pass begins during it
+        assert!(
+            !e.snapshot().radio.fm_channel,
+            "no FM channel held over the pass"
+        );
+        e.steer_sat_dial(435.645); // Doppler takes the dial back to the bird
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "back on the bird: its sideband, not FM"
+        );
+    }
+
+    #[test]
+    fn a_satellite_pick_after_the_iss_park_takes_the_dial_and_names_the_mode() {
+        let (mut e, ic9700, _) = sat_station();
+        e.tune_channel(145.800, "2m", "FM");
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(
+            e.settings.active_radio, ic9700,
+            "the satellite rule's radio"
+        );
+        assert_eq!(e.rig_mode_effective(), "USB", "the bird's sideband");
+        assert!(!e.snapshot().radio.fm_channel, "the park's channel is gone");
+    }
+
+    #[test]
+    fn the_iss_park_arms_nothing_and_the_gate_judges_as_before() {
+        // From FT8, disarmed: the park arms nothing.
+        let mut e = Engine::new("K1ABC", "EN50", 0);
+        e.set_license_class("technician");
+        e.set_operating_mode("digital", false);
+        e.set_frequency(144.174, "2m", "USB");
+        e.tune_channel(145.800, "2m", "FM");
+        assert!(!e.tx_enabled(), "from FT8: nothing arms");
+        // Armed in Phone on 2 m: an in-band park keeps the latch as any in-band QSY does, and a
+        // Technician may transmit on 2 m as before.
+        let mut e = Engine::new("K1ABC", "EN50", 0);
+        e.set_license_class("technician");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(146.520, "2m", "FM");
+        assert!(e.tx_enabled(), "premise: Phone armed");
+        e.tune_channel(145.800, "2m", "FM");
+        assert!(e.tx_enabled(), "an in-band park keeps the latch");
+        assert!(e.tx_allowed(), "the gate: 2 m is a Technician's");
     }
 
     #[test]

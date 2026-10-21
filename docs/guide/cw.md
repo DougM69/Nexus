@@ -291,9 +291,11 @@ for your first over. The Log pane pre-fills **CW / 599**.
 - **The AI model ships as an app resource** (DeepCW, AGPL-3.0, © e04). A build
   without it says so in the pane and the classic decoder carries on — nothing
   else in the cockpit is affected.
-- **Unassisted mode turns the AI decoder off**, whatever the switch says, because
-  a declared unassisted entry means no machine copy. That is the one case where
-  the AI decoder is silent with the setting still on.
+- **Unassisted mode turns CW decoding off entirely**, whatever the AI switch says,
+  because CQ WW counts a CW decoder as assistance. Neither the AI nor the classic
+  decoder runs: no copy, no call chips, no His Call guess, no report or name for
+  the log and no speed, and the Decode and Copilot panes say why. CW speed match
+  sends at your own speed. Ending the entry brings the decoder back as you had it.
 
 The license-class gate blocks keying outside your segment — including the
 Technician CW-only segments on 80/40/15 m. Set your class in

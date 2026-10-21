@@ -344,6 +344,14 @@ impl CwStreamDecoder {
         }
     }
 
+    /// Forget everything heard (the copy, the speed and the noise floor) but keep the pitch and the
+    /// operator's sensitivity: what is fed next decodes as from a fresh start.
+    pub fn reset(&mut self) {
+        let s = self.sensitivity;
+        *self = Self::new(self.sr, self.pitch);
+        self.sensitivity = s;
+    }
+
     /// The accumulated decoded text.
     pub fn transcript(&self) -> &str {
         &self.transcript

@@ -22,7 +22,17 @@ vi.setConfig({ testTimeout: 60_000 })
 
 // The station-only settings no form here edits: each is kept by the save from afar all the same.
 // The source sweep below turns red the day one of them gets a control.
-const NOT_ON_THE_FORM = ['directedMaxCalls', 'maxPowerAm', 'catRtsState', 'catDtrState', 'cloudlogKey']
+const NOT_ON_THE_FORM = [
+  'directedMaxCalls',
+  'maxPowerAm',
+  'catRtsState',
+  'catDtrState',
+  'cloudlogKey',
+]
+
+// The station-only settings whose control is drawn at the station alone: from afar the row says
+// "Set at the station" and there is no control at all, not even a read-only one.
+const DRAWN_AT_THE_STATION_ONLY = ['tciServerTx']
 
 const SOURCES = import.meta.glob(['./*.tsx', '!./*.test.tsx'], {
   query: '?raw',
@@ -85,16 +95,19 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-/** Settings that show each conditional control: the CAT broker's PTT, the Icom network address
- *  or the serial PTT port and lines, the SWR threshold. Two, as one radio connects one way. */
+/** Settings that show each conditional control: the CAT broker's PTT, the TCI server's own
+ *  controls, the Icom network address or the serial PTT port and lines, the SWR threshold. Two, as
+ *  one radio connects one way. */
 const SHOWING = [
-  { rigConn: 'icomlan', catBroker: true, wsjtxUdp: true, swrStopEnabled: true, pttMethod: 'rts' },
-  { rigConn: 'serial', catBroker: true, wsjtxUdp: true, swrStopEnabled: true, pttMethod: 'rts' },
+  { rigConn: 'icomlan', catBroker: true, tciServer: true, wsjtxUdp: true, swrStopEnabled: true, pttMethod: 'rts' },
+  { rigConn: 'serial', catBroker: true, tciServer: true, wsjtxUdp: true, swrStopEnabled: true, pttMethod: 'rts' },
 ]
 
-/** Each station-only control on every tab, by setting, with the settings `read` answers. */
+/** Each station-only control on every tab, by setting, with the settings `read` answers; and each
+ *  setting a "Set at the station" line names. */
 async function controls(read: Record<string, unknown>) {
   const found = new Map<string, HTMLElement[]>()
+  const said = new Set<string>()
   for (const showing of SHOWING) {
     for (const tab of SETTINGS_TABS) {
       const target = SETTINGS_SECTIONS.find((s) => s.tab === tab.id)?.id
@@ -130,10 +143,13 @@ async function controls(read: Record<string, unknown>) {
         const name = el.dataset.setting!
         found.set(name, [...(found.get(name) ?? []), el])
       }
+      for (const el of container.querySelectorAll<HTMLElement>('[data-set-at-station]')) {
+        if (el.textContent === t('settings.stationOnly.hint')) said.add(el.dataset.setAtStation!)
+      }
       cleanup()
     }
   }
-  return found
+  return { found, said }
 }
 
 const hintFor = (el: HTMLElement) =>
@@ -141,14 +157,21 @@ const hintFor = (el: HTMLElement) =>
 
 describe('settings set at the station', () => {
   it('from afar, each is read-only and says "Set at the station"', async () => {
-    const found = await controls({
+    const { found, said } = await controls({
       stationOnlySettings: STATION_ONLY,
       secretsSavedAtStation: { clublogApiKey: true, cloudlogKey: false },
     })
-    const onTheForm = STATION_ONLY.filter((name) => !NOT_ON_THE_FORM.includes(name))
+    const onTheForm = STATION_ONLY.filter(
+      (name) => !NOT_ON_THE_FORM.includes(name) && !DRAWN_AT_THE_STATION_ONLY.includes(name),
+    )
     expect([...found.keys()].sort(), 'every station-only control is found').toEqual(
       [...onTheForm].sort(),
     )
+    // Drawn at the station alone: no control from afar, and its row says where it is set.
+    for (const name of DRAWN_AT_THE_STATION_ONLY) {
+      expect(found.has(name), `${name}: a control from afar`).toBe(false)
+      expect(said.has(name), `${name}: "Set at the station"`).toBe(true)
+    }
     const wrong: string[] = []
     for (const [name, els] of found) {
       for (const el of els) {
@@ -160,8 +183,13 @@ describe('settings set at the station', () => {
   })
 
   it('at the station, each is editable and says nothing', async () => {
-    const found = await controls({})
+    const { found, said } = await controls({})
     expect(found.size, 'CONTROL: the controls are found').toBeGreaterThan(30)
+    expect(said.size, 'nothing says "Set at the station" at the station').toBe(0)
+    // What is drawn at the station alone is drawn there, and checked below like every other.
+    for (const name of DRAWN_AT_THE_STATION_ONLY) {
+      expect(found.has(name), `${name}: no control at the station`).toBe(true)
+    }
     const wrong: string[] = []
     for (const [name, els] of found) {
       for (const el of els) {

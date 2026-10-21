@@ -569,6 +569,9 @@ fn a_host_restart_between_a_take_back_and_its_undo_loses_neither() {
     wait_until("both at the host", 10, || club_calls(&host.eng).len() == 2);
     let (id, _) = take_back_newest(&p2);
     wait_until("taken back", 10, || club_calls(&host.eng) == ["K9AAA"]);
+    // As above: the take-back's ack must reach the position before the host goes, or it
+    // still counts as queued beside the restore below.
+    wait_until("p2 synced", 10, || state(&p2) == SyncState::Synced);
     host.stop();
     wait_until("p2 sees the host gone", 20, || {
         !engine_lock(&p2).fd_mirror_mut().connected
@@ -606,6 +609,10 @@ fn a_position_away_when_it_takes_back_catches_the_club_up_when_it_returns() {
     party(&p2, "K9AAA", &["COOK"]);
     party(&p2, "W9BBB", &["LAKE"]);
     wait_until("both at the host", 10, || club_calls(&host.eng).len() == 2);
+    // The host holding both is not the position hearing it does: its queue counts until the
+    // host's ack arrives, so wait for that before the link goes, or the second contact still
+    // counts as queued below.
+    wait_until("p2 synced", 10, || state(&p2) == SyncState::Synced);
     p2_sd.store(true, Ordering::Relaxed);
     wait_until("p2 link down", 10, || {
         !engine_lock(&p2).fd_mirror_mut().connected

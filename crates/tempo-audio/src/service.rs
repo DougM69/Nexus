@@ -26,7 +26,7 @@ use tempo_app::engine::{
     DecodeResult, Engine, Js8MultiJob, Js8Speed, PskStreamTick, RttyStreamTick, SatCatBackend,
 };
 use tempo_app::keyboard;
-use tempo_app::mic::{MicTick, MIC};
+use tempo_app::mic::{MicTick, MIC, TCI_OVER};
 use tempo_app::remote_monitor::provenance::{Connection as RemoteConnection, Read as RemoteRead};
 use tempo_core::tempo_fast;
 use tempo_core::timing::{now_unix_ms, SlotClock};
@@ -64,6 +64,10 @@ enum CatDaemon {
     /// Nexus's own Icom network client (`crate::icomlan`, the "Icom network" Connection, Beta):
     /// the native CI-V daemon, carried over a network session to the radio, keying refused.
     IcomLan(crate::icomlan::IcomLanDaemon),
+    /// Nexus's own TCI client (`crate::tci`, the "TCI" Connection, Beta): the same rigctld
+    /// protocol on the same port, served from one session to an SDR program's TCI server, with
+    /// that program's receive audio.
+    Tci(crate::tci::TciDaemon),
 }
 
 impl CatDaemon {
@@ -74,6 +78,7 @@ impl CatDaemon {
             CatDaemon::Omni(d) => d.is_alive(),
             CatDaemon::Flex(d) => d.is_alive(),
             CatDaemon::IcomLan(d) => d.is_alive(),
+            CatDaemon::Tci(d) => d.is_alive(),
         }
     }
     /// The native daemon, when that's what this is (scope drain / enable) — the one carried over
@@ -83,7 +88,9 @@ impl CatDaemon {
         match self {
             CatDaemon::Native(d) => Some(d),
             CatDaemon::IcomLan(d) => Some(d.native()),
-            CatDaemon::Spawned(_) | CatDaemon::Omni(_) | CatDaemon::Flex(_) => None,
+            CatDaemon::Spawned(_) | CatDaemon::Omni(_) | CatDaemon::Flex(_) | CatDaemon::Tci(_) => {
+                None
+            }
         }
     }
     /// Nexus's own Icom network client, when that's what this is — for its status and findings.
@@ -100,7 +107,8 @@ impl CatDaemon {
             CatDaemon::Native(_)
             | CatDaemon::Spawned(_)
             | CatDaemon::Flex(_)
-            | CatDaemon::IcomLan(_) => None,
+            | CatDaemon::IcomLan(_)
+            | CatDaemon::Tci(_) => None,
         }
     }
     /// Nexus's own Flex client, when that's what this is — for the slices and the TX intent.
@@ -110,7 +118,34 @@ impl CatDaemon {
             CatDaemon::Native(_)
             | CatDaemon::Spawned(_)
             | CatDaemon::Omni(_)
-            | CatDaemon::IcomLan(_) => None,
+            | CatDaemon::IcomLan(_)
+            | CatDaemon::Tci(_) => None,
+        }
+    }
+    /// Nexus's own TCI client, when that's what this is — for its receive audio, its tune carrier,
+    /// the TX intent, and what it says about the transmitter.
+    fn tci(&self) -> Option<&crate::tci::TciDaemon> {
+        match self {
+            CatDaemon::Tci(d) => Some(d),
+            _ => None,
+        }
+    }
+    /// What Nexus's own client (the Flex client or the TCI client) said about the transmitter, once
+    /// its session has ended: the latest alarm, read up to the session's last event.
+    fn client_alarm(&self) -> Option<String> {
+        match self {
+            CatDaemon::Flex(d) => d.alarm(),
+            CatDaemon::Tci(d) => d.alarm(),
+            _ => None,
+        }
+    }
+    /// What Nexus's own client said about the transmitter since this was last asked: each alarm
+    /// once, as it is raised.
+    fn take_new_client_alarm(&self) -> Option<String> {
+        match self {
+            CatDaemon::Flex(d) => d.take_new_alarm(),
+            CatDaemon::Tci(d) => d.take_new_alarm(),
+            _ => None,
         }
     }
 }
@@ -137,8 +172,14 @@ fn native_civ_model(t: &Transport) -> Option<crate::civ::commands::IcomModel> {
     // holds the COM port, so Nexus cannot open it to speak CI-V. Mirrored in tempo-app's
     // `native_civ_reachable`, which is what tells the operator the cure does not exist here.
     // The Icom network connection carries the same daemon over its own session
-    // (`CatDaemon::IcomLan`); the serial one must never open a COM port for it.
-    if !t.icom_native_cat || t.is_network() || t.is_omnirig() || t.is_icom_lan() || t.rig_model == 0
+    // (`CatDaemon::IcomLan`); the serial one must never open a COM port for it. Nor on TCI, where
+    // the SDR program drives the radio: a model and toggle left over from USB count for nothing.
+    if !t.icom_native_cat
+        || t.is_network()
+        || t.is_omnirig()
+        || t.is_icom_lan()
+        || t.is_tci()
+        || t.rig_model == 0
     {
         return None;
     }
@@ -213,6 +254,8 @@ fn keys_on_the_cat_port(t: &Transport) -> bool {
         && !t.is_omnirig()
         // Nor the Icom network connection: there is no CAT serial port, and it keys nothing.
         && !t.is_icom_lan()
+        // Nor TCI: there is no CAT serial port either, and every key goes through the TCI client.
+        && !t.is_tci()
         && !t.serial_port.trim().is_empty()
         && t.ptt_port().eq_ignore_ascii_case(t.serial_port.trim())
 }
@@ -274,6 +317,23 @@ fn spawn_cat_daemon(
         };
         return crate::icomlan::IcomLanDaemon::start(&target)
             .map(|d| (CatDaemon::IcomLan(d), None))
+            .map_err(std::io::Error::other);
+    }
+    // Nexus's own TCI client, when the operator chose that connection. Nothing falls back from it
+    // either: the bundled Hamlib cannot load its TCI backend, and the SDR program is where the
+    // operator said the radio is. Never Nexus's own TCI server ([`tci_dials_nexus`]).
+    if t.is_tci() {
+        let Some(target) = t.tci_target() else {
+            return Err(std::io::Error::other(
+                "The TCI connection needs the SDR program's address and its TCI port \
+                 (Settings ▸ Radio ▸ Rig & CAT)",
+            ));
+        };
+        if let Some(words) = tci_dials_nexus(t, &target) {
+            return Err(std::io::Error::other(words));
+        }
+        return crate::tci::TciDaemon::start_with_receive(&target)
+            .map(|d| (CatDaemon::Tci(d), None))
             .map_err(std::io::Error::other);
     }
     let mut native_fallback: Option<String> = None;
@@ -369,13 +429,29 @@ fn seed_line_declarations(t: &mut Transport, s: &tempo_app::settings::Settings) 
 
 /// The transport the launch opens: the startup seed ([`Transport::from_cfg`]) with what the first
 /// open must already know from the settings. That is the #145 declarations
-/// ([`seed_line_declarations`]), and a NET rigctl address one of Nexus's own listeners holds
-/// ([`AddressRefusal`]): the launch is the open a clash an older build stored meets first.
+/// ([`seed_line_declarations`]), a NET rigctl address one of Nexus's own listeners holds
+/// ([`AddressRefusal`]): the launch is the open a clash an older build stored meets first, and the
+/// TCI connection's server with the port of Nexus's own TCI server ([`seed_tci`]).
 fn launch_transport(cfg: &RadioConfig, s: &Settings) -> Transport {
     let mut t = Transport::from_cfg(cfg);
     seed_line_declarations(&mut t, s);
     t.address_refusal = AddressRefusal::of(&t, s);
+    seed_tci(&mut t, s);
     t
+}
+
+/// The TCI connection's server and the port of Nexus's own TCI server, from the settings of the
+/// radio the launch opens: not carried in the startup seed, and a first open that dialled a
+/// default would talk to whatever listens there (its close sends `trx:<trx>,false;`, which on
+/// ExpertSDR3 ends another program's over) a tick before the settings' rebuild dialled the right
+/// one.
+fn seed_tci(t: &mut Transport, s: &Settings) {
+    t.tci_host.clone_from(&s.tci_host);
+    t.tci_port = s.tci_port;
+    t.tci_trx = s.tci_trx;
+    t.tci_dialect.clone_from(&s.tci_dialect);
+    t.tci_audio = s.tci_audio;
+    t.tci_server_self_port = s.tci_server.then_some(s.tci_server_port);
 }
 
 /// Which CAT backend is actually serving, for probe/status attribution — the operator
@@ -411,6 +487,40 @@ fn icom_lan_reopen_at(key: std::net::SocketAddrV4, now: f64, default_at: f64) ->
         Some(ms) => now + ms as f64,
         None => default_at,
     }
+}
+
+/// [`icom_lan_reopen_at`] for a radio on the TCI connection whose open failed: when the TCI
+/// client's reconnect ladder allows (`crate::tci::registry`), never while it waits for the
+/// operator, and on the ordinary reopen backoff when the ladder has nothing to say.
+fn tci_reopen_at(key: crate::tci::registry::Key, now: f64, default_at: f64) -> f64 {
+    if crate::tci::registry::held(key) {
+        return f64::INFINITY;
+    }
+    match crate::tci::registry::retry_in(key, crate::tci::now_ms()) {
+        Some(ms) => now + ms as f64,
+        None => default_at,
+    }
+}
+
+/// Why the TCI client must not dial `target`: it is Nexus's OWN TCI server on this computer
+/// (`Settings::tci_server`, on its `tci_server_port`), so Nexus would be its own SDR program, as
+/// the CAT path never connects Nexus to its own broker (`broker_self_port`). The address as the
+/// operator wrote it decides first (`127.0.0.1`, `localhost`, `::1`), then the address it resolves
+/// to: the server listens on this computer's loopback only. `None`: go ahead.
+fn tci_dials_nexus(t: &Transport, target: &crate::tci::Target) -> Option<String> {
+    let own = t.tci_server_self_port?;
+    let itself = t.tci_dials_nexus_by_name()
+        || target
+            .server()
+            .is_ok_and(|a| a.ip().is_loopback() && a.port() == own);
+    itself.then(|| {
+        format!(
+            "The TCI connection points at Nexus's own TCI server ({}:{own}), not an SDR program. \
+             Set TCI port to the SDR program's TCI port (Settings ▸ Radio ▸ Rig & CAT), or move \
+             Nexus's TCI server to another port.",
+            target.host
+        )
+    })
 }
 
 /// Append the backend attribution to a probe/status detail line, success and failure
@@ -551,6 +661,15 @@ fn cat_down_message(t: &Transport, err: &std::io::Error) -> String {
         return format!(
             "CAT can't reach the radio over the network ({err}). If the session was lost, Nexus \
              reconnects by itself; the radio may hold the old session for up to 3 minutes."
+        );
+    }
+    if t.is_tci() {
+        return format!(
+            "CAT can't reach the SDR program's TCI server at {}:{} ({err}). If the connection was \
+             lost, Nexus reconnects by itself; check that the SDR program is running with its TCI \
+             server on.",
+            t.tci_host.trim(),
+            t.tci_port
         );
     }
     if t.is_network() {
@@ -2138,9 +2257,15 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // function returns, i.e. after `quit_cleanup` has already been released to exit the
             // process, so the restore would race process death: the "mic still dead after Nexus
             // exits" harm the restore exists to prevent. Doing it HERE makes it part of the
-            // shutdown the exit path waits for. Only the client: every other CAT daemon ends as it
-            // always has.
-            if matches!(state.rigctld_proc, Some(CatDaemon::Flex(_))) {
+            // shutdown the exit path waits for. Only the clients: every other CAT daemon ends as
+            // it always has. Nexus's TCI client too: its teardown sends the stops through the live
+            // session and waits for the SDR program to report the unkey before the close frame,
+            // where process death would end the socket with no close at all, and whether a server
+            // then unkeys is not known for every SDR program.
+            if matches!(
+                state.rigctld_proc,
+                Some(CatDaemon::Flex(_) | CatDaemon::Tci(_))
+            ) {
                 state.rigctld_proc = None;
             }
             cfg.rx_tap.retire_receive_audio();
@@ -2295,39 +2420,45 @@ impl MonitorConn {
     }
 }
 
-/// Put on screen, naming `radio`, what the Flex client in `daemon` has said about the transmitter
-/// since it was last read ([`crate::flex::FlexDaemon::take_new_alarm`]): each alarm once. A session
-/// that has ended is read up to its last event first, as the radio loop reads its own client after
-/// a death, so an alarm raised as it ended is not left behind.
+/// Put on screen, naming `radio`, what Nexus's own client in `daemon` (the Flex client or the TCI
+/// client) has said about the transmitter since it was last read
+/// ([`CatDaemon::take_new_client_alarm`]): each alarm once. A session that has ended is read up to
+/// its last event first, as the radio loop reads its own client after a death, so an alarm raised
+/// as it ended is not left behind.
 ///
-/// ⭐ EVERY LIVE FLEX CLIENT IS READ UNTIL IT IS TORN DOWN, NOT ONLY THE ACTIVE ONE. The radio loop
-/// reads the active radio's client every tick; the monitor pool holds the others (the radio a
-/// switch left, and the radios the monitor opened). Read only while active, a pooled client's
-/// alarms reached the log and nothing else: a switch made mid-over hands the outgoing client to the
-/// pool before the radio has confirmed its unkey, and "it may still be transmitting" was said
-/// where nobody looked. So the monitor reads every pooled client on each pass, and each place that
-/// lets a client go reads it first ([`drop_pooled`]).
-fn raise_flex_alarm(daemon: Option<&CatDaemon>, radio: u32, engine: &Arc<Mutex<Engine>>) {
-    let Some(flex) = daemon.and_then(CatDaemon::flex) else {
+/// ⭐ EVERY LIVE CLIENT IS READ UNTIL IT IS TORN DOWN, NOT ONLY THE ACTIVE ONE. The radio loop reads
+/// the active radio's client every tick; the monitor pool holds the others (the radio a switch
+/// left, and the radios the monitor opened). Read only while active, a pooled client's alarms
+/// reached the log and nothing else: a switch made mid-over hands the outgoing client to the pool
+/// before the radio has confirmed its unkey, and "it may still be transmitting" was said where
+/// nobody looked. So the monitor reads every pooled client on each pass, and each place that lets
+/// a client go reads it first ([`drop_pooled`]).
+fn raise_client_alarm(daemon: Option<&CatDaemon>, radio: u32, engine: &Arc<Mutex<Engine>>) {
+    let Some(daemon) = daemon else {
         return;
     };
-    if !flex.is_alive() {
-        let _ = flex.alarm();
+    let alive = match daemon {
+        CatDaemon::Flex(d) => d.is_alive(),
+        CatDaemon::Tci(d) => d.is_alive(),
+        _ => return,
+    };
+    if !alive {
+        let _ = daemon.client_alarm();
     }
-    if let Some(text) = flex.take_new_alarm() {
+    if let Some(text) = daemon.take_new_client_alarm() {
         engine_lock(engine).raise_tx_alarm(radio, text, now_unix_ms() as u64);
     }
 }
 
-/// Let the pooled connections `gone` go, each one's Flex client read for its alarms first
-/// ([`raise_flex_alarm`]). Dropping a connection unkeys and closes its daemon.
+/// Let the pooled connections `gone` go, each one's client read for its alarms first
+/// ([`raise_client_alarm`]). Dropping a connection unkeys and closes its daemon.
 fn drop_pooled(
     p: &mut Vec<MonitorConn>,
     engine: &Arc<Mutex<Engine>>,
     gone: impl Fn(&MonitorConn) -> bool,
 ) {
     for c in p.iter().filter(|c| gone(c)) {
-        raise_flex_alarm(c.rigctld_proc.as_ref(), c.id, engine);
+        raise_client_alarm(c.rigctld_proc.as_ref(), c.id, engine);
     }
     p.retain(|c| !gone(c));
 }
@@ -2370,8 +2501,14 @@ impl Transport {
             icom_lan_host: p.icom_lan_host.clone(),
             icom_lan_user: p.icom_lan_user.clone(),
             icom_lan_port: p.icom_lan_port,
+            tci_host: p.tci_host.clone(),
+            tci_port: p.tci_port,
+            tci_trx: p.tci_trx,
+            tci_dialect: p.tci_dialect.clone(),
+            tci_audio: p.tci_audio,
             radio_id: p.id,
             broker_self_port: None,
+            tci_server_self_port: None,
             address_refusal: AddressRefusal::default(),
             audio_in: String::new(),
             audio_out: String::new(),
@@ -2471,6 +2608,7 @@ fn open_read_only(
                 network
                     || native_civ_addr(t).is_some()
                     || t.is_icom_lan()
+                    || t.is_tci()
                     || t.is_slow_serial_link(),
             );
             let ok = probe_cat(&mut rig, t).ok;
@@ -2535,6 +2673,8 @@ fn monitor_want(s: &Settings) -> (u32, Vec<(u32, Transport)>) {
             // Our own CAT broker's port, as the active radio's transport carries it, so a monitor
             // never takes Nexus itself for a radio (`net_rigctld_on_this_machine`, `open_read_only`).
             t.broker_self_port = s.cat_broker.then_some(s.cat_broker_port);
+            // …and our own TCI server's, so a monitor's TCI client never dials Nexus itself.
+            t.tci_server_self_port = s.tci_server.then_some(s.tci_server_port);
             // And whether one of Nexus's own listeners holds this radio's NET rigctl address.
             t.address_refusal = AddressRefusal::of(&t, s);
             (p.id, t)
@@ -2566,9 +2706,9 @@ fn reconcile_pool_with_open(
 ) {
     let (to_open, to_close): (Vec<(u32, Transport)>, Vec<u32>) = {
         let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
-        // Every pooled Flex client's transmitter alarms, on every pass (see `raise_flex_alarm`).
+        // Every pooled client's transmitter alarms, on every pass (see `raise_client_alarm`).
         for c in p.iter() {
-            raise_flex_alarm(c.rigctld_proc.as_ref(), c.id, engine);
+            raise_client_alarm(c.rigctld_proc.as_ref(), c.id, engine);
         }
         let mut to_open = Vec::new();
         for (id, t) in want {
@@ -3156,11 +3296,38 @@ enum ErrOwner {
     /// Native Flex DAX RX audio was selected but no audio is arriving — otherwise the
     /// operator is simply deaf, with silence indistinguishable from a dead band.
     Dax,
+    /// TCI receive audio was the source but none is arriving: the same deafness, on Nexus's TCI
+    /// client.
+    TciAudio,
     /// The sound card is open and delivering, but every sample is digital zero for a
     /// sustained window (macOS: the TCC mic-denial shape) — otherwise the operator is
     /// deaf with every health check reading "capture alive". Its own owner so a real
     /// device error outranks it and only its own writer clears it.
     SilentCapture,
+}
+
+/// Nexus's TCI client's receive audio, while it is the station's receive source
+/// ([`RadioLoop::reconcile_tci_audio`]).
+struct TciRx {
+    /// Which session's receive path ([`is_receive_of`]), held weakly: its allocation lasts while
+    /// this does, so a later session's path can never be taken for it.
+    receive: std::sync::Weak<crate::tci::audio::Receive>,
+    /// The receive tap's ring the session feeds (the waterfall, Remote Listen).
+    ring: Arc<crate::monitor::SpscRing>,
+    /// The receive floor's clocks, as `dax_started`/`dax_last_audio` are native DAX's: when the
+    /// TCI audio became the source, and when the loop last took a sample of it.
+    started: Instant,
+    last_audio: Option<Instant>,
+}
+
+/// Whether `d`'s receive path is `receive`: the same for as long as the session lives, wherever
+/// its daemon is moved (the monitor pool, the loop).
+fn is_receive_of(
+    d: &crate::tci::TciDaemon,
+    receive: &std::sync::Weak<crate::tci::audio::Receive>,
+) -> bool {
+    d.receive()
+        .is_some_and(|r| std::ptr::eq(Arc::as_ptr(r), receive.as_ptr()))
 }
 
 /// What came of a key for one of the loop's own overs ([`RadioLoop::key_over`]).
@@ -3222,6 +3389,10 @@ fn note_refused_key(what: &str, why: &str) {
 /// thread does in well under a second) but short enough that the operator is not left guessing
 /// through a whole QSO.
 const DAX_STARVE_AFTER: Duration = Duration::from_secs(6);
+
+/// The receive tap's ring for TCI audio: about 2.7 s at the modem rate, many times what the
+/// waterfall's thread drains in one of its 20 ms ticks.
+const TCI_TAP_RING_CAP: usize = 1 << 15;
 
 /// How far from a slot boundary the Flex client's transmit audio source may be written, on
 /// either side (see `RadioLoop::tx_routing_quiet`): longer than any tick plus the write.
@@ -3365,6 +3536,9 @@ struct StationSinks {
     /// edge seeds `last_fd_seq` past the restored journal rows (removed ones included) so
     /// they are never re-pushed to the club network / WSJT-X sinks as newly logged.
     fd_was_active: bool,
+    /// The WSJT-X UDP Status last sent, so the loop sends another on each change between slot
+    /// boundaries, as WSJT-X does ([`wsjtx_status_change`]). `None` until the first boundary.
+    wsjtx_status: Option<WsjtxStatusOwned>,
 }
 
 impl StationSinks {
@@ -3377,6 +3551,7 @@ impl StationSinks {
             last_reported_band: now_unix_ms(),
             last_reported_bm: String::new(),
             fd_was_active: false,
+            wsjtx_status: None,
         }
     }
 }
@@ -3677,6 +3852,12 @@ struct RadioLoop {
     /// When the microphone audio already queued runs out (loop ms): what the look-ahead (M3) is
     /// measured against.
     mic_busy_until: f64,
+    /// A TCI program's audio over (`tempo_app::engine::tci`, through Nexus's TCI server) has keyed
+    /// PTT through this loop.
+    program_over_keyed: bool,
+    /// When that over's audio already queued runs out (loop ms): its look-ahead's measure, as
+    /// `mic_busy_until` is the microphone's.
+    program_over_busy_until: f64,
     /// The transmit route's generation, the microphone's G7: it moves whenever the route transmit
     /// audio leaves by is replaced (the sound card released or reopened, the Flex DAX tee
     /// installed or removed), so an over cannot carry on across the change.
@@ -3776,6 +3957,13 @@ struct RadioLoop {
     /// The client's native audio starved (the receive floor fired): off until the toggle is
     /// turned off or the client goes.
     flex_client_audio_failed: bool,
+    /// Nexus's TCI client's receive audio in the sound card's place, while it is
+    /// ([`RadioLoop::reconcile_tci_audio`]): the session it comes from, the receive tap's ring it
+    /// feeds, and the receive floor's clocks.
+    tci_rx: Option<TciRx>,
+    /// The session whose receive audio starved (the receive floor fired): not taken again until
+    /// the TCI client is another session (a reconnect, a saved change, a switch).
+    tci_rx_failed: Option<std::sync::Weak<crate::tci::audio::Receive>>,
     /// The radio's DAX source as last pushed to the engine (the Phone cockpit's "mic
     /// disconnected").
     flex_mic_off_pushed: Option<bool>,
@@ -3807,9 +3995,18 @@ struct RadioLoop {
     /// check is safe where a "quiet band" objection would apply to real capture.
     dax_last_audio: Option<Instant>,
     /// We wrote the current audio-error line with a voice-mic open failure, so we clear
-    /// Slot index whose WSJT-X-style EARLY decode pass already ran (once per
-    /// RX slot; the boundary decode then ingests only the stragglers).
+    /// Slot index whose WSJT-X-style EARLY decode pass, or its full pass, already ran (once
+    /// per RX slot; the boundary decode then ingests only the stragglers).
     early_done_slot: Option<u64>,
+    /// Slot index whose FULL pass already ran: WSJT-X's `m_hsymStop` decode, FT8 at 14.40 s and
+    /// FT4 at 6.048 s into the slot. It is that slot's authoritative decode, in place of the one
+    /// the boundary would dispatch, so its decodes are folded before the boundary's TX decision
+    /// whenever it finishes in time.
+    full_done_slot: Option<u64>,
+    /// A full pass that finished BEFORE its boundary: the boundary slot it decodes for and its
+    /// frame. Its decodes are already folded; the boundary named here runs its TX decision and
+    /// housekeeping with it, and any other boundary drops it unused.
+    full_pass_frame: Option<(u64, Vec<f32>)>,
     /// MSK144's repeating early passes: (slot, index of the last 2 s interval decoded).
     /// One fixed early pass per slot is right for FT8/FT4 (callers appear before the TX
     /// window opens) and wrong for meteor scatter, where a ping lands at ANY moment and is
@@ -4315,6 +4512,8 @@ impl RadioLoop {
             monitor_tx_muted: false,
             mic_keyed: false,
             mic_busy_until: 0.0,
+            program_over_keyed: false,
+            program_over_busy_until: 0.0,
             tx_route_gen: 0,
             mono_origin: None,
             force_audio_rebuild: false,
@@ -4329,6 +4528,8 @@ impl RadioLoop {
             dax_tee_id: None,
             flex_client_audio: false,
             flex_client_audio_failed: false,
+            tci_rx: None,
+            tci_rx_failed: None,
             flex_mic_off_pushed: None,
             flex_radio_has_mic_pushed: None,
             flex_tune_pushed: None,
@@ -4338,6 +4539,8 @@ impl RadioLoop {
             audio_awaiting_samples: false,
             silent_capture_since: None,
             early_done_slot: None,
+            full_done_slot: None,
+            full_pass_frame: None,
             early_msk_done: None,
             js8_done: [None; Js8Speed::ALL.len()],
             js8_multi_worker: DecodeWorker::spawn_with("nexus-js8-multi", run_worker_job),
@@ -4506,6 +4709,7 @@ impl RadioLoop {
             .is_some_and(|(port, _)| *port == self.cat_port_configured)
             || self.applied.is_network()
             || self.applied.is_icom_lan()
+            || self.applied.is_tci()
         {
             return;
         }
@@ -4540,6 +4744,7 @@ impl RadioLoop {
         }
         let port_returned = if !want.is_network()
             && !want.is_icom_lan()
+            && !want.is_tci()
             && !want.serial_port.is_empty()
             && now >= self.cat_port_check_at
         {
@@ -4660,7 +4865,7 @@ impl RadioLoop {
         present: impl FnOnce() -> Vec<String>,
     ) -> Transport {
         let mut want = want.clone();
-        if want.is_network() || want.is_icom_lan() || want.serial_port.is_empty() {
+        if want.is_network() || want.is_icom_lan() || want.is_tci() || want.serial_port.is_empty() {
             return want;
         }
         // Only the identity captured on the configured port: a port the operator changed to
@@ -4744,6 +4949,7 @@ impl RadioLoop {
             Some(CatDaemon::IcomLan(_)) => CatLink::IcomLan,
             Some(CatDaemon::Omni(_)) => CatLink::OmniRig,
             Some(CatDaemon::Flex(_)) => CatLink::Flex,
+            Some(CatDaemon::Tci(_)) => CatLink::Tci,
             Some(CatDaemon::Spawned(_)) | None if t.is_network() => {
                 CatLink::Network(t.rig_addr.clone())
             }
@@ -4770,6 +4976,14 @@ impl RadioLoop {
             .is_some()
         {
             return "Nexus's Icom network client (Beta)";
+        }
+        if self
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::tci)
+            .is_some()
+        {
+            return "Nexus's TCI client (Beta)";
         }
         let native_wanted = native_civ_addr(t).is_some() && !keys_on_the_cat_port(t);
         cat_backend_label(
@@ -5337,14 +5551,117 @@ impl RadioLoop {
         }
     }
 
+    /// Nexus's TCI client's receive audio in the sound card's place, while the radio's TCI audio
+    /// is on (`tci_audio`). The decoders take it each tick (the receive block at the top of
+    /// `step`), and the session's thread feeds a ring of its own on the receive tap, published here
+    /// in the card's place, so the waterfall and Remote Listen hear what the decoders hear. The
+    /// card's ring goes back on the tap when TCI audio stops being the source: the session goes (a
+    /// switch, a rebuild, a lost link), the receive floor gives up on it, or the tap was given
+    /// another ring (a sound-card rebuild publishes its own, and TCI's is published again over it).
+    /// The operator's RX gain reaches the session's thread every tick (an atomic store).
+    fn reconcile_tci_audio<B: AudioBackend>(&mut self, engine: &Arc<Mutex<Engine>>, backend: &B) {
+        let tci = self.rigctld_proc.as_ref().and_then(CatDaemon::tci);
+        // A failure is about the session it happened on: another one tries again.
+        if self
+            .tci_rx_failed
+            .as_ref()
+            .is_some_and(|f| !tci.is_some_and(|d| is_receive_of(d, f)))
+        {
+            self.tci_rx_failed = None;
+        }
+        let want = tci.filter(|d| {
+            self.applied.tci_audio
+                && !self
+                    .tci_rx_failed
+                    .as_ref()
+                    .is_some_and(|f| is_receive_of(d, f))
+        });
+        let on_the_tap = |ring: &Arc<crate::monitor::SpscRing>| {
+            self.rx_tap
+                .current()
+                .is_some_and(|s| Arc::ptr_eq(&s.ring, ring))
+        };
+        if let (Some(rx), Some(d)) = (&self.tci_rx, want) {
+            if is_receive_of(d, &rx.receive) && on_the_tap(&rx.ring) {
+                if let Some(r) = d.receive() {
+                    r.set_gain(self.applied.rx_gain);
+                }
+                return;
+            }
+        }
+        if let Some(rx) = self.tci_rx.take() {
+            // The session stops feeding the old ring, if it is still the loop's; a session moved
+            // to the monitor pool stops once the tap lets the ring go (it holds the ring weakly).
+            if let Some(r) = tci
+                .filter(|d| is_receive_of(d, &rx.receive))
+                .and_then(crate::tci::TciDaemon::receive)
+            {
+                r.set_tap(None);
+            }
+            // The sound card back on the tap, unless it already has another source.
+            if on_the_tap(&rx.ring) {
+                match backend.spectrum_tap() {
+                    Some((ring, rate)) => self.rx_tap.publish_card_with_origin(
+                        ring,
+                        rate,
+                        crate::receive_audio::ReceiveOrigin::from_open(
+                            self.remote_radio_id,
+                            &self.applied.audio_in,
+                            backend.capture_input(),
+                        ),
+                    ),
+                    None => self.rx_tap.clear_card(),
+                }
+            }
+        }
+        let Some(receive) = want.and_then(crate::tci::TciDaemon::receive) else {
+            return;
+        };
+        // Audio kept from before it was the source (a session the monitor held) is not this
+        // moment's: the decoders start from now.
+        let _ = receive.take();
+        receive.set_gain(self.applied.rx_gain);
+        let ring = Arc::new(crate::monitor::SpscRing::new(TCI_TAP_RING_CAP));
+        receive.set_tap(Some(&ring));
+        // No capture device to name: the audio is the SDR program's, over the network.
+        self.rx_tap
+            .publish_card_with_origin(ring.clone(), crate::tci::audio::MODEM_RATE, None);
+        self.tci_rx = Some(TciRx {
+            receive: Arc::downgrade(receive),
+            ring,
+            started: Instant::now(),
+            last_audio: None,
+        });
+        self.clear_audio_error_if_owned(engine, ErrOwner::TciAudio);
+    }
+
+    /// An over of ours (or the tune carrier) that Nexus's TCI client ended by itself, and why
+    /// ([`crate::tci::TciDaemon::take_halt`]): the SDR program stopped, or ended it itself; it did
+    /// not confirm the key, or never took Nexus's audio, or stopped answering; the carrier outlasted
+    /// its hold. The session has already sent its stops. The engine halts its transmission as Stop
+    /// TX halts it, so nothing the loop holds keys again by itself, and the operator reads why on
+    /// the lane the loop's transmit notices use, with the CAT verdict kept as it was.
+    fn take_tci_halts(&mut self, engine: &Arc<Mutex<Engine>>) {
+        let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::tci) else {
+            return;
+        };
+        while let Some(why) = d.take_halt() {
+            tempo_core::applog::info("tx", &format!("TCI: {why}; transmit halted"));
+            let mut eng = engine_lock(engine);
+            eng.halt_tx();
+            eng.set_cat_status(self.cat_ok, format!("TCI: {why}."));
+        }
+    }
+
     /// Whether this moment is a QUIET POINT for the Flex client's transmit audio source: nothing
     /// of ours on the air, ending or about to key, and no slot transmission due. The operator's
     /// ruling of 2026-10-03 writes the DAX source flag when the mode or the TX slice changes and
     /// NEVER between the slot boundary and `xmit 1`; asked only at the end of a tick, after every
     /// keying site in it, so the write can never sit inside a keying sequence:
     ///
-    /// - nothing keyed or held: no over, tune, manual PTT, microphone over or rig PTT, and no
-    ///   immediate over or armed microphone over waiting for its key;
+    /// - nothing keyed or held: no over, tune, manual PTT, microphone over, TCI program's over or
+    ///   rig PTT, and no immediate over, armed microphone over or armed program's over waiting for
+    ///   its key;
     /// - with slot transmission armed (the Digital section, TX enabled): the current slot's TX
     ///   decision has been made (`boundary_keyed` names this slot, so neither the boundary nor the
     ///   deferred decode path can still key in it), and the nearest boundary, either side, is
@@ -5356,8 +5673,10 @@ impl RadioLoop {
             || self.tuning_keyed
             || self.manual_ptt_applied
             || self.mic_keyed
+            || self.program_over_keyed
             || eng.peek_immediate_tx()
             || eng.mic_armed()
+            || eng.tci_over_armed()
         {
             return false;
         }
@@ -5471,6 +5790,9 @@ impl RadioLoop {
         if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::flex) {
             d.set_tx_intent(true);
         }
+        if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::tci) {
+            d.set_tx_intent(true);
+        }
     }
 
     /// Clear the shared audio-error banner IF `owner` still holds it, and hand the line back.
@@ -5553,6 +5875,7 @@ impl RadioLoop {
             || self.holds_tx()
             || self.tuning_keyed
             || self.mic_keyed
+            || self.program_over_keyed
             || rig.keyed
             || flex.is_some_and(crate::flex::FlexDaemon::keyed_by_another);
         if keyed_first {
@@ -5580,6 +5903,32 @@ impl RadioLoop {
             .as_ref()
             .and_then(CatDaemon::flex)
             .is_some_and(crate::flex::FlexDaemon::keyed)
+    }
+
+    /// Whether Nexus's own TCI client believes a key of ours may be on the air
+    /// ([`crate::tci::TciDaemon::keyed`]): from its write until the SDR program reports the
+    /// transmitter off, kept once the session has ended. Part of this loop's true keyed set, as
+    /// [`Self::flex_keyed`] is: a stop the program has not yet confirmed, and the SDR program's own
+    /// tune carrier, are keys `rig` never holds.
+    fn tci_keyed(&self) -> bool {
+        self.rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::tci)
+            .is_some_and(crate::tci::TciDaemon::keyed)
+    }
+
+    /// Tell Nexus's TCI client that the key about to be asked for carries Nexus's own signal, or
+    /// that it no longer does. Every over the loop keys with [`Self::key_over`] and every slot over
+    /// does: its audio (FT8, the voice keyer, APRS, SSTV, RTTY, PSK, the soundcard CW keyer, the
+    /// Remote microphone) or an FSK keyline. The client then never keys one of them on the SDR
+    /// program's own microphone, whatever mode the program is in (an APRS frame goes out in FM):
+    /// it takes Nexus's audio, or is refused while that route is not up. The operator's own PTT
+    /// (`Rig::ptt_plain`, the Phone cockpit's and the CAT broker's) is never marked, and keys the
+    /// microphone in a voice mode, as the Flex client's ruling has it ("Follow the slice's mode").
+    fn mark_tci_nexus_key(&self, on: bool) {
+        if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::tci) {
+            d.set_voice_key(on);
+        }
     }
 
     /// JS8's "Hold PTT between frames" (JS8Call's `HoldPTT`, off by default): when the slot over
@@ -5627,6 +5976,38 @@ impl RadioLoop {
         if let Some(mut tail) = tail {
             backend.retune_tx(&mut tail);
         }
+    }
+
+    /// WSJT-X's mid-over message switch (`m_restart`): while this loop's FT8/FT4 slot over is on
+    /// the air, from its key to the stop at its window's end (WSJT-X's `m_transmitting`,
+    /// `widgets/mainwindow.cpp:8214` to `:8569`), the engine rebuilds it for the message the
+    /// sequencer now sends ([`Engine::ft_midover_switch`]) and the audio route plays the rest of
+    /// it in place of what it still holds ([`AudioBackend::retune_tx`]). The over keeps its key,
+    /// its window and its PTT: nothing here touches `tx_until_ms` or the audio stop. Not while the
+    /// operator holds live PTT, and not on a rig the loop does not own. A route that cannot replace
+    /// what it was handed (nothing left to play) sends the over as first chosen, and the engine
+    /// logs it.
+    /// `clicked`: a Tx-slot click asked, not a decode.
+    fn ft_midover_switch<B: AudioBackend>(
+        &mut self,
+        eng: &mut Engine,
+        backend: &mut B,
+        now: f64,
+        clicked: bool,
+    ) {
+        let Some((stop, held_until)) = self.slot_audio_stop else {
+            return;
+        };
+        if self.tx_until_ms != Some(held_until)
+            || now >= stop
+            || !self.holds_slot_over()
+            || self.manual_ptt_applied
+            || !self.may_key()
+        {
+            return;
+        }
+        let live = self.clock.slot_index(now);
+        let _ = eng.ft_midover_switch(live, now, clicked, |tail| backend.retune_tx(tail));
     }
 
     /// Whether this loop's PTT hold is a slot over's (FT8, FT4, JS8 and the other timed-slot
@@ -5713,22 +6094,27 @@ impl RadioLoop {
     /// this are unchanged. `Rig::ptt` leaves `keyed` set after a failed key (fail-safe), so with
     /// nothing held the idle self-heal unkeys the radio on this same tick, in case it keyed after
     /// all, and an over that goes out unkeys at its end as any over does.
-    /// Start the radio's own tune carrier through Nexus's Flex client, held at most `hold_ms`
-    /// ([`crate::flex::FlexDaemon::tune_on`]). A refusal goes on the PTT line in the operator's
-    /// words, as a refused key's does ([`Self::report_ptt`]), and comes back for the log; a start
-    /// clears that line.
+    /// Start the radio's own tune carrier through Nexus's Flex client
+    /// ([`crate::flex::FlexDaemon::tune_on`]), or the SDR program's through Nexus's TCI client
+    /// ([`crate::tci::TciDaemon::tune_on`]), held at most `hold_ms`. A refusal goes on the PTT line
+    /// in the operator's words, as a refused key's does ([`Self::report_ptt`]), and comes back for
+    /// the log; a start clears that line.
     fn key_radio_tune(&mut self, engine: &Arc<Mutex<Engine>>, hold_ms: u64) -> Option<String> {
-        let started = self
-            .rigctld_proc
-            .as_ref()
-            .and_then(CatDaemon::flex)
-            .map(|d| d.tune_on(hold_ms));
+        let started = match self.rigctld_proc.as_ref() {
+            Some(CatDaemon::Flex(d)) => Some(
+                d.tune_on(hold_ms)
+                    .map_err(|refusal| crate::flex::tune_refusal_words(refusal.as_ref())),
+            ),
+            // Its refusal is already in the operator's words.
+            Some(CatDaemon::Tci(d)) => Some(d.tune_on(hold_ms)),
+            _ => None,
+        };
         let why = match started {
             Some(Ok(())) => {
                 self.report_ptt(engine, false);
                 return None;
             }
-            Some(Err(refusal)) => crate::flex::tune_refusal_words(refusal.as_ref()),
+            Some(Err(why)) => why,
             None => crate::flex::tune_refusal_words(None),
         };
         tempo_core::applog::info("tx", &format!("{why} (dropped)"));
@@ -5741,16 +6127,29 @@ impl RadioLoop {
 
     fn key_over(&self, rig: &mut Rig, plain: bool) -> KeyUp {
         let held = self.holds_tx();
+        // Every over keyed here carries Nexus's own signal: on the TCI connection it never takes
+        // the SDR program's microphone ([`Self::mark_tci_nexus_key`]).
+        self.mark_tci_nexus_key(true);
+        let asked = Instant::now();
         let key = if plain {
             rig.ptt_plain(true)
         } else {
             rig.ptt(true)
         };
+        self.mark_tci_nexus_key(false);
         match key {
             Ok(()) => KeyUp::Keyed,
             Err(_) if held => KeyUp::Held,
             Err(e) if crate::rig::no_answer_in_time(&e) => KeyUp::NoAnswer,
-            Err(e) => KeyUp::Refused(e.to_string()),
+            // Nexus's TCI client says why it kept the key off the air, in place of the rigctld
+            // answer (`RPRT -1`), which carries no reason.
+            Err(e) => KeyUp::Refused(
+                self.rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::tci)
+                    .and_then(|d| d.key_refused_since(asked))
+                    .unwrap_or_else(|| e.to_string()),
+            ),
         }
     }
 
@@ -6342,6 +6741,11 @@ impl RadioLoop {
         if let Some(daemon) = old_proc.as_ref().and_then(CatDaemon::native) {
             daemon.set_scope_enabled(false);
         }
+        // A TCI radio leaves the loop's transmit tee behind: no audio of Nexus's reaches its
+        // session from the monitor, so its client keys none.
+        if let Some(daemon) = old_proc.as_ref().and_then(CatDaemon::tci) {
+            daemon.set_tx_route(false);
+        }
         let mut old_transport = std::mem::replace(&mut self.applied, conn.transport);
         // The demoted transport keeps the broker's port, which the monitor's own want carries
         // too (`monitor_want`), so ordinary reconciliation keeps the connection. Not the keying
@@ -6572,6 +6976,16 @@ impl RadioLoop {
             .and_then(CatDaemon::flex)
             .filter(|_| self.flex_client_audio)
             .map(crate::flex::FlexDaemon::take_audio);
+        // …or Nexus's own TCI client's, while it is the receive source (`reconcile_tci_audio`).
+        // The RX gain is applied on the session's thread, to this and the receive tap's copy alike.
+        let tci_audio = match (
+            &self.tci_rx,
+            self.rigctld_proc.as_ref().and_then(CatDaemon::tci),
+        ) {
+            (Some(rx), Some(d)) if is_receive_of(d, &rx.receive) => d.receive().map(|r| r.take()),
+            _ => None,
+        };
+        let dax_is_the_source = native_audio.is_some();
         let captured = match native_audio {
             Some(mut dax_audio) => {
                 if !dax_audio.is_empty() {
@@ -6586,8 +7000,26 @@ impl RadioLoop {
                 }
                 dax_audio
             }
-            None => soundcard,
+            None => match tci_audio {
+                Some(tci_audio) => {
+                    if !tci_audio.is_empty() {
+                        if let Some(rx) = self.tci_rx.as_mut() {
+                            rx.last_audio = Some(Instant::now());
+                        }
+                    }
+                    tci_audio
+                }
+                None => soundcard,
+            },
         };
+        // Programs on Nexus's TCI server hear what the decoders hear: the Flex's DAX audio while it
+        // is the receive source, with its RX gain (`RxTap::publish_dax`), and the sound card's
+        // capture otherwise. Nexus's own TCI client puts its audio on the tap in the card's place
+        // (`reconcile_tci_audio`); the Icom network connection carries no audio at all.
+        self.rx_tap.publish_dax(
+            crate::flex::audio::MODEM_RATE,
+            dax_is_the_source.then_some(captured.as_slice()),
+        );
         // ⚠️ RX FLOOR. Taking DAX audio means IGNORING the sound card, so a DAX source that never
         // streams (wrong IP, firewall, DAX off on the radio, slice never bound) — or one that
         // streamed and then STOPPED (a WAN drop, a radio reboot, SmartSDR restarted) — leaves the
@@ -6626,13 +7058,50 @@ impl RadioLoop {
                 self.err_owner = ErrOwner::Dax;
             }
         }
+        // ⚠️ THE SAME FLOOR FOR TCI AUDIO. An SDR program that never streams its receive audio over
+        // TCI (its audio not offered, the stream refused), or stops it, leaves the operator just as
+        // deaf. Not while a transmission of ours is up: a server may pause its receive stream for an
+        // over, and that is no failure, so the window runs from the unkey.
+        let transmitting = rig.keyed
+            || self.tx_until_ms.is_some()
+            || self.tuning_keyed
+            || self.manual_ptt_applied
+            || self.mic_keyed
+            || self.program_over_keyed
+            || self.tci_keyed();
+        if let Some(rx) = self.tci_rx.as_mut() {
+            if transmitting {
+                rx.last_audio = Some(Instant::now());
+            }
+            if Self::dax_starved(Some(rx.started), rx.last_audio, Instant::now()) {
+                // This session's audio is not taken again; it stays the radio's CAT. The receive
+                // tap gets the sound card back this tick (`reconcile_tci_audio`).
+                self.tci_rx_failed = Some(rx.receive.clone());
+                if matches!(self.err_owner, ErrOwner::None | ErrOwner::TciAudio) {
+                    {
+                        let mut eng = engine_lock(engine);
+                        eng.set_audio_error(Some((
+                            AudioErrorKind::NoReceiveAudio,
+                            "Audio over TCI is on for this radio but no audio is arriving from \
+                             the SDR program — switched back to the sound card. Check that the \
+                             SDR program streams its audio over TCI, or turn Audio over TCI off \
+                             for this radio (Settings ▸ Radio ▸ Rig & CAT)."
+                                .to_string(),
+                        )));
+                    }
+                    self.err_owner = ErrOwner::TciAudio;
+                }
+            }
+        }
         if !captured.is_empty() {
             self.rx.push(&captured);
         }
         // Keep the DAX TX tee in sync with Nexus's own Flex client (Beta): install it once the
         // client's transmit route is up (its own DAX transmit stream, no other program's DAX), so
         // backend.play sends TX over DAX INSTEAD of the sound card — one route, never both — and
-        // clear it when the route goes. The TX schedule is unchanged either way.
+        // clear it when the route goes. The TX schedule is unchanged either way. Nexus's own TCI
+        // client's tee is the same route into its session, once the SDR program has taken Nexus's
+        // audio stream (Audio over TCI on): its client keys Nexus's audio only while that tee is in.
         //
         // ⚠️ AND TELL THE ENGINE ABOUT THE OPERATOR'S MICROPHONE (2026-08-17 Flex audit, critic
         // gap #6). The radio's DAX source flag is RADIO-WIDE: while it says DAX, the Flex's
@@ -6647,9 +7116,15 @@ impl RadioLoop {
         // mic is the operator's again after it, and the marker would flash for every message.
         let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
         let client = flex.filter(|_| self.flex_client_audio);
+        let tci = self.rigctld_proc.as_ref().and_then(CatDaemon::tci);
+        let tci_tee = tci
+            .filter(|d| d.tx_route_ready())
+            .and_then(crate::tci::TciDaemon::tx_tee);
+        let tci_route = tci_tee.is_some();
         let want_tee: Option<crate::backend::TxTeeHandle> = client
             .filter(|d| d.tx_route_ready())
-            .and_then(crate::flex::FlexDaemon::tx_tee);
+            .and_then(crate::flex::FlexDaemon::tx_tee)
+            .or(tci_tee);
         let mic_off = match client {
             Some(d) => d.radio_dax() == Some(true) && !d.dax_for_keyer(),
             None => flex.is_some_and(crate::flex::FlexDaemon::leaves_dax),
@@ -6657,6 +7132,10 @@ impl RadioLoop {
         let want_id = want_tee
             .as_ref()
             .map(|t| Arc::as_ptr(t) as *const () as usize);
+        // The TCI client's route is off before its tee goes, and on only once it is in.
+        if let Some(d) = tci.filter(|_| !tci_route) {
+            d.set_tx_route(false);
+        }
         if want_id != self.dax_tee_id {
             // ⛔ NEVER A SILENT OVER, PART WAY THROUGH EITHER (operator ruling, 2026-10-08, "End
             // the over"). A slot over hands its whole waveform to the tee at its key, so the tee
@@ -6687,14 +7166,17 @@ impl RadioLoop {
             {
                 tempo_core::applog::info(
                     "tx",
-                    "voice-keyer message ended: its Flex native DAX audio went part way through \
-                     (unkeyed; TX On unchanged)",
+                    "voice-keyer message ended: the route carrying its audio (Flex native DAX or \
+                     TCI) went part way through (unkeyed; TX On unchanged)",
                 );
                 engine_lock(engine).stop_voice();
             }
             self.dax_tee_id = want_id;
             backend.set_tx_tee(want_tee);
             self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
+        }
+        if let Some(d) = tci.filter(|_| tci_route) {
+            d.set_tx_route(true);
         }
         if self.flex_mic_off_pushed != Some(mic_off) {
             self.flex_mic_off_pushed = Some(mic_off);
@@ -6909,6 +7391,14 @@ impl RadioLoop {
                 if let Some(t) = want.icom_lan_target() {
                     crate::icomlan::registry::operator_acted(t.key());
                     self.cat_reopen_at = 0.0;
+                } else if want.is_tci() {
+                    // …and so is it on the TCI connection: a radio on the reconnect ladder, or
+                    // waiting for the operator after refusals, is dialled now, and one whose open
+                    // could not dial at all says why again.
+                    if let Some(key) = want.tci_key() {
+                        crate::tci::registry::operator_acted(key);
+                    }
+                    self.cat_reopen_at = 0.0;
                 } else if self.waits_for_a_rigctld_here(rig)
                     || self.applied.address_refusal.0.is_some()
                 {
@@ -6916,17 +7406,18 @@ impl RadioLoop {
                 }
             }
             let suspect_rebuild = self.cat_rebuild_due(&want, now, rig.has_control());
-            // Nexus's Flex client says what the operator must know about the transmitter. Once its
-            // session has ended, why, when the transmitter is the reason (the radio did not confirm
-            // an unkey, or the session ended during a transmission): that is what the operator
-            // must read, not that a helper stopped. While it lives, each alarm once, as it is
-            // raised (an earlier session of ours still holds the transmitter, a ping went
-            // unanswered during an over): read only after a death, these reached only the log.
-            let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
-            let flex_alarm = if daemon_died {
-                flex.and_then(crate::flex::FlexDaemon::alarm)
+            // Nexus's own client (the Flex client, the TCI client) says what the operator must
+            // know about the transmitter. Once its session has ended, why, when the transmitter is
+            // the reason (the radio did not confirm an unkey, or the session ended during a
+            // transmission): that is what the operator must read, not that a helper stopped. While
+            // it lives, each alarm once, as it is raised (an earlier session of ours still holds
+            // the transmitter, a ping went unanswered during an over): read only after a death,
+            // these reached only the log.
+            let client = self.rigctld_proc.as_ref();
+            let client_alarm = if daemon_died {
+                client.and_then(CatDaemon::client_alarm)
             } else {
-                flex.and_then(crate::flex::FlexDaemon::take_new_alarm)
+                client.and_then(CatDaemon::take_new_client_alarm)
             };
             // …and each one stays on screen until the operator dismisses it: the CAT status is
             // latest-wins, so the next CAT message replaced it. Raised once each: after a death
@@ -6934,9 +7425,9 @@ impl RadioLoop {
             // since the last take is new. About the radio this client serves (`remote_radio_id`),
             // never whichever one is active by now: a switch flips that before the loop lets go.
             let new_alarm = if daemon_died {
-                flex.and_then(crate::flex::FlexDaemon::take_new_alarm)
+                client.and_then(CatDaemon::take_new_client_alarm)
             } else {
-                flex_alarm.clone()
+                client_alarm.clone()
             };
             if let Some(text) = new_alarm {
                 let radio = self.remote_radio_id.unwrap_or(remote_want_radio);
@@ -6947,13 +7438,13 @@ impl RadioLoop {
                 let mut eng = engine_lock(engine);
                 eng.set_cat_status(
                     Some(false),
-                    flex_alarm.clone().unwrap_or_else(|| {
+                    client_alarm.clone().unwrap_or_else(|| {
                         "the CAT helper (rigctld) stopped — restarting it. If this keeps \
                          happening, check the radio's cable/port and Test CAT."
                             .to_string()
                     }),
                 );
-            } else if let Some(alarm) = &flex_alarm {
+            } else if let Some(alarm) = &client_alarm {
                 // A transmit fault, not a CAT fault: the lane the loop's transmit notices use,
                 // with the CAT verdict kept as it was.
                 let ok = self.cat_ok;
@@ -7009,7 +7500,7 @@ impl RadioLoop {
                         eng.remote_close_radio();
                     }
                     let radio = self.remote_radio_id.unwrap_or(remote_want_radio);
-                    raise_flex_alarm(self.rigctld_proc.as_ref(), radio, engine);
+                    raise_client_alarm(self.rigctld_proc.as_ref(), radio, engine);
                     self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
                     *rig = Rig::vox();
                     self.rig_asserted = false;
@@ -7040,6 +7531,10 @@ impl RadioLoop {
                     if let Some(t) = want.icom_lan_target() {
                         crate::icomlan::registry::operator_acted(t.key());
                     }
+                    // …and to the TCI connection, the same way.
+                    if let Some(key) = want.tci_key() {
+                        crate::tci::registry::operator_acted(key);
+                    }
                 }
                 // The keyed belief at teardown entry, carried onto the fresh rig below. A rebuild
                 // must NEVER make the loop forget a physically-keyed transmitter: the fresh rig
@@ -7047,8 +7542,9 @@ impl RadioLoop {
                 // that unkeys a wedged rig on the external-Hamlib path (it has no daemon fail-safe,
                 // unlike CI-V). #stuck-tx-1.10.2: the teardown discarded this and stranded TX. Nexus's
                 // own Flex client counts too: it knows what the radio keyed for Nexus that `rig`
-                // never did.
-                let was_keyed = rig.keyed || self.flex_keyed();
+                // never did. So does its TCI client: the SDR program's tune carrier, and an unkey
+                // the program has not confirmed yet.
+                let was_keyed = rig.keyed || self.flex_keyed() || self.tci_keyed();
                 // Unkey through the STILL-ALIVE old rig/daemon before tearing it
                 // down — flush, unkey, clear TX state, THEN drop the daemon.
                 if !asking_again {
@@ -7069,10 +7565,10 @@ impl RadioLoop {
                     self.applied.rigctld_port,
                     want.rigctld_port,
                 );
-                // The outgoing client is read until it goes (`raise_flex_alarm`): about the radio
+                // The outgoing client is read until it goes (`raise_client_alarm`): about the radio
                 // it served, which `remote_radio_id` still names.
                 let served = self.remote_radio_id.unwrap_or(remote_want_radio);
-                raise_flex_alarm(self.rigctld_proc.as_ref(), served, engine);
+                raise_client_alarm(self.rigctld_proc.as_ref(), served, engine);
                 // What the Icom network session said as it ended, before it goes.
                 let lan_loss = self
                     .rigctld_proc
@@ -7106,9 +7602,9 @@ impl RadioLoop {
                     }
                     (false, _) => detail,
                 };
-                // …and so must the Flex client's alarm, ahead of it: the operator reads that the
+                // …and so must the client's alarm, ahead of it: the operator reads that the
                 // radio may still be transmitting before anything about the restart.
-                let detail = match &flex_alarm {
+                let detail = match &client_alarm {
                     Some(alarm) => {
                         let (first, rest) =
                             detail.split_at(detail.chars().next().map_or(0, char::len_utf8));
@@ -7159,6 +7655,10 @@ impl RadioLoop {
                     if let Some(t) = want.icom_lan_target() {
                         self.cat_reopen_at = icom_lan_reopen_at(t.key(), now, self.cat_reopen_at);
                     }
+                    // …and on the TCI connection, the TCI client's own ladder.
+                    if let Some(key) = want.tci_key() {
+                        self.cat_reopen_at = tci_reopen_at(key, now, self.cat_reopen_at);
+                    }
                 }
                 self.cat_ok = ok;
                 {
@@ -7182,6 +7682,10 @@ impl RadioLoop {
                 }
                 // The Icom network client's reading of the radio, as at connect.
                 if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::icom_lan) {
+                    detail = format!("{detail} {}", d.status());
+                }
+                // …and who answered the TCI client.
+                if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::tci) {
                     detail = format!("{detail} {}", d.status());
                 }
                 // Test CAT is the button an operator presses precisely BECAUSE the rig isn't
@@ -7618,7 +8122,30 @@ impl RadioLoop {
             // capability — cheap (a key compare) unless it just gained/lost/changed a native scope.
             let (scope_model, scope_net) = (self.applied.rig_model, self.applied.is_network());
             self.reconcile_spectrum_source(engine, scope_model, scope_net);
+            // The TCI radio's own panadapter (its IQ): renewed for the active radio's client every
+            // tick, so a client a switch left behind lapses by itself (`crate::tci::iq`). Not on a
+            // switch the handoff has not seen (W0): `rigctld_proc` is the radio being left.
+            crate::tci::iq::reconcile(
+                self.rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::tci)
+                    .filter(|_| !self.switch_unhanded),
+                engine,
+                &self.spectrum_feed,
+            );
             self.reconcile_flex_client_audio(engine);
+            self.take_tci_halts(engine);
+            self.reconcile_tci_audio(engine, &*backend);
+            // Nexus's spots on the TCI radio's own panadapter, and the clicks on them: renewed for
+            // the active radio's client every tick, so a client a switch left behind lapses by
+            // itself (`crate::tci::spots`). Not while `rigctld_proc` is a radio being left.
+            crate::tci::spots::tick(
+                self.rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::tci)
+                    .filter(|_| !self.handoff_deferred && !self.switch_unhanded),
+                engine,
+            );
             // FORK-LOCAL: the FT-710's own spectrum over its internal FT4222 bridge. No-op on every
             // other radio, and on this one too until the operator opts in. Not on a switch the
             // handoff has not seen (W0): `rig` is the radio being left, and the span and scope-mode
@@ -7784,6 +8311,15 @@ impl RadioLoop {
             }
             // Nexus's own Flex client carries the same fail-safe (it reuses `serve_connection`).
             if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::flex) {
+                d.set_tx_intent(
+                    rig.keyed
+                        || self.tx_until_ms.is_some()
+                        || self.tuning_keyed
+                        || self.manual_ptt_applied,
+                );
+            }
+            // …and so does Nexus's own TCI client.
+            if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::tci) {
                 d.set_tx_intent(
                     rig.keyed
                         || self.tx_until_ms.is_some()
@@ -10077,6 +10613,9 @@ impl RadioLoop {
                             // sent while nothing reached the air), and the warning says why
                             // ([`Self::key_over`]). (Audio-routing problems can't be detected
                             // here — see the Soundcard control's caveat.)
+                            // A word after the first goes out on the key an earlier word of this
+                            // over took, still held through its word space and tail.
+                            let continues = now < self.cw_keying_until;
                             self.ensure_commanded(rig); // read-only launch: assert before key
                             self.publish_tx_intent_now(); // before keying
                             let key = self.key_over(rig, false);
@@ -10098,12 +10637,21 @@ impl RadioLoop {
                                     // mid-message on a later word the radio does key.
                                     eng.cw_key_refused();
                                 }
-                                eng.set_cw_keyer_error(key.warns().then(|| {
-                                    "Soundcard keyer: the rig didn't accept PTT. Check your PTT \
-                                     method + that Nexus's audio output is routed to the rig \
-                                     (like FT8). If in doubt, use the WinKeyer or CAT keyer."
-                                        .to_string()
-                                }));
+                                // Such a word rides that key whatever a second key is answered
+                                // ([`KeyUp::Held`]), and Nexus's TCI and Flex clients refuse a
+                                // second key of ours by design while the first is on the air. That
+                                // is no PTT problem, so the warning line stays as this over's own
+                                // key left it: telling the operator to switch keyers there sent
+                                // them, on TCI, to the CAT keyer, which keys nothing.
+                                if !(continues && key == KeyUp::Held) {
+                                    eng.set_cw_keyer_error(key.warns().then(|| {
+                                        "Soundcard keyer: the rig didn't accept PTT. Check your \
+                                         PTT method + that Nexus's audio output is routed to the \
+                                         rig (like FT8). If in doubt, use the WinKeyer or CAT \
+                                         keyer."
+                                            .to_string()
+                                    }));
+                                }
                             }
                         }
                     } else {
@@ -10151,6 +10699,17 @@ impl RadioLoop {
                         if cw_err.is_none() {
                             self.cw_keying_until = self.cw_busy_until;
                         }
+                        // ⛔ A WORD THE RADIO'S OWN KEYER IS NEVER HANDED (a `;`, a control
+                        // character, a character with no Morse: `rig::cw_text_refusal`) was refused
+                        // before anything was sent, so nothing waits on it, and the rest of the
+                        // message is dropped with it, as a refused key drops it: never keyed part
+                        // way with a word missing. The CW screen says which character, once.
+                        let unsendable = cw_err
+                            .as_ref()
+                            .and_then(|_| crate::rig::cw_text_refusal(&text));
+                        if unsendable.is_some() {
+                            self.cw_busy_until = 0.0;
+                        }
                         // Nexus's own Flex client says why it sent nothing (the slice not in CW,
                         // break-in off, ...), in place of the Hamlib advice, which would be wrong
                         // there. Its refusal drops the rest of the message, as a refused key does,
@@ -10162,7 +10721,7 @@ impl RadioLoop {
                             .map(|(why, _)| why);
                         {
                             let mut eng = engine_lock(engine);
-                            if let Some(why) = flex_why {
+                            if let Some(why) = unsendable.or(flex_why) {
                                 tempo_core::applog::info(
                                     "tx",
                                     &format!("CW not keyed: {why} (dropped)"),
@@ -11470,6 +12029,108 @@ impl RadioLoop {
             }
         }
 
+        // A TCI program's audio over: a program on Nexus's TCI server (a logger's voice macro,
+        // WSJT-X) transmitting its own audio (`tempo_app::engine::tci`). It is the Remote
+        // microphone's machinery with a program's numbers (`TCI_OVER`), and this block is the one
+        // above with the program's state. The ENGINE decides everything on every tick
+        // (`Engine::poll_tci`: the switch and every station gate, Nexus's own key, the section, the
+        // owner, the route, a radio on its own microphone, the ceiling, the gap, and what audio is
+        // due); this block keys what it is told to with Nexus's own key (`key_over`: on a TCI
+        // radio that is Nexus's audio, never the SDR program's microphone), plays it through the
+        // same `play()` (the Flex DAX or TCI route when one is installed, the sound card
+        // otherwise), and holds PTT to `tx_until_ms` from where the queued audio ends, so a wedged
+        // loop unkeys.
+        //
+        // Polled on EVERY tick, with an over or without: the same poll ends a program's microphone
+        // key (keyed by the manual PTT below, which reads it masked) and its Tune when a gate
+        // under them goes down, so neither keys again when the gate comes back up.
+        {
+            let mono = self.mono_now(now);
+            let (abort, tick) = {
+                let mut eng = engine_lock(engine);
+                if !self.may_key() {
+                    // `rig` is not the operator's radio this tick (a deferred handoff, a CAT
+                    // hold): the over ends, as the microphone's does. The poll still judges a
+                    // program's microphone key and Tune, which wait as the operator's own do.
+                    eng.drop_tci_over();
+                }
+                let queued = (self.program_over_busy_until - now).max(0.0);
+                let tick = eng.poll_tci(mono, TCI_OVER.ahead_ms as f64 - queued, self.tx_route_gen);
+                // AFTER the poll, so an abort IT armed is consumed on this same tick.
+                (eng.take_tci_abort(), tick)
+            };
+            // Something else unkeyed the rig under a keyed over (its deadline expired over a
+            // stalled loop, a hard stop or a rebuild cleared the hold): it does not come back.
+            let unkeyed_under =
+                self.program_over_keyed && (self.tx_until_ms.is_none() || !rig.keyed);
+            // The engine is keying an over this loop never keyed (the loop was rebuilt under it).
+            let never_keyed =
+                !self.program_over_keyed && matches!(tick, MicTick::Ahead | MicTick::Samples(_));
+            // Its owner let go and it played out what it took: the graceful end, with no abort.
+            // The output ring plays its last and the deadline unkeys after it. From here this
+            // block holds nothing, so an unkey under the PTT is not this over's to answer: the
+            // operator's own PTT pressed in that tail is not let go here.
+            let drained = self.program_over_keyed
+                && !abort
+                && !unkeyed_under
+                && matches!(tick, MicTick::Idle | MicTick::Armed);
+            if unkeyed_under || never_keyed {
+                engine_lock(engine).drop_tci_over();
+            }
+            if (abort || unkeyed_under) && self.program_over_keyed {
+                // A hard end: the feed is closed and its epoch moved (the engine's kill path);
+                // here the queued audio goes (the only thing that stops a VOX rig) and PTT drops.
+                let dropped = backend.flush_output();
+                let _ = rig.ptt(false);
+                self.tx_until_ms = None;
+                crate::civ::diag::note(&format!(
+                    "TCI program's over ended: unkey, {dropped} queued samples dropped"
+                ));
+            }
+            if abort || unkeyed_under || never_keyed || drained {
+                self.program_over_keyed = false;
+                self.program_over_busy_until = 0.0;
+            } else {
+                match tick {
+                    MicTick::Key => {
+                        self.ensure_commanded(rig); // read-only launch: assert before key
+                        self.publish_tx_intent_now(); // before keying — the fail-safe must know
+                        let key = self.key_over(rig, false);
+                        self.report_ptt(engine, key.warns());
+                        if let KeyUp::Refused(why) = &key {
+                            // The rig did not key, so none of the program's audio may be played:
+                            // the over ends here through its one kill path, and the abort that
+                            // arms goes with it, since nothing was queued for it to flush.
+                            note_refused_key("TCI program's over not keyed", why);
+                            let mut eng = engine_lock(engine);
+                            eng.drop_tci_over();
+                            let _ = eng.take_tci_abort();
+                        } else {
+                            self.program_over_keyed = true;
+                            self.program_over_busy_until = now;
+                            // The lead-in and the silent pre-roll come before any audio is
+                            // queued: hold PTT across them, and no further.
+                            let until = now
+                                + (TCI_OVER.lead_in_ms + TCI_OVER.ahead_ms) as f64
+                                + crate::slot::TX_TAIL_MS;
+                            self.tx_until_ms =
+                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        }
+                    }
+                    MicTick::Samples(buf) => {
+                        backend.play(&buf);
+                        // Contiguous in audio time: the deadline advances from where the queued
+                        // audio ends. THIS is the bound that makes a wedged loop unkey.
+                        self.program_over_busy_until = self.program_over_busy_until.max(now)
+                            + buf.len() as f64 * 1000.0 / f64::from(TCI_OVER.rate_hz);
+                        let until = self.program_over_busy_until + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    }
+                    MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
+                }
+            }
+        }
+
         // Manual PTT (live phone) + RF power — applied via the rig on change. Only the
         // Phone section drives these (the FT8 TX path is idle there), so no PTT clash.
         {
@@ -12375,12 +13036,19 @@ impl RadioLoop {
             // and the client's typed calls start and end it: rigctld has no verb for it. The
             // loop's timeout above and its release below stand; the client's session also ends the
             // carrier by itself at the hold handed to it plus its margin, whether or not this loop
-            // runs. Decided at the key, kept to the release.
+            // runs. Decided at the key, kept to the release. On the TCI connection it is always
+            // the SDR program's own carrier, through Nexus's TCI client, the same way: TCI has no
+            // tone of Nexus's for a tune (`TciDaemon::tunes_natively`).
             let native = if keying {
                 self.rigctld_proc
                     .as_ref()
                     .and_then(CatDaemon::flex)
                     .is_some_and(crate::flex::FlexDaemon::tunes_natively)
+                    || self
+                        .rigctld_proc
+                        .as_ref()
+                        .and_then(CatDaemon::tci)
+                        .is_some_and(crate::tci::TciDaemon::tunes_natively)
             } else {
                 self.tune_native
             };
@@ -12580,16 +13248,14 @@ impl RadioLoop {
             backend.flush_output();
             // The radio's own carrier ends with its own stop, the client's typed call; every other
             // tune with the unkey, as does a native tune whose client has gone.
-            match self
-                .rigctld_proc
-                .as_ref()
-                .and_then(CatDaemon::flex)
-                .filter(|_| self.tune_native)
-            {
-                Some(d) => {
+            match self.rigctld_proc.as_ref().filter(|_| self.tune_native) {
+                Some(CatDaemon::Flex(d)) => {
                     d.tune_off();
                 }
-                None => {
+                Some(CatDaemon::Tci(d)) => {
+                    d.tune_off();
+                }
+                _ => {
                     let _ = rig.ptt(false);
                 }
             }
@@ -12665,9 +13331,10 @@ impl RadioLoop {
         // self-heal excludes it: a physically held mic owns its own unkey path. A tune
         // can never reach here — the tune branch above returns first. Nexus's own Flex client's
         // belief counts as `rig.keyed` does (`flex_keyed`): its `T 0` then ends everything of
-        // ours, whatever kind it is.
+        // ours, whatever kind it is. So does its TCI client's (`tci_keyed`): an unkey the SDR
+        // program has not confirmed yet is sent again.
         let abort_has_something_to_cut = self.tx_until_ms.is_some()
-            || ((rig.keyed || self.flex_keyed()) && !self.manual_ptt_applied);
+            || ((rig.keyed || self.flex_keyed() || self.tci_keyed()) && !self.manual_ptt_applied);
         if (slot_tx_abort && abort_has_something_to_cut)
             || (self.tx_until_ms.is_some() && tx_off_cut)
         {
@@ -12755,7 +13422,9 @@ impl RadioLoop {
                     WsjtxInbound::FreeText { text, send, .. } => {
                         let t = text.trim();
                         if send && !t.is_empty() {
-                            eng.broadcast(t);
+                            if let Err(reason) = eng.udp_free_text(t) {
+                                crate::civ::diag::note(&format!("UDP FreeText refused: {reason}"));
+                            }
                         }
                     }
                     WsjtxInbound::Reply {
@@ -12787,17 +13456,7 @@ impl RadioLoop {
                                         |eng| {
                                             eng.work_station_opens_session(&sender, Some(&message))
                                         },
-                                        |eng| {
-                                            eng.work_station(
-                                                &sender,
-                                                None,
-                                                Some(&message),
-                                                Some(snr),
-                                                dx_freq,
-                                            )?;
-                                            eng.set_tx_enabled(true);
-                                            Ok(())
-                                        },
+                                        |eng| eng.answer_udp_reply(&sender, &message, snr, dx_freq),
                                         |_| (),
                                     );
                                     if let Err(reason) = worked {
@@ -12809,23 +13468,18 @@ impl RadioLoop {
                                 continue;
                             }
                             // A refusal (no derivable parity — the context was just flushed
-                            // by a QSY/tier switch) must NOT fall through to the arm below:
-                            // arming TX for a QSO that was never started is exactly the
-                            // unattended-keying shape the refusal exists to prevent. The
-                            // companion sent a message, so the reason goes to the diag log
-                            // rather than vanishing.
+                            // by a QSY/tier switch — or a stop the operator has not answered)
+                            // arms nothing: arming TX for a QSO that was never started is
+                            // exactly the unattended-keying shape the refusal exists to
+                            // prevent. The companion sent a message, so the reason goes to the
+                            // diag log rather than vanishing.
                             if let Err(reason) =
-                                eng.work_station(sender, None, Some(&message), Some(snr), dx_freq)
+                                eng.answer_udp_reply(sender, &message, snr, dx_freq)
                             {
                                 crate::civ::diag::note(&format!(
                                     "UDP Reply for {sender} refused: {reason}"
                                 ));
-                                continue;
                             }
-                            // Stock parity: "double-click sets Tx enable" governs
-                            // only OUR OWN UI clicks — an inbound UDP Reply
-                            // (JTAlert/GridTracker) always arms TX in WSJT-X.
-                            eng.set_tx_enabled(true);
                         }
                     }
                     // Companion mode: WSJT-X logged a QSO. It emits BOTH LoggedAdif
@@ -12930,8 +13584,10 @@ impl RadioLoop {
                         let held = self.holds_tx();
                         let asked = Instant::now();
                         // A key the radio refuses plays nothing here and halts TX, as at the
-                        // boundary (`slot::slot_key_failure`).
+                        // boundary (`slot::slot_key_failure`). Nexus's own audio, as there.
+                        self.mark_tci_nexus_key(true);
                         let keyed = crate::slot::key_slot_transmitter(&mut eng, rig, backend, held);
+                        self.mark_tci_nexus_key(false);
                         // ⭐ AN FT8/FT4 KEY THE RADIO ANSWERED PAST THE END OF ITS SLOT IS NOT
                         // PLAYED, as at the boundary (`slot::unkey_a_key_past_its_period`): Fake It's
                         // write-back, Split Operation's commands and the key all come after the
@@ -13010,6 +13666,8 @@ impl RadioLoop {
             // Slot indices renumber with the new period — stale per-slot markers from
             // the old tier must not coincidentally match a new tier's slot.
             self.early_done_slot = None;
+            self.full_done_slot = None;
+            self.full_pass_frame = None;
             self.early_msk_done = None;
             self.js8_done = [None; Js8Speed::ALL.len()];
             self.boundary_keyed = None;
@@ -13032,9 +13690,21 @@ impl RadioLoop {
         // is dropped. Draining BEFORE the new-boundary dispatch guarantees an early
         // result's `early_seen` is set before the same-slot boundary filters
         // against it. At most one decode is ever in flight (the in-flight guard).
+        //
+        // A result of the period that just ended (its boundary slot is the one on the clock) that
+        // changes what the QSO sequencer would send next asks for WSJT-X's mid-over switch
+        // (`ft_midover_switch`, below). A stale one folds as before and never does: what it moved
+        // goes out at the next over, as it always did.
+        let mut ft_restart = false;
         while let Some(result) = self.decode.try_recv() {
             self.decode_in_flight = false;
-            match eng.apply_decode_result(result) {
+            let live = self.clock.slot_index(now);
+            let next_before = (result.slot() == live).then(|| eng.ft_next_over(live));
+            let applied = eng.apply_decode_result(result);
+            if next_before.is_some_and(|before| eng.ft_next_over(live) != before) {
+                ft_restart = true;
+            }
+            match applied {
                 DecodeApplied::Boundary {
                     slot: bslot, frame, ..
                 } => {
@@ -13050,7 +13720,14 @@ impl RadioLoop {
                     // folds its decodes and emits its period below — it must never
                     // reach the TX decision.
                     let live = self.clock.slot_index(now);
-                    if bslot == live {
+                    if self.full_done_slot.map(|s| s + 1) == Some(bslot)
+                        && self.last_slot.is_none_or(|l| l < bslot)
+                    {
+                        // A FULL pass finished before its boundary: its decodes are folded
+                        // (above), so the boundary's TX decision will have them. That boundary
+                        // keys and runs the housekeeping with it, and only that one.
+                        self.full_pass_frame = Some((bslot, frame));
+                    } else if bslot == live {
                         self.finish_boundary(
                             &mut eng,
                             rig,
@@ -13099,6 +13776,12 @@ impl RadioLoop {
                 // TX decision, and WSJT-X sends it to neither a logger nor PSK Reporter.
                 DecodeApplied::Late { .. } | DecodeApplied::Stale => {}
             }
+        }
+        // A Tx-slot click's switch is taken every tick, so one made with no over on the air is
+        // dropped here and never acts on a later one.
+        let clicked = eng.take_ft_restart();
+        if clicked || ft_restart {
+            self.ft_midover_switch(&mut eng, backend, now, clicked);
         }
 
         // --- JS8: the once-a-second station tick and the MULTI-SPEED scheduler. JS8Call
@@ -13161,28 +13844,44 @@ impl RadioLoop {
             }
         }
 
-        // --- WSJT-X-style early decode (FT8/FT4): a few seconds before the
-        // boundary, decode the partial capture so callers appear while the
-        // period is still running (stock decodes ~3×/period from ~11.8 s; our
-        // single boundary pass made decodes land exactly as the operator's TX
-        // window opened — zero decision time). RX slots only: our own carrier
-        // (current TX or its boundary-crossing tail) must never reach the
-        // decoder. The boundary pass below stays authoritative and ingests only
-        // the stragglers this pass missed.
+        // --- WSJT-X's decode moments before the boundary (FT8/FT4), so callers appear while the
+        // period is still running and the boundary's TX decision has their decodes. RX slots only:
+        // our own carrier (current TX or its boundary-crossing tail) must never reach the decoder.
+        //
+        // WSJT-X counts the moments in half-symbol steps of `m_FFTSize = m_nsps/2` = 3456 samples
+        // at 12 kHz, 0.288 s (mainwindow.cpp:10920-10921 FT4, :10984-10985 FT8), and calls the
+        // decoder when the step count reaches them (:2379-2383):
+        // - FT8 EARLY pass at `m_earlyDecode` = 41 steps = 11.808 s (mainwindow.h:666): cheap,
+        //   over the audio so far, AP off (`nzhsym = 41`, :2480);
+        // - FT8 FULL pass at `m_hsymStop` = 50 steps = 14.40 s (:2222), over the first 14.4 s
+        //   with the rest of the buffer zero (`d2` is zeroed at each period start, :2610);
+        // - FT4's only pass at `m_hsymStop` = 21 steps = 6.048 s (:2226), the whole FT4 frame.
+        // The full pass is the period's authoritative decode: it replaces the boundary's, and
+        // the boundary keys with its decodes when it has finished. WSJT-X's third FT8 moment
+        // (`m_earlyDecode2` = 47, :2223) decodes nothing new (ft8_decode.f90:124-150: it
+        // subtracts the early decodes for the full pass) and has no counterpart here: the full
+        // pass's own multi-pass subtraction covers it.
         if self.tx_until_ms.is_none()
             && !self.prev_slot_was_tx
-            && self.early_done_slot != Some(slot)
+            && self.full_done_slot != Some(slot)
             && !is_tuning
         {
             /// Interval between MSK144's repeating early passes (ms). 2 s keeps ping-to-
             /// screen latency ~2 s (WSJT-X's rtd is ~0.3 s; the difference buys reuse of the
             /// existing early machinery instead of a new streaming path into rxdsp).
             const MSK_EARLY_STEP_MS: f64 = 2_000.0;
+            /// One WSJT-X half-symbol step, 3456 samples at 12 kHz (ms).
+            const HSYM_MS: f64 = 288.0;
             let slot_ms_now = eng.active_slot_secs() * 1000.0;
             let elapsed_now = slot_ms_now - self.clock.ms_to_next_slot(now);
+            let full_at_ms = match tier_now {
+                Tier::Ft8 => Some(50.0 * HSYM_MS),
+                Tier::Ft4 => Some(21.0 * HSYM_MS),
+                _ => None,
+            };
             let early_at_ms = match tier_now {
-                Tier::Ft8 => Some(11_800.0),
-                Tier::Ft4 => Some(5_500.0),
+                _ if self.early_done_slot == Some(slot) => None,
+                Tier::Ft8 => Some(41.0 * HSYM_MS),
                 // FT2's tones end at 2.52 s of 3.75 (slot-start audio, Decodium's
                 // convention) — this is a COMPLETE-signal pass with 1.15 s of decode
                 // room against a measured 510 ms, not a partial. Without it FT2 fell
@@ -13199,7 +13898,13 @@ impl RadioLoop {
                 }
                 _ => None,
             };
-            if let Some(at) = early_at_ms {
+            // The full pass once its moment has come (it supersedes an early pass not yet run),
+            // else the early pass.
+            let due = match full_at_ms {
+                Some(at) if elapsed_now >= at => Some((at, DecodePass::Boundary)),
+                _ => early_at_ms.map(|at| (at, DecodePass::Early)),
+            };
+            if let Some((at, pass)) = due {
                 let slot_ms = eng.active_slot_secs() * 1000.0;
                 let elapsed_ms = slot_ms - self.clock.ms_to_next_slot(now);
                 // `< slot_ms` guards the exact-boundary tick (ms_to_next_slot
@@ -13215,6 +13920,9 @@ impl RadioLoop {
                     && eng.source_kind() == SourceKind::Native
                 {
                     self.early_done_slot = Some(slot);
+                    if pass == DecodePass::Boundary {
+                        self.full_done_slot = Some(slot);
+                    }
                     if tier_now == Tier::Msk144 {
                         self.early_msk_done =
                             Some((slot, (elapsed_ms / MSK_EARLY_STEP_MS).floor() as u32));
@@ -13246,10 +13954,11 @@ impl RadioLoop {
                             eng.keep_prebuilt_wave(&next, &wave);
                         }
                     }
-                    // Dispatch the early partial decode (boundary-slot index = audio
-                    // slot + 1, matching the boundary ingest's parity/history). The
-                    // result folds in — and publishes its spots — via the drain block.
-                    let job = eng.build_decode_job(frame, slot + 1, DecodePass::Early);
+                    // Dispatch the decode (boundary-slot index = audio slot + 1, matching the
+                    // boundary ingest's parity/history). The result folds in via the drain
+                    // block: an early one publishes its spots there, a full one is kept for its
+                    // boundary.
+                    let job = eng.build_decode_job(frame, slot + 1, pass);
                     self.decode.dispatch(WorkerJob::Slot(job));
                     self.decode_in_flight = true;
                 }
@@ -13274,8 +13983,42 @@ impl RadioLoop {
         if Some(slot) != self.last_slot {
             let currently_tx = self.tx_until_ms.is_some();
             let prev_was_tx = self.prev_slot_was_tx;
+            // A full pass kept for a boundary is this one's only when it names it: a boundary the
+            // clock skipped leaves its pass to be dropped here, never to decide a later slot.
+            let full_pass = self.full_pass_frame.take().filter(|(s, _)| *s == slot);
             if crate::slot::slot_wants_decode(currently_tx, prev_was_tx, self.rx.is_empty()) {
-                if !self.decode_in_flight {
+                if let Some((_, frame)) = full_pass {
+                    // The just-ended period's full pass (FT8 14.40 s, FT4 6.048 s) finished
+                    // before this boundary, so its decodes are already folded: run the TX
+                    // decision with them now, then the housekeeping, as the deferred path does
+                    // once a boundary decode drains. Nothing is decoded again.
+                    self.last_slot = Some(slot);
+                    let lead = js8_lead_waves.take();
+                    self.finish_boundary(
+                        &mut eng,
+                        rig,
+                        backend,
+                        sinks,
+                        station,
+                        now,
+                        slot,
+                        true,
+                        Some(frame),
+                        lead,
+                    )?;
+                } else if self.decode_in_flight && self.full_done_slot == Some(slot.wrapping_sub(1))
+                {
+                    // That full pass is still running. It IS this period's decode, not a decoder
+                    // falling behind, so nothing is dropped and nothing else is dispatched. Key
+                    // now with what has folded (WSJT-X keys at t = 0 whatever its decoder is
+                    // doing: `m_transmitting = true` at :8214); the pass's decodes reach the
+                    // sequencer the moment it drains, and that drain is this slot's
+                    // housekeeping only (`finish_boundary` sees `boundary_keyed`).
+                    self.last_slot = Some(slot);
+                    let lead = js8_lead_waves.take();
+                    let _ =
+                        self.key_boundary_tx(&mut eng, rig, backend, now, slot, false, None, lead);
+                } else if !self.decode_in_flight {
                     self.last_slot = Some(slot);
                     // Capture the just-ended slot's audio BEFORE any keying — a TX
                     // start clears the ring (own-carrier guard) and the straggler
@@ -13298,7 +14041,7 @@ impl RadioLoop {
                     };
                     // WSJT-X key-at-boundary (operator-approved 2026-07-21): when the
                     // just-ended RX slot's EARLY decode already folded (FT8/FT4 native —
-                    // dispatched at 11.8 s / 5.5 s and drained above), the
+                    // dispatched at 11.808 s and drained above), the
                     // auto-sequencer's inputs are ready NOW. Run the TX decision AT the
                     // boundary — exactly WSJT-X's ordering (it keys at t=0 and decodes
                     // in parallel; stragglers can't change an in-flight over there
@@ -13488,6 +14231,19 @@ impl RadioLoop {
             let _ = rig.stop_voice_mem();
         }
 
+        // WSJT-X sends a Status on each change of what it reports (`statusUpdate` from
+        // `on_autoButton_clicked`, the TX start and stop, a new Tx message, the DX call and grid,
+        // the watchdog: mainwindow.cpp:3811, 8076, 8216, 8580, 10452-10497, 14059), not once a
+        // period. The boundary sends one every period (`emit_boundary_housekeeping`); this sends
+        // the ones in between, so a logger sees TX enabled or the next over the moment it happens.
+        if let (Some(server), Some(last)) = (sinks.wsjtx, station.wsjtx_status.as_ref()) {
+            let changed = wsjtx_status_change(last, &engine_lock(engine));
+            if let Some(status) = changed {
+                let _ = server.send_status(&status.as_status());
+                station.wsjtx_status = Some(status);
+            }
+        }
+
         // PSK Reporter: flush accumulated spots periodically (outside the lock). JS8's spots are
         // the engine's (`take_js8_psk_spots`: the stations JS8Call would spot, with their grids),
         // taken into the same buffer when the flush is due, so they ride the same upload.
@@ -13643,6 +14399,8 @@ impl RadioLoop {
         }
         let held = self.holds_tx();
         let asked = Instant::now();
+        // A slot over is Nexus's own audio: never the SDR program's microphone on TCI.
+        self.mark_tci_nexus_key(true);
         let action = crate::slot::slot_tx_phase(
             eng,
             rig,
@@ -13655,6 +14413,7 @@ impl RadioLoop {
             prebuilt,
             held,
         );
+        self.mark_tci_nexus_key(false);
         self.explain_flex_refusal(eng, asked);
         if let Some(t) = action.tx_until_ms {
             self.tx_until_ms = Some(t);
@@ -13789,58 +14548,38 @@ impl RadioLoop {
                 );
             }
             if let Some(server) = sinks.wsjtx {
-                let dx = snap
-                    .qso
-                    .as_ref()
-                    .and_then(|q| q.dxcall.clone())
-                    .unwrap_or_default();
-                let _ = server.send_status(&WsjtxStatus {
-                    dial_freq: cur_dial,
-                    mode: tier,
-                    dx_call: &dx,
-                    report: "",
-                    tx_mode: tier,
-                    tx_enabled: false,
-                    transmitting: snap.radio.transmitting,
+                // The LIVE mode wins: field_day is Some only while a
+                // contest is actually RUNNING, whereas special_op
+                // is a persistent setting an operator can forget to turn
+                // off — a stale Hound flag must not misadvertise an
+                // active contest session (review catch). 6=FOX stays unbuilt.
+                // A running contest reports the activity WSJT-X itself would
+                // be set to for it: 3 (Field Day) in ARRL Field Day only,
+                // 1 (NA VHF) in the ARRL VHF contests, 0 everywhere else.
+                let special_op = if let Some(fd) = &snap.field_day {
+                    tempo_core::fieldday::FtMessages::of_contest(&fd.event).special_op()
+                } else if matches!(
+                    eng.settings().special_op,
+                    tempo_app::settings::SpecialOp::Hound
+                        | tempo_app::settings::SpecialOp::SuperHound
+                ) {
+                    7
+                } else {
+                    0
+                };
+                let status = wsjtx_status(
+                    &*eng,
+                    cur_dial,
+                    &snap.mycall,
+                    &snap.mygrid,
+                    special_op,
                     // `decoding` and `transmitting` are disjoint phases in
                     // WSJT-X: when we decode the prior RX slot AND transmit in
                     // this one (calling CQ), report the transmit phase only.
-                    decoding: did_rx && !tx_this_slot,
-                    // REAL audio offsets (GridTracker/JTAlert show these) —
-                    // hardcoded 1500s confused every cooperating logger.
-                    rx_df: snap.radio.rx_offset_hz.max(0.0) as u32,
-                    tx_df: snap.radio.tx_offset_hz.max(0.0) as u32,
-                    de_call: &snap.mycall,
-                    de_grid: &snap.mygrid,
-                    dx_grid: "",
-                    tx_watchdog: false,
-                    sub_mode: "",
-                    fast_mode: false,
-                    // The LIVE mode wins: field_day is Some only while a
-                    // contest is actually RUNNING, whereas special_op
-                    // is a persistent setting an operator can forget to turn
-                    // off — a stale Hound flag must not misadvertise an
-                    // active contest session (review catch). 6=FOX stays unbuilt.
-                    // A running contest reports the activity WSJT-X itself would
-                    // be set to for it: 3 (Field Day) in ARRL Field Day only,
-                    // 1 (NA VHF) in the ARRL VHF contests, 0 everywhere else.
-                    special_op: if let Some(fd) = &snap.field_day {
-                        tempo_core::fieldday::FtMessages::of_contest(&fd.event).special_op()
-                    } else if matches!(
-                        eng.settings().special_op,
-                        tempo_app::settings::SpecialOp::Hound
-                            | tempo_app::settings::SpecialOp::SuperHound
-                    ) {
-                        7
-                    } else {
-                        0
-                    },
-                    freq_tol: 0,
-                    // T/R period (s), mode-driven: FT1 = 4, FT4 ≈ 8, FT8/DX1 = 15.
-                    tr_period: eng.active_slot_secs().round() as u32,
-                    config_name: "Default",
-                    tx_message: "",
-                });
+                    did_rx && !tx_this_slot,
+                );
+                let _ = server.send_status(&status.as_status());
+                station.wsjtx_status = Some(status);
                 if !fd_new.is_empty() {
                     let ctx = FdWsjtxCtx {
                         when_secs: now_secs,
@@ -14260,6 +14999,125 @@ fn fd_interop_mode(mode: &str, submode: &str) -> String {
 }
 
 /// The WSJT-X mode string for a link [`Tier`].
+/// A WSJT-X UDP Status (type 1, `Network/NetworkMessage.hpp`), owned, so the loop can keep the
+/// one it last sent and tell a change from a repeat. Filled as `MainWindow::statusUpdate` fills
+/// it (`widgets/mainwindow.cpp:13955-13989`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WsjtxStatusOwned {
+    dial_freq: u64,
+    mode: &'static str,
+    tx: tempo_app::engine::WsjtxTxStatus,
+    decoding: bool,
+    rx_df: u32,
+    tx_df: u32,
+    de_call: String,
+    de_grid: String,
+    sub_mode: String,
+    special_op: u8,
+    freq_tol: u32,
+    tr_period: u32,
+}
+
+impl WsjtxStatusOwned {
+    fn as_status(&self) -> WsjtxStatus<'_> {
+        WsjtxStatus {
+            dial_freq: self.dial_freq,
+            mode: self.mode,
+            dx_call: &self.tx.dx_call,
+            report: &self.tx.report,
+            tx_mode: self.mode,
+            tx_enabled: self.tx.tx_enabled,
+            transmitting: self.tx.transmitting,
+            decoding: self.decoding,
+            rx_df: self.rx_df,
+            tx_df: self.tx_df,
+            de_call: &self.de_call,
+            de_grid: &self.de_grid,
+            dx_grid: &self.tx.dx_grid,
+            tx_watchdog: self.tx.tx_watchdog,
+            sub_mode: &self.sub_mode,
+            fast_mode: false,
+            special_op: self.special_op,
+            freq_tol: self.freq_tol,
+            tr_period: self.tr_period,
+            config_name: "Default",
+            tx_message: &self.tx.tx_message,
+        }
+    }
+}
+
+/// The Status for the engine as it stands. `de_call`, `de_grid`, `special_op` and `decoding` come
+/// from the slot boundary that sends it (see `emit_boundary_housekeeping`).
+fn wsjtx_status(
+    eng: &Engine,
+    dial_freq: u64,
+    de_call: &str,
+    de_grid: &str,
+    special_op: u8,
+    decoding: bool,
+) -> WsjtxStatusOwned {
+    let tier = eng.tier();
+    let (sub_mode, freq_tol, tr_period) =
+        wsjtx_mode_fields(tier, eng.settings(), eng.active_slot_secs());
+    WsjtxStatusOwned {
+        dial_freq,
+        mode: tier_mode(tier),
+        tx: eng.wsjtx_tx_status(),
+        decoding,
+        // REAL audio offsets (GridTracker/JTAlert show these) —
+        // hardcoded 1500s confused every cooperating logger.
+        rx_df: eng.rx_offset_hz().max(0.0) as u32,
+        tx_df: eng.tx_offset_hz().max(0.0) as u32,
+        de_call: de_call.to_string(),
+        de_grid: de_grid.to_string(),
+        sub_mode,
+        special_op,
+        freq_tol,
+        tr_period,
+    }
+}
+
+/// The Status to send between boundaries when what it reports has changed since `last`, else
+/// `None`. The boundary's own fields (`decoding`, the station, the special operation) stay as
+/// the boundary sent them.
+fn wsjtx_status_change(last: &WsjtxStatusOwned, eng: &Engine) -> Option<WsjtxStatusOwned> {
+    let now = wsjtx_status(
+        eng,
+        eng.settings().dial_hz(),
+        &last.de_call,
+        &last.de_grid,
+        last.special_op,
+        last.decoding,
+    );
+    (now != *last).then_some(now)
+}
+
+/// Sub-mode, Frequency Tolerance and T/R Period as `statusUpdate` fills them
+/// (mainwindow.cpp:13958-13978).
+///
+/// - Sub-mode: `current_submode ()` (mainwindow.cpp:13126-13134), a letter for JT65 and Q65 (and
+///   JT4, not built here) when VHF features are on, else empty. Nexus always offers the JT65 and
+///   Q65 submode, as WSJT-X does only with VHF features on, so those report their letter.
+/// - Frequency Tolerance: the F Tol box, or `quint32_max` when the mode does not show it. Nexus
+///   has no F Tol control in any mode, so it always reports `u32::MAX`, WSJT-X's "not offered".
+/// - T/R Period: the T/R box, or `quint32_max` when the mode hides it. WSJT-X shows it for FST4,
+///   Q65 and MSK144 (and FST4W's own box), and hides it for FT8, FT4, JT65 and WSPR (the
+///   `displayWidgets` strings, mainwindow.cpp:10836-11515, position 5). The modes WSJT-X does not
+///   have (FT1, DX1, FT2, JS8) report their real period, the only honest value there.
+fn wsjtx_mode_fields(tier: Tier, settings: &Settings, slot_secs: f64) -> (String, u32, u32) {
+    let letter = |n: u8| char::from(b'A' + n.min(25)).to_string();
+    let sub_mode = match tier {
+        Tier::Jt65 => letter(settings.jt65_submode),
+        Tier::Q65 => letter(settings.q65_submode),
+        _ => String::new(),
+    };
+    let tr_period = match tier {
+        Tier::Ft8 | Tier::Ft4 | Tier::Jt65 | Tier::Wspr => u32::MAX,
+        _ => slot_secs.round() as u32,
+    };
+    (sub_mode, u32::MAX, tr_period)
+}
+
 fn tier_mode(tier: Tier) -> &'static str {
     match tier {
         Tier::TempoFast => "TempoFast",
@@ -15149,6 +16007,13 @@ struct Transport {
     icom_lan_host: String,
     icom_lan_user: String,
     icom_lan_port: u16,
+    /// The TCI connection's server address and port, transceiver, dialect and audio switch
+    /// (`RadioProfile::tci_*`). Read through [`Transport::tci_target`] only.
+    tci_host: String,
+    tci_port: u16,
+    tci_trx: u8,
+    tci_dialect: String,
+    tci_audio: bool,
     radio_id: u32,
     /// The operator's D1/D2/D3 choice (`RadioProfile::icom_data_mode`), handed to the CI-V
     /// daemon at construction. Part of transport IDENTITY on purpose: changing it must
@@ -15160,6 +16025,10 @@ struct Transport {
     /// The port our OWN CAT broker is serving on (if enabled), so auto-coexist never
     /// connects Nexus to itself. `None` = broker off.
     broker_self_port: Option<u16>,
+    /// The port our OWN TCI server listens on (if enabled), so the TCI client never dials Nexus
+    /// itself ([`tci_dials_nexus`]). A station fact, set where `broker_self_port` is. `None` =
+    /// server off.
+    tci_server_self_port: Option<u16>,
     /// Why this radio's NET rigctl Network Address may not be opened, while one of Nexus's own
     /// listeners holds its port ([`AddressRefusal`]).
     address_refusal: AddressRefusal,
@@ -15217,8 +16086,17 @@ impl Transport {
             icom_lan_host: c.icom_lan_host.clone(),
             icom_lan_user: c.icom_lan_user.clone(),
             icom_lan_port: c.icom_lan_port,
+            // Not in the startup seed: the launch reads them from the settings ([`seed_tci`]).
+            tci_host: tempo_app::settings::TCI_DEFAULT_HOST.to_string(),
+            tci_port: tempo_app::settings::TCI_DEFAULT_PORT,
+            tci_trx: 0,
+            tci_dialect: tempo_app::settings::TciDialect::Auto
+                .as_setting()
+                .to_string(),
+            tci_audio: true,
             radio_id: c.radio_id,
             broker_self_port: c.broker_self_port,
+            tci_server_self_port: None,
             address_refusal: AddressRefusal::default(),
             audio_in: c.audio_in.clone(),
             audio_out: c.audio_out.clone(),
@@ -15275,6 +16153,11 @@ impl Transport {
             icom_lan_host: s.icom_lan_host.clone(),
             icom_lan_user: s.icom_lan_user.clone(),
             icom_lan_port: s.icom_lan_port,
+            tci_host: s.tci_host.clone(),
+            tci_port: s.tci_port,
+            tci_trx: s.tci_trx,
+            tci_dialect: s.tci_dialect.clone(),
+            tci_audio: s.tci_audio,
             radio_id: s.active_radio,
             rig_conn: s.rig_conn.clone(),
             rig_addr: s.rig_addr.clone(),
@@ -15285,6 +16168,7 @@ impl Transport {
             } else {
                 None
             },
+            tci_server_self_port: s.tci_server.then_some(s.tci_server_port),
             address_refusal: AddressRefusal::default(),
             audio_in: s.audio_in.clone(),
             audio_out: s.audio_out.clone(),
@@ -15338,6 +16222,11 @@ impl Transport {
             // The Icom network client's radio, compared only where that connection is in play,
             // like the Flex client's: an address edit on a serial radio restarts nothing.
             || self.icom_lan_target() != o.icom_lan_target()
+            // The TCI client's server, transceiver, dialect and audio, the same way, and whether
+            // Nexus's own TCI server now sits where it dials (that client lets go of the link and
+            // says why, or dials again once it no longer does).
+            || self.tci_target() != o.tci_target()
+            || self.tci_dials_nexus_by_name() != o.tci_dials_nexus_by_name()
             || self.broker_self_port != o.broker_self_port
             || self.address_refusal != o.address_refusal
     }
@@ -15373,6 +16262,50 @@ impl Transport {
             rigctld_port: self.rigctld_port,
             data_mode: self.icom_data_mode,
         })
+    }
+
+    /// Is CAT for this radio Nexus's own TCI client? The rule lives in tempo-app
+    /// ([`tempo_app::settings::rig_conn_is_tci`]), as [`Self::is_icom_lan`]'s does.
+    fn is_tci(&self) -> bool {
+        tempo_app::settings::rig_conn_is_tci(&self.rig_conn)
+    }
+
+    /// What the TCI client dials: `Some` only on the TCI connection with a server address, a port
+    /// and a CAT model ([`tempo_app::settings::tci_reachable`], the single source of truth).
+    fn tci_target(&self) -> Option<crate::tci::Target> {
+        if !tempo_app::settings::tci_reachable(
+            self.rig_model,
+            &self.rig_conn,
+            &self.tci_host,
+            self.tci_port,
+        ) {
+            return None;
+        }
+        Some(crate::tci::Target {
+            host: self.tci_host.trim().to_string(),
+            port: self.tci_port,
+            trx: u32::from(self.tci_trx),
+            dialect: tempo_app::settings::TciDialect::from_setting(&self.tci_dialect),
+            audio: self.tci_audio,
+            rigctld_port: self.rigctld_port,
+        })
+    }
+
+    /// The TCI client's reconnect-ladder key for this radio ([`crate::tci::registry`]): the
+    /// server's address, resolved, and the transceiver. `None` off the TCI connection, or when the
+    /// address resolves to nothing.
+    fn tci_key(&self) -> Option<crate::tci::registry::Key> {
+        let target = self.tci_target()?;
+        Some((target.server().ok()?, tempo_net::tci::Trx::new(target.trx)?))
+    }
+
+    /// Whether the TCI client's address, as written, is Nexus's own TCI server on this computer
+    /// ([`tci_dials_nexus`], which also asks the resolved address). Config only: compared every
+    /// tick by [`Self::rig_differs`].
+    fn tci_dials_nexus_by_name(&self) -> bool {
+        self.is_tci()
+            && self.tci_server_self_port == Some(self.tci_port)
+            && tempo_app::settings::host_is_this_machine(&self.tci_host)
     }
 
     /// A networked rig (FlexRadio/SmartSDR or a remote rigctld): rigctld connects to
@@ -15439,7 +16372,11 @@ impl Transport {
     /// S-meter poll) the moment the Connection dropdown moved, before the address existed.
     #[cfg_attr(not(feature = "device"), allow(dead_code))]
     fn is_slow_serial_link(&self) -> bool {
-        crate::rigmodels::is_slow_serial_link(self.rig_model, self.baud, self.is_network())
+        // TCI has no serial link at all, whatever Baud a USB setup left behind: its shim answers
+        // reads from the SDR program's own reports, and its open sets the long deadline the
+        // program's write reports need.
+        !self.is_tci()
+            && crate::rigmodels::is_slow_serial_link(self.rig_model, self.baud, self.is_network())
     }
 
     /// True if the selected sound-card input/output device changed.
@@ -15745,6 +16682,8 @@ enum CatLink {
     Flex,
     /// Nexus's own Icom network client.
     IcomLan,
+    /// Nexus's own TCI client, to an SDR program's TCI server.
+    Tci,
 }
 
 impl CatLink {
@@ -15775,6 +16714,12 @@ impl CatLink {
                 .to_string(),
             CatLink::IcomLan => "the radio did not answer over the network; check its network \
                                  connection (Nexus reconnects a lost session by itself)"
+                .to_string(),
+            // A write counts only once the SDR program reports it (`crate::tci::shim`), so a
+            // program holding writes back, or slow to report them, reads as silence here.
+            CatLink::Tci => "the SDR program did not report the change; check that it is \
+                             running with its TCI server on (Nexus reconnects a lost connection \
+                             by itself)"
                 .to_string(),
         }
     }
@@ -15978,7 +16923,9 @@ fn ptt_mode_for(t: &Transport) -> PttMode {
     // must stay in step with `open_rig` — both consult `keys_on_the_cat_port` for exactly that
     // reason. Handing back PttMode::Serial here would try to open a port rigctld owns: on
     // Windows that fails outright, and the operator sees a rig that tunes but never keys.
-    if keys_on_the_cat_port(t) {
+    // The TCI connection keys through its client whatever the PTT method says, for the same
+    // reason in step with `open_rig` ([`keys_through_the_tci_client`]).
+    if keys_on_the_cat_port(t) || keys_through_the_tci_client(t) {
         return PttMode::Cat;
     }
     match t.ptt_method.as_str() {
@@ -15993,6 +16940,19 @@ fn ptt_mode_for(t: &Transport) -> PttMode {
         },
         _ => PttMode::Vox,
     }
+}
+
+/// ⛔ THE TCI CONNECTION KEYS THROUGH ITS CLIENT, WHATEVER THE PTT METHOD SAYS: CAT, through the
+/// TCI client's shim, where the SDR program's admission decides every key (`crate::tci::shim`).
+/// A serial keying line or VOX on such a radio would key the SDR program behind that admission
+/// (it would transmit whatever source it had selected, its microphone included), and an RTS
+/// method left over from a USB setup would key a serial line and open no TCI link at all. Model 0
+/// ("None / VOX") is still the no-CAT escape here, as everywhere.
+///
+/// ⚠️ ONE PLACE, TWO CALLERS: [`ptt_mode_for`] and [`open_rig`], for `keys_on_the_cat_port`'s
+/// reason.
+fn keys_through_the_tci_client(t: &Transport) -> bool {
+    t.is_tci() && t.cat_available()
 }
 
 /// How a CAT-PTT transport keys: the radio's DATA input ([`PttMode::CatData`], `T 3`) when the
@@ -16022,6 +16982,9 @@ fn cat_ptt_mode(t: &Transport) -> PttMode {
 /// frequency back; for serial PTT it opens the control line; for VOX `cat_ok` is
 /// `None` (not applicable). Mirrors WSJT-X's Test CAT.
 fn open_rig(t: &Transport, allow_coexist: bool) -> RigOpen {
+    if keys_through_the_tci_client(t) {
+        return open_cat(t, PttMode::Cat, allow_coexist, None);
+    }
     match t.ptt_method.as_str() {
         // CAT PTT: control + keying both over the CAT daemon (rigctld, the native CI-V
         // daemon, or the OmniRig shim — `cat_available` is what says one can exist).
@@ -16200,7 +17163,8 @@ fn open_cat(
     // THAT daemon serves while the operator believes they are on OmniRig. We must own the
     // listener. If the port is genuinely taken, the bind below fails and says so.
     // The Icom network client never coexists either: whatever is on the port is not its daemon.
-    let allow_coexist = allow_coexist && !t.is_omnirig() && !t.is_icom_lan();
+    // Nor the TCI client, for the same reason.
+    let allow_coexist = allow_coexist && !t.is_omnirig() && !t.is_icom_lan() && !t.is_tci();
     // NET rigctl to a rigctld on this computer: share THAT one, whatever rigctld TCP Port says,
     // rather than start a second rigctld in front of it (`net_rigctld_on_this_machine`). Only a
     // rigctld's answer is taken. Where nothing answers, nothing is started either: the radio
@@ -16303,8 +17267,9 @@ fn open_cat(
                 network
                     || native_civ_addr(t).is_some()
                     || t.is_icom_lan()
+                    || t.is_tci()
                     || t.is_slow_serial_link(),
-            ); // network chains + the native daemon + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long deadline
+            ); // network chains + the native daemon + the TCI client (a write waits for the SDR program's report) + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long deadline
             let mut probe = finish_cat_open(&mut rig, t);
             // Say WHICH backend this result came from — a native-CI-V radio silently
             // falling back to rigctld otherwise reads as "native was tested and failed".
@@ -16315,6 +17280,7 @@ fn open_cat(
                 probe.detail,
                 match (proc.omni(), proc.flex()) {
                     _ if proc.icom_lan().is_some() => "Nexus's Icom network client (Beta)",
+                    _ if proc.tci().is_some() => "Nexus's TCI client (Beta)",
                     (Some(d), _) => omnirig_backend_label(d.slot()),
                     (None, Some(_)) => "Nexus's Flex client (Beta)",
                     (None, None) if flex_client_ip(t).is_some() => {
@@ -16348,11 +17314,18 @@ fn open_cat(
                             probe.detail = format!("{} {e}", probe.detail);
                         }
                     }
-                    CatDaemon::Native(_) | CatDaemon::Flex(_) | CatDaemon::IcomLan(_) => {}
+                    CatDaemon::Native(_)
+                    | CatDaemon::Flex(_)
+                    | CatDaemon::IcomLan(_)
+                    | CatDaemon::Tci(_) => {}
                 }
             }
             // What the Icom network client read from the radio, and what may need a look.
             if let Some(d) = proc.icom_lan() {
+                probe.detail = format!("{} {}", probe.detail, d.status());
+            }
+            // Who answered the TCI client.
+            if let Some(d) = proc.tci() {
                 probe.detail = format!("{} {}", probe.detail, d.status());
             }
             (rig, Some(proc), probe)
@@ -16364,6 +17337,13 @@ fn open_cat(
         ),
         // The Icom network client's own words: no answer, a refused login, busy, a wait.
         Err(e) if t.is_icom_lan() => (
+            Rig::vox(),
+            None,
+            CatProbe::status(Some(false), e.to_string()),
+        ),
+        // …and the TCI client's: nothing answered, not a TCI server, never ready, a wait on the
+        // reconnect ladder or for the operator, Nexus's own TCI server.
+        Err(e) if t.is_tci() => (
             Rig::vox(),
             None,
             CatProbe::status(Some(false), e.to_string()),
@@ -16594,12 +17574,14 @@ mod tests {
     mod clock_repair_tests;
     mod contest_reply;
     mod contest_status;
+    mod cw_cat_text;
     mod cw_speed_match;
     mod cw_stop;
     mod decode_in_flight;
     mod failed_unkey;
     mod filter_width;
     mod flex_audio;
+    mod ft_midover;
     mod ft_window;
     mod ic905_ten_ghz;
     mod icom_lan;
@@ -16613,6 +17595,13 @@ mod tests {
     mod remote_radio;
     mod rf_pane;
     mod split_overs;
+    mod tci;
+    mod tci_cw;
+    mod tci_pan;
+    mod tci_server;
+    mod tci_soundcard_cw;
+    mod tci_spots;
+    mod udp_requests;
     mod wfview;
     mod yaesu_alc;
     use super::should_command_rf_power;
@@ -17350,6 +18339,9 @@ mod tests {
             ("Serial", ""),
             ("SERIAL", ""),
             ("Network", "192.168.1.50:4992"),
+            // The TCI connection: the SDR program drives the radio, so neither side serves it.
+            ("tci", ""),
+            ("TCI", ""),
             // Anything a newer build (or a hand-edited file) might write.
             ("usb", ""),
         ] {
@@ -17692,6 +18684,343 @@ mod tests {
             );
         }
         drop(worker);
+    }
+
+    /// A WSJT-X-mode engine on FT8 that has just keyed its report to K1ABC (the operator's
+    /// Tx-slot pick of Tx2), so every transmit-side Status field has a value to carry.
+    fn wsjtx_status_engine() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        let _ = e.take_slot_tx_abort();
+        e.override_next_tx("K1ABC", Some("FN42"), "K1ABC W9XYZ -12");
+        assert!(!e.poll_tx(0).is_empty(), "premise: the report over keys");
+        e
+    }
+
+    /// One Status datagram through a real WSJT-X server socket, read back field by field in
+    /// `NetworkMessage.hpp`'s order.
+    fn wsjtx_status_on_the_wire(status: &WsjtxStatusOwned) -> Vec<String> {
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            listener.local_addr().unwrap(),
+        )
+        .unwrap();
+        server.send_status(&status.as_status()).unwrap();
+        let mut buf = [0u8; 4096];
+        let (n, _) = listener.recv_from(&mut buf).expect("the Status datagram");
+        wsjtx_status_fields(&buf[..n])
+    }
+
+    /// A Status datagram's fields, in order, as text.
+    fn wsjtx_status_fields(datagram: &[u8]) -> Vec<String> {
+        let mut r = tempo_net::qds::QdsReader::new(datagram);
+        let mut f = Vec::new();
+        assert_eq!(r.read_u32(), Some(tempo_net::wsjtx::MAGIC));
+        r.read_u32().unwrap(); // schema
+        assert_eq!(r.read_u32(), Some(1), "type 1 = Status");
+        let mut s = |v: Option<Option<String>>| f.push(v.unwrap().unwrap_or_default());
+        s(r.read_utf8()); // Id
+        let dial = r.read_u64().unwrap();
+        s(r.read_utf8()); // Mode
+        s(r.read_utf8()); // DX call
+        s(r.read_utf8()); // Report
+        s(r.read_utf8()); // Tx Mode
+        let b = |v: Option<bool>| v.unwrap().to_string();
+        let tx_enabled = b(r.read_bool());
+        let transmitting = b(r.read_bool());
+        let decoding = b(r.read_bool());
+        let rx_df = r.read_u32().unwrap().to_string();
+        let tx_df = r.read_u32().unwrap().to_string();
+        s(r.read_utf8()); // DE call
+        s(r.read_utf8()); // DE grid
+        s(r.read_utf8()); // DX grid
+        let watchdog = b(r.read_bool());
+        s(r.read_utf8()); // Sub-mode
+        let fast = b(r.read_bool());
+        let special = r.read_u8().unwrap().to_string();
+        let ftol = r.read_u32().unwrap().to_string();
+        let tr = r.read_u32().unwrap().to_string();
+        s(r.read_utf8()); // Configuration name
+        s(r.read_utf8()); // Tx Message
+        assert_eq!(r.remaining(), 0, "nothing after the Tx Message");
+        let [id, mode, dx, rpt, tx_mode, de, de_grid, dx_grid, sub, config, msg] =
+            <[String; 11]>::try_from(f).unwrap();
+        vec![
+            id,
+            dial.to_string(),
+            mode,
+            dx,
+            rpt,
+            tx_mode,
+            tx_enabled,
+            transmitting,
+            decoding,
+            rx_df,
+            tx_df,
+            de,
+            de_grid,
+            dx_grid,
+            watchdog,
+            sub,
+            fast,
+            special,
+            ftol,
+            tr,
+            config,
+            msg,
+        ]
+    }
+
+    /// The user report: "when using the WSJT-X UDP API it doesn't pass through what the TX
+    /// message is, only decodes." Every field of the Status is filled as WSJT-X's
+    /// `statusUpdate` fills it (mainwindow.cpp:13955-13989), checked by value off the wire.
+    #[test]
+    fn the_wsjtx_status_carries_the_tx_message_and_tx_state_by_value() {
+        let e = wsjtx_status_engine();
+        let status = wsjtx_status(&e, 14_074_000, "W9XYZ", "EN37", 0, false);
+        let on_air = format!("{:<37}", "K1ABC W9XYZ -12");
+        let max = u32::MAX.to_string();
+        let expect: Vec<&str> = vec![
+            tempo_net::APP_ID,
+            "14074000",
+            "FT8",
+            "K1ABC", // DX call: m_hisCall
+            "-12",   // Report: the report sent, QString::number
+            "FT8",
+            "true", // Tx Enabled: the Enable Tx latch
+            "true", // Transmitting: the report over is keyed
+            "false",
+            "1500",
+            "1500",
+            "W9XYZ",
+            "EN37",
+            "FN42",  // DX grid: m_hisGrid
+            "false", // Tx Watchdog: not tripped
+            "",      // Sub-mode: none in FT8
+            "false",
+            "0",
+            &max, // Frequency Tolerance: quint32_max, FT8 shows no F Tol
+            &max, // T/R Period: quint32_max, FT8 hides the T/R box
+            "Default",
+            &on_air, // Tx Message: m_currentMessage, msgsent's 37 blank-padded characters
+        ];
+        assert_eq!(wsjtx_status_on_the_wire(&status), expect);
+    }
+
+    /// WSJT-X sends a Status on each change (Enable Tx, a new over, the TX start and stop,
+    /// the DX call), not once a period: the loop's between-boundary check sends exactly then.
+    #[test]
+    fn a_wsjtx_status_goes_out_on_each_change_and_never_on_a_repeat() {
+        let mut e = wsjtx_status_engine();
+        let first = wsjtx_status(&e, e.settings().dial_hz(), "W9XYZ", "EN37", 0, false);
+        assert_eq!(wsjtx_status_change(&first, &e), None, "nothing changed");
+
+        e.set_tx_enabled(false);
+        let off = wsjtx_status_change(&first, &e).expect("Enable Tx off is sent");
+        assert!(!off.tx.tx_enabled);
+        assert_eq!(
+            off.tx.tx_message, first.tx.tx_message,
+            "the last over stays"
+        );
+        assert_eq!(wsjtx_status_change(&off, &e), None, "and only once");
+
+        e.set_tx_enabled(true);
+        let on = wsjtx_status_change(&off, &e).expect("Enable Tx on is sent");
+        assert!(on.tx.tx_enabled);
+
+        e.override_next_tx("K1ABC", Some("FN42"), "K1ABC W9XYZ RR73");
+        assert!(!e.poll_tx(2).is_empty(), "premise: the next over keys");
+        let next = wsjtx_status_change(&on, &e).expect("a new Tx message is sent");
+        assert_eq!(next.tx.tx_message, format!("{:<37}", "K1ABC W9XYZ RR73"));
+    }
+
+    /// WSJT-X's Tx Message for a tune is "TUNE" (mainwindow.cpp:8083-8085), unpadded.
+    #[test]
+    fn a_tune_reports_tune_as_the_tx_message() {
+        let mut e = wsjtx_status_engine();
+        e.set_tune(true);
+        assert_eq!(e.wsjtx_tx_status().tx_message, "TUNE");
+    }
+
+    /// Sub-mode, F Tol and T/R per mode, as `statusUpdate` reads its boxes.
+    #[test]
+    fn the_wsjtx_mode_fields_follow_what_wsjtx_shows_per_mode() {
+        let s = Settings {
+            q65_submode: 2,
+            jt65_submode: 1,
+            ..Default::default()
+        };
+        let max = u32::MAX;
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Ft8, &s, 15.0),
+            (String::new(), max, max)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Ft4, &s, 7.5),
+            (String::new(), max, max)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Wspr, &s, 120.0),
+            (String::new(), max, max)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Jt65, &s, 60.0),
+            ("B".into(), max, max)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Q65, &s, 30.0),
+            ("C".into(), max, 30)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Msk144, &s, 15.0),
+            (String::new(), max, 15)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::Fst4, &s, 60.0),
+            (String::new(), max, 60)
+        );
+        assert_eq!(
+            wsjtx_mode_fields(Tier::TempoFast, &s, 4.0),
+            (String::new(), max, 4)
+        );
+    }
+
+    /// The radio loop itself sends the Status when Enable Tx changes between slot boundaries, and
+    /// sends nothing more while nothing changes.
+    #[test]
+    fn the_radio_loop_sends_a_wsjtx_status_when_enable_tx_changes() {
+        let engine = Arc::new(Mutex::new(wsjtx_status_engine()));
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            listener.local_addr().unwrap(),
+        )
+        .unwrap();
+        let statuses = || {
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok((n, _)) = listener.recv_from(&mut buf) {
+                let mut r = tempo_net::qds::QdsReader::new(&buf[..n]);
+                r.read_u32();
+                r.read_u32();
+                if r.read_u32() == Some(1) {
+                    got.push(buf[..n].to_vec());
+                }
+            }
+            got
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let sinks = Sinks {
+            wsjtx: Some(&server),
+            psk: None,
+            cfg_dial_hz: 14_074_000,
+        };
+        let (mut ra, mut reopen) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        // As the last boundary left it: the Status it sent.
+        let sent = {
+            let e = engine.lock().unwrap();
+            wsjtx_status(&e, e.settings().dial_hz(), "W9XYZ", "EN37", 0, false)
+        };
+        station.wsjtx_status = Some(sent.clone());
+        let mut tick = |now: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut reopen,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        tick(100.0);
+        let settled = statuses();
+        engine.lock().unwrap().set_tx_enabled(false);
+        tick(120.0);
+        let after = statuses();
+        assert_eq!(
+            after.len(),
+            1,
+            "one Status for the change (settled first: {settled:?})"
+        );
+        let f = wsjtx_status_fields(&after[0]);
+        assert_eq!(f[6], "false", "Tx Enabled off");
+        assert_eq!(f[21], sent.tx.tx_message, "the Tx message rides along");
+        tick(140.0);
+        assert!(statuses().is_empty(), "nothing changed, nothing sent");
+    }
+
+    /// The slot boundary sends a Status and keeps it, as the one the next change is told
+    /// against: without it no change between boundaries would ever be sent.
+    #[test]
+    fn the_slot_boundary_sends_a_wsjtx_status_and_keeps_it() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tier(Tier::Ft8);
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            listener.local_addr().unwrap(),
+        )
+        .unwrap();
+        let sinks = Sinks {
+            wsjtx: Some(&server),
+            psk: None,
+            cfg_dial_hz: 14_074_000,
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        for now in [100.0, 15_020.0] {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        let mut last = None;
+        let mut buf = [0u8; 4096];
+        while let Ok((n, _)) = listener.recv_from(&mut buf) {
+            let mut r = tempo_net::qds::QdsReader::new(&buf[..n]);
+            r.read_u32();
+            r.read_u32();
+            if r.read_u32() == Some(1) {
+                last = Some(buf[..n].to_vec());
+            }
+        }
+        let kept = station
+            .wsjtx_status
+            .as_ref()
+            .expect("the boundary keeps its Status");
+        assert_eq!(
+            last.expect("the boundary sends a Status"),
+            tempo_net::wsjtx::encode_status(tempo_net::APP_ID, &kept.as_status()),
+            "the one kept is the one sent"
+        );
     }
 
     #[test]
@@ -27747,6 +29076,371 @@ mod tests {
         );
     }
 
+    // ---- WSJT-X's decode moments (FT8 full pass at 14.40 s, FT4 at 6.048 s) ----
+    //
+    // The scene each test below plays: W9XYZ (us, even slots) has sent K1ABC an R-report and
+    // waits for the RR73; K1ABC's RR73 is in the odd slot 1. Which over the slot-2 boundary
+    // keys tells whether that decode was in the boundary's TX decision: "K1ABC W9XYZ 73" when
+    // it was, the R-report again when it was not.
+
+    /// The slot's audio from its start, `len` samples: `msg` as a `kind` signal at 1500 Hz in
+    /// light noise (strong enough that every pass that sees the frame decodes it).
+    fn wsjt_slot_audio(kind: tempo_core::modes::ModeKind, msg: &str, len: usize) -> Vec<f32> {
+        let mode = tempo_core::modes::make_mode(kind);
+        let wave = mode.gen_wave(&mode.encode(msg), 12_000.0, 1500.0);
+        let mut seed = 0x5EED_u64;
+        (0..len)
+            .map(|i| {
+                seed = seed
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                let noise = ((seed >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * 0.02;
+                noise + 0.05 * wave.get(i).copied().unwrap_or(0.0)
+            })
+            .collect()
+    }
+
+    /// What went on the air: the messages a `kind` decoder finds in the played TX audio.
+    fn wsjt_messages_played(kind: tempo_core::modes::ModeKind, played: &[f32]) -> Vec<String> {
+        use tempo_core::modes::{DecodeRequest, NativeSource, SignalSource};
+        let mut frame = played.to_vec();
+        frame.resize(kind.frame_samples().max(kind.capture_samples()), 0.0);
+        let iwave = tempo_core::channel::capture_to_i16(&frame);
+        let req = DecodeRequest {
+            iwave: &iwave,
+            nfa: 200,
+            nfb: 2900,
+            ndepth: 3,
+            mycall: "",
+            hiscall: "",
+            nqso_progress: 0,
+            nfqso: 1500,
+            nftx: 1500,
+            frame_time_ms: 0,
+            ap: false,
+            ap_cq_only: false,
+            partial: false,
+        };
+        NativeSource::from_kind(kind)
+            .decode_a7(&req, false)
+            .into_iter()
+            .map(|d| d.message.trim().to_string())
+            .collect()
+    }
+
+    /// W9XYZ on `tier`.
+    fn wsjt_engine(tier: Tier) -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tier(tier);
+        engine
+    }
+
+    /// Put W9XYZ on even slots, mid-QSO with K1ABC: the R-report is the next over (K1ABC's
+    /// report decoded from real audio first, as a double-click needs).
+    fn awaiting_rr73(engine: &Arc<Mutex<Engine>>, kind: tempo_core::modes::ModeKind) {
+        {
+            let mut e = engine.lock().unwrap();
+            let heard = wsjt_slot_audio(kind, "W9XYZ K1ABC -10", kind.capture_samples());
+            assert_eq!(e.ingest(&heard, 0), 1, "K1ABC's report decoded");
+            e.call_station_ctx("K1ABC", None, Some("W9XYZ K1ABC -10"), Some(-10), None)
+                .unwrap();
+            e.set_tx_even(true);
+            // Only the boundary path under test may key.
+            let _ = e.take_immediate_tx();
+            assert_eq!(
+                e.snapshot().qso.and_then(|q| q.tx_now).as_deref(),
+                Some("K1ABC W9XYZ R-10"),
+                "the scene: the R-report is next"
+            );
+        }
+    }
+
+    /// One radio-loop tick at `now` (ms).
+    fn tick(
+        state: &mut RadioLoop,
+        engine: &Arc<Mutex<Engine>>,
+        backend: &mut MockBackend,
+        rig: &mut Rig,
+        station: &mut StationSinks,
+        now: f64,
+    ) {
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        state
+            .step(engine, backend, rig, &sinks, now, &mut ra, &mut rr, station)
+            .unwrap();
+    }
+
+    /// Tick from `from` (1 ms apart, 20 ms of real time apart) until the decode in flight
+    /// drains; true when it drained before `before`.
+    fn drain_decode(
+        state: &mut RadioLoop,
+        engine: &Arc<Mutex<Engine>>,
+        backend: &mut MockBackend,
+        rig: &mut Rig,
+        station: &mut StationSinks,
+        from: f64,
+        before: f64,
+    ) -> bool {
+        let mut now = from;
+        while state.decode_in_flight && now < before {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            tick(state, engine, backend, rig, station, now);
+            now += 1.0;
+        }
+        !state.decode_in_flight
+    }
+
+    /// FT8: the full pass runs at WSJT-X's `m_hsymStop` = 50 half-symbols = 14.40 s
+    /// (mainwindow.cpp:2222, 3456-sample steps at :10984-10985), over the slot's first 14.4 s,
+    /// and a reply it finds before 15.0 s is in the boundary's TX decision: the 73 goes out,
+    /// not the R-report again.
+    #[test]
+    fn ft8_full_pass_at_14_4_s_puts_its_decodes_in_the_boundary_decision() {
+        use tempo_core::modes::ModeKind;
+        let engine = wsjt_engine(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+
+        tick(&mut state, &engine, b, r, s, 100.0); // slot 0: nothing queued yet
+        awaiting_rr73(&engine, ModeKind::Ft8);
+        tick(&mut state, &engine, b, r, s, 15_020.0); // slot 1: theirs
+        assert!(!rig.keyed, "odd slot: not ours");
+
+        // Slot 1's first 14.4 s, K1ABC's RR73 in it. The early pass found nothing.
+        backend.queue_capture(wsjt_slot_audio(ModeKind::Ft8, "W9XYZ K1ABC RR73", 172_800));
+        state.early_done_slot = Some(1);
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 29_399.0);
+        assert!(
+            !state.decode_in_flight,
+            "no full pass before 14.40 s into the slot"
+        );
+        tick(&mut state, &engine, b, r, s, 29_400.0);
+        assert!(
+            state.decode_in_flight && state.full_done_slot == Some(1),
+            "the full pass dispatches at 14.40 s"
+        );
+        assert!(
+            drain_decode(&mut state, &engine, b, r, s, 29_401.0, 29_990.0),
+            "the full pass drained before the boundary"
+        );
+        tick(&mut state, &engine, b, r, s, 29_995.0);
+        assert!(!state.decode_in_flight, "one full pass per slot");
+
+        tick(&mut state, &engine, b, r, s, 30_020.0); // slot 2: ours
+        assert!(rig.keyed, "keyed at the boundary");
+        assert_eq!(
+            wsjt_messages_played(ModeKind::Ft8, &backend.played),
+            vec!["K1ABC W9XYZ 73".to_string()],
+            "the RR73 the full pass found was in the boundary's decision"
+        );
+        assert!(
+            !state.decode_in_flight,
+            "the full pass was the period's decode: no second decode of it at the boundary"
+        );
+        assert_eq!(state.dropped_decodes, 0);
+    }
+
+    /// FT8: a full pass still decoding at the boundary is that period's decode running, not a
+    /// decoder falling behind. The boundary keys on time without it (WSJT-X keys at t = 0 and
+    /// decodes in parallel) and drops nothing; its decodes reach the sequencer the moment they
+    /// land, where the mid-over switch turns the rest of the over on the air into the message they
+    /// move the QSO to, and its drain is housekeeping only (no second over).
+    #[test]
+    fn ft8_full_pass_still_running_at_the_boundary_is_not_dropped() {
+        use tempo_core::modes::ModeKind;
+        let engine = wsjt_engine(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+
+        tick(&mut state, &engine, b, r, s, 100.0); // slot 0: nothing queued yet
+        awaiting_rr73(&engine, ModeKind::Ft8);
+        tick(&mut state, &engine, b, r, s, 15_020.0);
+        backend.queue_capture(wsjt_slot_audio(ModeKind::Ft8, "W9XYZ K1ABC RR73", 172_800));
+        state.early_done_slot = Some(1);
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 29_400.0);
+        assert!(state.decode_in_flight, "the full pass is running");
+
+        // The boundary, with the full pass still decoding (a decode takes far longer than
+        // the gap between these two ticks).
+        tick(&mut state, &engine, b, r, s, 30_000.0);
+        assert!(r.keyed, "keyed at the boundary, on time");
+        assert_eq!(
+            state.dropped_decodes, 0,
+            "the running full pass IS the period's decode: nothing dropped"
+        );
+        let played_at_key = b.played.len();
+        // The card has only begun the over: all of it is still to play.
+        b.tx_unplayed = played_at_key;
+
+        assert!(
+            drain_decode(&mut state, &engine, b, r, s, 30_001.0, 45_000.0),
+            "the full pass drained"
+        );
+        assert_eq!(
+            wsjt_messages_played(ModeKind::Ft8, &backend.played),
+            vec!["K1ABC W9XYZ 73".to_string()],
+            "its RR73 reached the sequencer as soon as it landed: the over on the air is the 73"
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().qso.and_then(|q| q.tx_now),
+            None,
+            "the 73 went out in this over: nothing left to send"
+        );
+        assert_eq!(
+            backend.played.len(),
+            played_at_key,
+            "its drain is housekeeping only: no second over"
+        );
+        assert!(
+            state.full_pass_frame.is_none(),
+            "finished as its own boundary's housekeeping, not parked for a boundary already past"
+        );
+    }
+
+    /// A full pass parked for its boundary is only that boundary's. When the clock skips that
+    /// boundary (a stall, a clock step), the next one must not take the TX decision from a
+    /// decode two periods old: it decodes the period that just ended, as any boundary does.
+    #[test]
+    fn a_parked_full_pass_never_decides_a_later_boundary() {
+        use tempo_core::modes::ModeKind;
+        let engine = wsjt_engine(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+
+        tick(&mut state, &engine, b, r, s, 100.0); // slot 0: nothing queued yet
+        awaiting_rr73(&engine, ModeKind::Ft8);
+        tick(&mut state, &engine, b, r, s, 15_020.0);
+        backend.queue_capture(wsjt_slot_audio(ModeKind::Ft8, "W9XYZ K1ABC RR73", 172_800));
+        state.early_done_slot = Some(1);
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 29_400.0);
+        assert!(drain_decode(
+            &mut state, &engine, b, r, s, 29_401.0, 30_000.0
+        ));
+        assert!(
+            matches!(state.full_pass_frame, Some((2, _))),
+            "parked for the slot-2 boundary"
+        );
+
+        // The next tick is in slot 4 (even, ours): slot 2's boundary never ran.
+        tick(&mut state, &engine, b, r, s, 60_020.0);
+        assert!(
+            !rig.keyed,
+            "slot 4's decision waits for slot 3's decode, never slot 1's parked one"
+        );
+        assert!(state.decode_in_flight, "slot 3's period is being decoded");
+        assert!(
+            state.full_pass_frame.is_none(),
+            "the parked pass is dropped"
+        );
+    }
+
+    /// FT4: WSJT-X's only FT4 decode is at `m_hsymStop` = 21 half-symbols = 6.048 s
+    /// (mainwindow.cpp:2226, :10924; 3456-sample steps at :10920-10921), nothing at 5.5 s, and
+    /// its decodes are in the 7.5 s boundary's decision.
+    #[test]
+    fn ft4_full_pass_at_6_048_s_puts_its_decodes_in_the_boundary_decision() {
+        use tempo_core::modes::ModeKind;
+        let engine = wsjt_engine(Tier::Ft4);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+
+        tick(&mut state, &engine, b, r, s, 100.0); // slot 0: nothing queued yet
+        awaiting_rr73(&engine, ModeKind::Ft4);
+        tick(&mut state, &engine, b, r, s, 7_520.0); // slot 1: theirs
+        assert!(!rig.keyed, "odd slot: not ours");
+
+        backend.queue_capture(wsjt_slot_audio(ModeKind::Ft4, "W9XYZ K1ABC RR73", 72_576));
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 13_000.0); // 5.5 s
+        tick(&mut state, &engine, b, r, s, 13_547.0);
+        assert!(
+            !state.decode_in_flight,
+            "no FT4 decode before 6.048 s (WSJT-X has no 5.5 s pass)"
+        );
+        tick(&mut state, &engine, b, r, s, 13_548.0);
+        assert!(
+            state.decode_in_flight && state.full_done_slot == Some(1),
+            "the FT4 full pass dispatches at 6.048 s"
+        );
+        assert!(drain_decode(
+            &mut state, &engine, b, r, s, 13_549.0, 15_000.0
+        ));
+
+        tick(&mut state, &engine, b, r, s, 15_020.0); // slot 2: ours
+        assert!(rig.keyed, "keyed at the boundary");
+        assert_eq!(
+            wsjt_messages_played(ModeKind::Ft4, &backend.played),
+            vec!["K1ABC W9XYZ 73".to_string()],
+            "the RR73 the 6.048 s pass found was in the boundary's decision"
+        );
+    }
+
+    /// FT8's early pass stays where WSJT-X runs it: `m_earlyDecode` = 41 half-symbols =
+    /// 11.808 s (mainwindow.h:666, triggered at mainwindow.cpp:2381).
+    #[test]
+    fn ft8_early_pass_runs_at_11_808_s() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tier(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 100.0);
+        tick(&mut state, &engine, b, r, s, 15_020.0);
+        backend.queue_capture(vec![0.001f32; 120_000]);
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 26_807.0);
+        assert!(!state.decode_in_flight, "nothing before 11.808 s");
+        tick(&mut state, &engine, b, r, s, 26_808.0);
+        assert!(
+            state.decode_in_flight
+                && state.early_done_slot == Some(1)
+                && state.full_done_slot.is_none(),
+            "the early pass, at 11.808 s"
+        );
+    }
+
+    /// An EARLY pass still running at the boundary is the decoder falling behind, and that
+    /// period's decode is dropped as before (WSJT-X: `if(m_decoderBusy) return;`,
+    /// mainwindow.cpp:5377). Only the full pass of the period that just ended is exempt.
+    #[test]
+    fn an_early_pass_still_running_at_the_boundary_still_drops_its_period() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tier(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 100.0);
+        tick(&mut state, &engine, b, r, s, 15_020.0);
+        backend.queue_capture(vec![0.001f32; 120_000]);
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 26_808.0);
+        assert!(state.decode_in_flight && state.full_done_slot.is_none());
+        tick(&mut state, &engine, b, r, s, 30_000.0);
+        assert_eq!(state.dropped_decodes, 1, "the busy-worker drop, unchanged");
+        assert!(drain_decode(
+            &mut state, &engine, b, r, s, 30_001.0, 45_000.0
+        ));
+    }
+
     /// THE 2026-08-17 FIELD INCIDENT (KF4YHC, FTX-1, 1.6.1): a boundary decode that
     /// overruns the T/R period drains AFTER the next boundary has re-stamped
     /// `boundary_keyed`. The same-slot guard no longer covers the job's slot, and
@@ -31559,6 +33253,76 @@ mod tests {
         );
     }
 
+    /// The SSTV screen's ISS downlink picked after a repeater, AT THE WIRE. The app's own FM
+    /// channels are simplex with no tone (`Engine::fm_repeater_config`), so the radio is TOLD so,
+    /// and a machine tuned after the channel is told its own shift and tone again. The pick used
+    /// to send none of it: the configuration the loop pushes had not changed, so the radio kept
+    /// the machine's shift and tone on the channel.
+    #[test]
+    fn the_sstv_iss_downlink_after_a_repeater_tells_the_radio_simplex_and_no_tone() {
+        let engine = repeater_engine();
+        // Remembers its dial, so the loop's read-back never takes a QSY for a knob move.
+        let (addr, log) = mock_stateful_rigctld(145_310_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 0.0;
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend| {
+            for _ in 0..4 {
+                t += 500.0;
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        t,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        // The shift, offset and tone lines the radio was sent from `from` on.
+        let fm_lines = |from: usize| -> Vec<String> {
+            log.lock().unwrap()[from..]
+                .iter()
+                .filter(|l| ["R ", "O ", "C "].iter().any(|p| l.starts_with(p)))
+                .cloned()
+                .collect()
+        };
+        let machine = ["R -", "O 600000", "C 1035"].map(String::from).to_vec();
+
+        run(&mut state, &mut rig, &mut backend);
+        // CONTROL: the machine reached the radio, or the lines below prove nothing.
+        assert_eq!(fm_lines(0), machine, "the machine");
+
+        let mark = log.lock().unwrap().len();
+        engine.lock().unwrap().sstv_tune(145.800, "2m", "FM");
+        run(&mut state, &mut rig, &mut backend);
+        assert_eq!(
+            fm_lines(mark),
+            ["R None", "C 0"].map(String::from).to_vec(),
+            "the ISS downlink: simplex, no tone"
+        );
+
+        let mark = log.lock().unwrap().len();
+        engine
+            .lock()
+            .unwrap()
+            .repeater_tune(145.310, "minus", 600_000, 103.5)
+            .unwrap();
+        run(&mut state, &mut rig, &mut backend);
+        assert_eq!(
+            fm_lines(mark),
+            machine,
+            "the machine again after the channel"
+        );
+    }
+
     /// ⚠️ THE OTHER HALF OF A CLASS-WIDE CAT CHANGE: what a rig that does NOT know `PKTFM`
     /// gets. It must be plain FM — the mode the very same FM authority commanded while idle —
     /// and never a sideband.
@@ -33283,12 +35047,18 @@ mod tests {
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
+            tci_host: tempo_app::settings::TCI_DEFAULT_HOST.to_string(),
+            tci_port: tempo_app::settings::TCI_DEFAULT_PORT,
+            tci_trx: 0,
+            tci_dialect: "auto".to_string(),
+            tci_audio: true,
             radio_id: 0,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
             omnirig_slot: 1,
             rigctld_port,
             broker_self_port,
+            tci_server_self_port: None,
             address_refusal: AddressRefusal::default(),
             audio_in: String::new(),
             audio_out: String::new(),
