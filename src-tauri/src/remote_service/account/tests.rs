@@ -37,6 +37,7 @@ struct Store {
     keys: Mutex<Option<AccountKeys>>,
     cache: Mutex<Option<DeviceCache>>,
     people: Mutex<Option<People>>,
+    devices: Mutex<()>,
 }
 impl AccountVault for Store {
     fn save_people(&self, people: &People) -> Result<(), &'static str> {
@@ -60,9 +61,16 @@ impl AccountVault for Store {
     fn device_cache(&self) -> Result<Option<DeviceCache>, &'static str> {
         Ok(self.cache.lock().unwrap().clone())
     }
-    fn save_device_cache(&self, cache: &DeviceCache) -> Result<(), &'static str> {
+    fn save_device_cache(
+        &self,
+        _: &DevicesHeld<'_>,
+        cache: &DeviceCache,
+    ) -> Result<(), &'static str> {
         *self.cache.lock().unwrap() = Some(cache.clone());
         Ok(())
+    }
+    fn devices_lock(&self) -> &Mutex<()> {
+        &self.devices
     }
     fn people(&self) -> Result<Option<People>, &'static str> {
         Ok(self.people.lock().unwrap().clone())
@@ -631,7 +639,9 @@ fn each_list_sweeps_the_devices_kept_for_the_lan() {
     let mut cache = DeviceCache::new(STATION);
     cache.keep(cached(pin_of("computerLan"))).unwrap();
     cache.keep(cached(pin_of("browser"))).unwrap();
-    store.save_device_cache(&cache).unwrap();
+    store
+        .save_device_cache(&DevicesHeld::take(&store), &cache)
+        .unwrap();
     let browser_waiting = json!({"kind": "browser", "approved": 0, "publicKey": key("browser")});
     let rows = [computer_row(&token("computer")), browser_waiting];
     assert_eq!(

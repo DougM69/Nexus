@@ -43,7 +43,7 @@ use tempo_client::account::{self, DeviceCache, KeySet, Owner, Tenant, Vouched};
 use tempo_client::native::{Scope, SignIn};
 use tokio::net::TcpListener;
 
-use super::vault::{AccountKeys, AccountVault};
+use super::vault::{AccountKeys, AccountVault, DevicesHeld};
 
 /// The most of a service or issuer answer read.
 const ANSWER_LIMIT: usize = 16384;
@@ -548,19 +548,21 @@ pub(crate) async fn vouch(
 /// The service's device list for the station, heard at `now_s`: every kept device it no longer
 /// lists as approved is taken out of the LAN's cache, and its pin returned for the caller to take
 /// out of the LAN and the pins before a LAN session is admitted again; every one it does list is
-/// confirmed. A cache kept for another station is dropped whole.
+/// confirmed. A cache kept for another station is dropped whole. The cache held from its read to its
+/// save ([`DevicesHeld`]).
 pub(crate) fn sweep(
     rows: &[Value],
     vault: &dyn AccountVault,
     station_id: &str,
     now_s: u64,
 ) -> Result<Vec<String>, &'static str> {
+    let held = DevicesHeld::take(vault);
     let Some(mut cache) = vault.device_cache()? else {
         return Ok(Vec::new());
     };
     if cache.station_id != station_id {
         let gone = cache.devices.into_iter().map(|d| d.pin).collect();
-        vault.save_device_cache(&DeviceCache::new(station_id))?;
+        vault.save_device_cache(&held, &DeviceCache::new(station_id))?;
         return Ok(gone);
     }
     let listed: Vec<String> = rows
@@ -569,7 +571,7 @@ pub(crate) fn sweep(
         .filter_map(|row| listed_keys(row).map(|(_, lan)| pin(&lan)))
         .collect();
     let gone = cache.sweep(&listed, now_s);
-    vault.save_device_cache(&cache)?;
+    vault.save_device_cache(&held, &cache)?;
     Ok(gone.into_iter().map(|device| device.pin).collect())
 }
 

@@ -2187,7 +2187,8 @@ impl Controller {
                     Ok(Some((vouched, lan))) => {
                         // The LAN's entry for it. One the store will not take leaves it out of the
                         // LAN with the internet down, which is where a refusal belongs.
-                        let _ = self.keep_for_lan(&station_id, &vouched, lan, now_s);
+                        let vault = &*self.accounts.vault;
+                        let _ = Self::keep_for_lan(vault, &station_id, &vouched, lan, now_s);
                         self.added(device, &vouched);
                     }
                     // A local decision since the list was asked for: the next list asks again.
@@ -2262,16 +2263,17 @@ impl Controller {
         });
         Ok(true)
     }
-    /// Keeps a device the station vouched for in the LAN's entry, by the pin the LAN admits it by.
-    /// An entry that does not read is never written over.
+    /// Keeps a device the station vouched for in the LAN's entry in `vault`, by the pin the LAN
+    /// admits it by, the entry held from its read to its save (`vault::DevicesHeld`). An entry that
+    /// does not read is never written over.
     fn keep_for_lan(
-        &self,
+        vault: &dyn vault::AccountVault,
         station_id: &str,
         vouched: &tempo_client::account::Vouched,
         pin: String,
         now_s: u64,
     ) -> Result<(), &'static str> {
-        let vault = &self.accounts.vault;
+        let held = vault::DevicesHeld::take(vault);
         let mut cache = vault
             .device_cache()?
             .filter(|cache| cache.station_id == station_id)
@@ -2283,7 +2285,7 @@ impl Controller {
             issued_at: vouched.issued_at,
             confirmed_at: now_s,
         })?;
-        vault.save_device_cache(&cache)
+        vault.save_device_cache(&held, &cache)
     }
     /// The notice of a device the station granted on its own proof, once.
     fn added(&self, device: &Device, vouched: &tempo_client::account::Vouched) {

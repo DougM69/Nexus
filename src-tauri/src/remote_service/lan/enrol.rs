@@ -30,6 +30,17 @@
 //! stays until it is removed at the shack, and a removal on the web no longer reaches it here: the
 //! service's list reaches the LAN only through that cache.
 //!
+//! **One writer at a time.** The device cache has writers here and beside: an enrolment
+//! ([`admit`]), an expiry ([`Enrolment::forget`]), a code pairing ([`Enrolment::paired_by_code`]),
+//! and each list the station hears (`remote_service::account::sweep`, and the controller keeping a
+//! device it vouched for); and the copy in memory follows it ([`Enrolment::reread`]). Each holds
+//! the cache (`DevicesHeld`) from its read to its save, so none saves over another's change. An
+//! enrolment holds it until its computer is in the book, so no list takes its entry out between the
+//! two; that is the one place the book's lock is taken inside it, and nothing holding the book's
+//! takes it (an expiry and a code pairing write the book first and let its lock go). An expiry
+//! takes out only an entry still past its age once it holds the cache: a computer enrolled again
+//! since it was found expired is in the book again, held to its new proof.
+//!
 //! Nothing here writes a log line, and no proof is kept: the cache holds the key's pin, the role
 //! and the proof's signing time.
 use std::sync::{Arc, Mutex};
@@ -39,7 +50,7 @@ use serde_json::json;
 use tempo_client::account::{self, CachedDevice, DeviceCache, Invite, KeySet, Owner, Role, Tenant};
 use tokio::sync::watch;
 
-use super::super::vault::AccountVault;
+use super::super::vault::{AccountVault, DevicesHeld};
 use super::book::{valid_name, Book};
 use super::channel::Socket;
 use super::pairing::{refuse, say, Desk, Outcome};
@@ -102,6 +113,12 @@ impl Enrolment {
         let Some(Kept { vault, .. }) = &self.kept else {
             return;
         };
+        self.read(&**vault, &DevicesHeld::take(&**vault));
+    }
+
+    /// [`Enrolment::reread`], the cache held: so the copy in memory follows the store in the order
+    /// its writers saved it, and never goes back to a read older than a save.
+    fn read(&self, vault: &dyn AccountVault, _held: &DevicesHeld<'_>) {
         let read = match vault.device_cache() {
             Ok(cache) => cache.map(|cache| cache.devices).unwrap_or_default(),
             Err(_) => return,
@@ -150,19 +167,27 @@ impl Enrolment {
             .collect()
     }
 
-    /// Takes the computers with `pins` out of the device cache, once they are out of the book. A
-    /// store that will not keep it leaves them there, still refused.
+    /// Takes the computers with `pins` out of the device cache, once they are out of the book: each
+    /// only while its proof is still past its age, since one enrolled again meanwhile is in the book
+    /// again, held to its new proof (see the header). A store that will not keep it leaves them
+    /// there, still refused.
     pub(super) fn forget(&self, pins: &[[u8; 32]]) {
-        let Some(Kept { vault, .. }) = &self.kept else {
+        let Some(Kept { vault, now_s }) = &self.kept else {
             return;
         };
+        let held = DevicesHeld::take(&**vault);
         if let Ok(Some(mut cache)) = vault.device_cache() {
+            let now_s = now_s();
             for pin in pins {
-                cache.forget(&tempo_client::hex(pin));
+                let pin = tempo_client::hex(pin);
+                let within_age = cache.find(&pin).is_some_and(|d| d.admits(now_s, false));
+                if !within_age {
+                    cache.forget(&pin);
+                }
             }
-            let _ = vault.save_device_cache(&cache);
+            let _ = vault.save_device_cache(&held, &cache);
         }
-        self.reread();
+        self.read(&**vault, &held);
     }
 
     /// The computer with `pin` was just paired with a code at the shack, and the book keeps that
@@ -174,14 +199,15 @@ impl Enrolment {
             return Ok(());
         };
         let pin = tempo_client::hex(pin);
+        let held = DevicesHeld::take(&**vault);
         let taken = vault.device_cache().and_then(|cache| match cache {
             Some(mut cache) if cache.find(&pin).is_some() => {
                 cache.forget(&pin);
-                vault.save_device_cache(&cache)
+                vault.save_device_cache(&held, &cache)
             }
             _ => Ok(()),
         });
-        self.reread();
+        self.read(&**vault, &held);
         taken.map_err(|_| "unavailable")
     }
 
@@ -267,8 +293,9 @@ impl Asked {
 }
 
 /// Admits the computer `asked` names, under the LAN station id `under`, at `now_s`: its proof
-/// checked (see the header), its key kept in the device cache and then paired in the book. Its
-/// device id. Blocks on the credential store.
+/// checked (see the header), its key kept in the device cache and then paired in the book, the
+/// cache held from its read until the book keeps the pairing. Its device id. Blocks on the
+/// credential store.
 pub(super) fn admit(
     book: &Book,
     enrolment: &Enrolment,
@@ -291,8 +318,10 @@ pub(super) fn admit(
         return Err("listenNative");
     }
     let pin = tls::pin(&asked.key);
-    // The cache first: a key the cache does not hold is never taken out of the book by a list.
+    // The cache first: a key the cache does not hold is never taken out of the book by a list. Held
+    // until the book keeps the pairing, so no list's sweep lands between the two.
     let station_id = &ready.owner.station_id;
+    let held = DevicesHeld::take(&*ready.vault);
     let mut cache = ready
         .vault
         .device_cache()?
@@ -306,7 +335,7 @@ pub(super) fn admit(
         // Not yet heard from the service.
         confirmed_at: 0,
     })?;
-    ready.vault.save_device_cache(&cache)?;
+    ready.vault.save_device_cache(&held, &cache)?;
     enrolment.hold(cache.devices);
     book.add(pin, &asked.name, under)
 }

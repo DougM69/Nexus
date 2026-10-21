@@ -51,7 +51,8 @@
 //! as it was typed), so the service still removes that person's devices once it is reached. None
 //! holds a secret: a key set is public, and a pin is a hash. Like the LAN entries they read past a
 //! field they do not know, and one that does not read at all is never taken for none: the station
-//! then admits no device on a proof until it signs in again.
+//! then admits no device on a proof until it signs in again. The devices kept for the LAN have
+//! several writers, and each holds that entry from its read to its save ([`DevicesHeld`]).
 //!
 //! The rest belong to the other end of Remote over this network, the computer an operator works
 //! from (`crate::lan_client`). One entry for each station it is paired with: its own key for that
@@ -323,16 +324,49 @@ pub trait AccountVault: Send + Sync {
     fn account_keys(&self) -> Result<Option<AccountKeys>, &'static str>;
     fn save_account_keys(&self, keys: &AccountKeys) -> Result<(), &'static str>;
     fn device_cache(&self) -> Result<Option<tempo_client::account::DeviceCache>, &'static str>;
+    /// Only while the cache is held ([`DevicesHeld`]).
     fn save_device_cache(
         &self,
+        held: &DevicesHeld<'_>,
         cache: &tempo_client::account::DeviceCache,
     ) -> Result<(), &'static str>;
+    /// The lock [`DevicesHeld`] takes: one for each store, so every writer of its device cache waits
+    /// for the others.
+    fn devices_lock(&self) -> &std::sync::Mutex<()>;
     fn people(&self) -> Result<Option<People>, &'static str>;
     fn save_people(&self, people: &People) -> Result<(), &'static str>;
     fn revokes(&self) -> Result<Option<Revokes>, &'static str>;
     fn save_revokes(&self, revokes: &Revokes) -> Result<(), &'static str>;
     fn uninvites(&self) -> Result<Option<Uninvites>, &'static str>;
     fn save_uninvites(&self, uninvites: &Uninvites) -> Result<(), &'static str>;
+}
+
+/// The LAN's device cache (`account-devices`) held by one writer from its read to its save. It has
+/// several: an enrolment adding its computer, each list the station hears (its sweep, and its
+/// keeping of a device it vouched for), an expiry, a code pairing, and the station's copy of the
+/// cache in memory, which every admission on the LAN reads (`super::lan::enrol`). Two that each read
+/// it and saved what they made of it lost one change to the other's save; when the change lost was
+/// an enrolment's entry, its computer stayed in the book with no proof's age held to it. A save asks
+/// for this, so no writer saves without it.
+///
+/// Taken before the book's own lock (`super::lan::book`): an enrolment takes the book's while it
+/// holds this one, and nothing that holds the book's takes this one (an expiry and a code pairing
+/// write the book first and let its lock go).
+pub struct DevicesHeld<'a> {
+    _held: std::sync::MutexGuard<'a, ()>,
+}
+
+impl<'a> DevicesHeld<'a> {
+    /// Waits for the device cache in `vault`, then holds it until dropped.
+    pub fn take(vault: &'a dyn AccountVault) -> Self {
+        // It guards no value of its own (the store is what it guards, and each save is whole), so a
+        // writer that panicked holding it left the cache as a crash there would: no reason to stop
+        // every writer after it.
+        let held = vault.devices_lock().lock();
+        Self {
+            _held: held.unwrap_or_else(std::sync::PoisonError::into_inner),
+        }
+    }
 }
 
 pub trait Vault: Send + Sync {
@@ -666,9 +700,15 @@ impl AccountVault for SystemVault {
     }
     fn save_device_cache(
         &self,
+        _held: &DevicesHeld<'_>,
         cache: &tempo_client::account::DeviceCache,
     ) -> Result<(), &'static str> {
         save_account_entry(ACCOUNT_DEVICES, cache)
+    }
+    fn devices_lock(&self) -> &std::sync::Mutex<()> {
+        // One for the process: every `SystemVault` is the same credential store.
+        static DEVICES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        &DEVICES
     }
     fn people(&self) -> Result<Option<People>, &'static str> {
         account_entry(ACCOUNT_PEOPLE)

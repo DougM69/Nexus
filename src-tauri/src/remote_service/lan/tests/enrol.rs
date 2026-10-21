@@ -8,13 +8,22 @@
 //!
 //! A computer paired again with a code at the shack is held to no proof's age from then on: there a
 //! fresh key stands for an enrolled computer, kept in the device cache as an enrolment keeps it.
+//!
+//! The device cache's writers one at a time: each is caught inside the store where it would race
+//! (held in a read or a save until the test lets it go), with another writer run beside it, so an
+//! overlap is made on purpose rather than waited for.
 use super::super::enrol as lan_enrol;
 use super::*;
 use crate::remote_service::tests::MemoryVault;
-use crate::remote_service::vault::{AccountKeys, AccountVault, People, Revokes, Uninvites};
+use crate::remote_service::vault::{
+    AccountKeys, AccountVault, DevicesHeld, People, Revokes, Uninvites,
+};
+use crate::remote_service::{account, Controller};
 use std::sync::atomic::AtomicU64;
+use std::sync::mpsc;
 use tempo_client::account::{
-    mailbox, CachedDevice, DeviceCache, Invite, KeySet, Owner, Role, Tenant, PROOF_MAX_AGE_S,
+    mailbox, CachedDevice, DeviceCache, Invite, KeySet, Owner, Role, Tenant, Vouched,
+    PROOF_MAX_AGE_S,
 };
 
 const CASES: &str =
@@ -43,6 +52,10 @@ fn spki(name: &str) -> Vec<u8> {
 
 /// What a station bound to the fixture's owner keeps, with `invites`.
 fn ready(vault: &MemoryVault, invites: Vec<Invite>) -> lan_enrol::Ready {
+    ready_on(Arc::new(vault.clone()), invites)
+}
+/// The same, its device cache kept in `vault`.
+fn ready_on(vault: Arc<dyn AccountVault>, invites: Vec<Invite>) -> lan_enrol::Ready {
     lan_enrol::Ready {
         tenant: Box::leak(Box::new(Tenant {
             origin: "http://127.0.0.1:9",
@@ -59,7 +72,7 @@ fn ready(vault: &MemoryVault, invites: Vec<Invite>) -> lan_enrol::Ready {
         },
         keys: KeySet::fetched(&cases()["jwks"], fixture_now()).unwrap(),
         invites,
-        vault: Arc::new(vault.clone()),
+        vault,
         now_s: fixture_now,
     }
 }
@@ -357,7 +370,9 @@ fn caching(devices: Vec<CachedDevice>) -> MemoryVault {
     for device in devices {
         cache.keep(device).unwrap();
     }
-    vault.save_device_cache(&cache).unwrap();
+    vault
+        .save_device_cache(&DevicesHeld::take(&vault), &cache)
+        .unwrap();
     vault
 }
 
@@ -714,11 +729,18 @@ impl AccountVault for Refusing {
         }
         self.inner.device_cache()
     }
-    fn save_device_cache(&self, cache: &DeviceCache) -> Result<(), &'static str> {
+    fn save_device_cache(
+        &self,
+        held: &DevicesHeld<'_>,
+        cache: &DeviceCache,
+    ) -> Result<(), &'static str> {
         if self.saves.load(Ordering::SeqCst) {
             return Err("credentialStoreUnavailable");
         }
-        self.inner.save_device_cache(cache)
+        self.inner.save_device_cache(held, cache)
+    }
+    fn devices_lock(&self) -> &Mutex<()> {
+        self.inner.devices_lock()
     }
     fn people(&self) -> Result<Option<People>, &'static str> {
         self.inner.people()
@@ -773,7 +795,10 @@ async fn a_code_pairing_the_cache_will_not_take_leaves_the_computer_held() {
     let vault = Refusing::default();
     let mut cache = DeviceCache::new(SERVICE_STATION);
     cache.keep(kept(&computer.pin, false, signed)).unwrap();
-    vault.inner.save_device_cache(&cache).unwrap();
+    vault
+        .inner
+        .save_device_cache(&DevicesHeld::take(&vault.inner), &cache)
+        .unwrap();
     let enrolment = Arc::new(lan_enrol::Enrolment::kept_in(
         Arc::new(vault.clone()),
         clock,
@@ -823,4 +848,608 @@ async fn a_code_pairing_the_cache_will_not_take_leaves_the_computer_held() {
     CLOCK.store(signed + PROOF_MAX_AGE_S, Ordering::SeqCst);
     assert!(enrolment.admits(&computer.pin), "paired by code: no age");
     assert_eq!(enrolment.expired(), Vec::<[u8; 32]>::new());
+}
+
+// ---- The device cache's writers, one at a time ---------------------------------------------------
+
+/// How long a writer is given beside one held inside its save. With nothing between the two it
+/// finishes at once, and its change is then lost to the held one's save; with the cache's lock it
+/// waits for the held one, which is let go after this.
+const BESIDE_FOR: Duration = Duration::from_millis(500);
+
+/// A held store call's two ends: the one told that a writer is in it, the one that lets it go.
+type Ends = (mpsc::Sender<()>, mpsc::Receiver<()>);
+
+/// One store call held once it is asked for: told when a writer is inside it, then let go.
+#[derive(Clone, Default)]
+struct Hold(Arc<Mutex<Option<Ends>>>);
+impl Hold {
+    /// Holds the next call: the first end hears a writer held in it, the second lets it go.
+    fn next(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let ((entered, held), (go, waits)) = (mpsc::channel(), mpsc::channel());
+        *self.0.lock().unwrap() = Some((entered, waits));
+        (held, go)
+    }
+    /// Holds no call: one asked for and not reached is called off.
+    fn clear(&self) {
+        self.0.lock().unwrap().take();
+    }
+    /// In a store call: waits here while it is held, never more than ten seconds.
+    fn here(&self) {
+        let hold = self.0.lock().unwrap().take();
+        if let Some((entered, waits)) = hold {
+            let _ = entered.send(());
+            let _ = waits.recv_timeout(Duration::from_secs(10));
+        }
+    }
+}
+
+/// The station's account entries in `inner`, a writer of its device cache held when asked: inside
+/// its read (`reads`: the cache read, nothing changed yet), inside its save (`saves`: read and
+/// changed, not yet written), or asking for the cache's lock again after its read (`relocks`: it let
+/// the lock go between its read and its save).
+#[derive(Clone, Default)]
+struct Holding {
+    inner: MemoryVault,
+    reads: Hold,
+    saves: Hold,
+    relocks: Hold,
+}
+thread_local! {
+    /// Whether this thread has read the device cache.
+    static READ_THE_CACHE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+impl AccountVault for Holding {
+    fn owner(&self) -> Result<Option<Owner>, &'static str> {
+        self.inner.owner()
+    }
+    fn save_owner(&self, owner: &Owner) -> Result<(), &'static str> {
+        self.inner.save_owner(owner)
+    }
+    fn account_keys(&self) -> Result<Option<AccountKeys>, &'static str> {
+        self.inner.account_keys()
+    }
+    fn save_account_keys(&self, keys: &AccountKeys) -> Result<(), &'static str> {
+        self.inner.save_account_keys(keys)
+    }
+    fn device_cache(&self) -> Result<Option<DeviceCache>, &'static str> {
+        READ_THE_CACHE.with(|read| read.set(true));
+        let read = self.inner.device_cache();
+        self.reads.here();
+        read
+    }
+    fn save_device_cache(
+        &self,
+        held: &DevicesHeld<'_>,
+        cache: &DeviceCache,
+    ) -> Result<(), &'static str> {
+        self.saves.here();
+        self.inner.save_device_cache(held, cache)
+    }
+    fn devices_lock(&self) -> &Mutex<()> {
+        if READ_THE_CACHE.with(std::cell::Cell::get) {
+            self.relocks.here();
+        }
+        self.inner.devices_lock()
+    }
+    fn people(&self) -> Result<Option<People>, &'static str> {
+        self.inner.people()
+    }
+    fn save_people(&self, people: &People) -> Result<(), &'static str> {
+        self.inner.save_people(people)
+    }
+    fn revokes(&self) -> Result<Option<Revokes>, &'static str> {
+        self.inner.revokes()
+    }
+    fn save_revokes(&self, revokes: &Revokes) -> Result<(), &'static str> {
+        self.inner.save_revokes(revokes)
+    }
+    fn uninvites(&self) -> Result<Option<Uninvites>, &'static str> {
+        self.inner.uninvites()
+    }
+    fn save_uninvites(&self, uninvites: &Uninvites) -> Result<(), &'static str> {
+        self.inner.save_uninvites(uninvites)
+    }
+}
+
+/// The LAN's store `inner`, the book's next write of who is paired held when asked: the book's own
+/// lock taken, nothing written yet.
+#[derive(Clone, Default)]
+struct HoldingLan {
+    inner: LanStore,
+    saves: Hold,
+}
+impl LanVault for HoldingLan {
+    fn lan_key(&self) -> Result<Option<LanKey>, &'static str> {
+        self.inner.lan_key()
+    }
+    fn save_lan_key(&self, key: &LanKey) -> Result<(), &'static str> {
+        self.inner.save_lan_key(key)
+    }
+    fn lan_devices(&self) -> Result<Option<LanDevices>, &'static str> {
+        self.inner.lan_devices()
+    }
+    fn save_lan_devices(&self, devices: &LanDevices) -> Result<(), &'static str> {
+        self.saves.here();
+        self.inner.save_lan_devices(devices)
+    }
+    fn remove_lan_devices(&self) -> Result<(), &'static str> {
+        self.saves.here();
+        self.inner.remove_lan_devices()
+    }
+}
+
+/// A store holding the LAN's device cache with `devices`, its writers held when asked.
+fn holding(devices: Vec<CachedDevice>) -> Holding {
+    Holding {
+        inner: caching(devices),
+        ..Holding::default()
+    }
+}
+/// The enrolment of the station bound to the fixture's owner, its device cache kept in `vault` and
+/// its proofs' ages read by `clock`: armed, and the cache read, as at launch.
+fn enrolment_in(vault: &Holding, clock: fn() -> u64) -> Arc<lan_enrol::Enrolment> {
+    let enrolment = Arc::new(lan_enrol::Enrolment::kept_in(
+        Arc::new(vault.clone()),
+        clock,
+    ));
+    enrolment.arm(Some(ready_on(Arc::new(vault.clone()), Vec::new())));
+    enrolment.load();
+    enrolment
+}
+/// The station's book kept in `store`, with these computers paired, read.
+fn book_in(store: &HoldingLan) -> Arc<Book> {
+    let book = Arc::new(Book::new(Arc::new(store.clone())));
+    book.load();
+    book
+}
+/// The pins the device cache in `vault` holds, in its order.
+fn cached_pins(vault: &Holding) -> Vec<String> {
+    let cache = vault.device_cache().unwrap().unwrap();
+    cache.devices.into_iter().map(|device| device.pin).collect()
+}
+/// A LAN key the service can list a computer by (lowercase hex) and the pin it gives.
+fn lan_key(byte: u8) -> (String, [u8; 32]) {
+    let spki = [byte; 91];
+    (tempo_client::hex(&spki), tls::pin(&spki))
+}
+/// A row of the service's list: a computer approved, named by its LAN key.
+fn approved(lan: &str) -> Value {
+    json!({"kind": "computer", "approved": 1, "publicKey": key("road"), "lanKey": lan})
+}
+/// The fixture's computer enrols in `book` on its own sign-in, its proof fresh.
+fn enrols(book: &Book, enrolment: &lan_enrol::Enrolment) {
+    let asked = computer(&token("computer"), "computerLan");
+    lan_enrol::admit(book, enrolment, STATION, &asked, fixture_now()).unwrap();
+}
+/// Whom the LAN admits holding the key with `pin`: the book's answer held to its proof's age, as TLS
+/// and every session tick ask.
+fn on_the_lan(
+    book: &Arc<Book>,
+    enrolment: &Arc<lan_enrol::Enrolment>,
+    pin: &[u8; 32],
+) -> Option<String> {
+    let (paired, _) = book.verifier();
+    enrolment.bounded(paired)(pin)
+}
+
+/// `writer` ran to its end within ten seconds: a lock that never came free stops it here.
+fn finished(writer: std::thread::JoinHandle<()>, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !writer.is_finished() {
+        assert!(Instant::now() < deadline, "{what}: never finished");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    writer.join().unwrap();
+}
+
+/// `first` held by `hold` inside the store call it guards, and `second` run beside it until it is
+/// done or has had [`BESIDE_FOR`]; then `first` let go. Both ran to their end.
+fn beside(
+    hold: &Hold,
+    first: impl FnOnce() + Send + 'static,
+    second: impl FnOnce() + Send + 'static,
+) {
+    let (held, go) = hold.next();
+    let first = std::thread::spawn(first);
+    held.recv_timeout(Duration::from_secs(10))
+        .expect("the first writer was never held");
+    let second = std::thread::spawn(second);
+    let since = Instant::now();
+    while !second.is_finished() && since.elapsed() < BESIDE_FOR {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let _ = go.send(());
+    finished(first, "the held writer");
+    finished(second, "the writer beside it");
+}
+
+/// ★ An enrolment during a list. The list's sweep has read the LAN's device cache and is about to
+/// save what it made of it when a computer enrols: the enrolment waits for that save and only then
+/// adds its entry, so the computer it puts in the book is held to its proof's age, refused on the
+/// thirtieth day after the list's own re-read and after a restart. With each writer reading and
+/// saving on its own, the sweep's save (made from the cache as it was before the enrolment) dropped
+/// the new entry while the computer stayed in the book: admitted with no age at all, and out of
+/// reach of a removal on the web, which reaches the LAN only through the cache.
+#[test]
+fn an_enrolment_during_a_list_is_held_to_its_proofs_age() {
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    CLOCK.store(fixture_now(), Ordering::SeqCst);
+    let pin = tls::pin(&spki("computerLan"));
+    // Enrolled before, and on the list.
+    let (other_key, other) = lan_key(7);
+    let vault = holding(vec![kept(&other, false, issued_at())]);
+    let enrolment = enrolment_in(&vault, clock);
+    let book = empty_book();
+
+    let (listed, list) = (vec![approved(&other_key)], vault.clone());
+    let (enrolling, into) = (enrolment.clone(), book.clone());
+    beside(
+        &vault.saves,
+        move || {
+            account::sweep(&listed, &list, SERVICE_STATION, fixture_now()).unwrap();
+        },
+        move || enrols(&into, &enrolling),
+    );
+    assert_eq!(book.paired(&pin), Some(book::device_id(&pin)), "enrolled");
+
+    // The list then reads the cache again (`Lan::expire`); and the proof's thirtieth day comes.
+    enrolment.reread();
+    CLOCK.store(issued_at() + PROOF_MAX_AGE_S, Ordering::SeqCst);
+    assert_eq!(
+        on_the_lan(&book, &enrolment, &pin),
+        None,
+        "on the LAN past its proof's age, the cache holding {:?}",
+        cached_pins(&vault)
+    );
+    assert_eq!(
+        cached_pins(&vault),
+        vec![tempo_client::hex(&other), tempo_client::hex(&pin)]
+    );
+    assert_eq!(enrolment.expired(), vec![other, pin], "the next list's");
+    let restarted = lan_enrol::Enrolment::kept_in(Arc::new(vault.clone()), clock);
+    restarted.load();
+    assert!(
+        !restarted.admits(&pin),
+        "started again on its thirtieth day"
+    );
+}
+
+/// What a writer of the device cache is given: the store, and the enrolment kept in it.
+type Writer = Box<dyn FnOnce(&Holding, &lan_enrol::Enrolment) + Send>;
+
+/// ★ Every writer of the LAN's device cache waits for an enrolment held between its read and its
+/// save, and makes its change on what that one saved: a list's sweep, a list keeping a device it
+/// vouched for, an expiry's removal, a code pairing's. After each pair the cache holds both changes.
+/// With each writer reading and saving on its own, the held save (made from the cache as it was
+/// before) put back what the other took out, or dropped what it added.
+#[test]
+fn every_writer_of_the_device_cache_waits_for_one_held_between_its_read_and_its_save() {
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    CLOCK.store(fixture_now(), Ordering::SeqCst);
+    let enrolled = tempo_client::hex(&tls::pin(&spki("computerLan")));
+    // Q past its proof's age; R and U within it, U off the list; S vouched for by the list.
+    let ((q_key, q), (r_key, r), (_, u), (_, s)) = (lan_key(1), lan_key(2), lan_key(3), lan_key(4));
+    let [q_hex, r_hex, u_hex, s_hex] = [q, r, u, s].map(|pin| tempo_client::hex(&pin));
+    let list = vec![
+        approved(&q_key),
+        approved(&r_key),
+        approved(&key("computerLan")),
+    ];
+    let vouched = Vouched {
+        subject: "the owner".into(),
+        role: Role::Operate,
+        guest: false,
+        issued_at: issued_at(),
+    };
+    let writers: Vec<(&str, Writer, Vec<&String>)> = vec![
+        (
+            "a list's sweep",
+            Box::new(move |vault: &Holding, _: &lan_enrol::Enrolment| {
+                account::sweep(&list, vault, SERVICE_STATION, fixture_now()).unwrap();
+            }),
+            vec![&q_hex, &r_hex, &enrolled],
+        ),
+        (
+            "a list keeping a device it vouched for",
+            Box::new(move |vault: &Holding, _: &lan_enrol::Enrolment| {
+                let pin = tempo_client::hex(&s);
+                Controller::keep_for_lan(vault, SERVICE_STATION, &vouched, pin, fixture_now())
+                    .unwrap();
+            }),
+            vec![&q_hex, &r_hex, &u_hex, &enrolled, &s_hex],
+        ),
+        (
+            "an expiry",
+            Box::new(move |_: &Holding, enrolment: &lan_enrol::Enrolment| {
+                enrolment.forget(&[q]);
+            }),
+            vec![&r_hex, &u_hex, &enrolled],
+        ),
+        (
+            "a code pairing",
+            Box::new(move |_: &Holding, enrolment: &lan_enrol::Enrolment| {
+                enrolment.paired_by_code(&r).unwrap();
+            }),
+            vec![&q_hex, &u_hex, &enrolled],
+        ),
+    ];
+    let (mut cached, mut wanted) = (Vec::new(), Vec::new());
+    for (what, writer, after) in writers {
+        let vault = holding(vec![
+            kept(&q, false, issued_at() - PROOF_MAX_AGE_S),
+            kept(&r, false, issued_at()),
+            kept(&u, false, issued_at()),
+        ]);
+        let enrolment = enrolment_in(&vault, clock);
+        let book = empty_book();
+        let (enrolling, into) = (enrolment.clone(), book.clone());
+        let (other, beside_it) = (vault.clone(), enrolment.clone());
+        beside(
+            &vault.saves,
+            move || enrols(&into, &enrolling),
+            move || writer(&other, &beside_it),
+        );
+        cached.push((what, cached_pins(&vault)));
+        wanted.push((what, after.into_iter().cloned().collect::<Vec<String>>()));
+    }
+    assert_eq!(cached, wanted, "each beside an enrolment");
+}
+
+/// ★ A list never lands between an enrolment's entry in the device cache and its pairing in the
+/// book. The enrolment held in the book's write (its entry kept, the computer not yet paired), a
+/// list that does not name the computer (it enrolled after the list was asked for) waits for it,
+/// then takes it out of the cache and the book alike, as it takes out every computer it does not
+/// name. Before, the list took the entry out while the book did not hold the computer yet, so
+/// taking it out of the book did nothing, and the enrolment then paired it: in the book with no
+/// entry, admitted past its proof's age.
+#[test]
+fn a_list_never_lands_between_an_enrolments_cache_entry_and_its_pairing() {
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    CLOCK.store(fixture_now(), Ordering::SeqCst);
+    let pin = tls::pin(&spki("computerLan"));
+    let (other_key, other) = lan_key(7);
+    let vault = holding(vec![kept(&other, false, issued_at())]);
+    let enrolment = enrolment_in(&vault, clock);
+    let store = HoldingLan {
+        inner: LanStore::holding(&fixture_key(), STATION, &[]),
+        ..HoldingLan::default()
+    };
+    let book = book_in(&store);
+
+    let (enrolling, into) = (enrolment.clone(), book.clone());
+    let (listed, list, from) = (vec![approved(&other_key)], vault.clone(), book.clone());
+    beside(
+        &store.saves,
+        move || enrols(&into, &enrolling),
+        move || {
+            // The list as the controller hears it: the sweep, then each computer it hands back
+            // taken out of the LAN (`Lan::revoke`: out of the book, then the store told).
+            let gone = account::sweep(&listed, &list, SERVICE_STATION, fixture_now()).unwrap();
+            for pin in gone
+                .iter()
+                .filter_map(|pin| super::super::pairing::hex32(pin))
+            {
+                if from.forget(&book::device_id(&pin)) {
+                    from.keep().unwrap();
+                }
+            }
+        },
+    );
+    enrolment.reread();
+    CLOCK.store(issued_at() + PROOF_MAX_AGE_S, Ordering::SeqCst);
+    assert_eq!(
+        (book.paired(&pin), cached_pins(&vault)),
+        (None, vec![tempo_client::hex(&other)]),
+        "a computer the list does not name: out of the cache and the book alike"
+    );
+    assert_eq!(on_the_lan(&book, &enrolment, &pin), None);
+}
+
+/// ★ An expiry never takes out a computer enrolled again meanwhile, and the cache's lock and the
+/// book's never wait on each other in a ring. The list's expiry has found the computer past its
+/// proof's age and taken it out of the book; while it writes the book (holding the book's lock) the
+/// computer signs in again and enrols, its fresh entry kept, and waits for the book. Once the book
+/// is written the expiry comes to the cache, finds there an entry within its age, and leaves it: the
+/// computer, paired again, is held to its new proof. Before, the expiry took the fresh entry out,
+/// leaving it in the book with none, admitted past its new proof's age. The order that keeps the
+/// two locks from a ring: an enrolment holds the cache's lock while it takes the book's, and the
+/// expiry lets the book's go before it takes the cache's. Both finished.
+#[test]
+fn an_expiry_never_takes_out_a_computer_enrolled_again_meanwhile() {
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    CLOCK.store(fixture_now(), Ordering::SeqCst);
+    let pin = tls::pin(&spki("computerLan"));
+    let vault = holding(vec![kept(&pin, false, issued_at() - PROOF_MAX_AGE_S)]);
+    let enrolment = enrolment_in(&vault, clock);
+    let store = HoldingLan {
+        inner: LanStore::holding(&fixture_key(), STATION, &[(&pin, "DESKTOP-7Q")]),
+        ..HoldingLan::default()
+    };
+    let book = book_in(&store);
+    assert_eq!(
+        enrolment.expired(),
+        vec![pin],
+        "premise: past its proof's age"
+    );
+
+    let (held, go) = store.saves.next();
+    let (expiring, from) = (enrolment.clone(), book.clone());
+    let expiry = std::thread::spawn(move || {
+        super::super::expire(&from, &Authority::default(), &expiring);
+    });
+    held.recv_timeout(Duration::from_secs(10))
+        .expect("the expiry never wrote the book");
+    let (enrolling, into) = (enrolment.clone(), book.clone());
+    let again = std::thread::spawn(move || enrols(&into, &enrolling));
+    // Its fresh entry kept, the enrolment is at the book's lock, which the expiry holds.
+    let fresh = vec![kept(&pin, false, issued_at())];
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while vault.device_cache().unwrap().unwrap().devices != fresh {
+        assert!(
+            Instant::now() < deadline,
+            "the enrolment never kept its entry"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let _ = go.send(());
+    finished(expiry, "the expiry");
+    finished(again, "the enrolment");
+
+    assert_eq!(
+        book.paired(&pin),
+        Some(book::device_id(&pin)),
+        "paired again"
+    );
+    CLOCK.store(issued_at() + PROOF_MAX_AGE_S, Ordering::SeqCst);
+    assert_eq!(
+        on_the_lan(&book, &enrolment, &pin),
+        None,
+        "on the LAN past its new proof's age, the cache holding {:?}",
+        cached_pins(&vault)
+    );
+    assert_eq!(enrolment.expired(), vec![pin]);
+}
+
+/// ★ The cache's copy in memory, which every admission reads, never goes back to an older read. A
+/// re-read of the cache (each list's, and the launch's) held once it has read, an enrolment beside
+/// it: the enrolment waits, and the copy ends holding its entry. Before, the re-read put back what
+/// it read before the enrolment's save after the enrolment had set the copy: the computer in the
+/// book and no age held to it until the cache was read again, which with the internet down (no
+/// list) is the next launch.
+#[test]
+fn the_caches_copy_in_memory_never_goes_back_to_an_older_read() {
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    CLOCK.store(fixture_now(), Ordering::SeqCst);
+    let pin = tls::pin(&spki("computerLan"));
+    let vault = holding(Vec::new());
+    let enrolment = enrolment_in(&vault, clock);
+    let book = empty_book();
+
+    let (rereading, enrolling, into) = (enrolment.clone(), enrolment.clone(), book.clone());
+    beside(
+        &vault.reads,
+        move || rereading.reread(),
+        move || enrols(&into, &enrolling),
+    );
+    assert_eq!(book.paired(&pin), Some(book::device_id(&pin)), "enrolled");
+    CLOCK.store(issued_at() + PROOF_MAX_AGE_S, Ordering::SeqCst);
+    assert_eq!(
+        on_the_lan(&book, &enrolment, &pin),
+        None,
+        "on the LAN past its proof's age, the cache holding {:?}",
+        cached_pins(&vault)
+    );
+}
+
+/// ★ Each writer holds the cache from its read to its save: it takes the lock once, before it reads.
+/// Each writer runs alone; one that asked for the lock again after reading (having let it go between
+/// its read and its save) is held there, and a list keeping a device runs then. No writer is held,
+/// and the cache holds both changes. One that let the lock go would have saved over the list's.
+#[test]
+fn each_writer_holds_the_cache_from_its_read_to_its_save() {
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    CLOCK.store(fixture_now(), Ordering::SeqCst);
+    let enrolled = tempo_client::hex(&tls::pin(&spki("computerLan")));
+    let ((q_key, q), (r_key, r), (_, u), (_, s), (_, t)) =
+        (lan_key(1), lan_key(2), lan_key(3), lan_key(4), lan_key(5));
+    let [q_hex, r_hex, u_hex, s_hex, t_hex] = [q, r, u, s, t].map(|pin| tempo_client::hex(&pin));
+    let list = vec![
+        approved(&q_key),
+        approved(&r_key),
+        approved(&key("computerLan")),
+    ];
+    // A list keeping a device it vouched for, by its pin.
+    let keeping = |pin: [u8; 32]| -> Writer {
+        Box::new(move |vault: &Holding, _: &lan_enrol::Enrolment| {
+            let vouched = Vouched {
+                subject: "the owner".into(),
+                role: Role::Operate,
+                guest: false,
+                issued_at: issued_at(),
+            };
+            let pin = tempo_client::hex(&pin);
+            Controller::keep_for_lan(vault, SERVICE_STATION, &vouched, pin, fixture_now()).unwrap();
+        })
+    };
+    let writers: Vec<(&str, Writer, Vec<&String>)> = vec![
+        (
+            "an enrolment",
+            Box::new(|_: &Holding, enrolment: &lan_enrol::Enrolment| {
+                enrols(&empty_book(), enrolment);
+            }),
+            vec![&q_hex, &r_hex, &u_hex, &enrolled, &s_hex],
+        ),
+        (
+            "a list's sweep",
+            Box::new(move |vault: &Holding, _: &lan_enrol::Enrolment| {
+                account::sweep(&list, vault, SERVICE_STATION, fixture_now()).unwrap();
+            }),
+            vec![&q_hex, &r_hex, &s_hex],
+        ),
+        (
+            "a list keeping a device it vouched for",
+            keeping(t),
+            vec![&q_hex, &r_hex, &u_hex, &t_hex, &s_hex],
+        ),
+        (
+            "an expiry",
+            Box::new(move |_: &Holding, enrolment: &lan_enrol::Enrolment| {
+                enrolment.forget(&[q]);
+            }),
+            vec![&r_hex, &u_hex, &s_hex],
+        ),
+        (
+            "a code pairing",
+            Box::new(move |_: &Holding, enrolment: &lan_enrol::Enrolment| {
+                enrolment.paired_by_code(&r).unwrap();
+            }),
+            vec![&q_hex, &u_hex, &s_hex],
+        ),
+    ];
+    let (mut cached, mut wanted) = (Vec::new(), Vec::new());
+    for (what, writer, after) in writers {
+        let vault = holding(vec![
+            kept(&q, false, issued_at() - PROOF_MAX_AGE_S),
+            kept(&r, false, issued_at()),
+            kept(&u, false, issued_at()),
+        ]);
+        let enrolment = enrolment_in(&vault, clock);
+        let (held, go) = vault.relocks.next();
+        let (on, beside_it) = (vault.clone(), enrolment.clone());
+        let first = std::thread::spawn(move || writer(&on, &beside_it));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !first.is_finished() && held.try_recv().is_err() {
+            assert!(Instant::now() < deadline, "{what}: neither done nor held");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // Only the first writer is looked at here.
+        vault.relocks.clear();
+        let (on, beside_it) = (vault.clone(), enrolment.clone());
+        let list = std::thread::spawn(move || keeping(s)(&on, &beside_it));
+        finished(list, "a list keeping a device");
+        let _ = go.send(());
+        finished(first, what);
+        cached.push((what, cached_pins(&vault)));
+        wanted.push((what, after.into_iter().cloned().collect::<Vec<String>>()));
+    }
+    assert_eq!(cached, wanted, "each, then a list keeping a device");
 }

@@ -7,7 +7,7 @@
 //! loopback; the issuer is never asked, because the station already holds its keys, fetched at
 //! that same time.
 use super::*;
-use crate::remote_service::vault::{AccountKeys, AccountVault, People};
+use crate::remote_service::vault::{AccountKeys, AccountVault, DevicesHeld, People};
 use tempo_client::account::{mailbox, CachedDevice, Invite, KeySet, Owner, Role, Tenant};
 
 const CASES: &str =
@@ -715,7 +715,9 @@ async fn a_computer_the_service_stops_listing_leaves_the_lan() {
             confirmed_at: 0,
         })
         .unwrap();
-    vault.save_device_cache(&cache).unwrap();
+    vault
+        .save_device_cache(&DevicesHeld::take(&vault), &cache)
+        .unwrap();
     let scratch = Scratch::new();
     let engine = engine();
     let service =
@@ -796,7 +798,9 @@ async fn a_computer_past_its_proofs_age_leaves_the_lan_at_the_next_list() {
             confirmed_at: 0,
         })
         .unwrap();
-    vault.save_device_cache(&cache).unwrap();
+    vault
+        .save_device_cache(&DevicesHeld::take(&vault), &cache)
+        .unwrap();
     let mut row = computer_row(&token("computer"), "operate");
     row["proof"] = serde_json::Value::Null;
     let status = listed(&service, &cloud, vec![row]).await;
@@ -864,7 +868,9 @@ async fn a_computer_paired_again_with_a_code_is_removed_at_the_shack_not_on_the_
             })
             .unwrap();
     }
-    vault.save_device_cache(&cache).unwrap();
+    vault
+        .save_device_cache(&DevicesHeld::take(&vault), &cache)
+        .unwrap();
     let scratch = Scratch::new();
     let engine = engine();
     let service = launch_owned(&cloud, &vault).with_lan(

@@ -23,6 +23,7 @@ mod tunnel_grants;
 pub(super) struct MemoryVault {
     values: Arc<Mutex<HashMap<String, String>>>,
     fail: Arc<AtomicBool>,
+    devices: Arc<Mutex<()>>,
 }
 impl MemoryVault {
     fn account_entry<T: serde::de::DeserializeOwned>(
@@ -72,9 +73,13 @@ impl vault::AccountVault for MemoryVault {
     }
     fn save_device_cache(
         &self,
+        _held: &vault::DevicesHeld<'_>,
         cache: &tempo_client::account::DeviceCache,
     ) -> Result<(), &'static str> {
         self.save_account_entry("account-devices", cache)
+    }
+    fn devices_lock(&self) -> &Mutex<()> {
+        &self.devices
     }
     fn people(&self) -> Result<Option<vault::People>, &'static str> {
         self.account_entry("account-people")
