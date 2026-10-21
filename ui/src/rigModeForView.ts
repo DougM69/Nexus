@@ -40,6 +40,10 @@
 // not transmit on is homed as before) and asks the engine to keep the dial wherever Phone may
 // transmit there (`keepDial`). The ENGINE judges that, with the licence and the real dial
 // under its lock; this module only says which screen the operator came from.
+//
+// It asks with Phone already the mode homed for too, where nothing follows and the dial stays
+// anyway: the ask is also what carries the FM channel the SSTV screen holds (144.500 on 2 m) into
+// Phone. The operator, the same day: "a kept FM channel keeps commanding FM in Phone".
 
 /** The rig modes a section can own. */
 export type RigMode = 'cw' | 'phone' | 'rtty' | 'keyboard' | 'digital'
@@ -76,7 +80,8 @@ export interface RigModeTransition {
   mode?: RigMode
   /** Re-home the dial to this mode's frequency. */
   followFreq: boolean
-  /** With `followFreq`: keep the dial instead where the engine finds this mode may transmit. */
+  /** Leaving the screen this mode rides for it: keep the dial (with `followFreq`, where the engine
+   *  finds this mode may transmit) and the FM channel it is held on. */
   keepDial?: boolean
   /** What the caller's "last re-homed mode" guard should hold after this. */
   nextHomed: RigMode
@@ -93,7 +98,7 @@ export function rigModeTransition(view: string, lastHomed: RigMode, from?: strin
   const mode = RIG_MODE_BY_VIEW[view]
   if (!mode) return { followFreq: false, nextHomed: lastHomed }
   const followFreq = mode !== lastHomed && VIEWS_THAT_HOME.has(view)
-  const keepDial = followFreq && from !== undefined && RIDES[from] === mode
+  const keepDial = from !== undefined && RIDES[from] === mode
   // ONLY a real re-home advances the guard. This one line is the fix.
   return { mode, followFreq, keepDial, nextHomed: followFreq ? mode : lastHomed }
 }

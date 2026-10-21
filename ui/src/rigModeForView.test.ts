@@ -105,17 +105,24 @@ describe('SSTV → Phone keeps the dial (the operator, 2026-10-20)', () => {
   })
 
   it('asks only when leaving the SSTV screen, and only for Phone', () => {
-    for (const from of ['operate', 'cw', 'rtty', 'psk', 'js8', 'chat', 'aprs', 'sats', 'map', 'logbook', undefined]) {
-      expect(rigModeTransition('phone', 'digital', from).keepDial, `Phone from ${from}`).toBeFalsy()
-    }
-    for (const view of ['operate', 'cw', 'rtty', 'psk', 'js8', 'chat']) {
-      expect(rigModeTransition(view, 'phone', 'sstv').keepDial, `SSTV → ${view}`).toBeFalsy()
+    for (const homed of ['digital', 'phone'] as const) {
+      for (const from of ['operate', 'cw', 'rtty', 'psk', 'js8', 'chat', 'aprs', 'sats', 'map', 'logbook', undefined]) {
+        expect(rigModeTransition('phone', homed, from).keepDial, `Phone from ${from}, ${homed} homed`).toBeFalsy()
+      }
+      for (const view of ['operate', 'cw', 'rtty', 'psk', 'js8', 'chat']) {
+        expect(rigModeTransition(view, homed, 'sstv').keepDial, `SSTV → ${view}, ${homed} homed`).toBeFalsy()
+      }
     }
   })
 
-  it('with Phone already the mode homed for, nothing follows and nothing is asked', () => {
-    const t = rigModeTransition('phone', 'phone', 'sstv')
-    expect(t.followFreq).toBe(false)
-    expect(t.keepDial).toBeFalsy()
+  it('with Phone already the mode homed for, nothing follows and it still asks to keep the dial', () => {
+    // The dial stays either way. The ask is what carries the FM channel the SSTV screen holds
+    // into Phone (the operator, 2026-10-20: "a kept FM channel keeps commanding FM in Phone").
+    expect(rigModeTransition('phone', 'phone', 'sstv')).toEqual({
+      mode: 'phone',
+      followFreq: false,
+      keepDial: true,
+      nextHomed: 'phone',
+    })
   })
 })

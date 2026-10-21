@@ -1648,6 +1648,11 @@ pub struct RadioStatus {
     /// when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub phone_mode_refused: bool,
+    /// The rig is held on an FM channel at or above 29 MHz (`Engine::fm_channel`), so FM is
+    /// commanded whatever the section's own policy says: in Phone, the FM channel kept from the
+    /// SSTV screen. The Phone cockpit's AUTO reads FM from it. Skipped when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fm_channel: bool,
     /// Whether the operator is holding a steady tune carrier (for ATU / amp
     /// tuning). While true the radio plays a continuous f0 sine instead of slots.
     #[serde(default)]

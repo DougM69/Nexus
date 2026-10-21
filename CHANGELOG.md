@@ -408,6 +408,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   memory pick, or a spot. Leave Phone and come back, and you return to where you left it. A frequency your licence
   may not use for phone (7.171 MHz for a General, 28.680 MHz for a Technician) still moves you to a legal phone
   frequency, as before.
+- **On a 2 m FM SSTV channel, clicking Phone keeps the radio in FM.** On the SSTV screen, picking an FM image channel
+  (144.500 MHz, or a frequency you set to FM there) puts the radio in FM, and clicking Phone kept the frequency but
+  switched the radio to USB. Phone now keeps FM there, and its AUTO mode button reads FM, until you move off the
+  channel from Nexus (a typed frequency, a band, memory or spot pick), go to another mode, or pick a mode on Phone's
+  mode buttons. Looking at another screen and coming back to Phone keeps it too. Phone reached any other way still
+  follows your phone mode setting.
 - **FT8 and FT4 no longer transmit on top of another program keying your radio through Nexus.** With "Other programs
   may key transmit" on, a program sharing the radio through Nexus's CAT broker (WSJT-X, VarAC) could key for a
   transmission of its own while your FT8 or FT4 CQ or QSO was armed, and at the start of your next period Nexus sent its
