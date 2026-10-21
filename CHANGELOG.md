@@ -422,6 +422,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   computer: transmit under your callsign, edit, export or delete your log, upload with your saved logins (LoTW signed
   with your certificate), spot under your call and read your Winlink mail. Invite to operate only someone you would
   hand the shack to; **Listen** gives none of that.
+- **Windows: FT8, FT4 and the other WSJT-X modes finish decoding sooner.** The FFT library in the Windows build now
+  uses the processor's SSE2 and AVX instructions, as WSJT-X's own Windows build does; until now it used none. On one
+  Windows PC the early FT8 decode took 17-36 % less time and the full decode 1-21 % less, and the decodes were
+  exactly the same. There is nothing to set: the library picks what the processor has when Nexus starts, and a
+  processor without AVX works as before. Linux and Mac builds are unchanged.
 - **FT8/FT4: a late reply changes the over already on the air, as in WSJT-X.** When your partner's reply is
   decoded after your over has started (a weak R-report or RR73 that only the full decode finds), Nexus used to send
   the old message to the end of the over and the right one an over later. It now switches the rest of the over to the
@@ -521,6 +526,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **Band Activity and Rx Frequency: a line's time is the start of the period it was heard in, as in WSJT-X and
+  ALL.TXT.** The time was when the line reached the list, so a line the full decode found at :34 read :34 under the
+  :15 period's separator. It now reads :15; hold the pointer over the time to see when the line arrived. A line
+  heard before a band or mode change shows the period it was heard in, and your own transmissions still show when
+  they were sent. With an MSK144, FST4, Q65 or JS8 T/R period other than the usual one, the period separators show
+  the right time now too.
+- **WSJT-X UDP: each decode carries the start of the period it was heard in, as WSJT-X sends it.** JTAlert,
+  GridTracker and loggers were given the moment Nexus sent each decode. A decode from the full pass, which finishes
+  a second or more into the next period, carried a time in that next period (a decode of the 12:00:15 period sent
+  at 12:00:31 said 12:00:31), and an early-pass decode a time 12 seconds into its own. Each decode now carries its
+  period's start, 12:00:15, and so does a logger's Replay. ALL.TXT already wrote that time.
 - **CW: "Colors" in the scope's head sits with its colour picker.** The word stood against the zero-beat reading,
   in the same small capitals, and read as part of it, while the picker sat in the middle of the row. The word and
   the picker are now one group after the zero-beat reading, set off from it by a thin line, and clicking the word

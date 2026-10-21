@@ -13399,7 +13399,7 @@ impl RadioLoop {
                         // double-spot.
                         if let Some(server) = sinks.wsjtx {
                             let tier = tier_mode(eng.tier());
-                            let ms_mid = (now as u64 % 86_400_000) as u32;
+                            let ms_mid = udp_decode_time_ms(&eng, now);
                             for d in eng.current_period_decodes() {
                                 let _ = server.send_decode(&build_decode(
                                     &d.message,
@@ -15219,7 +15219,7 @@ fn emit_rx_decodes(
         return;
     }
     let tier = tier_mode(eng.tier());
-    let ms_mid = (now as u64 % 86_400_000) as u32;
+    let ms_mid = udp_decode_time_ms(eng, now);
     let now_secs = (now / 1000.0) as u32;
     let me = (
         eng.settings().mycall.as_str(),
@@ -15244,6 +15244,19 @@ fn emit_rx_decodes(
             queue_spot(psk_spots, psk_cache, d, tier, cur_dial, now_secs, me);
         }
     }
+}
+
+/// A UDP Decode's `Time` (ms since midnight UTC) for the decodes `eng` folded last: the START of
+/// the period they were heard in, whenever the datagram goes out. WSJT-X 3.0.2 stamps every pass of
+/// a period with its start (`dec_data.params.nutc`, `widgets/mainwindow.cpp:5397-5404`) and sends
+/// that as the Decode's Time (`postDecode`, :13409-13410), so JTAlert, GridTracker and loggers file
+/// a decode by its period. The moment of sending put a full-pass decode, which ends seconds into
+/// the next period, under that next one. ALL.TXT stamps the same second.
+fn udp_decode_time_ms(eng: &Engine, now: f64) -> u32 {
+    let unix_ms = eng
+        .last_decode_period_start_unix()
+        .map_or(now as u64, |s| s * 1000);
+    (unix_ms % 86_400_000) as u32
 }
 
 fn build_decode<'a>(
@@ -17601,6 +17614,7 @@ mod tests {
     mod tci_server;
     mod tci_soundcard_cw;
     mod tci_spots;
+    mod udp_decode_time;
     mod udp_requests;
     mod wfview;
     mod yaesu_alc;

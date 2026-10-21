@@ -1219,6 +1219,7 @@
 "3","operate.decodes.row.highlighted"," · highlighted by your logger (UDP)","","UDP",""
 "3","operate.decodes.tier.title","Decoded by {{tier}}","","{{tier}}",""
 "3","operate.decodes.utc.title","UTC heard","","UTC",""
+"3","operate.decodes.utc.period.title","Start of the period it was heard in (UTC). Arrived at {{time}}.","","{{time}} | UTC","Tooltip on the time of a received line in Band Activity. The time shown is the start of the period the line was heard in; {{time}} is when the line arrived, as hhmmss."
 "3","operate.decodes.dt.title","DT — time offset (s); large = clock/sync skew","","",""
 "3","operate.decodes.dt.title.msk144","T — when in the period the ping landed (s)","","",""
 "3","operate.decodes.marker.lowConf.title","Low-confidence decode","","",""

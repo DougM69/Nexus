@@ -635,11 +635,14 @@ MinGW FFTW prefix.
 The cross build needs a static single-precision FFTW3f for MinGW at
 `FFTW_MINGW_PREFIX` (default `/tmp/fftw-mingw`; the cross script overrides it to
 `target/fftw-mingw`). `scripts/build-windows-cross.sh` builds it once and caches
-it:
+it, with SSE2/AVX/AVX2 codelets that FFTW picks by CPU at run time (WSJT-X's own
+Windows FFTW has SIMD too). A stamp in the prefix records the version and flags, so a
+cache built with other flags is rebuilt:
 
 ```bash
 ./configure --host=x86_64-w64-mingw32 --enable-float --enable-static \
-            --disable-shared --prefix=$FFTW_MINGW_PREFIX
+            --disable-shared --enable-sse2 --enable-avx --enable-avx2 \
+            --with-our-malloc --prefix=$FFTW_MINGW_PREFIX
 ```
 
 ### 9.4 NSIS bundling: offline WebView2 + Hamlib
