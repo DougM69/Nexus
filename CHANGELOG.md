@@ -573,6 +573,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode could leave the contest, and the CW and Phone log lines then showed the everyday form: no exchange boxes, no
   dupe check, the casual macros. Opening the CW or Phone screen now enters the contest again in S&P, as the Contest
   screen already does. It never starts calling CQ, and a station already in the contest keeps running or S&P.
+- **Field Day and contest FT: only your caller's own RR73 closes the contact.** In the Contest screen's Running on
+  Field Day's messages (ARRL Field Day, Winter Field Day, and FT1, DX1 or FT2 in any contest), an RR73, RRR or 73
+  sent to you by another station logged your contact with the station you were working and went back to CQ before
+  that station had confirmed; its own RR73 then got no 73. Now, as in WSJT-X, another station's confirmation is
+  ignored: nothing is logged or sent to it, and your caller keeps getting your R and exchange until its own RR73
+  logs the contact, with your 73 in ARRL Field Day on FT8 and FT4 as before. The ARRL VHF contests and the
+  contests with the standard messages already worked this way. NEEDS-BENCH: ARRL Field Day on FT8 and FT4, a
+  station that calls you and a second station that sends you RR73.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.
