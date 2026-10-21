@@ -937,6 +937,23 @@ mod tests {
             [("K1ABC".to_string(), 14_025_000)]
         );
         assert!(e.take_tci_spot_clicks().is_empty(), "told once");
+        // Refused with a callsign a program's spot could carry, so only the refusal keeps it untold:
+        // off the bands, and with something on the air; and with no callsign at all.
+        assert!(e.tci_program_spot_clicked("K1ABC", 15_000_000).is_err());
+        assert!(
+            e.take_tci_spot_clicks().is_empty(),
+            "off the bands: nothing told"
+        );
+        e.set_operating_mode("phone", false);
+        e.set_tx_enabled_by_operator(true);
+        e.set_ptt(true);
+        assert!(e.on_air(), "premise: the PTT keys");
+        assert!(e.tci_program_spot_clicked("K1ABC", 14_225_000).is_err());
+        assert!(
+            e.take_tci_spot_clicks().is_empty(),
+            "on the air: nothing told"
+        );
+        e.set_ptt(false);
         assert!(e.tci_program_spot_clicked("HELLO", 14_025_000).is_err());
         assert!(e.take_tci_spot_clicks().is_empty(), "refused: nothing told");
         for n in 0..=SPOT_CLICKS_WAITING {
