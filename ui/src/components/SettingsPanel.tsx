@@ -6597,7 +6597,7 @@ export function SettingsPanel({
                     <span className="settings-label">
                       {t('settings.rigControl.flexUnbenched.label')}
                     </span>
-                    <button disabled={remote}
+                    <button disabled={locked('flexNativeUnbenched')} data-setting="flexNativeUnbenched"
                       type="button"
                       role="switch"
                       aria-checked={form.flexNativeUnbenched ?? false}
@@ -6613,6 +6613,7 @@ export function SettingsPanel({
                     >
                       <span className="toggle-knob" />
                     </button>
+                    {setAtStation('flexNativeUnbenched')}
                     <span className="settings-hint">
                       <T k="settings.rigControl.flexUnbenched.hint" tags={{ b: <strong /> }} />
                     </span>
@@ -9084,7 +9085,7 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">{t('settings.cw.keyer.title')}</span>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.cw.keyer.label')}</span>
-                <select disabled={remote}
+                <select disabled={locked('cwKeyer')} data-setting="cwKeyer"
                   className="settings-input"
                   value={form.cwKeyer ?? 'cat'}
                   onChange={(e) => update('cwKeyer', e.target.value)}
@@ -9094,6 +9095,7 @@ export function SettingsPanel({
                   <option value="winkeyer">{t('settings.cw.keyer.winkeyer')}</option>
                   <option value="soundcard">{t('settings.cw.keyer.soundcard')}</option>
                 </select>
+                {setAtStation('cwKeyer')}
                 <span className="settings-hint">
                   <T k="settings.cw.keyer.hint" tags={{ b: <strong /> }} />
                 </span>
@@ -9204,7 +9206,7 @@ export function SettingsPanel({
               {form.cwKeyer === 'winkeyer' && (
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.cw.winkeyerPort.label')}</span>
-                  <input disabled={remote}
+                  <input disabled={locked('winkeyerPort')} data-setting="winkeyerPort"
                     className="settings-input"
                     type="text"
                     value={form.winkeyerPort}
@@ -9215,6 +9217,7 @@ export function SettingsPanel({
                     autoComplete="off"
                     spellCheck={false}
                   />
+                  {setAtStation('winkeyerPort')}
                   <span className="settings-hint">{t('settings.cw.winkeyerPort.hint')}</span>
                 </label>
               )}
@@ -9222,7 +9225,7 @@ export function SettingsPanel({
                 <>
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.cw.keyPort.label')}</span>
-                    <input disabled={remote}
+                    <input disabled={locked('cwKeyPort')} data-setting="cwKeyPort"
                       className="settings-input"
                       type="text"
                       value={form.cwKeyPort ?? ''}
@@ -9233,6 +9236,7 @@ export function SettingsPanel({
                       autoComplete="off"
                       spellCheck={false}
                     />
+                    {setAtStation('cwKeyPort')}
                     {/* "US Navigator" was listed here as an example through 0.27. The Timewave
                         Navigator keys through a K1EL WinKey micro, which ignores DTR/RTS
                         entirely — so this hint pointed a Navigator owner at the one backend
@@ -9243,7 +9247,7 @@ export function SettingsPanel({
                   </label>
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.cw.keyLine.label')}</span>
-                    <select disabled={remote}
+                    <select disabled={locked('cwKeyLine')} data-setting="cwKeyLine"
                       className="settings-input"
                       value={form.cwKeyLine ?? 'dtr'}
                       onChange={(e) => update('cwKeyLine', e.target.value)}
@@ -9251,6 +9255,7 @@ export function SettingsPanel({
                       <option value="dtr">{t('settings.cw.keyLine.dtr')}</option>
                       <option value="rts">{SERIAL_LINE_RTS}</option>
                     </select>
+                    {setAtStation('cwKeyLine')}
                     <span className="settings-hint">{t('settings.cw.keyLine.hint')}</span>
                   </label>
                 </>
@@ -9397,7 +9402,7 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">{t('settings.rtty.keying.title')}</span>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rtty.backend.label')}</span>
-                <select disabled={remote}
+                <select disabled={locked('rttyBackend')} data-setting="rttyBackend"
                   className="settings-input"
                   value={form.rttyBackend ?? 'afsk'}
                   onChange={(e) => update('rttyBackend', e.target.value)}
@@ -9405,6 +9410,7 @@ export function SettingsPanel({
                   <option value="afsk">{t('settings.rtty.backend.afsk')}</option>
                   <option value="fsk">{t('settings.rtty.backend.fsk')}</option>
                 </select>
+                {setAtStation('rttyBackend')}
                 <span className="settings-hint">
                   <T k="settings.rtty.backend.hint" tags={{ b: <strong /> }} />
                 </span>
@@ -9427,7 +9433,7 @@ export function SettingsPanel({
                 <>
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.rtty.fskPort.label')}</span>
-                    <input disabled={remote}
+                    <input disabled={locked('rttyFskPort')} data-setting="rttyFskPort"
                       className="settings-input"
                       type="text"
                       value={form.rttyFskPort ?? ''}
@@ -9438,11 +9444,12 @@ export function SettingsPanel({
                       autoComplete="off"
                       spellCheck={false}
                     />
+                    {setAtStation('rttyFskPort')}
                     <span className="settings-hint">{t('settings.rtty.fskPort.hint')}</span>
                   </label>
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.rtty.fskLine.label')}</span>
-                    <select disabled={remote}
+                    <select disabled={locked('rttyFskLine')} data-setting="rttyFskLine"
                       className="settings-input"
                       value={form.rttyFskLine ?? 'dtr'}
                       onChange={(e) => update('rttyFskLine', e.target.value)}
@@ -9450,6 +9457,7 @@ export function SettingsPanel({
                       <option value="dtr">{t('settings.rtty.fskLine.dtr')}</option>
                       <option value="rts">{SERIAL_LINE_RTS}</option>
                     </select>
+                    {setAtStation('rttyFskLine')}
                     <span className="settings-hint">{t('settings.rtty.fskLine.hint')}</span>
                   </label>
                 </>

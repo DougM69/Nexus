@@ -911,6 +911,199 @@ fn a_radio_edit_from_afar_keeps_that_radios_ptt() {
     );
 }
 
+/// What `read` finds in a whole save made from `shack` with `change` alone: as the shack has it,
+/// once the save from afar has gone through the keeps, and once the shack's own screen's has.
+fn kept_from_afar<T>(
+    shack: &tempo_app::settings::Settings,
+    change: impl Fn(&mut tempo_app::settings::Settings),
+    read: impl Fn(&tempo_app::settings::Settings) -> T,
+) -> [T; 3] {
+    let mut asked = shack.clone();
+    change(&mut asked);
+    let mut from_afar = asked.clone();
+    keep_the_shacks_settings(shack, &mut from_afar, Some(&Afar { stand_down: 3 }));
+    let mut at_the_shack = asked;
+    keep_the_shacks_settings(shack, &mut at_the_shack, None);
+    [read(shack), read(&from_afar), read(&at_the_shack)]
+}
+
+/// The shack's own keying lines: a serial keyline for CW on its own port, and true FSK for RTTY on
+/// its own port and line, beside a CAT radio on COM4.
+fn shack_that_keys_by_lines() -> tempo_app::settings::Settings {
+    tempo_app::settings::Settings {
+        serial_port: "COM4".into(),
+        cw_keyer: tempo_app::settings::CwKeyerBackend::Serial,
+        cw_key_port: "COM7".into(),
+        cw_key_line: "dtr".into(),
+        winkeyer_port: "COM6".into(),
+        rtty_backend: "fsk".into(),
+        rtty_fsk_port: "COM8".into(),
+        rtty_fsk_line: "dtr".into(),
+        ..Default::default()
+    }
+}
+
+/// ⛔ How CW keys the transmitter is set at the station only: a save from afar keeps the shack's
+/// keyer. CONTROL: the shack's own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_cw_keyer() {
+    use tempo_app::settings::CwKeyerBackend;
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.cw_keyer = CwKeyerBackend::Soundcard,
+            |s| s.cw_keyer
+        ),
+        [
+            CwKeyerBackend::Serial,
+            CwKeyerBackend::Serial,
+            CwKeyerBackend::Soundcard
+        ]
+    );
+}
+
+/// ⛔ The CW keyline's port is set at the station only: a save from afar cannot point it at the CAT
+/// port. CONTROL: the shack's own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_cw_key_port() {
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.cw_key_port = "COM4".into(),
+            |s| s.cw_key_port.clone()
+        ),
+        ["COM7", "COM7", "COM4"]
+    );
+}
+
+/// ⛔ Which line of that port keys CW is set at the station only. CONTROL: the shack's own save
+/// takes it.
+#[test]
+fn a_save_from_afar_keeps_the_cw_key_line() {
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.cw_key_line = "rts".into(),
+            |s| s.cw_key_line.clone()
+        ),
+        ["dtr", "dtr", "rts"]
+    );
+}
+
+/// ⛔ The WinKeyer's port is set at the station only. CONTROL: the shack's own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_winkeyer_port() {
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.winkeyer_port = "COM4".into(),
+            |s| s.winkeyer_port.clone()
+        ),
+        ["COM6", "COM6", "COM4"]
+    );
+}
+
+/// ⛔ How RTTY keys the transmitter (AFSK, or true FSK on a serial line) is set at the station
+/// only. CONTROL: the shack's own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_rtty_keying() {
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.rtty_backend = "afsk".into(),
+            |s| s.rtty_backend.clone()
+        ),
+        ["fsk", "fsk", "afsk"]
+    );
+}
+
+/// ⛔ The FSK keyline's port is set at the station only: a save from afar cannot point it at the
+/// CAT port. CONTROL: the shack's own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_rtty_fsk_port() {
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.rtty_fsk_port = "COM4".into(),
+            |s| s.rtty_fsk_port.clone()
+        ),
+        ["COM8", "COM8", "COM4"]
+    );
+}
+
+/// ⛔ Which line of that port carries the FSK data is set at the station only. CONTROL: the shack's
+/// own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_rtty_fsk_line() {
+    assert_eq!(
+        kept_from_afar(
+            &shack_that_keys_by_lines(),
+            |s| s.rtty_fsk_line = "rts".into(),
+            |s| s.rtty_fsk_line.clone()
+        ),
+        ["dtr", "dtr", "rts"]
+    );
+}
+
+/// The two-radio shack with the Flex client's Beta for CW, Tune and the ATU on for radio 1 alone.
+fn shack_with_one_flex_beta() -> tempo_app::settings::Settings {
+    let mut shack = two_radio_shack();
+    shack.radios[1].flex_native_unbenched = true;
+    shack.sync_flat_from_active();
+    shack
+}
+
+/// ⛔ The Flex client's Beta that lets it start CW, Tune and the ATU no bench has confirmed is set at
+/// the station only, and it is the radio's own, as its PTT is: a save from afar keeps the shack's
+/// value for the radio its form was editing, either way. CONTROL: the shack's own save takes it.
+#[test]
+fn a_save_from_afar_keeps_the_flex_beta_of_the_radio_its_form_edited() {
+    let shack = shack_with_one_flex_beta();
+    assert!(!shack.flex_native_unbenched, "premise: radio 0 is live");
+    assert_eq!(
+        kept_from_afar(
+            &shack,
+            |s| s.flex_native_unbenched = true,
+            |s| s.flex_native_unbenched
+        ),
+        [false, false, true],
+        "radio 0's form, turned on"
+    );
+    assert_eq!(
+        kept_from_afar(
+            &shack,
+            |s| {
+                s.active_radio = 1;
+                s.flex_native_unbenched = false;
+            },
+            |s| s.flex_native_unbenched
+        ),
+        [false, true, false],
+        "radio 1's form, turned off"
+    );
+}
+
+/// ⛔ …and a radio's edit from afar keeps that radio's Beta as the shack has it. CONTROL: the
+/// shack's own edit takes it, and the rest of the edit is taken from afar.
+#[test]
+fn a_radio_edit_from_afar_keeps_that_radios_flex_beta() {
+    let shack = shack_with_one_flex_beta();
+    let mut asked: tempo_app::settings::RadioProfilePatch =
+        serde_json::from_value(serde_json::to_value(&shack.radios[1]).unwrap()).unwrap();
+    asked.flex_native_unbenched = false;
+    asked.tx_level = 0.25;
+    let mut patch = asked.clone();
+    keep_the_shacks_radio_ptt(&shack, 1, &mut patch, Some(&Afar { stand_down: 3 }));
+    assert!(patch.flex_native_unbenched, "from afar, radio 1's Beta");
+    assert_eq!(patch.tx_level, 0.25, "CONTROL: the rest of the edit");
+    let mut patch = asked.clone();
+    keep_the_shacks_radio_ptt(&shack, 1, &mut patch, None);
+    assert!(
+        !patch.flex_native_unbenched,
+        "CONTROL: the shack's own edit"
+    );
+}
+
 /// ⛔ "PROGRAMS ON TCI MAY TRANSMIT" IS SET AT THE SHACK ONLY. A whole save from afar neither
 /// turns it on nor off, nor the server under it; a radio's edit from afar cannot name it, since it
 /// is the station's and no radio's; and the read from afar says it is set at the station.

@@ -175,7 +175,7 @@ pub(crate) const PRESENCE_BOUND: [&str; 7] = [
 /// that let the station transmit with no press at it (a switch that transmits by itself, or one that
 /// lets a program at the shack or a browser start a transmission there) and the guards on a
 /// transmission (what stops or caps one by itself, the power ceilings, the licence privileges, and
-/// the line that keys the transmitter), the one setting that names a program for the shack to run
+/// the lines that key the transmitter), the one setting that names a program for the shack to run
 /// (the TQSL path), and the TCI server's settings. From afar a save keeps the shack's own value of
 /// each ([`keep_the_shacks_transmit_settings`], [`keep_the_shacks_radio_ptt`]): they are set at the
 /// shack only. So are the addresses Nexus sends a stored key or password to
@@ -256,6 +256,21 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     };
     save.ptt_method = method.clone();
     save.ptt_serial_port = port.clone();
+    // …and the other lines that key it: CW's keyer, its keyline's port and line and the WinKeyer's
+    // port (the radio loop opens a CW key port as soon as its keyer is chosen, the CAT port among
+    // them), and how RTTY keys, with true FSK's port and line.
+    save.cw_keyer = shack.cw_keyer;
+    save.cw_key_port = shack.cw_key_port.clone();
+    save.cw_key_line = shack.cw_key_line.clone();
+    save.winkeyer_port = shack.winkeyer_port.clone();
+    save.rtty_backend = shack.rtty_backend.clone();
+    save.rtty_fsk_port = shack.rtty_fsk_port.clone();
+    save.rtty_fsk_line = shack.rtty_fsk_line.clone();
+    // The Flex client's Beta that lets it start CW, Tune and the ATU no bench has confirmed: the
+    // radio's own, as its PTT is.
+    save.flex_native_unbenched = edited.map_or(shack.flex_native_unbenched, |radio| {
+        radio.flex_native_unbenched
+    });
     // ⛔ The one setting that names a program for the shack to run: TQSL, which signs a LoTW upload
     // from the Upload button (which runs from afar too) or the automatic batch, with nobody at the
     // shack to see what it was. Every other path a save carries is data: a voice-keyer slot's WAV,
@@ -264,8 +279,9 @@ pub(crate) fn keep_the_shacks_transmit_settings(
 }
 
 /// What one radio's edit from afar may not change ([`SETTINGS_FROM_AFAR`]): its PTT method and
-/// port, put back into `patch` as the shack has them for radio `id`. From the shack's own screen
-/// (`None`), or for a radio the shack does not have, the patch is taken as it came.
+/// port, and the Flex client's Beta for CW, Tune and the ATU, put back into `patch` as the shack has
+/// them for radio `id`. From the shack's own screen (`None`), or for a radio the shack does not
+/// have, the patch is taken as it came.
 pub(crate) fn keep_the_shacks_radio_ptt(
     shack: &tempo_app::settings::Settings,
     id: u32,
@@ -278,6 +294,7 @@ pub(crate) fn keep_the_shacks_radio_ptt(
     if let Some(radio) = shack.radios.iter().find(|p| p.id == id) {
         patch.ptt_method = radio.ptt_method.clone();
         patch.ptt_serial_port = radio.ptt_serial_port.clone();
+        patch.flex_native_unbenched = radio.flex_native_unbenched;
     }
 }
 
@@ -420,7 +437,7 @@ pub(crate) fn keep_the_shacks_settings(
 /// addresses the shack sends a stored key or password to
 /// ([`keep_the_shacks_credential_addresses`]). A test changes each setting alone in a save from
 /// afar and holds this list to exactly the ones that come back.
-pub(crate) const STATION_ONLY_SETTINGS: [&str; 45] = [
+pub(crate) const STATION_ONLY_SETTINGS: [&str; 53] = [
     "js8AprsRelay",
     "beaconTxPercent",
     "cqPauseSecs",
@@ -461,6 +478,14 @@ pub(crate) const STATION_ONLY_SETTINGS: [&str; 45] = [
     "catSerialHandshake",
     "pttMethod",
     "pttSerialPort",
+    "cwKeyer",
+    "cwKeyPort",
+    "cwKeyLine",
+    "winkeyerPort",
+    "rttyBackend",
+    "rttyFskPort",
+    "rttyFskLine",
+    "flexNativeUnbenched",
     "tqslPath",
     "cloudlogUrl",
     "fdJoinAddr",

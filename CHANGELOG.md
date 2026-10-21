@@ -944,6 +944,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a browser transmit, the PTT method, port and lines, the TQSL path and the addresses your logging-service keys are sent
   to as the station's own profile of that name has them, and a new one carries none of them, so loading it keeps the
   station's own. Profiles saved at the station, and loading them there, are unchanged.
+- **Nexus Remote: the CW and RTTY keying lines and the Flex client's Beta are set at the station only.** A settings
+  save from a computer driving the station now keeps the station's CW keyer backend, its keyline serial port and line
+  and the WinKeyer port, the RTTY keying backend with the FSK serial port and line, and each radio's **Let Nexus send
+  CW, Tune and ATU through the native Flex client** switch. On that computer they are greyed out and say "Set at the
+  station", with the station's own value. The station's own Settings window changes them as before.
 - **The certificate checks behind Nexus's downloads no longer trust the distrusted emSign certificates.** Nexus's HTTPS
   (propagation data, maps, the update check and the other downloads) now uses the releases of its certificate libraries that
   drop the emSign certificates whose private keys were exposed (RUSTSEC-2026-0381, 0382 and 0383, published 20 October 2026).
