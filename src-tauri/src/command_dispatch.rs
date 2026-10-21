@@ -754,11 +754,13 @@ impl Stores for ShackStores {
 /// ([`SECRET_SETTINGS`]) and every setting set at the station only ([`STATION_ONLY_SETTINGS`])
 /// included, and the shack's own screen applies what a profile holds when it is loaded there. A
 /// read from afar blanks the stored keys ([`station_answer`]), and a save from afar keeps the
-/// shack's own of both ([`merged_save`]), as the settings themselves do.
+/// shack's own of both ([`merged_save`]), as the settings themselves do, or is refused where the
+/// list does not read here.
 const PROFILES: &str = "nexus.profiles";
 
 /// The saved profiles `text` with each stored key a profile carries put to `kept(profile, key)`.
-/// `None` when `text` is no list, which goes as it came: the screen cannot load it either.
+/// `None` when `text` does not read here as a list. The shack's screen reads more than this does,
+/// so such a list may still load there with every setting it holds.
 fn profiles_with_secrets(text: &str, kept: impl Fn(&str, &str) -> String) -> Option<String> {
     let mut profiles: Vec<Value> = serde_json::from_str(text).ok()?;
     for profile in &mut profiles {
@@ -782,11 +784,14 @@ fn profiles_with_secrets(text: &str, kept: impl Fn(&str, &str) -> String) -> Opt
 /// as the shack's own profile of the same name holds it (`shack`, the shack's saved profiles), and
 /// left out where that profile does not hold it or the shack has no profile of that name: a setting
 /// a profile leaves out keeps the station's current value when the profile is loaded
-/// (`mergeProfile`). `None` when `text` is no list, which goes as it came.
+/// (`mergeProfile`). `None` when `text`, or the shack's own list, does not read here as a list:
+/// the shack's own settings cannot then be kept.
 fn profiles_with_station_settings(text: &str, shack: Option<&String>) -> Option<String> {
+    let shack: Vec<Value> = match shack {
+        Some(t) => serde_json::from_str(t).ok()?,
+        None => Vec::new(),
+    };
     let held: BTreeMap<String, serde_json::Map<String, Value>> = shack
-        .and_then(|t| serde_json::from_str::<Vec<Value>>(t).ok())
-        .unwrap_or_default()
         .into_iter()
         .filter_map(|profile| {
             let name = profile.get("name")?.as_str()?.to_string();
@@ -848,23 +853,22 @@ fn station_answer(value: Value) -> Value {
 /// station's keys as the other computer sent them, so a key it removed is removed. A saved profile's
 /// stored keys stay the shack's: never changed, blanked or planted from afar. ⛔ So does each setting
 /// set at the station only, which a profile loaded at the shack would apply as if typed there
-/// ([`profiles_with_station_settings`]). `None` when the arguments carry no map of strings.
+/// ([`profiles_with_station_settings`]). The shack's own list sent back as it is goes as it is.
+/// `None` when the arguments carry no map of strings, or carry another profile list where that list
+/// or the shack's own does not read here: the keeps cannot run, so the whole save is refused.
 fn merged_save(shack: BTreeMap<String, String>, args: &Value) -> Option<Value> {
     let mut sent: BTreeMap<String, String> =
         serde_json::from_value(args.get("state")?.clone()).ok()?;
-    let held = profile_secrets(shack.get(PROFILES));
-    if let Some(text) = sent.get_mut(PROFILES) {
+    let own = shack.get(PROFILES);
+    let held = profile_secrets(own);
+    if let Some(text) = sent.get_mut(PROFILES).filter(|text| Some(&**text) != own) {
         let kept = |profile: &str, key: &str| {
             held.get(&(profile.to_string(), key.to_string()))
                 .cloned()
                 .unwrap_or_default()
         };
-        if let Some(restored) = profiles_with_secrets(text, kept) {
-            *text = restored;
-        }
-        if let Some(station) = profiles_with_station_settings(text, shack.get(PROFILES)) {
-            *text = station;
-        }
+        *text = profiles_with_secrets(text, kept)?;
+        *text = profiles_with_station_settings(text, own)?;
     }
     Some(serde_json::json!({ "state": join_ui_state(sent, shack) }))
 }

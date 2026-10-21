@@ -3442,6 +3442,127 @@ fn a_profile_saved_at_the_shack_comes_back_whole_through_a_save_from_afar() {
     assert_eq!(saved, shack_profiles);
 }
 
+/// Values the shack's screen reads in a saved profile list (`JSON.parse`) and the station does not
+/// (serde_json).
+fn values_only_the_screen_reads() -> [(&'static str, String); 3] {
+    [
+        ("a number past the largest float", "1e400".to_string()),
+        ("a lone half of a surrogate pair", r#""\ud800""#.to_string()),
+        (
+            "nesting deeper than 128",
+            format!("{}{}", "[".repeat(129), "]".repeat(129)),
+        ),
+    ]
+}
+
+/// A saved profile list of one profile, "Home", holding `settings`, with `pad` beside its name.
+fn profile_list_with(pad: &str, settings: &Value) -> String {
+    format!(r#"[{{"name":"Home","pad":{pad},"settings":{settings}}}]"#)
+}
+
+/// ⛔ A saved profile list from afar that the station cannot read is refused, and with it the whole
+/// save, so nothing of it is written. The shack's screen reads more than the station does: a list
+/// kept as sent would load there with every setting it holds, the station-only ones included.
+/// CONTROL: the same list, readable, is saved with the shack's own watchdog and the rest of the save.
+#[test]
+fn a_profile_list_from_afar_the_station_cannot_read_is_refused() {
+    let shack = shack();
+    let own = json!([{ "name": "Home", "settings": { "txWatchdogMin": 6, "mygrid": "EN52" } }]);
+    ui_now(
+        &shack,
+        &[
+            ("nexus.profiles", own.to_string().as_str()),
+            ("nexus.watchlist", "old"),
+        ],
+    );
+    let base = shack.inner.stores.revision(Store::UiState).unwrap();
+    let planted = json!({
+        "txWatchdogMin": 0,
+        "tqslPath": "C:\\Users\\Public\\not-tqsl.exe",
+        "cloudlogUrl": "https://collector.example",
+        "mygrid": "EN53",
+    });
+    let sent = |profiles: String| json!({ "state": { "nexus.profiles": profiles, "nexus.watchlist": "new" } });
+    for (id, (shape, pad)) in (1..).zip(values_only_the_screen_reads()) {
+        let profiles = profile_list_with(&pad, &planted);
+        assert!(
+            serde_json::from_str::<Value>(&profiles).is_err(),
+            "premise: the station cannot read {shape}"
+        );
+        assert_eq!(
+            kind(&shack.admit(
+                &controller(),
+                save(id, "ui_state_save", sent(profiles), base.as_str())
+            )),
+            refused(Refusal::BadArguments),
+            "{shape}"
+        );
+    }
+    let readable = sent(profile_list_with("1", &planted));
+    match shack.admit(
+        &controller(),
+        save(9, "ui_state_save", readable, base.as_str()),
+    ) {
+        Admission::Run { args, .. } => {
+            let saved: Value =
+                serde_json::from_str(args["state"]["nexus.profiles"].as_str().unwrap()).unwrap();
+            let home = &saved[0]["settings"];
+            assert_eq!(
+                (
+                    &home["txWatchdogMin"],
+                    home.get("tqslPath"),
+                    &home["mygrid"],
+                    &args["state"]["nexus.watchlist"]
+                ),
+                (&json!(6), None, &json!("EN53"), &json!("new")),
+                "CONTROL: the shack's watchdog, and the rest of the save"
+            );
+        }
+        other => panic!("{}", kind(&other)),
+    }
+}
+
+/// ⛔ The shack's own saved profile list, when the station cannot read it, is never replaced from
+/// afar: the station could keep neither its stored keys nor its station-only settings, so a save
+/// carrying another list is refused. CONTROL: the shack's own list, sent back as it is, is written
+/// as it is, byte for byte, with the rest of the save.
+#[test]
+fn a_shack_profile_list_the_station_cannot_read_is_not_replaced_from_afar() {
+    for (shape, pad) in values_only_the_screen_reads() {
+        let shack = shack();
+        let own = profile_list_with(
+            &pad,
+            &json!({ "txWatchdogMin": 6, "clublogApiKey": "FAKE-HOME-KEY-0004" }),
+        );
+        ui_now(
+            &shack,
+            &[("nexus.profiles", own.as_str()), ("nexus.watchlist", "old")],
+        );
+        let base = shack.inner.stores.revision(Store::UiState).unwrap();
+        let sent = |profiles: &str| json!({ "state": { "nexus.profiles": profiles, "nexus.watchlist": "new" } });
+        let other = json!([{ "name": "Home", "settings": { "txWatchdogMin": 0 } }]).to_string();
+        assert_eq!(
+            kind(&shack.admit(
+                &controller(),
+                save(1, "ui_state_save", sent(&other), base.as_str())
+            )),
+            refused(Refusal::BadArguments),
+            "{shape}"
+        );
+        match shack.admit(
+            &controller(),
+            save(2, "ui_state_save", sent(&own), base.as_str()),
+        ) {
+            Admission::Run { args, .. } => assert_eq!(
+                args,
+                json!({ "state": { "nexus.profiles": own, "nexus.watchlist": "new" } }),
+                "CONTROL, {shape}"
+            ),
+            other => panic!("{shape}: {}", kind(&other)),
+        }
+    }
+}
+
 /// Each setting a whole save from afar keeps as the shack has it, found by trying them all: every
 /// setting the shack's file carries is changed alone in a save from afar, and it is kept when it
 /// comes back as the shack's. Also what could not be changed alone (a list or a table).
