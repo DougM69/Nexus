@@ -4222,6 +4222,27 @@ impl FieldDayStation {
         crate::message::unhash_call(to) == self.mycall()
     }
 
+    /// The caller `de` of a first call with no grid, as my report names it: WSJT-X's Tx2 to it
+    /// (`genStdMsgs`, mainwindow.cpp), its call hashed where it is nonstandard (`t0a`, 9596,
+    /// 9629-9631) and whole otherwise, beside my call as [`my_call_beside`](Self::my_call_beside)
+    /// writes it (`t0b`, 9625-9626). `None` for `<...>`, which names nobody (WSJT-X puts only a
+    /// callsign into its DX call box, 9402), and for a nonstandard call beside a nonstandard call
+    /// of mine, between which no message carries a report.
+    fn gridless_caller(&self, de: &str) -> Option<String> {
+        let his = crate::message::unhash_call(de);
+        if !crate::message::is_callsign(his) {
+            return None;
+        }
+        match (
+            crate::message::is_std_call(his),
+            crate::message::is_std_call(self.mycall()),
+        ) {
+            (true, _) => Some(his.to_string()),
+            (false, true) => Some(format!("<{his}>")),
+            (false, false) => None,
+        }
+    }
+
     /// My call as WSJT-X 3.0.2 writes it beside a grid or a report, its Tx2 and Tx3
     /// (`genStdMsgs`, mainwindow.cpp): whole when `stdCall` passes it (`/P` and `/R` too), else
     /// hashed, `t0b=hisCall + " <" + my_callsign + "> "` (9597, taken by `if(!bMyCall) { t=t0b;`
@@ -4627,6 +4648,28 @@ impl FieldDayStation {
                     });
                     self.state = FdState::AwaitExchange;
                     self.transcript.push(format!("caller {de} {grid} → report"));
+                }
+                // Running: a caller's first call that carries no grid → my report, as WSJT-X
+                // running with no activity answers a message to it of fewer than five words with
+                // Tx2 (`processMessage`, mainwindow.cpp 9315-9325). A caller whose call is
+                // nonstandard sends its first call that way, `<K1ABC> W9XYZ/M` (`msgtype(t0a,
+                // ui->tx1)`, 9627). The report's calls: [`gridless_caller`](Self::gridless_caller).
+                (FdState::CallingCq, Msg::Grid { to, de, grid })
+                    if self.to_me(to) && grid.is_empty() =>
+                {
+                    let Some(his) = self.gridless_caller(de) else {
+                        continue;
+                    };
+                    self.dxcall = Some(de.clone());
+                    self.peer_grid = None;
+                    self.pending = Some(Msg::Report {
+                        to: his,
+                        de: self.my_call_beside(),
+                        snr: rpt,
+                    });
+                    self.state = FdState::AwaitExchange;
+                    self.transcript
+                        .push(format!("caller {de} with no grid → report"));
                 }
                 // Running: a caller that sent its report without its grid → R and mine.
                 (FdState::CallingCq, Msg::Report { to, de, .. }) if self.to_me(to) => {
@@ -7420,8 +7463,12 @@ mod tests {
         let mut run = ft8_station("tnqp", "FN42", true);
         run.observe(&[dec("N0ABC W9XYZ EN37"), dec("N0ABC W9XYZ -07")], 1);
         assert_eq!(run.state, FdState::CallingCq, "sent to somebody else");
-        run.observe(&[dec("<K1ABC> PJ4/W9XYZ")], 1);
-        assert_eq!(run.state, FdState::CallingCq, "a call with no grid");
+        run.observe(&[dec("<N0ABC> PJ4/W9XYZ")], 1);
+        assert_eq!(
+            run.state,
+            FdState::CallingCq,
+            "a call with no grid to somebody else"
+        );
         run.observe(&[dec("K1ABC W9XYZ EN37")], 3);
         run.observe(&[dec("K1ABC N0ABC R-07")], 5);
         assert_eq!(
@@ -7430,6 +7477,61 @@ mod tests {
             "an R-report from a bystander"
         );
         assert!(run.log.qsos().is_empty());
+    }
+
+    /// ⭐ The standard messages' run answers a caller's first call that carries no grid, as WSJT-X
+    /// running with no activity does. A caller whose call is nonstandard sends it as `t0a` alone,
+    /// `<K1ABC> W9XYZ/M` (mainwindow.cpp 9627), and WSJT-X answers a message to it of fewer than
+    /// five words with Tx2, the report (`processMessage` 9315-9325), to the call in its DX call box
+    /// (9402): `<W9XYZ/M> K1ABC -05`, its call hashed beside mine (`t0a`, 9629-9631, 9655), or
+    /// mine hashed beside its where mine is the nonstandard one (`t0b`, 9625-9626). The contact
+    /// then runs as any other and is logged without a grid. Not answered, as before: a call to
+    /// somebody else, one from `<...>`, and a nonstandard call beside a nonstandard call of mine,
+    /// which no message carries with a report.
+    #[test]
+    fn the_standard_messages_run_answers_a_first_call_with_no_grid() {
+        let mut run = ft8_station("txqp", "FN42", true);
+        run.observe(&[dec("<K1ABC> W9XYZ/M")], 1);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::AwaitExchange, "<W9XYZ/M> K1ABC -05".to_string()),
+            "W9XYZ/M's first call: my report"
+        );
+        run.after_tx();
+        run.observe(&[dec("K1ABC <W9XYZ/M> R-07")], 3);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::Done, "W9XYZ/M <K1ABC> RR73".to_string()),
+            "its roger: RR73"
+        );
+        assert_eq!(last_row(&run).0, "W9XYZ/M", "logged");
+
+        let mut run = ft8_station_as("K1ABC/QRP", "txqp", "FN42", true);
+        run.observe(&[dec("<K1ABC/QRP> W9XYZ")], 1);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::AwaitExchange, "W9XYZ <K1ABC/QRP> -05".to_string()),
+            "a nonstandard call of mine: my report, my call hashed"
+        );
+        run.after_tx();
+        run.observe(&[dec("<K1ABC/QRP> W9XYZ R-07")], 3);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::Done, "<W9XYZ> K1ABC/QRP RR73".to_string()),
+            "and RR73"
+        );
+        assert_eq!(last_row(&run).0, "W9XYZ", "logged");
+
+        for (mycall, heard, what) in [
+            ("K1ABC", "<N0ABC> W9XYZ/M", "a call to somebody else"),
+            ("K1ABC", "K1ABC <...>", "a call from <...>"),
+            ("K1ABC/QRP", "<K1ABC/QRP> W9XYZ/M", "two nonstandard calls"),
+        ] {
+            let mut run = ft8_station_as(mycall, "txqp", "FN42", true);
+            let cq = next(&run);
+            run.observe(&[dec(heard)], 1);
+            assert_eq!((run.state, next(&run)), (FdState::CallingCq, cq), "{what}");
+        }
     }
 
     /// A change of messages (a tier change, in the engine) re-arms: a contact half-worked in

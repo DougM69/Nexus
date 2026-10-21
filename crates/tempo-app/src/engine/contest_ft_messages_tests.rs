@@ -1596,6 +1596,73 @@ fn the_contests_run_closes_with_a_caller_whose_call_is_nonstandard() {
     }
 }
 
+/// ⭐ A STANDARD-MESSAGES RUN ANSWERS A WSJT-X CALLER'S FIRST CALL, WHICH CARRIES NO GRID, as
+/// WSJT-X running with no activity answers it. A caller signing W9XYZ/M sends its first call as
+/// `t0a` alone, `<K1ABC> W9XYZ/M` (mainwindow.cpp 9627), a type 4 message with no grid; WSJT-X
+/// answers it with Tx2, the report (`processMessage` 9315-9325), `<W9XYZ/M> K1ABC -12` (`t0a` and
+/// the report, 9629-9631, 9655). Its roger `K1ABC <W9XYZ/M> R-07` (`t0b`, 9625-9626, 9656) then
+/// gets WSJT-X's RR73 (9701). In a contest with the standard messages on FT8 and FT4, each over
+/// keyed packs to WSJT-X's 77 bits and FT4 tones, and the contact is logged as W9XYZ/M. Before,
+/// the run kept calling CQ.
+#[test]
+fn a_standard_messages_run_answers_a_wsjtx_callers_first_call_with_no_grid() {
+    let air = |t: &str| {
+        let bits: String = bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(t))
+            .unwrap_or_default()
+            .iter()
+            .map(|b| char::from(b'0' + *b as u8))
+            .collect();
+        (air_form(t), bits, tones_of(modes::ModeKind::Ft4, t))
+    };
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        let what = format!("\"txqp\" {}", tier_name(tier));
+        let mut e = engine_for("txqp", MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-run").expect("the run starts");
+        keyed(&mut e, 0).expect("the CQ");
+        let call = air_form("<K1ABC> W9XYZ/M");
+        assert_eq!(
+            call,
+            ("i3=4".to_string(), "<K1ABC> W9XYZ/M".to_string()),
+            "{what}: its first call, as decoded"
+        );
+        e.ingest_decodes_for_test(&[heard(&call.1)], 2);
+        let tx2 = keyed(&mut e, 2);
+        assert_eq!(
+            tx2.as_deref(),
+            Some("<W9XYZ/M> K1ABC -12"),
+            "{what}: answered with the report"
+        );
+        e.ingest_decodes_for_test(&[heard(&air_form("K1ABC <W9XYZ/M> R-07").1)], 4);
+        let tx4 = keyed(&mut e, 4);
+        assert_eq!(
+            tx4.as_deref(),
+            Some("W9XYZ/M <K1ABC> RR73"),
+            "{what}: its roger, RR73"
+        );
+        assert_eq!(
+            rows_of(&e)
+                .iter()
+                .map(|r| r.split(' ').next())
+                .collect::<Vec<_>>(),
+            [Some("W9XYZ/M")],
+            "{what}: logged"
+        );
+        for (over, ours, wsjtx, kind) in [
+            ("Tx2", tx2, "<W9XYZ/M> K1ABC -12", "i3=1"),
+            ("Tx4", tx4, "W9XYZ/M <K1ABC> RR73", "i3=4"),
+        ] {
+            let ours = ours.unwrap_or_default();
+            assert_eq!(air_form(wsjtx).0, kind, "{what} {over}: WSJT-X's packs");
+            assert_eq!(
+                air(&ours),
+                air(wsjtx),
+                "{what} {over} {ours:?}: WSJT-X's on the air"
+            );
+        }
+    }
+}
+
 /// ⭐ THE CONTEST'S RUN PASSES BY A CALLER THE DECODER COULD NOT RESOLVE, as WSJT-X's Field Day
 /// activity does: `processMessage` returns at once for a message that carries `<...>`
 /// (mainwindow.cpp 9097-9099). W9XYZ/M's exchange carrying a hash this station's table does not

@@ -785,6 +785,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   why, as it already did with the contest switch on and as WSJT-X answers no `<...>`. Once the station's call shows
   in full, a double-click works it as usual. NEEDS-BENCH: FT8, a station signing /M or /QRP whose call Nexus has not
   decoded in full calling CQ with its call hashed.
+- **Contests with the standard messages: when you run, a station signing W9XYZ/M that runs WSJT-X now gets an
+  answer.** Such a station calls you with your call in angle brackets, its own in full and no grid,
+  `<K1ABC> W9XYZ/M`. Your run did not answer it and kept calling CQ, unless that station had Skip Tx1 on. It now
+  answers with your report, `<W9XYZ/M> K1ABC -12`, as WSJT-X does, and the contact goes on as usual and is logged as
+  W9XYZ/M, with no grid. A first call from `<...>`, or one where both calls have a suffix or a prefix, is still not
+  answered; the ARRL VHF contests and Field Day are unchanged. NEEDS-BENCH: a state QSO party (or another contest
+  with the standard messages) on FT8, Running, called by a station signing /M or /QRP that runs WSJT-X with no
+  Special Operating Activity and Skip Tx1 off.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.
