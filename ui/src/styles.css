@@ -15505,6 +15505,29 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   text-transform: uppercase;
   color: var(--text-faint);
 }
+/* CW's "Colors" and its picker, one group (a <label> around both). Shrink-to-fit, so the
+   picker's own `margin-left: auto` (.wf-palette) has no free space to take inside it, and the
+   word stays against its select. A soft rule opens the group: the word is in the zero-beat
+   name's small uppercase, and without it "+120 Hz COLORS" still read as one run. It never
+   shrinks or wraps: pressure in the row still lands on the zero-beat's name and the title. */
+.ph-scope-palette {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  white-space: nowrap;
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--border-soft);
+}
+/* ONE FREE SPACE PER HEAD: in front of the controls, the title's `margin-right: auto`. The
+   strip's ✕ brings `margin-left: auto` of its own (.cockpit-popout), and two auto margins split
+   the row's free space: CW's "Colors" stayed by the zero-beat reading while its picker went to
+   the middle of the row, a third of the space from each, and Phone's picker stood a third of
+   the space short of the ✕ (measured in Chrome at 1280x800: 190 px between "Colors" and its
+   picker; Phone's picker 280 px from the ✕). */
+.ph-scope-head > .cockpit-popout {
+  margin-left: 0;
+}
 
 /* THE CW ZERO-BEAT INDICATOR (ZeroBeat.tsx) — lamp + needle + signed offset, riding the CW
    scope head beside the marker it complements (the scope draws the TARGET; this is where the

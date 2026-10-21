@@ -514,6 +514,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **CW: "Colors" in the scope's head sits with its colour picker.** The word stood against the zero-beat reading,
+  in the same small capitals, and read as part of it, while the picker sat in the middle of the row. The word and
+  the picker are now one group after the zero-beat reading, set off from it by a thin line, and clicking the word
+  opens the picker. On the Phone screen the colour picker sits beside the scope strip's ✕ too, where it had stood
+  a third of the way along the row.
 - **CW on the Soundcard keyer no longer warns of a PTT problem after a message that went out whole on a TCI
   radio.** Each word after the first asks for the transmitter again while the first word's key still holds it, and
   the TCI connection refuses a second key while one of Nexus's is on the air. The CW screen read that as "the rig

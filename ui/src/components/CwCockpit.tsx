@@ -2418,8 +2418,14 @@ export function CwCockpit({
               goes with the scope when the strip is hidden, which is right, because it is
               the other half of that picture. */}
           <ZeroBeat active={active} targetHz={pitch} filterHz={filterHz} />
-          <span className="ph-scope-head-label">{t('cw.scope.colors.label')}</span>
-          <PalettePicker />
+          {/* "Colors" and its picker are ONE group, a <label> around both: as two loose items the
+              word sat against the zero-beat reading, in the same small uppercase, and read as part
+              of it, while the picker sat apart (`.ph-scope-palette`). Clicking the word opens the
+              picker; the picker keeps its own aria-label, which names it better than the word. */}
+          <label className="ph-scope-palette">
+            <span className="ph-scope-head-label">{t('cw.scope.colors.label')}</span>
+            <PalettePicker />
+          </label>
           {/* THE STRIP'S OWN ✕ (⊞ `scope`), last in the head — the title carries
               `margin-right: auto`, so this row's tail is its right edge. The strip hosts no
               stop control (THE STOP LINE), so its hide ends nothing and it warns of nothing. */}
