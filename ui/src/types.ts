@@ -1549,6 +1549,10 @@ export interface RadioStatus {
   /** The licence lock is the phone MODE alone: LSB, AM or FM on 60 m, where a USB pick would key.
    *  Name that rule instead of the frequency. `txAllowed` is false with it. Absent when false. */
   phoneModeRefused?: boolean
+  /** The rig is held on an FM channel at or above 29 MHz, so FM is commanded whatever the
+   *  section's own policy says: in Phone, the FM channel kept from the SSTV screen. The Phone
+   *  cockpit's AUTO reads FM from it. Absent when false. */
+  fmChannel?: boolean
   /** Whether a tune carrier is currently keyed. */
   tuning: boolean
   /** ⭐ WHO HOLDS THE TRANSMITTER, or null/undefined when nobody does — the engine's

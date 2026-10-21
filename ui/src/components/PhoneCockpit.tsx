@@ -948,8 +948,10 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
 
   // AUTO sideband from the rig-mode policy — FM when the FM sub-mode is selected, else sideband
   // by band (LSB <10 MHz except 60 m, USB above). The operator can override this transiently (below).
+  // FM as well while the engine holds the rig on an FM channel (`fmChannel`): Phone entered from
+  // the SSTV screen on 144.500 goes on commanding FM there, which this copy of the policy cannot see.
   const sidebandAuto =
-    phoneMode?.toLowerCase() === 'fm' ? 'FM' : sidebandForMhz(snap.radio.dialMhz)
+    snap.radio.fmChannel || phoneMode?.toLowerCase() === 'fm' ? 'FM' : sidebandForMhz(snap.radio.dialMhz)
   // Transient operator override ("USB"/"LSB"/"FM") or null = AUTO. The COMMANDED mode (canonical
   // for TX/logging + what the rig is set to) is the override when set, else the band-auto sideband.
   const modeOverride = snap.radio.sidebandOverride ?? null

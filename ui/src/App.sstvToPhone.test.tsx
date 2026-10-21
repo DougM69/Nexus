@@ -9,8 +9,12 @@
 // recording bridge, so every assertion is about the argument object that left the UI.
 //   · Phone from the SSTV screen follows AND asks the engine to keep the dial (`keepDial`); the
 //     engine keeps it where Phone may transmit and homes it where it may not.
-//   · Every other entry sends exactly what it sent before: Phone from FT8, CW from SSTV, and Phone
-//     from SSTV when Phone is already the section homed for.
+//   · With Phone already the section homed for, Phone from the SSTV screen re-asserts without
+//     following and still asks (`keepDial`): the dial stays either way, and the ask carries the FM
+//     channel the SSTV screen holds into Phone (the operator, 2026-10-20: "a kept FM channel keeps
+//     commanding FM in Phone").
+//   · Every other entry sends exactly what it sent before: Phone from FT8, followed or not, and CW
+//     from SSTV.
 //   · Entering the SSTV screen still asserts nothing (RX-first).
 //   · The backend has a `keep_dial` parameter to receive it.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -161,9 +165,15 @@ describe('the Phone tab on the SSTV screen', () => {
     expect(await entriesSentBy('CW')).toEqual([{ mode: 'cw', followFreq: true }])
   })
 
-  it('CONTROL: with Phone the section already homed for, it re-asserts without following', async () => {
+  it('with Phone the section already homed for, re-asserts without following and still asks to keep the dial', async () => {
     savedSection = 'phone'
     await mountOn('sstv')
+    expect(await entriesSentBy('Phone')).toEqual([{ mode: 'phone', followFreq: false, keepDial: true }])
+  })
+
+  it('CONTROL: with Phone the section already homed for, from the FT8 screen it re-asserts as before', async () => {
+    savedSection = 'phone'
+    await mountOn('operate')
     expect(await entriesSentBy('Phone')).toEqual([{ mode: 'phone', followFreq: false }])
   })
 

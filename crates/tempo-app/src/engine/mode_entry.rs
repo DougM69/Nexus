@@ -8,7 +8,8 @@
 //!
 //! One entry keeps the dial instead of homing it: Phone entered from the SSTV
 //! screen ([`Engine::prepare_mode_entry_keeping_dial`]), whose pictures already
-//! go out in the phone segment.
+//! go out in the phone segment. An FM channel that screen holds the dial on stays
+//! FM in Phone with it.
 
 use super::Engine;
 use crate::settings::OperatingMode;
@@ -18,7 +19,8 @@ pub(super) struct ModeEntry {
     pub mode: OperatingMode,
     pub frequency: Option<(f64, String)>,
     /// The entry keeps the dial where it is (`frequency` is then `None`). The setter
-    /// carries the operator's residency on that dial into the section entered.
+    /// carries the operator's residency on that dial into the section entered, and the
+    /// FM channel the dial is held on.
     pub kept_dial: bool,
 }
 
@@ -53,12 +55,12 @@ impl Engine {
         }
     }
 
-    /// The follow entry for a section entered from a screen that already rides it: today only
-    /// Phone from the SSTV screen. The operator's rule (2026-10-20): "when on sstv and changing
-    /// to phone, it should not switch to phone frequency until I tell it to". The dial stays
-    /// where it is whenever the section may transmit there, however it got there (a channel
-    /// pick, the rig's own knob, the dial the app launched on), and the operator moves it
-    /// themselves: by tuning, a band or memory pick, or a spot.
+    /// The entry for a section entered from a screen that already rides it: today only Phone
+    /// from the SSTV screen. The operator's rule (2026-10-20): "when on sstv and changing to
+    /// phone, it should not switch to phone frequency until I tell it to". With
+    /// `follow_frequency` the dial stays where it is whenever the section may transmit there,
+    /// however it got there (a channel pick, the rig's own knob, the dial the app launched on),
+    /// and the operator moves it themselves: by tuning, a band or memory pick, or a spot.
     ///
     /// A dial the section may NOT transmit on homes exactly as [`Self::prepare_mode_entry`]
     /// homes it, through the remembered dial or the segment default: the 40 m image channel
@@ -66,10 +68,20 @@ impl Engine {
     /// Legality is [`Engine::emission_allowed`], the model the dial memory's restore and the
     /// transmit gate share, so a kept dial is one the gate will key. A held pass moves nothing
     /// here either: keeping is no QSY, and the home stands down for the pass already.
-    pub(super) fn prepare_mode_entry_keeping_dial(&self, mode: &str) -> ModeEntry {
-        let entry = self.prepare_mode_entry(mode, true);
+    ///
+    /// Without `follow_frequency` (Phone already the section the app homed for) nothing homes,
+    /// as in every entry that does not follow, so there is no legality to judge. The entry still
+    /// keeps the dial, and what the dial carries comes into the section with it: the operator's
+    /// residency, and the FM channel the SSTV screen holds it on (the operator's rule, the same
+    /// day: "a kept FM channel keeps commanding FM in Phone").
+    pub(super) fn prepare_mode_entry_keeping_dial(
+        &self,
+        mode: &str,
+        follow_frequency: bool,
+    ) -> ModeEntry {
+        let entry = self.prepare_mode_entry(mode, follow_frequency);
         let s = &self.settings;
-        if !self.emission_allowed(entry.mode, s.dial_mhz, &s.sideband) {
+        if follow_frequency && !self.emission_allowed(entry.mode, s.dial_mhz, &s.sideband) {
             return entry;
         }
         ModeEntry {
@@ -283,12 +295,12 @@ mod tests {
 
     /// The Phone tab pressed on the SSTV screen, as the app sends it (`keepDial`)…
     fn phone_tab_on_the_sstv_screen(e: &mut Engine, arm_manual: bool) {
-        e.set_operating_mode_keeping_dial("phone", arm_manual);
+        e.set_operating_mode_keeping_dial("phone", true, arm_manual);
     }
 
     /// …and the entry it prepares.
     fn prepared_on_the_sstv_screen(e: &Engine) -> ModeEntry {
-        e.prepare_mode_entry_keeping_dial("phone")
+        e.prepare_mode_entry_keeping_dial("phone", true)
     }
 
     fn assert_dial(e: &Engine, mhz: f64, why: &str) {
@@ -522,5 +534,222 @@ mod tests {
         phone_tab_on_the_sstv_screen(&mut e, false);
         assert!(!e.tx_enabled(), "from afar: nothing arms");
         assert_dial(&e, 14.230, "from afar the dial stays too");
+    }
+
+    // ── A 2 m FM image channel kept in Phone ────────────────────────────────────────────────
+    //
+    // The operator, 2026-10-20: "a kept FM channel keeps commanding FM in Phone". On the SSTV
+    // screen a 2 m FM channel (144.500) holds the rig in FM: `sstv_tune` arms the FM-channel hold.
+    // Phone pressed there kept the dial, but the section entry ended the hold, and Phone's own
+    // policy (USB for a station whose phone mode is SSB) put the rig in USB on an FM channel.
+
+    /// The Phone tab on the SSTV screen with Phone already the section the app homed for: nothing
+    /// follows, and the screen still asks to keep the dial (`keepDial` without `followFreq`).
+    fn phone_tab_on_the_sstv_screen_already_homed(e: &mut Engine) {
+        e.set_operating_mode_keeping_dial("phone", false, true);
+    }
+
+    /// Phone re-entered from a screen that is not the SSTV screen, with Phone already the section
+    /// homed for: a glance at the map and back, or the rail's Phone button.
+    fn phone_from_another_screen(e: &mut Engine) {
+        e.set_operating_mode("phone", false);
+    }
+
+    /// A General on 20 m FT8 who picked the 2 m SSTV FM calling channel on the SSTV screen.
+    fn on_the_2m_fm_image_channel() -> Engine {
+        let mut e = general_on_ft8();
+        e.sstv_tune(144.500, "2m", "FM");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "premise: the SSTV screen holds FM on its channel"
+        );
+        e
+    }
+
+    #[test]
+    fn a_kept_2m_fm_image_channel_keeps_commanding_fm_in_phone() {
+        for (how, already_homed) in [("Phone followed", false), ("Phone already homed", true)] {
+            let mut e = on_the_2m_fm_image_channel();
+            if already_homed {
+                phone_tab_on_the_sstv_screen_already_homed(&mut e);
+            } else {
+                phone_tab_on_the_sstv_screen(&mut e, true);
+            }
+            assert_eq!(e.settings().operating_mode, OperatingMode::Phone, "{how}");
+            assert_dial(&e, 144.500, how);
+            assert_eq!(
+                e.rig_mode_effective(),
+                "FM",
+                "{how}: the kept FM channel, not USB"
+            );
+            assert!(
+                e.snapshot().radio.fm_channel,
+                "{how}: the Phone cockpit is told"
+            );
+        }
+    }
+
+    #[test]
+    fn an_fm_channel_phone_may_not_transmit_on_homes_when_followed_and_stays_fm_otherwise() {
+        // 29.600, the 10 m FM calling channel, is outside a Technician's 28.300-28.500 phone.
+        let technician_on_29_6 = || {
+            let mut e = Engine::new("K1ABC", "EN50", 0);
+            e.set_license_class("technician");
+            e.sstv_tune(29.600, "10m", "FM");
+            assert_eq!(
+                e.rig_mode_effective(),
+                "FM",
+                "premise: the SSTV screen holds FM"
+            );
+            e
+        };
+        // Followed: Phone homes to the Technician's 10 m phone home, as before, in Phone's mode.
+        let mut e = technician_on_29_6();
+        phone_tab_on_the_sstv_screen(&mut e, true);
+        assert_dial(&e, 28.300, "followed: the 10 m phone home");
+        assert_eq!(e.rig_mode_effective(), "USB", "followed: Phone's own mode");
+        // Already homed: nothing moves, as before, and the channel stays FM to listen on.
+        let mut e = technician_on_29_6();
+        phone_tab_on_the_sstv_screen_already_homed(&mut e);
+        assert_dial(&e, 29.600, "already homed: nothing moves");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "already homed: the kept FM channel"
+        );
+    }
+
+    #[test]
+    fn the_kept_fm_channel_lasts_until_the_dial_moves_off_it() {
+        // A glance at the map and back re-enters Phone and moves nothing.
+        let mut e = on_the_2m_fm_image_channel();
+        phone_tab_on_the_sstv_screen(&mut e, true);
+        phone_from_another_screen(&mut e);
+        assert_eq!(e.rig_mode_effective(), "FM", "a glance at the map and back");
+        // A nudge of the rig's knob inside the channel is tuning, not leaving it.
+        knob(&mut e, 144_502_000);
+        assert_eq!(e.rig_mode_effective(), "FM", "a nudge of the knob");
+        // Off the channel, Phone's own policy: USB on 2 m for this station…
+        e.set_frequency(144.200, "2m", "USB");
+        assert_eq!(e.rig_mode_effective(), "USB", "tuned to 144.200");
+        assert!(!e.snapshot().radio.fm_channel, "tuned to 144.200: told");
+        // …and the channel is not brought back by entering Phone again.
+        phone_from_another_screen(&mut e);
+        assert_eq!(e.rig_mode_effective(), "USB", "Phone again on 144.200");
+        // Another band, likewise.
+        let mut e = on_the_2m_fm_image_channel();
+        phone_tab_on_the_sstv_screen(&mut e, true);
+        e.set_frequency(14.230, "20m", "USB");
+        assert_eq!(e.rig_mode_effective(), "USB", "tuned to 20 m");
+        // Another section ends it too: CW, then Phone back on the remembered 144.500.
+        let mut e = on_the_2m_fm_image_channel();
+        phone_tab_on_the_sstv_screen(&mut e, true);
+        e.set_operating_mode("cw", true);
+        assert_eq!(e.rig_mode_effective(), "CW", "CW");
+        e.set_operating_mode("phone", true);
+        assert_dial(&e, 144.500, "Phone's remembered dial");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "Phone's own policy after another section"
+        );
+        // …even one entered without moving the dial: FT8 re-asserted with no follow.
+        let mut e = on_the_2m_fm_image_channel();
+        phone_tab_on_the_sstv_screen(&mut e, true);
+        e.set_operating_mode("digital", false);
+        assert_eq!(e.rig_mode_effective(), "PKTUSB", "FT8 with no QSY");
+        // A hold another screen sets after the kept channel was left is not Phone's: a repeater
+        // tuned in the Program section ends with Phone as it always has (the station's phone mode
+        // then commands FM, which the repeater tune writes).
+        let mut e = on_the_2m_fm_image_channel();
+        phone_tab_on_the_sstv_screen(&mut e, true);
+        e.set_frequency(144.200, "2m", "USB");
+        e.repeater_tune(146.940, "minus", 0, 0.0).unwrap();
+        phone_from_another_screen(&mut e);
+        assert!(
+            !e.snapshot().radio.fm_channel,
+            "a repeater's hold ends with Phone"
+        );
+        assert_eq!(e.rig_mode_effective(), "FM", "the station's phone mode");
+    }
+
+    #[test]
+    fn the_operators_own_mode_pick_takes_the_kept_channel_back() {
+        // AUTO on the kept channel is FM: what the channel needs.
+        let mut e = on_the_2m_fm_image_channel();
+        phone_tab_on_the_sstv_screen(&mut e, true);
+        e.request_sideband_override(None);
+        assert_eq!(e.rig_mode_effective(), "FM", "AUTO on the kept channel");
+        // A pick in the cockpit's mode picker is the operator's own word, and is commanded…
+        e.request_sideband_override(Some("USB"));
+        assert_eq!(e.rig_mode_effective(), "USB", "the operator's USB pick");
+        // …and AUTO afterwards is Phone's own policy: the pick gave the channel back.
+        e.request_sideband_override(None);
+        assert_eq!(e.rig_mode_effective(), "USB", "AUTO after a pick");
+    }
+
+    #[test]
+    fn every_other_phone_mode_is_as_before() {
+        // HF: the band's sideband on a kept SSB image channel.
+        let mut e = general_on_ft8();
+        e.sstv_tune(14.230, "20m", "USB");
+        phone_tab_on_the_sstv_screen(&mut e, true);
+        assert_eq!(e.rig_mode_effective(), "USB", "20 m image channel");
+        let mut e = Engine::new("K1ABC", "EN50", 0);
+        e.set_license_class("extra");
+        e.sstv_tune(7.171, "40m", "LSB");
+        phone_tab_on_the_sstv_screen(&mut e, true);
+        assert_dial(&e, 7.171, "an Extra may talk on 7.171");
+        assert_eq!(e.rig_mode_effective(), "LSB", "40 m image channel");
+        // An FM word on HF commands nothing: the 29 MHz floor. Nor is it kept, to come back when
+        // the knob later turns up to 2 m.
+        let mut e = general_on_ft8();
+        e.sstv_tune(14.230, "20m", "FM");
+        assert!(
+            !e.snapshot().radio.fm_channel,
+            "an FM word on 20 m holds nothing"
+        );
+        phone_tab_on_the_sstv_screen(&mut e, true);
+        assert_eq!(e.rig_mode_effective(), "USB", "an FM word on 20 m");
+        knob(&mut e, 144_500_000);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "the knob up to 144.500 afterwards"
+        );
+        // Phone from the rail on 2 m, not from the SSTV screen: the station's phone mode.
+        for (phone_mode, want) in [("ssb", "USB"), ("fm", "FM")] {
+            let mut e = general_on_ft8();
+            e.settings.phone_mode = phone_mode.into();
+            e.set_frequency(144.174, "2m", "USB"); // FT8 on 2 m
+            e.set_operating_mode("phone", true);
+            assert_eq!(
+                e.rig_mode_effective(),
+                want,
+                "FT8 on 2 m, then Phone; phone mode {phone_mode}"
+            );
+        }
+        // …and on the SSTV screen's own FM channel when another screen came between.
+        let mut e = on_the_2m_fm_image_channel();
+        phone_from_another_screen(&mut e);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "SSTV, the map, then Phone already homed"
+        );
+        let mut e = on_the_2m_fm_image_channel();
+        e.set_operating_mode("phone", true);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "SSTV, the map, then Phone following"
+        );
+        // APRS's FM ends with Phone, from the SSTV screen too, as it always has.
+        let mut e = general_on_ft8();
+        e.aprs_tune(144.390).unwrap();
+        assert_eq!(e.rig_mode_effective(), "FM", "premise: APRS holds FM");
+        phone_tab_on_the_sstv_screen(&mut e, true);
+        assert_eq!(e.rig_mode_effective(), "USB", "APRS's channel");
     }
 }

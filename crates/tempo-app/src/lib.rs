@@ -339,6 +339,7 @@ impl AppState {
                 tx_emission_mhz: None,
                 phone_usb_only: false,
                 phone_mode_refused: false,
+                fm_channel: false,
                 tuning: false,
                 tx_watchdog: false,
                 slot_key_refused: None,

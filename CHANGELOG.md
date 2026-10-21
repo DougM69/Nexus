@@ -441,6 +441,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   memory pick, or a spot. Leave Phone and come back, and you return to where you left it. A frequency your licence
   may not use for phone (7.171 MHz for a General, 28.680 MHz for a Technician) still moves you to a legal phone
   frequency, as before.
+- **On a 2 m FM SSTV channel, clicking Phone keeps the radio in FM.** On the SSTV screen, picking an FM image channel
+  (144.500 MHz, or a frequency you set to FM there) puts the radio in FM, and clicking Phone kept the frequency but
+  switched the radio to USB. Phone now keeps FM there, and its AUTO mode button reads FM, until you move off the
+  channel from Nexus (a typed frequency, a band, memory or spot pick), go to another mode, or pick a mode on Phone's
+  mode buttons. Looking at another screen and coming back to Phone keeps it too. Phone reached any other way still
+  follows your phone mode setting.
 - **An unassisted contest entry now stops all CW decoding, not only the AI decoder.** With Settings ▸ Contesting ▸
   Unassisted entry on, the classic decoder still copied CW into the Decode pane, offered the calls it heard as chips
   and filled His Call with its best guess. CQ WW's rules count a CW decoder as QSO-finding assistance, which an

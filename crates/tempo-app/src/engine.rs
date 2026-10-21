@@ -4350,8 +4350,20 @@ pub struct Engine {
     ///
     /// Cleared by every QSY, section change and radio switch, exactly like `aprs_fm`, and gated at
     /// read time on the dial still being at/above 29 MHz — the same threshold `Settings::rig_mode`
-    /// applies to Phone-FM, so a knob-QSY down to HF can never leave FM forced.
+    /// applies to Phone-FM, so a knob-QSY down to HF can never leave FM forced. One section entry
+    /// keeps it: Phone entered from the SSTV screen on the channel that screen tuned
+    /// (`fm_channel_kept`, below).
     fm_channel: bool,
+    /// The FM-channel hold above is one PHONE KEPT (the operator, 2026-10-20: "a kept FM channel
+    /// keeps commanding FM in Phone"). Phone entered from the SSTV screen leaves the dial where it
+    /// is (`ModeEntry::kept_dial`), and on the FM channel that screen tuned (`sstv_tune`) the hold
+    /// stays instead of ending with the section entry, so Phone goes on commanding FM there rather
+    /// than its own policy (USB for a station whose phone mode is SSB). While this is set, a later
+    /// Phone entry that moves nothing (a glance at the map and back) keeps the hold too. It ends
+    /// with the hold (a QSY, a radio switch, any other section) and with the operator's own pick
+    /// in the Phone cockpit's mode picker (`request_sideband_override`), which the hold would
+    /// otherwise outrank in `rig_mode_effective`.
+    fm_channel_kept: bool,
     /// The FM channel a committed REMOTE repeater tune established: its dial and FM tuple. A
     /// browser's later retune may end that hold (as the desktop's own QSY does); a hold set at the
     /// station, or one whose dial or tuple has since changed, still refuses remote work.
@@ -6323,6 +6335,7 @@ impl Engine {
             aprs_msg_seq: 0,
             aprs_fm: false,
             fm_channel: false,
+            fm_channel_kept: false,
             remote_fm_hold: None,
             remote_aprs_hold: None,
             sat_mode: None,
@@ -7522,6 +7535,7 @@ impl Engine {
         // this clears the flag outright so it never lingers pointed at a different radio.
         self.aprs_fm = false;
         self.fm_channel = false;
+        self.fm_channel_kept = false;
         self.sat_mode = None;
         // Frequency coverage belongs to the RADIO, so it must not survive the switch. Dropping it to
         // "unknown" makes the window before the loop re-probes fail OPEN; keeping the old radio's
@@ -7921,6 +7935,13 @@ impl Engine {
         // A fresh QSY request is a fresh attempt: drop any earlier refusal so a stale "the radio
         // refused 144.390" can't sit on screen next to a frequency that worked.
         self.rig_refused_dial_mhz = None;
+        // An FM channel Phone kept ends with a QSY, as the other holds do below, and FIRST: the
+        // dial is leaving the channel, so the radio the QSY routes to is the one Phone's own mode
+        // belongs on, not the FM radio the channel needed (a 2 m SSB spot clicked in Phone).
+        if self.fm_channel_kept {
+            self.fm_channel = false;
+            self.fm_channel_kept = false;
+        }
         // Auto radio routing on (BAND, MODE CLASS): a commanded band pick (dropdown / manual entry /
         // Needed click / APRS tune) hands off to the radio the operator mapped for that band+mode
         // FIRST, then the tune below lands it on the requested dial. Mode class — not band alone —
@@ -9020,12 +9041,19 @@ impl Engine {
         self.enter_section_with_reset(entry, arm_manual, reset);
     }
 
-    /// The Phone tab pressed on the SSTV screen: [`Self::set_operating_mode`] with `follow_freq`,
-    /// except that the dial stays where it is when Phone may transmit there, and homes as any
-    /// entry does when it may not ([`Self::prepare_mode_entry_keeping_dial`]). Arms exactly as
-    /// every entry arms: with `arm_manual`, and never behind a stop.
-    pub fn set_operating_mode_keeping_dial(&mut self, mode: &str, arm_manual: bool) {
-        let entry = self.prepare_mode_entry_keeping_dial(mode);
+    /// The Phone tab pressed on the SSTV screen: [`Self::set_operating_mode`], except that the
+    /// dial stays where it is. With `follow_freq` it stays when Phone may transmit there and homes
+    /// as any entry does when it may not ([`Self::prepare_mode_entry_keeping_dial`]); without, it
+    /// stays, as in every entry that does not follow. Either way an FM channel the SSTV screen
+    /// holds the dial on stays FM in Phone (`fm_channel_kept`). Arms exactly as every entry arms:
+    /// with `arm_manual`, and never behind a stop.
+    pub fn set_operating_mode_keeping_dial(
+        &mut self,
+        mode: &str,
+        follow_freq: bool,
+        arm_manual: bool,
+    ) {
+        let entry = self.prepare_mode_entry_keeping_dial(mode, follow_freq);
         self.enter_section_with_reset(entry, arm_manual, reset_ft8_a7_without_waiting);
     }
 
@@ -9076,8 +9104,23 @@ impl Engine {
         // hold ends where it always did: with the bird for a linear transponder, with the dial
         // for an FM one (`sat_linear_mode`). A section change is neither. Where it also QSYs
         // (`follow_freq`), `tune_dial` clears it below exactly as any other QSY does.
+        //
+        // ⭐ AND NOT AN FM CHANNEL PHONE KEEPS (the operator, 2026-10-20: "a kept FM channel keeps
+        // commanding FM in Phone"). Phone entered from the SSTV screen leaves the dial where it is
+        // (`kept_dial`), and on the 2 m FM image channel that screen tuned, Phone's own policy is
+        // USB for a station whose phone mode is SSB: the rig went FM → USB on an FM channel. So
+        // the hold stays with the dial, and through later Phone entries (a glance at the map and
+        // back), until the dial moves (`tune_dial` ends it before routing the QSY), another
+        // section is entered, the radio is switched or the operator picks a mode in the Phone
+        // cockpit. Only a hold in force is kept (at/above 29 MHz, as `rig_mode_effective` reads
+        // it). APRS's simplex context ends as it always has.
         self.aprs_fm = false;
-        self.fm_channel = false;
+        let keeps_fm_channel = entry.mode == OperatingMode::Phone
+            && (entry.kept_dial || self.fm_channel_kept)
+            && self.fm_channel
+            && self.settings.dial_mhz >= 29.0;
+        self.fm_channel = keeps_fm_channel;
+        self.fm_channel_kept = keeps_fm_channel;
         let om = entry.mode;
         // A mode change invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
@@ -9765,6 +9808,13 @@ impl Engine {
         // pass in force is ordinary terrestrial operating and claims nothing.
         if self.sideband_override.is_some() && self.sat_dial_owner.is_some() {
             self.sat_mode_released = true;
+        }
+        // …and a pick on an FM channel Phone kept is the operator taking the mode too: that hold
+        // answers above this override in `rig_mode_effective`, so without this a USB pick there
+        // would change nothing. AUTO is no pick: on the kept channel it stays FM.
+        if self.sideband_override.is_some() && self.fm_channel_kept {
+            self.fm_channel = false;
+            self.fm_channel_kept = false;
         }
         self.immediate_retune = true;
     }
@@ -25408,6 +25458,9 @@ contact yourself."
             self.tx_source_verdict().emission_mhz,
         );
         s.radio.phone_mode_refused = self.phone_mode_refused();
+        // The FM-channel hold as `rig_mode_effective` reads it, so the Phone cockpit's AUTO says
+        // what is commanded on a kept FM channel.
+        s.radio.fm_channel = self.fm_channel && self.settings.dial_mhz >= 29.0;
         s.radio.tuning = self.tuning;
         // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
         s.radio.tx_busy_reason = self.tx_owner().map(TxOwner::busy_reason);
@@ -62083,6 +62136,64 @@ mod tests {
             (e.settings.dial_mhz - dial).abs() > 1e-6,
             "no pass → the section QSY re-homes exactly as before"
         );
+    }
+
+    #[test]
+    fn the_phone_tab_on_the_sstv_screen_mid_pass_leaves_the_bird_its_mode() {
+        // Phone pressed on the SSTV screen keeps the dial, and keeps the FM channel that screen
+        // tuned. A pass is not that channel: the bird still names the mode, linear or FM.
+        let linear = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_965_000,
+            downlink_centre_hz: 435_640_000,
+            invert: false,
+            half_width_hz: 30_000,
+        };
+        let fm = tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000);
+        for (bird, transponder, class, want) in [
+            ("RS-44|linear", linear, SSB_BIRD, "USB"),
+            ("SO-50|FM repeater", fm, FM_BIRD, "FM"),
+        ] {
+            let (mut e, _, _) = sat_station();
+            e.set_sat_transponder(Some((bird.into(), 0, transponder)));
+            e.sat_tune_nominal(class, 1_000_000);
+            let dial = e.settings.dial_mhz;
+            assert_eq!(e.rig_mode_effective(), want, "{bird}: precondition");
+            e.set_operating_mode_keeping_dial("phone", true, true);
+            assert!(
+                (e.settings.dial_mhz - dial).abs() < 1e-9,
+                "{bird}: the pass keeps the dial"
+            );
+            assert_eq!(e.rig_mode_effective(), want, "{bird}: the bird's mode");
+            assert!(!e.snapshot().radio.fm_channel, "{bird}: no FM channel held");
+        }
+    }
+
+    #[test]
+    fn a_qsy_off_a_kept_fm_channel_routes_on_phones_own_mode() {
+        // The kept channel ends BEFORE the QSY is routed, so the radio the QSY lands on is the one
+        // Phone's own mode (SSB here) routes to, not the FM radio: the rig is then commanded USB,
+        // and the radio it routed to is the one meant for that.
+        for how in [
+            "a 2 m SSB spot clicked in Phone",
+            "Phone entered again, following",
+        ] {
+            let (mut e, ic9700, ft991a) = three_radio_engine();
+            e.sstv_tune(144.500, "2m", "FM");
+            assert_eq!(
+                e.settings.active_radio, ic9700,
+                "{how}: premise: the pick routed on Phone's SSB class"
+            );
+            e.set_operating_mode_keeping_dial("phone", true, true);
+            assert_eq!(e.rig_mode_effective(), "FM", "{how}: premise: kept");
+            if how.starts_with("a 2 m SSB spot") {
+                e.work_spot("phone", 144.205, "2m");
+            } else {
+                e.set_operating_mode("phone", true);
+            }
+            assert_ne!(e.settings.active_radio, ft991a, "{how}: not the FM radio");
+            assert_eq!(e.settings.active_radio, ic9700, "{how}: Phone's SSB radio");
+            assert_eq!(e.rig_mode_effective(), "USB", "{how}: Phone's own mode");
+        }
     }
 
     #[test]

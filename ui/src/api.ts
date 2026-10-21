@@ -2366,9 +2366,10 @@ export async function pickBand(band: string, mode?: string): Promise<AppSnapshot
  * clicks an actual operating-section tab — then the rig QSYs to that mode's home frequency
  * on the current band (phone segment / CW segment / FT8 watering hole). Pass false for
  * incidental nav and the Needed click (which sets the spot's exact frequency itself).
- * `keepDial` (with `followFreq`): the Phone tab pressed on the SSTV screen — the engine keeps
- * the dial where Phone may transmit there and homes it where it may not. Sent only when true,
- * so every other entry's wire is unchanged. */
+ * `keepDial`: the Phone tab pressed on the SSTV screen. With `followFreq` the engine keeps the
+ * dial where Phone may transmit there and homes it where it may not; without, nothing homes.
+ * Either way an FM channel the SSTV screen holds stays FM in Phone. Sent only when true, so every
+ * other entry's wire is unchanged. */
 export async function setOperatingMode(
   mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard',
   followFreq: boolean,

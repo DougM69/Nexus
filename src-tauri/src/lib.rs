@@ -19991,8 +19991,9 @@ fn pick_band(
 /// computer). A manual section is then entered without arming Enable TX, as Remote's entry enters
 /// it: from afar only the wired starts arm, under the stream's transmit rules.
 ///
-/// `keep_dial`, with `follow_freq`: the Phone tab pressed on the SSTV screen. The dial stays where
-/// it is when Phone may transmit there and homes when it may not
+/// `keep_dial`: the Phone tab pressed on the SSTV screen. With `follow_freq` the dial stays where
+/// it is when Phone may transmit there and homes when it may not; without, nothing homes. Either
+/// way an FM channel the SSTV screen holds stays FM in Phone
 /// (`Engine::set_operating_mode_keeping_dial`). Absent everywhere else.
 #[tauri::command(async)]
 fn set_operating_mode(
@@ -20003,8 +20004,8 @@ fn set_operating_mode(
     keep_dial: Option<bool>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    if follow_freq && keep_dial == Some(true) {
-        eng.set_operating_mode_keeping_dial(&mode, afar.is_none());
+    if keep_dial == Some(true) {
+        eng.set_operating_mode_keeping_dial(&mode, follow_freq, afar.is_none());
     } else {
         eng.set_operating_mode_with_arming(&mode, follow_freq, afar.is_none());
     }
@@ -53354,6 +53355,89 @@ mod tests {
                 (dial - want).abs() < 1e-9,
                 "{case}: the dial is {dial}, not {want}"
             );
+        }
+    }
+
+    /// The Phone tab pressed on the SSTV screen while the 2 m FM image channel holds the rig in FM,
+    /// through the shack's own runner with the arguments the screen sends: Phone keeps the dial
+    /// AND commands FM there, whether it follows (`followFreq`) or Phone is already the section
+    /// homed for, and the snapshot it answers tells the Phone cockpit (`fmChannel`). CONTROLS:
+    /// Phone entered from another screen (no `keepDial`) uses the station's phone mode, USB here,
+    /// as it always has.
+    #[test]
+    fn the_phone_tab_on_the_sstv_screen_keeps_a_2m_fm_channel_in_fm_at_the_wire() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::set_operating_mode;
+        use serde_json::{json, Value};
+        use tempo_app::settings::OperatingMode;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![set_operating_mode])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        for (case, args, want) in [
+            (
+                "the report: Phone follows",
+                json!({"mode": "phone", "followFreq": true, "keepDial": true}),
+                "FM",
+            ),
+            (
+                "the report: Phone already homed",
+                json!({"mode": "phone", "followFreq": false, "keepDial": true}),
+                "FM",
+            ),
+            (
+                "CONTROL: another screen, Phone already homed",
+                json!({"mode": "phone", "followFreq": false}),
+                "USB",
+            ),
+            (
+                "CONTROL: another screen, Phone follows",
+                json!({"mode": "phone", "followFreq": true}),
+                "USB",
+            ),
+        ] {
+            {
+                let mut e = engine_lock(&engine);
+                *e = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
+                e.set_license_class("general");
+                e.set_operating_mode("digital", false);
+                e.set_frequency(14.074, "20m", "USB");
+                e.sstv_tune(144.500, "2m", "FM");
+                assert_eq!(e.rig_mode_effective(), "FM", "{case}: premise");
+            }
+            let ran = ask("set_operating_mode", args);
+            assert!(ran.is_ok(), "{case}: {ran:?}");
+            let e = engine_lock(&engine);
+            assert_eq!(e.settings().operating_mode, OperatingMode::Phone, "{case}");
+            let dial = e.settings().dial_mhz;
+            assert!((dial - 144.500).abs() < 1e-9, "{case}: the dial is {dial}");
+            assert_eq!(e.rig_mode_effective(), want, "{case}: the rig mode");
+            let told = ran
+                .as_ref()
+                .ok()
+                .map(|s| s["radio"]["fmChannel"] == json!(true));
+            assert_eq!(told, Some(want == "FM"), "{case}: what the cockpit is told");
         }
     }
 
