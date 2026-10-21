@@ -26,7 +26,7 @@ use tempo_app::engine::{
     DecodeResult, Engine, Js8MultiJob, Js8Speed, PskStreamTick, RttyStreamTick, SatCatBackend,
 };
 use tempo_app::keyboard;
-use tempo_app::mic::{MicTick, MIC};
+use tempo_app::mic::{MicTick, MIC, TCI_OVER};
 use tempo_app::remote_monitor::provenance::{Connection as RemoteConnection, Read as RemoteRead};
 use tempo_core::tempo_fast;
 use tempo_core::timing::{now_unix_ms, SlotClock};
@@ -3852,6 +3852,12 @@ struct RadioLoop {
     /// When the microphone audio already queued runs out (loop ms): what the look-ahead (M3) is
     /// measured against.
     mic_busy_until: f64,
+    /// A TCI program's audio over (`tempo_app::engine::tci`, through Nexus's TCI server) has keyed
+    /// PTT through this loop.
+    program_over_keyed: bool,
+    /// When that over's audio already queued runs out (loop ms): its look-ahead's measure, as
+    /// `mic_busy_until` is the microphone's.
+    program_over_busy_until: f64,
     /// The transmit route's generation, the microphone's G7: it moves whenever the route transmit
     /// audio leaves by is replaced (the sound card released or reopened, the Flex DAX tee
     /// installed or removed), so an over cannot carry on across the change.
@@ -4506,6 +4512,8 @@ impl RadioLoop {
             monitor_tx_muted: false,
             mic_keyed: false,
             mic_busy_until: 0.0,
+            program_over_keyed: false,
+            program_over_busy_until: 0.0,
             tx_route_gen: 0,
             mono_origin: None,
             force_audio_rebuild: false,
@@ -5651,8 +5659,9 @@ impl RadioLoop {
     /// NEVER between the slot boundary and `xmit 1`; asked only at the end of a tick, after every
     /// keying site in it, so the write can never sit inside a keying sequence:
     ///
-    /// - nothing keyed or held: no over, tune, manual PTT, microphone over or rig PTT, and no
-    ///   immediate over or armed microphone over waiting for its key;
+    /// - nothing keyed or held: no over, tune, manual PTT, microphone over, TCI program's over or
+    ///   rig PTT, and no immediate over, armed microphone over or armed program's over waiting for
+    ///   its key;
     /// - with slot transmission armed (the Digital section, TX enabled): the current slot's TX
     ///   decision has been made (`boundary_keyed` names this slot, so neither the boundary nor the
     ///   deferred decode path can still key in it), and the nearest boundary, either side, is
@@ -5664,8 +5673,10 @@ impl RadioLoop {
             || self.tuning_keyed
             || self.manual_ptt_applied
             || self.mic_keyed
+            || self.program_over_keyed
             || eng.peek_immediate_tx()
             || eng.mic_armed()
+            || eng.tci_over_armed()
         {
             return false;
         }
@@ -5864,6 +5875,7 @@ impl RadioLoop {
             || self.holds_tx()
             || self.tuning_keyed
             || self.mic_keyed
+            || self.program_over_keyed
             || rig.keyed
             || flex.is_some_and(crate::flex::FlexDaemon::keyed_by_another);
         if keyed_first {
@@ -6973,6 +6985,7 @@ impl RadioLoop {
             (Some(rx), Some(d)) if is_receive_of(d, &rx.receive) => d.receive().map(|r| r.take()),
             _ => None,
         };
+        let dax_is_the_source = native_audio.is_some();
         let captured = match native_audio {
             Some(mut dax_audio) => {
                 if !dax_audio.is_empty() {
@@ -6999,6 +7012,14 @@ impl RadioLoop {
                 None => soundcard,
             },
         };
+        // Programs on Nexus's TCI server hear what the decoders hear: the Flex's DAX audio while it
+        // is the receive source, with its RX gain (`RxTap::publish_dax`), and the sound card's
+        // capture otherwise. Nexus's own TCI client puts its audio on the tap in the card's place
+        // (`reconcile_tci_audio`); the Icom network connection carries no audio at all.
+        self.rx_tap.publish_dax(
+            crate::flex::audio::MODEM_RATE,
+            dax_is_the_source.then_some(captured.as_slice()),
+        );
         // ⚠️ RX FLOOR. Taking DAX audio means IGNORING the sound card, so a DAX source that never
         // streams (wrong IP, firewall, DAX off on the radio, slice never bound) — or one that
         // streamed and then STOPPED (a WAN drop, a radio reboot, SmartSDR restarted) — leaves the
@@ -7046,6 +7067,7 @@ impl RadioLoop {
             || self.tuning_keyed
             || self.manual_ptt_applied
             || self.mic_keyed
+            || self.program_over_keyed
             || self.tci_keyed();
         if let Some(rx) = self.tci_rx.as_mut() {
             if transmitting {
@@ -11978,6 +12000,108 @@ impl RadioLoop {
                         self.mic_busy_until = self.mic_busy_until.max(now)
                             + buf.len() as f64 * 1000.0 / f64::from(MIC.rate_hz);
                         let until = self.mic_busy_until + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    }
+                    MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
+                }
+            }
+        }
+
+        // A TCI program's audio over: a program on Nexus's TCI server (a logger's voice macro,
+        // WSJT-X) transmitting its own audio (`tempo_app::engine::tci`). It is the Remote
+        // microphone's machinery with a program's numbers (`TCI_OVER`), and this block is the one
+        // above with the program's state. The ENGINE decides everything on every tick
+        // (`Engine::poll_tci`: the switch and every station gate, Nexus's own key, the section, the
+        // owner, the route, a radio on its own microphone, the ceiling, the gap, and what audio is
+        // due); this block keys what it is told to with Nexus's own key (`key_over`: on a TCI
+        // radio that is Nexus's audio, never the SDR program's microphone), plays it through the
+        // same `play()` (the Flex DAX or TCI route when one is installed, the sound card
+        // otherwise), and holds PTT to `tx_until_ms` from where the queued audio ends, so a wedged
+        // loop unkeys.
+        //
+        // Polled on EVERY tick, with an over or without: the same poll ends a program's microphone
+        // key (keyed by the manual PTT below, which reads it masked) and its Tune when a gate
+        // under them goes down, so neither keys again when the gate comes back up.
+        {
+            let mono = self.mono_now(now);
+            let (abort, tick) = {
+                let mut eng = engine_lock(engine);
+                if !self.may_key() {
+                    // `rig` is not the operator's radio this tick (a deferred handoff, a CAT
+                    // hold): the over ends, as the microphone's does. The poll still judges a
+                    // program's microphone key and Tune, which wait as the operator's own do.
+                    eng.drop_tci_over();
+                }
+                let queued = (self.program_over_busy_until - now).max(0.0);
+                let tick = eng.poll_tci(mono, TCI_OVER.ahead_ms as f64 - queued, self.tx_route_gen);
+                // AFTER the poll, so an abort IT armed is consumed on this same tick.
+                (eng.take_tci_abort(), tick)
+            };
+            // Something else unkeyed the rig under a keyed over (its deadline expired over a
+            // stalled loop, a hard stop or a rebuild cleared the hold): it does not come back.
+            let unkeyed_under =
+                self.program_over_keyed && (self.tx_until_ms.is_none() || !rig.keyed);
+            // The engine is keying an over this loop never keyed (the loop was rebuilt under it).
+            let never_keyed =
+                !self.program_over_keyed && matches!(tick, MicTick::Ahead | MicTick::Samples(_));
+            // Its owner let go and it played out what it took: the graceful end, with no abort.
+            // The output ring plays its last and the deadline unkeys after it. From here this
+            // block holds nothing, so an unkey under the PTT is not this over's to answer: the
+            // operator's own PTT pressed in that tail is not let go here.
+            let drained = self.program_over_keyed
+                && !abort
+                && !unkeyed_under
+                && matches!(tick, MicTick::Idle | MicTick::Armed);
+            if unkeyed_under || never_keyed {
+                engine_lock(engine).drop_tci_over();
+            }
+            if (abort || unkeyed_under) && self.program_over_keyed {
+                // A hard end: the feed is closed and its epoch moved (the engine's kill path);
+                // here the queued audio goes (the only thing that stops a VOX rig) and PTT drops.
+                let dropped = backend.flush_output();
+                let _ = rig.ptt(false);
+                self.tx_until_ms = None;
+                crate::civ::diag::note(&format!(
+                    "TCI program's over ended: unkey, {dropped} queued samples dropped"
+                ));
+            }
+            if abort || unkeyed_under || never_keyed || drained {
+                self.program_over_keyed = false;
+                self.program_over_busy_until = 0.0;
+            } else {
+                match tick {
+                    MicTick::Key => {
+                        self.ensure_commanded(rig); // read-only launch: assert before key
+                        self.publish_tx_intent_now(); // before keying — the fail-safe must know
+                        let key = self.key_over(rig, false);
+                        self.report_ptt(engine, key.warns());
+                        if let KeyUp::Refused(why) = &key {
+                            // The rig did not key, so none of the program's audio may be played:
+                            // the over ends here through its one kill path, and the abort that
+                            // arms goes with it, since nothing was queued for it to flush.
+                            note_refused_key("TCI program's over not keyed", why);
+                            let mut eng = engine_lock(engine);
+                            eng.drop_tci_over();
+                            let _ = eng.take_tci_abort();
+                        } else {
+                            self.program_over_keyed = true;
+                            self.program_over_busy_until = now;
+                            // The lead-in and the silent pre-roll come before any audio is
+                            // queued: hold PTT across them, and no further.
+                            let until = now
+                                + (TCI_OVER.lead_in_ms + TCI_OVER.ahead_ms) as f64
+                                + crate::slot::TX_TAIL_MS;
+                            self.tx_until_ms =
+                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        }
+                    }
+                    MicTick::Samples(buf) => {
+                        backend.play(&buf);
+                        // Contiguous in audio time: the deadline advances from where the queued
+                        // audio ends. THIS is the bound that makes a wedged loop unkey.
+                        self.program_over_busy_until = self.program_over_busy_until.max(now)
+                            + buf.len() as f64 * 1000.0 / f64::from(TCI_OVER.rate_hz);
+                        let until = self.program_over_busy_until + crate::slot::TX_TAIL_MS;
                         self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                     }
                     MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
@@ -17452,6 +17576,7 @@ mod tests {
     mod tci;
     mod tci_cw;
     mod tci_pan;
+    mod tci_server;
     mod udp_requests;
     mod wfview;
     mod yaesu_alc;

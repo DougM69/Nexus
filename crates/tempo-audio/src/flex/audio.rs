@@ -52,8 +52,8 @@ use crate::capture_resample::CaptureResampler;
 
 use super::ClientState;
 
-/// The decoders' rate.
-const MODEM_RATE: u32 = 12_000;
+/// The decoders' rate: the receive audio's, as [`super::FlexDaemon::take_audio`] hands it over.
+pub(crate) const MODEM_RATE: u32 = 12_000;
 /// Per channel, about ten seconds at 12 kHz: a stalled reader loses the oldest audio, never
 /// memory.
 const RING_CAP: usize = 120_000;

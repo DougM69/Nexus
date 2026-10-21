@@ -949,6 +949,89 @@ fn a_slot_over_never_keys_the_sdr_microphone_on_a_server_with_no_data_mode() {
     on_its_own_audio(&mut s, "a late start");
 }
 
+/// Phone on 20 m with "Programs on TCI may transmit" on: a program on Nexus's own TCI server may key.
+fn programs_may_transmit(e: &mut Engine) {
+    let mut settings = e.settings().clone();
+    settings.tci_server_tx = true;
+    e.apply_settings(settings);
+    phone(e);
+}
+
+impl TciScene {
+    /// Run the loop on the real clock until `done`, a program on Nexus's own TCI server sending 20 ms
+    /// of its audio at `level` before each step, as the server hands it over; or fail saying `what`.
+    fn run_with_program_audio(&mut self, level: f32, what: &str, done: impl Fn(&TciScene) -> bool) {
+        let deadline = Instant::now() + WAIT;
+        while !done(self) {
+            assert!(Instant::now() < deadline, "{what}");
+            let _ = self.engine().tci_tx_audio(1, &[level; 240], Instant::now());
+            self.step();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+/// ⛔ A PROGRAM'S AUDIO OVER THROUGH NEXUS'S OWN TCI SERVER GOES TO THE SDR PROGRAM AS NEXUS'S AUDIO,
+/// NEVER ON ITS MICROPHONE. With the station's radio on the TCI connection in a voice mode (where an
+/// unmarked key would take the SDR program's microphone), a program's over keys `trx:0,true,tci`
+/// once, its audio reaches the SDR program and none of it is played on the sound card. With an SDR
+/// program that never takes Nexus's audio stream, nothing keys at all and nothing is sent anywhere:
+/// the over ends, refused, and is never put on the microphone.
+#[test]
+fn a_tci_server_programs_over_goes_out_as_nexus_audio_never_on_the_sdr_microphone() {
+    use tempo_net::tci::server::KeyKind;
+    let mut s = TciScene::new([], waits(), programs_may_transmit);
+    s.routed("the program's over");
+    s.run(200);
+    assert_eq!(
+        s.engine().tci_key(1, KeyKind::Tci, true),
+        Ok(()),
+        "premise: the program's key is admitted"
+    );
+    s.run_with_program_audio(0.25, "the program's over never keyed", |s| {
+        !s.keys().is_empty()
+    });
+    assert_eq!(s.sent(0, "trx:0,true"), 0, "the SDR program's microphone");
+    assert_eq!(
+        s.keys(),
+        [(Keyer::Client(0), SimSource::Tci)],
+        "keyed on Nexus's audio"
+    );
+    s.run_with_program_audio(
+        0.25,
+        "the program's audio never reached the SDR program",
+        |s| s.sim.tx_audio(0).iter().any(|x| *x != 0.0),
+    );
+    assert_eq!(s.sent(0, "trx:0,true,tci"), 1);
+    assert!(
+        s.card.played.lock().unwrap().is_empty(),
+        "played on the sound card as well"
+    );
+    // No route: the SDR program never takes Nexus's stream.
+    let mut s = TciScene::new([Fault::NoAudioAck], waits(), programs_may_transmit);
+    assert!(
+        s.sim.wait_for(WAIT, |log| log.iter().any(|l| matches!(
+            &l.event,
+            SimEvent::Command { conn: 0, text, .. } if text == "audio_start:0"
+        ))),
+        "premise: the stream asked for"
+    );
+    s.run(300);
+    assert_eq!(
+        s.engine().tci_key(1, KeyKind::Tci, true),
+        Ok(()),
+        "premise: the program's key is admitted"
+    );
+    s.run_with_program_audio(0.25, "the refused over never ended", |s| {
+        !s.engine().tci_over_armed()
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!s.any_key_asked(), "keyed {:?}", s.sim.commands_from(0));
+    assert!(s.keys().is_empty(), "the radio keyed");
+    assert!(s.card.played.lock().unwrap().is_empty(), "played");
+    assert!(s.sim.tx_audio(0).is_empty(), "sent");
+}
+
 /// ⭐ WITH AUDIO OVER TCI OFF, A TCI RADIO KEYS LIKE ANY CAT RADIO (the operator's rule): an over of
 /// Nexus's keys the SDR program's own input, which the operator routes from Nexus's sound card (a
 /// virtual cable), and Nexus plays it to the sound card. No transmit tee goes in, no audio stream is

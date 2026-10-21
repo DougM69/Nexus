@@ -537,6 +537,16 @@ impl MicLatch {
         matches!(self.phase, Phase::Keyed(_))
     }
 
+    /// For tests: a keyed over's key moved `by_ms` earlier, as if it had keyed that long before,
+    /// so its ceiling (C1, counted from the key) is reached without waiting it out. Nothing else
+    /// moves; an over that is not keyed is left as it is.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn age_for_test(&mut self, by_ms: u64) {
+        if let Phase::Keyed(over) = &mut self.phase {
+            over.keyed_ms = over.keyed_ms.saturating_sub(by_ms);
+        }
+    }
+
     /// How much voiced audio the keyed over has accepted, in ms (0 when not keyed). For the
     /// no-power warning only.
     pub fn voiced_ms(&self) -> u64 {

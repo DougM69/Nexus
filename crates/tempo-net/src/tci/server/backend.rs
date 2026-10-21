@@ -104,6 +104,9 @@ pub enum Refusal {
     ContextHold,
     /// The radio's connection cannot transmit (item 4).
     Connection,
+    /// A `tci` key while the radio takes its transmit audio from its own microphone (item 4): the
+    /// program's audio would not reach the air, and the microphone would carry the over.
+    RadioMic,
     /// Outside the licence: for an audio over, the whole transmit passband (item 5, §3.6).
     Licence,
     /// Something else owns the transmitter (item 6).
@@ -115,7 +118,9 @@ pub enum Refusal {
     /// A `tci` key in the Digital section (item 8): FT8, FT4 and the other slot-timed modes go out
     /// through the server only once the loop bench has measured Nexus's added delay at or under
     /// 0.2 s and the recorded overs decode (the operator's ruling of 2026-10-19). Until then the
-    /// section refuses them.
+    /// section refuses them. Also a `tci` key in any section from a program whose last
+    /// `modulation:` asked a data mode: a data-mode over from a program is held like FT8 (the
+    /// operator's ruling of 2026-10-20).
     SlotTimed,
     /// A `tci` key with no audio stream started (item 9).
     AudioStream,
@@ -148,12 +153,14 @@ impl Refusal {
             Refusal::WatchdogTrip => "the TX watchdog has tripped",
             Refusal::ContextHold => "a band or radio change holds programs' keys",
             Refusal::Connection => "this radio's connection cannot transmit",
+            Refusal::RadioMic => "the radio takes its transmit audio from its own microphone",
             Refusal::Licence => "outside the licence",
             Refusal::Owner => "something else is transmitting",
             Refusal::ClockRepair => "the clock is being repaired",
             Refusal::Section => "not in this section",
             Refusal::SlotTimed => {
-                "FT8, FT4 and other slot-timed modes may not transmit through TCI yet"
+                "FT8, FT4 and other slot-timed modes may not transmit through TCI yet, and a \
+                 data-mode over from a program is held like FT8"
             }
             Refusal::AudioStream => "no TCI audio stream",
             Refusal::CwText => {
