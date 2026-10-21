@@ -1478,6 +1478,57 @@ fn rr73_and_73_to_a_nonstandard_call_are_wsjtxs_bit_for_bit() {
     }
 }
 
+/// ⭐ THE CONTEST'S RUN CLOSES WITH A CALLER WHOSE CALL IS NONSTANDARD, as WSJT-X 3.0.2 closes
+/// with one. Running WSJT-X, a caller signing W9XYZ/M sends its exchange with its call hashed
+/// (`t0b`, mainwindow.cpp 9597 and 9625-9626) and its RR73 with ours hashed,
+/// `<K1ABC> W9XYZ/M RR73` (9702), each heard here as this station's decoder prints it from the
+/// air. In ARRL Field Day on FT8 and FT4 the run logs W9XYZ/M, bare, answers with WSJT-X's 73,
+/// `W9XYZ/M <K1ABC> 73` (9709), and calls CQ; in Winter Field Day it logs and calls CQ. Before,
+/// the RR73 was not taken: the caller got the R and exchange again, and nothing was logged.
+#[test]
+fn the_contests_run_closes_with_a_caller_whose_call_is_nonstandard() {
+    // (contest, tier, our class, W9XYZ/M's, the run answers RR73 with 73)
+    for (contest, tier, mine, theirs, answers) in [
+        ("arrlfd", Tier::Ft8, "2B", "1D", true),
+        ("arrlfd", Tier::Ft4, "2B", "1D", true),
+        ("wfd", Tier::Ft8, "1H", "1H", false),
+    ] {
+        let what = format!("{contest:?} {}", tier_name(tier));
+        let mut e = engine_for(contest, MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-run").expect("the run starts");
+        let cq = keyed(&mut e, 0).expect("the CQ");
+        let exch = air_form(&format!("K1ABC <W9XYZ/M> {theirs} WI")).1;
+        e.ingest_decodes_for_test(&[heard(&exch)], 2);
+        assert_eq!(
+            keyed(&mut e, 2),
+            Some(format!("<W9XYZ/M> K1ABC R {mine} EMA")),
+            "{what}: R and ours"
+        );
+        let rr73 = air_form("<K1ABC> W9XYZ/M RR73");
+        assert_eq!(
+            rr73,
+            ("i3=4".to_string(), "<K1ABC> W9XYZ/M RR73".to_string()),
+            "{what}: the caller's RR73, as decoded"
+        );
+        e.ingest_decodes_for_test(&[heard(&rr73.1)], 4);
+        assert_eq!(
+            rows_of(&e),
+            [format!("W9XYZ/M CLASS={theirs},SECTION=WI")],
+            "{what}: logged"
+        );
+        let close = if answers {
+            "W9XYZ/M <K1ABC> 73".to_string()
+        } else {
+            cq.clone()
+        };
+        assert_eq!(keyed(&mut e, 4), Some(close), "{what}: the close");
+        e.ingest_decodes_for_test(&[], 6);
+        assert_eq!(keyed(&mut e, 6), Some(cq), "{what}: then CQ");
+        assert_eq!(rows_of(&e).len(), 1, "{what}: once");
+    }
+}
+
 /// Whether the station is in the contest's S&P, listening, with nothing to send.
 fn listening(e: &Engine) -> bool {
     matches!(&e.mode, Mode::FieldDay { station, running: false }

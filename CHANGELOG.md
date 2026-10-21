@@ -731,6 +731,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message bit for bit. Your exchange and your roger to that station are unchanged, and so is everything when your
   own call has a suffix or a prefix. NEEDS-BENCH: ARRL Field Day on FT8, S&P and Running with a station signing /M
   or /QRP that runs WSJT-X.
+- **Field Day: when you run, a station signing W9XYZ/M can now close the contact.** In the Contest screen on Field
+  Day's messages, a station whose call has a suffix such as /M, /4 or /QRP and runs WSJT-X sends its RR73 or 73 with
+  your call in angle brackets and its own in full, `<K1ABC> W9XYZ/M RR73`. Your run did not take that as sent to you:
+  it sent the station your roger and exchange again, and the contact was never logged. It now takes it as WSJT-X does,
+  logs the station as W9XYZ/M and, in ARRL Field Day on FT8 and FT4, answers with WSJT-X's 73 before calling CQ again.
+  NEEDS-BENCH: ARRL Field Day on FT8, Running, with a station signing /M or /QRP that runs WSJT-X calling you.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.
