@@ -479,6 +479,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screen does, and with two radios it uses the one set up for 2 m FM. After RTTY it also tuned 2.125 kHz high and
   then did not put your frequency back at the end of the pass; it now tunes 145.800 MHz exactly. At the end of the
   pass your own frequency comes back on its own radio, in its own mode. A satellite you are working keeps its mode.
+- **SSTV's FM channels and the ISS auto-arm now transmit on the channel, with no repeater offset or tone.** After
+  you had tuned a repeater, the SSTV screen's 145.800 and 144.500 MHz FM channels, the ISS auto-arm's park on
+  145.800 MHz, and Phone kept on either channel all used that repeater's offset and tone: the radio was set to
+  transmit 600 kHz away, with the tone. On 144.500 MHz that is 143.900 MHz, outside the 2 m band: with a US licence
+  class set, transmit was locked out there, and with License Class set to Open nothing stopped it. These channels are
+  now simplex with no tone, as APRS is. A repeater you tune still gets its own offset and tone, and so does a
+  frequency you set to FM yourself on the SSTV screen.
 - **An unassisted contest entry now stops all CW decoding, not only the AI decoder.** With Settings ▸ Contesting ▸
   Unassisted entry on, the classic decoder still copied CW into the Decode pane, offered the calls it heard as chips
   and filled His Call with its best guess. CQ WW's rules count a CW decoder as QSO-finding assistance, which an

@@ -4352,8 +4352,9 @@ pub struct Engine {
     /// command FM, for the same reason `aprs_fm` above exists: the Program section is a workbench,
     /// not a Phone/Digital operating section, so a tune from it can't ride the Phone-FM override
     /// and would otherwise inherit the rig mode of whichever section the operator last operated —
-    /// demodulating a repeater as packet-USB. UNLIKE `aprs_fm` it does NOT force simplex: carrying
-    /// the machine's shift and tone is the whole point.
+    /// demodulating a repeater as packet-USB. UNLIKE `aprs_fm` a repeater's hold does NOT force
+    /// simplex: carrying the machine's shift and tone is the whole point. The app's own channels
+    /// do (`fm_channel_simplex`, below).
     ///
     /// Cleared by every QSY, section change and radio switch, exactly like `aprs_fm`, and gated at
     /// read time on the dial still being at/above 29 MHz — the same threshold `Settings::rig_mode`
@@ -4371,6 +4372,15 @@ pub struct Engine {
     /// in the Phone cockpit's mode picker (`request_sideband_override`), which the hold would
     /// otherwise outrank in `rig_mode_effective`.
     fm_channel_kept: bool,
+    /// The FM channel held is one of the app's own SIMPLEX channels, not a repeater: an FM row of
+    /// the SSTV plan (the ISS downlink, the 144.500 calling channel) picked on the SSTV screen, or
+    /// the ISS auto-arm's park (`tune_channel`). It is worked simplex with no tone, as APRS is
+    /// (`fm_repeater_config`). A repeater tune writes its shift and tone to Settings and nothing
+    /// resets them, so without this the channel was worked through the last machine's: the radio
+    /// was commanded that shift and tone, and the transmitter keyed the machine's input while the
+    /// dial read the channel. Stated by each verb that arms the hold (`repeater_tune` clears it),
+    /// read only together with `fm_channel`, and kept with the hold when Phone keeps it.
+    fm_channel_simplex: bool,
     /// The FM channel a committed REMOTE repeater tune established: its dial and FM tuple. A
     /// browser's later retune may end that hold (as the desktop's own QSY does); a hold set at the
     /// station, or one whose dial or tuple has since changed, still refuses remote work.
@@ -6345,6 +6355,7 @@ impl Engine {
             aprs_fm: false,
             fm_channel: false,
             fm_channel_kept: false,
+            fm_channel_simplex: false,
             remote_fm_hold: None,
             remote_aprs_hold: None,
             sat_mode: None,
@@ -7883,6 +7894,8 @@ impl Engine {
         self.machinery_tune(dial, band, mode);
         if hold_fm {
             self.fm_channel = true;
+            // One of the app's own channels: simplex, no tone (`fm_channel_simplex`).
+            self.fm_channel_simplex = true;
             // The station's own hold, whatever channel a browser marked before.
             self.remote_fm_hold = None;
         }
@@ -9549,6 +9562,13 @@ impl Engine {
         // `rig_mode_effective`, so it can never drag FM down to HF.
         if mode.eq_ignore_ascii_case("fm") {
             self.fm_channel = true;
+            // An FM row of the SSTV plan is one of the app's own channels, never a repeater:
+            // simplex, no tone (`fm_channel_simplex`). Any other dial picked in FM here (the
+            // strip's FM toggle on a dial of the operator's own, such as a local machine's
+            // output) carries the stored repeater shift and tone, as Phone's FM does.
+            self.fm_channel_simplex = crate::bandplan::sstv_band_plan()
+                .iter()
+                .any(|c| c.mode.eq_ignore_ascii_case("fm") && (c.dial_mhz - dial_mhz).abs() < 1e-6);
             // The station's own hold, whatever channel a browser marked before.
             self.remote_fm_hold = None;
         }
@@ -10243,6 +10263,11 @@ impl Engine {
     /// the rig is in FM. APRS forces SIMPLEX / no tone so it never inherits the operator's
     /// Phone-section repeater shift (which would transmit the beacon off-frequency).
     ///
+    /// The app's own FM channels are APRS's case and take the same answer: an SSTV plan's FM row
+    /// picked on the SSTV screen, the ISS auto-arm's park, and Phone's keep of either
+    /// (`fm_channel_simplex`). Each is a simplex channel, and a stored repeater shift and tone
+    /// there keyed the last machine's input, with its tone, while the dial read the channel.
+    ///
     /// A satellite FM bird forces the same SHIFT, and for a sharper version of the same reason: a
     /// bird has no repeater shift at all — its uplink is the split TX dial (cross-band) or the one
     /// dial it shares with the downlink (simplex) — so a stale terrestrial shift would key it
@@ -10263,7 +10288,7 @@ impl Engine {
     /// names its VFO, which does not exist yet. Strictly better than 0.0 either way, and never
     /// worse.
     pub fn fm_repeater_config(&self) -> (String, i64, f32) {
-        if self.aprs_fm {
+        if self.aprs_fm || (self.fm_channel && self.fm_channel_simplex) {
             ("simplex".to_string(), 0, 0.0)
         } else if self.sat_fm() {
             ("simplex".to_string(), 0, self.sat_uplink_tone_hz())
@@ -21397,6 +21422,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // machine's channel, and the dial it displaces is the operator's and banks here.
         self.machinery_tune(output_mhz, band, "FM");
         self.fm_channel = true;
+        // A machine's hold: its own shift and tone, written above.
+        self.fm_channel_simplex = false;
         // A channel this verb sets is the station's own, even on the identical machine a browser
         // tuned earlier; only a committed remote repeater tune re-marks it (see `remote_fm_hold`).
         self.remote_fm_hold = None;
@@ -24414,8 +24441,8 @@ contact yourself."
         // Ask the question the RADIO LOOP asks, not a second one that could drift from it: the
         // shift reaches the rig only when the mode policy resolves to FM (`service.rs` applies
         // `fm_repeater_config` under exactly that condition), and `fm_repeater_config` is the
-        // accessor it applies — already answering SIMPLEX for the two cases where a stored shift
-        // must not be used (an APRS beacon, an FM bird).
+        // accessor it applies — already answering SIMPLEX for the cases where a stored shift
+        // must not be used (an APRS beacon, the app's own FM channels, an FM bird).
         if !matches!(self.rig_mode_effective().as_str(), "FM" | "PKTFM") {
             return 0.0;
         }
@@ -57078,6 +57105,132 @@ mod tests {
             (e.tx_emission_mhz() - 144.390).abs() < 1e-9,
             "a beacon goes out on the channel, never through a shift: {}",
             e.tx_emission_mhz()
+        );
+    }
+
+    /// The app's own FM channels are worked simplex with no tone, as APRS is: the SSTV plan's FM
+    /// rows picked on the SSTV screen, the ISS auto-arm's park on 145.800, and the channel Phone
+    /// keeps from either. A repeater tune writes its shift and tone to Settings and nothing resets
+    /// them, so each of these was worked through the last machine's: the radio was commanded that
+    /// shift and tone, and the transmitter keyed the machine's input while the dial read the
+    /// channel.
+    #[test]
+    fn the_apps_own_fm_channels_are_worked_simplex_with_no_tone() {
+        // This morning's machine, then FT8 on 2 m: its shift and tone stay stored.
+        let after_a_repeater = || {
+            let mut e = Engine::new("K1ABC", "EN50", 0);
+            e.set_license_class("technician");
+            e.set_operating_mode("digital", false);
+            e.repeater_tune(146.940, "minus", 600_000, 103.5).unwrap();
+            e.set_frequency(144.174, "2m", "USB");
+            e
+        };
+        let mut got = Vec::new();
+        for (how, channel) in [
+            ("the SSTV screen's ISS downlink", 145.800),
+            ("the SSTV screen's calling channel", 144.500),
+            ("the ISS park", 145.800),
+            ("Phone kept from the calling channel", 144.500),
+            ("Phone kept from the ISS park", 145.800),
+        ] {
+            let mut e = after_a_repeater();
+            if how.ends_with("ISS park") {
+                e.tune_channel(channel, "2m", "FM");
+            } else {
+                e.sstv_tune(channel, "2m", "FM");
+            }
+            if how.starts_with("Phone kept") {
+                e.set_operating_mode_keeping_dial("phone", true, true);
+            }
+            assert!(
+                e.snapshot().radio.fm_channel && e.rig_mode_effective() == "FM",
+                "{how}: premise: the channel is held in FM"
+            );
+            got.push((
+                how,
+                e.fm_repeater_config(),
+                format!("{:.3}", e.tx_emission_mhz()),
+            ));
+        }
+        let simplex = |how, channel: f64| {
+            (
+                how,
+                ("simplex".to_string(), 0, 0.0),
+                format!("{channel:.3}"),
+            )
+        };
+        assert_eq!(
+            got,
+            vec![
+                simplex("the SSTV screen's ISS downlink", 145.800),
+                simplex("the SSTV screen's calling channel", 144.500),
+                simplex("the ISS park", 145.800),
+                simplex("Phone kept from the calling channel", 144.500),
+                simplex("Phone kept from the ISS park", 145.800),
+            ],
+            "simplex with no tone, so the emission is the channel"
+        );
+    }
+
+    /// The controls beside it: a machine still keys its own input with its tone wherever its hold
+    /// is reached from, a machine tuned after the SSTV channel gets its own back, APRS is simplex as
+    /// it always was, and a dial of the operator's own picked in FM on the SSTV screen (the strip's
+    /// FM toggle, there for a local machine) carries the stored machine as before.
+    #[test]
+    fn a_repeater_keeps_its_shift_and_tone_beside_the_apps_own_channels() {
+        let mut e = Engine::new("K1ABC", "EN50", 0);
+        e.set_license_class("technician");
+        e.set_operating_mode("digital", false);
+        let mut got = Vec::new();
+        let mut note = |how: &'static str, e: &Engine| {
+            got.push((
+                how,
+                e.fm_repeater_config(),
+                format!("{:.3}", e.tx_emission_mhz()),
+            ));
+        };
+        e.repeater_tune(146.940, "minus", 600_000, 103.5).unwrap();
+        note("a repeater tune", &e);
+        e.set_operating_mode_keeping_dial("phone", true, true);
+        assert!(e.snapshot().radio.fm_channel, "premise: Phone kept it");
+        note("Phone kept on the machine", &e);
+        e.sstv_tune(144.500, "2m", "FM");
+        e.repeater_tune(147.000, "plus", 0, 100.0).unwrap();
+        note("a machine tuned after the SSTV channel", &e);
+        e.sstv_tune(147.000, "2m", "FM");
+        note("the machine's output picked in FM on the SSTV screen", &e);
+        e.aprs_tune(144.390).unwrap();
+        note("APRS", &e);
+        let machine = |how, shift: &str, offset, tone, emission: &str| {
+            (how, (shift.to_string(), offset, tone), emission.to_string())
+        };
+        assert_eq!(
+            got,
+            vec![
+                machine("a repeater tune", "minus", 600_000, 103.5, "146.340"),
+                machine(
+                    "Phone kept on the machine",
+                    "minus",
+                    600_000,
+                    103.5,
+                    "146.340"
+                ),
+                machine(
+                    "a machine tuned after the SSTV channel",
+                    "plus",
+                    600_000,
+                    100.0,
+                    "147.600"
+                ),
+                machine(
+                    "the machine's output picked in FM on the SSTV screen",
+                    "plus",
+                    600_000,
+                    100.0,
+                    "147.600"
+                ),
+                machine("APRS", "simplex", 0, 0.0, "144.390"),
+            ]
         );
     }
 

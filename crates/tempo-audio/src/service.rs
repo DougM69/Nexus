@@ -33253,6 +33253,76 @@ mod tests {
         );
     }
 
+    /// The SSTV screen's ISS downlink picked after a repeater, AT THE WIRE. The app's own FM
+    /// channels are simplex with no tone (`Engine::fm_repeater_config`), so the radio is TOLD so,
+    /// and a machine tuned after the channel is told its own shift and tone again. The pick used
+    /// to send none of it: the configuration the loop pushes had not changed, so the radio kept
+    /// the machine's shift and tone on the channel.
+    #[test]
+    fn the_sstv_iss_downlink_after_a_repeater_tells_the_radio_simplex_and_no_tone() {
+        let engine = repeater_engine();
+        // Remembers its dial, so the loop's read-back never takes a QSY for a knob move.
+        let (addr, log) = mock_stateful_rigctld(145_310_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 0.0;
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend| {
+            for _ in 0..4 {
+                t += 500.0;
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        t,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        // The shift, offset and tone lines the radio was sent from `from` on.
+        let fm_lines = |from: usize| -> Vec<String> {
+            log.lock().unwrap()[from..]
+                .iter()
+                .filter(|l| ["R ", "O ", "C "].iter().any(|p| l.starts_with(p)))
+                .cloned()
+                .collect()
+        };
+        let machine = ["R -", "O 600000", "C 1035"].map(String::from).to_vec();
+
+        run(&mut state, &mut rig, &mut backend);
+        // CONTROL: the machine reached the radio, or the lines below prove nothing.
+        assert_eq!(fm_lines(0), machine, "the machine");
+
+        let mark = log.lock().unwrap().len();
+        engine.lock().unwrap().sstv_tune(145.800, "2m", "FM");
+        run(&mut state, &mut rig, &mut backend);
+        assert_eq!(
+            fm_lines(mark),
+            ["R None", "C 0"].map(String::from).to_vec(),
+            "the ISS downlink: simplex, no tone"
+        );
+
+        let mark = log.lock().unwrap().len();
+        engine
+            .lock()
+            .unwrap()
+            .repeater_tune(145.310, "minus", 600_000, 103.5)
+            .unwrap();
+        run(&mut state, &mut rig, &mut backend);
+        assert_eq!(
+            fm_lines(mark),
+            machine,
+            "the machine again after the channel"
+        );
+    }
+
     /// ⚠️ THE OTHER HALF OF A CLASS-WIDE CAT CHANGE: what a rig that does NOT know `PKTFM`
     /// gets. It must be plain FM — the mode the very same FM authority commanded while idle —
     /// and never a sideband.
