@@ -3113,6 +3113,8 @@ export const JA: PartialCatalog = {
   "settings.contestPick.power.aria": "どの電力カテゴリーで参加するか",
   "settings.contestPick.assisted.label": "スポット支援",
   "settings.contestPick.assisted.aria": "エントリーがスポット支援を使うかどうか",
+  "settings.contestPick.assisted.offer": "ログはNON-ASSISTEDを申告していますが、アンアシステッド・エントリーはオフです。",
+  "settings.contestPick.assisted.offer.action": "アンアシステッド・エントリーをオンにする",
   "settings.contestPick.station.label": "局種別",
   "settings.contestPick.station.aria": "スクールクラブ局かどうか",
   "settings.contestPick.entryAxes.unset": "未設定",

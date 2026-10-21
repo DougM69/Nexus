@@ -4678,6 +4678,10 @@ export const EN = {
   'settings.contestPick.power.aria': 'Which power category you are entering',
   'settings.contestPick.assisted.label': 'Spotting assistance',
   'settings.contestPick.assisted.aria': 'Whether your entry uses spotting assistance',
+  // Beside that picker while NON-ASSISTED is declared and the Unassisted entry switch is off.
+  // `NON-ASSISTED` is the Cabrillo token, invariant; "Unassisted entry" is the switch's own label.
+  'settings.contestPick.assisted.offer': 'Your log declares NON-ASSISTED, but Unassisted entry is off.',
+  'settings.contestPick.assisted.offer.action': 'Turn on Unassisted entry',
   'settings.contestPick.station.label': 'Station type',
   'settings.contestPick.station.aria': 'Whether this is a school club station',
   'settings.contestPick.entryAxes.unset': 'Not set',

@@ -2124,6 +2124,16 @@ export function SettingsPanel({
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
   }
 
+  // Declare or end an unassisted entry: at once, by its own command rather than Save, with the form
+  // field synced so a later Save cannot write the stale value back. The Unassisted entry switch and
+  // the offer beside a NON-ASSISTED declaration both come here, and only on the operator's click.
+  const declareUnassisted = (on: boolean) => {
+    updateBool('unassistedMode', on)
+    setUnassistedMode(on)
+      .then(() => getAssistanceJournal().then(setAssistLog))
+      .catch(() => {})
+  }
+
   // The GEOGRAPHIC alert scope (#174). Both halves are plain add/remove on a list, and both
   // default EMPTY — which is "alert on everywhere", the behaviour before this setting existed.
   // There is deliberately no master toggle: the lists ARE the state, so there is no hidden
@@ -13360,6 +13370,23 @@ export function SettingsPanel({
                       </button>
                     ))}
                   </div>
+                  {/* NON-ASSISTED is what the log declares; the Unassisted entry switch below is
+                      what turns the aids off. While they disagree, one line says so and offers
+                      the switch. The declaration never turns it on by itself: it is asked, not
+                      inferred (`contest_category_assisted`). */}
+                  {field === 'contestCategoryAssisted' && form.contestCategoryAssisted === 'NON-ASSISTED' && !form.unassistedMode && (
+                    <span className="settings-hint" data-unassisted-offer>
+                      {t('settings.contestPick.assisted.offer')}{' '}
+                      <button
+                        type="button"
+                        className="settings-linkbtn"
+                        disabled={remote}
+                        onClick={() => declareUnassisted(true)}
+                      >
+                        {t('settings.contestPick.assisted.offer.action')}
+                      </button>
+                    </span>
+                  )}
                 </div>
               ))}
               <span className="settings-hint">{t('settings.contestPick.entryAxes.hint')}</span>
@@ -13382,13 +13409,7 @@ export function SettingsPanel({
                   role="switch"
                   aria-checked={!!form.unassistedMode}
                   className={`toggle${form.unassistedMode ? ' on' : ''}`}
-                  onClick={() => {
-                    const on = !form.unassistedMode
-                    updateBool('unassistedMode', on)
-                    setUnassistedMode(on)
-                      .then(() => getAssistanceJournal().then(setAssistLog))
-                      .catch(() => {})
-                  }}
+                  onClick={() => declareUnassisted(!form.unassistedMode)}
                   aria-label={
                     form.unassistedMode
                       ? t('settings.contestCategory.unassisted.aria.end')

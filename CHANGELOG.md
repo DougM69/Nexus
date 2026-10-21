@@ -395,6 +395,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   switch off, the classic decoder still copies CW, while the record (Settings ▸ Contesting ▸ Your entry) showed the
   AI CW decoder as off. The source is now the CW decoder, on whenever any CW decoding runs, which is everywhere but
   an unassisted entry. Rows recorded before keep the name they were written with.
+- **Declaring NON-ASSISTED offers the Unassisted entry switch.** In Settings ▸ Contesting ▸ Your entry, picking
+  NON-ASSISTED under Spotting assistance writes it into your Cabrillo log but turns nothing off: the CW decoder, the
+  spots, Super Check Partial and call history stay on until you switch Unassisted entry on. While the switch is
+  off, a line beside the picker now says so, with a button that turns it on. Nothing turns it on unless you click.
 
 ### Added
 - **Every save of the contest log now keeps backup copies beside it.** The contest log

@@ -6041,6 +6041,8 @@ export const FR: PartialCatalog = {
   "settings.contestPick.power.aria": "Dans quelle catégorie de puissance tu participes",
   "settings.contestPick.assisted.label": "Assistance par spots",
   "settings.contestPick.assisted.aria": "Si ta participation utilise l’assistance par spots",
+  "settings.contestPick.assisted.offer": "Ton log déclare NON-ASSISTED, mais la participation non assistée est désactivée.",
+  "settings.contestPick.assisted.offer.action": "Activer la participation non assistée",
   "settings.contestPick.station.label": "Type de station",
   "settings.contestPick.station.aria": "S’il s’agit d’une station de club scolaire",
   "settings.contestPick.entryAxes.unset": "Non défini",

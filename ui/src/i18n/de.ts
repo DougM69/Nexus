@@ -678,6 +678,8 @@ export const DE: PartialCatalog = {
   "settings.contestPick.power.aria": "In welcher Leistungskategorie du teilnimmst",
   "settings.contestPick.assisted.label": "Spotting-Unterstützung",
   "settings.contestPick.assisted.aria": "Ob dein Beitrag Spotting-Unterstützung nutzt",
+  "settings.contestPick.assisted.offer": "Dein Log erklärt NON-ASSISTED, aber die Unassisted-Teilnahme ist aus.",
+  "settings.contestPick.assisted.offer.action": "Unassisted-Teilnahme einschalten",
   "settings.contestPick.station.label": "Stationsart",
   "settings.contestPick.station.aria": "Ob dies eine Schulclub-Station ist",
   "settings.contestPick.entryAxes.unset": "Nicht gesetzt",

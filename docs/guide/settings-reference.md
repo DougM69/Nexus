@@ -2270,7 +2270,9 @@ What your Cabrillo log declares about the entry, and the switch that keeps the
   PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp.
   **Takes effect at once**" — its own command, not Save, because an operator
   flips it as an event starts. "Your own settings for each of those are left
-  alone and come back when you switch this off."
+  alone and come back when you switch this off." Picking `NON-ASSISTED` under
+  **Spotting assistance** does not turn it on: while the switch is off, a line
+  beside that picker says so, with a button that does.
 - **Assistance record** — the timestamped journal: a row per flip and a row each
   time Nexus starts, with which sources were active. Kept in `assistance_journal.json` beside your settings, so
   it survives restarts. Newest first.
