@@ -20,8 +20,8 @@
 //     surplus by `weight` (a list or a board that grows with what it holds and scrolls in its box).
 //     Set from what each box draws (2026-10-07).
 //   · `remote` — whether the hosted Remote page has everything the box draws: its copies of the
-//     Conditions feeds (connect/usePaneContext `remoteFeeds`), the station's collections
-//     (remote-web/collections), the streamed snapshot and spectrum, or the clock. False for a box that
+//     Conditions feeds (connect/usePaneContext `remoteFeeds`), the station's collections, the
+//     streamed snapshot and spectrum, or the clock. False for a box that
 //     asks the station for something none of those carry (the Kp outlook, the openings log, the
 //     satellite passes, the contest calendar) and for POTA/SOTA, whose hunt wiring a browser does not
 //     get. Read off the code on 2026-10-07; a box offered on the Remote page is checked there first.

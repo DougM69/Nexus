@@ -4,17 +4,13 @@
 // 2026-10-04, "Stream client window"): the PC an operator works FROM opens the Remote page in a
 // Nexus window of its own. Pinned here: it is offered on Windows only, at the END of the card (the
 // beta line and the streaming switch stay first, as ordered on 2026-10-02), one click asks Rust to
-// open the window once, a failure says so in words, and the Remote page's own copy of Settings
-// never shows it — the page cannot open windows in this app, and must not appear to.
+// open the window once, and a failure says so in words.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import { EN } from '../i18n/en'
-import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
-import { navigationPages } from '../remote-web/__fixtures__/navigation-page'
-import configuration from '../remote-web/__fixtures__/configuration-settings.json'
 
 const platform = vi.hoisted(() => ({ windows: true }))
 vi.mock('../platform', async (importOriginal) => {
@@ -57,11 +53,7 @@ const features: FeaturesApi = {
   setProfile: vi.fn(),
 } as unknown as FeaturesApi
 
-function renderPanel(remote = false) {
-  const page = vi.fn(async () => {
-    const pages = navigationPages('settings', configuration)
-    return { ...pages[0], rows: pages.flatMap((p) => p.rows), nextCursor: null }
-  })
+function renderPanel() {
   const panel = (
     <SettingsPanel
       activeRadioId={0}
@@ -76,15 +68,7 @@ function renderPanel(remote = false) {
       features={features}
     />
   )
-  return render(
-    remote ? (
-      <RemoteCollectionsContext.Provider value={{ page } as unknown as RemoteCollections}>
-        {panel}
-      </RemoteCollectionsContext.Provider>
-    ) : (
-      panel
-    ),
-  )
+  return render(panel)
 }
 
 async function openStationTab() {
