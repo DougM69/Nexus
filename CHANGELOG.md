@@ -837,6 +837,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same one Nexus's own 73 is. Other free text, and contacts where both calls are plain or both have a suffix or
   a prefix, go out as before. NEEDS-BENCH: FT8, working a station signing /M that runs WSJT-X, type 73 as the next
   message: WSJT-X shows `W9XYZ/M <you> 73` and logs.
+- **FT8/FT4: clicking the Tx3 row sends what the row shows.** With your call ending in /P or /R and a station
+  signing W9XYZ/M or PJ4/W9XYZ, no report can ride your roger, so the Tx panel's Tx3 shows `<W9XYZ/M> K1ABC/P RRR`.
+  Clicked, it went out as `W9XYZ/M <K1ABC/P> RRR`, the Tx4 message. It now goes out as the row shows it, as WSJT-X
+  sends what its Tx3 box holds; the automatic sequence already sent it that way. NEEDS-BENCH: FT8, your call with
+  /P, working a station signing /M that runs WSJT-X, click Tx3: WSJT-X decodes its own call in angle brackets,
+  your call in full and RRR.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.

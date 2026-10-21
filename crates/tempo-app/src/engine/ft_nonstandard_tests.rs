@@ -425,6 +425,46 @@ fn no_click_works_a_call_the_decoder_could_not_resolve() {
     }
 }
 
+/// ⭐ A CLICKED TX3 ROW GOES OUT AS THE ROW SHOWS IT, as WSJT-X keys the text of the Tx3 box
+/// clicked (`on_txb3_clicked`, mainwindow.cpp 8771-8777; `ui->tx3->text()`, 7901). A /P station
+/// working a nonstandard call can put no number in its roger, so its Tx3 row is `<W9XYZ/M>
+/// K1ABC/P RRR`; clicked, it went out as `W9XYZ/M <K1ABC/P> RRR`, the Tx4 row. The Tx4 row and
+/// the sequence's own Tx3 keep their forms.
+#[test]
+fn a_clicked_tx3_row_goes_out_as_the_row_shows_it() {
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        for (dx, cq) in [("W9XYZ/M", "CQ W9XYZ/M"), ("PJ4/W9XYZ", "CQ PJ4/W9XYZ")] {
+            let what = format!("{} {dx}", tier_name(tier));
+            let working = || {
+                let mut e = Engine::new("K1ABC/P", MY_GRID, 0);
+                e.set_tier(tier);
+                let cq = off_air(cq);
+                e.ingest_decodes_for_test(&[heard(&cq)], 2);
+                e.work_station(dx, None, Some(&cq), Some(SNR), None)
+                    .expect("the double-click is taken");
+                e
+            };
+            for row in [format!("<{dx}> K1ABC/P RRR"), format!("{dx} <K1ABC/P> RRR")] {
+                let mut e = working();
+                e.override_next_tx(dx, None, &row);
+                assert_eq!(
+                    keyed(&mut e, 4).as_deref(),
+                    Some(row.as_str()),
+                    "{what}: the row {row:?}"
+                );
+            }
+            let mut e = working();
+            keyed(&mut e, 4).expect("the answer");
+            e.ingest_decodes_for_test(&[heard(&format!("K1ABC/P <{dx}> -07"))], 6);
+            assert_eq!(
+                keyed(&mut e, 6),
+                Some(format!("<{dx}> K1ABC/P RRR")),
+                "{what}: the sequence's Tx3"
+            );
+        }
+    }
+}
+
 /// ⭐ FREE TEXT IN A CONTACT WITH A STATION SIGNING W9XYZ/M GOES OUT AS WSJT-X'S MESSAGE FOR THE
 /// TWO CALLS. Typed `73` went out as `W9XYZ/M K1ABC 73`, which the packer sends as `W9XYZ K1ABC 73`:
 /// another station. Where exactly one call is nonstandard, WSJT-X writes that call whole and the

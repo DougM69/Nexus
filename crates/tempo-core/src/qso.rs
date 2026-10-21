@@ -802,6 +802,29 @@ impl Station {
         self.rv_count = 0;
     }
 
+    /// The message a Tx panel row the operator clicked stands for: `text` read back, except our
+    /// roger where no number can ride it. [`Self::hashed_form`] sends that Tx3 as a bare `RRR`
+    /// (`<W9XYZ/M> K1ABC/P RRR`), and an `RRR` read back is the Tx4 roger, which `hashed_form`
+    /// writes in WSJT-X's Tx4 form (`W9XYZ/M <K1ABC/P> RRR`): another over than the row shows.
+    /// WSJT-X keys the text of the Tx box clicked (`on_txb3_clicked`, `widgets/mainwindow.cpp`
+    /// 8771-8777, then `ui->tx3->text()`, 7901), so that row stands for our roger, which goes
+    /// out as the row shows it.
+    pub fn tx_row(&self, text: &str) -> Msg {
+        let msg = Msg::parse(text);
+        if let (Msg::Rrr { .. }, Some(dx)) = (&msg, &self.dxcall) {
+            // No number rides this roger: `hashed_form` drops it.
+            let roger = Msg::RReport {
+                to: dx.clone(),
+                de: self.mycall.clone(),
+                snr: 0,
+            };
+            if self.hashed_form(roger.clone()) == msg {
+                return roger;
+            }
+        }
+        msg
+    }
+
     /// Called after I transmit `pending`. Escalates the IR-HARQ redundancy
     /// version for the next retransmission of the SAME step (0→1→2→0), and counts
     /// transmissions of this step. (A partner advance in [`observe`] resets both,

@@ -25297,7 +25297,8 @@ contact yourself."
             self.call_station_ctx(dxcall, dxgrid, None, None, None)?;
         }
         if let Mode::Qso { station, .. } = &mut self.mode {
-            station.override_next(Msg::parse(text));
+            let row = station.tx_row(text);
+            station.override_next(row);
         }
         self.reset_tx_watchdog();
         if self.settings.double_click_sets_tx {
