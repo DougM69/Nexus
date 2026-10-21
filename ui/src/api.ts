@@ -241,11 +241,6 @@ export async function getCredentialsStatus(): Promise<import('./types').CredStat
   return invoke('get_credentials_status')
 }
 
-/** Restricted observer read. Runtime validation lives at the monitoring boundary. */
-export async function getRemoteMonitorFrame(): Promise<unknown> {
-  return invoke<unknown>('get_remote_monitor_frame')
-}
-
 export function getRemoteStationStatus(): Promise<RemoteStationStatus> { return invoke('get_remote_station_status') }
 /** Whether a stream watches this station's screen now; `remote-stream-watched` tells each change. */
 export function getStreamWatched(): Promise<boolean> { return invoke('get_stream_watched') }

@@ -2,11 +2,11 @@
    the account and trial states, the station list, pairing, refusals, and the header and footer.
 
    SCOPE — every selector in this file starts at `.remote-site`, a class only RemoteApp's own
-   account shell carries. The connected views (MonitorApp, BrowserApplication and the Nexus App
-   inside it) never have it, so nothing here can reach them. That matters because this sheet is
-   global once loaded, and the classes it restyles are shared: `.remote-button`, `.remote-actions`
-   and `.remote-section` also render in SessionStatus, the hosted logging controls and the native
-   Remote station panel, and `.rm-header`/`.rm-card`/`.rm-scroll` are the observer's own.
+   account shell carries. The stream page never has it, so nothing here can reach it. That matters
+   because this sheet is global once loaded, and the classes it restyles are shared:
+   `.remote-button`, `.remote-actions` and `.remote-section` also render in SessionStatus, the
+   hosted logging controls and the native Remote station panel, and `.rm-header`/`.rm-card`/
+   `.rm-scroll` are the shared shell's (monitor.css).
 
    TOKENS — dark is hamradiotools.io's palette verbatim (the site is dark-only:
    src/styles/global.css @theme). Light is derived for the same family, checked to WCAG AA:
