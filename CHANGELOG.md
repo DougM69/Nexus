@@ -305,8 +305,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into a dummy load.
 - **Nexus Remote: add your station to a second PC by signing in, with no code (Beta, test builds).** In **Stations on
   this network** on the second PC, press **Sign in** and sign in to Nexus Remote in your web browser with the account
-  your station is linked to, or one its owner invited to operate it. The station is then on that PC, on its own
-  network and over the internet, in one step: no code to type and nothing to press at the shack. Nexus finds the
+  your station is linked to, or one its owner invited to operate it. The station is then on that PC on its own
+  network in one step, with no code to type and nothing to press at the shack. Over the internet the PC waits until
+  you approve it at the shack under Remote access, where Nexus asks with the PC's key: a sign-in alone never lets a PC
+  or a browser operate the station over the internet. Nexus finds the
   station on the network by name, or asks for its address, and before it connects it checks that the station Nexus
   Remote lists is the one its owner signed in for at the shack; the shack checks the PC's sign-in itself in turn. The
   station must be signed in to Nexus Remote at the shack first (Settings → Station → Remote access). A PC already paired
@@ -329,8 +331,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Nexus Remote: add your station from a PC that has never been on its network (Beta, test builds).** A laptop away
   from home, or a friend you invited who lives elsewhere, can now sign in from **Stations on this network** and keep
   the station: when Nexus does not find it on the network the PC is on, press **Not on this network** and the station
-  is added over the internet. **Operate from this computer** then drives it over the internet road (part of Nexus
-  Remote's paid service). The first time that PC is on the station's own network, press **Sign in** on the station's
+  is added over the internet, waiting until you approve the PC at the shack under Remote access. **Operate from this
+  computer** then drives it over the internet road (part of Nexus Remote's paid service). The first time that PC is on the station's own network, press **Sign in** on the station's
   row there once: the station is then on the PC on its network too, with the same keys and no second device at
   Nexus Remote, and from then on it signs in again every 30 days as any other. NEEDS-BENCH: a laptop on a phone hotspot
   that has never been on the shack's network, then the same laptop at home.

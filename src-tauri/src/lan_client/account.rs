@@ -22,7 +22,9 @@
 //!    station's network). The operator picks one when more than one can take this computer.
 //! 4. **The internet road**, registered in the same step, and free: the road key as a device of that
 //!    station, with the LAN key and the proof (`client/device`, signed by the road key). The service
-//!    approves it on the proof, and the station grants it on its own check of the same proof.
+//!    approves it on the proof, and the station checks the same proof itself; it grants it nothing
+//!    on that alone while `remote_service::account::GRANTS_ON_SIGN_IN` is off, and the road then
+//!    waits for Approve at the station ([`Signed`]).
 //! 5. **First contact on the station's network** ([`enrol`]): where a look by name finds it (an
 //!    advert whose key tag starts its LAN key's fingerprint), else where the operator says it is.
 //!    TLS with this computer's LAN key and the station's pinned, so no other machine ever hears the
@@ -167,7 +169,8 @@ fn now_s() -> u64 {
 }
 
 /// What a sign-in did: the station's id on this computer, whether its internet road waits for
-/// Approve at the station (a station paired with a code whose owner has not signed in at the shack),
+/// Approve at the station (one the service did not approve, and every road a sign-in adds while the
+/// station grants nothing on a sign-in: [`waits`]),
 /// whether it is kept by its service id until this computer first reaches it on its network, and
 /// this computer's key for its internet road as the station shows it (`internet::shown_key`), which
 /// the station asks the operator to compare before approving this computer.
@@ -177,6 +180,13 @@ pub(crate) struct Signed {
     pub(crate) waiting: bool,
     pub(crate) away: bool,
     pub(crate) key: String,
+}
+
+/// Whether a road this sign-in registered waits for Approve at the station: one the service did not
+/// approve, and while the station grants nothing on a sign-in
+/// (`crate::remote_service::account::GRANTS_ON_SIGN_IN`), every one.
+fn waits(approved: bool) -> bool {
+    !approved || !crate::remote_service::account::GRANTS_ON_SIGN_IN
 }
 
 /// Signs in through `open`'s browser, on the sign-in's own port: to add a station new to this
@@ -429,7 +439,7 @@ async fn add(
             .await?;
             return Ok(Signed {
                 station: id,
-                waiting: !approved,
+                waiting: waits(approved),
                 away: true,
                 key,
             });
@@ -461,7 +471,7 @@ async fn add(
     .await?;
     Ok(Signed {
         station: lan_id,
-        waiting: !approved,
+        waiting: waits(approved),
         away: false,
         key,
     })
@@ -564,7 +574,7 @@ async fn link(
     }
     Ok(Signed {
         station: id,
-        waiting: !approved,
+        waiting: waits(approved),
         away: false,
         key,
     })

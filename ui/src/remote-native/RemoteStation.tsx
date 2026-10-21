@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { answerRemoteAutostartOffer, getRemoteStationStatus, getSettings, remoteStationAction, setLaunchAtLogin } from '../api'
 import { t } from '../i18n'
-import { isNative, PLATFORM_NAMES, type AccountRole, type RemoteStationAction, type RemoteStationStatus } from './types'
+import { isNative, PLATFORM_NAMES, waitsForApprove, type AccountRole, type RemoteStationAction, type RemoteStationStatus } from './types'
 import { shortFingerprint } from '../remote-web/stream-protocol'
 import '../remote-web/remote.css'
 
@@ -86,10 +86,12 @@ export function RemoteStation() {
   const account = status?.account
   const roleName = (role: AccountRole) => role === 'listen' ? t('remote.account.role.listen') : t('remote.account.role.operate')
   // What the station knows of a device beyond its approval: added by its own sign-in, a proof the station
-  // could not confirm (never granted), or a removal the service has not heard yet.
+  // could not confirm (never granted), or a removal the service has not heard yet. A device added by its
+  // sign-in that waits for Approve here was confirmed, so it says only how it was added.
   const accountNotes = (device: RemoteStationStatus['devices'][number]) => <>
     {device.addedBy === 'account' && <span>{t('remote.account.addedByAccount')}</span>}
-    {account?.unconfirmed?.[device.id] && <span className="remote-warning">{t('remote.account.unconfirmed')}</span>}
+    {account?.unconfirmed?.[device.id] && !waitsForApprove(status, device.id)
+      && <span className="remote-warning">{t('remote.account.unconfirmed')}</span>}
     {account?.removals?.includes(device.id) && <span>{t('remote.account.removalWaiting')}</span>}
   </>
   // One card (the operator, 2026-10-02: "Settings ▸ Remote access becomes one card"): where this
@@ -211,7 +213,7 @@ export function RemoteStation() {
           return <li key={device.id} className="remote-native-browser">
             <span className="remote-native-browser-name">{device.name}</span>
             {key && <span className="remote-native-browser-key">{t('remote.browserKey', { key: shortFingerprint(key) })}</span>}
-            <span className="remote-native-browser-state">{device.approved !== 1 ? t('remote.native.asks')
+            <span className="remote-native-browser-state">{device.approved !== 1 || waitsForApprove(status, device.id) ? t('remote.native.asks')
               : unpinned ? t('remote.browserKeyNotPinned') : device.untilRemoved === 1 ? t('remote.browserApprovedUntilRemoved')
               : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
             {accountNotes(device)}
@@ -234,7 +236,7 @@ export function RemoteStation() {
               <span className="remote-native-browser-name">{device.name}</span>
               {device.platform && <span>{t('remote.native.computerPlatform', { platform: PLATFORM_NAMES[device.platform] })}</span>}
               {key && <span className="remote-native-browser-key">{t('remote.browserKey', { key: shortFingerprint(key) })}</span>}
-              <span className="remote-native-browser-state">{device.approved !== 1 ? t('remote.native.computerAsks')
+              <span className="remote-native-browser-state">{device.approved !== 1 || waitsForApprove(status, device.id) ? t('remote.native.computerAsks')
                 : unpinned ? t('remote.native.computerKeyNotPinned') : device.untilRemoved === 1 ? t('remote.browserApprovedUntilRemoved')
                 : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
               {accountNotes(device)}

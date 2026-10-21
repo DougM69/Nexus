@@ -545,7 +545,8 @@ async fn a_station_whose_proof_does_not_hold_is_neither_registered_nor_looked_fo
             .count();
         if trusted {
             // Registered; then nowhere on this network, and the operator said nothing: kept by its
-            // service id, the LAN key its proof vouched for pinned, its road beside it.
+            // service id, the LAN key its proof vouched for pinned, its road beside it, waiting for
+            // Approve at the station, which grants nothing on a sign-in yet.
             let key = (cloud.seen.lock().unwrap().devices.first())
                 .map(|(body, _)| shown(body))
                 .unwrap_or_default();
@@ -553,7 +554,7 @@ async fn a_station_whose_proof_does_not_hold_is_neither_registered_nor_looked_fo
                 signed,
                 Ok(Signed {
                     station: SERVICE_STATION.into(),
-                    waiting: false,
+                    waiting: true,
                     away: true,
                     key
                 }),
@@ -600,7 +601,8 @@ async fn a_station_whose_proof_does_not_hold_is_neither_registered_nor_looked_fo
 /// for the account finds it here (`alreadyHere`) and registers nothing: one device at the service.
 /// A guest invited to operate is kept the same way; one invited only to listen is not kept; and a
 /// computer holding eight stations, one of them kept this way, adds no ninth: refused before the
-/// browser opens. CONTROL: a road the service has not approved yet is said to wait.
+/// browser opens. Each road waits for Approve at the station: the station grants nothing on a
+/// sign-in yet (`remote_service::account::GRANTS_ON_SIGN_IN`), even one the service approved.
 #[tokio::test]
 async fn a_station_found_nowhere_here_is_kept_by_its_service_id_for_the_internet_road() {
     let (lan_key, _) = ComputerKey::generate().unwrap();
@@ -630,7 +632,7 @@ async fn a_station_found_nowhere_here_is_kept_by_its_service_id_for_the_internet
             signed,
             Ok(Signed {
                 station: SERVICE_STATION.into(),
-                waiting: !approve,
+                waiting: true,
                 away: true,
                 key
             }),

@@ -1,6 +1,8 @@
 //! The station's account, wired into the shack: signing in there binds the station with no code, and
 //! a device the service approved on its own proof is granted only once the station has checked that
-//! proof itself, then only as its role says.
+//! proof itself, then only as its role says. While the station grants nothing on a sign-in
+//! (`account::GRANTS_ON_SIGN_IN`, off in every build) such a device waits for Approve at the shack;
+//! what a grant on a sign-in is, is tested with it on ([`launch_granting_on_sign_in`]).
 //!
 //! The proofs are tempo-client's account fixture (tokens minted once by throwaway keys that never
 //! left a scratch process), read at the fixture's own time. The service is the fake cloud on
@@ -56,6 +58,7 @@ fn accounts(vault: &MemoryVault, bind: account::Binder) -> Accounts {
         bind,
         lan_key: Some(Arc::new(|| Some(key("stationLan")))),
         now_s: fixture_now,
+        grants_on_sign_in: account::GRANTS_ON_SIGN_IN,
     }
 }
 fn launch_with(cloud: &FakeCloud, vault: &MemoryVault, accounts: Accounts) -> Service {
@@ -426,16 +429,153 @@ fn launch_owned_at(origin: &str, vault: &MemoryVault) -> Service {
         accounts(vault, bind),
     )
 }
+/// [`launch_owned`] in a build whose station grants a device what its role says on its own
+/// sign-in (`account::GRANTS_ON_SIGN_IN` on): what such a grant is, and what still holds one back,
+/// kept tested while every build has it off.
+fn launch_granting_on_sign_in(cloud: &FakeCloud, vault: &MemoryVault) -> Service {
+    let (bind, _) = binder(Vec::new());
+    launch_with(
+        cloud,
+        vault,
+        Accounts {
+            grants_on_sign_in: true,
+            ..accounts(vault, bind)
+        },
+    )
+}
 
-/// ★ A browser signed in as the station's owner: the service approved it, and the station, having
-/// checked its proof itself, grants it what an Approve press grants (station control and logging,
-/// never FT8/FT4 transmit) and pins its key, with no press; the notice names it, and the LAN keeps
-/// it under its key's pin.
+/// The pin the room's tunnel takes a computer by: its listed road key's.
+fn road_pin() -> [u8; 32] {
+    tempo_stream::protocol::hex_bytes(&sha256(&key("road")))
+        .unwrap()
+        .try_into()
+        .unwrap()
+}
+
+/// ⛔ SIGN-IN GRANTS NOTHING YET (`account::GRANTS_ON_SIGN_IN`). A browser signed in as the
+/// station's owner, its proof checked here and holding: granted nothing and pinned for nothing,
+/// nothing kept for the LAN on it, and no notice that it was added; it is shown waiting for Approve
+/// at the station, through the next list too. Approve here then grants it what Approve grants any
+/// browser, and pins it.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_browser_signed_in_as_the_owner_is_granted_and_pinned_with_no_press() {
+async fn a_browser_signed_in_as_the_owner_waits_for_approve_at_the_station() {
     let cloud = fake_cloud().await;
     let vault = owned_vault(&cloud.origin, Vec::new());
     let service = launch_owned(&cloud, &vault);
+    let status = listed(&service, &cloud, vec![browser_row(&token("browser"))]).await;
+    assert_eq!(
+        status.account.unconfirmed,
+        BTreeMap::from([(BROWSER.to_string(), "approveAtStation")]),
+        "shown waiting for Approve"
+    );
+    assert_eq!(status.station_permissions, Vec::<String>::new(), "control");
+    assert_eq!(status.logging_permissions, Vec::<String>::new(), "logging");
+    assert_eq!(status.pinned_devices, Vec::<String>::new(), "pinned");
+    assert!(status.account.added.is_empty(), "a notice of it");
+    assert_eq!(vault.device_cache().unwrap(), None, "kept for the LAN");
+    let again = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(again.station_permissions, Vec::<String>::new(), "next list");
+    assert_eq!(again.pinned_devices, Vec::<String>::new(), "next list");
+
+    let approved = service
+        .action(Action::Device {
+            device_id: BROWSER.into(),
+            approve: true,
+            transmit: false,
+            key: Some(sha256(&key("browser"))),
+            kind: Some(Kind::Browser),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        (approved.station_permissions, approved.pinned_devices),
+        (vec![BROWSER.to_string()], vec![BROWSER.to_string()]),
+        "CONTROL: Approve at the station"
+    );
+    assert_eq!(approved.account.unconfirmed, BTreeMap::new());
+}
+
+/// ⛔ …and a computer signed in by someone the station invited to operate: its proof and its
+/// invitation hold here, but it is pinned for nothing, so the room's tunnel does not take it, and
+/// nothing is kept for the LAN on it; it waits for Approve at the station. Approve here pins it and
+/// the tunnel takes it. CONTROL: invited only to listen it is refused as it was, and someone not
+/// invited gets nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invited_guests_computer_waits_for_approve_at_the_station() {
+    let invited = |role| {
+        vec![Invite {
+            mailbox: mailbox("K9.Guest@example.test"),
+            role,
+        }]
+    };
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, invited(Role::Operate));
+    let service = launch_owned(&cloud, &vault);
+    let tunnel = || service.control.lock().unwrap().approved.paired(&road_pin());
+    let status = listed(
+        &service,
+        &cloud,
+        vec![computer_row(&token("guest"), "operate")],
+    )
+    .await;
+    assert_eq!(
+        status.account.unconfirmed,
+        BTreeMap::from([(COMPUTER_ID.to_string(), "approveAtStation")]),
+        "shown waiting for Approve"
+    );
+    assert_eq!(status.pinned_devices, Vec::<String>::new(), "pinned");
+    assert_eq!(tunnel(), None, "the tunnel takes it");
+    assert!(status.account.added.is_empty(), "a notice of it");
+    assert_eq!(vault.device_cache().unwrap(), None, "kept for the LAN");
+
+    let approved = service
+        .action(Action::Device {
+            device_id: COMPUTER_ID.into(),
+            approve: true,
+            transmit: false,
+            key: Some(sha256(&key("road"))),
+            kind: Some(Kind::Computer),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        approved.pinned_devices,
+        vec![COMPUTER_ID.to_string()],
+        "CONTROL: Approve at the station"
+    );
+    assert!(tunnel().is_some(), "CONTROL: the tunnel takes it approved");
+
+    for (invites, proof, why) in [
+        (invited(Role::Listen), "guest", "listenNative"),
+        (Vec::new(), "stranger", "proofNotYours"),
+    ] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, invites);
+        let service = launch_owned(&cloud, &vault);
+        let status = listed(
+            &service,
+            &cloud,
+            vec![computer_row(&token(proof), "operate")],
+        )
+        .await;
+        assert_eq!(
+            status.account.unconfirmed,
+            BTreeMap::from([(COMPUTER_ID.to_string(), why)]),
+            "{proof}"
+        );
+        assert!(status.pinned_devices.is_empty(), "{proof}");
+    }
+}
+
+/// ★ With sign-in grants on ([`launch_granting_on_sign_in`]), a browser signed in as the station's
+/// owner: the service approved it, and the station, having checked its proof itself, grants it what
+/// an Approve press grants (station control and logging, never FT8/FT4 transmit) and pins its key,
+/// with no press; the notice names it, and the LAN keeps it under its key's pin.
+#[tokio::test(flavor = "multi_thread")]
+async fn granting_on_sign_in_a_browser_signed_in_as_the_owner_is_granted_with_no_press() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
     let status = listed(&service, &cloud, vec![browser_row(&token("browser"))]).await;
     assert_eq!(status.account.unconfirmed, BTreeMap::new());
     assert_eq!(status.station_permissions, vec![BROWSER.to_string()]);
@@ -537,13 +677,13 @@ async fn a_proof_the_station_cannot_confirm_grants_nothing() {
     }
 }
 
-/// A computer signed in by someone the station invited to operate: pinned (its own pin, which the
-/// room's tunnel holds station control by), granted nothing on the relay's lanes, and kept for the
-/// LAN under its LAN key as a guest's. The service's role is not the station's to take: the
+/// With sign-in grants on ([`launch_granting_on_sign_in`]), a computer signed in by someone the
+/// station invited to operate: pinned (its own pin, which the room's tunnel holds station control
+/// by), granted nothing on the relay's lanes, and kept for the LAN under its LAN key as a guest's. The service's role is not the station's to take: the
 /// invitation decides. Invited to listen, a computer is refused, since its pin alone would hold
 /// station control; and someone not invited gets nothing.
 #[tokio::test(flavor = "multi_thread")]
-async fn an_invited_guests_computer_is_pinned_by_the_invitations_role() {
+async fn granting_on_sign_in_an_invited_guests_computer_is_pinned_by_the_invitations_role() {
     let invited = |role| {
         vec![Invite {
             mailbox: mailbox("K9.Guest@example.test"),
@@ -552,7 +692,7 @@ async fn an_invited_guests_computer_is_pinned_by_the_invitations_role() {
     };
     let cloud = fake_cloud().await;
     let vault = owned_vault(&cloud.origin, invited(Role::Operate));
-    let service = launch_owned(&cloud, &vault);
+    let service = launch_granting_on_sign_in(&cloud, &vault);
     let status = listed(
         &service,
         &cloud,
@@ -585,7 +725,7 @@ async fn an_invited_guests_computer_is_pinned_by_the_invitations_role() {
     ] {
         let cloud = fake_cloud().await;
         let vault = owned_vault(&cloud.origin, invites);
-        let service = launch_owned(&cloud, &vault);
+        let service = launch_granting_on_sign_in(&cloud, &vault);
         let status = listed(
             &service,
             &cloud,
@@ -631,12 +771,13 @@ async fn a_station_with_no_owner_of_its_own_vouches_for_nobody() {
 }
 
 /// Once granted, a device is the operator's: station control taken away at the shack stays away
-/// through the next list, which does not grant it again.
+/// through the next list, which does not grant it again. With sign-in grants on
+/// ([`launch_granting_on_sign_in`]), where that next list would.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_operators_own_decision_outlasts_the_next_list() {
     let cloud = fake_cloud().await;
     let vault = owned_vault(&cloud.origin, Vec::new());
-    let service = launch_owned(&cloud, &vault);
+    let service = launch_granting_on_sign_in(&cloud, &vault);
     let status = listed(&service, &cloud, vec![browser_row(&token("browser"))]).await;
     assert_eq!(status.station_permissions, vec![BROWSER.to_string()]);
     service
@@ -977,12 +1118,13 @@ async fn a_computer_paired_again_with_a_code_is_removed_at_the_shack_not_on_the_
 /// ★ A device removed at the shack while the service cannot be told: out at the station at once, as
 /// ever, and kept waiting (in the store too) instead of failing. While it waits, its proof grants
 /// it nothing, though the service still lists it as approved; the service is told before the next
-/// list once it answers, and it is no longer waiting.
+/// list once it answers, and it is no longer waiting. With sign-in grants on
+/// ([`launch_granting_on_sign_in`]), where that proof would grant it again.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_removal_made_offline_is_sent_before_the_next_list_and_grants_nothing_meanwhile() {
     let cloud = fake_cloud().await;
     let vault = owned_vault(&cloud.origin, Vec::new());
-    let service = launch_owned(&cloud, &vault);
+    let service = launch_granting_on_sign_in(&cloud, &vault);
     let status = listed(&service, &cloud, vec![browser_row(&token("browser"))]).await;
     assert_eq!(status.pinned_devices, vec![BROWSER.to_string()], "premise");
 
@@ -1016,7 +1158,7 @@ async fn a_removal_made_offline_is_sent_before_the_next_list_and_grants_nothing_
 
     // A restart reads them back, and still grants nothing.
     drop(service);
-    let service = launch_owned(&cloud, &vault);
+    let service = launch_granting_on_sign_in(&cloud, &vault);
     let restarted = listed(&service, &cloud, vec![browser_row(&token("browser"))]).await;
     assert_eq!(restarted.account.removals, vec![BROWSER.to_string()]);
     assert!(restarted.pinned_devices.is_empty());
@@ -1113,13 +1255,14 @@ async fn a_removal_the_service_refuses_by_name_does_not_wait() {
 // ---- People --------------------------------------------------------------------------------------
 
 /// ★ Inviting someone tells the service (the address as typed, and the role), then keeps them here
-/// by their address as the service matches it; their computer is then approved on their own proof.
-/// Taking the invitation back takes them out here before the service is told.
+/// by their address as the service matches it; with sign-in grants on
+/// ([`launch_granting_on_sign_in`]), their computer is then approved on their own proof. Taking the
+/// invitation back takes them out here before the service is told.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_invitation_is_kept_here_and_its_guest_is_approved_on_their_proof() {
     let cloud = fake_cloud().await;
     let vault = owned_vault(&cloud.origin, Vec::new());
-    let service = launch_owned(&cloud, &vault);
+    let service = launch_granting_on_sign_in(&cloud, &vault);
     eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
     // Invited again with another role: one invitation, the later role.
     for role in [Role::Listen, Role::Operate] {
