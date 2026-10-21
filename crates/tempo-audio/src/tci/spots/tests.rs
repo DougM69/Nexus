@@ -173,6 +173,31 @@ fn a_spot_comes_off_once_its_station_has_not_been_heard_for_fifteen_minutes() {
     );
 }
 
+/// ⛔ NO CLICK IS KEPT WHILE THE SPOTS ARE OFF, EVEN ON ONE OF OURS STILL UP: between the switch
+/// going off (or the radio loop's offer lapsing) and the spots' thread taking ours down, or when
+/// that take-down could not be sent, a click on a spot of ours still on the panadapter is refused.
+/// CONTROL: the same click, the offer standing, is kept.
+#[test]
+fn a_click_on_one_of_ours_still_up_is_refused_once_the_spots_are_off() {
+    let call = Call::new("K1ABC").expect("a call");
+    let hz = Hz::new(14_025_000).expect("a frequency");
+    let o = offer(1, vec![spot("K1ABC", 14_025_000, 0)]);
+    let with = |offer: Option<PanadapterSpots>, renewed: Instant| {
+        let shared = Shared::default();
+        *lock(&shared.state) = state(offer, renewed, &[up("K1ABC", 14_025_000)], true);
+        shared.clicked(&call, hz, Some(Channel::A))
+    };
+    let lapsed = Instant::now()
+        .checked_sub(LEASE + Duration::from_millis(10))
+        .expect("a moment past the lease");
+    let got = [
+        with(Some(o.clone()), Instant::now()),
+        with(None, Instant::now()),
+        with(Some(o), lapsed),
+    ];
+    assert_eq!(got, [Ok(()), Err(CLICK_SPOTS_OFF), Err(CLICK_SPOTS_OFF)]);
+}
+
 /// ⭐ A LAPSED OR WITHDRAWN OFFER CLEARS OURS: the switch off, or an offer the radio loop stopped
 /// renewing for the [`LEASE`], is one `spot_clear;`, and then nothing. CONTROL: within the lease the
 /// offer stands.
