@@ -427,6 +427,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the program's connection. That included Nexus's own connection to a TCI radio, which was dropped and reopened over and
   over while it read the radio's levels. Now only lines that are not rig-control commands at all count, so a web page or
   a port scanner writing to the CAT broker's port is still hung up on.
+- **TCI (Beta): closing the connection no longer cuts off Nexus's last commands to the SDR program.** When Nexus closed
+  its TCI connection (changing radio, saving the connection, quitting) while the program was sending receive audio or
+  its panadapter, the connection could end in a network reset rather than a clean close. A program that writes before
+  it reads, or whose computer drops what it has not read when a reset comes, then never read Nexus's last commands:
+  the transmitter's stop, the panadapter's stop, and the stop Nexus sends again when the program has not confirmed the
+  transmitter went off. Nexus now reads on for up to 0.2 s after its close, until the program answers it, so the
+  connection ends cleanly and the program has read everything sent before. NEEDS-BENCH: ExpertSDR3 and Thetis with
+  Audio over TCI and the panadapter on: change the radio's Connection and save, then quit Nexus; the program shows a
+  clean disconnect and stops sending to Nexus.
+- **TCI (Beta): a stop can no longer wait behind an SDR program that sends slowly.** Nexus read each message from the
+  program until it was whole, so a program sending one a byte at a time, the bytes under 20 ms apart, held Nexus in
+  that one read. Stop, and Nexus's own checks that end an over the program is not taking Nexus's audio for or has not
+  confirmed it ended, waited until the message was done, which could take hours. Each read now gives up after 20 ms
+  and carries on with the message next time, so a stop and those checks come on time whatever the program sends.
+  Connecting gives up after 3 s however slowly the program answers, rather than after minutes.
 - **A logger can no longer turn TX back on after you stop it.** With the WSJT-X UDP feed on, a Reply from GridTracker or
   JTAlert used to arm TX even after Stop TX, Esc or a TX watchdog trip, and cleared the trip. Now that Reply is ignored
   until you turn TX on yourself, and the watchdog trip stays until you do. A logger's free text with "send" no longer

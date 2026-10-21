@@ -9,7 +9,9 @@
 //! - *Connect* ([`Connection::connect`]): TCP within [`CONNECT_TIMEOUT`], then the WebSocket
 //!   handshake within [`HANDSHAKE_TIMEOUT`]. The WebSocket layer refuses a message over
 //!   [`MAX_WS_MESSAGE`], and the codecs refuse much less ([`super::wire::MAX_MESSAGE`],
-//!   [`super::frame::MAX_FRAME`]), so nothing a server sends is held without a bound.
+//!   [`super::frame::MAX_FRAME`]), so nothing a server sends is held without a bound, and nothing
+//!   is waited for without one either: the handshake ends at its deadline, and each read of the
+//!   driver within [`READ_POLL`], however the server's bytes trickle in.
 //! - *The handshake to `ready`* (TCI 2.0 §4.1): the init burst is folded into the model
 //!   ([`super::model`]) and the dialect learned from it ([`super::dialect`]). At `ready;` the
 //!   dialect is pinned and the session's own setup goes out, in this order: the stops an earlier
@@ -74,8 +76,12 @@
 //! **Every close sends the stops first** (item 7): a close on purpose, the escalation, a stale
 //! link, a server that never said `ready;`, a message the WebSocket layer refused. A close on
 //! purpose with a key of ours on the air waits up to [`Config::close_wait_ms`] for the server to
-//! report the unkey before the close frame. A link that has already dropped carries nothing more;
-//! its belief is handed on instead.
+//! report the unkey before the close frame. After the close frame the driver reads on, dropping
+//! what comes, until the server's own close frame or [`CLOSE_DRAIN`]: a socket let go with the
+//! server's frames unread ends in a reset rather than a FIN, and a server that writes before it
+//! reads, or whose system drops unread data on a reset, would never read the stops and the close
+//! frame sent just before. A link that has already dropped carries nothing more; its belief is
+//! handed on instead.
 //!
 //! The session itself never starts a transmission: none of its reactions to text, frames, time or
 //! teardown is a key.
@@ -141,19 +147,25 @@ pub const METER_INTERVAL_MS: u32 = 200;
 /// How often a server whose S-meter is polled is asked.
 pub const METER_POLL_MS: u64 = 500;
 
-/// How long the driver waits for a message before it looks at requests and time again. A stop
-/// waits at most this long behind a read.
+/// The longest one read of the driver lasts before it looks at requests and time again, however
+/// the server's bytes trickle in: a frame left partway is read on the next time. A stop waits at
+/// most this long behind a read, and so do the windows and deadlines of [`Session::poll`].
 pub const READ_POLL: Duration = Duration::from_millis(20);
 
 /// How long the TCP connect may take. Bounded so that nothing waiting on it (ultimately the radio
 /// loop, which unkeys) is held by an unreachable address.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// How long the WebSocket handshake may take.
+/// How long the WebSocket handshake may take, all of it: a server that trickles its answer is cut
+/// off here, not at a timeout on each read.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// How long one write may block before the connection counts as gone.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long a close reads on after its close frame, waiting for the server's own, before it lets
+/// the socket go.
+pub const CLOSE_DRAIN: Duration = Duration::from_millis(200);
 
 /// The largest WebSocket message read. The codecs refuse anything over 64 KiB, counted, and the
 /// session goes on; a message over this ends the session ([`End::ProtocolError`]).
@@ -1342,6 +1354,42 @@ impl<S: Read + Write> Outbox for WsOut<'_, S> {
     }
 }
 
+/// The socket under the session's WebSocket. Each read gets only the time left before `read_by`,
+/// and none starts once that has run out. A timeout on each read would bound one read and no
+/// more: the WebSocket layer reads on until a handshake answer or a frame is whole, so a server
+/// sending a byte just inside each read's timeout could hold the handshake for minutes, and one
+/// read of the driver for hours (a frame may be up to [`MAX_WS_MESSAGE`]), while stops, windows
+/// and deadlines waited. `read_by` is the handshake's deadline, then the end of each read of the
+/// driver ([`READ_POLL`]), then the end of the close's drain ([`CLOSE_DRAIN`]); a frame a read
+/// leaves partway is kept by the WebSocket layer, and the next read goes on with it. Writes keep
+/// the socket's own timeout, [`WRITE_TIMEOUT`] each. The probe ([`super::probe`]) and the TCI
+/// server's handshake read the same way.
+struct Socket {
+    tcp: TcpStream,
+    read_by: Instant,
+}
+
+impl Read for Socket {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.read_by.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(ErrorKind::TimedOut, "the read's time is up"));
+        }
+        self.tcp.set_read_timeout(Some(left))?;
+        self.tcp.read(buf)
+    }
+}
+
+impl Write for Socket {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
+}
+
 /// A [`Session`] running on its own thread over one WebSocket. `Sync`, so one connection serves
 /// several callers at once: each request waits on its own answer, and a stop never queues behind
 /// another caller's request for longer than one read ([`READ_POLL`]).
@@ -1363,26 +1411,25 @@ impl Connection {
         let unreachable = |e: io::Error| ConnectError::Unreachable(e.to_string());
         let tcp = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map_err(unreachable)?;
         tcp.set_nodelay(true).map_err(unreachable)?;
-        tcp.set_read_timeout(Some(HANDSHAKE_TIMEOUT))
-            .map_err(unreachable)?;
         tcp.set_write_timeout(Some(WRITE_TIMEOUT))
             .map_err(unreachable)?;
         let limits = WebSocketConfig::default()
             .max_message_size(Some(MAX_WS_MESSAGE))
             .max_frame_size(Some(MAX_WS_MESSAGE));
         let url = format!("ws://{addr}/");
-        let (ws, _) = tungstenite::client::client_with_config(url.as_str(), tcp, Some(limits))
+        // The whole handshake inside its deadline, however the server's answer trickles in.
+        let socket = Socket {
+            tcp,
+            read_by: Instant::now() + HANDSHAKE_TIMEOUT,
+        };
+        let (ws, _) = tungstenite::client::client_with_config(url.as_str(), socket, Some(limits))
             .map_err(|e| ConnectError::Handshake(e.to_string()))?;
-        ws.get_ref()
-            .set_read_timeout(Some(READ_POLL))
-            .map_err(unreachable)?;
         Connection::spawn(ws, config, streams).map_err(|e| ConnectError::Spawn(e.to_string()))
     }
 
-    /// Start the session over an open WebSocket. Its reads must time out (the driver interleaves
-    /// them with requests and time).
-    pub fn spawn<S: Read + Write + Send + 'static>(
-        ws: WebSocket<S>,
+    /// Start the session over an open WebSocket: the driver sets each read's deadline.
+    fn spawn(
+        ws: WebSocket<Socket>,
         config: Config,
         streams: Box<dyn Streams>,
     ) -> io::Result<Connection> {
@@ -1400,9 +1447,7 @@ impl Connection {
             let shared = Arc::clone(&shared);
             std::thread::Builder::new()
                 .name("tci-session".into())
-                .spawn(move || {
-                    drive(ws, session, streams, epoch, &request_rx, &event_tx, &shared)
-                })?
+                .spawn(move || drive(ws, session, streams, epoch, request_rx, &event_tx, &shared))?
         };
         Ok(Connection {
             requests,
@@ -1505,7 +1550,8 @@ impl Connection {
         }
     }
 
-    /// Close on purpose, waiting for the teardown (stops first) to finish.
+    /// Close on purpose, waiting for the teardown (stops first) to finish, the server's answer to
+    /// the close frame included (at most [`CLOSE_DRAIN`]).
     pub fn close(mut self) {
         self.shutdown();
     }
@@ -1531,12 +1577,12 @@ fn retryable(e: &io::Error) -> bool {
     )
 }
 
-fn drive<S: Read + Write>(
-    mut ws: WebSocket<S>,
+fn drive(
+    mut ws: WebSocket<Socket>,
     mut session: Session,
     mut streams: Box<dyn Streams>,
     epoch: Instant,
-    requests: &Receiver<Request>,
+    requests: Receiver<Request>,
     events: &Sender<Event>,
     shared: &Shared,
 ) {
@@ -1574,6 +1620,9 @@ fn drive<S: Read + Write>(
             }
         }
         if !session.is_closed() {
+            // One read, however the server's bytes trickle in: a frame it leaves partway is read
+            // on the next time round, after requests and time.
+            ws.get_mut().read_by = Instant::now() + READ_POLL;
             let read = ws.read();
             let mut out = WsOut(&mut ws);
             match read {
@@ -1607,7 +1656,29 @@ fn drive<S: Read + Write>(
             break;
         }
     }
+    // Closed: a request from here is answered at once as closed, not after the drain.
+    drop(requests);
+    drain(&mut ws);
+}
+
+/// After the close frame: read on, dropping what comes, until the server's own close frame (it
+/// sends nothing after it, RFC 6455 §5.5.1), the end of the connection, or [`CLOSE_DRAIN`]. A
+/// socket let go with the server's frames still unread ends in a reset rather than a FIN, and a
+/// server that writes before it reads, or whose system drops unread data on a reset, then never
+/// reads what went out just before: the stops, `iq_stop`, the close frame. A link already gone
+/// ends it at the first read.
+fn drain(ws: &mut WebSocket<Socket>) {
     let _ = ws.flush();
+    let until = Instant::now() + CLOSE_DRAIN;
+    ws.get_mut().read_by = until;
+    loop {
+        match ws.read() {
+            Ok(Message::Close(_)) => return,
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(e)) if retryable(&e) && Instant::now() < until => {}
+            Err(_) => return,
+        }
+    }
 }
 
 /// Store the session's state for [`Connection::snapshot`] and wake [`Connection::wait_until`].
@@ -1634,5 +1705,7 @@ fn answer<T>(session: &Session, shared: &Shared, reply: Sender<T>, value: T) {
 
 #[cfg(test)]
 mod sim_tests;
+#[cfg(test)]
+mod socket_tests;
 #[cfg(test)]
 mod tests;
