@@ -43,7 +43,10 @@ pub enum CallRef {
     /// A destination no 28-bit field can carry, by name: a group not in [`GROUPS`] or a compound
     /// call. JS8Call puts `<....>` in the directed frame (`packDirectedMessage`,
     /// varicode.cpp:1578-1584) and sends the name in a compound frame instead (`buildMessageFrames`
-    /// CASE 2, :2100-2135), so [`pack28`] refuses it. Only [`CallRef::parse_destination`] makes one.
+    /// CASE 2, :2100-2135), so [`pack28`] refuses it. [`CallRef::parse_destination`] makes one. So
+    /// does a selected call that is portable ("W1AW/P"), as the To field gives one, though it is
+    /// NOT compound: it is carried by its text, and compose keys it as JS8Call does, a directed
+    /// frame to the base call with the portable flag (`packCallsign`, varicode.cpp:955-960).
     Compound(String),
 }
 

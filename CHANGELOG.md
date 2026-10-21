@@ -463,6 +463,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   @group JS8 can address". It now goes out the way JS8Call sends it, a message or a command alike, and a message to a
   group you joined is marked as yours. Compound calls such as KD4JRX/WFD can be put in the To box too. A name JS8Call
   cannot send to is still refused, and the message now says a group is @ and up to 8 letters or digits.
+- **JS8 sends to a portable call.** W1AW/P in the To box, typed or picked from a station heard as portable, was
+  refused as "not a callsign or @group JS8 can address". It now goes out as JS8Call sends it, a message or a command
+  alike: a directed frame to W1AW with JS8Call's portable flag set, the same frame byte for byte. Other suffixes are
+  unchanged: W1AW/M, W1AW/1 or W1AW/QRP goes as a compound call, as JS8Call sends one, and a call JS8Call cannot send
+  to is still refused. NEEDS-BENCH: a JS8Call station receiving a message sent to its /P call.
 - **FT8 and FT4: a weak reply that arrives late in the period now counts for your next over.** Nexus now
   decodes at the same moments as WSJT-X. FT8's full decode runs 14.4 seconds into the period instead of after the
   period ends, and FT4's one decode runs at 6.05 seconds instead of at 5.5 and again at 7.5. A weak RR73 or report
