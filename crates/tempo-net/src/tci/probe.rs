@@ -323,24 +323,44 @@ mod tests {
     fn the_probe_writes_nothing_and_closes_cleanly() {
         // The positive control first: a session on the same kind of server writes as soon as the
         // server says `ready;` (its audio stream and meter pushes), and the simulator's log shows
-        // it. Read before the session closes: a close with the server's audio still arriving can
-        // end in a reset that loses the session's last frames, which is not what this shows.
+        // it, up to the session's close. That close comes with the server's IQ arriving too, and
+        // the server still reads its last lines and its close frame: the close reads on to the
+        // server's answer, so the socket does not go with the server's frames unread.
         let control = sim(SimDialect::expert_sdr3(), []);
-        let session = Connection::connect(
-            control.addr(),
-            Config::new(Trx::new(0).expect("trx 0")),
-            Box::new(NoStreams),
-        )
-        .expect("the session connects");
+        let trx = Trx::new(0).expect("trx 0");
+        let session = Connection::connect(control.addr(), Config::new(trx), Box::new(NoStreams))
+            .expect("the session connects");
         let wrote = control.wait_for(WAIT, |log| {
             log.iter()
                 .any(|l| matches!(&l.event, SimEvent::TextIn { conn: 0, .. }))
         });
-        let control_wrote = written_by(&control, 0);
+        session
+            .send(wire::Command::Stream(wire::StreamSetting::IqStart(trx)))
+            .expect("iq_start sent");
+        let streaming = control.wait_for(WAIT, |log| {
+            log.iter()
+                .filter(|l| {
+                    matches!(&l.event, SimEvent::FrameOut { conn: 0, header: Some(h), .. }
+                        if h.kind == tempo_tcisim::frame::kind::IQ)
+                })
+                .count()
+                >= 3
+        });
         session.close();
+        let control_closed = closed(&control, 0);
+        let control_wrote = written_by(&control, 0);
+        assert!(streaming, "control: the server's IQ never came");
         assert!(
-            wrote,
-            "control: the log shows what a client writes: {control_wrote:?}"
+            wrote
+                && ["trx:0,false;", "iq_stop:0;"]
+                    .iter()
+                    .all(|t| control_wrote.iter().any(|w| w == t)),
+            "control: the log shows what a client writes, its close's lines too: {control_wrote:?}"
+        );
+        assert_eq!(
+            control_closed,
+            Some(Closer::Client),
+            "control: the session's close frame was never read"
         );
 
         for server in servers() {
