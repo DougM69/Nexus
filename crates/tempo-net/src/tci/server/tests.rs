@@ -1376,6 +1376,20 @@ fn a_refused_key_answers_trx_false_and_logs_its_gate_once() {
     assert_eq!(b.handle.programs()[0].key, None);
 }
 
+/// What "Last refused" and the connection log say when a program's own audio comes before it asked
+/// a voice mode, as the app's hint and the guide say it: the advice whole, and that WSJT-X and
+/// JTDX ask for a mode only when it differs from Nexus's (set to USB on a station already in USB,
+/// they ask for nothing and are refused).
+#[test]
+fn the_voice_mode_refusal_says_some_programs_ask_only_when_the_mode_differs() {
+    assert_eq!(
+        Refusal::VoiceMode.text(),
+        "a program may transmit its own audio only after it asks for a voice mode (USB, LSB, AM or \
+         FM): set the program's Radio mode, or use Nexus for FT8; some programs, WSJT-X and JTDX \
+         among them, ask for their mode only when it differs from Nexus's"
+    );
+}
+
 /// The forms MSHV writes on its first `vfo` (`network.cpp:2482-2491`): none of them arms.
 #[test]
 fn mshvs_first_writes_are_answered_and_arm_nothing() {

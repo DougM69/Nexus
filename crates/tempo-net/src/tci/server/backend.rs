@@ -172,7 +172,9 @@ impl Refusal {
             }
             Refusal::VoiceMode => {
                 "a program may transmit its own audio only after it asks for a voice mode (USB, \
-                 LSB, AM or FM): set the program's Radio mode, or use Nexus for FT8"
+                 LSB, AM or FM): set the program's Radio mode, or use Nexus for FT8; some \
+                 programs, WSJT-X and JTDX among them, ask for their mode only when it differs \
+                 from Nexus's"
             }
             Refusal::AudioStream => "no TCI audio stream",
             Refusal::CwText => {

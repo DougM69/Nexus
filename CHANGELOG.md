@@ -86,7 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is: WSJT-X asking for DIGU and then keying is held like FT8 even on the Phone screen. A program must also ask for
   a voice mode (USB, LSB, AM or FM) before its own audio goes out: one that has asked for no mode, as WSJT-X, JTDX
   and MSHV do with their Radio mode at None (their default), or that asked for CW, is refused, and Last refused says
-  to set the program's Radio mode or to use Nexus for FT8. NEEDS-BENCH: a program's voice audio through Share by
+  to set the program's Radio mode or to use Nexus for FT8, and that WSJT-X and JTDX ask for a mode only when it
+  differs from Nexus's, so set to USB while Nexus is already in USB they ask for nothing and are refused.
+  NEEDS-BENCH: a program's voice audio through Share by
   TCI into a dummy load, on a sound-card radio and on a Flex: the key on its first audio, its tail on its release,
   and each stop; and WSJT-X, JTDX and MSHV refused with their Radio mode at None and at Data/Pkt.
 - **Share by TCI: spots from programs on Nexus's band map (Beta).** With **Spots from programs** on, as it comes,
