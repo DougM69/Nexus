@@ -145,6 +145,27 @@ export function txEarcon(on: boolean): void {
   }
 }
 
+/** The CW turn cue's sound (Settings `soundCwTurn`, off by default): one short rising chirp,
+ * 1.2 → 1.6 kHz in 120 ms, quieter than an alert and nothing like a ~600 Hz CW note. The cockpit
+ * plays it once per over, and never while anything is keyed. */
+export function turnEarcon(): void {
+  const ctx = ensureCtx()
+  if (!ctx) return
+  const now = ctx.currentTime
+  const osc = ctx.createOscillator()
+  const gain = ctx.createGain()
+  osc.type = 'sine'
+  osc.frequency.setValueAtTime(1200, now)
+  osc.frequency.exponentialRampToValueAtTime(1600, now + 0.12)
+  gain.gain.setValueAtTime(0.0001, now)
+  gain.gain.exponentialRampToValueAtTime(0.08, now + 0.01)
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12)
+  osc.connect(gain)
+  gain.connect(ctx.destination)
+  osc.start(now)
+  osc.stop(now + 0.13)
+}
+
 /** Pass-start (AOS) earcon for the ARMED satellite track (satPassAlert.ts): a
  * rising three-tone. Three notes, not two, and frequencies no other alert
  * uses (BEEP_HZ, the 990 Hz ⏰ alarm, the 660/880 TX pair) — the operator's

@@ -533,6 +533,10 @@ const MIGRATED = [
   // word is the only entry, the same split the AI decoder's 400–1200 Hz window and the BW
   // nudge's ±50 Hz take inside their sentences.
   'components/CwCockpit.tsx',
+  // The CW turn cue (2026-10-21) — born migrated: the lamp's words, its pace hint and what a screen
+  // reader hears are all the catalog's (`cw.turn.*`, `cw.pace.*`); only its glyphs are in the code.
+  'components/CwTurnLamp.tsx',
+  'features/cwTurn.ts',
   // The CW zero-beat indicator (2026-08-28) — born migrated, so it never joins the
   // un-migrated backlog. Its only invariants are `Hz` and the signed offset it formats.
   'components/ZeroBeat.tsx',

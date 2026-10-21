@@ -262,6 +262,7 @@ export const SETTINGS_KEYS = [
   'announceVerbosity',
   'soundTxState',
   'soundDecodeTick',
+  'soundCwTurn',
   'bestCaller',
   'bestCallerMinSnr',
   'blockedCalls',
@@ -376,6 +377,8 @@ export const NEWER_SETTINGS = {
   tciServerTx: false,
   tciServerCw: false,
   tciServerSpots: false,
+  // A station that predates the CW turn cue's sound plays none: that setting's default.
+  soundCwTurn: false,
 } as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
@@ -681,6 +684,7 @@ export const SETTINGS_SHAPES = {
   "announceVerbosity": "string",
   "soundTxState": "boolean",
   "soundDecodeTick": "boolean",
+  "soundCwTurn": "boolean",
   "bestCaller": "string",
   "bestCallerMinSnr": "nullable-number",
   "blockedCalls": "array",

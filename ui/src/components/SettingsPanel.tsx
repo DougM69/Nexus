@@ -10676,6 +10676,25 @@ export function SettingsPanel({
                   {t('settings.accessibility.decodeTick.hint')}
                 </span>
               </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">
+                    {t('settings.accessibility.cwTurnSound.label')}
+                  </span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.soundCwTurn ?? false}
+                    className={`toggle${form.soundCwTurn ? ' on' : ''}`}
+                    onClick={() => updateBool('soundCwTurn', !form.soundCwTurn)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  {t('settings.accessibility.cwTurnSound.hint')}
+                </span>
+              </div>
             </div>
           </fieldset>
           </>

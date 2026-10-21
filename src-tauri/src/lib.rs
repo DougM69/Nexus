@@ -17345,20 +17345,14 @@ struct CwDecodeResult {
     rst: Option<String>,
     /// The other station's name, read from the decode (e.g. "BOB"), else null.
     name: Option<String>,
-    /// Guided QSO-state tag: "listening" | "cq" | "answered" | "report" | "73".
-    state: String,
-    /// Plain-English state, e.g. "W1ABC is calling CQ".
-    headline: String,
-    /// The guided instruction, e.g. "Press Answer (F2) to call them".
-    prompt: String,
-    /// Recommended action id to highlight: "F2" | "F3" | "log", or null.
-    recommended: Option<String>,
+    /// Whose turn it is and what fits, for the cockpit's turn cue (`tempo_core::cw_turn`): null
+    /// unless the AI decoder is on and keeping up. It never sends; the cockpit lights a key.
+    turn: Option<tempo_core::cw_turn::Turn>,
     /// The operator-confirmed worked callsign (the active peer), if any.
     worked_call: Option<String>,
     /// An unassisted contest entry is declared: no CW decoder runs
     /// (`Settings::cw_decoder_active`), so every field above that the decoder fills is empty,
-    /// the guidance included, and the Decode pane says why. A turn cue drawn from this read
-    /// shows nothing then either.
+    /// the turn cue included, and the Decode pane says why.
     unassisted: bool,
 }
 
@@ -17385,17 +17379,28 @@ fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
     let mycall = eng.settings().mycall.clone();
     // An unassisted entry gets nothing the decoder would give it. The engine has no copy for it,
     // and the copilot does not run on the call the operator chose either: no call chips (the
-    // best of which fills His Call), no report or name for the log strip, and no guidance.
+    // best of which fills His Call), no report or name for the log strip, and no turn cue.
     let unassisted = !eng.settings().cw_decoder_active();
     // Parse the decode into copilot context. The DXCC resolver (src-tauri has it; tempo-core
     // doesn't) supplies the real-prefix check that filters CW misdecodes out of the chips.
     let assist = if unassisted {
         tempo_core::cw_parse::CwAssist::default()
     } else {
-        tempo_core::cw_parse::analyze(&d.text, &sent, &mycall, worked.as_deref(), |b| {
+        tempo_core::cw_parse::analyze(&d.text, &mycall, |b| {
             propagation::dxcc::resolve(b).is_some()
         })
     };
+    // Whose turn it is: none in an unassisted entry either (`Engine::cw_turn`). The call the
+    // F-keys' `!` sends is the station worked, else the decoder's best guess, which the cockpit
+    // puts in His Call.
+    let his_call = worked.clone().or_else(|| {
+        assist
+            .candidates
+            .iter()
+            .find(|c| c.best)
+            .map(|c| c.call.clone())
+    });
+    let turn = eng.cw_turn(his_call.as_deref());
     CwDecodeResult {
         text: d.text,
         pending: eng.cw_decode_pending(),
@@ -17413,10 +17418,7 @@ fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
             .collect(),
         rst: assist.exchange.rst,
         name: assist.exchange.name,
-        state: assist.guidance.state,
-        headline: assist.guidance.headline,
-        prompt: assist.guidance.prompt,
-        recommended: assist.guidance.recommended,
+        turn,
         worked_call: worked,
         unassisted,
     }
@@ -39350,8 +39352,8 @@ fn winlink_disconnect() -> Result<(), String> {
 mod tests {
     use crate::remote_service::stored_log_tests::StoredLog;
 
-    /// The AI decoder's provisional tail is for the eye only. The copilot's callsign chips, the
-    /// report and name the log entry takes, and the guidance all read the CONFIRMED copy, so a
+    /// The AI decoder's provisional tail is for the eye only. The copilot's callsign chips and the
+    /// report and name the log entry takes all read the CONFIRMED copy, so a
     /// letter the next pass may still change never reaches a log, a macro or the entry.
     #[test]
     fn the_cw_copilot_reads_only_the_confirmed_ai_copy() {
@@ -39444,13 +39446,49 @@ mod tests {
         let calls: Vec<&str> = r.candidates.iter().map(|c| c.call.as_str()).collect();
         assert!(calls.is_empty(), "no call chips: {calls:?}");
         assert_eq!((r.rst, r.name), (None, None), "no report or name");
-        assert_eq!(r.recommended, None, "no guidance");
+        assert_eq!(r.turn, None, "no turn cue");
         assert_eq!(
             r.worked_call.as_deref(),
             Some("K9ABC"),
             "the call the operator chose stays"
         );
         assert!(r.unassisted, "the Decode pane is told why");
+    }
+
+    /// The turn cue rides the CW read, from the AI decoder's copy. With no station worked, the
+    /// call the F-keys send is the decoder's best guess, so an answer is suggested only for the
+    /// station heard calling. An unassisted entry gets no cue, as it gets nothing else a CW
+    /// decoder gives.
+    #[test]
+    fn the_turn_cue_rides_the_cw_read_and_never_an_unassisted_one() {
+        use tempo_core::cw_turn::{Role, State};
+        let mut e = tempo_app::engine::Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("cw", false);
+        e.set_frequency(7.03, "40m", "CW");
+        // 5.2 s of audio, then the AI's pass over it: K1ABC's CQ, a letter every 0.15 s from 1 s.
+        for _ in 0..52 {
+            e.feed_rx_audio(&[0.0; 1200]);
+        }
+        let (_, fed, g) = e.ai_cw_window().expect("the AI ring fills");
+        let text = "CQ CQ DE K1ABC K1ABC K";
+        let letters: Vec<(f64, char)> = text
+            .chars()
+            .enumerate()
+            .map(|(i, c)| (1.0 + i as f64 * 0.15, c))
+            .collect();
+        e.push_ai_cw_pass(g, text, "");
+        e.push_ai_cw_times(g, fed as f64 / 12_000.0, &letters, &[]);
+        let turn = super::read_cw_state(&e)
+            .turn
+            .expect("control: a turn is read");
+        assert_eq!(
+            (turn.state, turn.role, turn.call.as_deref()),
+            (State::YourTurn, Some(Role::Answer), Some("K1ABC"))
+        );
+        e.set_unassisted_mode(true);
+        let r = super::read_cw_state(&e);
+        assert_eq!(r.turn, None, "unassisted: no turn cue");
+        assert!(r.unassisted);
     }
 
     /// The settings backup's stated contract is that it CARRIES NO SECRETS, and

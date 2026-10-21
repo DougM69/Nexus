@@ -2820,6 +2820,9 @@ be photographed, and were not exercised for this capture.*
   know your TX state by ear."
 - **Decode-batch tick** — "A soft tick each cycle new signals are decoded — the
   band's rhythm, eyes-free."
+- **CW turn sound** — "A short rising chirp when the CW turn cue says it is your
+  turn to send. Never while you transmit." Off as it comes. The cue itself is on
+  the CW screen ([Turn Cue](../manual/CW.md#turn-cue)).
 
 ---
 

@@ -1760,19 +1760,45 @@ export interface CwDecodeResult {
   rst: string | null
   /** The other station's name, read from the decode (e.g. "BOB"), else null. */
   name: string | null
-  /** Guided QSO-state tag: "listening" | "cq" | "answered" | "report" | "73". */
-  state: string
-  /** Plain-English state, e.g. "W1ABC is calling CQ". */
-  headline: string
-  /** Guided instruction, e.g. "Press Answer (F2) to call them". */
-  prompt: string
-  /** Recommended action id to highlight: "F2" | "F3" | "log", or null. */
-  recommended: string | null
+  /** Whose turn it is and what fits, for the turn cue (`tempo_core::cw_turn`): null unless the
+   *  AI decoder is on and keeping up, and in an unassisted entry. Absent from an older station. */
+  turn?: CwTurn | null
   /** The operator-confirmed worked callsign (active peer), if any. */
   workedCall: string | null
   /** An unassisted contest entry is declared at the station: no CW decoder runs, so every field the
    *  decoder fills is empty, and the Decode pane says why. Absent from an older station. */
   unassisted?: boolean
+}
+
+/** Where a CW contact stands, as the station reads it from the AI decoder's copy. */
+export type CwTurnState =
+  | 'idle'
+  | 'theySend'
+  | 'finishing'
+  | 'yourTurn'
+  | 'hold'
+  | 'unsure'
+  | 'youSend'
+  | 'listen'
+  | 'closing'
+
+/** The KIND of message that fits; the cockpit finds the key that sends it in the set in use. */
+export type CwTurnRole = 'cq' | 'answer' | 'reply' | 'myCall' | 'exchange' | 'tu' | 'close' | 'again' | 'repeat'
+
+/** What the lamp says beside the state. */
+export type CwTurnHint = 'type' | 'fiveNnTu' | 'partial' | 'splitOff' | 'noReply' | 'late'
+
+/** The CW turn read. It never sends: the cockpit lights a key, and the operator presses it. */
+export interface CwTurn {
+  state: CwTurnState
+  role: CwTurnRole | null
+  hint: CwTurnHint | null
+  /** The station the lamp names: the one sending, or the one the over was for. */
+  call: string | null
+  /** Which over: its first letter's stream time in ms. A turn is announced once per over. */
+  over: number | null
+  /** What the lamp counts down (seconds): our listening after a CQ or a call, or a race. */
+  window: { total: number; left: number } | null
 }
 
 /** One signal found by the wideband CW skimmer (audio pitch + text + WPM). */
@@ -5062,6 +5088,8 @@ export interface Settings {
   soundTxState?: boolean
   /** Soft tick when a decode batch lands. Off by default. */
   soundDecodeTick?: boolean
+  /** A short rising chirp when the CW turn cue says it is your turn. Off by default. */
+  soundCwTurn?: boolean
   // --- Auto-CQ caller selection (W1.4) ---
   /** When several stations answer your CQ, which to work first:
    *  'first' (stock), 'strongest', 'farthest', or 'cq_first'. */

@@ -87,6 +87,9 @@ mod cw_sending_gate_tests;
 /// CW speed match: an answer keys at the station's measured speed, a CQ at the operator's own.
 #[cfg(test)]
 mod cw_speed_match_tests;
+/// The CW turn cue's read: the AI copy and our keying on one clock, never unassisted.
+#[cfg(test)]
+mod cw_turn_tests;
 /// An unassisted contest entry decodes no CW at all.
 #[cfg(test)]
 mod cw_unassisted_tests;
@@ -4045,6 +4048,18 @@ pub struct Engine {
     ai_cw_epoch: u64,
     /// AI CW decoder status for the UI ("listening…", "model not installed", …).
     ai_cw_status: String,
+    /// The AI decoder's letters with the stream time it heard each at (seconds on the AI-CW
+    /// clock, `ai_cw_fed`), for the CW turn cue ([`Self::cw_turn`]): confirmed ones appended as
+    /// each pass gives them, the oldest dropped past [`CW_TURN_KEEP_SECS`]; the provisional
+    /// tail's replaced by every pass, as `ai_cw_pending` is.
+    cw_turn_letters: VecDeque<(f64, char)>,
+    cw_turn_pending: Vec<(f64, char)>,
+    /// The end of the newest window the AI decoder has listened to, on that clock; `None` until
+    /// its first pass over this stream.
+    cw_turn_heard: Option<f64>,
+    /// Our own CW transmissions on that clock (start, end; the end `None` while still keying),
+    /// so the cue knows where our overs were and drops our own sidetone from the copy.
+    cw_turn_keyed: VecDeque<(f64, Option<f64>)>,
     /// Streaming single-signal CW decoder at the operator's pitch. Fed incrementally so it
     /// accumulates a PERSISTENT transcript (the batch decoder re-read the ring each poll,
     /// so its text churned and the last characters vanished within seconds).
@@ -4478,6 +4493,17 @@ const AI_CW_WINDOW: usize = 180_000;
 const CW_SPEED_MATCH_FRESH_SECS: f32 = 10.0;
 /// How much of the newest CW copy CW speed match looks in for the call being answered.
 const CW_SPEED_MATCH_COPY_CHARS: usize = 200;
+/// The AI-CW stream clock: samples fed to the AI ring per second (the decode thread stitches on
+/// the same clock).
+const AI_CW_CLOCK_HZ: f64 = 12_000.0;
+/// How much of the AI decoder's timed copy the CW turn cue keeps (seconds): a long over and the
+/// one before it.
+const CW_TURN_KEEP_SECS: f64 = 90.0;
+/// How many of our own transmissions the cue remembers.
+const CW_TURN_KEEP_KEYED: usize = 16;
+/// The AI decoder has not listened this far behind the stream (seconds): it has stopped, failed
+/// or cannot keep up, and the cue shows nothing rather than a turn read from stale copy.
+const CW_TURN_STALL_SECS: f64 = 10.0;
 
 /// Whether the newest [`CW_SPEED_MATCH_COPY_CHARS`] of `copy` hold `call` (upper case) as a word,
 /// or as one part of a portable call (`W1AW/P`, `VE3/W1AW`).
@@ -6277,6 +6303,10 @@ impl Engine {
             ai_cw_fed: 0,
             ai_cw_epoch: 0,
             ai_cw_status: String::new(),
+            cw_turn_letters: VecDeque::new(),
+            cw_turn_pending: Vec::new(),
+            cw_turn_heard: None,
+            cw_turn_keyed: VecDeque::new(),
             cw_stream: tempo_core::cw_decode::CwStreamDecoder::new(tempo_fast::SAMPLE_RATE, 600.0),
             qso_audio: Vec::new(),
             cat_status: (None, String::new()),
@@ -15301,6 +15331,8 @@ impl Engine {
         // moved on — keeping it past that point risks the Log button reaching back to an old
         // abandoned exchange instead of saying there is nothing to log.
         self.stalled_qso = None;
+        // …and the CW contact the turn cue was following: the next over is the next contact's.
+        self.forget_cw_turn();
         // One line per contact — the event behind "my log is missing a QSO". Bounded by
         // contacts, which is bounded by the operator: a busy hour is a few dozen lines, and a
         // quiet one is none. Nothing here is on a timer.
@@ -16887,6 +16919,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.ai_cw_audio.clear();
         self.ai_cw_fed = 0;
         self.ai_cw_epoch = self.ai_cw_epoch.wrapping_add(1);
+        // The turn cue's times are on this clock: they go with it.
+        self.forget_cw_turn();
+        self.cw_turn_heard = None;
     }
 
     /// The best resume point from `dxcall` addressed to `mycall` in this slot, for
@@ -20576,6 +20611,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 let drop = self.ai_cw_audio.len() - AI_CW_WINDOW;
                 self.ai_cw_audio.drain(0..drop);
             }
+            self.note_cw_turn_keying();
         } else if !self.ai_cw_audio.is_empty() {
             self.restart_ai_cw_stream();
         }
@@ -20706,6 +20742,103 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
+    /// One AI-CW pass's letters with the stream time each was heard at ([`Self::push_ai_cw_pass`]'s
+    /// text again, letter by letter), and the end of the window it listened to: what the CW turn
+    /// cue reads ([`Self::cw_turn`]). Kept as that text is: confirmed letters are appended, the
+    /// provisional ones replace the last pass's, and a pass over an older generation is dropped.
+    pub fn push_ai_cw_times(
+        &mut self,
+        epoch: u64,
+        heard_until: f64,
+        confirmed: &[(f64, char)],
+        pending: &[(f64, char)],
+    ) {
+        if epoch != self.ai_cw_epoch {
+            return;
+        }
+        self.cw_turn_heard = Some(heard_until);
+        self.cw_turn_letters.extend(confirmed.iter().copied());
+        self.cw_turn_pending = pending.to_vec();
+        let keep_from = heard_until - CW_TURN_KEEP_SECS;
+        while self
+            .cw_turn_letters
+            .front()
+            .is_some_and(|(t, _)| *t < keep_from)
+        {
+            self.cw_turn_letters.pop_front();
+        }
+    }
+
+    /// Our own CW keying on the AI-CW stream clock, for the turn cue: a transmission opens at the
+    /// first audio fed while CW is sending ([`Self::cw_sending`]) and closes at the first fed
+    /// after it stops. The radio loop feeds audio every tick, so the clock is the audio's own.
+    fn note_cw_turn_keying(&mut self) {
+        let now = self.ai_cw_fed as f64 / AI_CW_CLOCK_HZ;
+        let keying = self.cw_sending();
+        match self.cw_turn_keyed.back_mut() {
+            Some((_, end @ None)) => {
+                if !keying {
+                    *end = Some(now);
+                }
+            }
+            _ if keying => {
+                if self.cw_turn_keyed.len() >= CW_TURN_KEEP_KEYED {
+                    self.cw_turn_keyed.pop_front();
+                }
+                self.cw_turn_keyed.push_back((now, None));
+            }
+            _ => {}
+        }
+    }
+
+    /// Whose turn it is in the CW contact the operator is copying, read from the AI decoder's
+    /// copy and our own keying ([`tempo_core::cw_turn`]). `None` unless that decoder is on and
+    /// keeping up, and in an unassisted entry, which gets nothing from a CW decoder
+    /// ([`crate::settings::Settings::cw_decoder_active`]). `his_call` is the call the F-keys'
+    /// `!` sends: the station worked, else the decoder's best guess, which only the caller can
+    /// rank (it holds the DXCC tables).
+    ///
+    /// ⛔ A READ: `&self`, so nothing here can key, queue or arm anything.
+    pub fn cw_turn(&self, his_call: Option<&str>) -> Option<tempo_core::cw_turn::Turn> {
+        if !self.settings.cw_decoder_active() || !self.settings.ai_cw_active() {
+            return None;
+        }
+        let heard = self.cw_turn_heard?;
+        let now = self.ai_cw_fed as f64 / AI_CW_CLOCK_HZ;
+        if now - heard > CW_TURN_STALL_SECS {
+            return None;
+        }
+        let letters: Vec<(f64, char)> = self
+            .cw_turn_letters
+            .iter()
+            .chain(&self.cw_turn_pending)
+            .copied()
+            .collect();
+        let keyed: Vec<(f64, Option<f64>)> = self.cw_turn_keyed.iter().copied().collect();
+        let wpm = self.cw_decode().wpm;
+        Some(tempo_core::cw_turn::read(&tempo_core::cw_turn::Input {
+            letters: &letters,
+            keyed: &keyed,
+            heard_until: heard,
+            now,
+            mark_age: self.cw_stream.secs_since_mark().map(f64::from),
+            wpm: (wpm > 0).then_some(wpm),
+            mycall: &self.settings.mycall,
+            his_call,
+            last_sent: self.cw_sent.back().map(String::as_str),
+            contest: self.in_field_day(),
+            split: self.split_tx_mhz.is_some(),
+        }))
+    }
+
+    /// Forget the contact the CW turn cue was following: its letters and our transmissions. A
+    /// logged contact, the Clear button and a new stream each start the next one.
+    fn forget_cw_turn(&mut self) {
+        self.cw_turn_letters.clear();
+        self.cw_turn_pending.clear();
+        self.cw_turn_keyed.clear();
+    }
+
     /// The AI decoder's provisional tail, for DISPLAY beside [`Self::cw_decode`]'s text: empty
     /// unless the AI copy is what the cockpit shows and the decoder is healthy (a fault leaves
     /// no stale tail on screen). Never read it as data; [`Self::cw_decode`] is the copy.
@@ -20773,6 +20906,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.cw_sent.clear();
         self.ai_cw_text.clear();
         self.ai_cw_pending.clear();
+        self.forget_cw_turn();
     }
 
     /// Wideband CW skim of the recent receive audio: every distinct keyed signal across

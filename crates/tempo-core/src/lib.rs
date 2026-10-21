@@ -20,6 +20,7 @@ pub mod contest;
 pub mod cw;
 pub mod cw_decode;
 pub mod cw_parse;
+pub mod cw_turn;
 pub mod diagnostics;
 pub mod doppler;
 pub mod eqsl;
