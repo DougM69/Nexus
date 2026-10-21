@@ -1927,9 +1927,10 @@ async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
 
 /// ★ Off never waits for the disk either: turned off while the switch's own save cannot finish
 /// (its file is a FIFO here, which opening for writing waits on until something reads it), the
-/// port closes and the status says off before the save is through, and the save then keeps the
-/// switch as off. CONTROL: the port was open before the press, and the press was still saving
-/// when the port closed.
+/// port closes, the paired computer's control of the station and its over end, and the status
+/// says off, all before the save is through; the save then keeps the switch as off. CONTROL: the
+/// port was open and the computer in control and on the air before the press, and the press was
+/// still saving when all of that had gone.
 #[cfg(unix)]
 #[tokio::test]
 async fn off_closes_the_port_while_its_own_save_is_held() {
@@ -1951,6 +1952,7 @@ async fn off_closes_the_port_while_its_own_save_is_held() {
         tokio::net::TcpStream::connect(at).await.is_ok(),
         "the control: not listening before the press"
     );
+    let (socket, _, _) = keyed_at(&s, at).await;
     let partial = scratch.path().with_extension("json.partial");
     let made = tempo_core::process::command("mkfifo")
         .arg(&partial)
@@ -1977,6 +1979,15 @@ async fn off_closes_the_port_while_its_own_save_is_held() {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
+    // And the computer's control of the station and its over gone, while the press saves.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut revoked = false;
+    while !revoked && !off.is_finished() && Instant::now() < deadline {
+        revoked = halted(&s) && s.shared.authority.local_status()["controller"].is_null();
+        if !revoked {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
     // The status, read on a thread of its own: a read that waited for the save would wait there.
     let (told, status) = std::sync::mpsc::channel();
     let reading = lan.clone();
@@ -1991,11 +2002,66 @@ async fn off_closes_the_port_while_its_own_save_is_held() {
         .unwrap()
         .unwrap();
     off.join().unwrap();
+    drop(socket);
     assert!(
         closed && saving,
         "the port at {at} stayed open while the switch's save was held"
     );
+    assert!(
+        revoked,
+        "the computer kept control of the station, or its over, while the save was held"
+    );
     assert_eq!(said, Some(false), "the status while the save was held");
     let saved: Value = serde_json::from_slice(&saved).unwrap();
     assert_eq!(saved["on"], false, "the switch kept as off: {saved}");
+}
+
+/// ★ Presses in a row leave the newest on disk. An Off is held up after it has taken effect (at
+/// the pairing book, as it reads which computers to revoke) while an On is pressed and kept; let
+/// go, the Off keeps the switch as it stands then, on, and never the off it was pressed as, which
+/// after a restart would undo the newest press. CONTROL: the Off had taken effect and was still
+/// held up when the On was pressed.
+#[tokio::test]
+async fn presses_in_a_row_leave_the_newest_on_disk() {
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return;
+    };
+    let port = free_port(address);
+    let network = Network::new(address, 32).unwrap();
+    let s = shack(network);
+    let scratch = Scratch::new();
+    let book = book_of(&s);
+    let resolve: Resolve = Arc::new(move |_| only(Ok(network)));
+    let lan = Arc::new(switch_for(&s, &scratch, resolve, book.clone()));
+    lan.turn_on(None, Some(port)).unwrap();
+    let at = SocketAddr::new(address.into(), port);
+    let listening = |st: &LanStatus| st.listening.as_deref() == Some(at.to_string().as_str());
+    eventually(&lan, "never listened", listening).await;
+    let held = book.held();
+    let off = {
+        let lan = lan.clone();
+        std::thread::spawn(move || lan.turn_off())
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while lan.state.switch().on {
+        assert!(Instant::now() < deadline, "the Off never took effect");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        !off.is_finished(),
+        "premise: the Off is held up at the book"
+    );
+    lan.turn_on(None, Some(port)).unwrap();
+    drop(held);
+    off.join().unwrap();
+    let kept = Switch::load(&scratch.path());
+    assert!(
+        kept.on,
+        "the switch kept on disk is not the newest press's: {kept:?}"
+    );
+    assert!(
+        lan.state.switch().on,
+        "the switch is on, as the newest press left it"
+    );
 }
