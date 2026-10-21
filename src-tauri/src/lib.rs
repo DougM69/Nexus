@@ -17393,8 +17393,8 @@ fn set_ai_cw(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, St
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist ai-cw toggle: {e}")
     });
-    // The AI decoder is one of the assistance sources, so its state belongs in the record.
-    journal_assistance(eng.settings(), "AI CW decoder toggled", false);
+    // Nothing for the assistance record: its source is the CW decoder, which the classic decoder
+    // keeps running with the AI off (`Settings::assistance_sources`).
     Ok(eng.snapshot())
 }
 
@@ -24281,9 +24281,9 @@ fn read_need_alerts(
     // keep running: the same glossary says "Generating spotting information for use by other
     // stations is not considered to be spotting assistance."
     //
-    // Own-radio decodes (assembled above) are NOT assistance under either ruleset — they are
-    // the operator's own receiver — so they stay, and remain the whole Needed board in an
-    // unassisted entry.
+    // Own-radio decodes (assembled above) stay, and are the whole Needed board in an unassisted
+    // entry. Neither ruleset sets them apart: CQ WW and ARRL both count any technology that
+    // identifies a callsign. The contest-assistance note says so (`assist.why.ownDecodes`).
     if !unassisted() {
         if let Ok(buf) = live_paths.lock() {
             let recent = buf.recent(now, 900);
@@ -46290,9 +46290,9 @@ mod tests {
     }
 
     /// The source list exactly as `Settings::assistance_sources` produces it.
-    fn posture(ai: bool, cluster: bool, pskr: bool) -> Vec<AssistanceSourceState> {
+    fn posture(cw: bool, cluster: bool, pskr: bool) -> Vec<AssistanceSourceState> {
         [
-            ("AI CW decoder", ai),
+            ("CW decoder", cw),
             ("DX cluster / RBN", cluster),
             ("PSK Reporter needs", pskr),
         ]
@@ -46326,12 +46326,12 @@ mod tests {
         // Declaring an unassisted entry must.
         assert!(assistance_posture_changed(&log, true, &silent));
         // So must ONE source changing while the unassisted flag stays put (e.g. the operator
-        // turning the AI decoder off by hand) — otherwise the record would claim the decoder
-        // was running when it was not.
+        // turning the cluster off by hand) — otherwise the record would claim the cluster was
+        // connected when it was not.
         assert!(assistance_posture_changed(
             &log,
             false,
-            &posture(false, true, true)
+            &posture(true, false, true)
         ));
     }
 

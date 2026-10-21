@@ -2372,7 +2372,7 @@ claim right now; the record underneath is the evidence, kept across restarts.*
   and stays on this computer: it never goes to the club network or to Remote.
   **Clear** forgets it.
 
-Unassisted mode turns both off, as it does the cluster and the AI CW decoder, and
+Unassisted mode turns both off, as it does the cluster and the CW decoder, and
 the assistance record lists them.
 
 ### Enter Sends Message

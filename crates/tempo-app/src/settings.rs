@@ -5920,9 +5920,13 @@ impl Settings {
     /// decide whether it shows Super Check Partial and fills from call history
     /// (`ui/src/features/contestLists.ts`), so a rename here is a rename there: guarded by
     /// `the_strip_reads_the_scp_and_call_history_labels_the_engine_sends`.
+    ///
+    /// The first is the CW decoder, the classic one included: it is on whenever any CW decoding
+    /// runs ([`Settings::cw_decoder_active`]), with the AI switch on or off, because CQ WW's rule
+    /// names "a CW decoder".
     pub fn assistance_sources(&self) -> [(&'static str, bool); 5] {
         [
-            ("AI CW decoder", self.ai_cw_active()),
+            ("CW decoder", self.cw_decoder_active()),
             ("DX cluster / RBN", self.cluster_active()),
             ("PSK Reporter needs", self.pskr_evidence_active()),
             (SCP_SOURCE, self.scp_active()),
@@ -15671,6 +15675,32 @@ mod tests {
                 "{label} still active in Unassisted mode — the switch must silence every source"
             );
         }
+    }
+
+    /// The record names the CW decoder, on whenever CW decoding runs: CQ WW's rule names "a CW
+    /// decoder", and with the AI switch off the classic decoder still copies. Only an unassisted
+    /// entry stops both ([`Settings::cw_decoder_active`]).
+    #[test]
+    fn the_record_names_the_cw_decoder_on_whenever_cw_decoding_runs() {
+        let mut s = Settings::default();
+        s.ai_cw_enabled = false;
+        assert_eq!(
+            s.assistance_sources()[0],
+            ("CW decoder", true),
+            "with the AI switch off the classic decoder still copies"
+        );
+        s.ai_cw_enabled = true;
+        assert_eq!(
+            s.assistance_sources()[0],
+            ("CW decoder", true),
+            "the AI decoder copies"
+        );
+        s.unassisted_mode = true;
+        assert_eq!(
+            s.assistance_sources()[0],
+            ("CW decoder", false),
+            "an unassisted entry decodes no CW"
+        );
     }
 
     /// It OVERRIDES, never OVERWRITES. The operator's own settings must survive untouched,

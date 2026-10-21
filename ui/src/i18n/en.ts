@@ -1038,13 +1038,13 @@ export const EN = {
   // Four whole sentences rather than a stem plus a " since HH:MMZ" fragment: the stamp lands
   // in a different place in different languages. `{{since}}` is a UTC time stamp — invariant.
   'assist.sources.off':
-    'Assistance sources off: AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
+    'Assistance sources off: CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
   'assist.sources.offSince':
-    'Assistance sources off since {{since}}: AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
+    'Assistance sources off since {{since}}: CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
   'assist.sources.on':
-    'AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help.',
+    'CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help.',
   'assist.sources.onSince':
-    'AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help since {{since}}.',
+    'CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help since {{since}}.',
   'assist.toggle.declare': 'Declare unassisted entry',
   'assist.toggle.end': 'End unassisted entry',
   'assist.why.summary': 'What this means for your contest category',
@@ -1053,7 +1053,7 @@ export const EN = {
   'assist.why.arrl':
     '<b>ARRL</b> contests call it spotting assistance and name “PSKReporter, Telnet, DX spotting websites or bulletin board systems, automated multi-channel decoders”. Single Operator may not use it (HCAT.1.1: “Use of spotting assistance is not permitted.”). <b>Single Operator Unlimited</b> may (HCAT.2.1). ARRL’s glossary defines a multi-channel decoder as software that “displays multiple decoded signals at the same time”. Nexus decodes one signal at a time, so that definition does not describe its CW decoder. It does describe the cluster, RBN and PSK Reporter feeds.',
   'assist.why.ownDecodes':
-    'Your <b>own radio’s decodes</b> are not assistance under either ruleset, so they keep feeding the Needed board in unassisted mode. Your outbound PSK Reporter uploads also keep running, because ARRL says “Generating spotting information for use by other stations is not considered to be spotting assistance.”',
+    'Your radio’s own <b>digital decodes</b>, FT8 and FT4 among them, keep feeding the Needed board in unassisted mode. Neither ruleset sets them apart: both count any technology that identifies a callsign or multiplier as assistance, so do not use the Needed board to find stations if your contest counts them. Your outbound PSK Reporter uploads also keep running, because ARRL says “Generating spotting information for use by other stations is not considered to be spotting assistance.”',
   'assist.why.notCovered':
     '<b>What this switch does not cover:</b> POTA and SOTA activator spots still arrive. Neither ruleset names those feeds, but both define assistance broadly enough to include them, so switch off the POTA/SOTA features by hand if you are entering a contest that counts them.',
   'assist.why.checkRules':
