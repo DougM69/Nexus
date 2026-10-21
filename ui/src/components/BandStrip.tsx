@@ -308,20 +308,21 @@ export function BandStrip({
             s.state,
             `${s.freqMhz.toFixed(3)} MHz`,
             ageLabel(s.ageSecs),
-            program != null && TCI,
-            program != null && t('settings.transmit.tciServer.program.name', { id: program }),
+            program != null && t('bandStrip.spot.tci.from', { id: program }),
             s.spotter && `de ${s.spotter}`,
             s.comment,
           ]
             .filter(Boolean)
             .join(' · ')
+          // A program's spot only tunes, and its tooltip says so.
+          const tip = program != null ? t('bandStrip.spot.tci.title', { detail }) : t('bandStrip.spot.title', { detail })
           return (
             <button
               key={repeat ? `${key}#${repeat}` : key}
               type="button"
               className={`bandstrip-spot${program != null ? ' from-tci' : ''}${mark?.dupe ? ' contest-dupe' : ''}`}
               style={{ left: `${pct(s.freqMhz)}%`, opacity }}
-              title={workAllowed ? t('bandStrip.spot.title', { detail }) : detail}
+              title={workAllowed ? tip : detail}
               aria-label={mark ? [s.call, ...markWords].join(' · ') : undefined}
               disabled={!workAllowed}
               // ⛔ A program's spot only tunes: never the Work, whatever it names.

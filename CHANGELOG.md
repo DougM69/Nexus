@@ -80,8 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out before the radio unkeys. It ends at once on Stop TX, Esc, TX Off, a logger's UDP Halt Tx, the Remote's Stop,
   the high-SWR cutoff, a band or radio change, the switch turned off, the program's own stop or its lost
   connection, 0.3 seconds with no audio from it, and 10 minutes on the air. Programs on a Flex's native connection
-  now hear the radio's own receive audio (DAX) instead of the sound card's; the Icom network connection carries no
-  audio, so there they hear the sound card. FT8, FT4 and the other slot-timed modes from programs stay refused, and
+  with **Flex native DAX audio** on now hear the radio's own receive audio (DAX) instead of the sound card's; the
+  Icom network connection carries no audio, so there they hear the sound card. FT8, FT4 and the other slot-timed
+  modes from programs stay refused, and
   so does any over from a program whose last mode request was a data mode (DIGU or DIGL), on whatever screen Nexus
   is: WSJT-X asking for DIGU and then keying is held like FT8 even on the Phone screen. A program must also ask for
   a voice mode (USB, LSB, AM or FM) before its own audio goes out: one that has asked for no mode, as WSJT-X, JTDX
