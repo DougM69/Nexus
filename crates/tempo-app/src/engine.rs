@@ -16784,11 +16784,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
     ///
     /// After the contact the station is the contest's S&P, as the Contest screen's S&P leaves it.
     ///
-    /// ⚠️ **REFUSED BEFORE ANYTHING CHANGES**, as `call_station_ctx` refuses: with no decode to
-    /// take the period from; for a CQ with no grid where the contest answers with the grid (the
+    /// ⚠️ **REFUSED BEFORE ANYTHING CHANGES**, as `call_station_ctx` refuses: for a CQ from a
+    /// call the decoder could not resolve, `<...>`, which names nobody; with no decode to take
+    /// the period from; for a CQ with no grid where the contest answers with the grid (the
     /// contest's S&P passes such a CQ by: its call is one the grid message cannot carry); and
     /// when the contest cannot start (its exchange not filled in), which `set_mode` refuses
     /// without changing anything.
+    ///
+    /// ⭐ WSJT-X answers no `<...>` either: `processMessage` takes a CQ's call from the word
+    /// after it (`deCallAndGrid`, decodedtext.cpp 212-224, whose call word cannot be `...`) and
+    /// puts only a callsign into its DX call box (`Radio::is_callsign`, mainwindow.cpp 9402), so
+    /// no message is built to that station until its call is decoded in full.
     fn answer_cq_in_contest(
         &mut self,
         messages: FtMessages,
@@ -16797,6 +16803,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
         text: &str,
         dx_freq: Option<f32>,
     ) -> Result<(), String> {
+        if de.contains("<...>") {
+            return Err(
+                "This CQ's call shows as <...>: Nexus has not decoded it in full yet. \
+                 Click the station's next CQ once its call shows."
+                    .into(),
+            );
+        }
         let slot = self
             .decode_history
             .iter()
