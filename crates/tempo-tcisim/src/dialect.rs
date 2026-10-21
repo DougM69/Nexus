@@ -101,6 +101,21 @@ pub enum ChronoLength {
     ClientSamples,
 }
 
+/// How a server keeps the spots its clients send (spec §4.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpotStore {
+    /// As the spec reads: one spot per callsign (a new `spot` for a call replaces it),
+    /// `spot_delete:<call>;` takes it off, `spot_clear;` takes off every spot, and the colour is a
+    /// decimal ARGB, drawn as sent. UNVERIFIED on ExpertSDR3, ExpertSDR2 and Thetis.
+    PerCall,
+    /// AetherSDR's (`src/core/TciProtocol.cpp` and `SpectrumWidget.cpp` at `8394342`): every `spot`
+    /// is a new spot, whatever its call; `spot_delete` needs the call and the frequency
+    /// (`spot_delete:<call>,<hz>;`) and takes off the first spot of that call within 100 Hz of it;
+    /// `spot_clear;` takes off every spot, from every source; the colour is kept as text and drawn
+    /// only when it starts with `#`. Its 30-minute lifetime is not modelled.
+    Appended,
+}
+
 /// Which spelling a spot click is reported in (spec §4.4); a server may send both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClickForm {
@@ -284,6 +299,7 @@ pub struct Dialect {
     /// A WebSocket ping this often (Thetis: every 20 s).
     pub ping_every: Option<Duration>,
     pub spot_click: Vec<ClickForm>,
+    pub spot_store: SpotStore,
     /// `tx_frequency:<hz>;` follows each change of the transmit frequency.
     pub tx_frequency: bool,
     /// The audio settings a client starts with.
@@ -356,6 +372,7 @@ impl Dialect {
             ping_every: None,
             // UNVERIFIED which spellings ExpertSDR3 sends; both, as AetherSDR does after Thetis.
             spot_click: vec![ClickForm::Legacy, ClickForm::Receiver],
+            spot_store: SpotStore::PerCall,
             tx_frequency: true,
             audio: AudioFormat::SPEC,
             iq_rate: 48_000,
@@ -469,6 +486,7 @@ impl Dialect {
             echo_stream_settings: true,
             ping_every: None,
             spot_click: Vec::new(),
+            spot_store: SpotStore::PerCall,
             tx_frequency: false,
             audio: AudioFormat {
                 samples: Some(1024),
@@ -523,7 +541,8 @@ impl Dialect {
     /// one message, ending `ready;start;`; it announces ExpertSDR3 1.5 on device `AetherSDR`;
     /// echoes `trx:true` only once the radio transmits and starts TX_CHRONO then, asking for 2048
     /// values (1024 stereo frames); only the keying client may unkey; a lost or closed owner is
-    /// unkeyed; spot clicks in both spellings.
+    /// unkeyed; spot clicks in both spellings; spots kept its own way ([`SpotStore::Appended`],
+    /// read at `8394342`).
     pub fn aether_sdr() -> Dialect {
         Dialect {
             name: "AetherSDR".into(),
@@ -574,6 +593,7 @@ impl Dialect {
             echo_stream_settings: true,
             ping_every: None,
             spot_click: vec![ClickForm::Legacy, ClickForm::Receiver],
+            spot_store: SpotStore::Appended,
             tx_frequency: true,
             audio: AudioFormat::SPEC,
             iq_rate: 48_000,

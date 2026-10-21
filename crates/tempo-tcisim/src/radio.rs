@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use crate::cw;
 use crate::dialect::{
     AudioFormat, ChronoLength, ClickForm, Dialect, DriveForm, Ident, KeySource, Ownership,
-    SensorForm, Spelling, TrxInit,
+    SensorForm, Spelling, SpotStore, TrxInit,
 };
 use crate::event::{Cause, Closer, Event, Keyer, Mic, Refusal, Source, Why};
 use crate::fault::{self, Fault};
@@ -115,6 +115,24 @@ pub struct Spot {
     pub text: String,
     /// The connection that sent it.
     pub by: usize,
+    /// The colour the panorama draws it in, ARGB; `None`: the server's own default colour, which
+    /// is what AetherSDR draws a colour that does not start with `#` in ([`SpotStore`]).
+    pub drawn: Option<u32>,
+}
+
+/// A colour as AetherSDR's panorama draws one: `#AARRGGBB`, or `#RRGGBB` taken as opaque.
+fn hash_colour(text: &str) -> Option<u32> {
+    let hex = text.strip_prefix('#')?;
+    if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    match hex.len() {
+        8 => u32::from_str_radix(hex, 16).ok(),
+        6 => u32::from_str_radix(hex, 16)
+            .ok()
+            .map(|rgb| 0xFF00_0000 | rgb),
+        _ => None,
+    }
 }
 
 /// What the radio's meters read.
@@ -2937,17 +2955,30 @@ impl Radio {
             Keyer::Client(c) => c,
             Keyer::Operator => usize::MAX,
         };
+        let store = self.dialect.spot_store;
         match (cmd.name.as_str(), cmd.args.len()) {
             ("spot", 4 | 5) => {
-                let (Ok(hz), Ok(argb)) = (cmd.arg(2).parse::<u64>(), cmd.arg(3).parse::<u32>())
-                else {
+                let Ok(hz) = cmd.arg(2).parse::<u64>() else {
                     return self.ignore(who, cmd, Why::Value);
+                };
+                let colour = cmd.arg(3);
+                let (argb, drawn) = match store {
+                    SpotStore::PerCall => match colour.parse::<u32>() {
+                        Ok(argb) => (argb, Some(argb)),
+                        Err(_) => return self.ignore(who, cmd, Why::Value),
+                    },
+                    SpotStore::Appended => match hash_colour(colour) {
+                        Some(argb) => (argb, Some(argb)),
+                        None => (colour.parse().unwrap_or(0), None),
+                    },
                 };
                 let call = cmd.arg(0).to_string();
                 if call.is_empty() {
                     return self.ignore(who, cmd, Why::Value);
                 }
-                self.spots.retain(|s| !s.call.eq_ignore_ascii_case(&call));
+                if store == SpotStore::PerCall {
+                    self.spots.retain(|s| !s.call.eq_ignore_ascii_case(&call));
+                }
                 self.spots.push(Spot {
                     call,
                     mode: cmd.arg(1).to_string(),
@@ -2955,14 +2986,28 @@ impl Radio {
                     argb,
                     text: cmd.arg(4).to_string(),
                     by,
+                    drawn,
                 });
                 if self.spots.len() > MAX_SPOTS {
                     self.spots.remove(0);
                 }
             }
-            ("spot_delete", 1) => {
+            ("spot_delete", 1) if store == SpotStore::PerCall => {
                 let call = cmd.arg(0);
                 self.spots.retain(|s| !s.call.eq_ignore_ascii_case(call));
+            }
+            ("spot_delete", 2) if store == SpotStore::Appended => {
+                let Ok(hz) = cmd.arg(1).parse::<u64>() else {
+                    return self.ignore(who, cmd, Why::Value);
+                };
+                let call = cmd.arg(0);
+                if let Some(i) = self
+                    .spots
+                    .iter()
+                    .position(|s| s.call == call && s.hz.abs_diff(hz) < 100)
+                {
+                    self.spots.remove(i);
+                }
             }
             ("spot_clear", 0) => self.spots.clear(),
             _ => self.ignore(who, cmd, Why::Arity),

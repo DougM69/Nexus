@@ -813,6 +813,56 @@ fn a_click_names_its_transceiver_and_channel_only_in_the_receiver_spelling() {
 }
 
 #[test]
+fn aethersdr_keeps_every_spot_deletes_by_call_and_frequency_and_draws_only_a_hash_colour() {
+    let mut b = Bench::new(Dialect::aether_sdr(), Vec::new());
+    b.connect(0);
+    b.send(
+        0,
+        "spot:K1ABC,CW,14025000,#FFF23EC0,needed;spot:K1ABC,CW,14026000,4294065856,;\
+         spot:W2X,FT8,14074500,#00FF00,;",
+    );
+    let spots = |b: &Bench| -> Vec<(String, u64, Option<u32>)> {
+        b.r.spots
+            .iter()
+            .map(|s| (s.call.clone(), s.hz, s.drawn))
+            .collect()
+    };
+    assert_eq!(
+        spots(&b),
+        [
+            ("K1ABC".to_string(), 14_025_000, Some(0xFFF2_3EC0)),
+            ("K1ABC".to_string(), 14_026_000, None),
+            ("W2X".to_string(), 14_074_500, Some(0xFF00_FF00)),
+        ]
+    );
+    b.send(0, "spot_delete:K1ABC;");
+    assert_eq!(spots(&b).len(), 3, "a delete with no frequency is ignored");
+    b.send(0, "spot_delete:K1ABC,14026050;");
+    assert_eq!(
+        spots(&b),
+        [
+            ("K1ABC".to_string(), 14_025_000, Some(0xFFF2_3EC0)),
+            ("W2X".to_string(), 14_074_500, Some(0xFF00_FF00)),
+        ],
+        "the K1ABC within 100 Hz"
+    );
+    b.send(0, "spot_clear;");
+    assert!(spots(&b).is_empty());
+    // CONTROL: the spec's store keeps one spot per call, draws the decimal colour, refuses `#`.
+    let mut b = Bench::new(Dialect::expert_sdr3(), Vec::new());
+    b.connect(0);
+    b.send(
+        0,
+        "spot:K1ABC,CW,14025000,4294065856,;spot:K1ABC,CW,14026000,4294065856,;\
+         spot:W2X,FT8,14074500,#FF00FF00,;spot_delete:W2X,14074500;",
+    );
+    assert_eq!(
+        spots(&b),
+        [("K1ABC".to_string(), 14_026_000, Some(0xFFF2_3EC0))]
+    );
+}
+
+#[test]
 fn stream_settings_are_answered_shape_the_frames_and_pihpsdr_refuses_its_unusual_ones() {
     let mut b = Bench::new(Dialect::expert_sdr3(), Vec::new());
     b.connect(0);
