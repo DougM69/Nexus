@@ -843,6 +843,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sends what its Tx3 box holds; the automatic sequence already sent it that way. NEEDS-BENCH: FT8, your call with
   /P, working a station signing /M that runs WSJT-X, click Tx3: WSJT-X decodes its own call in angle brackets,
   your call in full and RRR.
+- **WSJT-X UDP: a Replay no longer marks old decodes as new.** When a logger such as JTAlert or GridTracker asks
+  Nexus to replay the decodes, Nexus sent them marked New, as if just heard, so a program could alert on them again.
+  They now go out marked not new, as WSJT-X sends them. Decodes as they are heard are still New. NEEDS-BENCH:
+  GridTracker or JTAlert on Nexus's UDP port, restarted while Nexus decodes: the period's decodes come back without
+  new alerts.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.

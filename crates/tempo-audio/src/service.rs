@@ -13396,20 +13396,26 @@ impl RadioLoop {
                         // period back — `last_decodes` alone holds only the most
                         // recent ingest (post-early-pass it's just the boundary
                         // stragglers). NO PSK spots here: replays must never
-                        // double-spot.
+                        // double-spot. Not New: WSJT-X replays each old decode "with the
+                        // 'New' field set to false" (`Network/NetworkMessage.hpp` 221-226;
+                        // `replayDecodes` → `postDecode (false, …)`, mainwindow.cpp
+                        // 13374-13396).
                         if let Some(server) = sinks.wsjtx {
                             let tier = tier_mode(eng.tier());
                             let ms_mid = udp_decode_time_ms(&eng, now);
                             for d in eng.current_period_decodes() {
-                                let _ = server.send_decode(&build_decode(
-                                    &d.message,
-                                    d.snr,
-                                    d.dt,
-                                    d.freq,
-                                    tier,
-                                    ms_mid,
-                                    d.qual < 0.17,
-                                ));
+                                let _ = server.send_decode(&WsjtxDecode {
+                                    new: false,
+                                    ..build_decode(
+                                        &d.message,
+                                        d.snr,
+                                        d.dt,
+                                        d.freq,
+                                        tier,
+                                        ms_mid,
+                                        d.qual < 0.17,
+                                    )
+                                });
                             }
                         }
                     }
