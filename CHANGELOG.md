@@ -812,6 +812,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   goes out. The WinKeyer, the serial key line and the soundcard keyer key exactly as before. NEEDS-BENCH: on a
   Kenwood or Elecraft and on an FTDX10, each on the CAT keyer into a dummy load, an F-key macro `CQ TEST;X` keys
   nothing, shows the warning and leaves the dial where it was; `CQ TEST K` keys in full.
+- **Turning off Remote over this network takes effect at once, however slow the disk.** Turning it off in Settings ▸
+  Station ▸ Remote access, or pressing **End remote control**, saved the setting before it closed the station's port,
+  ended the other computers' sessions and took back their control of the station. While the disk was busy, or
+  something held the settings file open, those computers stayed connected and anything they had on the air kept going
+  until the save finished. Now the port closes and the sessions end first, and the setting is saved after.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to

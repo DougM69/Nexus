@@ -1851,8 +1851,10 @@ async fn a_picked_address_that_goes_and_comes_back_is_listened_at_again() {
 
 /// ★ Off never waits behind Windows' firewall: turned off while the firewall is being read (here a
 /// read that does not come back), after the station has looked at its network again more than
-/// once, the port closes at once and the status says off. CONTROL: the port was open while the
-/// read was under way.
+/// once, the port closes at once and the status says off. The press is made on a thread of its
+/// own, as the shack's command makes it: it answers once the switch is kept, which takes as long as
+/// the disk does, and the port closes before that. CONTROL: the port was open while the read was
+/// under way.
 #[tokio::test]
 async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
     let Some(address) = own_private_address() else {
@@ -1874,14 +1876,14 @@ async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
             .recv_timeout(Duration::from_secs(30));
         Some("public")
     });
-    let lan = switch_with(
+    let lan = Arc::new(switch_with(
         &s,
         &scratch,
         Arc::new(move |_| only(Ok(network))),
         book_of(&s),
         advertise(),
         firewall,
-    );
+    ));
     lan.turn_on(None, Some(port)).unwrap();
     let at = SocketAddr::new(address.into(), port);
     tokio::time::timeout(Duration::from_secs(5), read.recv())
@@ -1893,7 +1895,10 @@ async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
         "the control: not listening while the firewall was read"
     );
     let started = Instant::now();
-    lan.turn_off();
+    let off = {
+        let lan = lan.clone();
+        std::thread::spawn(move || lan.turn_off())
+    };
     // Closed: a connection is no longer taken. Windows retries a refused connection to this
     // computer's own address for about two seconds before it says so, so a connection not taken
     // within a moment is what is asked, on every platform.
@@ -1916,5 +1921,81 @@ async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
         started.elapsed()
     );
     assert!(!lan.status().on);
+    off.join().unwrap();
     let _ = answer.send(());
+}
+
+/// ★ Off never waits for the disk either: turned off while the switch's own save cannot finish
+/// (its file is a FIFO here, which opening for writing waits on until something reads it), the
+/// port closes and the status says off before the save is through, and the save then keeps the
+/// switch as off. CONTROL: the port was open before the press, and the press was still saving
+/// when the port closed.
+#[cfg(unix)]
+#[tokio::test]
+async fn off_closes_the_port_while_its_own_save_is_held() {
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return;
+    };
+    let port = free_port(address);
+    let network = Network::new(address, 32).unwrap();
+    let s = shack(network);
+    let scratch = Scratch::new();
+    let resolve: Resolve = Arc::new(move |_| only(Ok(network)));
+    let lan = Arc::new(switch_for(&s, &scratch, resolve, book_of(&s)));
+    lan.turn_on(None, Some(port)).unwrap();
+    let at = SocketAddr::new(address.into(), port);
+    let listening = |st: &LanStatus| st.listening.as_deref() == Some(at.to_string().as_str());
+    eventually(&lan, "never listened", listening).await;
+    assert!(
+        tokio::net::TcpStream::connect(at).await.is_ok(),
+        "the control: not listening before the press"
+    );
+    let partial = scratch.path().with_extension("json.partial");
+    let made = tempo_core::process::command("mkfifo")
+        .arg(&partial)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "premise: a FIFO to hold the save on");
+    let off = {
+        let lan = lan.clone();
+        std::thread::spawn(move || lan.turn_off())
+    };
+    // Closed: a connection is refused, while the press saves. On Linux and macOS this computer
+    // refuses one to its own address at once; a connection that only waits is not counted, since
+    // a listener that has stopped accepting fills its queue and leaves the next one waiting.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut closed = false;
+    while !closed && !off.is_finished() && Instant::now() < deadline {
+        let taken = tokio::time::timeout(
+            Duration::from_millis(200),
+            tokio::net::TcpStream::connect(at),
+        )
+        .await;
+        closed = matches!(taken, Ok(Err(_)));
+        if !closed {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+    // The status, read on a thread of its own: a read that waited for the save would wait there.
+    let (told, status) = std::sync::mpsc::channel();
+    let reading = lan.clone();
+    std::thread::spawn(move || {
+        let _ = told.send(reading.status().on);
+    });
+    let said = status.recv_timeout(Duration::from_secs(2)).ok();
+    let saving = !off.is_finished();
+    // Let the save through: what it writes is read off the FIFO.
+    let saved = tokio::task::spawn_blocking(move || std::fs::read(&partial))
+        .await
+        .unwrap()
+        .unwrap();
+    off.join().unwrap();
+    assert!(
+        closed && saving,
+        "the port at {at} stayed open while the switch's save was held"
+    );
+    assert_eq!(said, Some(false), "the status while the save was held");
+    let saved: Value = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(saved["on"], false, "the switch kept as off: {saved}");
 }

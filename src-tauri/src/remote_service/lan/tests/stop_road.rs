@@ -22,7 +22,7 @@
 use super::super::audio_road::{self, AudioRoad};
 use super::super::datagram::{End, Keys, Tag, AUDIO_LABEL, AUDIO_MAX, EXPORTED, STOP_LABEL};
 use super::super::stop_road::{
-    Down, Hears, Powers, Running, StateClock, StopRoad, Up, AFTERLIFE, FRESH,
+    Down, Hears, Powers, Running, StateClock, StopRoad, Up, AFTERLIFE, ANSWERED, FRESH,
 };
 use super::super::wire;
 use super::commands::App;
@@ -376,11 +376,38 @@ impl Raw {
         None
     }
 
-    /// A Stop on the road, and when it was acknowledged, if it was within `within`.
+    /// When the shack's road sent its acknowledgement of the Stop numbered `stop` on this road, at
+    /// or after `since`. The road notes it just after the acknowledgement goes, so this end, which
+    /// has heard it, may look a moment early.
+    fn answered(&self, stop: u64, since: Instant) -> Option<Instant> {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let noted = ANSWERED
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .iter()
+                .find(|(tag, number, at)| *tag == self.tag && *number == stop && *at >= since)
+                .map(|(_, _, at)| *at);
+            if noted.is_some() || Instant::now() >= deadline {
+                return noted;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// A Stop on the road, once this end has heard it acknowledged within `within`: how long the
+    /// shack took, from its sending here to the acknowledgement leaving the shack. The time this
+    /// end's own thread then takes to read it is the test machine's, not the road's: starved on a
+    /// loaded box, it read acknowledgements 25 ms late that had left the shack in under a
+    /// millisecond. Sealed, and the socket found writable, before the clock starts: the clock and
+    /// the send then run together on this thread, with no yield to the runtime between them.
     async fn road_stop(&mut self, stop: u64, within: Duration) -> Option<Duration> {
+        let datagram = self.sealed(&Up::Stop { stop });
+        self.udp.writable().await.unwrap();
         let sent = Instant::now();
-        self.say(&Up::Stop { stop }).await;
-        self.stopped(stop, within).await.map(|at| at - sent)
+        self.udp.try_send(&datagram).unwrap();
+        self.stopped(stop, within).await?;
+        self.answered(stop, sent).map(|at| at - sent)
     }
 
     /// The next presence deadline the shack gives, within `within`, whatever else came first.
