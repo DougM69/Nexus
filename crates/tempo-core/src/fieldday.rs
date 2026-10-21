@@ -4210,6 +4210,18 @@ impl FieldDayStation {
         to == me || (!crate::message::is_std_call(me) && crate::message::unhash_call(to) == me)
     }
 
+    /// Addressed to my call in a caller's RR73, RRR or 73: whole, or hashed whatever my call.
+    /// A caller whose call is nonstandard closes with mine hashed and its own whole, as WSJT-X
+    /// 3.0.2 writes it, `<K1ABC> W9XYZ/M RR73` (`genStdMsgs`, mainwindow.cpp 9702 and 9710), and
+    /// WSJT-X takes that as its own: the decoder prints its own call's hash as `<K1ABC>`
+    /// (`unpack77`, packjt77.f90 644-651, `n12.eq.hashmy12`), `DecodedText` drops the brackets
+    /// (decodedtext.cpp 66), and `auto_sequence` and `processMessage` ask whether that word holds
+    /// its call (7546, 9108). The exchanges still take a standard call of mine only whole
+    /// ([`to_my_call`](Self::to_my_call)).
+    fn closes_to_me(&self, to: &str) -> bool {
+        crate::message::unhash_call(to) == self.mycall()
+    }
+
     /// My call as WSJT-X 3.0.2 writes it beside a grid or a report, its Tx2 and Tx3
     /// (`genStdMsgs`, mainwindow.cpp): whole when `stdCall` passes it (`/P` and `/R` too), else
     /// hashed, `t0b=hisCall + " <" + my_callsign + "> "` (9597, taken by `if(!bMyCall) { t=t0b;`
@@ -4231,15 +4243,30 @@ impl FieldDayStation {
     /// (9601), RR73 and 73 `if(bHisCall and !bMyCall) t="<" + hisCall + "> " + my_callsign …`
     /// (9702, 9710).
     ///
-    /// WSJT-X also asks whether `to`'s call is standard. Here it always is, or arrives already
-    /// hashed: a station with a nonstandard call cannot send the grid, report or exchange these
-    /// overs answer (its own message packs as free text), and its RR73 or 73 names it hashed.
+    /// ⭐ In Field Day's messages, RR73 and 73 from a standard call of mine to a nonstandard
+    /// `to` (`W9XYZ/M`, `/4`, `/QRP`, `PJ4/W9XYZ`) go `to` whole and mine hashed, as WSJT-X
+    /// writes them: `if(!bHisCall and bMyCall) t=hisCall + " <" + my_callsign + "> " …` (9701,
+    /// 9709), `W9XYZ/M <K1ABC> RR73`, a type 4 message. `hisCall` is the call the decoder printed,
+    /// brackets dropped (decodedtext.cpp 66): such a station packs its Field Day exchange with its
+    /// call hashed (`K1ABC <W9XYZ/M> R 1D WI`) and closes with it whole (`<K1ABC> W9XYZ/M RR73`),
+    /// and either way it is the same call here. Hashed the other way round, as these overs went
+    /// before, `<W9XYZ/M> K1ABC RR73` is a type 1 message, not WSJT-X's; whole beside my call
+    /// whole, the packer would send the base call, `W9XYZ K1ABC RR73`, another station.
+    ///
+    /// The ARRL VHF and standard messages name `to` as it came, as they always have.
     fn closing_calls(&self, to: &str) -> (String, String) {
         let me = self.mycall().to_string();
+        let his = crate::message::unhash_call(to);
+        if self.messages == FtMessages::FieldDay
+            && crate::message::is_std_call(&me)
+            && crate::message::is_nonstandard_call(his)
+        {
+            return (his.to_string(), format!("<{me}>"));
+        }
         if crate::message::is_std_call(&me) {
             (to.to_string(), me)
         } else {
-            (format!("<{}>", crate::message::unhash_call(to)), me)
+            (format!("<{his}>"), me)
         }
     }
 
@@ -4374,6 +4401,13 @@ impl FieldDayStation {
             FtMessages::FieldDay => {}
         }
         for d in decodes {
+            // ⭐ A message naming a call the decoder could not resolve is passed by, as WSJT-X's
+            // Field Day activity passes it by: `processMessage` returns at once for one that
+            // carries `<...>` (mainwindow.cpp 9097-9099). The run would answer that caller as
+            // `<...>` and log `...`; S&P would answer a CQ from it.
+            if d.message.contains("<...>") {
+                continue;
+            }
             let m = Msg::parse(&d.message);
             match (self.state, &m) {
                 // S&P: heard a CQ → answer with my exchange.
@@ -4468,10 +4502,14 @@ impl FieldDayStation {
                 // answered with 73, as WSJT-X's runner answers it (Tx5, mainwindow.cpp
                 // 9210-9215); the 73 goes once and the run calls CQ again. A bare 73, and every
                 // other Field Day station, close as they always have, with nothing sent back.
+                //
+                // ⭐ A caller whose call is nonstandard closes with my call hashed
+                // ([`closes_to_me`](Self::closes_to_me)), and is answered with WSJT-X's 73 to it
+                // ([`closing_calls`](Self::closing_calls)).
                 (FdState::AwaitConfirm, Msg::Rr73 { to, de })
                 | (FdState::AwaitConfirm, Msg::Rrr { to, de })
                 | (FdState::AwaitConfirm, Msg::Bye73 { to, de })
-                    if self.to_my_call(to) && self.from_dx(de) =>
+                    if self.closes_to_me(to) && self.from_dx(de) =>
                 {
                     if let Some((call, class, section)) = self.peer_exch.take() {
                         self.log_field_day(&call, &class, &section, slot);
@@ -6907,7 +6945,9 @@ mod tests {
     /// rows the same contact logs with the call heard whole (the call, the entity and prefix
     /// resolved from it, the exchange, the dupe mark), the submitted ADIF and the journal write
     /// the call, and S&P passes the station's next CQ by as a contact already in the log. What
-    /// goes on the air is what it was. The call heard whole is the control.
+    /// goes on the air is what it was, but RR73 and 73 to a nonstandard call, which go as WSJT-X
+    /// writes them (`rr73_and_73_to_a_nonstandard_call_go_out_as_wsjtx_writes_them`). The call
+    /// heard whole is the control.
     #[test]
     fn field_days_messages_log_a_hashed_call_without_its_brackets() {
         // The rows, the time set aside, and the calls the submitted ADIF and the journal write.
@@ -6943,6 +6983,12 @@ mod tests {
             } else {
                 format!("CQ {call}")
             };
+            // The two calls of RR73 and 73.
+            let closing = if crate::message::is_std_call(call) {
+                format!("{heard} K1ABC")
+            } else {
+                format!("{call} <K1ABC>")
+            };
             let what = format!("{heard} S&P");
             let mut sp = contest_station("K1ABC", "arrlfd", false);
             sp.observe(&[dec(&cq)], 0);
@@ -6953,7 +6999,7 @@ mod tests {
             );
             sp.after_tx();
             sp.observe(&[dec(&format!("K1ABC {heard} R 1D WI"))], 2);
-            assert_eq!(next(&sp), format!("{heard} K1ABC RR73"), "{what}: RR73");
+            assert_eq!(next(&sp), format!("{closing} RR73"), "{what}: RR73");
             assert_eq!(logged(&sp), whole(call, false, 2), "{what}: logged");
             sp.after_tx();
             sp.rearm(false);
@@ -6976,7 +7022,7 @@ mod tests {
                 run.after_tx();
                 run.observe(&[dec(&format!("K1ABC {heard} {close}"))], 3);
                 let bye = match close {
-                    "RR73" => format!("{heard} K1ABC 73"),
+                    "RR73" => format!("{closing} 73"),
                     _ => String::new(),
                 };
                 assert_eq!(next(&run), bye, "{what}: the close");
@@ -6986,9 +7032,224 @@ mod tests {
             let what = format!("{heard} Running, rogered first");
             let mut run = contest_station("K1ABC", "arrlfd", true);
             run.observe(&[dec(&format!("K1ABC {heard} R 1D WI"))], 1);
-            assert_eq!(next(&run), format!("{heard} K1ABC RR73"), "{what}: RR73");
+            assert_eq!(next(&run), format!("{closing} RR73"), "{what}: RR73");
             assert_eq!(logged(&run), whole(call, true, 1), "{what}: logged");
         }
+    }
+
+    /// ⭐ RR73 AND 73 TO A NONSTANDARD CALL GO OUT AS WSJT-X 3.0.2 WRITES THEM in Field Day's
+    /// messages: that call whole and mine hashed, `W9XYZ/M <K1ABC> RR73` (`genStdMsgs`,
+    /// mainwindow.cpp 9701 and 9709, `if(!bHisCall and bMyCall) t=hisCall + " <" + my_callsign +
+    /// "> " …`), where `hisCall` is the call the decoder printed, brackets dropped (`DecodedText`,
+    /// decodedtext.cpp 66). So S&P's RR73 to a runner signing W9XYZ/M, the run's 73 to such a
+    /// caller's RR73, and the run's RR73 to one that rogers first, with a `/P` call of mine too
+    /// (`stdCall` passes it, 9588). The exchange overs before them, S&P's answer and the run's R
+    /// and exchange, are what they were.
+    #[test]
+    fn rr73_and_73_to_a_nonstandard_call_go_out_as_wsjtx_writes_them() {
+        for me in ["K1ABC", "K1ABC/P"] {
+            for his in ["W9XYZ/M", "W9XYZ/4", "W9XYZ/QRP", "PJ4/W9XYZ"] {
+                let h = format!("<{his}>");
+                let what = format!("{me} working {his}");
+                let mut sp = contest_station(me, "arrlfd", false);
+                sp.observe(&[dec(&format!("CQ {his}"))], 0);
+                assert_eq!(
+                    next(&sp),
+                    format!("{his} {me} 2B EMA"),
+                    "{what}: S&P's answer"
+                );
+                sp.after_tx();
+                sp.observe(&[dec(&format!("{me} {h} R 1D WI"))], 2);
+                assert_eq!(
+                    next(&sp),
+                    format!("{his} <{me}> RR73"),
+                    "{what}: S&P's RR73"
+                );
+                assert_eq!(last_row(&sp).0, his, "{what}: S&P logged");
+
+                let mut run = contest_station(me, "arrlfd", true);
+                run.observe(&[dec(&format!("{me} {h} 1D WI"))], 1);
+                assert_eq!(
+                    next(&run),
+                    format!("{h} {me} R 2B EMA"),
+                    "{what}: the run's R and exchange"
+                );
+                run.after_tx();
+                run.observe(&[dec(&format!("{me} {h} RR73"))], 3);
+                assert_eq!(
+                    next(&run),
+                    format!("{his} <{me}> 73"),
+                    "{what}: the run's 73"
+                );
+                assert_eq!(last_row(&run).0, his, "{what}: the run logged");
+
+                let mut run = contest_station(me, "arrlfd", true);
+                run.observe(&[dec(&format!("{me} {h} R 1D WI"))], 1);
+                assert_eq!(
+                    next(&run),
+                    format!("{his} <{me}> RR73"),
+                    "{what}: the run's RR73 to a caller that rogers first"
+                );
+            }
+        }
+    }
+
+    /// The control: outside a standard call of mine closing to a nonstandard one in Field Day's
+    /// messages, RR73 and 73 go out as before. A standard call heard hashed, `<W9XYZ>`; both
+    /// calls nonstandard; and the ARRL VHF and standard messages, which this change leaves as
+    /// they were. A nonstandard call of mine closing to a standard one is
+    /// `a_nonstandard_call_goes_out_as_wsjtx_writes_it`'s.
+    #[test]
+    fn rr73_and_73_otherwise_go_out_as_before() {
+        let mut sp = contest_station("K1ABC", "arrlfd", false);
+        sp.observe(&[dec("CQ FD W9XYZ EN37")], 0);
+        sp.after_tx();
+        sp.observe(&[dec("K1ABC <W9XYZ> R 1D WI")], 2);
+        assert_eq!(
+            next(&sp),
+            "<W9XYZ> K1ABC RR73",
+            "a standard call heard hashed"
+        );
+        let mut sp = contest_station("PJ4/K1ABC", "arrlfd", false);
+        sp.observe(&[dec("CQ W9XYZ/M")], 0);
+        sp.after_tx();
+        sp.observe(&[dec("<PJ4/K1ABC> <W9XYZ/M> R 1D WI")], 2);
+        assert_eq!(
+            next(&sp),
+            "<W9XYZ/M> PJ4/K1ABC RR73",
+            "both calls nonstandard"
+        );
+        let mut vhf = ft8_station("arrlvhf_jan", "FN42", true);
+        vhf.observe(&[dec("K1ABC <W9XYZ/M> EN37")], 1);
+        vhf.after_tx();
+        vhf.observe(&[dec("K1ABC <W9XYZ/M> RR73")], 3);
+        assert_eq!(next(&vhf), "<W9XYZ/M> K1ABC 73", "the ARRL VHF messages");
+        let mut std = ft8_station("txqp", "FN42", true);
+        std.observe(&[dec("K1ABC <W9XYZ/M> EN37")], 1);
+        std.after_tx();
+        std.observe(&[dec("K1ABC <W9XYZ/M> R-07")], 3);
+        assert_eq!(next(&std), "<W9XYZ/M> K1ABC RR73", "the standard messages");
+    }
+
+    /// ⭐ FIELD DAY'S RUN CLOSES WITH A CALLER WHOSE CALL IS NONSTANDARD. Running WSJT-X 3.0.2,
+    /// such a caller sends its RR73 and 73 with my call hashed and its own whole,
+    /// `<K1ABC> W9XYZ/M RR73` (`genStdMsgs`, mainwindow.cpp 9702 and 9710,
+    /// `if(bHisCall and !bMyCall)`), and WSJT-X takes that as addressed to itself: its decoder
+    /// prints its own call's hash as `<K1ABC>` (`unpack77`, packjt77.f90 644-651,
+    /// `n12.eq.hashmy12`), `DecodedText` drops the brackets (decodedtext.cpp 66), and
+    /// `auto_sequence` and `processMessage` ask whether that word holds its call (7546, 9108). So
+    /// the run logs W9XYZ/M, bare, on its RR73, RRR or 73, and answers the RR73 and RRR with 73
+    /// where the caller runs WSJT-X's Field Day activity (9210-9215). Before, it never closed: it
+    /// sent the caller its R and exchange again.
+    #[test]
+    fn field_days_run_closes_with_a_caller_whose_call_is_nonstandard() {
+        for me in ["K1ABC", "K1ABC/P"] {
+            for (close, answer) in [
+                ("RR73", format!("W9XYZ/M <{me}> 73")),
+                ("RRR", format!("W9XYZ/M <{me}> 73")),
+                ("73", String::new()),
+            ] {
+                let what = format!("{me}, <{me}> W9XYZ/M {close}");
+                let mut run = contest_station(me, "arrlfd", true);
+                run.observe(&[dec(&format!("{me} <W9XYZ/M> 1D WI"))], 1);
+                assert_eq!(next(&run), format!("<W9XYZ/M> {me} R 2B EMA"), "{what}");
+                run.after_tx();
+                run.observe(&[dec(&format!("<{me}> W9XYZ/M {close}"))], 3);
+                assert_eq!(
+                    (run.state, next(&run)),
+                    (FdState::Done, answer),
+                    "{what}: closed"
+                );
+                assert_eq!(
+                    last_row(&run).0,
+                    "W9XYZ/M",
+                    "{what}: logged, without the brackets"
+                );
+                assert_eq!(run.log.qsos().len(), 1, "{what}: once");
+            }
+        }
+        // Winter Field Day's runner, whose caller does not run WSJT-X's activity, sends nothing.
+        let session = ContestSession::field_day(FdEvent::WinterFd, "1H", "EMA");
+        let mut run = FieldDayStation::running("K1ABC", "FN42", session, "20M");
+        run.observe(&[dec("K1ABC <W9XYZ/M> 1H WI")], 1);
+        run.after_tx();
+        run.observe(&[dec("<K1ABC> W9XYZ/M RR73")], 3);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::Done, String::new()),
+            "WFD"
+        );
+        assert_eq!(last_row(&run).0, "W9XYZ/M", "WFD: logged");
+    }
+
+    /// The control: only the caller's own close, to my own call. Hashed to another call, from
+    /// another station, or to a call the decoder could not resolve, it closes nothing and the
+    /// caller gets the R and exchange again; and the exchanges still take my standard call only
+    /// whole (`a_standard_call_goes_out_and_is_heard_exactly_as_before`).
+    #[test]
+    fn field_days_run_closes_only_on_the_callers_own_close_to_my_call() {
+        for (heard, what) in [
+            ("<K2DEF> W9XYZ/M RR73", "to another call"),
+            ("<K1ABC> N0ABC/M RR73", "from another station"),
+            (
+                "<...> W9XYZ/M RR73",
+                "to a call the decoder could not resolve",
+            ),
+        ] {
+            let mut run = contest_station("K1ABC", "arrlfd", true);
+            run.observe(&[dec("K1ABC <W9XYZ/M> 1D WI")], 1);
+            run.after_tx();
+            run.observe(&[dec(heard)], 3);
+            assert_eq!(
+                (run.state, next(&run)),
+                (
+                    FdState::AwaitConfirm,
+                    "<W9XYZ/M> K1ABC R 2B EMA".to_string()
+                ),
+                "{what}: nothing closed"
+            );
+            assert!(run.log.qsos().is_empty(), "{what}: nothing logged");
+        }
+    }
+
+    /// ⭐ FIELD DAY'S MESSAGES PASS BY A CALL THE DECODER COULD NOT RESOLVE, as WSJT-X's Field Day
+    /// activity does: `processMessage` returns at once for a message that carries `<...>`
+    /// (mainwindow.cpp 9097-9099). Running, a caller heard as `<...>` gets no answer and no row,
+    /// whether it sends its exchange or rogers first, and the run keeps calling CQ. The same
+    /// station's next message, its call resolved, is worked as any other's and logged bare. The
+    /// same line keeps S&P from answering a CQ that names such a call, `CQ FD <...> EN37`: WSJT-X
+    /// answers a CQ only through `processMessage`.
+    #[test]
+    fn field_days_run_passes_by_a_caller_the_decoder_could_not_resolve() {
+        for heard in ["K1ABC <...> 1D WI", "K1ABC <...> R 1D WI"] {
+            let mut run = contest_station("K1ABC", "arrlfd", true);
+            run.observe(&[dec(heard)], 1);
+            assert_eq!(
+                (run.state, next(&run)),
+                (FdState::CallingCq, "CQ FD K1ABC FN42".to_string()),
+                "{heard}: no answer"
+            );
+            assert!(run.log.qsos().is_empty(), "{heard}: no row");
+            run.observe(&[dec("K1ABC <W9XYZ/M> 1D WI")], 3);
+            assert_eq!(
+                next(&run),
+                "<W9XYZ/M> K1ABC R 2B EMA",
+                "{heard}: its next, resolved, is answered"
+            );
+            run.after_tx();
+            run.observe(&[dec("<K1ABC> W9XYZ/M RR73")], 5);
+            assert_eq!(next(&run), "W9XYZ/M <K1ABC> 73", "{heard}: and closed");
+            assert_eq!(last_row(&run).0, "W9XYZ/M", "{heard}: and logged bare");
+        }
+        let mut sp = contest_station("K1ABC", "arrlfd", false);
+        sp.observe(&[dec("CQ FD <...> EN37")], 0);
+        assert_eq!(
+            (sp.state, next(&sp)),
+            (FdState::Listening, String::new()),
+            "S&P: a CQ from <...> is not answered"
+        );
+        sp.observe(&[dec("CQ FD W9XYZ EN37")], 2);
+        assert_eq!(next(&sp), "W9XYZ K1ABC 2B EMA", "S&P: the next CQ is");
     }
 
     /// The direction reaches a running station's CQ at once, and every CQ after; S&P calls none.
