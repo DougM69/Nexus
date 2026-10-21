@@ -939,6 +939,226 @@ fn a_program_holding_a_key_is_ended_sooner_when_it_goes_silent() {
     );
 }
 
+/// The writer's side: a program that takes what the server sends a few bytes at a time, and the
+/// control, one that takes it at once through the same buffers. Linux only: they make the server's
+/// send buffer small through the kernel's own sizing of it ([`SMALL_MSS`]), which other systems do
+/// their own way.
+#[cfg(target_os = "linux")]
+mod slow_readers {
+    use std::os::fd::AsRawFd;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread;
+
+    use super::*;
+    use crate::tci::server::conn::WRITE_STALL;
+
+    /// The MSS a program with small buffers announces. Linux sizes the server's send buffer for
+    /// that connection from it, 25,600 bytes on this box where loopback's own MSS gives megabytes,
+    /// so one write of the writer's (up to 64 KiB of frames) fills the buffers between the server
+    /// and a program that does not read it.
+    const SMALL_MSS: libc::c_int = 384;
+
+    /// How much of what the server sends a slow program reads at a time, every [`SLOW_GAP`]: in a
+    /// whole [`WRITE_STALL`], about a sixth of one write of the writer's, yet something every time,
+    /// so each write of the socket goes on a little before a timeout on it would end it.
+    const SLOW_READ: usize = 200;
+
+    /// The gap between a slow program's reads.
+    const SLOW_GAP: Duration = Duration::from_millis(100);
+
+    /// How late the farewell may come after the stall: the reader's wake and a margin for a loaded
+    /// box. With a timeout on each write of the socket alone, it never came while the program read
+    /// on.
+    const PAST_THE_STALL: Duration = Duration::from_secs(1);
+
+    /// Receive audio as large as one write of the writer's, in one frame: eight of the largest
+    /// frames a program may stream ([`rx_frame`]) make such a write, but the writer gathers them as
+    /// they come, so its first writes of them can be one frame each. One frame of the same size is
+    /// the first write, from the moment it is sent, and more than the buffers hold.
+    fn one_whole_write() -> Vec<u8> {
+        let mut f = tx_frame(16 * 1024, 16 * 1024);
+        f[24] = 1;
+        f
+    }
+
+    /// The control's receive audio: [`BURST`] frames at a time, one write of the writer's and more
+    /// than the buffers hold, every [`BURST_GAP`].
+    const BURST: usize = 8;
+    const BURST_GAP: Duration = Duration::from_millis(200);
+
+    /// A program's socket with small buffers, connected to the server on `port`: it announces
+    /// [`SMALL_MSS`], and its receive buffer is the smallest the kernel allows.
+    fn small_buffers(port: u16) -> TcpStream {
+        let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
+            .expect("a socket");
+        socket
+            .set_recv_buffer_size(2048)
+            .expect("a small receive buffer");
+        let mss = SMALL_MSS;
+        // SAFETY: the option's value is a c_int that outlives the call, and its length is given.
+        let set = unsafe {
+            libc::setsockopt(
+                socket.as_raw_fd(),
+                libc::IPPROTO_TCP,
+                libc::TCP_MAXSEG,
+                (&mss as *const libc::c_int).cast(),
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(set, 0, "TCP_MAXSEG: {}", std::io::Error::last_os_error());
+        socket
+            .connect(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)).into())
+            .expect("connected");
+        socket.into()
+    }
+
+    /// A program over [`small_buffers`] through its init burst, its receive audio started and its
+    /// `tci` key admitted, as WSJT-X's is for an over.
+    fn keyed_through_small_buffers(b: &Bench) -> Client {
+        let mut c = Client::over(small_buffers(b.port), request(b.port))
+            .expect("a handshake the gate takes");
+        c.burst();
+        c.ask("audio_start:0;", "audio_start:0;");
+        c.ask("trx:0,true,tci;", "trx:0,true;");
+        c
+    }
+
+    impl Client {
+        /// The rest of the connection as a program that reads slowly: at most [`SLOW_READ`] bytes
+        /// of what the server sends every [`SLOW_GAP`], below the WebSocket (no frame is whole at
+        /// this pace), counted in `read`, with a command of its own each time so it is never
+        /// silent; until the server ends the connection or `limit` passes.
+        fn read_slowly(mut self, limit: Duration, read: &AtomicUsize) {
+            let mut tcp = self.ws.get_ref().try_clone().expect("a second handle");
+            let mut buf = [0u8; SLOW_READ];
+            let until = Instant::now() + limit;
+            while Instant::now() < until && self.ws.send(Message::text("trx:0;")).is_ok() {
+                let _ = tcp.set_read_timeout(Some(SLOW_GAP));
+                match tcp.read(&mut buf) {
+                    Ok(0) => return,
+                    Ok(n) => {
+                        read.fetch_add(n, Ordering::Relaxed);
+                    }
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    Err(_) => return,
+                }
+                thread::sleep(SLOW_GAP);
+            }
+        }
+    }
+
+    /// ⭐ A PROGRAM THAT READS SLOWLY CANNOT HOLD OFF ITS FAREWELL: a program holding a `tci` key,
+    /// through small buffers, is sent one write of receive audio, more than the buffers hold, then
+    /// reads [`SLOW_READ`] bytes of it every [`SLOW_GAP`], with a command of its own each time so it
+    /// is never silent. Each write of the socket goes on a little before a timeout on it would end
+    /// it, so with a timeout on each write alone the writer's write lasted as long as the slow read
+    /// went on, and the farewell that ends the program's transmissions never came meanwhile. Each
+    /// write of the writer's has [`WRITE_STALL`] in all: past it the program is taken for gone, its
+    /// transmissions end, and it is closed as lost, as one that stopped reading is.
+    #[test]
+    fn a_program_that_reads_slowly_cannot_hold_off_its_farewell() {
+        let b = Bench::new();
+        let c = keyed_through_small_buffers(&b);
+        let id = b.id(1);
+        let sent = Instant::now();
+        assert!(
+            b.handle.send_rx_audio(id, one_whole_write()),
+            "its audio is started"
+        );
+        let read = Arc::new(AtomicUsize::new(0));
+        let reader = {
+            let read = Arc::clone(&read);
+            thread::spawn(move || c.read_slowly(WRITE_STALL * 3, &read))
+        };
+        let farewell = b.mock.wait_call(WRITE_STALL + PAST_THE_STALL, |call| {
+            *call == Call::Disconnected(id)
+        });
+        let took = sent.elapsed();
+        assert!(
+            farewell.is_some(),
+            "no farewell {took:?} after the audio was sent, the program reading on ({} bytes \
+             read); still served: {:?}",
+            read.load(Ordering::Relaxed),
+            b.handle
+                .programs()
+                .iter()
+                .map(|p| (p.id, p.key))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            took >= WRITE_STALL,
+            "taken for gone after {took:?}, inside the stall"
+        );
+        assert!(
+            b.mock
+                .wait_event(WAIT, |e| *e
+                    == Event::Closed {
+                        client: id,
+                        why: Closed::Lost
+                    })
+                .is_some(),
+            "closed as lost: {:?}",
+            b.mock.events()
+        );
+        wait_gone(&b);
+        assert_eq!(transmit_after_end(&b, id), [], "transmitting after its end");
+        reader.join().expect("the program's reads");
+    }
+
+    /// The control: a program with the same small buffers that reads what it is sent at once
+    /// takes every frame of receive audio sent to it, [`BURST`] at a time every [`BURST_GAP`] for
+    /// longer than [`WRITE_STALL`], and stays. The stall is each write's own, so a program whose
+    /// writes go out is never taken for gone.
+    #[test]
+    fn a_program_that_keeps_up_takes_all_its_audio_and_stays() {
+        let b = Bench::new();
+        let mut c = keyed_through_small_buffers(&b);
+        let id = b.id(1);
+        let sender = {
+            let handle = b.handle.clone();
+            thread::spawn(move || {
+                let started = Instant::now();
+                let mut sent = 0;
+                while started.elapsed() < WRITE_STALL + BURST_GAP * 5 {
+                    for _ in 0..BURST {
+                        sent += usize::from(handle.send_rx_audio(id, rx_frame()));
+                    }
+                    thread::sleep(BURST_GAP);
+                }
+                (sent, started.elapsed())
+            })
+        };
+        let audio = |c: &mut Client| {
+            usize::from(matches!(
+                c.next(Duration::from_millis(100)),
+                Some(Message::Binary(_))
+            ))
+        };
+        let mut got = 0;
+        while !sender.is_finished() {
+            got += audio(&mut c);
+        }
+        let (sent, took) = sender.join().expect("the audio was sent");
+        let until = Instant::now() + WAIT;
+        while got < sent && Instant::now() < until {
+            got += audio(&mut c);
+        }
+        assert!(took > WRITE_STALL, "the audio ran only {took:?}");
+        assert!(
+            !b.mock.calls().contains(&Call::Disconnected(id)),
+            "taken for gone while it kept up: {:?}",
+            b.mock.events()
+        );
+        assert_eq!(got, sent, "every frame reached the program");
+        assert!(c.alive(), "the program is still served");
+        let _ = c.ws.close(None);
+    }
+}
+
 // ── The init burst ───────────────────────────────────────────────────────────────────────────
 
 const BURST: [&str; 31] = [

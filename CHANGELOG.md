@@ -524,6 +524,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   started again the program listed under the same Connection number counted as having asked for it, though it had
   asked for nothing. Nexus now lets a mode request already under way finish before it ends the program, forgets it
   with the program, and takes none once the program's end has begun.
+- **Share by TCI (Beta): a program that takes what Nexus sends a few bytes at a time is now disconnected after 5 s.**
+  A program that stopped reading was already treated as gone after 5 s, and whatever it had on the air ended with it.
+  One that still read a few bytes every few seconds was not: Nexus waited on it for as long as it kept reading, and
+  the program stayed connected, holding any key it had. What Nexus sends a program at one time now has 5 s in all; a
+  program that takes longer is disconnected as a lost connection, and whatever it was transmitting ends. A program
+  that keeps up is not affected.
 - **A logger can no longer turn TX back on after you stop it.** With the WSJT-X UDP feed on, a Reply from GridTracker or
   JTAlert used to arm TX even after Stop TX, Esc or a TX watchdog trip, and cleared the trip. Now that Reply is ignored
   until you turn TX on yourself, and the watchdog trip stays until you do. A logger's free text with "send" no longer
