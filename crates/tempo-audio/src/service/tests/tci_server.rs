@@ -3,7 +3,8 @@
 //! out its tail on its owner's release, and ends hard (unkeyed, its queued audio flushed) within a
 //! tick of every stop, its 300 ms gap, its 10-minute ceiling and its program's loss; a CAT rebuild
 //! under it unkeys it through both links; a loop rebuilt under it plays none of it; and programs'
-//! slot-timed overs stay refused, a program's data-mode over with them on any screen. The program is
+//! slot-timed overs stay refused, a program's data-mode over with them on any screen, and so does
+//! the over of a program that asked no voice mode. The program is
 //! the engine's own API as the server's backend calls it (`tci_key`, `tci_tx_audio`, `tci_release`,
 //! `tci_end_own`, `tci_disconnected`, `tci_note_modulation`); the server and its wire are the app's,
 //! tested there. The loop's monotonic clock is the test's (`mono_origin`), so a program's audio
@@ -16,9 +17,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tempo_net::tci::server::{KeyKind, Mic, Refusal};
 use tempo_net::tci::wire::Word;
 
-/// The program that keys, and another one.
+/// The program that keys, and another one: both asked `usb` (`Scene::with`).
 const P1: u64 = 1;
 const P2: u64 = 2;
+/// A program that has asked no mode, as WSJT-X, JTDX and MSHV ask none in their default setup.
+const P3: u64 = 3;
 
 /// The radio loop's tick in these scenes, ms.
 const TICK: f64 = 20.0;
@@ -27,7 +30,8 @@ const TICK: f64 = 20.0;
 const FRAME: usize = TCI_OVER.samples(20) as usize;
 
 /// The radio loop at a station in Phone on 20 m with every HF privilege, TX armed as entering Phone
-/// arms it, and "Programs on TCI may transmit" on; a mock sound card that keeps what is played.
+/// arms it, "Programs on TCI may transmit" on, and P1 and P2 programs that asked `usb` (a program's
+/// own audio goes out only after it asks a voice mode); a mock sound card that keeps what is played.
 struct Scene {
     engine: Arc<Mutex<Engine>>,
     state: RadioLoop,
@@ -62,6 +66,9 @@ impl Scene {
             e.set_operating_mode("phone", false);
             e.set_frequency(14.250, "20m", "USB");
             assert!(e.tx_enabled(), "premise: entering Phone arms TX");
+            let usb = Word::new("usb").expect("a mode word");
+            e.tci_note_modulation(P1, &usb);
+            e.tci_note_modulation(P2, &usb);
             Transport::from_settings(e.settings())
         };
         let cfg = RadioConfig {
@@ -392,8 +399,8 @@ fn no_other_programs_audio_reaches_the_transmitter() {
 /// unkeyed, what was queued is flushed and the PTT hold is gone; for twenty ticks after, with the
 /// program still sending, nothing keys and nothing is played; and the program's next key gets the
 /// answer the stop leaves (a Stop holds until the operator arms; a band or radio change holds
-/// programs' keys; the program's own end, its loss, a new route or the loop's rig changing hands
-/// hold nothing).
+/// programs' keys; the program's own end, a new route or the loop's rig changing hands hold
+/// nothing; its loss forgets its mode ask, so its number is a program that asked no voice mode).
 #[test]
 fn every_stop_ends_a_programs_over_within_a_tick() {
     type Tweak = fn(&mut tempo_app::settings::Settings);
@@ -405,7 +412,7 @@ fn every_stop_ends_a_programs_over_within_a_tick() {
             "its lost connection",
             as_is,
             |s| s.engine().tci_disconnected(P1),
-            Ok(()),
+            Err(Refusal::VoiceMode),
         ),
         (
             "another program's trx:0,false",
@@ -806,6 +813,53 @@ fn a_programs_data_mode_over_on_the_phone_screen_keys_nothing() {
     assert_eq!(s.key(P1), Ok(()), "control: its key after usb");
     while t <= 2_600.0 {
         s.tick(t, Some(0.5));
+        t += TICK;
+    }
+    assert!(
+        s.rig.keyed && s.backend.played.contains(&0.5),
+        "control: after usb its voice over keys and plays"
+    );
+}
+
+/// ⛔ A PROGRAM'S OWN AUDIO GOES OUT ONLY AFTER IT ASKS A VOICE MODE (the operator's ruling of
+/// 2026-10-20): WSJT-X's default shape (its Radio mode "None": no `modulation:` at all, then
+/// `trx:0,true,tci`) at 14.074 on the Phone screen with the licence class Open, where no other gate
+/// refuses it, is refused as asking no voice mode, and two seconds of its audio key nothing, play
+/// nothing and are not taken. CONTROL: once the same program asks `usb`, its voice over keys and
+/// plays.
+#[test]
+fn a_programs_over_with_no_voice_mode_asked_keys_nothing_on_the_phone_screen() {
+    let mut s = Scene::new();
+    {
+        let mut e = s.engine();
+        e.set_license_class("open");
+        e.set_frequency(14.074, "20m", "USB");
+        assert!(
+            e.tx_allowed(),
+            "premise: the Open class keys on 14.074 in Phone"
+        );
+    }
+    let key = s.key(P3);
+    let (mut taken, mut keyed_at) = (false, None);
+    let mut t = 0.0;
+    while t <= 2_000.0 {
+        taken |= s.audio(P3, t, 0.5);
+        s.step(t);
+        if s.rig.keyed && keyed_at.is_none() {
+            keyed_at = Some(t);
+        }
+        t += TICK;
+    }
+    assert_eq!(keyed_at, None, "the program's over keyed the rig");
+    assert!(s.backend.played.is_empty(), "its audio was played");
+    assert!(!taken, "its audio was taken");
+    assert_eq!(key, Err(Refusal::VoiceMode), "the key");
+    s.engine()
+        .tci_note_modulation(P3, &Word::new("usb").expect("a mode word"));
+    assert_eq!(s.key(P3), Ok(()), "control: its key after usb");
+    while t <= 2_600.0 {
+        s.audio(P3, t, 0.5);
+        s.step(t);
         t += TICK;
     }
     assert!(

@@ -24,7 +24,7 @@
 //! | 5 | the licence: a `tci` over across its whole passband, a microphone key as Nexus's own, Tune at its carrier, CW as Nexus's own CW | `Licence` |
 //! | 6 | nothing else owns the transmitter (a program re-asserting its own key passes, and its CW queues behind its own) | `Owner` |
 //! | 7 | no clock repair holds transmit (nor drops a key already held; CW is never admitted under one) | `ClockRepair` |
-//! | 8 | the section: a `tci` over or a microphone key in Phone, CW in CW, Tune in any; a `tci` over in Digital not yet, nor in any section from a program whose last `modulation:` asked a data mode | `Section`, `SlotTimed` |
+//! | 8 | the section: a `tci` over or a microphone key in Phone, CW in CW, Tune in any; a `tci` over in Digital not yet, nor in any section from a program whose last `modulation:` asked a data mode; and a `tci` over only from a program whose last `modulation:` asked a voice mode | `Section`, `SlotTimed`, `VoiceMode` |
 //! | 9 | a `tci` over has the program's audio stream started | `AudioStream` |
 //!
 //! Item 1, receiver 0, is the server's. The verdict for a `tci` key is also what each program is
@@ -42,6 +42,16 @@
 //! another mode, and an over it holds ends on the tick after it asks one
 //! ([`Engine::tci_note_modulation`]). Without it, FT8 from a program on the Phone screen went out
 //! wherever the licence let a phone emission through (every frequency, for the Open class).
+//!
+//! ⛔ AND A PROGRAM'S OWN AUDIO GOES OUT ONLY AFTER IT ASKS A VOICE MODE (the operator's ruling of
+//! 2026-10-20): a `tci` over is admitted only from a program whose last `modulation:` asked `usb`,
+//! `lsb`, `am` or `nfm` (TCI's FM), the voice modes Nexus's server offers programs. One that has
+//! asked none, or `cw` (a program's CW is text, keyed by Nexus's own keyer), is refused as
+//! `VoiceMode`, after the section's own refusals, and an over it holds ends on the tick after it
+//! asks anything but a voice mode. WSJT-X, JTDX and MSHV ask no mode in their default setup (their
+//! Radio mode "None"), so without it their FT8 on the Phone screen went out wherever the licence
+//! let a phone emission through, as a data-mode over did. A program's microphone key and its Tune
+//! carry no audio of its own and are not judged on what it asked.
 //!
 //! ## The three kinds of key
 //!
@@ -86,7 +96,7 @@
 use super::{now_unix_millis, reset_ft8_a7_without_waiting, DataFrame, Engine};
 use crate::mic::{MicDrop, MicFeed, MicFrame, MicGates, MicLatch, MicTick, TCI_OVER};
 use crate::settings::OperatingMode;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::time::Instant;
 use tempo_net::tci::server::{KeyKind, Refusal};
 use tempo_net::tci::wire::Word;
@@ -129,6 +139,30 @@ struct Key {
     section: OperatingMode,
 }
 
+/// What a program's last `modulation:` asked, as its audio overs are judged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Asked {
+    /// A voice mode: its own audio may go out, in Phone.
+    Voice,
+    /// A data mode, as WSJT-X asks before its FT8: held like FT8.
+    Data,
+    /// Any other (`cw`): no audio over.
+    Other,
+}
+
+impl Asked {
+    /// A `modulation:` word's kind. The voice modes are those Nexus's server offers programs
+    /// (`tempo_net::tci::server::MODULATIONS`; `nfm` is TCI's FM). A word the server does not offer
+    /// never reaches the engine, and one added to that list is no voice mode until it is named here.
+    fn of(mode: &Word) -> Asked {
+        match mode.as_str() {
+            "usb" | "lsb" | "am" | "nfm" => Asked::Voice,
+            "digu" | "digl" => Asked::Data,
+            _ => Asked::Other,
+        }
+    }
+}
+
 /// The TCI server's programs as the engine holds them.
 pub(super) struct TciState {
     /// The program's key that owns the transmitter.
@@ -147,8 +181,9 @@ pub(super) struct TciState {
     abort: bool,
     /// Programs' CW: their speed, and whose word the keyer was handed last.
     cw: cw::TciCw,
-    /// The programs whose last `modulation:` asked a data mode: their overs are held like FT8.
-    data_mode: HashSet<u64>,
+    /// What each program's last `modulation:` asked, kept until it asks another or its connection
+    /// ends; a program that has asked none has no entry. Only a voice mode lets its overs out.
+    modulation: HashMap<u64, Asked>,
 }
 
 impl Default for TciState {
@@ -163,7 +198,7 @@ impl Default for TciState {
             media: 0,
             abort: false,
             cw: cw::TciCw::default(),
-            data_mode: HashSet::new(),
+            modulation: HashMap::new(),
         }
     }
 }
@@ -230,7 +265,7 @@ impl Engine {
             return Err(Refusal::ClockRepair);
         }
         // A data-mode over from a program is held like FT8, in any section (module header).
-        if ask == Ask::Over && self.tci.data_mode.contains(&program) {
+        if ask == Ask::Over && self.tci_asked(program) == Some(Asked::Data) {
             return Err(Refusal::SlotTimed);
         }
         match (ask, self.settings.operating_mode) {
@@ -240,6 +275,10 @@ impl Engine {
             // The slot-timed modes wait for the loop bench (module header).
             (Ask::Over, OperatingMode::Digital) => return Err(Refusal::SlotTimed),
             _ => return Err(Refusal::Section),
+        }
+        // A program's own audio goes out only after it asked a voice mode (module header).
+        if ask == Ask::Over && !self.tci_asked_voice(program) {
+            return Err(Refusal::VoiceMode);
         }
         if ask == Ask::Over && !audio_started {
             return Err(Refusal::AudioStream);
@@ -278,6 +317,18 @@ impl Engine {
     /// on every tick.
     fn tci_over_routed(&self) -> bool {
         !self.flex_radio_has_mic
+    }
+
+    /// What `program`'s last `modulation:` asked, or `None` before its first.
+    fn tci_asked(&self, program: u64) -> Option<Asked> {
+        self.tci.modulation.get(&program).copied()
+    }
+
+    /// ⛔ Whether `program`'s own audio may go out: its last `modulation:` asked a voice mode. A
+    /// program that has asked none has not (WSJT-X's default setup asks none). Judged at the
+    /// admission and on every tick.
+    fn tci_asked_voice(&self, program: u64) -> bool {
+        self.tci_asked(program) == Some(Asked::Voice)
     }
 
     /// The station's own gates on a program's key, re-checked on every tick: the switch, TX armed,
@@ -406,22 +457,21 @@ impl Engine {
 
     /// `program`'s connection ended: it closed, failed or went silent, or the server or the
     /// operator ended it. ⛔ Everything it holds ends hard, NOW: the over's abort is armed here, so
-    /// the radio loop flushes and unkeys on its next tick (§3.1 item 4).
+    /// the radio loop flushes and unkeys on its next tick (§3.1 item 4). What it asked as its mode
+    /// is forgotten with it.
     pub fn tci_disconnected(&mut self, program: u64) {
         self.end_tci_program(program, "its connection ended");
-        self.tci.data_mode.remove(&program);
+        self.tci.modulation.remove(&program);
     }
 
     /// `modulation:0,<mode>` from `program`, whatever comes of the change itself (the CAT broker's
-    /// mode rule judges it after, and may refuse it): whether it asked a data mode (`digu`,
-    /// `digl`). From that ask until the program asks another mode, its audio overs are held like
-    /// FT8 (`SlotTimed`, in any section), and an over it holds ends on the radio loop's next tick.
+    /// mode rule judges it after, and may refuse it): what it asked, kept until it asks another or
+    /// its connection ends. After a voice mode its audio overs are judged as Nexus's own phone;
+    /// after a data mode (`digu`, `digl`) they are held like FT8 (`SlotTimed`, in any section);
+    /// after any other they are refused (`VoiceMode`), as they are before its first ask. An over it
+    /// holds ends on the radio loop's next tick when it asks anything but a voice mode.
     pub fn tci_note_modulation(&mut self, program: u64, mode: &Word) {
-        if matches!(mode.as_str(), "digu" | "digl") {
-            self.tci.data_mode.insert(program);
-        } else {
-            self.tci.data_mode.remove(&program);
-        }
+        self.tci.modulation.insert(program, Asked::of(mode));
     }
 
     fn end_tci_program(&mut self, program: u64, why: &str) {
@@ -616,11 +666,10 @@ impl Engine {
             tx_allowed: self.tci_over_licensed() && self.tci_over_routed(),
             // Nexus's own key wins (§2.4): a tune, or the operator's own PTT, takes the transmitter.
             tuning: self.tuning || self.manual_ptt,
-            // G4: the section it was admitted in, and its program has asked no data mode since
-            // (a data-mode over is held like FT8).
+            // G4: the section it was admitted in, and its program's last ask still a voice mode
+            // (a data mode is held like FT8; any other carries no audio over).
             in_section: key.is_some_and(|k| {
-                k.section == self.settings.operating_mode
-                    && !self.tci.data_mode.contains(&k.program)
+                k.section == self.settings.operating_mode && self.tci_asked_voice(k.program)
             }),
             // G5: still its owner's. The socket is the server's: a lost one ends the key at once
             // (`tci_disconnected`).
@@ -745,6 +794,9 @@ mod tests {
 
     const P1: u64 = 1;
     const P2: u64 = 2;
+    /// A program that has asked no mode, as WSJT-X, JTDX and MSHV ask none in their default setup
+    /// (their Radio mode "None").
+    const P3: u64 = 3;
     /// The radio loop's tick, in ms, and the audio it may take each tick.
     const TICK: u64 = 20;
 
@@ -753,7 +805,8 @@ mod tests {
     }
 
     /// A station in Phone on 20 m with every HF privilege, TX armed as entering Phone arms it, and
-    /// programs allowed to transmit.
+    /// programs allowed to transmit. P1 and P2 asked `usb`, as a logger's voice keyer asks it, so
+    /// their audio overs are judged as voice; P3 asked nothing.
     fn phone() -> Engine {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_license_class("extra");
@@ -761,6 +814,8 @@ mod tests {
         e.set_frequency(14.250, "20m", "USB");
         e.settings.tci_server_tx = true;
         assert!(e.tx_enabled(), "premise: entering Phone arms TX");
+        e.tci_note_modulation(P1, &word("usb"));
+        e.tci_note_modulation(P2, &word("usb"));
         e
     }
 
@@ -1062,6 +1117,48 @@ mod tests {
                 Ok(()),
             ),
             (
+                "an over in Phone from a program that asked no voice mode (cw)",
+                |e| e.tci_note_modulation(P1, &word("cw")),
+                Try::Over(true),
+                Err(Refusal::VoiceMode),
+            ),
+            (
+                "an over in Digital from a program that asked cw: slot-timed first",
+                |e| {
+                    *e = digital();
+                    e.tci_note_modulation(P1, &word("cw"));
+                },
+                Try::Over(true),
+                Err(Refusal::SlotTimed),
+            ),
+            (
+                "an over in CW from a program that asked cw: the section first",
+                |e| {
+                    e.set_operating_mode("cw", false);
+                    e.tci_note_modulation(P1, &word("cw"));
+                },
+                Try::Over(true),
+                Err(Refusal::Section),
+            ),
+            (
+                "an over with no audio stream from a program that asked cw: the voice mode first",
+                |e| e.tci_note_modulation(P1, &word("cw")),
+                Try::Over(false),
+                Err(Refusal::VoiceMode),
+            ),
+            (
+                "control: a microphone key from a program that asked cw",
+                |e| e.tci_note_modulation(P1, &word("cw")),
+                Try::Mic,
+                Ok(()),
+            ),
+            (
+                "control: Tune from a program that asked cw",
+                |e| e.tci_note_modulation(P1, &word("cw")),
+                Try::Tune,
+                Ok(()),
+            ),
+            (
                 "an over with no audio stream",
                 |_| {},
                 Try::Over(false),
@@ -1225,6 +1322,12 @@ mod tests {
             }),
             ("P1 retune", |s| {
                 let _ = s.e.tci_retune_refusal();
+            }),
+            ("P1 modulation lsb", |s| {
+                s.e.tci_note_modulation(P1, &word("lsb"))
+            }),
+            ("P2 modulation digu", |s| {
+                s.e.tci_note_modulation(P2, &word("digu"))
             }),
             ("P1 cw_macros", |s| {
                 let text = Text::new("CQ TEST").expect("printable");
@@ -1791,8 +1894,9 @@ mod tests {
     /// no other gate refuses a phone emission: `modulation:0,digu` and then `trx:0,true,tci` is
     /// refused as slot-timed, told `tx_enable` false, and arms nothing; `digl` the same. CONTROLS:
     /// another program that asked `usb` is admitted (one program's ask holds only that program), and
-    /// the first one's later `usb` lets its next over in. A lost connection forgets its ask. An over
-    /// keyed before its program asks a data mode ends with its abort on the next tick.
+    /// the first one's later `usb` lets its next over in. A lost connection forgets its ask, so its
+    /// number is a program that asked nothing (`VoiceMode`, not `SlotTimed`). An over keyed before
+    /// its program asks a data mode ends with its abort on the next tick.
     #[test]
     fn a_programs_data_mode_over_is_held_like_ft8_in_any_section() {
         let mut e = phone();
@@ -1834,7 +1938,7 @@ mod tests {
         e.tci_disconnected(P2);
         assert_eq!(
             e.tci_key(P2, KeyKind::Tci, true),
-            Ok(()),
+            Err(Refusal::VoiceMode),
             "a lost program's ask outlived it"
         );
         // Asked part way through an over: it ends with its abort on the next tick.
@@ -1846,6 +1950,135 @@ mod tests {
             s.tick(20),
             MicTick::Idle,
             "the over went on after its program asked digu"
+        );
+        assert!(s.e.take_tci_abort(), "no abort");
+    }
+
+    /// ⛔ A PROGRAM'S OWN AUDIO GOES OUT ONLY AFTER IT ASKS A VOICE MODE (the operator's ruling of
+    /// 2026-10-20). WSJT-X's default shape (its Radio mode "None": no `modulation:` at all, then
+    /// `trx:0,true,tci`) on the Phone screen at 14.074 with the licence class Open, where no other
+    /// gate refuses a phone emission, is refused as `VoiceMode`, told `tx_enable` false, and arms
+    /// nothing. Every mode the server offers programs is judged by name: `usb`, `lsb`, `am` and
+    /// `nfm` (TCI's FM) let the over in, `digu` and `digl` hold it like FT8, `cw` refuses it.
+    /// CONTROLS: the program's microphone key and its Tune, which carry no audio of its own, are
+    /// admitted with no mode asked; after `usb` its over is admitted and `tx_enable` says so;
+    /// `digu` holds it again and a later `usb` lets its next over in. A lost connection forgets a
+    /// voice ask too. In Digital and in CW the section's refusal comes first. An over keyed before
+    /// its program asks `cw` ends with its abort on the next tick; one whose program asks another
+    /// voice mode goes on.
+    #[test]
+    fn a_programs_own_audio_goes_out_only_after_it_asks_a_voice_mode() {
+        let at_14074 = || {
+            let mut e = phone();
+            e.set_license_class("open");
+            e.set_frequency(14.074, "20m", "USB");
+            assert!(
+                e.tx_allowed() && e.tci_over_licensed(),
+                "premise: the Open class lets a phone emission out at 14.074"
+            );
+            e
+        };
+        let mut e = at_14074();
+        assert_eq!(
+            e.tci_key(P3, KeyKind::Tci, true),
+            Err(Refusal::VoiceMode),
+            "WSJT-X's default shape"
+        );
+        assert!(!e.tci_tx_enable(P3, true), "told it may transmit");
+        assert!(!e.tci_over_armed(), "an over was armed");
+        assert_eq!(e.tx_owner(), None, "something owns TX");
+        assert_eq!(
+            try_key(&mut e, P3, Try::Mic),
+            Ok(()),
+            "control: its microphone key"
+        );
+        e.tci_release(P3);
+        assert_eq!(try_key(&mut e, P3, Try::Tune), Ok(()), "control: its Tune");
+        e.tci_tune_off(P3);
+        e.tci_note_modulation(P3, &word("usb"));
+        assert!(
+            e.tci_tx_enable(P3, true),
+            "control: after its usb, told it may not transmit"
+        );
+        assert_eq!(
+            e.tci_key(P3, KeyKind::Tci, true),
+            Ok(()),
+            "control: after its usb"
+        );
+        e.tci_release(P3);
+        e.tci_note_modulation(P3, &word("digu"));
+        assert_eq!(
+            e.tci_key(P3, KeyKind::Tci, true),
+            Err(Refusal::SlotTimed),
+            "digu after usb"
+        );
+        e.tci_note_modulation(P3, &word("usb"));
+        assert_eq!(
+            e.tci_key(P3, KeyKind::Tci, true),
+            Ok(()),
+            "control: usb after digu"
+        );
+        e.tci_release(P3);
+        e.tci_disconnected(P3);
+        assert_eq!(
+            e.tci_key(P3, KeyKind::Tci, true),
+            Err(Refusal::VoiceMode),
+            "a lost program's usb outlived it"
+        );
+
+        // Every mode the server offers programs, by name.
+        let judged = [
+            ("usb", Ok(())),
+            ("lsb", Ok(())),
+            ("am", Ok(())),
+            ("nfm", Ok(())),
+            ("digu", Err(Refusal::SlotTimed)),
+            ("digl", Err(Refusal::SlotTimed)),
+            ("cw", Err(Refusal::VoiceMode)),
+        ];
+        let mut names: Vec<&str> = judged.iter().map(|(w, _)| *w).collect();
+        let mut offered = tempo_net::tci::server::MODULATIONS.to_vec();
+        names.sort_unstable();
+        offered.sort_unstable();
+        assert_eq!(names, offered, "the modes the server offers programs");
+        let mut wrong = Vec::new();
+        for (w, want) in judged {
+            let mut e = at_14074();
+            e.tci_note_modulation(P3, &word(w));
+            let got = e.tci_key(P3, KeyKind::Tci, true);
+            if got != want {
+                wrong.push(format!("after {w}: got {got:?}, want {want:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "the modes:\n{}", wrong.join("\n"));
+
+        assert_eq!(
+            digital().tci_key(P3, KeyKind::Tci, true),
+            Err(Refusal::SlotTimed),
+            "Digital: the section first"
+        );
+        assert_eq!(
+            cw_section().tci_key(P3, KeyKind::Tci, true),
+            Err(Refusal::Section),
+            "CW: the section first"
+        );
+
+        // Asked part way through an over: another voice mode keeps it, cw ends it.
+        let mut s = Scene::new(phone());
+        s.keyed();
+        s.e.tci_note_modulation(P1, &word("lsb"));
+        s.audio(P1, 20, 0.5);
+        assert_ne!(
+            s.tick(20),
+            MicTick::Idle,
+            "control: another voice mode ended the over"
+        );
+        s.e.tci_note_modulation(P1, &word("cw"));
+        s.audio(P1, 40, 0.5);
+        assert_eq!(
+            s.tick(40),
+            MicTick::Idle,
+            "the over went on after its program asked cw"
         );
         assert!(s.e.take_tci_abort(), "no abort");
     }

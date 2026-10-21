@@ -122,6 +122,10 @@ pub enum Refusal {
     /// `modulation:` asked a data mode: a data-mode over from a program is held like FT8 (the
     /// operator's ruling of 2026-10-20).
     SlotTimed,
+    /// A `tci` key from a program whose last `modulation:` asked no voice mode, or that has asked
+    /// none (item 8): a program's own audio goes out only after it asks USB, LSB, AM or FM (the
+    /// operator's ruling of 2026-10-20). WSJT-X, JTDX and MSHV ask none in their default setup.
+    VoiceMode,
     /// A `tci` key with no audio stream started (item 9).
     AudioStream,
     /// CW text Nexus will not key (§3.5 `cw_macros`): a character its keyer cannot send, a `;`,
@@ -161,6 +165,10 @@ impl Refusal {
             Refusal::SlotTimed => {
                 "FT8, FT4 and other slot-timed modes may not transmit through TCI yet, and a \
                  data-mode over from a program is held like FT8"
+            }
+            Refusal::VoiceMode => {
+                "a program may transmit its own audio only after it asks for a voice mode (USB, \
+                 LSB, AM or FM): set the program's Radio mode, or use Nexus for FT8"
             }
             Refusal::AudioStream => "no TCI audio stream",
             Refusal::CwText => {

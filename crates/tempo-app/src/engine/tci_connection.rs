@@ -526,10 +526,12 @@ mod tests {
     /// ⛔ THE LIFT IS NEXUS'S OWN: with the station's radio on the TCI connection, in the Digital
     /// section, a program's over through Nexus's own TCI server is still refused as slot-timed (the
     /// server's rule, `engine/tci.rs`), and its `tx_enable` says so. CONTROL: the same program's
-    /// over in Phone is admitted.
+    /// over in Phone is admitted, once it asked a voice mode (a program that asked none is refused
+    /// there).
     #[test]
     fn programs_slot_timed_overs_through_nexus_own_tci_server_stay_refused_on_a_tci_radio() {
         use tempo_net::tci::server::{KeyKind, Refusal};
+        use tempo_net::tci::wire::Word;
         let mut e = at("tci", "digital", 14.074);
         e.settings.tci_server_tx = true;
         assert!(e.tx_allowed(), "premise: Nexus's own FT8 may transmit here");
@@ -538,6 +540,7 @@ mod tests {
         assert!(!e.tci_over_armed(), "a program's over armed");
         let mut e = at("tci", "phone", 14.250);
         e.settings.tci_server_tx = true;
+        e.tci_note_modulation(1, &Word::new("usb").expect("a mode word"));
         assert_eq!(e.tci_key(1, KeyKind::Tci, true), Ok(()), "control: Phone");
     }
 

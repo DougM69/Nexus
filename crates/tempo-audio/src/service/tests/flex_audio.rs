@@ -986,10 +986,12 @@ fn run_with_program_audio(s: &mut FlexScene, ms: u64, level: f32) {
 /// asks to send its own audio (`trx:0,true,tci`): it would leave over DAX, which the radio then
 /// ignores, and the mic would carry the over. Refused as APRS and SSTV are refused there, with its
 /// reason: none of its audio is taken, nothing keys and nothing plays. CONTROL: with native audio off
-/// the radio is the operator's again, and the same program's over keys it and plays.
+/// the radio is the operator's again, and the same program's over keys it and plays. The program
+/// asked `usb`, as a program's own audio goes out only after it asks a voice mode.
 #[test]
 fn a_tci_programs_audio_over_refuses_while_the_radio_has_the_mic() {
     use tempo_net::tci::server::{KeyKind, Refusal};
+    use tempo_net::tci::wire::Word;
     let mut s = FlexScene::with_session(true, reports(&["USB"]));
     {
         let mut e = s.engine.lock().unwrap();
@@ -998,6 +1000,7 @@ fn a_tci_programs_audio_over_refuses_while_the_radio_has_the_mic() {
         e.apply_settings(settings);
         e.set_operating_mode("phone", false); // arms TX
         e.set_frequency(14.250, "20m", "USB");
+        e.tci_note_modulation(1, &Word::new("usb").expect("a mode word"));
     }
     run_until(&mut s, "the radio never had the mic", has_mic);
     assert_eq!(

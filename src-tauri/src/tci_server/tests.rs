@@ -1023,6 +1023,18 @@ fn listening(h: &Handle, port: u16) -> (Client, ClientId) {
     (client, id)
 }
 
+/// A program as [`listening`] that has also asked a voice mode, as a logger's voice keyer or
+/// WSJT-X set to Radio mode USB asks one (`modulation:0,usb;`): a `tci` key is refused without it.
+/// The server runs a program's commands in order, so the engine has the ask when its audio start
+/// is answered.
+fn voice_program(h: &Handle, port: u16) -> (Client, ClientId) {
+    let (mut client, id, _) = program(h, port);
+    client.send("modulation:0,usb;");
+    client.send("audio_start:0;");
+    client.lines_until("audio_start:0;");
+    (client, id)
+}
+
 /// One transmit frame in a program's default stream (48 kHz float32 stereo): `frames` frames of
 /// `level` on both channels, its `length` in values.
 fn tx_frame(frames: usize, level: f32) -> Vec<u8> {
@@ -1100,7 +1112,7 @@ fn a_programs_key_is_the_engines_verdict_and_its_over_is_its_own() {
     let engine = phone();
     let (mut m, _feed) = serving_with_audio(&engine);
     let h = handle(&m);
-    let (mut a, a_id) = listening(&h, port(&m));
+    let (mut a, a_id) = voice_program(&h, port(&m));
     let (mut b, b_id, _) = program(&h, port(&m));
     m.publish();
     a.lines_until("tx_enable:0,true;");
@@ -1187,6 +1199,9 @@ fn nothing_a_program_sends_arms_lets_go_of_a_stop_or_trip_raises_power_or_keys_o
     use tempo_net::tci::wire::Text;
     type Step = (&'static str, fn(&EngineTci, ClientId, ClientId));
     let steps: Vec<Step> = vec![
+        ("A's voice mode", |t, a, _| {
+            let _ = t.set_mode(a, &Word::new("usb").expect("a mode word"));
+        }),
         ("A's tci key", |t, a, _| {
             let _ = t.key(a, KeyKind::Tci, true);
         }),
@@ -1380,7 +1395,7 @@ fn every_stop_in_nexus_ends_a_programs_over_and_the_server_takes_no_more_of_its_
         let engine = phone();
         let (mut m, _feed) = serving_with_audio(&engine);
         let h = handle(&m);
-        let (mut a, a_id) = listening(&h, port(&m));
+        let (mut a, a_id) = voice_program(&h, port(&m));
         key_over(&engine, &mut m, &mut a);
         stop(&engine);
         {
@@ -1448,7 +1463,7 @@ fn a_programs_lost_connection_ends_what_it_held_before_the_next_tick() {
     let engine = phone();
     let (mut m, _feed) = serving_with_audio(&engine);
     let h = handle(&m);
-    let (mut a, _) = listening(&h, port(&m));
+    let (mut a, _) = voice_program(&h, port(&m));
     let (other, other_id, _) = program(&h, port(&m));
     key_over(&engine, &mut m, &mut a);
     drop(other);
@@ -1666,14 +1681,14 @@ fn the_server_follows_share_by_tci_and_its_port_in_the_settings() {
 /// ⛔ THE OPERATOR'S RULING OF 2026-10-19, THROUGH THE SERVER: FT8, FT4 and the other slot-timed
 /// modes stay refused until the loop bench. In Digital on FT8, armed, with the switch on, a
 /// program's over is answered `trx:0,false;`, the log says why, its `tx_enable` stays false and
-/// nothing is armed. CONTROL: the same program in Phone is admitted.
+/// nothing is armed. CONTROL: the same program in Phone is admitted (it asked a voice mode).
 #[test]
 fn slot_timed_modes_stay_refused_through_the_server() {
     let engine = armed();
     programs_may_transmit(&engine, true);
     let (m, _feed) = serving_with_audio(&engine);
     let h = handle(&m);
-    let (mut a, a_id) = listening(&h, port(&m));
+    let (mut a, a_id) = voice_program(&h, port(&m));
     a.send("trx:0,true,tci;");
     a.lines_until("trx:0,false;");
     assert_eq!(
@@ -1769,6 +1784,58 @@ fn a_programs_data_mode_over_is_held_like_ft8_through_the_server() {
         "premise: B let go"
     );
     // CONTROL: the first program's later usb lets its next voice over key.
+    a.send("modulation:0,usb;");
+    a.send("trx:0,true,tci;");
+    assert!(
+        eventually(&engine, |e| e.tci_owner() == Some(a_id.get())),
+        "control: after its usb, its voice over was not admitted"
+    );
+}
+
+/// ⛔ THE OPERATOR'S RULING OF 2026-10-20, THROUGH THE SERVER: a program's own audio goes out only
+/// after it asks a voice mode. WSJT-X's default shape (its Radio mode "None": no `modulation:` at
+/// all), its audio started and then `trx:0,true,tci;`, with Nexus on the Phone screen at 14.074 and
+/// the licence class Open, where no other gate refuses a phone emission: answered `trx:0,false;`,
+/// the program's last refusal says it must ask a voice mode, it is not told it may transmit, and
+/// nothing is armed. CONTROL: the same program's later `modulation:0,usb;` lets its next over key.
+#[test]
+fn a_programs_over_with_no_voice_mode_asked_is_refused_through_the_server() {
+    let engine = phone();
+    {
+        let mut e = engine_lock(&engine);
+        e.set_license_class("open");
+        e.set_frequency(14.074, "20m", "USB");
+        assert!(
+            e.tx_allowed(),
+            "premise: the Open class keys on 14.074 in Phone"
+        );
+    }
+    let (mut m, _feed) = serving_with_audio(&engine);
+    let h = handle(&m);
+    let (mut a, a_id) = listening(&h, port(&m));
+    a.send("trx:0,true,tci;");
+    a.lines_until("trx:0,false;");
+    m.publish();
+    let refused = engine_lock(&engine)
+        .snapshot()
+        .radio
+        .tci_server
+        .and_then(|s| s.programs.into_iter().find(|p| p.id == a_id.get()))
+        .and_then(|p| p.refused);
+    assert_eq!(
+        refused.as_deref(),
+        Some(Refusal::VoiceMode.text()),
+        "the program's last refusal"
+    );
+    assert!(
+        !told_tx_enable(&engine, &h, a_id),
+        "told it may transmit with no voice mode asked"
+    );
+    assert!(
+        !engine_lock(&engine).tci_over_armed(),
+        "an over with no voice mode asked armed"
+    );
+    // CONTROL: its later usb lets its next over key.
     a.send("modulation:0,usb;");
     a.send("trx:0,true,tci;");
     assert!(
