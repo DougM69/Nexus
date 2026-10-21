@@ -240,26 +240,14 @@ pub fn morse_line(text: &str) -> String {
 /// first `;`, so a `;` in the text would end the keyer's command early and the radio would read
 /// the rest as a command of its own; a line break would end rigctld's own command. Only what
 /// [`tempo_core::cw::sendable`] keeps goes, with spaces between words: the rule a TCI program's
-/// CW keeps too.
+/// CW keeps too. Nexus's own CW is refused whole by the same rule before any of it is queued
+/// (`Engine::send_cw`), so this is the backstop: a word reaches it only when the keyer was changed
+/// to this one under a message already queued, or from a caller outside the engine.
 pub fn cw_text_refusal(text: &str) -> Option<String> {
     let c = text
         .chars()
         .find(|c| *c != ' ' && !tempo_core::cw::sendable(*c))?;
-    Some(if c == ';' {
-        "CW not sent: \";\" is never handed to the radio's own keyer, because Kenwood, Yaesu and \
-         Elecraft radios read it as the end of a command. Take it out of the message."
-            .to_string()
-    } else {
-        let shown = if c.is_control() {
-            c.escape_default().to_string()
-        } else {
-            c.to_string()
-        };
-        format!(
-            "CW not sent: Nexus has no Morse for \"{shown}\", so it is never handed to the \
-             radio's own keyer. Take it out of the message."
-        )
-    })
+    Some(tempo_core::cw::keyer_refusal(c))
 }
 /// Parse the S-meter reading (dB relative to S9) from a rigctld `l STRENGTH` reply.
 /// Hamlib reports STRENGTH as a signed integer dB value where S9 = 0 dB (S1 ≈ -48 dB,

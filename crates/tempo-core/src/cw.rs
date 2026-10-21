@@ -139,10 +139,32 @@ pub fn morse_code(ch: char) -> Option<&'static str> {
 /// those radios end a command at the first `;`: one in the text would end the keyer's command
 /// early, and the radio would read the rest as a command of its own. No control character and
 /// nothing without Morse either; a space is a word gap, not a character. Nexus's CAT keyer
-/// (`tempo_audio::rig::cw_text_refusal`), a TCI program's CW and the callbook's name and state
+/// (`tempo_audio::rig::cw_text_refusal`), a message that keyer would key, refused whole before
+/// anything keys (`Engine::send_cw`), a TCI program's CW and the callbook's name and state
 /// ([`sendable_text`]) all keep to this one rule, so they cannot drift apart.
 pub fn sendable(ch: char) -> bool {
     ch != ';' && morse_code(ch).is_some()
+}
+
+/// Why the radio's own keyer is never handed `c`, a character [`sendable`] refuses, in the CW
+/// screen's words: the one sentence the CAT keyer's own check and a message refused whole before
+/// anything keys both say.
+pub fn keyer_refusal(c: char) -> String {
+    if c == ';' {
+        "CW not sent: \";\" is never handed to the radio's own keyer, because Kenwood, Yaesu and \
+         Elecraft radios read it as the end of a command. Take it out of the message."
+            .to_string()
+    } else {
+        let shown = if c.is_control() {
+            c.escape_default().to_string()
+        } else {
+            c.to_string()
+        };
+        format!(
+            "CW not sent: Nexus has no Morse for \"{shown}\", so it is never handed to the \
+             radio's own keyer. Take it out of the message."
+        )
+    }
 }
 
 /// `text` from outside Nexus that a macro keys (a callbook's name or state), with every character

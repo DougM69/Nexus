@@ -84,6 +84,9 @@ mod cw_sending_gate_tests;
 /// CW speed match: an answer keys at the station's measured speed, a CQ at the operator's own.
 #[cfg(test)]
 mod cw_speed_match_tests;
+/// A CW message the radio's own keyer would not take is refused whole, before anything keys.
+#[cfg(test)]
+mod cw_whole_message_tests;
 mod field_day_display;
 /// WSJT-X's mid-over message switch for FT8 and FT4 (`m_restart`).
 pub mod ft_midover;
@@ -10501,6 +10504,14 @@ impl Engine {
             self.cw_keyer_error = Some(CLOCK_REPAIR_DROPPED.to_string());
             return;
         }
+        // ⛔ So is a message the radio's own keyer would not take whole
+        // ([`Self::cw_message_refusal`]): nothing of it keys, nothing is armed and no pending stop
+        // is superseded, and the CW cockpit's warning line says which character.
+        if let Some(why) = self.cw_message_refusal(&expanded) {
+            tempo_core::applog::info("tx", &format!("CW not keyed: {why} (dropped)"));
+            self.cw_keyer_error = Some(why);
+            return;
+        }
         if !expanded.trim().is_empty() {
             // A deliberate CW send (F-key macro or typed text) IS the transmit action, so RE-ARM
             // TX. Without this, a prior Stop TX / halt_tx (which disables tx_enabled to stop the
@@ -10541,8 +10552,10 @@ impl Engine {
     /// message, and a refused send logs nothing. Every gate [`Self::poll_cw_one`] puts a word
     /// through is asked here first: the clock-repair hold, the latch, a connection that refuses
     /// TX, the licence privileges at the dial and as CW. So is the CW section, and a transmitter
-    /// another owner holds (a tune carrier). Taken, the message is queued exactly as an F-key's
-    /// is, and the poll checks every word again.
+    /// another owner holds (a tune carrier), and every word of the message the radio's own keyer
+    /// would not take ([`Self::cw_message_refusal`]), so a contact is never logged on an exchange
+    /// the keyer would stop part way. Taken, the message is queued exactly as an F-key's is, and
+    /// the poll checks every word again.
     ///
     /// ⛔ A PENDING STOP IS LEFT ALONE. `send_cw` clears `cw_abort` and `slot_tx_abort`, so the
     /// macro fired after a Stop TX is not flushed by it; nothing here touches either, so a stop
@@ -10584,10 +10597,33 @@ impl Engine {
         if expanded.trim().is_empty() {
             return Err(CW_ARMED_EMPTY.to_string());
         }
+        // Said in the strip's own line, so the CW cockpit's warning line does not say it twice.
+        if let Some(why) = self.cw_message_refusal(&expanded) {
+            return Err(why);
+        }
         tempo_core::applog::info("tx", &format!("CW over queued by Enter: {expanded:?}"));
         let wpm = if reply { self.cw_reply_wpm() } else { None };
         self.queue_cw(expanded, wpm);
         Ok(())
+    }
+
+    /// ⛔ Why an EXPANDED CW message is refused WHOLE before anything of it keys, in the CW
+    /// screen's words, or `None` when it may go. On the radio's own keyer ([`Self::cw_cat_keyer`]),
+    /// it is the first character of any of its words that keyer is never handed
+    /// ([`tempo_core::cw::sendable`]): the keyer refuses such a word only when its turn comes, after
+    /// the words before it have keyed, and by then Enter Sends Message has logged the contact with
+    /// its exchange cut short. So every word is asked here, before any is queued, and the keyer
+    /// still checks each word it is handed. The other keyers put no text inside a radio command,
+    /// and their messages go as before.
+    fn cw_message_refusal(&self, expanded: &str) -> Option<String> {
+        if !self.cw_cat_keyer() {
+            return None;
+        }
+        expanded
+            .split_whitespace()
+            .flat_map(str::chars)
+            .find(|c| !tempo_core::cw::sendable(*c))
+            .map(tempo_core::cw::keyer_refusal)
     }
 
     /// Queue an EXPANDED CW message for the radio loop, shared by [`Self::send_cw`] and
@@ -10899,6 +10935,15 @@ impl Engine {
             self.settings.cw_keyer,
             crate::settings::CwKeyerBackend::Soundcard
         )
+    }
+
+    /// True if CW keys on the RADIO'S OWN keyer (the CAT keyer, `rig.send_morse`): the keyer the
+    /// radio loop hands a word to when no other takes it, so a WinKeyer or a key line chosen with
+    /// no port set ([`Self::cw_winkeyer_port`], [`Self::cw_serial_key_port`]) keys there too.
+    fn cw_cat_keyer(&self) -> bool {
+        !self.cw_soundcard()
+            && self.cw_winkeyer_port().is_none()
+            && self.cw_serial_key_port().is_none()
     }
 
     /// The WinKeyer serial port when the CW keyer backend is WinKeyer and a port is set —

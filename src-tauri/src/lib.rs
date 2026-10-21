@@ -52230,9 +52230,10 @@ mod tests {
     /// text goes through the station's own runner, as the command lane runs it, into `send_cw` and
     /// the engine's one CW queue; each word the queue gives is handed to the radio's keyer as the
     /// radio loop's CAT keyer hands it (`Rig::send_morse`), here to a rigctld that records every
-    /// line. Kenwood, Yaesu and Elecraft radios end a command at `;`, so the word holding one is
-    /// refused, says why, and never reaches rigctld. CONTROL: every other word from afar reaches
-    /// it as typed.
+    /// line. Kenwood, Yaesu and Elecraft radios end a command at `;`, so a message holding one is
+    /// refused whole, says why, and nothing of it reaches rigctld; Enter Sends Message on that
+    /// computer is answered with the refusal, so its strip logs nothing. CONTROL: ordinary text
+    /// from afar reaches it as typed, and Enter's send takes it.
     #[cfg(feature = "radio")]
     #[test]
     fn cw_typed_from_afar_never_reaches_the_radios_keyer_with_a_semicolon() {
@@ -52285,39 +52286,68 @@ mod tests {
             }
         });
         let mut rig = tempo_audio::rig::Rig::rigctld(&addr);
-        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
-        let sent = ask(
-            "send_cw",
-            json!({"text": "CQ TEST;FA00007000000 DE KD9TAW", "afar": {"standDown": now}}),
-        );
-        assert!(sent.is_ok(), "premise: the start from afar ran: {sent:?}");
-        let mut refused = Vec::new();
-        loop {
+        let mut key_what_is_queued = || loop {
             let Some((word, _, _)) = engine_lock(&engine).poll_cw_word() else {
                 break;
             };
-            if let Err(e) = rig.send_morse(&word) {
-                refused.push((word, e.to_string()));
-            }
-        }
-        let wire = wire.lock().unwrap().clone();
-        assert!(
-            !wire.iter().any(|l| l.contains("FA00007000000")),
-            "the word with the `;` from afar reached rigctld: {wire:?}"
+            let _ = rig.send_morse(&word);
+        };
+        let semicolon = "CW not sent: \";\" is never handed to the radio's own keyer, because \
+             Kenwood, Yaesu and Elecraft radios read it as the end of a command. Take it out of \
+             the message.";
+        let text = "CQ TEST;FA00007000000 DE KD9TAW";
+        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let sent = ask("send_cw", json!({"text": text, "afar": {"standDown": now}}));
+        assert!(sent.is_ok(), "premise: the start from afar ran: {sent:?}");
+        key_what_is_queued();
+        assert_eq!(
+            wire.lock().unwrap().clone(),
+            Vec::<String>::new(),
+            "nothing of the message from afar reached rigctld: it is refused whole"
         );
         assert_eq!(
-            refused.len(),
-            1,
-            "the word with the `;` is refused, and only it: {refused:?}"
+            engine_lock(&engine).cw_keyer_error().as_deref(),
+            Some(semicolon),
+            "the CW screen says why"
         );
-        assert!(
-            refused[0].1.starts_with("CW not sent: \";\""),
-            "the refusal says why: {refused:?}"
+        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let took = ask(
+            "send_cw_armed",
+            json!({"text": text, "afar": {"standDown": now}}),
         );
         assert_eq!(
-            wire,
-            ["b CQ", "b DE", "b KD9TAW"],
-            "CONTROL: every other word from afar reaches the radio's keyer as typed"
+            took.map(|_| ()),
+            Err(semicolon.to_string()),
+            "Enter's send from afar is refused, with the character, so its strip logs nothing"
+        );
+        key_what_is_queued();
+        assert_eq!(
+            wire.lock().unwrap().clone(),
+            Vec::<String>::new(),
+            "nothing of Enter's message reached rigctld"
+        );
+        // CONTROL: ordinary text from afar reaches the radio's keyer as typed, and Enter's send
+        // takes it.
+        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let sent = ask(
+            "send_cw",
+            json!({"text": "CQ TEST DE KD9TAW", "afar": {"standDown": now}}),
+        );
+        assert!(sent.is_ok(), "CONTROL: {sent:?}");
+        key_what_is_queued();
+        assert_eq!(
+            wire.lock().unwrap().clone(),
+            ["b CQ", "b TEST", "b DE", "b KD9TAW"],
+            "CONTROL: ordinary text from afar reaches the radio's keyer as typed"
+        );
+        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let took = ask(
+            "send_cw_armed",
+            json!({"text": "TU", "afar": {"standDown": now}}),
+        );
+        assert!(
+            took.is_ok(),
+            "CONTROL: Enter's send from afar takes it: {took:?}"
         );
     }
 
