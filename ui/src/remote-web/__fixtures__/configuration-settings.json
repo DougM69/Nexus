@@ -334,6 +334,7 @@
     "simultaneousRadios": false,
     "singleDecode": false,
     "soundDecodeTick": false,
+    "soundCwTurn": false,
     "soundTxState": false,
     "source": "native",
     "specialOp": "none",

@@ -749,7 +749,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Accessibility & eyes-free',
     tab: 'appearance',
     keywords: ['screen reader', 'announce', 'blind', 'earcon', 'sound', 'a11y', 'speech',
-      'eyes free', 'tick'],
+      'eyes free', 'tick', 'turn cue', 'chirp'],
   },
 
   // ---- Config ------------------------------------------------------------------

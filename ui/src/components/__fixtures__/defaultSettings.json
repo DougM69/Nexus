@@ -238,6 +238,7 @@
   "announceVerbosity": "needed",
   "soundTxState": false,
   "soundDecodeTick": false,
+  "soundCwTurn": false,
   "bestCaller": "first",
   "bestCallerMinSnr": null,
   "wantedCalls": [],

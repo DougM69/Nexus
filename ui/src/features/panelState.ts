@@ -1354,6 +1354,10 @@ export const CW_PANEL_IDS = [
   'scopeCtl',
   'dsp',
   'txmeters',
+  // THE TURN CUE: the lamp at the head of the dock's send row and the F-key glow it brings. A
+  // READOUT like the TX meters above it: it lights a key and never sends, so a tick may hide it for
+  // good; the macros and the send bar beside it keep no id. Shown as it ships.
+  'turnCue',
   'rxdsp',
   'bandActivity',
   'copilot',

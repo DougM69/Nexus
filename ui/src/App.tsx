@@ -3219,6 +3219,8 @@ function App() {
     <CwCockpit
       esmSetting={esmSettingFor('cw')}
       speedMatch={cwSpeedMatch}
+      turnSound={settings?.soundCwTurn === true}
+      announceVerbosity={settings?.announceVerbosity ?? 'needed'}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.cw}

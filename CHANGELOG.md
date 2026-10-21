@@ -359,6 +359,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Spot me. Clicking a row tunes the radio to the spot and the main window opens the matching screen, as from the
   Needed window. The window's filters are its own: it opens with your Spots view's filters, and closing it forgets them.
   The Spots box in the popped-out Conditions window now has Spot me too, as it has in the main window.
+- **CW: a turn cue for when you copy with the decoder.** A small lamp at the start of the CW send row says whose
+  turn it is (`≋ W1ABC sending`, `▶ Your turn · F3`, `⏸ Hold · W2XYZ`, `? Not sure · F7`), and the F-key that fits
+  glows again: F2 to answer a CQ, F3 when a station comes back to you, F4 when they sign. "Your turn" waits for the
+  other station to stop AND end its over (K, KN, BK, QRZ, part of your call with "?", a CQ), so a pause alone only
+  says "Not sure"; your own over heard back through the radio never counts as theirs. When a DX comes back to you
+  in a pileup no key glows, and the lamp's tooltip says to send 5NN TU. The Decode pane's speed now reads
+  `them 18 · you 25 WPM`, and a click sends at their speed for this contact. It never transmits: every send is still
+  your own key press. It shows with the AI decoder on and the Decode pane shown, never in an unassisted contest
+  entry, and unticking Turn Cue in ⊞ Panels hides it for good. A screen reader hears "Your turn" and "Hold" once
+  per over; a short chirp is there too, off until you turn on CW turn sound in Settings ▸ Appearance ▸
+  Accessibility & eyes-free. The cue lands about a second after the other station stops: in time for a ragchew or
+  a CQ, tight in a contest, and too slow to win a pileup, where it tells you when not to call.
 
 ### Changed
 - **FT8/FT4: a late reply changes the over already on the air, as in WSJT-X.** When your partner's reply is

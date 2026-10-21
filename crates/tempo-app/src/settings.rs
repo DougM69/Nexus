@@ -3107,6 +3107,11 @@ pub struct Settings {
     /// by default.
     #[serde(default)]
     pub sound_decode_tick: bool,
+    /// The CW turn cue's sound: a short rising chirp when it says it is your turn to send. Off
+    /// by default, like every earcon, and off for a settings file from before it; the cockpit
+    /// never plays it while anything is keyed.
+    #[serde(default)]
+    pub sound_cw_turn: bool,
 
     // --- Auto-CQ caller selection (W1.4) ---
     /// When running CQ and several stations answer, which one to work first:
@@ -5776,6 +5781,7 @@ impl Default for Settings {
             announce_verbosity: default_announce_verbosity(),
             sound_tx_state: false,
             sound_decode_tick: false,
+            sound_cw_turn: false,
             lotw_username: String::new(),
             lotw_last_qsl: String::new(),
             lotw_cursor_every_call: false,
@@ -11132,6 +11138,29 @@ mod tests {
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
         assert_eq!(s.dial_hz(), 14_074_000); // default = FT8 20 m (the default mode)
+    }
+
+    /// The CW turn cue's sound ships off, on the exact wire key the UI writes (`soundCwTurn`), a
+    /// settings file from before it loads with it off, and a choice of on survives a save.
+    #[test]
+    fn the_cw_turn_sound_ships_off_on_its_wire_key_and_round_trips() {
+        let s = Settings::default();
+        assert!(!s.sound_cw_turn, "an earcon ships off");
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"soundCwTurn\":false"),
+            "the wire key the UI writes"
+        );
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        older.as_object_mut().unwrap().remove("soundCwTurn");
+        let older: Settings = serde_json::from_value(older).unwrap();
+        assert!(!older.sound_cw_turn, "a file from before it: off");
+        let on = Settings {
+            sound_cw_turn: true,
+            ..Settings::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert!(back.sound_cw_turn, "on survives a save and a load");
     }
 
     /// The SSTV section's four fields, on the exact wire keys the UI hand-writes.
