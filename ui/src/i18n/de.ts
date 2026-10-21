@@ -6002,6 +6002,7 @@ export const DE: PartialCatalog = {
   "operate.decodes.row.highlighted": " · von Ihrem Logprogramm hervorgehoben (UDP)",
   "operate.decodes.tier.title": "Dekodiert von {{tier}}",
   "operate.decodes.utc.title": "Gehört (UTC)",
+  "operate.decodes.utc.period.title": "Beginn der Periode, in der es empfangen wurde (UTC). Eingetroffen um {{time}}.",
   "operate.decodes.dt.title": "DT — Zeitversatz (s); groß = Uhr- bzw. Sync-Abweichung",
   "operate.decodes.dt.title.msk144": "T — wann in der Periode der Ping ankam (s)",
   "operate.decodes.marker.lowConf.title": "Dekodierung mit geringer Sicherheit",

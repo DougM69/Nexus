@@ -10150,6 +10150,9 @@ export const EN = {
 
   'operate.decodes.tier.title': 'Decoded by {{tier}}',
   'operate.decodes.utc.title': 'UTC heard',
+  // A received row's time is its period's start, as WSJT-X and ALL.TXT show it; {{time}} is when
+  // the line reached the list (UTC, hhmmss), seconds later for a full-pass decode.
+  'operate.decodes.utc.period.title': 'Start of the period it was heard in (UTC). Arrived at {{time}}.',
   'operate.decodes.dt.title': 'DT — time offset (s); large = clock/sync skew',
   'operate.decodes.dt.title.msk144': 'T — when in the period the ping landed (s)',
   'operate.decodes.marker.lowConf.title': 'Low-confidence decode',

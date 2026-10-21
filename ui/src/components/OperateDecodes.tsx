@@ -21,6 +21,7 @@ import {
   passesFilter,
   periodStartMs,
   renderWindow,
+  rowTimeMs,
   type DecodeEntry,
   type DecodeFilter,
   type DecodeSort,
@@ -91,6 +92,10 @@ interface Props {
   /** Active mode/tier — sets the T/R period for separator UTC times; a tier
    * change wipes the pane like a band change. */
   tier: Tier
+  /** The live T/R period in seconds (`snap.link.periodSecs`): MSK144, FST4, Q65 and JS8 make it a
+   *  setting, so the tier alone cannot date a row. Absent or 0 (a station that sends none), the
+   *  tier's usual period stands in. */
+  periodSecs?: number
   /** The period a band or mode change caught while it was decoding (the snapshot's
    * `lateDecodes`): shown after the wipe, as WSJT-X shows it, under the band and mode it was
    * heard on, and never worked from. */
@@ -239,6 +244,7 @@ export function OperateDecodes({
   rxOffsetHz,
   band,
   tier,
+  periodSecs,
   late = null,
   harqRescues,
   onCall,
@@ -507,6 +513,8 @@ export function OperateDecodes({
   // The order rows are DRAWN in. Everything that addresses a row by position (the roving index,
   // the period separators) reads `drawn`; counts read `shown`, which is the same set.
   const drawn = newestTop ? [...shown].reverse() : shown
+  // The period the separators and the time column date rows by (see the `periodSecs` prop).
+  const periodS = periodSecs && periodSecs > 0 ? periodSecs : undefined
 
   // Wipe this pane (WSJT-X "Erase") and re-pin to the bottom.
   // Also calls onErase so the cockpit can mirror the gesture to loggers.
@@ -751,10 +759,10 @@ export function OperateDecodes({
                   className="od-period-sep"
                   role="separator"
                   aria-label={t('operate.decodes.period.aria', {
-                    time: fmtUtc(periodStartMs(d.slot - 1, tier)),
+                    time: fmtUtc(periodStartMs(d.slot - 1, tier, periodS)),
                   })}
                 >
-                  <span className="od-sep-utc">{fmtUtc(periodStartMs(d.slot - 1, tier))}</span>
+                  <span className="od-sep-utc">{fmtUtc(periodStartMs(d.slot - 1, tier, periodS))}</span>
                   <span className="od-sep-band">{band}</span>
                 </div>
               )}
@@ -832,7 +840,18 @@ export function OperateDecodes({
                 >
                   {d.tier}
                 </span>
-                <span className="decode-utc" title={t('operate.decodes.utc.title')}>{fmtUtc(d.at)}</span>
+                {/* The period it was heard in, as WSJT-X and ALL.TXT stamp it; when it reached
+                    this list goes in the tooltip. */}
+                <span
+                  className="decode-utc"
+                  title={
+                    d.mine
+                      ? t('operate.decodes.utc.title')
+                      : t('operate.decodes.utc.period.title', { time: fmtUtc(d.at) })
+                  }
+                >
+                  {fmtUtc(rowTimeMs(d, tier, periodS))}
+                </span>
                 <span className={`decode-snr ${snrClass(d.snr)}`}>{fmtSnr(d.snr)}</span>
                 {/* On MSK144 dt is the ping's TIME WITHIN THE PERIOD (WSJT-X renames this
                     column "T"), so it is legitimately 0..period and the FT8 clock-skew

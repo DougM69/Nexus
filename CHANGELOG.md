@@ -519,6 +519,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **Band Activity and Rx Frequency: a line's time is the start of the period it was heard in, as in WSJT-X and
+  ALL.TXT.** The time was when the line reached the list, so a line the full decode found at :34 read :34 under the
+  :15 period's separator. It now reads :15; hold the pointer over the time to see when the line arrived. A line
+  heard before a band or mode change shows the period it was heard in, and your own transmissions still show when
+  they were sent. With an MSK144, FST4, Q65 or JS8 T/R period other than the usual one, the period separators show
+  the right time now too.
 - **WSJT-X UDP: each decode carries the start of the period it was heard in, as WSJT-X sends it.** JTAlert,
   GridTracker and loggers were given the moment Nexus sent each decode. A decode from the full pass, which finishes
   a second or more into the next period, carried a time in that next period (a decode of the 12:00:15 period sent

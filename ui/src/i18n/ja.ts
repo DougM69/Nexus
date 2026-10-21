@@ -6426,6 +6426,7 @@ export const JA: PartialCatalog = {
   "operate.decodes.row.highlighted": "・ロガー（UDP）によるハイライト",
   "operate.decodes.tier.title": "{{tier}} でデコード",
   "operate.decodes.utc.title": "受信時刻（UTC）",
+  "operate.decodes.utc.period.title": "受信した周期の開始時刻（UTC）。到着: {{time}}",
   "operate.decodes.dt.title": "DT — 時間オフセット（s）。大きい場合は時計/同期のずれです",
   "operate.decodes.dt.title.msk144": "T — ピングが周期内のどこで届いたか（s）",
   "operate.decodes.marker.lowConf.title": "信頼度の低いデコード",

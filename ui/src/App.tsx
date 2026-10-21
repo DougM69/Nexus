@@ -2997,6 +2997,7 @@ function App() {
         rxOffsetHz={snap.radio.rxOffsetHz}
         band={snap.radio.band}
         tier={snap.link.tier}
+        periodSecs={snap.link.periodSecs}
         harqRescues={snap.harqRescues}
         onCall={handleCall}
         needAlertsByCall={needAlertsByCall}
