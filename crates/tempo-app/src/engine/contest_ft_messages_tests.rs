@@ -1478,6 +1478,73 @@ fn rr73_and_73_to_a_nonstandard_call_are_wsjtxs_bit_for_bit() {
     }
 }
 
+/// ⭐ RR73 AND 73 TO A NONSTANDARD CALL ARE WSJT-X 3.0.2'S, BIT FOR BIT, IN THE ARRL VHF AND
+/// STANDARD MESSAGES TOO: WSJT-X's Tx4 and Tx5 are the same lines in every activity
+/// (`genStdMsgs`, mainwindow.cpp 9701 and 9709). Running an ARRL VHF contest and one with the
+/// standard messages on FT8 and FT4, a caller signing W9XYZ/M sends its grid (NA VHF's Tx2) or
+/// its report (the standard Tx2) with its call hashed (`t0b`, 9597, 9625-9626, 9655), then its
+/// RR73 with ours hashed (9702), each heard as this station's decoder prints it. The run's roger
+/// is WSJT-X's (`t0a`, 9596, 9629-9631, 9657) and its 73 is `W9XYZ/M <K1ABC> 73`, a type 4
+/// message; a caller that sends its grid and rogers our report gets `W9XYZ/M <K1ABC> RR73`.
+/// Each over keyed packs to WSJT-X's 77 bits and, on FT4, its tones. Before, the 73 was
+/// `W9XYZ/M K1ABC 73`, which goes on the air as `W9XYZ K1ABC 73`: another station's call.
+#[test]
+fn rr73_and_73_to_a_nonstandard_call_are_wsjtxs_bit_for_bit_in_every_set() {
+    // What goes on the air: the 77-bit type and the text a receiving station decodes, the 77
+    // bits, and the FT4 tones.
+    let air = |t: &str| {
+        let bits: String = bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(t))
+            .unwrap_or_default()
+            .iter()
+            .map(|b| char::from(b'0' + *b as u8))
+            .collect();
+        (air_form(t), bits, tones_of(modes::ModeKind::Ft4, t))
+    };
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        let mut overs = Vec::new();
+        for (contest, call, roger) in [
+            (
+                "arrlvhf_jan",
+                "K1ABC <W9XYZ/M> EN37",
+                "<W9XYZ/M> K1ABC R FN42",
+            ),
+            ("txqp", "K1ABC <W9XYZ/M> -07", "<W9XYZ/M> K1ABC R-12"),
+        ] {
+            let what = format!("{contest:?} {}", tier_name(tier));
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(tier);
+            e.set_mode("fieldday-run").expect("the run starts");
+            keyed(&mut e, 0).expect("the CQ");
+            e.ingest_decodes_for_test(&[heard(&air_form(call).1)], 2);
+            let tx3 = keyed(&mut e, 2).expect("the run's roger");
+            e.ingest_decodes_for_test(&[heard(&air_form("<K1ABC> W9XYZ/M RR73").1)], 4);
+            let tx5 = keyed(&mut e, 4).expect("the run's 73");
+            overs.push((format!("{what} Tx3"), tx3, roger, "i3=1"));
+            overs.push((format!("{what} Tx5"), tx5, "W9XYZ/M <K1ABC> 73", "i3=4"));
+        }
+        let what = format!("\"txqp\" {}", tier_name(tier));
+        let mut e = engine_for("txqp", MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-run").expect("the run starts");
+        keyed(&mut e, 0).expect("the CQ");
+        e.ingest_decodes_for_test(&[heard(&air_form("K1ABC <W9XYZ/M> EN37").1)], 2);
+        let tx2 = keyed(&mut e, 2).expect("the run's report");
+        e.ingest_decodes_for_test(&[heard(&air_form("K1ABC <W9XYZ/M> R-07").1)], 4);
+        let tx4 = keyed(&mut e, 4).expect("the run's RR73");
+        overs.push((format!("{what} Tx2"), tx2, "<W9XYZ/M> K1ABC -12", "i3=1"));
+        overs.push((format!("{what} Tx4"), tx4, "W9XYZ/M <K1ABC> RR73", "i3=4"));
+
+        for (what, ours, wsjtx, kind) in overs {
+            assert_eq!(air_form(wsjtx).0, kind, "{what}: WSJT-X's packs");
+            assert_eq!(
+                air(&ours),
+                air(wsjtx),
+                "{what} {ours:?}: WSJT-X's on the air"
+            );
+        }
+    }
+}
+
 /// ⭐ THE CONTEST'S RUN CLOSES WITH A CALLER WHOSE CALL IS NONSTANDARD, as WSJT-X 3.0.2 closes
 /// with one. Running WSJT-X, a caller signing W9XYZ/M sends its exchange with its call hashed
 /// (`t0b`, mainwindow.cpp 9597 and 9625-9626) and its RR73 with ours hashed,

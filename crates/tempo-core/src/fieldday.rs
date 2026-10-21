@@ -4243,24 +4243,21 @@ impl FieldDayStation {
     /// (9601), RR73 and 73 `if(bHisCall and !bMyCall) t="<" + hisCall + "> " + my_callsign …`
     /// (9702, 9710).
     ///
-    /// ⭐ In Field Day's messages, RR73 and 73 from a standard call of mine to a nonstandard
-    /// `to` (`W9XYZ/M`, `/4`, `/QRP`, `PJ4/W9XYZ`) go `to` whole and mine hashed, as WSJT-X
-    /// writes them: `if(!bHisCall and bMyCall) t=hisCall + " <" + my_callsign + "> " …` (9701,
-    /// 9709), `W9XYZ/M <K1ABC> RR73`, a type 4 message. `hisCall` is the call the decoder printed,
-    /// brackets dropped (decodedtext.cpp 66): such a station packs its Field Day exchange with its
-    /// call hashed (`K1ABC <W9XYZ/M> R 1D WI`) and closes with it whole (`<K1ABC> W9XYZ/M RR73`),
-    /// and either way it is the same call here. Hashed the other way round, as these overs went
-    /// before, `<W9XYZ/M> K1ABC RR73` is a type 1 message, not WSJT-X's; whole beside my call
-    /// whole, the packer would send the base call, `W9XYZ K1ABC RR73`, another station.
-    ///
-    /// The ARRL VHF and standard messages name `to` as it came, as they always have.
+    /// ⭐ RR73 and 73 from a standard call of mine to a nonstandard `to` (`W9XYZ/M`, `/4`,
+    /// `/QRP`, `PJ4/W9XYZ`) go `to` whole and mine hashed, as WSJT-X writes them in every set of
+    /// messages (its Tx4 and Tx5 are the same lines in every activity): `if(!bHisCall and
+    /// bMyCall) t=hisCall + " <" + my_callsign + "> " …` (9701, 9709), `W9XYZ/M <K1ABC> RR73`, a
+    /// type 4 message. `hisCall` is the call the decoder printed, brackets dropped
+    /// (decodedtext.cpp 66): such a station sends its exchange, grid or report with its call
+    /// hashed (`K1ABC <W9XYZ/M> R 1D WI`) and closes with it whole (`<K1ABC> W9XYZ/M RR73`), and
+    /// either way it is the same call here. Hashed the other way round, as Field Day's and the
+    /// standard messages' RR73 went before, `<W9XYZ/M> K1ABC RR73` is a type 1 message, not
+    /// WSJT-X's; whole beside my call whole, as the ARRL VHF and standard messages' 73 went
+    /// before, the packer sends the base call, `W9XYZ K1ABC 73`, another station.
     fn closing_calls(&self, to: &str) -> (String, String) {
         let me = self.mycall().to_string();
         let his = crate::message::unhash_call(to);
-        if self.messages == FtMessages::FieldDay
-            && crate::message::is_std_call(&me)
-            && crate::message::is_nonstandard_call(his)
-        {
+        if crate::message::is_std_call(&me) && crate::message::is_nonstandard_call(his) {
             return (his.to_string(), format!("<{me}>"));
         }
         if crate::message::is_std_call(&me) {
@@ -7094,11 +7091,72 @@ mod tests {
         }
     }
 
-    /// The control: outside a standard call of mine closing to a nonstandard one in Field Day's
-    /// messages, RR73 and 73 go out as before. A standard call heard hashed, `<W9XYZ>`; both
-    /// calls nonstandard; and the ARRL VHF and standard messages, which this change leaves as
-    /// they were. A nonstandard call of mine closing to a standard one is
-    /// `a_nonstandard_call_goes_out_as_wsjtx_writes_it`'s.
+    /// ⭐ RR73 AND 73 TO A NONSTANDARD CALL GO OUT AS WSJT-X 3.0.2 WRITES THEM in the ARRL VHF
+    /// and standard messages too: WSJT-X's Tx4 and Tx5 are the same lines in every activity
+    /// (`genStdMsgs`, mainwindow.cpp 9701 and 9709), `W9XYZ/M <K1ABC> RR73` and `… 73`. A caller
+    /// signing W9XYZ/M sends its grid or report with its call hashed, `K1ABC <W9XYZ/M> EN37`
+    /// (`t0b`, 9597 and 9625-9626), and closes with mine hashed, `<K1ABC> W9XYZ/M RR73` (9702),
+    /// or is heard closing with its own hashed. The run's 73 to it, and the standard messages'
+    /// RR73 to one that rogers my report, take WSJT-X's form. Before, the 73 was
+    /// `W9XYZ/M K1ABC 73`, which the packer sends as `W9XYZ K1ABC 73`: another station's call.
+    #[test]
+    fn rr73_and_73_to_a_nonstandard_call_go_out_as_wsjtx_writes_them_in_every_set() {
+        for his in ["W9XYZ/M", "W9XYZ/4", "W9XYZ/QRP", "PJ4/W9XYZ"] {
+            let h = format!("<{his}>");
+            for close in [
+                format!("<K1ABC> {his} RR73"),
+                format!("<K1ABC> {his} RRR"),
+                format!("K1ABC {h} RR73"),
+            ] {
+                let what = format!("ARRL VHF, {close}");
+                let mut vhf = ft8_station("arrlvhf_jan", "FN42", true);
+                vhf.observe(&[dec(&format!("K1ABC {h} EN37"))], 1);
+                assert_eq!(
+                    next(&vhf),
+                    format!("{h} K1ABC R FN42"),
+                    "{what}: R and mine"
+                );
+                vhf.after_tx();
+                vhf.observe(&[dec(&close)], 3);
+                assert_eq!(
+                    (vhf.state, next(&vhf)),
+                    (FdState::Done, format!("{his} <K1ABC> 73")),
+                    "{what}: the 73"
+                );
+
+                let what = format!("standard messages, {close}");
+                let mut std = ft8_station("txqp", "FN42", true);
+                std.observe(&[dec(&format!("K1ABC {h} -07"))], 1);
+                assert_eq!(next(&std), format!("{h} K1ABC R-05"), "{what}: R and mine");
+                std.after_tx();
+                std.observe(&[dec(&close)], 3);
+                assert_eq!(
+                    (std.state, next(&std)),
+                    (FdState::Done, format!("{his} <K1ABC> 73")),
+                    "{what}: the 73"
+                );
+            }
+            let what = format!("standard messages, {his} rogers my report");
+            let mut std = ft8_station("txqp", "FN42", true);
+            std.observe(&[dec(&format!("K1ABC {h} EN37"))], 1);
+            assert_eq!(next(&std), format!("{h} K1ABC -05"), "{what}: my report");
+            std.after_tx();
+            std.observe(&[dec(&format!("K1ABC {h} R-07"))], 3);
+            assert_eq!(
+                (std.state, next(&std)),
+                (FdState::Done, format!("{his} <K1ABC> RR73")),
+                "{what}: RR73"
+            );
+        }
+    }
+
+    /// The control: outside a standard call of mine closing to a nonstandard one, RR73 and 73
+    /// go out as before. In Field Day's messages a standard call heard hashed, `<W9XYZ>`, and
+    /// both calls nonstandard; in the ARRL VHF and standard messages a standard call, whole or
+    /// heard hashed, and a `/P` call, which `stdCall` passes (mainwindow.cpp 9589). A nonstandard
+    /// call of mine closing to a standard one is `a_nonstandard_call_goes_out_as_wsjtx_writes_it`'s.
+    /// And only the caller's own close sends a 73: one to another call, from another station,
+    /// or naming a call the decoder could not resolve closes nothing and sends no 73.
     #[test]
     fn rr73_and_73_otherwise_go_out_as_before() {
         let mut sp = contest_station("K1ABC", "arrlfd", false);
@@ -7119,16 +7177,51 @@ mod tests {
             "<W9XYZ/M> PJ4/K1ABC RR73",
             "both calls nonstandard"
         );
-        let mut vhf = ft8_station("arrlvhf_jan", "FN42", true);
-        vhf.observe(&[dec("K1ABC <W9XYZ/M> EN37")], 1);
-        vhf.after_tx();
-        vhf.observe(&[dec("K1ABC <W9XYZ/M> RR73")], 3);
-        assert_eq!(next(&vhf), "<W9XYZ/M> K1ABC 73", "the ARRL VHF messages");
-        let mut std = ft8_station("txqp", "FN42", true);
-        std.observe(&[dec("K1ABC <W9XYZ/M> EN37")], 1);
-        std.after_tx();
-        std.observe(&[dec("K1ABC <W9XYZ/M> R-07")], 3);
-        assert_eq!(next(&std), "<W9XYZ/M> K1ABC RR73", "the standard messages");
+        for event in ["arrlvhf_jan", "txqp"] {
+            // (the caller as heard, my 73 to its RR73)
+            for (heard, bye) in [
+                ("W9XYZ", "W9XYZ K1ABC 73"),
+                ("<W9XYZ>", "<W9XYZ> K1ABC 73"),
+                ("W9XYZ/P", "W9XYZ/P K1ABC 73"),
+            ] {
+                let what = format!("{event}, {heard}");
+                let mut run = ft8_station(event, "FN42", true);
+                let call = match event {
+                    "arrlvhf_jan" => format!("K1ABC {heard} EN37"),
+                    _ => format!("K1ABC {heard} -07"),
+                };
+                run.observe(&[dec(&call)], 1);
+                run.after_tx();
+                run.observe(&[dec(&format!("K1ABC {heard} RR73"))], 3);
+                assert_eq!(
+                    (run.state, next(&run)),
+                    (FdState::Done, bye.to_string()),
+                    "{what}: the 73"
+                );
+            }
+            for close in [
+                "<K2DEF> W9XYZ/M RR73",
+                "<K1ABC> N0ABC/M RR73",
+                "K1ABC <...> RR73",
+                "<...> W9XYZ/M RR73",
+            ] {
+                let what = format!("{event}, {close}");
+                let mut run = ft8_station(event, "FN42", true);
+                let call = match event {
+                    "arrlvhf_jan" => "K1ABC <W9XYZ/M> EN37",
+                    _ => "K1ABC <W9XYZ/M> -07",
+                };
+                run.observe(&[dec(call)], 1);
+                let roger = next(&run);
+                run.after_tx();
+                run.observe(&[dec(close)], 3);
+                assert_eq!(
+                    (run.state, next(&run), run.log.qsos().len()),
+                    (FdState::AwaitConfirm, roger, 0),
+                    "{what}: nothing closed, no 73"
+                );
+            }
+        }
     }
 
     /// ⭐ FIELD DAY'S RUN CLOSES WITH A CALLER WHOSE CALL IS NONSTANDARD. Running WSJT-X 3.0.2,

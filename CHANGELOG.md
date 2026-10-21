@@ -748,6 +748,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `...`; in S&P it answered a CQ from `<...>`. Nexus now passes such a message by, as WSJT-X does in Field Day. Once
   the station has sent its call in full (in a CQ, for example), its next message is worked as usual. NEEDS-BENCH:
   ARRL Field Day on FT8, Running, called by a station signing /M or /QRP whose call Nexus has not heard in full.
+- **ARRL VHF contests and contests with the standard messages: your 73 to a station signing W9XYZ/M no longer
+  goes out with another station's call.** In the Contest screen, closing a contact with a station whose call has a
+  suffix such as /M, /4 or /QRP, or a prefix such as PJ4/, your 73 read `W9XYZ/M K1ABC 73`, which goes on the air
+  as `W9XYZ K1ABC 73`: the call without its suffix, which is a different station. In the contests with the
+  standard messages your RR73 to such a station read `<W9XYZ/M> K1ABC RR73`, a different message from the one
+  WSJT-X sends. Nexus now sends WSJT-X's, `W9XYZ/M <K1ABC> 73` and `W9XYZ/M <K1ABC> RR73`, the same message bit for
+  bit, as it already does in Field Day. Your grid, report and roger are unchanged, and so is everything when your
+  own call has a suffix or a prefix. NEEDS-BENCH: an ARRL VHF contest on FT8, Running, called by a station signing
+  /M or /QRP that runs WSJT-X.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.
