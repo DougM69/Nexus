@@ -1404,6 +1404,20 @@ async fn eventually(lan: &Lan, what: &str, done: impl Fn(&LanStatus) -> bool) ->
     }
 }
 
+/// The switch kept on disk once `done` holds, within five seconds. A decision is said at once and
+/// kept on disk after, so a status read on another thread can come before the file is written.
+async fn kept_once(path: &std::path::Path, what: &str, done: impl Fn(&Switch) -> bool) -> Switch {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let switch = Switch::load(path);
+        if done(&switch) {
+            return switch;
+        }
+        assert!(Instant::now() < deadline, "{what}: {switch:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// Listening on this box's own private address, LAN on, with nobody connected yet. `None`, said on
 /// stderr, on a box with no private address of its own.
 async fn listening() -> Option<Running> {
@@ -1531,7 +1545,8 @@ async fn it_turns_itself_off_without_a_key_and_waits_for_a_network_or_its_addres
     })
     .await;
     assert_eq!(status.reason, Some("noKey"));
-    assert_eq!(Switch::load(&scratch.path()).off, Some(Off::NoKey));
+    let kept = kept_once(&scratch.path(), "the off was not kept", |sw| sw.off.is_some()).await;
+    assert_eq!(kept.off, Some(Off::NoKey));
 
     let scratch = Scratch::new();
     let lan = switch_for(
