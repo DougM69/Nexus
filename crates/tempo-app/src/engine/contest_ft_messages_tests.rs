@@ -201,7 +201,7 @@ fn engine_for(contest: &str, grid: &str) -> Engine {
 
 /// The text of the over `plan_tx` planned, if it keyed one — through `commit_tx`, as the
 /// radio loop does.
-fn keyed(e: &mut Engine, slot: u64) -> Option<String> {
+pub(super) fn keyed(e: &mut Engine, slot: u64) -> Option<String> {
     let plan = e.plan_tx(slot)?;
     let text = match &plan.waveform {
         TxWaveform::Native { text, .. }
@@ -217,7 +217,7 @@ fn keyed(e: &mut Engine, slot: u64) -> Option<String> {
 /// FT8 tones back to the 77 message bits (genft8.f90: Costas at 0-6, 36-42 and 72-78; three
 /// Gray-coded bits a data symbol), `None` for the all-zero frame a message the packer refused
 /// leaves behind.
-fn bits77(tones: &[i32]) -> Option<Vec<i8>> {
+pub(super) fn bits77(tones: &[i32]) -> Option<Vec<i8>> {
     const COSTAS: [i32; 7] = [3, 1, 4, 0, 6, 5, 2];
     const INV_GRAY: [i8; 8] = [0, 1, 3, 2, 6, 4, 5, 7];
     if tones.len() != 79 || tones[..7] != COSTAS {
@@ -253,7 +253,7 @@ pub(super) fn air_form(text: &str) -> (String, String) {
 }
 
 /// The tones, as digits, for the byte-for-byte comparison.
-fn tones_of(kind: modes::ModeKind, text: &str) -> String {
+pub(super) fn tones_of(kind: modes::ModeKind, text: &str) -> String {
     modes::make_mode(kind)
         .encode(text)
         .iter()

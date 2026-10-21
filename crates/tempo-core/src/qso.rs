@@ -514,10 +514,11 @@ impl Station {
     /// and the other in full, so **both callsigns come back off the air exactly as
     /// queued**. The ADDRESSEE is the one hashed, except in the report and the roger of
     /// a nonstandard sender opposite a plain c28 call, where the SENDER is — WSJT-X's
-    /// own form, which keeps the number (see the arms). A no-op for a pair the plain
-    /// forms can carry — which includes every `/P` and `/R` station working a standard
-    /// or same-suffixed partner, so their overs are left exactly as the sequencer built
-    /// them.
+    /// own form, which keeps the number — and in RR73 and 73 from a standard call to a
+    /// nonstandard one, where the sender is hashed as WSJT-X writes them (see the arms).
+    /// A no-op for a pair the plain forms can carry — which includes every `/P` and `/R`
+    /// station working a standard or same-suffixed partner, so their overs are left
+    /// exactly as the sequencer built them.
     ///
     /// **What the hashed form costs, stated here so it is not rediscovered:** a grid or
     /// a numeric report rides only beside a plain c28 call
@@ -544,6 +545,15 @@ impl Station {
         // MY call fails `stdCall`).
         let hashes_sender = |de: &str, to: &str| {
             !crate::message::is_std_call(de) && crate::message::packs_beside_hash(to)
+        };
+        // A standard sender closing to a nonstandard call: WSJT-X's RR73 and 73 put THAT call
+        // whole and mine hashed (`genStdMsgs`, mainwindow.cpp 9701 and 9709: `if(!bHisCall and
+        // bMyCall) t=hisCall + " <" + my_callsign + "> " …`), a type 4 message. `stdCall` passes
+        // `/P` and `/R`, and so does this. A Tx panel row clicked back in may bring either call
+        // bracketed already, so both are read without their brackets.
+        let closes_to_nonstandard = |de: &str, to: &str| {
+            crate::message::is_std_call(crate::message::unhash_call(de))
+                && crate::message::is_nonstandard_call(crate::message::unhash_call(to))
         };
         match msg {
             // A CQ has no addressee to hash, and a hashed CQ is unusable anyway:
@@ -621,6 +631,18 @@ impl Station {
                 to: brk(&to),
                 de,
                 snr,
+            },
+            // RR73 and 73 to a nonstandard call, `W9XYZ/M <K1ABC> RR73` (`closes_to_nonstandard`
+            // above). The other way round, `<W9XYZ/M> K1ABC RR73` names the same two stations in
+            // a type 1 message, which is not WSJT-X's. (WSJT-X writes the RRR it sends in place
+            // of RR73 the same way; that over is not changed here.)
+            Msg::Rr73 { to, de } if closes_to_nonstandard(&de, &to) => Msg::Rr73 {
+                to: crate::message::unhash_call(&to).to_string(),
+                de: brk(&de),
+            },
+            Msg::Bye73 { to, de } if closes_to_nonstandard(&de, &to) => Msg::Bye73 {
+                to: crate::message::unhash_call(&to).to_string(),
+                de: brk(&de),
             },
             Msg::Rr73 { to, de } => Msg::Rr73 { to: brk(&to), de },
             Msg::Rrr { to, de } => Msg::Rrr { to: brk(&to), de },
@@ -1552,7 +1574,7 @@ mod start_context_tests {
         // The DX rogers → I send the final 73; the QSO completes.
         s.observe(&[dec("<KD9TAW> PJ4/K1ABC RR73", -7)]);
         assert_eq!(s.state, State::Done);
-        assert_eq!(s.pending_text().as_deref(), Some("<PJ4/K1ABC> KD9TAW 73"));
+        assert_eq!(s.pending_text().as_deref(), Some("PJ4/K1ABC <KD9TAW> 73"));
         assert_eq!(
             s.dxcall.as_deref(),
             Some("PJ4/K1ABC"),

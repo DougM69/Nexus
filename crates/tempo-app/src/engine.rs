@@ -102,6 +102,9 @@ pub mod ft_midover;
 /// …and its tests.
 #[cfg(test)]
 mod ft_midover_tests;
+/// Operate's FT8/FT4 sequencer working a nonstandard call, against WSJT-X's messages.
+#[cfg(test)]
+mod ft_nonstandard_tests;
 /// Every contact held in one form: one band, one phone mode, whichever way it came in.
 #[cfg(test)]
 mod held_form_tests;
