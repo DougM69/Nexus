@@ -40,7 +40,8 @@ if(CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
         message(FATAL_ERROR
             "Cross build needs MinGW FFTW3f at ${FFTW_MINGW_PREFIX}/lib/libfftw3f.a "
             "(build it with ./configure --host=x86_64-w64-mingw32 --enable-float "
-            "--enable-static --disable-shared --prefix=${FFTW_MINGW_PREFIX}).")
+            "--enable-static --disable-shared --enable-sse2 --enable-avx --enable-avx2 "
+            "--with-our-malloc --prefix=${FFTW_MINGW_PREFIX}).")
     endif()
     set(FFTW3F_INCLUDE_DIRS "${FFTW_MINGW_PREFIX}/include")
     set(FFTW3F_LIBRARY_DIRS "${FFTW_MINGW_PREFIX}/lib")

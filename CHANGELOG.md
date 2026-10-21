@@ -415,6 +415,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a CQ, tight in a contest, and too slow to win a pileup, where it tells you when not to call.
 
 ### Changed
+- **Windows: FT8, FT4 and the other WSJT-X modes finish decoding sooner.** The FFT library in the Windows build now
+  uses the processor's SSE2 and AVX instructions, as WSJT-X's own Windows build does; until now it used none. On one
+  Windows PC the early FT8 decode took 17-36 % less time and the full decode 1-21 % less, and the decodes were
+  exactly the same. There is nothing to set: the library picks what the processor has when Nexus starts, and a
+  processor without AVX works as before. Linux and Mac builds are unchanged.
 - **FT8/FT4: a late reply changes the over already on the air, as in WSJT-X.** When your partner's reply is
   decoded after your over has started (a weak R-report or RR73 that only the full decode finds), Nexus used to send
   the old message to the end of the over and the right one an over later. It now switches the rest of the over to the

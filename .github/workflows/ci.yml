@@ -1039,7 +1039,11 @@ jobs:
             src-tauri/target
             target/fftw-mingw
             target/vpx-mingw
-          key: ${{ runner.os }}-wincross-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
+          # The cross script is in the key because it holds FFTW's configure flags. Under a key
+          # that ignores them, an exact hit keeps restoring the library built with the old flags
+          # and is never saved again. The script's stamp refuses that old build (a restore-key
+          # match still brings one in) and rebuilds it; this key lets the rebuild be cached.
+          key: ${{ runner.os }}-wincross-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock', 'scripts/build-windows-cross.sh') }}
           restore-keys: |
             ${{ runner.os }}-wincross-
 
