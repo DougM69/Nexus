@@ -4222,6 +4222,27 @@ impl FieldDayStation {
         crate::message::unhash_call(to) == self.mycall()
     }
 
+    /// The caller `de` of a first call with no grid, as my report names it: WSJT-X's Tx2 to it
+    /// (`genStdMsgs`, mainwindow.cpp), its call hashed where it is nonstandard (`t0a`, 9596,
+    /// 9629-9631) and whole otherwise, beside my call as [`my_call_beside`](Self::my_call_beside)
+    /// writes it (`t0b`, 9625-9626). `None` for `<...>`, which names nobody (WSJT-X puts only a
+    /// callsign into its DX call box, 9402), and for a nonstandard call beside a nonstandard call
+    /// of mine, between which no message carries a report.
+    fn gridless_caller(&self, de: &str) -> Option<String> {
+        let his = crate::message::unhash_call(de);
+        if !crate::message::is_callsign(his) {
+            return None;
+        }
+        match (
+            crate::message::is_std_call(his),
+            crate::message::is_std_call(self.mycall()),
+        ) {
+            (true, _) => Some(his.to_string()),
+            (false, true) => Some(format!("<{his}>")),
+            (false, false) => None,
+        }
+    }
+
     /// My call as WSJT-X 3.0.2 writes it beside a grid or a report, its Tx2 and Tx3
     /// (`genStdMsgs`, mainwindow.cpp): whole when `stdCall` passes it (`/P` and `/R` too), else
     /// hashed, `t0b=hisCall + " <" + my_callsign + "> "` (9597, taken by `if(!bMyCall) { t=t0b;`
@@ -4399,9 +4420,12 @@ impl FieldDayStation {
         }
         for d in decodes {
             // ⭐ A message naming a call the decoder could not resolve is passed by, as WSJT-X's
-            // Field Day activity passes it by: `processMessage` returns at once for one that
-            // carries `<...>` (mainwindow.cpp 9097-9099). The run would answer that caller as
-            // `<...>` and log `...`; S&P would answer a CQ from it.
+            // Field Day activity passes it by: for a message to this station, `processMessage`
+            // returns at once where it carries `<...>` (mainwindow.cpp 9097-9099, inside the
+            // branch for a message to it that opens at 9050); for a CQ from such a call, only a
+            // callsign goes into the DX call box (`Radio::is_callsign`, 9402), so no message is
+            // built to it. The run would answer that caller as `<...>` and log `...`; S&P would
+            // answer a CQ from it.
             if d.message.contains("<...>") {
                 continue;
             }
@@ -4536,8 +4560,13 @@ impl FieldDayStation {
             let m = Msg::parse(&d.message);
             match (self.state, &m) {
                 // S&P: a CQ that carries a grid → my grid. (A CQ without one is from a
-                // station whose call the grid message cannot carry.)
-                (FdState::Listening, Msg::Cq { de, grid, .. }) if !grid.is_empty() => {
+                // station whose call the grid message cannot carry.) A CQ from a call the
+                // decoder could not resolve, `<...>`, names nobody and is passed by: WSJT-X puts
+                // only a callsign into its DX call box (`Radio::is_callsign`, mainwindow.cpp
+                // 9402), so it builds no message to one.
+                (FdState::Listening, Msg::Cq { de, grid, .. })
+                    if !grid.is_empty() && !de.contains("<...>") =>
+                {
                     if self.worked_before(de, Some(grid)) {
                         self.transcript.push(format!("skip dupe {de}"));
                         continue;
@@ -4594,8 +4623,11 @@ impl FieldDayStation {
             let m = Msg::parse(&d.message);
             let rpt = d.snr.clamp(-30, 49);
             match (self.state, &m) {
-                // S&P: a CQ that carries a grid → my grid.
-                (FdState::Listening, Msg::Cq { de, grid, .. }) if !grid.is_empty() => {
+                // S&P: a CQ that carries a grid → my grid. Not a CQ from `<...>`, as in the ARRL
+                // VHF contests.
+                (FdState::Listening, Msg::Cq { de, grid, .. })
+                    if !grid.is_empty() && !de.contains("<...>") =>
+                {
                     if self.worked_before(de, Some(grid)) {
                         self.transcript.push(format!("skip dupe {de}"));
                         continue;
@@ -4619,6 +4651,28 @@ impl FieldDayStation {
                     });
                     self.state = FdState::AwaitExchange;
                     self.transcript.push(format!("caller {de} {grid} → report"));
+                }
+                // Running: a caller's first call that carries no grid → my report, as WSJT-X
+                // running with no activity answers a message to it of fewer than five words with
+                // Tx2 (`processMessage`, mainwindow.cpp 9315-9325). A caller whose call is
+                // nonstandard sends its first call that way, `<K1ABC> W9XYZ/M` (`msgtype(t0a,
+                // ui->tx1)`, 9627). The report's calls: [`gridless_caller`](Self::gridless_caller).
+                (FdState::CallingCq, Msg::Grid { to, de, grid })
+                    if self.to_me(to) && grid.is_empty() =>
+                {
+                    let Some(his) = self.gridless_caller(de) else {
+                        continue;
+                    };
+                    self.dxcall = Some(de.clone());
+                    self.peer_grid = None;
+                    self.pending = Some(Msg::Report {
+                        to: his,
+                        de: self.my_call_beside(),
+                        snr: rpt,
+                    });
+                    self.state = FdState::AwaitExchange;
+                    self.transcript
+                        .push(format!("caller {de} with no grid → report"));
                 }
                 // Running: a caller that sent its report without its grid → R and mine.
                 (FdState::CallingCq, Msg::Report { to, de, .. }) if self.to_me(to) => {
@@ -6644,6 +6698,34 @@ mod tests {
         );
     }
 
+    /// ⛔ The ARRL VHF and standard messages' S&P passes by a CQ from a call the decoder could not
+    /// resolve, as WSJT-X builds no message to one: it takes a CQ's call from the word after it
+    /// (`deCallAndGrid`, decodedtext.cpp 212-224), which `...` cannot be, and puts only a
+    /// callsign into its DX call box (`Radio::is_callsign`, mainwindow.cpp 9402). The station's
+    /// next CQ, its call resolved, is answered as before.
+    #[test]
+    fn vhf_and_standard_sp_pass_by_a_cq_from_an_unresolved_call() {
+        for (event, cq) in [
+            ("arrlvhf_jan", "CQ TEST"),
+            ("txqp", "CQ TEST"),
+            ("txqp", "CQ QP"),
+        ] {
+            let mut sp = ft8_station(event, "FN42", false);
+            sp.observe(&[dec(&format!("{cq} <...> EN37"))], 1);
+            assert_eq!(
+                (sp.state, next(&sp)),
+                (FdState::Listening, String::new()),
+                "{event} {cq}: passed by"
+            );
+            sp.observe(&[dec(&format!("{cq} <K9QQQ/M> EN37"))], 3);
+            assert_eq!(
+                (sp.state, next(&sp)),
+                (FdState::AwaitExchange, "<K9QQQ/M> K1ABC FN42".to_string()),
+                "{event} {cq}: its next CQ, resolved, is answered"
+            );
+        }
+    }
+
     #[test]
     fn rogered_grid_is_read_only_in_the_packers_own_form() {
         let ok = |t: &str| rogered_grid_of(t).map(|(a, b, g)| format!("{a} {b} {g}"));
@@ -7309,9 +7391,9 @@ mod tests {
     /// activity does: `processMessage` returns at once for a message that carries `<...>`
     /// (mainwindow.cpp 9097-9099). Running, a caller heard as `<...>` gets no answer and no row,
     /// whether it sends its exchange or rogers first, and the run keeps calling CQ. The same
-    /// station's next message, its call resolved, is worked as any other's and logged bare. The
-    /// same line keeps S&P from answering a CQ that names such a call, `CQ FD <...> EN37`: WSJT-X
-    /// answers a CQ only through `processMessage`.
+    /// station's next message, its call resolved, is worked as any other's and logged bare. S&P
+    /// does not answer a CQ that names such a call, `CQ FD <...> EN37`, either: WSJT-X puts only a
+    /// callsign into its DX call box (`Radio::is_callsign`, 9402), so it builds no message to one.
     #[test]
     fn field_days_run_passes_by_a_caller_the_decoder_could_not_resolve() {
         for heard in ["K1ABC <...> 1D WI", "K1ABC <...> R 1D WI"] {
@@ -7384,8 +7466,12 @@ mod tests {
         let mut run = ft8_station("tnqp", "FN42", true);
         run.observe(&[dec("N0ABC W9XYZ EN37"), dec("N0ABC W9XYZ -07")], 1);
         assert_eq!(run.state, FdState::CallingCq, "sent to somebody else");
-        run.observe(&[dec("<K1ABC> PJ4/W9XYZ")], 1);
-        assert_eq!(run.state, FdState::CallingCq, "a call with no grid");
+        run.observe(&[dec("<N0ABC> PJ4/W9XYZ")], 1);
+        assert_eq!(
+            run.state,
+            FdState::CallingCq,
+            "a call with no grid to somebody else"
+        );
         run.observe(&[dec("K1ABC W9XYZ EN37")], 3);
         run.observe(&[dec("K1ABC N0ABC R-07")], 5);
         assert_eq!(
@@ -7394,6 +7480,61 @@ mod tests {
             "an R-report from a bystander"
         );
         assert!(run.log.qsos().is_empty());
+    }
+
+    /// ⭐ The standard messages' run answers a caller's first call that carries no grid, as WSJT-X
+    /// running with no activity does. A caller whose call is nonstandard sends it as `t0a` alone,
+    /// `<K1ABC> W9XYZ/M` (mainwindow.cpp 9627), and WSJT-X answers a message to it of fewer than
+    /// five words with Tx2, the report (`processMessage` 9315-9325), to the call in its DX call box
+    /// (9402): `<W9XYZ/M> K1ABC -05`, its call hashed beside mine (`t0a`, 9629-9631, 9655), or
+    /// mine hashed beside its where mine is the nonstandard one (`t0b`, 9625-9626). The contact
+    /// then runs as any other and is logged without a grid. Not answered, as before: a call to
+    /// somebody else, one from `<...>`, and a nonstandard call beside a nonstandard call of mine,
+    /// which no message carries with a report.
+    #[test]
+    fn the_standard_messages_run_answers_a_first_call_with_no_grid() {
+        let mut run = ft8_station("txqp", "FN42", true);
+        run.observe(&[dec("<K1ABC> W9XYZ/M")], 1);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::AwaitExchange, "<W9XYZ/M> K1ABC -05".to_string()),
+            "W9XYZ/M's first call: my report"
+        );
+        run.after_tx();
+        run.observe(&[dec("K1ABC <W9XYZ/M> R-07")], 3);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::Done, "W9XYZ/M <K1ABC> RR73".to_string()),
+            "its roger: RR73"
+        );
+        assert_eq!(last_row(&run).0, "W9XYZ/M", "logged");
+
+        let mut run = ft8_station_as("K1ABC/QRP", "txqp", "FN42", true);
+        run.observe(&[dec("<K1ABC/QRP> W9XYZ")], 1);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::AwaitExchange, "W9XYZ <K1ABC/QRP> -05".to_string()),
+            "a nonstandard call of mine: my report, my call hashed"
+        );
+        run.after_tx();
+        run.observe(&[dec("<K1ABC/QRP> W9XYZ R-07")], 3);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::Done, "<W9XYZ> K1ABC/QRP RR73".to_string()),
+            "and RR73"
+        );
+        assert_eq!(last_row(&run).0, "W9XYZ", "logged");
+
+        for (mycall, heard, what) in [
+            ("K1ABC", "<N0ABC> W9XYZ/M", "a call to somebody else"),
+            ("K1ABC", "K1ABC <...>", "a call from <...>"),
+            ("K1ABC/QRP", "<K1ABC/QRP> W9XYZ/M", "two nonstandard calls"),
+        ] {
+            let mut run = ft8_station_as(mycall, "txqp", "FN42", true);
+            let cq = next(&run);
+            run.observe(&[dec(heard)], 1);
+            assert_eq!((run.state, next(&run)), (FdState::CallingCq, cq), "{what}");
+        }
     }
 
     /// A change of messages (a tier change, in the engine) re-arms: a contact half-worked in

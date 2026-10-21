@@ -82,16 +82,22 @@ export function genStdMessages(inp: StdMsgInput): StdMessages {
   // keeps the call in full, which is what lets the partner resolve that hash. Any other
   // nonstandard or slashed sender carries neither (Tx1/Tx2 → the bare call, Tx3 → RRR,
   // which is what keeps Tx3 tellable from Tx1/Tx2 for the partner's sequencer).
+  //
+  // RR73 (or RRR) and 73 from a standard call to a nonstandard DX put the DX whole and MY call
+  // hashed, WSJT-X's Tx4 and Tx5 when only HIS call fails stdCall (genStdMsgs: `hisCall
+  // <my_callsign> RR73`), a type 4 message.
   if (!isStdCall(dx) || !isStdCall(my) || suffixConflict(my, dx)) {
-    const bdx = `<${dx.replace(/^<|>$/g, '')}>`
+    const dxWhole = dx.replace(/^<|>$/g, '')
+    const bdx = `<${dxWhole}>`
     const iCarry = packsBesideHash(my)
     const iHash = !isStdCall(my) && packsBesideHash(dx)
+    const iClose = isStdCall(my) && isNonstandardCall(dxWhole)
     return {
       tx1: iCarry ? j(bdx, my, grid) : j(bdx, my),
       tx2: iHash ? j(dx, `<${my}>`, rpt) : iCarry ? j(bdx, my, rpt) : j(bdx, my),
       tx3: iHash ? j(dx, `<${my}>`, `R${rpt}`) : iCarry ? j(bdx, my, `R${rpt}`) : j(bdx, my, 'RRR'),
-      tx4: j(bdx, my, final),
-      tx5: j(bdx, my, '73'),
+      tx4: iClose ? j(dxWhole, `<${my}>`, final) : j(bdx, my, final),
+      tx5: iClose ? j(dxWhole, `<${my}>`, '73') : j(bdx, my, '73'),
       // A CQ has no pair, so only MY call decides it: a /P or /R rover's CQ is an
       // ordinary Type 1/2 frame and keeps its grid. Never a hashed CQ (does not unpack).
       tx6: isStdCall(my) ? j('CQ', my, grid) : j('CQ', my),
@@ -119,6 +125,16 @@ export function genStdMessages(inp: StdMsgInput): StdMessages {
  */
 export function isStdCall(call: string): boolean {
   return /^([A-Z]{0,2}|[A-Z][0-9]|[0-9][A-Z])([0-9][A-Z]{0,3})(\/R|\/P)?$/i.test(call.trim())
+}
+
+/**
+ * A callsign the standard 28-bit field cannot hold — `message.rs::is_nonstandard_call`, keep the
+ * two in lockstep: shaped like a callsign (3–10 letters, digits and `/`, with a letter and a
+ * digit) and not isStdCall. A hashed token such as `<...>` is not a callsign.
+ */
+function isNonstandardCall(call: string): boolean {
+  const c = call.trim()
+  return /^[A-Z0-9/]{3,10}$/i.test(c) && /[0-9]/.test(c) && /[A-Z]/i.test(c) && !isStdCall(c)
 }
 
 /**

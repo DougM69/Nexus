@@ -201,7 +201,7 @@ fn engine_for(contest: &str, grid: &str) -> Engine {
 
 /// The text of the over `plan_tx` planned, if it keyed one — through `commit_tx`, as the
 /// radio loop does.
-fn keyed(e: &mut Engine, slot: u64) -> Option<String> {
+pub(super) fn keyed(e: &mut Engine, slot: u64) -> Option<String> {
     let plan = e.plan_tx(slot)?;
     let text = match &plan.waveform {
         TxWaveform::Native { text, .. }
@@ -217,7 +217,7 @@ fn keyed(e: &mut Engine, slot: u64) -> Option<String> {
 /// FT8 tones back to the 77 message bits (genft8.f90: Costas at 0-6, 36-42 and 72-78; three
 /// Gray-coded bits a data symbol), `None` for the all-zero frame a message the packer refused
 /// leaves behind.
-fn bits77(tones: &[i32]) -> Option<Vec<i8>> {
+pub(super) fn bits77(tones: &[i32]) -> Option<Vec<i8>> {
     const COSTAS: [i32; 7] = [3, 1, 4, 0, 6, 5, 2];
     const INV_GRAY: [i8; 8] = [0, 1, 3, 2, 6, 4, 5, 7];
     if tones.len() != 79 || tones[..7] != COSTAS {
@@ -253,7 +253,7 @@ pub(super) fn air_form(text: &str) -> (String, String) {
 }
 
 /// The tones, as digits, for the byte-for-byte comparison.
-fn tones_of(kind: modes::ModeKind, text: &str) -> String {
+pub(super) fn tones_of(kind: modes::ModeKind, text: &str) -> String {
     modes::make_mode(kind)
         .encode(text)
         .iter()
@@ -1596,6 +1596,73 @@ fn the_contests_run_closes_with_a_caller_whose_call_is_nonstandard() {
     }
 }
 
+/// ⭐ A STANDARD-MESSAGES RUN ANSWERS A WSJT-X CALLER'S FIRST CALL, WHICH CARRIES NO GRID, as
+/// WSJT-X running with no activity answers it. A caller signing W9XYZ/M sends its first call as
+/// `t0a` alone, `<K1ABC> W9XYZ/M` (mainwindow.cpp 9627), a type 4 message with no grid; WSJT-X
+/// answers it with Tx2, the report (`processMessage` 9315-9325), `<W9XYZ/M> K1ABC -12` (`t0a` and
+/// the report, 9629-9631, 9655). Its roger `K1ABC <W9XYZ/M> R-07` (`t0b`, 9625-9626, 9656) then
+/// gets WSJT-X's RR73 (9701). In a contest with the standard messages on FT8 and FT4, each over
+/// keyed packs to WSJT-X's 77 bits and FT4 tones, and the contact is logged as W9XYZ/M. Before,
+/// the run kept calling CQ.
+#[test]
+fn a_standard_messages_run_answers_a_wsjtx_callers_first_call_with_no_grid() {
+    let air = |t: &str| {
+        let bits: String = bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(t))
+            .unwrap_or_default()
+            .iter()
+            .map(|b| char::from(b'0' + *b as u8))
+            .collect();
+        (air_form(t), bits, tones_of(modes::ModeKind::Ft4, t))
+    };
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        let what = format!("\"txqp\" {}", tier_name(tier));
+        let mut e = engine_for("txqp", MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-run").expect("the run starts");
+        keyed(&mut e, 0).expect("the CQ");
+        let call = air_form("<K1ABC> W9XYZ/M");
+        assert_eq!(
+            call,
+            ("i3=4".to_string(), "<K1ABC> W9XYZ/M".to_string()),
+            "{what}: its first call, as decoded"
+        );
+        e.ingest_decodes_for_test(&[heard(&call.1)], 2);
+        let tx2 = keyed(&mut e, 2);
+        assert_eq!(
+            tx2.as_deref(),
+            Some("<W9XYZ/M> K1ABC -12"),
+            "{what}: answered with the report"
+        );
+        e.ingest_decodes_for_test(&[heard(&air_form("K1ABC <W9XYZ/M> R-07").1)], 4);
+        let tx4 = keyed(&mut e, 4);
+        assert_eq!(
+            tx4.as_deref(),
+            Some("W9XYZ/M <K1ABC> RR73"),
+            "{what}: its roger, RR73"
+        );
+        assert_eq!(
+            rows_of(&e)
+                .iter()
+                .map(|r| r.split(' ').next())
+                .collect::<Vec<_>>(),
+            [Some("W9XYZ/M")],
+            "{what}: logged"
+        );
+        for (over, ours, wsjtx, kind) in [
+            ("Tx2", tx2, "<W9XYZ/M> K1ABC -12", "i3=1"),
+            ("Tx4", tx4, "W9XYZ/M <K1ABC> RR73", "i3=4"),
+        ] {
+            let ours = ours.unwrap_or_default();
+            assert_eq!(air_form(wsjtx).0, kind, "{what} {over}: WSJT-X's packs");
+            assert_eq!(
+                air(&ours),
+                air(wsjtx),
+                "{what} {over} {ours:?}: WSJT-X's on the air"
+            );
+        }
+    }
+}
+
 /// ⭐ THE CONTEST'S RUN PASSES BY A CALLER THE DECODER COULD NOT RESOLVE, as WSJT-X's Field Day
 /// activity does: `processMessage` returns at once for a message that carries `<...>`
 /// (mainwindow.cpp 9097-9099). W9XYZ/M's exchange carrying a hash this station's table does not
@@ -1884,6 +1951,43 @@ fn a_double_click_on_a_cq_from_a_resolved_hashed_call_works_as_before() {
                     "{what}: answered"
                 );
             }
+        }
+    }
+}
+
+/// ⛔ THE CONTEST'S S&P PASSES BY A CQ FROM A CALL THE DECODER COULD NOT RESOLVE, with TX on, in
+/// every set of messages, as WSJT-X builds no message to `<...>`: it takes a CQ's call from the
+/// word after it (`deCallAndGrid`, decodedtext.cpp 212-224), which `...` cannot be, and puts only
+/// a callsign into its DX call box (`Radio::is_callsign`, mainwindow.cpp 9402). In ARRL Field Day
+/// (which passed it by already), an ARRL VHF contest and a contest with the standard messages, on
+/// FT8 and FT4, `CQ … <...> EN37` queues nothing and keys nothing; the station's next CQ, its
+/// call resolved, is answered as before.
+#[test]
+fn the_contests_sp_passes_by_a_cq_from_an_unresolved_call() {
+    let print = |b: &[i8]| tempo_fast::unpack77(b).unwrap_or_default();
+    for (contest, cq, answer) in HASHED_CQS {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            let what = format!("{contest:?} {}", tier_name(tier));
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(tier);
+            e.set_mode("fieldday-sp").expect("S&P starts");
+            e.set_tx_enabled(true);
+            let (sent, unknown) = hashed_cq(cq);
+            let unresolved = print(&unknown);
+            assert_eq!(unresolved, format!("{cq} <...> EN37"), "{what}: unresolved");
+            e.ingest_decodes_for_test(&[heard(&unresolved)], 2);
+            assert_eq!(
+                (queued(&e), keyed(&mut e, 2)),
+                (None, None),
+                "{what}: passed by"
+            );
+            assert!(listening(&e), "{what}: still listening");
+            e.ingest_decodes_for_test(&[heard(&print(&sent))], 4);
+            assert_eq!(
+                keyed(&mut e, 4).as_deref(),
+                Some(answer),
+                "{what}: its next CQ, resolved, is answered"
+            );
         }
     }
 }

@@ -787,6 +787,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers no `<...>`. Once the station's call shows in full, a double-click works it as usual. NEEDS-BENCH: ARRL
   Field Day on FT8, a station signing /M or /QRP whose call Nexus has not decoded in full calling `CQ FD` with its
   call hashed.
+- **FT8/FT4: your RR73 and 73 to a station signing W9XYZ/M are the ones WSJT-X sends.** Outside a contest, closing
+  a contact with a station whose call has a suffix such as /M, /4 or /QRP, or a prefix such as PJ4/, sent
+  `<W9XYZ/M> K1ABC RR73` and `<W9XYZ/M> K1ABC 73`: the right two calls, but a different message from the one WSJT-X
+  sends. Nexus now sends WSJT-X's, `W9XYZ/M <K1ABC> RR73` (or `W9XYZ/M <K1ABC> RRR` when you prefer RRR) and
+  `W9XYZ/M <K1ABC> 73`: that station's call in full and yours in angle brackets, the same message bit for bit, and
+  the Tx panel's Tx4 and Tx5 show them that way. This holds when your own call ends in /P or /R too. Your grid,
+  report and roger are unchanged, and so is everything when your own call has another suffix or a prefix.
+  NEEDS-BENCH: FT8 and FT4, a station signing /M or /QRP that runs WSJT-X, answering its CQ and answered by it, with
+  RR73 and with RRR.
+- **ARRL VHF contests and contests with the standard messages: S&P no longer answers a CQ from `<...>`.** With TX
+  on in the Contest screen's S&P, a station whose call has a suffix or a prefix can show as `CQ TEST <...> EN37`
+  until Nexus has decoded its call in full. S&P answered that CQ, sending your grid to `<...>`, a call no one could
+  read. It now passes such a CQ by, as Field Day's S&P already did and as WSJT-X answers no `<...>`, and answers the
+  station's next CQ once its call shows. NEEDS-BENCH: an ARRL VHF contest on FT8, S&P with TX on, a station signing
+  /M or /QRP whose call Nexus has not decoded in full calling `CQ TEST` with its call hashed.
+- **FT8/FT4: double-clicking a CQ from `<...>` no longer answers it outside a contest either.** A station whose
+  call has a suffix or a prefix can show as `<...>` until Nexus has decoded its call in full. Double-clicking its
+  CQ with the contest switch off, a logger's Reply to it, or working it from the Remote page turned TX on, moved RX
+  and TX onto the station and sent your grid to `<...>`, a call no one could read. It now does none of that and says
+  why, as it already did with the contest switch on and as WSJT-X answers no `<...>`. Once the station's call shows
+  in full, a double-click works it as usual. NEEDS-BENCH: FT8, a station signing /M or /QRP whose call Nexus has not
+  decoded in full calling CQ with its call hashed.
+- **Contests with the standard messages: when you run, a station signing W9XYZ/M that runs WSJT-X now gets an
+  answer.** Such a station calls you with your call in angle brackets, its own in full and no grid,
+  `<K1ABC> W9XYZ/M`. Your run did not answer it and kept calling CQ, unless that station had Skip Tx1 on. It now
+  answers with your report, `<W9XYZ/M> K1ABC -12`, as WSJT-X does, and the contact goes on as usual and is logged as
+  W9XYZ/M, with no grid. A first call from `<...>`, or one where both calls have a suffix or a prefix, is still not
+  answered; the ARRL VHF contests and Field Day are unchanged. NEEDS-BENCH: a state QSO party (or another contest
+  with the standard messages) on FT8, Running, called by a station signing /M or /QRP that runs WSJT-X with no
+  Special Operating Activity and Skip Tx1 off.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.
