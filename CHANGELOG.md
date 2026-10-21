@@ -422,6 +422,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ago that was, so a click could send your next over at the previous station's speed. It now shows, and a chip click
   now uses, only a speed from keying heard in the last 10 seconds, the rule CW speed match already had. With none,
   no speed is shown and a chip click leaves your keyer speed alone.
+- **Clicking a spot or tuning to another frequency forgets the CW speed with the copy.** A spot clicked within 10
+  seconds of the last station showed that station's speed beside the Decode pane's title, and a call chip's click
+  set your keyer to it. The decoder now starts afresh at the new frequency: the speed shows once the new station is
+  heard, timed from its own keying, and CW speed match times it the same way.
 - **FT8 and FT4 no longer transmit on top of another program keying your radio through Nexus.** With "Other programs
   may key transmit" on, a program sharing the radio through Nexus's CAT broker (WSJT-X, VarAC) could key for a
   transmission of its own while your FT8 or FT4 CQ or QSO was armed, and at the start of your next period Nexus sent its

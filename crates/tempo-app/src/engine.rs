@@ -16654,9 +16654,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
-    /// Clear the CW decode transcript + reset the stream decoder. A QSY (band change,
-    /// commanded retune, or working a spot) moves onto a different signal, so the old
-    /// CW copy is stale (operator report: the CW decode area lingered across a QSY).
+    /// Clear both decoders' CW copy and forget the classic decoder's speed. A QSY (band change,
+    /// commanded retune, or working a spot) moves onto a different signal, so the old CW copy
+    /// is stale (operator report: the CW decode area lingered across a QSY), and so is the
+    /// speed: kept, a spot clicked within ten seconds of the last station would offer that
+    /// station's speed beside the Decode title and to a call chip's click. The classic decoder
+    /// is reset, not just cleared, so the next station is timed from its own keying (CW speed
+    /// match's measurement included); its pitch and sensitivity are kept.
     fn clear_cw_decode(&mut self) {
         self.ai_cw_text.clear();
         self.ai_cw_pending.clear();
@@ -16668,7 +16672,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // A successful decode clears it (aicw.rs), which is the only state
         // that means "healthy".
         self.restart_ai_cw_stream();
-        self.cw_stream.clear();
+        self.cw_stream.reset();
     }
 
     /// Empty the AI-CW ring and restart its stream clock as a new generation.
