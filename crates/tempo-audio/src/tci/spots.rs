@@ -37,10 +37,16 @@
 //! letters and digits, and the text keeps printable characters, the codec escaping its `:`, `,`
 //! and `;` (as `^`, `~` and `*`, which are dropped from the text itself).
 //!
-//! ## Per server
-//! The colour is ARGB, opaque, as the specification writes it (a decimal number). ExpertSDR3,
-//! ExpertSDR2 and Thetis take spots and send clicks; piHPSDR's TCI has no spot commands, so its
-//! panadapter shows none and sends no clicks. Nexus's own design, not a port.
+//! ## Per server ([`Forms`])
+//! ExpertSDR3, ExpertSDR2 and Thetis are sent the specification's forms, the colour ARGB, opaque,
+//! as a decimal number. AetherSDR, which names itself in its `device:` line, keeps spots its own
+//! way (its source at `8394342`): it draws a colour only as `#AARRGGBB`, deletes a spot only by
+//! call and frequency, keeps every `spot:` as a new spot for 30 minutes, and its `spot_clear;`
+//! clears every spot it shows, from every source. So there Nexus sends its colours as `#AARRGGBB`,
+//! never sends `spot_clear;`, deletes each spot of its own with its frequency (a spot that moved
+//! too, before it goes up again), and puts each one up again before its 30 minutes are over.
+//! piHPSDR's TCI has no spot commands: its panadapter shows none and sends no clicks. Nexus's own
+//! design, not a port.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::net::SocketAddr;
@@ -52,7 +58,7 @@ use tempo_app::engine::tci_spots::{PanadapterSpot, PanadapterSpots};
 use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::settings::TCI_SPOTS_MAX;
 use tempo_net::tci::session::Connection;
-use tempo_net::tci::wire::{Call, Command, Hz, Text, Token};
+use tempo_net::tci::wire::{Call, Command, Hz, SpotColour, Text, Token};
 use tempo_net::tci::Channel;
 
 use super::TciDaemon;
@@ -67,6 +73,10 @@ pub const LEASE: Duration = Duration::from_secs(5);
 
 /// How often the spots' thread looks again with nothing to wake it: for the ages and the lease.
 const LOOK: Duration = Duration::from_secs(1);
+
+/// How long a spot of ours stays up on AetherSDR before it is put up again: it forgets a TCI spot
+/// after 30 minutes (`TciProtocol::cmdSpot`, `lifetime_seconds` 1800).
+pub const AETHERSDR_REFRESH: Duration = Duration::from_secs(25 * 60);
 
 /// How far a click may land from one of ours and still be on it, in Hz.
 const CLICK_SLACK_HZ: i64 = 1_000;
@@ -130,13 +140,39 @@ impl Up {
         })
     }
 
-    fn command(&self) -> Command {
+    fn command(&self, forms: Forms) -> Command {
         Command::Spot {
             call: self.call.clone(),
             mode: self.mode.clone(),
             hz: self.hz,
-            argb: self.argb,
+            colour: match forms {
+                Forms::Spec => SpotColour::Decimal(self.argb),
+                Forms::AetherSdr => SpotColour::Hash(self.argb),
+            },
             text: self.text.clone(),
+        }
+    }
+}
+
+/// How a server takes spots.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Forms {
+    /// The specification's: a decimal colour, `spot_delete:<call>;`, `spot_clear;` at connect and
+    /// at close, and a spot put up again in place of the one up for its call.
+    #[default]
+    Spec,
+    /// AetherSDR's: a `#AARRGGBB` colour, `spot_delete:<call>,<hz>;`, never a `spot_clear;`, and
+    /// a spot put up again only once the one up for its call is deleted.
+    AetherSdr,
+}
+
+impl Forms {
+    /// The forms of the server that names itself `device` (its `device:` line).
+    fn of(device: Option<&str>) -> Forms {
+        if device.is_some_and(|d| d.trim().eq_ignore_ascii_case("AetherSDR")) {
+            Forms::AetherSdr
+        } else {
+            Forms::Spec
         }
     }
 }
@@ -187,10 +223,11 @@ fn wanted(spots: &[PanadapterSpot], now_unix: i64) -> Vec<Up> {
     up
 }
 
-/// One of ours on the panadapter, as it went out.
+/// One of ours on the panadapter, as it went out, and when.
 #[derive(Debug, Clone)]
 struct Shown {
     up: Up,
+    since: Instant,
 }
 
 /// What the spots' thread sends next, in order.
@@ -198,18 +235,21 @@ struct Shown {
 enum Op {
     /// `spot_clear;`
     Clear,
-    /// `spot_delete:<call>;`
-    Delete(Call),
+    /// `spot_delete:…;` for one of ours, as it went up.
+    Delete(Up),
     /// `spot:…;`
     Put(Up),
 }
 
 impl Op {
-    fn command(&self) -> Command {
+    fn command(&self, forms: Forms) -> Command {
         match self {
             Op::Clear => Command::SpotClear,
-            Op::Delete(call) => Command::SpotDelete(call.clone()),
-            Op::Put(up) => up.command(),
+            Op::Delete(up) => Command::SpotDelete {
+                call: up.call.clone(),
+                hz: (forms == Forms::AetherSdr).then_some(up.hz),
+            },
+            Op::Put(up) => up.command(forms),
         }
     }
 }
@@ -225,6 +265,8 @@ struct State {
     /// `spot_clear;` has gone out since the spots were last turned on: nothing an earlier session
     /// put up is left.
     cleared: bool,
+    /// How the server takes spots, from what it says it is.
+    forms: Forms,
     /// The clicks kept for the radio loop: the call, the frequency clicked, and when.
     clicks: VecDeque<(String, i64, Instant)>,
     /// The client is closing: the thread sends nothing more.
@@ -247,47 +289,72 @@ impl State {
                 self.shown.clear();
                 self.cleared = self.live(now);
             }
-            Op::Delete(call) => {
-                self.shown.remove(call.as_str());
+            Op::Delete(up) => {
+                self.shown.remove(up.call.as_str());
             }
             Op::Put(up) => {
-                self.shown
-                    .insert(up.call.as_str().to_string(), Shown { up: up.clone() });
+                self.shown.insert(
+                    up.call.as_str().to_string(),
+                    Shown {
+                        up: up.clone(),
+                        since: now,
+                    },
+                );
             }
+        }
+    }
+
+    /// What takes ours off the panadapter: one `spot_clear;`, or on AetherSDR, whose clear takes
+    /// off every spot it shows, a delete for each of ours. Nothing when none of ours can be up.
+    fn take_down(&self) -> Vec<Op> {
+        match self.forms {
+            Forms::Spec if self.cleared || !self.shown.is_empty() => vec![Op::Clear],
+            Forms::Spec => Vec::new(),
+            Forms::AetherSdr => self
+                .shown
+                .values()
+                .map(|shown| Op::Delete(shown.up.clone()))
+                .collect(),
         }
     }
 }
 
 /// What to send to make the panadapter what the offer says, at `now` (`now_unix` on the wall
-/// clock), in order: a lapsed or withdrawn offer clears ours; the first live offer clears first
-/// (whatever an earlier session left), then puts up every spot; after that only the spots that
-/// went (deleted first, so the panadapter never holds more than [`TCI_SPOTS_MAX`] of ours) or
-/// changed are sent.
+/// clock), in order: a lapsed or withdrawn offer takes ours down ([`State::take_down`]); the first
+/// live offer clears first (whatever an earlier session left; not on AetherSDR), then puts up every
+/// spot; after that only the spots that went (deleted first, so the panadapter never holds more
+/// than [`TCI_SPOTS_MAX`] of ours) or changed are sent, and on AetherSDR those due their
+/// [`AETHERSDR_REFRESH`].
 fn plan(s: &State, now: Instant, now_unix: i64) -> Vec<Op> {
     let Some(offer) = s.offer.as_ref().filter(|_| s.live(now)) else {
-        return if s.cleared || !s.shown.is_empty() {
-            vec![Op::Clear]
-        } else {
-            Vec::new()
-        };
+        return s.take_down();
     };
     let want = wanted(&offer.spots, now_unix);
-    if !s.cleared {
+    if s.forms == Forms::Spec && !s.cleared {
         return std::iter::once(Op::Clear)
             .chain(want.into_iter().map(Op::Put))
             .collect();
     }
+    // On AetherSDR a spot put up again is a second spot: the one up goes first.
+    let again = |shown: &Shown| {
+        s.forms == Forms::AetherSdr
+            && now.saturating_duration_since(shown.since) >= AETHERSDR_REFRESH
+    };
     let mut ops: Vec<Op> = s
         .shown
         .values()
-        .filter(|shown| !want.iter().any(|u| u.call == shown.up.call))
-        .map(|shown| Op::Delete(shown.up.call.clone()))
+        .filter(|shown| {
+            want.iter()
+                .find(|u| u.call == shown.up.call)
+                .is_none_or(|u| s.forms == Forms::AetherSdr && (*u != shown.up || again(shown)))
+        })
+        .map(|shown| Op::Delete(shown.up.clone()))
         .collect();
     ops.extend(want.into_iter().filter_map(|u| {
         let due = s
             .shown
             .get(u.call.as_str())
-            .is_none_or(|shown| shown.up != u);
+            .is_none_or(|shown| shown.up != u || again(shown));
         due.then_some(Op::Put(u))
     }));
     ops
@@ -362,8 +429,8 @@ impl Shared {
         None
     }
 
-    /// Stop the thread, then take ours off the panadapter in one `spot_clear;` while the session
-    /// is still up: the client's close, after its transmitter's stops.
+    /// Stop the thread, then take ours off the panadapter while the session is still up
+    /// ([`State::take_down`]): the client's close, after its transmitter's stops.
     pub(crate) fn close(&self, conn: &Connection) {
         lock(&self.state).stopping = true;
         self.wake.notify_all();
@@ -371,22 +438,39 @@ impl Shared {
         if let Some(thread) = thread {
             let _ = thread.join();
         }
-        let up = {
+        let (ops, forms) = {
             let s = lock(&self.state);
-            s.cleared || !s.shown.is_empty()
+            (s.take_down(), s.forms)
         };
-        if up && conn.send(Command::SpotClear).is_ok() {
+        for op in ops {
+            if conn.send(op.command(forms)).is_err() {
+                return;
+            }
             let mut s = lock(&self.state);
-            s.shown.clear();
-            s.cleared = false;
+            s.sent(&op, Instant::now());
         }
     }
 }
 
 /// The spots' thread: plans, sends, and records what went out, until the client closes or its
 /// session goes. A command the session would not send (it is closing, or gone) ends the pass; the
-/// next is tried a [`LOOK`] later.
+/// next is tried a [`LOOK`] later. The server's forms are read once, first, from its `device:` line
+/// (the session is ready, so its burst is in).
 fn put_up(shared: &Shared, conn: &Weak<Connection>, server: SocketAddr) {
+    let Some(device) = conn
+        .upgrade()
+        .map(|c| c.read(|s| s.model.device.known().map(|d| d.as_str().to_string())))
+    else {
+        return;
+    };
+    let forms = Forms::of(device.as_deref());
+    if forms == Forms::AetherSdr {
+        tempo_core::applog::info(
+            "cat",
+            &format!("TCI ({server}): spots in AetherSDR's forms (#AARRGGBB colours, no clear)"),
+        );
+    }
+    lock(&shared.state).forms = forms;
     let mut not_before: Option<Instant> = None;
     loop {
         let ops = {
@@ -417,7 +501,7 @@ fn put_up(shared: &Shared, conn: &Weak<Connection>, server: SocketAddr) {
             if lock(&shared.state).stopping {
                 return;
             }
-            if let Err(e) = conn.send(op.command()) {
+            if let Err(e) = conn.send(op.command(forms)) {
                 tempo_core::applog::info(
                     "cat",
                     &format!("TCI ({server}): spots not sent to the panadapter ({e:?})"),

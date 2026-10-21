@@ -342,6 +342,47 @@ impl Text {
     }
 }
 
+/// A spot's colour (`SPOT` `arg4`, §4.3), ARGB. The specification writes it as a decimal number
+/// (`SPOT:RN6LHF,CW,7100000,16711680,ANY_TEXT;`). AetherSDR's TCI server keeps the argument as text
+/// and draws a spot in it only when it starts with `#` (`TciProtocol::cmdSpot` and
+/// `SpectrumWidget`, at `8394342`), so it is sent `#AARRGGBB` there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SpotColour {
+    /// A decimal number: `4294065856`.
+    Decimal(u32),
+    /// `#AARRGGBB`: `#FFF23EC0`.
+    Hash(u32),
+}
+
+impl SpotColour {
+    /// The colour, ARGB, in whichever form it came.
+    pub fn argb(self) -> u32 {
+        match self {
+            SpotColour::Decimal(argb) | SpotColour::Hash(argb) => argb,
+        }
+    }
+
+    fn parse(arg: &str) -> Option<SpotColour> {
+        let s = arg.trim_matches(' ');
+        match s.strip_prefix('#') {
+            Some(hex) if hex.len() == 8 && hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                u32::from_str_radix(hex, 16).ok().map(SpotColour::Hash)
+            }
+            Some(_) => None,
+            None => uint(s).map(SpotColour::Decimal),
+        }
+    }
+}
+
+impl fmt::Display for SpotColour {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SpotColour::Decimal(argb) => write!(f, "{argb}"),
+            SpotColour::Hash(argb) => write!(f, "#{argb:08X}"),
+        }
+    }
+}
+
 /// Where a transmission takes its audio (`trx` `arg3`, §4.2). Absent, the SDR program's selected
 /// microphone.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1049,16 +1090,22 @@ pub enum Command {
     Set(Setting),
     Read(Query),
     Stream(StreamSetting),
-    /// A spot on the SDR program's panorama (§4.3): callsign, mode, frequency, colour (ARGB) and
-    /// a comment.
+    /// A spot on the SDR program's panorama (§4.3): callsign, mode, frequency, colour and a
+    /// comment.
     Spot {
         call: Call,
         mode: Token,
         hz: Hz,
-        argb: u32,
+        colour: SpotColour,
         text: Text,
     },
-    SpotDelete(Call),
+    /// A spot taken off the panorama: by its callsign (§4.3), or by its callsign and its frequency,
+    /// the form AetherSDR's TCI server takes (`TciProtocol::cmdSpotDelete` at `8394342` ignores a
+    /// delete that has no frequency, and takes off the spot of that call within 100 Hz of it).
+    SpotDelete {
+        call: Call,
+        hz: Option<Hz>,
+    },
     SpotClear,
     /// Receive levels pushed every `interval_ms` (30–1000; the server's default when absent).
     RxSensorsEnable {
@@ -1093,16 +1140,18 @@ impl Command {
                 call,
                 mode,
                 hz,
-                argb,
+                colour,
                 text,
             } => Line::new("spot")
                 .arg(call)
                 .arg(mode)
                 .arg(hz)
-                .arg(argb)
+                .arg(colour)
                 .text(text)
                 .end(),
-            Command::SpotDelete(call) => Line::new("spot_delete").arg(call).end(),
+            Command::SpotDelete { call, hz } => {
+                Line::new("spot_delete").arg(call).opt(hz.as_ref()).end()
+            }
             Command::SpotClear => Line::new("spot_clear").end(),
             Command::RxSensorsEnable { on, interval_ms } => Line::new("rx_sensors_enable")
                 .arg(on)
@@ -2191,13 +2240,18 @@ fn request(name: &str, a: &Args<'_, '_>, dialect: &Dialect) -> Result<Request, F
                 call: a.call(0)?,
                 mode: a.token(1)?,
                 hz: a.hz(2)?,
-                argb: a.uint(3)?,
+                colour: a.read(3, SpotColour::parse)?,
                 text: a.text(4)?,
             })
         }
         "spot_delete" => {
-            a.arity(1)?;
-            command(Command::SpotDelete(a.call(0)?))
+            if !(1..=2).contains(&n) {
+                return Err(Fault::Arity(n));
+            }
+            command(Command::SpotDelete {
+                call: a.call(0)?,
+                hz: if n == 2 { Some(a.hz(1)?) } else { None },
+            })
         }
         "spot_clear" => {
             a.arity(0)?;
@@ -2972,6 +3026,65 @@ mod tests {
         assert_eq!(Text::from_wire(&"E".repeat(MAX_ARG + 1)), None);
     }
 
+    /// A spot's colour in either form (the specification's decimal, AetherSDR's `#AARRGGBB`) and a
+    /// delete with or without the spot's frequency each read back as they were sent. Anything else
+    /// in the colour, or a third argument to a delete, is refused.
+    #[test]
+    fn a_spot_colour_and_a_delete_read_in_either_form() {
+        let call = || Call::new("K1ABC").expect("a call");
+        let spot = |colour| Command::Spot {
+            call: call(),
+            mode: Token::new("CW").expect("a mode"),
+            hz: Hz::new(14_025_000).expect("a frequency"),
+            colour,
+            text: Text::new("New one").expect("text"),
+        };
+        let cases = [
+            (
+                "spot:K1ABC,CW,14025000,4294065856,New one;",
+                spot(SpotColour::Decimal(0xFFF2_3EC0)),
+            ),
+            (
+                "spot:K1ABC,CW,14025000,#FFF23EC0,New one;",
+                spot(SpotColour::Hash(0xFFF2_3EC0)),
+            ),
+            (
+                "spot_delete:K1ABC;",
+                Command::SpotDelete {
+                    call: call(),
+                    hz: None,
+                },
+            ),
+            (
+                "spot_delete:K1ABC,14025000;",
+                Command::SpotDelete {
+                    call: call(),
+                    hz: Hz::new(14_025_000),
+                },
+            ),
+        ];
+        for (text, command) in cases {
+            assert_eq!(command.render().as_str(), text);
+            let read: Vec<_> = requests(text, &EXPERT_SDR3).collect();
+            assert_eq!(read, [Ok(Request::Command(command))], "{text}");
+        }
+        assert_eq!(
+            SpotColour::parse("#fff23ec0"),
+            Some(SpotColour::Hash(0xFFF2_3EC0))
+        );
+        for bad in [
+            "spot:K1ABC,CW,14025000,#FFF23EC,x;",
+            "spot:K1ABC,CW,14025000,#FFF23EC0A,x;",
+            "spot:K1ABC,CW,14025000,#GGF23EC0,x;",
+            "spot:K1ABC,CW,14025000,-1,x;",
+            "spot:K1ABC,CW,14025000,red,x;",
+            "spot_delete:K1ABC,14025000,1;",
+        ] {
+            let read: Vec<_> = requests(bad, &EXPERT_SDR3).collect();
+            assert!(read.len() == 1 && read[0].is_err(), "{bad}: {read:?}");
+        }
+    }
+
     #[test]
     fn a_mode_list_past_max_args_cannot_be_made() {
         let usb = Word::new("usb").unwrap();
@@ -3249,6 +3362,13 @@ mod tests {
         .prop_map(|s| Text::new(&s).unwrap())
     }
 
+    fn a_colour() -> impl Strategy<Value = SpotColour> {
+        prop_oneof![
+            any::<u32>().prop_map(SpotColour::Decimal),
+            any::<u32>().prop_map(SpotColour::Hash),
+        ]
+    }
+
     fn a_source() -> impl Strategy<Value = Source> {
         prop_oneof![
             Just(Source::Tci),
@@ -3455,16 +3575,17 @@ mod tests {
             a_setting().prop_map(Command::Set),
             a_query().prop_map(Command::Read),
             a_stream().prop_map(Command::Stream),
-            (a_call(), a_token(), a_hz(), any::<u32>(), a_text()).prop_map(
-                |(call, mode, hz, argb, text)| Command::Spot {
+            (a_call(), a_token(), a_hz(), a_colour(), a_text()).prop_map(
+                |(call, mode, hz, colour, text)| Command::Spot {
                     call,
                     mode,
                     hz,
-                    argb,
+                    colour,
                     text
                 }
             ),
-            a_call().prop_map(Command::SpotDelete),
+            (a_call(), prop::option::of(a_hz()))
+                .prop_map(|(call, hz)| Command::SpotDelete { call, hz }),
             Just(Command::SpotClear),
             (any::<bool>(), prop::option::of(any::<u32>()))
                 .prop_map(|(on, interval_ms)| Command::RxSensorsEnable { on, interval_ms }),

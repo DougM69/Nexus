@@ -41,8 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does; the click does nothing else: it never turns TX on or starts a contact, and while Nexus is transmitting it
   is ignored. A click on a spot Nexus did not put there, or on the program's B receiver, is ignored too. When the
   switch comes on, and when the connection closes, Nexus clears the panadapter's spots, which in some programs also
-  clears spots another program put there. In an unassisted contest entry the Needed board has no cluster spots, so
-  the panadapter has none either. piHPSDR's TCI has no spots. NEEDS-BENCH: on ExpertSDR3 and on Thetis, the spots
+  clears spots another program put there. AetherSDR is the exception: its clear would take off every spot it
+  shows, its own cluster and skimmer spots too, so there Nexus takes off only its own, one by one, sends the
+  colours the way AetherSDR draws them, and puts each spot up again before AetherSDR's 30 minutes for it are over.
+  In an unassisted contest entry the Needed board has no cluster spots, so the panadapter has none either.
+  piHPSDR's TCI has no spots. NEEDS-BENCH: on ExpertSDR3, on Thetis and on AetherSDR in front of a Flex, the spots
   and their colours on the panadapter, a click tuning Nexus (and whether the program tunes itself too), and the
   spots gone when Nexus closes.
 - **Share by TCI: programs on this computer can use the radio through Nexus.** Settings ▸ Radio ▸ Transmit limits

@@ -43,10 +43,15 @@ fn offer(generation: u64, spots: Vec<PanadapterSpot>) -> PanadapterSpots {
     }
 }
 
-/// The wire text of each op, as the codec renders it.
+/// The wire text of each op, as the codec renders it in the specification's forms.
 fn texts(ops: &[Op]) -> Vec<String> {
+    texts_in(ops, Forms::Spec)
+}
+
+/// The wire text of each op in `forms`.
+fn texts_in(ops: &[Op], forms: Forms) -> Vec<String> {
     ops.iter()
-        .map(|op| op.command().render().as_str().to_string())
+        .map(|op| op.command(forms).render().as_str().to_string())
         .collect()
 }
 
@@ -60,7 +65,15 @@ fn state(offer: Option<PanadapterSpots>, at: Instant, shown: &[Up], cleared: boo
         renewed: Some(at),
         shown: shown
             .iter()
-            .map(|u| (u.call.as_str().to_string(), Shown { up: u.clone() }))
+            .map(|u| {
+                (
+                    u.call.as_str().to_string(),
+                    Shown {
+                        up: u.clone(),
+                        since: at,
+                    },
+                )
+            })
             .collect(),
         cleared,
         ..State::default()
@@ -184,6 +197,99 @@ fn an_offer_withdrawn_or_lapsed_clears_ours() {
     assert!(plan(&gone, t + LEASE, now).is_empty(), "and then nothing");
 }
 
+/// ⭐ AETHERSDR'S FORMS: no `spot_clear;` ever (it clears every spot it shows, from every source):
+/// the first offer only puts ours up, a withdrawn one deletes each of ours by call and frequency;
+/// colours go as `#AARRGGBB`; a spot that moved is deleted at its old frequency before it goes up
+/// again (AetherSDR keeps every `spot:` as a new spot), and one up for [`AETHERSDR_REFRESH`] is put
+/// up again the same way, before AetherSDR forgets it. CONTROL: the specification's forms clear,
+/// replace a moved spot by putting it up again, and refresh nothing.
+#[test]
+fn on_aethersdr_nothing_is_cleared_and_every_delete_names_its_frequency() {
+    let t = Instant::now();
+    let now = 1_000_000;
+    let aether = |o: Option<PanadapterSpots>, shown: &[Up], cleared: bool| State {
+        forms: Forms::AetherSdr,
+        ..state(o, t, shown, cleared)
+    };
+    let o = offer(1, vec![spot("K1ABC", 14_025_000, now)]);
+    assert_eq!(
+        texts_in(
+            &plan(&aether(Some(o.clone()), &[], false), t, now),
+            Forms::AetherSdr
+        ),
+        ["spot:K1ABC,CW,14025000,#FFF23EC0,New one;"],
+        "the first offer: no clear"
+    );
+    let up_14025 = [up("K1ABC", 14_025_000), up("W1AW", 7_030_000)];
+    assert_eq!(
+        texts_in(
+            &plan(&aether(None, &up_14025, false), t, now),
+            Forms::AetherSdr
+        ),
+        ["spot_delete:K1ABC,14025000;", "spot_delete:W1AW,7030000;"],
+        "withdrawn: each of ours, by call and frequency"
+    );
+    let moved = offer(2, vec![spot("K1ABC", 14_026_000, now)]);
+    assert_eq!(
+        texts_in(
+            &plan(&aether(Some(moved.clone()), &up_14025[..1], false), t, now),
+            Forms::AetherSdr
+        ),
+        [
+            "spot_delete:K1ABC,14025000;",
+            "spot:K1ABC,CW,14026000,#FFF23EC0,New one;"
+        ],
+        "moved: deleted where it was, then put up"
+    );
+    let mut s = aether(Some(o.clone()), &up_14025[..1], false);
+    assert!(plan(&s, t, now).is_empty(), "unchanged: nothing");
+    s.renewed = Some(t + AETHERSDR_REFRESH);
+    assert_eq!(
+        texts_in(&plan(&s, t + AETHERSDR_REFRESH, now), Forms::AetherSdr),
+        [
+            "spot_delete:K1ABC,14025000;",
+            "spot:K1ABC,CW,14025000,#FFF23EC0,New one;"
+        ],
+        "put up again before AetherSDR forgets it"
+    );
+    // CONTROL: the specification's forms.
+    assert_eq!(
+        texts(&plan(&state(Some(moved), t, &up_14025[..1], true), t, now)),
+        ["spot:K1ABC,CW,14026000,4294065856,New one;"],
+        "control: moved, put up again in its place"
+    );
+    let mut s = state(Some(o), t, &up_14025[..1], true);
+    s.renewed = Some(t + AETHERSDR_REFRESH);
+    assert!(
+        plan(&s, t + AETHERSDR_REFRESH, now).is_empty(),
+        "control: no refresh"
+    );
+    assert_eq!(
+        texts(&plan(&state(None, t, &up_14025, true), t, now)),
+        ["spot_clear;"],
+        "control: withdrawn, one clear"
+    );
+}
+
+/// The server's forms come from what it calls itself: AetherSDR by name, in any case; anything
+/// else, or nothing, the specification's.
+#[test]
+fn the_forms_follow_the_servers_device_line() {
+    let got: Vec<Forms> = [
+        Some("AetherSDR"),
+        Some(" aethersdr "),
+        Some("SunSDR2DX"),
+        None,
+    ]
+    .into_iter()
+    .map(Forms::of)
+    .collect();
+    assert_eq!(
+        got,
+        [Forms::AetherSdr, Forms::AetherSdr, Forms::Spec, Forms::Spec]
+    );
+}
+
 /// ⭐ AT MOST [`TCI_SPOTS_MAX`], THE BEST FIRST, ONE PER CALL: of 150 offered, the first 100 calls
 /// go; a call offered twice goes once, as its first (best) offer; a call that is not a callsign or a
 /// frequency no radio has is not sent at all.
@@ -224,7 +330,7 @@ fn no_call_mode_or_text_from_a_spot_becomes_a_command() {
     };
     let rendered = Up::of(&hostile)
         .expect("W1AW can be a spot")
-        .command()
+        .command(Forms::Spec)
         .render()
         .as_str()
         .to_string();
@@ -598,4 +704,80 @@ fn a_server_with_no_spot_commands_shows_none_and_carries_on() {
     assert!(s.radio().spots.is_empty());
     assert!(d.is_alive(), "the session goes on");
     drop(d);
+}
+
+/// ⭐ ON AETHERSDR, OUR SPOTS ARE DRAWN IN THEIR COLOURS, NEVER TWICE, AND OTHER SPOTS ARE LEFT
+/// ALONE: a spot AetherSDR shows from another source stays through ours going up, moving, the
+/// switch going off and the client's close; ours are drawn in the need's colour; a moved spot
+/// leaves no copy; nothing sends `spot_clear;`. CONTROL: on a server of the specification's
+/// forms, `spot_clear;` takes the other spot too.
+#[test]
+fn on_aethersdr_ours_are_drawn_never_twice_and_other_spots_stay() {
+    let others = |s: &Simulator| -> Vec<String> {
+        s.radio()
+            .spots
+            .into_iter()
+            .filter(|sp| sp.by == usize::MAX)
+            .map(|sp| sp.call)
+            .collect()
+    };
+    let s = sim(SimDialect::aether_sdr());
+    s.operator("spot:DL1ABC,CW,14030000,#FF00FF00,cluster;");
+    let d = daemon(&s);
+    let now = now_unix();
+    renew(&d, &Some(offer(1, vec![spot("K1ABC", 14_025_000, now)])), 0);
+    until(&s, "our spot never went up", |s| {
+        on_panadapter(s) == ["DL1ABC", "K1ABC"]
+    });
+    assert_eq!(
+        s.radio()
+            .spots
+            .iter()
+            .find(|sp| sp.call == "K1ABC")
+            .and_then(|sp| sp.drawn),
+        Some(MAGENTA),
+        "drawn in the need's colour"
+    );
+    renew(&d, &Some(offer(2, vec![spot("K1ABC", 14_026_000, now)])), 0);
+    until(&s, "the moved spot never moved", |s| {
+        s.radio()
+            .spots
+            .iter()
+            .any(|sp| sp.call == "K1ABC" && sp.hz == 14_026_000)
+    });
+    assert_eq!(
+        on_panadapter(&s),
+        ["DL1ABC", "K1ABC"],
+        "no copy left behind"
+    );
+    renew(&d, &None, 0);
+    until(&s, "the switch off never took ours off", |s| {
+        on_panadapter(s) == ["DL1ABC"]
+    });
+    renew(&d, &Some(offer(3, vec![spot("W1AW", 7_030_000, now)])), 0);
+    until(&s, "ours never came back", |s| {
+        on_panadapter(s) == ["DL1ABC", "W1AW"]
+    });
+    drop(d);
+    until(&s, "the close never took ours off", |s| {
+        on_panadapter(s) == ["DL1ABC"]
+    });
+    assert!(
+        !spot_commands(&s).iter().any(|c| c == "spot_clear"),
+        "no spot_clear: {:?}",
+        spot_commands(&s)
+    );
+    assert_eq!(others(&s), ["DL1ABC"]);
+    // CONTROL: the specification's forms clear, the other spot with ours.
+    let s = sim(SimDialect::expert_sdr3());
+    s.operator("spot:DL1ABC,CW,14030000,4278255360,cluster;");
+    let d = daemon(&s);
+    renew(&d, &Some(offer(1, vec![spot("K1ABC", 14_025_000, now)])), 0);
+    until(&s, "control: our spot never went up", |s| {
+        on_panadapter(s).contains(&"K1ABC".to_string())
+    });
+    drop(d);
+    until(&s, "control: the close never cleared", |s| {
+        on_panadapter(s).is_empty()
+    });
 }

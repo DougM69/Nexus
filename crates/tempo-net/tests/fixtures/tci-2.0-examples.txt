@@ -246,3 +246,7 @@ x   s   `modulations_list:LSB,USB,DSB,CW,FMN,AM,DIGU,SPEC,DIGL,SAM,DRM;`
 x   s   `protocol:ExpertSDR3,1.5;`
 x   s   `protocol:ExpertSDR3,2.0;`
 x   s   `device:SunSDR2QRP;`
+# AetherSDR's spot forms (src/core/TciProtocol.cpp, cmdSpot and cmdSpotDelete, at 8394342): it
+# draws a spot's colour only as #AARRGGBB, and deletes a spot only by callsign and frequency.
+x   c   `spot:K1ABC,CW,14025000,#FFF23EC0,needed;`
+x   c   `spot_delete:K1ABC,14025000;`

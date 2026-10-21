@@ -736,7 +736,7 @@ impl Session {
             | Command::Set(_)
             | Command::Read(_)
             | Command::Spot { .. }
-            | Command::SpotDelete(_)
+            | Command::SpotDelete { .. }
             | Command::SpotClear
             | Command::RxSensorsEnable { .. }
             | Command::TxSensorsEnable { .. }

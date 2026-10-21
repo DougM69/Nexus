@@ -1118,7 +1118,7 @@ fn a_chrono_asking_for_more_than_a_frame_can_carry_is_dropped_before_audio_is_si
 /// variant, so a new one does not compile until it is classified here too.
 fn every_command(t: Trx) -> Vec<Command> {
     use crate::tci::frame::{AudioRate, IqRate};
-    use crate::tci::wire::{Call, Text, Token};
+    use crate::tci::wire::{Call, SpotColour, Text, Token};
     let hz = |v: i64| Hz::new(v).expect("hz");
     let call = || Call::new("K1ABC").expect("call");
     let mut list = vec![
@@ -1138,10 +1138,24 @@ fn every_command(t: Trx) -> Vec<Command> {
             call: call(),
             mode: Token::new("FT8").expect("mode"),
             hz: hz(14_074_000),
-            argb: 0xFF00_FF00,
+            colour: SpotColour::Decimal(0xFF00_FF00),
             text: Text::new("cq dx").expect("text"),
         },
-        Command::SpotDelete(call()),
+        Command::Spot {
+            call: call(),
+            mode: Token::new("FT8").expect("mode"),
+            hz: hz(14_074_000),
+            colour: SpotColour::Hash(0xFF00_FF00),
+            text: Text::new("cq dx").expect("text"),
+        },
+        Command::SpotDelete {
+            call: call(),
+            hz: None,
+        },
+        Command::SpotDelete {
+            call: call(),
+            hz: Some(hz(14_074_000)),
+        },
         Command::SpotClear,
         Command::RxSensorsEnable {
             on: true,
@@ -1192,7 +1206,7 @@ fn every_command(t: Trx) -> Vec<Command> {
             | Command::Read(_)
             | Command::Stream(_)
             | Command::Spot { .. }
-            | Command::SpotDelete(_)
+            | Command::SpotDelete { .. }
             | Command::SpotClear
             | Command::RxSensorsEnable { .. }
             | Command::TxSensorsEnable { .. }
