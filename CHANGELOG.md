@@ -716,6 +716,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own rogered exchange logs the contact and gets your RR73. The ARRL VHF contests and the contests with the
   standard messages already worked this way. NEEDS-BENCH: ARRL Field Day on FT8 and FT4, a station whose CQ you
   answer and a second station that sends you a rogered exchange.
+- **Field Day: a station signing W9XYZ/M is logged as W9XYZ/M, not `<W9XYZ/M>`.** In the Contest screen on Field
+  Day's messages (ARRL Field Day, Winter Field Day, and FT1, DX1 or FT2 in any contest), a station whose call ends
+  in a suffix such as /M, /4 or /QRP sends its exchange with its call in angle brackets, and a contact with it went
+  into your contest log that way: in the ADIF and Cabrillo files you export, and in the dupe check, so S&P answered
+  that station's next CQ and worked it again. The call is now logged without the brackets, as the ARRL VHF contests
+  and the contests with the standard messages already log it and as WSJT-X does, so that station's next CQ is a dupe
+  like any other. What you send on the air during the contact is unchanged. NEEDS-BENCH: ARRL Field Day on FT8, S&P
+  on a station signing /M or /QRP.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.

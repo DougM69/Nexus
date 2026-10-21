@@ -1355,6 +1355,80 @@ fn the_contests_sp_completes_a_field_day_contact_only_with_the_station_it_called
     }
 }
 
+/// ⭐ THE CONTEST LOGS A HASHED CALL WITHOUT ITS BRACKETS in Field Day's messages, as the ARRL VHF
+/// and standard messages do and as WSJT-X logs the call in its DX call box, which a decoded
+/// message fills with the brackets dropped (decodedtext.cpp 66). W9XYZ/M's call is nonstandard, so
+/// its Field Day exchange names it hashed: `K1ABC <W9XYZ/M> R 1D WI` to S&P, `K1ABC <W9XYZ/M> 1D
+/// WI` to the run. In ARRL Field Day on FT8 and FT4 and in Winter Field Day, S&P and Running, the
+/// row and the exported ADIF's CALL are `W9XYZ/M`, and every over is what it was.
+#[test]
+fn the_contest_logs_a_hashed_call_without_its_brackets() {
+    // The rows, and every CALL the exported ADIF writes.
+    let logged = |e: &Engine| {
+        let adif = e.export_log("adif").expect("the contest exports");
+        let calls = adif
+            .split("<CALL:")
+            .skip(1)
+            .filter_map(|r| {
+                let (len, rest) = r.split_once('>')?;
+                rest.get(..len.parse().ok()?).map(str::to_string)
+            })
+            .collect::<Vec<_>>();
+        (rows_of(e), calls)
+    };
+    // (contest, tier, our exchange's class, W9XYZ/M's)
+    for (contest, tier, mine, theirs) in [
+        ("arrlfd", Tier::Ft8, "2B", "1D"),
+        ("arrlfd", Tier::Ft4, "2B", "1D"),
+        ("wfd", Tier::Ft8, "1H", "1H"),
+    ] {
+        let row = || {
+            (
+                vec![format!("W9XYZ/M CLASS={theirs},SECTION=WI")],
+                vec!["W9XYZ/M".to_string()],
+            )
+        };
+        let what = format!("{contest:?} {} S&P", tier_name(tier));
+        let mut e = engine_for(contest, MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-sp").expect("S&P starts");
+        e.set_tx_enabled(true);
+        e.ingest_decodes_for_test(&[heard("CQ W9XYZ/M")], 2);
+        assert_eq!(
+            keyed(&mut e, 2),
+            Some(format!("W9XYZ/M K1ABC {mine} EMA")),
+            "{what}: the answer"
+        );
+        e.ingest_decodes_for_test(&[heard(&format!("K1ABC <W9XYZ/M> R {theirs} WI"))], 4);
+        assert_eq!(
+            keyed(&mut e, 4).as_deref(),
+            Some("<W9XYZ/M> K1ABC RR73"),
+            "{what}: RR73"
+        );
+        assert_eq!(logged(&e), row(), "{what}: logged");
+
+        let what = format!("{contest:?} {} Running", tier_name(tier));
+        let mut e = engine_for(contest, MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-run").expect("the run starts");
+        let cq = keyed(&mut e, 0).expect("the CQ");
+        e.ingest_decodes_for_test(&[heard(&format!("K1ABC <W9XYZ/M> {theirs} WI"))], 2);
+        assert_eq!(
+            keyed(&mut e, 2),
+            Some(format!("<W9XYZ/M> K1ABC R {mine} EMA")),
+            "{what}: R and ours"
+        );
+        e.ingest_decodes_for_test(&[heard("K1ABC <W9XYZ/M> RR73")], 4);
+        // ARRL Field Day's runner answers RR73 with 73; Winter Field Day's goes back to CQ.
+        let close = match contest {
+            "arrlfd" => "<W9XYZ/M> K1ABC 73".to_string(),
+            _ => cq,
+        };
+        assert_eq!(keyed(&mut e, 4), Some(close), "{what}: the close");
+        assert_eq!(logged(&e), row(), "{what}: logged");
+    }
+}
+
 /// Whether the station is in the contest's S&P, listening, with nothing to send.
 fn listening(e: &Engine) -> bool {
     matches!(&e.mode, Mode::FieldDay { station, running: false }
