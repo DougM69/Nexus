@@ -566,6 +566,11 @@ fn off_after(ticks: &[(Instant, bool)], since: Instant) -> Option<Instant> {
 /// holds, which the shack ends a press at (200 ms, `ptt_hold::GAP`). Paced by a sleep after its
 /// calls, with the state read in line every third time, a loaded run stretched one gap past that
 /// and the shack, rightly, ended the press under a screen still holding it.
+///
+/// The first re-assertion is due 100 ms after the press that took was sent, as the screen's timer
+/// starts with the press itself. Timed from the screen thread's start instead, the first gap also
+/// held the press's answer on its way back and the thread starting, and a starved run stretched it
+/// past 200 ms the same way.
 struct Held {
     done: Arc<AtomicBool>,
     screen: std::thread::JoinHandle<Said>,
@@ -583,8 +588,10 @@ impl Held {
         }
         let done = Arc::new(AtomicBool::new(false));
         let shack = shack_loop(t.s.shared.engine.clone(), done.clone());
+        let mut pressed = Instant::now();
         eventually("presence live for a press", || {
             let _ = ask(&t.screens.main, "get_snapshot", json!({}));
+            pressed = Instant::now();
             ask(&t.screens.main, "set_ptt", json!({"on": true})).is_ok()
         });
         let (window, until) = (t.screens.main.clone(), done.clone());
@@ -599,7 +606,7 @@ impl Held {
         };
         let screen = std::thread::spawn(move || {
             let mut said = Vec::new();
-            let mut last = Instant::now();
+            let mut last = pressed;
             loop {
                 std::thread::sleep(
                     (last + Duration::from_millis(100)).saturating_duration_since(Instant::now()),
