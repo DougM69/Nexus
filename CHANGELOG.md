@@ -795,6 +795,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The in-app updater no longer carries the `zip` library**, which three new advisories (RUSTSEC-2026-0367, -0368 and
   -0369) cover. Nexus's updates are installers, not zip files, so the advisories' code was never used; it is now not
   built in at all.
+- **The radio-sharing ports now cap how much Nexus reads for one command.** When Nexus shares a radio with other
+  programs over the Hamlib rigctld text protocol — the CAT broker and the SDR-program daemons — a single local
+  connection that sent one over-long command, or a stream that was never a complete command, could make Nexus hold
+  it in memory without limit. Every such port now bounds the length of one command line and ends a connection that
+  runs past it; nothing in an over-long line reaches the radio, and ordinary sharing clients, whose commands are
+  short, are unaffected. These ports are reachable only from this computer, as they have always been.
 
 ## [1.19.0] — 2026-10-16
 
