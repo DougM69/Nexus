@@ -299,3 +299,128 @@ fn a_double_click_on_a_cq_from_an_unresolved_call_answers_nothing() {
         }
     }
 }
+
+/// `over`, a message whose second call is hashed, as the FT8 encoder packs it, off the air with
+/// that call's hash changed to one this station's table does not hold (the second call of a
+/// standard message is bits 29-56; its last bit flipped is another hash).
+fn unresolved(over: &str) -> String {
+    let mut bits =
+        bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(over)).expect("the over packs");
+    bits[56] ^= 1;
+    tempo_fast::unpack77(&bits).unwrap_or_default()
+}
+
+/// ⛔ A CQ RUN NEVER ANSWERS A CALLER THE DECODER COULD NOT RESOLVE. `<...>` names nobody, and
+/// WSJT-X builds no message to it: its messages go to the call in its DX call box (`genStdMsgs`,
+/// mainwindow.cpp 9567-9577), which takes only a callsign (`Radio::is_callsign`, 9402). Operate's
+/// FT8 and FT4 Call CQ, first-heard and with a best-caller choice: a caller's grid or report from
+/// `<...>` keys the CQ again, and the next caller in the same period, its call resolved, is
+/// answered, also where the `<...>` caller is the stronger.
+#[test]
+fn a_cq_run_never_answers_an_unresolved_caller() {
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        for strategy in ["first", "strongest"] {
+            for (over, answer) in [
+                ("K1ABC <K9QQQ/M> EN37", "<K9QQQ/M> K1ABC -12"),
+                ("K1ABC <K9QQQ/M> -07", "<K9QQQ/M> K1ABC R-12"),
+            ] {
+                let what = format!("{} {strategy} {over:?}", tier_name(tier));
+                let caller = unresolved(over);
+                assert_eq!(
+                    caller,
+                    over.replace("<K9QQQ/M>", "<...>"),
+                    "{what}: unresolved"
+                );
+                let mut e = Engine::new(ME, MY_GRID, 0);
+                let mut s = e.settings().clone();
+                s.best_caller = strategy.into();
+                e.apply_settings(s);
+                e.set_tier(tier);
+                e.start_cq(None).expect("Call CQ");
+                let (at, cq) = key_next(&mut e, 0);
+                e.ingest_decodes_for_test(&[heard(&caller)], at + 1);
+                let (at, next) = key_next(&mut e, at + 2);
+                assert_eq!(next, cq, "{what}: the CQ again");
+                let louder = modes::Decode {
+                    snr: 0,
+                    ..heard(&caller)
+                };
+                e.ingest_decodes_for_test(&[louder, heard(over)], at + 1);
+                assert_eq!(
+                    key_next(&mut e, at + 2).1,
+                    answer,
+                    "{what}: the next caller, resolved, is answered"
+                );
+            }
+        }
+    }
+}
+
+/// Where the station is, what it has queued, TX, and the RX and TX offsets.
+fn where_it_is(e: &Engine) -> (String, Option<String>, bool, (f32, f32)) {
+    let mode = match &e.mode {
+        Mode::Qso { station, running } => format!("Qso running={running} {:?}", station.state),
+        Mode::FieldDay { .. } => "FieldDay".into(),
+        Mode::Chat => "Chat".into(),
+    };
+    (
+        mode,
+        queued(e),
+        e.tx_enabled,
+        (e.rx_offset_hz, e.tx_offset_hz),
+    )
+}
+
+/// ⛔ NO CLICK WORKS A CALL THE DECODER COULD NOT RESOLVE, whatever its message: a double-click,
+/// a logger's Reply and the Remote page's work command on a call to this station from `<...>`
+/// (its grid, its report, its roger) or on its call to somebody else, and a roster click on
+/// `<...>`, are refused and change nothing, on FT8 and FT4, as no message to `<...>` is built in
+/// WSJT-X (its DX call box takes only a callsign, `Radio::is_callsign`, mainwindow.cpp 9402).
+/// The same message heard with the call resolved is worked as before.
+#[test]
+fn no_click_works_a_call_the_decoder_could_not_resolve() {
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        for (over, answer) in [
+            ("K1ABC <K9QQQ/M> EN37", "<K9QQQ/M> K1ABC -12"),
+            ("K1ABC <K9QQQ/M> -07", "<K9QQQ/M> K1ABC R-12"),
+            ("K1ABC <K9QQQ/M> R-07", "K9QQQ/M <K1ABC> RR73"),
+            ("W9XYZ <K9QQQ/M> EN37", "<K9QQQ/M> K1ABC FN42"),
+        ] {
+            let what = format!("{} {over:?}", tier_name(tier));
+            let heard_as = unresolved(over);
+            assert_eq!(
+                heard_as,
+                over.replace("<K9QQQ/M>", "<...>"),
+                "{what}: unresolved"
+            );
+            let mut e = Engine::new(ME, MY_GRID, 0);
+            e.set_tier(tier);
+            e.set_mode("qso-monitor").expect("QSO mode");
+            e.ingest_decodes_for_test(&[heard(&heard_as)], 2);
+            let before = where_it_is(&e);
+            let click = e.work_station("<...>", None, Some(&heard_as), Some(SNR), Some(1234.0));
+            let reply = e.answer_udp_reply("<...>", &heard_as, SNR, Some(1234.0));
+            let remote =
+                e.call_station_ctx("<...>", None, Some(&heard_as), Some(SNR), Some(1234.0));
+            let roster = e.work_station("<...>", None, None, None, Some(1234.0));
+            assert_eq!(
+                (
+                    [click.is_ok(), reply.is_ok(), remote.is_ok(), roster.is_ok()],
+                    where_it_is(&e),
+                    keyed(&mut e, 4)
+                ),
+                ([false; 4], before.clone(), None),
+                "{what}: no answer"
+            );
+            assert_eq!(before.1, None, "{what}: nothing queued");
+            e.ingest_decodes_for_test(&[heard(over)], 6);
+            e.work_station("<K9QQQ/M>", None, Some(over), Some(SNR), Some(1234.0))
+                .expect("its next is taken");
+            assert_eq!(
+                keyed(&mut e, 8).as_deref(),
+                Some(answer),
+                "{what}: its next, resolved, is answered"
+            );
+        }
+    }
+}

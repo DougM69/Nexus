@@ -850,13 +850,19 @@ impl Station {
                 // unsolicited transmission is unacceptable, and it's not how WSJT-X
                 // works). The operator works a station explicitly by double-clicking
                 // a decode, which builds an `answering`/`start(..)` station.
+                //
+                // ⛔ Never a caller the decoder could not resolve: `<...>` names nobody, and
+                // WSJT-X builds no message to it. Its messages go to the call in its DX call box
+                // (`genStdMsgs`, `widgets/mainwindow.cpp` 9567-9577), which takes only a
+                // callsign (`Radio::is_callsign`, 9402), and the caller's call word
+                // (`deCallAndGrid`, `Decoder/decodedtext.cpp` 212-224) cannot be `...`. The run
+                // keeps calling CQ, and the next caller in the period is answered.
                 (State::CallingCq, Msg::Grid { to, de, grid })
-                    if crate::message::same_call(to, &self.mycall) =>
+                    if crate::message::same_call(to, &self.mycall) && !de.contains("<...>") =>
                 {
                     // `de` is already unhashed: `observe` runs every parsed message through
-                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` and an
-                    // UNRESOLVED `<...>` arrives untouched (it is not a callsign and must not
-                    // be laundered into one).
+                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` (an
+                    // UNRESOLVED `<...>` is left as it is, and passed by above).
                     self.dxcall = Some(de.clone());
                     if !grid.is_empty() {
                         self.dxgrid = Some(grid.clone()); // i3=4 calls carry no grid
@@ -1057,14 +1063,14 @@ impl Station {
                     self.log("got 73 → QSO complete".into());
                 }
                 // We're calling CQ and a station answers with a bare report (grid skipped):
-                // lock onto them, capture the report, and roger with R + our report.
+                // lock onto them, capture the report, and roger with R + our report. Never
+                // `<...>`, as the grid's arm above.
                 (State::CallingCq, Msg::Report { to, de, snr })
-                    if crate::message::same_call(to, &self.mycall) =>
+                    if crate::message::same_call(to, &self.mycall) && !de.contains("<...>") =>
                 {
                     // `de` is already unhashed: `observe` runs every parsed message through
-                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` and an
-                    // UNRESOLVED `<...>` arrives untouched (it is not a callsign and must not
-                    // be laundered into one).
+                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` (an
+                    // UNRESOLVED `<...>` is left as it is, and passed by above).
                     self.dxcall = Some(de.clone());
                     self.rx_report = Some(*snr);
                     self.pending = Some(Msg::RReport {
@@ -1804,9 +1810,45 @@ mod start_context_tests {
             Some("..."),
             "an unknown station must never be adopted as the literal ellipsis"
         );
-        // It stays visibly unresolved rather than becoming a plausible-looking call — which is
-        // the pre-existing behaviour, and the right one: nothing downstream can mistake it.
-        assert_eq!(s.dxcall.as_deref(), Some("<...>"));
+        // Nor as `<...>`: the run passes it by (`a_cq_run_never_answers_an_unresolved_caller`).
+        assert_eq!(s.dxcall, None);
+    }
+
+    /// ⛔ A CQ RUN NEVER ANSWERS A CALLER WHOSE CALL THE DECODER COULD NOT RESOLVE. `<...>` names
+    /// nobody, and WSJT-X 3.0.2 builds no message to it: its messages go to the call in its DX
+    /// call box (`genStdMsgs`, `widgets/mainwindow.cpp` 9567-9577), which takes only a callsign
+    /// (`Radio::is_callsign`, 9402), and the caller's call word (`deCallAndGrid`,
+    /// `Decoder/decodedtext.cpp` 212-224, `[A-Z0-9/]+`) cannot be `...`. A grid or a report from
+    /// one leaves the run calling CQ; the next caller in the same period, its call resolved, is
+    /// answered.
+    #[test]
+    fn a_cq_run_never_answers_an_unresolved_caller() {
+        for (caller, resolved, answer) in [
+            (
+                "KD9TAW <...> EN37",
+                "KD9TAW <W9XYZ/M> EN37",
+                "<W9XYZ/M> KD9TAW -05",
+            ),
+            (
+                "KD9TAW <...> -12",
+                "KD9TAW <W9XYZ/M> -12",
+                "<W9XYZ/M> KD9TAW R-05",
+            ),
+        ] {
+            let mut s = Station::calling_cq(ME, MY_GRID);
+            s.observe(&[dec(caller, -5)]);
+            assert_eq!(
+                (s.state, s.dxcall.clone(), s.pending_text()),
+                (State::CallingCq, None, Some("CQ KD9TAW EN61".into())),
+                "{caller}: passed by"
+            );
+            s.observe(&[dec(caller, -5), dec(resolved, -5)]);
+            assert_eq!(
+                (s.dxcall.as_deref(), s.pending_text().as_deref()),
+                (Some("<W9XYZ/M>"), Some(answer)),
+                "{caller}: the next caller, resolved, is answered"
+            );
+        }
     }
 
     /// FIELD REPORT 2026-08-23: calling RI1FJL, a Franz Josef Land DXpedition working a pileup.

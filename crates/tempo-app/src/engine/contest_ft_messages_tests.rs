@@ -1715,6 +1715,55 @@ fn the_contests_run_passes_by_a_caller_the_decoder_could_not_resolve() {
     }
 }
 
+/// ⛔ THE ARRL VHF AND STANDARD MESSAGES' RUN PASSES BY A CALLER THE DECODER COULD NOT RESOLVE, as
+/// WSJT-X builds no message to `<...>`: its messages go to the call in its DX call box
+/// (`genStdMsgs`, mainwindow.cpp 9567-9577), which takes only a callsign (`Radio::is_callsign`,
+/// 9402). W9XYZ/M's grid or report carrying a hash this station's table does not hold decodes as
+/// `K1ABC <...> EN37`: on FT8 and FT4 the run keys its CQ again, and the next caller in the same
+/// period, its call resolved, is answered.
+#[test]
+fn the_vhf_and_standard_runs_pass_by_a_caller_the_decoder_could_not_resolve() {
+    let bits = |t: &str| {
+        bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(t)).expect("the text packs")
+    };
+    let print = |b: &[i8]| tempo_fast::unpack77(b).unwrap_or_default();
+    for (contest, over, answer) in [
+        (
+            "arrlvhf_jan",
+            "K1ABC <W9XYZ/M> EN37",
+            "<W9XYZ/M> K1ABC R FN42",
+        ),
+        ("txqp", "K1ABC <W9XYZ/M> EN37", "<W9XYZ/M> K1ABC -12"),
+        ("txqp", "K1ABC <W9XYZ/M> -07", "<W9XYZ/M> K1ABC R-12"),
+    ] {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            let what = format!("{contest:?} {} {over:?}", tier_name(tier));
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(tier);
+            e.set_mode("fieldday-run").expect("the run starts");
+            let cq = keyed(&mut e, 0).expect("the CQ");
+            // The second call of a standard message is bits 29-56; its last bit flipped is a hash
+            // the table does not hold.
+            let mut unknown = bits(over);
+            unknown[56] ^= 1;
+            let heard_as = print(&unknown);
+            assert_eq!(
+                heard_as,
+                over.replace("<W9XYZ/M>", "<...>"),
+                "{what}: unresolved"
+            );
+            e.ingest_decodes_for_test(&[heard(&heard_as)], 2);
+            assert_eq!(keyed(&mut e, 2), Some(cq.clone()), "{what}: no answer");
+            e.ingest_decodes_for_test(&[heard(&heard_as), heard(over)], 4);
+            assert_eq!(
+                keyed(&mut e, 4).as_deref(),
+                Some(answer),
+                "{what}: the next caller, resolved, is answered"
+            );
+        }
+    }
+}
+
 /// Whether the station is in the contest's S&P, listening, with nothing to send.
 fn listening(e: &Engine) -> bool {
     matches!(&e.mode, Mode::FieldDay { station, running: false }

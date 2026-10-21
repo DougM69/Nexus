@@ -16419,6 +16419,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
         {
             return Err(Self::UNRESOLVED_CQ.into());
         }
+        // Nor any other click on `<...>`: a call to this station from one, its call to somebody
+        // else, a roster row.
+        if dxcall.contains("<...>") {
+            return Err(Self::UNRESOLVED_CALL.into());
+        }
 
         // Resolve the message we're answering → (parsed Msg, the report we send =
         // the SNR we decoded the DX at). Prefer the clicked line; recover its SNR
@@ -16791,6 +16796,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Why a double-click on a CQ from `<...>` is refused, in a contest or out of one.
     const UNRESOLVED_CQ: &str = "This CQ's call shows as <...>: Nexus has not decoded it in full \
          yet. Click the station's next CQ once its call shows.";
+
+    /// Why any other click on a message from `<...>`, or on `<...>` itself, is refused.
+    const UNRESOLVED_CALL: &str = "This call shows as <...>: Nexus has not decoded it in full \
+         yet. Click the station's next message once its call shows.";
 
     /// A double-click on `de`'s CQ (`text`, which carried `grid`) while a contest runs whose
     /// own FT8/FT4 `messages` apply: the contest's S&P works that station
@@ -30737,7 +30746,8 @@ fn best_caller_decodes(
             _ => continue,
         };
         answers.push(idx);
-        if blocked.iter().any(|b| same_call(b, &de)) {
+        // Nor is a caller the decoder could not resolve, `<...>`, which the sequencer passes by.
+        if blocked.iter().any(|b| same_call(b, &de)) || de.contains("<...>") {
             continue;
         }
         callers.push(CqCaller {
