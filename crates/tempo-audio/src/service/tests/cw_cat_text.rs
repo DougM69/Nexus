@@ -4,9 +4,12 @@
 //! command early, and the radio read the rest as a command of its own. Hamlib's TS-2000 backend
 //! wrote `KY TEST;` and then `FA00007000000      ;` for `b TEST;FA00007000000` (rigctl 4.5.5, a
 //! fake radio on a pty): a retune to 7.000 MHz while the radio keys CW. The text reaches the
-//! keyer from the operator's typing and macros, from a callbook (`{HISNAME}`, `{HISSTATE}`) and
-//! from a computer driving the station. Each test runs the real `RadioLoop::step` against a
-//! rigctld that records every line exactly as it was sent.
+//! keyer from the operator's typing and macros, from Enter Sends Message, from a callbook
+//! (`{HISNAME}`, `{HISSTATE}`) and from a computer driving the station. A message holding a
+//! character the radio's keyer is never handed is refused whole before any of it keys, so Enter
+//! Sends Message never logs a contact whose exchange stopped part way; the keyer's own check on
+//! each word stays behind it. Each test runs the real `RadioLoop::step` against a rigctld that
+//! records every line exactly as it was sent.
 
 use super::cw_stop::{lines_since, step};
 use super::*;
@@ -15,6 +18,11 @@ use std::io::{BufRead, BufReader, Write};
 /// The second command the earlier measurement saw the radio read after the CW text's `;`: VFO A
 /// to 7.000 MHz.
 const RETUNE: &str = "FA00007000000";
+
+/// The CW screen's words for a `;`, by value.
+const SEMICOLON: &str = "CW not sent: \";\" is never handed to the radio's own keyer, because \
+     Kenwood, Yaesu and Elecraft radios read it as the end of a command. Take it out of the \
+     message.";
 
 /// A rigctld that records each line it is sent exactly as sent (only the `\n` that ends it taken
 /// off), and answers `f` 7.030 MHz, `m` CW, `t` not keyed and anything else `RPRT 0`.
@@ -57,11 +65,17 @@ fn recording_rigctld() -> (String, Arc<Mutex<Vec<String>>>) {
 
 /// A TS-2000 on the CAT keyer in the CW section on 40 m, at 20 WPM.
 fn station() -> Arc<Mutex<Engine>> {
+    station_with(|_| {})
+}
+
+/// [`station`], with `change` made to its settings first.
+fn station_with(change: impl FnOnce(&mut tempo_app::settings::Settings)) -> Arc<Mutex<Engine>> {
     let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
     {
         let mut e = engine.lock().unwrap();
         let mut s = e.settings().clone();
         s.rig_model = 2014;
+        change(&mut s);
         e.apply_settings(s);
         e.set_license_class("extra");
         e.set_cw_keyer("cat", 600.0);
@@ -136,11 +150,11 @@ fn keyed(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// After a refused word: the controls, each in the scene the refusal left. A new message keys from
-/// the next tick: nothing waits on a word that was never sent, and none of the refused message is
-/// left to key first. Ordinary text keys exactly as before, its one-character word padded to two
-/// (`b K `, issue #86), and the CW screen's warning goes once a word keys; then the punctuation and
-/// prosigns Nexus's table has (`?`, `=`, `+`, `/`, `(`, `)`) key too.
+/// After a refused message or word: the controls, each in the scene the refusal left. A new message
+/// keys from the next tick: nothing waits on a word that was never sent, and none of the refused
+/// message is left to key first. Ordinary text keys exactly as before, its one-character word
+/// padded to two (`b K `, issue #86), and the CW screen's warning goes once a word keys; then the
+/// punctuation and prosigns Nexus's table has (`?`, `=`, `+`, `/`, `(`, `)`) key too.
 fn controls_key_as_before(s: &mut Scene, send: impl Fn(&mut Engine, &str)) {
     let from = s.sent();
     send(&mut s.engine.lock().unwrap(), "CQ TEST DE KD9TAW K");
@@ -148,7 +162,7 @@ fn controls_key_as_before(s: &mut Scene, send: impl Fn(&mut Engine, &str)) {
     assert_eq!(
         keyed(&s.lines(from)),
         ["b CQ"],
-        "control: a new message keys at once after a refused word"
+        "control: a new message keys at once after a refusal"
     );
     s.run(5);
     assert_eq!(
@@ -168,10 +182,10 @@ fn controls_key_as_before(s: &mut Scene, send: impl Fn(&mut Engine, &str)) {
     assert_eq!(s.keyer_error(), None);
 }
 
-/// ⛔ A `;` TYPED IN THE CW SCREEN (or in an F-key macro) NEVER REACHES THE RADIO'S KEYER. The word
-/// that holds it is not sent, the rest of the message is dropped with it, as for a refused key, and
-/// the CW screen says why, once. The word before it keys as it always did. CONTROLS: the same
-/// scene then keys ordinary text and the punctuation Nexus's table has exactly as before.
+/// ⛔ A `;` TYPED IN THE CW SCREEN (or in an F-key macro) NEVER REACHES THE RADIO'S KEYER, AND
+/// NOTHING OF ITS MESSAGE KEYS. The message is refused whole before any word goes, so it is never
+/// keyed part way and stopped, and the CW screen says why, once. CONTROLS: the same scene then keys
+/// ordinary text and the punctuation Nexus's table has exactly as before.
 #[test]
 fn a_semicolon_typed_in_cw_never_reaches_the_radios_keyer_and_the_cw_screen_says_why() {
     let mut s = Scene::new(station());
@@ -187,13 +201,104 @@ fn a_semicolon_typed_in_cw_never_reaches_the_radios_keyer_and_the_cw_screen_says
     );
     assert_eq!(
         keyed(&lines),
+        Vec::<String>::new(),
+        "nothing of the message keys: it is refused whole, the word before the `;` too"
+    );
+    assert_eq!(
+        s.keyer_error().as_deref(),
+        Some(SEMICOLON),
+        "the CW screen says the `;` was not sent"
+    );
+    controls_key_as_before(&mut s, |e, text| e.send_cw(text));
+}
+
+/// ⛔ ENTER SENDS MESSAGE KEYS NOTHING OF AN EXCHANGE THE RADIO'S KEYER WOULD NOT TAKE, AND ANSWERS
+/// IT AS A REFUSAL, SO THE CONTEST STRIP LOGS NOTHING. The strip logs the contact only once Enter's
+/// send has taken its message. Before, the send took it, the call and the class keyed, the keyer
+/// refused the section (`IL;`, a slip of the finger beside `L` in Settings), and the contact was
+/// already in the log with its exchange cut short. The strip's own line says why, so the CW
+/// screen's warning line does not say it twice. CONTROL: the exchange as it should be keys in full.
+#[test]
+fn enter_sends_nothing_of_an_exchange_the_radios_keyer_would_not_take_so_nothing_is_logged() {
+    let field_day = |section: &'static str| {
+        station_with(move |s| {
+            s.fd_active = true;
+            s.fd_event = "arrlfd".into();
+            s.fd_class = "3A".into();
+            s.fd_section = section.into();
+        })
+    };
+    let mut s = Scene::new(field_day("IL;"));
+    let took = {
+        let mut e = s.engine.lock().unwrap();
+        e.select_peer("K9AAA");
+        assert_eq!(
+            e.preview_cw("! {EXCH}"),
+            "K9AAA 3A IL;",
+            "premise: the exchange holds the `;`"
+        );
+        e.send_cw_armed("! {EXCH}")
+    };
+    s.run(4);
+    assert_eq!(
+        (took, keyed(&s.lines(0)), s.keyer_error()),
+        (Err(SEMICOLON.to_string()), vec![], None),
+        "(Enter's send, what keyed, the CW screen's line): refused, so the strip logs nothing; \
+         nothing of the message keys; said once, in the strip's own line"
+    );
+    // CONTROL: the section as it should be keys in full, and Enter's send takes it.
+    let mut s = Scene::new(field_day("IL"));
+    let took = {
+        let mut e = s.engine.lock().unwrap();
+        e.select_peer("K9AAA");
+        e.send_cw_armed("! {EXCH}")
+    };
+    s.run(4);
+    assert_eq!(took, Ok(()), "control: taken, so the strip logs it");
+    assert_eq!(
+        keyed(&s.lines(0)),
+        ["b K9AAA", "b 3A", "b IL"],
+        "control: the exchange keys in full"
+    );
+    assert_eq!(s.keyer_error(), None);
+}
+
+/// ⛔ THE RADIO'S KEYER KEEPS ITS OWN CHECK, FOR A WORD THAT REACHES IT ANOTHER WAY. Here a message
+/// was queued for a WinKeyer, which puts no text inside a radio command and so takes it as typed,
+/// and the keyer was switched to CAT on the CW screen before the radio loop took a word. The word
+/// with the `;` is refused when its turn comes, the rest of the message is dropped with it, and the
+/// CW screen says why, once. CONTROLS: ordinary text then keys exactly as before.
+#[test]
+fn a_message_queued_for_a_winkeyer_then_keyed_by_the_radio_never_hands_it_a_semicolon() {
+    let engine = station_with(|s| s.winkeyer_port = "/dev/ttyUSB0".into());
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_cw_keyer("winkeyer", 600.0);
+        let text = format!("CQ TEST;{RETUNE} DE KD9TAW");
+        e.send_cw(&text);
+        assert_eq!(
+            (e.cw_sent().last(), e.cw_keyer_error()),
+            (Some(&text), None),
+            "premise: taken for the WinKeyer, as typed"
+        );
+        e.set_cw_keyer("cat", 600.0); // before the radio loop takes a word
+    }
+    let mut s = Scene::new(engine);
+    s.run(6);
+    let lines = s.lines(0);
+    assert!(
+        !lines.iter().any(|l| l.contains(RETUNE)),
+        "the word with the `;` reached the rigctld: {lines:?}"
+    );
+    assert_eq!(
+        keyed(&lines),
         ["b CQ"],
         "the word before it keys, and nothing after it: the rest of the message is dropped"
     );
-    let why = s.keyer_error().expect("the CW screen says why");
-    assert!(
-        why.starts_with("CW not sent: \";\""),
-        "the CW screen says the `;` was not sent: {why}"
+    assert_eq!(
+        s.keyer_error().as_deref(),
+        Some(SEMICOLON),
+        "the CW screen says the `;` was not sent"
     );
     controls_key_as_before(&mut s, |e, text| e.send_cw(text));
 }
@@ -242,9 +347,9 @@ fn a_callbook_name_with_a_semicolon_keys_the_rest_of_the_name_and_never_the_semi
 /// ⛔ CW TYPED ON A COMPUTER DRIVING THE STATION TAKES THE SAME ROAD, AND THE SAME RULE. Remote's CW
 /// reaches the station's own `send_cw` handler (src-tauri), which runs exactly this for a call from
 /// afar: the text as that computer sent it into the engine's one CW queue, then the note that a
-/// start from afar ran. The radio loop keys it as it keys the station's own, so the word with the
-/// `;` never reaches the radio's keyer, the rest is dropped and the CW screen says why. CONTROLS:
-/// from afar, ordinary text and the table's punctuation key exactly as before.
+/// start from afar ran. The message with the `;` is refused whole there, so nothing of it reaches
+/// the radio's keyer and the CW screen says why. CONTROLS: from afar, ordinary text and the table's
+/// punctuation key exactly as before.
 #[test]
 fn cw_typed_from_afar_never_hands_the_radios_keyer_a_semicolon() {
     let from_afar = |e: &mut Engine, text: &str| {
@@ -257,9 +362,9 @@ fn cw_typed_from_afar_never_hands_the_radios_keyer_a_semicolon() {
         &mut s.engine.lock().unwrap(),
         &format!("CQ TEST;{RETUNE} DE KD9TAW"),
     );
-    // Two ticks: `CQ`, then the refused word. The controls' message follows on the very next tick,
-    // well inside the refused word's own length (18 s of Morse), so nothing may wait on it, and its
-    // first word is the one keyed only if the rest of this message was dropped.
+    // Two ticks, where `CQ` and the word with the `;` would go. The controls' message follows on
+    // the very next tick, so its first word is the one keyed only if nothing of this message is
+    // left.
     s.run(2);
     let lines = s.lines(0);
     assert!(
@@ -268,13 +373,13 @@ fn cw_typed_from_afar_never_hands_the_radios_keyer_a_semicolon() {
     );
     assert_eq!(
         keyed(&lines),
-        ["b CQ"],
-        "the word before it keys, and nothing after it: the rest of the message is dropped"
+        Vec::<String>::new(),
+        "nothing of the message from afar keys: it is refused whole"
     );
-    let why = s.keyer_error().expect("the CW screen says why");
-    assert!(
-        why.starts_with("CW not sent: \";\""),
-        "the CW screen says the `;` was not sent: {why}"
+    assert_eq!(
+        s.keyer_error().as_deref(),
+        Some(SEMICOLON),
+        "the CW screen says the `;` was not sent"
     );
     controls_key_as_before(&mut s, from_afar);
 }
