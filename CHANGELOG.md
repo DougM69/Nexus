@@ -486,6 +486,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   class set, transmit was locked out there, and with License Class set to Open nothing stopped it. These channels are
   now simplex with no tone, as APRS is. A repeater you tune still gets its own offset and tone, and so does a
   frequency you set to FM yourself on the SSTV screen.
+- **With two radios, an FM channel picked on the SSTV screen goes to your FM radio.** With 2 m FM set to go to one
+  radio and 2 m SSB to another, picking 145.800 or 144.500 MHz FM on the SSTV screen (or a frequency you set to FM
+  there) went to the SSB radio and put it in FM. It now goes to the radio set up for 2 m FM, as the ISS auto-arm and
+  a repeater tune do.
 - **An unassisted contest entry now stops all CW decoding, not only the AI decoder.** With Settings ▸ Contesting ▸
   Unassisted entry on, the classic decoder still copied CW into the Decode pane, offered the calls it heard as chips
   and filled His Call with its best guess. CQ WW's rules count a CW decoder as QSO-finding assistance, which an

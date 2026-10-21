@@ -4032,7 +4032,8 @@ pub enum RouteMode {
     Digital,
     /// FM voice and FM packet: repeaters, simplex, APRS. The class the FT-991A owns on 2 m.
     Fm,
-    /// SSB/AM voice (and SSTV, which rides the phone segment on the same rig).
+    /// SSB/AM voice (and SSTV, which rides the phone segment on the same rig; an SSTV FM
+    /// channel is held in FM, so it routes as `Fm`).
     Ssb,
     Cw,
     Rtty,

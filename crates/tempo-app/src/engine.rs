@@ -9551,6 +9551,13 @@ impl Engine {
         arm_manual: bool,
     ) {
         self.set_operating_mode_with_arming("phone", false, arm_manual);
+        // An FM channel is held in FM below, so the pick routes on FM: the radio it lands on is
+        // the one then commanded FM, as a repeater tune's is. It routed on Phone's own class and,
+        // with two radios mapped, landed on the SSB one. Below 29 MHz the hold commands nothing
+        // (`rig_mode_effective`), so Phone's own class stands there.
+        if mode.eq_ignore_ascii_case("fm") && dial_mhz >= 29.0 {
+            self.route_intent = Some(crate::settings::RouteMode::Fm);
+        }
         self.set_frequency(dial_mhz, band, mode);
         // A cockpit sideband override describes the section being LEFT, not this channel
         // (work_spot's rule) — without this a stale Phone-cockpit FM pick would key FM
@@ -10170,7 +10177,7 @@ impl Engine {
     /// commanded, and Remote names the radio of that same QSY). Its mirror sent a band pick or a
     /// typed frequency made on the channel to the FM radio, which was then commanded the
     /// section's own mode. A tune that holds an FM channel afterwards names the FM class itself
-    /// (`route_intent`, as `repeater_tune` and `tune_channel` do).
+    /// (`route_intent`, as `repeater_tune`, `sstv_tune` and `tune_channel` do).
     pub fn route_mode(&self, band: &str, dial_mhz: f64) -> crate::settings::RouteMode {
         self.route_mode_for(band, dial_mhz, self.settings.operating_mode)
     }
@@ -62371,16 +62378,18 @@ mod tests {
     fn a_qsy_off_a_kept_fm_channel_routes_on_phones_own_mode() {
         // The kept channel ends BEFORE the QSY is routed, so the radio the QSY lands on is the one
         // Phone's own mode (SSB here) routes to, not the FM radio: the rig is then commanded USB,
-        // and the radio it routed to is the one meant for that.
+        // and the radio it routed to is the one meant for that. The SSB rule is what names that
+        // radio: with none, a 2 m SSB QSY stays on whichever 2 m radio it is on.
         for how in [
             "a 2 m SSB spot clicked in Phone",
             "Phone entered again, following",
         ] {
-            let (mut e, ic9700, ft991a) = three_radio_engine();
+            let mut e = fm_and_ssb_radios_on_2m();
             e.sstv_tune(144.500, "2m", "FM");
             assert_eq!(
-                e.settings.active_radio, ic9700,
-                "{how}: premise: the pick routed on Phone's SSB class"
+                active_radio_name(&e),
+                "FT-991A",
+                "{how}: premise: the pick routed on the FM class"
             );
             e.set_operating_mode_keeping_dial("phone", true, true);
             assert_eq!(e.rig_mode_effective(), "FM", "{how}: premise: kept");
@@ -62389,8 +62398,8 @@ mod tests {
             } else {
                 e.set_operating_mode("phone", true);
             }
-            assert_ne!(e.settings.active_radio, ft991a, "{how}: not the FM radio");
-            assert_eq!(e.settings.active_radio, ic9700, "{how}: Phone's SSB radio");
+            assert_ne!(active_radio_name(&e), "FT-991A", "{how}: not the FM radio");
+            assert_eq!(active_radio_name(&e), "IC-9700", "{how}: Phone's SSB radio");
             assert_eq!(e.rig_mode_effective(), "USB", "{how}: Phone's own mode");
         }
     }
@@ -62491,6 +62500,63 @@ mod tests {
                     "PKTUSB"
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn the_sstv_screens_fm_channels_go_to_the_fm_radio() {
+        // The SSTV screen holds its FM rows in FM (`sstv_tune`), so they route on FM, as the ISS
+        // park, a repeater and APRS do. With 2 m FM mapped to the FT-991A and 2 m SSB to the
+        // IC-9700, the pick routed on Phone's own class: it landed on the IC-9700 and commanded FM
+        // there. Its sideband channels, and an FM word below 29 MHz (which holds nothing), route on
+        // Phone's own class as before, with 10 m FM mapped to the FT-991A as well.
+        let mut got = Vec::new();
+        for (how, dial, band, mode) in [
+            ("the ISS downlink", 145.800, "2m", "FM"),
+            ("the 2 m calling channel", 144.500, "2m-call", "FM"),
+            ("the 20 m channel (control)", 14.230, "20m", "USB"),
+            ("an FM word at 28.680 (control)", 28.680, "10m", "FM"),
+            ("the 6 m channel (control)", 50.680, "6m", "USB"),
+        ] {
+            let mut e = fm_and_ssb_radios_on_2m();
+            let ft991a = e
+                .settings()
+                .radios
+                .iter()
+                .find(|p| p.name == "FT-991A")
+                .unwrap()
+                .id;
+            let mut rules = e.settings().routing_rules.clone();
+            rules.push(crate::settings::RoutingRule {
+                bands: vec!["10m".into()],
+                mode: Some(crate::settings::RouteMode::Fm),
+                context: None,
+                radio: ft991a,
+            });
+            e.set_routing_rules(rules);
+            e.set_operating_mode("digital", false); // FT8 on 20 m, on the FTdx10
+            e.sstv_tune(dial, band, mode);
+            got.push((how, active_radio_name(&e), e.rig_mode_effective()));
+        }
+        let mut e = fm_and_ssb_radios_on_2m();
+        e.tune_channel(145.800, "2m", "FM");
+        got.push((
+            "the ISS park (control)",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let want = |how, radio: &str, mode: &str| (how, radio.to_string(), mode.to_string());
+        assert_eq!(
+            got,
+            vec![
+                want("the ISS downlink", "FT-991A", "FM"),
+                want("the 2 m calling channel", "FT-991A", "FM"),
+                want("the 20 m channel (control)", "FTdx10", "USB"),
+                want("an FM word at 28.680 (control)", "FTdx10", "USB"),
+                want("the 6 m channel (control)", "FTdx10", "USB"),
+                want("the ISS park (control)", "FT-991A", "FM"),
+            ],
+            "an FM channel goes to the FM radio, and is commanded FM there"
         );
     }
 
