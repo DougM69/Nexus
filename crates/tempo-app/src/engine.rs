@@ -7916,20 +7916,45 @@ impl Engine {
     /// Subtracting the two spans gives the whole correction: the AFSK dial is the FSK dial plus
     /// the mark tone, and then both backends put the signal in the identical window. The stored
     /// number stays the FSK dial — the frequency the comments describe and operators quote —
-    /// and this is the one place the offset is applied, so no channel table can drift out of
-    /// step with it.
+    /// and [`Self::rtty_plan_dial`] is the one place the offset is applied, so no channel table
+    /// can drift out of step with it.
     ///
     /// Found in a triage sweep of #114 (ve3wej), who reported only the 20 m entry.
     fn rtty_channel_dial(&self, dial_mhz: f64) -> f64 {
         if self.settings.operating_mode != crate::settings::OperatingMode::Rtty {
             return dial_mhz;
         }
+        self.rtty_plan_dial(dial_mhz)
+    }
+
+    /// [`Self::rtty_channel_dial`]'s correction for a row of the RTTY plan, for the picks that
+    /// know they are RTTY ones whatever section the station is in now: the section's home, a
+    /// band pick naming RTTY and the RTTY cockpit's channel list ([`Self::rtty_channel_plan`]).
+    fn rtty_plan_dial(&self, dial_mhz: f64) -> f64 {
         if self.settings.rtty_backend.eq_ignore_ascii_case("fsk") {
             return dial_mhz;
         }
         // The SAME live mark the gate judges (`rtty_tx_mark_hz`) — a channel pick must land the
         // signal where the plan says regardless of where the operator has netted.
         dial_mhz + self.rtty_tx_mark_hz() / 1_000_000.0
+    }
+
+    /// The RTTY band plan as this station tunes it: each row at the dial its keying backend needs
+    /// ([`Self::rtty_plan_dial`]). Every RTTY channel pick reads the plan through this — the RTTY
+    /// cockpit's channel list (`get_licensed_band_plan`), the section's home and a band pick
+    /// naming RTTY — so each puts the signal where the plan says on either backend.
+    ///
+    /// ⚠️ The correction used to reach none of them. It was applied only in `tune_channel`, whose
+    /// one caller is the ISS auto-arm's FM park, so on the default AFSK every RTTY channel pick
+    /// tuned the plan's FSK dial: the 20 m pick keyed 14.0807–14.0809, inside FT4.
+    pub fn rtty_channel_plan(&self) -> Vec<crate::bandplan::BandChannel> {
+        crate::bandplan::rtty_band_plan()
+            .into_iter()
+            .map(|mut c| {
+                c.dial_mhz = self.rtty_plan_dial(c.dial_mhz);
+                c
+            })
+            .collect()
     }
 
     fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
@@ -8733,7 +8758,8 @@ impl Engine {
                 }),
             // RTTY: park on the band's RTTY watering hole (the built-in plan the cockpit's
             // band selector serves) — only if the operator may key the RTTY emission there.
-            OperatingMode::Rtty => crate::bandplan::rtty_band_plan()
+            OperatingMode::Rtty => self
+                .rtty_channel_plan()
                 .into_iter()
                 .find(|c| c.band == band)
                 .filter(|c| self.rtty_emission_ok(c.dial_mhz))
@@ -8980,7 +9006,8 @@ impl Engine {
                 .into_iter()
                 .find(|c| c.band == band)
                 .map(|c| (c.dial_mhz, c.mode)),
-            OperatingMode::Rtty => crate::bandplan::rtty_band_plan()
+            OperatingMode::Rtty => self
+                .rtty_channel_plan()
                 .into_iter()
                 .find(|c| c.band == band)
                 .filter(|c| self.rtty_emission_ok(c.dial_mhz))
@@ -36381,6 +36408,7 @@ mod tests {
             "LSB",
             "precondition: the RTTY band plan is LSB"
         );
+        let rtty_dial = e.settings().dial_mhz;
         // …Tempo (chat): the Digital policy, no re-home…
         e.set_operating_mode("digital", false);
         // …then the FT cockpit, which is no longer a mode change.
@@ -36395,8 +36423,8 @@ mod tests {
         // …and it is the SIDE that is re-derived, never the dial: a section entry with
         // `follow_freq = false` must still leave the VFO exactly where it was.
         assert!(
-            (e.settings().dial_mhz - 14.083).abs() < 1e-9,
-            "the dial is untouched, got {}",
+            (e.settings().dial_mhz - rtty_dial).abs() < 1e-9,
+            "the dial is untouched at {rtty_dial}, got {}",
             e.settings().dial_mhz
         );
     }
@@ -41330,6 +41358,56 @@ mod tests {
         assert!(
             (fsk_top - 14.083).abs() < 1e-9,
             "the plan's dial is the emission it always described"
+        );
+    }
+
+    /// The correction above reached no pick the operator makes: it was applied only in
+    /// `tune_channel`, whose one caller parks an FM channel. RTTY entered on a band and a band
+    /// pick naming RTTY tuned the plan's FSK dial on both backends, so on the default AFSK the
+    /// 20 m mark went out at 14.0809, inside FT4. They read the plan as this station tunes it now
+    /// (`rtty_channel_plan`), with the live mark, so a netted station lands on the plan too.
+    #[test]
+    fn an_rtty_channel_pick_lands_the_signal_on_the_plan_on_either_backend() {
+        let from_ft8 = |backend: &str| {
+            let mut e = Engine::new("K1ABC", "EN50", 0);
+            e.set_license_class("general");
+            e.settings.rtty_backend = backend.into();
+            e.set_operating_mode("digital", false);
+            e.set_frequency(14.074, "20m", "USB");
+            e
+        };
+        // Where the mark goes out, as the log writes a contact (`logged_signal_offset`).
+        let mark = |e: &Engine| {
+            let (offset, below) = e.logged_signal_offset();
+            let dial = e.settings().dial_mhz;
+            format!("{:.6}", if below { dial - offset } else { dial + offset })
+        };
+        let mut got = Vec::new();
+        for backend in ["afsk", "fsk"] {
+            let mut e = from_ft8(backend);
+            e.set_operating_mode("rtty", true);
+            got.push((backend, "RTTY entered on 20 m", mark(&e)));
+            let mut e = from_ft8(backend);
+            e.set_operating_mode("rtty", false);
+            e.set_frequency(7.080, "40m", "LSB");
+            e.pick_band("20m", Some("rtty"));
+            got.push((backend, "a band pick naming RTTY", mark(&e)));
+        }
+        let mut e = from_ft8("afsk");
+        e.rtty_net(1700.0).expect("unkeyed: the net is taken");
+        e.set_operating_mode("rtty", true);
+        got.push(("afsk", "netted to 1700 Hz, RTTY entered", mark(&e)));
+        let on_the_plan = |backend, how| (backend, how, "14.083000".to_string());
+        assert_eq!(
+            got,
+            vec![
+                on_the_plan("afsk", "RTTY entered on 20 m"),
+                on_the_plan("afsk", "a band pick naming RTTY"),
+                on_the_plan("fsk", "RTTY entered on 20 m"),
+                on_the_plan("fsk", "a band pick naming RTTY"),
+                on_the_plan("afsk", "netted to 1700 Hz, RTTY entered"),
+            ],
+            "the mark goes out on the plan's 14.083"
         );
     }
 

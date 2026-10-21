@@ -494,6 +494,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screen, an ISS pass made the auto-arm retune to 145.800 MHz, and Doppler tuning pulled the radio straight back to
   your satellite. While a satellite holds the radio, the auto-arm now only tells you the ISS is up, as it does on
   other screens, and arms if you release the satellite while the ISS is still up.
+- **RTTY's band channels now put your signal on the RTTY frequency with AFSK keying.** Picking a channel in the RTTY
+  cockpit, entering RTTY on a band, or picking a band for RTTY tuned the radio to the channel's frequency as if it
+  were the signal. With AFSK (the default) the signal sits a mark tone (2.125 kHz) below the dial, so on 20 m it went
+  out at about 14.081 MHz, among the FT4 signals, and on 17 m and 12 m among FT8's and on 15 m among JS8's. With AFSK
+  these picks now tune a mark tone higher (14.0851 MHz on 20 m, as the channel list shows), so the signal lands on the
+  channel's frequency, as with FSK. FSK is unchanged.
 - **An unassisted contest entry now stops all CW decoding, not only the AI decoder.** With Settings ▸ Contesting ▸
   Unassisted entry on, the classic decoder still copied CW into the Decode pane, offered the calls it heard as chips
   and filled His Call with its best guess. CQ WW's rules count a CW decoder as QSO-finding assistance, which an

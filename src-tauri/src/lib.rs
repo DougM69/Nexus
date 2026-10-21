@@ -19855,14 +19855,12 @@ fn get_licensed_band_plan(
     // per-mode dials), license-filtered per band — a Technician sees only the
     // bands their class can key there (RTTY, PSK and JS8 ride data privileges, SSTV
     // rides phone). JS8's list is JS8Call's FrequencyList defaults (bandplan::js8_band_plan),
-    // or the operator's own (bandplan::js8_plan_from).
+    // or the operator's own (bandplan::js8_plan_from). RTTY's rows come at the dial this
+    // station's keying backend tunes for them (Engine::rtty_channel_plan).
     let lower = mode.to_ascii_lowercase();
     if lower == "rtty" || lower == "sstv" || lower == "psk" || lower == "js8" {
         let (plan, priv_mode) = if lower == "rtty" {
-            (
-                tempo_app::bandplan::rtty_band_plan(),
-                OperatingMode::Digital,
-            )
+            (eng.rtty_channel_plan(), OperatingMode::Digital)
         } else if lower == "psk" {
             (
                 tempo_app::bandplan::psk_band_plan(),
@@ -51619,6 +51617,63 @@ mod tests {
         // And nobody LOSES a band by this change: every class lists the same set.
         assert_eq!(general.len(), open.len());
         assert_eq!(tech.len(), open.len());
+    }
+
+    /// The RTTY cockpit's channel list is the RTTY plan as this station tunes it. AFSK's signal
+    /// sits a mark tone below its dial, so there each row comes a mark tone above the plan's FSK
+    /// dial and a pick puts the mark where the plan says, as on FSK, and on the dial RTTY's own
+    /// home tunes. The list served the plan's FSK dial on both backends, so the default AFSK's
+    /// 20 m pick keyed 14.0807–14.0809, inside FT4.
+    #[test]
+    fn the_rtty_channel_list_tunes_the_dial_each_backend_needs() {
+        use std::sync::{Arc, Mutex};
+        use tauri::Manager;
+        let mut got = Vec::new();
+        for backend in ["afsk", "fsk"] {
+            let settings = tempo_app::settings::Settings {
+                rtty_backend: backend.into(),
+                ..tempo_app::settings::Settings::default()
+            };
+            let engine: crate::SharedEngine = Arc::new(Mutex::new(
+                tempo_app::engine::Engine::with_settings(settings),
+            ));
+            let app = tauri::test::mock_builder()
+                .manage(Arc::clone(&engine))
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .expect("a mock app");
+            let row = |band: &str| {
+                super::get_licensed_band_plan(app.state::<crate::SharedEngine>(), "rtty".into())
+                    .expect("the RTTY list")
+                    .into_iter()
+                    .find(|c| c.band == band)
+                    .map(|c| format!("{:.6}", c.dial_mhz))
+            };
+            let (twenty, seventeen) = (row("20m"), row("17m"));
+            // RTTY entered on 20 m: the section's home, beside the list's row.
+            let home = {
+                let mut e = crate::engine_lock(&engine);
+                e.set_frequency(14.074, "20m", "USB");
+                e.set_operating_mode("rtty", true);
+                format!("{:.6}", e.settings().dial_mhz)
+            };
+            got.push((backend, twenty, seventeen, home));
+        }
+        let rows = |backend, twenty: &str, seventeen: &str| {
+            (
+                backend,
+                Some(twenty.to_string()),
+                Some(seventeen.to_string()),
+                twenty.to_string(),
+            )
+        };
+        assert_eq!(
+            got,
+            vec![
+                rows("afsk", "14.085125", "18.107125"),
+                rows("fsk", "14.083000", "18.105000"),
+            ],
+            "AFSK rows a mark tone above the plan, FSK on it, and the home on the list's row"
+        );
     }
 
     /// A MID from the front end is a FILENAME fragment, so the traversal shapes are refused at
