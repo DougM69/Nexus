@@ -15,9 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what answered, such as the program's version and the radio it drives; it only reads, and never transmits or
   changes the radio. The setup wizard looks for a TCI server on this computer when it opens and offers it, and has an
   **SDR program (TCI)** choice. The connection carries the dial, the mode and, with **Audio over TCI** on, the
-  receive audio; Nexus transmits on it and can draw the program's panadapter (the entries below). Spots over TCI
-  come in a later update (their switch is in Settings already and is kept with the radio). The SDR-program setup
-  guide no longer says Nexus cannot use TCI.
+  receive audio; Nexus transmits on it, can draw the program's panadapter and can put Nexus's needed spots on it
+  (the entries below). The SDR-program setup guide no longer says Nexus cannot use TCI.
 - **Transmitting on a TCI radio (Beta).** On a radio whose Connection is TCI, Nexus now transmits through the SDR
   program. PTT on the Phone screen keys the program's own microphone, and Tune keys its tune carrier at its own
   tune drive. With **Audio over TCI** on, as it comes, Nexus's own audio goes to the program over TCI, with no
@@ -33,6 +32,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they still may not send FT8, FT4 or the other slot-timed modes. NEEDS-BENCH: FT8 and FT4 through a real SDR
   program into a dummy load, with Audio over TCI on and then off: the overs' timing at a second receiver, the
   mid-over switch, and Stop TX part way through an over; and CW on the Soundcard keyer.
+- **TCI (Beta): Nexus's needed spots on the SDR program's own panadapter.** On a TCI radio, **Spots on the SDR
+  panadapter** (Settings ▸ Radio ▸ Rig & CAT, off as it comes) now puts the stations on the Needed board that have
+  a frequency (cluster and skimmer spots, and your own decodes) on the SDR program's panadapter, each in the colour
+  the board gives its need, the most wanted first and at most 100 at once. A spot goes once its station has not
+  been heard for 15 minutes, and all of Nexus's spots go when you turn the switch off, change to another radio or
+  Nexus closes the connection. Click one in the SDR program and Nexus tunes to it, as a click on the Needed board
+  does; the click does nothing else: it never turns TX on or starts a contact, and while Nexus is transmitting it
+  is ignored. A click on a spot Nexus did not put there, or on the program's B receiver, is ignored too. When the
+  switch comes on, and when the connection closes, Nexus clears the panadapter's spots, which in some programs also
+  clears spots another program put there. AetherSDR is the exception: its clear would take off every spot it
+  shows, its own cluster and skimmer spots too, so there Nexus takes off only its own, one by one, sends the
+  colours the way AetherSDR draws them, and puts each spot up again before AetherSDR's 30 minutes for it are over.
+  In an unassisted contest entry the Needed board has no cluster spots, so the panadapter has none either.
+  piHPSDR's TCI has no spots. NEEDS-BENCH: on ExpertSDR3, on Thetis and on AetherSDR in front of a Flex, the spots
+  and their colours on the panadapter, a click tuning Nexus (and whether the program tunes itself too), and the
+  spots gone when Nexus closes.
 - **Share by TCI: programs on this computer can use the radio through Nexus.** Settings ▸ Radio ▸ Transmit limits
   & sharing has a new switch, **Share by TCI**, below **Share this radio with other programs**. It is off as it
   comes. Turned on and saved, it makes Nexus a TCI server on this computer: WSJT-X, JTDX, MSHV, Log4OM and other

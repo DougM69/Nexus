@@ -910,6 +910,22 @@ fn cat_waits_for_ready_and_nothing_is_written_after_the_close() {
     assert!(b.wire.take().is_empty());
 }
 
+/// The spot clicks among `events`, as "CALL hz channel" ("-" for none named).
+fn clicks(events: Vec<Event>) -> Vec<String> {
+    events
+        .into_iter()
+        .map(|e| match e {
+            Event::SpotClicked { call, hz, channel } => format!(
+                "{} {} {}",
+                call.as_str(),
+                hz.get(),
+                channel.map_or("-".to_string(), |c| c.to_string())
+            ),
+            other => panic!("{other:?}"),
+        })
+        .collect()
+}
+
 #[test]
 fn spot_clicks_are_reported_and_receive_blocks_reach_the_streams() {
     let mut b = Bench::ready(Config::new(trx(0)));
@@ -917,22 +933,21 @@ fn spot_clicks_are_reported_and_receive_blocks_reach_the_streams() {
         "clicked_on_spot:K1ABC,14025000;rx_clicked_on_spot:0,1,W1AW,7030000;\
          rx_clicked_on_spot:1,0,N0CALL,3530000;",
     );
-    let calls: Vec<String> = b
-        .events()
-        .into_iter()
-        .map(|e| match e {
-            Event::SpotClicked { call, hz } => format!("{} {}", call.as_str(), hz.get()),
-            other => panic!("{other:?}"),
-        })
-        .collect();
     assert_eq!(
-        calls,
-        ["K1ABC 14025000", "W1AW 7030000"],
-        "receiver 1's is not ours"
+        clicks(b.events()),
+        ["W1AW 7030000 1"],
+        "ours, with its channel, at once; receiver 1's is not ours"
     );
     assert!(b.wire.take().is_empty(), "a click writes nothing");
+    b.at(10 + CLICK_PAIR_MS).poll();
+    assert_eq!(
+        clicks(b.events()),
+        ["K1ABC 14025000 -"],
+        "the legacy click, with no twin, once its wait is over"
+    );
     let before = b.streams.received;
-    b.at(11).binary(&block(0, BlockKind::RxAudio));
+    b.at(11 + CLICK_PAIR_MS)
+        .binary(&block(0, BlockKind::RxAudio));
     b.binary(&block(1, BlockKind::RxAudio));
     b.binary(&block(0, BlockKind::Iq));
     assert_eq!(b.streams.received, before + 1);
@@ -940,6 +955,102 @@ fn spot_clicks_are_reported_and_receive_blocks_reach_the_streams() {
     // A frame that does not decode is counted and dropped.
     b.binary(&[0u8; 10]);
     assert_eq!(b.s.snapshot().frames.refused, 1);
+}
+
+/// ONE CLICK IS ONE CLICK: a server that sends a click in both spellings (ExpertSDR3, Thetis,
+/// AetherSDR) is heard once, with the channel the receiver's spelling names, in either order and
+/// whether the two arrive in one message or two. A double click is two. CONTROL: the legacy
+/// spelling alone is still a click, reported once its wait is over.
+#[test]
+fn a_click_in_both_spellings_is_reported_once_whichever_comes_first() {
+    let mut b = Bench::ready(Config::new(trx(0)));
+    let mut seen = Vec::new();
+    // Legacy first, one message.
+    b.at(10)
+        .text("clicked_on_spot:K1ABC,14025000;rx_clicked_on_spot:0,0,K1ABC,14025000;");
+    seen.push(("legacy, then receiver", clicks(b.events())));
+    b.at(10 + CLICK_PAIR_MS).poll();
+    seen.push(("legacy, then receiver: after the wait", clicks(b.events())));
+    // Receiver first, two messages.
+    b.at(300).text("rx_clicked_on_spot:0,0,W1AW,7030000;");
+    b.at(305).text("clicked_on_spot:W1AW,7030000;");
+    seen.push(("receiver, then legacy", clicks(b.events())));
+    b.at(305 + CLICK_PAIR_MS).poll();
+    seen.push(("receiver, then legacy: after the wait", clicks(b.events())));
+    // A double click: both spellings, twice.
+    b.at(600)
+        .text("clicked_on_spot:N0CALL,3530000;rx_clicked_on_spot:0,0,N0CALL,3530000;");
+    b.at(640)
+        .text("clicked_on_spot:N0CALL,3530000;rx_clicked_on_spot:0,0,N0CALL,3530000;");
+    b.at(640 + CLICK_PAIR_MS).poll();
+    seen.push(("a double click", clicks(b.events())));
+    // CONTROL: the legacy spelling alone (ExpertSDR2).
+    b.at(1_000).text("clicked_on_spot:VP2V/K1ABC,7025000;");
+    seen.push(("legacy alone, at once", clicks(b.events())));
+    b.at(1_000 + CLICK_PAIR_MS).poll();
+    seen.push(("legacy alone, after the wait", clicks(b.events())));
+    let want: Vec<(&str, Vec<String>)> = vec![
+        ("legacy, then receiver", vec!["K1ABC 14025000 0".into()]),
+        ("legacy, then receiver: after the wait", vec![]),
+        ("receiver, then legacy", vec!["W1AW 7030000 0".into()]),
+        ("receiver, then legacy: after the wait", vec![]),
+        (
+            "a double click",
+            vec!["N0CALL 3530000 0".into(), "N0CALL 3530000 0".into()],
+        ),
+        ("legacy alone, at once", vec![]),
+        (
+            "legacy alone, after the wait",
+            vec!["VP2V/K1ABC 7025000 -".into()],
+        ),
+    ];
+    assert_eq!(seen, want);
+}
+
+/// ⛔ A CLICK ON ANOTHER TRANSCEIVER'S PANORAMA IS NOT OURS IN EITHER SPELLING: its legacy twin,
+/// which names no transceiver, is settled by the receiver's spelling, in either order. CONTROL:
+/// the same clicks on our transceiver are reported.
+#[test]
+fn a_click_on_another_transceivers_panorama_is_never_ours_in_either_spelling() {
+    let heard = |ours: u32| {
+        let mut b = Bench::ready(Config::new(trx(ours)));
+        b.at(10)
+            .text("clicked_on_spot:K1ABC,14025000;rx_clicked_on_spot:1,0,K1ABC,14025000;");
+        b.at(300).text("rx_clicked_on_spot:1,1,W1AW,7030000;");
+        b.at(310).text("clicked_on_spot:W1AW,7030000;");
+        b.at(310 + CLICK_PAIR_MS).poll();
+        clicks(b.events())
+    };
+    assert_eq!(heard(0), Vec::<String>::new(), "transceiver 1's clicks");
+    assert_eq!(
+        heard(1),
+        ["K1ABC 14025000 0", "W1AW 7030000 1"],
+        "control: on transceiver 1, they are ours"
+    );
+}
+
+/// A legacy click waits exactly its pairing window, and a burst of clicks is held only up to its
+/// bound (the newest kept).
+#[test]
+fn a_legacy_click_waits_its_window_and_a_burst_is_bounded() {
+    let mut b = Bench::ready(Config::new(trx(0)));
+    b.at(10).text("clicked_on_spot:K1ABC,14025000;");
+    b.at(10 + CLICK_PAIR_MS - 1).poll();
+    assert!(clicks(b.events()).is_empty(), "still waiting for its twin");
+    b.at(10 + CLICK_PAIR_MS).poll();
+    assert_eq!(clicks(b.events()), ["K1ABC 14025000 -"]);
+    let burst: String = (0..CLICKS_HELD + 12)
+        .map(|n| format!("clicked_on_spot:K{n}ABC,14025000;"))
+        .collect();
+    b.at(1_000).text(&burst);
+    b.at(1_000 + CLICK_PAIR_MS).poll();
+    let got = clicks(b.events());
+    assert_eq!(got.len(), CLICKS_HELD, "{got:?}");
+    assert_eq!(
+        got.last().map(String::as_str),
+        Some(format!("K{}ABC 14025000 -", CLICKS_HELD + 11).as_str()),
+        "the newest are kept"
+    );
 }
 
 #[test]
@@ -1007,7 +1118,7 @@ fn a_chrono_asking_for_more_than_a_frame_can_carry_is_dropped_before_audio_is_si
 /// variant, so a new one does not compile until it is classified here too.
 fn every_command(t: Trx) -> Vec<Command> {
     use crate::tci::frame::{AudioRate, IqRate};
-    use crate::tci::wire::{Call, Text, Token};
+    use crate::tci::wire::{Call, SpotColour, Text, Token};
     let hz = |v: i64| Hz::new(v).expect("hz");
     let call = || Call::new("K1ABC").expect("call");
     let mut list = vec![
@@ -1027,10 +1138,24 @@ fn every_command(t: Trx) -> Vec<Command> {
             call: call(),
             mode: Token::new("FT8").expect("mode"),
             hz: hz(14_074_000),
-            argb: 0xFF00_FF00,
+            colour: SpotColour::Decimal(0xFF00_FF00),
             text: Text::new("cq dx").expect("text"),
         },
-        Command::SpotDelete(call()),
+        Command::Spot {
+            call: call(),
+            mode: Token::new("FT8").expect("mode"),
+            hz: hz(14_074_000),
+            colour: SpotColour::Hash(0xFF00_FF00),
+            text: Text::new("cq dx").expect("text"),
+        },
+        Command::SpotDelete {
+            call: call(),
+            hz: None,
+        },
+        Command::SpotDelete {
+            call: call(),
+            hz: Some(hz(14_074_000)),
+        },
         Command::SpotClear,
         Command::RxSensorsEnable {
             on: true,
@@ -1081,7 +1206,7 @@ fn every_command(t: Trx) -> Vec<Command> {
             | Command::Read(_)
             | Command::Stream(_)
             | Command::Spot { .. }
-            | Command::SpotDelete(_)
+            | Command::SpotDelete { .. }
             | Command::SpotClear
             | Command::RxSensorsEnable { .. }
             | Command::TxSensorsEnable { .. }

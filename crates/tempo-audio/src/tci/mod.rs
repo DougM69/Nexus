@@ -67,8 +67,13 @@
 //! [`iq`]: the SDR program's IQ drawn in Nexus's RF scope while the radio's switch is on, on a
 //! thread of its own ([`TciDaemon::want_pan`]).
 //!
+//! ## Spots
+//! [`spots`]: Nexus's needed spots on the SDR program's panadapter while the radio's switch is on,
+//! put up by a thread of their own ([`TciDaemon::offer_spots`]); a click on one of them tunes Nexus
+//! and nothing else. Taken off in teardown, after the stops.
+//!
 //! ## Not yet
-//! CW through the SDR program's keyer, and spots.
+//! CW through the SDR program's keyer.
 //!
 //! Nexus's own design, not a port: the protocol core it drives (`tempo_net::tci`) is written from
 //! Expert Electronics' TCI 2.0 specification.
@@ -77,6 +82,7 @@ pub mod audio;
 pub mod iq;
 pub mod registry;
 pub mod shim;
+pub mod spots;
 #[cfg(test)]
 mod tests;
 
@@ -298,6 +304,8 @@ struct Watch {
     /// has its audio: the session's chrono window (`Config::chrono_window_ms`), the limit its first
     /// pull is held to.
     pull_gap: Duration,
+    /// Nexus's spots on the panadapter, and the clicks on them kept for the radio loop ([`spots`]).
+    spots: Arc<spots::Shared>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -730,6 +738,8 @@ impl Drop for TciDaemon {
                 });
             }
             carried = conn.read(|s| s.keyed);
+            // Then Nexus's spots off the panadapter, while the session is still up.
+            self.watch.spots.close(conn);
         }
         self.stop.store(true, Ordering::Relaxed);
         for thread in [self.tcp_thread.take(), self.watch_thread.take()]
@@ -1001,12 +1011,11 @@ fn watch_session(
             } else {
                 "the SDR program stopped"
             }),
-            // Selecting or tuning to a clicked spot is the panorama's later change; never a key.
-            Event::SpotClicked { call, hz } => log(&format!(
-                "spot {} at {} Hz clicked on the SDR program's panorama",
-                call.as_str(),
-                hz.get()
-            )),
+            // Kept for the radio loop, which tunes to it, when it is one of ours; never a key.
+            Event::SpotClicked { call, hz, channel } => {
+                let taken = watch.spots.clicked(&call, hz, channel);
+                log(&spots::click_words(&call, hz, taken));
+            }
             Event::Closed { end, carried } => {
                 tempo_core::applog::warn(
                     "cat",

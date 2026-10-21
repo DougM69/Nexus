@@ -171,6 +171,17 @@ pub const CLOSE_DRAIN: Duration = Duration::from_millis(200);
 /// session goes on; a message over this ends the session ([`End::ProtocolError`]).
 pub const MAX_WS_MESSAGE: usize = 1 << 20;
 
+/// How long a spot click in the legacy spelling (`clicked_on_spot`, which names no transceiver)
+/// waits for the same click in the receiver's spelling (`rx_clicked_on_spot`, which names the
+/// transceiver and the channel). A server that sends both sends them one after the other for one
+/// click (AetherSDR's `TciServer::broadcastSpotClicked`), and the receiver's spelling says whose
+/// panorama it was. A legacy click with no such twin by then is reported on its own.
+pub const CLICK_PAIR_MS: u64 = 250;
+
+/// The most clicks held for their twin at once, in each spelling: a burst of clicks from a server
+/// is not kept without bound.
+const CLICKS_HELD: usize = 8;
+
 /// How the session is set up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Config {
@@ -358,9 +369,16 @@ pub enum Event {
     ForeignKey { on: bool },
     /// The SDR program started (`start;`) or stopped (`stop;`).
     Running(bool),
-    /// The SDR's operator clicked a spot on its panorama: select or tune only, never transmit
-    /// (plan §6.1 item 10).
-    SpotClicked { call: Call, hz: Hz },
+    /// The SDR's operator clicked a spot on its panorama: select or tune only, never transmit.
+    /// Reported once per click on this session's transceiver, whichever spellings the server sends
+    /// it in ([`CLICK_PAIR_MS`]); never for a click the server says was on another transceiver's
+    /// panorama. `channel`: the receive channel the click names (A or B), or `None` from a server
+    /// that named none (the legacy spelling alone).
+    SpotClicked {
+        call: Call,
+        hz: Hz,
+        channel: Option<Channel>,
+    },
     /// The session ended. `carried`: a key of ours that may still be on the air. Nothing follows.
     Closed { end: End, carried: Option<OurKey> },
 }
@@ -449,6 +467,91 @@ struct Keyed {
     stop_ms: Option<u64>,
 }
 
+/// The SDR operator's spot clicks, each reported once. A server that sends a click in both
+/// spellings sends them back to back, in either order; the receiver's spelling decides whose
+/// panorama it was, so its legacy twin is never reported for it. A legacy click is held
+/// [`CLICK_PAIR_MS`] for its twin, then reported on its own ([`Clicks::due`]).
+#[derive(Debug, Default)]
+struct Clicks {
+    /// Legacy clicks waiting for their twin: the call, the frequency, when.
+    held: VecDeque<(Call, Hz, u64)>,
+    /// Receiver-spelled clicks a legacy twin may still follow: the call, the frequency, when.
+    answered: VecDeque<(Call, Hz, u64)>,
+}
+
+impl Clicks {
+    /// A click in the legacy spelling: dropped if its receiver-spelled twin came first, held for
+    /// that twin otherwise.
+    fn legacy(&mut self, call: Call, hz: Hz, now: u64) {
+        self.answered
+            .retain(|(_, _, at)| now.saturating_sub(*at) < CLICK_PAIR_MS);
+        if let Some(i) = self
+            .answered
+            .iter()
+            .position(|(c, h, _)| *c == call && *h == hz)
+        {
+            self.answered.remove(i);
+            return;
+        }
+        if self.held.len() >= CLICKS_HELD {
+            self.held.pop_front();
+        }
+        self.held.push_back((call, hz, now));
+    }
+
+    /// A click in the receiver's spelling: it settles its legacy twin, held or still to come, and
+    /// is reported when it is on `ours`.
+    fn receiver(
+        &mut self,
+        trx: Trx,
+        channel: Channel,
+        call: Call,
+        hz: Hz,
+        ours: Trx,
+        now: u64,
+    ) -> Option<Event> {
+        match self
+            .held
+            .iter()
+            .position(|(c, h, _)| *c == call && *h == hz)
+        {
+            Some(i) => {
+                self.held.remove(i);
+            }
+            None => {
+                if self.answered.len() >= CLICKS_HELD {
+                    self.answered.pop_front();
+                }
+                self.answered.push_back((call.clone(), hz, now));
+            }
+        }
+        (trx == ours).then_some(Event::SpotClicked {
+            call,
+            hz,
+            channel: Some(channel),
+        })
+    }
+
+    /// The legacy clicks whose twin has not come within [`CLICK_PAIR_MS`], oldest first.
+    fn due(&mut self, now: u64) -> Vec<Event> {
+        let mut due = Vec::new();
+        while self
+            .held
+            .front()
+            .is_some_and(|(_, _, at)| now.saturating_sub(*at) >= CLICK_PAIR_MS)
+        {
+            if let Some((call, hz, _)) = self.held.pop_front() {
+                due.push(Event::SpotClicked {
+                    call,
+                    hz,
+                    channel: None,
+                });
+            }
+        }
+        due
+    }
+}
+
 /// The protocol core of one connection.
 pub struct Session {
     config: Config,
@@ -472,6 +575,8 @@ pub struct Session {
     chronos_not_ours: u64,
     chronos_refused: u64,
     timing: Timing,
+    /// The SDR operator's spot clicks, each reported once.
+    clicks: Clicks,
     /// Why the session is closing, and when the close frame goes regardless.
     closing: Option<(End, u64)>,
     events: VecDeque<Event>,
@@ -514,6 +619,7 @@ impl Session {
             chronos_not_ours: 0,
             chronos_refused: 0,
             timing: Timing::default(),
+            clicks: Clicks::default(),
             closing: None,
             events: VecDeque::new(),
             now_ms,
@@ -676,7 +782,7 @@ impl Session {
             | Command::Set(_)
             | Command::Read(_)
             | Command::Spot { .. }
-            | Command::SpotDelete(_)
+            | Command::SpotDelete { .. }
             | Command::SpotClear
             | Command::RxSensorsEnable { .. }
             | Command::TxSensorsEnable { .. }
@@ -869,11 +975,15 @@ impl Session {
                 self.events.push_back(Event::Running(false));
                 self.halt(out, Halt::SdrStopped, now);
             }
-            Notice::ClickedOnSpot { call, hz } => {
-                self.events.push_back(Event::SpotClicked { call, hz });
-            }
-            Notice::RxClickedOnSpot { trx, call, hz, .. } if trx == ours => {
-                self.events.push_back(Event::SpotClicked { call, hz });
+            Notice::ClickedOnSpot { call, hz } => self.clicks.legacy(call, hz, now),
+            Notice::RxClickedOnSpot {
+                trx,
+                channel,
+                call,
+                hz,
+            } => {
+                let click = self.clicks.receiver(trx, channel, call, hz, ours, now);
+                self.events.extend(click);
             }
             _ => {}
         }
@@ -1111,6 +1221,9 @@ impl Session {
             }
             Phase::AwaitReady | Phase::Ready => {}
         }
+        // A legacy spot click whose receiver-spelled twin did not come is reported on its own.
+        let clicks = self.clicks.due(now);
+        self.events.extend(clicks);
         if now
             >= self
                 .last_ping_ms
