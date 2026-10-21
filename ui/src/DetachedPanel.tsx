@@ -41,6 +41,7 @@ import {
   getPropagation,
   getSettings,
   getAllSpots,
+  clickTciSpot,
   selectPeer,
   archiveConversation,
   setFrequency,
@@ -80,6 +81,7 @@ import {
   type FreqMarker,
 } from './api'
 import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
+import { useTciSpots } from './features/tciSpots'
 import { failureToShow, useLatestLogAnswer, useLogStatus } from './features/logSource'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
@@ -291,6 +293,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // Band-map pop-out only: the live spot feed + which calls are in the log (worked).
   const isBandMap = panel === 'bandmapPhone' || panel === 'bandmapCw'
   const [allSpots, setAllSpots] = useState<SpotRow[]>([])
+  // …and the spots programs on the station's TCI server sent, asked when the station says they
+  // changed. A click on one only tunes (`clickTciSpot`).
+  const tciSpots = useTciSpots(isBandMap ? snap?.radio.tciServer?.spots : null)
   // Selection mirrors the shared engine (snap.activePeer), so a station picked in the main
   // window — or in this one — highlights consistently across every window.
   const selected = snap?.activePeer ?? null
@@ -638,6 +643,14 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           onSnap={setSnap}
           onWorkSpot={(s) =>
             onWorkSpot({ call: s.call, band: s.band, mode: s.mode, freqMhz: s.freqMhz })
+          }
+          tciSpots={tciSpots}
+          // ⛔ A program's spot only tunes; the station tells every program of the click.
+          onTciSpot={(s) =>
+            void withErrorToast(
+              () => clickTciSpot(s.call, s.freqMhz),
+              t('shell.pounce.qsy.failed', { call: s.call }),
+            ).then((next) => next && setSnap(next))
           }
           markers={freqMarkers}
           // Jumping back is the station's operator QSY, which refuses while anything transmits.

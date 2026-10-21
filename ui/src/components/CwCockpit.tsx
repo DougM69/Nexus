@@ -271,6 +271,10 @@ interface Props {
   fieldDay?: FieldDayStatus | null
   /** Live cluster spots (all bands/modes); the band-strip filters to CW on the current band. */
   spots?: SpotRow[]
+  /** The spots programs on Nexus's TCI server sent, for the band strip with their source. */
+  tciSpots?: SpotRow[]
+  /** ⛔ A click on a program's spot in the band strip: it only tunes, never `onWorkSpot`. */
+  onTciSpot?: (s: SpotRow) => void
   /** Top need tag per heard call (UPPERCASE) — colours band-strip ticks by need tier. */
   needByCall?: Map<string, NeedTag>
   /** Activity type per heard call (UPPERCASE) — POTA/SOTA/DXped badges on the band strip. */
@@ -442,6 +446,8 @@ export function CwCockpit({
   onSnap,
   fieldDay,
   spots,
+  tciSpots,
+  onTciSpot,
   needByCall,
   typeByCall,
   onWorkSpot,
@@ -1802,6 +1808,8 @@ export function CwCockpit({
             dialMhz={snap.radio.dialMhz}
             txAllowed={snap.radio.txAllowed}
             spots={spots ?? []}
+            tciSpots={tciSpots}
+            onTciSpot={onTciSpot}
             fieldDay={fieldDay}
             spotMode="CW"
             needByCall={needByCall}
