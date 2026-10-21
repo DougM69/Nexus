@@ -519,6 +519,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **WSJT-X UDP: each decode carries the start of the period it was heard in, as WSJT-X sends it.** JTAlert,
+  GridTracker and loggers were given the moment Nexus sent each decode. A decode from the full pass, which finishes
+  a second or more into the next period, carried a time in that next period (a decode of the 12:00:15 period sent
+  at 12:00:31 said 12:00:31), and an early-pass decode a time 12 seconds into its own. Each decode now carries its
+  period's start, 12:00:15, and so does a logger's Replay. ALL.TXT already wrote that time.
 - **CW: "Colors" in the scope's head sits with its colour picker.** The word stood against the zero-beat reading,
   in the same small capitals, and read as part of it, while the picker sat in the middle of the row. The word and
   the picker are now one group after the zero-beat reading, set off from it by a thin line, and clicking the word

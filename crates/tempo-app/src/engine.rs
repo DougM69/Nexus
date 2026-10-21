@@ -29047,6 +29047,15 @@ contact yourself."
         &self.last_wire_decodes
     }
 
+    /// The UTC second the period of the last folded decodes STARTED (`None` before any): the
+    /// time ALL.TXT stamps on their lines and WSJT-X puts on their UDP Decode datagrams. See
+    /// [`crate::alltxt::period_start_unix`]; both passes carry the audio's slot + 1.
+    pub fn last_decode_period_start_unix(&self) -> Option<u64> {
+        self.last_decode_slot.map(|slot| {
+            crate::alltxt::period_start_unix(slot.saturating_sub(1), self.active_slot_secs())
+        })
+    }
+
     /// Every decode of the CURRENT period (for UDP Replay) — the early pass +
     /// boundary stragglers reassembled from history; `last_decodes` alone holds
     /// only the most recent ingest's batch.
