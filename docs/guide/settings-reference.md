@@ -451,14 +451,17 @@ Baud continue across to the right.*
   (UDP)** in place of Serial Port and Baud. See the
   [Icom guide](../rigs/icom.md#nexuss-own-network-connection-beta).
   For an SDR program's own TCI server (ExpertSDR3, Thetis, piHPSDR) there is
-  **TCI (SDR program) — Beta**, offered for every radio: the dial and mode only
-  for now, and nothing transmits on it yet. It puts the **SDR program address**,
+  **TCI (SDR program) — Beta**, offered for every radio: Nexus sets the dial and
+  mode and transmits through the program. It puts the **SDR program address**,
   the **TCI port**, **Find TCI server**, the **Transceiver** and the **SDR
-  program** in place of Rig Model, Serial Port and Baud, with three switches
-  that take effect in a later update (**Audio over TCI**, **SDR panadapter in
-  the scope**, **Spots on the SDR panadapter**). **Find TCI server** reads what
-  the server at that address says about itself and closes, the form's port first
-  and then 50001 and 40001; it never transmits. See
+  program** in place of Rig Model, Serial Port and Baud, with three switches:
+  **Audio over TCI**, on by default, carries the receive audio and Nexus's
+  transmit audio over TCI with no virtual audio cable; **SDR panadapter in the
+  scope**, off by default, draws the program's own spectrum in Nexus's scope;
+  **Spots on the SDR panadapter**, off by default, is not yet in effect.
+  **Find TCI server** reads what the server at that address says about itself
+  and closes, the form's port first and then 50001 and 40001; it never
+  transmits. See
   [TCI: connect to an SDR program's TCI server](../rigs/tci.md).
 - **Network Address** (Network only) — host:port. For a Flex, the WSJT-X-proven
   path is the SmartSDR CAT app on **this** PC: its default TCP port 5002 is
@@ -888,12 +891,13 @@ full power on every mode.*
   - **TCI server port**: 40001 unless something else on this computer already
     has it.
   - **Programs on TCI may transmit**: off by default, shown and set at the
-    station only. On, a program can Tune and key the radio's microphone on the
-    Phone screen, behind every Nexus transmit safeguard, and no program can turn
-    TX on. FT8, FT4 and the other slot-timed modes may not transmit through TCI
-    yet.
-  - **CW macros from programs** and **Spots from programs**: on by default, and
-    not yet in effect.
+    station only. On, a program can Tune, key the radio's microphone on the
+    Phone screen and send CW macros on the CW screen, behind every Nexus
+    transmit safeguard, and no program can turn TX on. FT8, FT4 and the other
+    slot-timed modes may not transmit through TCI yet.
+  - **CW macros from programs**: on by default. A logger's CW macros go out on
+    Nexus's own CW keyer, at the program's speed, while programs may transmit.
+  - **Spots from programs**: on by default, and not yet in effect.
   - **Programs connected**: each connection by number, with its address,
     whether it is receiving audio or transmitting, the last thing Nexus
     refused it, and **Disconnect**.

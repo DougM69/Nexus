@@ -123,7 +123,7 @@ describe('the setup wizard and the TCI connection', () => {
     await waitFor(() => expect(api.tciProbe).toHaveBeenLastCalledWith('192.168.1.30', 50001))
     expect(await screen.findByText(/Found a TCI server at 192\.168\.1\.30:40001: ExpertSDR3 2\.0, SunSDR2QRP\./)).toBeTruthy()
     expect((screen.getByLabelText('TCI port') as HTMLInputElement).value).toBe('40001')
-    expect(screen.getByText(/Nexus controls the radio over TCI, but does not transmit on this connection yet/)).toBeTruthy()
+    expect(screen.getByText(/Nexus controls the radio and transmits over TCI/)).toBeTruthy()
     const draft = finish(onApply)
     expect([draft.rigConn, draft.rigModel, draft.tciHost, draft.tciPort]).toEqual(['tci', 7, '192.168.1.30', 40001])
   })

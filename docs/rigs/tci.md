@@ -19,22 +19,20 @@ model and no virtual COM port.
 
 ## What works today
 
-The TCI connection is **Beta**, and it arrives in parts:
+The TCI connection is **Beta**:
 
 | Part | Today |
 |---|---|
 | The dial and the mode, read and set through the program's TCI server | Works |
 | **Find TCI server**, in Settings and in the setup wizard | Works |
-| Receive audio over TCI | Not yet: the audio still comes from the sound card under **Audio**, so keep the program's virtual audio cable for now |
-| Transmitting over TCI | Not yet: **Nexus does not transmit on this connection** |
-| The program's panadapter in Nexus's scope | Not yet |
+| Receive audio over TCI | Works with **Audio over TCI** on, with no virtual audio cable. If the program stops sending it, Nexus goes back to the sound card under **Audio** and says so |
+| Transmitting through the program | Works: see [Transmitting](#transmitting) |
+| CW over TCI | With the **Soundcard** keyer. Not yet through the program's own keyer |
+| The program's panadapter in Nexus's scope | Works with **SDR panadapter in the scope** on |
 | The stations you need, shown on the program's panadapter | Not yet |
 
-The switches for audio, the panadapter and spots are in Settings already and
-are saved with the radio. They take effect when those parts arrive.
-
-To transmit with an SDR program today, use its CAT server instead, as
-[Hermes Lite 2 and SDR Program Setup](sdr-programs.md) describes.
+The **Spots on the SDR panadapter** switch is in Settings already and is saved
+with the radio. It takes effect when that part arrives.
 
 ---
 
@@ -81,8 +79,8 @@ on the radio.
 | **TCI port** | The port in the program's TCI settings. | 50001 |
 | **Transceiver** | Which of the program's transceivers this radio is, counted from 1. | 1 |
 | **SDR program** | **Automatic** learns the program from what it does. Name ExpertSDR3, Thetis or piHPSDR only if Nexus reads yours wrongly; naming one fills in the port it comes set to. | Automatic |
-| **Audio over TCI** | Receive audio from the program, and Nexus's transmit audio to it, over TCI instead of a virtual audio cable. Not yet in effect. | On |
-| **SDR panadapter in the scope** | The program's own spectrum in Nexus's scope and waterfall. Not yet in effect. | Off |
+| **Audio over TCI** | Receive audio from the program, and Nexus's transmit audio to it, over TCI instead of a virtual audio cable. Off, Nexus uses the sound card under **Audio**, as with any CAT radio. | On |
+| **SDR panadapter in the scope** | The program's own spectrum in Nexus's RF scope and in the Phone and CW scopes. The FT8/FT4 waterfall stays on the receive audio. | Off |
 | **Spots on the SDR panadapter** | The stations you still need, marked on the program's panadapter, 100 at most. Clicking one tunes Nexus to it; it never transmits. Not yet in effect. | Off |
 
 Every field is per radio: each radio card keeps its own.
@@ -93,6 +91,34 @@ The wizard's **How does the radio connect?** step looks for a TCI server on
 this computer (ports 50001 and 40001) when it opens, and offers one it finds as
 a row to pick. It also has an **SDR program (TCI)** choice, with the address,
 the port and **Find TCI server**.
+
+---
+
+## Transmitting
+
+Every Nexus transmit safeguard applies on this connection as on any other: TX
+must be on, **Stop TX** ends what is on the air at once, and your licence and
+power limits hold. Transmitting has been tried against a simulated SDR program
+only, so try it into a dummy load first.
+
+- **PTT** on the Phone screen keys the program's own microphone.
+- **Tune** keys the program's own tune carrier, at its own tune drive.
+- **With Audio over TCI on**, as it comes, Nexus's own audio goes to the
+  program over TCI: FT8, FT4, JS8 and the other digital modes, RTTY, PSK,
+  SSTV, APRS, the voice keyer and the Remote microphone. Nexus keys one of
+  these only once the program has taken its audio, never on the program's
+  microphone. If the program stops taking the audio part way through, Nexus
+  ends that transmission and says why. FT8 and FT4 keep WSJT-X's mid-over
+  switch: a decode that moves the contact on while you transmit changes the
+  rest of the over to the next message.
+- **With Audio over TCI off**, Nexus plays its audio on the sound card under
+  **Audio**, as with any CAT radio, and the program transmits its own input.
+  Route Nexus's audio to that input with a virtual audio cable.
+- **CW** goes out over TCI with the **Soundcard** keyer (**Settings ▸ CW ▸
+  Keyer backend**), as Nexus's own audio. The **CAT** keyer would hand the
+  words to the program's own keyer, which Nexus does not drive yet, so on this
+  connection it sends nothing and the CW screen says the radio did not accept
+  it.
 
 ---
 
@@ -125,8 +151,9 @@ internet.
 
 ## Related guides
 
-- [Hermes Lite 2 and SDR Program Setup](sdr-programs.md): the CAT server route
-  for Thetis and piHPSDR, which carries transmit and audio today.
+- [Hermes Lite 2 and SDR Program Setup](sdr-programs.md): the other way to
+  connect Thetis and piHPSDR, through their CAT server and a virtual audio
+  cable.
 - [Share by TCI](tci-server.md): the other direction, Nexus as the TCI server
   for programs such as WSJT-X on this computer.
 - [Rig Setup Guides](index.md): the connection types, and Test CAT.

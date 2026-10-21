@@ -1693,10 +1693,10 @@ pub struct RadioStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_unkey_failed: Option<SlotUnkeyFailed>,
     /// A slot over (FT8, FT4, JS8 and the other timed-slot modes) lost its audio part way through:
-    /// Flex native DAX audio went off under it (the operator, or the receive floor giving up on
-    /// DAX), or its DAX transmit route went. Nexus ended the over there, rather than leave the
-    /// radio keyed and silent for the rest of it, and halted transmit. Cleared by re-enabling TX.
-    /// ABSENT until it happens, so every snapshot before one is byte-identical.
+    /// the route carrying it went (Flex native DAX audio switched off or given up on by the receive
+    /// floor, or the DAX or TCI transmit route lost). Nexus ended the over there, rather than leave
+    /// the radio keyed and silent for the rest of it, and halted transmit. Cleared by re-enabling
+    /// TX. ABSENT until it happens, so every snapshot before one is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_audio_lost: Option<SlotAudioLost>,
     /// The last FT8 or FT4 over Nexus dropped because the radio keyed it only after its period had

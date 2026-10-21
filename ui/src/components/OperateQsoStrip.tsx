@@ -305,13 +305,18 @@ export function OperateQsoStrip({
           </button>
         </div>
       )}
+      {/* A connection that transmits nothing says so, with its reason on hover, as the other
+          screens' TX strip does (`CockpitTxStrip`), rather than "Receiving" over a Call CQ that
+          cannot key. What is on the air is still shown first. */}
       {radio && (
-        <span className="cq-statecap">
+        <span className="cq-statecap" title={!onAir && radio.txRefusal ? radio.txRefusal : undefined}>
           {onAir
             ? t('operate.strip.state.transmitting')
-            : radio.txEnabled
-              ? t('operate.strip.state.receiving')
-              : t('operate.strip.state.txOff')}
+            : radio.txRefusal
+              ? t('operate.strip.state.connectionNoTx')
+              : radio.txEnabled
+                ? t('operate.strip.state.receiving')
+                : t('operate.strip.state.txOff')}
         </span>
       )}
       {/* The rig has been moved out from under us — stated in the strip that is already always

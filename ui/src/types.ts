@@ -1576,8 +1576,9 @@ export interface RadioStatus {
    *  takes it. Kept until TX is turned on again; absent otherwise, and from a station older than
    *  it. */
   slotUnkeyFailed?: SlotUnkeyFailed | null
-  /** A slot over (FT8, FT4, JS8 …) lost its audio part way through: Flex native DAX audio went off
-   *  under it, or its DAX transmit route went, so the station ended it there and halted transmit.
+  /** A slot over (FT8, FT4, JS8 …) lost its audio part way through: the route carrying it (Flex
+   *  native DAX audio, or Nexus's transmit audio over TCI) went, so the station ended it there and
+   *  halted transmit.
    *  Kept until TX is turned on again; absent otherwise, and from a station older than it. */
   slotAudioLost?: SlotAudioLost | null
   /** The last FT8 or FT4 over the station dropped because the radio keyed it only after its period

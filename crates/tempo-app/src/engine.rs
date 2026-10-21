@@ -18014,10 +18014,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Halt TX because the slot over on the air (FT8, FT4, JS8 and the other timed-slot modes)
     /// lost its audio part way through, and keep the reason on screen until the operator turns TX
     /// on again ([`Self::set_tx_enabled`]). Nexus's own Flex client carries an over to the radio
-    /// as DAX, all of it handed over at the key; native audio going off under it (the operator, or
-    /// the receive floor giving up on DAX) or its DAX transmit route going takes the rest with it,
-    /// and the radio would stay keyed with nothing to send until the over's own end. Operator
-    /// ruling, 2026-10-08, "End the over": the over ends there and TX turns off.
+    /// as DAX, and its own TCI client as TCI audio, all of it handed over at the key; that route
+    /// going under it (native audio switched off, the receive floor giving up on DAX, a transmit
+    /// route lost) takes the rest with it, and the radio would stay keyed with nothing to send
+    /// until the over's own end. Operator ruling, 2026-10-08, "End the over": the over ends there
+    /// and TX turns off.
     /// [`Self::halt_tx`] is that end, the Stop TX: its slot abort has the radio loop unkey and
     /// flush in the same tick.
     ///
@@ -18032,8 +18033,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         tempo_core::applog::info(
             "tx",
             &format!(
-                "{} over: its audio stopped reaching the radio part way through (Flex native DAX \
-                 audio went off), so it was ended; transmit halted",
+                "{} over: its audio stopped reaching the radio part way through (the route \
+                 carrying it, Flex native DAX or TCI, went), so it was ended; transmit halted",
                 self.tier().label()
             ),
         );

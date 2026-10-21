@@ -5968,12 +5968,12 @@ export function SettingsPanel({
 
               {/* The TCI connection: the SDR program's own TCI server, one WebSocket. Find TCI
                   server reads the server's handshake and closes, writing nothing to it. The three
-                  switches at the end are stored per radio now and take effect when audio, the
-                  panadapter and spots over TCI arrive; the hint above them says so. */}
+                  switches at the end are stored per radio; the spots switch takes effect when spots
+                  over TCI arrive, and the note above says so. */}
               {form.rigConn === 'tci' && (
                 <>
-                  {/* A note across the whole row, not one cell's hint: it says what is not ready yet,
-                      and the transmit sentence must not hide in a narrow column. */}
+                  {/* A note across the whole row, not one cell's hint: what works and what is not
+                      ready yet must not hide in a narrow column. */}
                   <p className="settings-note" data-tci-hint>
                     <T k="settings.rigControl.tci.hint" tags={{ b: <strong /> }} />
                   </p>
