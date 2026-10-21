@@ -182,3 +182,94 @@ fn only_the_partners_own_rr73_draws_the_73() {
         );
     }
 }
+
+/// What the station has queued to send next.
+fn queued(e: &Engine) -> Option<String> {
+    match &e.mode {
+        Mode::Qso { station, .. } => station.outgoing().map(|m| m.to_text()),
+        Mode::FieldDay { station, .. } => station.outgoing().map(|m| m.to_text()),
+        _ => None,
+    }
+}
+
+/// `cq` from `<K9QQQ/M>` as the FT8 encoder packs it, off the air, and the same CQ with the hash
+/// of its call changed to one this station's table does not hold (the second call of a standard
+/// message is bits 29-56; its last bit flipped is another hash).
+fn hashed_cq(cq: &str) -> (String, String) {
+    let sent =
+        bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(&format!("{cq} <K9QQQ/M> EN37")))
+            .expect("the CQ packs");
+    let mut unknown = sent.clone();
+    unknown[56] ^= 1;
+    let print = |b: &[i8]| tempo_fast::unpack77(b).unwrap_or_default();
+    (print(&sent), print(&unknown))
+}
+
+/// ⛔ A DOUBLE-CLICK ON A CQ FROM A CALL THE DECODER COULD NOT RESOLVE ANSWERS NOTHING, outside a
+/// contest as inside one. WSJT-X takes a CQ's call from the word after it (`deCallAndGrid`,
+/// decodedtext.cpp 212-224), which `...` cannot be, and puts only a callsign into its DX call box
+/// (`Radio::is_callsign`, mainwindow.cpp 9402), so it builds no message to `<...>`. Operate's FT8
+/// and FT4 with no contest, a directed CQ whose call this station's hash table does not hold
+/// decodes as `CQ TEST <...> EN37` (a plain CQ never carries a hashed call: the packer refuses
+/// it): a double-click on it, a logger's Reply to it and the Remote page's work command are
+/// refused, and change nothing: the mode, what is queued, TX (off), the RX and TX offsets, and
+/// nothing keys. Its next CQ, heard with the call resolved, is worked as before. `CQ DX` is
+/// checked as the decoder would print it.
+#[test]
+fn a_double_click_on_a_cq_from_an_unresolved_call_answers_nothing() {
+    let state = |e: &Engine| {
+        let mode = match &e.mode {
+            Mode::Qso { station, running } => format!("Qso running={running} {:?}", station.state),
+            Mode::FieldDay { .. } => "FieldDay".into(),
+            Mode::Chat => "Chat".into(),
+        };
+        (
+            mode,
+            queued(e),
+            e.tx_enabled,
+            (e.rx_offset_hz, e.tx_offset_hz),
+        )
+    };
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        for (cq, packed) in [("CQ TEST", true), ("CQ DX", false)] {
+            let what = format!("{} {cq:?}", tier_name(tier));
+            let mut e = Engine::new(ME, MY_GRID, 0);
+            e.set_tier(tier);
+            e.set_mode("qso-monitor").expect("QSO mode");
+            let (resolved, unresolved) = if packed {
+                hashed_cq(cq)
+            } else {
+                (format!("{cq} <K9QQQ/M> EN37"), format!("{cq} <...> EN37"))
+            };
+            assert_eq!(unresolved, format!("{cq} <...> EN37"), "{what}: unresolved");
+            e.ingest_decodes_for_test(&[heard(&unresolved)], 2);
+            let before = state(&e);
+            let click = e.work_station("<...>", None, Some(&unresolved), Some(SNR), Some(1234.0));
+            let reply = e.answer_udp_reply("<...>", &unresolved, SNR, Some(1234.0));
+            let remote =
+                e.call_station_ctx("<...>", None, Some(&unresolved), Some(SNR), Some(1234.0));
+            assert_eq!(
+                (
+                    click.is_ok(),
+                    reply.is_ok(),
+                    remote.is_ok(),
+                    state(&e),
+                    keyed(&mut e, 4)
+                ),
+                (false, false, false, before.clone(), None),
+                "{what}: no answer"
+            );
+            assert_eq!(before.1, None, "{what}: nothing queued");
+            assert_eq!(resolved, format!("{cq} <K9QQQ/M> EN37"), "{what}: resolved");
+            e.ingest_decodes_for_test(&[heard(&resolved)], 6);
+            e.work_station("<K9QQQ/M>", None, Some(&resolved), Some(SNR), Some(1234.0))
+                .expect("its next CQ is taken");
+            assert!(e.tx_enabled, "{what}: TX on");
+            assert_eq!(
+                keyed(&mut e, 8).as_deref(),
+                Some("<K9QQQ/M> K1ABC FN42"),
+                "{what}: its next CQ, resolved, is answered"
+            );
+        }
+    }
+}

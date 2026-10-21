@@ -16409,6 +16409,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.tier_is_rx_only(t) || self.tier_is_beacon(t) {
             return Ok(()); // benign — the tier cannot answer; unchanged silent behaviour
         }
+        // A CQ from a call the decoder could not resolve, `<...>`, names nobody: refused before
+        // anything changes, as in a contest ([`Self::answer_cq_in_contest`]). WSJT-X builds no
+        // message to one: it takes a CQ's call from the word after it (`deCallAndGrid`,
+        // decodedtext.cpp 212-224), which `...` cannot be, and puts only a callsign into its DX
+        // call box (`Radio::is_callsign`, mainwindow.cpp 9402).
+        if reply_msg
+            .is_some_and(|t| matches!(Msg::parse(t), Msg::Cq { de, .. } if de.contains("<...>")))
+        {
+            return Err(Self::UNRESOLVED_CQ.into());
+        }
 
         // Resolve the message we're answering → (parsed Msg, the report we send =
         // the SNR we decoded the DX at). Prefer the clicked line; recover its SNR
@@ -16778,6 +16788,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
             && tempo_core::message::is_std_call(&self.settings.mycall)
     }
 
+    /// Why a double-click on a CQ from `<...>` is refused, in a contest or out of one.
+    const UNRESOLVED_CQ: &str = "This CQ's call shows as <...>: Nexus has not decoded it in full \
+         yet. Click the station's next CQ once its call shows.";
+
     /// A double-click on `de`'s CQ (`text`, which carried `grid`) while a contest runs whose
     /// own FT8/FT4 `messages` apply: the contest's S&P works that station
     /// ([`FieldDayStation::answer_cq`]). The rest is what a double-click does outside a contest
@@ -16807,11 +16821,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         dx_freq: Option<f32>,
     ) -> Result<(), String> {
         if de.contains("<...>") {
-            return Err(
-                "This CQ's call shows as <...>: Nexus has not decoded it in full yet. \
-                 Click the station's next CQ once its call shows."
-                    .into(),
-            );
+            return Err(Self::UNRESOLVED_CQ.into());
         }
         let slot = self
             .decode_history

@@ -778,6 +778,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read. It now passes such a CQ by, as Field Day's S&P already did and as WSJT-X answers no `<...>`, and answers the
   station's next CQ once its call shows. NEEDS-BENCH: an ARRL VHF contest on FT8, S&P with TX on, a station signing
   /M or /QRP whose call Nexus has not decoded in full calling `CQ TEST` with its call hashed.
+- **FT8/FT4: double-clicking a CQ from `<...>` no longer answers it outside a contest either.** A station whose
+  call has a suffix or a prefix can show as `<...>` until Nexus has decoded its call in full. Double-clicking its
+  CQ with the contest switch off, a logger's Reply to it, or working it from the Remote page turned TX on, moved RX
+  and TX onto the station and sent your grid to `<...>`, a call no one could read. It now does none of that and says
+  why, as it already did with the contest switch on and as WSJT-X answers no `<...>`. Once the station's call shows
+  in full, a double-click works it as usual. NEEDS-BENCH: FT8, a station signing /M or /QRP whose call Nexus has not
+  decoded in full calling CQ with its call hashed.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.
