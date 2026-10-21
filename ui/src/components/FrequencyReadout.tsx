@@ -102,8 +102,8 @@ interface Props {
    * While it differs from `dialMhz` the station has not shown it yet, so it renders dimmed with a
    * trailing ellipsis and `aria-busy`: what you see is what was asked for, not what the radio has
    * confirmed. When the station's reading catches up the two agree and it renders as any other
-   * dial. It is never left standing — `WheelTuning` reverts it, and says so, if the station never
-   * confirms it (see PROVISIONAL_MS there). */
+   * dial. Nothing passes it since the hosted page's wheel tuning went; whatever passes it next must
+   * not leave it standing: revert it, and say so, if the station never confirms it. */
   provisionalMhz?: number
 }
 

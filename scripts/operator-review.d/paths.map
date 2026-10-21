@@ -172,4 +172,3 @@ bandplan | crates/tempo-core/src/channel.rs | channelised segments such as the f
 bandplan | ui/src/band.ts | the UI's own band arithmetic — frequency to band, and back
 bandplan | ui/src/components/Band*.tsx | the band pickers, menus, strips and maps: what the operator is offered
 bandplan | ui/src/components/FrequencyControl.tsx | where the operator types or spins a frequency
-bandplan | ui/src/remote-web/band-choices.ts | the same offer, made to a Remote browser
