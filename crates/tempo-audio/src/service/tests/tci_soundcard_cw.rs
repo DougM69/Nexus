@@ -588,6 +588,56 @@ fn with_audio_over_tci_off_a_soundcard_cw_macro_keys_plainly_and_plays_on_the_so
     assert!(s.sim.tx_audio(0).is_empty(), "audio sent over TCI");
 }
 
+/// ⭐ A SOUNDCARD CW MACRO THAT WENT OUT WHOLE ON TCI LEAVES NO WARNING ON THE CW SCREEN, with Audio
+/// over TCI on and off. Each word after the first asks for the key again while the over still holds
+/// it, and the TCI client refuses a second key of ours by design (one of ours is on the air); that
+/// refusal is not the radio declining PTT, so the CW screen must not say it was.
+#[test]
+fn a_soundcard_cw_macro_that_went_out_whole_on_tci_leaves_no_warning() {
+    let mut lines = Vec::new();
+    for audio in [true, false] {
+        let mut s = Scene::new(|e| {
+            let mut settings = e.settings().clone();
+            settings.tci_audio = audio;
+            e.apply_settings(settings);
+            soundcard_cw(e);
+        });
+        if audio {
+            s.routed();
+        } else {
+            s.run(300);
+        }
+        s.engine().send_cw(MACRO);
+        s.run_until("the macro never unkeyed", |s| {
+            s.trx_writes().iter().any(|c| c == "trx:0,false")
+        });
+        let whole = MACRO
+            .split_whitespace()
+            .map(|w| tempo_core::cw::morse_samples(w, WPM, PITCH, tempo_fast::SAMPLE_RATE as u32))
+            .collect::<Vec<_>>()
+            .concat();
+        if audio {
+            let rate = tx_rate(&tx_frames(&s.sim.log()));
+            assert_eq!(
+                heard(&s.sim.tx_audio(0), rate),
+                MACRO_HEARD,
+                "premise: the whole macro went out"
+            );
+        } else {
+            assert!(
+                *s.card.played.lock().unwrap() == whole,
+                "premise: the whole macro went out"
+            );
+        }
+        lines.push((audio, s.engine().cw_keyer_error()));
+    }
+    assert_eq!(
+        lines,
+        [(true, None), (false, None)],
+        "(Audio over TCI, the CW screen's warning line)"
+    );
+}
+
 /// ⛔ THE CAT KEYER ON A TCI RADIO KEYS NOTHING, AND THE CW SCREEN SAYS THE RADIO DID NOT TAKE IT.
 /// The TCI client does not drive the SDR program's own CW keyer, so its rigctld answers the radio's
 /// keyer (`b`) as a backend that has none. The program is put in CW; the F-key's words reach no key,

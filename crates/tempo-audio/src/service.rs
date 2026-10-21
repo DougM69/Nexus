@@ -10613,6 +10613,9 @@ impl RadioLoop {
                             // sent while nothing reached the air), and the warning says why
                             // ([`Self::key_over`]). (Audio-routing problems can't be detected
                             // here — see the Soundcard control's caveat.)
+                            // A word after the first goes out on the key an earlier word of this
+                            // over took, still held through its word space and tail.
+                            let continues = now < self.cw_keying_until;
                             self.ensure_commanded(rig); // read-only launch: assert before key
                             self.publish_tx_intent_now(); // before keying
                             let key = self.key_over(rig, false);
@@ -10634,12 +10637,21 @@ impl RadioLoop {
                                     // mid-message on a later word the radio does key.
                                     eng.cw_key_refused();
                                 }
-                                eng.set_cw_keyer_error(key.warns().then(|| {
-                                    "Soundcard keyer: the rig didn't accept PTT. Check your PTT \
-                                     method + that Nexus's audio output is routed to the rig \
-                                     (like FT8). If in doubt, use the WinKeyer or CAT keyer."
-                                        .to_string()
-                                }));
+                                // Such a word rides that key whatever a second key is answered
+                                // ([`KeyUp::Held`]), and Nexus's TCI and Flex clients refuse a
+                                // second key of ours by design while the first is on the air. That
+                                // is no PTT problem, so the warning line stays as this over's own
+                                // key left it: telling the operator to switch keyers there sent
+                                // them, on TCI, to the CAT keyer, which keys nothing.
+                                if !(continues && key == KeyUp::Held) {
+                                    eng.set_cw_keyer_error(key.warns().then(|| {
+                                        "Soundcard keyer: the rig didn't accept PTT. Check your \
+                                         PTT method + that Nexus's audio output is routed to the \
+                                         rig (like FT8). If in doubt, use the WinKeyer or CAT \
+                                         keyer."
+                                            .to_string()
+                                    }));
+                                }
                             }
                         }
                     } else {

@@ -435,6 +435,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can also import a copy into the Logbook like any ADIF file.
 
 ### Fixed
+- **CW on the Soundcard keyer no longer warns of a PTT problem after a message that went out whole on a TCI
+  radio.** Each word after the first asks for the transmitter again while the first word's key still holds it, and
+  the TCI connection refuses a second key while one of Nexus's is on the air. The CW screen read that as "the rig
+  didn't accept PTT" and suggested the WinKeyer or the CAT keyer (which keys nothing on TCI), though every word had
+  gone out. Those words now leave the CW screen as the message's first word left it. A message whose first key the
+  radio refuses still says so, as before.
 - **Moving from SSTV to the Phone cockpit no longer retunes the radio.** If you reached an SSTV frequency on the
   radio's own knob, or Nexus opened on the SSTV screen, clicking Phone moved the radio to the phone segment's default
   frequency or your last phone frequency. It now stays on the SSTV frequency until you move it: by tuning, a band or
