@@ -89,6 +89,38 @@ it('says when the station could not confirm a device the service approved, and w
   expect(screen.getAllByRole('button', { name: EN['remote.approve'] }).length).toBe(2)
 })
 
+// A device added by signing in is listed approved by the service, and the station grants it nothing until it is approved
+// here (`remote_service::account::GRANTS_ON_SIGN_IN`): its row asks, as a device added at the station asks, with Approve, and
+// never says the station could not confirm it (it could).
+it('shows a device added by signing in as asking, with Approve, until it is approved here', async () => {
+  const computer = crypto.randomUUID(), browser = crypto.randomUUID(), key = 'ab'.repeat(32)
+  const devices = [
+    { id: computer, name: 'DESKTOP-7Q', approved: 1, expiresAt: Date.now() + 600000, key, kind: 'computer' as const,
+      platform: 'windows' as const, addedBy: 'account' as const },
+    { id: browser, name: 'Chrome on Windows', approved: 1, expiresAt: Date.now() + 600000, key, addedBy: 'account' as const },
+  ]
+  const actions = shack({ ...bound({ unconfirmed: { [computer]: 'approveAtStation', [browser]: 'approveAtStation' } }, devices),
+    pinnedDevices: [] })
+  await screen.findByText(EN['remote.native.computerAsks'])
+  expect(screen.getByText(EN['remote.native.asks'])).toBeTruthy()
+  expect(screen.queryByText(EN['remote.account.unconfirmed']), 'it was confirmed').toBeNull()
+  expect(screen.queryByText(EN['remote.native.computerKeyNotPinned']), 'never approved here').toBeNull()
+  expect(screen.getAllByText(EN['remote.account.addedByAccount']).length).toBe(2)
+  fireEvent.click(screen.getAllByRole('button', { name: EN['remote.approve'] })[1])
+  await waitFor(() => expect(actions).toEqual([{ type: 'device', deviceId: computer, approve: true, transmit: false, key, kind: 'computer' }]))
+})
+
+// Someone invited to operate holds what the owner's own other computer holds. The form says so where Operate is offered,
+// so the owner invites to operate only someone they would hand the shack to.
+it('says what Operate gives where it is offered, and not for Listen', async () => {
+  shack(bound({}))
+  const role = await screen.findByLabelText(EN['remote.account.role']) as HTMLSelectElement
+  expect(role.value, 'Operate is offered first').toBe('operate')
+  expect(screen.getByText(EN['remote.account.operateIsYours'])).toBeTruthy()
+  fireEvent.change(role, { target: { value: 'listen' } })
+  expect(screen.queryByText(EN['remote.account.operateIsYours']), 'CONTROL: Listen').toBeNull()
+})
+
 it('invites someone with a role, lists the people invited, and takes an invitation back', async () => {
   const actions = shack(bound({ people: [{ mailbox: 'k9.guest@example.test', role: 'listen' }] }))
   const person = await screen.findByText('k9.guest@example.test')

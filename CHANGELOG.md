@@ -305,8 +305,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into a dummy load.
 - **Nexus Remote: add your station to a second PC by signing in, with no code (Beta, test builds).** In **Stations on
   this network** on the second PC, press **Sign in** and sign in to Nexus Remote in your web browser with the account
-  your station is linked to, or one its owner invited to operate it. The station is then on that PC, on its own
-  network and over the internet, in one step: no code to type and nothing to press at the shack. Nexus finds the
+  your station is linked to, or one its owner invited to operate it. The station is then on that PC on its own
+  network in one step, with no code to type and nothing to press at the shack. Over the internet the PC waits until
+  you approve it at the shack under Remote access, where Nexus asks with the PC's key: a sign-in alone never lets a PC
+  or a browser operate the station over the internet. Nexus finds the
   station on the network by name, or asks for its address, and before it connects it checks that the station Nexus
   Remote lists is the one its owner signed in for at the shack; the shack checks the PC's sign-in itself in turn. The
   station must be signed in to Nexus Remote at the shack first (Settings → Station → Remote access). A PC already paired
@@ -329,8 +331,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Nexus Remote: add your station from a PC that has never been on its network (Beta, test builds).** A laptop away
   from home, or a friend you invited who lives elsewhere, can now sign in from **Stations on this network** and keep
   the station: when Nexus does not find it on the network the PC is on, press **Not on this network** and the station
-  is added over the internet. **Operate from this computer** then drives it over the internet road (part of Nexus
-  Remote's paid service). The first time that PC is on the station's own network, press **Sign in** on the station's
+  is added over the internet, waiting until you approve the PC at the shack under Remote access. **Operate from this
+  computer** then drives it over the internet road (part of Nexus Remote's paid service). The first time that PC is on the station's own network, press **Sign in** on the station's
   row there once: the station is then on the PC on its network too, with the same keys and no second device at
   Nexus Remote, and from then on it signs in again every 30 days as any other. NEEDS-BENCH: a laptop on a phone hotspot
   that has never been on the shack's network, then the same laptop at home.
@@ -415,6 +417,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a CQ, tight in a contest, and too slow to win a pileup, where it tells you when not to call.
 
 ### Changed
+- **Nexus Remote: inviting someone to operate says what that gives them.** Under Settings ▸ Station ▸ Remote access ▸
+  People, with **Operate** chosen, the form now says that someone invited to operate can do all you can from another
+  computer: transmit under your callsign, edit, export or delete your log, upload with your saved logins (LoTW signed
+  with your certificate), spot under your call and read your Winlink mail. Invite to operate only someone you would
+  hand the shack to; **Listen** gives none of that.
 - **FT8/FT4: a late reply changes the over already on the air, as in WSJT-X.** When your partner's reply is
   decoded after your over has started (a weak R-report or RR73 that only the full decode finds), Nexus used to send
   the old message to the end of the over and the right one an over later. It now switches the rest of the over to the
@@ -973,6 +980,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your browser; the watch-and-control workspace it replaced is gone from the page.
 
 ### Security
+- **Nexus Remote: a config profile saved from a computer driving the station no longer carries the settings set at the
+  station only.** Profiles are kept at the station, and loading one there applies what it holds. A profile saved from a
+  computer driving the station now keeps the transmit limits and safety stops, the switches that let other programs or
+  a browser transmit, the PTT method, port and lines, the TQSL path and the addresses your logging-service keys are sent
+  to as the station's own profile of that name has them, and a new one carries none of them, so loading it keeps the
+  station's own. Profiles saved at the station, and loading them there, are unchanged.
+- **Nexus Remote: the CW and RTTY keying lines and the Flex client's Beta are set at the station only.** A settings
+  save from a computer driving the station now keeps the station's CW keyer backend, its keyline serial port and line
+  and the WinKeyer port, the RTTY keying backend with the FSK serial port and line, and each radio's **Let Nexus send
+  CW, Tune and ATU through the native Flex client** switch. On that computer they are greyed out and say "Set at the
+  station", with the station's own value. The station's own Settings window changes them as before.
 - **The certificate checks behind Nexus's downloads no longer trust the distrusted emSign certificates.** Nexus's HTTPS
   (propagation data, maps, the update check and the other downloads) now uses the releases of its certificate libraries that
   drop the emSign certificates whose private keys were exposed (RUSTSEC-2026-0381, 0382 and 0383, published 20 October 2026).

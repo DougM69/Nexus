@@ -3,7 +3,7 @@ import { getRemoteStationStatus, remoteStationAction } from '../api'
 import { Dialog } from '../components/ui/Dialog'
 import { t } from '../i18n'
 import { shortFingerprint } from '../remote-web/stream-protocol'
-import { isNative, PLATFORM_NAMES, type RemoteStationStatus } from './types'
+import { isNative, PLATFORM_NAMES, waitsForApprove, type RemoteStationStatus } from './types'
 
 /** How often the shack looks for a browser asking to stream, while Remote is on. Each look is the
  *  Refresh the Remote access panel makes (one request to the service); with Remote off, none is made. */
@@ -98,16 +98,18 @@ export function RemoteApprovalPrompt() {
 
   const fingerprint = device?.key ? shortFingerprint(device.key) : ''
   const platform = device?.platform ? PLATFORM_NAMES[device.platform] : ''
+  // Approved before, here: never a device added by its sign-in that waits for its first Approve here.
+  const again = !!device && device.approved === 1 && !waitsForApprove(status, device.id)
   return <Dialog
     open={!!device}
     // Escape and a click outside: closed, and nothing answered. The request stays in Settings.
     onOpenChange={open => { if (!open && current) settle(current) }}
     title={!device ? '' : isNative(device) ? t('remote.approval.computerTitle', { computer: device.name })
       : t('remote.approval.title', { browser: device.name })}
-    description={!device ? undefined : isNative(device) ? device.approved === 1
+    description={!device ? undefined : isNative(device) ? again
       ? t('remote.approval.computerBodyAgain', { platform, key: fingerprint })
       : t('remote.approval.computerBody', { platform, key: fingerprint })
-      : device.approved === 1
+      : again
         ? t('remote.approval.bodyAgain', { key: fingerprint })
         : t('remote.approval.body', { key: fingerprint })}
     className="remote-approval"

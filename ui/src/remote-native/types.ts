@@ -66,7 +66,8 @@ export type AccountStatus = {
   /** Devices granted on their own proof since Nexus started, until dismissed: the notice at the shack. */
   added: { deviceId: string; name: string; kind: DeviceKind; platform?: DevicePlatform | null; key?: string | null
     role: AccountRole; guest: boolean }[]
-  /** Devices the service approved on a proof the station could not confirm, each with why. */
+  /** Devices the service approved on their own proof that the station granted nothing, each with why: a proof it
+   *  could not confirm, or `approveAtStation` ([`waitsForApprove`]). */
   unconfirmed: Record<string, string>
   /** Devices removed here that the service has not heard of yet. */
   removals: string[]
@@ -79,6 +80,11 @@ export type DevicePlatform = 'windows' | 'macos' | 'linux' | 'ios' | 'android'
 export const PLATFORM_NAMES: Record<DevicePlatform, string> = { windows: 'Windows', macos: 'macOS', linux: 'Linux', ios: 'iOS', android: 'Android' }
 /** Nexus on another computer or a phone (the native client), not a browser. */
 export const isNative = (device: { kind?: DeviceKind }) => device.kind === 'computer' || device.kind === 'phone'
+/** A device added by its own sign-in, whose proof the station checked, waiting for Approve here: the station grants
+ *  nothing on a sign-in alone (`remote_service::account::GRANTS_ON_SIGN_IN`). The service lists it as approved, and it
+ *  asks as a device added at the station asks; the station never approved it. */
+export const waitsForApprove = (status: RemoteStationStatus | null | undefined, deviceId: string) =>
+  status?.account?.unconfirmed?.[deviceId] === 'approveAtStation'
 export type RemoteStationAction =
   | { type: 'begin'; name: string }
   | { type: 'refresh' | 'cancel' | 'enable' | 'disable' | 'forget' }

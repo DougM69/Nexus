@@ -175,7 +175,7 @@ pub(crate) const PRESENCE_BOUND: [&str; 7] = [
 /// that let the station transmit with no press at it (a switch that transmits by itself, or one that
 /// lets a program at the shack or a browser start a transmission there) and the guards on a
 /// transmission (what stops or caps one by itself, the power ceilings, the licence privileges, and
-/// the line that keys the transmitter), the one setting that names a program for the shack to run
+/// the lines that key the transmitter), the one setting that names a program for the shack to run
 /// (the TQSL path), and the TCI server's settings. From afar a save keeps the shack's own value of
 /// each ([`keep_the_shacks_transmit_settings`], [`keep_the_shacks_radio_ptt`]): they are set at the
 /// shack only. So are the addresses Nexus sends a stored key or password to
@@ -256,6 +256,21 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     };
     save.ptt_method = method.clone();
     save.ptt_serial_port = port.clone();
+    // …and the other lines that key it: CW's keyer, its keyline's port and line and the WinKeyer's
+    // port (the radio loop opens a CW key port as soon as its keyer is chosen, the CAT port among
+    // them), and how RTTY keys, with true FSK's port and line.
+    save.cw_keyer = shack.cw_keyer;
+    save.cw_key_port = shack.cw_key_port.clone();
+    save.cw_key_line = shack.cw_key_line.clone();
+    save.winkeyer_port = shack.winkeyer_port.clone();
+    save.rtty_backend = shack.rtty_backend.clone();
+    save.rtty_fsk_port = shack.rtty_fsk_port.clone();
+    save.rtty_fsk_line = shack.rtty_fsk_line.clone();
+    // The Flex client's Beta that lets it start CW, Tune and the ATU no bench has confirmed: the
+    // radio's own, as its PTT is.
+    save.flex_native_unbenched = edited.map_or(shack.flex_native_unbenched, |radio| {
+        radio.flex_native_unbenched
+    });
     // ⛔ The one setting that names a program for the shack to run: TQSL, which signs a LoTW upload
     // from the Upload button (which runs from afar too) or the automatic batch, with nobody at the
     // shack to see what it was. Every other path a save carries is data: a voice-keyer slot's WAV,
@@ -264,8 +279,9 @@ pub(crate) fn keep_the_shacks_transmit_settings(
 }
 
 /// What one radio's edit from afar may not change ([`SETTINGS_FROM_AFAR`]): its PTT method and
-/// port, put back into `patch` as the shack has them for radio `id`. From the shack's own screen
-/// (`None`), or for a radio the shack does not have, the patch is taken as it came.
+/// port, and the Flex client's Beta for CW, Tune and the ATU, put back into `patch` as the shack has
+/// them for radio `id`. From the shack's own screen (`None`), or for a radio the shack does not
+/// have, the patch is taken as it came.
 pub(crate) fn keep_the_shacks_radio_ptt(
     shack: &tempo_app::settings::Settings,
     id: u32,
@@ -278,6 +294,7 @@ pub(crate) fn keep_the_shacks_radio_ptt(
     if let Some(radio) = shack.radios.iter().find(|p| p.id == id) {
         patch.ptt_method = radio.ptt_method.clone();
         patch.ptt_serial_port = radio.ptt_serial_port.clone();
+        patch.flex_native_unbenched = radio.flex_native_unbenched;
     }
 }
 
@@ -420,7 +437,7 @@ pub(crate) fn keep_the_shacks_settings(
 /// addresses the shack sends a stored key or password to
 /// ([`keep_the_shacks_credential_addresses`]). A test changes each setting alone in a save from
 /// afar and holds this list to exactly the ones that come back.
-pub(crate) const STATION_ONLY_SETTINGS: [&str; 45] = [
+pub(crate) const STATION_ONLY_SETTINGS: [&str; 53] = [
     "js8AprsRelay",
     "beaconTxPercent",
     "cqPauseSecs",
@@ -461,6 +478,14 @@ pub(crate) const STATION_ONLY_SETTINGS: [&str; 45] = [
     "catSerialHandshake",
     "pttMethod",
     "pttSerialPort",
+    "cwKeyer",
+    "cwKeyPort",
+    "cwKeyLine",
+    "winkeyerPort",
+    "rttyBackend",
+    "rttyFskPort",
+    "rttyFskLine",
+    "flexNativeUnbenched",
     "tqslPath",
     "cloudlogUrl",
     "fdJoinAddr",
@@ -726,8 +751,10 @@ impl Stores for ShackStores {
 // --- The one mixed store -------------------------------------------------------------------------
 
 /// ⛔ The saved config profiles, one of the station's keys: each a whole Settings, its stored keys
-/// ([`SECRET_SETTINGS`]) included. A read from afar blanks them ([`station_answer`]) and a save
-/// from afar keeps the shack's own ([`merged_save`]), as the settings themselves do.
+/// ([`SECRET_SETTINGS`]) and every setting set at the station only ([`STATION_ONLY_SETTINGS`])
+/// included, and the shack's own screen applies what a profile holds when it is loaded there. A
+/// read from afar blanks the stored keys ([`station_answer`]), and a save from afar keeps the
+/// shack's own of both ([`merged_save`]), as the settings themselves do.
 const PROFILES: &str = "nexus.profiles";
 
 /// The saved profiles `text` with each stored key a profile carries put to `kept(profile, key)`.
@@ -745,6 +772,39 @@ fn profiles_with_secrets(text: &str, kept: impl Fn(&str, &str) -> String) -> Opt
                 if settings.contains_key(key) {
                     settings.insert(key.into(), Value::String(kept(&name, key)));
                 }
+            }
+        }
+    }
+    serde_json::to_string(&profiles).ok()
+}
+
+/// The saved profiles `text` with each setting set at the station only ([`STATION_ONLY_SETTINGS`])
+/// as the shack's own profile of the same name holds it (`shack`, the shack's saved profiles), and
+/// left out where that profile does not hold it or the shack has no profile of that name: a setting
+/// a profile leaves out keeps the station's current value when the profile is loaded
+/// (`mergeProfile`). `None` when `text` is no list, which goes as it came.
+fn profiles_with_station_settings(text: &str, shack: Option<&String>) -> Option<String> {
+    let held: BTreeMap<String, serde_json::Map<String, Value>> = shack
+        .and_then(|t| serde_json::from_str::<Vec<Value>>(t).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|profile| {
+            let name = profile.get("name")?.as_str()?.to_string();
+            Some((name, profile.get("settings")?.as_object()?.clone()))
+        })
+        .collect();
+    let mut profiles: Vec<Value> = serde_json::from_str(text).ok()?;
+    for profile in &mut profiles {
+        let own = profile
+            .get("name")
+            .and_then(Value::as_str)
+            .and_then(|name| held.get(name));
+        if let Some(settings) = profile.get_mut("settings").and_then(Value::as_object_mut) {
+            for key in STATION_ONLY_SETTINGS {
+                match own.and_then(|own| own.get(key)) {
+                    Some(value) => settings.insert(key.into(), value.clone()),
+                    None => settings.remove(key),
+                };
             }
         }
     }
@@ -786,8 +846,9 @@ fn station_answer(value: Value) -> Value {
 
 /// What a `ui_state_save` from afar writes at the shack: the shack's own keys as they are, and the
 /// station's keys as the other computer sent them, so a key it removed is removed. A saved profile's
-/// stored keys stay the shack's: never changed, blanked or planted from afar. `None` when the
-/// arguments carry no map of strings.
+/// stored keys stay the shack's: never changed, blanked or planted from afar. ⛔ So does each setting
+/// set at the station only, which a profile loaded at the shack would apply as if typed there
+/// ([`profiles_with_station_settings`]). `None` when the arguments carry no map of strings.
 fn merged_save(shack: BTreeMap<String, String>, args: &Value) -> Option<Value> {
     let mut sent: BTreeMap<String, String> =
         serde_json::from_value(args.get("state")?.clone()).ok()?;
@@ -800,6 +861,9 @@ fn merged_save(shack: BTreeMap<String, String>, args: &Value) -> Option<Value> {
         };
         if let Some(restored) = profiles_with_secrets(text, kept) {
             *text = restored;
+        }
+        if let Some(station) = profiles_with_station_settings(text, shack.get(PROFILES)) {
+            *text = station;
         }
     }
     Some(serde_json::json!({ "state": join_ui_state(sent, shack) }))

@@ -340,6 +340,7 @@ export const ES: PartialCatalog = {
   "remote.account.role": "Función",
   "remote.account.role.operate": "Operar",
   "remote.account.role.listen": "Escuchar",
+  "remote.account.operateIsYours": "Quien es invitado a operar puede hacer todo lo que tú puedes desde otro ordenador: transmitir con tu indicativo, editar, exportar o borrar tu log, subir con tus accesos guardados (LoTW firmado con tu certificado), publicar spots con tu indicativo y leer tu buzón de Winlink. Invita a operar solo a alguien a quien le confiarías la estación.",
   "remote.account.invite": "Invitar",
   "remote.account.uninvite": "Quitar",
   "remote.account.inviteLimit": "Esta estación ha invitado a tantas personas como puede. Quita a alguien primero.",

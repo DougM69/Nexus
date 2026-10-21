@@ -179,3 +179,27 @@ it('a computer approved before its key was pinned is asked again, by name, platf
   expect(actions).toEqual([])
   expect(dialog()).toBeNull()
 })
+
+// A device added by signing in to the account is listed approved by the service, and the station grants it nothing until
+// it is approved here (`remote_service::account::GRANTS_ON_SIGN_IN`). The station says so (`approveAtStation`), and the
+// question is the one a new device is asked, never "approved before": the station never approved it.
+it('a device added by signing in, waiting for Approve here, is asked as a new one and never as approved before', async () => {
+  const computer = asking({ name: 'DESKTOP-7Q', kind: 'computer', platform: 'windows', approved: 1, addedBy: 'account' })
+  status = station([computer], { account: { signingIn: false, added: [], unconfirmed: { [computer.id]: 'approveAtStation' }, removals: [], people: [] } })
+  render(<RemoteApprovalPrompt />)
+  await flush()
+  const box = screen.getByRole('dialog', { name: 'Let DESKTOP-7Q operate this station?' })
+  expect(document.getElementById(box.getAttribute('aria-describedby')!)?.textContent)
+    .toBe(`Nexus on Windows, signed in to your Remote account, asks to operate this station over the internet as you would here, transmit included. Approve it only if this key matches the one Nexus shows on that computer: ${SHORT}.`)
+  await wait(APPROVAL_ARM_MS)
+  fireEvent.click(approve())
+  await flush()
+  expect(actions).toEqual([{ type: 'device', deviceId: computer.id, approve: true, transmit: false, key: KEY, kind: 'computer' }])
+  cleanup(); actions.length = 0
+  const browser = asking({ approved: 1, addedBy: 'account' })
+  status = station([browser], { account: { signingIn: false, added: [], unconfirmed: { [browser.id]: 'approveAtStation' }, removals: [], people: [] } })
+  render(<RemoteApprovalPrompt />)
+  await flush()
+  expect(dialog()?.textContent).toMatch(/A browser signed in to your Remote account asks to stream this station/)
+  expect(dialog()?.textContent, 'never approved here').not.toMatch(/approved before/)
+})

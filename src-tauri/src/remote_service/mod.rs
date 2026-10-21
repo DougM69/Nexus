@@ -87,8 +87,10 @@ pub struct AccountStatus {
     /// The devices the station granted on their own proof since Nexus started, for the notice at
     /// the shack, each until the operator dismisses it.
     added: Vec<Added>,
-    /// The devices the service approved on a proof the station could not confirm, each with why:
-    /// granted nothing, and shown with the prompt a device added at the station gets.
+    /// The devices the service approved on their own proof that the station granted nothing, each
+    /// with why: a proof it could not confirm, or `approveAtStation`, a proof that holds while the
+    /// station grants nothing on a sign-in (`account::GRANTS_ON_SIGN_IN`). Each is shown with the
+    /// prompt a device added at the station gets.
     unconfirmed: BTreeMap<String, &'static str>,
     /// Devices removed here while the service could not be reached: out at the station already,
     /// and told to the service before the station's next list.
@@ -1346,6 +1348,9 @@ pub(crate) struct Accounts {
     /// the store will not give one up. `None` here: the LAN's own, once the service has started.
     lan_key: Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>,
     now_s: fn() -> u64,
+    /// Whether a device is granted anything on its own sign-in: [`account::GRANTS_ON_SIGN_IN`], in
+    /// every build. Only a test of the grants a sign-in would make sets it otherwise.
+    grants_on_sign_in: bool,
 }
 impl Accounts {
     /// The account of the service this build is made for, in the OS credential store, signing in
@@ -1359,6 +1364,7 @@ impl Accounts {
             service,
             lan_key: None,
             now_s,
+            grants_on_sign_in: account::GRANTS_ON_SIGN_IN,
         }
     }
     /// No account sign-in: this build's own tenant is not a test's service.
@@ -1370,6 +1376,7 @@ impl Accounts {
             bind: Arc::new(|_| Box::pin(async { Err("accountNotReady") })),
             lan_key: None,
             now_s,
+            grants_on_sign_in: account::GRANTS_ON_SIGN_IN,
         }
     }
 }
@@ -2127,9 +2134,11 @@ impl Controller {
     /// Each device the service lists as approved on its own proof, and not pinned here at that
     /// approval yet, is checked by the station itself (`account::vouch`) before anything is granted
     /// on it. One whose proof holds is granted as its role says, as an Approve press grants
-    /// ([`Controller::grant_vouched`]), kept for the LAN, and named in the notice at the shack. One
-    /// whose proof does not hold is granted nothing and shown with why, beside the prompt a device
-    /// added at the station gets. Once pinned, a device is left to the operator's own decisions.
+    /// ([`Controller::grant_vouched`]), kept for the LAN, and named in the notice at the shack; while
+    /// the station grants nothing on a sign-in (`account::GRANTS_ON_SIGN_IN`) it is granted nothing
+    /// and waits for Approve (`approveAtStation`). One whose proof does not hold is granted nothing
+    /// and shown with why. Either is shown beside the prompt a device added at the station gets.
+    /// Once pinned, a device is left to the operator's own decisions.
     async fn vouch(&self, devices: &[Device], at: (u64, u64)) {
         let now = now_ms();
         let waiting: Vec<&Device> = {
@@ -2217,14 +2226,22 @@ impl Controller {
     }
     /// What an Approve press grants a device the operator was shown, for one the station vouched
     /// for on its own proof, by its role: a browser that operates gets station control and logging,
-    /// one that listens gets neither, and neither gets FT8/FT4 transmit (that stays a tick at the
-    /// shack); every device gets its pin ([`Device::pin`]). With Remote on the grants take effect at
+    /// one that listens gets neither, and every device gets its pin ([`Device::pin`]). Neither gets
+    /// the Remote page's own FT8/FT4 transmit (`Authority::permit_transmit`), which only that page's
+    /// FT8/FT4 capabilities and actions read. It is not what keeps a browser off the air: station
+    /// control and the pin are all a stream needs (`Authority::stream_admitted`), and a streaming
+    /// browser uses the station's own window, transmit included, as any browser approved here does.
+    /// With Remote on the grants take effect at
     /// once; with it off they wait in the record for Turn on. `false`, granting nothing, when a
     /// local decision (Turn off or on, take over) was made after the list was asked for.
     ///
     /// A computer or phone that would only listen is refused (`listenNative`): its pin alone holds
     /// station control on the room's tunnel whenever Remote is on (`Control::sync_approved`), so it
     /// cannot be pinned as a listener. The operator can still approve it at the shack to operate.
+    ///
+    /// ⛔ Every other device is refused too (`approveAtStation`) while the station grants nothing on
+    /// a sign-in (`account::GRANTS_ON_SIGN_IN`): it waits for Approve at the shack, which grants it
+    /// through [`Controller::grant_approved`] as it grants any device.
     fn grant_vouched(
         &self,
         device: &Device,
@@ -2238,6 +2255,9 @@ impl Controller {
         if !browser && !operate {
             return Err("listenNative");
         }
+        if !self.accounts.grants_on_sign_in {
+            return Err("approveAtStation");
+        }
         let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
         if control.generation != generation || control.operations.epoch() != epoch {
             return Ok(false);
@@ -2246,6 +2266,8 @@ impl Controller {
             let operations = control.operations.clone();
             operations.permit(&device.id, operate)?;
             operations.permit_station(&device.id, operate)?;
+            // The Remote page's own FT8/FT4 transmit, off: only that page's FT8/FT4 actions read
+            // it. The stream needs station control alone, and in it a click is the operator's own.
             operations.permit_transmit(&device.id, false)?;
         }
         if browser {

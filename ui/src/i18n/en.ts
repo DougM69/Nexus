@@ -421,6 +421,7 @@ export const EN = {
   "remote.account.role": "Role",
   "remote.account.role.operate": "Operate",
   "remote.account.role.listen": "Listen",
+  "remote.account.operateIsYours": "Someone invited to operate can do all you can from another computer: transmit under your callsign, edit, export or delete your log, upload with your saved logins (LoTW signed with your certificate), spot under your call and read your Winlink mail. Invite to operate only someone you would hand the shack to.",
   "remote.account.invite": "Invite",
   "remote.account.uninvite": "Remove",
   "remote.account.inviteLimit": "This station has invited as many people as it can. Remove someone first.",

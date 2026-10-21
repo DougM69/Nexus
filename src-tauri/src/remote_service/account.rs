@@ -26,9 +26,10 @@
 //! ## A listed device ([`vouch_listed`], [`sweep`])
 //!
 //! A device the service lists with a proof (`x-nexus-device-proof`) is checked here against the
-//! owner and the people invited, for exactly the keys the list names. Each list the station hears
-//! sweeps the devices it keeps for the LAN: one the service no longer lists as approved is taken
-//! out, and its pin returned, before any LAN session is admitted.
+//! owner and the people invited, for exactly the keys the list names; while [`GRANTS_ON_SIGN_IN`]
+//! is off it is granted nothing on that alone, and waits for Approve at the shack. Each list the
+//! station hears sweeps the devices it keeps for the LAN: one the service no longer lists as
+//! approved is taken out, and its pin returned, before any LAN session is admitted.
 //!
 //! Nothing here writes a log line. What it returns to a caller is a name (`&'static str`) or a
 //! value with no token in it: no access token, proof or credential leaves this module except in
@@ -47,6 +48,18 @@ use super::vault::{AccountKeys, AccountVault, DevicesHeld};
 
 /// The most of a service or issuer answer read.
 const ANSWER_LIMIT: usize = 16384;
+
+/// ⛔ SIGN-IN GRANTS NOTHING YET. Whether the station grants a device the service approved on its
+/// own sign-in (its owner's, or that of someone the station invited) what its role says, with no
+/// press at the shack, once its proof holds here (`Controller::grant_vouched`). Off: its proof is
+/// checked as before, and it is granted nothing, pinned for nothing and kept for nothing on the
+/// station's network; it is shown waiting for Approve at the shack (`approveAtStation`), as a
+/// device added with a code waits, and Approve there grants it what Approve grants any device. The
+/// computer that signed in says its internet road waits for that Approve
+/// (`crate::lan_client::account`). It stays off until a new device's transmit hold and the notice
+/// email to the station's owner are built. A computer that enrols on the station's own network by
+/// its sign-in (`super::lan::enrol`) is taken there as before.
+pub(crate) const GRANTS_ON_SIGN_IN: bool = false;
 
 /// The account's side of the Remote service and its issuer.
 pub(crate) struct Service {

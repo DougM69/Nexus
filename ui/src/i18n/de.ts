@@ -325,6 +325,7 @@ export const DE: PartialCatalog = {
   "remote.account.role": "Rolle",
   "remote.account.role.operate": "Bedienen",
   "remote.account.role.listen": "Zuhören",
+  "remote.account.operateIsYours": "Wer zum Bedienen eingeladen ist, kann alles, was du von einem anderen Computer aus kannst: unter deinem Rufzeichen senden, dein Logbuch bearbeiten, exportieren oder löschen, mit deinen gespeicherten Zugängen hochladen (LoTW mit deinem Zertifikat signiert), unter deinem Rufzeichen spotten und dein Winlink-Postfach lesen. Lade zum Bedienen nur jemanden ein, dem du die Station überlassen würdest.",
   "remote.account.invite": "Einladen",
   "remote.account.uninvite": "Entfernen",
   "remote.account.inviteLimit": "Diese Station hat so viele Personen eingeladen wie möglich. Entferne zuerst jemanden.",
