@@ -290,7 +290,8 @@ fn a_nonstandard_call_still_gets_its_report_through_the_hash() {
 fn rr73_and_73_to_a_nonstandard_call_go_out_as_wsjtx_writes_them() {
     // WSJT-X 3.0.2 closes with a nonstandard call whole and mine hashed, a type 4 message
     // (`genStdMsgs`, mainwindow.cpp 9701 and 9709: `if(!bHisCall and bMyCall)
-    // t=hisCall + " <" + my_callsign + "> " …`). `bMyCall` is `stdCall`, which passes `/P`
+    // t=hisCall + " <" + my_callsign + "> " …`): its RR73, the RRR it sends in place of RR73
+    // (the same expression, 9701) and its 73. `bMyCall` is `stdCall`, which passes `/P`
     // and `/R`, so a portable call of mine closes the same way. Hashed the other way round,
     // `<W9XYZ/M> KD9TAW 73` names the same two stations in a type 1 message, not WSJT-X's.
     for c in ["W9XYZ/M", "PJ4/K1ABC", "YW18FIFA"] {
@@ -299,13 +300,25 @@ fn rr73_and_73_to_a_nonstandard_call_go_out_as_wsjtx_writes_them() {
     let mut wrong = Vec::new();
     for my in ["KD9TAW", "KD9TAW/P", "KD9TAW/R"] {
         for dx in ["W9XYZ/M", "PJ4/K1ABC", "YW18FIFA"] {
-            let sent = (queued(my, "EN52", dx, 4), queued(my, "EN52", dx, 5));
-            let want = (format!("{dx} <{my}> RR73"), format!("{dx} <{my}> 73"));
+            let roger = Msg::RReport {
+                to: my.into(),
+                de: dx.into(),
+                snr: -7,
+            };
+            let rrr = Station::start(my, "EN52", dx, Some((&roger, -7)), true, false)
+                .pending_text()
+                .unwrap_or_default();
+            let sent = (queued(my, "EN52", dx, 4), rrr, queued(my, "EN52", dx, 5));
+            let want = (
+                format!("{dx} <{my}> RR73"),
+                format!("{dx} <{my}> RRR"),
+                format!("{dx} <{my}> 73"),
+            );
             if sent != want {
                 wrong.push(format!("{my} × {dx}\n  sent {sent:?}\n  want {want:?}"));
                 continue;
             }
-            for t in [&sent.0, &sent.1] {
+            for t in [&sent.0, &sent.1, &sent.2] {
                 assert_eq!(i3_of(t), Some(4), "[{t}] is a type 4 message");
                 assert_on_air(ModeKind::Ft8, t);
                 assert_on_air(ModeKind::Ft4, t);
@@ -348,8 +361,7 @@ fn rr73_and_73_to_a_nonstandard_call_go_out_as_wsjtx_writes_them() {
 fn rr73_and_73_otherwise_go_out_as_before() {
     // Only a standard call of mine closing to a nonstandard one changes. A nonstandard call of
     // mine beside a standard one is WSJT-X's other form already (9702, 9710); two nonstandard
-    // calls, and a `/P` beside a `/R`, keep the form they had; so does the RRR that rogers in
-    // place of RR73 when the operator prefers it.
+    // calls, and a `/P` beside a `/R`, keep the form they had.
     for c in ["W9XYZ/M", "PJ4/K1ABC", "F4CYH/R"] {
         seed_hash(c);
     }
@@ -391,16 +403,19 @@ fn rr73_and_73_otherwise_go_out_as_before() {
         let sent = (queued(my, "EN52", dx, 4), queued(my, "EN52", dx, 5));
         assert_eq!(sent, (rr73.to_string(), bye.to_string()), "{my} × {dx}");
     }
-    let rrr = Msg::RReport {
+    // RRR in place of RR73 to a standard call, and the RRR a `/P` call sends as its roger
+    // where no number can ride (Tx3, not Tx4), keep their forms.
+    let roger = Msg::RReport {
         to: "KD9TAW".into(),
-        de: "W9XYZ/M".into(),
+        de: "W9XYZ".into(),
         snr: -7,
     };
-    let st = Station::start("KD9TAW", "EN52", "W9XYZ/M", Some((&rrr, -7)), true, false);
+    let st = Station::start("KD9TAW", "EN52", "W9XYZ", Some((&roger, -7)), true, false);
+    assert_eq!(st.pending_text().as_deref(), Some("W9XYZ KD9TAW RRR"));
     assert_eq!(
-        st.pending_text().as_deref(),
-        Some("<W9XYZ/M> KD9TAW RRR"),
-        "RRR in place of RR73"
+        queued("KD9TAW/P", "EN52", "PJ4/K1ABC", 3),
+        "<PJ4/K1ABC> KD9TAW/P RRR",
+        "a /P call's roger"
     );
 }
 

@@ -84,8 +84,9 @@ fn answering_its_cq(tier: Tier) -> Engine {
 /// the 77 bits of the over WSJT-X writes in its place, and on FT4 to the same tones: Tx1, Tx2 and
 /// Tx3 with its call hashed (`t0a`, 9596, 9629-9631, 9655-9656), and the RR73 and 73 with its
 /// call whole and ours hashed (`if(!bHisCall and bMyCall) t=hisCall + " <" + my_callsign + "> "
-/// …`, 9701 and 9709), type 4 messages. Before, the RR73 and 73 went `<W9XYZ/M> K1ABC RR73`, a
-/// type 1 message that is not WSJT-X's.
+/// …`, 9701 and 9709), type 4 messages; so is the RRR sent in place of RR73 when the operator
+/// prefers it, the same expression (`m_send_RR73 ? "RR73" : "RRR"`, 9701). Before, they went
+/// `<W9XYZ/M> K1ABC RR73`, a type 1 message that is not WSJT-X's.
 #[test]
 fn rr73_and_73_to_a_nonstandard_call_are_wsjtxs_bit_for_bit() {
     for tier in [Tier::Ft8, Tier::Ft4] {
@@ -129,6 +130,29 @@ fn rr73_and_73_to_a_nonstandard_call_are_wsjtxs_bit_for_bit() {
             tier_name(tier)
         );
 
+        // The same, with RRR in place of RR73 (Settings: prefer RRR); WSJT-X answers our RRR with
+        // its 73 (9210-9215).
+        let mut e = Engine::new(ME, MY_GRID, 0);
+        let mut s = e.settings().clone();
+        s.prefer_rrr = true;
+        e.apply_settings(s);
+        e.set_tier(tier);
+        e.start_cq(None).expect("Call CQ");
+        let (at, _) = key_next(&mut e, 0);
+        e.ingest_decodes_for_test(&[heard(&off_air("<K1ABC> W9XYZ/M"))], at + 1);
+        let (at, _) = key_next(&mut e, at + 2);
+        e.ingest_decodes_for_test(&[heard(&off_air("K1ABC <W9XYZ/M> R-07"))], at + 1);
+        let (at, rrr) = key_next(&mut e, at + 2);
+        overs.push(("Tx4 RRR", rrr, "W9XYZ/M <K1ABC> RRR", "i3=4"));
+        e.ingest_decodes_for_test(&[heard(&off_air("<K1ABC> W9XYZ/M 73"))], at + 1);
+        let log = e.stored_log();
+        assert_eq!(
+            log.iter().map(|r| r.call.as_str()).collect::<Vec<_>>(),
+            ["W9XYZ/M"],
+            "{}: with RRR, logged",
+            tier_name(tier)
+        );
+
         for (over, ours, wsjtx, kind) in overs {
             let what = format!("{} {over} {ours:?}", tier_name(tier));
             assert_eq!(air_form(wsjtx).0, kind, "{what}: WSJT-X's packs");
@@ -137,14 +161,16 @@ fn rr73_and_73_to_a_nonstandard_call_are_wsjtxs_bit_for_bit() {
     }
 }
 
-/// The Tx panel's RR73 and 73 rows, clicked, go out as WSJT-X's: the row as the panel now shows
-/// it (`W9XYZ/M <K1ABC> RR73`) and as it showed it before (`<W9XYZ/M> K1ABC RR73`) both key
-/// `W9XYZ/M <K1ABC> RR73`; never both calls hashed, which names neither station.
+/// The Tx panel's RR73 (or RRR) and 73 rows, clicked, go out as WSJT-X's: the row as the panel
+/// now shows it (`W9XYZ/M <K1ABC> RR73`) and as it showed it before (`<W9XYZ/M> K1ABC RR73`) both
+/// key `W9XYZ/M <K1ABC> RR73`; never both calls hashed, which names neither station.
 #[test]
 fn the_tx_panels_rr73_and_73_rows_go_out_as_wsjtxs() {
     for (row, sent) in [
         ("W9XYZ/M <K1ABC> RR73", "W9XYZ/M <K1ABC> RR73"),
         ("<W9XYZ/M> K1ABC RR73", "W9XYZ/M <K1ABC> RR73"),
+        ("W9XYZ/M <K1ABC> RRR", "W9XYZ/M <K1ABC> RRR"),
+        ("<W9XYZ/M> K1ABC RRR", "W9XYZ/M <K1ABC> RRR"),
         ("W9XYZ/M <K1ABC> 73", "W9XYZ/M <K1ABC> 73"),
         ("<W9XYZ/M> K1ABC 73", "W9XYZ/M <K1ABC> 73"),
     ] {

@@ -514,7 +514,7 @@ impl Station {
     /// and the other in full, so **both callsigns come back off the air exactly as
     /// queued**. The ADDRESSEE is the one hashed, except in the report and the roger of
     /// a nonstandard sender opposite a plain c28 call, where the SENDER is — WSJT-X's
-    /// own form, which keeps the number — and in RR73 and 73 from a standard call to a
+    /// own form, which keeps the number — and in RR73, RRR and 73 from a standard call to a
     /// nonstandard one, where the sender is hashed as WSJT-X writes them (see the arms).
     /// A no-op for a pair the plain forms can carry — which includes every `/P` and `/R`
     /// station working a standard or same-suffixed partner, so their overs are left
@@ -546,8 +546,8 @@ impl Station {
         let hashes_sender = |de: &str, to: &str| {
             !crate::message::is_std_call(de) && crate::message::packs_beside_hash(to)
         };
-        // A standard sender closing to a nonstandard call: WSJT-X's RR73 and 73 put THAT call
-        // whole and mine hashed (`genStdMsgs`, mainwindow.cpp 9701 and 9709: `if(!bHisCall and
+        // A standard sender closing to a nonstandard call: WSJT-X's RR73 (or RRR) and 73 put THAT
+        // call whole and mine hashed (`genStdMsgs`, mainwindow.cpp 9701 and 9709: `if(!bHisCall and
         // bMyCall) t=hisCall + " <" + my_callsign + "> " …`), a type 4 message. `stdCall` passes
         // `/P` and `/R`, and so does this. A Tx panel row clicked back in may bring either call
         // bracketed already, so both are read without their brackets.
@@ -632,11 +632,17 @@ impl Station {
                 de,
                 snr,
             },
-            // RR73 and 73 to a nonstandard call, `W9XYZ/M <K1ABC> RR73` (`closes_to_nonstandard`
+            // RR73, the RRR sent in its place (one expression in WSJT-X, `m_send_RR73 ? "RR73" :
+            // "RRR"`) and 73 to a nonstandard call, `W9XYZ/M <K1ABC> RR73` (`closes_to_nonstandard`
             // above). The other way round, `<W9XYZ/M> K1ABC RR73` names the same two stations in
-            // a type 1 message, which is not WSJT-X's. (WSJT-X writes the RRR it sends in place
-            // of RR73 the same way; that over is not changed here.)
+            // a type 1 message, which is not WSJT-X's. The RRR that stands in for a roger no
+            // number can ride (the `RReport` arms above) is our Tx3, not WSJT-X's Tx4, and keeps
+            // its form.
             Msg::Rr73 { to, de } if closes_to_nonstandard(&de, &to) => Msg::Rr73 {
+                to: crate::message::unhash_call(&to).to_string(),
+                de: brk(&de),
+            },
+            Msg::Rrr { to, de } if closes_to_nonstandard(&de, &to) => Msg::Rrr {
                 to: crate::message::unhash_call(&to).to_string(),
                 de: brk(&de),
             },

@@ -83,9 +83,9 @@ export function genStdMessages(inp: StdMsgInput): StdMessages {
   // nonstandard or slashed sender carries neither (Tx1/Tx2 → the bare call, Tx3 → RRR,
   // which is what keeps Tx3 tellable from Tx1/Tx2 for the partner's sequencer).
   //
-  // RR73 and 73 from a standard call to a nonstandard DX put the DX whole and MY call hashed,
-  // WSJT-X's Tx4 and Tx5 when only HIS call fails stdCall (genStdMsgs: `hisCall <my_callsign>
-  // RR73`), a type 4 message. The RRR that rogers in place of RR73 keeps the DX hashed.
+  // RR73 (or RRR) and 73 from a standard call to a nonstandard DX put the DX whole and MY call
+  // hashed, WSJT-X's Tx4 and Tx5 when only HIS call fails stdCall (genStdMsgs: `hisCall
+  // <my_callsign> RR73`), a type 4 message.
   if (!isStdCall(dx) || !isStdCall(my) || suffixConflict(my, dx)) {
     const dxWhole = dx.replace(/^<|>$/g, '')
     const bdx = `<${dxWhole}>`
@@ -96,7 +96,7 @@ export function genStdMessages(inp: StdMsgInput): StdMessages {
       tx1: iCarry ? j(bdx, my, grid) : j(bdx, my),
       tx2: iHash ? j(dx, `<${my}>`, rpt) : iCarry ? j(bdx, my, rpt) : j(bdx, my),
       tx3: iHash ? j(dx, `<${my}>`, `R${rpt}`) : iCarry ? j(bdx, my, `R${rpt}`) : j(bdx, my, 'RRR'),
-      tx4: iClose && !inp.preferRrr ? j(dxWhole, `<${my}>`, final) : j(bdx, my, final),
+      tx4: iClose ? j(dxWhole, `<${my}>`, final) : j(bdx, my, final),
       tx5: iClose ? j(dxWhole, `<${my}>`, '73') : j(bdx, my, '73'),
       // A CQ has no pair, so only MY call decides it: a /P or /R rover's CQ is an
       // ordinary Type 1/2 frame and keeps its grid. Never a hashed CQ (does not unpack).

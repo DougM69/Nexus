@@ -767,11 +767,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FT8/FT4: your RR73 and 73 to a station signing W9XYZ/M are the ones WSJT-X sends.** Outside a contest, closing
   a contact with a station whose call has a suffix such as /M, /4 or /QRP, or a prefix such as PJ4/, sent
   `<W9XYZ/M> K1ABC RR73` and `<W9XYZ/M> K1ABC 73`: the right two calls, but a different message from the one WSJT-X
-  sends. Nexus now sends WSJT-X's, `W9XYZ/M <K1ABC> RR73` and `W9XYZ/M <K1ABC> 73`: that station's call in full and
-  yours in angle brackets, the same message bit for bit, and the Tx panel's Tx4 and Tx5 show them that way. This
-  holds when your own call ends in /P or /R too. Your grid, report and roger are unchanged; so is the RRR you send in
-  place of RR73 when you prefer it, and everything when your own call has another suffix or a prefix. NEEDS-BENCH:
-  FT8 and FT4, a station signing /M or /QRP that runs WSJT-X, answering its CQ and answered by it.
+  sends. Nexus now sends WSJT-X's, `W9XYZ/M <K1ABC> RR73` (or `W9XYZ/M <K1ABC> RRR` when you prefer RRR) and
+  `W9XYZ/M <K1ABC> 73`: that station's call in full and yours in angle brackets, the same message bit for bit, and
+  the Tx panel's Tx4 and Tx5 show them that way. This holds when your own call ends in /P or /R too. Your grid,
+  report and roger are unchanged, and so is everything when your own call has another suffix or a prefix.
+  NEEDS-BENCH: FT8 and FT4, a station signing /M or /QRP that runs WSJT-X, answering its CQ and answered by it, with
+  RR73 and with RRR.
 - **ARRL VHF contests and contests with the standard messages: S&P no longer answers a CQ from `<...>`.** With TX
   on in the Contest screen's S&P, a station whose call has a suffix or a prefix can show as `CQ TEST <...> EN37`
   until Nexus has decoded its call in full. S&P answered that CQ, sending your grid to `<...>`, a call no one could

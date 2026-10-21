@@ -207,22 +207,26 @@ describe('nonstandard-call (hashed) display parity', () => {
   })
   it("RR73 and 73 from a standard call to a nonstandard one are WSJT-X's: that call whole, mine hashed", () => {
     // WSJT-X 3.0.2's Tx4 and Tx5 when only HIS call fails stdCall (genStdMsgs, mainwindow.cpp
-    // 9701 and 9709): `hisCall <my_callsign> RR73`, a type 4 message. stdCall passes /P and /R,
-    // so a portable call of mine closes the same way. The engine sends exactly these.
+    // 9701 and 9709): `hisCall <my_callsign> RR73` (or RRR, the same expression), a type 4
+    // message. stdCall passes /P and /R, so a portable call of mine closes the same way. The
+    // engine sends exactly these.
     for (const my of ['K1ABC', 'K1ABC/P', 'K1ABC/R'])
       for (const dx of ['W9XYZ/M', 'PJ4/W9XYZ', 'YW18FIFA']) {
         const m = genStdMessages({ dxCall: dx, myCall: my, myGrid: 'FN42', snr: -12 })
         expect([m.tx4, m.tx5], `${my} × ${dx}`).toEqual([`${dx} <${my}> RR73`, `${dx} <${my}> 73`])
+        const r = genStdMessages({ dxCall: dx, myCall: my, myGrid: 'FN42', preferRrr: true })
+        expect(r.tx4, `${my} × ${dx} RRR`).toBe(`${dx} <${my}> RRR`)
       }
-    // Tx1–Tx3 keep the DX hashed, and the RRR that rogers in place of RR73 keeps its form.
+    // Tx1–Tx3 keep the DX hashed.
     const m = genStdMessages({ dxCall: 'W9XYZ/M', myCall: 'K1ABC', myGrid: 'FN42', snr: -12 })
     expect(stdMessageList(m).slice(0, 3)).toEqual([
       '<W9XYZ/M> K1ABC FN42',
       '<W9XYZ/M> K1ABC -12',
       '<W9XYZ/M> K1ABC R-12',
     ])
-    expect(genStdMessages({ dxCall: 'W9XYZ/M', myCall: 'K1ABC', myGrid: 'FN42', preferRrr: true }).tx4).toBe(
-      '<W9XYZ/M> K1ABC RRR',
+    // The RRR a /P call sends as its roger where no number can ride (Tx3) keeps its form.
+    expect(genStdMessages({ dxCall: 'W9XYZ/M', myCall: 'K1ABC/P', myGrid: 'FN42' }).tx3).toBe(
+      '<W9XYZ/M> K1ABC/P RRR',
     )
     // A call the decoder could not resolve is no callsign to put in full.
     expect(genStdMessages({ dxCall: '<...>', myCall: 'K1ABC', myGrid: 'FN42' }).tx5).toBe('<...> K1ABC 73')
