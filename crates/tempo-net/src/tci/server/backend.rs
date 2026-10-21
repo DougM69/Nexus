@@ -30,9 +30,10 @@
 //!
 //! A program's [`TciBackend::disconnected`] waits for that program's calls in flight that can
 //! transmit ([`TciBackend::key`], [`TciBackend::tune_on`], [`TciBackend::cw`],
-//! [`TciBackend::tx_audio`]), and for a [`TciBackend::spot`] in flight, and none of them is made
-//! for it afterwards: what such a call admitted just before the end is ended by it, nothing the
-//! program sends transmits after it, and no spot of its outlives it. So the
+//! [`TciBackend::tx_audio`]), and for a [`TciBackend::spot`] or [`TciBackend::set_mode`] in flight,
+//! and none of them is made for it afterwards: what such a call admitted just before the end is
+//! ended by it, nothing the program sends transmits after it, and no spot or mode ask of its
+//! outlives it. So the
 //! app must never call [`Handle::disconnect`](super::Handle::disconnect) or
 //! [`Server::stop`](super::Server::stop) while holding the lock its backend takes, nor from inside
 //! a backend call.
@@ -171,7 +172,9 @@ impl Refusal {
             }
             Refusal::VoiceMode => {
                 "a program may transmit its own audio only after it asks for a voice mode (USB, \
-                 LSB, AM or FM): set the program's Radio mode, or use Nexus for FT8"
+                 LSB, AM or FM): set the program's Radio mode, or use Nexus for FT8; some \
+                 programs, WSJT-X and JTDX among them, ask for their mode only when it differs \
+                 from Nexus's"
             }
             Refusal::AudioStream => "no TCI audio stream",
             Refusal::CwText => {
@@ -426,9 +429,9 @@ pub trait TciBackend: Send + Sync {
     /// The program is gone: it closed, the connection failed or went silent, or the server or the
     /// operator ended it. Anything it keyed, tuned or sent as CW ends hard now (design §3.4, a lost
     /// socket unkeys within one radio-loop tick). Called once a program, before its slot is freed,
-    /// after its transmit calls and its spot in flight have returned, and never followed by another
-    /// of them. No lock of the server's is held but that program's transmit gate, which only its
-    /// transmit calls and its spots take.
+    /// after its transmit calls, its spot and its mode ask in flight have returned, and never
+    /// followed by another of them. No lock of the server's is held but that program's transmit
+    /// gate, which only its transmit calls, its spots and its mode asks take.
     fn disconnected(&self, client: ClientId);
 
     /// A line for the connection log.
@@ -440,7 +443,9 @@ pub trait TciBackend: Send + Sync {
     fn set_dial(&self, client: ClientId, hz: Hz) -> Result<Hz, Refusal>;
 
     /// `modulation:0,<mode>;`, a word from [`super::MODULATIONS`]: `Ok` with the mode now in force.
-    /// Only the side inside the section's family (design §2.4).
+    /// Only the side inside the section's family (design §2.4). Asked through the program's gate,
+    /// as a spot is: never once its end has begun, and its end waits for one in flight, so a mode
+    /// kept as the program's ask never outlives it.
     fn set_mode(&self, client: ClientId, mode: &Word) -> Result<Word, Refusal>;
 
     /// `drive:0,<level>;`: `Ok` with the level now in force. Lower only (design §2.4), under the

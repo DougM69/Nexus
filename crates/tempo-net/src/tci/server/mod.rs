@@ -45,9 +45,9 @@
 //! [`Handle::publish`] never calls the backend, so the app may publish under its own engine lock
 //! (and must: [`Snapshot`] says why).
 //!
-//! Each program also has a transmit gate (`conn.rs`), held only around its calls that can transmit
-//! and its spots, and by its end, which tells the backend under it: so nothing the program sends
-//! transmits after its end began, and no spot of its is kept after it. [`Handle::disconnect`] and
+//! Each program also has a transmit gate (`conn.rs`), held only around its calls that can transmit,
+//! its spots and its mode asks, and by its end, which tells the backend under it: so nothing the
+//! program sends transmits after its end began, and no spot or mode ask of its is kept after it. [`Handle::disconnect`] and
 //! [`Server::stop`] take it and call the backend, so the app never calls them under its backend's
 //! lock, nor from inside a backend call.
 
