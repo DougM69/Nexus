@@ -72,8 +72,8 @@ impl Engine {
     /// Without `follow_frequency` (Phone already the section the app homed for) nothing homes,
     /// as in every entry that does not follow, so there is no legality to judge. The entry still
     /// keeps the dial, and what the dial carries comes into the section with it: the operator's
-    /// residency, and the FM channel the SSTV screen holds it on (the operator's rule, the same
-    /// day: "a kept FM channel keeps commanding FM in Phone").
+    /// residency, and the FM channel the SSTV screen holds it on (the rule: a kept FM channel keeps
+    /// commanding FM in Phone).
     pub(super) fn prepare_mode_entry_keeping_dial(
         &self,
         mode: &str,
@@ -538,7 +538,7 @@ mod tests {
 
     // ── A 2 m FM image channel kept in Phone ────────────────────────────────────────────────
     //
-    // The operator, 2026-10-20: "a kept FM channel keeps commanding FM in Phone". On the SSTV
+    // The rule: a kept FM channel keeps commanding FM in Phone. On the SSTV
     // screen a 2 m FM channel (144.500) holds the rig in FM: `sstv_tune` arms the FM-channel hold.
     // Phone pressed there kept the dial, but the section entry ended the hold, and Phone's own
     // policy (USB for a station whose phone mode is SSB) put the rig in USB on an FM channel.

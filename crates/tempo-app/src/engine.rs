@@ -4354,8 +4354,8 @@ pub struct Engine {
     /// keeps it: Phone entered from the SSTV screen on the channel that screen tuned
     /// (`fm_channel_kept`, below).
     fm_channel: bool,
-    /// The FM-channel hold above is one PHONE KEPT (the operator, 2026-10-20: "a kept FM channel
-    /// keeps commanding FM in Phone"). Phone entered from the SSTV screen leaves the dial where it
+    /// The FM-channel hold above is one PHONE KEPT (the rule: a kept FM channel
+    /// keeps commanding FM in Phone). Phone entered from the SSTV screen leaves the dial where it
     /// is (`ModeEntry::kept_dial`), and on the FM channel that screen tuned (`sstv_tune`) the hold
     /// stays instead of ending with the section entry, so Phone goes on commanding FM there rather
     /// than its own policy (USB for a station whose phone mode is SSB). While this is set, a later
@@ -9105,8 +9105,8 @@ impl Engine {
         // for an FM one (`sat_linear_mode`). A section change is neither. Where it also QSYs
         // (`follow_freq`), `tune_dial` clears it below exactly as any other QSY does.
         //
-        // ⭐ AND NOT AN FM CHANNEL PHONE KEEPS (the operator, 2026-10-20: "a kept FM channel keeps
-        // commanding FM in Phone"). Phone entered from the SSTV screen leaves the dial where it is
+        // ⭐ AND NOT AN FM CHANNEL PHONE KEEPS (the rule: a kept FM channel keeps
+        // commanding FM in Phone). Phone entered from the SSTV screen leaves the dial where it is
         // (`kept_dial`), and on the 2 m FM image channel that screen tuned, Phone's own policy is
         // USB for a station whose phone mode is SSB: the rig went FM → USB on an FM channel. So
         // the hold stays with the dial, and through later Phone entries (a glance at the map and

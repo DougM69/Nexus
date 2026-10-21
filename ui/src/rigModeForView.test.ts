@@ -117,7 +117,7 @@ describe('SSTV → Phone keeps the dial (the operator, 2026-10-20)', () => {
 
   it('with Phone already the mode homed for, nothing follows and it still asks to keep the dial', () => {
     // The dial stays either way. The ask is what carries the FM channel the SSTV screen holds
-    // into Phone (the operator, 2026-10-20: "a kept FM channel keeps commanding FM in Phone").
+    // into Phone (the rule: a kept FM channel keeps commanding FM in Phone).
     expect(rigModeTransition('phone', 'phone', 'sstv')).toEqual({
       mode: 'phone',
       followFreq: false,

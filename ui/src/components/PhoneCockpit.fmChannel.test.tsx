@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// A KEPT FM CHANNEL READS FM IN THE PHONE COCKPIT (the operator, 2026-10-20: "a kept FM channel
-// keeps commanding FM in Phone").
+// A KEPT FM CHANNEL READS FM IN THE PHONE COCKPIT (the rule: a kept FM channel
+// keeps commanding FM in Phone).
 //
 // Phone pressed on the SSTV screen on 144.500, the 2 m FM image channel, keeps the dial, and the
 // engine now goes on commanding FM there (`fmChannel` in the snapshot) instead of Phone's own

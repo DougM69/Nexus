@@ -11,8 +11,8 @@
 //     engine keeps it where Phone may transmit and homes it where it may not.
 //   · With Phone already the section homed for, Phone from the SSTV screen re-asserts without
 //     following and still asks (`keepDial`): the dial stays either way, and the ask carries the FM
-//     channel the SSTV screen holds into Phone (the operator, 2026-10-20: "a kept FM channel keeps
-//     commanding FM in Phone").
+//     channel the SSTV screen holds into Phone (the rule: a kept FM channel keeps
+//     commanding FM in Phone).
 //   · Every other entry sends exactly what it sent before: Phone from FT8, followed or not, and CW
 //     from SSTV.
 //   · Entering the SSTV screen still asserts nothing (RX-first).

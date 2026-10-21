@@ -43,7 +43,7 @@
 //
 // It asks with Phone already the mode homed for too, where nothing follows and the dial stays
 // anyway: the ask is also what carries the FM channel the SSTV screen holds (144.500 on 2 m) into
-// Phone. The operator, the same day: "a kept FM channel keeps commanding FM in Phone".
+// Phone. The rule: a kept FM channel keeps commanding FM in Phone.
 
 /** The rig modes a section can own. */
 export type RigMode = 'cw' | 'phone' | 'rtty' | 'keyboard' | 'digital'
