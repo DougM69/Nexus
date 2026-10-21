@@ -10,9 +10,10 @@
 //! Every action that can put the transmitter on the air ([`Action::Key`], [`Action::TuneOn`],
 //! [`Action::Cw`]) is a question to the backend, whose verdict is final, asked through the
 //! program's transmit gate (`conn.rs`): never once the program's end has begun, and never while
-//! that end is being told. The server's own part is to refuse more: receiver 0 only, sources it
-//! knows, the forms §3.5 refuses outright. A program is never told a key took that the backend did
-//! not admit.
+//! that end is being told. So is [`Action::Mode`]: the backend keys a program's own audio only after
+//! that program asked a voice mode, so the ask must not outlive the program. The server's own part
+//! is to refuse more: receiver 0 only, sources it knows, the forms §3.5 refuses outright. A program
+//! is never told a key took that the backend did not admit.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -383,9 +384,9 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Ask the backend something that can transmit, or a spot that must not outlive the program,
-/// through the program's gate: only while its end has not begun, and holding that end off until
-/// the call returns. `None`: the end has begun, nothing reached the backend, and nothing is
+/// Ask the backend something that can transmit, or a spot or a mode ask that must not outlive the
+/// program, through the program's gate: only while its end has not begun, and holding that end off
+/// until the call returns. `None`: the end has begun, nothing reached the backend, and nothing is
 /// answered (the program is being closed).
 fn gated<T>(cx: &Cx<'_>, call: impl FnOnce() -> T) -> Option<T> {
     let ended = lock(cx.gate);
@@ -487,9 +488,14 @@ pub(super) fn run(action: Action, cx: &Cx<'_>) -> Effects {
                 fx.refused(cx, Refused::Mode);
                 fx.echo(cx, Out::Mode(s.mode));
             } else {
-                match cx.backend.set_mode(cx.client, &mode) {
-                    Ok(now) => fx.all.push(Out::Mode(now)),
-                    Err(r) => {
+                // Through the gate: the backend keeps what a program asked until its end and keys
+                // its own audio only after a voice mode, and each server numbers its programs from
+                // 1 again. An ask kept past the program's end would stand for the next program
+                // given its number; the end waits for one in flight, then forgets it.
+                match gated(cx, || cx.backend.set_mode(cx.client, &mode)) {
+                    None => {}
+                    Some(Ok(now)) => fx.all.push(Out::Mode(now)),
+                    Some(Err(r)) => {
                         fx.refusal(cx, r);
                         fx.echo(cx, Out::Mode(s.mode));
                     }

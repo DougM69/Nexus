@@ -518,6 +518,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one message, such as a block of Nexus's transmit audio, and a stop behind it, for as long as it kept reading. Each
   message now has 2 s in all. A program that takes longer is treated as a lost connection: if Nexus was transmitting
   it says the radio may still be transmitting, then connects again and sends its stop first.
+- **Share by TCI (Beta): a program's mode request no longer outlives its connection.** A program's own transmit audio
+  goes out only after that program asks for a voice mode (USB, LSB, AM or FM). A mode request that arrived just as you
+  pressed Disconnect, or as Share by TCI stopped, could be kept after the program was gone, and once Share by TCI
+  started again the program listed under the same Connection number counted as having asked for it, though it had
+  asked for nothing. Nexus now lets a mode request already under way finish before it ends the program, forgets it
+  with the program, and takes none once the program's end has begun.
 - **A logger can no longer turn TX back on after you stop it.** With the WSJT-X UDP feed on, a Reply from GridTracker or
   JTAlert used to arm TX even after Stop TX, Esc or a TX watchdog trip, and cleared the trip. Now that Reply is ignored
   until you turn TX on yourself, and the watchdog trip stays until you do. A logger's free text with "send" no longer

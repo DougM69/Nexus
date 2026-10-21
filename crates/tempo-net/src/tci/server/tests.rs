@@ -1697,6 +1697,58 @@ fn a_disconnect_waits_for_a_spot_in_flight_and_no_spot_comes_after_it() {
     );
 }
 
+/// A mode ask the backend is taking when the program's end begins: the end waits for the call, then
+/// the backend forgets the ask with the program. The backend keys a program's own audio only after
+/// that program asked a voice mode, and each server numbers its programs from 1 again: an ask kept
+/// past its program's end would stand for the next server's program with that number, which asked
+/// nothing.
+#[test]
+fn a_disconnect_waits_for_a_mode_ask_in_flight_and_then_forgets_it() {
+    let mut b = Bench::new();
+    let mut c = b.client();
+    b.mock.pause_at("set_mode");
+    c.send("modulation:0,usb;");
+    assert!(b
+        .mock
+        .wait_call(WAIT, |call| matches!(call, Call::SetMode(..)))
+        .is_some());
+    let handle = b.handle.clone();
+    let id = b.id(1);
+    let ender = std::thread::spawn(move || handle.disconnect(id));
+    let early = b.mock.wait_call(Duration::from_millis(500), |call| {
+        *call == Call::Disconnected(id)
+    });
+    b.mock.release();
+    ender.join().expect("disconnected");
+    wait_gone(&b);
+    let kept = b.mock.asked(id);
+    // The next server, on the same backend: its first program is program 1 again.
+    b.server.take().expect("running").stop();
+    let next = Server::start(
+        Config {
+            port: 0,
+            limits: Limits::default(),
+        },
+        Arc::clone(&b.mock) as Arc<dyn TciBackend>,
+        snapshot(),
+    )
+    .expect("a loopback port");
+    let mut newcomer = Client::connect(next.port()).expect("a handshake the gate takes");
+    newcomer.burst();
+    let numbered: Vec<ClientId> = next.handle().programs().iter().map(|p| p.id).collect();
+    assert_eq!(numbered, [id], "the next server numbers from 1 again");
+    assert_eq!(
+        (kept, b.mock.asked(id)),
+        (None, None),
+        "the ask kept after its program's end, and for the next program 1, which asked nothing"
+    );
+    assert_eq!(early, None, "ended while its mode ask was in flight");
+    let calls = b.mock.calls();
+    let ask = calls.iter().position(|c| matches!(c, Call::SetMode(..)));
+    let ended = calls.iter().position(|c| *c == Call::Disconnected(id));
+    assert!(ask < ended && ended.is_some(), "{calls:?}");
+}
+
 /// Transmit audio the backend is taking when the program's end begins: the same.
 #[test]
 fn a_disconnect_waits_for_transmit_audio_in_flight() {
@@ -1743,8 +1795,9 @@ fn an_ended_programs_transmit_audio_never_reaches_the_backend() {
     assert_eq!(transmit_after_end(&b, id), []);
 }
 
-/// And the table's half of it: once a program's end has begun, a key, a Tune or CW asks the backend
-/// nothing and is answered nothing.
+/// And the table's half of it: once a program's end has begun, a key, a Tune, CW or a mode ask (the
+/// backend keys a program's own audio only after it asked a voice mode) asks the backend nothing
+/// and is answered nothing.
 #[test]
 fn an_ended_program_asks_the_backend_nothing_that_transmits() {
     for text in [
@@ -1752,6 +1805,7 @@ fn an_ended_program_asks_the_backend_nothing_that_transmits() {
         "trx:0,true;",
         "tune:0,true;",
         "cw_macros:0,CQ;",
+        "modulation:0,usb;",
     ] {
         let mock = Mock::default();
         let model = Mutex::new(snapshot());
@@ -1779,6 +1833,9 @@ fn an_ended_program_asks_the_backend_nothing_that_transmits() {
     let mock = Mock::default();
     let (_, calls, _) = run_one("trx:0,true,tci;", &mock);
     assert_eq!(calls, ["Key(Tci)"]);
+    let mock = Mock::default();
+    let (_, calls, _) = run_one("modulation:0,usb;", &mock);
+    assert_eq!(calls, ["SetMode(usb)"]);
 }
 
 // ── Transmit audio: what a frame claims against what it carries ─────────────────────────────
