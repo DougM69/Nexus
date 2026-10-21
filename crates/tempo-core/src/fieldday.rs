@@ -4401,6 +4401,13 @@ impl FieldDayStation {
             FtMessages::FieldDay => {}
         }
         for d in decodes {
+            // ⭐ A message naming a call the decoder could not resolve is passed by, as WSJT-X's
+            // Field Day activity passes it by: `processMessage` returns at once for one that
+            // carries `<...>` (mainwindow.cpp 9097-9099). The run would answer that caller as
+            // `<...>` and log `...`; S&P would answer a CQ from it.
+            if d.message.contains("<...>") {
+                continue;
+            }
             let m = Msg::parse(&d.message);
             match (self.state, &m) {
                 // S&P: heard a CQ → answer with my exchange.
@@ -7203,6 +7210,46 @@ mod tests {
             );
             assert!(run.log.qsos().is_empty(), "{what}: nothing logged");
         }
+    }
+
+    /// ⭐ FIELD DAY'S MESSAGES PASS BY A CALL THE DECODER COULD NOT RESOLVE, as WSJT-X's Field Day
+    /// activity does: `processMessage` returns at once for a message that carries `<...>`
+    /// (mainwindow.cpp 9097-9099). Running, a caller heard as `<...>` gets no answer and no row,
+    /// whether it sends its exchange or rogers first, and the run keeps calling CQ. The same
+    /// station's next message, its call resolved, is worked as any other's and logged bare. The
+    /// same line keeps S&P from answering a CQ that names such a call, `CQ FD <...> EN37`: WSJT-X
+    /// answers a CQ only through `processMessage`.
+    #[test]
+    fn field_days_run_passes_by_a_caller_the_decoder_could_not_resolve() {
+        for heard in ["K1ABC <...> 1D WI", "K1ABC <...> R 1D WI"] {
+            let mut run = contest_station("K1ABC", "arrlfd", true);
+            run.observe(&[dec(heard)], 1);
+            assert_eq!(
+                (run.state, next(&run)),
+                (FdState::CallingCq, "CQ FD K1ABC FN42".to_string()),
+                "{heard}: no answer"
+            );
+            assert!(run.log.qsos().is_empty(), "{heard}: no row");
+            run.observe(&[dec("K1ABC <W9XYZ/M> 1D WI")], 3);
+            assert_eq!(
+                next(&run),
+                "<W9XYZ/M> K1ABC R 2B EMA",
+                "{heard}: its next, resolved, is answered"
+            );
+            run.after_tx();
+            run.observe(&[dec("<K1ABC> W9XYZ/M RR73")], 5);
+            assert_eq!(next(&run), "W9XYZ/M <K1ABC> 73", "{heard}: and closed");
+            assert_eq!(last_row(&run).0, "W9XYZ/M", "{heard}: and logged bare");
+        }
+        let mut sp = contest_station("K1ABC", "arrlfd", false);
+        sp.observe(&[dec("CQ FD <...> EN37")], 0);
+        assert_eq!(
+            (sp.state, next(&sp)),
+            (FdState::Listening, String::new()),
+            "S&P: a CQ from <...> is not answered"
+        );
+        sp.observe(&[dec("CQ FD W9XYZ EN37")], 2);
+        assert_eq!(next(&sp), "W9XYZ K1ABC 2B EMA", "S&P: the next CQ is");
     }
 
     /// The direction reaches a running station's CQ at once, and every CQ after; S&P calls none.

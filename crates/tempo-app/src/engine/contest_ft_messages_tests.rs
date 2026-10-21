@@ -1529,6 +1529,58 @@ fn the_contests_run_closes_with_a_caller_whose_call_is_nonstandard() {
     }
 }
 
+/// ⭐ THE CONTEST'S RUN PASSES BY A CALLER THE DECODER COULD NOT RESOLVE, as WSJT-X's Field Day
+/// activity does: `processMessage` returns at once for a message that carries `<...>`
+/// (mainwindow.cpp 9097-9099). W9XYZ/M's exchange carrying a hash this station's table does not
+/// hold decodes as `K1ABC <...> 1D WI`: in ARRL Field Day on FT8 and FT4 and in Winter Field
+/// Day, it gets no answer and no row, plain or rogered first, and the run calls CQ. Its next,
+/// the call resolved, is worked and logged as before.
+#[test]
+fn the_contests_run_passes_by_a_caller_the_decoder_could_not_resolve() {
+    let bits = |t: &str| {
+        bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(t)).expect("the text packs")
+    };
+    let print = |b: &[i8]| tempo_fast::unpack77(b).unwrap_or_default();
+    for (contest, tier, mine, theirs) in [
+        ("arrlfd", Tier::Ft8, "2B", "1D"),
+        ("arrlfd", Tier::Ft4, "2B", "1D"),
+        ("wfd", Tier::Ft8, "1H", "1H"),
+    ] {
+        for roger in ["", "R "] {
+            let what = format!("{contest:?} {} {roger:?}", tier_name(tier));
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(tier);
+            e.set_mode("fieldday-run").expect("the run starts");
+            let cq = keyed(&mut e, 0).expect("the CQ");
+            // The second call of a Field Day exchange is bits 28-55; its last bit flipped is a
+            // hash the table does not hold.
+            let mut unknown = bits(&format!("K1ABC <W9XYZ/M> {roger}{theirs} WI"));
+            unknown[55] ^= 1;
+            let heard_as = print(&unknown);
+            assert_eq!(
+                heard_as,
+                format!("K1ABC <...> {roger}{theirs} WI"),
+                "{what}: unresolved"
+            );
+            e.ingest_decodes_for_test(&[heard(&heard_as)], 2);
+            assert_eq!(keyed(&mut e, 2), Some(cq.clone()), "{what}: no answer");
+            assert_eq!(rows_of(&e), Vec::<String>::new(), "{what}: no row");
+            e.ingest_decodes_for_test(&[heard(&format!("K1ABC <W9XYZ/M> {theirs} WI"))], 4);
+            assert_eq!(
+                keyed(&mut e, 4),
+                Some(format!("<W9XYZ/M> K1ABC R {mine} EMA")),
+                "{what}: its next, resolved, is answered"
+            );
+            e.ingest_decodes_for_test(&[heard("<K1ABC> W9XYZ/M RR73")], 6);
+            assert_eq!(
+                rows_of(&e),
+                [format!("W9XYZ/M CLASS={theirs},SECTION=WI")],
+                "{what}: and logged"
+            );
+        }
+    }
+}
+
 /// Whether the station is in the contest's S&P, listening, with nothing to send.
 fn listening(e: &Engine) -> bool {
     matches!(&e.mode, Mode::FieldDay { station, running: false }
