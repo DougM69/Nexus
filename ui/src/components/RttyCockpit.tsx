@@ -471,11 +471,14 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   }
 
   // Licensed RTTY watering holes (built-in band plan, WSJT-X-style) — same
-  // source the CW/Phone BandPicker uses, filtered to digital privileges.
+  // source the CW/Phone BandPicker uses, filtered to digital privileges. Each row
+  // comes at the dial this station's keying backend tunes for it (AFSK sits a mark
+  // tone above the plan), so the list is fetched again when the backend changes.
   const [plan, setPlan] = useState<BandChannel[]>([])
+  const rttyBackend = rtty?.backend
   useEffect(() => {
     if (control) void getLicensedBandPlan('rtty').then(setPlan).catch(() => {})
-  }, [control])
+  }, [control, rttyBackend])
 
   // RF POWER. RTTY is a 100%-duty-cycle mode — the carrier is on for the whole over
   // with no let-up — so most rigs want it run well below their SSB rating or the finals
