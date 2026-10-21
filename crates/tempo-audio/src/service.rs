@@ -17587,6 +17587,7 @@ mod tests {
     mod tci_cw;
     mod tci_pan;
     mod tci_server;
+    mod tci_soundcard_cw;
     mod tci_spots;
     mod udp_requests;
     mod wfview;
