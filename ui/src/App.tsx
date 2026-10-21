@@ -730,9 +730,9 @@ function App() {
     setStatus('slotUnkeyFailed', slotUnkeyFailedLane(snap?.radio.slotUnkeyFailed))
   }, [snap?.radio.slotUnkeyFailed?.at, snap?.radio.slotUnkeyFailed?.why])
 
-  // …and one the station ended part way through because its audio stopped reaching the radio (Flex
-  // native DAX audio went off under it): TX halted the same way, and the lane says so until TX is
-  // turned on again; not on the Remote page either.
+  // …and one the station ended part way through because its audio stopped reaching the radio (the
+  // route carrying it, Flex native DAX or TCI, went): TX halted the same way, and the lane says so
+  // until TX is turned on again; not on the Remote page either.
   useEffect(() => {
     setStatus('slotAudioLost', slotAudioLostLane(snap?.radio.slotAudioLost))
   }, [snap?.radio.slotAudioLost?.at])

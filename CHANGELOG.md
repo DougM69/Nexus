@@ -15,9 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what answered, such as the program's version and the radio it drives; it only reads, and never transmits or
   changes the radio. The setup wizard looks for a TCI server on this computer when it opens and offers it, and has an
   **SDR program (TCI)** choice. The connection carries the dial, the mode and, with **Audio over TCI** on, the
-  receive audio, and Nexus transmits on it (the next entry); the program's panadapter and spots over TCI come in a
-  later update (their switches are in Settings already and are kept with the radio). The SDR-program setup guide no
-  longer says Nexus cannot use TCI.
+  receive audio; Nexus transmits on it and can draw the program's panadapter (the entries below). Spots over TCI
+  come in a later update (their switch is in Settings already and is kept with the radio). The SDR-program setup
+  guide no longer says Nexus cannot use TCI.
 - **Transmitting on a TCI radio (Beta).** On a radio whose Connection is TCI, Nexus now transmits through the SDR
   program. PTT on the Phone screen keys the program's own microphone, and Tune keys its tune carrier at its own
   tune drive. With **Audio over TCI** on, as it comes, Nexus's own audio goes to the program over TCI, with no
@@ -27,11 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only once the program has taken Nexus's audio, never on the program's microphone; an over whose audio the
   program stops taking is ended, with the reason on screen; and Stop TX ends an over at once, sending none of the
   rest. With **Audio over TCI** off, a TCI radio keys like any CAT radio: Nexus plays its audio on the sound card
-  and the program transmits its own input, which you route from Nexus with a virtual audio cable. Every Nexus
-  transmit safeguard applies as on any other connection. Programs that use the radio through **Share by TCI** are
-  not changed by this: they still may not send FT8, FT4 or the other slot-timed modes. NEEDS-BENCH: FT8 and FT4
-  through a real SDR program into a dummy load, with Audio over TCI on and then off: the overs' timing at a second
-  receiver, the mid-over switch, and Stop TX part way through an over.
+  and the program transmits its own input, which you route from Nexus with a virtual audio cable. CW goes out over
+  TCI with the Soundcard keyer; through the program's own keyer it is not ready yet. Every Nexus transmit safeguard
+  applies as on any other connection. Programs that use the radio through **Share by TCI** are not changed by this:
+  they still may not send FT8, FT4 or the other slot-timed modes. NEEDS-BENCH: FT8 and FT4 through a real SDR
+  program into a dummy load, with Audio over TCI on and then off: the overs' timing at a second receiver, the
+  mid-over switch, and Stop TX part way through an over; and CW on the Soundcard keyer.
 - **Share by TCI: programs on this computer can use the radio through Nexus.** Settings ▸ Radio ▸ Transmit limits
   & sharing has a new switch, **Share by TCI**, below **Share this radio with other programs**. It is off as it
   comes. Turned on and saved, it makes Nexus a TCI server on this computer: WSJT-X, JTDX, MSHV, Log4OM and other
@@ -39,12 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   radio Nexus runs. They follow and set the dial, switch the sideband, may lower the power but never raise it, and
   get the receive audio from a sound card. Only programs on this computer can connect, never another computer or
   a web page. **Programs on TCI may transmit** is a separate switch, off as it comes and set at the station only:
-  with it on, a program can Tune and key the radio's microphone on the Phone screen, every Nexus transmit
-  safeguard still applies, and no program can turn TX on. FT8, FT4 and the other slot-timed modes may not transmit
-  through TCI yet, until the delay Nexus adds to a program's timing has been measured. A program's own transmit
-  audio, CW macros and spots are not ready yet. The programs connected are listed with what each is doing and the
-  last thing Nexus refused it, each with a **Disconnect**. Settings will not save the CAT sharing port and the TCI
-  server port as the same number. A new guide, Share by TCI, covers turning it on and setting up each program.
+  with it on, a program can Tune, key the radio's microphone on the Phone screen and send a logger's CW macros on
+  the CW screen, which Nexus's own CW keyer sends at the program's speed; every Nexus transmit safeguard still
+  applies, and no program can turn TX on. FT8, FT4 and the other slot-timed modes may not transmit through TCI
+  yet, until the delay Nexus adds to a program's timing has been measured. A program's own transmit audio and
+  spots are not ready yet. The programs connected are listed with what each is doing and the last thing Nexus
+  refused it, each with a **Disconnect**. Settings will not save the CAT sharing port and the TCI server port as
+  the same number. A new guide, Share by TCI, covers turning it on and setting up each program.
 - **TCI (Beta): the SDR program's own panadapter in Nexus's scope.** On a TCI radio, **SDR panadapter in the
   scope** (Settings ▸ Radio ▸ Rig & CAT, off as it comes) now draws the SDR program's own spectrum in the RF scope
   and in the Phone and CW scopes: the program's whole receive bandwidth (48 kHz as the programs come) around its

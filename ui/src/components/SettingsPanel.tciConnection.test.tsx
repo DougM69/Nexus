@@ -3,11 +3,12 @@
 // The TCI connection (Beta) in Settings ▸ Radio ▸ Rig & CAT: an SDR program's own TCI server.
 //
 // Pinned here: the choice is offered for every radio and never picked for the operator; picking it
-// shows the server's address, port, transceiver and program, the three later switches and Find TCI
+// shows the server's address, port, transceiver and program, the three switches and Find TCI
 // server, and puts away the Rig Model, Serial Port and Baud; it stores TCI's own model number and
-// leaving it takes that number off again; the section says plainly that nothing transmits on it
-// yet; Find TCI server asks for the address in the form and fills in the port it found; and every
-// field travels in the radio patch, the seam that has dropped per-radio fields on Save before.
+// leaving it takes that number off again; the section says plainly what works on it and what is
+// not ready yet; Find TCI server asks for the address in the form and fills in the port it found;
+// and every field travels in the radio patch, the seam that has dropped per-radio fields on Save
+// before.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
@@ -221,7 +222,7 @@ describe('the TCI connection is offered for every radio', () => {
     }
   })
 
-  it('says that nothing transmits on it yet, and what else is not ready', async () => {
+  it('says that Nexus transmits on it, and what is not ready yet', async () => {
     await editHl2()
     fireEvent.change(control('Connection'), { target: { value: 'tci' } })
     const hint = await waitFor(() => {
@@ -230,8 +231,9 @@ describe('the TCI connection is offered for every radio', () => {
       return el!.textContent ?? ''
     })
     expect(hint).toMatch(/Beta/)
-    expect(hint).toMatch(/Nexus does not transmit on this connection/)
-    expect(hint).toMatch(/receive audio, transmitting, the panadapter and spots over TCI/)
+    expect(hint).toMatch(/It reads and sets the dial and mode and transmits through the program\./)
+    expect(hint).toMatch(/Not ready yet: CW through the program's own keyer \(use the Soundcard keyer\) and spots on its panadapter\./)
+    expect(hint).not.toMatch(/does not transmit/)
   })
 })
 

@@ -30,12 +30,12 @@ server, see [TCI: connect to an SDR program's TCI server](tci.md).
 | The dial: programs read it and tune the radio | Works |
 | The mode: programs read it and switch the sideband | Works |
 | Power: programs read it and may lower it | Works. A program never raises it. |
-| Receive audio to programs | Works from a sound card. Not yet from a Flex on DAX or from the Icom network connection. |
+| Receive audio to programs | Works, except a Flex's own DAX audio: with **Flex native DAX audio** on, programs hear the sound card under **Audio** instead. |
 | Tune from a program | Works with **Programs on TCI may transmit** on |
 | A program keying the radio's own microphone, on the Phone screen | Works with **Programs on TCI may transmit** on |
 | A program's own transmit audio | Not yet |
 | FT8, FT4 and the other slot-timed modes from a program | Refused for now (see below) |
-| CW macros from a logger's TCI keyer | Not yet |
+| CW macros from a logger's TCI keyer | Works on the CW screen, with **Programs on TCI may transmit** on |
 | Spots from programs on Nexus's band map | Not yet |
 | IQ for skimmers | Not offered |
 
@@ -60,7 +60,7 @@ If the port is taken, a sentence saying so takes the address's place. Give
 | **Share by TCI** | Runs the TCI server. Turning it off closes every program's connection. | Off |
 | **TCI server port** | The port it listens on. | 40001 |
 | **Programs on TCI may transmit** | Lets programs key the transmitter at all. Turning it off ends whatever a program is transmitting. Shown and set only at the station: from a computer driving the station, it reads "Set at the station". | Off |
-| **CW macros from programs** | Lets a logger's TCI keyer send CW through Nexus, on the CW screen only, and only while programs may transmit. Not yet in effect. | On |
+| **CW macros from programs** | Lets a logger's TCI keyer send CW through Nexus's own CW keyer, on the CW screen only, and only while programs may transmit. | On |
 | **Spots from programs** | Shows programs' spots on Nexus's band map and passes your clicks on spots back to them. A spot or a click never transmits. Not yet in effect. | On |
 
 Every one of these belongs to the station and is set only there.
@@ -145,6 +145,13 @@ transmissions still applies:
   and the other way round. Run one FT8 program at a time.
 - A program that disconnects or stops answering stops transmitting at once.
 
+A logger's CW macros (Log4OM's TCI keyer, 5MContest) go out on Nexus's own
+CW keyer, whichever one you use, on the CW screen only, and only while **CW
+macros from programs** is on as well. They go at the speed the program sets;
+your own CW speed stays as it is. A macro holding a character the keyer
+cannot send is refused whole. **Stop TX**, Esc and a CW stop from any program
+end it.
+
 **FT8, FT4 and the other slot-timed modes may not transmit through TCI yet.**
 A program times its own transmissions, and Nexus adds a short delay of its
 own on the way to the radio. Until that delay has been measured and the
@@ -172,9 +179,10 @@ password and no encryption, which is why it stays on this computer.
   connected**: "Last refused" says why, for example "programs on TCI may not
   transmit" or "transmit is not enabled".
 - **WSJT-X says "TCI Audio could not be switched on".** Nexus has no receive
-  audio for programs from this radio: a Flex on DAX or the Icom network
-  connection, for now. Untick **Use TCI Audio** and give WSJT-X the radio's
-  own audio device, as you would without Nexus.
+  audio to send at that moment, usually because the sound card under
+  **Audio** did not open. Check Nexus's audio settings, or untick **Use TCI
+  Audio** and give WSJT-X the radio's own audio device, as you would without
+  Nexus.
 - **Settings ▸ Logging & Connectors ▸ Connections** keeps a Connection log;
   the server's own lines there say which programs connected and what Nexus
   refused them.

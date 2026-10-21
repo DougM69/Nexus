@@ -6863,7 +6863,7 @@ export const EN = {
   // `{{server}}` is what the server said about itself, as sent; `{{address}}` is host:port.
   'settings.rigControl.conn.tci': 'TCI (SDR program) — Beta',
   'settings.rigControl.tci.hint':
-    "<b>Beta.</b> Nexus connects to the SDR program's own TCI server and reads and sets the dial and mode through it, with no rigctld and no virtual COM port. <b>Not ready yet:</b> receive audio, transmitting, the panadapter and spots over TCI. Until they are, Nexus does not transmit on this connection, its audio comes from the sound card under Audio, and the three switches at the end are kept for later. Turn the TCI server on in the program first.",
+    "<b>Beta.</b> Nexus connects to the SDR program's own TCI server, with no rigctld and no virtual COM port. It reads and sets the dial and mode and transmits through the program. With <b>Audio over TCI</b> on, the receive audio and Nexus's own transmit audio go over TCI too. <b>Not ready yet:</b> CW through the program's own keyer (use the Soundcard keyer) and spots on its panadapter. Turn the TCI server on in the program first.",
   'settings.rigControl.tci.host.label': 'SDR program address',
   'settings.rigControl.tci.host.hint':
     'The computer the SDR program runs on: <b>127.0.0.1</b> is this one. TCI has no password and no encryption, so reach another computer only on your own network.',
@@ -7433,7 +7433,7 @@ export const EN = {
   'setup.rig.conn.tci.label': 'SDR program (TCI)',
   'setup.rig.conn.tci.blurb': 'ExpertSDR3, Thetis or piHPSDR, over its TCI server',
   'setup.rig.tci.hint':
-    'Turn the TCI server on in the SDR program first: ExpertSDR3 and Thetis come set to port 50001, piHPSDR to 40001. Beta: Nexus controls the radio over TCI, but does not transmit on this connection yet.',
+    'Turn the TCI server on in the SDR program first: ExpertSDR3 and Thetis come set to port 50001, piHPSDR to 40001. Beta: Nexus controls the radio and transmits over TCI, and the audio goes over TCI too, with no virtual audio cable.',
   'setup.rig.address.label': 'Address',
   'setup.rig.network.hint':
     'A found Flex configures the WSJT-X-proven path: CAT through the SmartSDR CAT app on this PC — its default TCP port 5002 drives slice A (per-slice ports: B=60001, C=60002) — and audio through DAX. Other network rigs: pick their model later in Settings ▸ Radio ▸ Rig & CAT.',
@@ -7667,7 +7667,7 @@ export const EN = {
   'settings.transmit.tciServer.spots.hint':
     "Spots a program sends show on Nexus's band map, and a click on a spot in Nexus is passed back to the programs. A spot or a click never transmits.",
   'settings.transmit.tciServer.notYet':
-    "<b>Not ready yet:</b> a program's own transmit audio, CW macros and spots. Receive audio comes only from a sound card for now, so a Flex on DAX or the Icom network connection has none to send.",
+    "<b>Not ready yet:</b> a program's own transmit audio, spots, and a Flex's DAX audio for programs: with Flex native DAX audio on, they hear the sound card under Audio instead.",
   'settings.transmit.tciServer.programs.label': 'Programs connected',
   'settings.transmit.tciServer.programs.none': 'No program is connected.',
   // One program's connection, by its number: `{{id}}` counts from 1 in the order programs connected,
@@ -11825,13 +11825,13 @@ export const EN = {
   'shell.lane.slotUnkeyFailed.message': 'PTT OFF FAILED — TX STOPPED',
   'shell.lane.slotUnkeyFailed.detail':
     'The radio did not accept PTT off at {{time}} UTC ({{why}}), so TX was turned off. It may still be transmitting: check the radio now. Nexus keeps sending PTT off until the radio accepts it. Turn TX on again once the radio is receiving.',
-  // A slot over whose audio stopped reaching the radio part way through (Flex native DAX audio went
-  // off under it, or its DAX transmit route went): the station ended it there rather than leave the
-  // radio keyed and silent for the rest of it, and halted TX; the lane keeps this until TX is turned
-  // on again.
+  // A slot over whose audio stopped reaching the radio part way through (the route carrying it
+  // went: Flex native DAX audio, or Nexus's transmit audio over TCI): the station ended it there
+  // rather than leave the radio keyed and silent for the rest of it, and halted TX; the lane keeps
+  // this until TX is turned on again.
   'shell.lane.slotAudioLost.message': 'OVER ENDED — TX STOPPED',
   'shell.lane.slotAudioLost.detail':
-    'Flex native DAX audio went off at {{time}} UTC in the middle of an over, so the rest of that over would have gone out silent. Nexus ended the over there and turned TX off. Turn TX on again to carry on.',
+    "The route carrying an over's audio to the radio (Flex DAX or TCI) stopped at {{time}} UTC in the middle of the over, so the rest of it would have gone out silent. Nexus ended the over there and turned TX off. Turn TX on again to carry on.",
   // An FT8 or FT4 over the radio keyed only after this station's period had ended, in the other
   // station's (a slow CAT link: Split operation's commands before the key, and the key itself): Nexus
   // unkeyed it at once, sent nothing and left TX on for the next over, as WSJT-X does. A warning, in
