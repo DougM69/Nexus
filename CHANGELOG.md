@@ -874,6 +874,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limits, "Disable Tx after 73", Parsec presence stop, the licence class, and the PTT method, port and serial lines).
   Each keeps the station's value, and the licence class can no longer be set from afar. The station's own Settings
   window changes them as before.
+- **Nexus Remote: a saved profile sent from a computer driving the station that the station cannot read in full is
+  refused.** Nothing of that save is written, so a profile saved there can never change the settings that are set at
+  the station only. If the station's own saved profiles cannot be read in full, they are not sent to that computer, so
+  no logging-service key saved in a profile leaves the station, and a save from that computer leaves them as they are.
 - **Security: settings that name a program Nexus runs can only be changed at the station.** The TQSL path, the
   program the station runs to sign a LoTW upload, could be changed by a settings save from a computer driving the
   station from afar, so that computer could point it at any program on the station. A save from afar now keeps the
