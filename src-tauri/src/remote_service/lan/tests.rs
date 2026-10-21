@@ -1545,7 +1545,10 @@ async fn it_turns_itself_off_without_a_key_and_waits_for_a_network_or_its_addres
     })
     .await;
     assert_eq!(status.reason, Some("noKey"));
-    let kept = kept_once(&scratch.path(), "the off was not kept", |sw| sw.off.is_some()).await;
+    let kept = kept_once(&scratch.path(), "the off was not kept", |sw| {
+        sw.off.is_some()
+    })
+    .await;
     assert_eq!(kept.off, Some(Off::NoKey));
 
     let scratch = Scratch::new();
