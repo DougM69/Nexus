@@ -20,8 +20,10 @@ The rig generates the actual Morse. Nexus sends the character string to Hamlib v
 
 Nexus toggles **DTR or RTS** on a serial port into the rig's KEY jack; the rig is in CW and shapes
 the signal itself. This is the clean answer for a rig that has no
-CAT CW keying. Set the keyline port and which line to use in **Settings ▸ CW**. The service holds
-the port open for the session (`crates/tempo-audio/src/service.rs:1515-1518`).
+CAT CW keying. Set the keyline port and which line to use in **Settings ▸ CW**. Nexus opens the
+port the first time it sends and keeps it open while the serial keyline is the keyer; changing the
+port or the line reopens it, and picking another keyer releases it. If the port cannot be opened,
+the CW cockpit shows the error the system gave.
 
 **When to use:** your rig has a key jack and no usable CAT keyer, and you want the rig's own
 timing and QSK rather than software-generated audio.
@@ -46,8 +48,11 @@ The back-end is switchable live mid-session; no restart is required.
 
 Entering the CW section commands the rig via CAT before any transmit:
 
-- **CAT and WinKeyer back-ends** → rig mode set to `CW`.
-- **Soundcard back-end** → rig mode set to `USB` (≥10 MHz) or `LSB` (<10 MHz).
+- **CAT, serial keyline and WinKeyer back-ends** → rig mode set to `CW`.
+- **Soundcard back-end** → rig mode set to the DATA submode `PKTUSB` (≥10 MHz) or `PKTLSB`
+  (<10 MHz), so the keyed tone reaches the transmitter from the sound card. With the radio's
+  **Data modes use plain SSB** setting on (an interface wired to the MIC socket), it is plain `USB`
+  or `LSB` instead.
 
 The mode is re-asserted on section entry even if the frequency has not changed. You do not need a separate mode button. TX is armed automatically on CW section entry (`tx_enabled = true`), consistent with a live-key rig, unless you stopped it: after Stop TX, Esc, TX Off or the watchdog, TX stays off, here and on every other screen, until you turn it back on yourself by sending with an F-key or typed text, or with TX On. The FT8 auto-sequencer never applies to CW.
 
@@ -308,7 +313,9 @@ If the rig has a split TX frequency set (`splitTxMhz` in the radio snapshot), a 
 
 | Setting | Default | Notes |
 |---|---|---|
-| `cw_keyer` | `cat` | `cat`, `soundcard`, or `winkeyer` |
+| `cw_keyer` | `cat` | `cat`, `serial`, `soundcard`, or `winkeyer` |
+| `cw_key_port` | *(empty)* | Serial port of the DTR/RTS keyline (e.g. `COM7`), separate from the CAT port; used when `cw_keyer` is `serial` |
+| `cw_key_line` | `dtr` | `dtr` or `rts`: the line that keys the rig on the serial keyline |
 | `winkeyer_port` | *(empty)* | Serial port of the K1EL WinKeyer (e.g. `COM6`); used when `cw_keyer` is `winkeyer` |
 | `cw_wpm` | `25` | Range 5–50; WPM_MIN=5, WPM_MAX=50 |
 | `cw_pitch_hz` | `600.0` | Range 300–1200, step 10; used as scope hairline and soundcard tone |
