@@ -3699,11 +3699,11 @@ pub struct Engine {
     /// write ([`Engine::record_dial`] with [`DialOrigin::Machinery`]), cleared at the next
     /// operator write. The MARK the knob test needs: a hold plainly exists while the app is
     /// sitting on its own channel, but the FM flags only describe some of them. `aprs_tune`
-    /// and `repeater_tune` re-arm one after their tune; `tune_channel` (the ISS SSTV park)
-    /// arms none, and a LINEAR transponder sets no `sat_fm` at all — so a knob nudge inside
-    /// either was banked as the operator's dial for that band. Recording the park where
-    /// provenance is already declared costs one field and covers every machinery verb,
-    /// present and future, instead of another per-verb flag.
+    /// and `repeater_tune` re-arm one after their tune; `tune_channel` (the ISS SSTV park) arms
+    /// none while a satellite pass owns the dial, and a LINEAR transponder sets no `sat_fm` at
+    /// all — so a knob nudge inside either was banked as the operator's dial for that band.
+    /// Recording the park where provenance is already declared costs one field and covers every
+    /// machinery verb, present and future, instead of another per-verb flag.
     ///
     /// Holds the BAND, not a span: off that band the park says nothing and the knob is an
     /// ordinary QSY (which then clears it). Session-only, like the memory it guards.
@@ -4347,12 +4347,13 @@ pub struct Engine {
     /// APRS — so FM never follows them onto another band/mode.
     aprs_fm: bool,
     /// The rig is parked on an FM CHANNEL — a repeater or FM simplex frequency (session-only, never
-    /// persisted). Set by [`Engine::repeater_tune`]; makes `rig_mode_effective` command FM and
-    /// `route_mode` answer Fm, for the same reason `aprs_fm` above exists: the Program section is a
-    /// workbench, not a Phone/Digital operating section, so a tune from it can't ride the Phone-FM
-    /// override and would otherwise inherit the rig mode of whichever section the operator last
-    /// operated — demodulating a repeater as packet-USB. UNLIKE `aprs_fm` it does NOT force simplex:
-    /// carrying the machine's shift and tone is the whole point.
+    /// persisted). Set by [`Engine::repeater_tune`], the SSTV strip's FM rows (`sstv_tune`) and an
+    /// FM channel the app parks (`tune_channel`, the ISS downlink); makes `rig_mode_effective`
+    /// command FM, for the same reason `aprs_fm` above exists: the Program section is a workbench,
+    /// not a Phone/Digital operating section, so a tune from it can't ride the Phone-FM override
+    /// and would otherwise inherit the rig mode of whichever section the operator last operated —
+    /// demodulating a repeater as packet-USB. UNLIKE `aprs_fm` it does NOT force simplex: carrying
+    /// the machine's shift and tone is the whole point.
     ///
     /// Cleared by every QSY, section change and radio switch, exactly like `aprs_fm`, and gated at
     /// read time on the dial still being at/above 29 MHz — the same threshold `Settings::rig_mode`
@@ -7852,11 +7853,39 @@ impl Engine {
     /// cannot tell 145.800 from a frequency the operator typed, and a mode switch inside an
     /// armed window banks the ISS downlink as their 2 m dial.
     ///
-    /// Identical to [`Self::set_frequency`] in every effect on the radio. It differs only in
-    /// what the per-(band, mode) dial memory makes of it: nothing is recorded, and the
-    /// operator residency it displaces is banked on the way in.
+    /// An FM channel is HELD in FM, as the SSTV strip's own pick of the same row holds it
+    /// (`sstv_tune`). The auto-arm parks from the SSTV or Satellites screen, and neither enters a
+    /// section, so without the hold the rig sat on the FM downlink in the mode of the section the
+    /// operator came from (DATA-U from FT8, USB from Phone) and decoded nothing. It is routed on
+    /// FM for the reason the repeater and APRS tunes are: the radio it lands on is the one then
+    /// commanded FM. And it lands on the channel itself, never on the RTTY plan's AFSK dial
+    /// ([`Self::rtty_channel_dial`]): that correction is for an RTTY emission, which an FM channel
+    /// is not.
+    ///
+    /// ⚠️ NOT WHILE A SATELLITE PASS OWNS THE DIAL. Doppler steers the dial back to the bird
+    /// within seconds, and the hold answers above the bird's mode in `rig_mode_effective`, so it
+    /// would hold a linear transponder in FM. There it holds nothing and routes on the section's
+    /// own mode, as it always did.
+    ///
+    /// The per-(band, mode) dial memory never takes it: nothing is recorded, and the operator
+    /// residency it displaces is banked on the way in.
     pub fn tune_channel(&mut self, dial_mhz: f64, band: &str, mode: &str) {
-        self.machinery_tune(self.rtty_channel_dial(dial_mhz), band, mode);
+        let fm = mode.eq_ignore_ascii_case("fm");
+        let hold_fm = fm && self.sat_dial_owner.is_none();
+        if hold_fm {
+            self.route_intent = Some(crate::settings::RouteMode::Fm);
+        }
+        let dial = if fm {
+            dial_mhz
+        } else {
+            self.rtty_channel_dial(dial_mhz)
+        };
+        self.machinery_tune(dial, band, mode);
+        if hold_fm {
+            self.fm_channel = true;
+            // The station's own hold, whatever channel a browser marked before.
+            self.remote_fm_hold = None;
+        }
     }
 
     /// The dial to actually tune for a band-plan pick, once the RTTY keying backend is taken
@@ -10115,6 +10144,13 @@ impl Engine {
     /// time the routed rig is commanded a mode, the hold this would have answered for is gone.
     /// A mirror would instead route a repeater click made DURING a pass on SSB, which is the
     /// disagreement the invariant is about, pointing the other way.
+    ///
+    /// The FM-CHANNEL hold (`fm_channel`) has no mirror either, for the same reason: every caller
+    /// asks on the way into a QSY that ends it (`tune_dial` clears it before the routed rig is
+    /// commanded, and Remote names the radio of that same QSY). Its mirror sent a band pick or a
+    /// typed frequency made on the channel to the FM radio, which was then commanded the
+    /// section's own mode. A tune that holds an FM channel afterwards names the FM class itself
+    /// (`route_intent`, as `repeater_tune` and `tune_channel` do).
     pub fn route_mode(&self, band: &str, dial_mhz: f64) -> crate::settings::RouteMode {
         self.route_mode_for(band, dial_mhz, self.settings.operating_mode)
     }
@@ -10129,14 +10165,10 @@ impl Engine {
         if self.aprs_fm && band.eq_ignore_ascii_case("2m") {
             return RouteMode::Fm;
         }
-        // Mirrors the `fm_channel` arm of `rig_mode_effective` (see the invariant in this doc
-        // comment): a rig held on an FM channel routes on FM.
-        if self.fm_channel && dial_mhz >= 29.0 {
-            return RouteMode::Fm;
-        }
-        // …and the `sat_fm` arm, for the same invariant: a rig held on an FM bird routes on FM.
-        // (The satellite pick names its class explicitly via `route_intent`, so this arm answers
-        // for the QSYs that follow it rather than for the pick itself.)
+        // Mirrors the `sat_fm` arm of `rig_mode_effective` (see the invariant in this doc
+        // comment): a rig held on an FM bird routes on FM. (The satellite pick names its class
+        // explicitly via `route_intent`, so this arm answers for the QSYs that follow it rather
+        // than for the pick itself.)
         if self.sat_fm() && dial_mhz >= 29.0 {
             return RouteMode::Fm;
         }
@@ -10169,18 +10201,18 @@ impl Engine {
     ///
     /// `machinery_park` is the general answer, because it is set where provenance is declared —
     /// at the machinery write itself — so it covers every machinery verb rather than the ones
-    /// that happen to arm an FM flag afterwards (`tune_channel` arms none; a LINEAR transponder
-    /// sets no `sat_fm`). It is band-exact: off the parked band the park says nothing.
+    /// that happen to arm an FM flag afterwards (`tune_channel` arms none while a satellite pass
+    /// owns the dial; a LINEAR transponder sets no `sat_fm`). It is band-exact: off the parked
+    /// band the park says nothing.
     ///
     /// The FM flags stay as a second, coarser term, and they are the reason this is not a bare
     /// `machinery_park` read. They survive a knob QSY on purpose
     /// (`fm_does_not_follow_the_operator_down_to_hf`): the rig is still IN FM, so
-    /// [`Engine::rig_mode_effective`] and [`Engine::route_mode`] still treat it as a channel
-    /// context, and the same gates are used here so all three answer alike. Their gates are
-    /// coarser than a band — APRS counts on 2 m, the FM-channel and FM-bird holds at/above
-    /// 29 MHz — so while one is set a knob move anywhere on VHF/UHF is the machinery's. That is
-    /// the disclosed cost of not clearing them: the alternative, clearing a hold on a knob QSY,
-    /// breaks the FM rule above.
+    /// [`Engine::rig_mode_effective`] still treats it as a channel context, and the same gates are
+    /// used here so the two answer alike. Their gates are coarser than a band — APRS counts on
+    /// 2 m, the FM-channel and FM-bird holds at/above 29 MHz — so while one is set a knob move
+    /// anywhere on VHF/UHF is the machinery's. That is the disclosed cost of not clearing them:
+    /// the alternative, clearing a hold on a knob QSY, breaks the FM rule above.
     ///
     /// NOT a bank-time provenance test: banking still reads only the residency. This runs at a
     /// WRITE, which is where provenance is allowed to be decided.
@@ -36603,7 +36635,7 @@ mod tests {
         use crate::settings::OperatingMode;
         // The APP's own channel park is a hold like APRS's, and hand-chasing the ISS
         // downlink's ±3.5 kHz Doppler is routine on an SSTV pass. `aprs_tune` and
-        // `repeater_tune` each re-arm an FM flag after their tune; `tune_channel` arms none,
+        // `repeater_tune` each re-arm an FM flag after their tune; `tune_channel` armed none then,
         // so nothing marked the park and the nudge was banked as the operator's 2 m phone
         // dial — overwriting the 146.520 the park had just correctly saved, and parking a
         // later return to 2 m Phone on the ISS downlink.
@@ -62208,6 +62240,258 @@ mod tests {
             assert_eq!(e.settings.active_radio, ic9700, "{how}: Phone's SSB radio");
             assert_eq!(e.rig_mode_effective(), "USB", "{how}: Phone's own mode");
         }
+    }
+
+    /// The active radio's name, so a routing assertion reads by value.
+    fn active_radio_name(e: &Engine) -> String {
+        e.settings
+            .radios
+            .iter()
+            .find(|p| p.id == e.settings.active_radio)
+            .map(|p| p.name.clone())
+            .unwrap_or_default()
+    }
+
+    /// [`three_radio_engine`] with a 2 m / 70 cm SSB rule beside its FM one: 2 m FM goes to the
+    /// FT-991A, 2 m SSB and 2 m digital to the IC-9700.
+    fn fm_and_ssb_radios_on_2m() -> Engine {
+        let (mut e, ic9700, _) = three_radio_engine();
+        let mut rules = e.settings().routing_rules.clone();
+        rules.insert(
+            0,
+            crate::settings::RoutingRule {
+                bands: vec!["2m".into(), "70cm".into()],
+                mode: Some(crate::settings::RouteMode::Ssb),
+                context: None,
+                radio: ic9700,
+            },
+        );
+        e.set_routing_rules(rules);
+        e
+    }
+
+    #[test]
+    fn a_qsy_made_while_an_fm_channel_is_held_routes_on_the_mode_it_is_commanded_in() {
+        // The QSY that leaves an FM channel ends its hold before the radio it routed to is
+        // commanded, so it is commanded the section's own mode, and has to be routed on that mode:
+        // the IC-9700 here, not the FM radio left in USB or DATA-U. A memory or spot pick enters
+        // its section first, which ended the hold before routing already; that row is the control.
+        let on_the_sstv_fm_channel = || {
+            let mut e = fm_and_ssb_radios_on_2m();
+            e.sstv_tune(144.500, "2m", "FM");
+            assert_eq!(
+                e.rig_mode_effective(),
+                "FM",
+                "premise: the channel holds FM"
+            );
+            e
+        };
+        let mut got = Vec::new();
+        let mut e = on_the_sstv_fm_channel();
+        e.pick_band("70cm", Some("phone"));
+        got.push((
+            "SSTV FM channel, then a band pick",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let mut e = on_the_sstv_fm_channel();
+        // Remote names the radio of a retune by the same question (`None` = stay on the active
+        // radio), so the two cannot disagree.
+        let remote = e
+            .remote_frequency_route(144.200, "2m")
+            .unwrap_or(e.settings.active_radio);
+        e.set_frequency(144.200, "2m", "USB");
+        assert_eq!(
+            remote, e.settings.active_radio,
+            "Remote's radio for the typed frequency is the one the station tuned"
+        );
+        got.push((
+            "SSTV FM channel, then a typed frequency",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let mut e = on_the_sstv_fm_channel();
+        e.work_spot("phone", 144.205, "2m");
+        got.push((
+            "SSTV FM channel, then a memory or spot pick",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let mut e = fm_and_ssb_radios_on_2m();
+        e.set_operating_mode("digital", false);
+        e.repeater_tune(146.940, "minus", 600_000, 103.5).unwrap();
+        e.set_frequency(144.174, "2m", "USB");
+        got.push((
+            "a repeater tuned from FT8, then FT8's 2 m frequency typed",
+            active_radio_name(&e),
+            e.rig_mode_effective(),
+        ));
+        let want = |how, mode: &str| (how, "IC-9700".to_string(), mode.to_string());
+        assert_eq!(
+            got,
+            vec![
+                want("SSTV FM channel, then a band pick", "USB"),
+                want("SSTV FM channel, then a typed frequency", "USB"),
+                want("SSTV FM channel, then a memory or spot pick", "USB"),
+                want(
+                    "a repeater tuned from FT8, then FT8's 2 m frequency typed",
+                    "PKTUSB"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_iss_park_holds_fm_as_the_strips_own_pick_does_from_any_section() {
+        // The ISS SSTV auto-arm parks the downlink (`tune_channel`, 145.800 FM) on the SSTV or
+        // Satellites screen, and neither screen enters a section: the rig parks in whatever section
+        // the operator came from. The SSTV strip's own pick of the same row holds FM (`sstv_tune`).
+        // The park held nothing, so the rig sat on an FM downlink in that section's mode.
+        let sections = ["digital", "phone", "cw", "rtty"];
+        let from = |section: &str| {
+            let mut e = Engine::new("K1ABC", "EN50", 0);
+            e.set_license_class("general");
+            e.set_operating_mode(section, false);
+            e.set_frequency(14.230, "20m", "USB");
+            e
+        };
+        let strip: Vec<_> = sections
+            .iter()
+            .map(|&s| {
+                let mut e = from(s);
+                e.sstv_tune(145.800, "2m", "FM");
+                (s, e.rig_mode_effective())
+            })
+            .collect();
+        assert_eq!(
+            strip,
+            sections.map(|s| (s, "FM".to_string())),
+            "the strip's own pick (control)"
+        );
+        let park: Vec<_> = sections
+            .iter()
+            .map(|&s| {
+                let mut e = from(s);
+                e.tune_channel(145.800, "2m", "FM");
+                (s, e.rig_mode_effective(), e.snapshot().radio.fm_channel)
+            })
+            .collect();
+        assert_eq!(
+            park,
+            sections.map(|s| (s, "FM".to_string(), true)),
+            "the ISS park: FM, and the snapshot says the rig is held on an FM channel"
+        );
+    }
+
+    #[test]
+    fn the_iss_park_from_rtty_lands_on_the_downlink_itself() {
+        // `tune_channel` applies the RTTY band plan's AFSK correction (the plan stores the emission,
+        // so an AFSK dial sits a mark tone above it). The ISS downlink is an FM channel, not an RTTY
+        // emission: from RTTY on the default AFSK keying the park landed a mark tone high, outside
+        // the 1 kHz the auto-arm checks before it puts the operator's dial back at LOS.
+        let parked = |backend: &str| {
+            let mut e = Engine::new("K1ABC", "EN50", 0);
+            e.set_license_class("general");
+            e.settings.rtty_backend = backend.into();
+            e.set_operating_mode("rtty", false);
+            e.tune_channel(145.800, "2m", "FM");
+            format!("{:.6}", e.settings().dial_mhz)
+        };
+        assert_eq!(
+            [parked("afsk"), parked("fsk")],
+            ["145.800000".to_string(), "145.800000".to_string()],
+            "AFSK, FSK: the downlink itself"
+        );
+    }
+
+    #[test]
+    fn the_iss_park_goes_to_the_fm_radio_and_los_returns_the_dial_to_its_own() {
+        // With 2 m FM routed to the FT-991A and 2 m digital to the IC-9700, the park is commanded
+        // FM, so it routes on FM, as the APRS and repeater tunes do. At LOS the auto-arm puts the
+        // operator's own dial back (`set_frequency`); that QSY ends the hold, so it routes on the
+        // section's own mode and lands back on the radio it came from.
+        for (from, dial, band, home) in [
+            ("FT8 on 2 m", 144.174, "2m", "IC-9700"),
+            ("FT8 on 20 m", 14.074, "20m", "FTdx10"),
+        ] {
+            let (mut e, _, _) = three_radio_engine();
+            e.work_spot("operate", dial, band);
+            assert_eq!(active_radio_name(&e), home, "{from}: premise");
+            e.tune_channel(145.800, "2m", "FM"); // ISS AOS
+            assert_eq!(
+                (active_radio_name(&e), e.rig_mode_effective()),
+                ("FT-991A".to_string(), "FM".to_string()),
+                "{from}: the park"
+            );
+            e.set_frequency(dial, band, "USB"); // LOS: the operator's own dial back
+            assert_eq!(
+                (active_radio_name(&e), e.rig_mode_effective()),
+                (home.to_string(), "PKTUSB".to_string()),
+                "{from}: LOS"
+            );
+        }
+    }
+
+    #[test]
+    fn an_iss_park_while_a_pass_owns_the_dial_leaves_no_fm_hold_over_the_bird() {
+        // A satellite pass owns the dial: Doppler steers it back to the bird every few seconds, and
+        // the bird names the mode. The park still takes the dial as it always has, but leaves no FM
+        // hold behind: that hold answers above a bird's mode, so once Doppler steered back it would
+        // hold a linear transponder in FM.
+        let (mut e, _, _) = sat_station();
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "premise: the bird's sideband"
+        );
+        e.tune_channel(145.800, "2m", "FM"); // an ISS pass begins during it
+        assert!(
+            !e.snapshot().radio.fm_channel,
+            "no FM channel held over the pass"
+        );
+        e.steer_sat_dial(435.645); // Doppler takes the dial back to the bird
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "back on the bird: its sideband, not FM"
+        );
+    }
+
+    #[test]
+    fn a_satellite_pick_after_the_iss_park_takes_the_dial_and_names_the_mode() {
+        let (mut e, ic9700, _) = sat_station();
+        e.tune_channel(145.800, "2m", "FM");
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(
+            e.settings.active_radio, ic9700,
+            "the satellite rule's radio"
+        );
+        assert_eq!(e.rig_mode_effective(), "USB", "the bird's sideband");
+        assert!(!e.snapshot().radio.fm_channel, "the park's channel is gone");
+    }
+
+    #[test]
+    fn the_iss_park_arms_nothing_and_the_gate_judges_as_before() {
+        // From FT8, disarmed: the park arms nothing.
+        let mut e = Engine::new("K1ABC", "EN50", 0);
+        e.set_license_class("technician");
+        e.set_operating_mode("digital", false);
+        e.set_frequency(144.174, "2m", "USB");
+        e.tune_channel(145.800, "2m", "FM");
+        assert!(!e.tx_enabled(), "from FT8: nothing arms");
+        // Armed in Phone on 2 m: an in-band park keeps the latch as any in-band QSY does, and a
+        // Technician may transmit on 2 m as before.
+        let mut e = Engine::new("K1ABC", "EN50", 0);
+        e.set_license_class("technician");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(146.520, "2m", "FM");
+        assert!(e.tx_enabled(), "premise: Phone armed");
+        e.tune_channel(145.800, "2m", "FM");
+        assert!(e.tx_enabled(), "an in-band park keeps the latch");
+        assert!(e.tx_allowed(), "the gate: 2 m is a Technician's");
     }
 
     #[test]
