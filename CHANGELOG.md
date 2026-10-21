@@ -883,6 +883,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it in memory without limit. Every such port now bounds the length of one command line and ends a connection that
   runs past it; nothing in an over-long line reaches the radio, and ordinary sharing clients, whose commands are
   short, are unaffected. These ports are reachable only from this computer, as they have always been.
+- **The PstRotatorAz link's rotator port now caps how much it reads for one command.** With the rotator set to
+  PstRotatorAz, Nexus answers rotator commands on this computer in the Hamlib rotctld text protocol, which its Rotor
+  pane and other rotator programs use. A single local connection that sent one over-long command, or a stream that was
+  never a complete command, could make Nexus hold it in memory without limit. The port now bounds the length of one
+  command line and ends a connection that runs past it; nothing in an over-long line reaches the rotator, and rotator
+  programs, whose commands are short, are unaffected. The link is new since 1.19.0, so no earlier release is affected,
+  and the port is reachable only from this computer.
 
 ## [1.19.0] — 2026-10-16
 
