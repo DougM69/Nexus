@@ -15769,7 +15769,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 /* In the strip's hover label (ink on the text colour), in the label's own ink. */
 .bandstrip-spot-call .spot-type-badge.type-tci {
-  margin-left: 4px;
+  margin-left: var(--space-1);
   border-color: currentColor;
   color: inherit;
 }
