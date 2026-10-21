@@ -817,6 +817,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answered; the ARRL VHF contests and Field Day are unchanged. NEEDS-BENCH: a state QSO party (or another contest
   with the standard messages) on FT8, Running, called by a station signing /M or /QRP that runs WSJT-X with no
   Special Operating Activity and Skip Tx1 off.
+- **FT8/FT4: a caller shown as `<...>` is no longer answered.** A station whose call has a suffix or a prefix
+  can show as `<...>` until Nexus has decoded its call in full. When you called CQ, outside a contest or Running in
+  an ARRL VHF contest or a contest with the standard messages, and such a station called you with its grid or its
+  report, Nexus answered it, sending your report or roger to `<...>`, a call no one could read; a best-caller choice
+  could even pick it over a station whose call shows. Double-clicking any other message from `<...>`, a logger's
+  Reply to one, working one from the Remote page, or clicking `<...>` in a list started a contact with `<...>` too.
+  Nexus now passes such a caller by and answers the next station that called you in the same period, or calls CQ
+  again; a click on `<...>` changes nothing and says why. WSJT-X answers no `<...>`. Once the station's call shows
+  in full, it is answered and worked as usual. Field Day already passed such a caller by. NEEDS-BENCH: FT8, Call CQ
+  and then an ARRL VHF contest's Running, called by a station signing /M that runs WSJT-X, whose call Nexus has not
+  decoded in full.
+- **FT8/FT4: typing 73 to a station signing W9XYZ/M no longer sends it to W9XYZ.** In a contact with a station
+  whose call has a suffix such as /M or /QRP, a prefix such as PJ4/, or a shape such as YW18FIFA, the free text you
+  type for the next message (`73`, `RR73`, `RRR` or a report) went out as `W9XYZ/M K1ABC 73`, which goes on the air
+  as `W9XYZ K1ABC 73`: another station's call (with YW18FIFA, a cut-off `YW18FIFA K1AB`). The same happened to your
+  own call when it has a suffix or a prefix. Nexus now sends the message WSJT-X sends for the two calls, such as
+  `W9XYZ/M <K1ABC> 73` (your call in angle brackets) or `<W9XYZ> K1ABC/QRP 73`, the same message bit for bit and
+  the same one Nexus's own 73 is. Other free text, and contacts where both calls are plain or both have a suffix or
+  a prefix, go out as before. NEEDS-BENCH: FT8, working a station signing /M that runs WSJT-X, type 73 as the next
+  message: WSJT-X shows `W9XYZ/M <you> 73` and logs.
+- **FT8/FT4: clicking the Tx3 row sends what the row shows.** With your call ending in /P or /R and a station
+  signing W9XYZ/M or PJ4/W9XYZ, no report can ride your roger, so the Tx panel's Tx3 shows `<W9XYZ/M> K1ABC/P RRR`.
+  Clicked, it went out as `W9XYZ/M <K1ABC/P> RRR`, the Tx4 message. It now goes out as the row shows it, as WSJT-X
+  sends what its Tx3 box holds; the automatic sequence already sent it that way. NEEDS-BENCH: FT8, your call with
+  /P, working a station signing /M that runs WSJT-X, click Tx3: WSJT-X decodes its own call in angle brackets,
+  your call in full and RRR.
+- **WSJT-X UDP: a Replay no longer marks old decodes as new.** When a logger such as JTAlert or GridTracker asks
+  Nexus to replay the decodes, Nexus sent them marked New, as if just heard, so a program could alert on them again.
+  They now go out marked not new, as WSJT-X sends them. Decodes as they are heard are still New. NEEDS-BENCH:
+  GridTracker or JTAlert on Nexus's UDP port, restarted while Nexus decodes: the period's decodes come back without
+  new alerts.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.

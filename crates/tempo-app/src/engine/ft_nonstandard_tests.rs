@@ -299,3 +299,222 @@ fn a_double_click_on_a_cq_from_an_unresolved_call_answers_nothing() {
         }
     }
 }
+
+/// `over`, a message whose second call is hashed, as the FT8 encoder packs it, off the air with
+/// that call's hash changed to one this station's table does not hold (the second call of a
+/// standard message is bits 29-56; its last bit flipped is another hash).
+fn unresolved(over: &str) -> String {
+    let mut bits =
+        bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(over)).expect("the over packs");
+    bits[56] ^= 1;
+    tempo_fast::unpack77(&bits).unwrap_or_default()
+}
+
+/// ⛔ A CQ RUN NEVER ANSWERS A CALLER THE DECODER COULD NOT RESOLVE. `<...>` names nobody, and
+/// WSJT-X builds no message to it: its messages go to the call in its DX call box (`genStdMsgs`,
+/// mainwindow.cpp 9567-9577), which takes only a callsign (`Radio::is_callsign`, 9402). Operate's
+/// FT8 and FT4 Call CQ, first-heard and with a best-caller choice: a caller's grid or report from
+/// `<...>` keys the CQ again, and the next caller in the same period, its call resolved, is
+/// answered, also where the `<...>` caller is the stronger.
+#[test]
+fn a_cq_run_never_answers_an_unresolved_caller() {
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        for strategy in ["first", "strongest"] {
+            for (over, answer) in [
+                ("K1ABC <K9QQQ/M> EN37", "<K9QQQ/M> K1ABC -12"),
+                ("K1ABC <K9QQQ/M> -07", "<K9QQQ/M> K1ABC R-12"),
+            ] {
+                let what = format!("{} {strategy} {over:?}", tier_name(tier));
+                let caller = unresolved(over);
+                assert_eq!(
+                    caller,
+                    over.replace("<K9QQQ/M>", "<...>"),
+                    "{what}: unresolved"
+                );
+                let mut e = Engine::new(ME, MY_GRID, 0);
+                let mut s = e.settings().clone();
+                s.best_caller = strategy.into();
+                e.apply_settings(s);
+                e.set_tier(tier);
+                e.start_cq(None).expect("Call CQ");
+                let (at, cq) = key_next(&mut e, 0);
+                e.ingest_decodes_for_test(&[heard(&caller)], at + 1);
+                let (at, next) = key_next(&mut e, at + 2);
+                assert_eq!(next, cq, "{what}: the CQ again");
+                let louder = modes::Decode {
+                    snr: 0,
+                    ..heard(&caller)
+                };
+                e.ingest_decodes_for_test(&[louder, heard(over)], at + 1);
+                assert_eq!(
+                    key_next(&mut e, at + 2).1,
+                    answer,
+                    "{what}: the next caller, resolved, is answered"
+                );
+            }
+        }
+    }
+}
+
+/// Where the station is, what it has queued, TX, and the RX and TX offsets.
+fn where_it_is(e: &Engine) -> (String, Option<String>, bool, (f32, f32)) {
+    let mode = match &e.mode {
+        Mode::Qso { station, running } => format!("Qso running={running} {:?}", station.state),
+        Mode::FieldDay { .. } => "FieldDay".into(),
+        Mode::Chat => "Chat".into(),
+    };
+    (
+        mode,
+        queued(e),
+        e.tx_enabled,
+        (e.rx_offset_hz, e.tx_offset_hz),
+    )
+}
+
+/// ⛔ NO CLICK WORKS A CALL THE DECODER COULD NOT RESOLVE, whatever its message: a double-click,
+/// a logger's Reply and the Remote page's work command on a call to this station from `<...>`
+/// (its grid, its report, its roger) or on its call to somebody else, and a roster click on
+/// `<...>`, are refused and change nothing, on FT8 and FT4, as no message to `<...>` is built in
+/// WSJT-X (its DX call box takes only a callsign, `Radio::is_callsign`, mainwindow.cpp 9402).
+/// The same message heard with the call resolved is worked as before.
+#[test]
+fn no_click_works_a_call_the_decoder_could_not_resolve() {
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        for (over, answer) in [
+            ("K1ABC <K9QQQ/M> EN37", "<K9QQQ/M> K1ABC -12"),
+            ("K1ABC <K9QQQ/M> -07", "<K9QQQ/M> K1ABC R-12"),
+            ("K1ABC <K9QQQ/M> R-07", "K9QQQ/M <K1ABC> RR73"),
+            ("W9XYZ <K9QQQ/M> EN37", "<K9QQQ/M> K1ABC FN42"),
+        ] {
+            let what = format!("{} {over:?}", tier_name(tier));
+            let heard_as = unresolved(over);
+            assert_eq!(
+                heard_as,
+                over.replace("<K9QQQ/M>", "<...>"),
+                "{what}: unresolved"
+            );
+            let mut e = Engine::new(ME, MY_GRID, 0);
+            e.set_tier(tier);
+            e.set_mode("qso-monitor").expect("QSO mode");
+            e.ingest_decodes_for_test(&[heard(&heard_as)], 2);
+            let before = where_it_is(&e);
+            let click = e.work_station("<...>", None, Some(&heard_as), Some(SNR), Some(1234.0));
+            let reply = e.answer_udp_reply("<...>", &heard_as, SNR, Some(1234.0));
+            let remote =
+                e.call_station_ctx("<...>", None, Some(&heard_as), Some(SNR), Some(1234.0));
+            let roster = e.work_station("<...>", None, None, None, Some(1234.0));
+            assert_eq!(
+                (
+                    [click.is_ok(), reply.is_ok(), remote.is_ok(), roster.is_ok()],
+                    where_it_is(&e),
+                    keyed(&mut e, 4)
+                ),
+                ([false; 4], before.clone(), None),
+                "{what}: no answer"
+            );
+            assert_eq!(before.1, None, "{what}: nothing queued");
+            e.ingest_decodes_for_test(&[heard(over)], 6);
+            e.work_station("<K9QQQ/M>", None, Some(over), Some(SNR), Some(1234.0))
+                .expect("its next is taken");
+            assert_eq!(
+                keyed(&mut e, 8).as_deref(),
+                Some(answer),
+                "{what}: its next, resolved, is answered"
+            );
+        }
+    }
+}
+
+/// ⭐ A CLICKED TX3 ROW GOES OUT AS THE ROW SHOWS IT, as WSJT-X keys the text of the Tx3 box
+/// clicked (`on_txb3_clicked`, mainwindow.cpp 8771-8777; `ui->tx3->text()`, 7901). A /P station
+/// working a nonstandard call can put no number in its roger, so its Tx3 row is `<W9XYZ/M>
+/// K1ABC/P RRR`; clicked, it went out as `W9XYZ/M <K1ABC/P> RRR`, the Tx4 row. The Tx4 row and
+/// the sequence's own Tx3 keep their forms.
+#[test]
+fn a_clicked_tx3_row_goes_out_as_the_row_shows_it() {
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        for (dx, cq) in [("W9XYZ/M", "CQ W9XYZ/M"), ("PJ4/W9XYZ", "CQ PJ4/W9XYZ")] {
+            let what = format!("{} {dx}", tier_name(tier));
+            let working = || {
+                let mut e = Engine::new("K1ABC/P", MY_GRID, 0);
+                e.set_tier(tier);
+                let cq = off_air(cq);
+                e.ingest_decodes_for_test(&[heard(&cq)], 2);
+                e.work_station(dx, None, Some(&cq), Some(SNR), None)
+                    .expect("the double-click is taken");
+                e
+            };
+            for row in [format!("<{dx}> K1ABC/P RRR"), format!("{dx} <K1ABC/P> RRR")] {
+                let mut e = working();
+                e.override_next_tx(dx, None, &row);
+                assert_eq!(
+                    keyed(&mut e, 4).as_deref(),
+                    Some(row.as_str()),
+                    "{what}: the row {row:?}"
+                );
+            }
+            let mut e = working();
+            keyed(&mut e, 4).expect("the answer");
+            e.ingest_decodes_for_test(&[heard(&format!("K1ABC/P <{dx}> -07"))], 6);
+            assert_eq!(
+                keyed(&mut e, 6),
+                Some(format!("<{dx}> K1ABC/P RRR")),
+                "{what}: the sequence's Tx3"
+            );
+        }
+    }
+}
+
+/// ⭐ FREE TEXT IN A CONTACT WITH A STATION SIGNING W9XYZ/M GOES OUT AS WSJT-X'S MESSAGE FOR THE
+/// TWO CALLS. Typed `73` went out as `W9XYZ/M K1ABC 73`, which the packer sends as `W9XYZ K1ABC 73`:
+/// another station. Where exactly one call is nonstandard, WSJT-X writes that call whole and the
+/// other hashed (`genStdMsgs`, mainwindow.cpp: RR73 or RRR and 73, 9701-9702 and 9709-9710; a
+/// report, `t0a` 9596 and 9629-9631 or `t0b` 9597 and 9625-9626, then 9655-9656); each typed text
+/// packs to the 77 bits and FT4 tones of WSJT-X's message. With both calls standard, or both
+/// nonstandard, WSJT-X's message is `t0` (9591, 9595), which the text as typed already packs to;
+/// and text that is no standard message goes as typed.
+#[test]
+fn free_text_goes_out_as_wsjtxs_message_for_the_two_calls() {
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        for (me, cq, typed, wsjtx) in [
+            ("K1ABC", "CQ W9XYZ/M", "73", "W9XYZ/M <K1ABC> 73"),
+            ("K1ABC", "CQ W9XYZ/M", "RR73", "W9XYZ/M <K1ABC> RR73"),
+            ("K1ABC", "CQ W9XYZ/M", "RRR", "W9XYZ/M <K1ABC> RRR"),
+            ("K1ABC", "CQ W9XYZ/M", "-12", "<W9XYZ/M> K1ABC -12"),
+            ("K1ABC", "CQ W9XYZ/M", "R-12", "<W9XYZ/M> K1ABC R-12"),
+            ("K1ABC", "CQ PJ4/W9XYZ", "73", "PJ4/W9XYZ <K1ABC> 73"),
+            ("K1ABC", "CQ YW18FIFA", "73", "YW18FIFA <K1ABC> 73"),
+            ("K1ABC/P", "CQ W9XYZ/M", "73", "W9XYZ/M <K1ABC/P> 73"),
+            ("K1ABC/QRP", "CQ W9XYZ EN37", "73", "<W9XYZ> K1ABC/QRP 73"),
+            ("K1ABC/QRP", "CQ W9XYZ EN37", "-12", "W9XYZ <K1ABC/QRP> -12"),
+            // As typed: WSJT-X's already.
+            ("K1ABC", "CQ W9XYZ EN37", "73", "W9XYZ K1ABC 73"),
+            ("K1ABC", "CQ W9XYZ/P EN37", "73", "W9XYZ/P K1ABC 73"),
+            ("K1ABC/P", "CQ F4CYH/R JN18", "73", "F4CYH/R K1ABC/P 73"),
+            ("PJ4/K1ABC", "CQ W9XYZ/M", "73", "W9XYZ K1ABC 73"),
+        ] {
+            let what = format!("{} {me} {cq:?} {typed:?}", tier_name(tier));
+            let mut e = Engine::new(me, MY_GRID, 0);
+            e.set_tier(tier);
+            let cq = off_air(cq);
+            e.ingest_decodes_for_test(&[heard(&cq)], 2);
+            let Msg::Cq { de, .. } = Msg::parse(&cq) else {
+                panic!("{what}: a CQ")
+            };
+            e.work_station(&de, None, Some(&cq), Some(SNR), None)
+                .expect("the double-click is taken");
+            e.qso_freetext(typed);
+            let sent = keyed(&mut e, 4).expect("the free text");
+            assert_eq!(air(&sent), air(wsjtx), "{what}: WSJT-X's on the air");
+        }
+        // Not a standard message: as typed.
+        let mut e = answering_its_cq(tier);
+        e.qso_freetext("TNX");
+        assert_eq!(
+            keyed(&mut e, 4).as_deref(),
+            Some("W9XYZ/M K1ABC TNX"),
+            "{}: free text",
+            tier_name(tier)
+        );
+    }
+}

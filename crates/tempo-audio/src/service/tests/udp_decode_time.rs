@@ -68,7 +68,8 @@ fn received(listener: &std::net::UdpSocket) -> Vec<u8> {
 }
 
 /// A decode of the 22:13:15 period goes out stamped 22:13:15 whether it is sent at :27 (the early
-/// pass), at :31 or at :34 (a full pass that ended in the next period).
+/// pass), at :31 or at :34 (a full pass that ended in the next period), and New, as WSJT-X sends
+/// a decode as it completes (`postDecode (true, …)`, mainwindow.cpp 3416, 5676, 7383).
 #[test]
 fn a_decode_goes_out_stamped_with_its_period_start_whenever_it_is_sent() {
     let e = heard_in_the_period();
@@ -82,11 +83,12 @@ fn a_decode_goes_out_stamped_with_its_period_start_whenever_it_is_sent() {
     for sent_at in [27.0, 31.0, 34.0] {
         let now = (PERIOD_START_S as f64 - 15.0 + sent_at) * 1000.0;
         emit_rx_decodes(&sinks, &e, &mut spots, &mut cache, now, 14_074_000);
-        let (_, time, message) = decode_on_the_wire(&received(&listener));
+        let (new, time, message) = decode_on_the_wire(&received(&listener));
         assert_eq!(message, "CQ W1AW FN31");
         assert_eq!(
-            time, PERIOD_START_MS_OF_DAY,
-            "sent at :{sent_at}: the Decode's Time"
+            (new, time),
+            (true, PERIOD_START_MS_OF_DAY),
+            "sent at :{sent_at}: the Decode's New and Time"
         );
     }
 }
@@ -110,7 +112,9 @@ fn all_txt_stamps_the_same_period_start() {
 }
 
 /// A logger's Replay gets the period's decodes back with the period's start, not the moment it
-/// asked.
+/// asked, and not New: WSJT-X replays each old decode "with the 'New' field set to false"
+/// (`Network/NetworkMessage.hpp` 221-226; `replayDecodes` → `postDecode (false, …)`,
+/// mainwindow.cpp 13374-13396).
 #[test]
 fn a_replay_sends_the_period_start() {
     let engine = Arc::new(Mutex::new(heard_in_the_period()));
@@ -155,7 +159,11 @@ fn a_replay_sends_the_period_start() {
         .take(16)
         .find(|d| d.get(8..12) == Some(&tempo_net::wsjtx::msg_type::DECODE.to_be_bytes()[..]))
         .expect("the replayed Decode");
-    let (_, time, message) = decode_on_the_wire(&decode);
+    let (new, time, message) = decode_on_the_wire(&decode);
     assert_eq!(message, "CQ W1AW FN31");
-    assert_eq!(time, PERIOD_START_MS_OF_DAY, "the replayed Decode's Time");
+    assert_eq!(
+        (new, time),
+        (false, PERIOD_START_MS_OF_DAY),
+        "the replayed Decode's New and Time"
+    );
 }

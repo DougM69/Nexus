@@ -4576,9 +4576,11 @@ impl FieldDayStation {
                     self.state = FdState::AwaitExchange;
                     self.transcript.push(format!("answer CQ {de}"));
                 }
-                // Running: a caller's grid → roger it and send mine.
+                // Running: a caller's grid → roger it and send mine. Not a caller from `<...>`,
+                // which names nobody: WSJT-X's messages go to the call in its DX call box
+                // (`genStdMsgs`, mainwindow.cpp 9567-9577), which takes only a callsign (9402).
                 (FdState::CallingCq, Msg::Grid { to, de, grid })
-                    if self.to_me(to) && !grid.is_empty() =>
+                    if self.to_me(to) && !grid.is_empty() && !de.contains("<...>") =>
                 {
                     self.dxcall = Some(de.clone());
                     self.peer_grid = Some(grid.clone());
@@ -4638,9 +4640,10 @@ impl FieldDayStation {
                     self.state = FdState::AwaitExchange;
                     self.transcript.push(format!("answer CQ {de}"));
                 }
-                // Running: a caller's grid → my report.
+                // Running: a caller's grid → my report. Not a caller from `<...>`, as in the ARRL
+                // VHF contests.
                 (FdState::CallingCq, Msg::Grid { to, de, grid })
-                    if self.to_me(to) && !grid.is_empty() =>
+                    if self.to_me(to) && !grid.is_empty() && !de.contains("<...>") =>
                 {
                     self.dxcall = Some(de.clone());
                     self.peer_grid = Some(grid.clone());
@@ -4674,8 +4677,11 @@ impl FieldDayStation {
                     self.transcript
                         .push(format!("caller {de} with no grid → report"));
                 }
-                // Running: a caller that sent its report without its grid → R and mine.
-                (FdState::CallingCq, Msg::Report { to, de, .. }) if self.to_me(to) => {
+                // Running: a caller that sent its report without its grid → R and mine. Not a
+                // caller from `<...>`.
+                (FdState::CallingCq, Msg::Report { to, de, .. })
+                    if self.to_me(to) && !de.contains("<...>") =>
+                {
                     self.dxcall = Some(de.clone());
                     self.pending = Some(Msg::RReport {
                         to: de.clone(),
@@ -6722,6 +6728,53 @@ mod tests {
                 (sp.state, next(&sp)),
                 (FdState::AwaitExchange, "<K9QQQ/M> K1ABC FN42".to_string()),
                 "{event} {cq}: its next CQ, resolved, is answered"
+            );
+        }
+    }
+
+    /// ⛔ The ARRL VHF and standard messages' Running passes by a caller whose call the decoder
+    /// could not resolve, its grid or its report, as WSJT-X builds no message to one: its messages
+    /// go to the call in its DX call box (`genStdMsgs`, mainwindow.cpp 9567-9577), which takes
+    /// only a callsign (`Radio::is_callsign`, 9402). The next caller in the same period, its call
+    /// resolved, is answered.
+    #[test]
+    fn vhf_and_standard_runs_pass_by_an_unresolved_caller() {
+        for (event, caller, resolved, state, answer) in [
+            (
+                "arrlvhf_jan",
+                "K1ABC <...> EN37",
+                "K1ABC <K9QQQ/M> EN37",
+                FdState::AwaitConfirm,
+                "<K9QQQ/M> K1ABC R FN42",
+            ),
+            (
+                "txqp",
+                "K1ABC <...> EN37",
+                "K1ABC <K9QQQ/M> EN37",
+                FdState::AwaitExchange,
+                "<K9QQQ/M> K1ABC -05",
+            ),
+            (
+                "txqp",
+                "K1ABC <...> -12",
+                "K1ABC <K9QQQ/M> -12",
+                FdState::AwaitConfirm,
+                "<K9QQQ/M> K1ABC R-05",
+            ),
+        ] {
+            let mut run = ft8_station(event, "FN42", true);
+            let cq = next(&run);
+            run.observe(&[dec(caller)], 1);
+            assert_eq!(
+                (run.state, next(&run)),
+                (FdState::CallingCq, cq),
+                "{event} {caller}: passed by"
+            );
+            run.observe(&[dec(caller), dec(resolved)], 3);
+            assert_eq!(
+                (run.state, next(&run)),
+                (state, answer.to_string()),
+                "{event} {caller}: the next caller, resolved, is answered"
             );
         }
     }

@@ -16419,6 +16419,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
         {
             return Err(Self::UNRESOLVED_CQ.into());
         }
+        // Nor any other click on `<...>`: a call to this station from one, its call to somebody
+        // else, a roster row.
+        if dxcall.contains("<...>") {
+            return Err(Self::UNRESOLVED_CALL.into());
+        }
 
         // Resolve the message we're answering → (parsed Msg, the report we send =
         // the SNR we decoded the DX at). Prefer the clicked line; recover its SNR
@@ -16791,6 +16796,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Why a double-click on a CQ from `<...>` is refused, in a contest or out of one.
     const UNRESOLVED_CQ: &str = "This CQ's call shows as <...>: Nexus has not decoded it in full \
          yet. Click the station's next CQ once its call shows.";
+
+    /// Why any other click on a message from `<...>`, or on `<...>` itself, is refused.
+    const UNRESOLVED_CALL: &str = "This call shows as <...>: Nexus has not decoded it in full \
+         yet. Click the station's next message once its call shows.";
 
     /// A double-click on `de`'s CQ (`text`, which carried `grid`) while a contest runs whose
     /// own FT8/FT4 `messages` apply: the contest's S&P works that station
@@ -17179,6 +17188,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
     /// `text`, addressed to the current DX station if one is known (`<DX> <ME>
     /// <text>`) else sent verbatim. No-op outside an active QSO or for empty text.
+    ///
+    /// ⭐ Where exactly one of the two calls is nonstandard (`W9XYZ/M`, `PJ4/W9XYZ`,
+    /// `YW18FIFA`, or my own `K1ABC/QRP`), text that reads as a standard message (`73`,
+    /// `RR73`, `RRR`, a report) goes out as WSJT-X writes that message for the pair, the
+    /// nonstandard call whole and the other hashed: `W9XYZ/M <K1ABC> 73` (`genStdMsgs`,
+    /// `widgets/mainwindow.cpp` 9701-9702, 9709-9710, and `t0a`/`t0b` 9596-9597, 9625-9631),
+    /// which is the over this station's own sequence sends ([`QsoStation::on_air_form`]).
+    /// Bare, the packer sends the base call: `W9XYZ/M K1ABC 73` goes on the air as `W9XYZ
+    /// K1ABC 73`, another station. With both calls standard, or both nonstandard, WSJT-X's
+    /// message is the bare text (`t0`, 9591 and 9595), which this already sends. It stays free
+    /// text to the sequence either way; only what goes on the air changes.
     pub fn qso_freetext(&mut self, text: &str) {
         let text = text.trim();
         if text.is_empty() {
@@ -17186,8 +17206,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         let mycall = self.settings.mycall.clone();
         if let Mode::Qso { station, .. } = &mut self.mode {
+            let std =
+                |c: &str| tempo_core::message::is_std_call(tempo_core::message::unhash_call(c));
             let msg = match &station.dxcall {
-                Some(dx) => tempo_core::message::Msg::Other(format!("{dx} {mycall} {text}")),
+                Some(dx) => {
+                    let typed = format!("{dx} {mycall} {text}");
+                    let parsed = Msg::parse(&typed);
+                    if std(&mycall) != std(dx) && !matches!(parsed, Msg::Other(_)) {
+                        Msg::Other(QsoStation::on_air_form(&mycall, dx, parsed).to_text())
+                    } else {
+                        Msg::Other(typed)
+                    }
+                }
                 None => tempo_core::message::Msg::Other(text.to_string()),
             };
             station.override_next(msg);
@@ -25267,7 +25297,8 @@ contact yourself."
             self.call_station_ctx(dxcall, dxgrid, None, None, None)?;
         }
         if let Mode::Qso { station, .. } = &mut self.mode {
-            station.override_next(Msg::parse(text));
+            let row = station.tx_row(text);
+            station.override_next(row);
         }
         self.reset_tx_watchdog();
         if self.settings.double_click_sets_tx {
@@ -30737,7 +30768,8 @@ fn best_caller_decodes(
             _ => continue,
         };
         answers.push(idx);
-        if blocked.iter().any(|b| same_call(b, &de)) {
+        // Nor is a caller the decoder could not resolve, `<...>`, which the sequencer passes by.
+        if blocked.iter().any(|b| same_call(b, &de)) || de.contains("<...>") {
             continue;
         }
         callers.push(CqCaller {
