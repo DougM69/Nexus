@@ -1048,6 +1048,179 @@ fn a_close_on_purpose_mid_over_stops_before_the_close_frame() {
     assert!(!s.radio().trx[0].transmitting());
 }
 
+/// How many closes each close test below makes: what they guard against is a race, so one close
+/// proves little either way.
+const CLOSES: usize = 6;
+
+/// How connection 0 ended, as the simulator logged it.
+fn closer(log: &[Logged]) -> Option<Closer> {
+    log.iter().find_map(|l| match l.event {
+        SimEvent::Closed { conn: 0, by } => Some(by),
+        _ => None,
+    })
+}
+
+/// Where in `log` the first command from connection 0 that is exactly `text` (no `;`) is.
+fn command_index(log: &[Logged], text: &str) -> Option<usize> {
+    log.iter()
+        .position(|l| matches!(&l.event, SimEvent::Command { conn: 0, text: t, .. } if t == text))
+}
+
+/// A session with the program's receive audio and IQ both arriving, as a close finds it while the
+/// panadapter draws.
+fn streaming(s: &Simulator, config: Config) -> Connection {
+    let conn = connect(s, config);
+    ready(&conn, true);
+    conn.send(Command::Stream(StreamSetting::IqStart(trx0())))
+        .expect("sent");
+    wait_log(s, "the program's IQ", |log| {
+        log.iter()
+            .filter(|l| {
+                matches!(
+                    l.event,
+                    SimEvent::FrameOut {
+                        conn: 0,
+                        header: Some(h),
+                        ..
+                    } if h.kind == tempo_tcisim::frame::kind::IQ
+                )
+            })
+            .count()
+            >= 3
+    });
+    conn
+}
+
+/// ⭐ A CLOSE REACHES A PROGRAM THAT IS STREAMING, TO ITS LAST LINE: with the program's receive
+/// audio and IQ arriving, the close's stop, its `iq_stop` and its close frame are all read, and the
+/// connection ends on the close frame. A socket let go at once would hold the program's frames
+/// unread and end in a reset, and the simulator, which writes before it reads, would then drop the
+/// connection without reading the last lines sent.
+#[test]
+fn a_close_while_the_program_streams_is_read_to_its_last_line() {
+    for close in 0..CLOSES {
+        let s = sim(SimDialect::expert_sdr3(), []);
+        streaming(&s, Config::new(trx0())).close();
+        wait_log(&s, "the end of the connection", |log| closer(log).is_some());
+        let log = s.log();
+        assert!(
+            command_index(&log, "trx:0,false").is_some(),
+            "close {close}: the stop never reached the program"
+        );
+        assert!(
+            command_index(&log, "iq_stop:0").is_some(),
+            "close {close}: iq_stop never reached the program"
+        );
+        assert_eq!(
+            closer(&log),
+            Some(Closer::Client),
+            "close {close}: the close frame was never read"
+        );
+    }
+}
+
+/// A close with our key up, the program streaming and slow to report: the stop, then the close
+/// frame only once the program has reported the unkey, and every line of it read.
+#[test]
+fn a_close_with_our_key_up_waits_for_the_unkey_and_reaches_a_streaming_program_whole() {
+    // Every text from the program comes 300 ms late, its report of the unkey too; its frames keep
+    // their cadence.
+    let slow = Fault::Slow {
+        delay: Duration::from_millis(300),
+    };
+    for close in 0..CLOSES {
+        let s = sim(SimDialect::expert_sdr3(), [slow.clone()]);
+        let conn = streaming(&s, Config::new(trx0()));
+        conn.key(TxStart::Audio).expect("admitted");
+        expect(&conn, "the echo", |e| {
+            *e == Event::KeyConfirmed(TxStart::Audio)
+        });
+        conn.close();
+        wait_log(&s, "the end of the connection", |log| closer(log).is_some());
+        let log = s.log();
+        let found = |what: &str, at: Option<usize>| {
+            at.unwrap_or_else(|| panic!("close {close}: {what}: {:?}", closer(&log)))
+        };
+        let stop = found(
+            "the stop never reached the program",
+            command_index(&log, "trx:0,false"),
+        );
+        found(
+            "iq_stop never reached the program",
+            command_index(&log, "iq_stop:0"),
+        );
+        let report = found(
+            "the program never reported the unkey",
+            log.iter().skip(stop).position(|l| {
+                matches!(&l.event, SimEvent::TextOut { conn: 0, text } if text.contains("trx:0,false"))
+            }),
+        );
+        let closed = found(
+            "the close frame was never read",
+            log.iter().position(|l| {
+                matches!(
+                    l.event,
+                    SimEvent::Closed {
+                        conn: 0,
+                        by: Closer::Client
+                    }
+                )
+            }),
+        );
+        assert!(
+            stop + report < closed,
+            "close {close}: the close frame came before the program reported the unkey"
+        );
+        assert!(!s.radio().trx[0].transmitting());
+    }
+}
+
+/// The escalation's stop, sent again before its close, reaches a program that is streaming: a
+/// transmitter stuck on the air, our stop never confirmed, then the stops again, `iq_stop` and the
+/// close frame, every line read.
+#[test]
+fn the_stop_the_escalation_sends_again_reaches_a_streaming_program() {
+    let fast = Config {
+        unkey_deadline_ms: 500,
+        ..Config::new(trx0())
+    };
+    for close in 0..CLOSES {
+        let s = sim(SimDialect::expert_sdr3(), [Fault::StuckTrx]);
+        let conn = streaming(&s, fast);
+        conn.key(TxStart::Audio).expect("admitted");
+        expect(&conn, "the echo", |e| {
+            *e == Event::KeyConfirmed(TxStart::Audio)
+        });
+        conn.end_ours();
+        let events = expect(&conn, "the close", |e| matches!(e, Event::Closed { .. }));
+        assert!(
+            events.contains(&Event::UnkeyUnconfirmed),
+            "close {close}: {events:?}"
+        );
+        wait_log(&s, "the end of the connection", |log| closer(log).is_some());
+        let log = s.log();
+        let stops = log
+            .iter()
+            .filter(|l| {
+                matches!(&l.event, SimEvent::Command { conn: 0, text, .. } if text == "trx:0,false")
+            })
+            .count();
+        assert!(
+            stops >= 2,
+            "close {close}: the stop sent again never reached the program ({stops} read)"
+        );
+        assert!(
+            command_index(&log, "iq_stop:0").is_some(),
+            "close {close}: iq_stop never reached the program"
+        );
+        assert_eq!(
+            closer(&log),
+            Some(Closer::Client),
+            "close {close}: the close frame was never read"
+        );
+    }
+}
+
 /// One block as the panadapter's tap was handed it: its rate, channels and frames, and its centre.
 type Handed = (u32, crate::tci::frame::Channels, usize, Option<i64>);
 
@@ -1072,11 +1245,9 @@ impl IqTap for IqBlocks {
 /// `iq_start` the simulated program's IQ blocks for our transceiver arrive with two channels at its
 /// IQ rate and the centre its burst reported.
 ///
-/// The close's `iq_stop` is pinned on the manual clock, as written
-/// (`a_close_stops_the_iq_stream_this_session_started_after_the_stops`), not here: the session
-/// drops its socket straight after the close frame, while the program's frames are still arriving
-/// unread, so the socket closes with a reset, and the simulator, which writes before it reads, can
-/// end there without reading the last lines sent.
+/// The close's `iq_stop` is pinned as written on the manual clock
+/// (`a_close_stops_the_iq_stream_this_session_started_after_the_stops`), and as the program reads
+/// it in `a_close_while_the_program_streams_is_read_to_its_last_line`.
 #[test]
 fn the_programs_iq_reaches_the_tap_centred_where_the_program_says() {
     let s = sim(SimDialect::expert_sdr3(), []);
