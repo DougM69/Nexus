@@ -24,8 +24,7 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
+  # A push to main starts this through ci-main.yml, which skips a commit that already passed here.
   pull_request:
     branches: [main]
   # Manual trigger — also the diagnostic lever for "why has CI never run".
