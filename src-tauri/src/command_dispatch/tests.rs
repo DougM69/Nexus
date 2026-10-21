@@ -3115,6 +3115,140 @@ fn a_saved_profile_carries_no_stored_key_toward_afar() {
     );
 }
 
+/// The saved profiles of a `ui_state_save` admitted from afar onto a shack whose `ui-state.json`
+/// holds `shack_profiles`: what the shack's file is then written with.
+fn profiles_saved_from_afar(shack_profiles: &Value, sent_profiles: &Value) -> Value {
+    let shack = shack();
+    let text = shack_profiles.to_string();
+    ui_now(&shack, &[("nexus.profiles", text.as_str())]);
+    let base = shack.inner.stores.revision(Store::UiState).unwrap();
+    let sent = json!({ "state": { "nexus.profiles": sent_profiles.to_string() } });
+    match shack.admit(&controller(), save(1, "ui_state_save", sent, base.as_str())) {
+        Admission::Run { args, .. } => serde_json::from_str(
+            args["state"]["nexus.profiles"]
+                .as_str()
+                .expect("the profiles are saved"),
+        )
+        .unwrap(),
+        other => panic!("{}", kind(&other)),
+    }
+}
+
+/// ⛔ A SAVED PROFILE CARRIES NO STATION-ONLY SETTING IN FROM AFAR. A profile is a whole Settings,
+/// and the shack's own screen applies what it holds when it is loaded there, as if typed there. A
+/// profile saved from afar keeps the TX watchdog as the shack's own profile of that name holds it,
+/// and one new from afar carries none, so loading it keeps the station's own (an absent key keeps
+/// the current value, `mergeProfile`). The same for the program the shack runs to sign a LoTW
+/// upload and the address its Cloudlog key goes to. CONTROL: the rest of each profile is the save's.
+#[test]
+fn a_profile_saved_from_afar_keeps_the_shacks_watchdog() {
+    let home = serde_json::to_value(tempo_app::settings::Settings {
+        tx_watchdog_min: 3,
+        mygrid: "EN52".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut planted = home.clone();
+    planted["txWatchdogMin"] = json!(0);
+    planted["tqslPath"] = json!("C:\\Users\\Public\\not-tqsl.exe");
+    planted["cloudlogUrl"] = json!("https://collector.example");
+    planted["mygrid"] = json!("EN53");
+    let saved = profiles_saved_from_afar(
+        &json!([{ "name": "Home", "settings": home, "schema": 2 }]),
+        &json!([
+            { "name": "Home", "settings": planted, "schema": 2 },
+            { "name": "New", "settings": { "txWatchdogMin": 0, "mygrid": "EN54" } },
+        ]),
+    );
+    let home = &saved[0]["settings"];
+    assert_eq!(
+        (
+            &home["txWatchdogMin"],
+            &home["tqslPath"],
+            &home["cloudlogUrl"]
+        ),
+        (&json!(3), &json!(""), &json!("")),
+        "from afar: the shack's Home"
+    );
+    assert_eq!(
+        saved[1]["settings"].get("txWatchdogMin"),
+        None,
+        "from afar: a new profile names no watchdog"
+    );
+    assert_eq!(
+        (&home["mygrid"], &saved[1]["settings"]["mygrid"]),
+        (&json!("EN53"), &json!("EN54")),
+        "CONTROL: the rest of the save"
+    );
+}
+
+/// ⛔ Every setting a save from afar keeps as the shack has it ([`STATION_ONLY_SETTINGS`]), inside a
+/// saved profile, by value: one the shack's profile of that name holds comes back as the shack's,
+/// one it does not hold is left out, and a profile new from afar carries none of them. CONTROL: the
+/// rest of each profile is the save's.
+#[test]
+fn a_profile_saved_from_afar_keeps_every_station_only_setting() {
+    let tagged = |tag: &str, keys: &[&str]| -> serde_json::Map<String, Value> {
+        keys.iter()
+            .map(|key| (key.to_string(), json!(format!("{tag} {key}"))))
+            .chain([("mygrid".to_string(), json!(format!("{tag} grid")))])
+            .collect()
+    };
+    // The shack's Home holds every station-only setting but the first, which it predates.
+    let (predated, held) = STATION_ONLY_SETTINGS.split_first().unwrap();
+    let saved = profiles_saved_from_afar(
+        &json!([{ "name": "Home", "settings": tagged("shack", held) }]),
+        &json!([
+            { "name": "Home", "settings": tagged("afar", &STATION_ONLY_SETTINGS) },
+            { "name": "New", "settings": tagged("afar", &STATION_ONLY_SETTINGS) },
+        ]),
+    );
+    for key in held {
+        assert_eq!(
+            saved[0]["settings"][key],
+            json!(format!("shack {key}")),
+            "from afar: {key}"
+        );
+    }
+    assert_eq!(saved[0]["settings"].get(predated), None, "{predated}");
+    for key in STATION_ONLY_SETTINGS {
+        assert_eq!(saved[1]["settings"].get(key), None, "a new profile: {key}");
+    }
+    assert_eq!(
+        [
+            &saved[0]["settings"]["mygrid"],
+            &saved[1]["settings"]["mygrid"]
+        ],
+        [&json!("afar grid"), &json!("afar grid")],
+        "CONTROL: the rest of the save"
+    );
+}
+
+/// A profile saved at the shack is read from afar and saved back as it was read: it comes back
+/// whole, every field of a whole Settings, its stored key and its station-only settings included.
+/// What the shack's own screen saves never passes here (`ui_state_save`, at the shack, writes the
+/// map as it came).
+#[test]
+fn a_profile_saved_at_the_shack_comes_back_whole_through_a_save_from_afar() {
+    let home = serde_json::to_value(tempo_app::settings::Settings {
+        tx_watchdog_min: 3,
+        clublog_api_key: "FAKE-HOME-KEY-0003".into(),
+        tqsl_path: "C:\\TrustedQSL\\tqsl.exe".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let shack_profiles = json!([{ "name": "Home", "settings": home, "schema": 2 }]);
+    let shack_map = map(&[("nexus.profiles", shack_profiles.to_string().as_str())]);
+    let read = station_answer(serde_json::to_value(&shack_map).unwrap());
+    let read: Value = serde_json::from_str(read["nexus.profiles"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        read[0]["settings"]["clublogApiKey"], "",
+        "premise: read blank"
+    );
+    let saved = profiles_saved_from_afar(&shack_profiles, &read);
+    assert_eq!(saved, shack_profiles);
+}
+
 /// Each setting a whole save from afar keeps as the shack has it, found by trying them all: every
 /// setting the shack's file carries is changed alone in a save from afar, and it is kept when it
 /// comes back as the shack's. Also what could not be changed alone (a list or a table).

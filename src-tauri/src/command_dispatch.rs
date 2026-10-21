@@ -726,8 +726,10 @@ impl Stores for ShackStores {
 // --- The one mixed store -------------------------------------------------------------------------
 
 /// ⛔ The saved config profiles, one of the station's keys: each a whole Settings, its stored keys
-/// ([`SECRET_SETTINGS`]) included. A read from afar blanks them ([`station_answer`]) and a save
-/// from afar keeps the shack's own ([`merged_save`]), as the settings themselves do.
+/// ([`SECRET_SETTINGS`]) and every setting set at the station only ([`STATION_ONLY_SETTINGS`])
+/// included, and the shack's own screen applies what a profile holds when it is loaded there. A
+/// read from afar blanks the stored keys ([`station_answer`]), and a save from afar keeps the
+/// shack's own of both ([`merged_save`]), as the settings themselves do.
 const PROFILES: &str = "nexus.profiles";
 
 /// The saved profiles `text` with each stored key a profile carries put to `kept(profile, key)`.
@@ -745,6 +747,39 @@ fn profiles_with_secrets(text: &str, kept: impl Fn(&str, &str) -> String) -> Opt
                 if settings.contains_key(key) {
                     settings.insert(key.into(), Value::String(kept(&name, key)));
                 }
+            }
+        }
+    }
+    serde_json::to_string(&profiles).ok()
+}
+
+/// The saved profiles `text` with each setting set at the station only ([`STATION_ONLY_SETTINGS`])
+/// as the shack's own profile of the same name holds it (`shack`, the shack's saved profiles), and
+/// left out where that profile does not hold it or the shack has no profile of that name: a setting
+/// a profile leaves out keeps the station's current value when the profile is loaded
+/// (`mergeProfile`). `None` when `text` is no list, which goes as it came.
+fn profiles_with_station_settings(text: &str, shack: Option<&String>) -> Option<String> {
+    let held: BTreeMap<String, serde_json::Map<String, Value>> = shack
+        .and_then(|t| serde_json::from_str::<Vec<Value>>(t).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|profile| {
+            let name = profile.get("name")?.as_str()?.to_string();
+            Some((name, profile.get("settings")?.as_object()?.clone()))
+        })
+        .collect();
+    let mut profiles: Vec<Value> = serde_json::from_str(text).ok()?;
+    for profile in &mut profiles {
+        let own = profile
+            .get("name")
+            .and_then(Value::as_str)
+            .and_then(|name| held.get(name));
+        if let Some(settings) = profile.get_mut("settings").and_then(Value::as_object_mut) {
+            for key in STATION_ONLY_SETTINGS {
+                match own.and_then(|own| own.get(key)) {
+                    Some(value) => settings.insert(key.into(), value.clone()),
+                    None => settings.remove(key),
+                };
             }
         }
     }
@@ -786,8 +821,9 @@ fn station_answer(value: Value) -> Value {
 
 /// What a `ui_state_save` from afar writes at the shack: the shack's own keys as they are, and the
 /// station's keys as the other computer sent them, so a key it removed is removed. A saved profile's
-/// stored keys stay the shack's: never changed, blanked or planted from afar. `None` when the
-/// arguments carry no map of strings.
+/// stored keys stay the shack's: never changed, blanked or planted from afar. ⛔ So does each setting
+/// set at the station only, which a profile loaded at the shack would apply as if typed there
+/// ([`profiles_with_station_settings`]). `None` when the arguments carry no map of strings.
 fn merged_save(shack: BTreeMap<String, String>, args: &Value) -> Option<Value> {
     let mut sent: BTreeMap<String, String> =
         serde_json::from_value(args.get("state")?.clone()).ok()?;
@@ -800,6 +836,9 @@ fn merged_save(shack: BTreeMap<String, String>, args: &Value) -> Option<Value> {
         };
         if let Some(restored) = profiles_with_secrets(text, kept) {
             *text = restored;
+        }
+        if let Some(station) = profiles_with_station_settings(text, shack.get(PROFILES)) {
+            *text = station;
         }
     }
     Some(serde_json::json!({ "state": join_ui_state(sent, shack) }))

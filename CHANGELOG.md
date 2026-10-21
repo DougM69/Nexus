@@ -938,6 +938,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your browser; the watch-and-control workspace it replaced is gone from the page.
 
 ### Security
+- **Nexus Remote: a config profile saved from a computer driving the station no longer carries the settings set at the
+  station only.** Profiles are kept at the station, and loading one there applies what it holds. A profile saved from a
+  computer driving the station now keeps the transmit limits and safety stops, the switches that let other programs or
+  a browser transmit, the PTT method, port and lines, the TQSL path and the addresses your logging-service keys are sent
+  to as the station's own profile of that name has them, and a new one carries none of them, so loading it keeps the
+  station's own. Profiles saved at the station, and loading them there, are unchanged.
 - **The certificate checks behind Nexus's downloads no longer trust the distrusted emSign certificates.** Nexus's HTTPS
   (propagation data, maps, the update check and the other downloads) now uses the releases of its certificate libraries that
   drop the emSign certificates whose private keys were exposed (RUSTSEC-2026-0381, 0382 and 0383, published 20 October 2026).
