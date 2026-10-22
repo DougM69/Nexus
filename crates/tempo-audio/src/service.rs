@@ -14205,12 +14205,16 @@ impl RadioLoop {
                     // exactly that slot.
                     self.last_slot = Some(slot);
                     self.dropped_decodes = self.dropped_decodes.saturating_add(1);
-                    eprintln!(
-                        "[decode] worker still busy at the slot {slot} boundary — period \
-                         dropped (total {}). The decoder is not keeping up with the T/R \
-                         period on this hardware.",
+                    let dropped = format!(
+                        "worker still busy at the slot {slot} boundary — period dropped \
+                         (total {}). The decoder is not keeping up with the T/R period on \
+                         this hardware.",
                         self.dropped_decodes
                     );
+                    eprintln!("[decode] {dropped}");
+                    // And to the diagnostic log: a Windows build has no console, so stderr
+                    // alone never told the operator that a period's decode was lost.
+                    tempo_core::applog::warn("decode", &dropped);
                     // ⭐ BUILD THIS OVER WITH THE ENGINE MUTEX RELEASED.
                     //
                     // This is the ONE branch where the modem is contended: we are
@@ -29545,6 +29549,80 @@ mod tests {
         assert!(drain_decode(
             &mut state, &engine, b, r, s, 30_001.0, 45_000.0
         ));
+    }
+
+    /// A period dropped because the decoder was still busy reaches the diagnostic log, not only
+    /// stderr: a Windows build has no console, and this line is how an operator sees that the
+    /// decoder cannot keep up. The scene runs in a child process of this test binary, because the
+    /// diagnostic log is one per process (`applog::init` is a one-shot) and would otherwise open
+    /// for every other test here.
+    #[test]
+    fn a_dropped_period_reaches_the_diagnostic_log() {
+        const CHILD: &str = "NEXUS_TEST_DROPPED_PERIOD_LOG";
+        if let Some(path) = std::env::var_os(CHILD) {
+            tempo_core::applog::init(path.into());
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            engine.lock().unwrap().set_tier(Tier::Ft8);
+            let mut backend = MockBackend::new();
+            let mut rig = Rig::vox();
+            let mut state = loop_state();
+            // The early pass is dispatched and never comes back: the worker is still busy at the
+            // boundary, every time.
+            let _held = ft_midover::HeldWorker::install(&mut state);
+            let mut station = StationSinks::new();
+            let (b, r, s) = (&mut backend, &mut rig, &mut station);
+            tick(&mut state, &engine, b, r, s, 100.0);
+            tick(&mut state, &engine, b, r, s, 15_020.0);
+            backend.queue_capture(vec![0.001f32; 120_000]);
+            let (b, r, s) = (&mut backend, &mut rig, &mut station);
+            tick(&mut state, &engine, b, r, s, 26_808.0);
+            assert!(state.decode_in_flight, "premise: the early pass is out");
+            tick(&mut state, &engine, b, r, s, 30_000.0);
+            assert_eq!(state.dropped_decodes, 1, "premise: the period was dropped");
+            tempo_core::applog::flush();
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-dropped-period-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("nexus-diag.log");
+        let me = format!(
+            "{}::a_dropped_period_reaches_the_diagnostic_log",
+            module_path!().split_once("::").map_or("", |(_, rest)| rest)
+        );
+        let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([me.as_str(), "--exact", "--test-threads=1"])
+            .env(CHILD, &path)
+            .output()
+            .expect("run the child");
+        let shown = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            shown.contains("running 1 test"),
+            "control: the child ran no test, so it proved nothing:\n{shown}"
+        );
+        assert!(out.status.success(), "the child failed:\n{shown}");
+        let log = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            log.contains("diagnostic log opened"),
+            "control: the child wrote this log:\n{log}"
+        );
+        assert!(
+            log.contains(
+                "decode: worker still busy at the slot 2 boundary — period dropped (total 1)"
+            ),
+            "the dropped period reached the diagnostic log:\n{log}"
+        );
     }
 
     /// THE 2026-08-17 FIELD INCIDENT (KF4YHC, FTX-1, 1.6.1): a boundary decode that

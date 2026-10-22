@@ -737,6 +737,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   early FT8 decode at 11.8 seconds now stops at 13.4 seconds if it is still running, as WSJT-X's does, so a slow
   computer no longer loses that period's full decode to it. NEEDS-BENCH: FT8 and FT4 QSOs with weak stations, into
   a dummy load first.
+- **The diagnostic log now says when a period's decode was dropped.** When the decoder is still busy as a period
+  ends, Nexus skips that period's decode, and it said so only on a console that Windows never shows. The line, with
+  how many periods have been dropped so far, now goes to the diagnostic log too, so a computer too slow for the
+  T/R period shows up in the log you send with a report.
 - **The Log button stays on screen in the Phone, CW, JS8, RTTY and PSK screens.** At 1280×800 the log form was taller
   than its pane, so Log and Spot sat below the fold. The "logs to … as" line and the Log/Spot buttons now stay together
   at the bottom of the log pane while the fields above them scroll. The callsign card below them is never covered.
