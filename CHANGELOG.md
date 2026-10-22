@@ -1104,6 +1104,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station file whose name is taken there, such as ALL.TXT saved a second time, is saved as `ALL (1).TXT`, then
   `ALL (2).TXT`, the way a browser names a download, and the file that was there keeps every byte. The message
   after the save names the file it went to.
+- **Nexus Remote: Save to this computer saves only the station's own kinds of file.** The second PC saves a
+  recording (.wav), an SSTV picture (.png or .bmp) or ALL.TXT, and nothing else. Any other file is refused with a
+  message that names it, and nothing is written to the Downloads folder.
 
 ### Security
 - **Nexus Remote: a config profile saved from a computer driving the station no longer carries the settings set at the

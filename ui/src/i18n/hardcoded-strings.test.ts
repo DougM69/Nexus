@@ -116,6 +116,7 @@ const MIGRATED = [
   // This computer ▸ Audio (2026-10-08), born migrated: a driving computer's headset.
   'components/ThisComputerAudio.tsx',
   'components/ShackFilesSave.tsx',
+  'features/shackFiles.ts',
   // Batch 1 (2026-08-18) — the getting-started guide and the app's own notices. Pure prose,
   // no radio state: the guide is documentation, the update banner and crash fallback are the
   // app talking about itself. Chosen as the first batch because GettingStartedGuide.tsx is

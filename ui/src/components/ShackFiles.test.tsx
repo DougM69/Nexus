@@ -142,6 +142,28 @@ describe('a station file saved on this computer', () => {
     expect(path).toBe('/home/op/Downloads/qso-KD9TAW-1 (1).wav')
   })
 
+  it('only a recording, an SSTV picture or ALL.TXT: any other name is refused before a byte is read', async () => {
+    station(1500, 1000)
+    const names = ['setup.exe', 'notes', 'all.txt', 'qso-KD9TAW-1.wav.exe', 'gallery.json']
+    const outcomes: string[] = []
+    for (const name of names) {
+      outcomes.push(await saveStationFile('recordings', name).then(() => 'saved', (e: Error) => e.message))
+    }
+    expect(shackFileRead).not.toHaveBeenCalled()
+    expect(shackFileSave).not.toHaveBeenCalled()
+    expect(outcomes).toEqual(names.map((name) => EN['remote.stationFiles.save.notShared'].replace('{{name}}', name)))
+
+    // CONTROL: each kind the station shares is saved, whatever the case of its extension.
+    const kinds = [
+      ['recordings', 'QSO-W1AW-2.WAV'],
+      ['sstv', '20261017_120000_PD120.png'],
+      ['sstv', '20261017_120000_Robot36.BMP'],
+      ['allTxt', 'ALL.TXT'],
+    ] as const
+    for (const [folder, name] of kinds) await saveStationFile(folder, name)
+    expect(shackFileSave.mock.calls.filter((c) => c[2] === 0).map((c) => c[0])).toEqual(kinds.map(([, name]) => name))
+  })
+
   it('an empty file is saved empty, in one call', async () => {
     station(0, 1000)
     await saveStationFile('allTxt', 'ALL.TXT')

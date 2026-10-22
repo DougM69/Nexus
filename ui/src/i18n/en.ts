@@ -207,6 +207,7 @@ export const EN = {
   'remote.stationFiles.saving': 'Saving… {{pct}}%',
   'remote.stationFiles.save.done': 'Saved to {{path}}',
   'remote.stationFiles.save.failed': 'Could not save the station’s file to this computer',
+  'remote.stationFiles.save.notShared': '{{name}} is not a recording, an SSTV picture or ALL.TXT',
   'remote.stationFiles.list.label': 'Save to this computer…',
   'remote.stationFiles.list.title.recordings': 'Recordings at the station',
   'remote.stationFiles.list.title.sstv': 'SSTV pictures at the station',

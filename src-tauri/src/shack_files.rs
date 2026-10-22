@@ -212,11 +212,38 @@ fn create_unused(dir: &Path, name: &str) -> Result<(String, std::fs::File), Stri
     ))
 }
 
+/// Whether a save writes a file of this name: only the kinds the station shares (a recording, an
+/// SSTV picture, ALL.TXT), under the station's own name or the numbered one [`create_unused`]
+/// gave it here (`ALL (1).TXT`), which the later pieces of that save name.
+fn saves(name: &str) -> bool {
+    let shared = |name: &str| {
+        [Folder::Recordings, Folder::AllTxt, Folder::Sstv]
+            .into_iter()
+            .any(|folder| folder.admits(name))
+    };
+    shared(name) || unnumbered(name).is_some_and(|own| shared(&own))
+}
+
+/// The name [`create_unused`] numbered into `name` (`ALL.TXT` for `ALL (1).TXT`), or None when
+/// `name` carries no number. The extension splits off as it does there.
+fn unnumbered(name: &str) -> Option<String> {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, Some(ext)),
+        _ => (name, None),
+    };
+    let (own, n) = stem.strip_suffix(')')?.rsplit_once(" (")?;
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(ext.map_or_else(|| own.to_string(), |ext| format!("{own}.{ext}")))
+}
+
 /// Writes one piece of a fetched file into `dir` (this computer's Downloads folder). The piece at
 /// offset 0 starts a new file under the bare `filename`, or under the next free name when a file
 /// of that name is there already, which is never written over. Each later piece names the file
 /// the first one started ([`Saved::name`]) and must start where that file now ends, so a piece
-/// sent twice or out of order is refused rather than written twice.
+/// sent twice or out of order is refused rather than written twice. A name of a kind the station
+/// does not share ([`saves`]) is refused before anything is written.
 pub(crate) fn save_piece_in(
     dir: &Path,
     filename: &str,
@@ -229,6 +256,11 @@ pub(crate) fn save_piece_in(
         .and_then(Path::to_str)
         .filter(|n| !n.is_empty())
         .ok_or("Invalid file name")?;
+    if !saves(name) {
+        return Err(format!(
+            "{name} is not a recording, an SSTV picture or ALL.TXT"
+        ));
+    }
     let bytes = crate::b64_decode(base64)?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let (name, mut file) = if offset == 0 {
