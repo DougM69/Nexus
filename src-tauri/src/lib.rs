@@ -40776,12 +40776,16 @@ mod tests {
                 assert!(body.contains(call), "{command} must go through {call}");
             }
         }
-        // The Remote dispatcher's log actions. The POSITIVE CONTROL: they do reach the log, so a
-        // check that read nothing could not pass for one that read it.
-        let remote = include_str!("remote_service/operations/logging.rs");
+        // The Remote dispatcher. The POSITIVE CONTROL: it does reach the engine, so a check that
+        // read nothing could not pass for one that read it.
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+        ]
+        .concat();
         assert!(
-            remote.contains("log_current_qso_for_sync"),
-            "the control: Remote's own append is there"
+            remote.contains(".poll_remote_transmit("),
+            "the control: the dispatcher's own engine call is there"
         );
         for name in [
             "contest_removal",
@@ -40837,11 +40841,15 @@ mod tests {
                 );
             }
         }
-        // POSITIVE CONTROL: Remote's log actions reach the log.
-        let remote = include_str!("remote_service/operations/logging.rs");
+        // POSITIVE CONTROL: the Remote dispatcher reaches the engine.
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+        ]
+        .concat();
         assert!(
-            remote.contains("log_current_qso_for_sync"),
-            "the control: Remote's own append is there"
+            remote.contains(".poll_remote_transmit("),
+            "the control: the dispatcher's own engine call is there"
         );
         assert!(
             !remote.contains("contest_unmerged"),
@@ -40878,11 +40886,11 @@ mod tests {
         let remote = [
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
-            include_str!("remote_service/operations/logging.rs"),
         ]
         .concat();
         assert!(
-            remote.contains("log_current_qso_for_sync") && remote.contains("execute_transmit"),
+            remote.contains(".poll_remote_transmit(")
+                && remote.contains(".remote_monitor_observation("),
             "the control: the dispatchers read here are the ones that reach the engine"
         );
         assert!(
@@ -40928,11 +40936,11 @@ mod tests {
         let remote = [
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
-            include_str!("remote_service/operations/logging.rs"),
         ]
         .concat();
         assert!(
-            remote.contains("log_current_qso_for_sync") && remote.contains("execute_transmit"),
+            remote.contains(".poll_remote_transmit(")
+                && remote.contains(".remote_monitor_observation("),
             "the control: the dispatchers read here are the ones that reach the engine"
         );
         assert!(
@@ -40970,11 +40978,11 @@ mod tests {
         let remote = [
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
-            include_str!("remote_service/operations/logging.rs"),
         ]
         .concat();
         assert!(
-            remote.contains("log_current_qso_for_sync") && remote.contains("execute_transmit"),
+            remote.contains(".poll_remote_transmit(")
+                && remote.contains(".remote_monitor_observation("),
             "the control: the dispatchers read here are the ones that reach the engine"
         );
         assert!(

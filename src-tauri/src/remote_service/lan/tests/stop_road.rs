@@ -790,37 +790,29 @@ async fn the_welcome_names_each_connections_own_road() {
 
 /// ★ The never-refused rule on this road (`a_controlling_browser_stops_any_local_transmission_…`
 /// on the hosted road): a Stop from a computer in control stops any transmission at the station,
-/// however it started, with or without transmit permission. It is acknowledged, and the transmit
-/// generation is retired at once, before the stop verbs run. CONTROL: each is on the air first.
+/// however it started. It is acknowledged, and the transmit generation is retired at once, before
+/// the stop verbs run. CONTROL: each is on the air first.
 #[test]
-fn a_stop_on_the_road_stops_any_local_transmission_with_or_without_transmit_permission() {
+fn a_stop_on_the_road_stops_any_local_transmission() {
     let _alone = alone();
     on_a_runtime(0, async {
-        for transmit in [false, true] {
-            for kind in LOCAL_TRANSMISSIONS {
-                let app = App::new();
-                let r = roadside(&app);
-                let mut seat = seated(&r).await;
-                if transmit {
-                    r.s.shared
-                        .authority
-                        .permit_transmit(&r.s.device, true)
-                        .unwrap();
-                }
-                key_locally(&mut r.s.shared.engine.lock().unwrap(), kind);
-                let generation = r.s.shared.authority.transmit_revocation().generation();
-                seat.road.say(&Up::Stop { stop: 1 }).await;
-                assert!(
-                    seat.road.stopped(1, Duration::from_secs(2)).await.is_some(),
-                    "{kind} transmit={transmit}: acknowledged"
-                );
-                assert!(
-                    r.s.shared.authority.transmit_revocation().generation() > generation,
-                    "{kind}: the generation is retired"
-                );
-                assert!(came_to_a_stop(&r.s).await, "{kind} transmit={transmit}");
-                assert_stopped(&mut r.s.shared.engine.lock().unwrap(), kind);
-            }
+        for kind in LOCAL_TRANSMISSIONS {
+            let app = App::new();
+            let r = roadside(&app);
+            let mut seat = seated(&r).await;
+            key_locally(&mut r.s.shared.engine.lock().unwrap(), kind);
+            let generation = r.s.shared.authority.transmit_revocation().generation();
+            seat.road.say(&Up::Stop { stop: 1 }).await;
+            assert!(
+                seat.road.stopped(1, Duration::from_secs(2)).await.is_some(),
+                "{kind}: acknowledged"
+            );
+            assert!(
+                r.s.shared.authority.transmit_revocation().generation() > generation,
+                "{kind}: the generation is retired"
+            );
+            assert!(came_to_a_stop(&r.s).await, "{kind}");
+            assert_stopped(&mut r.s.shared.engine.lock().unwrap(), kind);
         }
     });
 }

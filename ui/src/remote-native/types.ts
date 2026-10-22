@@ -15,7 +15,6 @@ export type RemoteStationStatus = {
     role?: AccountRole | null; addedBy?: 'shack' | 'account' | null }[]
   loggingPermissions?: string[]
   stationPermissions?: string[]
-  transmitPermissions?: string[]
   loggingController?: string | null
   /** A5: the browsers whose listed key is the one pinned here, the ones that can stream. */
   pinnedDevices?: string[]
@@ -88,14 +87,13 @@ export const waitsForApprove = (status: RemoteStationStatus | null | undefined, 
 export type RemoteStationAction =
   | { type: 'begin'; name: string }
   | { type: 'refresh' | 'cancel' | 'enable' | 'disable' | 'forget' }
-  | { type: 'approve'; enrollmentId: string; accountId: string; transmit?: boolean }
+  | { type: 'approve'; enrollmentId: string; accountId: string }
   | { type: 'loggingPermission'; deviceId: string; allow: boolean }
   | { type: 'stationPermission'; deviceId: string; allow: boolean }
-  | { type: 'transmitPermission'; deviceId: string; allow: boolean }
   | { type: 'takeOverLogging' }
   /** `key`: the device key shown beside the browser, pinned if the service still lists it (A5). `kind`: the
    *  kind it was shown as; the station grants and pins nothing for a device the service now names another. */
-  | { type: 'device'; deviceId: string; approve: boolean; transmit?: boolean; key?: string; kind?: DeviceKind }
+  | { type: 'device'; deviceId: string; approve: boolean; key?: string; kind?: DeviceKind }
   /** Remote over this network: only ever pressed at the shack (`LanStation`). */
   | { type: 'lanOn'; address?: string; port?: number }
   /** Where it listens: one of `networks`' addresses, or none to let the station choose. */

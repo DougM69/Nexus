@@ -127,15 +127,12 @@ fn a_malformed_identity_is_refused_before_anything_is_looked_up() {
 fn the_listen_capability_is_advertised_under_station_control_and_not_under_logging() {
     let f = Fixture::new();
     let now = Instant::now();
-    // Logging only: the browser is told about its logging capabilities and nothing about
-    // audio, so a browser that knows the lane still never offers a listen control.
+    // Logging only: the browser is told nothing about audio, so a browser that knows the lane
+    // still never offers a listen control.
     f.authority.permit(DEVICE, true).unwrap();
     let logging = control_state_version(&f, now, 4);
+    assert_eq!(logging["allowed"], true, "fixture: logging was not granted");
     let capabilities = logging["controls"]["capabilities"].as_array().unwrap();
-    assert!(
-        capabilities.iter().any(|c| c == "qsoLogging"),
-        "fixture: logging was not granted"
-    );
     assert!(
         !capabilities.iter().any(|c| c == "audioListen"),
         "a logging-only browser was offered the listen control"

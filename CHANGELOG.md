@@ -5,6 +5,16 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+- **Nexus Remote: the old Remote page's FT8/FT4 transmit permission.** The page that used it is gone, so the
+  station no longer takes FT8/FT4 or held-contact commands from a browser, and Settings ▸ Remote access no
+  longer offers **Also allow FT8/FT4 transmit from the Remote page** or the switch to allow or revoke it. A
+  browser streaming the station is unchanged: it operates Nexus as you would at the shack, transmit included,
+  and its Stop TX works as before. A browser you approved with that permission keeps its station controls and
+  logging after you update; only the old permission is dropped.
+
 ## [1.20.0] — 2026-10-22
 
 ### Added

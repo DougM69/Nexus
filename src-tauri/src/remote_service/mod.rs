@@ -55,7 +55,6 @@ pub struct Status {
     observation_generation: Option<String>,
     logging_permissions: Vec<String>,
     station_permissions: Vec<String>,
-    transmit_permissions: Vec<String>,
     logging_controller: Option<String>,
     /// A5: the browsers whose listed device key is the one pinned at the radio, the ones that can
     /// stream. An approved browser listed with a key and missing here is approved again to stream.
@@ -325,11 +324,6 @@ pub enum Action {
         device_id: String,
         allow: bool,
     },
-    TransmitPermission {
-        #[serde(rename = "deviceId")]
-        device_id: String,
-        allow: bool,
-    },
     TakeOverLogging {},
     Begin {
         name: String,
@@ -341,9 +335,6 @@ pub enum Action {
         enrollment_id: String,
         #[serde(rename = "accountId")]
         account_id: String,
-        /// "Also allow FT8/FT4 transmit" for the browser that did the pairing.
-        #[serde(default)]
-        transmit: bool,
     },
     Enable {},
     Disable {},
@@ -352,9 +343,6 @@ pub enum Action {
         #[serde(rename = "deviceId")]
         device_id: String,
         approve: bool,
-        /// "Also allow FT8/FT4 transmit" on this approval. Ignored when revoking.
-        #[serde(default)]
-        transmit: bool,
         /// A5: the device key the operator was shown beside this browser (its SHA-256, the device
         /// list's `key`). Pinned only if the service still lists that key once it has approved.
         #[serde(default)]
@@ -430,8 +418,8 @@ type Reply = oneshot::Sender<Result<(), &'static str>>;
 /// and the record has to fit the smallest OS credential blob (Windows).
 const MAX_REMEMBERED: usize = 8;
 /// A decision a restart must remember. Operator decisions 2026-09-13: Remote remembers being on;
-/// approving a browser grants it station control and logging, plus FT8/FT4 transmit when the
-/// approval ticks it, and each is kept for as long as that approval stands, until revoked.
+/// approving a browser grants it station control and logging, and each is kept for as long as that
+/// approval stands, until revoked.
 ///
 /// Every decision is applied to `Control::remembered` under the `Control` lock at the moment it is
 /// made, so the record always holds the operator's decisions in the order they were made, and Turn
@@ -461,7 +449,6 @@ enum Persist {
         approval: Option<Approval>,
         logging: Option<bool>,
         control: Option<bool>,
-        transmit: Option<bool>,
     },
     /// The approvals the service lists right now. A grant remembered against any other approval
     /// (a browser revoked, re-approved, expired or gone) is forgotten; the rest are rebound to the
@@ -582,7 +569,6 @@ impl Remembered {
                 approval,
                 logging,
                 control,
-                transmit,
             } => {
                 let at = state.grants.iter().position(|g| g.device_id == device_id);
                 let mut grant = match (at.map(|i| state.grants[i].clone()), approval) {
@@ -596,7 +582,7 @@ impl Remembered {
                         generation: approval.generation,
                         logging: false,
                         control: false,
-                        transmit: false,
+                        retired_transmit: Default::default(),
                     },
                     (Some(grant), None) => grant,
                     // Nothing remembered for this browser, and no approval to bind a grant to.
@@ -604,8 +590,6 @@ impl Remembered {
                 };
                 grant.logging = logging.unwrap_or(grant.logging);
                 grant.control = control.unwrap_or(grant.control);
-                // FT8/FT4 transmit is only ever held alongside station control.
-                grant.transmit = transmit.unwrap_or(grant.transmit) && grant.control;
                 let keep = grant.logging || grant.control;
                 match at {
                     Some(i) if keep => state.grants[i] = grant,
@@ -709,15 +693,13 @@ impl Control {
     fn revoke_browser(&mut self, device_id: &str) {
         let operations = self.operations.clone();
         let taken = operations.permit(device_id, false).is_ok()
-            && operations.permit_station(device_id, false).is_ok()
-            && operations.permit_transmit(device_id, false).is_ok();
+            && operations.permit_station(device_id, false).is_ok();
         if taken {
             self.remember(Persist::Browser {
                 device_id: device_id.to_string(),
                 approval: None,
                 logging: Some(false),
                 control: Some(false),
-                transmit: Some(false),
             });
         } else {
             operations.invalidate();
@@ -1002,8 +984,7 @@ impl Service {
         // A stand-down at the shack retires remote transmit authority. Handing the engine this
         // revocation is what makes `Engine::halt_tx` — the verb every local stop funnels through,
         // including WSJT-X's UDP HaltTx — move the generation a browser carries as its
-        // `transmitEpoch`, so a gesture held across the operator's own Stop TX is refused instead
-        // of arming the rig a second later. See `Engine::halt_tx`.
+        // `transmitEpoch`, its Stop's token. See `Engine::halt_tx`.
         tempo_app::engine::engine_lock(&engine)
             .set_remote_transmit_revocation(operations.transmit_revocation());
         // A streamed operator's held PTT: the stream records the holds, the engine arms and
@@ -1098,8 +1079,6 @@ impl Service {
         status.logging_controller = operations["controller"].as_str().map(str::to_string);
         status.station_permissions =
             serde_json::from_value(operations["controlDevices"].clone()).unwrap_or_default();
-        status.transmit_permissions =
-            serde_json::from_value(operations["transmitDevices"].clone()).unwrap_or_default();
         status.pinned_devices = status
             .devices
             .iter()
@@ -1134,8 +1113,7 @@ impl Service {
     pub async fn action(&self, action: Action) -> Result<Status, &'static str> {
         match &action {
             Action::LoggingPermission { device_id, allow }
-            | Action::StationPermission { device_id, allow }
-            | Action::TransmitPermission { device_id, allow } => {
+            | Action::StationPermission { device_id, allow } => {
                 // Keep admission and grant under the same local control lock
                 // as Disable/Take over. A prior status snapshot must not install
                 // a new grant after that local authority has been stopped.
@@ -1158,21 +1136,16 @@ impl Service {
                     approval = Some(device.approval());
                 }
                 // These are the restrict switches: each allows or revokes one permission for one
-                // browser, live first, and the record follows only what took effect. Revoking
-                // station control revokes transmit with it.
+                // browser, live first, and the record follows only what took effect.
                 let operations = control.operations.clone();
-                let (logging, station, transmit) = match &action {
+                let (logging, station) = match &action {
                     Action::StationPermission { .. } => {
                         operations.permit_station(device_id, *allow)?;
-                        (None, Some(*allow), (!*allow).then_some(false))
-                    }
-                    Action::TransmitPermission { .. } => {
-                        operations.permit_transmit(device_id, *allow)?;
-                        (None, None, Some(*allow))
+                        (None, Some(*allow))
                     }
                     _ => {
                         operations.permit(device_id, *allow)?;
-                        (Some(*allow), None, None)
+                        (Some(*allow), None)
                     }
                 };
                 control.remember(Persist::Browser {
@@ -1180,7 +1153,6 @@ impl Service {
                     approval,
                     logging,
                     control: station,
-                    transmit,
                 });
                 drop(control);
                 return self.status();
@@ -1467,8 +1439,8 @@ impl Controller {
         }
     }
     /// Remote remembers being on. If it was on when Nexus last exited, turn it on again exactly as
-    /// Turn on Remote does: a fresh local authority (every in-memory permission cleared, transmit
-    /// included), a fresh generation, and the remembered grants restored for still-approved
+    /// Turn on Remote does: a fresh local authority (every in-memory permission cleared), a fresh
+    /// generation, and the remembered grants restored for still-approved
     /// browsers. A locked or unreadable store, a record written for another pairing, or a record
     /// that says off all leave it off.
     async fn resume(&mut self, binding: Binding) {
@@ -1579,8 +1551,7 @@ impl Controller {
     /// Put back remembered grants for each browser the service still lists as approved at the SAME
     /// approval (`Approval::holds`: the same generation, so a renewal on use still matches), under the
     /// epoch captured when Remote came on. The grants are read from the record now, under the lock, so
-    /// a revocation made while the list was on its way is honoured. FT8/FT4 transmit comes back only
-    /// where it was granted, only with station control, and arms nothing.
+    /// a revocation made while the list was on its way is honoured. Nothing restored arms anything.
     fn apply_restore(&mut self, devices: &[Device]) {
         let Some(restore) = self.restore.take() else {
             return;
@@ -1617,7 +1588,6 @@ impl Controller {
         let grants = operations::DurableGrants {
             logging: ids(|g| g.logging),
             control: ids(|g| g.control),
-            transmit: ids(|g| g.control && g.transmit),
         };
         let operations = control.operations.clone();
         match operations.restore(restore.epoch, &grants) {
@@ -1894,10 +1864,10 @@ impl Controller {
         Ok((binding, token))
     }
     /// ONE APPROVAL (operator decision 2026-09-13): approving a browser grants it station control
-    /// and logging, and FT8/FT4 transmit when the approval ticked it. With Remote on they take
+    /// and logging. With Remote on they take
     /// effect at once; with Remote off they wait in the record for Turn on. A local decision made
     /// after the approval was asked for (Turn off or on, take over) wins, and nothing is granted;
-    /// revoking this device does too (the revoke is taken again after this, `Controller::handle`). ⛔ Granting transmit arms nothing: the browser still has to press TX On.
+    /// revoking this device does too (the revoke is taken again after this, `Controller::handle`).
     ///
     /// A5: the device key the operator was shown (`shown`) is pinned if the service still lists that
     /// key for the browser now that it has approved it. A key that changed in between pins nothing,
@@ -1910,7 +1880,6 @@ impl Controller {
         &self,
         devices: &[Device],
         device_id: String,
-        transmit: bool,
         shown: Option<String>,
         kind: Option<Kind>,
         (generation, epoch): (u64, u64),
@@ -1934,16 +1903,14 @@ impl Controller {
         if control.generation != generation || control.operations.epoch() != epoch {
             return Ok(());
         }
-        // A computer (the native client) is granted nothing on the relay's lanes, whatever the
-        // approval said of transmit: it never reaches them. Its approval is its pin, below, which
+        // A computer (the native client) is granted nothing on the relay's lanes: it never reaches
+        // them. Its approval is its pin, below, which
         // the tunnel through the room checks. A browser is granted only if it was shown as one.
         let browser = as_shown && device.kind == Kind::Browser;
         if control.enabled && browser {
             let operations = control.operations.clone();
             operations.permit(&device_id, true)?;
             operations.permit_station(&device_id, true)?;
-            // A fresh approval without the tick holds no transmit, even if an earlier one did.
-            operations.permit_transmit(&device_id, transmit)?;
         }
         if browser {
             control.remember(Persist::Browser {
@@ -1951,7 +1918,6 @@ impl Controller {
                 approval: Some(approval),
                 logging: Some(true),
                 control: Some(true),
-                transmit: Some(transmit),
             });
         }
         control.remember(Persist::Listed(approved));
@@ -2226,9 +2192,7 @@ impl Controller {
     }
     /// What an Approve press grants a device the operator was shown, for one the station vouched
     /// for on its own proof, by its role: a browser that operates gets station control and logging,
-    /// one that listens gets neither, and every device gets its pin ([`Device::pin`]). Neither gets
-    /// the Remote page's own FT8/FT4 transmit (`Authority::permit_transmit`), which only that page's
-    /// FT8/FT4 capabilities and actions read. It is not what keeps a browser off the air: station
+    /// one that listens gets neither, and every device gets its pin ([`Device::pin`]). Station
     /// control and the pin are all a stream needs (`Authority::stream_admitted`), and a streaming
     /// browser uses the station's own window, transmit included, as any browser approved here does.
     /// With Remote on the grants take effect at
@@ -2266,9 +2230,6 @@ impl Controller {
             let operations = control.operations.clone();
             operations.permit(&device.id, operate)?;
             operations.permit_station(&device.id, operate)?;
-            // The Remote page's own FT8/FT4 transmit, off: only that page's FT8/FT4 actions read
-            // it. The stream needs station control alone, and in it a click is the operator's own.
-            operations.permit_transmit(&device.id, false)?;
         }
         if browser {
             control.remember(Persist::Browser {
@@ -2276,7 +2237,6 @@ impl Controller {
                 approval: Some(device.approval()),
                 logging: Some(operate),
                 control: Some(operate),
-                transmit: Some(false),
             });
         }
         control.remember(Persist::Listed(approved.to_vec()));
@@ -2389,7 +2349,6 @@ impl Controller {
         match action {
             Action::LoggingPermission { .. }
             | Action::StationPermission { .. }
-            | Action::TransmitPermission { .. }
             | Action::TakeOverLogging {}
             | Action::LanOn { .. }
             | Action::LanOff {}
@@ -2518,7 +2477,6 @@ impl Controller {
             Action::Approve {
                 enrollment_id,
                 account_id,
-                transmit,
             } => {
                 let pending = self.pending.as_mut().ok_or("pairingExpired")?;
                 if pending.id != enrollment_id
@@ -2602,7 +2560,6 @@ impl Controller {
                             approval: Some(approval),
                             logging: Some(true),
                             control: Some(true),
-                            transmit: Some(transmit),
                         });
                         // A5, operator ruling D4 (2026-09-28): that browser's key is pinned on first
                         // use, the trust the pairing already places in the service. Both ends show
@@ -2799,7 +2756,6 @@ impl Controller {
             Action::Device {
                 device_id,
                 approve,
-                transmit,
                 key,
                 kind,
             } => {
@@ -2844,14 +2800,8 @@ impl Controller {
                 if approve {
                     // The list names the approval the service just wrote; the grant binds to it.
                     let devices = self.list().await?;
-                    let granted = self.grant_approved(
-                        &devices,
-                        device_id,
-                        transmit,
-                        key,
-                        kind,
-                        (generation, epoch),
-                    );
+                    let granted =
+                        self.grant_approved(&devices, device_id, key, kind, (generation, epoch));
                     self.listed(&devices);
                     self.vouch(&devices, (generation, epoch)).await;
                     if let Ok(mut status) = self.status.lock() {

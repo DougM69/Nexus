@@ -481,7 +481,6 @@ async fn a_browser_signed_in_as_the_owner_waits_for_approve_at_the_station() {
         .action(Action::Device {
             device_id: BROWSER.into(),
             approve: true,
-            transmit: false,
             key: Some(sha256(&key("browser"))),
             kind: Some(Kind::Browser),
         })
@@ -532,7 +531,6 @@ async fn an_invited_guests_computer_waits_for_approve_at_the_station() {
         .action(Action::Device {
             device_id: COMPUTER_ID.into(),
             approve: true,
-            transmit: false,
             key: Some(sha256(&key("road"))),
             kind: Some(Kind::Computer),
         })
@@ -570,10 +568,9 @@ async fn an_invited_guests_computer_waits_for_approve_at_the_station() {
 /// ★ With sign-in grants on ([`launch_granting_on_sign_in`]), a browser signed in as the station's
 /// owner: the service approved it, and the station, having checked its proof itself, grants it what
 /// an Approve press grants and pins its key, with no press; the notice names it, and the LAN keeps
-/// it under its key's pin. What it grants is station control and logging, with the Remote page's
-/// own FT8/FT4 transmit off. That tick gates only that page's FT8/FT4 actions: station control and
-/// the pin are what a stream needs, and a streaming browser uses the station's own window,
-/// transmit included.
+/// it under its key's pin. What it grants is station control and logging: station control and the
+/// pin are what a stream needs, and a streaming browser uses the station's own window, transmit
+/// included.
 #[tokio::test(flavor = "multi_thread")]
 async fn granting_on_sign_in_a_browser_signed_in_as_the_owner_is_granted_with_no_press() {
     let cloud = fake_cloud().await;
@@ -591,16 +588,11 @@ async fn granting_on_sign_in_a_browser_signed_in_as_the_owner_is_granted_with_no
     );
     assert_eq!(status.logging_permissions, vec![BROWSER.to_string()]);
     assert_eq!(
-        status.transmit_permissions,
-        Vec::<String>::new(),
-        "the Remote page's own FT8/FT4 transmit"
-    );
-    assert_eq!(
         status.pinned_devices,
         vec![BROWSER.to_string()],
         "with station control, all a stream needs"
     );
-    // What a restart restores is the same: control and logging, the page's FT8/FT4 transmit off.
+    // What a restart restores is the same: control and logging.
     let mut remembered = None;
     for _ in 0..100 {
         remembered = vault.state().unwrap().map(|state| state.grants);
@@ -612,12 +604,12 @@ async fn granting_on_sign_in_a_browser_signed_in_as_the_owner_is_granted_with_no
     let remembered: Vec<_> = remembered
         .unwrap()
         .iter()
-        .map(|g| (g.device_id.clone(), g.logging, g.control, g.transmit))
+        .map(|g| (g.device_id.clone(), g.logging, g.control))
         .collect();
     assert_eq!(
         remembered,
-        vec![(BROWSER.to_string(), true, true, false)],
-        "logging, control, the page's FT8/FT4 transmit"
+        vec![(BROWSER.to_string(), true, true)],
+        "logging, control"
     );
     let added: Vec<_> = status
         .account
@@ -1148,7 +1140,6 @@ async fn a_removal_made_offline_is_sent_before_the_next_list_and_grants_nothing_
         .action(Action::Device {
             device_id: BROWSER.into(),
             approve: false,
-            transmit: false,
             key: None,
             kind: None,
         })
@@ -1201,7 +1192,6 @@ async fn a_removal_the_service_no_longer_lists_is_not_waiting() {
         .action(Action::Device {
             device_id: BROWSER.into(),
             approve: false,
-            transmit: false,
             key: None,
             kind: None,
         })
@@ -1254,7 +1244,6 @@ async fn a_removal_the_service_refuses_by_name_does_not_wait() {
         .action(Action::Device {
             device_id: BROWSER.into(),
             approve: false,
-            transmit: false,
             key: None,
             kind: None,
         })
