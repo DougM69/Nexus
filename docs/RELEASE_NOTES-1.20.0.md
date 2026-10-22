@@ -53,6 +53,8 @@ and Native Icom CI-V always tells the radio to stop transmitting as it closes.
   shows, and a caller shown as `<...>` is not answered.
 - **Free text FT8 cannot send is refused with the reason** instead of keying a steady tone, and a logger's Replay
   no longer marks old decodes as new.
+- **FT8 decodes nothing from a period with almost no receive audio**, as WSJT-X does, so a muted or unplugged sound
+  card cannot hand the sequencer a phantom RR73 or R-report from a station heard earlier.
 - **TCI (Beta):** Nexus drives an SDR program over TCI, transmits through it, draws its panadapter in the scope and
   puts Nexus's needed spots on it.
 - **Share by TCI:** programs on this computer use the radio through Nexus, may transmit voice, Tune and CW when you
@@ -232,6 +234,12 @@ and Native Icom CI-V always tells the radio to stop transmitting as it closes.
   Remote, and Nexus says why. The message you had queued stays queued, and text FT8 can send goes out as before.
 - **A logger's Replay no longer marks old decodes as new.** When JTAlert or GridTracker asks Nexus to replay the
   decodes, they now go out marked not new, as WSJT-X sends them, so the program does not alert on them again.
+- **A muted or unplugged sound card no longer finishes a QSO for you.** When a whole FT8 period's receive audio is
+  under half a bit, as with the rig's audio muted, the input turned right down or the cable pulled, WSJT-X does not
+  decode it at all. Nexus did, and after a busy period it could "hear" that period's stations again in a few stray
+  bits of noise; in a QSO such a line could read as your partner's RR73 or R-report, and Nexus sent the next message
+  and logged a contact that was never finished. Such a period now gives no line anywhere, and the QSO repeats its
+  last message as WSJT-X does.
 
 ### Contest FT8 and FT4
 
@@ -640,18 +648,5 @@ FT1, DX1 or FT2 in any contest.
 - From a second PC there is no paddle, and on a network that blocks Stop's own road (some hotels and offices)
   transmitting is off.
 - Nexus Remote's internet road from a second PC runs on a test service during the beta (see Upgrading).
-- NEEDS-BENCH, not yet checked on the hardware they need: TCI on ExpertSDR3, Thetis and AetherSDR (transmitting, the
-  panadapter, the spots and a clean close), a program's voice audio through Share by TCI, Log4OM's spots, the FT8 and
-  FT4 late-reply switch on a sound card, on a Flex's DAX and in a contest, the new 73 answers, Field Day and the ARRL
-  VHF contests with a station signing a suffixed call, the new decode moments and the repeated report with a weak
-  station, and FT8 and FT4 waiting while WSJT-X holds PTT through Nexus.
-- Also NEEDS-BENCH for FT8 and FT4: decodes counted as they are found, with weak stations; your RR73, RRR and typed
-  73 to a station signing a suffixed call that runs WSJT-X, and the clicked Tx3; a caller or a CQ shown as `<...>`,
-  outside a contest and in the contests with the standard messages; the refused free text; and a logger's Replay.
-- Also NEEDS-BENCH: CW's meters, Tune, PTT and the voice keyer during a CW send, the CAT keyer's refusal on a Kenwood,
-  an Elecraft and an FTDX10, AFSK RTTY on USB, the RTTY waterfall band and Auto-tune, PstRotatorAz, the FT-1000 and
-  FT-1000D, the KPA1500 over the network and at its fast baud rates, the IC-7300's scope, the Icom network
-  connection's SWR, Native Icom CI-V's close while keyed, the contest logger window pinned on Windows, JS8 to a /P
-  call, and the Remote second-PC features (two PCs, the radio into a dummy load).
 
-**179 changes since 1.19.0.** The full list is in the CHANGELOG.
+**180 changes since 1.19.0.** The full list is in the CHANGELOG.
