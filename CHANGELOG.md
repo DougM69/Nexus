@@ -43,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WSJT-X UDP link asks to clear the Rx Frequency window, Nexus now empties only its Rx Frequency pane, and a clear of
   Band Activity empties only Band Activity, as WSJT-X does. Before, any clear from such a program emptied both decode
   panes.
+- **FT-991, FT-710 and FTDX10: the ALC meter works again behind your own older rigctld.** Since 1.19.0 Nexus reads
+  these radios' ALC with a raw `RM4;` through rigctld. A rigctld from Hamlib before 4.6 (Hamlib 4.5.5, for example,
+  which many Linux distributions still ship) never answers that raw read, so a radio reached over Network through
+  such a rigctld showed ALC as "not reported" after the first few reads. When the raw read never answers, Nexus now
+  reads ALC the way 1.18.0 did, through Hamlib, for the rest of the session. This changes the CAT reads made while
+  transmitting, so it needs a check on an FT-991 behind its own rigctld.
 
 ## [1.20.0] — 2026-10-22
 
