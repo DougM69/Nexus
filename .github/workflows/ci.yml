@@ -174,10 +174,16 @@ jobs:
       # `cargo test -p tempo-core --test fd_rules_corpus` (in the run above):
       # every refuse fixture must exit 1 with its recorded reason, every accept
       # fixture must exit 0.
+      #
+      # `!cancelled()` on this step and clippy: they run after a red test step,
+      # so one push reports a bad seed or a lint along with the failing tests
+      # instead of leaving them for the next push (21 Oct: both were skipped).
       - name: fd-rules publish gate on the in-repo seed
+        if: ${{ !cancelled() }}
         run: cargo run --quiet -p tempo-core --bin fd-rules-check -- crates/tempo-core/src/fd_rules.seed.json
 
       - name: cargo clippy (deny warnings)
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   # The feature-gated crates, which a plain `--workspace` run does not build:
