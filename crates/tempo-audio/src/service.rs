@@ -1168,9 +1168,18 @@ const N_TX_METERS: usize = TX_METERS.len();
 /// wire, and placed on the radio's own bar instead of Hamlib's quarter of it. `None` is a missed
 /// read on either path, so the three-strikes ladder treats both alike, and `deadline_ms` bounds
 /// both. A read: nothing is set on the radio.
-fn read_tx_meter(rig: &mut Rig, meter: &str, model: u32, deadline_ms: Option<u64>) -> Option<f32> {
+///
+/// `raw_alc` false reads that ALC with `l ALC` after all: the link never answered the raw read
+/// ([`RadioLoop::tx_alc_raw`]).
+fn read_tx_meter(
+    rig: &mut Rig,
+    meter: &str,
+    model: u32,
+    raw_alc: bool,
+    deadline_ms: Option<u64>,
+) -> Option<f32> {
     match crate::rigmodels::raw_alc_query(model) {
-        Some(query) if meter == "ALC" => rig
+        Some(query) if meter == "ALC" && raw_alc => rig
             .send_raw_within(query, deadline_ms)
             .and_then(|reply| crate::rigmodels::alc_bar_from_rm4(&reply)),
         _ => rig.read_meter_f32_within(meter, deadline_ms),
@@ -4354,6 +4363,16 @@ struct RadioLoop {
     /// backoff applied when it fails again — `func_retry_at`/`func_retry_backoff`'s pair.
     tx_meter_retry_at: [u32; N_TX_METERS],
     tx_meter_retry_backoff: [u32; N_TX_METERS],
+    /// Has this link answered the raw ALC read ([`crate::rigmodels::raw_alc_query`])? `None` not
+    /// yet, `Some(true)` it has, `Some(false)` it never did and ALC is read with Hamlib's `l ALC`.
+    ///
+    /// ⚠️ A RIGCTLD BEFORE HAMLIB 4.6 NEVER ANSWERS IT. Its `w` waits for a CR or LF that a Yaesu
+    /// never sends and prints nothing (measured, Hamlib 4.5.5 `rigctld -m 1035`), so an FT-991
+    /// behind the operator's own rigctld lost its ALC meter in 1.19.0: three misses and ⊘, where
+    /// 1.18.0's `l ALC` read it. So when the ladder gives the raw read up on a link where it never
+    /// answered, the meter falls back to `l ALC` instead of being parked. Only on an over's read:
+    /// a tune-up's 120 ms deadline can miss a slow radio that does answer. Reset with the ladder.
+    tx_alc_raw: Option<bool>,
     /// Whether we last surfaced the "monitor refused — would transmit into the TX
     /// device" note on the audio-error line, so we clear only our OWN message.
     /// The monitor block currently OWNS the audio-error line (it wrote either
@@ -4648,6 +4667,7 @@ impl RadioLoop {
             tx_meter_misses: [0; N_TX_METERS],
             tx_meter_retry_at: [0; N_TX_METERS],
             tx_meter_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS],
+            tx_alc_raw: None,
 
             clock_offset_ms: 0,
             clock_jump: tempo_app::clocksync::ClockJumpDetector::new(),
@@ -6899,6 +6919,7 @@ impl RadioLoop {
         self.tx_meter_misses = [0; N_TX_METERS];
         self.tx_meter_retry_at = [0; N_TX_METERS];
         self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
+        self.tx_alc_raw = None;
         // The audio device must be (re)opened for the new radio even if its device name matches
         // (e.g. both "system default") — force it, since `audio_differs` alone would skip an
         // empty-vs-empty compare and leave the OLD radio's sound-card stream running.
@@ -8728,6 +8749,7 @@ impl RadioLoop {
                     self.tx_meter_misses = [0; N_TX_METERS];
                     self.tx_meter_retry_at = [0; N_TX_METERS];
                     self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
+                    self.tx_alc_raw = None;
                     // The level give-ups are a rate limit, not a verdict: a write refused while
                     // the link was half-open must be retried once the link is proven alive.
                     self.rf_power_giveup = None;
@@ -8873,6 +8895,7 @@ impl RadioLoop {
                             self.tx_meter_misses = [0; N_TX_METERS];
                             self.tx_meter_retry_at = [0; N_TX_METERS];
                             self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
+                            self.tx_alc_raw = None;
                             self.agc_giveup = None; // the refusal may have been the dead link
                             self.rf_power_giveup = None; // …and so may these three have been
                             self.mic_gain_giveup = None;
@@ -12713,14 +12736,32 @@ impl RadioLoop {
                     // keep their cadence and a rig that answers none of them is simply left
                     // alone while it transmits. See `tx_meter_supported`.
                     let mut reading = None;
+                    let model = self.applied.rig_model;
+                    let raw_alc = self.tx_alc_raw != Some(false);
                     if self.tx_meter_supported[i] != Some(false) {
-                        reading =
-                            read_tx_meter(rig, TX_METERS[i], self.applied.rig_model, deadline);
+                        reading = read_tx_meter(rig, TX_METERS[i], model, raw_alc, deadline);
                         note_ext_read(
                             &mut self.tx_meter_supported[i],
                             &mut self.tx_meter_misses[i],
                             reading.is_some(),
                         );
+                        if TX_METERS[i] == "ALC"
+                            && raw_alc
+                            && crate::rigmodels::raw_alc_query(model).is_some()
+                        {
+                            if reading.is_some() {
+                                self.tx_alc_raw = Some(true);
+                            } else if self.tx_meter_supported[i] == Some(false)
+                                && self.tx_alc_raw.is_none()
+                                && deadline.is_none()
+                            {
+                                // Never answered on this link: `l ALC` gets its own three
+                                // strikes instead of the meter being parked. See `tx_alc_raw`.
+                                self.tx_alc_raw = Some(false);
+                                self.tx_meter_supported[i] = None;
+                                self.tx_meter_misses[i] = 0;
+                            }
+                        }
                         if self.tx_meter_supported[i] == Some(false) {
                             // Just gave up: arm the re-probe and double the wait for the one
                             // after (capped) — the funcs' ladder, verbatim.
@@ -12752,10 +12793,11 @@ impl RadioLoop {
                         eng.observe_rig_tx_meters(swr, alc, po, comp);
                         // The ALC reading carries where this radio's own ALC zone ends on its
                         // bar, for the bar's colours (display only).
+                        // `l ALC` is Hamlib's scale, whose 1.0 is the zone's top: no zone of its own.
                         if alc.is_some() {
-                            eng.observe_rig_tx_alc_zone(crate::rigmodels::alc_zone_top(
-                                self.applied.rig_model,
-                            ));
+                            eng.observe_rig_tx_alc_zone(
+                                crate::rigmodels::alc_zone_top(model).filter(|_| raw_alc),
+                            );
                         }
                         // NOTIFY, NEVER ACT (the project's alerts rule). This raises a status
                         // line into the same lane as the foreign-key notice above and does
