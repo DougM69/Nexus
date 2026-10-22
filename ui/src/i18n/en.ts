@@ -10170,6 +10170,7 @@ export const EN = {
   'operate.tx.next.title': 'Queued as the next transmission',
   'operate.tx.tx5.placeholder': 'Free text',
   'operate.tx.tx5.aria': 'Tx5 free text',
+  'operate.tx.tx5.loggerRefused': "A logger's free text did not go out: {{reason}}",
   'operate.tx.tx6.placeholder': 'CQ call',
   'operate.tx.tx6.aria': 'Tx6 Call CQ (edit for a directed CQ)',
   // The directed-CQ tokens are what goes on the air; they stay as written.

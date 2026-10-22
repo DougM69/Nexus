@@ -52,7 +52,7 @@ fn tier_name(t: Tier) -> &'static str {
 }
 
 /// Operate's FT8 or FT4 with no contest: this station double-clicks `cq` (as it comes off the air).
-fn answering(tier: Tier, cq: &str) -> Engine {
+pub(super) fn answering(tier: Tier, cq: &str) -> Engine {
     let mut e = Engine::new(ME, MY_GRID, 0);
     e.set_tier(tier);
     let cq = air_form(cq).1;
@@ -83,7 +83,7 @@ fn over(e: &mut Engine, slot: u64) -> Option<(String, bool)> {
 }
 
 /// The first over planned from `from` on, within two of this station's slots.
-fn next_over(e: &mut Engine, from: u64) -> Option<(String, bool)> {
+pub(super) fn next_over(e: &mut Engine, from: u64) -> Option<(String, bool)> {
     (from..from + 4).find_map(|s| over(e, s))
 }
 
@@ -265,7 +265,7 @@ fn an_over_on_the_air_is_never_switched_to_text_the_encoder_refuses() {
 }
 
 /// The keying point, for an over that reaches it however it was queued: the QSO's next over, and a
-/// frame in the chat broadcast queue (what a logger's FreeText queues on an FT tier). Nothing is
+/// frame in the chat broadcast queue on an FT tier. Nothing is
 /// keyed, and nothing records an over that never went: no ALL.TXT line.
 #[test]
 fn the_keying_point_never_keys_an_over_the_encoder_refuses() {

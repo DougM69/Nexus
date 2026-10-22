@@ -13404,6 +13404,9 @@ impl RadioLoop {
         // and every Tauri command queued behind it — for as long as it kept
         // sending. The overflow is not dropped, just deferred one 20 ms tick.
         if let Some(server) = sinks.wsjtx {
+            // One Replay per tick: it re-sends all of Band Activity (thousands of datagrams on a
+            // busy band) with the engine lock held, so a burst of them is answered once.
+            let mut replayed = false;
             for inb in server.drain(tempo_net::server::INBOUND_PER_TICK) {
                 match inb {
                     WsjtxInbound::HaltTx { .. } => {
@@ -13417,24 +13420,22 @@ impl RadioLoop {
                             eng.halt_tx_for_failed_unkey(&why);
                         }
                     }
-                    WsjtxInbound::Clear { .. } => {
-                        // Visual clear only — the engine's decode context (answer
+                    WsjtxInbound::Clear { window, .. } => {
+                        // The panes' clear — the engine's decode context (answer
                         // parity / history) is not a window and stays intact.
-                        eng.apply_udp_clear();
+                        eng.apply_udp_clear(window);
                     }
-                    WsjtxInbound::Replay { .. } => {
-                        // A consumer that just connected wants the WHOLE current
-                        // period back — `last_decodes` alone holds only the most
-                        // recent ingest (post-early-pass it's just the boundary
-                        // stragglers). NO PSK spots here: replays must never
-                        // double-spot. Not New: WSJT-X replays each old decode "with the
-                        // 'New' field set to false" (`Network/NetworkMessage.hpp` 221-226;
-                        // `replayDecodes` → `postDecode (false, …)`, mainwindow.cpp
-                        // 13374-13396).
+                    WsjtxInbound::Replay { .. } if !replayed => {
+                        replayed = true;
+                        // A consumer that just connected wants every decode Band Activity
+                        // holds, as WSJT-X re-sends its window (`replayDecodes`, mainwindow.cpp
+                        // 13374-13396), each stamped with its own period's start. NO PSK spots
+                        // here: replays must never double-spot. Not New: WSJT-X replays each
+                        // old decode "with the 'New' field set to false"
+                        // (`Network/NetworkMessage.hpp` 221-226; `postDecode (false, …)`).
                         if let Some(server) = sinks.wsjtx {
                             let tier = tier_mode(eng.tier());
-                            let ms_mid = udp_decode_time_ms(&eng, now);
-                            for d in eng.current_period_decodes() {
+                            for (start, d) in eng.band_activity() {
                                 let _ = server.send_decode(&WsjtxDecode {
                                     new: false,
                                     ..build_decode(
@@ -13443,13 +13444,14 @@ impl RadioLoop {
                                         d.dt,
                                         d.freq,
                                         tier,
-                                        ms_mid,
+                                        (start * 1000 % 86_400_000) as u32,
                                         d.qual < 0.17,
                                     )
                                 });
                             }
                         }
                     }
+                    WsjtxInbound::Replay { .. } => {}
                     WsjtxInbound::Location { location, .. } => {
                         eng.apply_udp_location(&location);
                     }
@@ -13457,11 +13459,8 @@ impl RadioLoop {
                         eng.set_highlight(&call, bg, fg);
                     }
                     WsjtxInbound::FreeText { text, send, .. } => {
-                        let t = text.trim();
-                        if send && !t.is_empty() {
-                            if let Err(reason) = eng.udp_free_text(t) {
-                                crate::civ::diag::note(&format!("UDP FreeText refused: {reason}"));
-                            }
+                        if let Err(reason) = eng.udp_free_text(&text, send) {
+                            crate::civ::diag::note(&format!("UDP FreeText refused: {reason}"));
                         }
                     }
                     WsjtxInbound::Reply {

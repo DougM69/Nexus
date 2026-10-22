@@ -5990,6 +5990,7 @@ export const DE: PartialCatalog = {
   "operate.tx.next.title": "Als nächste Aussendung eingereiht",
   "operate.tx.tx5.placeholder": "Freitext",
   "operate.tx.tx5.aria": "Tx5-Freitext",
+  "operate.tx.tx5.loggerRefused": "Der Freitext eines Logprogramms wurde nicht gesendet: {{reason}}",
   "operate.tx.tx6.placeholder": "CQ-Ruf",
   "operate.tx.tx6.aria": "Tx6 CQ rufen (für ein gerichtetes CQ bearbeiten)",
   "operate.tx.tx6.hint": "Für ein gerichtetes CQ bearbeiten — CQ DX / CQ NA / CQ POTA / CQ TEST",

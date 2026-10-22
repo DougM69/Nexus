@@ -4013,6 +4013,7 @@ export const ES: PartialCatalog = {
   "operate.tx.cq.malformed.try": "No se envió nada: eso no es un CQ que Nexus pueda llamar. Prueba: {{fix}}",
   "operate.tx.cq.malformed": "No se envió nada: eso no es un CQ que Nexus pueda llamar. La forma es CQ, una palabra de dirección opcional, luego {{mycall}} y tu localizador.",
   "operate.tx.tx5.aria": "Texto libre Tx5",
+  "operate.tx.tx5.loggerRefused": "El texto libre de un programa de log no se transmitió: {{reason}}",
   "operate.tx.tx5.placeholder": "Texto libre",
   "operate.tx.tx6.aria": "Tx6 Llamar CQ (edítalo para un CQ dirigido)",
   "operate.tx.tx6.hint": "Edítalo para un CQ dirigido — CQ DX / CQ NA / CQ POTA / CQ TEST",
