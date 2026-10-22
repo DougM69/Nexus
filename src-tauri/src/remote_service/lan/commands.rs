@@ -6,10 +6,16 @@
 //!
 //! The reading task parses it and hands it on, and never runs a command or takes a lock itself.
 //! - **A Stop**, or the off half of a transmit switch, is admitted there, with no lock
-//!   (`command_dispatch::admit_stop`), and run at once on a thread of its own, behind no other
-//!   call, its answer ahead of everything waiting to be written. It needs no lease and takes no slot.
-//!   It moves the transmit stand-down generation there and then, an atomic step, so every start
-//!   read before it is void wherever it waits.
+//!   (`command_dispatch::admit_stop`), and run at once, behind no other call, its answer ahead of
+//!   everything waiting to be written. It needs no lease and takes no slot. It moves the transmit
+//!   stand-down generation there and then, an atomic step, so every start read before it is void
+//!   wherever it waits. Each Stop command has one thread at work at most, never one per Stop,
+//!   as the Stop road's stopper has: a Stop runs at once when none of its command is running,
+//!   and Stops of that command that land while one runs are run once more after it, after all of
+//!   them have landed, each answered from that run. A Stop of another command never waits behind it.
+//!   Those with the same arguments share a run, and at most [`STOP_RUNS`] runs wait; a Stop past
+//!   them is answered `busy`, its stand-down already taken, so a flood of Stops each with arguments
+//!   of its own grows neither what waits nor what runs.
 //! - **Any other call** is admitted off the reading task, since a store's revision can wait on the
 //!   Engine: the dispatcher's lease, class, journal, caps and revisions, with the lease read live
 //!   from the operations authority. It then runs through the app's own handler, and its answer goes
@@ -77,6 +83,11 @@ pub(crate) use super::wire::OUTCOMES;
 pub(crate) const WATCH: usize = 8;
 /// Events kept for a lane that has fallen behind; older ones are skipped.
 const EVENTS: usize = 64;
+/// Runs of one Stop command waiting at once, each with its own arguments. A Stop's arguments only
+/// differ for a switch's off half, and the most off halves one command has is `js8_arm`'s five
+/// switches, so this is room to spare. A Stop past it is refused `busy`: what it stops was already
+/// stopped (the stand-down moves on the reading task), and a run of its command is waiting.
+pub(crate) const STOP_RUNS: usize = 8;
 
 /// An event raised at the shack, as the lane forwards it: its name, a number the shack gives it
 /// (the same on every connection), when it was raised, and its payload as the app emitted it.
@@ -201,6 +212,11 @@ pub(super) struct Lane {
     key: CallerKey,
     profile: Profile,
     pending: Arc<AtomicUsize>,
+    /// Each Stop command's Stops, run in turn: a Stop is admitted only for a command of Stop's rules
+    /// (`command_dispatch::admit_stop`), so these are a few at most.
+    stops: std::collections::HashMap<String, Arc<InTurn<StopRun>>>,
+    /// The `outcomes` questions, answered in turn.
+    asked: Arc<InTurn<Vec<u64>>>,
     assembly: Assembly,
     feeds: Vec<(&'static Feed, tokio::task::JoinHandle<()>)>,
     events: tokio::task::JoinHandle<()>,
@@ -244,6 +260,8 @@ impl Lane {
             },
             profile: opening.profile,
             pending: Arc::new(AtomicUsize::new(0)),
+            stops: Default::default(),
+            asked: Default::default(),
             assembly: Assembly::new(wire::CALL_BYTES),
             feeds: Vec::new(),
             events,
@@ -277,11 +295,31 @@ impl Lane {
                 // before the Stop waits for anything, as the road's Stop takes it.
                 self.context.took_stop(stops);
                 self.context.transmit.revoke();
-                let context = self.context.clone();
-                tokio::task::spawn_blocking(move || {
-                    let answer = answered(id, run(&context.runner, &stop.cmd, stop.args), None);
-                    let _ = context.outbox.urgent(answer);
-                });
+                let (context, cmd) = (self.context.clone(), stop.cmd.clone());
+                let turns = self.stops.entry(stop.cmd).or_default();
+                let args = stop.args;
+                let mut over = false;
+                turns.start(
+                    |waiting| match waiting.iter().position(|run| run.args == args) {
+                        Some(same) => waiting[same].ids.push(id),
+                        None if waiting.len() >= STOP_RUNS => over = true,
+                        None => waiting.push(StopRun {
+                            args,
+                            ids: vec![id],
+                        }),
+                    },
+                    move |waiting| {
+                        for StopRun { args, ids } in waiting {
+                            let ran = run(&context.runner, &cmd, args);
+                            for id in ids {
+                                let _ = context.outbox.urgent(answered(id, ran.clone(), None));
+                            }
+                        }
+                    },
+                );
+                if over {
+                    let _ = self.context.outbox.urgent(refused(id, Refusal::Busy));
+                }
                 return;
             }
             Err(call) => call,
@@ -362,19 +400,25 @@ impl Lane {
         });
     }
 
-    /// What became of each of `ids`, asked after a reconnect, answered off the reading task.
+    /// What became of each of `ids`, asked after a reconnect, answered off the reading task, in
+    /// turn with the questions before it.
     pub(super) fn outcomes(&self, ids: Vec<u64>) {
         let (context, key) = (self.context.clone(), self.key.clone());
-        tokio::task::spawn_blocking(move || {
-            let outcomes: Vec<Value> = context
-                .dispatcher
-                .outcomes(&key, &ids)
-                .iter()
-                .map(outcome)
-                .collect();
-            let answer = json!({"type":"outcomes","ids":ids,"outcomes":outcomes});
-            let _ = context.outbox.text(answer.to_string());
-        });
+        self.asked.start(
+            |waiting| waiting.push(ids),
+            move |waiting| {
+                for ids in waiting {
+                    let outcomes: Vec<Value> = context
+                        .dispatcher
+                        .outcomes(&key, &ids)
+                        .iter()
+                        .map(outcome)
+                        .collect();
+                    let answer = json!({"type":"outcomes","ids":ids,"outcomes":outcomes});
+                    let _ = context.outbox.text(answer.to_string());
+                }
+            },
+        );
     }
 
     /// The feeds this computer watches from now on, in place of the ones before: each new one
@@ -418,6 +462,95 @@ impl Drop for Lane {
             task.abort();
         }
     }
+}
+
+/// The Stops of one command waiting to run with the same arguments, and their ids.
+struct StopRun {
+    args: Value,
+    ids: Vec<u64>,
+}
+
+/// Work the reading task hands off that must never take a thread a message: what waits is done in
+/// turn by one blocking task, started when work arrives with none at work, and ending when none is
+/// left. A flood therefore holds one thread, and what it holds waiting is what the network brought.
+pub(super) struct InTurn<T> {
+    /// What waits, and whether a task is at work on it.
+    waiting: std::sync::Mutex<(Vec<T>, bool)>,
+}
+
+impl<T> Default for InTurn<T> {
+    fn default() -> Self {
+        Self {
+            waiting: std::sync::Mutex::new((Vec::new(), false)),
+        }
+    }
+}
+
+impl<T: Send + 'static> InTurn<T> {
+    fn waiting(&self) -> std::sync::MutexGuard<'_, (Vec<T>, bool)> {
+        self.waiting
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// `add` puts work with what waits; a task to do it, with `work`, starts unless one is at work,
+    /// which then does it once what it has now is done.
+    pub(super) fn start(
+        self: &Arc<Self>,
+        add: impl FnOnce(&mut Vec<T>),
+        mut work: impl FnMut(Vec<T>) + Send + 'static,
+    ) {
+        {
+            let mut waiting = self.waiting();
+            add(&mut waiting.0);
+            if std::mem::replace(&mut waiting.1, true) {
+                return;
+            }
+        }
+        let turns = self.clone();
+        off_the_reading_task(move || {
+            let _at_work = AtWork(&turns);
+            loop {
+                let next = {
+                    let mut waiting = turns.waiting();
+                    if waiting.0.is_empty() {
+                        // Under the same lock `start` reads it by: work added after this starts
+                        // a task of its own.
+                        waiting.1 = false;
+                        return;
+                    }
+                    std::mem::take(&mut waiting.0)
+                };
+                work(next);
+            }
+        });
+    }
+}
+
+/// ⛔ A task at work that panics is no longer at work: the next work starts a task of its own, so
+/// a Stop after it is never left waiting for a task that is gone.
+struct AtWork<'a, T: Send + 'static>(&'a InTurn<T>);
+
+impl<T: Send + 'static> Drop for AtWork<'_, T> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.waiting().1 = false;
+        }
+    }
+}
+
+/// A Stop's or an `outcomes`' task, started off the reading task on a blocking thread.
+fn off_the_reading_task(work: impl FnOnce() + Send + 'static) {
+    #[cfg(test)]
+    STARTED.with(|started| started.set(started.get() + 1));
+    tokio::task::spawn_blocking(work);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The tasks [`off_the_reading_task`] started from this thread: a test's reading task runs on
+    /// the test's own thread, so its count is the test's alone.
+    pub(super) static STARTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A call waiting, counted against [`PENDING`] until it is answered however it ends.
