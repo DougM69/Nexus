@@ -1149,10 +1149,12 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
   set the machine's clock instead. Turn the check off for fully-offline operation
   (no network calls) — the last measurement then keeps steering until it ages
   out, and the bar says when it has.
-- **Station power (W)** — "Your transmit power in watts — unlocks the Journey
-  miles-per-watt & QRP feats." It also feeds the P.533 link budget. Leave blank
-  if unknown. This is what you actually run, for the record — it commands
-  nothing; the rig's power lives on the cockpit **Pwr** slider.
+- **Station power (W)** — "Your transmit power in watts — logged on every
+  contact as its power (ADIF TX_PWR), and unlocks the Journey miles-per-watt &
+  QRP feats." It also feeds the P.533 link budget. Leave blank if unknown, and
+  contacts are logged with no power. This is what you actually run, for the
+  record — it commands nothing; the rig's power lives on the cockpit **Pwr**
+  slider.
 
 Units used to be the last field in this row; it is now on the Station tab under
 [Operator & Radio](#operator--radio).

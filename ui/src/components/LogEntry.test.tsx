@@ -282,6 +282,30 @@ describe('LogEntry standard variant — other-radio override (band/freq/mode/UTC
     expect(rec.whenUnix).toBeLessThanOrEqual(after)
   })
 
+  // A user's report: "isn't logging an end time for SSB". A contact logged live ends when it is
+  // logged, and the record says so as TIME_OFF, as an FT contact's does. One typed in with its
+  // own UTC time is a contact from earlier: its end is not known, and none is written.
+  it('a live contact carries its end time; one with a hand-entered time carries none', () => {
+    renderStd()
+    const before = Math.floor(Date.now() / 1000)
+    fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'w1aw' } })
+    fireEvent.click(logBtn())
+    const after = Math.floor(Date.now() / 1000)
+    const live = mockedLogQso.mock.calls[0][0]
+    expect(live.timeOffUnix).toBeGreaterThanOrEqual(before)
+    expect(live.timeOffUnix).toBeLessThanOrEqual(after)
+    expect(live.timeOffUnix).toBeGreaterThanOrEqual(live.whenUnix)
+
+    fireEvent.click(overrideToggle())
+    fireEvent.change(screen.getByLabelText('Date (UTC)'), { target: { value: '2026-03-15' } })
+    fireEvent.change(screen.getByLabelText('Time (UTC)'), { target: { value: '14:30' } })
+    fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'k9xyz' } })
+    fireEvent.click(logBtn())
+    const typed = mockedLogQso.mock.calls[1][0]
+    expect(typed.whenUnix).toBe(Math.floor(Date.UTC(2026, 2, 15, 14, 30, 0) / 1000))
+    expect(typed.timeOffUnix).toBeUndefined()
+  })
+
   it('BLOCKS logging a mismatched record when the override is open but the freq is invalid', () => {
     // Review finding: with the override open and the freq cleared, band+freq once fell back to
     // the live rig while mode+time stayed the override — logging e.g. 20m/14.2 tagged FM at a

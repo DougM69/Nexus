@@ -6217,7 +6217,7 @@ export const FR: PartialCatalog = {
   "settings.digital.promptToLog.label": "Demander avant d'enregistrer",
   "settings.digital.singleDecode.hint": "Ne décode que dans ±25 Hz autour de votre marqueur RX vert (la même fenêtre à une station que WSJT-X utilise pour un re-décodage au double-clic) au lieu de toute la bande passante — isole une station faible et économise le CPU. FT8 et FT4 uniquement : 50 Hz est plus étroit qu'un seul signal JT65, Q65 ou MSK144, ces modes gardent donc toute la bande passante. S'applique tant que le marqueur RX est dans la bande passante ci-dessus ; désactivé = bande passante complète, le comportement d'origine.",
   "settings.digital.singleDecode.label": "Décodage unique",
-  "settings.digital.stationPower.hint": "Votre puissance d'émission en watts — débloque les exploits miles-par-watt et QRP de Journey. Laissez vide si vous ne la connaissez pas.",
+  "settings.digital.stationPower.hint": "Votre puissance d'émission en watts — enregistrée sur chaque contact comme sa puissance (ADIF TX_PWR), et débloque les exploits miles-par-watt et QRP de Journey. Laissez vide si vous ne la connaissez pas.",
   "settings.digital.stationPower.label": "Puissance de la station (W)",
   "settings.digital.units.auto": "Automatique (selon le système)",
   "settings.digital.units.hint": "Distances, température et vitesse du vent. Automatique suit la région de votre système d'exploitation. S'applique immédiatement partout dans l'application.",

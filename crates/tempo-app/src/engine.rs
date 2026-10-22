@@ -15610,6 +15610,16 @@ impl Engine {
                 rec.my_rig = Some(rig.to_string());
             }
         }
+        // THE POWER IT WAS MADE AT (ADIF `TX_PWR`), on the same terms: the watts the
+        // operator gave Settings ▸ Station power — what WSJT-X logs, from the Tx power its Log
+        // QSO dialog keeps between contacts — and nothing when none is set. Never derived from
+        // the rig's power slider: that is a fraction of a rated output nobody may have entered.
+        if rec.tx_power.is_none() {
+            rec.tx_power = self
+                .settings
+                .station_power_w
+                .filter(|w| w.is_finite() && *w > 0.0);
+        }
         // Resolve the DXCC entity (country) if the record doesn't already carry one
         // — so manually-logged contacts get a country too, not just auto-QSOs. One that arrives
         // with a DXCC number takes the number's name (`StationCore::country_for`).
@@ -44680,6 +44690,38 @@ mod tests {
         };
         assert_eq!(rig("K9AAA").as_deref(), Some("FT-991A"));
         assert_eq!(rig("N0CALL"), None);
+    }
+
+    /// A logged contact carries the station's power (ADIF `TX_PWR`) — the watts the
+    /// operator gave Settings ▸ Station power, which is what WSJT-X logs too (its Log QSO
+    /// dialog's Tx power, typed by the operator and kept between contacts). Stamped at the log
+    /// funnel on MY_RIG's terms: a record's own power wins, and none set stamps nothing.
+    #[test]
+    fn a_logged_contact_carries_the_station_power_the_operator_set() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let unset = e.qso_record("N0CALL".into(), None, None);
+        e.log_qso(unset);
+        e.settings.station_power_w = Some(100.0);
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+        let mut own = e.qso_record("K9AAA".into(), None, None);
+        own.tx_power = Some(5.0);
+        e.log_qso(own);
+        // A zero is the field's "not a power" — never stamped as 0 W on the air.
+        e.settings.station_power_w = Some(0.0);
+        let zero = e.qso_record("K1ZRO".into(), None, None);
+        e.log_qso(zero);
+        let log = e.stored_log();
+        let power = |call: &str| log.iter().find(|r| r.call == call).and_then(|r| r.tx_power);
+        assert_eq!(power("W9XYZ"), Some(100.0));
+        assert_eq!(power("K9AAA"), Some(5.0), "the record's own power wins");
+        assert_eq!(power("N0CALL"), None, "no power set stamps nothing");
+        assert_eq!(power("K1ZRO"), None);
+        assert!(
+            tempo_core::logbook::adif_record(log.iter().find(|r| r.call == "W9XYZ").unwrap())
+                .contains("<TX_PWR:3>100"),
+            "and the ADIF every upload sends carries it"
+        );
     }
 
     /// THE FIELD REPORT (2026-09-22, FTDX10 on macOS): the logbook's RIG column read "CP2105

@@ -591,10 +591,19 @@ fn record_for(
             .and_then(|s| s.name.as_ref())
             .map(|_| "SAT".to_string()),
         sat_name: q.sat.as_ref().and_then(|s| s.name.clone()),
-        operator: None,
+        // ⭐ WHO WAS AT THE KEY, AND THE CALL IT WENT OUT UNDER — both stamped on the row at log
+        // time and both dropped here until now: `OPERATOR` was hardcoded `None` and
+        // `STATION_CALLSIGN` was the session's call, which after a call change and a restart is
+        // not the call the contact was made on. An empty stamp is "nobody named" / "not
+        // recorded" (a row from before `on_air_call`), and then the merge writes what it
+        // always did.
+        operator: Some(q.operator.clone()).filter(|o| !o.trim().is_empty()),
         my_grid: None,
         my_rig: None,
-        station_callsign: Some(log.mycall.clone()).filter(|c| !c.trim().is_empty()),
+        station_callsign: [&q.on_air_call, &log.mycall]
+            .into_iter()
+            .find(|c| !c.trim().is_empty())
+            .cloned(),
         extra: Vec::new(),
         contest: Some(Box::new(contest)),
     };
@@ -1028,6 +1037,54 @@ mod tests {
     }
 
     /// ⭐ §3.2 — merging twice writes nothing the second time.
+    /// ⭐ **WHO WAS AT THE KEY, AND THE CALL IT WENT OUT UNDER, SURVIVE THE MERGE**.
+    ///
+    /// Each contest row is stamped at log time with the operator setting
+    /// ([`LoggedQso::operator`]) and the call on the air ([`LoggedQso::on_air_call`]), and the
+    /// merge wrote `OPERATOR` as nothing and `STATION_CALLSIGN` as the session's call — so a
+    /// club's rotation of operators reached the Cabrillo and never the Logbook, and a contact
+    /// merged after the call was changed and Nexus restarted was signed under the new call.
+    /// Read back through the file too: the Logbook is what reaches every upload.
+    #[test]
+    fn a_merged_row_keeps_its_operator_and_the_call_it_was_logged_on() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        log.operator = "K9OP".into();
+        log.on_air_call = "K9OLD".into();
+        assert!(log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_583_500));
+        // Nobody named, and a row from before the call on the air was recorded: both keep
+        // what the merge always wrote.
+        log.operator = String::new();
+        log.on_air_call = String::new();
+        assert!(log.log_mode_at("W1AW", "1D", "CT", "PH", 0, 1_782_583_800));
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 2);
+        let path = scratch_adi();
+        lb.save(&path).expect("write log.adi");
+        let reborn = Logbook::load(&path);
+        let _ = std::fs::remove_file(&path);
+        let by = |call: &str| {
+            reborn
+                .records()
+                .iter()
+                .find(|r| r.call == call)
+                .cloned()
+                .expect("merged")
+        };
+        let named = by("K1ABC");
+        assert_eq!(named.operator.as_deref(), Some("K9OP"));
+        assert_eq!(named.station_callsign.as_deref(), Some("K9OLD"));
+        let plain = by("W1AW");
+        assert_eq!(
+            plain.operator, None,
+            "nobody named is no OPERATOR, never \"\""
+        );
+        assert_eq!(plain.station_callsign.as_deref(), Some("W9XYZ"));
+    }
+
     #[test]
     fn a_second_merge_writes_nothing() {
         let log = fd_log();

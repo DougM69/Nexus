@@ -5,6 +5,24 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Phone, CW, RTTY, PSK and Satellites contacts now log an end time.** A contact logged from the
+  entry strip carries TIME_OFF — the moment you pressed Log — as an FT8 contact always has. The
+  start time is unchanged. A contact typed in under "Logged on another radio" with its own UTC
+  time still carries no end time, because Nexus cannot know it.
+- **Your station power is logged on every contact.** The watts in Settings ▸ Station power go on
+  each new contact as its power (ADIF TX_PWR), and out with it to QRZ, Club Log, eQSL, HRDLog,
+  Cloudlog/Wavelog and the WSJT-X UDP messages your logger reads. Leave it blank and contacts
+  are logged without a power, as before. A contact that already carries a power keeps it.
+- **A contest's contacts keep their operator and station call in the Logbook.** Merging a
+  contest into the Logbook dropped the "Operator at the key" each contact was logged with, and
+  stamped the station call in use at the merge rather than the one the contact was made on.
+- **The WSJT-X QSOLogged message carries the contact's power** in its Tx power field, so N1MM,
+  HRD and Log4OM receive it.
+
 ## [1.20.0] — 2026-10-22
 
 ### Added

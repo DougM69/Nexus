@@ -5310,7 +5310,7 @@ export const DE: PartialCatalog = {
   "settings.digital.clockCheck.label": "Uhrenprüfung (NTP)",
   "settings.digital.clockCheck.hint": "Misst die PC-Uhr gegen öffentliche NTP-Server und gleicht sie AUS: TempoFast/TempoDeep sind auf UTC-Slots getaktet, und Nexus verschiebt seine eigenen Sende- und Dekodierfenster um die gemessene Abweichung, damit sie auf dem echten UTC-Raster liegen, auch wenn die Uhr falsch geht. Die obere Leiste zeigt, was angewendet wird. Für vollständig netzlosen Betrieb abschalten (keine Netzzugriffe) — die letzte Messung steuert dann weiter, bis sie abläuft.",
   "settings.digital.stationPower.label": "Stationsleistung (W)",
-  "settings.digital.stationPower.hint": "Ihre Sendeleistung in Watt — schaltet die Journey-Leistungen für Meilen pro Watt und QRP frei. Leer lassen, wenn unbekannt.",
+  "settings.digital.stationPower.hint": "Ihre Sendeleistung in Watt — wird bei jedem Kontakt als dessen Leistung geloggt (ADIF TX_PWR) und schaltet die Journey-Leistungen für Meilen pro Watt und QRP frei. Leer lassen, wenn unbekannt.",
   "settings.digital.units.label": "Einheiten",
   "settings.digital.units.auto": "Automatisch (vom System)",
   "settings.digital.units.metric": "Metrisch (km, °C)",

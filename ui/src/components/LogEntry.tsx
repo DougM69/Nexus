@@ -2129,6 +2129,9 @@ export function LogEntry({
     // The host's start for this call (`startedAt`), and then the contact ends now.
     const started = !overrideOpen && startedAt && sameCall(startedAt.call, call) ? Math.min(startedAt.unix, nowUnix) : null
     const whenUnix = overrideOpen && ovWhen !== null ? ovWhen : started ?? nowUnix
+    // A contact logged live ends now (TIME_OFF), as an FT contact's does — Phone, CW, RTTY and PSK
+    // logged none until now. A hand-entered UTC time is a contact from earlier, whose end is unknown.
+    const live = !(overrideOpen && ovWhen !== null)
     const rec: LoggedQso = {
       call,
       grid: logGrid.trim() || null,
@@ -2144,7 +2147,7 @@ export function LogEntry({
       comment: logComment.trim() || null,
       notes: logNotes.trim() || null,
       whenUnix,
-      ...(started != null ? { timeOffUnix: nowUnix } : {}),
+      ...(live ? { timeOffUnix: nowUnix } : {}),
       confirmed: false,
       awardConfirmed: false,
       // `asksForPark` FIRST: an exchange with no park row sends no park reference, by any

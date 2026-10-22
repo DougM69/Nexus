@@ -7769,7 +7769,7 @@ export const EN = {
     'Measure your PC clock against public NTP servers and CORRECT for it: TempoFast/TempoDeep are slot-timed to UTC, and Nexus shifts its own transmit and decode windows by the measured offset so they land on the true UTC grid even when the clock is off. The top bar shows what is being applied. Turn off for fully-offline operation (no network calls) — the last measurement then keeps steering until it ages out.',
   'settings.digital.stationPower.label': 'Station power (W)',
   'settings.digital.stationPower.hint':
-    'Your transmit power in watts — unlocks the Journey miles-per-watt & QRP feats. Leave blank if unknown.',
+    'Your transmit power in watts — logged on every contact as its power (ADIF TX_PWR), and unlocks the Journey miles-per-watt & QRP feats. Leave blank if unknown.',
   // The units preference. The <option> VALUES ('auto', 'metric', 'imperial') are persisted
   // tokens and stay in the component; km, °C, mi and °F are unit symbols inside these labels.
   'settings.digital.units.label': 'Units',

@@ -4916,7 +4916,7 @@ export const JA: PartialCatalog = {
   "settings.digital.clockCheck.label": "時刻チェック (NTP)",
   "settings.digital.clockCheck.hint": "PCの時計を公開NTPサーバーと照合し、そのずれを補正します。TempoFast/TempoDeepはUTCのスロットに同期して動くため、Nexusは測定したずれの分だけ自身の送信・デコードウィンドウをずらし、時計が狂っていても本来のUTCグリッド上に乗るようにします。適用中の値はトップバーに表示されます。完全オフラインで運用する場合はオフにしてください（ネットワークアクセスなし）。その場合は最後の測定値が期限切れになるまで補正を続けます。",
   "settings.digital.stationPower.label": "局の出力 (W)",
-  "settings.digital.stationPower.hint": "ワット単位の送信出力です。Journeyのmiles-per-watt実績とQRP実績の解除に使われます。不明な場合は空欄のままにしてください。",
+  "settings.digital.stationPower.hint": "ワット単位の送信出力です。各交信の送信出力（ADIF TX_PWR）として記録され、Journeyのmiles-per-watt実績とQRP実績の解除にも使われます。不明な場合は空欄のままにしてください。",
   "settings.digital.units.label": "単位",
   "settings.digital.units.auto": "自動（システム設定に従う）",
   "settings.digital.units.metric": "メートル法（km、°C）",

@@ -6217,7 +6217,7 @@ export const ES: PartialCatalog = {
   "settings.digital.promptToLog.label": "Preguntar antes de anotar",
   "settings.digital.singleDecode.hint": "Decodifica solo dentro de ±25 Hz de tu marcador RX verde (la misma ventana de una estación que usa WSJT-X al redecodificar con doble clic) en vez de toda la banda de paso — aísla una estación débil y ahorra CPU. Solo FT8 y FT4: 50 Hz es más estrecho que una sola señal JT65, Q65 o MSK144, así que esos modos mantienen la banda de paso completa. Se aplica mientras el marcador RX esté dentro de la banda de paso de arriba; desactivado = banda de paso completa, el comportamiento de serie.",
   "settings.digital.singleDecode.label": "Decodificación única",
-  "settings.digital.stationPower.hint": "Tu potencia de transmisión en vatios — desbloquea los logros de millas por vatio y QRP de Journey. Déjalo vacío si no la sabes.",
+  "settings.digital.stationPower.hint": "Tu potencia de transmisión en vatios — se anota en cada contacto como su potencia (ADIF TX_PWR) y desbloquea los logros de millas por vatio y QRP de Journey. Déjalo vacío si no la sabes.",
   "settings.digital.stationPower.label": "Potencia de la estación (W)",
   "settings.digital.units.auto": "Automático (del sistema)",
   "settings.digital.units.hint": "Distancias, temperatura y velocidad del viento. Automático sigue la región de tu sistema operativo. Se aplica al instante en toda la aplicación.",
