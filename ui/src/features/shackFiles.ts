@@ -48,7 +48,8 @@ export function useStationPicture(path: string, wanted: boolean): string | null 
 /** Copy one file of a station folder into this computer's Downloads folder, piece by piece, and
  *  return where it landed. `onProgress` hears the share done so far, 0 to 1. The size is the one
  *  the first piece reported, so a file still growing at the station (ALL.TXT) is saved as it was
- *  when the save began. */
+ *  when the save began. A file already in Downloads is never written over: the first piece takes
+ *  the next free name, and every later piece goes to that file. */
 export async function saveStationFile(
   folder: ShackFolder,
   name: string,
@@ -56,13 +57,16 @@ export async function saveStationFile(
 ): Promise<string> {
   let offset = 0
   let size = Infinity
+  let target = name
   let saved = ''
   do {
     const piece = await shackFileRead(folder, name, offset)
     if (size === Infinity) size = piece.size
     const length = atob(piece.data).length
     if (length === 0 && offset > 0) break
-    saved = await shackFileSave(name, piece.data, offset)
+    const here = await shackFileSave(target, piece.data, offset)
+    target = here.name
+    saved = here.path
     offset += length
     onProgress?.(size > 0 ? Math.min(1, offset / size) : 1)
   } while (offset < size)

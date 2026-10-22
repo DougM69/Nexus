@@ -1100,6 +1100,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ended the other computers' sessions and took back their control of the station. While the disk was busy, or
   something held the settings file open, those computers stayed connected and anything they had on the air kept going
   until the save finished. Now the port closes and the sessions end first, and the setting is saved after.
+- **Nexus Remote: Save to this computer never replaces a file already in the second PC's Downloads folder.** A
+  station file whose name is taken there, such as ALL.TXT saved a second time, is saved as `ALL (1).TXT`, then
+  `ALL (2).TXT`, the way a browser names a download, and the file that was there keeps every byte. The message
+  after the save names the file it went to.
 
 ### Security
 - **Nexus Remote: a config profile saved from a computer driving the station no longer carries the settings set at the
