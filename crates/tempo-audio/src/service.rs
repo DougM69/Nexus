@@ -14462,7 +14462,7 @@ impl RadioLoop {
         let Some(frame) = self.rx.frame_from(start, FT8_RESIDUAL_SAMPLES) else {
             return;
         };
-        let left_ms = FT8_RESIDUAL_GIVE_UP_MS - elapsed_ms;
+        let left_ms = (FT8_RESIDUAL_GIVE_UP_MS - elapsed_ms).max(0.0);
         let job = eng
             .build_decode_job(frame, slot + 1, DecodePass::Residual)
             .with_give_up_at(std::time::Instant::now() + Duration::from_secs_f64(left_ms / 1000.0));
