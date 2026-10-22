@@ -842,7 +842,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   /M or /QRP whose call Nexus has not decoded in full calling `CQ TEST` with its call hashed.
 - **FT8/FT4: double-clicking a CQ from `<...>` no longer answers it outside a contest either.** A station whose
   call has a suffix or a prefix can show as `<...>` until Nexus has decoded its call in full. Double-clicking its
-  CQ with the contest switch off, a logger's Reply to it, or working it from the Remote page turned TX on, moved RX
+  CQ with the contest switch off, or a logger's Reply to it, turned TX on, moved RX
   and TX onto the station and sent your grid to `<...>`, a call no one could read. It now does none of that and says
   why, as it already did with the contest switch on and as WSJT-X answers no `<...>`. Once the station's call shows
   in full, a double-click works it as usual. NEEDS-BENCH: FT8, a station signing /M or /QRP whose call Nexus has not
@@ -860,7 +860,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an ARRL VHF contest or a contest with the standard messages, and such a station called you with its grid or its
   report, Nexus answered it, sending your report or roger to `<...>`, a call no one could read; a best-caller choice
   could even pick it over a station whose call shows. Double-clicking any other message from `<...>`, a logger's
-  Reply to one, working one from the Remote page, or clicking `<...>` in a list started a contact with `<...>` too.
+  Reply to one, or clicking `<...>` in a list started a contact with `<...>` too.
   Nexus now passes such a caller by and answers the next station that called you in the same period, or calls CQ
   again; a click on `<...>` changes nothing and says why. WSJT-X answers no `<...>`. Once the station's call shows
   in full, it is answered and worked as usual. Field Day already passed such a caller by. NEEDS-BENCH: FT8, Call CQ
