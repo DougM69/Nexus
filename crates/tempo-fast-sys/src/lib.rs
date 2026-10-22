@@ -314,6 +314,36 @@ pub type Ft4DecodeT = Ft8DecodeT;
 /// thread inside the modem: it must not call back into the modem, and must not unwind.
 pub type DecodeCallback = unsafe extern "C" fn(user: *mut c_void, rec: *const Ft8DecodeT) -> c_int;
 
+/// What WSJT-X's FT8 decoder keeps of each early decode so its full pass can start from audio with
+/// that decode already subtracted (`ft8_decode.f90` `itone_save`/`f1_save`/`xdt_save`/
+/// `lsubtracted`). Layout matches `ft8_sub_t` in `libtempo.h` and `ft8_cabi.f90` (332 bytes).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Ft8SubT {
+    /// The decode's 79 channel tones.
+    pub itone: [c_int; 79],
+    /// Carrier, Hz.
+    pub f1: c_float,
+    /// The decoder's start time, s: the record's `dt + 0.5`.
+    pub xdt0: c_float,
+    /// 1 = a direct decode, tones known; 0 = not subtractable (an a7 decode).
+    pub ok: c_int,
+    /// 1 = already subtracted from the residual.
+    pub done: c_int,
+}
+
+impl Default for Ft8SubT {
+    fn default() -> Self {
+        Self {
+            itone: [0; 79],
+            f1: 0.0,
+            xdt0: 0.0,
+            ok: 0,
+            done: 0,
+        }
+    }
+}
+
 /// FST4 decode record — byte-identical C-ABI layout to [`Ft8DecodeT`].
 pub type Fst4DecodeT = Ft8DecodeT;
 
@@ -753,6 +783,55 @@ extern "C" {
         lapcqonly: c_int,
         out: *mut Ft8DecodeT,
         max_out: c_int,
+        cb: Option<DecodeCallback>,
+        user: *mut c_void,
+    ) -> c_int;
+
+    /// [`ft8_decode_frame_cb`] plus WSJT-X's carry between the passes of one period: `subs`
+    /// (null, or `max_out` records) receives each decode's [`Ft8SubT`]; with 1..=200 `nearly`
+    /// early decodes and `early`, `early_subs`, `resid` non-null, the full pass (nzhsym 50,
+    /// depth >= 2) starts from `resid` over the first 47 x 3456 samples, subtracts the early
+    /// decodes not yet subtracted and dedupes against them without handing them to `cb`
+    /// (`ft8_decode.f90:121`, `:152-162`); the early records open `out`. Anything else is
+    /// [`ft8_decode_frame_cb`]. The caller must carry only a residual made from the same first
+    /// 47 x 3456 samples as `iwave`.
+    pub fn ft8_decode_frame_dp(
+        iwave: *const i16, // [FT8_NMAX]
+        nfa: c_int,
+        nfb: c_int,
+        ndepth: c_int,
+        mycall: *const c_char,
+        hiscall: *const c_char,
+        nqso_progress: c_int,
+        nfqso: c_int,
+        nftx: c_int,
+        nzhsym: c_int,
+        nutc: c_int,
+        la7final: c_int,
+        lft8apon: c_int,
+        lapcqonly: c_int,
+        out: *mut Ft8DecodeT,
+        max_out: c_int,
+        cb: Option<DecodeCallback>,
+        user: *mut c_void,
+        subs: *mut Ft8SubT,
+        nearly: c_int,
+        early: *const Ft8DecodeT,
+        early_subs: *const Ft8SubT,
+        resid: *const c_float, // [FT8_NMAX]
+    ) -> c_int;
+
+    /// WSJT-X's FT8 47 step (`ft8_decode.f90:124-149`): from the first 47 x 3456 samples of
+    /// `iwave` (the rest taken as zero), subtract each early decode with dt < 0.396 s
+    /// (DT-refined at depth 3), set its `done`, and write the residual to `resid`. `cb` (may be
+    /// `None`) is asked with a null record after each early decode; nonzero stops there (the
+    /// 14.3 s bail-out). Returns the decodes reached, or -1 when `nearly` is not 1..=200.
+    pub fn ft8_subtract_early(
+        iwave: *const i16, // [FT8_NMAX]
+        ndepth: c_int,
+        nearly: c_int,
+        early_subs: *mut Ft8SubT,
+        resid: *mut c_float, // [FT8_NMAX]
         cb: Option<DecodeCallback>,
         user: *mut c_void,
     ) -> c_int;
@@ -1240,6 +1319,18 @@ mod tests {
         assert_eq!(offset_of!(Ft8DecodeT, qual), 60);
         // Ft4DecodeT is an alias — identical layout.
         assert_eq!(size_of::<Ft4DecodeT>(), size_of::<Ft8DecodeT>());
+    }
+
+    /// Lock the C-ABI layout of `Ft8SubT` to `ft8_sub_t` in `libtempo.h` / `ft8_cabi.f90`.
+    #[test]
+    fn ft8_sub_t_layout() {
+        assert_eq!(size_of::<Ft8SubT>(), 332, "Ft8SubT size");
+        assert_eq!(align_of::<Ft8SubT>(), 4, "Ft8SubT align");
+        assert_eq!(offset_of!(Ft8SubT, itone), 0);
+        assert_eq!(offset_of!(Ft8SubT, f1), 316);
+        assert_eq!(offset_of!(Ft8SubT, xdt0), 320);
+        assert_eq!(offset_of!(Ft8SubT, ok), 324);
+        assert_eq!(offset_of!(Ft8SubT, done), 328);
     }
 
     #[test]

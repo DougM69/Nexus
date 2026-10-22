@@ -300,6 +300,51 @@ int ft8_decode_frame_cb(const int16_t *iwave /*[FT8_NMAX]*/,
                         tempo_decode_cb cb, void *user);
 
 /*
+ * What WSJT-X's FT8 decoder keeps of each early decode to subtract it from the full pass's audio
+ * (ft8_decode.f90 itone_save/f1_save/xdt_save/lsubtracted). Matches the Fortran bind(C) type
+ * ft8_sub_t: 332 bytes.
+ */
+typedef struct {
+    int   itone[79]; /* the decode's channel tones */
+    float f1;        /* carrier, Hz */
+    float xdt0;      /* ft8b's start time, s (the record's dt + 0.5) */
+    int   ok;        /* 1 = a direct decode, tones known; 0 = not subtractable (a7) */
+    int   done;      /* 1 = already subtracted from the residual */
+} ft8_sub_t;
+
+/*
+ * ft8_decode_frame_cb plus WSJT-X's carry between the passes of one period. `subs` (NULL, or
+ * max_out records) receives each decode's ft8_sub_t. With 1..200 `nearly` early decodes, `early`,
+ * `early_subs` and `resid` non-NULL, nzhsym 50 and depth >= 2, the pass starts from `resid` (the
+ * 47 step's residual) over the first 47*3456 samples, subtracts the early decodes not yet
+ * subtracted, and dedupes against them without handing them to `cb` (ft8_decode.f90:121,
+ * :152-162); the early records open `out`. Anything else is ft8_decode_frame_cb. The caller must
+ * only carry a residual made from the same first 47*3456 samples as `iwave`.
+ */
+int ft8_decode_frame_dp(const int16_t *iwave /*[FT8_NMAX]*/,
+                        int nfa, int nfb, int ndepth,
+                        const char *mycall, const char *hiscall,
+                        int nqso_progress, int nfqso, int nftx, int nzhsym,
+                        int nutc, int la7final,
+                        int lft8apon, int lapcqonly,
+                        ft8_decode_t *out, int max_out,
+                        tempo_decode_cb cb, void *user,
+                        ft8_sub_t *subs, int nearly,
+                        const ft8_decode_t *early, const ft8_sub_t *early_subs,
+                        const float *resid /*[FT8_NMAX]*/);
+
+/*
+ * WSJT-X's FT8 47 step (ft8_decode.f90:124-149): from the first 47*3456 samples of `iwave` (the
+ * rest taken as zero), subtract each early decode with dt < 0.396 s (DT-refined at depth 3), set
+ * its `done`, and write the residual to `resid`. `cb` (may be NULL) is asked with NULL after each
+ * early decode; nonzero stops there (the 14.3 s bail-out). Returns the decodes reached, or -1 when
+ * `nearly` is not 1..200.
+ */
+int ft8_subtract_early(const int16_t *iwave /*[FT8_NMAX]*/, int ndepth, int nearly,
+                       ft8_sub_t *early_subs, float *resid /*[FT8_NMAX]*/,
+                       tempo_decode_cb cb, void *user);
+
+/*
  * Clear the a7 cross-cycle decode table (prior-slot call pairs + slot tracker).
  * Call on band change / QSO change so stale prior-cycle pairs are not replayed
  * as AP hypotheses against the new band's audio. Mirrors ft1_harq_reset.

@@ -360,6 +360,57 @@ fn decode_frame_impl(
     ap_cq_only: bool,
     progress: Option<&mut dyn FnMut(Progress<'_>) -> bool>,
 ) -> Vec<Decode> {
+    decode_records(
+        iwave,
+        nfa,
+        nfb,
+        ndepth,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        nftx,
+        nutc,
+        a7_final,
+        partial,
+        ap,
+        ap_cq_only,
+        progress,
+        None,
+        false,
+    )
+    .0
+    .iter()
+    .map(from_record)
+    .collect()
+}
+
+/// The one call into the modem's decode (`ft8_decode_frame_dp`): the records it wrote, and, when
+/// `want_subs`, what the full pass needs to subtract each one ([`Carry`]). `carried` is the early
+/// pass's decodes and the 47 step's residual, for a full pass that starts from it.
+#[allow(clippy::too_many_arguments)]
+fn decode_records(
+    iwave: &[i16],
+    nfa: i32,
+    nfb: i32,
+    ndepth: i32,
+    mycall: &str,
+    hiscall: &str,
+    nqso_progress: i32,
+    nfqso: i32,
+    nftx: i32,
+    nutc: i32,
+    a7_final: bool,
+    partial: bool,
+    ap: bool,
+    ap_cq_only: bool,
+    progress: Option<&mut dyn FnMut(Progress<'_>) -> bool>,
+    carried: Option<(&Early, &Residual)>,
+    want_subs: bool,
+) -> (
+    Vec<tempo_fast_sys::Ft8DecodeT>,
+    Vec<tempo_fast_sys::Ft8SubT>,
+) {
     assert!(
         iwave.len() >= NMAX,
         "decode_frame needs at least {NMAX} samples, got {}",
@@ -368,68 +419,341 @@ fn decode_frame_impl(
     let myc = std::ffi::CString::new(mycall).unwrap_or_default();
     let hisc = std::ffi::CString::new(hiscall).unwrap_or_default();
     let mut out = vec![tempo_fast_sys::Ft8DecodeT::default(); MAX_DECODES];
+    let mut subs = if want_subs {
+        vec![tempo_fast_sys::Ft8SubT::default(); MAX_DECODES]
+    } else {
+        Vec::new()
+    };
     // WSJT-X's m_earlyDecode / m_hsymStop for FT8 (mainwindow.h:533,
     // mainwindow.cpp:1678). The wrapper treats anything but 41 as 50.
     let nzhsym = if partial { 41 } else { 50 };
+    let (nearly, early, early_subs, resid) = match carried {
+        Some((e, r)) => (
+            e.records.len() as i32,
+            e.records.as_ptr(),
+            e.subs.as_ptr(),
+            r.dd1.as_ptr(),
+        ),
+        None => (0, std::ptr::null(), std::ptr::null(), std::ptr::null()),
+    };
 
     let mut stream = progress.map(|progress| Stream {
         progress,
         panic: None,
     });
+    let (cb, user): (
+        Option<tempo_fast_sys::DecodeCallback>,
+        *mut std::os::raw::c_void,
+    ) = match stream.as_mut() {
+        Some(stream) => (Some(on_progress), (stream as *mut Stream<'_>).cast()),
+        None => (None, std::ptr::null_mut()),
+    };
     let n = {
         let _guard = modem_lock();
-        match stream.as_mut() {
-            None => unsafe {
-                tempo_fast_sys::ft8_decode_frame(
-                    iwave.as_ptr(),
-                    nfa,
-                    nfb,
-                    ndepth,
-                    myc.as_ptr(),
-                    hisc.as_ptr(),
-                    nqso_progress,
-                    nfqso,
-                    nftx,
-                    nzhsym,
-                    nutc,
-                    a7_final as i32,
-                    ap as i32,
-                    ap_cq_only as i32,
-                    out.as_mut_ptr(),
-                    out.len() as i32,
-                )
-            },
-            Some(stream) => unsafe {
-                tempo_fast_sys::ft8_decode_frame_cb(
-                    iwave.as_ptr(),
-                    nfa,
-                    nfb,
-                    ndepth,
-                    myc.as_ptr(),
-                    hisc.as_ptr(),
-                    nqso_progress,
-                    nfqso,
-                    nftx,
-                    nzhsym,
-                    nutc,
-                    a7_final as i32,
-                    ap as i32,
-                    ap_cq_only as i32,
-                    out.as_mut_ptr(),
-                    out.len() as i32,
-                    Some(on_progress),
-                    (stream as *mut Stream<'_>).cast(),
-                )
-            },
+        // SAFETY: every pointer is to a live buffer of the length the modem reads: `iwave` holds
+        // NMAX samples (asserted), `out` and `subs` MAX_DECODES records (or `subs` is null), the
+        // carried early records and subs `nearly` each and the residual NMAX samples (`Carry`
+        // builds them so), and `user` is the `Stream` `on_progress` reads, alive until the modem
+        // returns.
+        unsafe {
+            tempo_fast_sys::ft8_decode_frame_dp(
+                iwave.as_ptr(),
+                nfa,
+                nfb,
+                ndepth,
+                myc.as_ptr(),
+                hisc.as_ptr(),
+                nqso_progress,
+                nfqso,
+                nftx,
+                nzhsym,
+                nutc,
+                a7_final as i32,
+                ap as i32,
+                ap_cq_only as i32,
+                out.as_mut_ptr(),
+                out.len() as i32,
+                cb,
+                user,
+                if want_subs {
+                    subs.as_mut_ptr()
+                } else {
+                    std::ptr::null_mut()
+                },
+                nearly,
+                early,
+                early_subs,
+                resid,
+            )
         }
     };
     if let Some(panic) = stream.and_then(|s| s.panic) {
         std::panic::resume_unwind(panic);
     }
-    if n <= 0 {
-        return Vec::new();
+    let n = n.max(0) as usize;
+    out.truncate(n);
+    subs.truncate(n.min(subs.len()));
+    (out, subs)
+}
+
+/// The early pass's audio a carry is checked against: WSJT-X's early moment, 41 x 3456 samples
+/// (11.808 s, `m_earlyDecode`).
+const EARLY_SAMPLES: usize = 41 * 3456;
+
+/// The samples WSJT-X's 47 step reads and its full pass takes from the residual: 47 x 3456
+/// (13.536 s, `m_earlyDecode2`; `lib/ft8_decode.f90:153`).
+pub const RESIDUAL_SAMPLES: usize = 47 * 3456;
+
+/// What WSJT-X's FT8 decoder keeps between the passes of one period, so that its full pass starts
+/// from audio with the early pass's decodes already subtracted, and neither searches for nor
+/// reports them again (`lib/ft8_decode.f90`: the SAVEd `dd1`, `ndec_early`, `itone_save`,
+/// `f1_save`, `xdt_save`, `lsubtracted`, `allmessages` at :72-73; the 47 step at :124-150; the full
+/// pass at :121 and :152-162). A weak decode under a strong one then surfaces in the full pass's
+/// first subtraction pass, and new decodes are handed on first.
+///
+/// WSJT-X keeps this in process-wide SAVE storage. Here the caller owns one per decoder (one per
+/// radio chain), and nothing of it is kept in the modem. Its life, period by period:
+/// - an early pass ([`decode_frame_carry`] with `partial`) replaces it with its decodes, what is
+///   needed to subtract each, and the audio they were decoded from (none at depth 1, where WSJT-X
+///   runs no early pass, `:102-105`, or when it decoded nothing);
+/// - [`subtract_early`] turns that into the residual, only over audio that starts with the very
+///   samples the early pass decoded;
+/// - a full pass (`a7_final`, not `partial`) takes it, whatever it holds, and starts from the
+///   residual only when its own first [`RESIDUAL_SAMPLES`] samples are the very samples the
+///   residual was made from. Any other full pass decodes the raw audio, exactly as before: a carry
+///   from another period, band or mode, or a step that never ran, can never be spliced onto audio
+///   it was not made from;
+/// - every other pass (the F6 re-decode) leaves it alone.
+#[derive(Default)]
+pub struct Carry {
+    state: CarryState,
+}
+
+#[derive(Default)]
+enum CarryState {
+    #[default]
+    Empty,
+    Early(Early),
+    Residual(Early, Residual),
+}
+
+/// An early pass's decodes, as it returned them.
+struct Early {
+    records: Vec<tempo_fast_sys::Ft8DecodeT>,
+    subs: Vec<tempo_fast_sys::Ft8SubT>,
+    /// The first [`EARLY_SAMPLES`] samples it decoded.
+    audio: Vec<i16>,
+}
+
+/// The 47 step's residual.
+struct Residual {
+    /// [`NMAX`] samples; the full pass takes the first [`RESIDUAL_SAMPLES`].
+    dd1: Vec<f32>,
+    /// The first [`RESIDUAL_SAMPLES`] samples it was made from.
+    audio: Vec<i16>,
+}
+
+impl Carry {
+    /// Forget everything carried.
+    pub fn clear(&mut self) {
+        self.state = CarryState::Empty;
     }
-    out.iter().take(n as usize).map(from_record).collect()
+
+    /// How many early decodes are carried.
+    pub fn early_len(&self) -> usize {
+        match &self.state {
+            CarryState::Empty => 0,
+            CarryState::Early(e) | CarryState::Residual(e, _) => e.records.len(),
+        }
+    }
+
+    /// Whether the 47 step's residual is ready for a full pass.
+    pub fn has_residual(&self) -> bool {
+        matches!(self.state, CarryState::Residual(..))
+    }
+
+    /// How many of the carried early decodes the residual already has subtracted; the full pass
+    /// subtracts the rest.
+    pub fn early_subtracted(&self) -> usize {
+        match &self.state {
+            CarryState::Residual(e, _) => e.subs.iter().filter(|s| s.done != 0).count(),
+            _ => 0,
+        }
+    }
+}
+
+/// [`decode_frame_a7_streaming`] for a caller that keeps WSJT-X's carry between the passes of a
+/// period ([`Carry`]): an early pass (`partial`) leaves its decodes in `carry`; a full pass
+/// (`a7_final`) takes `carry` and, when [`subtract_early`] made a residual from this very audio,
+/// starts from it: the early decodes are subtracted and come first in the returned list, as the
+/// early pass returned them, and only the decodes new to this pass reach `progress`, in the pass's
+/// own order (the RX frequency's first). Without such a residual the full pass is exactly
+/// [`decode_frame_a7_streaming`]'s. Any other pass is too, and leaves `carry` alone.
+///
+/// # Panics
+/// Panics if `iwave.len() < NMAX`, or if `progress` panicked.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_frame_carry(
+    iwave: &[i16],
+    nfa: i32,
+    nfb: i32,
+    ndepth: i32,
+    mycall: &str,
+    hiscall: &str,
+    nqso_progress: i32,
+    nfqso: i32,
+    nftx: i32,
+    nutc: i32,
+    a7_final: bool,
+    partial: bool,
+    ap: bool,
+    ap_cq_only: bool,
+    progress: &mut dyn FnMut(Progress<'_>) -> bool,
+    carry: &mut Carry,
+) -> Vec<Decode> {
+    if partial {
+        carry.clear();
+        let (records, subs) = decode_records(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+            nftx,
+            nutc,
+            a7_final,
+            partial,
+            ap,
+            ap_cq_only,
+            Some(progress),
+            None,
+            true,
+        );
+        let decodes = records.iter().map(from_record).collect();
+        if effective_depth(ndepth) >= 2 && !records.is_empty() && subs.len() == records.len() {
+            carry.state = CarryState::Early(Early {
+                records,
+                subs,
+                audio: iwave[..EARLY_SAMPLES].to_vec(),
+            });
+        }
+        return decodes;
+    }
+    let taken = if a7_final {
+        std::mem::take(&mut carry.state)
+    } else {
+        CarryState::Empty
+    };
+    let carried = match &taken {
+        CarryState::Residual(e, r)
+            if iwave.len() >= NMAX && iwave[..RESIDUAL_SAMPLES] == r.audio[..] =>
+        {
+            Some((e, r))
+        }
+        _ => None,
+    };
+    decode_records(
+        iwave,
+        nfa,
+        nfb,
+        ndepth,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        nftx,
+        nutc,
+        a7_final,
+        partial,
+        ap,
+        ap_cq_only,
+        Some(progress),
+        carried,
+        false,
+    )
+    .0
+    .iter()
+    .map(from_record)
+    .collect()
+}
+
+/// WSJT-X's 47 step (`lib/ft8_decode.f90:124-149`, run at 47 x 3456 samples, 13.536 s): subtract
+/// the carried early decodes from the period's first [`RESIDUAL_SAMPLES`] samples of `iwave`, so
+/// the full pass can start from the residual ([`Carry`]). Only those that end inside them (dt
+/// under 0.396 s) are subtracted here, DT-refined at depth 3; the full pass subtracts the rest.
+/// `give_up` is asked after each early decode and `true` stops there, keeping what was done:
+/// WSJT-X bails out at 14.3 s into the period (`:140-145`).
+///
+/// Does nothing, and leaves no carry, unless `carry` holds an early pass's decodes and `iwave`
+/// starts with the very samples that pass decoded. Returns how many early decodes were reached.
+///
+/// # Panics
+/// Panics if `iwave.len() < NMAX`, or if `give_up` panicked.
+pub fn subtract_early(
+    iwave: &[i16],
+    ndepth: i32,
+    carry: &mut Carry,
+    give_up: &mut dyn FnMut() -> bool,
+) -> usize {
+    assert!(
+        iwave.len() >= NMAX,
+        "subtract_early needs at least {NMAX} samples, got {}",
+        iwave.len()
+    );
+    let CarryState::Early(mut early) = std::mem::take(&mut carry.state) else {
+        return 0;
+    };
+    if iwave[..EARLY_SAMPLES] != early.audio[..] {
+        return 0;
+    }
+    let mut dd1 = vec![0f32; NMAX];
+    let mut asked = |p: Progress<'_>| matches!(p, Progress::Candidate) && give_up();
+    let mut stream = Stream {
+        progress: &mut asked,
+        panic: None,
+    };
+    let n = {
+        let _guard = modem_lock();
+        // SAFETY: `iwave` holds NMAX samples (asserted), `dd1` NMAX, `early.subs` exactly the
+        // `nearly` records passed, and `stream` is alive until the modem returns.
+        unsafe {
+            tempo_fast_sys::ft8_subtract_early(
+                iwave.as_ptr(),
+                ndepth,
+                early.subs.len() as i32,
+                early.subs.as_mut_ptr(),
+                dd1.as_mut_ptr(),
+                Some(on_progress),
+                (&mut stream as *mut Stream<'_>).cast(),
+            )
+        }
+    };
+    if let Some(panic) = stream.panic {
+        std::panic::resume_unwind(panic);
+    }
+    if n < 0 {
+        return 0;
+    }
+    carry.state = CarryState::Residual(
+        early,
+        Residual {
+            dd1,
+            audio: iwave[..RESIDUAL_SAMPLES].to_vec(),
+        },
+    );
+    n as usize
+}
+
+/// The decode depth the modem runs: anything at or below 0 is 3 (`ft8_cabi.f90`).
+fn effective_depth(ndepth: i32) -> i32 {
+    if ndepth <= 0 {
+        3
+    } else {
+        ndepth
+    }
 }
 
 /// One modem record as a [`Decode`].

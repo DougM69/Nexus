@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::net::{ToSocketAddrs, UdpSocket};
 
 use crate::decode::Decode;
-use crate::mode::{make_mode, Mode, ModeKind};
+use crate::mode::{make_mode, Mode, ModeKind, PassCarry};
 
 /// Inputs for one decode interval (slot). Native sources decode `iwave`; passive
 /// sources (UDP) ignore the audio and drain queued network decodes.
@@ -142,24 +142,38 @@ pub trait SignalSource: Send {
         let _ = sink;
         self.decode_a7(req, a7_final)
     }
+
+    /// WSJT-X's FT8 47 step for a native FT8 source ([`Mode::subtract_early`]): subtract this
+    /// period's early decodes from `req.iwave`, the period's first 13.536 s, for the full pass that
+    /// follows. Decodes nothing; `sink` is asked only whether to give up. Every other source has
+    /// no such step and does nothing.
+    fn subtract_early(&mut self, req: &DecodeRequest, sink: &mut dyn DecodeSink) -> usize {
+        let _ = (req, sink);
+        0
+    }
 }
 
 /// Native decode: run the active [`Mode`] over locally captured audio.
 pub struct NativeSource {
     mode: Box<dyn Mode>,
+    /// What the mode keeps between the passes of one period ([`PassCarry`]): FT8's early decodes
+    /// and the 47 step's residual. This decoder's own, so one radio chain's can never reach
+    /// another's; a new mode starts a new one.
+    carry: PassCarry,
 }
 
 impl NativeSource {
     /// Wrap an explicit boxed mode.
     pub fn new(mode: Box<dyn Mode>) -> Self {
-        Self { mode }
+        Self {
+            mode,
+            carry: PassCarry::default(),
+        }
     }
 
     /// Build from a [`ModeKind`].
     pub fn from_kind(kind: ModeKind) -> Self {
-        Self {
-            mode: make_mode(kind),
-        }
+        Self::new(make_mode(kind))
     }
 
     /// The active mode.
@@ -167,9 +181,16 @@ impl NativeSource {
         self.mode.as_ref()
     }
 
-    /// Switch modes at runtime (e.g. the user picks FT4 instead of FT8).
+    /// Switch modes at runtime (e.g. the user picks FT4 instead of FT8). Nothing the old mode
+    /// carried between passes survives the switch.
     pub fn set_mode(&mut self, mode: Box<dyn Mode>) {
         self.mode = mode;
+        self.carry = PassCarry::default();
+    }
+
+    /// What this decoder carries between the passes of the period ([`PassCarry`]).
+    pub fn carry(&self) -> &PassCarry {
+        &self.carry
     }
 }
 
@@ -252,7 +273,9 @@ impl SignalSource for NativeSource {
             }
         }
         let kind = self.mode.kind();
-        let mut decs = self.mode.decode_frame_streaming(
+        // With this decoder's carry: FT8's full pass starts from the early pass's residual, as
+        // WSJT-X's does ([`Mode::decode_frame_carry`]).
+        let mut decs = self.mode.decode_frame_carry(
             req.iwave,
             req.nfa,
             req.nfb,
@@ -267,12 +290,18 @@ impl SignalSource for NativeSource {
             req.partial,
             req.ap,
             req.ap_cq_only,
+            &mut self.carry,
             &mut Tagged { kind, sink },
         );
         for d in &mut decs {
             d.mode = Some(kind);
         }
         decs
+    }
+
+    fn subtract_early(&mut self, req: &DecodeRequest, sink: &mut dyn DecodeSink) -> usize {
+        self.mode
+            .subtract_early(req.iwave, req.ndepth, &mut self.carry, sink)
     }
 }
 

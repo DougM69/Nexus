@@ -616,6 +616,88 @@ pub trait Mode: Send + Sync {
             ap_cq_only,
         )
     }
+
+    /// [`decode_frame_streaming`](Mode::decode_frame_streaming) for a decoder that keeps state
+    /// between the passes of one period, as WSJT-X's FT8 decoder does: `carry` is the decoder's
+    /// own ([`PassCarry`]; [`NativeSource`](crate::NativeSource) keeps one). FT8's early pass
+    /// leaves its decodes there and its full pass starts from the audio with them subtracted
+    /// ([`Mode::subtract_early`]). Every other mode keeps nothing, and this default is
+    /// [`decode_frame_streaming`](Mode::decode_frame_streaming).
+    #[allow(clippy::too_many_arguments)] // mirrors the modem decode ABI
+    fn decode_frame_carry(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        nfqso: i32,
+        nftx: i32,
+        frame_time_ms: i64,
+        a7_final: bool,
+        partial: bool,
+        ap: bool,
+        ap_cq_only: bool,
+        carry: &mut PassCarry,
+        sink: &mut dyn DecodeSink,
+    ) -> Vec<Decode> {
+        let _ = carry;
+        self.decode_frame_streaming(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+            nftx,
+            frame_time_ms,
+            a7_final,
+            partial,
+            ap,
+            ap_cq_only,
+            sink,
+        )
+    }
+
+    /// WSJT-X's FT8 47 step, between the early and the full pass: subtract the early pass's
+    /// decodes carried in `carry` from the period's first 13.536 s, `iwave`
+    /// (`lib/ft8_decode.f90:124-149`), asking `sink`'s give-up after each. Decodes nothing.
+    /// Returns how many early decodes it reached. Every other mode has no such step: this
+    /// default does nothing.
+    fn subtract_early(
+        &self,
+        iwave: &[i16],
+        ndepth: i32,
+        carry: &mut PassCarry,
+        sink: &mut dyn DecodeSink,
+    ) -> usize {
+        let _ = (iwave, ndepth, carry, sink);
+        0
+    }
+}
+
+/// What a decoder keeps between the passes of one period ([`Mode::decode_frame_carry`]). Only
+/// FT8's has anything in it ([`ft8::Carry`]); the owner keeps one per decoder and starts a new one
+/// with each mode.
+#[derive(Default)]
+pub struct PassCarry {
+    ft8: ft8::Carry,
+}
+
+impl PassCarry {
+    /// How many early FT8 decodes are carried.
+    pub fn ft8_early_len(&self) -> usize {
+        self.ft8.early_len()
+    }
+
+    /// Whether an FT8 residual is ready for the full pass.
+    pub fn ft8_has_residual(&self) -> bool {
+        self.ft8.has_residual()
+    }
 }
 
 /// Build a boxed [`Mode`] from its [`ModeKind`].
@@ -836,6 +918,64 @@ impl Mode for Ft8Mode {
         .into_iter()
         .map(Into::into)
         .collect()
+    }
+    fn decode_frame_carry(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        nfqso: i32,
+        nftx: i32,
+        frame_time_ms: i64,
+        a7_final: bool,
+        partial: bool,
+        ap: bool,
+        ap_cq_only: bool,
+        carry: &mut PassCarry,
+        sink: &mut dyn DecodeSink,
+    ) -> Vec<Decode> {
+        // The same slot key as `decode_frame_a7`.
+        let nutc = (frame_time_ms / 1000).rem_euclid(86_400) as i32;
+        ft8::decode_frame_carry(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+            nftx,
+            nutc,
+            a7_final,
+            partial,
+            ap,
+            ap_cq_only,
+            &mut |progress| match progress {
+                ft8::Progress::Found(d) => {
+                    sink.found(&d.clone().into());
+                    false
+                }
+                ft8::Progress::Candidate => sink.give_up(),
+            },
+            &mut carry.ft8,
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
+    }
+    fn subtract_early(
+        &self,
+        iwave: &[i16],
+        ndepth: i32,
+        carry: &mut PassCarry,
+        sink: &mut dyn DecodeSink,
+    ) -> usize {
+        ft8::subtract_early(iwave, ndepth, &mut carry.ft8, &mut || sink.give_up())
     }
 }
 
