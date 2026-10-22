@@ -726,7 +726,7 @@ export const EN = {
 
   'settings.station.grid.label': 'Grid',
   'settings.station.grid.hint':
-    'Maidenhead locator. All 6 characters — 4 measures every distance and bearing from the middle of a ~100-mile square.',
+    'Maidenhead locator. All 6 characters — 4 measures every distance and bearing from the middle of a ~100-mile square. Logged on each contact as your grid; your LoTW uploads keep using your TQSL Station Location.',
 
   'settings.station.opName.label': 'Operator name',
   // Prose, not a token: a locale should offer a first name its operators recognise.
@@ -739,12 +739,12 @@ export const EN = {
   'settings.station.fdOperator.placeholder': 'leave blank if that is you',
   // ⚠️ `OPERATOR` is the ADIF field name — a wire identifier. Keep it verbatim.
   'settings.station.fdOperator.hint':
-    'Only for multi-operator: the callsign of whoever is operating, when that is not the station call. Stamped on every contact you log (ADIF OPERATOR) so a shared activation can be split per operator — POTA and Field Day both want each operator to submit their own. Blank means single-op and nothing is stamped. Change it when you swap seats.',
+    'Only for multi-operator: the callsign of whoever is operating, when that is not the station call. Stamped on every contact you log (ADIF OPERATOR) so a shared activation can be split per operator — POTA and Field Day both want each operator to submit their own. Blank means single-op: your station call is logged as the operator. Change it when you swap seats.',
 
   'settings.station.opState.label': 'State',
   // ⚠️ `{MYSTATE}` — CW macro token, as above.
   'settings.station.opState.hint':
-    'Your US state or province, for everyday contacts — the CW {MYSTATE} macro and the QTH an RTTY ragchew sends. A contest uses its own box, Contesting ▸ Your station data ▸ State or province, so a portable or mobile entry can differ from this one.',
+    'Your US state or province, for everyday contacts — the CW {MYSTATE} macro, the QTH an RTTY ragchew sends, and your state on each contact you log (not a park or summit activation, which logs the park\'s). A contest uses its own box, Contesting ▸ Your station data ▸ State or province, so a portable or mobile entry can differ from this one.',
 
   'settings.station.licenseClass.label': 'License Class',
   // The <option> VALUES ('technician' … 'open') are persisted tokens and stay in the code.
@@ -8563,6 +8563,10 @@ export const EN = {
   'settings.integrations.openingWatch.label': 'Near-region opening watch',
   'settings.integrations.openingWatch.hint':
     'Watch VHF/10 m activity near your QTH (not just your own contacts) so openings flag "open around you" before you\'ve worked anyone. Takes effect on restart.',
+  'settings.integrations.logSpaceWeather.label': 'Log space weather on each contact',
+  // ⚠️ `K_INDEX`, `A_INDEX`, `SFI` are ADIF field names — wire identifiers. Keep them verbatim.
+  'settings.integrations.logSpaceWeather.hint':
+    'Adds the planetary K index, A index and solar flux to every contact you log (ADIF K_INDEX, A_INDEX, SFI), from the latest reading Nexus fetched. Nothing is added when that reading is more than 3 hours old.',
   // ⚠️ `ITU-R P.533` is the recommendation's number — the same token the propagation panes
   // keep as a constant (ENGINE_P533). The <option> values ('heuristic', 'p533') are persisted
   // and stay in the panel.

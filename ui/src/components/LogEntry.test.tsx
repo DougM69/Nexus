@@ -306,6 +306,36 @@ describe('LogEntry standard variant — other-radio override (band/freq/mode/UTC
     expect(typed.timeOffUnix).toBeUndefined()
   })
 
+  it('a live contact starts when its call was entered and ends when it is logged', () => {
+    const now = vi.spyOn(Date, 'now')
+    try {
+      const t0 = 1_790_000_000
+      renderStd()
+      // Typed a key at a time: the first keystroke is the start.
+      now.mockReturnValue(t0 * 1000)
+      fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'w1' } })
+      now.mockReturnValue((t0 + 5) * 1000)
+      fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'w1aw' } })
+      now.mockReturnValue((t0 + 90) * 1000)
+      fireEvent.click(logBtn())
+      const first = mockedLogQso.mock.calls[0][0]
+      expect(first.whenUnix).toBe(t0)
+      expect(first.timeOffUnix).toBe(t0 + 90)
+
+      // Another call over the one in the box is another contact, with its own start.
+      fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'k9xyz' } })
+      now.mockReturnValue((t0 + 200) * 1000)
+      fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'n0ab' } })
+      now.mockReturnValue((t0 + 260) * 1000)
+      fireEvent.click(logBtn())
+      const second = mockedLogQso.mock.calls[1][0]
+      expect(second.whenUnix).toBe(t0 + 200)
+      expect(second.timeOffUnix).toBe(t0 + 260)
+    } finally {
+      now.mockRestore()
+    }
+  })
+
   it('BLOCKS logging a mismatched record when the override is open but the freq is invalid', () => {
     // Review finding: with the override open and the freq cleared, band+freq once fell back to
     // the live rig while mode+time stayed the override — logging e.g. 20m/14.2 tagged FM at a

@@ -500,6 +500,10 @@ fn record_for(
             .collect(),
         qid: id.qid.clone(),
     };
+    let station_callsign = [&q.on_air_call, &log.mycall]
+        .into_iter()
+        .find(|c| !c.trim().is_empty())
+        .cloned();
     let mut rec = QsoRecord {
         id: None,
         call: q.call.clone(),
@@ -557,12 +561,21 @@ fn record_for(
         qth: None,
         comment: None,
         notes: None,
-        tx_power: None,
+        // The power stamped on the row at log time, as the general log writes it; a row from
+        // before it was recorded carries none.
+        tx_power: q
+            .tx_power
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|w| w.is_finite() && *w > 0.0),
         when_unix: q.when_unix,
         // A legacy row with no stamp keeps the placeholder rather than a fabricated
         // midnight — the same rule the ADIF importer applies.
         time_known: q.when_unix > 0,
-        time_off_unix: None,
+        // A contest row records one moment, the one it was logged at, which is when the
+        // contact ended: it is the row's end time as well as its start.
+        time_off_unix: (q.when_unix > 0).then_some(q.when_unix),
         confirmed: false,
         award_confirmed: false,
         qsl_rcvd: QslRcvd::default(),
@@ -595,16 +608,22 @@ fn record_for(
         // time and both dropped here until now: `OPERATOR` was hardcoded `None` and
         // `STATION_CALLSIGN` was the session's call, which after a call change and a restart is
         // not the call the contact was made on. An empty stamp is "nobody named" / "not
-        // recorded" (a row from before `on_air_call`), and then the merge writes what it
-        // always did.
-        operator: Some(q.operator.clone()).filter(|o| !o.trim().is_empty()),
+        // recorded" (a row from before `on_air_call`), and then the station call goes on: with
+        // nobody named the operator is the station, as the general log's own funnel writes it.
+        operator: Some(q.operator.clone())
+            .filter(|o| !o.trim().is_empty())
+            .or_else(|| station_callsign.clone()),
         my_grid: None,
-        my_rig: None,
-        station_callsign: [&q.on_air_call, &log.mycall]
-            .into_iter()
-            .find(|c| !c.trim().is_empty())
-            .cloned(),
-        extra: Vec::new(),
+        // The radio stamped on the row at log time — the general log's own answer then.
+        my_rig: Some(q.rig.clone()).filter(|r| !r.trim().is_empty()),
+        station_callsign,
+        // The worked station's continent, from the country file's reading the row made at log
+        // time (ADIF `CONT`), as an ordinary contact carries it.
+        extra: q
+            .continent
+            .iter()
+            .map(|c| ("CONT".to_string(), c.clone()))
+            .collect(),
         contest: Some(Box::new(contest)),
     };
     // Into the lifetime log in its one form: a phone row worked on a sideband is SSB, with the
@@ -1079,10 +1098,53 @@ mod tests {
         assert_eq!(named.station_callsign.as_deref(), Some("K9OLD"));
         let plain = by("W1AW");
         assert_eq!(
-            plain.operator, None,
-            "nobody named is no OPERATOR, never \"\""
+            plain.operator.as_deref(),
+            Some("W9XYZ"),
+            "nobody named: the operator is the station, never \"\""
         );
         assert_eq!(plain.station_callsign.as_deref(), Some("W9XYZ"));
+    }
+
+    /// **A merged contact carries the radio and the power it was made with, and an end
+    /// time** — the row's own `MY_RIG` and `TX_PWR`, stamped at log time, and `TIME_OFF` = the
+    /// moment it was logged, the one moment a contest row records — plus the continent its call
+    /// resolved to. Read back through the file, which is what reaches every upload. A row from
+    /// before the stamps carries no rig and no power.
+    #[test]
+    fn a_merged_row_carries_its_radio_power_and_end_time() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        log.rig = "Icom IC-7300".into();
+        log.tx_power = "100".into();
+        assert!(log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_583_500));
+        log.rig = String::new();
+        log.tx_power = String::new();
+        assert!(log.log_mode_at("W1AW", "1D", "CT", "PH", 0, 1_782_583_800));
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 2);
+        let path = scratch_adi();
+        lb.save(&path).expect("write log.adi");
+        let reborn = Logbook::load(&path);
+        let _ = std::fs::remove_file(&path);
+        let by = |call: &str| {
+            reborn
+                .records()
+                .iter()
+                .find(|r| r.call == call)
+                .cloned()
+                .expect("merged")
+        };
+        let kit = by("K1ABC");
+        assert_eq!(kit.my_rig.as_deref(), Some("Icom IC-7300"));
+        assert_eq!(kit.tx_power, Some(100.0));
+        assert_eq!(kit.time_off_unix, Some(1_782_583_500));
+        let none = by("W1AW");
+        assert_eq!(none.my_rig, None);
+        assert_eq!(none.tx_power, None);
+        assert_eq!(none.time_off_unix, Some(1_782_583_800));
     }
 
     #[test]

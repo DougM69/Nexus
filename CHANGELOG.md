@@ -7,12 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Log space weather on each contact (off by default).** Settings ▸ Logging & Connectors ▸
+  Integrations & Feeds ▸ Propagation has a new switch. On, every contact you log carries the
+  planetary K index, A index and solar flux (ADIF K_INDEX, A_INDEX, SFI) from the latest reading
+  Nexus fetched, and nothing when that reading is more than 3 hours old.
+- **Each contact logs the worked station's continent and the distance to it** (ADIF CONT, and
+  DISTANCE in km from your grid to theirs when both are known).
+
 ### Fixed
 
-- **Phone, CW, RTTY, PSK and Satellites contacts now log an end time.** A contact logged from the
-  entry strip carries TIME_OFF — the moment you pressed Log — as an FT8 contact always has. The
-  start time is unchanged. A contact typed in under "Logged on another radio" with its own UTC
-  time still carries no end time, because Nexus cannot know it.
+- **Phone, CW, RTTY, PSK and Satellites contacts now log when they started and ended.** A contact
+  logged from the entry strip starts when its call was entered, typed or clicked in, and ends when
+  you press Log, as a JS8 contact already did; until now both were the moment you pressed Log. A
+  contact typed in under "Logged on another radio" with its own UTC time keeps that time and
+  carries no end time, because Nexus cannot know it.
+- **Every contact names its operator.** With Operator at the key left blank, your station call is
+  logged as the operator (ADIF OPERATOR), as the box's hint always said. The N3FJP push now sends
+  the contact's own operator instead of always your station call.
+- **Your grid and state are logged on each contact.** New contacts carry your grid from Settings ▸
+  Station (ADIF MY_GRIDSQUARE) and, on everyday contacts, your State (MY_STATE); a park or summit
+  activation still logs the park's state, never your home one. QRZ, Club Log, eQSL, HRDLog,
+  Cloudlog/Wavelog and the ADIF export receive them. Your LoTW uploads leave out a grid or state
+  Nexus filled in itself, so TQSL keeps signing from your Station Location exactly as before; a
+  grid that came with the contact (from WSJT-X, typed in the Logbook, or imported) goes to LoTW as
+  it always did.
+- **Contest and Field Day contacts keep their radio and power, and gain an end time, in the
+  Logbook.** Each contest contact records the radio and station power in use when it was logged,
+  keeps them across a restart, and carries them, with its time as its end time, when the contest
+  is merged into the Logbook.
+- **A TCI radio's contacts name the radio.** The rig logged for a contact made on a TCI radio is
+  the radio the SDR program reports, such as SunSDR2DX, instead of "TCI".
 - **Your station power is logged on every contact.** The watts in Settings ▸ Station power go on
   each new contact as its power (ADIF TX_PWR), and out with it to QRZ, Club Log, eQSL, HRDLog,
   Cloudlog/Wavelog and the WSJT-X UDP messages your logger reads. Leave it blank and contacts

@@ -459,7 +459,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'pskreporter', 'cluster', 'rbn', 'reverse beacon', 'spot source', 'cluster node',
       'dxspider', 'cc cluster', 'all.txt', 'directed.txt', 'wav',
       'recording', 'propagation', 'diagnostic log', 'nexus-diag.log', 'log file', 'debug log',
-      'troubleshooting', 'bug report', 'crash'],
+      'troubleshooting', 'bug report', 'crash',
+      // Logging the space weather on each contact (K_INDEX / A_INDEX / SFI).
+      'space weather', 'k index', 'a index', 'sfi', 'solar flux'],
   },
   {
     id: 'antenna-gain',

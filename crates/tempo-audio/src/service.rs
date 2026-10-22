@@ -3992,6 +3992,9 @@ struct RadioLoop {
     /// ([`RadioLoop::reconcile_tci_audio`]): the session it comes from, the receive tap's ring it
     /// feeds, and the receive floor's clocks.
     tci_rx: Option<TciRx>,
+    /// The radio name the active radio's TCI server reported, as last handed to the engine
+    /// ([`RadioLoop::note_tci_device`]), so the engine is told only when it changes.
+    tci_device: Option<String>,
     /// The session whose receive audio starved (the receive floor fired): not taken again until
     /// the TCI client is another session (a reconnect, a saved change, a switch).
     tci_rx_failed: Option<std::sync::Weak<crate::tci::audio::Receive>>,
@@ -4560,6 +4563,7 @@ impl RadioLoop {
             flex_client_audio: false,
             flex_client_audio_failed: false,
             tci_rx: None,
+            tci_device: None,
             tci_rx_failed: None,
             flex_mic_off_pushed: None,
             flex_radio_has_mic_pushed: None,
@@ -5681,6 +5685,25 @@ impl RadioLoop {
             let mut eng = engine_lock(engine);
             eng.halt_tx();
             eng.set_cat_status(self.cat_ok, format!("TCI: {why}."));
+        }
+    }
+
+    /// The radio the active radio's TCI server named, handed to the engine when it changes: a
+    /// contact made on a TCI radio logs it as its rig (`MY_RIG`), where the radio's model only
+    /// says "TCI". `None` once no TCI session serves the active radio. Not on a switch the
+    /// handoff has not seen: `rigctld_proc` is then the radio being left.
+    fn note_tci_device(&mut self, engine: &Arc<Mutex<Engine>>) {
+        if self.switch_unhanded {
+            return;
+        }
+        let device = self
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::tci)
+            .and_then(crate::tci::TciDaemon::device);
+        if device != self.tci_device {
+            self.tci_device = device.clone();
+            engine_lock(engine).set_tci_device(device);
         }
     }
 
@@ -8166,6 +8189,7 @@ impl RadioLoop {
             );
             self.reconcile_flex_client_audio(engine);
             self.take_tci_halts(engine);
+            self.note_tci_device(engine);
             self.reconcile_tci_audio(engine, &*backend);
             // Nexus's spots on the TCI radio's own panadapter, and the clicks on them: renewed for
             // the active radio's client every tick, so a client a switch left behind lapses by

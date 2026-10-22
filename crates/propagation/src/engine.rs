@@ -72,6 +72,12 @@ pub struct SpaceWxView {
     /// the live command layer (the engine has no network); `None` when unavailable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solar_wind: Option<crate::solar_wind::SolarWind>,
+    /// Whether these numbers are a reading SWPC answered, rather than the neutral stand-ins
+    /// a snapshot carries when space weather could not be fetched ([`crate::live`]). Filled by the
+    /// live layer; read by the shell, which hands only a real reading on to the log. Never sent to
+    /// the UI.
+    #[serde(skip)]
+    pub fetched: bool,
 }
 
 /// The whole propagation nowcast the UI section renders.
@@ -175,6 +181,7 @@ impl PropagationEngine {
                 flare: wx.flare_in_progress(),
                 xray_long: wx.xray_long,
                 solar_wind: None, // command layer fills this from the live feed
+                fetched: false,   // the live layer says when SWPC answered
             },
             // Default provenance; live/cached callers override `source`.
             source: "live".to_string(),

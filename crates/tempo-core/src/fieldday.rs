@@ -332,6 +332,17 @@ pub struct LoggedQso {
     /// line writes [`station_call`](Self::station_call), else [`FieldDayLog::mycall`], as it
     /// always has.
     pub on_air_call: String,
+    /// ⭐ **The radio this contact was made on** (ADIF `MY_RIG`) — [`FieldDayLog::rig`] at the
+    /// moment it was logged, the name the general log's own funnel stamps (`Engine::log_rig_now`
+    /// in tempo-app), so a radio changed mid-event names the right one on each contact. `""`
+    /// when none was known: no rig set, or a row logged before this was recorded. Journaled
+    /// (`MY_RIG`) and carried into the Logbook by the merge; no contest file writes it.
+    pub rig: String,
+    /// **The power this contact was made at** (ADIF `TX_PWR`), as the general log writes it —
+    /// watts, `"100"`, `"0.5"` — from [`FieldDayLog::tx_power`] at log time; `""` when none was
+    /// set. Text, not a number, because this row is compared for dupes and derives `Eq`.
+    /// Journaled and merged as [`rig`](Self::rig) is.
+    pub tx_power: String,
 }
 
 impl LoggedQso {
@@ -961,6 +972,13 @@ pub struct FieldDayLog {
     /// exactly as [`operator`](Self::operator) is ([`LoggedQso::on_air_call`]). `""` in a log
     /// nothing stamps.
     pub on_air_call: String,
+    /// The radio RIGHT NOW (ADIF `MY_RIG`, `""` = none known), stamped by the engine at contest
+    /// entry and whenever the station changes, and copied onto each row as it is logged exactly as
+    /// [`operator`](Self::operator) is ([`LoggedQso::rig`]).
+    pub rig: String,
+    /// The station power RIGHT NOW (ADIF `TX_PWR` text, `""` = none set), stamped and copied as
+    /// [`rig`](Self::rig) is ([`LoggedQso::tx_power`]).
+    pub tx_power: String,
     /// The LIVE rows: what is scored, duped, exported, merged and synced.
     qsos: Vec<LoggedQso>,
     /// ⭐ **The contacts the operator took out of the live log — kept, never deleted**
@@ -1059,6 +1077,8 @@ impl FieldDayLog {
             operator: String::new(),
             station_call: String::new(),
             on_air_call: String::new(),
+            rig: String::new(),
+            tx_power: String::new(),
             qsos: Vec::new(),
             removed: Vec::new(),
             worked: HashSet::new(),
@@ -1857,6 +1877,8 @@ impl FieldDayLog {
             operator: self.operator.clone(),
             station_call: self.station_call.clone(),
             on_air_call: self.on_air_call.clone(),
+            rig: self.rig.clone(),
+            tx_power: self.tx_power.clone(),
         });
         // The contact is logged, so nothing is in flight any more: the next exchange
         // composed issues its own serial instead of re-sending this one's.
@@ -2488,6 +2510,14 @@ impl FieldDayLog {
             if journal && !q.on_air_call.is_empty() {
                 s.push_str(&adif_field("APP_NEXUS_ONAIR", &q.on_air_call));
             }
+            // The radio and the power it was made with, in the journal, under their ADIF names:
+            // the merge carries them into the Logbook, and a restart must not lose them.
+            if journal && !q.rig.is_empty() {
+                s.push_str(&adif_field("MY_RIG", &q.rig));
+            }
+            if journal && !q.tx_power.is_empty() {
+                s.push_str(&adif_field("TX_PWR", &q.tx_power));
+            }
             // A contact the operator removed: kept, with when (`restore_row` reads it back).
             if let Some(at) = removed_unix {
                 s.push_str(&adif_field("APP_NEXUS_REMOVED", &at.to_string()));
@@ -3044,6 +3074,16 @@ impl FieldDayLog {
             on_air_call: f
                 .get("APP_NEXUS_ONAIR")
                 .map(|c| c.trim().to_ascii_uppercase())
+                .unwrap_or_default(),
+            // The radio and the power, from the journal's own `MY_RIG` and `TX_PWR`: a row
+            // journaled before they were recorded carries neither.
+            rig: f
+                .get("MY_RIG")
+                .map(|r| r.trim().to_string())
+                .unwrap_or_default(),
+            tx_power: f
+                .get("TX_PWR")
+                .map(|p| p.trim().to_string())
                 .unwrap_or_default(),
         };
         match removed_unix {
@@ -8004,6 +8044,61 @@ mod tests {
         let mut old = ilqp_from_kane();
         old.merge_adif(&older, 0);
         assert_eq!(calls(&old), owned([("K9AAA", ""), ("K9BBB", "")]));
+    }
+
+    /// **Each row keeps the radio and the power it was made with**, stamped at log time
+    /// from the log's RIGHT NOW values, through the journal and a restart; no contest file carries
+    /// them; and a journal written before they were recorded still reads, its rows carrying none.
+    #[test]
+    fn the_journal_keeps_the_radio_and_power_each_contact_was_made_with() {
+        let mut log = ilqp_from_kane();
+        log.rig = "Icom IC-7300".into();
+        log.tx_power = "100".into();
+        ilqp_contact(&mut log, "K9AAA", "599", "COOK", "CW");
+        log.rig = "Elecraft KX3".into();
+        log.tx_power = "5".into();
+        ilqp_contact(&mut log, "K9BBB", "599", "WILL", "CW");
+        let journal = log.journal_adif();
+        assert!(
+            record_for(&journal, "K9AAA").contains("<MY_RIG:12>Icom IC-7300 <TX_PWR:3>100 "),
+            "{journal}"
+        );
+        assert!(
+            record_for(&journal, "K9BBB").contains("<MY_RIG:12>Elecraft KX3 <TX_PWR:1>5 "),
+            "{journal}"
+        );
+        for export in [log.adif(), log.submission_adif()] {
+            assert!(
+                !export.contains("MY_RIG") && !export.contains("TX_PWR"),
+                "{export}"
+            );
+        }
+        let kit = |log: &FieldDayLog| -> Vec<(String, String, String)> {
+            log.qsos()
+                .iter()
+                .map(|q| (q.call.clone(), q.rig.clone(), q.tx_power.clone()))
+                .collect()
+        };
+        let owned = |rows: [(&str, &str, &str); 2]| {
+            rows.map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string()))
+                .to_vec()
+        };
+        let mut back = ilqp_from_kane();
+        back.merge_adif(&journal, 0);
+        assert_eq!(
+            kit(&back),
+            owned([
+                ("K9AAA", "Icom IC-7300", "100"),
+                ("K9BBB", "Elecraft KX3", "5")
+            ])
+        );
+        let older = journal
+            .replace("<MY_RIG:12>Icom IC-7300 <TX_PWR:3>100 ", "")
+            .replace("<MY_RIG:12>Elecraft KX3 <TX_PWR:1>5 ", "");
+        assert!(!older.contains("MY_RIG"), "the control: {older}");
+        let mut old = ilqp_from_kane();
+        old.merge_adif(&older, 0);
+        assert_eq!(kit(&old), owned([("K9AAA", "", ""), ("K9BBB", "", "")]));
     }
 }
 

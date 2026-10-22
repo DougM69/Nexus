@@ -2570,6 +2570,11 @@ pub struct Settings {
     /// + QRP feats. `None` until the operator sets it (those feats stay gated).
     #[serde(default)]
     pub station_power_w: Option<f64>,
+    /// Log the space weather on each contact (ADIF `K_INDEX`, `A_INDEX`, `SFI`): the latest
+    /// planetary K and A index and 10.7 cm solar flux Nexus fetched, and only when that reading is
+    /// no more than three hours old. Off by default — a logger's propagation fields are opt-in.
+    #[serde(default)]
+    pub log_space_weather: bool,
     /// Display units for distances/temperature/speed (F4MQS): `"auto"` (from the OS
     /// locale — imperial only for US/LR/MM), `"metric"`, or `"imperial"`. Display-only —
     /// every wire/protocol value stays native (APRS transmits °F/mph, RepeaterBook fetches
@@ -5693,6 +5698,7 @@ impl Default for Settings {
             monitor_device: String::new(),
             monitor_level: 0.5,
             station_power_w: None,
+            log_space_weather: false,
             units: default_units(),
             swr_stop_enabled: false,
             swr_stop_threshold: 2.5,

@@ -441,9 +441,17 @@ pub fn lotw_owed(rows: &crate::logstore::LogRows) -> Result<bool, String> {
 /// so a batch uploaded after the operator sets their home call back still signs each contact
 /// under the call that made it. Records written before that stamp existed carry none and sign
 /// from the live setting, exactly as they always did.
+///
+/// ⭐ The own-station fields Nexus filled in itself from Settings (`MY_GRIDSQUARE`, `MY_STATE`;
+/// [`tempo_core::logbook::SELF_FILLED_FIELD`]) are left out, in both modes, so TQSL signs every
+/// such contact exactly as it did before Nexus filled them: from the named Station Location, or
+/// from the live setting stamped above. A named location's `-a compliant` check would otherwise
+/// skip, without a word, every contact whose filled grid is not the certificate's location. A
+/// field the operator typed or another program logged is not Nexus's and goes as it always has.
 pub fn lotw_batch_adif(batch: &[QsoRecord], adif_location: bool, call: &str, grid: &str) -> String {
     let mut out = tempo_core::logbook::adif_header();
     for r in batch {
+        let r = &tempo_core::logbook::without_self_filled(r);
         if adif_location {
             out.push_str(&tempo_core::logbook::adif_record_with_station(
                 r, call, grid,

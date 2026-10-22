@@ -1326,3 +1326,40 @@ fn another_contests_screen_lets_none_of_a_contests_contacts_go_while_its_running
         .collect();
     assert_eq!(qso_lines(&e), lines, "its Cabrillo file");
 }
+
+/// **Each contest contact keeps the radio and the power it was made with, through the
+/// journal and a restart, into the Logbook** — with the contact's time as its end time. The
+/// operator changed radio and power between the two contacts; each merged copy names its own.
+#[test]
+fn a_contest_contact_reaches_the_logbook_with_its_own_radio_power_and_end_time() {
+    let d = Dir::new("contest-merge-kit");
+    let mut s = field_day_settings();
+    s.rig_model_name = "Icom IC-7300".into();
+    s.station_power_w = Some(100.0);
+    let mut e = launch(&d, &s);
+    assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+    save(&mut e, |s| {
+        s.rig_model_name = "Elecraft KX3".into();
+        s.station_power_w = Some(5.0);
+    });
+    assert!(e.fd_log_manual("W1AW", "1D", "CT", "CW").unwrap());
+    let s = quit(e);
+
+    let mut e = launch(&d, &s);
+    assert_eq!(
+        contest_calls(&e),
+        ["K1ABC", "W1AW"],
+        "PREMISE: both came back"
+    );
+    assert_eq!(merge(&mut e), (2, 0));
+    for (call, rig, watts) in [
+        ("K1ABC", "Icom IC-7300", 100.0),
+        ("W1AW", "Elecraft KX3", 5.0),
+    ] {
+        let r = copy_of(&e, call);
+        assert_eq!(r.my_rig.as_deref(), Some(rig), "{call}");
+        assert_eq!(r.tx_power, Some(watts), "{call}");
+        assert_eq!(r.time_off_unix, Some(r.when_unix), "{call}");
+        assert_eq!(r.operator.as_deref(), Some("W9XYZ"), "{call}: nobody named");
+    }
+}
