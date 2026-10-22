@@ -149,6 +149,10 @@ mod session_tests;
 pub mod slices;
 #[cfg(test)]
 mod stop_hold_tests;
+/// Decodes streamed from a running FT8/FT4 pass: each folds once, at once, and the screen keeps
+/// the pass.
+#[cfg(test)]
+mod streamed_decode_tests;
 pub mod sub_controls;
 mod tci;
 /// A radio on the TCI connection: what Nexus may transmit through an SDR program, and a spot
@@ -1937,6 +1941,11 @@ pub struct DecodeJob {
     /// around the decode so a second chain on another band cannot feed it another
     /// band's callsigns — see [`run_decode_job`].
     ctx: Option<Arc<Mutex<tempo_fast::DecoderCtx>>>,
+    /// When this pass gives up: past it, an FT8 pass stops at its next sync candidate with what it
+    /// has found ([`modes::DecodeSink::give_up`]). The radio loop sets it on the FT8 early pass,
+    /// at WSJT-X's 13.4 s into the period ([`DecodeJob::with_give_up_at`]); `None`, every other
+    /// pass, runs to its end.
+    give_up_at: Option<Instant>,
 }
 
 impl DecodeJob {
@@ -1949,6 +1958,18 @@ impl DecodeJob {
     pub fn with_ctx(mut self, ctx: Arc<Mutex<tempo_fast::DecoderCtx>>) -> Self {
         self.ctx = Some(ctx);
         self
+    }
+
+    /// Give this pass up at `at` (see [`DecodeJob::give_up_at`]): the FT8 early pass, at WSJT-X's
+    /// 13.4 s, so that pass can never hold the decoder at the full pass's moment.
+    pub fn with_give_up_at(mut self, at: Instant) -> Self {
+        self.give_up_at = Some(at);
+        self
+    }
+
+    /// Which pass this job is.
+    pub fn pass(&self) -> DecodePass {
+        self.pass
     }
 }
 
@@ -1988,6 +2009,77 @@ pub struct DecodeResult {
     /// the radio loop clears its in-flight latch when a result lands, so a job that
     /// never returns one stops decoding forever.
     failed: bool,
+}
+
+/// One decode a running pass has just found, on its way to the engine before the pass ends
+/// ([`Engine::apply_streamed_decode`]), as WSJT-X hands each decode to its sequencer the moment the
+/// decoder finds it: its decoder calls back with each new decode (`lib/ft8_decode.f90:233-238`,
+/// `lib/ft4_decode.f90:456`), jt9 writes and flushes the line at once (`lib/decoder.f90`
+/// `ft8_decoded`, `flush(6)`), and the GUI hands every line to `auto_sequence` as it arrives
+/// (`widgets/mainwindow.cpp:850`, `readFromStdout` :6132-6143, :7434). The same decode is in the
+/// pass's [`DecodeResult`], which folds what was not streamed.
+pub struct StreamedDecode {
+    decode: modes::Decode,
+    pass: DecodePass,
+    slot: u64,
+    epoch: u64,
+}
+
+impl StreamedDecode {
+    /// The decode.
+    pub fn decode(&self) -> &modes::Decode {
+        &self.decode
+    }
+    /// The pass that found it.
+    pub fn pass(&self) -> DecodePass {
+        self.pass
+    }
+    /// The boundary slot its pass decodes for.
+    pub fn slot(&self) -> u64 {
+        self.slot
+    }
+}
+
+/// Where [`run_decode_job_streaming`] reports while its pass runs, on the decoding thread with the
+/// modem busy: nothing here may call into the modem.
+pub trait DecodeProgress {
+    /// A decode the pass has just found.
+    fn found(&mut self, d: StreamedDecode);
+    /// An FT8 sync candidate has been tried; the pass then asks whether to give up
+    /// ([`DecodeJob::with_give_up_at`]).
+    fn candidate(&mut self) {}
+}
+
+/// A [`DecodeProgress`] that keeps nothing: the decodes arrive in the [`DecodeResult`] only.
+struct NoProgress;
+
+impl DecodeProgress for NoProgress {
+    fn found(&mut self, _: StreamedDecode) {}
+}
+
+/// The decoder's [`modes::DecodeSink`] for one job: each decode on to `progress` with the job's
+/// pass, slot and epoch, and the give-up answered from the job's moment.
+struct JobSink<'a> {
+    progress: &'a mut dyn DecodeProgress,
+    pass: DecodePass,
+    slot: u64,
+    epoch: u64,
+    give_up_at: Option<Instant>,
+}
+
+impl modes::DecodeSink for JobSink<'_> {
+    fn found(&mut self, d: &modes::Decode) {
+        self.progress.found(StreamedDecode {
+            decode: d.clone(),
+            pass: self.pass,
+            slot: self.slot,
+            epoch: self.epoch,
+        });
+    }
+    fn give_up(&mut self) -> bool {
+        self.progress.candidate();
+        self.give_up_at.is_some_and(|at| Instant::now() >= at)
+    }
 }
 
 impl DecodeResult {
@@ -2156,6 +2248,13 @@ pub enum DecodeApplied {
 /// identical decodes. Locks ONLY the decoder ([`SharedSource`]) — never the engine
 /// mutex — for the whole decode, serializing all process-global decode FFI state.
 pub fn run_decode_job(job: DecodeJob) -> DecodeResult {
+    run_decode_job_streaming(job, &mut NoProgress)
+}
+
+/// [`run_decode_job`], telling `progress` of each decode a native FT8 or FT4 pass finds the moment
+/// it finds it ([`StreamedDecode`]); the result still carries every decode. Every other pass and
+/// mode tells `progress` nothing.
+pub fn run_decode_job_streaming(job: DecodeJob, progress: &mut dyn DecodeProgress) -> DecodeResult {
     // Identify the job before it is consumed — a panic destroys the job, but the
     // loop still needs to know which pass/slot/epoch failed.
     let (pass, slot, epoch) = (job.pass, job.slot, job.epoch);
@@ -2176,7 +2275,9 @@ pub fn run_decode_job(job: DecodeJob) -> DecodeResult {
     // AssertUnwindSafe: on the panic path we return no decodes and touch no recovered
     // state, so a half-updated decoder cannot leak into the result. The decoder's own
     // global FFI state is re-seeded per job by the caller's context handling.
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_decode_job_inner(job))) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_decode_job_inner(job, progress)
+    })) {
         Ok(r) => r,
         Err(_) => {
             eprintln!(
@@ -2196,7 +2297,7 @@ pub fn run_decode_job(job: DecodeJob) -> DecodeResult {
     }
 }
 
-fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
+fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> DecodeResult {
     let DecodeJob {
         source,
         next_source,
@@ -2219,7 +2320,15 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
         epoch,
         heard_on,
         ctx,
+        give_up_at,
     } = job;
+    let mut sink = JobSink {
+        progress,
+        pass,
+        slot,
+        epoch,
+        give_up_at,
+    };
     // Hold the decoder lock across the ENTIRE decode: this is the single lock that
     // serializes the a7 table, the packjt77 hash table and the FT1 IR-HARQ buffers
     // against the engine thread's harq_reset / seed_hash_table / source swaps.
@@ -2274,7 +2383,7 @@ fn run_decode_job_inner(job: DecodeJob) -> DecodeResult {
                 ap_cq_only,
                 partial: pass.is_partial(),
             };
-            src.decode_a7(&req, pass.a7_final())
+            src.decode_streaming(&req, pass.a7_final(), &mut sink)
         }
     };
     let decodes = match ctx {
@@ -3325,10 +3434,18 @@ pub struct Engine {
     /// and the sequencer silently fell back to Tx1 (the "sent my grid instead of a
     /// report" on-air bug). Also the source for answer parity.
     decode_history: std::collections::VecDeque<(u64, modes::Decode)>,
-    /// Messages the WSJT-X-style EARLY decode pass already ingested for an
-    /// upcoming boundary slot, so the boundary's full-window decode ingests only
-    /// the stragglers it newly found (no double rows / double observe).
+    /// Messages already folded for an upcoming boundary slot — by its EARLY decode pass, and as
+    /// each was streamed from a running pass ([`Engine::apply_streamed_decode`]) — so a later fold
+    /// of the same slot ingests only what is new (no double rows / double observe).
     early_seen: Option<(u64, std::collections::HashSet<String>)>,
+    /// The streamed pass whose decodes `last_decodes` is gathering: the screen polls the snapshot
+    /// a few times a second, and a pass streams faster than that, so its decodes are kept together
+    /// until the pass ends instead of each replacing the last.
+    shown_pass: Option<(u64, DecodePass)>,
+    /// A pass whose remaining decodes are not streamed but folded whole when it ends: the
+    /// operator's best-caller choice compares every answer of a pass
+    /// ([`Engine::sequencer_compares_a_pass`]).
+    held_pass: Option<(u64, DecodePass)>,
     /// JS8 message layer (heard table, inbox, outbox, autoreply policy) — pure, clock
     /// injected, never keys. Configured from `Settings` by `js8_apply_station_config`.
     js8_station: ::js8::Station,
@@ -6123,6 +6240,8 @@ impl Engine {
             route_target: None,
             decode_history: std::collections::VecDeque::new(),
             early_seen: None,
+            shown_pass: None,
+            held_pass: None,
             js8_station: ::js8::Station::new(js8_boot),
             js8_reasm: ::js8::Reassembler::new(),
             js8_hb_on: false,
@@ -16887,6 +17006,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // the new band's (the panes wipe on the change and take the feed in again). A period
         // still decoding comes back as `late`, under what it was heard on.
         self.last_decodes.clear();
+        self.shown_pass = None;
+        self.held_pass = None;
         self.late = None;
         // Advance the decode-context generation so any decode still in flight on the
         // worker (built in the OLD context) lands stale and is dropped — its slot
@@ -27546,6 +27667,7 @@ contact yourself."
                 epoch,
                 heard_on: None,
                 ctx: None,
+                give_up_at: None,
             };
         }
         if self.app.tier() == Tier::TempoDeep {
@@ -27572,6 +27694,7 @@ contact yourself."
                 epoch,
                 heard_on: None,
                 ctx: None,
+                give_up_at: None,
             };
         }
         // Native tiers (FT1/FT8/FT4) decode through the active SignalSource with
@@ -27710,6 +27833,7 @@ contact yourself."
             // Single-radio today: the chain owner attaches its own context with
             // `DecodeJob::with_ctx`. `None` keeps the shipped path byte-identical.
             ctx: None,
+            give_up_at: None,
         }
     }
 
@@ -27768,10 +27892,20 @@ contact yourself."
         // WSJT-X 3.0.2 drops an a7 line in the 1.5 periods after a band change or a mode
         // switch before anything reads it (`A7Hide`).
         let decodes = self.without_hidden_a7(decodes);
+        // The decodes of this pass already streamed are on screen: the rest join them.
+        let continues = self.shown_pass == Some((slot, pass));
+        if matches!(pass, DecodePass::Boundary | DecodePass::Early) {
+            if continues {
+                self.shown_pass = None;
+            }
+            if self.held_pass == Some((slot, pass)) {
+                self.held_pass = None;
+            }
+        }
         match pass {
             DecodePass::Boundary => {
-                // If the early pass already ingested this boundary's messages, keep
-                // only the stragglers the full-window decode newly found.
+                // If the early pass already ingested this boundary's messages, or they were
+                // streamed as this pass found them, keep only what is new.
                 let decodes = self.drop_early_dupes(decodes, slot);
                 // JS8: the multi-speed pass decoded the tier speed ~1-2 s ago at JS8Call's
                 // decode moment; this boundary re-decode of the same audio is stragglers only.
@@ -27780,7 +27914,7 @@ contact yourself."
                 } else {
                     decodes
                 };
-                let n = self.process_decodes(&frame, decodes, slot);
+                let n = self.fold_decodes(Some(&frame), decodes, slot, continues);
                 DecodeApplied::Boundary { n, slot, frame }
             }
             DecodePass::Early => {
@@ -27790,14 +27924,29 @@ contact yourself."
                     // boundary pass redecodes the full window from scratch.
                     return DecodeApplied::Early { n: 0 };
                 }
-                self.early_seen = Some((
-                    slot,
-                    decodes
-                        .iter()
-                        .map(|d| d.message.trim().to_string())
-                        .collect(),
-                ));
-                let n = self.process_decodes(&frame, decodes, slot);
+                let heard: std::collections::HashSet<String> = decodes
+                    .iter()
+                    .map(|d| d.message.trim().to_string())
+                    .collect();
+                // What was streamed is folded already; the boundary drops all of it.
+                if !matches!(&self.early_seen, Some((s, _)) if *s == slot) {
+                    self.early_seen = None;
+                }
+                let (_, folded) = self
+                    .early_seen
+                    .get_or_insert_with(|| (slot, Default::default()));
+                let fresh: Vec<modes::Decode> = decodes
+                    .into_iter()
+                    .filter(|d| !folded.contains(d.message.trim()))
+                    .collect();
+                folded.extend(heard);
+                if fresh.is_empty() {
+                    // Every decode was streamed and folded: keep the pass's audio for a
+                    // re-decode, as its fold would have.
+                    self.last_rx = Some(tempo_core::channel::capture_to_i16(&frame));
+                    return DecodeApplied::Early { n: 0 };
+                }
+                let n = self.fold_decodes(Some(&frame), fresh, slot, continues);
                 DecodeApplied::Early { n }
             }
             // The multi-speed JS8 pass: rows + spots, exactly like an EARLY result — and never
@@ -27848,8 +27997,13 @@ contact yourself."
         slot: u64,
         pass: DecodePass,
     ) -> DecodeApplied {
+        // Its early pass, or what it streamed before the change, wrote these already.
         let written = match self.late_early_seen.take() {
-            Some((s, seen)) if s == slot && pass == DecodePass::Boundary => seen,
+            Some((s, seen))
+                if s == slot && matches!(pass, DecodePass::Boundary | DecodePass::Early) =>
+            {
+                seen
+            }
             _ => std::collections::HashSet::new(),
         };
         if self.settings.write_all_txt {
@@ -28029,6 +28183,69 @@ contact yourself."
         n
     }
 
+    /// Fold one decode a running pass has just found ([`StreamedDecode`]), as WSJT-X hands each
+    /// decode to its sequencer the moment its decoder finds it: rows, ALL.TXT, the roster and the
+    /// QSO sequencer have it now instead of when the pass ends. Returns how many decodes folded
+    /// (0 or 1); the radio loop then sends them on to loggers and PSK Reporter, and a fold that
+    /// moves the over on the air is WSJT-X's mid-over switch, as for any fold.
+    ///
+    /// The sequencer's rules are the ones every fold runs ([`Engine::observe_modes`]); only when
+    /// a decode reaches them changes. Each message folds once: one the early pass or an earlier
+    /// streamed decode already folded for this slot is dropped, and the pass's [`DecodeResult`]
+    /// then folds only what was not streamed. A decode built before a band or mode change is
+    /// dropped (its result is shown as heard before the change, [`Engine::fold_late`]); so is one
+    /// of a pass the best-caller choice needs whole ([`Engine::sequencer_compares_a_pass`]), which
+    /// its result folds whole, as before.
+    pub fn apply_streamed_decode(&mut self, streamed: StreamedDecode) -> usize {
+        let StreamedDecode {
+            decode,
+            pass,
+            slot,
+            epoch,
+        } = streamed;
+        if epoch != self.decode_epoch || !matches!(pass, DecodePass::Boundary | DecodePass::Early) {
+            return 0;
+        }
+        if self.held_pass == Some((slot, pass)) {
+            return 0;
+        }
+        if self.sequencer_compares_a_pass() {
+            self.held_pass = Some((slot, pass));
+            return 0;
+        }
+        let decodes = self.without_hidden_a7(vec![decode]);
+        if !matches!(&self.early_seen, Some((s, _)) if *s == slot) {
+            self.early_seen = None;
+        }
+        let (_, folded) = self
+            .early_seen
+            .get_or_insert_with(|| (slot, Default::default()));
+        let decodes: Vec<modes::Decode> = decodes
+            .into_iter()
+            .filter(|d| folded.insert(d.message.trim().to_string()))
+            .collect();
+        if decodes.is_empty() {
+            return 0;
+        }
+        let continues = self.shown_pass == Some((slot, pass));
+        self.shown_pass = Some((slot, pass));
+        self.fold_decodes(None, decodes, slot, continues)
+    }
+
+    /// The operator's best-caller choice compares every answer a pass brings — the strongest,
+    /// the farthest, or a caller who was calling CQ first ([`best_caller_decodes`]) — while a CQ
+    /// run waits for one. One decode at a time, it would answer the first instead, so such a pass
+    /// is folded whole when it ends, as before. "First" (with or without an SNR floor or blocked
+    /// calls) picks from each decode on its own, and streams.
+    fn sequencer_compares_a_pass(&self) -> bool {
+        self.cq_running
+            && matches!(&self.mode, Mode::Qso { station, .. } if station.state == QsoState::CallingCq)
+            && matches!(
+                self.settings.best_caller.as_str(),
+                "strongest" | "farthest" | "cq_first"
+            )
+    }
+
     /// Drop decodes the early pass already ingested for this boundary slot.
     /// Always consumes the marker — a leftover from a slot whose boundary never
     /// decoded (we transmitted) must not filter a later slot.
@@ -28087,6 +28304,19 @@ contact yourself."
     }
 
     fn process_decodes(&mut self, frame: &[f32], decodes: Vec<modes::Decode>, slot: u64) -> usize {
+        self.fold_decodes(Some(frame), decodes, slot, false)
+    }
+
+    /// [`Engine::process_decodes`] for a fold that may have no audio — a decode streamed from a
+    /// running pass ([`Engine::apply_streamed_decode`]) — and that may `continue` the pass already
+    /// on screen: its decodes then join `last_decodes` instead of replacing them.
+    fn fold_decodes(
+        &mut self,
+        frame: Option<&[f32]>,
+        decodes: Vec<modes::Decode>,
+        slot: u64,
+        continues: bool,
+    ) -> usize {
         if tempo_core::applog::debug_enabled() {
             tempo_core::applog::debug(
                 "decode",
@@ -28117,7 +28347,7 @@ contact yourself."
                         },
                         self.app.tier().label(),
                         self.settings.dial_mhz,
-                        Self::drought_audio_note(frame)
+                        frame.map(Self::drought_audio_note).unwrap_or_default()
                     ),
                 );
             }
@@ -28200,7 +28430,14 @@ contact yourself."
             }
             self.qsy.on_rx_slot(slot);
         }
-        self.last_rx = Some(tempo_core::channel::capture_to_i16(frame));
+        match frame {
+            Some(frame) => self.last_rx = Some(tempo_core::channel::capture_to_i16(frame)),
+            // A streamed decode of a period not yet decoded: the audio retained for a re-decode
+            // is the last period's, which this one now replaces on screen. Until the pass's
+            // result keeps this period's, there is nothing to re-decode.
+            None if self.last_decode_slot != Some(slot) => self.last_rx = None,
+            None => {}
+        }
         for d in &decodes {
             self.decode_history.push_back((slot, d.clone()));
         }
@@ -28213,7 +28450,11 @@ contact yourself."
             self.js8_ingest(&decodes, slot);
         }
         self.last_wire_decodes = wire_copy.unwrap_or_else(|| decodes.clone());
-        self.last_decodes = decodes;
+        if continues {
+            self.last_decodes.extend(decodes);
+        } else {
+            self.last_decodes = decodes;
+        }
         self.last_decode_slot = Some(slot);
         // A period shown from before a band or mode change gives way to this context's own.
         self.late = None;

@@ -91,6 +91,18 @@ module ft8_cabi
      real(c_float)          :: qual         ! decode quality metric [0,1]
   end type ft8_decode_t
 
+  ! The caller's callback for ft8_decode_frame_cb (tempo_decode_cb in libtempo.h). `rec` points
+  ! at a decode the pass has just accepted, or is NULL after each sync candidate is tried; a
+  ! nonzero answer to a NULL `rec` stops the pass there.
+  abstract interface
+     function ft8_decode_cb(user, rec) bind(C) result(istop)
+       import :: c_ptr, c_int
+       type(c_ptr), value :: user
+       type(c_ptr), value :: rec
+       integer(c_int)     :: istop
+     end function ft8_decode_cb
+  end interface
+
   !-------------------------------------------------------------------------
   ! PER-CHAIN DECODER CONTEXT
   !
@@ -454,6 +466,52 @@ contains
     type(ft8_decode_t),     intent(out) :: out(*)
     integer(c_int)                      :: ndec
 
+    ndec = ft8_decode_frame_cb(iwave, nfa, nfb, ndepth, mycall, hiscall, &
+         nqso_progress, nfqso_in, nftx_in, nzhsym_in, nutc, la7final, &
+         lft8apon_in, lapcqonly_in, out, max_out, c_null_funptr, c_null_ptr)
+  end function ft8_decode_frame
+
+  !-------------------------------------------------------------------------
+  ! ft8_decode_frame_cb : ft8_decode_frame, handing each decode to `cb` the moment the pass
+  !                       accepts it, as WSJT-X's decoder hands each one to its callback
+  !                       (ft8_decode.f90:233-238), which jt9 writes and flushes at once
+  !                       (decoder.f90 ft8_decoded, flush(6)) for the GUI's auto-sequencer to read
+  !                       line by line (mainwindow.cpp readFromStdout). The decodes come in the
+  !                       pass's own order: the sync candidates within 10 Hz of nfqso first
+  !                       (sync8.f90:155-163), then by sync; the a7 replay's after the passes.
+  !
+  !   cb      : tempo_decode_cb, or NULL for no callback (exactly ft8_decode_frame). Called with
+  !             a pointer to a copy of the record just written to `out`, and with NULL after every
+  !             sync candidate of the direct passes, where WSJT-X asks its early pass's give-up
+  !             (ft8_decode.f90:240-242). A nonzero answer to the NULL call ends the pass there:
+  !             no further candidate, pass or a7 replay, and `out` holds what was found. The
+  !             answer to a decode is ignored.
+  !   cb_user : handed back to `cb` untouched.
+  !
+  ! Everything else, and the decodes themselves, are ft8_decode_frame's. Not reentrant: `cb` must
+  ! not call back into the modem.
+  !-------------------------------------------------------------------------
+  function ft8_decode_frame_cb(iwave, nfa, nfb, ndepth, mycall, hiscall, &
+       nqso_progress, nfqso_in, nftx_in, nzhsym_in, nutc, la7final, &
+       lft8apon_in, lapcqonly_in, out, max_out, cb, cb_user) result(ndec) &
+       bind(C, name="ft8_decode_frame_cb")
+    integer(c_int16_t),     intent(in)  :: iwave(F8_NMAX)
+    integer(c_int), value,  intent(in)  :: nfa, nfb, ndepth, nqso_progress, nfqso_in
+    integer(c_int), value,  intent(in)  :: nftx_in, nzhsym_in
+    integer(c_int), value,  intent(in)  :: nutc, la7final, max_out
+    integer(c_int), value,  intent(in)  :: lft8apon_in, lapcqonly_in
+    character(kind=c_char), intent(in)  :: mycall(*)
+    character(kind=c_char), intent(in)  :: hiscall(*)
+    type(ft8_decode_t),     intent(out) :: out(*)
+    type(c_funptr), value,  intent(in)  :: cb
+    type(c_ptr),    value,  intent(in)  :: cb_user
+    integer(c_int)                      :: ndec
+
+    ! Not initialized in the declaration: that would make it SAVEd module state.
+    procedure(ft8_decode_cb), pointer :: fcb
+    type(ft8_decode_t), target :: rec
+    logical :: streaming, stopped
+    integer(c_int) :: istop
     real              :: dd(F8_NMAX)
     real              :: candidate(3, F8_MAXCAND)
     real              :: sbase(F8_NH1)
@@ -475,6 +533,10 @@ contains
 
     ndec = 0
     if (max_out <= 0) return
+    fcb => null()
+    streaming = c_associated(cb)
+    if (streaming) call c_f_procpointer(cb, fcb)
+    stopped = .false.
 
     ! DELIBERATE DIVERGENCE, DOCUMENTED NOT CLOSED — the final-pass subtraction.
     ! Upstream's boundary pass does NOT start from raw audio: ft8_decode.f90:
@@ -684,6 +746,10 @@ contains
                    do j = 1, n
                       out(ndecodes)%message(j) = msg37(j:j)
                    end do
+                   if (streaming) then
+                      rec = out(ndecodes)
+                      istop = fcb(cb_user, c_loc(rec))
+                   end if
                 end if
                 ! Seed the a7 table for the NEXT same-parity slot. Only on the
                 ! authoritative pass: the early pass would double-save the same
@@ -696,7 +762,16 @@ contains
                 end if
              end if
           end if
+          ! WSJT-X asks its early pass's give-up here, after every candidate
+          ! (ft8_decode.f90:240-242); the caller decides when that is.
+          if (streaming) then
+             if (fcb(cb_user, c_null_ptr) /= 0) then
+                stopped = .true.
+                exit
+             end if
+          end if
        end do
+       if (stopped) exit
     end do
 
     ! --- a7 cross-cycle replay (mirrors ft8_decode.f90 245-278) -------------
@@ -710,7 +785,7 @@ contains
     ! safe superset of stock (which relies on downstream GUI dedup) keeping
     ! this wrapper's existing no-duplicate-rows contract.
     if (la7final /= 0 .and. .not. is_stale .and. lft8apon .and. &
-         a7_ndec(a7_jseq, 0) >= 1) then
+         .not. stopped .and. a7_ndec(a7_jseq, 0) >= 1) then
        newdat = .true.
        do i = 1, a7_ndec(a7_jseq, 0)
           if (a7_f0(i, a7_jseq, 0) == -99.0) exit
@@ -754,6 +829,10 @@ contains
                    do j = 1, n
                       out(ndecodes)%message(j) = msg37(j:j)
                    end do
+                   if (streaming) then
+                      rec = out(ndecodes)
+                      istop = fcb(cb_user, c_loc(rec))
+                   end if
                 end if
                 call ft8_a7_save(nutc, xdt, f1, msg37)
              end if
@@ -764,7 +843,7 @@ contains
     ! ndec == max_out here means the cap was hit and the weakest decodes were
     ! dropped: raise F8_MAXDEC and the Rust MAX_DECODES (crates/ft8) together.
     ndec = min(ndecodes, max_out)
-  end function ft8_decode_frame
+  end function ft8_decode_frame_cb
 
   !-------------------------------------------------------------------------
   ! ft8_a7_reset : clear the a7 cross-cycle decode table + slot tracker.

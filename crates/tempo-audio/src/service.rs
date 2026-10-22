@@ -22,8 +22,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use tempo_app::engine::{
-    engine_lock, run_decode_job, run_js8_multi_job, DecodeApplied, DecodeJob, DecodePass,
-    DecodeResult, Engine, Js8MultiJob, Js8Speed, PskStreamTick, RttyStreamTick, SatCatBackend,
+    engine_lock, run_decode_job_streaming, run_js8_multi_job, DecodeApplied, DecodeJob, DecodePass,
+    DecodeProgress, DecodeResult, Engine, Js8MultiJob, Js8Speed, PskStreamTick, RttyStreamTick,
+    SatCatBackend, StreamedDecode,
 };
 use tempo_app::keyboard;
 use tempo_app::mic::{MicTick, MIC, TCI_OVER};
@@ -3390,6 +3391,11 @@ fn note_refused_key(what: &str, why: &str) {
 /// through a whole QSO.
 const DAX_STARVE_AFTER: Duration = Duration::from_secs(6);
 
+/// When WSJT-X's FT8 early pass gives up, in ms into the period: `lib/ft8_decode.f90:240-242`
+/// (`if(.not.ldiskdat .and. nzhsym.eq.41 .and. tseq.ge.13.4d0) go to 800`), checked after every
+/// sync candidate, the decodes found so far kept.
+const FT8_EARLY_GIVE_UP_MS: f64 = 13_400.0;
+
 /// The receive tap's ring for TCI audio: about 2.7 s at the modem rate, many times what the
 /// waterfall's thread drains in one of its 20 ms ticks.
 const TCI_TAP_RING_CAP: usize = 1 << 15;
@@ -3404,12 +3410,37 @@ enum WorkerJob {
     Js8Multi(Js8MultiJob),
 }
 
-/// The one function both workers run — a slot job yields one result, a multi-speed job one
-/// per slice (`run_js8_multi_job`). Free so a test can hand it to `spawn_with`.
-fn run_worker_job(job: WorkerJob) -> Vec<DecodeResult> {
+/// What a decode worker hands back, in the order it happens.
+enum WorkerOut {
+    /// A decode a running FT8/FT4 pass has just found, before the pass ends: WSJT-X's decoder
+    /// hands each decode on the moment it finds it (see [`StreamedDecode`]). The pass's result
+    /// follows its decodes.
+    Found(StreamedDecode),
+    /// A job's result: one per slot job, one per slice of a multi-speed job.
+    Done(DecodeResult),
+}
+
+/// The one function both workers run — a slot job hands on each decode as its pass finds it,
+/// then its result; a multi-speed job one result per slice (`run_js8_multi_job`). Free so a test
+/// can hand it to `spawn_with`.
+fn run_worker_job(job: WorkerJob, out: &mut dyn FnMut(WorkerOut)) {
+    /// A running pass's decodes, on to the worker's channel as they are found.
+    struct Forward<'a>(&'a mut dyn FnMut(WorkerOut));
+    impl DecodeProgress for Forward<'_> {
+        fn found(&mut self, d: StreamedDecode) {
+            (self.0)(WorkerOut::Found(d));
+        }
+    }
     match job {
-        WorkerJob::Slot(j) => vec![run_decode_job(j)],
-        WorkerJob::Js8Multi(j) => run_js8_multi_job(j),
+        WorkerJob::Slot(j) => {
+            let result = run_decode_job_streaming(j, &mut Forward(out));
+            out(WorkerOut::Done(result));
+        }
+        WorkerJob::Js8Multi(j) => {
+            for result in run_js8_multi_job(j) {
+                out(WorkerOut::Done(result));
+            }
+        }
     }
 }
 
@@ -3429,7 +3460,7 @@ fn run_worker_job(job: WorkerJob) -> Vec<DecodeResult> {
 struct DecodeWorker {
     /// `Option` only so [`Drop`] can drop the sender first, then join.
     job_tx: Option<Sender<WorkerJob>>,
-    result_rx: Receiver<DecodeResult>,
+    result_rx: Receiver<WorkerOut>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -3438,20 +3469,20 @@ impl DecodeWorker {
         Self::spawn_with("nexus-decode", run_worker_job)
     }
 
-    /// A worker thread named `name` running `run` on every job (one job may yield several
-    /// results; each is sent in order).
-    fn spawn_with(name: &str, run: fn(WorkerJob) -> Vec<DecodeResult>) -> Self {
+    /// A worker thread named `name` running `run` on every job (one job may hand back several
+    /// things — decodes as found, results; each is sent in order).
+    fn spawn_with(name: &str, run: fn(WorkerJob, &mut dyn FnMut(WorkerOut))) -> Self {
         let (job_tx, job_rx) = std::sync::mpsc::channel::<WorkerJob>();
-        let (result_tx, result_rx) = std::sync::mpsc::channel::<DecodeResult>();
+        let (result_tx, result_rx) = std::sync::mpsc::channel::<WorkerOut>();
         let handle = std::thread::Builder::new()
             .name(name.into())
             .spawn(move || {
                 // Ends when the job sender drops (loop shutdown / RadioLoop drop).
                 for job in job_rx {
-                    for result in run(job) {
-                        if result_tx.send(result).is_err() {
-                            return; // loop went away
-                        }
+                    let mut gone = false;
+                    run(job, &mut |out| gone |= result_tx.send(out).is_err());
+                    if gone {
+                        return; // loop went away
                     }
                 }
             })
@@ -3470,8 +3501,8 @@ impl DecodeWorker {
         }
     }
 
-    /// Non-blocking: take the next completed result, if one is ready.
-    fn try_recv(&self) -> Option<DecodeResult> {
+    /// Non-blocking: take the next thing the worker handed back, if one is ready.
+    fn try_recv(&self) -> Option<WorkerOut> {
         self.result_rx.try_recv().ok()
     }
 }
@@ -13701,8 +13732,41 @@ impl RadioLoop {
         // changes what the QSO sequencer would send next asks for WSJT-X's mid-over switch
         // (`ft_midover_switch`, below). A stale one folds as before and never does: what it moved
         // goes out at the next over, as it always did.
+        //
+        // An FT8/FT4 pass hands on each decode the moment it finds it, as WSJT-X's decoder does
+        // (`StreamedDecode`), and each folds here on the tick it lands, with the same rule: one
+        // found before the boundary is in the boundary's TX decision, one found after it may
+        // switch the over on the air, one of an older period never does. A found decode never
+        // keys anything and never clears the in-flight latch; its pass's result does that.
+        //
+        // A found decode that moves the over asks for the switch at once, as each line WSJT-X
+        // reads does (`processMessage` sets `m_restart` per line): the switch takes only a decode
+        // that moved the sequencer in its own fold (`Engine::ft_midover_switch`), and the next
+        // fold in this tick — another decode, or its pass's end — would be one that did not.
         let mut ft_restart = false;
-        while let Some(result) = self.decode.try_recv() {
+        while let Some(out) = self.decode.try_recv() {
+            let result = match out {
+                WorkerOut::Found(found) => {
+                    let live = self.clock.slot_index(now);
+                    let next_before = (found.slot() == live).then(|| eng.ft_next_over(live));
+                    if eng.apply_streamed_decode(found) > 0 {
+                        if next_before.is_some_and(|before| eng.ft_next_over(live) != before) {
+                            self.ft_midover_switch(&mut eng, backend, now, false);
+                        }
+                        let cur_dial = eng.settings().dial_hz();
+                        emit_rx_decodes(
+                            sinks,
+                            &eng,
+                            &mut station.psk_spots,
+                            &mut station.psk_cache,
+                            now,
+                            cur_dial,
+                        );
+                    }
+                    continue;
+                }
+                WorkerOut::Done(result) => result,
+            };
             self.decode_in_flight = false;
             let live = self.clock.slot_index(now);
             let next_before = (result.slot() == live).then(|| eng.ft_next_over(live));
@@ -13804,7 +13868,11 @@ impl RadioLoop {
                 self.js8_last_tick_ms = now_ms;
                 eng.js8_tick(now_ms);
             }
-            while let Some(result) = self.js8_multi_worker.try_recv() {
+            while let Some(out) = self.js8_multi_worker.try_recv() {
+                // The multi-speed worker hands back results only (JS8 does not stream).
+                let WorkerOut::Done(result) = out else {
+                    continue;
+                };
                 self.js8_multi_pending = self.js8_multi_pending.saturating_sub(1);
                 if let DecodeApplied::Early { n } = eng.apply_decode_result(result) {
                     if n > 0 {
@@ -13964,7 +14032,21 @@ impl RadioLoop {
                     // boundary ingest's parity/history). The result folds in via the drain
                     // block: an early one publishes its spots there, a full one is kept for its
                     // boundary.
-                    let job = eng.build_decode_job(frame, slot + 1, pass);
+                    let mut job = eng.build_decode_job(frame, slot + 1, pass);
+                    // ⭐ WSJT-X's EARLY PASS GIVES UP AT 13.4 s into the period: after every sync
+                    // candidate it reads the clock and stops if it is that late
+                    // (`lib/ft8_decode.f90:240-242`, `nzhsym.eq.41 .and. tseq.ge.13.4d0`; `tseq`
+                    // is the time into the period, `timestamp` :313-328), keeping what it found.
+                    // So the early pass can never hold the decoder at the full pass's moment
+                    // (14.40 s, which waits for a free decoder) nor at the boundary (where a
+                    // decoder still busy drops the period's decode). The moment, in this tick's
+                    // period, as a monotonic deadline, so a wall-clock step cannot move it.
+                    if tier_now == Tier::Ft8 && pass == DecodePass::Early {
+                        let left_ms = (FT8_EARLY_GIVE_UP_MS - elapsed_ms).max(0.0);
+                        job = job.with_give_up_at(
+                            std::time::Instant::now() + Duration::from_secs_f64(left_ms / 1000.0),
+                        );
+                    }
                     self.decode.dispatch(WorkerJob::Slot(job));
                     self.decode_in_flight = true;
                 }
@@ -17601,6 +17683,7 @@ mod tests {
     mod filter_width;
     mod flex_audio;
     mod ft_midover;
+    mod ft_streaming;
     mod ft_window;
     mod ic905_ten_ghz;
     mod icom_lan;
@@ -18479,10 +18562,11 @@ mod tests {
             DecodePass::Boundary,
         );
         worker.dispatch(WorkerJob::Slot(job));
-        // Wait (bounded) for the worker to finish — it runs on its own thread.
+        // Wait (bounded) for the worker to finish — it runs on its own thread, behind the one
+        // process-wide modem lock, which another test's decode can hold for over a second.
         let mut result = None;
-        for _ in 0..500 {
-            if let Some(r) = worker.try_recv() {
+        for _ in 0..5_000 {
+            if let Some(WorkerOut::Done(r)) = worker.try_recv() {
                 result = Some(r);
                 break;
             }
@@ -18538,10 +18622,12 @@ mod tests {
             "the guard blocks a second concurrent dispatch"
         );
 
-        // Drain the one result → flag clears → the next dispatch is allowed again.
+        // Drain the one result → flag clears → the next dispatch is allowed again. Every decode in
+        // this test binary waits for the one process-wide modem lock, and under the full suite
+        // another test's decode can hold it for over a second, so this waits up to ten.
         let mut got = false;
-        for _ in 0..500 {
-            if let Some(r) = worker.try_recv() {
+        for _ in 0..5_000 {
+            if let Some(WorkerOut::Done(r)) = worker.try_recv() {
                 let _ = eng.apply_decode_result(r);
                 in_flight = false;
                 got = true;
@@ -18686,7 +18772,7 @@ mod tests {
         worker.dispatch(WorkerJob::Js8Multi(eng.build_js8_multi_job(slices, 5)));
         let mut results = Vec::new();
         for _ in 0..2_000 {
-            if let Some(r) = worker.try_recv() {
+            if let Some(WorkerOut::Done(r)) = worker.try_recv() {
                 results.push(r);
                 if results.len() == 2 {
                     break;
@@ -29563,7 +29649,7 @@ mod tests {
         let stolen = {
             let mut got = None;
             for _ in 0..500 {
-                if let Some(r) = state.decode.try_recv() {
+                if let Some(WorkerOut::Done(r)) = state.decode.try_recv() {
                     got = Some(r);
                     break;
                 }
@@ -29572,7 +29658,7 @@ mod tests {
             got.expect("the straggler decode finished and was intercepted")
         };
         // Replace the worker with a hand-held channel so the test controls delivery.
-        let (late_tx, late_rx) = std::sync::mpsc::channel::<DecodeResult>();
+        let (late_tx, late_rx) = std::sync::mpsc::channel::<WorkerOut>();
         state.decode = DecodeWorker {
             job_tx: None,
             result_rx: late_rx,
@@ -29608,7 +29694,7 @@ mod tests {
 
         // NOW the stale result lands — 1.1 s into the odd slot, the field shape
         // (:45+1 s). THE assertion: it must never key a new over.
-        late_tx.send(stolen).unwrap();
+        late_tx.send(WorkerOut::Done(stolen)).unwrap();
         state
             .step(
                 &engine,

@@ -22,7 +22,7 @@ pub use decode::Decode;
 pub use mode::{
     make_mode, tx_mode, Capabilities, Ft1Mode, Ft4Mode, Ft8Mode, Js8Mode, Js8Speed, Mode, ModeKind,
 };
-pub use source::{DecodeRequest, NativeSource, SignalSource, WsjtxUdpSource};
+pub use source::{DecodeRequest, DecodeSink, NativeSource, SignalSource, WsjtxUdpSource};
 
 /// Clear FT8's a7 cross-cycle decode table (prior-slot call pairs). The engine
 /// calls this on band QSY / tier switch — analogous to `tempo_fast::harq_reset` — so a

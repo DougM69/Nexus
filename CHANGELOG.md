@@ -727,6 +727,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sending its last message again. If that decode is still running when your over starts, its result still counts
   as soon as it is done. The early FT8 decode at 11.8 seconds is unchanged. NEEDS-BENCH: an FT8 and an FT4 QSO
   with a weak station, into a dummy load first.
+- **FT8 and FT4: each decode counts the moment it is found, as in WSJT-X.** Nexus handed a decode pass's results
+  to the QSO sequencer and the decode list only when the whole pass had finished. It now hands each decode on as soon
+  as it is found, and your RX frequency is looked at first, as in WSJT-X. A weak reply on your frequency is then in
+  the decision for your next over even on a slower computer, where it used to arrive after your over had started and
+  the over went out again. The decodes themselves are unchanged and each still appears once, in the list, in ALL.TXT
+  and to loggers and PSK Reporter, which now also get each one as it is found. A CQ run whose best-caller choice is
+  strongest, farthest or CQ callers first still compares all the answers a pass brings before it picks one. The
+  early FT8 decode at 11.8 seconds now stops at 13.4 seconds if it is still running, as WSJT-X's does, so a slow
+  computer no longer loses that period's full decode to it. NEEDS-BENCH: FT8 and FT4 QSOs with weak stations, into
+  a dummy load first.
 - **The Log button stays on screen in the Phone, CW, JS8, RTTY and PSK screens.** At 1280×800 the log form was taller
   than its pane, so Log and Spot sat below the fold. The "logs to … as" line and the Log/Spot buttons now stay together
   at the bottom of the log pane while the fields above them scroll. The callsign card below them is never covered.
