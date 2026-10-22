@@ -935,6 +935,18 @@ export function OperateCockpit({
     tx5Edited.current = true
     setTx5(v)
   }
+  // A logger's UDP FreeText (JTAlert, GridTracker) sets Tx5 as WSJT-X's does, and says why its
+  // over did not go out. Each one once, by its seq; one sent before this cockpit mounted is past.
+  const udpFreeText = snap.udpFreeText
+  const udpFreeTextSeen = useRef(udpFreeText?.seq)
+  useEffect(() => {
+    if (!udpFreeText || udpFreeText.seq === udpFreeTextSeen.current) return
+    udpFreeTextSeen.current = udpFreeText.seq
+    if (udpFreeText.fill != null) handleTx5(udpFreeText.fill)
+    if (udpFreeText.refused) {
+      pushToast(t('operate.tx.tx5.loggerRefused', { reason: udpFreeText.refused }), 'error')
+    }
+  }, [udpFreeText?.seq])
   const handleTx6 = (v: string) => {
     tx6Edited.current = true
     setTx6(v)

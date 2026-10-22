@@ -904,6 +904,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alone leaves it. NEEDS-BENCH: Nexus decoding FT8 with its UDP feed on for a few minutes, then start GridTracker
   or JTAlert: the decodes of all those periods come back with their own times and no new alerts. Erase Band
   Activity and restart the program: nothing comes back until the next period is decoded.
+- **WSJT-X UDP: a logger's free text goes into Tx 5, and out as Tx 5, as in WSJT-X.** Free text from JTAlert,
+  GridTracker or a logger became a chat broadcast, which the FT8 and FT4 screen never sent (and on FT8 in Chat a
+  piece of it could go out reading as another station's call). Now the text goes into Tx 5. When the program asks
+  for it to be sent, it is your next over, as when you click Tx 5, and an over on the air switches to it, as in
+  WSJT-X; an empty text that is not sent clears Tx 5. It goes out only while TX is on, and it never turns TX on or
+  restarts the TX watchdog. When it does not go out, Tx 5 still shows it and Nexus says why: TX is off, it is
+  text FT8 or FT4 cannot encode (as for the free text you type), the contest screen sends its own exchange, or
+  the program asked to send Tx 5 without its text. Chat sends it as a chat broadcast, as before, on the Tempo
+  tiers only. NEEDS-BENCH: FT8 into a dummy load with TX on and the UDP feed on, and WSJT-X's message_aggregator
+  example (or GridTracker) connected: type `TNX 73` in its free-text box and Tx 5 follows each key; press Enter
+  and the next over is `TNX 73`, which a WSJT-X station decodes; press Enter during an over and the rest of it
+  switches. With TX off, Enter fills Tx 5, says TX is off and nothing keys. Enter on `W9XYZ K1ABC TNX 73`
+  says FT8 cannot encode it and nothing keys. Repeat on FT4, and once on the contest screen (the run goes on).
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.

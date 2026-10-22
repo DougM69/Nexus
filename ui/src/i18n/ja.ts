@@ -6415,6 +6415,7 @@ export const JA: PartialCatalog = {
   "operate.tx.next.title": "次の送信として待機中",
   "operate.tx.tx5.placeholder": "フリーテキスト",
   "operate.tx.tx5.aria": "Tx5 フリーテキスト",
+  "operate.tx.tx5.loggerRefused": "ログソフトからのフリーテキストは送信されませんでした: {{reason}}",
   "operate.tx.tx6.placeholder": "CQ メッセージ",
   "operate.tx.tx6.aria": "Tx6 CQ 呼出し（指定 CQ は編集）",
   "operate.tx.tx6.hint": "指定 CQ にするには編集 — CQ DX / CQ NA / CQ POTA / CQ TEST",

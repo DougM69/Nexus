@@ -135,6 +135,19 @@ pub struct WorkPark {
     pub reference: String,
 }
 
+/// A logger's WSJT-X FreeText as Tx 5 took it ([`AppSnapshot::udp_free_text`]): the text Tx 5
+/// now shows, and why its over was not sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UdpFreeText {
+    /// One more for each FreeText taken, so the cockpit applies each once.
+    pub seq: u32,
+    /// The text Tx 5 shows now; empty clears it, `None` leaves it as it is.
+    pub fill: Option<String>,
+    /// Why the over was not sent, when "send" asked for it.
+    pub refused: Option<String>,
+}
+
 /// One UDP-driven callsign highlight (JTAlert paints wanted/B4 calls).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -4605,6 +4618,9 @@ pub struct AppSnapshot {
     /// Bumped by an inbound UDP Clear — the UI erases its panes on change.
     #[serde(default)]
     pub clear_tick: u32,
+    /// The last FreeText a logger sent (JTAlert, GridTracker), as Tx 5 took it. Absent until one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_free_text: Option<UdpFreeText>,
     /// Bumped every time a QSO is logged, by ANY path — the UI fires the
     /// "clear DX call after logging" wipe on change, so a backend auto-log
     /// clears the cockpit's DX fields just like a manual log does.

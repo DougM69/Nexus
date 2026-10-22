@@ -13459,11 +13459,8 @@ impl RadioLoop {
                         eng.set_highlight(&call, bg, fg);
                     }
                     WsjtxInbound::FreeText { text, send, .. } => {
-                        let t = text.trim();
-                        if send && !t.is_empty() {
-                            if let Err(reason) = eng.udp_free_text(t) {
-                                crate::civ::diag::note(&format!("UDP FreeText refused: {reason}"));
-                            }
+                        if let Err(reason) = eng.udp_free_text(&text, send) {
+                            crate::civ::diag::note(&format!("UDP FreeText refused: {reason}"));
                         }
                     }
                     WsjtxInbound::Reply {

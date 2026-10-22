@@ -166,6 +166,9 @@ mod tx_alarms;
 mod tx_frame_width_tests;
 #[cfg(test)]
 mod tx_gate_table;
+/// A logger's UDP FreeText goes into Tx 5, and with "send" out as Tx 5.
+#[cfg(test)]
+mod udp_free_text_tests;
 /// What a logger's UDP Replay re-sends: Band Activity's decodes, as they went out.
 #[cfg(test)]
 mod udp_replay_tests;
@@ -1721,6 +1724,15 @@ pub const FLEX_VOICE_MAX_SAMPLES: usize = 20 * 12_000;
 /// The decodes Band Activity keeps, and so the most a logger's Replay re-sends: the pane's own
 /// store (`MAX_HISTORY`, `ui/src/decodeHistory.ts`).
 const BAND_ACTIVITY_DEPTH: usize = 3000;
+/// A logger's free text refused while TX is off ([`Engine::udp_free_text`]).
+const UDP_FREE_TEXT_TX_OFF: &str =
+    "TX is off: turn TX on in Nexus before sending a logger's free text";
+/// A logger's "send" with no text: Tx 5 as it stands, which the station does not hold.
+const UDP_FREE_TEXT_EMPTY: &str = "a logger asked to send Tx 5 as it stands, which Nexus cannot \
+    do: it sends a logger's free text only with the text";
+/// A logger's free text on the contest screen, which sends its own exchange.
+const UDP_FREE_TEXT_CONTEST: &str = "the contest screen sends its own exchange: a logger's free \
+    text goes out from Tx 5 on the FT8/FT4 screen";
 /// What [`Engine::send_voice`] answers for a message longer than that.
 const FLEX_VOICE_TOO_LONG: &str = "The voice keyer can't play this message through the Flex \
      native client: it is longer than 20 seconds, the most the client's DAX carries, so its start \
@@ -3532,6 +3544,8 @@ pub struct Engine {
     /// the matching pane(s). Visual-only: the engine's decode context (answer
     /// parity, history) is NOT a window and stays intact.
     clear_tick: u32,
+    /// The last FreeText a logger sent, as Tx 5 took it ([`Engine::udp_free_text`]).
+    udp_free_text: Option<crate::dto::UdpFreeText>,
     /// Bumped every time a contact reaches the log — through ANY path, so a
     /// backend auto-log (the FT8/RTTY sequencer completing a QSO on its own)
     /// increments it just like a manual log does. The UI watches it to fire the
@@ -6278,6 +6292,7 @@ impl Engine {
             highlights: std::collections::HashMap::new(),
             highlight_seq: 0,
             clear_tick: 0,
+            udp_free_text: None,
             logged_tick: 0,
             pending_udp_clear: None,
             pending_udp_qsos: std::collections::VecDeque::new(),
@@ -17556,18 +17571,89 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
-    /// A logger's WSJT-X FreeText with "send" set (JTAlert, GridTracker). In WSJT-X it sets Tx5
-    /// and selects it as the next message (`on_txb5_clicked`), which goes out only if TX is
-    /// already enabled. So here the text is queued only while the operator has TX armed (a stop
-    /// and a watchdog trip both disarm), and this never arms TX, never restarts the watchdog
-    /// clock and never clears a stop: another program does not decide that the station transmits.
-    pub fn udp_free_text(&mut self, text: &str) -> Result<(), String> {
-        if !self.tx_enabled {
-            return Err(
-                "TX is off: turn TX on in Nexus before sending a logger's free text".into(),
-            );
+    /// A logger's WSJT-X FreeText (JTAlert, GridTracker), taken as WSJT-X 3.0.2 takes it
+    /// (`widgets/mainwindow.cpp:692-709`): its text goes into Tx 5 whether or not it is sent
+    /// (`ui->tx5->setCurrentText`), an empty text without "send" clears Tx 5, and "send" makes Tx 5
+    /// the next over (`ui->txb5->click ()`; `on_txb5_clicked`, 8797-8803, which also switches an
+    /// over on the air, `if(m_transmitting) m_restart=true`), as the operator's own click on Tx 5
+    /// does. WSJT-X does this only with its Tx panel showing (`tabWidget` index 0): here Tx 5 is the
+    /// FT screen's, so the contest screen shows the text but sends its own exchange, and Chat,
+    /// which has no Tx 5, sends it as a chat broadcast, on a chat tier only.
+    ///
+    /// ⛔ Another program does not decide that the station transmits: the over is queued only
+    /// while the operator has TX on (a stop and a watchdog trip both turn it off), and this never
+    /// arms TX, never restarts the watchdog clock (WSJT-X's `tx_watchdog (false)` does) and never
+    /// clears a stop. Nor is an over the encoder refuses queued. Each refusal is the `Err`, and
+    /// the cockpit shows it with the text.
+    pub fn udp_free_text(&mut self, text: &str, send: bool) -> Result<(), String> {
+        let text = text.trim();
+        if matches!(self.mode, Mode::Chat) {
+            if !send || text.is_empty() {
+                return Ok(());
+            }
+            if !self.app.tier().is_chat() {
+                return Err("a logger's free text goes out from Tx 5 on the FT8/FT4 screen".into());
+            }
+            if !self.tx_enabled {
+                return Err(UDP_FREE_TEXT_TX_OFF.into());
+            }
+            self.queue_broadcast(text);
+            return Ok(());
         }
-        self.queue_broadcast(text);
+        if text.len() > 128 || !text.bytes().all(|b| (b' '..=b'~').contains(&b)) {
+            return Err("a logger's free text must be plain text of at most 128 characters".into());
+        }
+        let text = text.to_uppercase();
+        let refused = if send {
+            self.send_udp_tx5(&text).err()
+        } else {
+            None
+        };
+        let seq = self
+            .udp_free_text
+            .as_ref()
+            .map_or(0, |u| u.seq)
+            .wrapping_add(1);
+        self.udp_free_text = Some(crate::dto::UdpFreeText {
+            seq,
+            fill: (!send || !text.is_empty()).then_some(text),
+            refused: refused.clone(),
+        });
+        refused.map_or(Ok(()), Err)
+    }
+
+    /// [`Self::udp_free_text`]'s "send": Tx 5 holding `text` is the next over.
+    fn send_udp_tx5(&mut self, text: &str) -> Result<(), String> {
+        if text.is_empty() {
+            return Err(UDP_FREE_TEXT_EMPTY.into());
+        }
+        let mycall = &self.settings.mycall;
+        let (row, on_air) = match &self.mode {
+            Mode::Qso { station, .. } => {
+                let row = station.tx_row(text);
+                let on_air = match &station.dxcall {
+                    Some(dx) => QsoStation::on_air_form(mycall, dx, row.clone()),
+                    None => row.clone(),
+                };
+                (row, on_air)
+            }
+            _ => return Err(UDP_FREE_TEXT_CONTEST.into()),
+        };
+        if !self.tx_enabled {
+            return Err(UDP_FREE_TEXT_TX_OFF.into());
+        }
+        if self.tier_is_rx_only(self.app.tier()) {
+            return Err("transmit unavailable for this tier".into());
+        }
+        if let Some(why) = self.ft_refusal(&on_air.to_text()) {
+            return Err(why);
+        }
+        if let Mode::Qso { station, .. } = &mut self.mode {
+            station.override_next(row);
+        }
+        // As a click on Tx 5: this period when it still fits, and the rest of an over on the air.
+        self.immediate_tx = true;
+        self.ft_restart = true;
         Ok(())
     }
 
@@ -26606,6 +26692,7 @@ contact yourself."
             })
             .collect();
         s.clear_tick = self.clear_tick;
+        s.udp_free_text = self.udp_free_text.clone();
         s.logged_tick = self.logged_tick;
         s.work_tick = self.work_tick;
         s.work_view = self.work_view.clone();

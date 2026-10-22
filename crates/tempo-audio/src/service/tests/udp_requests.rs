@@ -147,3 +147,37 @@ fn a_loggers_halt_tx_stops_and_holds_against_a_reply() {
         "(armed after HaltTx, (station worked, armed after the Reply))"
     );
 }
+
+/// The "Now sending" readout.
+fn now_sending(engine: &Arc<Mutex<Engine>>) -> Option<String> {
+    engine.lock().unwrap().snapshot().qso.and_then(|q| q.tx_now)
+}
+
+/// ⭐ A logger's FreeText with "send", TX on: the text is the next over, as WSJT-X's click on Tx5
+/// makes it (`widgets/mainwindow.cpp:692-709`). Nexus queued a chat broadcast that the FT8
+/// screen's sequencer never sent.
+#[test]
+fn a_loggers_free_text_with_send_goes_out_as_tx5_while_tx_is_on() {
+    let engine = station();
+    engine.lock().unwrap().set_tx_enabled_by_operator(true);
+    deliver(&engine, &[free_text_datagram("TNX 73", true)]);
+    assert_eq!(
+        (now_sending(&engine), engine.lock().unwrap().tx_enabled()),
+        (Some("TNX 73".to_string()), true),
+        "(now sending, TX on)"
+    );
+}
+
+/// Without "send" the logger's text only fills Tx5: nothing is queued.
+#[test]
+fn a_loggers_free_text_without_send_fills_tx5_only() {
+    let engine = station();
+    engine.lock().unwrap().set_tx_enabled_by_operator(true);
+    deliver(&engine, &[free_text_datagram("TNX 73", false)]);
+    let taken = engine.lock().unwrap().snapshot().udp_free_text;
+    assert_eq!(
+        (taken.and_then(|t| t.fill), now_sending(&engine)),
+        (Some("TNX 73".to_string()), None),
+        "(Tx 5, now sending)"
+    );
+}

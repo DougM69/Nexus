@@ -5423,6 +5423,10 @@ export interface AppSnapshot {
   highlights?: { call: string; bg?: string | null; fg?: string | null }[]
   /** Bumped by an inbound UDP Clear — panes erase on change. */
   clearTick?: number
+  /** The last FreeText a logger sent (JTAlert, GridTracker), as Tx5 took it: Tx5 shows `fill`
+   *  (empty clears it; null leaves it), `refused` says why its over was not sent. `seq` grows by
+   *  one per FreeText, so the cockpit applies each once. Absent until a logger sends one. */
+  udpFreeText?: { seq: number; fill?: string | null; refused?: string | null }
   /** Bumped every time a QSO is logged, by any path (backend auto-log included).
    * App fires the "clear DX call after logging" wipe on change. */
   loggedTick?: number
