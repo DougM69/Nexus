@@ -62,6 +62,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such a rigctld showed ALC as "not reported" after the first few reads. When the raw read never answers, Nexus now
   reads ALC the way 1.18.0 did, through Hamlib, for the rest of the session. This changes the CAT reads made while
   transmitting, so it needs a check on an FT-991 behind its own rigctld.
+- **Remote: a paired computer can no longer make the station hold hundreds of megabytes in unfinished calls.** A
+  call too big for one message is sent in pieces, and the station limited each call to 16 MiB but let a computer
+  leave 16 of them unfinished at once, about 256 MiB a connection. The station now holds at most two calls of the
+  largest size unfinished on a connection, 32 MiB, and closes a connection that sends more. A large ADIF import, a
+  voice message and an SSTV picture from the other computer go through as before.
+- **Remote: a flood of Stops or call-outcome questions from a paired computer no longer slows the station.** Each
+  Stop on the command link started a thread of its own, so thousands of Stops a second could crowd the station's
+  screen and radio loop out. Each kind of Stop now runs on one thread: the first runs at once, a different kind of
+  Stop still runs at once beside it, and Stops of the same kind that arrive while one is running are run once more
+  as soon as it finishes, so a Stop is never lost or held back. At most eight runs of one kind, each with
+  different arguments, wait at once; a Stop past them is answered busy, so varying the arguments no longer makes
+  the waiting list or the work grow. Every Stop still ends the computer's transmit permission the moment it arrives. Questions about what became of earlier calls are answered one after another on
+  one thread.
 
 ## [1.20.0] — 2026-10-22
 
