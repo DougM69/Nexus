@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sample like that could read as a value already filled in. Those boxes are now blank. Hints that are words or
   formats stay, such as Call, Name, RST, MHz and the UTC date format. The park box now reads "Park (reference or
   name)", and the CQ WW zone box still shows the zone the country file gives for the call typed.
+- **No other screen shows made-up example values in an empty box either.** Settings (Station's callsign, grid,
+  name and state, the Field Day class and section, Your station data, the club event boxes, the port and address
+  boxes, Blocked callsigns, Station power), the setup wizard, the POTA/SOTA activation box, Repeaters' place box,
+  APRS's watched calls, the hide-calls filter, the watch list and the spot comment no longer show a sample such as
+  KD9TAW, WI, 1D, K-1234, COM16 or 192.168.1.50. Words that say what goes in a box stay ("Select or type",
+  "empty = off", "host:port"), and so does a box's real default, such as the rigctld port 4534 or the APRS-IS
+  server.
 
 ## [1.20.0] — 2026-10-22
 

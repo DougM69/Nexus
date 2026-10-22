@@ -140,7 +140,6 @@ export function SpotDialog({
             className="settings-input"
             value={comment}
             maxLength={30}
-            placeholder={t('spots.post.comment.placeholder')}
             onChange={(e) => setComment(e.target.value)}
             onKeyDown={onKey}
             autoComplete="off"

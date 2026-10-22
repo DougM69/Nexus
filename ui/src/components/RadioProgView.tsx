@@ -138,8 +138,7 @@ function rowIds(row: RepeaterSearchRow): string[] {
 /** The geocoder's required credit, for the same reason. */
 const ATTRIB_OSM = 'Geocoding © OpenStreetMap contributors'
 
-/** Example values drawn from a technical namespace — a locator and a dial frequency. */
-const EXAMPLE_GRID = 'FN31'
+/** An example value drawn from a technical namespace — a dial frequency. */
 const EXAMPLE_FREQ_MHZ = '146.940'
 
 /** The mode every programmable channel here is, and the filter chip that names it. */
@@ -998,7 +997,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           type="text"
           className="settings-input rp-city-input rp-place-input"
           value={text}
-          placeholder={t('program.origin.place.placeholder', { grid: EXAMPLE_GRID })}
+          placeholder={t('program.origin.place.placeholder')}
           aria-label={from ? t('program.origin.place.aria') : t('program.route.to.place.aria')}
           onChange={(e) => (from ? setFromPlace(e.target.value) : setToPlace(e.target.value))}
           onKeyDown={(e) => {

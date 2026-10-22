@@ -34,7 +34,7 @@
 //   • It cannot tell a WRONG translation from a right one, and it cannot tell that a key is
 //     used in the right place. It only proves the English is not baked into the JSX.
 //   • A prose string hidden behind a named constant (`const MSG = 'Saved'; <b>{MSG}</b>`)
-//     passes. That is the deliberate escape hatch invariant TOKENS use (see STATION_EXAMPLES),
+//     passes. That is the deliberate escape hatch invariant TOKENS use (see GUIDE_EXAMPLES),
 //     and it costs an author a conscious act.
 
 import { describe, expect, it } from 'vitest'
@@ -244,8 +244,8 @@ const MIGRATED = [
   // sections that configure them. The firehose is nearly ALL tokens: every callsign,
   // spotter, DXCC entity, US state, band, mode, submode, frequency and cluster comment on
   // these screens is data and stays in the code, as do the POTA/SOTA programme names, the
-  // P/S/✈/B badge glyphs, `de`, `DXCC`, and the prefix/grid EXAMPLES the watch and hide
-  // filters offer (WATCH_EXAMPLES, HIDE_EXAMPLES). It also proves the registry-by-getter
+  // P/S/✈/B badge glyphs, `de`, `DXCC`, and the prefix/grid examples the watch and hide
+  // filters quote in their hints. It also proves the registry-by-getter
   // path a second time: `SpotLegend.tsx`'s two badge tables resolve their words when read,
   // so `BandStrip.tsx` — which this batch does not own — reads them unchanged.
   'components/SpotsPanel.tsx',
@@ -374,8 +374,8 @@ const MIGRATED = [
   // two wordings is how the pair drifted before, and one catalog now holds both. The units
   // rule lands on the HARDWARE here — sound-card device names, sample rates, the dB and ×
   // gain readings, every baud rate, rotator model names and Hamlib model numbers, azimuth and
-  // elevation degrees, Keplerian element sources and epochs, and the callsign/grid/address
-  // EXAMPLES (WIZARD_EXAMPLES, ROTATOR_EXAMPLES) all stay in the code. Two things this batch
+  // elevation degrees, Keplerian element sources and epochs, and the grid EXAMPLES
+  // (WIZARD_EXAMPLES) all stay in the code. Two things this batch
   // settles: a CONFIGURATION control on the transmit path is not a transmit control — Tx
   // Power's drive slider moved exactly as PTT Method did in batch 12, while `SetupHealth`'s
   // Prove TX, which really does key a carrier, did not (see PARTIAL below); and the wizard's

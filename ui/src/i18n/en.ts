@@ -729,8 +729,6 @@ export const EN = {
     'Maidenhead locator. All 6 characters — 4 measures every distance and bearing from the middle of a ~100-mile square.',
 
   'settings.station.opName.label': 'Operator name',
-  // Prose, not a token: a locale should offer a first name its operators recognise.
-  'settings.station.opName.placeholder': 'Alex',
   // ⚠️ `{NAME}` is a CW macro token matched literally by the expander — it must survive
   // translation unchanged. It is safe here only because interpolation is `{{double}}`.
   'settings.station.opName.hint': 'Used by the CW {NAME} macro and logging.',
@@ -3435,9 +3433,6 @@ export const EN = {
   'spots.post.call.label': 'Callsign',
   'spots.post.freq.label': 'Frequency (MHz)',
   'spots.post.comment.label': 'Comment',
-  // An example cluster comment. The mode name, the split offset and the report are tokens a
-  // translator leaves; the word between them is theirs.
-  'spots.post.comment.placeholder': 'e.g. FT8 up 2 · loud · 599',
   'spots.post.cancel': 'Cancel',
   'spots.post.submit': 'Spot',
   'spots.post.busy': 'Spotting…',
@@ -3534,9 +3529,8 @@ export const EN = {
   'pounce.dismiss.aria': 'Dismiss alert',
 
   // ── The watch list ("alert me loudly when THIS shows up") ───────────────────────────
-  // ⚠️ The prefixes, grid squares and entity names in the examples are TOKENS supplied by
-  // the component (WATCH_EXAMPLES); the ones quoted inside the hint stay in the sentence,
-  // as `ADIF OPERATOR` does elsewhere. `DXCC` is a programme name, not a word.
+  // ⚠️ The prefixes and grid squares quoted inside the hint stay in the sentence, as
+  // `ADIF OPERATOR` does elsewhere. `DXCC` is a programme name, not a word.
   'watchlist.hint':
     "Get a loud alert when a matching station is decoded — a callsign or prefix (wildcards: <code>VP8*</code>, <code>*ABC</code>), a whole DXCC entity, or a grid square (<code>FN31</code>, <code>EM7*</code>). A grid you name here alerts on every band — the HF grid-quiet default doesn't apply to squares you asked for.",
   'watchlist.item.kind.call': 'CALL',
@@ -3554,9 +3548,6 @@ export const EN = {
   'watchlist.add.kind.dxcc': 'DXCC entity',
   'watchlist.add.kind.grid': 'Grid square',
   'watchlist.add.value.aria': 'Watch value',
-  'watchlist.add.value.placeholder.call': 'e.g. {{first}}  or  {{second}}',
-  'watchlist.add.value.placeholder.grid': 'e.g. {{first}}  or  {{second}}',
-  'watchlist.add.value.placeholder.dxcc': 'e.g. {{entity}}',
   'watchlist.add.cqOnly.label': 'CQ only',
   'watchlist.add.cqOnly.title': 'Only alert on a CQ call',
   'watchlist.add.notes.aria': 'Notes for the new entry',
@@ -3582,12 +3573,11 @@ export const EN = {
   // ── The two display filters (hide calls / hide countries) ───────────────────────────
   // Both say the same thing about themselves and say it differently, which is why they do
   // not share keys: one is about callsigns you are tired of seeing, the other about whole
-  // entities. `{{examples}}` is a space-separated list of prefixes from the component.
+  // entities.
   'hideCalls.chip.label': 'Hide calls',
   'hideCalls.chip.title':
     'Hide callsigns (or VP8*-style prefixes) from this pane — a display filter only; decoding, logging, alerts and the auto-responder are untouched',
   'hideCalls.head': 'Hide these callsigns',
-  'hideCalls.placeholder': 'e.g. {{examples}}',
   'hideCalls.note':
     'Space-separated. A trailing <code>*</code> is a prefix ("VP8*" hides every VP8). A view filter only — the stations you are working and those calling you always show. To stop your auto-CQ from answering a call, Alt-double-click it instead.',
 
@@ -3778,7 +3768,7 @@ export const EN = {
   'settings.alerts.geo.hint':
     'Leave every box clear to be alerted about the whole world — that is the default and what this panel has always done. Tick one or more and the new-one, new-grid and CQ alerts are kept to those continents. Someone calling YOU, and anything on your watch list, always alerts wherever they are.',
   'settings.alerts.geo.entities.label': 'Add a country',
-  'settings.alerts.geo.entities.placeholder': 'type to search, e.g. France',
+  'settings.alerts.geo.entities.placeholder': 'type to search',
   'settings.alerts.geo.entities.aria': 'Matching DXCC entities',
   'settings.alerts.geo.entities.hint':
     'Countries added here alert as well as the continents ticked above, so you can follow all of Europe plus Japan. Untick one to drop it. Names are the DXCC list\u2019s own, so Germany appears as Fed. Rep. of Germany.',
@@ -4905,7 +4895,6 @@ export const EN = {
     'The call that goes on the air and onto every contact you log — at a club event that is the club\'s call, the same one at every position on site.',
 
   'settings.fdWho.position.label': 'Position name',
-  'settings.fdWho.position.placeholder': 'CW tent',
   'settings.fdWho.position.hint':
     'Which tent, trailer or table this station is — it names you on the club band board so everyone can see which position is on which band, and it never goes on the air.',
 
@@ -4947,7 +4936,6 @@ export const EN = {
   'settings.fdClub.host.aria.enable': 'Enable club event hosting',
   'settings.fdClub.host.aria.disable': 'Disable club event hosting',
   'settings.fdClub.eventName.label': 'Event name',
-  'settings.fdClub.eventName.placeholder': 'W9ABC Field Day',
   'settings.fdClub.eventName.hint': 'Shown to joining positions and in discovery.',
   'settings.fdClub.hostPort.label': 'Host port',
   'settings.fdClub.hostPort.hint': 'TCP port for the club sync (default 42073).',
@@ -5889,8 +5877,8 @@ export const EN = {
   'program.origin.station.label': 'My station {{grid}}',
   'program.origin.station.title': 'Your station grid from Settings',
   // ONE box takes a grid or a city (a locator is the place as typed; anything else is a town to look
-  // up). {{grid}} is an example locator, a token.
-  'program.origin.place.placeholder': 'Grid or city: {{grid}}, Gatlinburg TN',
+  // up).
+  'program.origin.place.placeholder': 'Grid or city',
   'program.origin.place.aria': 'Where to search: a grid square or a city',
   'program.route.to.place.aria': 'Where the route ends: a grid square or a city',
   // A HUMAN example, not a technical one: a locale should offer a place its operators know.
@@ -6721,7 +6709,6 @@ export const EN = {
     'Apply this profile — merged onto your current settings. Your callsign, license class, radio roster and sync history never come from a profile, and anything the profile predates keeps its current value.',
   'settings.profiles.delete.action': 'Delete',
   'settings.profiles.save.label': 'Save current as',
-  'settings.profiles.save.placeholder': 'e.g. Portable VHF',
   'settings.profiles.save.action': 'Save',
   'settings.profiles.save.hint': 'Snapshots the current settings under a name.',
 
@@ -6758,9 +6745,7 @@ export const EN = {
   'settings.rigControl.txAudio.hint':
     'Which of the radio’s audio inputs transmits when Nexus keys it over CAT. <b>Front/Mic</b> is how Nexus has always keyed the radio. <b>Rear/Data</b> keys its data input instead: choose it if your sound card reaches the radio through its rear DATA or ACC jack (where a SignaLink plugs in) or its own USB audio, and the radio sends no audio from Nexus although it does on VOX. The Phone cockpit’s PTT is not affected and keys the radio as it always has. <b>Per radio.</b>',
   'settings.rigControl.pttPort.label': 'PTT Serial Port',
-  // `{{example}}` is the platform's own device-name example, supplied by the panel as an
-  // invariant token (RIG_EXAMPLES) — a "localised" COM16 names no port on any machine.
-  'settings.rigControl.pttPort.placeholder': 'e.g. {{example}} — blank = use the CAT port',
+  'settings.rigControl.pttPort.placeholder': 'blank = use the CAT port',
   'settings.rigControl.pttPort.hint':
     'COM port your RTS/DTR keying line is on — e.g. an SO2R controller (u2R/MK2R) that routes PTT on its own port, separate from CAT. Leave blank if keying shares the CAT port, which is how a single-cable interface like a Digirig Mobile is wired; CAT keeps working either way. <b>Per radio</b>: each rig on an SO2R box has its own keying port, and this one follows the radio you switch to.',
   'settings.rigControl.catRts.label': 'Interface keys RTS on the CAT port',
@@ -6928,7 +6913,7 @@ export const EN = {
   // because what it says is a different answer, not a different ending; the Xiegu COM-number
   // clause is the one genuinely optional half and is interpolated whole.
   'settings.rigControl.serialPort.label': 'Serial Port',
-  'settings.rigControl.serialPort.placeholder': 'Select or type, e.g. {{example}}',
+  'settings.rigControl.serialPort.placeholder': 'Select or type',
   'settings.rigControl.serialPort.refresh.action': 'Refresh',
   'settings.rigControl.serialPort.refresh.title': 'Re-scan serial ports',
   'settings.rigControl.serialPort.autoTest.action': 'Auto-test',
@@ -7262,8 +7247,7 @@ export const EN = {
   'settings.rotator.port.hint.pstRotator':
     'PstRotatorAz: enter {{address}} as the port (its UDP Control Port), and turn on UDP Control in its Setup (the baud is not used). Nexus listens for its replies on that port + 1, {{reply}}, so no other program may use it.',
   'settings.rotator.external.label': 'External rotctld (advanced)',
-  // `{{example}}` is a host:port the panel supplies as an invariant token.
-  'settings.rotator.external.placeholder': 'host:port — e.g. {{example}}',
+  'settings.rotator.external.placeholder': 'host:port',
   'settings.rotator.external.aria': 'External rotctld address (advanced)',
   'settings.rotator.external.hint':
     'Point Nexus at a rotctld you run yourself (or one on another machine). It OVERRIDES the model and port above and stops the integrated daemon. Needs the port — a bare host name is not an address.',
@@ -7961,11 +7945,11 @@ export const EN = {
   'settings.cw.reverse.hint':
     "Put your radio in its <b>reverse</b> CW mode (CW-R / CW-L) instead of its normal CW, on <b>every band</b>. Off by default, so Nexus asks for plain CW and your radio stays where its own menu puts it. This changes only the pitch you hear on a signal — CW and CW-R transmit identically, and the station you work cannot tell — so it is a personal preference, not a band rule. Which sideband it actually selects depends on the radio: on a Yaesu it is CW-L, while on an Icom it follows that rig's own <b>CW Normal Side</b> menu. The Soundcard keyer ignores this, because it never puts the rig in CW at all.",
   'settings.cw.winkeyerPort.label': 'WinKeyer port',
-  'settings.cw.winkeyerPort.placeholder': '{{example}} — K1EL WinKeyer serial port',
+  'settings.cw.winkeyerPort.placeholder': 'K1EL WinKeyer serial port',
   'settings.cw.winkeyerPort.hint':
     "The serial port your WinKey presents. 1200 baud. A WinKey micro inside a multi-function interface (Timewave Navigator, microHAM) counts — use that device's CW/WinKey port, not its CAT port.",
   'settings.cw.keyPort.label': 'Keyline serial port',
-  'settings.cw.keyPort.placeholder': '{{example}} — the keying interface (separate from CAT)',
+  'settings.cw.keyPort.placeholder': 'the keying interface (separate from CAT)',
   'settings.cw.keyPort.hint':
     "The USB-to-serial into your keying interface (Buxcomm, a homebrew DTR cable, …) that plugs into the rig's KEY jack. Must be a SEPARATE port from CAT. Set the rig to CW and its key-jack to straight-key / bug. An interface with a WinKey chip in it — Timewave Navigator, microHAM, a K1EL WinKeyer — does <b>not</b> key on DTR: pick the WinKeyer backend above instead and give it that device's CW port.",
   'settings.cw.keyLine.label': 'Keying line',
@@ -8023,7 +8007,7 @@ export const EN = {
   'settings.rtty.afskSideband.hint':
     'The sideband the rig runs AFSK on. LSB is the RTTY convention. On USB, Nexus puts the rig in its upper data mode (DATA-U / USB-D / DIGU) and swaps the tones itself, so mark stays high on the air and the decoder still copies — leave Reverse off.',
   'settings.rtty.fskPort.label': 'FSK serial port',
-  'settings.rtty.fskPort.placeholder': "{{example}} — e.g. the FTDX10's USB Enhanced COM",
+  'settings.rtty.fskPort.placeholder': "e.g. the FTDX10's USB Enhanced COM",
   'settings.rtty.fskPort.hint':
     "The port whose control line feeds the rig's FSK input. Empty = the CAT serial port.",
   'settings.rtty.fskLine.label': 'FSK data line',
@@ -8586,8 +8570,7 @@ export const EN = {
   'settings.dxkeeper.note':
     'Pushes each logged QSO into <b>DXKeeper</b> over its TCP Network Service. Enable it in DXKeeper under <em>Configuration ▸ Defaults ▸ Network Service</em> first.',
   'settings.dxkeeper.host.label': 'DXKeeper host',
-  // `{{example}}` is an IP address the panel supplies as an invariant token (LOGGER_EXAMPLES).
-  'settings.dxkeeper.host.placeholder': '{{example}} (empty = off)',
+  'settings.dxkeeper.host.placeholder': 'empty = off',
   'settings.dxkeeper.host.hint': 'Usually 127.0.0.1 — same PC. Leave blank to disable.',
   // `{{port}}` is base + 1, computed and interpolated invariantly.
   'settings.dxkeeper.basePort.hint':
@@ -8605,7 +8588,7 @@ export const EN = {
   'settings.n3fjp.note':
     "Each contact you log in Contest mode reaches the club's master N3FJP log the moment you log it. Nexus fills in the form of the <b>N3FJP Field Day Contest Log</b> (call, band, mode, class and section), so at Field Day the whole club's score updates in real time. CQ WPX, CQ WW RTTY and the ARRL VHF contests carry their exchange too; a QSO party, Sweepstakes or CQ WW CW/SSB contact reaches N3FJP without its exchange. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
   'settings.n3fjp.host.label': 'N3FJP host',
-  'settings.n3fjp.host.placeholder': '{{example}} (empty = off)',
+  'settings.n3fjp.host.placeholder': 'empty = off',
   'settings.n3fjp.host.hint':
     'IP or hostname of the master log computer. Leave blank to disable.',
   'settings.n3fjp.port.label': 'N3FJP port',
@@ -8631,7 +8614,7 @@ export const EN = {
   // is written to settings, not an example, and never came near this file.
   'settings.n1mm.legend': 'N1MM+ Integration',
   'settings.n1mm.addr.label': 'N1MM contact broadcast address',
-  'settings.n1mm.addr.placeholder': '{{example}} (empty = off)',
+  'settings.n1mm.addr.placeholder': 'empty = off',
   'settings.n1mm.addr.hint':
     'Where the N1MM contact packets go (host:port, UDP). Name the port — consumers stack on one host, and 12060 is often already taken by another logger. Leave blank to disable.',
   // The state sentence that follows the hint — one whole sentence per state, because what it
@@ -8704,8 +8687,8 @@ export const EN = {
   // ⚠️ WHAT STAYED IN THE PANEL, and it is nearly all names. The featgroup titles (`LoTW`,
   // `eQSL`, `QRZ`, `HamQTH`, `ClubLog`, `HRDLog`, `RepeaterBook`, `Cloudlog / Wavelog`) are the
   // services' own names and nothing else, so they never came here — a translated service name
-  // names no service. The token-shaped placeholders (`rbuapp_…`, the example Cloudlog URL, the
-  // profile id `1`) are invariant values in `CONFIRMATION_EXAMPLES`.
+  // names no service. The token-shaped placeholder (`rbuapp_…`) is an invariant value in
+  // `CONFIRMATION_EXAMPLES`.
   //
   // ⚠️ WHAT IS VERBATIM INSIDE THESE SENTENCES, for the same reason the DXKeeper hints keep
   // `Base Port`: each one NAMES SOMETHING THE OPERATOR MUST FIND SOMEWHERE ELSE, spelled the way
@@ -8782,7 +8765,6 @@ export const EN = {
   'settings.confirmations.eqsl.username.hint':
     'Your eQSL.cc login (often your callsign). Save settings to apply.',
   'settings.confirmations.eqsl.qthNickname.label': 'QTH Nickname',
-  'settings.confirmations.eqsl.qthNickname.placeholder': 'e.g. Home',
   'settings.confirmations.eqsl.qthNickname.hint':
     'Only needed when your callsign has more than one QTH profile at eQSL — those accounts can\u2019t sign in without it. Leave empty otherwise.',
   'settings.confirmations.eqsl.password.label': 'eQSL password',
