@@ -636,17 +636,30 @@ impl Mode for Ft8Mode {
         }
     }
     fn encode(&self, msg: &str) -> Vec<i32> {
+        // ⛔ NEVER A MESSAGE THE ENCODER REFUSES: empty, which every caller reads as "do not
+        // key" (`wsjt77::Refusal`). `genft8` answers a bad message with 79 zero tones and the
+        // vendored entry point passes them on as an over, one steady carrier for 12.64 s; a text
+        // the packer builds from fields it never set has no frame at all.
+        if crate::wsjt77::ft8_refusal(msg).is_some() {
+            return Vec::new();
+        }
         // The lock-free encoder, so an over built at its key never waits for a decode holding the
         // modem; the vendored one still runs on the message for the callsign tables it writes
         // (`ft8::encode_later`). A message whose vendored result is not a function of its text
         // is the vendored encoder's alone (`crate::wsjt77`).
-        match crate::wsjt77::ft8_tones(msg) {
+        let tones = match crate::wsjt77::ft8_tones(msg) {
             Some(tones) => {
                 ft8::encode_later(msg);
                 tones
             }
             None => ft8::encode(msg),
+        };
+        // The vendored encoder's bad message, where only it could tell: every over carries its
+        // Costas arrays, so 79 zeros are that answer and never a frame.
+        if tones.iter().all(|&t| t == 0) {
+            return Vec::new();
         }
+        tones
     }
     fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
         // WSJT-X positions FT8 tones 0.5 s into the slot (the decoder's `xdt = t − 0.5`).
@@ -759,7 +772,11 @@ impl Mode for Ft4Mode {
         }
     }
     fn encode(&self, msg: &str) -> Vec<i32> {
-        // As FT8: lock-free, with the vendored encode owed for the callsign tables.
+        // As FT8: never a message the encoder refuses (its bad message is already empty here),
+        // and lock-free, with the vendored encode owed for the callsign tables.
+        if crate::wsjt77::ft4_refusal(msg).is_some() {
+            return Vec::new();
+        }
         match crate::wsjt77::ft4_tones(msg) {
             Some(tones) => {
                 ft4::encode_later(msg);

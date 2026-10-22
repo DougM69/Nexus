@@ -110,7 +110,9 @@ impl Engine {
                 {
                     return Err(Reason::InvalidAction);
                 }
-                self.qso_freetext(text);
+                // Text whose over the encoder refuses is refused, as the native box refuses it.
+                self.qso_freetext_checked(text)
+                    .map_err(|_| Reason::InvalidAction)?;
             }
             FtExchangeChange::Monitor => {
                 // Native S&P resets the same decoder state at the same point.

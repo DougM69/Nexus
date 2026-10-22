@@ -471,8 +471,9 @@ fn a_clicked_tx3_row_goes_out_as_the_row_shows_it() {
 /// other hashed (`genStdMsgs`, mainwindow.cpp: RR73 or RRR and 73, 9701-9702 and 9709-9710; a
 /// report, `t0a` 9596 and 9629-9631 or `t0b` 9597 and 9625-9626, then 9655-9656); each typed text
 /// packs to the 77 bits and FT4 tones of WSJT-X's message. With both calls standard, or both
-/// nonstandard, WSJT-X's message is `t0` (9591, 9595), which the text as typed already packs to;
-/// and text that is no standard message goes as typed.
+/// nonstandard, WSJT-X's message is `t0` (9591, 9595), which the text as typed already packs to.
+/// Text that is no standard message goes as typed where the packer has a frame for it; `TNX`
+/// beside W9XYZ/M has none and is never queued (`ft_refused_text_tests`).
 #[test]
 fn free_text_goes_out_as_wsjtxs_message_for_the_two_calls() {
     for tier in [Tier::Ft8, Tier::Ft4] {
@@ -507,13 +508,15 @@ fn free_text_goes_out_as_wsjtxs_message_for_the_two_calls() {
             let sent = keyed(&mut e, 4).expect("the free text");
             assert_eq!(air(&sent), air(wsjtx), "{what}: WSJT-X's on the air");
         }
-        // Not a standard message: as typed.
+        // Not a standard message, and `W9XYZ/M K1ABC TNX` has no frame (`pack77_4` builds it
+        // from a hash and a call it never set; it went on the air as `<...>`): never queued, and
+        // the reply keys.
         let mut e = answering_its_cq(tier);
         e.qso_freetext("TNX");
         assert_eq!(
             keyed(&mut e, 4).as_deref(),
-            Some("W9XYZ/M K1ABC TNX"),
-            "{}: free text",
+            Some("<W9XYZ/M> K1ABC FN42"),
+            "{}: free text with no frame",
             tier_name(tier)
         );
     }

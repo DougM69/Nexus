@@ -105,6 +105,9 @@ mod ft_midover_tests;
 /// Operate's FT8/FT4 sequencer working a nonstandard call, against WSJT-X's messages.
 #[cfg(test)]
 mod ft_nonstandard_tests;
+/// FT8/FT4 never key an over the encoder refuses, on every path that queues an operator's text.
+#[cfg(test)]
+mod ft_refused_text_tests;
 /// Every contact held in one form: one band, one phone mode, whichever way it came in.
 #[cfg(test)]
 mod held_form_tests;
@@ -17199,33 +17202,83 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// K1ABC 73`, another station. With both calls standard, or both nonstandard, WSJT-X's
     /// message is the bare text (`t0`, 9591 and 9595), which this already sends. It stays free
     /// text to the sequence either way; only what goes on the air changes.
+    ///
+    /// The refusal ([`Self::qso_freetext_checked`]) is not reported here; the operator's own
+    /// command reports it.
     pub fn qso_freetext(&mut self, text: &str) {
+        let _ = self.qso_freetext_checked(text);
+    }
+
+    /// [`Self::qso_freetext`], with its refusal: `Err` in the operator's words when the over this
+    /// text makes is one the encoder refuses ([`Self::ft_refusal`]), and then nothing changes.
+    /// `W9XYZ/M K1ABC TNX 73`, which `TNX 73` makes beside W9XYZ/M (or `W9XYZ K1ABC TNX 73`
+    /// beside a plain call), has no frame (`modes::wsjt77::Refusal`): keyed, it was 13.14 s of
+    /// one steady carrier. WSJT-X 3.0.2 keys that carrier too (`guiUpdate` stops only on an
+    /// empty message, `widgets/mainwindow.cpp:7802-7803`, and keys `genft8`'s zeros,
+    /// 7952-7962); the operator ruled that Nexus never keys it and says why.
+    pub fn qso_freetext_checked(&mut self, text: &str) -> Result<(), String> {
         let text = text.trim();
         if text.is_empty() {
-            return;
+            return Ok(());
         }
         let mycall = self.settings.mycall.clone();
-        if let Mode::Qso { station, .. } = &mut self.mode {
-            let std =
-                |c: &str| tempo_core::message::is_std_call(tempo_core::message::unhash_call(c));
-            let msg = match &station.dxcall {
-                Some(dx) => {
-                    let typed = format!("{dx} {mycall} {text}");
-                    let parsed = Msg::parse(&typed);
-                    if std(&mycall) != std(dx) && !matches!(parsed, Msg::Other(_)) {
-                        Msg::Other(QsoStation::on_air_form(&mycall, dx, parsed).to_text())
-                    } else {
-                        Msg::Other(typed)
-                    }
+        let Mode::Qso { station, .. } = &self.mode else {
+            return Ok(());
+        };
+        let std = |c: &str| tempo_core::message::is_std_call(tempo_core::message::unhash_call(c));
+        let msg = match &station.dxcall {
+            Some(dx) => {
+                let typed = format!("{dx} {mycall} {text}");
+                let parsed = Msg::parse(&typed);
+                if std(&mycall) != std(dx) && !matches!(parsed, Msg::Other(_)) {
+                    Msg::Other(QsoStation::on_air_form(&mycall, dx, parsed).to_text())
+                } else {
+                    Msg::Other(typed)
                 }
-                None => tempo_core::message::Msg::Other(text.to_string()),
-            };
+            }
+            None => tempo_core::message::Msg::Other(text.to_string()),
+        };
+        // Free text goes on the air as it is (`QsoStation::hashed_form` passes `Msg::Other`).
+        if let Some(why) = self.ft_refusal(&msg.to_text()) {
+            return Err(why);
+        }
+        if let Mode::Qso { station, .. } = &mut self.mode {
             station.override_next(msg);
             self.reset_tx_watchdog();
             // No record_own_tx here: QSO free text goes out as a SINGLE non-chunk frame,
             // which poll_tx already records (parse_chunk is None) — recording it here too
             // double-showed the row.
         }
+        Ok(())
+    }
+
+    /// Why this station cannot send `text` as an FT8 or FT4 over, in the operator's words, or
+    /// `None` where it can, or the tier is neither. The verdict `Ft8Mode::encode` and
+    /// `Ft4Mode::encode` key nothing on (`modes::wsjt77::Refusal`): asked where an operator's
+    /// text is queued, so the refusal is said before anything changes, and by [`Self::plan_tx`]
+    /// for any over that reaches it anyway.
+    fn ft_refusal(&self, text: &str) -> Option<String> {
+        let mode = match self.app.tier() {
+            Tier::Ft8 => modes::wsjt77::ft8_refusal(text).map(|_| "FT8")?,
+            Tier::Ft4 => modes::wsjt77::ft4_refusal(text).map(|_| "FT4")?,
+            _ => return None,
+        };
+        Some(format!(
+            "{mode} cannot encode \"{text}\", so nothing goes out. After two calls only a report \
+             (-12, R-12), RRR, RR73 or 73 fits; free text alone, as in Tx 5, holds 13 characters."
+        ))
+    }
+
+    /// Why the Tx-slot click on `text` to `dxcall` ([`Self::override_next_tx`]) would queue an
+    /// over the encoder refuses, in the operator's words ([`Self::ft_refusal`]), or `None`. The
+    /// row is judged as it would go on the air: read as the station reads a clicked row
+    /// (`QsoStation::tx_row`) and written for the pair (`QsoStation::on_air_form`), which leaves
+    /// free text as typed. WSJT-X keys a Tx box's text as it stands (`ui->tx5->currentText()`,
+    /// `widgets/mainwindow.cpp:7903`), refused or not.
+    pub fn override_next_tx_refusal(&self, dxcall: &str, text: &str) -> Option<String> {
+        let mycall = &self.settings.mycall;
+        let row = QsoStation::answering(mycall, "", dxcall).tx_row(text);
+        self.ft_refusal(&QsoStation::on_air_form(mycall, dxcall, row).to_text())
     }
 
     // ----- command delegates ----------------------------------------------
@@ -25289,6 +25342,11 @@ contact yourself."
         if self.tier_is_rx_only(self.app.tier()) {
             return Err("transmit unavailable for this tier".into());
         }
+        // ⛔ Never an over the encoder refuses: refused here, before the QSO, TX or the over on
+        // the air (`ft_restart`) changes.
+        if let Some(why) = self.override_next_tx_refusal(dxcall, text) {
+            return Err(why);
+        }
         let on_dx = matches!(&self.mode, Mode::Qso { station, .. }
             if station.dxcall.as_deref().map(|c| tempo_core::message::same_call(c, dxcall)).unwrap_or(false));
         if !on_dx {
@@ -26979,6 +27037,16 @@ contact yourself."
         };
         match text {
             Some(t) => {
+                // ⛔ NEVER AN OVER THE ENCODER REFUSES, whatever queued it. The operator's verbs
+                // refuse such text with the reason before it is queued (`qso_freetext_checked`,
+                // `override_next_tx_checked`); this is the backstop at the keying point, ahead of
+                // the band-activity row, the ALL.TXT line and the watchdog, so nothing records an
+                // over that never went. (`Ft8Mode::encode` would build it empty anyway.)
+                if let Some(why) = self.ft_refusal(&t) {
+                    tempo_core::applog::info("tx", &format!("over not keyed: {why}"));
+                    self.app.set_transmitting(false);
+                    return None;
+                }
                 self.app.set_transmitting(true);
                 // Wall-clock watchdog (WSJT-X): start the timer on the first over after
                 // an operator action, then trip (auto-halt TX) once REAL elapsed time

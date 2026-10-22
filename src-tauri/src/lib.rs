@@ -21030,8 +21030,8 @@ fn resume_chat_cq(
 }
 
 /// WSJT-X Tx-slot click: force `text` as the next transmission to `call`
-/// (starts/retargets the QSO, arms per the double-click behavior option). `afar`: as
-/// [`set_tx_enabled`]'s.
+/// (starts/retargets the QSO, arms per the double-click behavior option); refused, with the
+/// reason, when the encoder cannot send its over. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn override_next_tx(
     state: State<'_, SharedEngine>,
@@ -21042,6 +21042,10 @@ fn override_next_tx(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
+    // A row whose over the encoder refuses is never queued, and the operator is told why.
+    if let Some(why) = eng.override_next_tx_refusal(&call, &text) {
+        return Err(why);
+    }
     eng.override_next_tx(&call, grid.as_deref(), &text);
     command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
@@ -21696,8 +21700,8 @@ fn qso_resend(
 }
 
 /// Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
-/// `text`, directed to the current DX station when known. No-op outside a QSO.
-/// `afar`: as [`set_tx_enabled`]'s.
+/// `text`, directed to the current DX station when known. No-op outside a QSO; refused,
+/// with the reason, when the encoder cannot send its over. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn qso_freetext(
     state: State<'_, SharedEngine>,
@@ -21706,7 +21710,7 @@ fn qso_freetext(
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
-    eng.qso_freetext(&text);
+    eng.qso_freetext_checked(&text)?;
     command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
@@ -52205,6 +52209,71 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⛔ The free-text box's command and the Tx row's command, working W9XYZ/M on FT8: text whose
+    /// over the encoder refuses is answered with the reason, which the screen shows as the
+    /// command's error (`withErrorToast`), and nothing is queued. CONTROL: `73` is queued.
+    #[test]
+    fn the_free_text_and_tx_row_commands_answer_an_encoder_refusal_with_the_reason() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::{override_next_tx, qso_freetext};
+        use serde_json::{json, Value};
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("K1ABC", "FN42", 0),
+        ));
+        engine_lock(&engine).set_tier(tempo_app::dto::Tier::Ft8);
+        engine_lock(&engine).call_station_with_grid("W9XYZ/M", None);
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![override_next_tx, qso_freetext])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        let tx_now = || engine_lock(&engine).snapshot().qso.and_then(|q| q.tx_now);
+        let why = |text: &str| {
+            format!(
+                "FT8 cannot encode \"{text}\", so nothing goes out. After two calls only a report \
+                 (-12, R-12), RRR, RR73 or 73 fits; free text alone, as in Tx 5, holds 13 characters."
+            )
+        };
+        let before = tx_now();
+        assert!(before.is_some(), "premise: the call is queued");
+        assert_eq!(
+            ask("qso_freetext", json!({"text": "TNX 73"})),
+            Err(why("W9XYZ/M K1ABC TNX 73")),
+            "the free-text box"
+        );
+        assert_eq!(
+            ask(
+                "override_next_tx",
+                json!({"call": "W9XYZ/M", "text": "W9XYZ/M K1ABC TNX"})
+            ),
+            Err(why("W9XYZ/M K1ABC TNX")),
+            "the Tx row"
+        );
+        assert_eq!(tx_now(), before, "nothing queued");
+        assert!(
+            ask("qso_freetext", json!({"text": "73"})).is_ok(),
+            "CONTROL"
+        );
+        assert_eq!(tx_now().as_deref(), Some("W9XYZ/M <K1ABC> 73"), "CONTROL");
+    }
+
     /// A mock app and its main window.
     pub(crate) type ShackApp = (
         tauri::App<tauri::test::MockRuntime>,
@@ -53291,7 +53360,8 @@ mod tests {
                 "override_next_tx",
                 json!({"call": "K1ABC", "text": "K1ABC W9XYZ EN52"}),
             ),
-            ("qso_freetext", json!({"text": "TNX 73"})),
+            // A message FT8 can carry: after both calls, `TNX 73` is one the encoder refuses.
+            ("qso_freetext", json!({"text": "73"})),
             ("qso_resend", json!({})),
             ("set_tx_enabled", json!({"enabled": true})),
             ("start_cq", json!({})),

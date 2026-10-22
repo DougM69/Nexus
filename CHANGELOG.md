@@ -843,6 +843,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sends what its Tx3 box holds; the automatic sequence already sent it that way. NEEDS-BENCH: FT8, your call with
   /P, working a station signing /M that runs WSJT-X, click Tx3: WSJT-X decodes its own call in angle brackets,
   your call in full and RRR.
+- **FT8/FT4: free text that FT8 cannot send no longer keys a steady tone.** Nexus puts both calls in front of the
+  free text you type for the next message, so `TNX 73` becomes `W9XYZ K1ABC TNX 73`: a message FT8's encoder cannot
+  build. Nexus transmitted it anyway: on FT8, one steady tone for 13 seconds; on FT4 nothing went out, though Band
+  Activity and ALL.TXT showed it sent. With a station signing W9XYZ/M, `TNX` went out as a message naming nobody
+  (`<...>`). Now such a message is never transmitted, whether it comes from the free-text box, a Tx row (Tx 5 as
+  typed or filled from a macro), a click during an over, the contest screen or Remote, and Nexus says why: after
+  two calls only a report, R-report, RRR, RR73 or 73 fits, and free text on its own, as in Tx 5, holds 13
+  characters. The message you had queued stays queued. Text FT8 can send goes out as before. NEEDS-BENCH: FT8 into
+  a dummy load, working a WSJT-X station signing W9XYZ/M: type `TNX 73` in the free-text box; the reason shows,
+  nothing keys and your queued message goes out; then put `TNX 73` in Tx 5 and click it: WSJT-X decodes `TNX 73`.
 - **WSJT-X UDP: a Replay no longer marks old decodes as new.** When a logger such as JTAlert or GridTracker asks
   Nexus to replay the decodes, Nexus sent them marked New, as if just heard, so a program could alert on them again.
   They now go out marked not new, as WSJT-X sends them. Decodes as they are heard are still New. NEEDS-BENCH:

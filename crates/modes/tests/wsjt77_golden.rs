@@ -16,7 +16,7 @@
 //! The vendored encoder is called ONLY where the Rust one answers: some inputs stop the Fortran
 //! program (a list-directed read with no `err=`), and those are among the ones it declines.
 
-use modes::wsjt77::{ft4_tones, ft4_wave, ft8_tones, ft8_wave};
+use modes::wsjt77::{ft4_refusal, ft4_tones, ft4_wave, ft8_refusal, ft8_tones, ft8_wave, Refusal};
 use modes::{make_mode, ModeKind};
 
 /// Both encoders on `msg`, both modes. `must_encode`: a message Nexus can send, which the Rust
@@ -622,7 +622,9 @@ fn arbitrary_text_encodes_to_the_vendored_tones_or_is_declined() {
 }
 
 /// The modes' own encode (the transmit path): the Rust tones where it answers, the vendored
-/// encoder's where it declines, so the same tones either way.
+/// encoder's where it declines, so the same tones either way; and nothing where the encoder refuses
+/// the message, which is exactly where the vendored encoder answers a bad message (FT8's 79 zero
+/// tones, FT4's none) or the packer has no frame for the text (`Refusal::NoFrame`).
 #[test]
 fn the_ft8_and_ft4_modes_encode_the_vendored_tones() {
     let (ft8_mode, ft4_mode) = (make_mode(ModeKind::Ft8), make_mode(ModeKind::Ft4));
@@ -631,8 +633,14 @@ fn the_ft8_and_ft4_modes_encode_the_vendored_tones() {
         .step_by(7)
         .chain(nexus_corpus().iter())
     {
-        assert_eq!(ft8_mode.encode(msg), ft8::encode(msg), "FT8 {msg:?}");
-        assert_eq!(ft4_mode.encode(msg), ft4::encode(msg), "FT4 {msg:?}");
+        let (vendored8, vendored4) = (ft8::encode(msg), ft4::encode(msg));
+        let bad8 = vendored8.iter().all(|&t| t == 0);
+        let none8 = bad8 || ft8_refusal(msg) == Some(Refusal::NoFrame);
+        let none4 = vendored4.is_empty() || ft4_refusal(msg) == Some(Refusal::NoFrame);
+        let want8 = if none8 { Vec::new() } else { vendored8 };
+        let want4 = if none4 { Vec::new() } else { vendored4 };
+        assert_eq!(ft8_mode.encode(msg), want8, "FT8 {msg:?}");
+        assert_eq!(ft4_mode.encode(msg), want4, "FT4 {msg:?}");
     }
 }
 
