@@ -4,7 +4,7 @@
 > store-and-forward) and the modem/audio/rig substrate it shares with the rest
 > of **Nexus**, the all-mode amateur radio operations center this project became.
 >
-> **Author / contact:** KD9TAW &lt;kd9taw@protonmail.com&gt;
+> **Author / contact:** KD9TAW &lt;contact@hamradiotools.io&gt;
 > **Repository:** https://sourceforge.net/projects/nexus-ham-radio
 > **License:** GPL-3.0-only (full text in [`COPYING`](../COPYING)).
 
@@ -746,4 +746,4 @@ This is experimental amateur-radio software; operate within your license
 privileges and local regulations. ARRL Field Day prohibits fully-automated
 contacts, so Nexus's Field Day workflow is operator-initiated by design.
 
-**Author / open-source contact:** KD9TAW &lt;kd9taw@protonmail.com&gt;
+**Author / open-source contact:** KD9TAW &lt;contact@hamradiotools.io&gt;
