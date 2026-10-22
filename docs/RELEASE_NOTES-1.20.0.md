@@ -5,8 +5,10 @@ partner's R-report or RR73 is decoded after your over has started, the rest of t
 message. The over keeps its start and its end, where Nexus used to send the old message to the end and the right
 one an over later. Nexus also decodes at WSJT-X's moments: FT8's full decode runs 14.4 seconds into the period
 and FT4's one decode at 6.05 seconds, so a weak reply that only the full decode finds is known before your next
-over starts. An RR73 that answers your report or your RRR gets its 73, and Band Activity, Rx Frequency and the
-WSJT-X UDP feed give each decode the start of the period it was heard in.
+over starts. Each decode is handed on the moment it is found, as in WSJT-X, so that reply counts on a slower
+computer too. An RR73 that answers your report or your RRR gets its 73, and Band Activity, Rx Frequency and the
+WSJT-X UDP feed give each decode the start of the period it was heard in. Your RR73, RRR and 73 to a station
+signing a call such as W9XYZ/M are WSJT-X's, and a caller shown as `<...>` is not answered until its call shows.
 
 Nexus now supports TCI in full, as a Beta. It can drive an SDR program over TCI (ExpertSDR3 for the SunSDR,
 Thetis 2.10.3.14 and later, and piHPSDR) with no rigctld, virtual COM port or virtual audio cable: the dial, the
@@ -26,15 +28,15 @@ and 73 WSJT-X sends, and only your caller's own RR73 closes a Field Day contact.
 CW has a turn cue that says whose turn it is when you copy with the decoder, the AI decoder keeps up with the
 signal, the classic decoder copies fast stations from the first few characters, and Esc stops a CW message
 sooner. RTTY has a tuning scope, callsign tags on its waterfall, Auto-tune and AFSK on USB. Nexus Remote can
-operate the shack from a second Windows PC with Nexus on it (Beta, test builds), on your own network and over
-the internet, and the settings that guard transmitting stay at the station.
+operate the shack from a second Windows PC with Nexus on it, on your own network and over the internet. It is a
+Beta in the regular Windows installer, and the settings that guard transmitting stay at the station.
 
 On Windows, FT8, FT4 and the other WSJT-X modes finish decoding sooner. A KPA1500 can be reached over the
 network, PstRotatorAz is driven directly, the FT-1000 and FT-1000D have their own entries in the rig list, and the
 scope controls work on the IC-7300, IC-705, IC-905 and IC-7300MK2. The rest are fixes: a logger can no longer turn
-TX back on after you stop it, FT8 and FT4 wait while another program keys your radio through Nexus, CW holds the
-transmitter until its last word ends, and Native Icom CI-V always tells the radio to stop transmitting as it
-closes.
+TX back on after you stop it, FT8 and FT4 wait while another program keys your radio through Nexus, free text
+FT8 cannot send is refused instead of keying a steady tone, CW holds the transmitter until its last word ends,
+and Native Icom CI-V always tells the radio to stop transmitting as it closes.
 
 ## The short version
 
@@ -45,6 +47,12 @@ closes.
 - **An RR73 to your report or to your RRR gets a 73**, and a repeated report carries the new signal report.
 - **Each decode carries the start of its period** in Band Activity, Rx Frequency and the WSJT-X UDP feed, and
   programs on that feed see what you are transmitting.
+- **Each decode counts the moment it is found**, as in WSJT-X, in the decode list, ALL.TXT, the UDP feed and the
+  sequencer. FT8's early decode stops at 13.4 s, and the diagnostic log says when a period's decode was dropped.
+- **Your RR73, RRR and 73 to a station signing W9XYZ/M are WSJT-X's**, a typed 73 too, a clicked Tx3 goes out as it
+  shows, and a caller shown as `<...>` is not answered.
+- **Free text FT8 cannot send is refused with the reason** instead of keying a steady tone, and a logger's Replay
+  no longer marks old decodes as new.
 - **TCI (Beta):** Nexus drives an SDR program over TCI, transmits through it, draws its panadapter in the scope and
   puts Nexus's needed spots on it.
 - **Share by TCI:** programs on this computer use the radio through Nexus, may transmit voice, Tune and CW when you
@@ -69,8 +77,9 @@ closes.
   channel picks that put your signal on the channel.
 - **SSTV and 2 m FM:** the FM channels transmit simplex with no tone, the right radio gets an FM pick, Phone keeps FM
   there, and the ISS auto-arm sets FM and leaves a satellite you are working alone.
-- **Nexus Remote from a second Windows PC (Beta, test builds):** operate the shack on your network or over the
-  internet, add the station by signing in, and take control from another PC.
+- **Nexus Remote from a second Windows PC (Beta), in the regular Windows installer:** operate the shack on your
+  network or over the internet, add the station by signing in, take control from another PC, and save the shack's
+  files without replacing a file already on that PC.
 - **Remote keeps the station's own settings at the station:** transmit limits, keying lines, the TQSL path,
   logging-service keys and the addresses they go to.
 - **Logbook:** export the contacts you pick, open a contact's editor from a cockpit or Awards, a Recent contacts box
@@ -79,13 +88,21 @@ closes.
   the IC-7300 family's scope, the Icom network connection's SWR, and the IC-7300's sound card on a Mac.
 - **Windows:** the FFT library uses SSE2 and AVX, so the WSJT-X modes finish decoding sooner.
 - **Security:** the certificate libraries drop the distrusted emSign certificates, the updater no longer carries the
-  `zip` library, and the local sharing ports cap the length of a command.
+  `zip` library, the local sharing ports cap the length of a command, the PstRotatorAz link's rotator port hangs up
+  on a web page, and Remote refuses a saved-profile list from afar that the station cannot read in full, and never
+  sends out a list of its own that it cannot read.
 
 ## Upgrading from 1.19
 
 - **FT8 and FT4 decode at new moments.** FT8's full decode runs 14.4 s into the period instead of after the period
-  ends. FT4 decodes once, at 6.05 s, instead of at 5.5 s and again at 7.5 s. FT8's early decode at 11.8 s is
-  unchanged.
+  ends. FT4 decodes once, at 6.05 s, instead of at 5.5 s and again at 7.5 s. FT8's early decode still starts at
+  11.8 s, and now stops at 13.4 s if it is still running.
+- **Decodes show as they are found.** The decode list fills during each pass instead of in one block, and loggers
+  and PSK Reporter get each decode as it is found. Each still appears once.
+- **A caller shown as `<...>` is passed by, and free text FT8 cannot send is refused.** Nexus works the station once
+  its call shows in full, as WSJT-X does. A refused free text says why and your queued message stays queued: after
+  two calls only a report, R-report, RRR, RR73 or 73 fits, and free text on its own, as in Tx 5, holds 13
+  characters.
 - **A late reply changes the over on the air.** You will see a second Tx line in ALL.TXT for an over that switched,
   and GridTracker and JTAlert are told the new message as it switches. A Tx button clicked during an over switches
   it the same way.
@@ -124,6 +141,9 @@ closes.
   listens for its replies on its UDP Control Port + 1 (12001 by default).
 - **The first Fetch LoTW on a large account asks a year at a time**, newest first. The Connections log shows "piece
   n of m".
+- **Nexus Remote from a second PC is a Beta, in the regular Windows installer.** During the beta its internet road
+  runs on a test service. When the regular service starts, the beta accounts and their stations are deleted, and
+  each shack then signs in or pairs again. Nothing is billed during the beta, and using it does not start your trial.
 - **Nexus Remote from a second PC: both PCs must run the same version.** Update the shack first, or both together.
 - **A PC added by signing in waits for Approve at the shack** before it uses the internet road. Check the key it
   shows against the one at the shack.
@@ -153,7 +173,7 @@ closes.
   report.
 - **An RR73 answering your RRR is answered with 73**, once, and the contact is logged once. In a Call CQ run with
   "Roger with RRR (not RR73)" on, the caller's RR73 gets one 73 and the run then calls CQ again. A Hound never sends
-  the 73.
+  the 73: by Fox/Hound's own rules the Fox's RR73 ends a Hound's contact, as in WSJT-X.
 - **A repeated report carries the new signal report**, as WSJT-X 3.0 does, in FT8, FT4 and FST4. Heard at +20 and
   then +27, you send R+27 the second time and log +27.
 - **Flex native audio (Beta): the late-reply switch works on DAX.** Nexus sends the radio only the audio that is
@@ -176,8 +196,42 @@ closes.
 - **The FT screen's transmit meters keep their places** from the moment the radio keys, instead of stretching and
   shrinking as each reading arrived.
 
-<!-- PENDING: decodes shown as each pass finishes, with the give-up and a log of dropped passes (in flight; lands before the release; add it to the short version and recount the changes line) -->
-<!-- PENDING: the last FT reply fixes: the RRR form, and refusing a caller whose call shows as <...> (in flight; lands before the release; add it to the short version and recount the changes line) -->
+- **Each decode counts the moment it is found, as in WSJT-X.** Nexus handed a pass's decodes to the QSO sequencer
+  and the decode list only when the whole pass had finished. Now each one goes on as soon as it is found, and your
+  RX frequency is looked at first, so a weak reply on your frequency is in the decision for your next over even on
+  a slower computer, where it used to arrive after the over had started. The decodes are unchanged and each still
+  appears once, in the list, in ALL.TXT and to loggers and PSK Reporter, which now get each one as it is found. A CQ
+  run that picks the strongest, farthest or CQ callers first still compares all the answers a pass brings.
+- **FT8's early decode at 11.8 s stops at 13.4 s** if it is still running, as WSJT-X's does, so a slow computer no
+  longer loses that period's full decode to it.
+- **The diagnostic log says when a period's decode was dropped.** When the decoder is still busy as a period ends,
+  Nexus skips that period's decode. It said so only on a console that Windows never shows; the line, with how many
+  periods have been dropped so far, is now in the log you send with a report.
+- **Your RR73, RRR and 73 to a station signing W9XYZ/M are the ones WSJT-X sends.** Outside a contest, closing a
+  contact with a station whose call has a suffix such as /M or /QRP, or a prefix such as PJ4/, sent
+  `<W9XYZ/M> K1ABC RR73`: the right two calls, but not WSJT-X's message. Nexus now sends `W9XYZ/M <K1ABC> RR73` (or
+  RRR) and `W9XYZ/M <K1ABC> 73`, the same message bit for bit, also when your own call ends in /P or /R, and the Tx
+  panel's Tx4 and Tx5 show them that way.
+- **Typing 73 to a station signing W9XYZ/M no longer sends it to W9XYZ.** The free text you type for the next
+  message (`73`, `RR73`, `RRR` or a report) went out as `W9XYZ/M K1ABC 73`, which goes on the air as another
+  station's call, `W9XYZ K1ABC 73`. Nexus now sends the message WSJT-X sends for the two calls, such as
+  `W9XYZ/M <K1ABC> 73`.
+- **A clicked Tx3 row goes out as it shows.** With your call ending in /P or /R and a station signing W9XYZ/M, the
+  Tx3 row `<W9XYZ/M> K1ABC/P RRR` went out as the Tx4 message. It now goes as shown, as WSJT-X sends what its Tx3
+  box holds.
+- **A caller shown as `<...>` is not answered.** A station whose call has a suffix or a prefix can show as `<...>`
+  until Nexus has decoded its call in full. A CQ run answered such a caller, sending your report or roger to a call
+  no one could read, and a double-click on its CQ or another message, a logger's Reply, the Remote page or a click
+  on `<...>` started a contact with it. Nexus now passes it by and answers the next station that called you, or
+  calls CQ again, and a click says why. Once the call shows in full, the station is worked as usual. WSJT-X answers
+  no `<...>`.
+- **Free text FT8 cannot send no longer keys a steady tone.** Nexus puts both calls in front of the free text you
+  type, so `TNX 73` becomes `W9XYZ K1ABC TNX 73`, a message FT8's encoder cannot build. On FT8 it went out as one
+  steady tone for 13 seconds; on FT4 nothing went out, though Band Activity and ALL.TXT showed it sent. Now such a
+  message is never transmitted, from the free-text box, a Tx row, a click during an over, the contest screen or
+  Remote, and Nexus says why. The message you had queued stays queued, and text FT8 can send goes out as before.
+- **A logger's Replay no longer marks old decodes as new.** When JTAlert or GridTracker asks Nexus to replay the
+  decodes, they now go out marked not new, as WSJT-X sends them, so the program does not alert on them again.
 
 ### Contest FT8 and FT4
 
@@ -204,6 +258,12 @@ FT1, DX1 or FT2 in any contest.
   `W9XYZ/M <K1ABC> 73`, and the RR73 in the standard messages is WSJT-X's too.
 - **A double-click on a CQ from `<...>` answers nothing** with the contest switch on, and says why, as WSJT-X answers
   no `<...>`. Once the call shows in full, a double-click works it as usual.
+- **ARRL VHF contests and the standard messages: S&P passes a CQ from `<...>` by**, as Field Day's S&P already did,
+  and answers the station's next CQ once its call shows.
+- **Contests with the standard messages: when you run, a station signing W9XYZ/M that runs WSJT-X gets an
+  answer.** It calls with `<K1ABC> W9XYZ/M` and no grid, and your run kept calling CQ unless that station had Skip
+  Tx1 on. Nexus now answers with your report, `<W9XYZ/M> K1ABC -12`, as WSJT-X does, and logs W9XYZ/M with no
+  grid. The ARRL VHF contests and Field Day are unchanged.
 
 ## TCI (Beta): Nexus drives an SDR program
 
@@ -358,9 +418,9 @@ FT1, DX1 or FT2 in any contest.
 
 - **A turn cue for when you copy with the decoder.** A small lamp at the start of the CW send row says whose turn it
   is (`≋ W1ABC sending`, `▶ Your turn · F3`, `⏸ Hold · W2XYZ`, `? Not sure · F7`), and the F-key that fits glows. It
-  never transmits. It shows with the AI decoder on and the Decode pane shown, never in an unassisted entry, and Turn
-  Cue in ⊞ Panels hides it. A screen reader hears "Your turn" and "Hold", and a chirp is there if you turn on CW turn
-  sound.
+  never transmits. It shows with the AI decoder on and the Decode pane shown, never in an unassisted entry, and
+  unticking Turn Cue in ⊞ Panels hides it, after a restart too, until you tick it again. A screen reader hears
+  "Your turn" and "Hold", and a chirp is there if you turn on CW turn sound.
 - **The AI CW decoder keeps up with the signal.** Copy of a new station starts about a second after it does, letters
   land about a second after they are sent, and the last few letters show at once in a dimmer colour until the decoder
   confirms them. Only confirmed letters are used for the call chips, the log and the Remote copy.
@@ -423,34 +483,39 @@ FT1, DX1 or FT2 in any contest.
 
 ## Nexus Remote
 
-### Operating from a second PC (Beta, test builds)
+### Operating from a second PC (Beta)
 
-- **Operate the shack from a second Windows PC with Nexus on it (Beta, test builds).** On your own network, choose
+- **Operate the shack from a second Windows PC with Nexus on it (Beta).** On your own network, choose
   **Operate from this computer** beside your shack in **Stations on this network**. The second PC shows the full Nexus
   screens for the shack's radio, plays its receive audio and sends your microphone. Phone PTT, CW from the keyboard
   and its macros, FT8 and FT4 (timed by the shack) and JS8 work as at the shack. Stop has its own road, and the shack
-  unkeys within about 5 s if the network or the second PC drops. There is no paddle from afar.
-- **Over the internet too (Beta, test builds).** Press **Sign in…** on the station's row in **Stations on this
-  network**, sign in to Nexus Remote and approve the PC at the shack. **Operate from this computer** then reaches the
-  shack over the internet when it is not on your network, and moves back by itself. The internet road is part of Remote's paid service. Nothing transmits unless
-  Stop's own road is working. After 15 minutes with no click, key or PTT, Nexus asks "Still there?".
-- **Add your station by signing in, with no code (Beta, test builds).** Press **Sign in** in **Stations on this
+  unkeys within about 5 s if the network or the second PC drops. There is no paddle from afar. It is in the regular
+  Windows installer, a Beta like the rest of Nexus Remote, and needs no special build.
+- **Over the internet too (Beta).** For a shack paired with a code, press **Sign in…** on its row in **Stations on
+  this network** and sign in to Nexus Remote; a shack added by signing in has the internet road from the start.
+  Either way, approve the PC at the shack: until then the road waits. **Operate from this computer** then reaches the
+  shack over the internet when it is not on your network, and moves back by itself. The internet road is part of
+  Remote's paid service. Nothing transmits unless Stop's own road is working. After 15 minutes with no click, key or
+  PTT, Nexus asks "Still there?".
+- **Add your station by signing in, with no code (Beta).** Press **Sign in…** in **Stations on this
   network** and sign in with the account your station is linked to, or one its owner invited to operate it. The
   station is then on that PC on its own network in one step. Over the internet the PC waits until you approve it at
   the shack, where Nexus asks with the PC's key: a sign-in alone never lets a PC or a browser operate the station over
   the internet. The PC shows its own key so you can check it.
-- **Add your station from a PC that has never been on its network (Beta, test builds)**, such as a laptop away from
+- **Add your station from a PC that has never been on its network (Beta)**, such as a laptop away from
   home or a friend you invited: press **Not on this network** and the station is added over the internet, waiting for
   your approval at the shack.
 - **A signed-in PC keeps its place on the station's network by signing in again every 30 days.** In the last week its
   row says by what day, and **Operate from this computer** signs in again by itself. A PC paired again with a code
-  stays until you remove it at the shack (Beta, test builds).
-- **Tune, ATU, RTTY and PSK (Beta, test builds), APRS, SSTV and Chat, and every JS8 switch** work from the second PC.
+  stays until you remove it at the shack (Beta).
+- **Tune, ATU, RTTY and PSK (Beta), APRS, SSTV and Chat, and every JS8 switch** work from the second PC.
   Stop on either PC ends each, and losing the second PC for about 5 s ends them too. A satellite track started from
   the second PC stops when it drops.
 - **Take control.** When another PC is operating the shack, the banner offers **Take control**: anything that PC is
   transmitting stops, and this PC starts with TX off.
-- **The shack's recordings, ALL.TXT and SSTV pictures reach the second PC**, with **Save to this computer**.
+- **The shack's recordings, ALL.TXT and SSTV pictures reach the second PC**, with **Save to this computer**, which
+  never replaces a file already in that PC's Downloads folder: ALL.TXT saved a second time goes in as
+  `ALL (1).TXT`, the way a browser names a download, and the message after the save names the file.
 - **Stations on this network leads with Operate from this computer**, and **Operate at this address** works at an
   address or a computer name you type (`shack-pc.local`), which Nexus remembers with that station.
 - **Updating the second PC no longer locks you out without warning.** While it operates a shack, its update notice
@@ -461,7 +526,7 @@ FT1, DX1 or FT2 in any contest.
 ### Accounts and the browser stream
 
 - **On the shack's own network, Remote stays free.** Stream and Listen work from a browser already approved for the
-  station when the account's internet use has ended, held to that network at both ends.
+  station when the account's trial is over or its paid plan has lapsed, held to that network at both ends.
 - **One trial per callsign and per shack computer.** Approving a station sends the station callsign and one-way
   hashes of this computer's hardware and installation IDs; the IDs never leave the computer.
 - **Signing in shares less about you:** no name, nickname or picture, and the shack's own sign-in does not ask for
@@ -480,6 +545,10 @@ FT1, DX1 or FT2 in any contest.
   port and lines, the CW and RTTY keying lines, the Flex client's Beta switch, the licence class, the TQSL path, the
   logging-service keys and the addresses they are sent to.
 - **A config profile saved from afar no longer carries those settings** into the station.
+- **A save of Settings or of a profile from afar keeps the station's own value of every setting only the station
+  can change:** what lets the station transmit with nobody at a key or lets another program or a browser transmit,
+  the guards on a transmission, the lines that key the radio, the TQSL path, where your keys and passwords are sent,
+  and the Club Log and Cloudlog keys. The CHANGELOG lists each one.
 - **Logging-service keys stay at the station.** A computer driving it sees only whether one is saved, and the connector
   Test buttons run at the station and answer only whether it worked. A key a service echoes back is hidden from the
   message.
@@ -545,6 +614,14 @@ FT1, DX1 or FT2 in any contest.
 - **Security: the radio-sharing ports and the PstRotatorAz link's rotator port cap how much Nexus reads for one
   command.** A local connection sending an endless command is ended. These ports are reachable only from this
   computer.
+- **Security: the PstRotatorAz link's rotator port hangs up on a web page.** A page open in a browser on this
+  computer can send a request to that port. Nothing in such a request moved the antenna, but only because of where
+  a browser's request puts a blank line. The port now ends the connection at the request's first line and answers
+  it nothing, as the radio-sharing port does. Rotator programs are unaffected.
+- **Security: Nexus Remote refuses a saved-profile list from afar that the station cannot read in full.** Nothing
+  of that save is written, so a profile saved from another computer can never change the settings set at the
+  station only. If the station's own saved profiles cannot be read in full, they are not sent to that computer, so
+  no logging-service key saved in a profile leaves the station.
 - **The old Remote browser workspace is removed.** Remote is the shack's own screen streamed to your browser.
 
 ## Known issues
@@ -562,15 +639,19 @@ FT1, DX1 or FT2 in any contest.
 - Cabrillo has no field for operating time, so the file is unchanged.
 - From a second PC there is no paddle, and on a network that blocks Stop's own road (some hotels and offices)
   transmitting is off.
+- Nexus Remote's internet road from a second PC runs on a test service during the beta (see Upgrading).
 - NEEDS-BENCH, not yet checked on the hardware they need: TCI on ExpertSDR3, Thetis and AetherSDR (transmitting, the
   panadapter, the spots and a clean close), a program's voice audio through Share by TCI, Log4OM's spots, the FT8 and
   FT4 late-reply switch on a sound card, on a Flex's DAX and in a contest, the new 73 answers, Field Day and the ARRL
   VHF contests with a station signing a suffixed call, the new decode moments and the repeated report with a weak
   station, and FT8 and FT4 waiting while WSJT-X holds PTT through Nexus.
+- Also NEEDS-BENCH for FT8 and FT4: decodes counted as they are found, with weak stations; your RR73, RRR and typed
+  73 to a station signing a suffixed call that runs WSJT-X, and the clicked Tx3; a caller or a CQ shown as `<...>`,
+  outside a contest and in the contests with the standard messages; the refused free text; and a logger's Replay.
 - Also NEEDS-BENCH: CW's meters, Tune, PTT and the voice keyer during a CW send, the CAT keyer's refusal on a Kenwood,
   an Elecraft and an FTDX10, AFSK RTTY on USB, the RTTY waterfall band and Auto-tune, PstRotatorAz, the FT-1000 and
   FT-1000D, the KPA1500 over the network and at its fast baud rates, the IC-7300's scope, the Icom network
   connection's SWR, Native Icom CI-V's close while keyed, the contest logger window pinned on Windows, JS8 to a /P
   call, and the Remote second-PC features (two PCs, the radio into a dummy load).
 
-**164 changes since 1.19.0.** The full list is in the CHANGELOG.
+**179 changes since 1.19.0.** The full list is in the CHANGELOG.
