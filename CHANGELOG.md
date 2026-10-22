@@ -5,6 +5,45 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **FT8/FT4: the test of what Nexus refuses to send names the refused messages.** The build's test that compares
+  every FT8 and FT4 over against WSJT-X's own encoder took the list of messages Nexus refuses to send from the very
+  check it was there to test, so that check refusing a message Nexus should send would still have passed. The test
+  now names the refused messages, and such a mistake fails the build. Nothing you see on the air or on screen
+  changes.
+
+### Fixed
+- **WSJT-X UDP: a logger's Replay gets back everything Band Activity holds.** When JTAlert, GridTracker or a
+  logger asks Nexus to replay the decodes, as it does when it starts while Nexus is running, Nexus sent only the
+  last period's. It now sends every decode Band Activity still holds, oldest first, each with the start of the
+  period it was heard in and marked not new, as WSJT-X does. Once you erase Band Activity, a logger clears it or a
+  band or mode change wipes it, a Replay sends only what has been heard since; a logger's Clear of Rx Frequency
+  alone leaves it. NEEDS-BENCH: Nexus decoding FT8 with its UDP feed on for a few minutes, then start GridTracker
+  or JTAlert: the decodes of all those periods come back with their own times and no new alerts. Erase Band
+  Activity and restart the program: nothing comes back until the next period is decoded.
+- **WSJT-X UDP: a logger's free text goes into Tx 5, and out as Tx 5, as in WSJT-X.** Free text from JTAlert,
+  GridTracker or a logger became a chat broadcast, which the FT8 and FT4 screen never sent (and on FT8 in Chat a
+  piece of it could go out reading as another station's call). Now the text goes into Tx 5. When the program asks
+  for it to be sent, it is your next over, as when you click Tx 5, and an over on the air switches to it, as in
+  WSJT-X; an empty text that is not sent clears Tx 5. It goes out only while TX is on, and it never turns TX on or
+  restarts the TX watchdog. When it does not go out, Tx 5 still shows it and Nexus says why: TX is off, it is
+  text FT8 or FT4 cannot encode (as for the free text you type), the contest screen sends its own exchange, or
+  the program asked to send Tx 5 without its text. Chat sends it as a chat broadcast, as before, on the Tempo
+  tiers only. NEEDS-BENCH: FT8 into a dummy load with TX on and the UDP feed on, and WSJT-X's message_aggregator
+  example (or GridTracker) connected: type `TNX 73` in its free-text box and Tx 5 follows each key; press Enter
+  and the next over is `TNX 73`, which a WSJT-X station decodes; press Enter during an over and the rest of it
+  switches. With TX off, Enter fills Tx 5, says TX is off and nothing keys. Enter on `W9XYZ K1ABC TNX 73`
+  says FT8 cannot encode it and nothing keys. Repeat on FT4, and once on the contest screen (the run goes on).
+- **Nexus Remote: Save to this computer saves only the station's own kinds of file.** The second PC saves a
+  recording (.wav), an SSTV picture (.png or .bmp) or ALL.TXT, and nothing else. Any other file is refused with a
+  message that names it, and nothing is written to the Downloads folder.
+- **FT8/FT4: a logging program's Clear of Rx Frequency clears only that pane.** When a program connected over the
+  WSJT-X UDP link asks to clear the Rx Frequency window, Nexus now empties only its Rx Frequency pane, and a clear of
+  Band Activity empties only Band Activity, as WSJT-X does. Before, any clear from such a program emptied both decode
+  panes.
+
 ## [1.20.0] — 2026-10-22
 
 ### Added
@@ -1049,13 +1088,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station file whose name is taken there, such as ALL.TXT saved a second time, is saved as `ALL (1).TXT`, then
   `ALL (2).TXT`, the way a browser names a download, and the file that was there keeps every byte. The message
   after the save names the file it went to.
-- **Nexus Remote: Save to this computer saves only the station's own kinds of file.** The second PC saves a
-  recording (.wav), an SSTV picture (.png or .bmp) or ALL.TXT, and nothing else. Any other file is refused with a
-  message that names it, and nothing is written to the Downloads folder.
-- **FT8/FT4: a logging program's Clear of Rx Frequency clears only that pane.** When a program connected over the
-  WSJT-X UDP link asks to clear the Rx Frequency window, Nexus now empties only its Rx Frequency pane, and a clear of
-  Band Activity empties only Band Activity, as WSJT-X does. Before, any clear from such a program emptied both decode
-  panes.
 
 ### Security
 - **Nexus Remote: a config profile saved from a computer driving the station no longer carries the settings set at the
