@@ -1137,6 +1137,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   command line and ends a connection that runs past it; nothing in an over-long line reaches the rotator, and rotator
   programs, whose commands are short, are unaffected. The link is new since 1.19.0, so no earlier release is affected,
   and the port is reachable only from this computer.
+- **The PstRotatorAz link's rotator port now hangs up on a web page.** A page open in a browser on this computer can
+  send a request to the port Nexus answers rotator commands on. Nothing in such a request moved the antenna, but only
+  because of where a browser's request happens to put a blank line. The port now ends the connection at the request's
+  first line and answers it nothing, as the radio-sharing port does; rotator programs are unaffected.
 
 ## [1.19.0] — 2026-10-16
 

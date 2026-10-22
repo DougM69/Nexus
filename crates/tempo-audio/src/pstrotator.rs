@@ -302,8 +302,8 @@ fn answer(peer: &Peer, line: &str) -> Option<String> {
     Some(reply)
 }
 
-/// One rotctld client, served until it hangs up, sends a line longer than [`MAX_LINE_BYTES`], or
-/// the link is dropped.
+/// One rotctld client, served until it hangs up, sends a line longer than [`MAX_LINE_BYTES`] or an
+/// HTTP request line, or the link is dropped.
 fn serve(mut conn: TcpStream, peer: Arc<Peer>, halt: Arc<AtomicBool>) {
     // An accepted socket inherits the listener's non-blocking mode on Windows.
     if conn.set_nonblocking(false).is_err() || conn.set_read_timeout(Some(TICK)).is_err() {
@@ -323,7 +323,19 @@ fn serve(mut conn: TcpStream, peer: Arc<Peer>, halt: Arc<AtomicBool>) {
                     .position(|b| *b == b'\n')
                 {
                     let line: Vec<u8> = pending.drain(..=end).collect();
-                    let Some(reply) = answer(&peer, String::from_utf8_lossy(&line).trim()) else {
+                    let line = String::from_utf8_lossy(&line);
+                    // A web page the operator visits can POST here with no preflight, as it can
+                    // to the shared CAT port. Hang up at its request line, answering nothing, so
+                    // no part of the request is ever read as a command.
+                    if crate::rigctld_server::looks_like_http(&line) {
+                        tempo_core::applog::info(
+                            "rotator",
+                            "an HTTP request on the rotctld port: a web page, not a rotator \
+                             program, so the link hung up on it",
+                        );
+                        return;
+                    }
+                    let Some(reply) = answer(&peer, line.trim()) else {
                         return;
                     };
                     if conn.write_all(reply.as_bytes()).is_err() {
@@ -999,5 +1011,36 @@ mod tests {
             );
             assert!(closed, "`q` ends the session ({chunk} bytes a write)");
         }
+    }
+
+    /// A web page the operator visits can POST to this port: a `text/plain` form is a request a
+    /// browser sends with no preflight. The link hangs up at the request line, answers nothing,
+    /// and nothing in the body reaches PstRotatorAz.
+    #[test]
+    fn an_http_post_from_a_web_page_is_hung_up_on_at_its_request_line() {
+        let bytes = b"POST / HTTP/1.1\r\n\
+                      Host: 127.0.0.1:4533\r\n\
+                      Content-Type: text/plain\r\n\
+                      Content-Length: 14\r\n\
+                      \r\n\
+                      P 90 0\nS\nK\n";
+        let (heard, closed, said) = sent(bytes, bytes.len());
+        assert_eq!(heard, Vec::<String>::new(), "nothing reached PstRotatorAz");
+        assert!(closed, "the link hung up on the web page: {said:?}");
+        assert_eq!(said, "", "a web page is answered nothing");
+    }
+
+    /// The hang-up is the request line's own, not the blank line that ends a request's headers:
+    /// a command right after an HTTP request line never runs.
+    #[test]
+    fn an_http_request_line_alone_is_hung_up_on() {
+        let (heard, closed, said) = sent(b"GET / HTTP/1.1\r\nP 90 0\n", 64);
+        assert_eq!(
+            heard,
+            Vec::<String>::new(),
+            "the command after it never ran"
+        );
+        assert!(closed, "an HTTP request line hangs up: {said:?}");
+        assert_eq!(said, "", "nothing is answered to a web page");
     }
 }
