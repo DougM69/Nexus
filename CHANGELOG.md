@@ -544,6 +544,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NON-ASSISTED under Spotting assistance writes it into your Cabrillo log but turns nothing off: the CW decoder, the
   spots, Super Check Partial and call history stay on until you switch Unassisted entry on. While the switch is
   off, a line beside the picker now says so, with a button that turns it on. Nothing turns it on unless you click.
+- **FT8/FT4: the test of what Nexus refuses to send names the refused messages.** The build's test that compares
+  every FT8 and FT4 over against WSJT-X's own encoder took the list of messages Nexus refuses to send from the very
+  check it was there to test, so that check refusing a message Nexus should send would still have passed. The test
+  now names the refused messages, and such a mistake fails the build. Nothing you see on the air or on screen
+  changes.
 
 ### Removed
 - **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to

@@ -621,24 +621,55 @@ fn arbitrary_text_encodes_to_the_vendored_tones_or_is_declined() {
     assert!(declined * 10 < total, "{declined} of {total} declined");
 }
 
+/// The texts the encoder refuses because the packer would build their frame from a field it never
+/// set (`Refusal::NoFrame`), named here so that the verdict below is checked, not trusted: the
+/// encoder's own refusal deciding what to expect could never catch it refusing a message it should
+/// send. The typed and Nexus corpora hold no such text (the walk checks that too), so the walk adds
+/// these, the ones Nexus's free text and Tx rows can make (`wsjt77`'s unit tests).
+const NO_FRAME: &[&str] = &[
+    "W9XYZ K1ABC TNX 73",
+    "W9XYZ/M K1ABC TNX 73",
+    "W9XYZ K1ABC 73 GL",
+    "W9XYZ K1ABC 5NN 001",
+    "W9XYZ K1ABC TNX 599 001",
+    "W9XYZ K1ABC 2B XYZ",
+    "W9XYZ/M K1ABC TNX",
+    "W9XYZ/M K1ABC/P",
+    "<...> PJ4/K1ABC RR73",
+    "K1ABC/ABCD 37",
+];
+
 /// The modes' own encode (the transmit path): the Rust tones where it answers, the vendored
 /// encoder's where it declines, so the same tones either way; and nothing where the encoder refuses
 /// the message, which is exactly where the vendored encoder answers a bad message (FT8's 79 zero
-/// tones, FT4's none) or the packer has no frame for the text (`Refusal::NoFrame`).
+/// tones, FT4's none) and for the [`NO_FRAME`] texts, the only ones `Refusal::NoFrame` names. The
+/// vendored encoder is not asked for those: its frame for them is whatever its memory held.
 #[test]
 fn the_ft8_and_ft4_modes_encode_the_vendored_tones() {
     let (ft8_mode, ft4_mode) = (make_mode(ModeKind::Ft8), make_mode(ModeKind::Ft4));
-    for msg in typed_corpus()
-        .iter()
+    let walked: Vec<String> = typed_corpus()
+        .into_iter()
         .step_by(7)
-        .chain(nexus_corpus().iter())
-    {
-        let (vendored8, vendored4) = (ft8::encode(msg), ft4::encode(msg));
-        let bad8 = vendored8.iter().all(|&t| t == 0);
-        let none8 = bad8 || ft8_refusal(msg) == Some(Refusal::NoFrame);
-        let none4 = vendored4.is_empty() || ft4_refusal(msg) == Some(Refusal::NoFrame);
-        let want8 = if none8 { Vec::new() } else { vendored8 };
-        let want4 = if none4 { Vec::new() } else { vendored4 };
+        .chain(nexus_corpus())
+        .chain(NO_FRAME.iter().map(|m| m.to_string()))
+        .collect();
+    for msg in &walked {
+        let no_frame = NO_FRAME.contains(&msg.as_str());
+        assert_eq!(
+            (
+                ft8_refusal(msg) == Some(Refusal::NoFrame),
+                ft4_refusal(msg) == Some(Refusal::NoFrame)
+            ),
+            (no_frame, no_frame),
+            "FT8, FT4 refuse {msg:?} as a text with no frame"
+        );
+        let (want8, want4) = if no_frame {
+            (Vec::new(), Vec::new())
+        } else {
+            let (vendored8, vendored4) = (ft8::encode(msg), ft4::encode(msg));
+            let bad8 = vendored8.iter().all(|&t| t == 0);
+            (if bad8 { Vec::new() } else { vendored8 }, vendored4)
+        };
         assert_eq!(ft8_mode.encode(msg), want8, "FT8 {msg:?}");
         assert_eq!(ft4_mode.encode(msg), want4, "FT4 {msg:?}");
     }
