@@ -372,8 +372,9 @@ const NOT_IMPLEMENTED: &str = "RPRT -11\n";
 /// this module.
 ///
 /// A real rigctld client never sends this. Hamlib's own protocol has no line ending in
-/// ` HTTP/1.x`, so refusing one costs nothing and closes the whole class.
-fn looks_like_http(line: &str) -> bool {
+/// ` HTTP/1.x`, so refusing one costs nothing and closes the whole class. The PstRotatorAz link's
+/// rotctld port asks the same question ([`crate::pstrotator`]).
+pub(crate) fn looks_like_http(line: &str) -> bool {
     let l = line.trim_end();
     // "GET / HTTP/1.1", "POST /x HTTP/1.0" — the version token is the tell, and it is what a
     // browser must send. Matching the METHOD alone would be wrong: `G` is a real rigctld verb.

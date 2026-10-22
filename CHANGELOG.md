@@ -1100,6 +1100,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ended the other computers' sessions and took back their control of the station. While the disk was busy, or
   something held the settings file open, those computers stayed connected and anything they had on the air kept going
   until the save finished. Now the port closes and the sessions end first, and the setting is saved after.
+- **Nexus Remote: Save to this computer never replaces a file already in the second PC's Downloads folder.** A
+  station file whose name is taken there, such as ALL.TXT saved a second time, is saved as `ALL (1).TXT`, then
+  `ALL (2).TXT`, the way a browser names a download, and the file that was there keeps every byte. The message
+  after the save names the file it went to.
 
 ### Security
 - **Nexus Remote: a config profile saved from a computer driving the station no longer carries the settings set at the
@@ -1137,6 +1141,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   command line and ends a connection that runs past it; nothing in an over-long line reaches the rotator, and rotator
   programs, whose commands are short, are unaffected. The link is new since 1.19.0, so no earlier release is affected,
   and the port is reachable only from this computer.
+- **The PstRotatorAz link's rotator port now hangs up on a web page.** A page open in a browser on this computer can
+  send a request to the port Nexus answers rotator commands on. Nothing in such a request moved the antenna, but only
+  because of where a browser's request happens to put a blank line. The port now ends the connection at the request's
+  first line and answers it nothing, as the radio-sharing port does; rotator programs are unaffected.
 
 ## [1.19.0] — 2026-10-16
 

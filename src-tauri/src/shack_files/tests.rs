@@ -154,8 +154,8 @@ fn the_size_bound_holds() {
 }
 
 /// ★ The save lands here: the pieces written into this computer's Downloads folder make the
-/// station's file, a save begun again replaces an older file of that name, a piece out of its
-/// place is refused, and the name cannot lead out of the folder.
+/// station's file, a piece out of its place is refused, and the name cannot lead out of the
+/// folder.
 #[test]
 fn the_save_lands_on_this_computer() {
     // Downloads sits inside a folder of this run's own, so the escape checked below would land
@@ -167,11 +167,6 @@ fn the_save_lands_on_this_computer() {
     std::fs::create_dir_all(&downloads).unwrap();
     let file = bytes(PIECE_BYTES + 77);
     std::fs::write(shack.join("qso-KD9TAW-1.wav"), &file).unwrap();
-    std::fs::write(
-        downloads.join("qso-KD9TAW-1.wav"),
-        b"an older, longer file of that name",
-    )
-    .unwrap();
 
     let mut offset = 0u64;
     loop {
@@ -179,7 +174,10 @@ fn the_save_lands_on_this_computer() {
         let saved = save_piece_in(&downloads, "qso-KD9TAW-1.wav", &piece.data, offset).unwrap();
         assert_eq!(
             saved,
-            downloads.join("qso-KD9TAW-1.wav").display().to_string()
+            Saved {
+                name: "qso-KD9TAW-1.wav".into(),
+                path: downloads.join("qso-KD9TAW-1.wav").display().to_string(),
+            }
         );
         offset += crate::b64_decode(&piece.data).unwrap().len() as u64;
         if offset >= piece.size {
@@ -196,5 +194,66 @@ fn the_save_lands_on_this_computer() {
     let saved = save_piece_in(&downloads, "../escape.wav", &first.data, 0);
     assert!(saved.is_err(), "{saved:?}");
     assert!(!root.join("escape.wav").exists());
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// ★ A save never writes over a file already in this computer's Downloads folder: the fetched
+/// file takes the next free name, `name (1).ext`, `name (2).ext`, as a browser names a download,
+/// and the files that were there keep every byte.
+#[test]
+fn a_save_never_writes_over_a_file_in_downloads() {
+    let root = scratch("no-overwrite");
+    let (shack, downloads) = (root.join("shack"), root.join("Downloads"));
+    std::fs::create_dir_all(&shack).unwrap();
+    std::fs::create_dir_all(&downloads).unwrap();
+    let file = bytes(PIECE_BYTES + 77);
+    std::fs::write(shack.join("qso-KD9TAW-1.wav"), &file).unwrap();
+    let older = b"an older file of that name";
+    let oldest = b"and one saved before it";
+    std::fs::write(downloads.join("qso-KD9TAW-1.wav"), older).unwrap();
+    std::fs::write(downloads.join("qso-KD9TAW-1 (1).wav"), oldest).unwrap();
+
+    // Each later piece names the file the first one started, as the window saving it does.
+    let (mut offset, mut target) = (0u64, "qso-KD9TAW-1.wav".to_string());
+    loop {
+        let piece = read_in(Folder::Recordings, &shack, "qso-KD9TAW-1.wav", offset).unwrap();
+        let saved = save_piece_in(&downloads, &target, &piece.data, offset).unwrap();
+        assert_eq!(
+            saved,
+            Saved {
+                name: "qso-KD9TAW-1 (2).wav".into(),
+                path: downloads.join("qso-KD9TAW-1 (2).wav").display().to_string(),
+            }
+        );
+        target = saved.name;
+        offset += crate::b64_decode(&piece.data).unwrap().len() as u64;
+        if offset >= piece.size {
+            break;
+        }
+    }
+    assert_eq!(
+        std::fs::read(downloads.join("qso-KD9TAW-1.wav")).unwrap(),
+        older
+    );
+    assert_eq!(
+        std::fs::read(downloads.join("qso-KD9TAW-1 (1).wav")).unwrap(),
+        oldest
+    );
+    assert!(std::fs::read(downloads.join("qso-KD9TAW-1 (2).wav")).unwrap() == file);
+
+    // ALL.TXT and a name with no extension take the number the same way.
+    std::fs::write(downloads.join("ALL.TXT"), older).unwrap();
+    std::fs::write(downloads.join("notes"), older).unwrap();
+    let ab = crate::b64_encode(b"AB");
+    assert_eq!(
+        save_piece_in(&downloads, "ALL.TXT", &ab, 0).unwrap().name,
+        "ALL (1).TXT"
+    );
+    assert_eq!(
+        save_piece_in(&downloads, "notes", &ab, 0).unwrap().name,
+        "notes (1)"
+    );
+    assert_eq!(std::fs::read(downloads.join("ALL.TXT")).unwrap(), older);
+    assert_eq!(std::fs::read(downloads.join("notes")).unwrap(), older);
     std::fs::remove_dir_all(&root).unwrap();
 }

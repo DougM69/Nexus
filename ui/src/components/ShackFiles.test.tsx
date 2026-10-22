@@ -78,7 +78,7 @@ const created: Blob[] = []
 beforeEach(() => {
   vi.clearAllMocks()
   created.length = 0
-  shackFileSave.mockImplementation(async (name: string) => `/home/op/Downloads/${name}`)
+  shackFileSave.mockImplementation(async (name: string) => ({ name, path: `/home/op/Downloads/${name}` }))
   URL.createObjectURL = vi.fn((blob: Blob) => {
     created.push(blob)
     return `blob:picture-${created.length}`
@@ -124,6 +124,22 @@ describe('a station file saved on this computer', () => {
     expect(shackFileRead.mock.calls.map((c) => c[2])).toEqual([0, 1000, 2000])
     expect(savedHere()).toEqual(file)
     expect(progress).toEqual([0.4, 0.8, 1])
+  })
+
+  it('never over a file already in Downloads: every piece goes to the free name the first one took', async () => {
+    const file = station(2500, 1000)
+    shackFileSave.mockImplementation(async (name: string, _data: string, offset: number) => {
+      const taken = offset === 0 ? 'qso-KD9TAW-1 (1).wav' : name
+      return { name: taken, path: `/home/op/Downloads/${taken}` }
+    })
+    const path = await saveStationFile('recordings', 'qso-KD9TAW-1.wav')
+    expect(shackFileSave.mock.calls.map((c) => c[0])).toEqual([
+      'qso-KD9TAW-1.wav',
+      'qso-KD9TAW-1 (1).wav',
+      'qso-KD9TAW-1 (1).wav',
+    ])
+    expect(savedHere()).toEqual(file)
+    expect(path).toBe('/home/op/Downloads/qso-KD9TAW-1 (1).wav')
   })
 
   it('an empty file is saved empty, in one call', async () => {
