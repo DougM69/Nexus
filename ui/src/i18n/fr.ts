@@ -73,6 +73,7 @@ export const FR: PartialCatalog = {
   "remote.stationFiles.saving": "Enregistrement… {{pct}} %",
   "remote.stationFiles.save.done": "Enregistré dans {{path}}",
   "remote.stationFiles.save.failed": "Impossible d’enregistrer le fichier de la station sur cet ordinateur",
+  "remote.stationFiles.save.notShared": "{{name}} n’est ni un enregistrement, ni une image SSTV, ni ALL.TXT",
   "remote.stationFiles.list.label": "Enregistrer sur cet ordinateur…",
   "remote.stationFiles.list.title.recordings": "Enregistrements à la station",
   "remote.stationFiles.list.title.sstv": "Images SSTV à la station",

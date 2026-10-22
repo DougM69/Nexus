@@ -28,6 +28,13 @@ fn free_text_datagram(text: &str, send: bool) -> Vec<u8> {
     w.into_bytes()
 }
 
+/// A logger's Clear (WSJT-X UDP message type 3) of `window`: 0 Band Activity, 1 Rx Frequency, 2 both.
+fn clear_datagram(window: u8) -> Vec<u8> {
+    let mut w = head(tempo_net::wsjtx::msg_type::CLEAR);
+    w.put_u8(window);
+    w.into_bytes()
+}
+
 /// A logger's HaltTx (WSJT-X UDP message type 8), auto-TX-only off: halt now.
 pub(super) fn halt_tx_datagram() -> Vec<u8> {
     let mut w = head(tempo_net::wsjtx::msg_type::HALT_TX);
@@ -179,5 +186,24 @@ fn a_loggers_free_text_without_send_fills_tx5_only() {
         (taken.and_then(|t| t.fill), now_sending(&engine)),
         (Some("TNX 73".to_string()), None),
         "(Tx 5, now sending)"
+    );
+}
+
+/// A logger's Clear erases the panes its window names, as WSJT-X's does (`++window`; `& 1` Band
+/// Activity, `& 2` Rx Frequency; `widgets/mainwindow.cpp:667-674`): 0 Band Activity only, 1 Rx
+/// Frequency only, 2 both, 3 neither. Each pane has its own tick in the snapshot, which the window
+/// showing it erases on.
+#[test]
+fn a_loggers_clear_erases_only_the_panes_its_window_names() {
+    let cleared = |window: u8| {
+        let engine = Arc::new(Mutex::new(Engine::new("K2DEF", "FN31", 0)));
+        deliver(&engine, &[clear_datagram(window)]);
+        let s = engine.lock().unwrap().snapshot();
+        (s.clear_tick, s.rx_freq_clear_tick)
+    };
+    assert_eq!(
+        [0, 1, 2, 3].map(cleared),
+        [(1, 0), (0, 1), (1, 1), (0, 0)],
+        "(Band Activity, Rx Frequency) ticks after a Clear of window 0, 1, 2, 3"
     );
 }

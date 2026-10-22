@@ -4615,12 +4615,15 @@ pub struct AppSnapshot {
     /// latch that Work withheld. Absent from the wire for a Work made at the station.
     #[serde(default, skip_serializing_if = "is_false")]
     pub work_afar: bool,
-    /// Bumped by an inbound UDP Clear — the UI erases its panes on change.
+    /// Bumped by an inbound UDP Clear of Band Activity — the UI erases that pane on change.
     #[serde(default)]
     pub clear_tick: u32,
     /// The last FreeText a logger sent (JTAlert, GridTracker), as Tx 5 took it. Absent until one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub udp_free_text: Option<UdpFreeText>,
+    /// Bumped by an inbound UDP Clear of Rx Frequency — the UI erases that pane on change.
+    #[serde(default)]
+    pub rx_freq_clear_tick: u32,
     /// Bumped every time a QSO is logged, by ANY path — the UI fires the
     /// "clear DX call after logging" wipe on change, so a backend auto-log
     /// clears the cockpit's DX fields just like a manual log does.

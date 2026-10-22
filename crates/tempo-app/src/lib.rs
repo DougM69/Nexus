@@ -1024,6 +1024,7 @@ impl AppState {
             highlights: Vec::new(),
             clear_tick: 0,
             udp_free_text: None,
+            rx_freq_clear_tick: 0,
             logged_tick: 0,
             hunt: None,
             // Filled by the engine while coordinated QSY is enabled; None here.

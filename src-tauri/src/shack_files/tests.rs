@@ -241,19 +241,74 @@ fn a_save_never_writes_over_a_file_in_downloads() {
     );
     assert!(std::fs::read(downloads.join("qso-KD9TAW-1 (2).wav")).unwrap() == file);
 
-    // ALL.TXT and a name with no extension take the number the same way.
+    // ALL.TXT takes the number the same way.
     std::fs::write(downloads.join("ALL.TXT"), older).unwrap();
-    std::fs::write(downloads.join("notes"), older).unwrap();
     let ab = crate::b64_encode(b"AB");
     assert_eq!(
         save_piece_in(&downloads, "ALL.TXT", &ab, 0).unwrap().name,
         "ALL (1).TXT"
     );
-    assert_eq!(
-        save_piece_in(&downloads, "notes", &ab, 0).unwrap().name,
-        "notes (1)"
-    );
     assert_eq!(std::fs::read(downloads.join("ALL.TXT")).unwrap(), older);
-    assert_eq!(std::fs::read(downloads.join("notes")).unwrap(), older);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// ★ A save writes only the kinds the station shares: recordings (.wav), SSTV pictures (.png,
+/// .bmp) and ALL.TXT. Any other name is refused with a plain message and nothing is written, not
+/// even the Downloads folder; nor can a later piece add to a file of another kind already there.
+/// CONTROL: each kind is saved, and the numbered name a save takes when Downloads holds the file
+/// already takes that save's later pieces (`ALL (1).TXT`, and `.wav (1)` for a name that is all
+/// extension).
+#[test]
+fn a_save_writes_only_the_kinds_the_station_shares() {
+    let root = scratch("kinds-saved");
+    let downloads = root.join("Downloads");
+    let ab = crate::b64_encode(b"AB");
+    for name in [
+        "notes",
+        "setup.exe",
+        "qso-KD9TAW-1.wav.exe",
+        "all.txt",
+        "ALL.TXT.lnk",
+        "ALL (one).TXT",
+        "notes (1)",
+        "nexus-diag.log",
+        "gallery.json",
+    ] {
+        assert_eq!(
+            save_piece_in(&downloads, name, &ab, 0),
+            Err(format!(
+                "{name} is not a recording, an SSTV picture or ALL.TXT"
+            )),
+        );
+    }
+    assert!(!downloads.exists(), "a refused save wrote into Downloads");
+
+    // A later piece is refused the same way: the file of another kind keeps every byte.
+    std::fs::create_dir_all(&downloads).unwrap();
+    std::fs::write(downloads.join("notes"), b"AB").unwrap();
+    assert!(save_piece_in(&downloads, "notes", &ab, 2).is_err());
+    assert_eq!(std::fs::read(downloads.join("notes")).unwrap(), b"AB");
+
+    // CONTROL: every kind the station shares is saved, whatever the case of its extension.
+    for name in [
+        "qso-KD9TAW-1.wav",
+        "QSO-W1AW-2.WAV",
+        "20261017_120000_PD120.png",
+        "20261017_120000_Robot36.BMP",
+        "ALL.TXT",
+        ".wav",
+    ] {
+        assert_eq!(
+            save_piece_in(&downloads, name, &ab, 0).map(|saved| saved.name),
+            Ok(name.to_string())
+        );
+    }
+    // A second save of each takes the numbered name, and its later piece goes there.
+    for (name, numbered) in [("ALL.TXT", "ALL (1).TXT"), (".wav", ".wav (1)")] {
+        let first = save_piece_in(&downloads, name, &ab, 0).unwrap().name;
+        assert_eq!(first, numbered);
+        save_piece_in(&downloads, &first, &ab, 2).unwrap();
+        assert_eq!(std::fs::read(downloads.join(numbered)).unwrap(), b"ABAB");
+    }
     std::fs::remove_dir_all(&root).unwrap();
 }

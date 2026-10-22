@@ -63,6 +63,7 @@ export const JA: PartialCatalog = {
   "remote.stationFiles.saving": "保存中… {{pct}}%",
   "remote.stationFiles.save.done": "{{path}} に保存しました",
   "remote.stationFiles.save.failed": "局のファイルをこのコンピューターに保存できませんでした",
+  "remote.stationFiles.save.notShared": "{{name}} は録音、SSTV 画像、ALL.TXT のいずれでもありません",
   "remote.stationFiles.list.label": "このコンピューターに保存…",
   "remote.stationFiles.list.title.recordings": "局の録音",
   "remote.stationFiles.list.title.sstv": "局の SSTV 画像",

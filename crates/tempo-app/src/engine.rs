@@ -3540,12 +3540,14 @@ pub struct Engine {
     highlights: std::collections::HashMap<String, (u64, Option<String>, Option<String>)>,
     /// Monotonic insertion counter for the highlight FIFO above.
     highlight_seq: u64,
-    /// Bumped by an inbound UDP Clear (type 3) — the UI watches it and erases
-    /// the matching pane(s). Visual-only: the engine's decode context (answer
-    /// parity, history) is NOT a window and stays intact.
+    /// Bumped by an inbound UDP Clear (type 3) of Band Activity — the UI watches it and erases
+    /// that pane. Visual-only: the engine's decode context (answer parity, history) is NOT a
+    /// window and stays intact.
     clear_tick: u32,
     /// The last FreeText a logger sent, as Tx 5 took it ([`Engine::udp_free_text`]).
     udp_free_text: Option<crate::dto::UdpFreeText>,
+    /// The same, for a Clear of Rx Frequency: the UI erases that pane.
+    rx_freq_clear_tick: u32,
     /// Bumped every time a contact reaches the log — through ANY path, so a
     /// backend auto-log (the FT8/RTTY sequencer completing a QSO on its own)
     /// increments it just like a manual log does. The UI watches it to fire the
@@ -6293,6 +6295,7 @@ impl Engine {
             highlight_seq: 0,
             clear_tick: 0,
             udp_free_text: None,
+            rx_freq_clear_tick: 0,
             logged_tick: 0,
             pending_udp_clear: None,
             pending_udp_qsos: std::collections::VecDeque::new(),
@@ -25412,13 +25415,18 @@ contact yourself."
         }
     }
 
-    /// Inbound UDP Clear (type 3): bump the visual clear tick for the UI. A Clear of Band Activity
-    /// (`window` 0 or 2) empties what a Replay re-sends, as WSJT-X erases that window
-    /// (`++window; if (window & 1)`, `widgets/mainwindow.cpp:667-674`).
+    /// Inbound UDP Clear (type 3): bump the clear tick of each pane the window names, as WSJT-X
+    /// erases its windows (`++window; if (window & 1)` Band Activity, `if (window & 2)` Rx
+    /// Frequency; `widgets/mainwindow.cpp:667-674`): 0 Band Activity, 1 Rx Frequency, 2 both.
+    /// A Clear of Band Activity also empties what a Replay re-sends.
     pub fn apply_udp_clear(&mut self, window: u8) {
-        self.clear_tick = self.clear_tick.wrapping_add(1);
-        if window.wrapping_add(1) & 1 != 0 {
+        let window = window.wrapping_add(1);
+        if window & 1 != 0 {
+            self.clear_tick = self.clear_tick.wrapping_add(1);
             self.band_activity.clear();
+        }
+        if window & 2 != 0 {
+            self.rx_freq_clear_tick = self.rx_freq_clear_tick.wrapping_add(1);
         }
     }
 
@@ -26693,6 +26701,7 @@ contact yourself."
             .collect();
         s.clear_tick = self.clear_tick;
         s.udp_free_text = self.udp_free_text.clone();
+        s.rx_freq_clear_tick = self.rx_freq_clear_tick;
         s.logged_tick = self.logged_tick;
         s.work_tick = self.work_tick;
         s.work_view = self.work_view.clone();
