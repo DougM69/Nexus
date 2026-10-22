@@ -85,10 +85,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   modes from programs stay refused, and
   so does any over from a program whose last mode request was a data mode (DIGU or DIGL), on whatever screen Nexus
   is: WSJT-X asking for DIGU and then keying is held like FT8 even on the Phone screen. A program must also ask for
-  a voice mode (USB, LSB, AM or FM) before its own audio goes out: one that has asked for no mode, as WSJT-X, JTDX
-  and MSHV do with their Radio mode at None (their default), or that asked for CW, is refused, and Last refused says
-  to set the program's Radio mode or to use Nexus for FT8, and that WSJT-X and JTDX ask for a mode only when it
-  differs from Nexus's, so set to USB while Nexus is already in USB they ask for nothing and are refused.
+  a voice mode (USB, LSB, AM or FM) before its own audio goes out. One that has asked for no mode, as WSJT-X, JTDX
+  and MSHV do with their Radio mode at None (their default), or that asked for CW, is refused. WSJT-X and JTDX ask
+  for a mode only when it differs from Nexus's: with their Radio mode at USB while Nexus is already in USB, they ask
+  for nothing and are refused too. Last refused then says to set the program's Radio mode or to use Nexus for FT8,
+  and that some programs ask for their mode only when it differs from Nexus's.
   NEEDS-BENCH: a program's voice audio through Share by
   TCI into a dummy load, on a sound-card radio and on a Flex: the key on its first audio, its tail on its release,
   and each stop; and WSJT-X, JTDX and MSHV refused with their Radio mode at None and at Data/Pkt.
@@ -270,10 +271,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Viridis, and somewhat more on Turbo. Its rows, and the SSTV waterfall's, now also come at an even pace: they
   used to arrive every third or fourth frame, so the scroll stuttered. The other waterfalls keep the row timing
   they had.
-- **Nexus Remote: on the shack's own network, Remote stays free.** When an account's internet use has ended, Stream
-  and Listen still work from a browser already approved for the station, as long as that device is on the same
-  network as the shack. The stream is held to that network at both ends and never goes through the relay. A shack
-  running an older Nexus is named as the reason the stream cannot start.
+- **Nexus Remote: on the shack's own network, Remote stays free.** When an account can no longer use Remote over the
+  internet, because its trial is over or its paid plan has lapsed, Stream and Listen still work from a browser
+  already approved for the station, as long as that device is on the same network as the shack. The stream is held
+  to that network at both ends and never goes through the relay. A shack running an older Nexus is named as the
+  reason the stream cannot start.
 - **Nexus Remote: one trial per callsign and per shack computer.** Approving a station now sends the station
   callsign from Settings ▸ Station and one-way hashes of this computer's hardware and installation IDs; the IDs
   themselves never leave the computer. When the service refuses the approval for one of these reasons, Nexus at the
@@ -285,16 +287,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NEEDS-BENCH: an AFSK RTTY QSO on USB, checked on a second receiver or a skimmer for mark high on RF.
 - **Yaesu FT-1000 and FT-1000D in the rig list.** Both now appear in the default list beside the FT-1000MP and
   use their own Hamlib driver (the FT-1000 driver is marked Beta by Hamlib). NEEDS-BENCH: an FT-1000 or FT-1000D on CAT.
-- **Nexus Remote: operate the shack from a second Windows PC with Nexus on it (Beta, test builds).** On your own
+- **Nexus Remote: operate the shack from a second Windows PC with Nexus on it (Beta).** On your own
   network, choose **Operate from this computer** beside your shack in **Stations on this network**: the second PC shows
   the full Nexus screens for the shack's radio, plays its receive audio and sends your microphone, and Phone PTT, CW
   from the keyboard and its macros, FT8 and FT4 (answering, Call CQ and contest S&P, timed by the shack) and JS8 work as
   at the shack. Stop works from the second PC on its own road, and the shack unkeys within about 5 s if the network or
   the second PC drops. Passwords and remote-access settings stay at the shack, both PCs must run the same version, and
-  there is no paddle from afar. NEEDS-BENCH: two Windows PCs on one network, the radio into a dummy load.
-- **Nexus Remote: operate from the second PC over the internet too (Beta, test builds).** In **Stations on this
-  network**, press **Add the internet road** beside your shack and sign in to Nexus Remote in your web browser, then
-  approve the PC at the shack under Remote access. From then on, when the shack is not on the network you are on,
+  there is no paddle from afar. It is in the regular Windows installer, a Beta like the rest of Nexus Remote, and
+  needs no special build. NEEDS-BENCH: two Windows PCs on one network, the radio into a dummy load.
+- **Nexus Remote: operate from the second PC over the internet too (Beta).** For a shack paired with a code, press
+  **Sign in…** on its row in **Stations on this network** and sign in to Nexus Remote in your web browser; a shack
+  added by signing in has the internet road from the start. Either way, approve the PC at the shack under Remote
+  access: until then the road waits. From then on, when the shack is not on the network you are on,
   **Operate from this computer** reaches it over the internet instead, and it moves back to your own network by itself
   when the shack answers there again. The internet road is part of Remote's paid service; on your own network it stays
   free. Stop keeps its own road over the internet as well, so nothing transmits unless that road is working; on a
@@ -303,8 +307,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers. Receive audio waits 120 ms before playing over the internet (60 ms on your own network) to ride out the
   internet's jitter. NEEDS-BENCH: the shack on one network and the second PC on another (a phone hotspot), the radio
   into a dummy load.
-- **Nexus Remote: add your station to a second PC by signing in, with no code (Beta, test builds).** In **Stations on
-  this network** on the second PC, press **Sign in** and sign in to Nexus Remote in your web browser with the account
+- **Nexus Remote: add your station to a second PC by signing in, with no code (Beta).** In **Stations on
+  this network** on the second PC, press **Sign in…** and sign in to Nexus Remote in your web browser with the account
   your station is linked to, or one its owner invited to operate it. The station is then on that PC on its own
   network in one step, with no code to type and nothing to press at the shack. Over the internet the PC waits until
   you approve it at the shack under Remote access, where Nexus asks with the PC's key: a sign-in alone never lets a PC
@@ -312,9 +316,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station on the network by name, or asks for its address, and before it connects it checks that the station Nexus
   Remote lists is the one its owner signed in for at the shack; the shack checks the PC's sign-in itself in turn. The
   station must be signed in to Nexus Remote at the shack first (Settings → Station → Remote access). A PC already paired
-  with a code has **Sign in** on its row in place of **Add the internet road**: it links that pairing to your account
-  and adds the internet road; for a station not yet signed in at the shack the road waits for Approve there, as
-  before. **Pair with a code instead** stays for such a station. A PC invited only to listen is not added; listen in
+  with a code has **Sign in…** on its row: it links that pairing to your account and adds the internet road; for a
+  station not yet signed in at the shack the road waits for Approve there, as before. **Pair with a code instead…**
+  stays for such a station. A PC invited only to listen is not added; listen in
   your web browser instead.
 - **Nexus Remote: a signed-in PC keeps its place on the station's network by signing in again every 30 days.** The
   station takes a PC on its own network for 30 days from that PC's sign-in, with the internet up or down. In the last
@@ -328,23 +332,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sign-in on to every computer that you, or someone you invite, signs in on, so a guest's computer never receives
   your address. A second PC's sign-in carries its verified email address, which is how your shack recognises a person
   you invited.
-- **Nexus Remote: add your station from a PC that has never been on its network (Beta, test builds).** A laptop away
+- **Nexus Remote: add your station from a PC that has never been on its network (Beta).** A laptop away
   from home, or a friend you invited who lives elsewhere, can now sign in from **Stations on this network** and keep
   the station: when Nexus does not find it on the network the PC is on, press **Not on this network** and the station
   is added over the internet, waiting until you approve the PC at the shack under Remote access. **Operate from this
-  computer** then drives it over the internet road (part of Nexus Remote's paid service). The first time that PC is on the station's own network, press **Sign in** on the station's
+  computer** then drives it over the internet road (part of Nexus Remote's paid service). The first time that PC is on the station's own network, press **Sign in…** on the station's
   row there once: the station is then on the PC on its network too, with the same keys and no second device at
   Nexus Remote, and from then on it signs in again every 30 days as any other. NEEDS-BENCH: a laptop on a phone hotspot
   that has never been on the shack's network, then the same laptop at home.
-- **Nexus Remote: a signed-in PC paired again with a code stays on the station's network (Beta, test builds).** A PC
-  added by signing in is taken on the station's own network for 30 days from its sign-in, and signing in again needs
-  Nexus Remote. If Nexus Remote cannot be reached, pair that PC again with a code: **Pair a computer** at the shack,
-  then **Pair with a code instead…** on the PC. It then stays on the station's network until you remove it at the
-  shack, like any PC paired with a code, with the internet up or down: its row in Stations on this network no longer
-  asks you to sign in again by a date, and **Operate from this computer** no longer signs in again by itself. Remove
-  such a PC at the shack: removing it on the Nexus Remote web page no longer takes it off the station's network.
-  Signing in from its row later puts it back on the 30 days. If the shack cannot keep the change in its credential
-  store, the pairing is refused and the PC keeps its 30 days. NEEDS-BENCH: a second PC on the shack's network.
+- **Nexus Remote: a signed-in PC paired again with a code stays on the station's network (Beta).** A PC added by
+  signing in is taken on the station's own network for 30 days from its sign-in, and to stay longer it signs in
+  again, which needs Nexus Remote. Pairing it again with a code ends the 30 days: it then stays until you remove it
+  at the shack, as any PC paired with a code does, and signing in from its row later starts the 30 days again. So if
+  Nexus Remote cannot be reached, pair that PC again with a code: **Pair a computer** at the shack, then **Pair with
+  a code instead…** on the PC. With the internet up or down, its row in Stations on this network then no longer asks
+  you to sign in again by a date, and **Operate from this computer** no longer signs in again by itself. Remove such
+  a PC at the shack: removing it on the Nexus Remote web page no longer takes it off the station's network. If the
+  shack cannot save the change, it refuses the pairing ("The station could not keep the pairing.") and the PC keeps
+  its 30 days. NEEDS-BENCH: a second PC on the shack's network.
 - **Nexus Remote from a second PC: every JS8 switch, and satellite tracks that end when the second PC goes.** HB, Relay,
   HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
@@ -359,7 +364,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the presence beacon, JS8's automatic replies, relay, heartbeat acks or APRS-IS relay, or a WSPR beacon, and a
   stale Settings save at the shack no longer turns the beacon or those JS8 switches back. NEEDS-BENCH: two PCs, the
   radio into a dummy load.
-- **Nexus Remote: Tune, ATU, RTTY and PSK now work from the second PC (Beta, test builds).** Tune, the radio's own
+- **Nexus Remote: Tune, ATU, RTTY and PSK now work from the second PC (Beta).** Tune, the radio's own
   tuner (ATU), RTTY and PSK sends, continuous TX with typing, and RTTY Auto's CQ and answer now work from the second PC
   as at the shack. Every transmit check at the shack still applies, including the tune carrier's time limit and
   continuous TX's own limit. Stop on either road ends each of them, and so does losing the second PC for about 5 s:
@@ -411,10 +416,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in a pileup no key glows, and the lamp says `Your turn · send 5NN TU`. The Decode pane's speed now reads
   `them 18 · you 25 WPM`, and a click sends at their speed for this contact. It never transmits: every send is still
   your own key press. It shows with the AI decoder on and the Decode pane shown, never in an unassisted contest
-  entry, and unticking Turn Cue in ⊞ Panels hides it for good. A screen reader hears "Your turn" and "Hold" once
-  per over; a short chirp is there too, off until you turn on CW turn sound in Settings ▸ Appearance ▸
-  Accessibility & eyes-free. The cue lands about a second after the other station stops: in time for a ragchew or
-  a CQ, tight in a contest, and too slow to win a pileup, where it tells you when not to call.
+  entry, and unticking Turn Cue in ⊞ Panels hides it, after a restart too, until you tick it again. A screen reader
+  hears "Your turn" and "Hold" once per over; a short chirp is there too, off until you turn on CW turn sound in
+  Settings ▸ Appearance ▸ Accessibility & eyes-free. The cue lands about a second after the other station stops: in
+  time for a ragchew or a CQ, tight in a contest, and too slow to win a pileup, where it tells you when not to call.
+- **Every save of the contest log now keeps backup copies beside it.** The contest log
+  (`fieldday_backup_<n>.adi`) is the only copy of a contest's contacts until you merge them into the Logbook. Each
+  time it is saved, Nexus also writes a copy to a `fieldday_history` folder next to it: `%APPDATA%\tempo\fieldday_history\`
+  on Windows, `~/.config/tempo/fieldday_history/` on Linux and Mac, and `tempo-r<n>` in place of `tempo` for a second
+  radio's window. It keeps the last 10 saves (`….save-000123.adi`, the highest number is the newest) and one copy per
+  hour (`….hour-20261017-21.adi`, the hour in UTC) for the last 48 hours. A big contest log is well under 1 MB, so the
+  folder stays a few MB at most. Nexus never reads these copies back on its own, and a copy that can't be written
+  never stops a contact from being logged. To use one: quit Nexus, copy the backup you want over
+  `fieldday_backup_<n>.adi` (keep the damaged file somewhere first), rename it to that name, and start Nexus again. You
+  can also import a copy into the Logbook like any ADIF file.
 
 ### Changed
 - **Nexus Remote: inviting someone to operate says what that gives them.** Under Settings ▸ Station ▸ Remote access ▸
@@ -445,11 +460,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   air, the rest of that over becomes the 73. A bare 73, an RR73 from another station, or one sent to another
   station changes nothing. NEEDS-BENCH: FT8 and FT4, a second station that answers your report with RR73.
 - **FT8/FT4: which late replies change the over on the air, as in WSJT-X.** Once an over carries your RR73 or
-  73, no reply changes it any more (WSJT-X turns Enable Tx off as it sends one). A CQ run that logs the contact and
-  goes back to CQ, or gives up on a caller who went quiet, now lets the over on the air finish: before, the rest
-  of your RR73 or report could become the CQ. If you close with RRR and your partner's 73 arrives while the RRR is
-  on the air, the rest of that over is your CQ (WSJT-X's Tx6) and TX turns off after it with "Disable Tx after
-  sending 73"; nothing is sent after it. NEEDS-BENCH: FT8 and FT4, Call CQ and a station you work by double-click.
+  73, no reply changes it any more: WSJT-X turns Enable Tx off as it sends one, so a reply decoded then cannot move
+  it. A CQ run that logs the contact and goes back to CQ, or gives up on a caller who went quiet, now lets the over
+  on the air finish: before, the rest of your RR73 or report could become the CQ. If you close with RRR and your
+  partner's 73 arrives while the RRR is on the air, the contact is over, so the rest of that over is your CQ, as
+  WSJT-X does it: a 73 answering your RRR moves WSJT-X on to its CQ message (Tx6) and turns its Enable Tx off. TX
+  turns off after that over with "Disable Tx after sending 73"; either way nothing is sent after it. NEEDS-BENCH:
+  FT8 and FT4, Call CQ and a station you work by double-click.
 - **Contest FT8/FT4: a late reply changes the over on the air inside a contact.** In the Contest screen's Running
   and S&P, a reply decoded after your over has started now switches the rest of that over to your next message, as
   WSJT-X does: your exchange becomes the RR73 when the runner's rogered exchange arrives, and the rogered exchange
@@ -460,8 +477,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of RR73) and your partner answers it with RR73 or RRR, Nexus now sends 73, once, and the QSO is complete;
   before, it closed without one. If the RR73 is decoded while your RRR is already on the air, the rest of that over
   becomes the 73, and "Disable Tx after sending 73" turns TX off after it as usual. The contact is logged once. After
-  your RR73 nothing changes: your partner's 73, RR73 or RRR gets no reply. A Hound never sends the 73. NEEDS-BENCH:
-  FT8 and FT4, a second station that answers your RRR with RR73.
+  your RR73 nothing changes: your partner's 73, RR73 or RRR gets no reply. A Hound never sends the 73: by Fox/Hound
+  mode's own rules the Fox's RR73 ends a Hound's contact and the Hound sends nothing more, as in WSJT-X, since a 73
+  would only add noise where the Fox transmits. NEEDS-BENCH: FT8 and FT4, a second station that answers your RRR
+  with RR73.
 - **FT8/FT4 Call CQ: a caller's RR73 to your RRR gets one 73, then the run calls CQ.** With "Roger with RRR (not
   RR73)" on, a Call CQ run now answers the caller's RR73 (or RRR) to your RRR with 73, once, as WSJT-X does, and
   then calls CQ again. Before, the run went back to CQ without a reply, and when that RR73 was decoded while your
@@ -503,6 +522,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the keys themselves are greyed out there and say "Set at the station", with the station's own value. A save
   from that computer already left them as the station had them; before, the form let you edit them and quietly put
   them back. At the station itself nothing changes.
+- **Nexus Remote: every setting only the station can change, in one list.** A save of Settings or of a profile from a
+  computer driving the station keeps the station's own value of each of these. What lets the station transmit with
+  nobody at a key, or lets another program or a browser transmit: the WSJT-X UDP API and its address, **Share this
+  radio with other programs** (the CAT broker) and its PTT, JS8's API over TCP and UDP and its APRS-IS relay,
+  **Share by TCI** with its port, **Programs on TCI may transmit**, CW macros and Spots from programs, the Remote
+  stream, the WSPR and FST4W beacons' Transmit %, and a CQ run's pause. The guards on a transmission: the TX
+  watchdog, JS8's idle watchdog, the tune limit, the Parsec stop, "Disable TX after sending 73", the CQ, reply and
+  Chat retry limits, RTTY Auto's repeats, the high-SWR cutoff and its level, the power ceiling for each mode, and the
+  licence class. The lines that key the radio: the PTT method, port and line and the CAT port's RTS, DTR and
+  handshake settings, the CW keyer backend, keyline port and line and the WinKeyer port, the RTTY keying backend with
+  its FSK port and line, and each radio's **Let Nexus send CW, Tune and ATU through the native Flex client**. The
+  TQSL path. Where your keys and passwords are sent: the Cloudlog/Wavelog URL, the Field Day club host, and an Icom
+  network radio's address and port. And the Club Log and Cloudlog keys themselves.
 - **The assistance record and the contest-category note name the CW decoder, not the AI CW decoder.** An unassisted
   entry turns off the classic decoder as well as the AI one, and CQ WW's rule names "a CW decoder". With the AI
   switch off, the classic decoder still copies CW, while the record (Settings ▸ Contesting ▸ Your entry) showed the
@@ -513,17 +545,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spots, Super Check Partial and call history stay on until you switch Unassisted entry on. While the switch is
   off, a line beside the picker now says so, with a button that turns it on. Nothing turns it on unless you click.
 
-### Added
-- **Every save of the contest log now keeps backup copies beside it.** The contest log
-  (`fieldday_backup_<n>.adi`) is the only copy of a contest's contacts until you merge them into the Logbook. Each
-  time it is saved, Nexus also writes a copy to a `fieldday_history` folder next to it: `%APPDATA%\tempo\fieldday_history\`
-  on Windows, `~/.config/tempo/fieldday_history/` on Linux and Mac, and `tempo-r<n>` in place of `tempo` for a second
-  radio's window. It keeps the last 10 saves (`….save-000123.adi`, the highest number is the newest) and one copy per
-  hour (`….hour-20261017-21.adi`, the hour in UTC) for the last 48 hours. A big contest log is well under 1 MB, so the
-  folder stays a few MB at most. Nexus never reads these copies back on its own, and a copy that can't be written
-  never stops a contact from being logged. To use one: quit Nexus, copy the backup you want over
-  `fieldday_backup_<n>.adi` (keep the damaged file somewhere first), rename it to that name, and start Nexus again. You
-  can also import a copy into the Logbook like any ADIF file.
+### Removed
+- **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
+  your browser; the watch-and-control workspace it replaced is gone from the page.
 
 ### Fixed
 - **Band Activity and Rx Frequency: a line's time is the start of the period it was heard in, as in WSJT-X and
@@ -915,10 +939,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limits, "Disable Tx after 73", Parsec presence stop, the licence class, and the PTT method, port and serial lines).
   Each keeps the station's value, and the licence class can no longer be set from afar. The station's own Settings
   window changes them as before.
-- **Nexus Remote: a saved profile sent from a computer driving the station that the station cannot read in full is
-  refused.** Nothing of that save is written, so a profile saved there can never change the settings that are set at
-  the station only. If the station's own saved profiles cannot be read in full, they are not sent to that computer, so
-  no logging-service key saved in a profile leaves the station, and a save from that computer leaves them as they are.
 - **Security: settings that name a program Nexus runs can only be changed at the station.** The TQSL path, the
   program the station runs to sign a LoTW upload, could be changed by a settings save from a computer driving the
   station from afar, so that computer could point it at any program on the station. A save from afar now keeps the
@@ -1023,12 +1043,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   AFSK transmit tones as well as the decoder, so a click while transmitting slid the signal you were sending to
   wherever you clicked. While an over is on the air or queued, continuous TX is on or Tune is keyed, a click now does
   nothing, and the waterfall's hint says tuning is held.
-- **Nexus Remote: a PC that signs in while the shack reads its device list keeps its 30 days (Beta, test builds).**
-  The shack keeps one list of the PCs added by signing in, and four things change it: a PC signing in on the
-  station's network, each device list the shack hears from Nexus Remote, a PC paired again with a code, and a PC
-  leaving after its 30 days. Two of them at the same moment could lose one change. At worst a PC that had just signed
-  in stayed on the station's network with no 30-day limit, and removing it on the Nexus Remote web page did not take
-  it off. The shack now makes these changes one at a time.
+- **Nexus Remote: a PC that signs in while the shack reads its device list keeps its 30-day limit (Beta).** A PC
+  added by signing in, and not paired again with a code, now always leaves the station's network 30 days after its
+  last sign-in, and removing it on the Nexus Remote web page always takes it off. Before, four things changed the
+  shack's list of PCs added by signing in (a PC signing in on the station's network, each device list the shack hears
+  from Nexus Remote, a PC paired again with a code, and a PC leaving after its 30 days), and two at the same moment
+  could lose one change. At worst a PC that had just signed in stayed on the station's network with no 30-day limit,
+  and removing it on the web page did not take it off. The shack now makes these changes one at a time.
 - **Nexus Remote: the second PC shows its own key, so you can check it before you approve it at the shack.** When the
   internet road waits for Approve at the shack, the shack asks "Let … operate this station?" and says to approve only
   if the key matches the one Nexus shows on that computer, but the second PC showed no key of its own. **Stations on
@@ -1066,10 +1087,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   something held the settings file open, those computers stayed connected and anything they had on the air kept going
   until the save finished. Now the port closes and the sessions end first, and the setting is saved after.
 
-### Removed
-- **Nexus Remote: the old browser workspace that was hidden in 1.17.0.** Remote is the shack's own screen streamed to
-  your browser; the watch-and-control workspace it replaced is gone from the page.
-
 ### Security
 - **Nexus Remote: a config profile saved from a computer driving the station no longer carries the settings set at the
   station only.** Profiles are kept at the station, and loading one there applies what it holds. A profile saved from a
@@ -1077,6 +1094,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a browser transmit, the PTT method, port and lines, the TQSL path and the addresses your logging-service keys are sent
   to as the station's own profile of that name has them, and a new one carries none of them, so loading it keeps the
   station's own. Profiles saved at the station, and loading them there, are unchanged.
+- **Nexus Remote: a saved profile sent from a computer driving the station that the station cannot read in full is
+  refused.** Nothing of that save is written, so a profile saved there can never change the settings that are set at
+  the station only. If the station's own saved profiles cannot be read in full, they are not sent to that computer, so
+  no logging-service key saved in a profile leaves the station, and a save from that computer leaves them as they are.
 - **Nexus Remote: the CW and RTTY keying lines and the Flex client's Beta are set at the station only.** A settings
   save from a computer driving the station now keeps the station's CW keyer backend, its keyline serial port and line
   and the WinKeyer port, the RTTY keying backend with the FSK serial port and line, and each radio's **Let Nexus send
