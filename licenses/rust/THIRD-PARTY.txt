@@ -1527,7 +1527,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ========================================================================
-chacha20 0.10.1 — MIT OR Apache-2.0 (MIT elected)
+chacha20 0.10.2 — MIT OR Apache-2.0 (MIT elected)
 https://github.com/RustCrypto/stream-ciphers
 
 LICENSE-MIT
