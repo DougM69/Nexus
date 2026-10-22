@@ -166,6 +166,9 @@ mod tx_alarms;
 mod tx_frame_width_tests;
 #[cfg(test)]
 mod tx_gate_table;
+/// What a logger's UDP Replay re-sends: Band Activity's decodes, as they went out.
+#[cfg(test)]
+mod udp_replay_tests;
 /// A spot worked from afar arms nothing at the shack, and its hint says where it came from.
 #[cfg(test)]
 mod work_from_afar_tests;
@@ -1715,6 +1718,9 @@ const AB_NO_DRIVABLE_MAPPING: &str =
 /// keeps the newest audio past that, so a longer message would lose its start and go out with dead
 /// air at its end. The client's queue is checked against it where it is defined.
 pub const FLEX_VOICE_MAX_SAMPLES: usize = 20 * 12_000;
+/// The decodes Band Activity keeps, and so the most a logger's Replay re-sends: the pane's own
+/// store (`MAX_HISTORY`, `ui/src/decodeHistory.ts`).
+const BAND_ACTIVITY_DEPTH: usize = 3000;
 /// What [`Engine::send_voice`] answers for a message longer than that.
 const FLEX_VOICE_TOO_LONG: &str = "The voice keyer can't play this message through the Flex \
      native client: it is longer than 20 seconds, the most the client's DAX carries, so its start \
@@ -3434,6 +3440,12 @@ pub struct Engine {
     /// and the sequencer silently fell back to Tx1 (the "sent my grid instead of a
     /// report" on-air bug). Also the source for answer parity.
     decode_history: std::collections::VecDeque<(u64, modes::Decode)>,
+    /// What Band Activity holds, oldest first, for a logger's UDP Replay: each decode as its UDP
+    /// Decode went out (the on-air text, `last_wire_decodes`) with the start of the period it was
+    /// heard in. WSJT-X replays every decode still in its Band Activity window (`replayDecodes`,
+    /// `widgets/mainwindow.cpp:13374-13396`), so this empties when that pane does: the operator's
+    /// Erase of it, a logger's Clear of it, and a band or mode change (`clear_decode_context`).
+    band_activity: std::collections::VecDeque<(u64, modes::Decode)>,
     /// Messages already folded for an upcoming boundary slot — by its EARLY decode pass, and as
     /// each was streamed from a running pass ([`Engine::apply_streamed_decode`]) — so a later fold
     /// of the same slot ingests only what is new (no double rows / double observe).
@@ -6239,6 +6251,7 @@ impl Engine {
             route_intent: None,
             route_target: None,
             decode_history: std::collections::VecDeque::new(),
+            band_activity: std::collections::VecDeque::new(),
             early_seen: None,
             shown_pass: None,
             held_pass: None,
@@ -16999,6 +17012,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// where stale rows would answer a station that isn't in this activity.
     fn clear_decode_context(&mut self) {
         self.decode_history.clear();
+        self.band_activity.clear();
         self.last_decode_slot = None;
         // Kept aside for the period still decoding, if one is (`fold_late`).
         self.late_early_seen = self.early_seen.take();
@@ -25312,15 +25326,24 @@ contact yourself."
         }
     }
 
-    /// Inbound UDP Clear (type 3): bump the visual clear tick for the UI.
-    pub fn apply_udp_clear(&mut self) {
+    /// Inbound UDP Clear (type 3): bump the visual clear tick for the UI. A Clear of Band Activity
+    /// (`window` 0 or 2) empties what a Replay re-sends, as WSJT-X erases that window
+    /// (`++window; if (window & 1)`, `widgets/mainwindow.cpp:667-674`).
+    pub fn apply_udp_clear(&mut self, window: u8) {
         self.clear_tick = self.clear_tick.wrapping_add(1);
+        if window.wrapping_add(1) & 1 != 0 {
+            self.band_activity.clear();
+        }
     }
 
     /// The operator hit Erase: queue an outbound UDP Clear so cooperating apps
-    /// mirror it. `window`: 0 = Band Activity, 1 = Rx Frequency, 2 = both.
+    /// mirror it. `window`: 0 = Band Activity, 1 = Rx Frequency, 2 = both. Band Activity erased
+    /// holds nothing for a Replay.
     pub fn notify_erase(&mut self, window: u8) {
         self.pending_udp_clear = Some(window.min(2));
+        if window != 1 {
+            self.band_activity.clear();
+        }
     }
 
     /// Consume the queued outbound Clear (radio loop).
@@ -28179,6 +28202,7 @@ contact yourself."
             self.persist_pending_msgs();
         }
         self.last_wire_decodes = fresh.clone();
+        self.note_band_activity(slot);
         self.last_decodes = fresh;
         n
     }
@@ -28450,6 +28474,7 @@ contact yourself."
             self.js8_ingest(&decodes, slot);
         }
         self.last_wire_decodes = wire_copy.unwrap_or_else(|| decodes.clone());
+        self.note_band_activity(slot);
         if continues {
             self.last_decodes.extend(decodes);
         } else {
@@ -29422,7 +29447,26 @@ contact yourself."
         })
     }
 
-    /// Every decode of the CURRENT period (for UDP Replay) — the early pass +
+    /// Every decode Band Activity holds, oldest first, with the UTC second its period started:
+    /// what a logger's UDP Replay re-sends, as WSJT-X's `replayDecodes` re-sends its window.
+    pub fn band_activity(&self) -> impl Iterator<Item = (u64, &modes::Decode)> + '_ {
+        self.band_activity.iter().map(|(start, d)| (*start, d))
+    }
+
+    /// Keep the decodes just folded at `slot`, as their UDP Decodes go out
+    /// (`last_wire_decodes`), for [`Self::band_activity`].
+    fn note_band_activity(&mut self, slot: u64) {
+        let start =
+            crate::alltxt::period_start_unix(slot.saturating_sub(1), self.active_slot_secs());
+        for d in &self.last_wire_decodes {
+            self.band_activity.push_back((start, d.clone()));
+        }
+        while self.band_activity.len() > BAND_ACTIVITY_DEPTH {
+            self.band_activity.pop_front();
+        }
+    }
+
+    /// Every decode of the CURRENT period (for "save decoded periods") — the early pass +
     /// boundary stragglers reassembled from history; `last_decodes` alone holds
     /// only the most recent ingest's batch.
     pub fn current_period_decodes(&self) -> Vec<modes::Decode> {
@@ -29461,6 +29505,27 @@ contact yourself."
             mode: None,
         };
         self.ingest_decodes_for_test(&[d], slot);
+    }
+
+    /// Test hook for the radio loop's tests (the `test-util` feature, never in a shipped build):
+    /// fold `message`, decoded at the boundary of `slot`, through the live decode's own fold
+    /// ([`Self::fold_decodes`]), without running a decoder, which would hold the process-wide modem
+    /// lock other tests wait on.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn fold_heard_for_test(&mut self, message: &str, slot: u64) -> usize {
+        let d = modes::Decode {
+            message: message.into(),
+            sync: 1.0,
+            snr: -10,
+            dt: 0.1,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            raw: None,
+            mode: None,
+        };
+        self.fold_decodes(None, vec![d], slot, false)
     }
 
     #[cfg(any(test, feature = "test-util"))]

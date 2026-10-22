@@ -896,6 +896,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   They now go out marked not new, as WSJT-X sends them. Decodes as they are heard are still New. NEEDS-BENCH:
   GridTracker or JTAlert on Nexus's UDP port, restarted while Nexus decodes: the period's decodes come back without
   new alerts.
+- **WSJT-X UDP: a logger's Replay gets back everything Band Activity holds.** When JTAlert, GridTracker or a
+  logger asks Nexus to replay the decodes, as it does when it starts while Nexus is running, Nexus sent only the
+  last period's. It now sends every decode Band Activity still holds, oldest first, each with the start of the
+  period it was heard in and marked not new, as WSJT-X does. Once you erase Band Activity, a logger clears it or a
+  band or mode change wipes it, a Replay sends only what has been heard since; a logger's Clear of Rx Frequency
+  alone leaves it. NEEDS-BENCH: Nexus decoding FT8 with its UDP feed on for a few minutes, then start GridTracker
+  or JTAlert: the decodes of all those periods come back with their own times and no new alerts. Erase Band
+  Activity and restart the program: nothing comes back until the next period is decoded.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.

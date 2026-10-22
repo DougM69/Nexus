@@ -167,3 +167,194 @@ fn a_replay_sends_the_period_start() {
         "the replayed Decode's New and Time"
     );
 }
+
+/// A Replay datagram from a logger.
+fn replay_datagram() -> Vec<u8> {
+    let mut w = tempo_net::qds::QdsWriter::new();
+    w.put_u32(tempo_net::wsjtx::MAGIC)
+        .put_u32(tempo_net::wsjtx::SCHEMA)
+        .put_u32(tempo_net::wsjtx::msg_type::REPLAY)
+        .put_utf8(Some("JTAlert"));
+    w.into_bytes()
+}
+
+/// A logger's Clear of `window` (0 Band Activity, 1 Rx Frequency, 2 both).
+fn clear_datagram(window: u8) -> Vec<u8> {
+    let mut w = tempo_net::qds::QdsWriter::new();
+    w.put_u32(tempo_net::wsjtx::MAGIC)
+        .put_u32(tempo_net::wsjtx::SCHEMA)
+        .put_u32(tempo_net::wsjtx::msg_type::CLEAR)
+        .put_utf8(Some("JTAlert"))
+        .put_u8(window);
+    w.into_bytes()
+}
+
+/// The three FT8 periods heard, oldest first: each one's decode, and its start as a Decode's
+/// `Time`.
+const THREE_PERIODS: [(u64, &str, u32); 3] = [
+    (SLOT - 2, "CQ W1AW FN31", PERIOD_START_MS_OF_DAY - 30_000),
+    (SLOT - 1, "CQ K1ABC FN42", PERIOD_START_MS_OF_DAY - 15_000),
+    (SLOT, "CQ W9XYZ EN37", PERIOD_START_MS_OF_DAY),
+];
+
+/// An FT8 station that heard [`THREE_PERIODS`], each folded as the live decode folds it (no
+/// decoder runs: it would hold the process-wide modem lock other tests wait on).
+fn heard_over_three_periods() -> Engine {
+    let mut e = Engine::new("K2DEF", "FN31", 0);
+    e.set_tier(Tier::Ft8);
+    for (slot, msg, _) in THREE_PERIODS {
+        assert_eq!(e.fold_heard_for_test(msg, slot), 1, "premise: {msg} folds");
+    }
+    e
+}
+
+/// What a replay of [`THREE_PERIODS`] sends: every decode, oldest first, not New.
+fn three_periods_replayed() -> Vec<(bool, u32, String)> {
+    THREE_PERIODS
+        .iter()
+        .map(|&(_, msg, time)| (false, time, msg.to_string()))
+        .collect()
+}
+
+/// `ticks` of datagrams, each tick's reaching the real radio loop before one step of it at
+/// 22:13:41; every Decode the consumer receives, as `(New, Time, Message)`.
+fn decodes_after(engine: Engine, ticks: &[&[Vec<u8>]]) -> Vec<(bool, u32, String)> {
+    let engine = Arc::new(Mutex::new(engine));
+    let (listener, server) = consumer();
+    let sinks = Sinks {
+        wsjtx: Some(&server),
+        psk: None,
+        cfg_dial_hz: 14_074_000,
+    };
+    let mut backend = MockBackend::new();
+    let mut rig = Rig::vox();
+    let mut state = loop_state_for(&engine);
+    let (mut ra, mut reopen) = (mock_reopen_audio(), mock_reopen_rig());
+    let mut station = StationSinks::new();
+    let mut now = (PERIOD_START_S as f64 + 26.0) * 1000.0;
+    for datagrams in ticks {
+        for d in *datagrams {
+            listener.send_to(d, server.local_addr().unwrap()).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                now,
+                &mut ra,
+                &mut reopen,
+                &mut station,
+            )
+            .unwrap();
+        now += 20.0;
+    }
+    listener
+        .set_read_timeout(Some(Duration::from_millis(300)))
+        .unwrap();
+    let mut buf = [0u8; 4096];
+    std::iter::from_fn(|| {
+        listener
+            .recv_from(&mut buf)
+            .ok()
+            .map(|(n, _)| buf[..n].to_vec())
+    })
+    .filter(|d| d.get(8..12) == Some(&tempo_net::wsjtx::msg_type::DECODE.to_be_bytes()[..]))
+    .map(|d| decode_on_the_wire(&d))
+    .collect()
+}
+
+/// ⭐ A Replay re-sends every decode Band Activity holds, each period's decodes stamped with that
+/// period's start, oldest first, none New. WSJT-X walks its whole Band Activity window
+/// (`replayDecodes`, `widgets/mainwindow.cpp:13374-13396`); Nexus sent the last period only.
+#[test]
+fn a_replay_sends_every_decode_band_activity_holds() {
+    assert_eq!(
+        decodes_after(heard_over_three_periods(), &[&[replay_datagram()]]),
+        three_periods_replayed(),
+        "the replay of three periods: (New, Time, Message)"
+    );
+}
+
+/// A burst of Replays in one tick is answered once (each re-sends all of Band Activity with the
+/// engine lock held); one in each of two ticks is answered twice.
+#[test]
+fn a_burst_of_replays_in_one_tick_is_answered_once() {
+    let once = decodes_after(
+        heard_over_three_periods(),
+        &[&[replay_datagram(), replay_datagram(), replay_datagram()]],
+    );
+    let twice = decodes_after(
+        heard_over_three_periods(),
+        &[&[replay_datagram()], &[replay_datagram()]],
+    );
+    assert_eq!(
+        (once.len(), twice.len()),
+        (3, 6),
+        "Decodes sent for (three Replays in one tick, one in each of two ticks)"
+    );
+}
+
+/// A logger's Clear of Band Activity (window 0, or 2 for both) leaves a Replay nothing to send; a
+/// Clear of Rx Frequency alone (1) leaves Band Activity, as WSJT-X's handler reads the window
+/// (`++window; if (window & 1)` erases Band Activity, `widgets/mainwindow.cpp:667-674`).
+#[test]
+fn a_loggers_clear_of_band_activity_leaves_a_replay_nothing() {
+    let after_clear = |window: u8| {
+        decodes_after(
+            heard_over_three_periods(),
+            &[&[clear_datagram(window), replay_datagram()]],
+        )
+    };
+    assert_eq!(after_clear(0), Vec::new(), "after a Clear of Band Activity");
+    assert_eq!(after_clear(2), Vec::new(), "after a Clear of both windows");
+    assert_eq!(
+        after_clear(1),
+        three_periods_replayed(),
+        "after a Clear of Rx Frequency"
+    );
+}
+
+/// The operator's Erase of Band Activity leaves a Replay nothing to send; an Erase of Rx Frequency
+/// leaves Band Activity whole.
+#[test]
+fn the_operators_erase_of_band_activity_leaves_a_replay_nothing() {
+    let after_erase = |window: u8| {
+        let mut e = heard_over_three_periods();
+        e.notify_erase(window);
+        decodes_after(e, &[&[replay_datagram()]])
+    };
+    assert_eq!(after_erase(0), Vec::new(), "after Erase of Band Activity");
+    assert_eq!(
+        after_erase(1),
+        three_periods_replayed(),
+        "after Erase of Rx Frequency"
+    );
+}
+
+/// A band change wipes Band Activity, and a Replay then sends only what the new band has given.
+#[test]
+fn after_a_band_change_a_replay_sends_only_the_new_bands_decodes() {
+    let mut e = heard_over_three_periods();
+    e.observe_rig_freq(7_074_000);
+    assert_eq!(e.settings().band, "40m", "premise: the dial moved to 40 m");
+    let left = decodes_after(e, &[&[replay_datagram()]]);
+    let mut e = heard_over_three_periods();
+    e.observe_rig_freq(7_074_000);
+    assert_eq!(e.fold_heard_for_test("CQ JA1ABC PM95", SLOT + 1), 1);
+    let heard_there = decodes_after(e, &[&[replay_datagram()]]);
+    assert_eq!(
+        (left, heard_there),
+        (
+            Vec::new(),
+            vec![(
+                false,
+                PERIOD_START_MS_OF_DAY + 15_000,
+                "CQ JA1ABC PM95".to_string()
+            )]
+        ),
+        "(replayed after the band change, replayed after a 40 m decode)"
+    );
+}
