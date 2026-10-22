@@ -1194,7 +1194,6 @@ export function OperateCockpit({
     ignoredCalls: ignored,
     onToggleIgnore: handleToggleIgnore,
     highlights: highlightMap,
-    clearTick: snap.clearTick ?? 0,
   }
 
   // Active special-op badge shown next to the TX indicator.
@@ -1327,6 +1326,7 @@ export function OperateCockpit({
             {...decodeClickProps}
             partnerCall={partnerCall}
             onErase={() => notifyErase(0)}
+            clearTick={snap.clearTick ?? 0}
             {...(layoutMode === 'roster' ? { title: t('operate.decodes.title') } : {})}
           />,
         )
@@ -1352,6 +1352,7 @@ export function OperateCockpit({
             {...decodeClickProps}
             partnerCall={partnerCall}
             onErase={() => notifyErase(1)}
+            clearTick={snap.rxFreqClearTick ?? 0}
             lockedFilter="rx"
             hideExcludedCountries={false}
             compact
@@ -2136,6 +2137,7 @@ export function OperateCockpit({
                         {...decodeClickProps}
                     partnerCall={partnerCall}
                         onErase={() => notifyErase(0)}
+                        clearTick={snap.clearTick ?? 0}
                         title={t('operate.decodes.title')}
                       />
                     </div>
@@ -2172,6 +2174,7 @@ export function OperateCockpit({
                         {...decodeClickProps}
                     partnerCall={partnerCall}
                         onErase={() => notifyErase(1)}
+                        clearTick={snap.rxFreqClearTick ?? 0}
                         lockedFilter="rx"
                         // This pane is situational awareness, not a chase list: a station
                         // from an excluded country sitting on OUR frequency is exactly what
@@ -2221,6 +2224,7 @@ export function OperateCockpit({
                     {...decodeClickProps}
                     partnerCall={partnerCall}
                     onErase={() => notifyErase(0)}
+                    clearTick={snap.clearTick ?? 0}
                   />
                 </div>
               )}
@@ -2251,6 +2255,7 @@ export function OperateCockpit({
                         {...decodeClickProps}
                     partnerCall={partnerCall}
                         onErase={() => notifyErase(1)}
+                        clearTick={snap.rxFreqClearTick ?? 0}
                         lockedFilter="rx"
                         // This pane is situational awareness, not a chase list: a station
                         // from an excluded country sitting on OUR frequency is exactly what

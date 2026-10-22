@@ -5421,8 +5421,10 @@ export interface AppSnapshot {
   lateDecodes?: LateDecodes
   /** UDP callsign highlights for the decode panes. */
   highlights?: { call: string; bg?: string | null; fg?: string | null }[]
-  /** Bumped by an inbound UDP Clear — panes erase on change. */
+  /** Bumped by an inbound UDP Clear of Band Activity — that pane erases on change. */
   clearTick?: number
+  /** Bumped by an inbound UDP Clear of Rx Frequency — that pane erases on change. */
+  rxFreqClearTick?: number
   /** Bumped every time a QSO is logged, by any path (backend auto-log included).
    * App fires the "clear DX call after logging" wipe on change. */
   loggedTick?: number

@@ -13417,10 +13417,10 @@ impl RadioLoop {
                             eng.halt_tx_for_failed_unkey(&why);
                         }
                     }
-                    WsjtxInbound::Clear { .. } => {
-                        // Visual clear only — the engine's decode context (answer
+                    WsjtxInbound::Clear { window, .. } => {
+                        // The panes' clear — the engine's decode context (answer
                         // parity / history) is not a window and stays intact.
-                        eng.apply_udp_clear();
+                        eng.apply_udp_clear(window);
                     }
                     WsjtxInbound::Replay { .. } => {
                         // A consumer that just connected wants the WHOLE current
