@@ -13,6 +13,17 @@
 use super::ft_midover::HeldWorker;
 use super::*;
 
+/// One scene of this module at a time. Every test in this binary decodes behind one process-wide
+/// modem lock, and the real-time Flex DAX scenes beside these must decode a period inside about a
+/// second and a half: these scenes' decodes come one after another rather than all at once.
+static ONE_SCENE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+fn one_scene_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    ONE_SCENE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
 /// The full pass's audio, `len` samples from the slot's start: `reply` at 1500 Hz (the RX
 /// frequency) among `others` CQs spread over the rest of the band, in light noise. Enough signals
 /// that the pass goes on decoding long after the RX-frequency candidate.
@@ -66,6 +77,7 @@ fn busy_slot_audio(
 #[test]
 fn ft8_a_reply_on_the_rx_frequency_reaches_the_sequencer_while_its_pass_is_still_decoding() {
     use tempo_core::modes::ModeKind;
+    let _scene = one_scene_at_a_time();
     let engine = wsjt_engine(Tier::Ft8);
     let mut backend = MockBackend::new();
     let mut rig = Rig::vox();
@@ -139,6 +151,7 @@ fn ft8_a_reply_on_the_rx_frequency_reaches_the_sequencer_while_its_pass_is_still
 /// boundary's decision: the 73 keys, not the R-report again, and the pass's end changes nothing.
 fn a_reply_found_before_the_boundary_is_in_its_decision(tier: Tier) {
     use tempo_core::modes::ModeKind;
+    let _scene = one_scene_at_a_time();
     let (kind, period, full_at, len) = match tier {
         Tier::Ft8 => (ModeKind::Ft8, 15_000.0, 14_400.0, 172_800),
         _ => (ModeKind::Ft4, 7_500.0, 6_048.0, 72_576),
@@ -218,6 +231,7 @@ fn ft4_a_reply_found_before_the_boundary_is_in_its_decision() {
 #[test]
 fn a_period_with_no_reply_keys_the_same_over_as_before() {
     use tempo_core::modes::ModeKind;
+    let _scene = one_scene_at_a_time();
     let engine = wsjt_engine(Tier::Ft8);
     let mut backend = MockBackend::new();
     let mut rig = Rig::vox();
@@ -297,6 +311,7 @@ fn run_with_a_slow_early_pass(job: WorkerJob, out: &mut dyn FnMut(WorkerOut)) {
 #[test]
 fn ft8_a_slow_early_pass_gives_up_at_13_4_s_and_the_full_pass_runs() {
     use tempo_core::modes::ModeKind;
+    let _scene = one_scene_at_a_time();
     let engine = wsjt_engine(Tier::Ft8);
     let mut backend = MockBackend::new();
     let mut rig = Rig::vox();
