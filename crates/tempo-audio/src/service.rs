@@ -29415,6 +29415,85 @@ mod tests {
         );
     }
 
+    /// `k` samples of one LSB, each + or -, at seeded places in `len` samples of silence: a receive
+    /// path gone dead (a muted rig, a pulled cable) but for the odd stray bit.
+    fn lsb_clicks(seed: u64, k: usize, len: usize) -> Vec<f32> {
+        let mut x = vec![0f32; len];
+        let mut s = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        for _ in 0..k {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            let lsb: f32 = if (s >> 33) & 1 == 0 { 1.0 } else { -1.0 };
+            x[(s % len as u64) as usize] = lsb / 32767.0;
+        }
+        x
+    }
+
+    /// FT8 in a QSO, the partner's period near-silent: three stray LSBs, 0.004 LSB rms. WSJT-X
+    /// decodes nothing under 0.5 LSB rms (`lib/decoder.f90:92-93`), so nothing moves the QSO: the
+    /// R-report goes out again and no contact is logged. Before that floor the full pass's a7
+    /// replay found "W9XYZ K1ABC RR73" in this audio, and the boundary keyed the 73 and logged a
+    /// contact the partner never finished. The early and the full pass each take their part of
+    /// the period, as the loop does.
+    #[test]
+    fn ft8_a_near_silent_period_moves_no_qso() {
+        use tempo_core::modes::ModeKind;
+        let engine = wsjt_engine(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+
+        tick(&mut state, &engine, b, r, s, 100.0); // slot 0: nothing queued yet
+        awaiting_rr73(&engine, ModeKind::Ft8);
+        // On the band a while: past WSJT-X's a7 hide after the tier change.
+        engine.lock().unwrap().age_a7_hide(Duration::from_secs(60));
+        let logged = engine.lock().unwrap().snapshot().logged_tick;
+        tick(&mut state, &engine, b, r, s, 15_020.0); // slot 1: theirs
+
+        let quiet = lsb_clicks(156, 3, 172_800);
+        let early = 41 * 3456;
+        b.queue_capture(quiet[..early].to_vec());
+        tick(&mut state, &engine, b, r, s, 26_807.0);
+        tick(&mut state, &engine, b, r, s, 26_808.0);
+        assert!(
+            state.decode_in_flight && state.early_done_slot == Some(1),
+            "the early pass dispatches at 11.808 s"
+        );
+        assert!(
+            drain_decode(&mut state, &engine, b, r, s, 26_809.0, 29_000.0),
+            "the early pass drained"
+        );
+        b.queue_capture(quiet[early..].to_vec());
+        tick(&mut state, &engine, b, r, s, 29_399.0);
+        tick(&mut state, &engine, b, r, s, 29_400.0);
+        assert!(
+            state.decode_in_flight && state.full_done_slot == Some(1),
+            "the full pass dispatches at 14.40 s"
+        );
+        assert!(
+            drain_decode(&mut state, &engine, b, r, s, 29_401.0, 29_990.0),
+            "the full pass drained before the boundary"
+        );
+
+        tick(&mut state, &engine, b, r, s, 30_020.0); // slot 2: ours
+        assert!(rig.keyed, "keyed at the boundary");
+        assert_eq!(
+            wsjt_messages_played(ModeKind::Ft8, &backend.played),
+            vec!["K1ABC W9XYZ R-10".to_string()],
+            "nothing was heard: the R-report again, not a 73"
+        );
+        let snap = engine.lock().unwrap().snapshot();
+        assert_eq!(snap.logged_tick, logged, "no contact logged");
+        assert_eq!(
+            snap.qso.and_then(|q| q.tx_now).as_deref(),
+            Some("K1ABC W9XYZ R-10"),
+            "still waiting for the RR73"
+        );
+    }
+
     /// A full pass parked for its boundary is only that boundary's. When the clock skips that
     /// boundary (a stall, a clock step), the next one must not take the TX decision from a
     /// decode two periods old: it decodes the period that just ended, as any boundary does.

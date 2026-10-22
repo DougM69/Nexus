@@ -550,6 +550,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your browser; the watch-and-control workspace it replaced is gone from the page.
 
 ### Fixed
+- **FT8: a period with almost no receive audio is not decoded, as in WSJT-X.** When a whole period's receive audio
+  is under half a bit (0.5 LSB rms), as with the rig's audio muted, the input turned right down or the cable pulled,
+  WSJT-X does not decode it at all. Nexus did, and after a busy period its a7 decoder could "hear" that period's
+  stations again in a few stray bits of noise. In a QSO such a line could read as your partner's RR73 or R-report:
+  Nexus then sent the next message and logged a contact that was never finished. Such a period now gives no line
+  in Band Activity, ALL.TXT, the WSJT-X UDP feed or PSK Reporter, and the QSO repeats its last message as WSJT-X
+  does. Receive audio at any working level decodes exactly as before. NEEDS-BENCH: during an FT8 QSO into a dummy
+  load, mute the rig's receive audio, then the computer's input, then pull the audio cable: no line appears and
+  nothing is logged.
 - **Band Activity and Rx Frequency: a line's time is the start of the period it was heard in, as in WSJT-X and
   ALL.TXT.** The time was when the line reached the list, so a line the full decode found at :34 read :34 under the
   :15 period's separator. It now reads :15; hold the pointer over the time to see when the line arrived. A line
