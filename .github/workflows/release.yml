@@ -176,6 +176,11 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: ubuntu:22.04@sha256:0a9887931b0e38af2e3487ed39e29436b0535c4f3f52e57745baaf79d1898956
+    # In a container a `run:` step's default shell is `sh` (dash), not the runner's bash, and dash
+    # has no `-o pipefail`: the first such step stopped this job with "Illegal option".
+    defaults:
+      run:
+        shell: bash
     steps:
       # Three the runner image happened to carry, which the bundle takes from the build host:
       # gstreamer1.0-plugins-base/-good (the app, autodetect and coreelements plugins build-linux.sh
