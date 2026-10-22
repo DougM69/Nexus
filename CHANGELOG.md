@@ -737,6 +737,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   early FT8 decode at 11.8 seconds now stops at 13.4 seconds if it is still running, as WSJT-X's does, so a slow
   computer no longer loses that period's full decode to it. NEEDS-BENCH: FT8 and FT4 QSOs with weak stations, into
   a dummy load first.
+- **FT8: the full decode starts from the audio the early decode has already cleared, as in WSJT-X.** At 13.5
+  seconds into the period Nexus now takes the stations the early decode found at 11.8 seconds out of the audio, as
+  WSJT-X does, and the full decode at 14.4 seconds searches what is left. It no longer finds those stations again
+  first: what they hid comes out in its first search, and only new decodes reach the decode list and the QSO
+  sequencer. On a busy band this is what puts a weak reply on your frequency in the decision for your next over:
+  with 80 stations in the period it arrives about 14.6 seconds into the period instead of 15.1, after your over had
+  started. On busy test recordings the full decode finds about 3 % more stations; like WSJT-X's, it also misses a
+  few that the old way found, about 4 in 1000. FT4 has no early decode, in WSJT-X or in Nexus, and is unchanged.
+  NEEDS-BENCH: FT8 QSOs with weak stations on a busy band, into a dummy load first.
 - **The diagnostic log now says when a period's decode was dropped.** When the decoder is still busy as a period
   ends, Nexus skips that period's decode, and it said so only on a console that Windows never shows. The line, with
   how many periods have been dropped so far, now goes to the diagnostic log too, so a computer too slow for the

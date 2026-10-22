@@ -144,6 +144,10 @@ mod restore_session_tests;
 #[cfg(test)]
 mod rtty_sideband_tests;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
+/// WSJT-X's FT8 47 step as a decode job: it decodes and folds nothing, and the full pass after it
+/// hands on no early decode again.
+#[cfg(test)]
+mod residual_pass_tests;
 #[cfg(all(test, debug_assertions))]
 mod session_tests;
 pub mod slices;
@@ -1856,6 +1860,11 @@ pub enum DecodePass {
         speed: modes::Js8Speed,
         cycle_start_ms: u64,
     },
+    /// WSJT-X's FT8 47 step (`lib/ft8_decode.f90:124-149`, at 47 half-symbols, 13.536 s): the
+    /// period's early decodes subtracted from its first 13.536 s, so the full pass starts from the
+    /// residual and finds new decodes first ([`modes::SignalSource::subtract_early`]). It decodes
+    /// nothing and folds nothing; it gives up at WSJT-X's 14.3 s (`:140-145`).
+    Residual,
 }
 
 impl DecodePass {
@@ -2368,6 +2377,16 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
                 modes::reset_ft8_a7();
             }
             let iwave = channel::capture_to_i16(&frame);
+            // The 47 step: the source subtracts this period's early decodes for its full pass.
+            // Nothing is decoded.
+            if pass == DecodePass::Residual {
+                let req = modes::DecodeRequest {
+                    ndepth,
+                    ..modes::DecodeRequest::full_band(&iwave)
+                };
+                src.subtract_early(&req, &mut sink);
+                return Vec::new();
+            }
             let req = modes::DecodeRequest {
                 iwave: &iwave,
                 nfa,
@@ -27637,9 +27656,10 @@ contact yourself."
         // (#103). Redecode replays `last_rx`, whose fold is display-only and gated by
         // its own history filter, so it keeps the live epoch (unchanged behavior).
         let epoch = match pass {
-            DecodePass::Boundary | DecodePass::Early | DecodePass::Js8Multi { .. } => {
-                self.capture_epoch
-            }
+            DecodePass::Boundary
+            | DecodePass::Early
+            | DecodePass::Js8Multi { .. }
+            | DecodePass::Residual => self.capture_epoch,
             DecodePass::Redecode => self.decode_epoch,
         };
         // Companion: decodes arrive over UDP; the audio is irrelevant. Drain the
@@ -27962,6 +27982,8 @@ contact yourself."
             }
             // The F6 redecode runs its own display-only fold in `redecode`, not here.
             DecodePass::Redecode => DecodeApplied::Stale,
+            // The 47 step decodes nothing: there is nothing to fold.
+            DecodePass::Residual => DecodeApplied::Stale,
         }
     }
 

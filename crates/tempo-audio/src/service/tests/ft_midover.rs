@@ -602,6 +602,28 @@ impl HeldWorker {
         results.remove(0)
     }
 
+    /// [`HeldWorker::decode`], when the loop has dispatched a decode.
+    pub(super) fn try_decode(&self) -> Option<DecodeResult> {
+        let job = self.jobs.try_recv().ok()?;
+        assert!(self.jobs.try_recv().is_err(), "one decode at a time");
+        let mut results = Vec::new();
+        run_worker_job(job, &mut |out| match out {
+            WorkerOut::Found(d) => self.found.borrow_mut().push(d),
+            WorkerOut::Done(r) => results.push(r),
+        });
+        assert_eq!(results.len(), 1, "a slot decode yields one result");
+        Some(results.remove(0))
+    }
+
+    /// The messages the pass found and has not handed to the loop yet, in the order it found them.
+    pub(super) fn found_messages(&self) -> Vec<String> {
+        self.found
+            .borrow()
+            .iter()
+            .map(|d| d.decode().message.trim().to_string())
+            .collect()
+    }
+
     /// Hand the loop the decodes the pass found, as the worker hands each on the moment it finds
     /// it; the pass's end is still to land.
     pub(super) fn stream(&self) {
