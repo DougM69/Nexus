@@ -79,7 +79,7 @@ const strip = (fieldDay: FieldDayStatus) => (
 )
 
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const qthBox = () => document.querySelectorAll<HTMLInputElement>('.le-fd-input-code')[1]
 const qthMarked = () =>
   qthBox().classList.contains('le-fd-input-history') &&

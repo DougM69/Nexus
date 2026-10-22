@@ -133,7 +133,7 @@ const altW = () => !fireEvent.keyDown(window, { key: 'w', code: 'KeyW', altKey: 
 const line = () => document.querySelector('.le-fd-remove-line')?.textContent ?? null
 const editor = () => document.querySelector<HTMLElement>('.contest-edit')
 const editBoxes = () => [...(editor()?.querySelectorAll<HTMLInputElement>('input') ?? [])]
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })
 const settle = async () => {
   await act(async () => {

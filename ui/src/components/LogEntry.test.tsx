@@ -60,9 +60,9 @@ function renderFd() {
   )
 }
 
-const call = () => screen.getByPlaceholderText('W1AW')
-const klass = () => screen.getByPlaceholderText('1D')
-const section = () => screen.getByPlaceholderText('WI')
+const call = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' })
+const klass = () => screen.getByLabelText(/^Class/)
+const section = () => screen.getByLabelText(/^Section/)
 const logBtn = () => screen.getByRole('button', { name: /log fd/i }) as HTMLButtonElement
 
 beforeEach(() => {

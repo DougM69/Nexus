@@ -39,12 +39,11 @@ type Program = 'POTA' | 'SOTA' | 'Both'
  *
  * POTA and SOTA are the programmes' own names, so the view's title and the activation
  * picker's two options print them as they are (a translated programme name names nothing).
- * The two references are the FORMAT the operator types, and the sources are websites.
+ * The sources are websites.
  * Only "Both" — an English word, not a programme — is prose, and it has a catalog entry.
  */
 const OTA_TITLE = 'POTA / SOTA'
 const ACT_PROGRAMS = ['POTA', 'SOTA'] as const
-const REF_EXAMPLES = { POTA: 'K-1234', SOTA: 'W7A/MN-001' } as const
 const SOURCES: Record<Program, string> = {
   POTA: 'pota.app',
   SOTA: 'SOTAwatch',
@@ -677,7 +676,6 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void handleStartActivation()
               }}
-              placeholder={actProg === 'SOTA' ? REF_EXAMPLES.SOTA : REF_EXAMPLES.POTA}
               autoComplete="off"
               spellCheck={false}
             />

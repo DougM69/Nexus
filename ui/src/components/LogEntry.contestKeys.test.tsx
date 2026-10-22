@@ -93,7 +93,7 @@ function Strip({ fieldDay = party(), active = true, remote = false }: { fieldDay
   )
 }
 
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const boxes = () => [...document.querySelectorAll<HTMLInputElement>('.le-fd-input-code')]
 const rstBox = () => boxes()[0]
 const qthBox = () => boxes()[1]

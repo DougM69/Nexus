@@ -87,7 +87,7 @@ function Strip({ fieldDay = party(), active = true, remote = false }: { fieldDay
   )
 }
 
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })
 /** A key on the window, as the browser delivers it; true when nothing held it. */
 const press = async (init: KeyboardEventInit) => {

@@ -149,7 +149,7 @@ function Both({ snap }: { snap: AppSnapshot }) {
 }
 
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
-const callIn = (w: string) => within(screen.getByTestId(w)).getByPlaceholderText('W1AW') as HTMLInputElement
+const callIn = (w: string) => within(screen.getByTestId(w)).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const qthIn = (w: string) => within(screen.getByTestId(w)).getAllByRole('textbox')[2] as HTMLInputElement
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })
 const toasts = () => toast.pushToast.mock.calls.map((c) => c[0] as string)
@@ -265,7 +265,7 @@ describe('one contact in progress, in two windows', () => {
     const fd = party()
     render(strip(poll(fd), 'logger'))
     await settle()
-    const box = screen.getByPlaceholderText('W1AW') as HTMLInputElement
+    const box = screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
     type(box, 'K9ABC')
     type(screen.getAllByRole('textbox')[2] as HTMLInputElement, 'COOK')
     await settle()

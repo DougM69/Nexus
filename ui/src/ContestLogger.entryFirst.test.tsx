@@ -125,7 +125,7 @@ async function mountLogger(): Promise<void> {
   await act(async () => new Promise((r) => setTimeout(r, 0)))
 }
 
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const sizeLine = () => document.querySelector('.contest-logger-size')!.textContent
 const larger = () => screen.getByRole('button', { name: t('contestLogger.size.larger') }) as HTMLButtonElement
 const smaller = () => screen.getByRole('button', { name: t('contestLogger.size.smaller') }) as HTMLButtonElement
@@ -297,7 +297,7 @@ describe('the contest logger window puts the entry first', () => {
     ])
     const [entry, recent, , contestScreen] = parts as HTMLElement[]
     // The entry holds the contact in progress, the main window's, in its boxes.
-    expect(within(entry).getByPlaceholderText('W1AW')).toBe(callBox())
+    expect(within(entry).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' })).toBe(callBox())
     expect([...entry.querySelectorAll<HTMLInputElement>('.le-fd-big input')].map((b) => b.value)).toEqual([
       'K9ABC',
       '59',

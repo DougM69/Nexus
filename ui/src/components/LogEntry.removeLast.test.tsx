@@ -98,7 +98,7 @@ const ctrlD = (extra: Partial<KeyboardEventInit> = {}) =>
   !fireEvent.keyDown(window, { key: 'd', code: 'KeyD', ctrlKey: true, ...extra })
 
 const line = () => document.querySelector('.le-fd-remove-line')?.textContent ?? null
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const called = () =>
   Object.entries(api)
     .filter(([, f]) => f.mock.calls.length > 0)

@@ -60,9 +60,6 @@ const APRS_MAP_SIDE_KEY = 'nexus.aprs.mapSide'
  * token: it is interpolated into that sentence, never written inside it. */
 const APRS_NA_CHANNEL = '144.390'
 
-/** What a watched-calls entry looks like — callsign-SSIDs, which are wire identifiers. */
-const WATCH_EXAMPLES = 'W9XYZ-9, KD9ABC'
-
 /** The unit symbol printed beside a frequency — a unit is a token, and the guard is told so by
  * this constant. A distance carries its unit from `fmtDistanceKm`, in the operator's units. */
 const MHZ_UNIT = 'MHz'
@@ -1254,7 +1251,6 @@ export function AprsCockpit({
                 <input
                   type="text"
                   className="settings-input"
-                  placeholder={WATCH_EXAMPLES}
                   spellCheck={false}
                   defaultValue={(settings?.aprsIsWatchCalls ?? []).join(', ')}
                   disabled={!canControl || !settings || savingInet}
