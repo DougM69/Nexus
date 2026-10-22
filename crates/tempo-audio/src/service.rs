@@ -18542,9 +18542,10 @@ mod tests {
             DecodePass::Boundary,
         );
         worker.dispatch(WorkerJob::Slot(job));
-        // Wait (bounded) for the worker to finish — it runs on its own thread.
+        // Wait (bounded) for the worker to finish — it runs on its own thread, behind the one
+        // process-wide modem lock, which another test's decode can hold for over a second.
         let mut result = None;
-        for _ in 0..500 {
+        for _ in 0..5_000 {
             if let Some(WorkerOut::Done(r)) = worker.try_recv() {
                 result = Some(r);
                 break;
@@ -18601,9 +18602,11 @@ mod tests {
             "the guard blocks a second concurrent dispatch"
         );
 
-        // Drain the one result → flag clears → the next dispatch is allowed again.
+        // Drain the one result → flag clears → the next dispatch is allowed again. Every decode in
+        // this test binary waits for the one process-wide modem lock, and under the full suite
+        // another test's decode can hold it for over a second, so this waits up to ten.
         let mut got = false;
-        for _ in 0..500 {
+        for _ in 0..5_000 {
             if let Some(WorkerOut::Done(r)) = worker.try_recv() {
                 let _ = eng.apply_decode_result(r);
                 in_flight = false;
