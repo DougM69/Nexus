@@ -5,6 +5,16 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **The log-entry boxes no longer show made-up example values.** An empty box in the contest log line and in the
+  Logbook's add-a-contact form used to show a sample in grey, such as W1AW in Call, 1D and WI in Field Day's Class
+  and Section, a county in a QSO party's county box, and FN31, 20m and a park reference in the Logbook form. A
+  sample like that could read as a value already filled in. Those boxes are now blank. Hints that are words or
+  formats stay, such as Call, Name, RST, MHz and the UTC date format. The park box now reads "Park (reference or
+  name)", and the CQ WW zone box still shows the zone the country file gives for the call typed.
+
 ## [1.20.0] — 2026-10-22
 
 ### Added

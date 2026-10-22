@@ -1105,7 +1105,7 @@ export const EN = {
   // squares, band names (20m), mode names (FT8), frequencies, RST reports, POTA/SOTA
   // references, QSL letters (L/C/E) and the Q-codes and service names printed as button
   // labels (QRZ, eQSL, CL, HL, QSL▸). Those live in `components/Logbook.tsx` as named
-  // constants — LOG_EXAMPLES and the labels beside it. What IS here is the prose around
+  // constants. What IS here is the prose around
   // them, and the ADIF field names quoted inside that prose (SIG_INFO, MY_SIG_INFO) are
   // wire identifiers that must survive translation verbatim, exactly as `ADIF OPERATOR`
   // does in `settings.station.fdOperator.hint`.
@@ -1466,8 +1466,7 @@ export const EN = {
     other: 'Purged {{count}} contacts from the log',
   },
 
-  // The hand-log form. Every placeholder that is a pure token (W1AW, FN31, 20m, US-1234…)
-  // is in LOG_EXAMPLES, not here; the three that are human prose are.
+  // The hand-log form. Its boxes show no sample values; the hints that are words are here.
   'logbook.form.open': 'Log QSO',
   'logbook.form.close': 'Close',
   'logbook.field.call.label': 'Call',
@@ -1498,11 +1497,7 @@ export const EN = {
   'logbook.field.parkMine.title':
     'POTA reference of YOUR own activation for this contact (ADIF MY_SIG_INFO). Defaults to POTA.',
   'logbook.field.name.label': 'Name',
-  // Prose, not a token: a locale should offer a first name its operators recognise.
-  'logbook.field.name.placeholder': 'Jim',
   'logbook.field.qth.label': 'QTH',
-  // Also prose — QTH is free text, so the example is a place a reader recognises.
-  'logbook.field.qth.placeholder': 'Dayton, OH',
   'logbook.column.notes': 'Notes',
   'qso.detail.title': 'Contact with {{call}}',
   'qso.detail.section.contact': 'Station worked',
@@ -1812,8 +1807,8 @@ export const EN = {
   'logEntry.park.program.title': 'On-the-air program for the park/summit you worked',
   // `{{example}}` is a park/summit REFERENCE from the call site — a wire format, never
   // localised. The prose around it is the part a translator owns.
-  'logEntry.park.ref.placeholderPota': 'Park ({{example}} or name)',
-  'logEntry.park.ref.placeholderSota': 'Summit ({{example}})',
+  'logEntry.park.ref.placeholderPota': 'Park (reference or name)',
+  'logEntry.park.ref.placeholderSota': 'Summit (reference)',
   'logEntry.park.ref.title':
     'Park/summit reference of the station you worked — logged to ADIF (POTA→SIG_INFO, SOTA→SOTA_REF)',
   'logEntry.park.live.label': 'live',

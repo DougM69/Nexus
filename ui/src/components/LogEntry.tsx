@@ -1,7 +1,6 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog (`i18n/en.ts`); a hardcoded one fails CI. What does NOT come from
-// the catalog is LOG_EXAMPLES and PARK_PROGRAMS below, the contest boxes' examples
-// (`slotExample`), plus everything this strip prints about a
+// the catalog is LOG_EXAMPLES and PARK_PROGRAMS below, plus everything this strip prints about a
 // contact — the callsign, RST, grid, band, mode and frequency are wire values, and a locale that
 // "translated" one would have broken an example of a wire format. See the invariant-token rule in
 // `i18n/index.ts`.
@@ -40,7 +39,7 @@ import { readLogDraft, writeLogDraft } from '../features/logDraft'
 import { CALL_HISTORY_SOURCE, SCP_SOURCE, useCallHistory, useScpList } from '../features/contestLists'
 import { scpLine } from '../features/scp'
 import { applyFill, contestLogFill, EMPTY_FILL, historyFill, loggedQthFill, offerFill, typedIn, type FillSource, type FillState } from '../features/callHistoryFill'
-import { fdFieldOk, fdSlotValue, fdVerdict, receivedCaption, slotCaption, slotExample, slotTitle } from '../features/contestSlots'
+import { fdFieldOk, fdSlotValue, fdVerdict, receivedCaption, slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
 import { contestUnsavedText } from '../features/contestUnsaved'
 import { contestDupe, contestDupeRow, contestWorkedRows, workedValues, type ContestDupeVerdict } from '../features/contestDupe'
@@ -232,33 +231,20 @@ function overrideModeFor(m: string): string {
 }
 
 /**
- * The invariant example values this strip shows in empty fields, gathered so the guard can prove
- * they never became catalog entries. Every one is drawn from a technical namespace — a callsign,
- * a Field Day class, an ARRL section code, the signal-report format's name, a unit, a POTA park
- * and a SOTA summit reference — so it is the same characters in every language.
+ * The invariant hints this strip shows in empty fields, gathered so the guard can prove they never
+ * became catalog entries: the signal-report format's name and a unit, the same characters in every
+ * language. Neither is a sample value; a box that would only show one (a callsign, a class, a
+ * section, a park) is left blank.
  */
 const LOG_EXAMPLES = {
-  call: 'W1AW',
-  fdClass: '1D',
-  fdSection: 'WI',
   rst: 'RST',
   freqUnit: 'MHz',
-  potaRef: 'K-1234',
-  sotaRef: 'W7A/MN-001',
 } as const
 
 /**
  * On-the-air programs for the park/summit picker. The ADIF SIG value and the label the operator
  * reads are the SAME token here, which is why this is one list and not a value/label pair.
  */
-/** The example value shown in an empty box, by slot; any other box shows a code from the list it
- *  draws on (`slotExample`). An example drawn from a technical namespace is an INVARIANT TOKEN
- *  and never a catalog string — see `LOG_EXAMPLES`. */
-const FD_FIELD_EXAMPLES: Record<string, string | undefined> = {
-  CLASS: LOG_EXAMPLES.fdClass,
-  SECTION: LOG_EXAMPLES.fdSection,
-}
-
 const PARK_PROGRAMS = ['POTA', 'SOTA'] as const
 
 /** Now, split into a UTC date (YYYY-MM-DD) + time (HH:MM) for the override's inputs. */
@@ -2801,7 +2787,6 @@ export function LogEntry({
                 )
                 onEnter(e)
               }}
-              placeholder={LOG_EXAMPLES.call}
               autoComplete="off"
               spellCheck={false}
             />
@@ -2908,7 +2893,7 @@ export function LogEntry({
                   window.clearTimeout(fdHitsCloseTimer.current)
                   fdHitsCloseTimer.current = window.setTimeout(closeFdHits, 150)
                 }}
-                placeholder={f === zoneSlot && zoneHint ? zoneHint : (FD_FIELD_EXAMPLES[f.key] ?? slotExample(f))}
+                placeholder={f === zoneSlot && zoneHint ? zoneHint : undefined}
                 autoComplete="off"
                 spellCheck={false}
                 title={
@@ -3349,9 +3334,7 @@ export function LogEntry({
             onKeyDown={onEnter}
             onBlur={() => window.setTimeout(() => setParkHits([]), 150)}
             placeholder={
-              logParkProgram === 'SOTA'
-                ? t('logEntry.park.ref.placeholderSota', { example: LOG_EXAMPLES.sotaRef })
-                : t('logEntry.park.ref.placeholderPota', { example: LOG_EXAMPLES.potaRef })
+              logParkProgram === 'SOTA' ? t('logEntry.park.ref.placeholderSota') : t('logEntry.park.ref.placeholderPota')
             }
             title={t('logEntry.park.ref.title')}
             autoComplete="off"

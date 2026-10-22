@@ -248,7 +248,7 @@ async function mountLogger(): Promise<void> {
   // The first snapshot poll lands after 300 ms; the log line is the sign it did.
   await act(async () => new Promise((r) => setTimeout(r, 400)))
   await settle()
-  expect(screen.getByPlaceholderText('W1AW'), 'control: the log line is on screen').toBeTruthy()
+  expect(screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), 'control: the log line is on screen').toBeTruthy()
 }
 
 function judge(calls: string[]): { refused: string[]; keying: string[] } {
@@ -267,7 +267,7 @@ describe('the contest logger window transmits nothing', () => {
   it('every key, at the window and in every box, reaches no command that transmits', async () => {
     await mountLogger()
     // Type a whole contact first, so Enter has something to log and Esc something to clear.
-    const box = screen.getByPlaceholderText('W1AW') as HTMLInputElement
+    const box = screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
     fireEvent.change(box, { target: { value: 'K9ABC' } })
     await settle()
     const from = bridgeCalls.length
@@ -282,7 +282,7 @@ describe('the contest logger window transmits nothing', () => {
 
   it('Esc, at the window and in every box, is the stop and only the stop: one halt a press, and the entry clears', async () => {
     await mountLogger()
-    const box = screen.getByPlaceholderText('W1AW') as HTMLInputElement
+    const box = screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
     const targets: Element[] = [document.body, ...Array.from(document.querySelectorAll('input, textarea'))]
     expect(targets.length, 'control: the boxes are there to press it in').toBeGreaterThan(2)
     for (const target of targets) {
@@ -308,7 +308,7 @@ describe('the contest logger window transmits nothing', () => {
 
   it('with Alt, Ctrl or Cmd held an F-key is the system\'s, so Alt+F4 closes the window; F5 alone is still held', async () => {
     await mountLogger()
-    const call = screen.getByPlaceholderText('W1AW')
+    const call = screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' })
     for (const [where, target] of [['the window', document.body], ['the call box', call]] as const) {
       expect(fireEvent.keyDown(target, { key: 'F5', code: 'F5' }), `${where}: F5 was left to the webview`).toBe(false)
       expect(fireEvent.keyDown(target, { key: 'F4', code: 'F4', altKey: true }), `${where}: Alt+F4 was held`).toBe(true)

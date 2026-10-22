@@ -93,7 +93,7 @@ const box = (caption: string): HTMLInputElement => {
   return cap.closest('label')!.querySelector('input')! as HTMLInputElement
 }
 const qthBox = () => box('County / State')
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const hits = () => [...document.querySelectorAll('.le-fd-suggest .le-fd-hit-code')].map((n) => n.textContent)
 
 afterEach(() => {
