@@ -554,13 +554,14 @@ fn every_callsign_class_pair_puts_both_calls_on_the_air_verbatim() {
 
 #[test]
 fn a_hashed_cq_is_never_generated() {
-    // `CQ <F4CYH/P> JN18` PACKS but does not UNPACK — a hashed CQ is unusable, and
-    // generating one would put a frame on the air that nobody can decode. A CQ
-    // therefore always carries the calling station's call in full.
-    let got = on_air(ModeKind::Ft8, "CQ <PJ4/K1ABC> FK52");
+    // A hashed CQ has no frame anybody can decode, so the encoder refuses it and nothing
+    // keys (it once packed into a frame that did not unpack). A CQ therefore always carries
+    // the calling station's call in full.
     assert!(
-        got.is_empty(),
-        "a hashed CQ does not survive the round trip; got {got:?}"
+        make_mode(ModeKind::Ft8)
+            .encode("CQ <PJ4/K1ABC> FK52")
+            .is_empty(),
+        "a hashed CQ must never become an over"
     );
 
     for mycall in ["F4CYH/P", "KD9TAW/R", "PJ4/K1ABC", "YW18FIFA", "KD9TAW/QRP"] {
