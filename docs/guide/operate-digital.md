@@ -231,6 +231,12 @@ end) is not implemented.
   the status line says the over was dropped and how late the radio was. However
   many are dropped in a row, TX stays on, as in WSJT-X: the TX watchdog ends a
   run that never gets an over out. A faster CAT baud rate keys sooner.
+- **A late reply switches the over on the air**, as in WSJT-X. FT8's full
+  decode runs 14.4 s into the period and FT4's at 6.05 s, so a weak R-report or
+  RR73 that only the full decode finds can arrive after your over has started.
+  The rest of that over becomes the new message; the over keeps its start and
+  end, and ALL.TXT gets a second Tx line. Once an over carries your RR73 or 73,
+  no reply changes it. A Tx button clicked during an over switches it too.
 - **Decode depth** (Fast / Normal / Deep) and the **decoder passband**
   (default 200–2900 Hz) are in
   [Settings ▸ Digital](settings-reference.md#digital-ft8ft4).
