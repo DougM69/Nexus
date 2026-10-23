@@ -3819,6 +3819,7 @@ export const ES: PartialCatalog = {
   "operate.decodes.hideB4Scope.any": "Cualquier banda",
   "operate.decodes.hideB4Scope.band": "Esta banda",
   "operate.decodes.hideB4.title.idle": "El chip B4 muestra estaciones trabajadas — ahí el interruptor de ocultar no hace nada",
+  "operate.decodes.hideB4.title.band": "Oculta las estaciones que ya has trabajado en esta banda (B4) del filtro que esté activo. Una estación trabajada solo en otra banda sigue visible. Se elige en el menú junto a −B4 en Actividad de banda.",
   "operate.decodes.newestTop.label": "Recientes arriba",
   "operate.decodes.newestTop.title": "Muestra las decodificaciones más recientes arriba y las sigue ahí. Desactivado es el orden de WSJT-X, con las más recientes abajo.",
   "operate.decodes.newestTop.title.idle": "Recientes arriba funciona con el orden por hora",

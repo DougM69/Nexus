@@ -354,10 +354,13 @@ export function OperateDecodes({
       aria-pressed={hideB4}
       disabled={filter === 'b4'}
       onClick={() => pickHideB4(!hideB4)}
+      // The tooltip names the band scope, which the Rx Frequency pane applies with no menu of its own.
       title={
         filter === 'b4'
           ? t('operate.decodes.hideB4.title.idle')
-          : t('operate.decodes.hideB4.title')
+          : hideB4Scope === 'band'
+            ? t('operate.decodes.hideB4.title.band')
+            : t('operate.decodes.hideB4.title')
       }
     >
       −{DECODE_TOKENS.b4}

@@ -6358,6 +6358,7 @@ export const JA: PartialCatalog = {
   "operate.decodes.hideB4Scope.any": "全バンド",
   "operate.decodes.hideB4Scope.band": "このバンド",
   "operate.decodes.hideB4.title.idle": "B4 チップは交信済み局を表示するためのものなので、この非表示スイッチはそこでは働きません",
+  "operate.decodes.hideB4.title.band": "このバンドで交信済み（B4）の局を、どのフィルター表示からも隠します。別のバンドでだけ交信した局は表示されたままです。バンドアクティビティの −B4 の横のメニューで切り替えます。",
   "operate.decodes.newestTop.label": "新しい順",
   "operate.decodes.newestTop.title": "最新のデコードを上に表示し、上端を追従します。オフはWSJT-Xと同じ順序で、最新が下になります。",
   "operate.decodes.newestTop.title.idle": "新しい順は時刻順の並べ替えで使えます",

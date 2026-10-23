@@ -10088,6 +10088,8 @@ export const EN = {
     'Hide stations you have already worked (B4) from whichever filter is active — CQ-only minus B4, and friends',
   'operate.decodes.hideB4.title.idle':
     'The B4 chip shows worked stations — the hide switch is idle there',
+  'operate.decodes.hideB4.title.band':
+    'Hide stations you have already worked on this band (B4) from whichever filter is active. A station worked only on another band stays. The menu beside −B4 in Band Activity sets this.',
   // #409: the menu beside −B4. B4 is the log shorthand for "worked before" and stays as it is.
   'operate.decodes.hideB4Scope.aria': 'Which worked stations −B4 hides',
   'operate.decodes.hideB4Scope.title':

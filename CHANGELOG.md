@@ -272,6 +272,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that its port stays free for another program, but a computer driving the station could still select it and open
   the port again. The station now refuses a disabled radio from Remote as it does at the desktop. Enable the radio
   to use it again.
+- **The Rx Frequency pane's −B4 says which worked stations it hides.** That pane has no menu of its own for
+  −B4's Any band / This band choice, but it follows the one in Band Activity. With This band chosen, hovering over
+  its −B4 now says it hides only stations worked on this band, and where to change that.
 
 ### Security
 - **A computer no longer takes the station's internet key on Nexus Remote's word alone.** Before, when you

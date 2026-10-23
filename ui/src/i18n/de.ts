@@ -5934,6 +5934,7 @@ export const DE: PartialCatalog = {
   "operate.decodes.hideB4Scope.any": "Jedes Band",
   "operate.decodes.hideB4Scope.band": "Dieses Band",
   "operate.decodes.hideB4.title.idle": "Der B4-Chip zeigt gearbeitete Stationen — der Ausblenden-Schalter ist dort wirkungslos",
+  "operate.decodes.hideB4.title.band": "Auf diesem Band bereits gearbeitete Stationen (B4) aus dem gerade aktiven Filter ausblenden. Eine nur auf einem anderen Band gearbeitete Station bleibt sichtbar. Einstellbar im Menü neben −B4 in der Bandaktivität.",
   "operate.decodes.newestTop.label": "Neueste oben",
   "operate.decodes.newestTop.title": "Die neuesten Dekodierungen oben anzeigen und dort mitlaufen. Aus ist die WSJT-X-Reihenfolge, mit den neuesten unten.",
   "operate.decodes.newestTop.title.idle": "Neueste oben funktioniert mit Sortierung nach Zeit",
