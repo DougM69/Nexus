@@ -349,7 +349,9 @@ protection, the first time a job names one that does not exist, so nothing names
 until the guard passes. It never uses the shared `production` environment. There is no `grant-trial`
 operation in production; trials there go through the Worker's admin route.
 
-Each row also names its private billing Worker (`billing.service`). The relay binds it as `BILLING`
-only once that row's `billing.deployed` is true, and the upload check then demands exactly that
-binding. The relay's no-logs rule covers Logpush and Tail Workers as well as Workers Logs: an upload
+Each row also names its private billing Worker (`billing.service`). The relay binds it as `BILLING`, on
+that Worker's `BillingService` entrypoint, only once that row's `billing.deployed` is true, and the upload
+check then demands exactly that binding and entrypoint. Until then `/api/remote/billing/checkout` and
+`/api/remote/billing/portal` answer `billingNotAvailable`, `config` says `billing: false`, and the page shows
+no Subscribe or Manage button. The relay's no-logs rule covers Logpush and Tail Workers as well as Workers Logs: an upload
 with any of them on fails its own verification.

@@ -33,6 +33,10 @@ const Wordmark = () => <span className="remote-site-wordmark">
 // reads as "this product is finished with me" rather than "ask and it can be extended". During a
 // closed beta every trial is granted by hand anyway, so asking is the actual mechanism.
 const BETA_CHANNEL = 'https://discord.gg/mCCBaRKj3'
+// Buying a plan during the app's trial keeps the trial's days when at least this much of it is left: the
+// payment provider's 48 hours, plus the five minutes the billing service allows for the time between. With
+// less, the plan starts and the first payment is taken at once, and Subscribe says so before the press.
+const TRIAL_KEPT_MS = 48 * 3600000 + 300000
 // Browser approval lifetime: warn this long before the end that using this browser cannot move.
 const APPROVAL_WARNING_MS = 7 * 86400000
 // The service names what it refused. Anything that is not a refusal - a dropped connection, a
@@ -200,6 +204,14 @@ export function RemoteApp() {
   // An account that has never held a trial may pair - that is the self-serve path, and gating
   // the pairing form on `entitled` made it unreachable for exactly the people who need it.
   const canPair = trial?.state === 'active' || trial?.state === 'none'
+  // Subscribe and Manage, only where the service has billing on. A subscription that has not ended is
+  // changed or cancelled in the provider's portal; one that has ended can be bought again, and its
+  // invoices are still in the portal.
+  const plan = trial?.plan
+  const subscribed = plan?.kind === 'subscription' && !['canceled', 'incomplete_expired'].includes(plan.status ?? '')
+  const trialLeft = trial?.state === 'active' && plan?.kind === 'trial' && session ? trial.expiresAt - session.serverNow : null
+  const goToBilling = (kind: 'checkout' | 'portal', body: { plan: 'monthly' | 'annual' } | Record<string, never> = {}) =>
+    void act(async () => { if (client) window.location.assign(await client.billingPage(kind, body)) })
   const daysLeft = trial && session
     ? Math.max(0, Math.ceil((trial.expiresAt - session.serverNow) / 86400000))
     : 0
@@ -254,6 +266,9 @@ export function RemoteApp() {
     : code === 'tryLater' ? t('remote.tryLater')
     // Set by the page, not the service: an open session whose next ticket was refused.
     : code === 'sessionEnded' ? t('remote.sessionEnded')
+    : code === 'alreadySubscribed' ? t('remote.billing.alreadySubscribed')
+    : code === 'noSubscription' ? t('remote.billing.noSubscription')
+    : code === 'billingNotAvailable' ? t('remote.billing.notAvailable')
     : t('remote.requestFailed')
   // A sign-up that worked but whose address is not confirmed yet. Auth0 keeps its session through
   // the deny, so "continue" is one plain login and "use a different account" has to sign out of it.
@@ -319,6 +334,25 @@ export function RemoteApp() {
         {trial?.state === 'ended' && <p className="remote-site-status remote-site-status--stopped" role="status">{t('remote.trialEnded', { until: utcDate(trial.expiresAt) })}</p>}
         {trial?.state === 'disabled' && <p className="remote-site-status remote-site-status--stopped" role="status">{t('remote.trialDisabled')}</p>}
         {lanOnly && session.stations.length > 0 && <p className="remote-site-status" role="status">{t('remote.lanFree')}</p>}
+        {/* No price here: the provider's checkout shows it, with the tax, before anything is paid. The
+            renewal terms sit beside Subscribe, and checkout repeats them beside its own pay button. */}
+        {client?.billing && trial && trial.state !== 'disabled' && <section className="rm-card remote-section remote-billing">
+          <h2>{t('remote.billing.title')}</h2>
+          {!subscribed && <>
+            <div className="remote-actions">
+              <button className="remote-button remote-button--primary" disabled={busy} onClick={() => goToBilling('checkout', { plan: 'monthly' })}>{t('remote.billing.subscribeMonthly')}</button>
+              <button className="remote-button remote-button--primary" disabled={busy} onClick={() => goToBilling('checkout', { plan: 'annual' })}>{t('remote.billing.subscribeYearly')}</button>
+            </div>
+            <p>{t('remote.billing.renewalTerms')}</p>
+            {trialLeft !== null && <p>{trialLeft >= TRIAL_KEPT_MS ? t('remote.billing.trialKept') : t('remote.billing.chargedNow')}</p>}
+          </>}
+          {plan?.kind === 'subscription' && <>
+            <p>{t('remote.billing.manageHint')}</p>
+            <div className="remote-actions">
+              <button className="remote-button" disabled={busy} onClick={() => goToBilling('portal')}>{t('remote.billing.manage')}</button>
+            </div>
+          </>}
+        </section>}
         {(trial?.state === 'ended' || trial?.state === 'disabled') &&
           <p><a href={BETA_CHANNEL} target="_blank" rel="noopener noreferrer">{t('remote.askAboutAccess')}</a></p>}
         {session.stations.map(station => <section className="rm-card remote-section" key={station.id}>

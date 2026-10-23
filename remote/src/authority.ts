@@ -32,6 +32,16 @@ export interface RemoteEnv {
   /** '1' once every Nexus that pairs sends its callsign and PC: an approve without them is refused
    *  `updateRequired` instead of starting a trial guarded by the mailbox alone. */
   TRIAL_IDENTITY_REQUIRED?: string
+  /** The private billing Worker's `BillingService` entrypoint, which holds the payment keys this relay never
+   *  does. Bound only once that environment's billing Worker is deployed (`billing.deployed` in
+   *  scripts/staging-common.mjs); until then it is absent, the billing routes answer `billingNotAvailable`
+   *  and the page shows no Subscribe or Manage button. */
+  BILLING?: BillingService
+}
+/** The billing Worker's RPC methods, as that Worker defines them: each answers `{ url }` or `{ error, status }`. */
+export interface BillingService {
+  checkout(accountId: string, plan: 'monthly' | 'annual'): Promise<unknown>
+  portal(accountId: string): Promise<unknown>
 }
 
 export class Refusal extends Error {

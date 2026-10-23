@@ -35,6 +35,10 @@ const ENROLMENTS_PER_DAY = 5
 const INVITES_PER_DAY = 20
 /** The people a station may have invited at once. */
 const INVITES_PER_STATION = 20
+/** Checkouts and portal pages an account may open a minute: each one is a call to the payment provider. */
+const BILLING_PER_MINUTE = 10
+/** The billing Worker's refusals the page can name. Anything else it answers is `serviceUnavailable`. */
+const BILLING_REFUSALS = new Set(['invalidRequest', 'accountNotFound', 'accessDenied', 'alreadySubscribed', 'noSubscription', 'serviceUnavailable'])
 
 function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   const result = new Response(JSON.stringify(value), { status, headers })
@@ -43,6 +47,15 @@ function json(value: unknown, status = 200, headers?: HeadersInit): Response {
   result.headers.set('x-content-type-options', 'nosniff')
   result.headers.set('referrer-policy', 'no-referrer')
   return result
+}
+/** The billing Worker's answer as the page gets it: a page on the provider's own domain to go to, or a
+ *  refusal by a name the page knows. Never a URL anywhere else, and never anything the Worker said besides. */
+function billingAnswer(answer: unknown, page: string): Response {
+  const value = answer as { url?: unknown; error?: unknown; status?: unknown } | null
+  if (typeof value?.url === 'string' && value.url.startsWith(page)) return json({ url: value.url })
+  const named = typeof value?.error === 'string' && BILLING_REFUSALS.has(value.error)
+    && typeof value.status === 'number' && Number.isInteger(value.status) && value.status >= 400 && value.status <= 599
+  throw named ? new Refusal(value.error as string, value.status as number) : new Refusal('serviceUnavailable', 503)
 }
 async function room(env: RemoteEnv, stationId: string, path: string, value?: unknown): Promise<Response> {
   // Construct fresh internal headers. Public requests cannot supply an admission.
@@ -80,6 +93,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     audioVersion: 1,
     // The stream's signalling lane. A page that cannot see this number never offers a stream.
     streamVersion: 1,
+    // Subscribe and Manage: true only where the billing Worker is bound. The page shows neither button
+    // otherwise, and an older service never says so.
+    billing: env.BILLING !== undefined,
   })
   const match = /^stations\/([0-9a-f-]{36})\/(.+)$/.exec(path)
   // The native client's routes (Nexus on another computer), on its own token and its device key's
@@ -466,6 +482,19 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // outside, and a provider that never sends the claim looks identical to one that does.
     return json({ accountId: identity.accountId, entitlement, stations, pending,
       identityVerified: verified, serverNow: now })
+  }
+  // SUBSCRIBE AND MANAGE, through the private billing Worker, which holds the payment keys. Above the
+  // entitlement, as `session` is: an account whose trial has ended is exactly the one that subscribes, and
+  // what it buys reaches it only as the webhook writes it and `readEntitlement` reads it, the one access
+  // check. Only the signed-in account's id goes over. Until the billing Worker is bound these say so.
+  if (path === 'billing/checkout' || path === 'billing/portal') {
+    requireValue(env.BILLING, 'billingNotAvailable', 503)
+    const checkout = path === 'billing/checkout', input = await body(request, checkout ? ['plan'] : [])
+    requireValue(!checkout || input.plan === 'monthly' || input.plan === 'annual', 'invalidRequest', 400)
+    await rate(env, `billing:${identity.accountId}`, now, BILLING_PER_MINUTE)
+    return checkout
+      ? billingAnswer(await env.BILLING.checkout(identity.accountId, input.plan as 'monthly' | 'annual'), 'https://checkout.stripe.com/')
+      : billingAnswer(await env.BILLING.portal(identity.accountId), 'https://billing.stripe.com/')
   }
   // THE ACCOUNT'S DEVICES, on the page: every device of every station the account owns, and its own
   // devices at stations it was invited to, each removable here. Above the entitlement, as `revoke` is:

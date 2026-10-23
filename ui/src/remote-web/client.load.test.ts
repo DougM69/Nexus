@@ -71,3 +71,11 @@ it('keeps any other deny a plain refusal, and any other callback failure a failu
   expect(other instanceof RemoteError&&['signInRefused','emailUnverified'].includes(other.code)).toBe(false)
   expect(window.location.search).toBe('')
 })
+// Subscribe and Manage show only where the service says its billing is on, by exactly `true`: an older
+// service never says, and anything else is not on.
+it('turns billing on only for a service that says billing: true',async()=>{
+  for(const [billing,on] of [[true,true],[false,false],[undefined,false],[1,false],['true',false]] as const){
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({issuer:'https://identity.remote-test.invalid/',audience:'nexus',clientId:'synthetic',ready:true,billing}),{status:200})))
+    expect((await BrowserClient.load())?.billing).toBe(on)
+  }
+})

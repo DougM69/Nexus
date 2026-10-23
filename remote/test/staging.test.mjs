@@ -310,7 +310,8 @@ function uploadedProvider({ fault, denied = false, legacy = false, observability
     row.type = 'plain_text'; row.text = secretText
   }
   if (billing && fault !== 'billing-missing') settings.bindings.push({ name: 'BILLING', type: 'service',
-    service: fault === 'billing-other' ? 'another-service' : STAGING.billing.service, environment: 'production' })
+    service: fault === 'billing-other' ? 'another-service' : STAGING.billing.service, environment: 'production',
+    ...(fault === 'billing-default-export' ? {} : { entrypoint: fault === 'billing-other-entrypoint' ? 'AnotherEntrypoint' : 'BillingService' }) })
   if (fault === 'secret-missing') settings.bindings = settings.bindings.filter(b => b.name !== 'ADMIN_SUBJECT')
   if (fault === 'identity') settings.bindings.find(row => row.name === 'AUTH0_ISSUER').text = 'https://other.auth0.com/'
   if (fault === 'revision') settings.bindings.find(row => row.name === 'REMOTE_BUILD_REVISION').text = '0'.repeat(40)
@@ -640,14 +641,17 @@ test("the environment table: staging resolves to today's exact names, and produc
 
 test('the billing Worker is bound only once its row says it is deployed, and the upload check demands exactly that binding', async () => {
   assert.equal('services' in stagingConfig(template, ids), false, 'no binding while the billing Worker does not exist')
-  assert.deepEqual(billingServices({ billing: { service: 'nexus-billing', deployed: true } }), [{ binding: 'BILLING', service: 'nexus-billing' }])
+  // The binding names the billing Worker's `BillingService` entrypoint: its RPC methods, never its public webhook route.
+  assert.deepEqual(billingServices({ billing: { service: 'nexus-billing', deployed: true } }),
+    [{ binding: 'BILLING', service: 'nexus-billing', entrypoint: 'BillingService' }])
   assert.deepEqual(billingServices({ billing: { service: 'nexus-billing', deployed: false } }), [])
 
   const p = uploadedProvider({ billing: true })
-  assert.deepEqual(p.config.services, [{ binding: 'BILLING', service: 'nexus-billing-staging' }])
+  assert.deepEqual(p.config.services, [{ binding: 'BILLING', service: 'nexus-billing-staging', entrypoint: 'BillingService' }])
   await p.api.recover(p.config, artifact.manifest.files['worker.js'])
   assert.equal(p.writes.length, 1)
-  for (const fault of ['billing-missing', 'billing-other']) {
+  // Bound to the Worker's default export instead (no entrypoint), or another entrypoint: not the artifact.
+  for (const fault of ['billing-missing', 'billing-other', 'billing-default-export', 'billing-other-entrypoint']) {
     const bad = uploadedProvider({ billing: true, fault })
     await assert.rejects(bad.api.recover(bad.config, artifact.manifest.files['worker.js']),
       fault === 'billing-missing' ? /binding inventory/ : /billing binding differs/, fault)
