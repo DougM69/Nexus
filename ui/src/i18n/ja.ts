@@ -24,23 +24,15 @@ import type { PartialCatalog } from './index'
 
 export const JA: PartialCatalog = {
   "remote.configurationLocal": "アカウント、バックアップ、リモートアクセスは局側の Nexus で管理してください。シャックで直接、またはこのブラウザーへのライブで操作できます。",
-  "remote.loggingLocalHint": "ブラウザーを承認すると、そのブラウザーは交信のログ記入もできます。制限する場合は、ここでログ記入の許可を取り消してください。この許可では無線機や送信を操作できません。",
-  "remote.loggingTakeOver": "リモートログ記入を終了（Remote を再びオンにするまで全員切断）",
   "remote.controlRequestFailed": "コマンドの実行を確認できませんでした。局の操作許可と現在の測定値を確認してください。",
   "remote.controlLocalHint": "ブラウザーを承認すると、局の操作（対応する受信機、無線機、アンプの操作）と、局のあらゆる送信を止める Stop TX が許可されます。ライブがオンなら、このウィンドウをライブで見て、ここと同じように Nexus を使うこともできます（送信を含む）。制限する場合は、ここで取り消してください。取り消すとライブも終了します。",
   // remote parity batch 1
   "remote.b1.rotatorPointing": "ローテーターを{{call}}に向けています。",
-  "remote.transmitAllow": "Remote のページからの FT8/FT4 送信を許可",
-  "remote.transmitRevoke": "Remote のページからの FT8/FT4 送信の許可を取り消す",
-  "remote.transmitLocalHint": "Remote のページからの FT8/FT4 送信には局の操作権限も必要です。一度許可すると、ここで取り消すまで Nexus を再起動しても保持されます。取り消すと、そのブラウザーのページからの FT8/FT4 送信はすぐに停止します。ブラウザーで TX On を押すまで、ページからは何も送信されません。ライブ中のブラウザーにはこの許可は不要です。ライブでは、ここと同じように送信できます。",
   "remote.controlAllow": "局の操作を許可",
   "remote.controlRevoke": "局の操作許可を取り消す",
   "remote.controlActive": "局の操作中",
   "amp.strip.statusUnknown": "アンプの状態を取得できません",
   "remote.controlTakeOver": "リモート操作を終了（Remote を再びオンにするまで全員切断）",
-  "remote.loggingAllow": "リモートログ記入を許可",
-  "remote.loggingRevoke": "ログ記入の許可を取り消す",
-  "remote.loggingController": "このブラウザーがリモートログ記入を制御しています。",
   // remote parity batch 2
   // remote parity batch 3
   "remote.audio.start": "受信音を聞く",
@@ -277,7 +269,7 @@ export const JA: PartialCatalog = {
   "remote.codeExpires": "このコードの有効期限は10分です。",
   "remote.approvePairing": "このアカウントとのペアリングを承認",
   "remote.cancelPairing": "ペアリングをキャンセル",
-  "remote.restartHint": "Remote は Nexus を再起動してもオンのままです。Nexus の終了時にオンだった場合は、自動的にオンに戻り再接続します。承認済みブラウザーには、FT8/FT4 の送信を含め、許可した内容がそのまま保持されます。再起動後は、ブラウザーが再びオンにするまで送信は常にオフです。Remote をオフにしても接続が切れるだけで、再びオンにすると承認済みブラウザーの許可が元に戻ります。",
+  "remote.restartHint": "Remote は Nexus を再起動してもオンのままです。Nexus の終了時にオンだった場合は、自動的にオンに戻り再接続します。承認済みブラウザーには、許可した内容がそのまま保持されます。Remote をオフにしても接続が切れるだけで、再びオンにすると承認済みブラウザーの許可が元に戻ります。",
   "remote.disable": "Remote をオフにする",
   "remote.enable": "Remote をオンにする",
   "remote.autostartOffer": "このパソコンの再起動後に Remote を再開するには、Nexus も起動する必要があります。このパソコンにサインインしたときに Nexus を起動しますか？",
@@ -290,7 +282,6 @@ export const JA: PartialCatalog = {
   "remote.noBrowsers": "現在のブラウザー要求や承認はありません",
   "remote.revokeBrowser": "ブラウザーの承認を取り消す",
   "remote.approveBrowser": "ブラウザーを承認",
-  "remote.approveTransmit": "Remote のページからの FT8/FT4 送信も許可",
   "remote.browserApprovedUntil": "{{until}} UTC まで承認済み。",
   "remote.browserApprovedUntilRemoved": "削除するまで承認済み。",
   "remote.browserRenewsUntil": "{{until}} UTC まで承認済み。このブラウザーから局を使うたびに延長されます（最長 {{limit}} UTC まで）。",

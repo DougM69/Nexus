@@ -74,10 +74,9 @@ fn heartbeat_on(
     )
 }
 
-/// An FT8 CQ on the air under `who`'s lease, with its transmit grant: what the radio loop halts on
-/// its next tick once the authority that permitted it is revoked.
-fn keyed_under(f: &Fixture, who: (&str, &str), now: Instant) {
-    f.authority.permit_transmit(who.1, true).unwrap();
+/// An FT8 CQ on the air under the lease held: what the radio loop halts on its next tick once the
+/// authority that permitted it is revoked.
+fn keyed_under(f: &Fixture, now: Instant) {
     let permit = f.authority.transmit.permit(now + LEASE).unwrap();
     let mut e = f.engine.lock().unwrap();
     e.configure_remote_settings_store(f.dir.join("settings.json"));
@@ -119,7 +118,7 @@ fn the_relays_road_moving_never_drops_a_lan_controller() {
         let who = (LAN_SESSION, LAN_DEVICE);
         let state = control_on(&f, lan, who, now).unwrap();
         assert_eq!(state["phase"], "controlling", "{event}: premise");
-        keyed_under(&f, who, now);
+        keyed_under(&f, now);
         let lease = state["leaseId"].as_str().unwrap();
         let presence = f
             .authority
@@ -148,7 +147,7 @@ fn the_relays_road_moving_never_drops_a_lan_controller() {
         // has.
         let g = Fixture::new();
         let relay_state = control_on(&g, g.connection, (SESSION, DEVICE), now).unwrap();
-        keyed_under(&g, (SESSION, DEVICE), now);
+        keyed_under(&g, now);
         relay_event(&g, event);
         assert!(
             halted(&g, now),
@@ -173,7 +172,7 @@ fn a_lan_connection_that_closes_drops_only_its_own_lease() {
     // The relay's browser in control; a LAN computer that holds nothing leaves.
     let f = Fixture::new();
     let state = control_on(&f, f.connection, (SESSION, DEVICE), now).unwrap();
-    keyed_under(&f, (SESSION, DEVICE), now);
+    keyed_under(&f, now);
     let idle = f.authority.start_lan_connection();
     f.authority.retire_lan_connection(idle);
     assert!(
@@ -193,7 +192,7 @@ fn a_lan_connection_that_closes_drops_only_its_own_lease() {
     let second = f.authority.start_lan_connection();
     let who = (LAN_SESSION, LAN_DEVICE);
     let state = control_on(&f, first, who, now).unwrap();
-    keyed_under(&f, who, now);
+    keyed_under(&f, now);
     f.authority.retire_lan_connection(second);
     assert!(
         !halted(&f, now),
@@ -265,7 +264,7 @@ fn invalidate_drops_every_lease_on_either_road() {
             (f.connection, (SESSION, DEVICE))
         };
         let state = control_on(&f, connection, who, now).unwrap();
-        keyed_under(&f, who, now);
+        keyed_under(&f, now);
         assert!(!halted(&f, now), "{road}: premise, on the air");
         f.authority.invalidate();
         assert!(
@@ -335,7 +334,7 @@ fn a_lan_controllers_stop_holds_through_the_relays_road_moving() {
     let lan = f.authority.start_lan_connection();
     let who = (LAN_SESSION, LAN_DEVICE);
     let state = control_on(&f, lan, who, now).unwrap();
-    keyed_under(&f, who, now);
+    keyed_under(&f, now);
     let stop = Request::StopTransmit {
         request_id: id(),
         station_boot_id: state["stationBootId"].as_str().unwrap().into(),
@@ -415,7 +414,7 @@ fn a_computer_takes_control_from_another_and_starts_with_tx_off() {
     );
     let (a, b) = ((LAN_SESSION, LAN_DEVICE), (LAN_OTHER_SESSION, LAN_OTHER));
     let held = control_on(&f, lan_a, a, now).unwrap();
-    keyed_under(&f, a, now);
+    keyed_under(&f, now);
     let lease = held["leaseId"].as_str().unwrap();
     let presence = f
         .authority

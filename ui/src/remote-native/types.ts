@@ -13,10 +13,9 @@ export type RemoteStationStatus = {
     key?: string | null; kind?: DeviceKind; platform?: DevicePlatform | null; untilRemoved?: number
     /** Listed to a station that checks proofs itself: what the device may do, and how it was added. */
     role?: AccountRole | null; addedBy?: 'shack' | 'account' | null }[]
-  loggingPermissions?: string[]
   stationPermissions?: string[]
-  transmitPermissions?: string[]
-  loggingController?: string | null
+  /** The device holding the station's lease, if any. */
+  controller?: string | null
   /** A5: the browsers whose listed key is the one pinned here, the ones that can stream. */
   pinnedDevices?: string[]
   /** S3-M1: the service holds another signing key for this station, so browsers refuse its stream
@@ -88,14 +87,12 @@ export const waitsForApprove = (status: RemoteStationStatus | null | undefined, 
 export type RemoteStationAction =
   | { type: 'begin'; name: string }
   | { type: 'refresh' | 'cancel' | 'enable' | 'disable' | 'forget' }
-  | { type: 'approve'; enrollmentId: string; accountId: string; transmit?: boolean }
-  | { type: 'loggingPermission'; deviceId: string; allow: boolean }
+  | { type: 'approve'; enrollmentId: string; accountId: string }
   | { type: 'stationPermission'; deviceId: string; allow: boolean }
-  | { type: 'transmitPermission'; deviceId: string; allow: boolean }
   | { type: 'takeOverLogging' }
   /** `key`: the device key shown beside the browser, pinned if the service still lists it (A5). `kind`: the
    *  kind it was shown as; the station grants and pins nothing for a device the service now names another. */
-  | { type: 'device'; deviceId: string; approve: boolean; transmit?: boolean; key?: string; kind?: DeviceKind }
+  | { type: 'device'; deviceId: string; approve: boolean; key?: string; kind?: DeviceKind }
   /** Remote over this network: only ever pressed at the shack (`LanStation`). */
   | { type: 'lanOn'; address?: string; port?: number }
   /** Where it listens: one of `networks`' addresses, or none to let the station choose. */

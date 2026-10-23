@@ -32,9 +32,7 @@
 //! ## Only a controlling browser may listen
 //!
 //! Admission is [`super::operations::Authority::audio_admitted`]: the operator's local
-//! **control** grant plus this browser's own live lease. A logging-only browser holds
-//! the logging grant and a perfectly valid lease, and is refused — listening to a shack
-//! is not a consequence of being allowed to write to its log. The lane re-checks on a
+//! **control** grant plus this browser's own live lease. The lane re-checks on a
 //! slow cadence as well as at the start, so a lapsed lease stops the audio rather than
 //! leaving a stream running for a browser that no longer controls anything.
 //!

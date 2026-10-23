@@ -30,11 +30,10 @@ const question = (device: Device) => `${device.id}:${device.key}`
  *  at the shack pops up "Let Chrome on Windows stream this station? Key XXXX XXXX" with Approve / Deny
  *  ... No hunting through Settings."). The browser's name and the key it shows on the Remote page.
  *
- *  Approve is exactly Settings ▸ Remote access's approve with its transmit tick off: station controls
- *  and logging, and the key shown here pinned (the station pins it only if the service still lists this
- *  same key). Station controls are all a stream needs, and a streaming browser is the operator at the
- *  shack, transmit included (the operator, 2026-10-03), so the question says so: the tick is only the
- *  Remote page's own FT8/FT4 transmit. It never approves by default: Deny holds the keyboard when it
+ *  Approve is exactly Settings ▸ Remote access's approve: station controls, and the key
+ *  shown here pinned (the station pins it only if the service still lists this same key). Station
+ *  controls are all a stream needs, and a streaming browser is the operator at the shack, transmit
+ *  included (the operator, 2026-10-03), so the question says so. It never approves by default: Deny holds the keyboard when it
  *  opens, so Enter alone denies; Escape or a click outside closes it and answers nothing; and Approve
  *  takes no click for its first second. Deny refuses a waiting request; for a browser approved before,
  *  it leaves its approval exactly as it is (it still cannot stream). Either way it is not asked again
@@ -42,7 +41,7 @@ const question = (device: Device) => `${device.id}:${device.key}`
  *
  *  A computer running Nexus is asked about the same way, by its name, its platform and its key in
  *  eight groups, and its Approve is the same press: its key pinned, for the tunnel through the room to
- *  check. It never carries the transmit tick, and approving it grants nothing on the relay's lanes:
+ *  check. Approving it grants nothing on the relay's lanes:
  *  what the computer may do once connected is the station's own rules for a computer driving it. */
 export function RemoteApprovalPrompt() {
   const [status, setStatus] = useState<RemoteStationStatus | null>(null)
@@ -88,7 +87,7 @@ export function RemoteApprovalPrompt() {
     setBusy(true); setFailed(false)
     try {
       const next = await remoteStationAction(approve
-        ? { type: 'device', deviceId: device.id, approve: true, transmit: false, key: device.key ?? undefined, kind: device.kind ?? 'browser' }
+        ? { type: 'device', deviceId: device.id, approve: true, key: device.key ?? undefined, kind: device.kind ?? 'browser' }
         : { type: 'device', deviceId: device.id, approve: false })
       if (!mounted.current) return
       setStatus(next); settle(key)

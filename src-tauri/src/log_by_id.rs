@@ -1604,7 +1604,7 @@ mod tests {
     /// longer exists — take it off the list when its reason goes.
     #[test]
     fn no_log_change_is_addressed_by_position() {
-        let sources: [(&str, &str); 7] = [
+        let sources: [(&str, &str); 6] = [
             (
                 "tempo-core logbook.rs",
                 include_str!("../../crates/tempo-core/src/logbook.rs"),
@@ -1623,10 +1623,6 @@ mod tests {
             ),
             ("lib.rs", include_str!("lib.rs")),
             ("log_by_id.rs", include_str!("log_by_id.rs")),
-            (
-                "remote logging.rs",
-                include_str!("remote_service/operations/logging.rs"),
-            ),
         ];
         // (file, function, why a position is right there)
         let allowed: [(&str, &str, &str); 10] = [

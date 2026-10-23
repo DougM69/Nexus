@@ -34,23 +34,15 @@ import type { PartialCatalog } from './index'
 
 export const FR: PartialCatalog = {
   "remote.configurationLocal": "Gérez les comptes, sauvegardes et accès distant dans Nexus à la station, sur place ou en direct dans ce navigateur.",
-  "remote.loggingLocalHint": "Autoriser un navigateur lui permet aussi de saisir des contacts. Pour limiter un navigateur, révoquez ici la saisie. Elle n’autorise aucune commande radio ni émission.",
-  "remote.loggingTakeOver": "Arrêter la saisie distante : tout le monde déconnecté jusqu’à ce que Remote soit réactivé",
   "remote.controlRequestFailed": "La commande n’a pas été confirmée. Vérifiez l’autorisation de contrôle de la station et les mesures actuelles.",
   "remote.controlLocalHint": "Autoriser un navigateur lui donne le contrôle de la station : les fonctions prises en charge du récepteur, de la radio et de l’amplificateur, ainsi que Stop TX, qui arrête toute émission de la station. Avec le direct activé, il peut aussi voir cette fenêtre en direct et utiliser Nexus comme vous le feriez ici, émission comprise. Pour limiter un navigateur, révoquez-le ici. Cela met aussi fin à son direct.",
   // remote parity batch 1
   "remote.b1.rotatorPointing": "Orientation du rotor vers {{call}}.",
-  "remote.transmitAllow": "Autoriser l’émission FT8/FT4 depuis la page Remote",
-  "remote.transmitRevoke": "Révoquer l’émission FT8/FT4 depuis la page Remote",
-  "remote.transmitLocalHint": "L’émission FT8/FT4 depuis la page Remote nécessite aussi le contrôle de la station. Une fois autorisée, elle le reste après les redémarrages jusqu’à ce que vous la révoquiez ici, et sa révocation arrête aussitôt l’émission FT8/FT4 de ce navigateur depuis la page. Rien n’est émis depuis la page tant que le navigateur n’a pas appuyé sur TX On. Un navigateur qui voit la station en direct n’en a pas besoin : par le direct, il émet comme vous le feriez ici.",
   "remote.controlAllow": "Autoriser le contrôle de la station",
   "remote.controlRevoke": "Révoquer le contrôle de la station",
   "remote.controlActive": "Contrôle de la station actif",
   "amp.strip.statusUnknown": "État de l’amplificateur indisponible",
   "remote.controlTakeOver": "Terminer le contrôle à distance : tout le monde déconnecté jusqu’à ce que Remote soit réactivé",
-  "remote.loggingAllow": "Autoriser la saisie distante",
-  "remote.loggingRevoke": "Révoquer l’autorisation de saisie",
-  "remote.loggingController": "Ce navigateur contrôle la saisie distante.",
   // remote parity batch 2
   // remote parity batch 3
   "remote.audio.start": "Écouter",
@@ -287,7 +279,7 @@ export const FR: PartialCatalog = {
   "remote.codeExpires": "Ce code expire après dix minutes.",
   "remote.approvePairing": "Approuver cette association au compte",
   "remote.cancelPairing": "Annuler l’association",
-  "remote.restartHint": "Remote reste activé quand Nexus redémarre : s’il était activé à la fermeture de Nexus, il se réactive et se reconnecte tout seul. Les navigateurs autorisés gardent ce que vous avez permis, émission FT8/FT4 comprise. Après un redémarrage, l’émission est toujours coupée jusqu’à ce que le navigateur la réactive. Désactiver Remote ne fait que déconnecter : en le réactivant, chaque navigateur autorisé retrouve ce qu’il avait.",
+  "remote.restartHint": "Remote reste activé quand Nexus redémarre : s’il était activé à la fermeture de Nexus, il se réactive et se reconnecte tout seul. Les navigateurs autorisés gardent ce que vous avez permis. Désactiver Remote ne fait que déconnecter : en le réactivant, chaque navigateur autorisé retrouve ce qu’il avait.",
   "remote.disable": "Désactiver Remote",
   "remote.enable": "Activer Remote",
   "remote.autostartOffer": "Remote ne peut revenir après un redémarrage de cet ordinateur que si Nexus démarre aussi. Démarrer Nexus quand vous ouvrez une session sur cet ordinateur ?",
@@ -300,7 +292,6 @@ export const FR: PartialCatalog = {
   "remote.noBrowsers": "Aucune demande ou autorisation de navigateur en cours",
   "remote.revokeBrowser": "Révoquer l’autorisation du navigateur",
   "remote.approveBrowser": "Autoriser le navigateur",
-  "remote.approveTransmit": "Autoriser aussi l’émission FT8/FT4 depuis la page Remote",
   "remote.browserApprovedUntil": "Autorisé jusqu’au {{until}} UTC.",
   "remote.browserApprovedUntilRemoved": "Autorisé jusqu’à ce que vous le retiriez.",
   "remote.browserRenewsUntil": "Autorisé jusqu’au {{until}} UTC. Tant que la station est utilisée depuis ce navigateur, il reste autorisé, au plus tard jusqu’au {{limit}} UTC.",

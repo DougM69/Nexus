@@ -34,23 +34,15 @@ import type { PartialCatalog } from './index'
 
 export const ES: PartialCatalog = {
   "remote.configurationLocal": "Gestiona las cuentas, copias de seguridad y el acceso remoto en Nexus en la estación, en persona o en directo en este navegador.",
-  "remote.loggingLocalHint": "Al autorizar un navegador, también puede registrar contactos. Para limitar un navegador, revoca aquí el registro. Este permiso no autoriza el control del equipo ni la transmisión.",
-  "remote.loggingTakeOver": "Finalizar el registro remoto: todos fuera hasta que se vuelva a activar Remote",
   "remote.controlRequestFailed": "El comando no se confirmó. Comprueba el permiso de control de estación y las lecturas actuales.",
   "remote.controlLocalHint": "Al autorizar un navegador, recibe el control de la estación: las funciones compatibles del receptor, la radio y el amplificador, y Stop TX, que detiene cualquier transmisión de la estación. Con el directo activado, también puede ver esta ventana en directo y usar Nexus como lo harías tú aquí, incluida la transmisión. Para limitar un navegador, revócalo aquí. Eso también termina su directo.",
   // remote parity batch 1
   "remote.b1.rotatorPointing": "Orientando el rotor hacia {{call}}.",
-  "remote.transmitAllow": "Permitir transmisión FT8/FT4 desde la página de Remote",
-  "remote.transmitRevoke": "Revocar la transmisión FT8/FT4 desde la página de Remote",
-  "remote.transmitLocalHint": "La transmisión FT8/FT4 desde la página de Remote también requiere el control de la estación. Una vez permitida, se mantiene tras los reinicios hasta que la revoques aquí, y revocarla detiene al instante la transmisión FT8/FT4 de ese navegador desde la página. Nada se transmite desde la página hasta que el navegador pulsa TX On. Un navegador que ve la estación en directo no la necesita: desde el directo transmite como lo harías tú aquí.",
   "remote.controlAllow": "Permitir control de estación",
   "remote.controlRevoke": "Revocar control de estación",
   "remote.controlActive": "Control de estación activo",
   "amp.strip.statusUnknown": "Estado del amplificador no disponible",
   "remote.controlTakeOver": "Finalizar control remoto: todos fuera hasta que se vuelva a activar Remote",
-  "remote.loggingAllow": "Permitir el registro remoto",
-  "remote.loggingRevoke": "Revocar el permiso de registro",
-  "remote.loggingController": "Este navegador controla el registro remoto.",
   // remote parity batch 2
   // remote parity batch 3
   "remote.audio.start": "Escuchar",
@@ -287,7 +279,7 @@ export const ES: PartialCatalog = {
   "remote.codeExpires": "Este código caduca a los diez minutos.",
   "remote.approvePairing": "Aprobar esta vinculación de cuenta",
   "remote.cancelPairing": "Cancelar vinculación",
-  "remote.restartHint": "Remote sigue activado cuando Nexus se reinicia: si estaba activado al cerrar Nexus, vuelve a activarse y a conectarse solo. Los navegadores autorizados conservan lo que permitiste, incluida la transmisión FT8/FT4. Tras un reinicio, la transmisión siempre está desactivada hasta que el navegador la vuelve a activar. Desactivar Remote solo desconecta: al volver a activarlo, cada navegador autorizado recupera lo que tenía.",
+  "remote.restartHint": "Remote sigue activado cuando Nexus se reinicia: si estaba activado al cerrar Nexus, vuelve a activarse y a conectarse solo. Los navegadores autorizados conservan lo que permitiste. Desactivar Remote solo desconecta: al volver a activarlo, cada navegador autorizado recupera lo que tenía.",
   "remote.disable": "Desactivar Remote",
   "remote.enable": "Activar Remote",
   "remote.autostartOffer": "Remote solo puede volver después de reiniciar este ordenador si Nexus también se inicia. ¿Iniciar Nexus cuando inicies sesión en este ordenador?",
@@ -300,7 +292,6 @@ export const ES: PartialCatalog = {
   "remote.noBrowsers": "No hay solicitudes ni autorizaciones vigentes",
   "remote.revokeBrowser": "Revocar autorización del navegador",
   "remote.approveBrowser": "Autorizar navegador",
-  "remote.approveTransmit": "Permitir también la transmisión FT8/FT4 desde la página de Remote",
   "remote.browserApprovedUntil": "Autorizado hasta el {{until}} UTC.",
   "remote.browserApprovedUntilRemoved": "Autorizado hasta que lo quite.",
   "remote.browserRenewsUntil": "Autorizado hasta el {{until}} UTC. Mientras se use la estación desde este navegador, sigue autorizado, como máximo hasta el {{limit}} UTC.",

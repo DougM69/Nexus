@@ -265,7 +265,7 @@ fn an_offer_without_control_or_a_live_lease_is_refused_first() {
         admit(&f.station, &offer(&f.lease), later),
         Err(StreamReason::NotController)
     );
-    // A logging-only browser: a perfectly good lease, and no control grant.
+    // A browser whose control grant was revoked after it took its lease.
     let f = fixture(now);
     f.station.authority.permit_station(DEVICE, false).unwrap();
     assert_eq!(
@@ -1128,13 +1128,13 @@ fn stop_request(streaming: &mut Streaming, lease: &str, now: Instant) -> Vec<u8>
 /// ★ Question B, answered by the operator on 2026-09-27, verbatim: "Control grant is enough",
 /// offered as "As the plan wrote it: the tick only mattered for the old page; any controller can
 /// stream and transmit." So a browser with the station-control grant and a live lease, and
-/// WITHOUT the FT8/FT4 transmit tick, is admitted to stream. Deliberate: change it only with the
-/// operator. CONTROL: without the control grant the same browser is refused.
+/// WITHOUT the FT8/FT4 transmit tick, is admitted to stream; the tick and the old page are gone
+/// now, and nothing else is asked. Deliberate: change it only with the operator. CONTROL: without
+/// the control grant the same browser is refused.
 #[test]
 fn a_controller_without_the_transmit_tick_is_admitted() {
     let now = Instant::now();
     let f = fixture(now);
-    f.station.authority.permit_transmit(DEVICE, false).unwrap();
     assert_eq!(
         f.station
             .authority
