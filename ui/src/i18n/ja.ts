@@ -470,6 +470,8 @@ export const JA: PartialCatalog = {
   "lanWindow.internet.keyMatches": "一致する",
   "lanWindow.internet.keyDiffers": "一致しない",
   "lanWindow.internet.keyDisagrees": "サービスがこの局について示したキーが、局自身のキーと異なります。このインターネット経路はオフです。ここで局を削除し、もう一度追加してください。",
+  "lanWindow.internet.dropRoadConfirm": "この局のインターネット経路を削除しますか？このネットワークでのペアリングは残るため、ここでは「このコンピューターから運用」を引き続き使えます。後でインターネット経路を再度追加するには、この行の「サインイン…」を使ってください。",
+  "lanWindow.internet.dropRoadYes": "インターネット経路を削除",
   "lanWindow.internet.reason.stationKeyDisagrees": "サービスがこの局について示したキーが、局自身のキーと異なります。何も追加されませんでした。",
   "lanWindow.internet.reason.internetNotIncluded": "インターネット経路は Nexus Remote の有料サービスに含まれ、お使いのアカウントには現在含まれていません。このネットワークでの運用は引き続き無料です。",
   "lanWindow.internet.reason.internetNotReady": "Nexus Remote はまだ Nexus からのサインインを受け付けていません。更新後にもう一度お試しください。",

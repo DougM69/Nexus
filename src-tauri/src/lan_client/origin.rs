@@ -551,6 +551,13 @@ enum FromPage {
         #[serde(rename = "stationId")]
         station_id: String,
     },
+    /// The operator compared the station's key with the station's own screen and it does not
+    /// match: for a station paired here with a code, its internet road goes and its pairing on its
+    /// network stays; any other is forgotten, as Forget does (`Stations::code_paired`).
+    KeyDiffers {
+        #[serde(rename = "stationId")]
+        station_id: String,
+    },
     /// The address Operate tries first for a station, changed, or cleared with none.
     KeepAddress {
         #[serde(rename = "stationId")]
@@ -808,23 +815,16 @@ async fn page(
                     }
                     FromPage::Forget { station_id } => {
                         if let Some(open) = road.take() { open.close().await }
-                        // The internet road's approval at the service ends first, while this
-                        // computer still holds the key that signs for it. The service out of reach
-                        // is said, and never keeps the forget here from going on.
+                        forget(&reach, station_id, false).await
+                    }
+                    FromPage::KeyDiffers { station_id } => {
                         let kept = reach.stations.clone();
                         let wanted = station_id.clone();
-                        let unreached = match store(move || kept.internet(&wanted)).await {
-                            Ok(Some(internet)) => (reach.forget_internet)(internet).await.err(),
-                            Ok(None) => None,
-                            Err(reason) => Some(reason),
-                        };
-                        let kept = reach.stations.clone();
-                        let _ = store(move || kept.forget(&station_id)).await;
-                        let mut told = listed(&reach).await;
-                        if let Some(reason) = unreached {
-                            told["forgetUnreached"] = json!(reason);
+                        let road_only = store(move || kept.code_paired(&wanted)).await == Ok(true);
+                        if !road_only {
+                            if let Some(open) = road.take() { open.close().await }
                         }
-                        told.to_string()
+                        forget(&reach, station_id, road_only).await
                     }
                     FromPage::KeyMatches { station_id } => {
                         let kept = reach.stations.clone();
@@ -939,6 +939,34 @@ async fn page(
     if let Some(signing) = signing.take() {
         signing.abort();
     }
+}
+
+/// Forget station `id` on this computer, or with `road_only` its internet road alone
+/// (`Stations::drop_road`), and the stations as the page then shows them. The internet road's
+/// approval at the service ends first, while this computer still holds the key that signs for it.
+/// The service out of reach is said, and never keeps the forget here from going on.
+async fn forget(reach: &Reach, id: String, road_only: bool) -> String {
+    let kept = reach.stations.clone();
+    let wanted = id.clone();
+    let unreached = match store(move || kept.internet(&wanted)).await {
+        Ok(Some(internet)) => (reach.forget_internet)(internet).await.err(),
+        Ok(None) => None,
+        Err(reason) => Some(reason),
+    };
+    let kept = reach.stations.clone();
+    let _ = store(move || {
+        if road_only {
+            kept.drop_road(&id)
+        } else {
+            kept.forget(&id)
+        }
+    })
+    .await;
+    let mut told = listed(reach).await;
+    if let Some(reason) = unreached {
+        told["forgetUnreached"] = json!(reason);
+    }
+    told.to_string()
 }
 
 /// Operate from this computer: Nexus starts again driving station `id` (one on this network, or

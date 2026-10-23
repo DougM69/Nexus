@@ -708,6 +708,30 @@ describe('the station’s key for each internet road', () => {
     expect(last(socket.sent)).toEqual({ type: 'forget', stationId: AWAY })
   })
 
+  it('held, on a station paired here with a code, It doesn’t match removes the internet road alone, asked first', () => {
+    page()
+    socket.tell({ type: 'stations', computer: 'DEN-PC', stations: [station], internet: [{ id: STATION, key: ROAD_KEY }],
+      account: [], away: [], stationKeys: [{ id: STATION, key: KEY, held: 'stationKeyUnconfirmed' }] })
+    const sent = socket.sent.length
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.keyDiffers'] }))
+    expect(socket.sent.length, 'removed without asking').toBe(sent)
+    expect(screen.getByText(EN['lanWindow.internet.dropRoadConfirm'])).toBeTruthy()
+    expect(screen.queryByText(EN['lanWindow.forgetConfirm'])).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.dropRoadYes'] }))
+    expect(last(socket.sent)).toEqual({ type: 'keyDiffers', stationId: STATION })
+  })
+
+  it('held, on a station added with the account as a guest, It doesn’t match forgets the station', () => {
+    page()
+    socket.tell({ type: 'stations', computer: 'DEN-PC', stations: [station], internet: [{ id: STATION, key: ROAD_KEY }],
+      account: [{ stationId: STATION, until: 1_900_000_000, renew: false }], away: [],
+      stationKeys: [{ id: STATION, key: KEY, held: 'stationKeyUnconfirmed' }] })
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.keyDiffers'] }))
+    expect(screen.queryByText(EN['lanWindow.internet.dropRoadConfirm'])).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.forgetYes'] }))
+    expect(last(socket.sent)).toEqual({ type: 'forget', stationId: STATION })
+  })
+
   it('disowned by the station on its network, says the road is off and offers no It matches', () => {
     page()
     told('stationKeyDisagrees')

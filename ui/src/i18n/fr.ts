@@ -480,6 +480,8 @@ export const FR: PartialCatalog = {
   "lanWindow.internet.keyMatches": "Elle correspond",
   "lanWindow.internet.keyDiffers": "Elle ne correspond pas",
   "lanWindow.internet.keyDisagrees": "Le service a donné pour cette station une autre clé que celle de la station elle-même. Cette voie internet est coupée. Oubliez la station ici, puis ajoutez-la de nouveau.",
+  "lanWindow.internet.dropRoadConfirm": "Retirer la voie internet de cette station ? Son appairage sur ce réseau reste, donc « Piloter depuis cet ordinateur » fonctionne toujours ici. Pour ajouter de nouveau la voie internet plus tard, utilisez « Se connecter… » sur cette ligne.",
+  "lanWindow.internet.dropRoadYes": "Retirer la voie internet",
   "lanWindow.internet.reason.stationKeyDisagrees": "Le service a donné pour cette station une autre clé que celle de la station elle-même. Rien n’a été ajouté.",
   "lanWindow.internet.reason.internetNotIncluded": "La voie internet fait partie du service payant de Nexus Remote, et votre compte ne l’inclut pas actuellement. Piloter sur ce réseau reste gratuit.",
   "lanWindow.internet.reason.internetNotReady": "Nexus Remote n’accepte pas encore les connexions depuis Nexus. Réessayez après une mise à jour.",

@@ -31,8 +31,9 @@
 //!
 //! A road whose station key this computer has not heard from the station itself, nor seen bound to
 //! its own account's sign-in, is held (`Stations::road_held`): client mode opens nothing for it, not
-//! a request to the service, until the operator confirms the key; and one the station disowned on
-//! its own network stays off (`stationKeyUnconfirmed`, `stationKeyDisagrees`).
+//! a request to the service, until the operator confirms the key, or a station paired here with a
+//! code names that key on its own network; and one the station disowned on its own network stays
+//! off (`stationKeyUnconfirmed`, `stationKeyDisagrees`).
 //!
 //! ## Refusals
 //!

@@ -465,6 +465,8 @@ export const DE: PartialCatalog = {
   "lanWindow.internet.keyMatches": "Stimmt überein",
   "lanWindow.internet.keyDiffers": "Stimmt nicht überein",
   "lanWindow.internet.keyDisagrees": "Der Dienst hat für diese Station einen anderen Schlüssel angegeben als die Station selbst. Dieser Internetweg ist aus. Vergiss die Station hier und füge sie erneut hinzu.",
+  "lanWindow.internet.dropRoadConfirm": "Den Internetweg dieser Station entfernen? Die Kopplung in diesem Netzwerk bleibt, „Von diesem Computer aus bedienen“ funktioniert hier also weiter. Um den Internetweg später erneut hinzuzufügen, nutze „Anmelden…“ in dieser Zeile.",
+  "lanWindow.internet.dropRoadYes": "Internetweg entfernen",
   "lanWindow.internet.reason.stationKeyDisagrees": "Der Dienst hat für diese Station einen anderen Schlüssel angegeben als die Station selbst. Es wurde nichts hinzugefügt.",
   "lanWindow.internet.reason.internetNotIncluded": "Der Internetweg gehört zum kostenpflichtigen Dienst von Nexus Remote, und dein Konto enthält ihn derzeit nicht. Der Betrieb in diesem Netzwerk bleibt kostenlos.",
   "lanWindow.internet.reason.internetNotReady": "Nexus Remote nimmt noch keine Anmeldungen von Nexus an. Versuche es nach einem Update erneut.",

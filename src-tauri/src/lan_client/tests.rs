@@ -2378,3 +2378,132 @@ fn a_hold_moves_with_a_station_first_reached_on_its_network() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// ★ It doesn't match, for a held road: on a station paired here with a code, only the internet road
+/// goes (ended at the service with its own key, then dropped here with its hold). The pairing on the
+/// station's network stays, so Operate there still works and the road can be added again later. On
+/// a station added with the account as a guest (there is no code pairing to keep: its network's key
+/// came from the same listing), the station is forgotten, as Forget does.
+#[tokio::test]
+async fn it_doesnt_match_drops_only_the_internet_road_of_a_code_paired_station() {
+    for code_paired in [true, false] {
+        let (dir, _) = typed_file("key-differs");
+        let store = StationStore::default();
+        let stations = Arc::new(
+            Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json")),
+        );
+        stations
+            .keep(&record(STATION, &["192.168.1.20:42075"]))
+            .unwrap();
+        let road = road_to(STATION);
+        stations.hold_road(STATION, &road.station_key).unwrap();
+        stations.keep_internet(STATION, &road).unwrap();
+        if !code_paired {
+            stations.keep_signed(STATION, 1_800_000_000).unwrap();
+        }
+        assert_eq!(
+            stations.road_held(STATION),
+            Ok(Some("stationKeyUnconfirmed"))
+        );
+        let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+        let told = asked.clone();
+        let origin = Origin::start(Reach {
+            stations: stations.clone(),
+            forget_internet: Arc::new(move |road: InternetRoad| {
+                told.lock().unwrap().push(road.device_id);
+                Box::pin(async { Ok(()) })
+            }),
+            ..reach(store.clone())
+        })
+        .unwrap();
+        let mut socket = page_socket(&origin).await;
+        let answer = said(
+            &mut socket,
+            json!({"type":"keyDiffers","stationId":STATION}),
+        )
+        .await;
+        assert_eq!(answer["type"], "stations", "{answer}");
+        assert_eq!(
+            asked.lock().unwrap().clone(),
+            vec![road.device_id.clone()],
+            "{code_paired}: the road not ended at the service"
+        );
+        assert!(
+            stations.internet(STATION).unwrap().is_none(),
+            "{code_paired}"
+        );
+        assert_eq!(stations.road_held(STATION), Ok(None), "{code_paired}");
+        assert!(
+            !store
+                .raw("lan-held-roads")
+                .is_some_and(|held| held.contains(STATION)),
+            "{code_paired}: a hold left behind"
+        );
+        assert_eq!(answer["internet"], json!([]), "{answer}");
+        assert_eq!(answer["stationKeys"], json!([]), "{answer}");
+        if code_paired {
+            assert_eq!(
+                answer["stations"][0]["id"],
+                json!(STATION),
+                "the pairing went: {answer}"
+            );
+            assert!(stations.get(STATION).unwrap().is_some(), "the pairing went");
+        } else {
+            assert_eq!(answer["stations"], json!([]), "{answer}");
+            assert!(stations.get(STATION).unwrap().is_none());
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// ★ A road held until its key is checked, for a station paired here with a code, is freed when the
+/// station names that same key on this network's road, which the code pinned: the station said it
+/// itself. Through the same comparison that turns a road off (`Afar::heard_key`, on each Operate
+/// connection here). CONTROLS: another key there still turns it off; a road turned off stays off
+/// when the station later names its pinned key (only forget and add again bring it back); and a
+/// guest's held road (its network's key came from the same listing as the station key, not from a
+/// code) is not freed by it.
+#[test]
+fn a_held_road_is_freed_when_the_code_paired_station_names_the_same_key() {
+    use crate::client_mode::Afar;
+    for case in ["same", "other", "disowned", "guest"] {
+        let (dir, _) = typed_file("heard-same");
+        let store = StationStore::default();
+        let stations = Arc::new(
+            Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json")),
+        );
+        stations
+            .keep(&record(STATION, &["192.168.1.20:42075"]))
+            .unwrap();
+        let road = road_to(STATION);
+        stations.hold_road(STATION, &road.station_key).unwrap();
+        stations.keep_internet(STATION, &road).unwrap();
+        if case == "guest" {
+            stations.keep_signed(STATION, 1_800_000_000).unwrap();
+        }
+        let roads = internet::Roads::new(stations.clone()).unwrap();
+        if case == "disowned" {
+            roads.heard_key(STATION, &road_to(STATION).station_key);
+            assert_eq!(stations.road_held(STATION), Ok(Some("stationKeyDisagrees")));
+        }
+        let said = if case == "other" {
+            road_to(STATION).station_key
+        } else {
+            road.station_key.clone()
+        };
+        roads.heard_key(STATION, &said);
+        let held = match case {
+            "same" => None,
+            "other" | "disowned" => Some("stationKeyDisagrees"),
+            _ => Some("stationKeyUnconfirmed"),
+        };
+        assert_eq!(stations.road_held(STATION), Ok(held), "{case}");
+        // Freed for good: a restart reads it free too.
+        assert_eq!(
+            Stations::new(Arc::new(store.clone())).road_held(STATION),
+            Ok(held),
+            "{case}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

@@ -577,6 +577,8 @@ export const EN = {
   "lanWindow.internet.keyMatches": "It matches",
   "lanWindow.internet.keyDiffers": "It doesn’t match",
   "lanWindow.internet.keyDisagrees": "The service gave a different key for this station than the station itself. This internet road is off. Forget the station here and add it again.",
+  "lanWindow.internet.dropRoadConfirm": "Remove this station’s internet road? Its pairing on this network stays, so Operate from this computer still works here. To add the internet road again later, use “Sign in…” on this row.",
+  "lanWindow.internet.dropRoadYes": "Remove the internet road",
   "lanWindow.internet.reason.stationKeyDisagrees": "The service gave a different key for this station than the station itself. Nothing was added.",
   "lanWindow.internet.reason.internetNotIncluded": "The internet road is part of Nexus Remote’s paid service, and your account does not include it now. Operating on this network stays free.",
   "lanWindow.internet.reason.internetNotReady": "Nexus Remote does not take sign-ins from Nexus yet. Try again after an update.",

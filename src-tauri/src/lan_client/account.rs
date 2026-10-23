@@ -72,8 +72,11 @@
 //! registered and kept; another key, and nothing is registered (`stationKeyDisagrees`); found nowhere
 //! here, the road is registered and kept HELD (`Stations::hold_road`): client mode opens nothing for
 //! it until the operator compares the station's key with the station's own screen and says it
-//! matches. A road to a station the account was invited to is kept held the same way, on its
-//! network or not: the proof there is someone else's, which nothing here binds to anyone.
+//! matches, or until the station names that same key on this network's road, at the next Operate
+//! there. It doesn't match then drops the internet road alone: the code pairing stays. A road to a
+//! station the account was invited to is kept held the same way, on its network or not: the proof
+//! there is someone else's, which nothing here binds to anyone, and its network's key came from the
+//! same listing, so only the operator's check frees it, and It doesn't match forgets the station.
 //!
 //! A station added with the account and then paired again here with a code is one of these from
 //! then on: the pairing drops its sign-in time (`Stations::drop_signed`), since the station keeps

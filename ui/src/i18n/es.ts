@@ -480,6 +480,8 @@ export const ES: PartialCatalog = {
   "lanWindow.internet.keyMatches": "Coincide",
   "lanWindow.internet.keyDiffers": "No coincide",
   "lanWindow.internet.keyDisagrees": "El servicio dio para esta estación una clave distinta de la que da la propia estación. Esta vía por internet está desactivada. Olvida la estación aquí y vuelve a añadirla.",
+  "lanWindow.internet.dropRoadConfirm": "¿Quitar la vía por internet de esta estación? Su emparejamiento en esta red se conserva, así que «Operar desde este ordenador» sigue funcionando aquí. Para volver a añadir la vía por internet más adelante, usa «Iniciar sesión…» en esta fila.",
+  "lanWindow.internet.dropRoadYes": "Quitar la vía por internet",
   "lanWindow.internet.reason.stationKeyDisagrees": "El servicio dio para esta estación una clave distinta de la que da la propia estación. No se añadió nada.",
   "lanWindow.internet.reason.internetNotIncluded": "La vía por internet forma parte del servicio de pago de Nexus Remote y tu cuenta no la incluye ahora. Operar en esta red sigue siendo gratis.",
   "lanWindow.internet.reason.internetNotReady": "Nexus Remote aún no acepta inicios de sesión desde Nexus. Inténtalo tras una actualización.",

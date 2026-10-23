@@ -854,13 +854,23 @@ impl Stations {
     }
 
     /// Station `id` named `said` as its key for the internet road, on its own network: a road kept
-    /// for it pinned to another key is held for good (`stationKeyDisagrees`). Whether it was.
+    /// for it pinned to another key is held for good (`stationKeyDisagrees`). Whether it was. The
+    /// same key frees a road held until the operator checks it, when the station is paired here
+    /// with a code ([`Self::code_paired`]): its network's road is pinned by the code, so the station
+    /// said it itself. Never one held for good: only forgetting it and adding it again frees that.
     pub(crate) fn disown_road(&self, id: &str, said: &str) -> Result<bool, &'static str> {
         let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
         let Some(road) = self.internet(id)? else {
             return Ok(false);
         };
         if road.station_key == said {
+            let pinned = crate::remote_service::fingerprint(&road.station_key);
+            let unconfirmed = self.held_list()?.roads.iter().any(|held| {
+                held.station_id == id && Some(&held.shown) == pinned.as_ref() && !held.disowned
+            });
+            if unconfirmed && self.code_paired(id)? {
+                self.write_held(id, None)?;
+            }
             return Ok(false);
         }
         let shown = crate::remote_service::fingerprint(&road.station_key).ok_or("notStation")?;
@@ -891,6 +901,30 @@ impl Stations {
             return Ok(());
         }
         self.write_held(id, None)
+    }
+
+    /// Whether station `id` is paired here with a code: its record on its network, and no sign-in
+    /// time (`drop_signed`). Its network's road is then pinned by the code, not by a key the service
+    /// listed.
+    pub(crate) fn code_paired(&self, id: &str) -> Result<bool, &'static str> {
+        Ok(self.get(id)?.is_some() && self.signed(id).is_none())
+    }
+
+    /// Drop the internet road kept for station `id`, and its hold, leaving its pairing on its
+    /// network: the operator said the station's key the road was pinned to is not the station's.
+    /// The road can be added again from the station's row. Its approval at the service is ended
+    /// first, by the caller, while this computer still holds the key that signs for it.
+    pub(crate) fn drop_road(&self, id: &str) -> Result<(), &'static str> {
+        let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
+        if !protocol::identifier(id) {
+            return Err("unknownStation");
+        }
+        self.vault
+            .remove_internet_road(id)
+            .map_err(|_| "storeUnavailable")?;
+        // A hold the store will not let go of holds no road.
+        let _ = self.write_held(id, None);
+        Ok(())
     }
 
     /// Forget station `id` on this computer: its internet road and its record (or, for one kept by

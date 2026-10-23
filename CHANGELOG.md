@@ -15,7 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     before anything is added. If the service named a different key, you are told so and nothing is added.
   - **Away from the station, or as an invited guest**, the station's row shows **This station's key for the
     internet road** in the same eight groups the station shows under Remote access. The internet road carries
-    nothing until you compare the two and press **It matches**. **It doesn't match** forgets the station.
+    nothing until you compare the two and press **It matches**. For a station paired with a code, the hold also
+    clears by itself the next time you Operate it on your network and the station names the same key.
+  - **It doesn't match**, for a station paired with a code, removes only its internet road: the pairing on your
+    network stays, so you can still operate at home and add the internet road again later. For a station you
+    were invited to, it forgets the station.
   - The station's **Approve** question for a computer now shows **This station's key** too, so both keys are
     read out in the same call.
   - Every internet road's row now shows the station's key. A computer that already has an internet road checks it
