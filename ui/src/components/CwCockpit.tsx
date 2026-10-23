@@ -12,6 +12,7 @@ import type { AppSnapshot, CwTurn, FieldDayStatus, NeedTag, Settings, SpotRow } 
 import { PhoneScope } from './PhoneScope'
 import { useSmeterDb } from './LiveMeters'
 import { TxMeters, TX_METERS_WHEN } from './TxMeters'
+import { DraftNumberInput } from './DraftNumberInput'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { BandStrip } from './BandStrip'
@@ -260,6 +261,10 @@ interface Props {
   theme: string
   /** CW sidetone pitch (Hz) — the scope's zero-beat marker. */
   pitchHz?: number
+  /** A pitch the operator set here, for App's copy of the settings — the copy `pitchHz` comes from,
+   *  which nothing else refreshes, so without it the cockpit came back on the old pitch after a page
+   *  switch while the engine kept the new one. */
+  onPitch?: (hz: number) => void
   /** Wheel-tune sensitivity (from Settings) — applied to the scope + readout wheel-tune. */
   wheelSensitivity?: number
   /** Click-to-work handoff from the Needed board: the callsign to prefill the log with.
@@ -451,6 +456,7 @@ export function CwCockpit({
   snap,
   theme,
   pitchHz = 600,
+  onPitch,
   wheelSensitivity,
   pendingWork,
   onConsumeWork,
@@ -1010,6 +1016,7 @@ export function CwCockpit({
   const changePitch = (v: number) => {
     const p = Math.max(300, Math.min(1200, Math.round(v)))
     setPitch(p)
+    onPitch?.(p)
     void setCwKeyer(keyer, p).then((s) => s && onSnap?.(s))
   }
 
@@ -2187,14 +2194,13 @@ export function CwCockpit({
         </label>
         <label className="cw-wpm" title={t('cw.pitch.title')}>
           <span>{t('cw.pitch.label')}</span>
-          <input
-            type="number"
+          <DraftNumberInput
             className="settings-input cw-pitch"
             min={300}
             max={1200}
             step={10}
             value={pitch}
-            onChange={(e) => changePitch(Number(e.target.value))}
+            onValue={changePitch}
             aria-label={t('cw.pitch.aria')}
           />
         </label>

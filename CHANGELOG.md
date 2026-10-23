@@ -256,6 +256,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second or two apart, and the second copy went to the sound card behind the first. Now the over goes out once,
   with one line, as WSJT-X sends it. A call made after your period has started was never affected. Check on the
   air: double-click a station during their period, and Rx Frequency and ALL.TXT show your call once.
+- **CW: the pitch box can be typed to any pitch again.** Typing into the CW cockpit's Pitch box forced each key
+  into 300–1200 Hz as it was pressed, so typing 650 gave 300 and then 1200; only the arrows could reach a pitch in
+  between. The box now keeps what you type, applies it once it is a pitch in range, and puts an out-of-range entry
+  back into range when you press Enter or leave the box. The decoder passband's F low and F high boxes in
+  Settings ▸ Digital had the same fault and are fixed the same way.
+- **CW: the cockpit no longer comes back on your old pitch.** After you changed the pitch in the CW cockpit,
+  the radio kept the new one, but going to another page and back showed the pitch you had before, with the
+  scope marker on it. The cockpit now shows the pitch you set.
 
 ### Security
 - **A computer no longer takes the station's internet key on Nexus Remote's word alone.** Before, when you
