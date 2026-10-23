@@ -127,6 +127,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
+- **FT8/FT4: the strip says so when the TX watchdog stops a call.** Calling a station that never answers goes on
+  until the TX watchdog turns transmit off, and the strip then showed only "AwaitReport" beside TX off. It now
+  shows "TX watchdog stopped the call" in red in place of the state, and the window's taskbar button flashes
+  once (a dock bounce on macOS), as WSJT-X does. TX On calls again. How long Nexus calls is unchanged.
 - **WSJT-X UDP: a logger's Replay gets back everything Band Activity holds.** When JTAlert, GridTracker or a
   logger asks Nexus to replay the decodes, as it does when it starts while Nexus is running, Nexus sent only the
   last period's. It now sends every decode Band Activity still holds, oldest first, each with the start of the

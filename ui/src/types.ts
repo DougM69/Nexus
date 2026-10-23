@@ -3626,6 +3626,9 @@ export interface QsoStatus {
   stalled?: boolean
   /** Times the current message has been sent this step ("called them N times"). */
   txCount?: number
+  /** True when the TX watchdog turned transmit off with this call still queued: the watchdog
+   *  ended it, not an answer and not the call cap. Clears at TX On. */
+  watchdogStopped?: boolean
 }
 
 /**

@@ -21604,6 +21604,10 @@ button.cq-skiptx1.on {
 .cq-state.running {
   color: var(--tx);
 }
+/* The TX watchdog ended the call: red, as WSJT-X paints its "Runaway Tx watchdog". */
+.cq-state.watchdog {
+  color: var(--state-weak);
+}
 /* Unmistakable "you're in a self-sustaining CQ run" badge: the engine works each answering
    station then returns to CQ, so make that state obvious with a live pulsing pill. */
 .cq-autocq {

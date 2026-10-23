@@ -26857,6 +26857,9 @@ contact yourself."
                         .or_else(|| station.pending_text()),
                     stalled: station.stalled(),
                     tx_count: station.tx_count,
+                    // A trip with the call still queued: the watchdog ended it, which the strip
+                    // says in place of the bare state. Display only; nothing reads it back.
+                    watchdog_stopped: self.tx_watchdog && station.pending_text().is_some(),
                 });
             }
             // Master switch off (spec §1.3): defensively refuse to expose FD
@@ -68561,12 +68564,13 @@ mod tests {
     }
 
     #[test]
-    fn an_unanswered_call_the_watchdog_ended_reads_as_stalled() {
-        // The operator calls a station that never comes back. Since the call cap stopped
-        // covering `AwaitReport` the calls go on until the wall-clock watchdog disarms TX —
-        // and the strip then said "TX off" beside "AwaitReport", with no "Stalled" anywhere,
-        // where it used to say Stalled. What the operator is told is the subject here; the
-        // sequencing (keep calling, the watchdog ends it) is not.
+    fn an_unanswered_call_the_watchdog_ended_says_so() {
+        // The operator calls a station that never comes back. The call cap does not cover
+        // `AwaitReport`, so the calls go on until the wall-clock watchdog disarms TX — and the
+        // strip then said "TX off" beside a bare "AwaitReport", nothing saying why it stopped.
+        // WSJT-X turns its TX status red and says the watchdog did it; the snapshot carries
+        // that fact so the strip can. Only what the operator is told is under test: the
+        // sequencing (keep calling, the watchdog ends it) and the cap are not.
         let mut e = Engine::new("K2DEF", "FN31", 0);
         let mut s = e.settings().clone();
         s.tx_watchdog_min = 6;
@@ -68586,7 +68590,7 @@ mod tests {
             sent >= 5,
             "precondition: the unanswered call keeps calling ({sent} overs)"
         );
-        assert!(!q.stalled, "precondition: still calling is not stalled");
+        assert!(!q.watchdog_stopped, "still calling: nothing has stopped it");
 
         e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
         for slot in 12..16 {
@@ -68596,9 +68600,34 @@ mod tests {
 
         let q = e.snapshot().qso.expect("the QSO stays put after the trip");
         assert_eq!(q.state, "AwaitReport");
+        assert_eq!(q.tx_now.as_deref(), Some("W9XYZ K2DEF FN31"));
         assert!(
-            q.stalled,
-            "the call was given up with no answer: the snapshot must say stalled"
+            q.watchdog_stopped,
+            "the watchdog ended the call: the snapshot must say so"
+        );
+        assert!(
+            !q.stalled,
+            "the call cap did not stop it, and must not claim to"
+        );
+
+        // TX On is the operator's answer to the trip, and the call goes on from there.
+        e.set_tx_enabled(true);
+        let q = e.snapshot().qso.expect("still the same QSO");
+        assert!(!q.watchdog_stopped, "TX On clears the watchdog's stop");
+    }
+
+    #[test]
+    fn a_watchdog_trip_with_no_call_queued_stops_no_call() {
+        // Monitoring with nothing queued: a trip there ended no call, and the strip must keep
+        // its ordinary state rather than say one was stopped.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_mode("qso-monitor").expect("monitor");
+        e.trip_tx_watchdog_for_test();
+        let q = e.snapshot().qso.expect("monitoring is a QSO mode");
+        assert_eq!(q.tx_now, None, "precondition: nothing queued");
+        assert!(
+            !q.watchdog_stopped,
+            "no call was queued, so none was stopped"
         );
     }
 

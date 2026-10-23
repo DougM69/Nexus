@@ -2465,6 +2465,12 @@ pub struct QsoStatus {
     /// when the partner advances the QSO) — the "I've called them N times" count.
     #[serde(default)]
     pub tx_count: u32,
+    /// True when the TX watchdog disarmed TX with this QSO's message still queued: the call
+    /// was ended by the watchdog, not answered and not capped. Display only, the strip's
+    /// "watchdog stopped the call" in place of the bare state (WSJT-X turns its TX status
+    /// red with the same news). Clears when the operator turns TX on again.
+    #[serde(default)]
+    pub watchdog_stopped: bool,
 }
 
 /// Status of the coordinated-QSY ("move together") feature — a SEPARATE, opt-in

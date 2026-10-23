@@ -10027,6 +10027,11 @@ export const EN = {
   // "Now sending". The three non-message states are whole answers; `txNow` itself is the
   // message on the air and is never translated.
   'operate.strip.now.stalled': 'Stalled',
+  // In place of the sequencer state once the TX watchdog has ended a call (WSJT-X: a red
+  // "Runaway Tx watchdog").
+  'operate.strip.state.watchdog': 'TX watchdog stopped the call',
+  'operate.strip.state.watchdog.title':
+    'The TX watchdog turned transmit off before this call was answered. Turn TX On to call again.',
   'operate.strip.now.rxOnly': '— receive-only, not transmitting',
   'operate.strip.now.beacon': '— beacon: transmits on schedule',
   'operate.strip.now.listening': '— listening',

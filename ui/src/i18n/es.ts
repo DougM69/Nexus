@@ -3989,6 +3989,8 @@ export const ES: PartialCatalog = {
   "operate.strip.now.listening": "— escuchando",
   "operate.strip.now.rxOnly": "— solo recepción, sin transmitir",
   "operate.strip.now.stalled": "Atascado",
+  "operate.strip.state.watchdog": "El watchdog de TX detuvo la llamada",
+  "operate.strip.state.watchdog.title": "El watchdog de TX apagó la transmisión antes de que respondieran a esta llamada. Activa TX para volver a llamar.",
   "operate.strip.period.auto.first": "TX AUTO / 1º",
   "operate.strip.period.auto.second": "TX AUTO / 2º",
   "operate.strip.period.first": "TX 1º / par",
