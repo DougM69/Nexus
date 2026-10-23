@@ -3493,7 +3493,6 @@ pub struct Engine {
     pending_log_identity: std::sync::Arc<()>,
     pending_log_epoch: u64,
     qso_log_epoch: u64,
-    remote_ft_settings_epoch: u64,
     /// Whether the active QSO has already been auto-logged (so it logs exactly
     /// once when the sequencer reaches `Done`). Reset when a new QSO starts.
     qso_logged: bool,
@@ -6399,7 +6398,6 @@ impl Engine {
             pending_log_identity: std::sync::Arc::new(()),
             pending_log_epoch: 0,
             qso_log_epoch: remote_logging::next_identity(),
-            remote_ft_settings_epoch: 0,
             qso_logged: false,
             qso_start_unix: None,
             cq_running: false,
@@ -7998,7 +7996,7 @@ impl Engine {
         //
         // CLEARED, AND DELIBERATELY NOT MARKED DIRTY — unlike the split above, which does
         // command the new radio. `rit_dirty`/`xit_dirty` are part of Remote's station-busy
-        // predicate (`remote_radio_context_idle`): a pending local clarifier gesture is a reason
+        // predicate (`remote_radio_context_check`): a pending local clarifier gesture is a reason
         // to refuse a remote selection, so arming one here would make every routed handoff look
         // like the operator had just reached for the clarifier. Clearing alone is enough for the
         // gate — it puts the belief back to "no offset", which judges the bare dial. That is the
@@ -17000,7 +16998,6 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// Toggle Skip Tx1 (WSJT-X parity) — a session-only preference (see the field).
     pub fn set_skip_tx1(&mut self, on: bool) {
-        self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         self.skip_tx1 = on;
     }
 
@@ -25151,7 +25148,6 @@ contact yourself."
     /// Operator picks a fixed cycle (Tx 1st = even, Tx 2nd = odd). An explicit pick
     /// disables auto-cycle — the operator is now in manual control.
     pub fn set_tx_even(&mut self, even: bool) {
-        self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         self.apply_cycle_parity(even);
         self.tx_cycle_auto = false;
     }
@@ -25159,7 +25155,6 @@ contact yourself."
     /// Toggle smart auto-cycle (FT8-style: answer on the opposite cycle of the station
     /// you reply to). On by default; turning it back on re-enables the auto pick.
     pub fn set_tx_cycle_auto(&mut self, auto: bool) {
-        self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         self.tx_cycle_auto = auto;
     }
 
@@ -25225,7 +25220,6 @@ contact yourself."
         if self.js8_refuses_tx_offset_move(hz) {
             return;
         }
-        self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         let (lo, hi) = Self::tx_offset_bounds(self.app.tier());
         self.tx_offset_hz = hz.clamp(lo, hi);
         self.settings.tx_offset_hz = self.tx_offset_hz;
@@ -25245,7 +25239,6 @@ contact yourself."
     /// setter made it apply to every caller, including the one gesture that must never move TX,
     /// and a function called `set_rx_offset` that also set TX could not be read as what it said.
     pub fn set_rx_offset(&mut self, hz: f32) {
-        self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         self.remote_actuation.revoke();
         // Per-tier, the same bounds as TX (#101): on WSPR the marker stays inside the 200 Hz
         // sub-band every WSPR decoder searches, instead of pointing at audio no WSPR signal
@@ -25256,7 +25249,6 @@ contact yourself."
     }
     /// Hold the TX offset fixed when the RX offset changes (WSJT-X "Hold Tx Freq").
     pub fn set_hold_tx_freq(&mut self, on: bool) {
-        self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         self.hold_tx_freq = on;
         self.settings.hold_tx_freq = on;
     }

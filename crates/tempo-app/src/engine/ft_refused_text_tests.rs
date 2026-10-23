@@ -1,7 +1,7 @@
 //! ⛔ FT8/FT4 NEVER KEY AN OVER THE ENCODER REFUSES, on every path that can queue an operator's
 //! text: the typed free-text box, a clicked Tx row (Tx 5 as typed, or filled from a macro), the
-//! same click during an over, the contest's Operate screen, the Remote client's free text,
-//! and the keying point itself for anything that reaches it anyway.
+//! same click during an over, the contest's Operate screen, and the keying point itself for
+//! anything that reaches it anyway.
 //!
 //! The texts are the ones the packer has no frame for (`modes::wsjt77::Refusal`). Typed `TNX 73`
 //! beside W9XYZ/M makes `W9XYZ/M K1ABC TNX 73` (beside a plain call `W9XYZ K1ABC TNX 73`), to which
@@ -18,11 +18,8 @@
 
 use super::contest_ft_messages_tests::air_form;
 use super::ft_midover::FtSwitch;
-use super::remote_transmit::{FtExchangeChange, FtExchangeContext};
 use super::*;
 use crate::dto::Tier;
-use crate::remote_control::transmit::TransmitAuthority;
-use crate::remote_control::Reason;
 
 const ME: &str = "K1ABC";
 const MY_GRID: &str = "FN42";
@@ -299,84 +296,6 @@ fn the_keying_point_never_keys_an_over_the_encoder_refuses() {
             next_over(&mut e, 0),
             Some(("W9XYZ K1ABC".to_string(), true)),
             "CONTROL {what}: a frame the packer carries"
-        );
-    }
-}
-
-/// A Remote browser's authority, valid for the length of the test.
-fn remote_permit(authority: &TransmitAuthority) -> crate::remote_control::transmit::TransmitPermit {
-    authority
-        .permit(std::time::Instant::now() + std::time::Duration::from_secs(24 * 60 * 60))
-        .expect("a permit")
-}
-
-/// A Remote browser holding `authority` clicks `cq` (as it comes off the air), so the contact is
-/// its own, with a settings store of its own (as `remote_transmit`'s tests give every station: one
-/// file per call, so parallel tests never share one).
-fn answering_from_afar(tier: Tier, cq: &str, authority: &TransmitAuthority) -> Engine {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let mut e = Engine::new(ME, MY_GRID, 0);
-    e.set_tier(tier);
-    e.configure_remote_settings_store(std::env::temp_dir().join(format!(
-        "nexus-ft-refused-text-{}-{}.json",
-        std::process::id(),
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    )));
-    // As `remote_transmit`'s stations: the tier's retune already taken by the radio loop.
-    let _ = e.take_immediate_retune();
-    let cq = air_form(cq).1;
-    e.ingest_decodes_for_test(&[heard(&cq)], 2);
-    let Msg::Cq { de, .. } = Msg::parse(&cq) else {
-        panic!("premise: a CQ, {cq:?}")
-    };
-    e.call_remote_ft_station(
-        remote_permit(authority),
-        &de,
-        None,
-        Some(&cq),
-        Some(SNR),
-        None,
-    )
-    .expect("the Remote click is taken");
-    // The radio loop takes the retune the click asked for, as it does between two requests.
-    let _ = e.take_immediate_retune();
-    e
-}
-
-/// The Remote client's free text, working W9XYZ/M: refused as the native one is
-/// (`InvalidAction`), nothing queued, and the reply keys. Control: `73`.
-#[test]
-fn the_remote_clients_free_text_never_queues_text_the_encoder_refuses() {
-    for tier in [Tier::Ft8, Tier::Ft4] {
-        let what = tier_name(tier);
-        let free_text = |text: &str| FtExchangeChange::FreeText { text: text.into() };
-        for text in ["TNX 73", "TNX"] {
-            let authority = TransmitAuthority::default();
-            let mut e = answering_from_afar(tier, "CQ W9XYZ/M", &authority);
-            let queued = tx_now(&e).expect("premise: the reply is queued");
-            let context = FtExchangeContext::from(&e.snapshot().qso.expect("a QSO"));
-            let permit = remote_permit(&authority);
-            let answer = e.change_remote_ft_exchange(permit, &context, &free_text(text));
-            assert_eq!(
-                (answer, tx_now(&e), next_over(&mut e, 4)),
-                (
-                    Err(Reason::InvalidAction),
-                    Some(queued.clone()),
-                    Some((queued, true))
-                ),
-                "{what}: Remote free text {text:?}"
-            );
-        }
-
-        let authority = TransmitAuthority::default();
-        let mut e = answering_from_afar(tier, "CQ W9XYZ/M", &authority);
-        let context = FtExchangeContext::from(&e.snapshot().qso.expect("a QSO"));
-        e.change_remote_ft_exchange(remote_permit(&authority), &context, &free_text("73"))
-            .expect("CONTROL: Remote 73");
-        assert_eq!(
-            next_over(&mut e, 4),
-            Some(("W9XYZ/M <K1ABC> 73".to_string(), true)),
-            "CONTROL {what}: Remote 73"
         );
     }
 }
