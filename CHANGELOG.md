@@ -140,6 +140,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
+- **No more empty window flashing on screen as Nexus starts, on Windows, when it last closed maximised.** Before the
+  splash gave way to the app, a launch that reopened a maximised window showed an empty full-screen frame for a
+  moment and took it away again. The window is now maximised out of sight and appears once, when the app is ready.
 - **WSJT-X UDP: a logger's Replay gets back everything Band Activity holds.** When JTAlert, GridTracker or a
   logger asks Nexus to replay the decodes, as it does when it starts while Nexus is running, Nexus sent only the
   last period's. It now sends every decode Band Activity still holds, oldest first, each with the start of the

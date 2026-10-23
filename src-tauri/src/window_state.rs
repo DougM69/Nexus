@@ -136,8 +136,57 @@ fn restore(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
         // Best-effort on a not-yet-mapped window: some window managers only honour a
         // maximise request once the window is shown. Failing here degrades to the restore
         // rect — the right size, on screen, un-maximised — never to a lost window.
+        maximize_hidden(app, window);
+    }
+}
+
+/// Maximise the main window while it is still hidden, without the operator ever seeing it.
+///
+/// On Windows a plain `maximize()` shows it: tao maximises with `ShowWindow(SW_MAXIMIZE)`,
+/// which also shows a hidden window, and only then hides it again with `SW_HIDE`. A launch
+/// that restored a maximised window drew an empty full-screen frame around the splash for a
+/// moment, then took it away until the app was ready. So the window is cloaked
+/// (`DWMWA_CLOAK`: Windows keeps it, nothing draws it) for that one call and uncloaked
+/// straight after, still hidden and now maximised — the show at the end of the launch is
+/// untouched. All three run on the main thread, where tao applies the maximise as it is
+/// called, so the uncloak cannot overtake it; and if the window handle is unavailable the
+/// maximise is made as before, flash and all, never skipped.
+#[cfg(windows)]
+fn maximize_hidden(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+    let Ok(hwnd) = window.hwnd() else {
+        let _ = window.maximize();
+        return;
+    };
+    let hwnd = hwnd.0 as isize;
+    let cloak = move |on: bool| {
+        let on = i32::from(on);
+        // SAFETY: `hwnd` is the live main window's handle, and the attribute is a BOOL read
+        // from a local that outlives the call.
+        unsafe {
+            DwmSetWindowAttribute(
+                hwnd as _,
+                DWMWA_CLOAK as u32,
+                &on as *const i32 as *const _,
+                std::mem::size_of::<i32>() as u32,
+            );
+        }
+    };
+    let w = window.clone();
+    let sent = app.run_on_main_thread(move || {
+        cloak(true);
+        let _ = w.maximize();
+        cloak(false);
+    });
+    if sent.is_err() {
         let _ = window.maximize();
     }
+}
+
+/// Elsewhere a maximise request on the hidden window is made as it always was.
+#[cfg(not(windows))]
+fn maximize_hidden(_app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    let _ = window.maximize();
 }
 
 /// Snapshot the window on close so the next launch reopens where it was.
@@ -727,6 +776,46 @@ mod tests {
     #[test]
     fn the_restore_floor_matches_the_shells_minimum_window() {
         assert_eq!(geom::MIN_INNER, (900.0, 600.0));
+    }
+
+    /// A launch that restores a maximised main window must not show it before the launch does.
+    /// tao maximises a hidden window with `ShowWindow(SW_MAXIMIZE)`, which shows it, and hides it
+    /// again only afterwards: on Windows the operator saw an empty full-screen frame flash
+    /// around the splash. So [`restore`] maximises through [`maximize_hidden`], which on Windows
+    /// cloaks the window for exactly that call. Source-read, because what is under test is the
+    /// order of calls on a real window, which no test here can make.
+    #[test]
+    fn a_maximised_restore_maximises_the_hidden_window_cloaked() {
+        let src = include_str!("window_state.rs");
+        let body = |sig: &str| {
+            let start = src.find(sig).unwrap_or_else(|| panic!("{sig} is defined"));
+            let rest = &src[start..];
+            &rest[..rest.find("\n}\n").expect("the end of the function")]
+        };
+        let restore = body("\nfn restore(");
+        assert!(
+            !restore.contains(".maximize()"),
+            "restore never maximises the hidden window itself"
+        );
+        assert!(
+            restore.contains("maximize_hidden(app, window)"),
+            "it maximises through maximize_hidden"
+        );
+        let windows = body("#[cfg(windows)]\nfn maximize_hidden(");
+        let at = |needle: &str| {
+            windows
+                .find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` in maximize_hidden"))
+        };
+        assert!(
+            at("cloak(true)") < at("let _ = w.maximize();")
+                && at("let _ = w.maximize();") < at("cloak(false)"),
+            "on Windows the maximise happens inside the cloak, and the cloak is lifted after it"
+        );
+        assert!(
+            at("run_on_main_thread(") < at("cloak(true)"),
+            "all three on the main thread, where each runs as it is called"
+        );
     }
 
     // ---- the Connect dashboard pop-out ---------------------------------------------------
