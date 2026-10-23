@@ -136,6 +136,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stamped the station call in use at the merge rather than the one the contact was made on.
 - **The WSJT-X QSOLogged message carries the contact's power** in its Tx power field, so N1MM,
   HRD and Log4OM receive it.
+- **Linux: the PC .deb and AppImage run on Ubuntu 22.04, Mint 21, and Debian 12.** They were built on Ubuntu
+  24.04, which made glibc 2.39 the minimum, so on Debian 12 (bookworm), Ubuntu 22.04 and Mint 21.x the package
+  installed and then the app did not start, and an installed Nexus could not take an update without upgrading
+  the whole distro. Both files are now built inside an Ubuntu 22.04 container and need glibc 2.35
+  (`ldd --version` shows yours). The Raspberry Pi packages are unchanged.
 
 ## [1.20.0] — 2026-10-22
 
