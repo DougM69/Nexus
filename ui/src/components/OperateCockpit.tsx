@@ -55,7 +55,7 @@ import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
 import { pointedTo } from './rotorPointAt'
 import { FastGraph } from './FastGraph'
-import { Waterfall } from './Waterfall'
+import { Waterfall, type WaterfallTag } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
 import { FT_PALETTE_SCOPE } from '../waterfallPalette'
 import { PaneSeam } from './PaneSeam'
@@ -335,6 +335,10 @@ const LAYOUT_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
 
 /** Where the rail side is stored (per surface): 'left', or anything else for the stock right. */
 const RAIL_SIDE_KEY = 'nexus.operate.railSide'
+/** Per surface: the callsign tags on the FT waterfall (#312), on unless turned off. */
+const WF_CALLS_KEY = 'nexus.operate.waterfallCalls'
+/** How many rows of callsign tags the FT waterfall stacks before it counts the rest. */
+const WF_CALL_LANES = 3
 
 /** Classic's column dividers' names, by the pair they sit between (column indices in grid order
  *  with the rail on the right: 0 Band Activity, 1 the Rx Frequency column, 2 Stations). Resolved
@@ -913,6 +917,31 @@ export function OperateCockpit({
 
   // RPT = the DX's current heard SNR (case-insensitive), −10 when unheard.
   const dxSnr = snrForCall(snap.stations, dxCall)
+
+  // #312 — the last period's decodes as callsign tags along the top of the waterfall, each over
+  // its own audio frequency, the RF scope's set (`rfFt`). The DX call is red, as WSJT-X marks it;
+  // in a crowd it keeps the top row, then a station calling us, then the strongest.
+  const [wfCalls, setWfCalls] = useState(() => surfaceGet(WF_CALLS_KEY) !== '0')
+  const wfTags = useMemo((): WaterfallTag[] => {
+    if (!wfCalls) return []
+    const dx = dxCall.trim().toUpperCase()
+    const order = [...rfFt.decodes].sort(
+      (a, b) =>
+        Number(b.call.toUpperCase() === dx) - Number(a.call.toUpperCase() === dx) ||
+        Number(b.me) - Number(a.me) ||
+        b.snr - a.snr,
+    )
+    return order.map((d, rank) => ({
+      key: `${d.call}@${d.hz}`,
+      hz: d.hz,
+      label: d.call,
+      title: t('waterfall.tag.title', { call: d.call, snr: d.snr, hz: Math.round(d.hz) }),
+      opacity: 1,
+      dim: false,
+      selected: d.call.toUpperCase() === dx,
+      rank,
+    }))
+  }, [wfCalls, rfFt, dxCall])
   const msgs = useMemo(
     () =>
       genStdMessages({
@@ -1942,6 +1971,27 @@ export function OperateCockpit({
                   active={active}
                   paletteScope={FT_PALETTE_SCOPE}
                   markerWidthHz={markerWidthHz}
+                  tags={wfTags}
+                  tagLanes={WF_CALL_LANES}
+                  // A tag is a click on the picture at its frequency: the RX offset, as there.
+                  onTag={(hz) => {
+                    if (control || ftRuntime) onTune(Math.round(hz), 'rx')
+                  }}
+                  headerExtra={
+                    <button
+                      type="button"
+                      className={`wf-popout wf-calls${wfCalls ? ' on' : ''}`}
+                      aria-pressed={wfCalls}
+                      onClick={() => {
+                        const next = !wfCalls
+                        surfaceSet(WF_CALLS_KEY, next ? '1' : '0')
+                        setWfCalls(next)
+                      }}
+                      title={t('waterfall.tags.toggle.title')}
+                    >
+                      {t('waterfall.tags.toggle.label')}
+                    </button>
+                  }
                   // An FT over is 13 s: the dark band reads as "that was us", and there is
                   // genuinely no receiver to picture during it. Explicit here because the
                   // default is OFF — the shared Waterfall also draws RTTY's and SSTV's band,

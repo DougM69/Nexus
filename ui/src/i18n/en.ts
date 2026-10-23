@@ -12480,6 +12480,14 @@ export const EN = {
   // back the scrollback stands, formatted by `ageLabel`.
   'waterfall.paused': '⏸ PAUSED',
   'waterfall.tx.held': 'TRANSMITTING — display held',
+  // The FT waterfall's callsign tags: how many of the newest slot's decodes found no room.
+  'waterfall.tags.hidden.title': {
+    one: '1 more decode has no room for its callsign here',
+    other: '{{count}} more decodes have no room for their callsigns here',
+  },
+  'waterfall.tag.title': '{{call}} · {{snr}} dB · {{hz}} Hz — click to listen here',
+  'waterfall.tags.toggle.label': 'Calls',
+  'waterfall.tags.toggle.title': 'Show the callsigns decoded in the last period above their signals',
   'waterfall.paused.back': '⏸ PAUSED · −{{age}}',
   'waterfall.paused.now': 'now',
 

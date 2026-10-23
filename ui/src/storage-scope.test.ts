@@ -99,6 +99,8 @@ export const PER_SURFACE = [
   // Which side Operate's rail stands on (layout L5): a layout choice of THIS window, like the
   // Classic / Roster pick on either side of it.
   'nexus.operate.railSide',
+  // The callsign tags on Operate's waterfall: what THIS window's waterfall draws.
+  'nexus.operate.waterfallCalls',
   'nexus.operateLayout',
   'nexus.ota.bandFilter',
   // Hide worked today: a statement about what THIS board shows, like the filters beside it — a

@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same window picker the Spots panel has: Any time (the default, and what Hide worked did before), Until 0000Z,
   1 h, 4 h, 24 h or 7 days. A station you last worked before the window shows again, which suits special-event
   calls such as 13 Colonies and Route 66 that are on the air all week. Nexus remembers the choice.
+- **Callsigns on the FT8/FT4 waterfall.** Each station decoded in the last period is labelled along the top of the
+  waterfall, over its own audio frequency, and the station in the DX Call box is shown in red. When the labels crowd,
+  they stack in up to three rows, a station calling you and then the strongest first, and a count says how many had
+  no room. Clicking a label moves your RX offset there, as clicking the waterfall does. The **Calls** button in the
+  waterfall's header turns the labels off.
 
 ### Changed
 - **The log-entry boxes no longer show made-up example values.** An empty box in the contest log line and in the

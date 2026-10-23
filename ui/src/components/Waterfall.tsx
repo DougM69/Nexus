@@ -31,6 +31,7 @@ import {
   MIN_SPAN,
   spanDb,
   tuneTarget,
+  laneTags,
 } from '../waterfall'
 import { useWaterfallPalette } from '../waterfallPalette'
 import { ageLabel } from '../waterfallHistory'
@@ -258,6 +259,10 @@ interface Props {
   /** A tag's click, with the tag's frequency. Omitted ⇒ the tags are labels and do nothing.
    *  Disabled while `keyed`: the host's own handler must refuse as well. */
   onTag?: (hz: number) => void
+  /** Stack crowded tags in up to this many rows, each over its own frequency, and count the ones
+   *  that fit in none (the FT decodes' callsigns, dozens to a slot). Omitted ⇒ one row, every tag
+   *  drawn (RTTY's few). */
+  tagLanes?: number
   /** Rows at the true `rowMs` (RTTY): the part of a frame a row overshot is carried into the
    *  next, so 50 ms rows on 60 Hz land every 3 frames, not 3 or 4. Omitted ⇒ the overshoot is
    *  dropped, so a row lands on the first frame at or past `rowMs` after the last: 120 ms is
@@ -266,7 +271,9 @@ interface Props {
 }
 
 /** One label on the picture: its text at `hz`. `opacity` 0..1 is the host's (a fading tag);
- *  `dim` marks it as already dealt with (a contest dupe) and is shown as a class. */
+ *  `dim` marks it as already dealt with (a contest dupe) and is shown as a class. `selected` is
+ *  the station the operator is working, which WSJT-X marks in red. `rank` orders a crowd: lower is
+ *  kept first (`tagLanes`). */
 export interface WaterfallTag {
   key: string
   hz: number
@@ -274,7 +281,17 @@ export interface WaterfallTag {
   title: string
   opacity: number
   dim: boolean
+  selected?: boolean
+  rank?: number
 }
+
+/** A tag's width before it is drawn, CSS px at text scale 1: `.wf-tag`'s bold 10 px callsign,
+ *  its padding and its border. An estimate, generous so two neighbours never touch. */
+const tagWidthPx = (label: string) => label.length * 6.6 + 12
+/** The gap kept between two tags in one row, CSS px. */
+const TAG_GAP_PX = 4
+/** Room kept at the right for the count of tags left out, CSS px at text scale 1. */
+const TAG_COUNT_PX = 36
 
 // Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
 // spectrum row so stations calling above ~2.9 kHz are visible + clickable. drawRow maps the view
@@ -328,6 +345,7 @@ export function Waterfall({
   contrastCurve,
   tags,
   onTag,
+  tagLanes,
   keepRowRemainder = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -377,6 +395,44 @@ export function Waterfall({
     prevViewRef.current = next
     return next
   }, [rxOffsetHz, zoomSpan, fixedLo, fixedHi])
+  // The tag layer's width and text scale, for stacking crowded tags (`tagLanes`). Until it is
+  // measured every tag is drawn in the one row, as without `tagLanes`.
+  const tagsRef = useRef<HTMLDivElement>(null)
+  const [tagBox, setTagBox] = useState({ w: 0, scale: 1 })
+  const hasTags = !!tags && tags.length > 0
+  useEffect(() => {
+    const el = tagsRef.current
+    if (!tagLanes || !el || typeof ResizeObserver === 'undefined') return
+    const measure = () => {
+      const scale = parseFloat(getComputedStyle(el).getPropertyValue('--text-scale')) || 1
+      const w = el.clientWidth
+      setTagBox((b) => (b.w === w && b.scale === scale ? b : { w, scale }))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [tagLanes, hasTags])
+  const tagLayout = useMemo(() => {
+    if (!tags || !tagLanes || !(tagBox.w > 0)) return null
+    const span = view.hi - view.lo
+    const inView = tags.filter((tag) => tag.hz >= view.lo && tag.hz <= view.hi)
+    const lay = (widthPx: number) =>
+      laneTags(
+        inView.map((tag) => ({
+          x: ((tag.hz - view.lo) / span) * tagBox.w,
+          w: tagWidthPx(tag.label) * tagBox.scale,
+          rank: tag.rank ?? 0,
+        })),
+        widthPx,
+        tagLanes,
+        TAG_GAP_PX * tagBox.scale,
+      )
+    // With some left out, the count takes the right end of the rows.
+    let laid = lay(tagBox.w)
+    if (laid.hidden > 0) laid = lay(tagBox.w - TAG_COUNT_PX * tagBox.scale)
+    return { lane: new Map(inView.map((tag, i) => [tag.key, laid.lane[i]])), hidden: laid.hidden }
+  }, [tags, tagLanes, tagBox, view.lo, view.hi])
   // refs so the animation loop always reads current props without re-subscribing
   const txRef = useRef(transmitting)
   const txBlanksRef = useRef(txBlanks)
@@ -1313,15 +1369,21 @@ export function Waterfall({
             surface already reads as "that was us transmitting". A live region, so a screen
             reader hears it when the over starts rather than only on inspection. */}
         {tags && tags.length > 0 && (
-          <div className="wf-tags">
+          <div className="wf-tags" ref={tagsRef}>
             {tags.map((tag) => {
               if (tag.hz < view.lo || tag.hz > view.hi) return null
+              const lane = tagLayout ? tagLayout.lane.get(tag.key) : 0
+              if (lane == null) return null
               return (
                 <button
                   key={tag.key}
                   type="button"
-                  className={tag.dim ? 'wf-tag dim' : 'wf-tag'}
-                  style={{ left: `${((tag.hz - view.lo) / (view.hi - view.lo)) * 100}%`, opacity: tag.opacity }}
+                  className={`wf-tag${tag.dim ? ' dim' : ''}${tag.selected ? ' selected' : ''}`}
+                  style={{
+                    left: `${((tag.hz - view.lo) / (view.hi - view.lo)) * 100}%`,
+                    opacity: tag.opacity,
+                    ...(lane > 0 ? { top: `calc(2px + ${lane} * (1.4em + 3px))` } : {}),
+                  }}
                   disabled={!onTag || keyed}
                   title={tag.title}
                   onClick={() => onTag?.(tag.hz)}
@@ -1330,6 +1392,11 @@ export function Waterfall({
                 </button>
               )
             })}
+            {tagLayout && tagLayout.hidden > 0 && (
+              <span className="wf-tag-more" title={t('waterfall.tags.hidden.title', { count: tagLayout.hidden })}>
+                +{tagLayout.hidden}
+              </span>
+            )}
           </div>
         )}
         {keyed && !txBlanks && (

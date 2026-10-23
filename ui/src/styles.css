@@ -16613,6 +16613,24 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   white-space: nowrap;
   cursor: pointer;
 }
+/* The station being worked, red as WSJT-X marks it. */
+.wf-tag.selected {
+  border-color: var(--tx);
+  color: var(--tx);
+}
+/* How many tags found no row (`tagLanes`): a count at the right of the top row. */
+.wf-tag-more {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  pointer-events: auto;
+  padding: 0 var(--space-1);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  color: var(--text-faint);
+  font-size: calc(10px * var(--text-scale));
+  line-height: 1.4;
+}
 .wf-tag.dim {
   color: var(--text-faint);
   border-color: var(--border-soft);
