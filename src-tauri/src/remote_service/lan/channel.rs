@@ -6,7 +6,8 @@
 //!    or over the caps ([`super::gate`]), is dropped as it arrives.
 //! 2. **The handshake, inside one deadline** ([`HANDSHAKE`]): TLS 1.3 with the computer's key held
 //!    to the paired keys ([`super::tls`]), the WebSocket upgrade, and the hello. A computer that
-//!    does not finish in time, or proves no paired key, counts against its address at the gate. A
+//!    does not finish in time, proves no paired key, or is cut by newer handshakes at the gate,
+//!    counts against its address there; one that finishes then takes a session's place. A
 //!    refused key reads its refusal and then an orderly close ([`drain`]).
 //! 3. **The hello.** The LAN protocol, stream and operation versions must be the shack's own; a
 //!    mismatch is refused saying which side to update (as ruled on 2026-10-04). Then the shack
@@ -446,16 +447,25 @@ pub(super) async fn connection<S>(
     {
         return;
     }
-    let Ok(_ticket) = shared.gate.admit(peer.ip(), Instant::now()) else {
+    let Ok(mut ticket) = shared.gate.admit(peer.ip(), Instant::now()) else {
         return;
     };
-    // 2 and 3. The handshake, inside one deadline.
-    let handshake = tokio::time::timeout(shared.handshake, handshake(stream, &shared)).await;
+    // 2 and 3. The handshake, inside one deadline, unless enough newer ones arrive meanwhile to cut
+    // it: a handshake holds a handshake's place, never a session's.
+    let handshake = tokio::select! {
+        done = tokio::time::timeout(shared.handshake, handshake(stream, &shared)) => done.ok(),
+        () = ticket.cut() => None,
+    };
     match handshake {
-        Ok(Ok(Opened::Session(socket, pin, device))) => {
+        // Refused for its version, and told which side to update: not counted.
+        Some(Ok(Opened::Told)) => {}
+        // Done, and only now holding one of the sessions' places: with every one taken, it is closed
+        // before its welcome, not counted.
+        Some(Ok(_)) if ticket.opened().is_err() => {}
+        Some(Ok(Opened::Session(socket, pin, device))) => {
             session(socket, pin, device, shared, stop, Some(peer.ip())).await;
         }
-        Ok(Ok(Opened::Pairing(socket, asked))) => {
+        Some(Ok(Opened::Pairing(socket, asked))) => {
             // From here on this connection holds the pairing desk and nothing else: no operations
             // authority, no engine, no stream.
             let (gate, desk, deadline) =
@@ -467,7 +477,7 @@ pub(super) async fn connection<S>(
                 }
             }
         }
-        Ok(Ok(Opened::Enrol(socket, asked))) => {
+        Some(Ok(Opened::Enrol(socket, asked))) => {
             // As a pairing: this connection holds the desk and nothing else.
             let (gate, desk, deadline) =
                 (shared.gate.clone(), shared.desk.clone(), shared.handshake);
@@ -478,9 +488,7 @@ pub(super) async fn connection<S>(
                 }
             }
         }
-        // Refused for its version, and told which side to update: not counted.
-        Ok(Ok(Opened::Told)) => {}
-        Ok(Err(())) | Err(_) => shared.gate.failed(peer.ip(), Instant::now()),
+        Some(Err(())) | None => shared.gate.failed(peer.ip(), Instant::now()),
     }
 }
 

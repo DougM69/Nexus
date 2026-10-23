@@ -35,7 +35,7 @@
 //! over's state with its holes on the air so far (display only) when it changes and again after
 //! each renewal, and presence's deadline at each renewal. Each message is one datagram of at most 128 bytes, and nothing is answered before this
 //! computer has spoken: the shack answers the address of the last datagram that verified. The
-//! messages' format has its own number, in the build's contract. Both ends read and write them with
+//! messages' format is frozen across builds, outside the build's contract. Both ends read and write them with
 //! the client core's (`tempo_client::stop_road::wire`), with the state echo's clock ([`StateClock`]).
 //!
 //! ## Stop is never refused here
@@ -87,10 +87,10 @@ use crate::command_dispatch::Refusal;
 use super::super::operations::{RoadPresence, RoadStop};
 use super::datagram::{self, End, Keys, Tag, EXPORTED};
 
-// What the road carries, its keys' afterlife, the state echo's clock, how fresh a state must be
-// and the format's text: the client core's, which both ends read.
+// What the road carries, its keys' afterlife, the state echo's clock and how fresh a state must
+// be: the client core's, which both ends read.
 #[cfg(test)]
-pub(crate) use tempo_client::stop_road::wire::{contract_text, FRESH};
+pub(crate) use tempo_client::stop_road::wire::FRESH;
 pub(crate) use tempo_client::stop_road::wire::{Down, StateClock, Up, AFTERLIFE};
 
 /// The road's port, past the listener's TCP port: 42077 beside 42075, the audio road's 42076 between.

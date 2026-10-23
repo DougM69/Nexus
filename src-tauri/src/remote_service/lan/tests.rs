@@ -488,23 +488,60 @@ fn source(n: usize) -> IpAddr {
     IpAddr::V4(Ipv4Addr::new(10, 0, (n / 256) as u8, (n % 256) as u8))
 }
 
-/// ★ At most two connections from one address and four in all. CONTROL: a connection that
+/// A handshake from `n` that has finished, holding a session's place.
+fn session(gate: &Arc<Gate>, n: usize, now: Instant) -> super::gate::Ticket {
+    let mut ticket = gate.admit(source(n), now).unwrap();
+    ticket.opened().unwrap();
+    ticket
+}
+
+/// ★ At most two connections from one address and four sessions in all. CONTROL: a session that
 /// ends gives its place back.
 #[test]
 fn the_gate_holds_the_open_connection_caps() {
     let gate = Arc::new(Gate::default());
     let now = Instant::now();
-    let _a1 = gate.admit(source(1), now).unwrap();
-    let a2 = gate.admit(source(1), now).unwrap();
+    let _a1 = session(&gate, 1, now);
+    let a2 = session(&gate, 1, now);
     assert_eq!(gate.admit(source(1), now).err(), Some(Refused::SourceFull));
-    let _b1 = gate.admit(source(2), now).unwrap();
-    let _b2 = gate.admit(source(2), now).unwrap();
-    assert_eq!(gate.admit(source(3), now).err(), Some(Refused::Full));
+    let _b1 = session(&gate, 2, now);
+    let _b2 = session(&gate, 2, now);
+    let mut fifth = gate.admit(source(3), now).unwrap();
+    assert_eq!(fifth.opened(), Err(Refused::Full));
+    drop(fifth);
     drop(a2);
     assert!(
-        gate.admit(source(3), now).is_ok(),
-        "an ended connection kept its place"
+        gate.admit(source(3), now).unwrap().opened().is_ok(),
+        "an ended session kept its place"
     );
+}
+
+/// ★ Handshakes never hold a session's place, and never all the handshakes' places: with four
+/// sessions open, eight handshakes are still admitted, each from its own address, and a ninth cuts
+/// the oldest of them and no other; a session is never cut, however many arrive after it. CONTROL:
+/// before the ninth arrived, nothing was cut.
+#[test]
+fn a_new_handshake_cuts_the_oldest_and_never_a_session() {
+    use super::gate::{HANDSHAKES, MAX_OPEN};
+    use futures_util::FutureExt;
+    let gate = Arc::new(Gate::default());
+    let now = Instant::now();
+    let sessions: Vec<_> = (0..MAX_OPEN).map(|n| session(&gate, n, now)).collect();
+    let cut = |ticket: &super::gate::Ticket| ticket.cut().now_or_never().is_some();
+    let handshakes: Vec<_> = (0..HANDSHAKES)
+        .map(|n| gate.admit(source(100 + n), now).unwrap())
+        .collect();
+    assert!(!handshakes.iter().any(cut), "CONTROL: cut before the ninth");
+    let newest = gate.admit(source(200), now).unwrap();
+    let was_cut: Vec<bool> = handshakes.iter().map(cut).collect();
+    assert!(was_cut[0], "the oldest stands");
+    assert!(!was_cut[1..].iter().any(|&c| c), "{was_cut:?}");
+    assert!(!cut(&newest));
+    let more: Vec<_> = (0..3 * HANDSHAKES)
+        .map(|n| gate.admit(source(300 + n), now).unwrap())
+        .collect();
+    assert!(!sessions.iter().any(cut), "a session was cut");
+    assert!(cut(&newest) && !cut(more.last().unwrap()));
 }
 
 /// ★ Ten new connections a minute from one address; the eleventh is refused, a refused one
@@ -993,6 +1030,96 @@ async fn a_source_off_the_subnet_is_dropped_before_tls() {
         hello(&mut socket.unwrap(), VERSIONS).await["type"],
         "welcome"
     );
+}
+
+/// Slow handshakes, one from each of `count` addresses on the subnet from `192.168.1.{first}`: each
+/// connection held open with nothing sent. The connections' tasks, and the computers' ends.
+async fn slow_handshakes(
+    s: &Shack,
+    first: usize,
+    count: usize,
+    stop: &watch::Receiver<bool>,
+) -> Vec<(tokio::task::JoinHandle<()>, tokio::net::TcpStream)> {
+    let mut held = Vec::new();
+    for n in first..first + count {
+        let (station, computer) = pair().await;
+        let task = tokio::spawn(channel::connection(
+            station,
+            format!("192.168.1.{n}:50000").parse().unwrap(),
+            s.shared.clone(),
+            stop.clone(),
+        ));
+        held.push((task, computer));
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while (first..first + count).any(|n| {
+        s.shared
+            .gate
+            .arrivals(format!("192.168.1.{n}").parse().unwrap())
+            == 0
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "the flood never reached the gate"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    held
+}
+
+/// ★ Slow handshakes from many addresses never keep a paired computer out. Twenty-four
+/// connections, one from each of twenty-four addresses on the subnet, each holding its TCP open and
+/// sending nothing; then the paired computer connects and is welcomed, while every one of them is
+/// still inside its deadline; then twenty-four more arrive, and its session goes on answering.
+/// CONTROL: each address reached the gate, the flood's handshakes were cut (their tasks ended long
+/// before their deadline) and each one cut was counted against its address.
+#[tokio::test]
+async fn slow_handshakes_from_many_addresses_never_keep_a_paired_computer_out() {
+    use super::gate::HANDSHAKES;
+    let s = shack(home());
+    let (_stop, stop) = watch::channel(false);
+    let flooded = Instant::now();
+    let flood = slow_handshakes(&s, 100, 24, &stop).await;
+    let (_task, socket) = dial(&s, &s.computer.key, PEER, stop.clone()).await;
+    let mut socket = socket.expect("the paired computer kept out by the flood");
+    assert_eq!(hello(&mut socket, VERSIONS).await["type"], "welcome");
+    assert!(
+        flooded.elapsed() < channel::HANDSHAKE,
+        "welcomed only once the flood's deadline had passed"
+    );
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let cut = loop {
+        let cut = flood.iter().filter(|(task, _)| task.is_finished()).count();
+        if cut > 24 - HANDSHAKES || Instant::now() >= deadline {
+            break cut;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert!(
+        cut > 24 - HANDSHAKES,
+        "CONTROL: {cut} of the flood's handshakes cut"
+    );
+    assert!(
+        s.shared
+            .gate
+            .failures(Ipv4Addr::new(192, 168, 1, 100).into())
+            == 1,
+        "CONTROL: a handshake cut was not counted"
+    );
+
+    let _more = slow_handshakes(&s, 150, 24, &stop).await;
+    socket.send(Message::Ping(Vec::new().into())).await.unwrap();
+    let answered = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match socket.next().await {
+                Some(Ok(Message::Pong(_))) => return true,
+                Some(Ok(_)) => {}
+                _ => return false,
+            }
+        }
+    })
+    .await;
+    assert_eq!(answered, Ok(true), "the open session stopped answering");
 }
 
 /// ★ Versions, as ruled on 2026-10-04: the hello must carry the station's own versions. A computer

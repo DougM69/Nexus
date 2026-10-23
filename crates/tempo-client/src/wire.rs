@@ -346,32 +346,36 @@ pub fn read_feed(frame: &[u8]) -> Option<(&str, u64, &[u8])> {
 // --- The build ------------------------------------------------------------------------------------
 
 /// This build's contract: SHA-256, lowercase hex, of this protocol's number, every command's class,
-/// the dispatcher's tables, the feeds, and the datagrams of Stop's second road and the audio road.
-/// Two builds with the same contract route, admit and push every command alike, and read each
-/// other's roads.
+/// the dispatcher's tables, the feeds, and the datagrams of the audio road. Two builds with the same
+/// contract route, admit and push every command alike, and read each other's audio road. Stop's
+/// second road is not in it: its format is frozen across builds (`crate::stop_road::wire`).
 pub fn contract() -> &'static str {
     static CONTRACT: OnceLock<String> = OnceLock::new();
     CONTRACT.get_or_init(|| {
-        let mut text = format!("nexus command link\nprotocol {}\n", PROTOCOL_VERSION);
-        text.push_str(&crate::dispatch::contract_text());
-        for feed in FEEDS {
-            text.push_str(&format!(
-                "feed {} {} {} {}\n",
-                feed.name,
-                feed.command,
-                feed.every.as_millis(),
-                feed.always
-            ));
-        }
-        text.push_str(&crate::stop_road::wire::contract_text());
-        text.push_str(&crate::audio_road::wire::contract_text());
-        text.push_str(&crate::ice::contract_text());
-        digest(&SHA256, text.as_bytes())
+        digest(&SHA256, contract_text().as_bytes())
             .as_ref()
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect()
     })
+}
+
+/// What [`contract`] digests.
+fn contract_text() -> String {
+    let mut text = format!("nexus command link\nprotocol {}\n", PROTOCOL_VERSION);
+    text.push_str(&crate::dispatch::contract_text());
+    for feed in FEEDS {
+        text.push_str(&format!(
+            "feed {} {} {} {}\n",
+            feed.name,
+            feed.command,
+            feed.every.as_millis(),
+            feed.always
+        ));
+    }
+    text.push_str(&crate::audio_road::wire::contract_text());
+    text.push_str(&crate::ice::contract_text());
+    text
 }
 
 /// Who is speaking: the end deciding which side should update.
@@ -713,9 +717,13 @@ mod tests {
             );
         }
         assert!(text.contains("event alert\n") && text.contains("profile desktop\n"));
-        assert!(crate::stop_road::wire::contract_text().starts_with("stop road 1 "));
         assert!(crate::audio_road::wire::contract_text()
             .starts_with("audio road 1 EXPORTER-nexus-audio-road format 1 max 512 "));
+        // Stop's second road is frozen, outside the build's check: a build that reads its bytes
+        // as this one does is not refused for its format. CONTROL: the audio road is in it.
+        let whole = contract_text();
+        assert!(whole.contains("audio road 1 EXPORTER-nexus-audio-road "));
+        assert!(!whole.contains("stop road") && !whole.contains("EXPORTER-nexus-stop-road"));
     }
 
     /// ★ A waterfall row crosses the link lossless, on this network and through the room alike

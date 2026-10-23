@@ -178,6 +178,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     quietly the next time it reaches the station on your network; if the station names another key, that road is
     turned off and says why. Nothing else changes for roads that already work, and nothing has to be paired again.
   - Your radio was never reachable this way: the station only ever lets in a computer you approved there.
+- **A machine on your network can no longer keep your second computer out of Nexus Remote.** A device opening
+  many slow connections from many addresses could take all four of the station's connection places, so a
+  computer you paired could not connect, or reconnect after a Wi-Fi drop. Connections still being set up no longer
+  take those places, and when too many are waiting the oldest is dropped. An open session and Stop were never
+  affected.
 
 ## [1.20.0] — 2026-10-22
 

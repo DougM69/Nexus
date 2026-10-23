@@ -1038,6 +1038,48 @@ fn a_datagram_that_does_not_verify_is_dropped_unread() {
     });
 }
 
+/// ★ A datagram that verifies under the road's keys but carries a body the format does not write is
+/// read as nothing and changes nothing: a Stop's body a byte short and a byte long, a hold that names
+/// no Stops, a heartbeat whose lease the station could not have issued, and kinds the road does not
+/// take. None is answered, and the local transmission stays on the air. CONTROL: a well-formed
+/// Stop under the same keys, after them all, is taken.
+#[test]
+fn a_datagram_that_verifies_but_is_malformed_changes_nothing() {
+    let _alone = alone();
+    on_a_runtime(0, async {
+        let app = App::new();
+        let r = roadside(&app);
+        let mut seat = seated(&r).await;
+        key_the_mic(&r.s);
+        let lease = seat.lease();
+        let sealed = |kind: u8, body: &[u8]| seat.road.keys.send.seal(kind, body).unwrap();
+        for (what, datagram) in [
+            ("a Stop a byte short", sealed(1, &[0, 0, 0, 0, 0, 0, 1])),
+            (
+                "a Stop a byte long",
+                sealed(1, &[0, 0, 0, 0, 0, 0, 0, 1, 0]),
+            ),
+            ("a hold that names no Stops", sealed(2, &1u64.to_be_bytes())),
+            (
+                "a heartbeat under a lease never issued",
+                sealed(
+                    4,
+                    &[format!("g{}", &lease[1..]).as_bytes(), &1u64.to_be_bytes()].concat(),
+                ),
+            ),
+            ("kind 0", sealed(0, &1u64.to_be_bytes())),
+            ("kind 5", sealed(5, &1u64.to_be_bytes())),
+        ] {
+            seat.road.send(&datagram).await;
+            assert_eq!(seat.road.heard(NOTHING).await, None, "{what}");
+            assert!(keyed(&r.s), "{what} stops nothing");
+        }
+        seat.road.say(&Up::Stop { stop: 1 }).await;
+        assert!(seat.road.stopped(1, Duration::from_secs(2)).await.is_some());
+        assert!(came_to_a_stop(&r.s).await);
+    });
+}
+
 // ----- Stop never waits -----
 
 /// ★ Its own socket, port, thread and keys. The audio road's real socket flooded at a hundred
@@ -1774,6 +1816,81 @@ async fn a_held_press_arms_the_microphone_only_under_the_stream_rules() {
     assert!(ticks.iter().any(|&(_, on)| on), "on the air");
 }
 
+/// ⛔ A held press from afar outside the operator's licence is refused as the shack's own PTT is:
+/// in Phone on 20 m with a Technician licence, the shack's own PTT does not key, and a press from
+/// afar, held and spoken into under live presence and fresh state, is said refused, never arms the
+/// microphone over, and none of its frames is taken. CONTROL: with an Extra licence on the same
+/// dial, the same press keys by its voice and its frames are taken.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_held_press_from_afar_outside_the_licence_is_refused_as_at_the_shack() {
+    use tempo_app::settings::LicenseClass;
+    let licensed = |r: &Roadside, class| {
+        let mut e = r.s.shared.engine.lock().unwrap();
+        let mut settings = e.settings().clone();
+        settings.license_class = class;
+        e.apply_settings(settings);
+    };
+    let app = App::new();
+    let r = roadside(&app);
+    let mut seat = seated(&r).await;
+    {
+        let mut e = r.s.shared.engine.lock().unwrap();
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+    }
+    licensed(&r, LicenseClass::Technician);
+    {
+        let mut e = r.s.shared.engine.lock().unwrap();
+        assert!(
+            e.tx_enabled() && !e.tx_allowed(),
+            "premise: armed, outside the licence"
+        );
+        e.set_ptt(true);
+        assert!(!e.manual_ptt(), "premise: the shack's own PTT refused");
+    }
+    let mut encoder = MicEncoder::new().unwrap();
+    for (press, class) in [(1, LicenseClass::Technician), (2, LicenseClass::Extra)] {
+        licensed(&r, class);
+        seat.renewed().await;
+        let taken = r.counts().mic_taken.load(Ordering::SeqCst);
+        let radio = radio_loop(
+            r.s.shared.engine.clone(),
+            Over::Voice,
+            Arc::default(),
+            Instant::now() + Duration::from_millis(900),
+        );
+        speak(&seat, &mut encoder, press, 1, 30, |_| true).await;
+        let keyed = r.s.shared.engine.lock().unwrap().mic_keyed();
+        seat.road.say(&Up::Release { press }).await;
+        let said = seat.road_says(Duration::from_millis(300)).await;
+        let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
+            .await
+            .unwrap();
+        let taken = r.counts().mic_taken.load(Ordering::SeqCst) - taken;
+        if class == LicenseClass::Technician {
+            assert!(
+                said.contains(&Down::Press {
+                    press,
+                    keyed: false,
+                    end: Some(HoldEnd::Refused)
+                }),
+                "outside the licence, said refused: {said:?}"
+            );
+            assert!(
+                !ticks.iter().any(|&(_, on)| on),
+                "on the air outside the licence"
+            );
+            assert!(!keyed && taken == 0, "keyed {keyed}, {taken} frames taken");
+        } else {
+            assert!(
+                keyed && taken > 0,
+                "CONTROL: keyed {keyed}, {taken} frames taken"
+            );
+            assert!(ticks.iter().any(|&(_, on)| on), "CONTROL: on the air");
+        }
+    }
+}
+
 /// ★ The held press ends 200 ms after its last re-assertion. A press from afar, keyed and
 /// spoken into, whose holds stop while its voice goes on: the over comes off the air no sooner than
 /// 200 ms after the last hold and within a tick past it, the road says the press lapsed, and the
@@ -1993,7 +2110,11 @@ fn the_overs_state_crosses_the_road_with_its_holes() {
         None,
         "a body without the holes"
     );
-    assert!(super::super::stop_road::contract_text().contains(" format 3 "));
+    assert_eq!(
+        widest.body(),
+        [0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255],
+        "the bytes the frozen format writes"
+    );
 }
 
 /// ★ A hold crosses the road with the Stops its press began under (the road's format 3), and a

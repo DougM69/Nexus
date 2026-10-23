@@ -284,6 +284,12 @@ jobs:
       - name: cargo clippy tempo-client --features device,bench-road-switch
         run: cargo clippy -p tempo-client --features device,bench-road-switch,tempo-audio/serial --all-targets -- -D warnings
 
+      # ...and its tests in that shape, which the lint above only compiles: the road switch's own
+      # tests exist only with the feature, so no other step runs them. The crate's other tests run
+      # here again too, which costs seconds and needs no list of names that could fall behind.
+      - name: cargo test tempo-client --features device,bench-road-switch
+        run: cargo test -p tempo-client --features device,bench-road-switch,tempo-audio/serial --no-fail-fast
+
       # The DeepCW inference bridge: compiled by no other Linux job (the model
       # file is gitignored, so only compile coverage is possible here — see the
       # documented silent-lobotomy trap in the release runbook).
@@ -423,6 +429,16 @@ jobs:
       # same toolchain, cache and `-D warnings`. It builds nothing that ships.
       - name: cargo clippy src-tauri --features radio,bench-road-switch
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features radio,bench-road-switch -- -D warnings
+
+      # The tests that exist only in that shape, which the lint above compiles and nothing ran
+      # until 2026-10-23: two of them had gone red unseen, when a feed added later was taken for
+      # a press. Each Stop road alone stopping every kind of over with the other road blocked, a
+      # start refused while either road is blocked, a road opened under a blocked link reaching
+      # nothing, and the switch's own command. Filtered by name, not the whole suite again: the
+      # filters are every test the feature adds (`cargo test ... -- --list` with and without it
+      # differ by exactly these five, and by the no-switch guard the step above runs).
+      - name: cargo test src-tauri --features radio,bench-road-switch (the road switch's tests)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio,bench-road-switch -- road_switch stop_road::bench:: a_road_opened_while_the_link_is_blocked
 
       - name: Set up Node.js for the native Remote integration
         uses: actions/setup-node@v7
