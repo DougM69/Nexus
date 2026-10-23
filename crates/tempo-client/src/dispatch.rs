@@ -477,18 +477,35 @@ pub fn forwards(name: &str) -> bool {
 pub enum Profile {
     /// The desktop app, the same build at both ends: every classed command, by its class.
     Desktop,
+    /// A phone's Nexus. Known by name, so a station recognises one, and refused: this build serves
+    /// it nothing ([`Profile::served`]), and the shack tells it to update the station.
+    Mobile,
 }
 
 impl Profile {
-    /// The profile a hello names, or `None` for one this build does not serve.
+    /// The profile a hello names, or `None` for a name this build does not know.
     pub fn named(name: &str) -> Option<Self> {
-        (name == "desktop").then_some(Profile::Desktop)
+        match name {
+            "desktop" => Some(Profile::Desktop),
+            "mobile" => Some(Profile::Mobile),
+            _ => None,
+        }
     }
 
     /// Its name in the hello.
     pub fn name(self) -> &'static str {
         match self {
             Profile::Desktop => "desktop",
+            Profile::Mobile => "mobile",
+        }
+    }
+
+    /// Whether this build opens a lane for it. Only the served profiles are in the build's
+    /// contract, so naming a refused one changes nothing a desktop of another build compares.
+    pub fn served(self) -> bool {
+        match self {
+            Profile::Desktop => true,
+            Profile::Mobile => false,
         }
     }
 }

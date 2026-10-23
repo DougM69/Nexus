@@ -718,6 +718,24 @@ mod tests {
             .starts_with("audio road 1 EXPORTER-nexus-audio-road format 1 max 512 "));
     }
 
+    /// ★ A phone's profile is known by name and refused, and the contract names the served
+    /// profiles alone: the desktop's line, once, as a 1.20.0 desktop's contract has it, so knowing a
+    /// phone moves no digest two desktops compare. CONTROL: the desktop is served and named.
+    #[test]
+    fn a_phone_is_known_by_name_and_left_out_of_the_contract() {
+        use crate::dispatch::Profile;
+        for profile in [Profile::Desktop, Profile::Mobile] {
+            assert_eq!(Profile::named(profile.name()), Some(profile));
+        }
+        assert_eq!(Profile::Mobile.name(), "mobile");
+        assert_eq!(Profile::named("tablet"), None);
+        assert!(Profile::Desktop.served() && !Profile::Mobile.served());
+        let text = crate::dispatch::contract_text();
+        let profiles: Vec<&str> = text.lines().filter(|l| l.starts_with("profile ")).collect();
+        assert_eq!(profiles, ["profile desktop"]);
+        assert!(!text.contains("mobile"), "{text}");
+    }
+
     /// ★ A waterfall row crosses the link lossless, on this network and through the room alike
     /// (the same feed on both): a quiet band's row, its neighbouring values one f32 step apart, is
     /// read here bit for bit as the shack made it, and what the screens here are handed is the same

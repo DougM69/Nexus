@@ -1147,9 +1147,14 @@ fn class_refusal(
     cmd: &str,
     args: &Value,
 ) -> Option<Refusal> {
-    // Every profile this build serves is admitted by class alone. A second one stops this binding
-    // from compiling until its own rule is written here.
-    let Profile::Desktop = caller.profile;
+    // Every profile this build serves is admitted by class alone. A new one stops this match from
+    // compiling until its own rule is written here. A phone is admitted nothing: no command is
+    // classed for it yet (the shack refuses its `open` before any call, so this is the second
+    // wall).
+    match caller.profile {
+        Profile::Desktop => {}
+        Profile::Mobile => return Some(Refusal::Unclassed),
+    }
     match class {
         None => Some(Refusal::Unclassed),
         Some(_) if !args.is_object() => Some(Refusal::BadArguments),
