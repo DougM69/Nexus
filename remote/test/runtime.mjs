@@ -42,6 +42,7 @@ const ask = (method, args) => fetch('${BILLING_STUB}', { method: 'POST', body: J
 export class BillingService extends WorkerEntrypoint {
   checkout(...args) { return ask('checkout', args) }
   portal(...args) { return ask('portal', args) }
+  cancel(...args) { return ask('cancel', args) }
 }
 export default { fetch() { return new Response('not found', { status: 404 }) } }`
 
