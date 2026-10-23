@@ -2119,6 +2119,57 @@ mod tests {
         assert!(!e.tx_allowed(), "its top tone crosses 14.150");
     }
 
+    /// THE DATA-FRAME RULE: the licence gate judges JTTY's whole frame against ONE privileged data
+    /// range ([`crate::privileges::tx_span_allowed`]), as FT8, JS8 and RTTY are judged. Swept across
+    /// every edge of every class's data ranges, the frame below, straddling and above each, at
+    /// three Tx offsets: the gate says what the data-frame rule says, every time.
+    ///
+    /// (Two legal edges of a 125 Hz frame could only disagree with that rule across a gap
+    /// narrower than the frame; the narrowest gap in the tables is 60 m's 2.1 kHz, so this pins
+    /// the rule the gate uses rather than a case where the old per-edge check differed.)
+    #[test]
+    fn the_licence_gate_judges_the_whole_frame_in_one_range() {
+        use crate::privileges::{allowed_spans, tx_span_allowed};
+        use crate::settings::{LicenseClass, OperatingMode};
+        for (class, name) in [
+            (LicenseClass::Technician, "technician"),
+            (LicenseClass::General, "general"),
+            (LicenseClass::Extra, "extra"),
+        ] {
+            let mut e = Engine::new("W9XYZ", "EN37", 0);
+            e.set_license_class(name);
+            e.set_operating_mode("jtty", false);
+            let mut checked = 0;
+            for (lo, hi) in allowed_spans(class, OperatingMode::Keyboard).unwrap() {
+                for edge in [lo, hi] {
+                    for tx in [200.0f32, 1500.0, 2900.0] {
+                        let (lo_hz, hi_hz) = (tx as f64, (tx + JTTY_SPAN_HZ) as f64);
+                        // Never an edge exactly on a range's end, where the float sum decides.
+                        for shift_hz in [-200.0, -126.0, -124.0, -60.0, -1.0, 1.0, 60.0, 200.0] {
+                            let dial = edge - lo_hz / 1e6 + shift_hz / 1e6;
+                            let band = crate::bandplan::band_for_dial(dial).unwrap_or("");
+                            e.set_frequency(dial, band, "USB");
+                            e.set_jtty_tx(tx).unwrap();
+                            let want = tx_span_allowed(
+                                class,
+                                dial + lo_hz / 1e6,
+                                dial + hi_hz / 1e6,
+                                OperatingMode::Keyboard,
+                            );
+                            assert_eq!(
+                                e.tx_allowed(),
+                                want,
+                                "{name}: dial {dial:.6} Tx {tx} at the edge {edge}"
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+            assert!(checked > 0, "{name}: nothing swept");
+        }
+    }
+
     /// The Tx offset goes back to 1500 Hz whenever JTTY is selected (WSJT-X's selection sets it,
     /// with Rx), holds its range, and cannot move while anything is queued or on the air.
     #[test]

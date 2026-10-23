@@ -23232,20 +23232,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     /// May the operator's class key the Keyboard section's EMISSION at `dial`? USB always (the
-    /// section's convention), judged through the same model `tx_allowed` uses at both edges of
-    /// [`Self::keyboard_span_hz`]: PSK31's narrow signal at the tuned audio offset (one point),
-    /// or JTTY's four tones from its Tx offset up.
+    /// section's convention): the WHOLE of [`Self::keyboard_span_hz`] inside ONE privileged data
+    /// range ([`crate::privileges::tx_span_allowed`], the data-frame rule FT8, JS8 and RTTY are
+    /// judged by): PSK31's narrow signal at the tuned audio offset (one point), or JTTY's four
+    /// tones from its Tx offset up.
     fn psk_emission_ok(&self, dial: f64) -> bool {
-        use crate::settings::OperatingMode;
         let (lo, hi) = self.keyboard_span_hz();
-        let allow = |off: f64| {
-            crate::privileges::tx_allowed(
-                self.settings.license_class,
-                dial + off / 1_000_000.0,
-                OperatingMode::Keyboard,
-            )
-        };
-        allow(lo) && allow(hi)
+        crate::privileges::tx_span_allowed(
+            self.settings.license_class,
+            dial + lo / 1_000_000.0,
+            dial + hi / 1_000_000.0,
+            crate::settings::OperatingMode::Keyboard,
+        )
     }
 
     /// Where the Keyboard section's signal sits above the dial, lowest and highest edge (Hz):
@@ -25693,23 +25691,24 @@ contact yourself."
     /// modem) from the transmit dial `dial`, with the transmitting VFO commanded `word`? The span
     /// [`Self::keyboard_span_hz`] sits on the side the WORD names — where
     /// [`Self::psk_emission_ok`] judges it above the dial always, by the section's USB
-    /// convention. Both of its edges must be privileged.
+    /// convention. The whole span must lie in one privileged range, as there.
     ///
     /// A word that names no side adds nothing, so, like [`Self::digital_emission_allowed`], this
     /// can only ever refuse more than the gate did before it knew the commanded word.
     fn keyboard_emission_allowed(&self, dial: f64, word: &str) -> bool {
         let (lo, hi) = self.keyboard_span_hz();
         let (lo, hi) = (lo / 1_000_000.0, hi / 1_000_000.0);
-        let allow = |f: f64| {
-            crate::privileges::tx_allowed(
+        let span = |a: f64, b: f64| {
+            crate::privileges::tx_span_allowed(
                 self.settings.license_class,
-                f,
+                a,
+                b,
                 crate::settings::OperatingMode::Keyboard,
             )
         };
         match Self::side_is_lsb(word) {
-            Some(false) => allow(dial + lo) && allow(dial + hi),
-            Some(true) => allow(dial - hi) && allow(dial - lo),
+            Some(false) => span(dial + lo, dial + hi),
+            Some(true) => span(dial - hi, dial - lo),
             None => true,
         }
     }
