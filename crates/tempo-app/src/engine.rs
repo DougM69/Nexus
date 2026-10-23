@@ -8005,6 +8005,22 @@ impl Engine {
         }
     }
 
+    /// Disable (`enabled = false`) or enable a radio. A disabled radio keeps its whole profile, but
+    /// the monitor stops opening it and routing stops choosing it, so its CAT port is free for
+    /// another program on this computer. Refused (`false`) for the radio being operated: the loop
+    /// holds that port, and disabling it would say the port was free while it is not.
+    pub fn set_radio_enabled(&mut self, id: u32, enabled: bool) -> bool {
+        if !enabled && id == self.settings.active_radio {
+            return false;
+        }
+        let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == id) else {
+            return false;
+        };
+        self.remote_actuation.revoke();
+        p.enabled = enabled;
+        true
+    }
+
     /// Set a radio's band-coverage set (empty = covers everything) for auto-routing (P4). Pure edit.
     pub fn set_radio_bands(&mut self, id: u32, bands: Vec<String>) {
         self.remote_actuation.revoke();
@@ -59200,6 +59216,63 @@ mod tests {
                 )
             )
         );
+    }
+
+    #[test]
+    fn a_disabled_radio_keeps_its_profile_and_the_operated_radio_cannot_be_disabled() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        let r1 = e.add_radio();
+        e.rename_radio(r1, "FT-991A");
+        let profile = |e: &Engine| {
+            e.settings
+                .radios
+                .iter()
+                .find(|p| p.id == r1)
+                .unwrap()
+                .clone()
+        };
+        let before = profile(&e);
+
+        assert!(
+            e.set_radio_enabled(r1, false),
+            "a radio not in use is disabled"
+        );
+        let disabled = profile(&e);
+        assert!(!disabled.enabled);
+        assert_eq!(
+            crate::settings::RadioProfile {
+                enabled: true,
+                ..disabled
+            },
+            before,
+            "disabling changes nothing but the flag"
+        );
+        // The roster is live state: a Save from a form loaded before the change does not undo it.
+        let mut stale = e.settings.clone();
+        stale.radios.iter_mut().for_each(|p| p.enabled = true);
+        e.apply_settings(stale);
+        assert!(
+            !profile(&e).enabled,
+            "a stale Save leaves the radio disabled"
+        );
+
+        assert!(
+            !e.set_radio_enabled(0, false),
+            "the radio being operated is refused"
+        );
+        assert!(
+            e.settings
+                .radios
+                .iter()
+                .find(|p| p.id == 0)
+                .unwrap()
+                .enabled
+        );
+        assert!(!e.set_radio_enabled(99, false), "no such radio");
+
+        assert!(e.set_radio_enabled(r1, true));
+        assert!(profile(&e).enabled, "enabled again");
     }
 
     #[test]

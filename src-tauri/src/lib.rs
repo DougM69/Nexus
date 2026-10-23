@@ -19202,6 +19202,28 @@ fn rename_radio(
     Ok(eng.snapshot())
 }
 
+/// Disable (`enabled: false`) or enable a radio: a disabled radio keeps its profile, and Nexus lets
+/// go of its CAT port so another program can use the rig. Refused for the radio in use. Returns the
+/// snapshot.
+#[tauri::command(async)]
+fn set_radio_enabled(
+    state: State<'_, SharedEngine>,
+    id: u32,
+    enabled: bool,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    if !eng.set_radio_enabled(id, enabled) {
+        return Err(
+            "Can't disable this radio: it's your operating radio (make another one active first)."
+                .into(),
+        );
+    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: set_radio_enabled save failed: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
 /// Set a radio's band-coverage set (empty = covers everything) for auto band-routing. Returns the
 /// snapshot.
 #[tauri::command(async)]
@@ -38356,6 +38378,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         add_radio,
         remove_radio,
         rename_radio,
+        set_radio_enabled,
         set_radio_bands,
         set_routing_rules,
         set_default_radio,

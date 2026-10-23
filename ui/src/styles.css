@@ -15077,6 +15077,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-radius: 999px;
   padding: 3px var(--space-2);
 }
+.radio-disabled-badge {
+  flex: 0 0 auto;
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border: 1px solid color-mix(in srgb, var(--text-faint) 45%, transparent);
+  border-radius: 999px;
+  padding: 3px var(--space-2);
+}
 .radio-card-meta {
   margin-top: 6px;
   font-size: calc(11px * var(--text-scale));

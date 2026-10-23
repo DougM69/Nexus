@@ -2858,6 +2858,12 @@ export async function renameRadio(id: number, name: string): Promise<AppSnapshot
   return invoke<AppSnapshot>('rename_radio', { id, name })
 }
 
+/** Disable (`enabled: false`) or enable a radio. A disabled radio keeps its profile and Nexus lets go
+ * of its port. Disabling the operating radio is refused. Returns the snapshot. */
+export async function setRadioEnabled(id: number, enabled: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_radio_enabled', { id, enabled })
+}
+
 /** Set a radio's band-coverage set (empty = covers everything) for auto-routing. Returns snapshot. */
 export async function setRadioBands(id: number, bands: string[]): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_radio_bands', { id, bands })

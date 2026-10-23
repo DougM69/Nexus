@@ -6498,6 +6498,7 @@ export const EN = {
   'settings.radios.remove.failed': 'Could not remove the radio',
   'settings.radios.rename.failed': 'Could not rename the radio',
   'settings.radios.bands.failed': 'Could not set band coverage',
+  'settings.radios.enabled.failed': 'Could not enable or disable the radio',
   'settings.radios.default.failed': 'Could not set the default radio',
   'settings.radios.switch.failed': 'Could not switch radios',
   // Two confirms, one wording for the button. Kept as separate entries because they guard
@@ -6643,6 +6644,17 @@ export const EN = {
   'settings.radios.remove.title': 'Remove this radio from the roster',
   'settings.radios.remove.title.blocked':
     'This is your operating radio — make another radio active first, then remove this one.',
+  // Disable: the profile stays, and Nexus lets go of the rig's port so another program can use it.
+  'settings.radios.disable.action': 'Disable',
+  'settings.radios.disable.title':
+    'Stop using this radio for now: its setup is kept, and Nexus lets go of its CAT port so another program can use the rig.',
+  'settings.radios.disable.title.blocked':
+    'This is your operating radio — make another radio active first, then disable this one.',
+  'settings.radios.enable.action': 'Enable',
+  'settings.radios.enable.title': 'Use this radio again: Nexus opens its CAT port again.',
+  'settings.radios.disabled.badge': 'Disabled',
+  'settings.radios.disabled.title':
+    'Nexus is not using this radio or its CAT port. Auto band-routing skips it.',
   // The roster card's summary line, and it is ONE entry because the words BETWEEN the tokens
   // are labels — "CAT", "audio", "CAT helper port" — that a language ordering them differently
   // cannot be served four fragments of. The Flex clause is optional and is interpolated whole.

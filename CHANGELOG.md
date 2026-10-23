@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nexus fetched, and nothing when that reading is more than 3 hours old.
 - **Each contact logs the worked station's continent and the distance to it** (ADIF CONT, and
   DISTANCE in km from your grid to theirs when both are known).
+- **Disable a second radio without deleting it.** With two or more radios, each card in Settings ▸ Radio has a
+  **Disable** button. A disabled radio keeps its whole setup, but Nexus stops watching it and lets go of its CAT
+  port, so another program on the same computer can use that rig. Auto band-routing skips it. **Enable** brings it
+  back. The radio you are operating can't be disabled: make another radio active first.
 
 ### Changed
 - **The log-entry boxes no longer show made-up example values.** An empty box in the contest log line and in the
