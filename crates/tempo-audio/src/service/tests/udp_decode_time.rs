@@ -279,7 +279,8 @@ fn a_replay_sends_every_decode_band_activity_holds() {
 }
 
 /// A burst of Replays in one tick is answered once (each re-sends all of Band Activity with the
-/// engine lock held); one in each of two ticks is answered twice.
+/// engine lock held), and so is one in each of two ticks: a logger is answered at most once a
+/// second.
 #[test]
 fn a_burst_of_replays_in_one_tick_is_answered_once() {
     let once = decodes_after(
@@ -292,7 +293,7 @@ fn a_burst_of_replays_in_one_tick_is_answered_once() {
     );
     assert_eq!(
         (once.len(), twice.len()),
-        (3, 6),
+        (3, 3),
         "Decodes sent for (three Replays in one tick, one in each of two ticks)"
     );
 }
