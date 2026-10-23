@@ -13825,6 +13825,8 @@ impl RadioLoop {
                         .map(|w| trim_samples < w.len())
                         .unwrap_or(false);
                     if trimmable {
+                        // The RX dial, before Split Operation moves it, for `boundary_keyed`.
+                        let dial_hz = eng.settings().dial_hz();
                         self.fake_it_write_back_before_key(rig, now);
                         // Split Operation: the engine reduced this over's audio —
                         // move the TX dial before the carrier keys (same as the
@@ -13898,6 +13900,18 @@ impl RadioLoop {
                             self.slot_tx_until_ms = self.tx_until_ms.unwrap_or(0.0);
                             self.last_slot = Some(slot_now); // slot handled; skip the boundary
                             self.prev_slot_was_tx = true;
+                            // This slot's TX decision is made, as `key_boundary_tx` records its
+                            // own. A call made in the other station's period keys here, on the
+                            // first tick of ours, while the FT8/FT4 full pass of the period just
+                            // heard may still be decoding; when that pass drains in this slot,
+                            // `finish_boundary` must see the slot keyed and run its housekeeping
+                            // only. Unrecorded, it planned the over again and keyed and played it
+                            // a second time ~2 s into the period (a second own row and Tx line).
+                            self.boundary_keyed = Some(KeyedBoundary {
+                                slot: slot_now,
+                                tx_this_slot: true,
+                                dial_hz,
+                            });
                         } else {
                             self.explain_flex_refusal(&mut eng, asked);
                         }

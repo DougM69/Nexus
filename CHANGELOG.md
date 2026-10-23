@@ -127,6 +127,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
+- **FT8/FT4: a call or Call CQ made during the other station's period sent its over twice (needs a check on the
+  air).** Double-clicking a station in the Call Roster or Band Activity, or pressing Call CQ, before your own period
+  began keyed the over at the start of your period as it should. About 2 s later, when the decode of the period
+  just heard finished, Nexus keyed the same over again: Rx Frequency and ALL.TXT showed your message twice, a
+  second or two apart, and the second copy went to the sound card behind the first. Now the over goes out once,
+  with one line, as WSJT-X sends it. A call made after your period has started was never affected. Check on the
+  air: double-click a station during their period, and Rx Frequency and ALL.TXT show your call once.
 - **WSJT-X UDP: a logger's Replay gets back everything Band Activity holds.** When JTAlert, GridTracker or a
   logger asks Nexus to replay the decodes, as it does when it starts while Nexus is running, Nexus sent only the
   last period's. It now sends every decode Band Activity still holds, oldest first, each with the start of the

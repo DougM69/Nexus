@@ -858,13 +858,19 @@ fn a_refused_late_start_ft8_key_is_not_played_and_halts_tx() {
             Some(0),
             "scene guard: slot 0's boundary is consumed"
         );
-        ft8_cq(&mut s.engine.lock().unwrap());
-        s.run_to(200.0);
-        assert_eq!(s.keys(), 1, "premise: the late start tried the key, once");
+        // Asked before the late start: its key records the slot as keyed too, as the boundary's does.
         assert!(
             !s.state.boundary_keyed.is_some_and(|k| k.tx_this_slot),
             "scene guard: the boundary did not key"
         );
+        assert_eq!(
+            s.keys(),
+            0,
+            "scene guard: nothing keyed before the late start"
+        );
+        ft8_cq(&mut s.engine.lock().unwrap());
+        s.run_to(200.0);
+        assert_eq!(s.keys(), 1, "premise: the late start tried the key, once");
         if key == Key::Refuses {
             assert!(s.backend.played.is_empty(), "the over was played");
             assert!(!s.armed(), "TX is still on");
