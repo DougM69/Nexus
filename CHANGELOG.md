@@ -268,6 +268,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until the TX watchdog turns transmit off, and the strip then showed only "AwaitReport" beside TX off. It now
   shows "TX watchdog stopped the call" in red in place of the state, and the window's taskbar button flashes
   once (a dock bounce on macOS), as WSJT-X does. TX On calls again. How long Nexus calls is unchanged.
+- **A disabled radio can't be made active from Remote either.** Disabling a radio takes it out of the switcher so
+  that its port stays free for another program, but a computer driving the station could still select it and open
+  the port again. The station now refuses a disabled radio from Remote as it does at the desktop. Enable the radio
+  to use it again.
 
 ### Security
 - **A computer no longer takes the station's internet key on Nexus Remote's word alone.** Before, when you

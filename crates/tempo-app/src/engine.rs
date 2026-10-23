@@ -7892,7 +7892,8 @@ impl Engine {
     /// the radio loop swaps to it on the next tick), and restores the new radio's last band/freq.
     /// The LIGHT path — deliberately does NOT touch Mode / TX queues / identity (unlike
     /// `apply_settings`), so swinging radios mid-session never resets the operator to Chat. No-op if
-    /// `id` isn't a configured radio or is already active.
+    /// `id` isn't a configured radio, is disabled (its port is released for another program, and
+    /// making it active would open it again), or is already active.
     pub fn set_active_radio(&mut self, id: u32) {
         self.set_active_radio_with_reset(id, reset_ft8_a7_without_waiting);
     }
@@ -7906,7 +7907,9 @@ impl Engine {
     }
 
     fn set_active_radio_with_reset(&mut self, id: u32, reset: impl FnOnce()) {
-        if id == self.settings.active_radio || !self.settings.radios.iter().any(|p| p.id == id) {
+        if id == self.settings.active_radio
+            || !self.settings.radios.iter().any(|p| p.id == id && p.enabled)
+        {
             return;
         }
         self.remote_readings.invalidate();
@@ -59747,6 +59750,34 @@ mod tests {
         assert!(profile(&e).enabled, "enabled again");
     }
 
+    /// ⭐ A DISABLED RADIO CANNOT BE MADE ACTIVE, by any caller: its port is released for another
+    /// program, and making it active would open it again. The refusal changes nothing — the radio
+    /// in use, its settings and its transmit state stay as they were. Enabled again, it switches.
+    #[test]
+    fn a_disabled_radio_cannot_be_made_active() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        let r1 = e.add_radio();
+        assert!(e.set_radio_enabled(r1, false));
+        e.set_tx_enabled(true);
+        e.take_slot_tx_abort();
+        let before = serde_json::to_value(e.settings()).unwrap();
+
+        assert!(
+            e.preview_radio_selection(r1).is_none(),
+            "no selection to prepare"
+        );
+        e.set_active_radio(r1);
+        assert_eq!(e.settings.active_radio, 0, "still the radio in use");
+        assert_eq!(serde_json::to_value(e.settings()).unwrap(), before);
+        assert!(e.tx_enabled(), "transmit left as it was");
+        assert!(!e.take_slot_tx_abort(), "and nothing cut");
+
+        assert!(e.set_radio_enabled(r1, true));
+        e.set_active_radio(r1);
+        assert_eq!(e.settings.active_radio, r1, "control: enabled, it switches");
+    }
+
     #[test]
     fn the_switcher_lists_no_disabled_radio_but_always_the_one_being_operated() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
@@ -59766,8 +59797,8 @@ mod tests {
         );
 
         // A radio still in use stays listed even when its profile says disabled (a settings file
-        // written that way, or a Remote selection of a disabled radio): the switcher never hides
-        // the radio on the air, and nothing here switches away from it.
+        // written that way): the switcher never hides the radio on the air, and nothing here
+        // switches away from it.
         e.settings
             .radios
             .iter_mut()
