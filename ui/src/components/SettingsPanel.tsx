@@ -12,6 +12,7 @@ import { Js8ComposeSettings } from './Js8ComposeSettings'
 import { js8CqTextRefused } from '../js8Compose'
 import { confirmDialog } from '../confirm'
 import { Js8FrequencySettings } from './Js8FrequencySettings'
+import { DraftNumberInput } from './DraftNumberInput'
 import { checkRigForm, blocks, dataModePickerShown, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
@@ -8497,26 +8498,18 @@ export function SettingsPanel({
                   <div className="settings-input-row">
                     <label className="settings-inline-label">
                       <span>{t('settings.digital.passband.low')}</span>
-                      <input disabled={locked('decodeFLowHz')}
+                      <DraftNumberInput disabled={locked('decodeFLowHz')}
                         id="decode-flow"
                         className="settings-input"
-                        type="number"
                         inputMode="numeric"
                         min={200}
                         max={2900}
                         step={1}
                         value={form.decodeFLowHz ?? 200}
                         aria-label={t('settings.digital.passband.low.aria')}
-                        onChange={(e) => {
-                          if (e.target.value === '') return // mid-edit clear: keep the prior value
+                        onValue={(v) => {
                           markDirty()
-                          const raw = Number(e.target.value)
-                          const clamped = Math.max(200, Math.min(2900, Math.round(raw)))
-                          setForm((prev) =>
-                            prev
-                              ? { ...prev, decodeFLowHz: clamped }
-                              : prev,
-                          )
+                          setForm((prev) => (prev ? { ...prev, decodeFLowHz: Math.round(v) } : prev))
                         }}
                         onBlur={() => {
                           setForm((prev) => {
@@ -8531,26 +8524,18 @@ export function SettingsPanel({
                     </label>
                     <label className="settings-inline-label">
                       <span>{t('settings.digital.passband.high')}</span>
-                      <input disabled={locked('decodeFHighHz')}
+                      <DraftNumberInput disabled={locked('decodeFHighHz')}
                         id="decode-fhigh"
                         className="settings-input"
-                        type="number"
                         inputMode="numeric"
                         min={200}
                         max={4000}
                         step={1}
                         value={form.decodeFHighHz ?? 2900}
                         aria-label={t('settings.digital.passband.high.aria')}
-                        onChange={(e) => {
-                          if (e.target.value === '') return // mid-edit clear: keep the prior value
+                        onValue={(v) => {
                           markDirty()
-                          const raw = Number(e.target.value)
-                          const clamped = Math.max(200, Math.min(4000, Math.round(raw)))
-                          setForm((prev) =>
-                            prev
-                              ? { ...prev, decodeFHighHz: clamped }
-                              : prev,
-                          )
+                          setForm((prev) => (prev ? { ...prev, decodeFHighHz: Math.round(v) } : prev))
                         }}
                         onBlur={() => {
                           setForm((prev) => {

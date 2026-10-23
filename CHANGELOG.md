@@ -127,6 +127,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
+- **CW: the pitch box can be typed to any pitch again.** Typing into the CW cockpit's Pitch box forced each key
+  into 300–1200 Hz as it was pressed, so typing 650 gave 300 and then 1200; only the arrows could reach a pitch in
+  between. The box now keeps what you type, applies it once it is a pitch in range, and puts an out-of-range entry
+  back into range when you press Enter or leave the box. The decoder passband's F low and F high boxes in
+  Settings ▸ Digital had the same fault and are fixed the same way.
 - **WSJT-X UDP: a logger's Replay gets back everything Band Activity holds.** When JTAlert, GridTracker or a
   logger asks Nexus to replay the decodes, as it does when it starts while Nexus is running, Nexus sent only the
   last period's. It now sends every decode Band Activity still holds, oldest first, each with the start of the

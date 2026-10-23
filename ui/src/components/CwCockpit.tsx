@@ -13,6 +13,7 @@ import type { AppSnapshot, CwTurn, FieldDayStatus, NeedTag, Settings, SpotRow } 
 import { PhoneScope } from './PhoneScope'
 import { useSmeterDb } from './LiveMeters'
 import { TxMeters, TX_METERS_WHEN } from './TxMeters'
+import { DraftNumberInput } from './DraftNumberInput'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { BandStrip } from './BandStrip'
@@ -2251,14 +2252,13 @@ export function CwCockpit({
         </label>
         <label className="cw-wpm" title={t('cw.pitch.title')}>
           <span>{t('cw.pitch.label')}</span>
-          <input disabled={!control}
-            type="number"
+          <DraftNumberInput disabled={!control}
             className="settings-input cw-pitch"
             min={300}
             max={1200}
             step={10}
             value={pitch}
-            onChange={(e) => changePitch(Number(e.target.value))}
+            onValue={changePitch}
             aria-label={t('cw.pitch.aria')}
           />
         </label>
